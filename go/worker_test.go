@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,29 +20,57 @@ import (
 )
 
 type workerRuntimeFixture struct {
-	ID                                   string   `json:"id"`
-	JobType                              string   `json:"jobType"`
-	FollowingJobType                     string   `json:"followingJobType"`
-	CheckpointName                       string   `json:"checkpointName"`
-	WaitName                             string   `json:"waitName"`
-	WaitMS                               int      `json:"waitMs"`
-	ExpectedHandlerOrder                 []string `json:"expectedHandlerOrder"`
-	ExpectedHandlerRuns                  int      `json:"expectedHandlerRuns"`
-	ExpectedCheckpointOperations         int      `json:"expectedCheckpointOperations"`
-	ExpectedAttemptsAfterSuspension      int      `json:"expectedAttemptsAfterSuspension"`
-	ExpectedAttemptsAfterReplay          int      `json:"expectedAttemptsAfterReplay"`
-	LeaseMS                              int      `json:"leaseMs"`
-	HeartbeatMS                          int      `json:"heartbeatMs"`
-	DurationMS                           int      `json:"durationMs"`
-	MaxAttempts                          int      `json:"maxAttempts"`
-	CancelReason                         string   `json:"cancelReason"`
-	ExpectedCallsWhileBlocked            int      `json:"expectedCallsWhileBlocked"`
-	ExpectedMinimumCallsBeforeSettlement int      `json:"expectedMinimumCallsBeforeSettlement"`
-	ExpectedMaximumOverlap               int      `json:"expectedMaximumOverlap"`
+	ID                                   string                           `json:"id"`
+	Kind                                 string                           `json:"kind"`
+	Covers                               []string                         `json:"covers"`
+	JobType                              string                           `json:"jobType"`
+	FollowingJobType                     string                           `json:"followingJobType"`
+	CheckpointName                       string                           `json:"checkpointName"`
+	WaitName                             string                           `json:"waitName"`
+	WaitMS                               int                              `json:"waitMs"`
+	ExpectedHandlerOrder                 []string                         `json:"expectedHandlerOrder"`
+	ExpectedHandlerRuns                  int                              `json:"expectedHandlerRuns"`
+	ExpectedCheckpointOperations         int                              `json:"expectedCheckpointOperations"`
+	ExpectedAttemptsAfterSuspension      int                              `json:"expectedAttemptsAfterSuspension"`
+	ExpectedAttemptsAfterReplay          int                              `json:"expectedAttemptsAfterReplay"`
+	ExpectedAfterSuspension              map[string]workerFixtureJobState `json:"expectedAfterSuspension"`
+	ExpectedAfterSlotRelease             map[string]workerFixtureJobState `json:"expectedAfterSlotRelease"`
+	ExpectedAfterReplay                  map[string]workerFixtureJobState `json:"expectedAfterReplay"`
+	LeaseMS                              int                              `json:"leaseMs"`
+	HeartbeatMS                          int                              `json:"heartbeatMs"`
+	DurationMS                           int                              `json:"durationMs"`
+	MaxAttempts                          int                              `json:"maxAttempts"`
+	CancelReason                         string                           `json:"cancelReason"`
+	ExpectedCallsWhileBlocked            int                              `json:"expectedCallsWhileBlocked"`
+	ExpectedMinimumCallsBeforeSettlement int                              `json:"expectedMinimumCallsBeforeSettlement"`
+	ExpectedMaximumOverlap               int                              `json:"expectedMaximumOverlap"`
+	Mode                                 string                           `json:"mode"`
+	LocalClockLeadMS                     int                              `json:"localClockLeadMs"`
+	ExpectedAbortReason                  string                           `json:"expectedAbortReason"`
+	ExpectedAbortReasons                 []string                         `json:"expectedAbortReasons"`
+	ExpectedAbortMessage                 string                           `json:"expectedAbortMessage"`
+	ExpectedRejectedWrites               []string                         `json:"expectedRejectedWrites"`
+	PortableRejectedWrites               []string                         `json:"portableRejectedWrites"`
+	ExpectedRejectedWriteError           string                           `json:"expectedRejectedWriteError"`
+	ExpectedState                        workerFixtureJobState            `json:"expectedState"`
+	ExpectedAfterRuns                    []workerFixtureJobState          `json:"expectedAfterRuns"`
+	ExpectedAttemptOutcome               string                           `json:"expectedAttemptOutcome"`
+	ExpectedAttemptOutcomes              []string                         `json:"expectedAttemptOutcomes"`
+	Concurrency                          int                              `json:"concurrency"`
+	JobCount                             int                              `json:"jobCount"`
+	SettleCheckMS                        int                              `json:"settleCheckMs"`
+	ExpectedActiveAtStop                 int                              `json:"expectedActiveAtStop"`
+	ExpectedSucceeded                    int                              `json:"expectedSucceeded"`
+	ExpectedReady                        int                              `json:"expectedReady"`
 }
 
-func TestWorkerExecutesDurableWaitSuspensionAndCheckpointReplayFixture(t *testing.T) {
-	fixture := loadWorkerRuntimeFixture(t, "durable-wait-suspension-and-checkpoint-replay")
+type workerFixtureJobState struct {
+	State     string `json:"state"`
+	Attempt   int    `json:"attempt"`
+	ErrorName string `json:"errorName"`
+}
+
+func executeWorkerSuspensionReplayFixture(t *testing.T, fixture workerRuntimeFixture) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-suspension-replay")
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -70,24 +97,17 @@ func TestWorkerExecutesDurableWaitSuspensionAndCheckpointReplayFixture(t *testin
 		t.Fatal(err)
 	}
 
-	var mu sync.Mutex
 	order := make([]string, 0, len(fixture.ExpectedHandlerOrder))
 	handlerRuns := 0
 	checkpointOperations := 0
-	followingStarted := make(chan struct{})
-	releaseFollowing := make(chan struct{})
 	worker.Handle(fixture.JobType, func(
 		_ context.Context,
 		_ any,
 		handlerContext *workhorse.HandlerContext,
 	) (any, error) {
-		mu.Lock()
 		handlerRuns++
 		order = append(order, "suspension:"+strconv.Itoa(handlerContext.Job.Attempt))
-		mu.Unlock()
 		prepared, err := handlerContext.Checkpoint(fixture.CheckpointName, func() (any, error) {
-			mu.Lock()
-			defer mu.Unlock()
 			checkpointOperations++
 			return map[string]any{"operation": checkpointOperations}, nil
 		})
@@ -104,34 +124,15 @@ func TestWorkerExecutesDurableWaitSuspensionAndCheckpointReplayFixture(t *testin
 		_ any,
 		handlerContext *workhorse.HandlerContext,
 	) (any, error) {
-		mu.Lock()
 		order = append(order, "following:"+strconv.Itoa(handlerContext.Job.Attempt))
-		mu.Unlock()
-		close(followingStarted)
-		<-releaseFollowing
 		return nil, nil
 	})
 
-	runContext, stop := context.WithCancel(ctx)
-	runResult := make(chan error, 1)
-	go func() { runResult <- worker.Run(runContext) }()
-	select {
-	case <-followingStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("following job did not acquire the released worker slot")
+	if processed, err := worker.RunOnce(ctx); err != nil || !processed {
+		t.Fatalf("suspension run: processed=%t err=%v", processed, err)
 	}
-	var suspendedState string
-	var suspendedAttempt int
-	if err := pool.QueryRow(
-		ctx,
-		"SELECT state, current_attempt FROM workhorse.job_runtime WHERE job_id = $1",
-		suspensionJobID,
-	).Scan(&suspendedState, &suspendedAttempt); err != nil {
-		t.Fatal(err)
-	}
-	if suspendedState != "scheduled" || suspendedAttempt != 1 {
-		t.Fatalf("unexpected suspended job state: state=%s attempt=%d", suspendedState, suspendedAttempt)
-	}
+	assertWorkerFixtureJobState(t, ctx, pool, suspensionJobID, fixture.ExpectedAfterSuspension["suspension"])
+	assertWorkerFixtureJobState(t, ctx, pool, followingJobID, fixture.ExpectedAfterSuspension["following"])
 	var attemptsAfterSuspension int
 	if err := pool.QueryRow(
 		ctx,
@@ -147,35 +148,18 @@ func TestWorkerExecutesDurableWaitSuspensionAndCheckpointReplayFixture(t *testin
 			attemptsAfterSuspension,
 		)
 	}
-	close(releaseFollowing)
-	deadline := time.Now().Add(3 * time.Second)
-	stateSQL := "SELECT state FROM (" +
-		"SELECT job_id, state FROM workhorse.job_runtime UNION ALL " +
-		"SELECT job_id, state FROM workhorse.job_outcome" +
-		") jobs WHERE job_id = $1"
-	for {
-		var followingState string
-		if err := pool.QueryRow(ctx, stateSQL, suspensionJobID).Scan(&suspendedState); err != nil {
-			t.Fatal(err)
-		}
-		if err := pool.QueryRow(ctx, stateSQL, followingJobID).Scan(&followingState); err != nil {
-			t.Fatal(err)
-		}
-		if suspendedState == "succeeded" && followingState == "succeeded" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("workers did not finish: suspension=%s following=%s", suspendedState, followingState)
-		}
-		time.Sleep(5 * time.Millisecond)
+	if processed, err := worker.RunOnce(ctx); err != nil || !processed {
+		t.Fatalf("following run: processed=%t err=%v", processed, err)
 	}
-	stop()
-	if err := <-runResult; err != nil {
-		t.Fatal(err)
+	assertWorkerFixtureJobState(t, ctx, pool, suspensionJobID, fixture.ExpectedAfterSlotRelease["suspension"])
+	assertWorkerFixtureJobState(t, ctx, pool, followingJobID, fixture.ExpectedAfterSlotRelease["following"])
+	time.Sleep(time.Duration(fixture.WaitMS)*time.Millisecond + 80*time.Millisecond)
+	if processed, err := worker.RunOnce(ctx); err != nil || !processed {
+		t.Fatalf("replay run: processed=%t err=%v", processed, err)
 	}
+	assertWorkerFixtureJobState(t, ctx, pool, suspensionJobID, fixture.ExpectedAfterReplay["suspension"])
+	assertWorkerFixtureJobState(t, ctx, pool, followingJobID, fixture.ExpectedAfterReplay["following"])
 
-	mu.Lock()
-	defer mu.Unlock()
 	if strings.Join(order, ",") != strings.Join(fixture.ExpectedHandlerOrder, ",") {
 		t.Fatalf("unexpected handler order: %v", order)
 	}
@@ -441,25 +425,6 @@ func (tracer *heartbeatQueryTracer) waitForCalls(t *testing.T, expected int) {
 			t.Fatalf("expected %d heartbeat calls, received %d", expected, calls)
 		}
 	}
-}
-
-func loadWorkerRuntimeFixture(t *testing.T, id string) workerRuntimeFixture {
-	t.Helper()
-	contents, err := os.ReadFile("../protocol/v1/runtime.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var fixtures []workerRuntimeFixture
-	if err := json.Unmarshal(contents, &fixtures); err != nil {
-		t.Fatal(err)
-	}
-	for _, fixture := range fixtures {
-		if fixture.ID == id {
-			return fixture
-		}
-	}
-	t.Fatalf("runtime fixture %s was not found", id)
-	return workerRuntimeFixture{}
 }
 
 func TestWorkerClaimsHandlesAndCompletesAJob(t *testing.T) {
@@ -922,8 +887,7 @@ func TestWorkerSurfacesRejectedSettlementAsTypedStaleLease(t *testing.T) {
 	}
 }
 
-func TestWorkerHeartbeatsKeepALongRunningAttemptOwned(t *testing.T) {
-	fixture := loadWorkerRuntimeFixture(t, "heartbeats-never-overlap")
+func executeWorkerHeartbeatFixture(t *testing.T, fixture workerRuntimeFixture) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-heartbeat")
 	ctx := context.Background()
 	config, err := pgxpool.ParseConfig(databaseURL)
@@ -1010,8 +974,7 @@ func TestWorkerHeartbeatsKeepALongRunningAttemptOwned(t *testing.T) {
 	}
 }
 
-func TestWorkerDeliversTypedCancellationAndAcknowledgesIt(t *testing.T) {
-	fixture := loadWorkerRuntimeFixture(t, "cooperative-cancellation-reaches-handler")
+func executeWorkerCancellationFixture(t *testing.T, fixture workerRuntimeFixture) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-cancel")
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -1069,145 +1032,81 @@ func TestWorkerDeliversTypedCancellationAndAcknowledgesIt(t *testing.T) {
 	if !errors.As(observed, &cancellation) || cancellation.JobID != jobID {
 		t.Fatalf("expected cancellation cause for %s, received %#v", jobID, observed)
 	}
-	var state string
-	if err := pool.QueryRow(
-		ctx,
-		"SELECT state FROM workhorse.job_outcome WHERE job_id = $1::uuid",
-		jobID,
-	).Scan(&state); err != nil {
+	if lifecycleCauseName(observed) != fixture.ExpectedAbortReason {
+		t.Fatalf("expected %s, received %s", fixture.ExpectedAbortReason, lifecycleCauseName(observed))
+	}
+	assertWorkerFixtureJobState(t, ctx, pool, jobID, fixture.ExpectedState)
+	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, jobID, []string{fixture.ExpectedAttemptOutcome})
+}
+
+func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-"+fixture.Mode)
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if state != "canceled" {
-		t.Fatalf("expected cancellation acknowledgement, received %s", state)
+	t.Cleanup(pool.Close)
+	queueName := "go-worker-" + fixture.Mode
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	options := workhorse.EnqueueOptions{
+		MaxAttempts: fixture.MaxAttempts,
+		RetryPolicy: map[string]any{"type": "fixed", "delayMs": 0},
 	}
+	if fixture.Mode == "deadline" {
+		deadline := time.Now().UTC().Add(time.Duration(fixture.DurationMS) * time.Millisecond)
+		options.Deadline = &deadline
+	} else {
+		options.ExecutionTimeoutMS = fixture.DurationMS
+	}
+	jobID, err := queue.Enqueue(ctx, fixture.JobType, nil, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue:             queueName,
+		WorkerID:          queueName,
+		LeaseDuration:     time.Duration(fixture.LeaseMS) * time.Millisecond,
+		HeartbeatInterval: time.Duration(fixture.HeartbeatMS) * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	causes := make(chan error, len(fixture.ExpectedAbortReasons))
+	worker.Handle(fixture.JobType, func(handlerContext context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
+		field := "attempt_timeout_at"
+		if fixture.Mode == "deadline" {
+			field = "deadline_at"
+		}
+		if _, err := pool.Exec(ctx, fmt.Sprintf(
+			"UPDATE workhorse.job_runtime SET %s = %s + ($2 * interval '1 millisecond') WHERE job_id = $1::uuid",
+			field,
+			field,
+		), jobID, fixture.LocalClockLeadMS); err != nil {
+			return nil, err
+		}
+		<-handlerContext.Done()
+		causes <- context.Cause(handlerContext)
+		return nil, nil
+	})
+	for _, expected := range fixture.ExpectedAfterRuns {
+		processed, err := worker.RunOnce(ctx)
+		if err != nil || !processed {
+			t.Fatalf("expiration attempt: processed=%t err=%v", processed, err)
+		}
+		assertWorkerFixtureJobState(t, ctx, pool, jobID, expected)
+	}
+	observedCauses := make([]string, 0, len(fixture.ExpectedAbortReasons))
+	for range fixture.ExpectedAbortReasons {
+		observedCauses = append(observedCauses, lifecycleCauseName(<-causes))
+	}
+	if strings.Join(observedCauses, ",") != strings.Join(fixture.ExpectedAbortReasons, ",") {
+		t.Fatalf("unexpected expiration causes: %v", observedCauses)
+	}
+	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, jobID, fixture.ExpectedAttemptOutcomes)
 }
 
-func TestWorkerDeliversDistinctDeadlineAndExecutionTimeoutCauses(t *testing.T) {
-	tests := []struct {
-		name       string
-		fixtureID  string
-		options    func(time.Time) workhorse.EnqueueOptions
-		matches    error
-		assertType func(*testing.T, string, error)
-	}{
-		{
-			name:      "deadline",
-			fixtureID: "deadline-settles-after-early-local-timer",
-			options: func(now time.Time) workhorse.EnqueueOptions {
-				deadline := now.Add(150 * time.Millisecond)
-				return workhorse.EnqueueOptions{Deadline: &deadline, MaxAttempts: 2}
-			},
-			matches: workhorse.ErrDeadlineExceeded,
-			assertType: func(t *testing.T, jobID string, cause error) {
-				var typed *workhorse.DeadlineExceededError
-				if !errors.As(cause, &typed) || typed.JobID != jobID {
-					t.Fatalf("expected deadline cause for %s, received %#v", jobID, cause)
-				}
-			},
-		},
-		{
-			name:      "execution-timeout",
-			fixtureID: "execution-timeout-settles-after-early-local-timer",
-			options: func(_ time.Time) workhorse.EnqueueOptions {
-				return workhorse.EnqueueOptions{ExecutionTimeoutMS: 150, MaxAttempts: 1}
-			},
-			matches: workhorse.ErrExecutionTimeout,
-			assertType: func(t *testing.T, jobID string, cause error) {
-				var typed *workhorse.ExecutionTimeoutError
-				if !errors.As(cause, &typed) || typed.JobID != jobID || typed.Attempt != 1 {
-					t.Fatalf("expected execution-timeout cause for %s, received %#v", jobID, cause)
-				}
-			},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			fixture := loadWorkerRuntimeFixture(t, test.fixtureID)
-			databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-"+test.name)
-			ctx := context.Background()
-			pool, err := pgxpool.New(ctx, databaseURL)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(pool.Close)
-			queueName := "go-worker-" + test.name
-			queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-			options := test.options(time.Now().UTC())
-			if test.name == "deadline" {
-				deadline := time.Now().UTC().Add(time.Duration(fixture.DurationMS) * time.Millisecond)
-				options.Deadline = &deadline
-			} else {
-				options.ExecutionTimeoutMS = fixture.DurationMS
-				options.RetryPolicy = map[string]any{"type": "fixed", "delayMs": 0}
-			}
-			options.MaxAttempts = fixture.MaxAttempts
-			jobID, err := queue.Enqueue(ctx, fixture.JobType, nil, options)
-			if err != nil {
-				t.Fatal(err)
-			}
-			worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-				Queue:             queueName,
-				WorkerID:          queueName,
-				LeaseDuration:     time.Duration(fixture.LeaseMS) * time.Millisecond,
-				HeartbeatInterval: time.Duration(fixture.HeartbeatMS) * time.Millisecond,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			cause := make(chan error, 1)
-			hasDeadline := make(chan bool, 1)
-			worker.Handle(fixture.JobType, func(handlerContext context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
-				_, ok := handlerContext.Deadline()
-				hasDeadline <- ok
-				<-handlerContext.Done()
-				cause <- context.Cause(handlerContext)
-				return nil, nil
-			})
-			processed, err := worker.RunOnce(ctx)
-			if err != nil || !processed {
-				t.Fatalf("expiration attempt: processed=%t err=%v", processed, err)
-			}
-			if !<-hasDeadline {
-				t.Fatal("expected expiration to be exposed as a context deadline")
-			}
-			observed := <-cause
-			if !errors.Is(observed, test.matches) {
-				t.Fatalf("expected %v, received %v", test.matches, observed)
-			}
-			test.assertType(t, jobID, observed)
-			if test.name == "deadline" {
-				var state string
-				var attempt int
-				if err := pool.QueryRow(
-					ctx,
-					"SELECT state, current_attempt FROM workhorse.job_outcome WHERE job_id = $1::uuid",
-					jobID,
-				).Scan(&state, &attempt); err != nil {
-					t.Fatal(err)
-				}
-				if state != "failed" || attempt != 1 {
-					t.Fatalf("expected deadline settlement, received state=%s attempt=%d", state, attempt)
-				}
-			} else {
-				var state string
-				var attempt int
-				if err := pool.QueryRow(
-					ctx,
-					"SELECT state, current_attempt FROM workhorse.job_runtime WHERE job_id = $1::uuid",
-					jobID,
-				).Scan(&state, &attempt); err != nil {
-					t.Fatal(err)
-				}
-				if state != "ready" || attempt != 2 {
-					t.Fatalf("expected timeout retry settlement, received state=%s attempt=%d", state, attempt)
-				}
-			}
-		})
-	}
-}
-
-func TestWorkerCancelsHandlerWithLeaseLossAfterFenceRecovery(t *testing.T) {
-	fixture := loadWorkerRuntimeFixture(t, "lease-loss-fences-handler-writes")
+func executeWorkerLeaseLossFixture(t *testing.T, fixture workerRuntimeFixture) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-lease-loss")
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -1236,10 +1135,51 @@ func TestWorkerCancelsHandlerWithLeaseLossAfterFenceRecovery(t *testing.T) {
 	}
 	started := make(chan struct{})
 	cause := make(chan error, 1)
-	worker.Handle(fixture.JobType, func(handlerContext context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
+	type rejectedWriteResults struct {
+		names    []string
+		messages []string
+	}
+	rejectedWrites := make(chan rejectedWriteResults, 1)
+	worker.Handle(fixture.JobType, func(handlerContext context.Context, _ any, durability *workhorse.HandlerContext) (any, error) {
 		close(started)
 		<-handlerContext.Done()
 		cause <- context.Cause(handlerContext)
+		writes := []struct {
+			name string
+			run  func() error
+		}{
+			{name: "checkpoint", run: func() error {
+				_, err := durability.Checkpoint("too-late", func() (any, error) { return map[string]any{"late": true}, nil })
+				return err
+			}},
+			{name: "sleep", run: func() error { return durability.Sleep("too-late", time.Millisecond) }},
+			{name: "sleepUntil", run: func() error { return durability.SleepUntil("too-late-until", time.Now().UTC()) }},
+			{name: "waitForSignal", run: func() error {
+				_, err := durability.WaitForSignal("too-late")
+				return err
+			}},
+			{name: "waitForHuman", run: func() error {
+				_, err := durability.WaitForHuman("too-late", map[string]any{"late": true})
+				return err
+			}},
+			{name: "runChild", run: func() error {
+				_, err := durability.CreateChild("too-late", "protocol.child", nil)
+				return err
+			}},
+			{name: "runChildren", run: func() error {
+				_, err := durability.CreateChildren([]workhorse.ChildJobRequest{{Name: "too-late", Type: "protocol.child"}})
+				return err
+			}},
+		}
+		rejected := make([]string, 0, len(writes))
+		messages := make([]string, 0, len(writes))
+		for _, write := range writes {
+			if err := write.run(); errors.Is(err, workhorse.ErrLeaseLost) {
+				rejected = append(rejected, write.name)
+				messages = append(messages, err.Error())
+			}
+		}
+		rejectedWrites <- rejectedWriteResults{names: rejected, messages: messages}
 		return map[string]any{"mustNotSettle": true}, nil
 	})
 	workerResult := make(chan error, 1)
@@ -1284,18 +1224,25 @@ func TestWorkerCancelsHandlerWithLeaseLossAfterFenceRecovery(t *testing.T) {
 	if !errors.As(observed, &leaseLoss) || leaseLoss.JobID != jobID {
 		t.Fatalf("expected lease-loss cause for %s, received %#v", jobID, observed)
 	}
-	var state string
-	var attempt int
-	if err := pool.QueryRow(
-		ctx,
-		"SELECT state, current_attempt FROM workhorse.job_runtime WHERE job_id = $1::uuid",
-		jobID,
-	).Scan(&state, &attempt); err != nil {
-		t.Fatal(err)
+	if observed.Error() != fixture.ExpectedAbortMessage {
+		t.Fatalf("expected lease-loss message %q, received %q", fixture.ExpectedAbortMessage, observed)
 	}
-	if state != "ready" || attempt != 2 {
-		t.Fatalf("expected recovered fence on attempt two, received state=%s attempt=%d", state, attempt)
+	results := <-rejectedWrites
+	if strings.Join(results.names, ",") != strings.Join(fixture.PortableRejectedWrites, ",") {
+		t.Fatalf("durable writes did not all reject the stale fence")
 	}
+	for _, message := range results.messages {
+		if message != fixture.ExpectedRejectedWriteError {
+			t.Fatalf("expected rejected-write message %q, received %q", fixture.ExpectedRejectedWriteError, message)
+		}
+	}
+	for _, portable := range fixture.PortableRejectedWrites {
+		if !containsString(fixture.ExpectedRejectedWrites, portable) {
+			t.Fatalf("portable rejected write %q is absent from expectedRejectedWrites", portable)
+		}
+	}
+	assertWorkerFixtureJobState(t, ctx, pool, jobID, fixture.ExpectedState)
+	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, jobID, []string{fixture.ExpectedAttemptOutcome})
 	var accepted bool
 	if err := pool.QueryRow(
 		ctx,

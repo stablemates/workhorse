@@ -28,8 +28,18 @@ import (
 )
 
 type protocolFixtureManifest struct {
-	Coverage        []string `json:"coverage"`
-	RuntimeCoverage []string `json:"runtimeCoverage"`
+	FormatVersion           int                         `json:"formatVersion"`
+	ProtocolVersion         int                         `json:"protocolVersion"`
+	Schema                  protocolFixtureVersionRange `json:"schema"`
+	SupportedClientProtocol protocolFixtureVersionRange `json:"supportedClientProtocol"`
+	Coverage                []string                    `json:"coverage"`
+	RuntimeCoverage         []string                    `json:"runtimeCoverage"`
+}
+
+type protocolFixtureVersionRange struct {
+	InstalledVersion int `json:"installedVersion"`
+	MinimumVersion   int `json:"minimumVersion"`
+	MaximumVersion   int `json:"maximumVersion"`
 }
 
 type protocolScenario struct {

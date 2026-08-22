@@ -167,6 +167,7 @@ const (
 	shortPoolListenerLogMessage         = "PostgreSQL notification listener requires at least two pool connections; worker is using polling"
 	pollingOnlyListenerLogMessage       = "PostgreSQL notification listener disabled; worker is using polling"
 	leaseLostMessage                    = "job lease was lost"
+	leaseLostErrorMessage               = "Job lease was lost"
 	cancellationRequestedMessage        = "job cancellation was requested"
 	deadlineExceededMessage             = "job deadline was exceeded"
 	executionTimeoutMessage             = "job execution timeout was exceeded"

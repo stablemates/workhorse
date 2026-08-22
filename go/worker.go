@@ -64,7 +64,7 @@ func (err *StaleLeaseError) Unwrap() error { return ErrStaleLease }
 type LeaseLostError struct{ JobID string }
 
 func (err *LeaseLostError) Error() string {
-	return fmt.Sprintf(jobLifecycleErrorFormat, ErrLeaseLost, err.JobID)
+	return leaseLostErrorMessage
 }
 func (err *LeaseLostError) Unwrap() error { return ErrLeaseLost }
 

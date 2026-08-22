@@ -34,8 +34,7 @@ type batchJobState struct {
 	Attempt int    `json:"attempt"`
 }
 
-func TestWorkerExecutesPriorityOrderedMixedBatchFixture(t *testing.T) {
-	fixture := loadBatchRuntimeFixture(t, "priority-ordered-mixed-batch")
+func executeWorkerBatchFixture(t *testing.T, fixture batchRuntimeFixture) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-batch-fixture")
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -133,7 +132,7 @@ func TestWorkerRecoversBatchHandlerPanicForEveryMember(t *testing.T) {
 	runContext, stop := context.WithCancel(ctx)
 	invocations := 0
 	worker.HandleBatch("batch.panic", workhorse.BatchHandlerOptions{
-		MaxSize: 2, Linger: 5 * time.Millisecond,
+		MaxSize: 2, Linger: time.Second,
 	}, func(items []workhorse.BatchHandlerItem) []workhorse.BatchHandlerOutcome {
 		invocations++
 		if invocations == 1 {

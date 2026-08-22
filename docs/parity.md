@@ -86,7 +86,7 @@ telemetry, and graceful shutdown.
 | Graceful stop and signal drain               | Supported  | Supported | Supported |
 | Retention maintenance participation          | Supported  | Absent    | Absent    |
 | OpenTelemetry tracing and metrics            | Supported  | Supported | Supported |
-| Shared runtime fixtures executed             | Supported  | Supported | Planned   |
+| Shared runtime fixtures executed             | Supported  | Supported | Supported |
 
 The Planned worker columns reflect the acceptance criteria in [WH-214], [WH-221], and [WH-236].
 Those work items cover individual and batch handlers, durable primitives, concurrency, heartbeats,
@@ -96,7 +96,7 @@ Planned only when a Plane work item commits to it. A cell claiming more than the
 is a bug in this document. Python executes every shared worker fixture against the lifecycle core
 under [WH-310]. `python/tests/test_async_worker.py` separately proves both async driver bridges,
 async handlers, durable context replay, batch adaptation, native listeners, and drain through that
-same core. Go keeps the shared-fixture row Planned under [WH-331].
+same core. Go executes every shared worker fixture against its public runtime under [WH-331].
 
 ## Roadmap progress
 
