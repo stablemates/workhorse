@@ -12,7 +12,7 @@ import pytest
 
 PROCESS_RUNNER_FIXTURE = Path(__file__).parent / "fixtures" / "process_runner.py"
 CRASH_FIXTURE = Path(__file__).parent / "fixtures" / "crash_worker.py"
-PACKED_FIXTURE = Path(__file__).parent / "fixtures" / "packed_consumer.py"
+DEDICATED_WORKER_EXAMPLE = Path(__file__).parents[1] / "examples" / "dedicated_worker.py"
 
 
 def _start_fixture(mode: str, timeout_ms: int) -> subprocess.Popen[str]:
@@ -162,46 +162,16 @@ def test_killed_worker_job_is_recovered_and_completed_once(
 def test_built_wheel_runs_a_worker_for_a_clean_consumer(
     database_url: str,
     tmp_path: Path,
+    installed_distribution_interpreters: dict[str, Path],
 ) -> None:
-    repository = Path(__file__).parents[2]
-    distribution_directory = tmp_path / "dist"
-    environment_directory = tmp_path / "consumer-environment"
-    subprocess.run(
-        [
-            "uv",
-            "build",
-            "--project",
-            str(repository / "python"),
-            "--out-dir",
-            str(distribution_directory),
-        ],
-        check=True,
-        cwd=repository,
-    )
-    wheel = next(distribution_directory.glob("*.whl"))
-    subprocess.run(
-        ["uv", "venv", str(environment_directory), "--python", sys.executable],
-        check=True,
-        cwd=repository,
-    )
-    installed_python = environment_directory / "bin" / "python"
-    subprocess.run(
-        [
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            str(installed_python),
-            f"{wheel}[psycopg]",
-        ],
-        check=True,
-        cwd=repository,
-    )
-
     environment = os.environ.copy()
     environment.pop("PYTHONPATH", None)
     result = subprocess.run(
-        [str(installed_python), str(PACKED_FIXTURE), database_url],
+        [
+            str(installed_distribution_interpreters["wheel"]),
+            str(DEDICATED_WORKER_EXAMPLE),
+            database_url,
+        ],
         check=False,
         cwd=tmp_path,
         env=environment,

@@ -4,10 +4,11 @@ import os
 import signal
 import sys
 from threading import Timer
+from typing import Any
 
 import psycopg
 
-from workhorse import Queue, Worker, run_worker_process
+from workhorse import HandlerContext, Json, Queue, Worker, run_worker_process
 
 database_url = sys.argv[1]
 
@@ -16,7 +17,7 @@ with psycopg.connect(database_url) as enqueue_connection:
     enqueue_connection.commit()
 
 
-def complete(payload: object, _context: object) -> dict[str, object]:
+def complete(payload: Any, _context: HandlerContext) -> dict[str, Json]:
     Timer(0.05, os.kill, args=(os.getpid(), signal.SIGTERM)).start()
     return {"payload": payload}
 

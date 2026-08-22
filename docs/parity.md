@@ -55,6 +55,9 @@ tracing and metrics, structured logs, signal and human-decision waits, and grace
 workers provide bounded concurrency, fair multi-queue
 claiming, ownership heartbeats, cancellation, durable checkpoints, durable timers, signal and
 human-decision waits, schedule firing, telemetry, and graceful drain through one lifecycle core.
+The Python release lane installs the built universal wheel and source distribution into clean
+environments. It exercises both async driver extras and runs the lifecycle example through the
+public package.
 A deployment using Go needs a TypeScript worker for lifecycle capabilities that
 remain Planned under [WH-236]. It also needs a TypeScript or Python worker to fire schedules until
 [WH-332] ships.
@@ -102,6 +105,7 @@ same core. Go keeps the shared-fixture row Planned under [WH-331].
 | Synchronous Python worker       | [WH-214]        | Backlog   |
 | Asynchronous Python worker      | [WH-312]        | In Review |
 | Python schedule firing          | [WH-309]        | In Review |
+| Python SDK release examples     | [WH-313]        | In Review |
 | Go transactional enqueue client | [WH-228]        | In Review |
 | Go worker and module examples   | [WH-236]        | Backlog   |
 | Go schedule firing              | [WH-332]        | Backlog   |
@@ -146,6 +150,7 @@ exactly as behaviour changes must update the guide that describes them.
 [WH-310]: https://app.plane.so/techprogress/browse/WH-310/
 [WH-311]: https://app.plane.so/techprogress/browse/WH-311/
 [WH-312]: https://app.plane.so/techprogress/browse/WH-312/
+[WH-313]: https://app.plane.so/techprogress/browse/WH-313/
 [WH-318]: https://app.plane.so/techprogress/browse/WH-318/
 [WH-331]: https://app.plane.so/techprogress/browse/WH-331/
 [WH-332]: https://app.plane.so/techprogress/browse/WH-332/

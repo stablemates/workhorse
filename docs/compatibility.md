@@ -39,10 +39,14 @@ published tarballs with pnpm. npm and yarn are not exercised in CI; the packages
 no install scripts, so nothing in them is package-manager specific.
 
 The Python package declares Python 3.10 through 3.14 and requires croniter 6.2.4 through the next
-major plus python-dateutil 2.9 through the next major. It supports Psycopg 3.3 through the next major or asyncpg 0.31 through the next major. Its package lane builds the source distribution and
+major plus python-dateutil 2.9 through the next major. It supports Psycopg 3.3 through the next major
+or asyncpg 0.31 through the next major. Its package lane builds the source distribution and
 universal wheel, checks inline types, runs both real drivers, and executes every shared SQL
-scenario. GitHub Actions remain intentionally disabled while the repository is private; when they
-are restored, each declared Python version must run this lane before publication.
+scenario. `python/tests/test_release.py` installs the wheel and source distribution with both driver
+extras into clean environments. It runs the lifecycle and async enqueue examples without repository imports, then
+checks that the active Python and PostgreSQL versions belong to this matrix. GitHub Actions remain
+intentionally disabled while the repository is private; when they are restored, each declared
+Python version and PostgreSQL major must run this lane before publication.
 
 The Go module declares Go 1.23 or newer and supports its pinned pgx 5.7.6 release. Its repository
 lane exercises enqueue through pgx transactions, pgx pools, and `database/sql` with pgx stdlib. It
@@ -133,6 +137,12 @@ compatible when its migration preserves those contracts.
 While the line is `0.x`, any minor release may make a breaking change, including a schema version
 bump. Breaking changes are listed in [`CHANGELOG.md`](../CHANGELOG.md) with the upgrade steps for
 that release.
+
+The Python package releases independently from a `python/vX.Y.Z` tag. Its version comes from
+`python/pyproject.toml`, and its release candidate is the source distribution plus universal wheel
+produced by `pnpm python:build`. Before publication, the Python format, lint, type, test, packed, and
+site smoke lanes must pass from that tag. Publication remains disabled while GitHub Actions are
+frozen.
 
 ## Protocol and schema compatibility
 

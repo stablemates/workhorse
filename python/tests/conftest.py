@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -10,6 +12,53 @@ import psycopg
 import pytest
 
 REPOSITORY = Path(__file__).parents[2]
+
+
+@pytest.fixture(scope="session")
+def installed_distribution_interpreters(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, Path]:
+    scratch = tmp_path_factory.mktemp("python-distributions")
+    distribution_directory = scratch / "dist"
+    subprocess.run(
+        [
+            "uv",
+            "build",
+            "--project",
+            str(REPOSITORY / "python"),
+            "--out-dir",
+            str(distribution_directory),
+        ],
+        check=True,
+        cwd=REPOSITORY,
+    )
+    artifacts = {
+        "wheel": next(distribution_directory.glob("*.whl")),
+        "sdist": next(distribution_directory.glob("*.tar.gz")),
+    }
+    interpreters: dict[str, Path] = {}
+    for name, artifact in artifacts.items():
+        environment_directory = scratch / f"{name}-environment"
+        subprocess.run(
+            ["uv", "venv", str(environment_directory), "--python", sys.executable],
+            check=True,
+            cwd=REPOSITORY,
+        )
+        installed_python = environment_directory / "bin" / "python"
+        subprocess.run(
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                str(installed_python),
+                f"{artifact}[psycopg,asyncpg]",
+            ],
+            check=True,
+            cwd=REPOSITORY,
+        )
+        interpreters[name] = installed_python
+    return interpreters
 
 
 @pytest.fixture
