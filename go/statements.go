@@ -6,6 +6,9 @@ const (
 	emptyString                          = ""
 	enqueueManyStatementName             = "enqueue_many_v2"
 	syncScheduleDefinitionsStatementName = "sync_schedule_definitions_v1"
+	tickStatementName                    = "tick_v1"
+	listSchedulesStatementName           = "list_schedules_v1"
+	fireScheduleStatementName            = "fire_schedule_v1"
 	promoteStatementName                 = "promote_v1"
 	claimStatementName                   = "claim_v3"
 	heartbeatStatementName               = "heartbeat_v2"
@@ -162,6 +165,26 @@ const (
 	negativeWorkerPollMessage           = "worker poll interval must not be negative"
 	workerHeartbeatRangeMessage         = "worker heartbeat interval must be a whole number of milliseconds greater than zero and shorter than the lease duration"
 	workerMaintenanceRangeMessage       = "worker maintenance interval must be a positive whole number of milliseconds"
+	workerScheduleNamespacesMessage     = "worker schedule namespaces must contain only non-empty names"
+	workerScheduleCatchupRangeMessage   = "worker schedule catch-up limit must be between 1 and 10000"
+	invalidCronExpressionFormat         = "invalid cron expression %q: %w"
+	cronOccurrenceSearchMessage         = "cron expression has no occurrence within the supported search window"
+	invalidHashedCronRangeFormat        = "invalid hashed cron range in %q"
+	invalidHashedCronStepFormat         = "invalid hashed cron step in %q"
+	hashedCronFieldPatternValue         = `H(?:\((\d+)-(\d+)\))?(?:/(\d+))?`
+	lastWeekdayCronFieldPatternValue    = `(?i)^(SUN|MON|TUE|WED|THU|FRI|SAT|[0-7])L$`
+	cronUTCZonePrefix                   = "CRON_TZ=UTC "
+	hashedCronSeedFormat                = "%s:%d:%d"
+	expandedHashedCronStepFormat        = "%d-%d/%d"
+	cronFieldSeparator                  = " "
+	cronListSeparator                   = ","
+	cronWildcardField                   = "*"
+	cronUnspecifiedField                = "?"
+	cronLastDayField                    = "L"
+	cronSundayAlias                     = "7"
+	cronSundayField                     = "0"
+	cronLastDayCandidateRange           = "28-31"
+	recoverMaintenancePhase             = "recover"
 	workerShutdownGraceRangeMessage     = "worker shutdown grace period must be a positive whole number of milliseconds"
 	notificationListenerLogMessage      = "PostgreSQL notification listener unavailable; worker is using polling"
 	shortPoolListenerLogMessage         = "PostgreSQL notification listener requires at least two pool connections; worker is using polling"
@@ -218,6 +241,10 @@ const (
 	childRequestErrorFormat             = "child request %d: %w"
 	invalidChildResultMessage           = "PostgreSQL returned an invalid child result"
 	invalidChildrenResultMessage        = "PostgreSQL returned an invalid child-set result"
+	invalidMaintenanceResultMessage     = "PostgreSQL returned an invalid maintenance result"
+	invalidScheduleListResultMessage    = "PostgreSQL returned an invalid schedule definition row"
+	invalidScheduleFireResultMessage    = "PostgreSQL returned an invalid schedule fire result"
+	maintenancePhaseErrorFormat         = "maintenance phase %s failed: %v"
 	unknownChildStatusFormat            = "PostgreSQL returned unknown child status %q"
 	unknownChildrenStatusFormat         = "PostgreSQL returned unknown child-set status %q"
 	workerIDFallbackFormat              = "%s-%d"
@@ -303,11 +330,19 @@ const (
 	batchDispatchedLogMessage      = "Batch handler dispatched"
 	handlerFailedSpanStatusMessage = "handler failed"
 
-	traceParentField      = "traceparent"
-	traceStateField       = "tracestate"
-	rowExpiredLeasesField = "expired_leases"
-	rowRetriedField       = "retried"
-	rowRowsAffectedField  = "rows_affected"
+	traceParentField         = "traceparent"
+	traceStateField          = "tracestate"
+	rowExpiredLeasesField    = "expired_leases"
+	rowRetriedField          = "retried"
+	rowRowsAffectedField     = "rows_affected"
+	rowPhaseField            = "phase"
+	rowSkippedLockField      = "skipped_lock"
+	rowErrorField            = "error"
+	rowNamespaceField        = "namespace"
+	rowScheduleNameField     = "schedule_name"
+	rowCronExpressionField   = "cron_expression"
+	rowRevisionField         = "revision"
+	rowLastOccurrenceAtField = "last_occurrence_at"
 )
 
 const (
@@ -339,8 +374,19 @@ const (
 var internalStatementRegistry = map[string]string{
 	schemaVersionStatement:               `SELECT version FROM workhorse.schema_version ORDER BY version`,
 	syncScheduleDefinitionsStatementName: `SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean)`,
-	promoteStatementName:                 `SELECT workhorse.promote_v1($1::integer) AS promoted`,
-	listCheckpointStatementName:          `SELECT checkpoint_value FROM workhorse.job_checkpoint WHERE job_id = $1::uuid AND checkpoint_name = $2::text`,
+	tickStatementName:                    `SELECT * FROM workhorse.tick_v1($1::integer, $2::integer)`,
+	listSchedulesStatementName: `SELECT definition.namespace, definition.schedule_name, definition.cron_expression,
+       definition.revision::text, max(occurrence.occurrence_at) AS last_occurrence_at
+  FROM workhorse.schedule_definition definition
+  LEFT JOIN workhorse.schedule_occurrence occurrence
+    ON occurrence.namespace = definition.namespace
+   AND occurrence.schedule_name = definition.schedule_name
+ WHERE definition.enabled AND definition.namespace = ANY($1::text[])
+ GROUP BY definition.namespace, definition.schedule_name
+ ORDER BY definition.namespace, definition.schedule_name`,
+	fireScheduleStatementName:   `SELECT workhorse.fire_schedule_v1($1::text, $2::text, $3::bigint, $4::timestamptz) AS job_id`,
+	promoteStatementName:        `SELECT workhorse.promote_v1($1::integer) AS promoted`,
+	listCheckpointStatementName: `SELECT checkpoint_value FROM workhorse.job_checkpoint WHERE job_id = $1::uuid AND checkpoint_name = $2::text`,
 }
 
 var protocolStatementRegistry = map[string]string{

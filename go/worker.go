@@ -121,38 +121,42 @@ type Handler func(context.Context, any, *HandlerContext) (any, error)
 
 // WorkerOptions configures a bounded worker with notification-assisted polling.
 type WorkerOptions struct {
-	Queue               string
-	Queues              []string
-	WorkerID            string
-	Concurrency         int
-	LeaseDuration       time.Duration
-	HeartbeatInterval   time.Duration
-	PollInterval        time.Duration
-	MaintenanceInterval time.Duration
-	ShutdownGracePeriod time.Duration
-	PollingOnly         bool
-	Logger              *slog.Logger
+	Queue                string
+	Queues               []string
+	WorkerID             string
+	Concurrency          int
+	LeaseDuration        time.Duration
+	HeartbeatInterval    time.Duration
+	PollInterval         time.Duration
+	MaintenanceInterval  time.Duration
+	ScheduleNamespaces   []string
+	ScheduleCatchupLimit int
+	ShutdownGracePeriod  time.Duration
+	PollingOnly          bool
+	Logger               *slog.Logger
 }
 
 // Worker claims and settles jobs through a caller-owned pool.
 type Worker struct {
-	pool                *pgxpool.Pool
-	queues              []string
-	nextQueueIndex      int
-	workerID            string
-	concurrency         int
-	leaseDuration       time.Duration
-	heartbeatInterval   time.Duration
-	pollInterval        time.Duration
-	maintenanceInterval time.Duration
-	shutdownGracePeriod time.Duration
-	pollingOnly         bool
-	logger              *slog.Logger
-	metrics             *workerMetrics
-	runPermit           chan struct{}
-	handlerSlots        chan struct{}
-	handlers            map[string]Handler
-	compatibility       *CachedCompatibilityCheck
+	pool                 *pgxpool.Pool
+	queues               []string
+	nextQueueIndex       int
+	workerID             string
+	concurrency          int
+	leaseDuration        time.Duration
+	heartbeatInterval    time.Duration
+	pollInterval         time.Duration
+	maintenanceInterval  time.Duration
+	scheduleNamespaces   []string
+	scheduleCatchupLimit int
+	shutdownGracePeriod  time.Duration
+	pollingOnly          bool
+	logger               *slog.Logger
+	metrics              *workerMetrics
+	runPermit            chan struct{}
+	handlerSlots         chan struct{}
+	handlers             map[string]Handler
+	compatibility        *CachedCompatibilityCheck
 }
 
 type fencedLease struct {
@@ -228,6 +232,25 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 	if maintenanceInterval < time.Millisecond || maintenanceInterval%time.Millisecond != 0 {
 		return nil, errors.New(workerMaintenanceRangeMessage)
 	}
+	scheduleNamespaces := make([]string, 0, len(options.ScheduleNamespaces))
+	seenScheduleNamespaces := make(map[string]struct{}, len(options.ScheduleNamespaces))
+	for _, namespace := range options.ScheduleNamespaces {
+		if namespace == emptyString {
+			return nil, errors.New(workerScheduleNamespacesMessage)
+		}
+		if _, exists := seenScheduleNamespaces[namespace]; exists {
+			continue
+		}
+		seenScheduleNamespaces[namespace] = struct{}{}
+		scheduleNamespaces = append(scheduleNamespaces, namespace)
+	}
+	scheduleCatchupLimit := options.ScheduleCatchupLimit
+	if scheduleCatchupLimit == 0 {
+		scheduleCatchupLimit = 100
+	}
+	if scheduleCatchupLimit < 1 || scheduleCatchupLimit > 10_000 {
+		return nil, errors.New(workerScheduleCatchupRangeMessage)
+	}
 	concurrency := options.Concurrency
 	if concurrency == 0 {
 		concurrency = 1
@@ -253,22 +276,24 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		return nil, fmt.Errorf(workerMetricCreationErrorFormat, err)
 	}
 	return &Worker{
-		pool:                pool,
-		queues:              uniqueQueues,
-		workerID:            workerID,
-		concurrency:         concurrency,
-		leaseDuration:       leaseDuration,
-		heartbeatInterval:   heartbeatInterval,
-		pollInterval:        pollInterval,
-		maintenanceInterval: maintenanceInterval,
-		shutdownGracePeriod: shutdownGracePeriod,
-		pollingOnly:         options.PollingOnly,
-		logger:              logger,
-		metrics:             metrics,
-		runPermit:           runPermit,
-		handlerSlots:        make(chan struct{}, concurrency),
-		handlers:            make(map[string]Handler),
-		compatibility:       NewCachedCompatibilityCheck(NewPGXExecutor(pool)),
+		pool:                 pool,
+		queues:               uniqueQueues,
+		workerID:             workerID,
+		concurrency:          concurrency,
+		leaseDuration:        leaseDuration,
+		heartbeatInterval:    heartbeatInterval,
+		pollInterval:         pollInterval,
+		maintenanceInterval:  maintenanceInterval,
+		scheduleNamespaces:   scheduleNamespaces,
+		scheduleCatchupLimit: scheduleCatchupLimit,
+		shutdownGracePeriod:  shutdownGracePeriod,
+		pollingOnly:          options.PollingOnly,
+		logger:               logger,
+		metrics:              metrics,
+		runPermit:            runPermit,
+		handlerSlots:         make(chan struct{}, concurrency),
+		handlers:             make(map[string]Handler),
+		compatibility:        NewCachedCompatibilityCheck(NewPGXExecutor(pool)),
 	}, nil
 }
 
@@ -481,22 +506,49 @@ func (worker *Worker) maintenanceLoop(ctx context.Context) error {
 }
 
 func (worker *Worker) runMaintenance(ctx context.Context) error {
-	rows, err := NewPGXExecutor(worker.pool).Query(
+	executor := NewPGXExecutor(worker.pool)
+	rows, err := executor.Query(
 		ctx,
-		protocolStatementRegistry[recoverExpiredStatementName],
+		internalStatementRegistry[tickStatementName],
+		workerPromotionLimit,
 		workerRecoveryLimit,
-		nil,
 	)
-	if err != nil || len(rows) != 1 {
+	if err != nil {
 		return err
 	}
-	expired, expiredOK := integer(rows[0][rowExpiredLeasesField])
-	retried, retriedOK := integer(rows[0][rowRetriedField])
-	rowsAffected, rowsOK := integer(rows[0][rowRowsAffectedField])
-	if expiredOK && expired > 0 {
-		if worker.metrics.enabled {
-			worker.metrics.expiredLeases.Add(ctx, int64(expired))
+	if len(rows) == 0 {
+		return errors.New(invalidMaintenanceResultMessage)
+	}
+	ownsTick := true
+	for _, row := range rows {
+		phase, phaseOK := row[rowPhaseField].(string)
+		skipped, skippedOK := row[rowSkippedLockField].(bool)
+		if !phaseOK || !skippedOK {
+			return errors.New(invalidMaintenanceResultMessage)
 		}
+		if skipped {
+			ownsTick = false
+			continue
+		}
+		if row[rowErrorField] != nil {
+			return fmt.Errorf(maintenancePhaseErrorFormat, phase, row[rowErrorField])
+		}
+		if phase == recoverMaintenancePhase {
+			worker.recordRecovery(ctx, row)
+		}
+	}
+	if ownsTick && len(worker.scheduleNamespaces) > 0 {
+		return worker.fireDueSchedules(ctx, executor, time.Now())
+	}
+	return nil
+}
+
+func (worker *Worker) recordRecovery(ctx context.Context, row Row) {
+	expired, expiredOK := integer(row[rowExpiredLeasesField])
+	retried, retriedOK := integer(row[rowRetriedField])
+	rowsAffected, rowsOK := integer(row[rowRowsAffectedField])
+	if worker.metrics.enabled && expiredOK && expired > 0 {
+		worker.metrics.expiredLeases.Add(ctx, int64(expired))
 	}
 	if worker.metrics.enabled && retriedOK && retried > 0 {
 		worker.metrics.retried.Add(
@@ -520,7 +572,80 @@ func (worker *Worker) runMaintenance(ctx context.Context) error {
 			slog.Int(recoveryRetriedAttribute, retried),
 		)
 	}
+}
+
+func (worker *Worker) fireDueSchedules(ctx context.Context, executor Executor, now time.Time) error {
+	rows, err := executor.Query(
+		ctx,
+		internalStatementRegistry[listSchedulesStatementName],
+		worker.scheduleNamespaces,
+	)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		schedule, err := storedScheduleFromRow(row)
+		if err != nil {
+			return err
+		}
+		occurrences, err := dueOccurrences(
+			schedule.expression,
+			schedule.lastOccurrence,
+			now,
+			worker.scheduleCatchupLimit,
+			time.Local,
+		)
+		if err != nil {
+			return err
+		}
+		for _, occurrence := range occurrences {
+			rows, err := executor.Query(
+				ctx,
+				internalStatementRegistry[fireScheduleStatementName],
+				schedule.namespace,
+				schedule.name,
+				schedule.revision,
+				occurrence,
+			)
+			if err != nil {
+				return err
+			}
+			if len(rows) != 1 {
+				return errors.New(invalidScheduleFireResultMessage)
+			}
+		}
+	}
 	return nil
+}
+
+type storedSchedule struct {
+	namespace      string
+	name           string
+	expression     string
+	revision       string
+	lastOccurrence *time.Time
+}
+
+func storedScheduleFromRow(row Row) (storedSchedule, error) {
+	namespace, namespaceOK := row[rowNamespaceField].(string)
+	name, nameOK := row[rowScheduleNameField].(string)
+	expression, expressionOK := row[rowCronExpressionField].(string)
+	revision, revisionOK := row[rowRevisionField].(string)
+	if !namespaceOK || !nameOK || !expressionOK || !revisionOK {
+		return storedSchedule{}, errors.New(invalidScheduleListResultMessage)
+	}
+	var lastOccurrence *time.Time
+	if value := row[rowLastOccurrenceAtField]; value != nil {
+		parsed, ok := value.(time.Time)
+		if !ok {
+			return storedSchedule{}, errors.New(invalidScheduleListResultMessage)
+		}
+		lastOccurrence = &parsed
+	}
+	return storedSchedule{
+		namespace: namespace, name: name, expression: expression,
+		revision: revision, lastOccurrence: lastOccurrence,
+	}, nil
 }
 
 func (worker *Worker) runOnce(ctx context.Context, executor Executor) (bool, error) {

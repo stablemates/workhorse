@@ -58,9 +58,8 @@ human-decision waits, schedule firing, telemetry, and graceful drain through one
 The Python release lane installs the built universal wheel and source distribution into clean
 environments. It exercises both async driver extras and runs the lifecycle example through the
 public package.
-A deployment using Go needs a TypeScript worker for lifecycle capabilities that
-remain Planned under [WH-236]. It also needs a TypeScript or Python worker to fire schedules until
-[WH-332] ships.
+A deployment using Go needs a TypeScript worker only for lifecycle capabilities that remain Planned
+under [WH-236]. Go workers can fire the recurring definitions that Go clients synchronize.
 
 ## Worker runtime
 
@@ -81,19 +80,19 @@ telemetry, and graceful shutdown.
 | Linked child fan-out and result join         | Supported  | Supported | Supported |
 | Latest-value progress reporting              | Supported  | Absent    | Absent    |
 | Batch handler delivery                       | Supported  | Supported | Supported |
-| Schedule firing (in-process cron)            | Supported  | Supported | Planned   |
+| Schedule firing (in-process cron)            | Supported  | Supported | Supported |
 | Worker fleet registration and remote pause   | Supported  | Absent    | Absent    |
 | Graceful stop and signal drain               | Supported  | Supported | Supported |
 | Retention maintenance participation          | Supported  | Absent    | Absent    |
 | OpenTelemetry tracing and metrics            | Supported  | Supported | Supported |
 | Shared runtime fixtures executed             | Supported  | Supported | Supported |
 
-The remaining Planned worker cell is Go schedule firing under [WH-332]. A row starts Planned only
-when a Plane work item commits to it. A cell claiming more than the work item scope is a bug in
-this document. Python executes every shared worker fixture against the lifecycle core under
+Python executes every shared worker fixture against the lifecycle core under
 [WH-310]. `python/tests/test_async_worker.py` separately proves both async driver bridges, async
 handlers, durable context replay, batch adaptation, native listeners, and drain through that same
-core. Go executes every shared worker fixture against its public runtime under [WH-331].
+core. Go executes every shared worker fixture against its public runtime under [WH-331]. Go and
+TypeScript also execute `protocol/v1/cron-occurrences.json`, which fixes their shared cron and time
+zone semantics.
 
 ## Roadmap progress
 
@@ -105,7 +104,7 @@ core. Go executes every shared worker fixture against its public runtime under [
 | Python SDK release examples     | [WH-313]        | In Review |
 | Go transactional enqueue client | [WH-228]        | In Review |
 | Go worker and module examples   | [WH-236]        | Backlog   |
-| Go schedule firing              | [WH-332]        | Backlog   |
+| Go schedule firing              | [WH-332]        | In Review |
 
 The Plane work items own sequencing, blockers, and completion. Update this table when their state
 changes, and update the capability matrices only when repository tests prove the new support.

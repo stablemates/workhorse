@@ -1,0 +1,115 @@
+[
+  {
+    "id": "seconds-catchup",
+    "expression": "30 */2 * * * *",
+    "timezone": "UTC",
+    "lastOccurrenceAt": "2026-01-01T00:00:00Z",
+    "now": "2026-01-01T00:07:00Z",
+    "limit": 10,
+    "expected": [
+      "2026-01-01T00:00:30Z",
+      "2026-01-01T00:02:30Z",
+      "2026-01-01T00:04:30Z",
+      "2026-01-01T00:06:30Z"
+    ]
+  },
+  {
+    "id": "catchup-limit",
+    "expression": "*/5 * * * * *",
+    "timezone": "UTC",
+    "lastOccurrenceAt": "2026-01-01T00:00:00Z",
+    "now": "2026-01-01T00:00:20Z",
+    "limit": 2,
+    "expected": ["2026-01-01T00:00:05Z", "2026-01-01T00:00:10Z"]
+  },
+  {
+    "id": "named-weekday",
+    "expression": "0 0 * * THU",
+    "timezone": "UTC",
+    "lastOccurrenceAt": "2026-01-07T00:00:00Z",
+    "now": "2026-01-08T00:00:00Z",
+    "limit": 10,
+    "expected": ["2026-01-08T00:00:00Z"]
+  },
+  {
+    "id": "last-day-of-month",
+    "expression": "0 0 L * *",
+    "timezone": "UTC",
+    "lastOccurrenceAt": "2026-01-01T00:00:00Z",
+    "now": "2026-01-31T00:00:00Z",
+    "limit": 10,
+    "expected": ["2026-01-31T00:00:00Z"]
+  },
+  {
+    "id": "leap-century-gap",
+    "expression": "0 0 29 2 *",
+    "timezone": "UTC",
+    "lastOccurrenceAt": "2096-02-29T00:00:00Z",
+    "now": "2104-03-01T00:00:00Z",
+    "limit": 10,
+    "expected": ["2104-02-29T00:00:00Z"]
+  },
+  {
+    "id": "last-named-weekday",
+    "expression": "0 0 * * THUL",
+    "timezone": "UTC",
+    "lastOccurrenceAt": "2026-01-01T00:00:00Z",
+    "now": "2026-01-31T00:00:00Z",
+    "limit": 10,
+    "expected": ["2026-01-29T00:00:00Z"]
+  },
+  {
+    "id": "last-numeric-sunday-alias",
+    "expression": "0 0 * * 7L",
+    "timezone": "UTC",
+    "lastOccurrenceAt": "2026-08-01T00:00:00Z",
+    "now": "2026-08-31T00:00:00Z",
+    "limit": 10,
+    "expected": ["2026-08-30T00:00:00Z"]
+  },
+  {
+    "id": "hashed-minute",
+    "expression": "H * * * *",
+    "timezone": "UTC",
+    "lastOccurrenceAt": "2026-01-01T00:00:00Z",
+    "now": "2026-01-01T01:00:00Z",
+    "limit": 10,
+    "expected": ["2026-01-01T00:44:00Z"]
+  },
+  {
+    "id": "spring-gap",
+    "expression": "30 2 * * *",
+    "timezone": "America/New_York",
+    "lastOccurrenceAt": "2026-03-07T07:30:00Z",
+    "now": "2026-03-08T08:00:00Z",
+    "limit": 10,
+    "expected": ["2026-03-08T07:30:00Z"]
+  },
+  {
+    "id": "fall-fold",
+    "expression": "30 1 * * *",
+    "timezone": "America/New_York",
+    "lastOccurrenceAt": "2026-10-31T05:30:00Z",
+    "now": "2026-11-01T07:00:00Z",
+    "limit": 10,
+    "expected": ["2026-11-01T05:30:00Z"]
+  },
+  {
+    "id": "new-definition-latest-occurrence",
+    "expression": "0 */10 * * * *",
+    "timezone": "UTC",
+    "lastOccurrenceAt": null,
+    "now": "2026-01-01T00:27:45Z",
+    "limit": 10,
+    "expected": ["2026-01-01T00:20:00Z"]
+  },
+  {
+    "id": "new-every-second-definition",
+    "expression": "* * * * * *",
+    "timezone": "UTC",
+    "lastOccurrenceAt": null,
+    "now": "2026-01-01T00:27:45.500Z",
+    "limit": 10,
+    "expected": ["2026-01-01T00:27:46Z"]
+  }
+]

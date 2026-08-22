@@ -1875,21 +1875,26 @@ export class Worker {
   }
 }
 
-function dueOccurrences(
+export function dueOccurrences(
   expression: string,
   lastOccurrenceAt: Date | null,
   now: Date,
   limit: number,
+  timezone?: string,
 ): Date[] {
   const normalizedExpression = expandHashedCronFields(expression);
   if (!lastOccurrenceAt) {
     const cron = CronExpressionParser.parse(normalizedExpression, {
       currentDate: new Date(now.getTime() + 1_000),
+      tz: timezone,
     });
     return [cron.prev().toDate()];
   }
 
-  const cron = CronExpressionParser.parse(normalizedExpression, { currentDate: lastOccurrenceAt });
+  const cron = CronExpressionParser.parse(normalizedExpression, {
+    currentDate: lastOccurrenceAt,
+    tz: timezone,
+  });
   const occurrences: Date[] = [];
   while (occurrences.length < limit) {
     const occurrence = cron.next().toDate();

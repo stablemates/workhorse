@@ -45,7 +45,8 @@ You don't have to elect a leader or run exactly one scheduler. Any number of wor
 race and the outcome is one job.
 
 TypeScript workers select definitions with `scheduleNamespaces`. Python workers use
-`schedule_namespaces`. Both evaluate schedules only after PostgreSQL grants the maintenance tick.
+`schedule_namespaces`, and Go workers use `WorkerOptions.ScheduleNamespaces`. Every runtime
+evaluates schedules only after PostgreSQL grants the maintenance tick.
 
 ## Deploys don't cause duplicates either
 
@@ -67,7 +68,7 @@ memory can't fire yesterday's schedule. It just becomes a no-op.
   skip a scheduled time, Workhorse fires after the clock advances. If clocks repeat a time,
   Workhorse fires its first occurrence only.
 - **Hashed fields stay stable across worker languages.** An `H` field spreads schedules to a
-  repeatable offset, so a Python worker and a TypeScript worker agree on the same occurrence.
+  repeatable offset, so TypeScript, Python, and Go workers agree on the same occurrence.
 - **Cancelling one fired job doesn't disable the schedule.** The definition and the jobs it
   creates have separate lifecycles — tomorrow's occurrence still runs.
 
