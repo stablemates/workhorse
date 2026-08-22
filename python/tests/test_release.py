@@ -37,6 +37,9 @@ def test_python_support_contract_matches_repository_declarations(database_url: s
     assert python_minimum.group(1) == classifiers[0]
     current_python = f"{sys.version_info.major}.{sys.version_info.minor}"
     assert current_python in classifiers
+    package_description = re.search(r'^description = "([^"]+)"$', manifest, re.MULTILINE)
+    assert package_description is not None
+    assert "worker SDK" in package_description.group(1)
 
     postgres_majors = _supported_postgres_majors()
     assert f"PostgreSQL {', '.join(postgres_majors)}" in readme

@@ -88,21 +88,18 @@ telemetry, and graceful shutdown.
 | OpenTelemetry tracing and metrics            | Supported  | Supported | Supported |
 | Shared runtime fixtures executed             | Supported  | Supported | Supported |
 
-The Planned worker columns reflect the acceptance criteria in [WH-214], [WH-221], and [WH-236].
-Those work items cover individual and batch handlers, durable primitives, concurrency, heartbeats,
-cancellation, telemetry, and graceful drain. Schedule firing is Planned under [WH-309] for
-Python and [WH-332] for Go, deliberately outside the [WH-214] and [WH-236] scopes. A row starts
-Planned only when a Plane work item commits to it. A cell claiming more than the work item scope
-is a bug in this document. Python executes every shared worker fixture against the lifecycle core
-under [WH-310]. `python/tests/test_async_worker.py` separately proves both async driver bridges,
-async handlers, durable context replay, batch adaptation, native listeners, and drain through that
-same core. Go executes every shared worker fixture against its public runtime under [WH-331].
+The remaining Planned worker cell is Go schedule firing under [WH-332]. A row starts Planned only
+when a Plane work item commits to it. A cell claiming more than the work item scope is a bug in
+this document. Python executes every shared worker fixture against the lifecycle core under
+[WH-310]. `python/tests/test_async_worker.py` separately proves both async driver bridges, async
+handlers, durable context replay, batch adaptation, native listeners, and drain through that same
+core. Go executes every shared worker fixture against its public runtime under [WH-331].
 
 ## Roadmap progress
 
 | Deliverable                     | Plane work item | State     |
 | ------------------------------- | --------------- | --------- |
-| Synchronous Python worker       | [WH-214]        | Backlog   |
+| Synchronous Python worker       | [WH-214]        | In Review |
 | Asynchronous Python worker      | [WH-312]        | In Review |
 | Python schedule firing          | [WH-309]        | In Review |
 | Python SDK release examples     | [WH-313]        | In Review |

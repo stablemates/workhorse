@@ -111,7 +111,7 @@ and explains where to deploy workers when the web tier is serverless.
 ## Packages and versioning
 
 Nine packages ship from this repository. `@workhorse-js/core` is the TypeScript durable queue;
-`workhorse-pg` is the Python enqueue client; the rest are optional TypeScript packages.
+`workhorse-pg` is the Python client and worker SDK; the rest are optional TypeScript packages.
 
 | Package                            | Purpose                                           | Peer requirements                                                                                             |
 | ---------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
@@ -123,7 +123,7 @@ Nine packages ship from this repository. `@workhorse-js/core` is the TypeScript 
 | `@workhorse-js/dashboard`          | Operator dashboard and its framework-neutral host | `@workhorse-js/core` >= 0.1 and < 0.2, React 19                                                               |
 | `@workhorse-js/dashboard-server`   | Authenticated standalone dashboard server         | `@workhorse-js/dashboard-contract`                                                                            |
 | `@workhorse-js/dashboard-contract` | Type-only dashboard server boundary               | None                                                                                                          |
-| `workhorse-pg`                     | Python client and synchronous worker              | croniter >= 6.2.4 and < 7; python-dateutil >= 2.9 and < 3; Psycopg >= 3.3 and < 4, or asyncpg >= 0.31 and < 1 |
+| `workhorse-pg`                     | Python clients and worker runtimes                | croniter >= 6.2.4 and < 7; python-dateutil >= 2.9 and < 3; Psycopg >= 3.3 and < 4, or asyncpg >= 0.31 and < 1 |
 
 The eight TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.
@@ -167,11 +167,11 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
   `@workhorse-js/dashboard` and its own client, and it changes without a schema version bump. Do not
   build against it; the supported operator surface is the `Queue` query API.
 
-The TypeScript client and worker and the Python and Go enqueue clients implement this protocol.
-Python runs the same canonical SQL fixtures and request mapping through Psycopg, plus transaction
-integration through Psycopg async and asyncpg. Its synchronous and asynchronous workers share one
-lifecycle core; the asynchronous surface uses native Psycopg or asyncpg query and notification
-connections. The Go worker supports bounded multi-queue dispatch, fenced ownership, cooperative
+The TypeScript, Python, and Go clients and workers implement this protocol. Python runs the same
+canonical SQL fixtures and request mapping through Psycopg, plus transaction integration through
+Psycopg async and asyncpg. Its synchronous and asynchronous workers share one lifecycle core; the
+asynchronous surface uses native Psycopg or asyncpg query and notification connections. The Go
+worker supports bounded multi-queue dispatch, fenced ownership, cooperative
 cancellation, durable checkpoints, durable timers, and graceful drain. Its release remains
 unsupported until the runtime and worker module-consumer matrices exist.
 
