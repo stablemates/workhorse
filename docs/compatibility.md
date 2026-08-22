@@ -50,10 +50,10 @@ Python version and PostgreSQL major must run this lane before publication.
 
 The Go module declares Go 1.23 or newer and supports its pinned pgx 5.7.6 release. Its repository
 lane exercises enqueue through pgx transactions, pgx pools, and `database/sql` with pgx stdlib. It
-also compiles and runs a separate module through a local `replace` directive. That consumer test
-proves the public module surface without depending on repository-only imports. The Go tests run
-against every PostgreSQL major supplied to the lane; GitHub Actions wiring waits for the CI
-unfreeze.
+also compiles and runs a separate module through a local `replace` directive. Another external
+module builds every Go example through the public import path. These tests prove the exported module
+surface without repository-only imports. The Go tests run against every PostgreSQL major supplied
+to the lane. GitHub Actions wiring waits for the CI unfreeze.
 
 ## JS runtime smoke tier
 

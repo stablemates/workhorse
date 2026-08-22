@@ -18,24 +18,8 @@ import (
 
 func TestExternalModuleCanImportAndEnqueue(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "module-consumer")
-	minimumGo, pgxVersion := moduleVersions(t)
-	moduleRoot, err := filepath.Abs(".")
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, goMod := externalModuleManifest(t, "workhorse-consumer")
 	consumerRoot := t.TempDir()
-
-	goMod := fmt.Sprintf(`module workhorse-consumer
-
-go %s
-
-require (
-	github.com/jackc/pgx/v5 %s
-	github.com/stablemates/workhorse/go v0.0.0
-)
-
-replace github.com/stablemates/workhorse/go => %s
-`, minimumGo, pgxVersion, filepath.ToSlash(moduleRoot))
 	mainSource := `package main
 
 import (
@@ -126,6 +110,49 @@ func main() {
 	}
 }
 
+func TestExamplesCompileAsExternalConsumers(t *testing.T) {
+	moduleRoot, goMod := externalModuleManifest(t, "workhorse-examples")
+	exampleRoot := filepath.Join(moduleRoot, "examples")
+	entries, err := os.ReadDir(exampleRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	consumerRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(consumerRoot, "go.mod"), []byte(goMod), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	compiled := 0
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		source, err := os.ReadFile(filepath.Join(exampleRoot, entry.Name(), "main.go"))
+		if err != nil {
+			t.Fatalf("read %s example: %v", entry.Name(), err)
+		}
+		target := filepath.Join(consumerRoot, entry.Name())
+		if err := os.Mkdir(target, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(target, "main.go"), source, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		compiled++
+	}
+	if compiled == 0 {
+		t.Fatal("go/examples contains no buildable main packages")
+	}
+
+	command := exec.Command("go", "build", "-mod=mod", "./...")
+	command.Dir = consumerRoot
+	command.Env = append(os.Environ(), "GOWORK=off")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build examples as external consumers: %v\n%s", err, output)
+	}
+}
+
 func TestGoSupportContractMatchesRepositoryDeclarations(t *testing.T) {
 	minimumGo, pgxVersion := moduleVersions(t)
 	if version.Compare(runtime.Version(), "go"+minimumGo) < 0 {
@@ -153,6 +180,16 @@ func TestGoSupportContractMatchesRepositoryDeclarations(t *testing.T) {
 	if !strings.Contains(readme, "pgx "+pgxVersion) {
 		t.Fatalf("go/README.md does not name the pinned pgx release %s", pgxVersion)
 	}
+	for _, requiredReadmeFragment := range []string{
+		"## Deployment and delivery boundaries",
+		"Delivery is at least once.",
+		"## Releasing the module",
+		"go/vX.Y.Z",
+	} {
+		if !strings.Contains(readme, requiredReadmeFragment) {
+			t.Fatalf("go/README.md does not declare release boundary %q", requiredReadmeFragment)
+		}
+	}
 	packageManifest := readRepositoryFile(t, "package.json")
 	if !strings.Contains(packageManifest, `"go:test": "tsx scripts/with-env.ts go -C go test ./..."`) {
 		t.Fatal("package.json does not expose the Go support test lane through the worktree environment")
@@ -178,6 +215,27 @@ func TestGoSupportContractMatchesRepositoryDeclarations(t *testing.T) {
 	if !contains(postgresMajors, serverMajor) {
 		t.Fatalf("test lane uses undeclared PostgreSQL major %s", serverMajor)
 	}
+}
+
+func externalModuleManifest(t *testing.T, moduleName string) (moduleRoot string, manifest string) {
+	t.Helper()
+	minimumGo, pgxVersion := moduleVersions(t)
+	moduleRoot, err := filepath.Abs(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest = fmt.Sprintf(`module %s
+
+go %s
+
+require (
+	github.com/jackc/pgx/v5 %s
+	github.com/stablemates/workhorse/go v0.0.0
+)
+
+replace github.com/stablemates/workhorse/go => %s
+`, moduleName, minimumGo, pgxVersion, filepath.ToSlash(moduleRoot))
+	return moduleRoot, manifest
 }
 
 func moduleVersions(t *testing.T) (minimumGo string, pgxVersion string) {

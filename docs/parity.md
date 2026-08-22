@@ -58,8 +58,8 @@ human-decision waits, schedule firing, telemetry, and graceful drain through one
 The Python release lane installs the built universal wheel and source distribution into clean
 environments. It exercises both async driver extras and runs the lifecycle example through the
 public package.
-A deployment using Go needs a TypeScript worker only for lifecycle capabilities that remain Planned
-under [WH-236]. Go workers can fire the recurring definitions that Go clients synchronize.
+Go workers can fire the recurring definitions that Go clients synchronize. The standalone
+dashboard reads the shared database, so a Go deployment does not need a TypeScript worker runtime.
 
 ## Worker runtime
 
@@ -103,7 +103,7 @@ zone semantics.
 | Python schedule firing          | [WH-309]        | In Review |
 | Python SDK release examples     | [WH-313]        | In Review |
 | Go transactional enqueue client | [WH-228]        | In Review |
-| Go worker and module examples   | [WH-236]        | Backlog   |
+| Go worker and module examples   | [WH-236]        | In Review |
 | Go schedule firing              | [WH-332]        | In Review |
 
 The Plane work items own sequencing, blockers, and completion. Update this table when their state
