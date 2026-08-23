@@ -7,6 +7,7 @@ from threading import Event, Lock
 from typing import Literal, TypeAlias, TypedDict, TypeVar, cast
 
 Json: TypeAlias = bool | int | float | str | list["Json"] | dict[str, "Json"] | None
+QueueHealth: TypeAlias = dict[str, Json]
 RetryPolicy: TypeAlias = Mapping[str, Json]
 EnqueueOutcome: TypeAlias = Literal[
     "accepted", "replayed", "replaced", "non_replaceable", "coalesced"

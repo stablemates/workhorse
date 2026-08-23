@@ -166,9 +166,52 @@ type Queue struct {
 	defaultQueue string
 }
 
+// QueueHealth is PostgreSQL's versioned health document. Stable fields and reason codes are
+// defined by queue_health_v1, so every language receives the same evaluation.
+type QueueHealth map[string]any
+
 // NewQueue constructs an enqueue client without taking ownership of the executor.
 func NewQueue(executor Executor, defaultQueue string) *Queue {
 	return &Queue{executor: executor, defaultQueue: defaultQueue}
+}
+
+// Health reads PostgreSQL's database-authoritative queue health snapshot.
+func (queue *Queue) Health(ctx context.Context) (QueueHealth, error) {
+	if err := AssertCompatible(ctx, queue.executor); err != nil {
+		return nil, err
+	}
+	rows, err := queue.executor.Query(
+		ctx,
+		protocolStatementRegistry[queueHealthStatementName],
+		time.Now().UTC().Add(-24*time.Hour),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) != 1 {
+		return nil, fmt.Errorf(invalidHealthRowCountMessage, len(rows))
+	}
+	return decodeQueueHealth(rows[0][rowSnapshotField])
+}
+
+func decodeQueueHealth(value any) (QueueHealth, error) {
+	if document, ok := value.(map[string]any); ok {
+		return QueueHealth(document), nil
+	}
+	var encoded []byte
+	switch value := value.(type) {
+	case []byte:
+		encoded = value
+	case string:
+		encoded = []byte(value)
+	default:
+		return nil, fmt.Errorf(invalidHealthJSONMessage, value)
+	}
+	var document QueueHealth
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		return nil, fmt.Errorf(decodeHealthJSONMessage, err)
+	}
+	return document, nil
 }
 
 // Enqueue submits one job and returns its stable identifier.

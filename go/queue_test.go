@@ -86,6 +86,26 @@ func TestQueueSerializesMinimalRequestsAndReturnsCanonicalResults(t *testing.T) 
 	}
 }
 
+func TestQueueHealthReturnsTheVersionedPostgreSQLDocument(t *testing.T) {
+	executor := &queueExecutor{responses: [][]workhorse.Row{
+		{{"version": int64(1)}},
+		{{"snapshot": []byte(`{"status":{"level":"healthy","reasons":[]},"ready":"3"}`)}},
+	}}
+	queue := workhorse.NewQueue(executor, "default")
+
+	health, err := queue.Health(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, ok := health["status"].(map[string]any)
+	if !ok || status["level"] != "healthy" || health["ready"] != "3" {
+		t.Fatalf("unexpected health document: %#v", health)
+	}
+	if len(executor.calls) != 2 || len(executor.calls[1].arguments) != 1 {
+		t.Fatalf("expected compatibility and one queue_health_v1 call: %#v", executor.calls)
+	}
+}
+
 func TestQueueSatisfiesSharedRequestFixturesWithinCurrentScope(t *testing.T) {
 	type requestFixture struct {
 		ID          string `json:"id"`

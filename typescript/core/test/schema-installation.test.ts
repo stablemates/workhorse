@@ -315,6 +315,33 @@ describe("schema installation", () => {
       updatedAt: expect.any(Date),
     });
 
+    const healthPolicy = await pool.query<{
+      promotion_lag_ms: number;
+      rollup_stalled_lag_ms: number;
+      row_retention_lag_ms: number;
+      partition_retention_lag_ms: number;
+      eligible_history_partitions: number;
+      operator_overrides: string[];
+    }>("SELECT * FROM workhorse.get_queue_health_policy_v1()");
+    expect(healthPolicy.rows[0]).toMatchObject({
+      promotion_lag_ms: 10_000,
+      rollup_stalled_lag_ms: 1_800_000,
+      row_retention_lag_ms: 21_600_000,
+      partition_retention_lag_ms: 172_800_000,
+      eligible_history_partitions: 2,
+      operator_overrides: [],
+    });
+    await expect(queue.health()).resolves.toMatchObject({
+      schemaVersion: WORKHORSE_SCHEMA_VERSION,
+      budgets: {
+        promotionLagMs: 10_000,
+        rollupStalledLagMs: 1_800_000,
+        rowRetentionLagMs: 21_600_000,
+        partitionRetentionLagMs: 172_800_000,
+        eligibleHistoryPartitions: 2,
+      },
+    });
+
     const historyPartitions = await pool.query<{ parent: string; partitions: number }>(`
         SELECT parent.relname AS parent, count(*)::integer AS partitions
           FROM pg_inherits inheritance

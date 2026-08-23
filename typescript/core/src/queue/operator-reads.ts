@@ -1,5 +1,4 @@
 import { databaseErrorCode, databaseErrorDetails, WorkhorseError } from "../errors.js";
-import { DEFAULT_QUEUE_HEALTH_BUDGETS, evaluateQueueHealth } from "../health.js";
 import { perQueueDepthSelect } from "../queue-depth.js";
 import { logInfo, recordRedrive, type QueueMetricSnapshot } from "../telemetry.js";
 import type {
@@ -26,6 +25,7 @@ import type {
   Json,
   QueueHealth,
   QueueHealthBudgets,
+  QueueHealthStatus,
   RateLimitPolicy,
   RateLimitStatus,
   RedriveIdempotencyConflictDetails,
@@ -43,6 +43,7 @@ import {
   MAX_REDRIVE_BATCH_SIZE,
 } from "../types.js";
 import { progressRecord } from "./checkpoints-progress-waits.js";
+import { QUEUE_HEALTH_SQL } from "./health-protocol.js";
 import {
   validateJobListQuery,
   validateJobTimelineCursor,
@@ -184,7 +185,6 @@ export type RateLimitStatusRow = RateLimitPolicyRow & {
 };
 
 import {
-  HEALTH_SNAPSHOT_SQL,
   RATE_LIMIT_STATUS_SQL,
   childPressureProjectionSql,
   childPressureSamplesSql,
@@ -200,7 +200,7 @@ function nullableHealthTimestamp(value: Date | string | null): Date | null {
   return value === null ? null : healthTimestamp(value);
 }
 
-type HealthSnapshotRow = RetentionPolicyRow & {
+export type QueueHealthDocument = RetentionPolicyRow & {
   captured_at: Date | string;
   schema_version: number | null;
   blocked: string;
@@ -283,6 +283,26 @@ type HealthSnapshotRow = RetentionPolicyRow & {
     has_job_events: boolean;
     has_attempt_history: boolean;
   }> | null;
+  budgets: QueueHealthBudgets;
+  status: QueueHealthStatus;
+  observations: {
+    relations: Array<{
+      relation: string;
+      total_bytes: string;
+      table_bytes: string;
+      index_bytes: string;
+      live_tuples: string;
+      dead_tuples: string;
+      modifications_since_analyze: string;
+      hot_update_ratio: number | null;
+      last_vacuum: Date | string | null;
+      last_autovacuum: Date | string | null;
+      partitions: string;
+    }>;
+    oldest_transaction_age_ms: number | null;
+    lock_wait_count: string;
+    notification_queue_usage: number;
+  };
 };
 
 function deadLetterFilter(filter: DeadLetterFilter): Record<string, Json> {
@@ -579,6 +599,162 @@ export class RedriveIdempotencyConflictError extends WorkhorseError {
     );
     this.name = "RedriveIdempotencyConflictError";
   }
+}
+
+/** Convert the versioned PostgreSQL health document into the public TypeScript shape. */
+export function queueHealthFromDocument(row: QueueHealthDocument): QueueHealth {
+  const rateLimits = row.rate_limit_policies.map(rateLimitStatus);
+  const base: Omit<QueueHealth, "status" | "budgets"> = {
+    capturedAt: healthTimestamp(row.captured_at),
+    schemaVersion: row.schema_version,
+    counts: {
+      blocked: Number(row.blocked),
+      scheduled: Number(row.scheduled),
+      ready: Number(row.ready),
+      active: Number(row.active),
+      succeeded: Number(row.succeeded_count),
+      failed: Number(row.failed_count),
+      canceled: Number(row.canceled_count),
+    },
+    terminalCountsCapped: row.terminal_counts_capped,
+    readyDepth: Number(row.ready),
+    scheduledDepth: Number(row.scheduled),
+    sleepingJobs: Number(row.sleeping),
+    overdueWaits: Number(row.overdue_waits),
+    nextWakeAt: nullableHealthTimestamp(row.next_wake_at),
+    activeLeases: Number(row.active),
+    expiredLeases: Number(row.expired),
+    dependencies: {
+      blockedJobs: Number(row.dependency_blocked_jobs),
+      pendingEdges: Number(row.dependency_pending_edges),
+      failedResolutions: Number(row.dependency_failed_resolutions),
+      retentionPruneStarved: row.dependency_retention_prune_starved,
+      capped: row.dependency_counts_capped,
+    },
+    children: {
+      waitingParents: Number(row.child_waiting_parents),
+      pendingChildren: Number(row.child_pending_children),
+      unjoinedResults: Number(row.child_unjoined_results),
+      failedParents: Number(row.child_failed_parents),
+      canceledParents: Number(row.child_canceled_parents),
+      capped: row.child_counts_capped,
+    },
+    externalWaits: {
+      pendingSignals: Number(row.pending_signal_waits),
+      pendingHumanDecisions: Number(row.pending_human_waits),
+      overdue: Number(row.overdue_external_waits),
+      oldestPendingAgeMs:
+        row.oldest_external_wait_age_ms === null ? null : Number(row.oldest_external_wait_age_ms),
+      rejectedDeliveries: Number(row.rejected_wait_deliveries),
+      capped: row.external_wait_counts_capped,
+    },
+    oldestReadyAgeMs: row.oldest_ready_age_ms === null ? null : Number(row.oldest_ready_age_ms),
+    deadlinePressure: {
+      pending: Number(row.pending_deadlines),
+      overdue: Number(row.overdue_deadlines),
+      dueWithinMinute: Number(row.deadlines_due_within_minute),
+      earliestAt: nullableHealthTimestamp(row.earliest_deadline_at),
+    },
+    activeExecutionTimeouts: Number(row.active_execution_timeouts),
+    overdueExecutionTimeouts: Number(row.overdue_execution_timeouts),
+    overdueScheduled: Number(row.overdue_scheduled),
+    oldestOverdueScheduledAgeMs:
+      row.oldest_overdue_scheduled_age_ms === null
+        ? null
+        : Number(row.oldest_overdue_scheduled_age_ms),
+    concurrencyPolicies: {
+      policies: row.concurrency_policies.map((policy) => ({
+        namespace: policy.namespace,
+        queue: policy.queue_name,
+        maxActive: policy.max_active,
+        active: Number(policy.active),
+        available: Math.max(0, policy.max_active - Number(policy.active)),
+        blockedReady: Number(policy.blocked_ready),
+        maxActivePerKey: policy.max_active_per_key,
+        saturatedKeys: Number(policy.saturated_keys),
+        highestKeyActive: Number(policy.highest_key_active),
+      })),
+      capped: row.concurrency_policies.some((policy) => policy.capped),
+    },
+    rateLimitPolicies: {
+      policies: rateLimits,
+      capped: rateLimits.some((policy) => policy.policySetCapped || policy.sampleCapped),
+    },
+    statistics: {
+      rolledUpThrough: healthTimestamp(row.rolled_up_through),
+      lagMs: Number(row.rollup_lag_ms),
+      lastRunAt: nullableHealthTimestamp(row.last_run_at),
+      buckets: Number(row.buckets),
+      bucketsCapped: row.buckets_capped,
+      oldestBucketAt: nullableHealthTimestamp(row.oldest_statistics_at),
+      newestBucketAt: nullableHealthTimestamp(row.newest_bucket_at),
+    },
+    retentionPolicy: retentionPolicy(row),
+    retentionLagMs: {
+      jobIdentity: row.job_identity_lag_ms === null ? null : Number(row.job_identity_lag_ms),
+      terminalOutcome:
+        row.terminal_outcome_lag_ms === null ? null : Number(row.terminal_outcome_lag_ms),
+      jobEvents: row.job_event_lag_ms === null ? null : Number(row.job_event_lag_ms),
+      attemptHistory:
+        row.attempt_history_lag_ms === null ? null : Number(row.attempt_history_lag_ms),
+      scheduleOccurrences:
+        row.schedule_occurrence_lag_ms === null ? null : Number(row.schedule_occurrence_lag_ms),
+      statistics: row.statistics_lag_ms === null ? null : Number(row.statistics_lag_ms),
+    },
+    oldestRetainedAt: {
+      jobIdentity: nullableHealthTimestamp(row.oldest_job_identity_at),
+      terminalOutcome: nullableHealthTimestamp(row.oldest_terminal_outcome_at),
+      jobEvents: nullableHealthTimestamp(row.oldest_job_event_at),
+      attemptHistory: nullableHealthTimestamp(row.oldest_attempt_history_at),
+      scheduleOccurrences: nullableHealthTimestamp(row.oldest_schedule_occurrence_at),
+      statistics: nullableHealthTimestamp(row.oldest_statistics_at),
+    },
+    eligibleHistoryPartitions: {
+      jobEvents: Number(row.eligible_event_partitions),
+      attemptHistory: Number(row.eligible_attempt_partitions),
+    },
+    defaultHistoryRows: {
+      jobEvents: Number(row.default_event_rows),
+      attemptHistory: Number(row.default_attempt_rows),
+    },
+    defaultHistoryRowsCapped: {
+      jobEvents: row.default_event_rows_capped,
+      attemptHistory: row.default_attempt_rows_capped,
+    },
+    historyPartitionDays: (row.history_partition_days ?? []).map((dayRow) => ({
+      day: dayRow.day,
+      startsAt: new Date(dayRow.starts_at),
+      hasJobEvents: dayRow.has_job_events,
+      hasAttemptHistory: dayRow.has_attempt_history,
+    })),
+    observations: {
+      relations: row.observations.relations.map((relation) => ({
+        relation: relation.relation,
+        totalBytes: Number(relation.total_bytes),
+        tableBytes: Number(relation.table_bytes),
+        indexBytes: Number(relation.index_bytes),
+        liveTuples: Number(relation.live_tuples),
+        deadTuples: Number(relation.dead_tuples),
+        modificationsSinceAnalyze: Number(relation.modifications_since_analyze),
+        hotUpdateRatio:
+          relation.hot_update_ratio === null ? null : Number(relation.hot_update_ratio),
+        lastVacuum: nullableHealthTimestamp(relation.last_vacuum),
+        lastAutovacuum: nullableHealthTimestamp(relation.last_autovacuum),
+        partitions: Number(relation.partitions),
+      })),
+      oldestTransactionAgeMs:
+        row.observations.oldest_transaction_age_ms === null
+          ? null
+          : Number(row.observations.oldest_transaction_age_ms),
+      lockWaitCount: Number(row.observations.lock_wait_count),
+      notificationQueueUsage: Number(row.observations.notification_queue_usage),
+    },
+  };
+  return {
+    ...base,
+    budgets: row.budgets,
+    status: row.status,
+  };
 }
 
 /** Owns operator reads, redrive operations, health, and metric snapshots. */
@@ -1040,212 +1216,15 @@ export class OperatorReadsModule extends QueueModule {
     };
   }
 
-  async health(options: { budgets?: Partial<QueueHealthBudgets> } = {}): Promise<QueueHealth> {
-    // The consistent snapshot is one statement and therefore one MVCC snapshot. The remaining
-    // queries are PostgreSQL observations — collector estimates and instantaneous server state —
-    // which are not transactional facts and can lag until the statistics collector flushes.
+  async health(): Promise<QueueHealth> {
     const rejectedSince = new Date(Date.now() - EXTERNAL_WAIT_REJECTION_WINDOW_MS);
-    const [snapshot, relations, activity, notification] = await Promise.all([
-      this.context.database.query<HealthSnapshotRow>(HEALTH_SNAPSHOT_SQL, [[], rejectedSince]),
-      this.context.database.query<{
-        relation: string;
-        total_bytes: string;
-        table_bytes: string;
-        index_bytes: string;
-        live_tuples: string;
-        dead_tuples: string;
-        modifications_since_analyze: string;
-        hot_update_ratio: number | null;
-        last_vacuum: Date | string | null;
-        last_autovacuum: Date | string | null;
-        partitions: string;
-      }>(`
-        -- Partitioned parents own no storage themselves, so a plain pg_class lookup reports the two
-        -- largest relations as empty. Summing each partition tree is what makes history visible.
-        SELECT parent.relname AS relation,
-               sum(pg_total_relation_size(COALESCE(tree.relid, parent.oid)))::text AS total_bytes,
-               sum(pg_relation_size(COALESCE(tree.relid, parent.oid)))::text AS table_bytes,
-               sum(pg_indexes_size(COALESCE(tree.relid, parent.oid)))::text AS index_bytes,
-               sum(COALESCE(s.n_live_tup, 0))::text AS live_tuples,
-               sum(COALESCE(s.n_dead_tup, 0))::text AS dead_tuples,
-               sum(COALESCE(s.n_mod_since_analyze, 0))::text AS modifications_since_analyze,
-               CASE WHEN sum(COALESCE(s.n_tup_upd, 0)) = 0 THEN NULL
-                    ELSE sum(s.n_tup_hot_upd)::double precision / sum(s.n_tup_upd) END
-                 AS hot_update_ratio,
-               max(s.last_vacuum) AS last_vacuum, max(s.last_autovacuum) AS last_autovacuum,
-               count(*) FILTER (WHERE tree.relid IS NOT NULL AND tree.relid <> parent.oid)::text
-                 AS partitions
-          FROM pg_class parent
-          JOIN pg_namespace n ON n.oid = parent.relnamespace
-          -- pg_partition_tree returns no rows for an ordinary table, so the join must be outer and
-          -- fall back to the relation itself. A plain inner join silently drops every unpartitioned
-          -- relation from health, which is most of them.
-          LEFT JOIN LATERAL pg_partition_tree(parent.oid) tree ON true
-          LEFT JOIN pg_stat_user_tables s ON s.relid = COALESCE(tree.relid, parent.oid)
-         WHERE n.nspname = 'workhorse' AND parent.relkind IN ('r', 'p')
-           AND parent.relispartition = false
-         GROUP BY parent.relname, parent.oid
-         ORDER BY parent.relname`),
-      this.context.database.query<{ age_ms: number | null; lock_wait_count: string }>(`
-        SELECT extract(epoch FROM clock_timestamp() - min(xact_start)) * 1000 AS age_ms,
-               count(*) FILTER (WHERE wait_event_type = 'Lock')::text AS lock_wait_count
-          FROM pg_stat_activity WHERE pid <> pg_backend_pid()`),
-      this.context.database.query<{ usage: number }>(
-        "SELECT pg_notification_queue_usage() AS usage",
-      ),
-    ]);
-
-    const row = snapshot.rows[0];
-    if (!row) throw new Error("health snapshot returned no row; is the schema installed?");
-    const rateLimits = row.rate_limit_policies.map(rateLimitStatus);
-    const base: Omit<QueueHealth, "status"> = {
-      capturedAt: healthTimestamp(row.captured_at),
-      schemaVersion: row.schema_version,
-      counts: {
-        blocked: Number(row.blocked),
-        scheduled: Number(row.scheduled),
-        ready: Number(row.ready),
-        active: Number(row.active),
-        succeeded: Number(row.succeeded_count),
-        failed: Number(row.failed_count),
-        canceled: Number(row.canceled_count),
-      },
-      terminalCountsCapped: row.terminal_counts_capped,
-      readyDepth: Number(row.ready),
-      scheduledDepth: Number(row.scheduled),
-      sleepingJobs: Number(row.sleeping),
-      overdueWaits: Number(row.overdue_waits),
-      nextWakeAt: nullableHealthTimestamp(row.next_wake_at),
-      activeLeases: Number(row.active),
-      expiredLeases: Number(row.expired),
-      dependencies: {
-        blockedJobs: Number(row.dependency_blocked_jobs),
-        pendingEdges: Number(row.dependency_pending_edges),
-        failedResolutions: Number(row.dependency_failed_resolutions),
-        retentionPruneStarved: row.dependency_retention_prune_starved,
-        capped: row.dependency_counts_capped,
-      },
-      children: {
-        waitingParents: Number(row.child_waiting_parents),
-        pendingChildren: Number(row.child_pending_children),
-        unjoinedResults: Number(row.child_unjoined_results),
-        failedParents: Number(row.child_failed_parents),
-        canceledParents: Number(row.child_canceled_parents),
-        capped: row.child_counts_capped,
-      },
-      externalWaits: {
-        pendingSignals: Number(row.pending_signal_waits),
-        pendingHumanDecisions: Number(row.pending_human_waits),
-        overdue: Number(row.overdue_external_waits),
-        oldestPendingAgeMs:
-          row.oldest_external_wait_age_ms === null ? null : Number(row.oldest_external_wait_age_ms),
-        rejectedDeliveries: Number(row.rejected_wait_deliveries),
-        capped: row.external_wait_counts_capped,
-      },
-      oldestReadyAgeMs: row.oldest_ready_age_ms === null ? null : Number(row.oldest_ready_age_ms),
-      deadlinePressure: {
-        pending: Number(row.pending_deadlines),
-        overdue: Number(row.overdue_deadlines),
-        dueWithinMinute: Number(row.deadlines_due_within_minute),
-        earliestAt: nullableHealthTimestamp(row.earliest_deadline_at),
-      },
-      activeExecutionTimeouts: Number(row.active_execution_timeouts),
-      overdueExecutionTimeouts: Number(row.overdue_execution_timeouts),
-      overdueScheduled: Number(row.overdue_scheduled),
-      oldestOverdueScheduledAgeMs:
-        row.oldest_overdue_scheduled_age_ms === null
-          ? null
-          : Number(row.oldest_overdue_scheduled_age_ms),
-      concurrencyPolicies: {
-        policies: row.concurrency_policies.map((policy) => ({
-          namespace: policy.namespace,
-          queue: policy.queue_name,
-          maxActive: policy.max_active,
-          active: Number(policy.active),
-          available: Math.max(0, policy.max_active - Number(policy.active)),
-          blockedReady: Number(policy.blocked_ready),
-          maxActivePerKey: policy.max_active_per_key,
-          saturatedKeys: Number(policy.saturated_keys),
-          highestKeyActive: Number(policy.highest_key_active),
-        })),
-        capped: row.concurrency_policies.some((policy) => policy.capped),
-      },
-      rateLimitPolicies: {
-        policies: rateLimits,
-        capped: rateLimits.some((policy) => policy.policySetCapped || policy.sampleCapped),
-      },
-      statistics: {
-        rolledUpThrough: healthTimestamp(row.rolled_up_through),
-        lagMs: Number(row.rollup_lag_ms),
-        lastRunAt: nullableHealthTimestamp(row.last_run_at),
-        buckets: Number(row.buckets),
-        bucketsCapped: row.buckets_capped,
-        oldestBucketAt: nullableHealthTimestamp(row.oldest_statistics_at),
-        newestBucketAt: nullableHealthTimestamp(row.newest_bucket_at),
-      },
-      retentionPolicy: retentionPolicy(row),
-      retentionLagMs: {
-        jobIdentity: row.job_identity_lag_ms === null ? null : Number(row.job_identity_lag_ms),
-        terminalOutcome:
-          row.terminal_outcome_lag_ms === null ? null : Number(row.terminal_outcome_lag_ms),
-        jobEvents: row.job_event_lag_ms === null ? null : Number(row.job_event_lag_ms),
-        attemptHistory:
-          row.attempt_history_lag_ms === null ? null : Number(row.attempt_history_lag_ms),
-        scheduleOccurrences:
-          row.schedule_occurrence_lag_ms === null ? null : Number(row.schedule_occurrence_lag_ms),
-        statistics: row.statistics_lag_ms === null ? null : Number(row.statistics_lag_ms),
-      },
-      oldestRetainedAt: {
-        jobIdentity: nullableHealthTimestamp(row.oldest_job_identity_at),
-        terminalOutcome: nullableHealthTimestamp(row.oldest_terminal_outcome_at),
-        jobEvents: nullableHealthTimestamp(row.oldest_job_event_at),
-        attemptHistory: nullableHealthTimestamp(row.oldest_attempt_history_at),
-        scheduleOccurrences: nullableHealthTimestamp(row.oldest_schedule_occurrence_at),
-        statistics: nullableHealthTimestamp(row.oldest_statistics_at),
-      },
-      eligibleHistoryPartitions: {
-        jobEvents: Number(row.eligible_event_partitions),
-        attemptHistory: Number(row.eligible_attempt_partitions),
-      },
-      defaultHistoryRows: {
-        jobEvents: Number(row.default_event_rows),
-        attemptHistory: Number(row.default_attempt_rows),
-      },
-      defaultHistoryRowsCapped: {
-        jobEvents: row.default_event_rows_capped,
-        attemptHistory: row.default_attempt_rows_capped,
-      },
-      historyPartitionDays: (row.history_partition_days ?? []).map((dayRow) => ({
-        day: dayRow.day,
-        startsAt: new Date(dayRow.starts_at),
-        hasJobEvents: dayRow.has_job_events,
-        hasAttemptHistory: dayRow.has_attempt_history,
-      })),
-      observations: {
-        relations: relations.rows.map((relation) => ({
-          relation: relation.relation,
-          totalBytes: Number(relation.total_bytes),
-          tableBytes: Number(relation.table_bytes),
-          indexBytes: Number(relation.index_bytes),
-          liveTuples: Number(relation.live_tuples),
-          deadTuples: Number(relation.dead_tuples),
-          modificationsSinceAnalyze: Number(relation.modifications_since_analyze),
-          hotUpdateRatio:
-            relation.hot_update_ratio === null ? null : Number(relation.hot_update_ratio),
-          lastVacuum: nullableHealthTimestamp(relation.last_vacuum),
-          lastAutovacuum: nullableHealthTimestamp(relation.last_autovacuum),
-          partitions: Number(relation.partitions),
-        })),
-        oldestTransactionAgeMs:
-          activity.rows[0]?.age_ms === null ? null : Number(activity.rows[0]?.age_ms ?? 0),
-        lockWaitCount: Number(activity.rows[0]?.lock_wait_count ?? 0),
-        notificationQueueUsage: Number(notification.rows[0]?.usage ?? 0),
-      },
-    };
-    return {
-      ...base,
-      status: evaluateQueueHealth(base, { ...DEFAULT_QUEUE_HEALTH_BUDGETS, ...options.budgets }),
-    };
+    const result = await this.context.database.query<{ snapshot: QueueHealthDocument }>(
+      QUEUE_HEALTH_SQL,
+      [rejectedSince],
+    );
+    const row = result.rows[0]?.snapshot;
+    if (!row) throw new Error("queue_health_v1 returned no snapshot; is the schema installed?");
+    return queueHealthFromDocument(row);
   }
 
   /** Read the per-queue live pressure used by OpenTelemetry observable instruments. */

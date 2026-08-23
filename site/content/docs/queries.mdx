@@ -96,18 +96,16 @@ interpreting them as lifecycle state.
 
 ## Ask the queue how it feels
 
-`queue.health({ budgets })` reads every correctness-sensitive value in a single SQL statement, so
+`queue.health()` reads every correctness-sensitive value in a single SQL statement, so
 the snapshot describes one instant — reported as `capturedAt`. It then evaluates the snapshot
-against budgets and returns a verdict.
+against database-owned budgets and returns a verdict.
 
 ```ts
-const health = await queue.health({
-  budgets: { rollupStalledLagMs: 5 * 60 * 1000 },
-});
+const health = await queue.health();
 
 if (health.status.level !== "healthy") {
   for (const reason of health.status.reasons) {
-    console.warn(reason.code, reason.observed);
+    console.warn(reason.code, reason.observed, reason.budget);
   }
 }
 ```
@@ -116,6 +114,8 @@ if (health.status.level !== "healthy") {
 with a stable machine-readable `code` and the `observed` value, so automation branches on codes
 instead of parsing prose. Exact counts live at the top level of `QueueHealth`; values that come
 from PostgreSQL's own lagging statistics live under `observations`, where lag is expected.
+The applied policy lives under `budgets`, so callers can explain the threshold without carrying
+process-local configuration.
 
 The `workhorse health --json` command runs the identical evaluation and exits non-zero on any
 exceeded budget. It is ready for probes and cron checks. For continuous export instead of polling, see

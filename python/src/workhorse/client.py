@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+import json
+from collections.abc import Mapping, Sequence
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 
 from ._compatibility import assert_async_compatible, assert_sync_compatible
@@ -32,6 +34,7 @@ from .types import (
     EnqueueResult,
     HumanWaitCompletionResult,
     Json,
+    QueueHealth,
     ScheduleDefinition,
     SignalDeliveryResult,
 )
@@ -55,6 +58,15 @@ class Queue:
 
     def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str:
         return self.enqueue_with_result(type, payload, options).job_id
+
+    def health(self) -> QueueHealth:
+        """Read PostgreSQL's database-authoritative queue health snapshot."""
+        assert_sync_compatible(self._executor)
+        row = _one_row(
+            self._executor.rows(STATEMENTS.health, (_health_window_start(),)),
+            "workhorse.queue_health_v1",
+        )
+        return _health_document(row.get("snapshot"))
 
     def enqueue_with_result(
         self, type: str, payload: Json, options: EnqueueOptions | None = None
@@ -152,6 +164,15 @@ class AsyncQueue:
     async def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str:
         return (await self.enqueue_with_result(type, payload, options)).job_id
 
+    async def health(self) -> QueueHealth:
+        """Read PostgreSQL's database-authoritative queue health snapshot."""
+        await assert_async_compatible(self._executor)
+        row = _one_row(
+            await self._executor.rows(STATEMENTS.health, (_health_window_start(),)),
+            "workhorse.queue_health_v1",
+        )
+        return _health_document(row.get("snapshot"))
+
     async def enqueue_with_result(
         self, type: str, payload: Json, options: EnqueueOptions | None = None
     ) -> EnqueueResult:
@@ -231,6 +252,20 @@ def _raise_translated(error: Exception) -> NoReturn:
     if translated is not None:
         raise translated from error
     raise error
+
+
+def _health_window_start() -> datetime:
+    return datetime.now(timezone.utc) - timedelta(days=1)
+
+
+def _health_document(value: object) -> QueueHealth:
+    if isinstance(value, str | bytes | bytearray):
+        value = json.loads(value)
+    if not isinstance(value, Mapping):
+        raise RuntimeError(
+            f"workhorse.queue_health_v1 returned {type(value).__name__}; expected JSON object"
+        )
+    return cast(QueueHealth, dict(value))
 
 
 def _results(rows: Sequence[Row]) -> list[EnqueueResult]:

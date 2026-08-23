@@ -30,7 +30,7 @@ exact count wins.
 
 ## Bounded by design
 
-A queue that has processed a hundred million jobs should not need to scan them all to say how it
+A queue with enormous history should not need to scan every old job to say how it
 feels. Live work is small by design, so live-state counts are exact. Terminal history is
 unbounded, so its counts are size-capped: the snapshot counts exactly up to a limit, then stops
 and marks the value as a lower bound with an explicit `capped` flag. The same treatment applies
@@ -61,12 +61,17 @@ The `workhorse health --json` command exits non-zero on any exceeded budget. The
 the same reasons for humans. Both read the identical evaluation, so one place decides what
 unhealthy means.
 
-If the defaults don't fit a deployment, every budget can be overridden per call:
+The database owns the budgets, so every SDK and dashboard backend receives the same verdict.
+Application sync records defaults, while operator overrides survive later deploys. The snapshot's
+`budgets` field shows the policy PostgreSQL used, which lets automation explain a reason without
+guessing which process supplied its threshold.
 
 ```ts
-const health = await queue.health({ budgets: { rollupStalledLagMs: 5 * 60 * 1000 } });
+const health = await queue.health();
 if (health.status.level !== "healthy") {
-  for (const reason of health.status.reasons) console.warn(reason.code, reason.observed);
+  for (const reason of health.status.reasons) {
+    console.warn(reason.code, reason.observed, reason.budget);
+  }
 }
 ```
 

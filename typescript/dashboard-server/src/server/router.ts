@@ -365,13 +365,11 @@ export const dashboardRouter = {
     cron: procedure.handler(({ context }) =>
       readDashboardCron(context.database, context.maintenanceLoops),
     ),
-    queues: procedure.handler(({ context }) =>
-      readDashboardQueues(context.database, context.queue),
-    ),
+    queues: procedure.handler(({ context }) => readDashboardQueues(context.database)),
     system: procedure
       .input(systemInput)
       .handler(({ context, input }) =>
-        readDashboardSystem(context.database, context.queue, input.window as DashboardSystemWindow),
+        readDashboardSystem(context.database, input.window as DashboardSystemWindow),
       ),
     workers: procedure.handler(({ context }) => {
       const canManageWorkers =
@@ -401,6 +399,7 @@ export const dashboardRouter = {
     }),
     humanWaits: procedure.handler(({ context }) =>
       readDashboardHumanWaits(
+        context.database,
         context.queue,
         context.operator.mode === "writable" && Boolean(context.taskController?.completeHumanWait),
         context.operator.mode === "writable" && Boolean(context.taskController?.signalTask),

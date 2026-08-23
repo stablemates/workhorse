@@ -30,8 +30,9 @@ Critical reasons mean work is stopping now, such as an expired lease, overdue ex
 stalled promotion. Degraded reasons mean the queue still runs while maintenance or admission falls
 behind. The reason codes are stable, so alerts can branch on them without parsing prose.
 
-Override budgets per call when deployment needs differ. The dashboard and `workhorse health
---json` use the same evaluation, so every operator surface agrees on the verdict.
+PostgreSQL owns the budgets and returns the applied values under `budgets`. Application sync seeds
+defaults without replacing operator overrides, so TypeScript, Go, Python, the dashboard, and
+`workhorse health --json` all use the same evaluation.
 
 ## Next
 

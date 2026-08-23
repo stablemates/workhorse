@@ -40,7 +40,6 @@ import type {
   Queryable,
   QueueOptions,
   QueueHealth,
-  QueueHealthBudgets,
   RedriveLineage,
   RedriveRequest,
   RedriveResult,
@@ -779,8 +778,8 @@ export class Queue {
     return this.modules.operatorReads.getJob<TResult>(id);
   }
 
-  async health(options: { budgets?: Partial<QueueHealthBudgets> } = {}): Promise<QueueHealth> {
-    return this.modules.operatorReads.health(options);
+  async health(): Promise<QueueHealth> {
+    return this.modules.operatorReads.health();
   }
 
   /** Read the per-queue live pressure used by OpenTelemetry observable instruments. */

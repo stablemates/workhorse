@@ -397,7 +397,7 @@ describe("health snapshots", () => {
     ).toBe(1);
   });
 
-  it("evaluates caller-overridable health budgets into machine-readable status reasons", async () => {
+  it("evaluates database-owned health budgets into machine-readable status reasons", async () => {
     await queue.prepareHistoryPartitions();
     const baseline = await queue.health();
     expect(
@@ -410,11 +410,24 @@ describe("health snapshots", () => {
       expect(reason.observed).toBeGreaterThan(reason.budget);
     }
 
-    // The same snapshot facts degrade under a tighter caller budget.
-    const strict = await queue.health({ budgets: { rollupStalledLagMs: -1 } });
+    await pool.query(
+      `SELECT workhorse.override_queue_health_policy_v1(
+         '{"rollup_stalled_lag_ms": 0}'::jsonb
+       )`,
+    );
+    await pool.query(
+      "SELECT workhorse.sync_queue_health_policy_v1(10000, 1800000, 21600000, 172800000, 2)",
+    );
+
+    // Application sync preserves the operator override, and every caller receives its verdict.
+    const strict = await queue.health();
+    expect(strict.budgets.rollupStalledLagMs).toBe(0);
     expect(strict.status.level).not.toBe("healthy");
     expect(strict.status.reasons).toContainEqual(
-      expect.objectContaining({ code: "rollup-stalled", severity: "degraded", budget: -1 }),
+      expect.objectContaining({ code: "rollup-stalled", severity: "degraded", budget: 0 }),
+    );
+    await pool.query(
+      "SELECT workhorse.revert_queue_health_policy_v1(ARRAY['rollup_stalled_lag_ms'])",
     );
 
     // An expired lease is critical, with the reason and the count read from one snapshot.

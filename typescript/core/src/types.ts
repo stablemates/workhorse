@@ -1049,6 +1049,8 @@ export interface QueueHealth {
    * describe the queue as of this instant. Only `observations` is read outside the snapshot.
    */
   capturedAt: Date;
+  /** Database-owned thresholds used to derive this snapshot's status. */
+  budgets: QueueHealthBudgets;
   /** Canonical schema protocol version installed in this database. */
   schemaVersion: number | null;
   counts: Record<JobState, number>;

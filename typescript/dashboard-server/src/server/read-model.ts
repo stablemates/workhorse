@@ -1,5 +1,5 @@
-import { expectOneRow } from "@workhorse-js/core";
-import type { Queue, RetryPolicy } from "@workhorse-js/core";
+import { expectOneRow, queueHealthFromDocument } from "@workhorse-js/core";
+import type { Queue, QueueHealthDocument, RetryPolicy } from "@workhorse-js/core";
 import {
   DashboardActivityBucket,
   DashboardActivityGroupBy,
@@ -56,6 +56,13 @@ function toIsoOrNull(value: Date | string | null): string | null {
   return value ? toIso(value) : null;
 }
 
+async function readQueueHealth(database: DashboardDatabase) {
+  const result = await database.execute<{ snapshot: QueueHealthDocument }>(sql`
+    SELECT workhorse.queue_health_v1() AS snapshot
+  `);
+  return queueHealthFromDocument(expectOneRow(result, "the queue health snapshot").snapshot);
+}
+
 const currentSignalWaitColumn = sql`
   signal_wait.deadline_at AS signal_wait_deadline_at
 `;
@@ -81,6 +88,7 @@ function signalWaitSummary(
 }
 
 export async function readDashboardHumanWaits(
+  database: DashboardDatabase,
   queue: Queue,
   canComplete: boolean,
   canSignal: boolean,
@@ -88,7 +96,7 @@ export async function readDashboardHumanWaits(
   const [waitPage, signalWaitPage, health] = await Promise.all([
     queue.listHumanWaits(),
     queue.listSignalWaits(),
-    queue.health(),
+    readQueueHealth(database),
   ]);
   return {
     capturedAt: new Date().toISOString(),
@@ -125,7 +133,7 @@ export async function readDashboardSettings(
   const [maintenance, retention, health, enqueued, workers] = await Promise.all([
     queue.getMaintenancePolicy(),
     queue.getRetentionPolicy(),
-    queue.health(),
+    readQueueHealth(database),
     // Measured arrival rate for the recommendation engine, over one stitched statistics hour so
     // the reading works whether or not the rollup has materialized the window yet.
     database.execute<{ jobs: string | number }>(sql`
@@ -422,7 +430,6 @@ async function readDashboardTaskCountsExact(
 /** Queue management rows keep hot live-state counts exact and estimate cold outcomes at scale. */
 export async function readDashboardQueues(
   database: DashboardDatabase,
-  queue: Queue,
 ): Promise<DashboardQueuesPage> {
   const [queueRows, relationRows, health] = await Promise.all([
     database.execute<{
@@ -460,7 +467,7 @@ export async function readDashboardQueues(
     database.execute<{ estimate: string | number }>(sql`
       SELECT estimate FROM workhorse.dashboard_job_estimate_v1()
     `),
-    queue.health(),
+    readQueueHealth(database),
   ]);
   const approximate = Number(relationRows.rows[0]?.estimate ?? -1) >= approximateCountThreshold;
 
@@ -1486,7 +1493,6 @@ function dashboardAdmissionPolicies(health: QueueHealthSnapshot) {
 
 export async function readDashboardSystem(
   database: DashboardDatabase,
-  queue: Queue,
   window: DashboardSystemWindow = "1h",
 ): Promise<DashboardSystemPage> {
   const windowSeconds = dashboardSystemWindowSeconds[window];
@@ -1709,7 +1715,7 @@ export async function readDashboardSystem(
     `),
     // Retention facts, partition existence, and the status verdict come from the canonical queue
     // read model rather than duplicated SQL here.
-    queue.health(),
+    readQueueHealth(database),
   ]);
 
   const summary = expectOneRow(summaryRows, "the snapshot summary read");
@@ -2237,7 +2243,7 @@ export async function readDashboardJobDetail(
         queue.concurrencyPolicies([job.queue]).then((policies) => policies[0] ?? null),
         // Terminal detail drops live utilization entirely, so only tasks that can still become
         // active need the bounded health aggregates beside their exact persisted policy.
-        job.runtime_state === null ? null : queue.health(),
+        job.runtime_state === null ? null : readQueueHealth(database),
       ])
     : [null, null];
   const healthPolicy = health?.concurrencyPolicies.policies.find(

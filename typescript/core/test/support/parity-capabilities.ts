@@ -255,10 +255,16 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
 
 export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   {
-    capability: "Job lookup, listing, timeline, health reads",
+    capability: "Job lookup, listing, and timeline",
     typescript: { file: "integration-operator-reads.test.ts", pattern: "listJobs" },
     python: operatorSurface,
     go: operatorSurface,
+  },
+  {
+    capability: "Queue health snapshot",
+    typescript: { file: "integration-health-snapshots.test.ts", pattern: "health" },
+    python: { file: "test_driver_integration.py", pattern: "health" },
+    go: { file: "queue_test.go", pattern: "Health" },
   },
   {
     capability: "Cancellation requests",

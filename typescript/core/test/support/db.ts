@@ -67,6 +67,7 @@ export function createDatabaseTestHarness(
             "schema_migration",
             "protocol_version",
             "maintenance_policy",
+            "queue_health_policy",
             "maintenance_state",
             "job_stat_state",
             "retention_policy",

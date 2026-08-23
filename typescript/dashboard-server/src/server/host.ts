@@ -253,8 +253,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
     basePath: name === null ? path : `${path}/${name}`,
     queryable: workspace.database,
     database: dashboardDatabase(workspace.database),
-    // The read model needs a Queue only for `health()`, which reads through the same connection
-    // and does not depend on a default queue name, so there is nothing for a caller to supply.
+    // Queue-backed policy and wait reads share the dashboard's caller-owned connection.
     queue: new Queue(workspace.database),
     environment: workspace.environment ?? options.environment ?? "unknown",
     configuredWorkers: workspace.configuredWorkers ?? options.configuredWorkers ?? [],

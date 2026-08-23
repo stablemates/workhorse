@@ -60,6 +60,11 @@
       "contract": "SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)"
     },
     {
+      "name": "queue_health_v1",
+      "arity": 1,
+      "contract": "SELECT workhorse.queue_health_v1($1::timestamptz) AS snapshot"
+    },
+    {
       "name": "enqueue_many_v1",
       "arity": 1,
       "contract": "SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal"
@@ -171,6 +176,7 @@
     }
   ],
   "typescriptContractSources": [
+    "typescript/core/src/queue/health-protocol.ts",
     "typescript/core/src/queue/enqueue-contracts.ts",
     "typescript/core/src/queue/maintenance-contract.ts",
     "typescript/core/src/queue/claim-lease-fence.ts",

@@ -7,7 +7,8 @@ export {
   rowsToQueryResult,
 } from "./adapter.js";
 export { databaseErrorCode, expectOneRow, MissingRowError, WorkhorseError } from "./errors.js";
-export { DEFAULT_QUEUE_HEALTH_BUDGETS, evaluateQueueHealth } from "./health.js";
+export { queueHealthFromDocument } from "./queue/operator-reads.js";
+export type { QueueHealthDocument } from "./queue/operator-reads.js";
 export { WorkhorseMetricsObserver } from "./metrics-observer.js";
 export type {
   AdapterNotificationPool,

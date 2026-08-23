@@ -4,6 +4,7 @@ const schemaVersionStatement = "schema_version"
 
 const (
 	emptyString                          = ""
+	queueHealthStatementName             = "queue_health_v1"
 	enqueueManyStatementName             = "enqueue_many_v1"
 	syncScheduleDefinitionsStatementName = "sync_schedule_definitions_v1"
 	tickStatementName                    = "tick_v1"
@@ -30,6 +31,7 @@ const (
 	recordBatchDispatchStatementName     = "record_batch_dispatch_v1"
 	recordBatchFailureStatementName      = "record_batch_failure_v1"
 	rowOrdinalField                      = "ordinal"
+	rowSnapshotField                     = "snapshot"
 	rowJobIDField                        = "job_id"
 	rowOutcomeField                      = "outcome"
 	rowReasonField                       = "reason"
@@ -63,6 +65,9 @@ const (
 	rowRecordedField                     = "recorded"
 	errorNameField                       = "name"
 	errorMessageField                    = "message"
+	invalidHealthRowCountMessage         = "workhorse.queue_health_v1 returned %d rows; expected one"
+	invalidHealthJSONMessage             = "workhorse.queue_health_v1 returned %T; expected JSON"
+	decodeHealthJSONMessage              = "decode workhorse.queue_health_v1: %w"
 
 	enqueueAcceptedValue       = "accepted"
 	enqueueReplayedValue       = "replayed"
@@ -393,6 +398,7 @@ var internalStatementRegistry = map[string]string{
 
 var protocolStatementRegistry = map[string]string{
 	runMaintenanceStatementName:      `SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)`,
+	queueHealthStatementName:         `SELECT workhorse.queue_health_v1($1::timestamptz) AS snapshot`,
 	enqueueManyStatementName:         `SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal`,
 	claimStatementName:               `SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)`,
 	recordBatchDispatchStatementName: `SELECT workhorse.record_batch_dispatch_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,

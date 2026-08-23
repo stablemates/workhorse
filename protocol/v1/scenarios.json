@@ -847,6 +847,17 @@
     ]
   },
   {
+    "id": "queue-health",
+    "steps": [
+      {
+        "id": "database-owned-snapshot",
+        "sql": "SELECT jsonb_build_object('schemaVersion', snapshot->'schema_version', 'promotionLagMs', snapshot->'budgets'->'promotionLagMs') AS value FROM (SELECT workhorse.queue_health_v1($1::timestamptz) AS snapshot) health",
+        "parameters": ["2000-01-01T00:00:00.000Z"],
+        "expect": { "rows": [{ "value": { "promotionLagMs": 10000, "schemaVersion": 1 } }] }
+      }
+    ]
+  },
+  {
     "id": "human-tokens",
     "steps": [
       {

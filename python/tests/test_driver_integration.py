@@ -48,6 +48,15 @@ def test_psycopg_preserves_caller_owned_commit_and_rollback(database_url: str) -
     assert job_id
 
 
+def test_psycopg_reads_the_database_health_document(database_url: str) -> None:
+    with psycopg.connect(database_url) as connection:
+        health = Queue(connection).health()
+
+    assert health["schema_version"] == 1
+    assert health["status"] == {"level": "healthy", "reasons": []}
+    assert health["budgets"]["promotionLagMs"] > 0  # type: ignore[index,operator]
+
+
 @pytest.mark.asyncio
 async def test_asyncpg_preserves_a_caller_owned_transaction(database_url: str) -> None:
     connection = await asyncpg.connect(database_url)
@@ -60,6 +69,18 @@ async def test_asyncpg_preserves_a_caller_owned_transaction(database_url: str) -
         assert job_count(database_url) == 1
     finally:
         await connection.close()
+
+
+@pytest.mark.asyncio
+async def test_asyncpg_reads_the_same_database_health_document(database_url: str) -> None:
+    connection = await asyncpg.connect(database_url)
+    try:
+        health = await AsyncQueue.from_asyncpg(connection).health()
+    finally:
+        await connection.close()
+
+    assert health["schema_version"] == 1
+    assert health["status"] == {"level": "healthy", "reasons": []}
 
 
 @pytest.mark.asyncio

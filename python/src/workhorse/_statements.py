@@ -20,6 +20,7 @@ class DriverStatement:
 @dataclass(frozen=True)
 class StatementRegistry:
     compatibility: DriverStatement
+    health: DriverStatement
     enqueue_many: DriverStatement
     sync_schedules: DriverStatement
     tick: DriverStatement
@@ -52,6 +53,10 @@ STATEMENTS = StatementRegistry(
     compatibility=DriverStatement(
         psycopg="SELECT version FROM workhorse.schema_version ORDER BY version",
         asyncpg="SELECT version FROM workhorse.schema_version ORDER BY version",
+    ),
+    health=DriverStatement(
+        psycopg="SELECT workhorse.queue_health_v1(%s::timestamptz) AS snapshot",
+        asyncpg="SELECT workhorse.queue_health_v1($1::timestamptz) AS snapshot",
     ),
     enqueue_many=DriverStatement(
         psycopg=(

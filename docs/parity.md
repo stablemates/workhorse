@@ -113,14 +113,15 @@ changes, and update the capability matrices only when repository tests prove the
 
 ## Operator reads and controls
 
-| Capability                                  | TypeScript | Python | Go     |
-| ------------------------------------------- | ---------- | ------ | ------ |
-| Job lookup, listing, timeline, health reads | Supported  | Absent | Absent |
-| Cancellation requests                       | Supported  | Absent | Absent |
-| Queue pause, resume, and purge              | Supported  | Absent | Absent |
-| Dead-letter listing and redrive             | Supported  | Absent | Absent |
-| Checkpoint, wait, and human-decision reads  | Supported  | Absent | Absent |
-| Durable operator worker pause               | Supported  | Absent | Absent |
+| Capability                                 | TypeScript | Python    | Go        |
+| ------------------------------------------ | ---------- | --------- | --------- |
+| Job lookup, listing, and timeline          | Supported  | Absent    | Absent    |
+| Queue health snapshot                      | Supported  | Supported | Supported |
+| Cancellation requests                      | Supported  | Absent    | Absent    |
+| Queue pause, resume, and purge             | Supported  | Absent    | Absent    |
+| Dead-letter listing and redrive            | Supported  | Absent    | Absent    |
+| Checkpoint, wait, and human-decision reads | Supported  | Absent    | Absent    |
+| Durable operator worker pause              | Supported  | Absent    | Absent    |
 
 These Absent cells are deliberate, not backlog: the standalone dashboard and the `workhorse` CLI
 already provide every read and control here against any database, whatever language enqueued the
