@@ -4,7 +4,11 @@ import { highlight } from "fumadocs-core/highlight";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { landingSnippets } from "../lib/landing-snippets.js";
+import {
+  landingSnippetLanguages,
+  landingSnippets,
+  type LandingSnippetId,
+} from "../lib/landing-snippets.js";
 
 /**
  * Highlights every landing-page snippet into static markup.
@@ -30,7 +34,7 @@ const rendered: Record<string, string> = {};
 
 for (const [id, code] of Object.entries(landingSnippets)) {
   const node = await highlight(code, {
-    lang: "ts",
+    lang: landingSnippetLanguages[id as LandingSnippetId] ?? "ts",
     themes: codeThemes,
     defaultColor: false,
     components: {

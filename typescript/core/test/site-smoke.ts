@@ -84,6 +84,9 @@ try {
     'property="og:image" content="https://workhorse.run/brand/workhorse-mark.png"',
     'type="application/ld+json"',
     '"@type":"SoftwareApplication"',
+    'aria-label="typescript"',
+    'aria-label="python"',
+    'aria-label="go"',
   ]);
 
   const quickstartHtml = await (await fetch(`${baseUrl}/docs/quickstart`)).text();

@@ -28,6 +28,45 @@ const worker = new Worker(queue, { concurrency: 4 }).handle(
 
 await worker.run();`,
 
+  languageTypeScript: `import { Pool } from "pg";
+import { Queue } from "@workhorse-js/core";
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const queue = new Queue(pool);
+
+await queue.enqueue("email.welcome", {
+  to: "ada@example.com",
+});`,
+
+  languagePython: `import psycopg
+
+from workhorse import Queue
+
+
+def enqueue_welcome(database_url: str) -> None:
+    with psycopg.connect(database_url) as connection:
+        Queue(connection).enqueue(
+            "email.welcome",
+            {"to": "ada@example.com"},
+        )`,
+
+  languageGo: `package example
+
+import (
+    "context"
+
+    "github.com/jackc/pgx/v5/pgxpool"
+    workhorse "github.com/stablemates/workhorse/go"
+)
+
+func enqueueWelcome(ctx context.Context, pool *pgxpool.Pool) error {
+    queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "default")
+    _, err := queue.Enqueue(ctx, "email.welcome", map[string]any{
+        "to": "ada@example.com",
+    }, workhorse.EnqueueOptions{})
+    return err
+}`,
+
   enqueue: `const client = await pool.connect();
 try {
   await client.query("BEGIN");
@@ -379,3 +418,9 @@ export default defineWorkerProcess({
 } as const;
 
 export type LandingSnippetId = keyof typeof landingSnippets;
+
+/** Shiki language overrides for snippets that are not TypeScript. */
+export const landingSnippetLanguages: Partial<Record<LandingSnippetId, "python" | "go" | "ts">> = {
+  languagePython: "python",
+  languageGo: "go",
+};
