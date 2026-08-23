@@ -3,6 +3,7 @@ import { Code, Paper, ScrollArea, Stack, Switch, Table, Text } from "@mantine/co
 import { StatusBadge } from "../status-badge.js";
 import { EmptyState, PageHeader } from "../components/task-list.js";
 import { formatExact, formatRelative } from "../preferences.js";
+import { presentSchedules } from "../presentation-policy.js";
 
 export function CronPage({
   data,
@@ -13,13 +14,14 @@ export function CronPage({
   togglingSchedule: string | null;
   setScheduleEnabled: (namespace: string, name: string, enabled: boolean) => void;
 }) {
+  const schedules = presentSchedules(data);
   return (
     <Stack gap="xl">
       <PageHeader
         title="Schedules"
         description="See when recurring tasks run and where Workhorse sends them."
       />
-      {data.schedules.length === 0 ? (
+      {schedules.length === 0 ? (
         <EmptyState>Workhorse has no recurring schedules.</EmptyState>
       ) : (
         <Paper withBorder>
@@ -36,7 +38,7 @@ export function CronPage({
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
-                {data.schedules.map((schedule) => {
+                {schedules.map((schedule) => {
                   const scheduleKey = `${schedule.namespace}:${schedule.name}`;
                   return (
                     <Table.Tr key={scheduleKey}>

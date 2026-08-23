@@ -67,17 +67,17 @@ const data: DashboardSettingsPage = {
     provenance: retentionProvenance,
     updatedAt: "2026-08-10T12:00:00.000Z",
   },
-  recommendations: [
-    {
-      id: "statistics-disabled",
-      severity: "info",
-      settings: ["statisticsRollupIntervalMs"],
-      summary:
-        "The statistics rollup is opted out while raw-history retention is enabled. Retention " +
-        "cannot delete past the rollup watermark, so history behind it is held indefinitely.",
-      measured: { statisticsRollupIntervalMs: 0 },
+  recommendationInputs: {
+    reasons: [],
+    statistics: {
+      rolledUpThrough: "2026-08-10T11:59:00.000Z",
+      lagMs: 60_000,
+      lastRunAt: null,
     },
-  ],
+    defaultHistoryRows: { jobEvents: 0, attemptHistory: 0 },
+    defaultHistoryRowsCapped: { jobEvents: false, attemptHistory: false },
+    enqueueRate: { jobs: 0, windowMs: 3_600_000 },
+  },
   workers: [
     {
       id: "worker-1",

@@ -2,6 +2,7 @@ import type {
   MaintenancePolicy,
   Queue,
   QueueHealth,
+  QueueHealthReason,
   RetentionPolicy,
   RetryPolicy,
 } from "@workhorse-js/core";
@@ -18,34 +19,22 @@ export type DashboardDependencyHealth = QueueHealth["dependencies"];
 export type DashboardChildHealth = QueueHealth["children"];
 export type DashboardExternalWaitHealth = QueueHealth["externalWaits"];
 
-/**
- * One piece of settings advice derived from measured queue state.
- *
- * A recommendation only exists when a measurement warrants it; the page never restates defaults.
- * `measured` carries the numbers the advice was computed from, so an operator can check the
- * arithmetic instead of trusting a sentence.
- */
-export interface DashboardSettingsRecommendation {
-  id:
-    | "terminal-cleanup-ceiling"
-    | "retention-lag"
-    | "rollup-stalled"
-    | "statistics-disabled"
-    | "partition-spill";
-  /** Warnings describe measured pressure; info describes a deliberate but consequential state. */
-  severity: "info" | "warning";
-  /** Policy settings the advice concerns, named as the settings page names them. */
-  settings: string[];
-  summary: string;
-  measured: Record<string, number | string | boolean | null>;
-}
-
 export interface DashboardSettingsPage {
   capturedAt: string;
   editable: boolean;
   maintenance: DashboardMaintenancePolicy;
   retention: DashboardRetentionPolicy;
-  recommendations: DashboardSettingsRecommendation[];
+  recommendationInputs: {
+    reasons: QueueHealthReason[];
+    statistics: {
+      rolledUpThrough: string;
+      lagMs: number;
+      lastRunAt: string | null;
+    };
+    defaultHistoryRows: { jobEvents: number; attemptHistory: number };
+    defaultHistoryRowsCapped: { jobEvents: boolean; attemptHistory: boolean };
+    enqueueRate: { jobs: number; windowMs: number };
+  };
   workers: Array<{
     id: string;
     /** First configured queue, retained for dashboard v1 compatibility. */
@@ -350,40 +339,25 @@ export interface DashboardJobRow extends Record<string, unknown> {
 }
 
 export interface DashboardScheduleRow {
-  kind: "user" | "system";
+  kind: "user";
   identity: {
-    kind: "user" | "system";
+    kind: "user";
     namespace: string;
     name: string;
   };
   namespace: string;
   name: string;
-  description: string | null;
   cron: string;
-  queue: string | null;
+  queue: string;
   type: string;
   /** User-task dispatch priority. System maintenance rows have no queue priority. */
-  priority: number | null;
+  priority: number;
   enabled: boolean;
   active: boolean;
   revision: string;
   updatedAt: string;
-  /** Completed user-schedule occurrences; unavailable for internal maintenance loops. */
-  occurrenceCount: number | null;
+  occurrenceCount: number;
   lastFiredAt: string | null;
-  lastRun?: {
-    status: string;
-    startedAt: string | null;
-    endedAt: string | null;
-    message: string | null;
-  } | null;
-  maintenance?: {
-    intervalMs: number;
-    phases: string[];
-    status: "scheduled" | "due" | "incomplete";
-    lastStartedAt: string | null;
-    lastCompletedAt: string | null;
-  } | null;
 }
 
 export interface MaintenanceLoopCadences {
@@ -422,8 +396,9 @@ export interface DashboardWorkerRow {
   startedAt: string | null;
   /** True when the worker has a row in the durable registry, whether or not it is still live. */
   registered: boolean;
+  /** Latest registry refresh, or null when the worker has never registered. */
+  lastHeartbeatAt: string | null;
   paused: boolean;
-  status: "active" | "idle" | "recent" | "offline";
 }
 
 export interface DashboardFailureRow {
@@ -506,6 +481,23 @@ export interface DashboardTaskFacets {
 export interface DashboardCronPage {
   capturedAt: string;
   schedules: DashboardScheduleRow[];
+  maintenance: {
+    cadences: MaintenanceLoopCadences;
+    policy: {
+      timezone: string;
+      partitionPreparationIntervalMs: number;
+      terminalCleanupIntervalMs: number;
+      historyRetentionLocalTime: string;
+      updatedAt: string;
+    };
+    tasks: Array<{
+      task: "history_partitions" | "history_retention" | "terminal_storage";
+      lastStartedAt: string | null;
+      lastCompletedAt: string | null;
+      due: boolean;
+      incomplete: boolean;
+    }>;
+  };
 }
 
 export interface DashboardQueuesPage {
@@ -531,7 +523,8 @@ export interface DashboardSystemOutcomeBucket {
 }
 
 export interface DashboardSystemRetryBucket {
-  label: "1m" | "5m" | "15m" | "1h" | "later";
+  /** Inclusive upper bound from capture time, or null for the final catch-all bucket. */
+  upperBoundMs: number | null;
   count: number;
 }
 
@@ -571,8 +564,6 @@ export type DashboardRetentionCategory =
 
 export interface DashboardRetentionCategoryRow {
   category: DashboardRetentionCategory;
-  /** Operator-facing name; avoids table and partition jargon. */
-  label: string;
   /** Configured minimum window in days, or null when the category is never pruned. */
   retentionDays: number | null;
   /** How far past the policy cutoff the oldest retained row still is. */
@@ -601,9 +592,6 @@ export interface DashboardSystemRetention {
 /** One relation an operator can reason about, with partitioned children already folded in. */
 export interface DashboardStorageRelation {
   relation: string;
-  /** Operator-facing name; avoids table and partition jargon. */
-  label: string;
-  group: "tasks" | "history" | "statistics";
   totalBytes: number;
   tableBytes: number;
   indexBytes: number;
@@ -642,11 +630,7 @@ export interface DashboardSystemPage {
   windowSeconds: number;
   status: {
     level: "healthy" | "degraded" | "critical";
-    checks: string[];
-    /** Checks that forced `critical`; empty when the page is healthy or only degraded. */
-    criticalChecks: string[];
-    /** Checks that only warrant `degraded`; reported even while `critical` is active. */
-    degradedChecks: string[];
+    reasons: QueueHealthReason[];
   };
   pausedQueues: string[];
   kpis: {

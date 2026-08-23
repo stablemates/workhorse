@@ -899,9 +899,14 @@ describe("Workhorse demo", () => {
     await expect(client.dashboard.system({ window: "1h" })).resolves.toMatchObject({
       status: {
         level: "degraded",
-        checks: ["Queue partner-api has 3+ ready tasks waiting for rate-limit tokens"],
-        criticalChecks: [],
-        degradedChecks: ["Queue partner-api has 3+ ready tasks waiting for rate-limit tokens"],
+        reasons: [
+          {
+            code: "rate-limit-throttled",
+            severity: "degraded",
+            observed: 3,
+            queue: "partner-api",
+          },
+        ],
       },
       integrity: {
         retention: {
@@ -1099,10 +1104,13 @@ describe("Workhorse demo", () => {
         "unassigned",
       ],
     });
-    await expect(
-      client.dashboard.activity({ filter: "all", period: "7d", groupBy: "task" }),
-    ).resolves.toMatchObject({
-      groups: [
+    const taskActivity = await client.dashboard.activity({
+      filter: "all",
+      period: "7d",
+      groupBy: "task",
+    });
+    expect(taskActivity.groups).toEqual(
+      expect.arrayContaining([
         "demo.batch-digest",
         "demo.durable-pipeline",
         "demo.job-dependency",
@@ -1112,9 +1120,10 @@ describe("Workhorse demo", () => {
         "email.send",
         "order.process",
         "order.refund",
-        "other",
-      ],
-    });
+      ]),
+    );
+    expect(taskActivity.groups.length).toBeGreaterThan(10);
+    expect(taskActivity.groups).not.toContain("other");
     await expect(
       client.dashboard.activity({ filter: "all", period: "7d", groupBy: "status" }),
     ).resolves.toMatchObject({
@@ -2223,7 +2232,7 @@ describe("Workhorse demo", () => {
         counts: { all: 1, discarded: 1 },
       });
       expect(await client.dashboard.system({ window: "1h" })).toMatchObject({
-        status: { level: "healthy", checks: [] },
+        status: { level: "healthy", reasons: [] },
         failingTypes: [
           expect.objectContaining({
             queue: "demo",
@@ -2698,7 +2707,11 @@ describe("Workhorse demo", () => {
       // Workers are unnamed, so the fleet is discovered from the registry rather than assumed.
       const defaultQueueWorker = await waitForRegisteredWorker(client);
       const workerId = defaultQueueWorker.id;
-      expect(defaultQueueWorker).toMatchObject({ paused: false, status: "idle" });
+      expect(defaultQueueWorker).toMatchObject({
+        paused: false,
+        registered: true,
+        lastHeartbeatAt: expect.any(String),
+      });
       await expect(client.dashboard.workers()).resolves.toMatchObject({ canManageWorkers: true });
       await expect(
         client.dashboard.setWorkerPaused({
@@ -2714,7 +2727,12 @@ describe("Workhorse demo", () => {
 
       await expect(client.dashboard.workers()).resolves.toMatchObject({
         workers: expect.arrayContaining([
-          expect.objectContaining({ id: workerId, paused: true, status: "idle" }),
+          expect.objectContaining({
+            id: workerId,
+            paused: true,
+            registered: true,
+            lastHeartbeatAt: expect.any(String),
+          }),
         ]),
       });
       expect(
@@ -2864,7 +2882,7 @@ describe("Workhorse demo", () => {
           concurrency: null,
           activeSlots: null,
           draining: false,
-          status: "offline",
+          lastHeartbeatAt: null,
         },
         {
           id: "expected-worker-b",
@@ -2872,7 +2890,7 @@ describe("Workhorse demo", () => {
           concurrency: null,
           activeSlots: null,
           draining: false,
-          status: "offline",
+          lastHeartbeatAt: null,
         },
       ],
     });
@@ -3123,8 +3141,12 @@ describe("Workhorse demo", () => {
       JSON.stringify(await client.dashboard.eventDetail({ id: enqueuedEvent!.id })),
     ).not.toContain("tenant-secret");
     const system = await client.dashboard.system({ window: "15m" });
-    expect(system.status.degradedChecks).toContain(
-      `Concurrency policy blocks ready tasks on ${queueName}`,
+    expect(system.status.reasons).toContainEqual(
+      expect.objectContaining({
+        code: "concurrency-blocked",
+        severity: "degraded",
+        queue: queueName,
+      }),
     );
     expect(system.queues.find((row) => row.queue === queueName)?.concurrencyPolicy).toMatchObject({
       available: 0,
@@ -3295,45 +3317,22 @@ describe("Workhorse demo", () => {
     const client = dashboardClient(app);
 
     const cron = await client.dashboard.cron();
+    expect(cron.maintenance).toMatchObject({
+      cadences: { tickIntervalMs: 1_000 },
+      policy: {
+        timezone: "UTC",
+        partitionPreparationIntervalMs: 21_600_000,
+        terminalCleanupIntervalMs: 300_000,
+        historyRetentionLocalTime: "03:00",
+      },
+      tasks: expect.arrayContaining([
+        expect.objectContaining({ task: "history_partitions" }),
+        expect.objectContaining({ task: "history_retention" }),
+        expect.objectContaining({ task: "terminal_storage" }),
+      ]),
+    });
     expect(cron.schedules).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          kind: "system",
-          name: "tick",
-          type: "workhorse.tick_v1",
-          maintenance: expect.objectContaining({
-            intervalMs: 1_000,
-            phases: ["promote", "recover"],
-          }),
-        }),
-        expect.objectContaining({
-          kind: "system",
-          name: "history-partitions",
-          type: "workhorse.prepare_history_partitions_v1",
-          maintenance: expect.objectContaining({
-            intervalMs: 21_600_000,
-            phases: ["history_partitions"],
-          }),
-        }),
-        expect.objectContaining({
-          kind: "system",
-          name: "history-retention",
-          cron: "daily at 03:00 UTC",
-          type: "workhorse.retain_history_v1",
-          maintenance: expect.objectContaining({
-            intervalMs: 86_400_000,
-            phases: ["event_retention", "attempt_retention", "schedule_occurrences"],
-          }),
-        }),
-        expect.objectContaining({
-          kind: "system",
-          name: "terminal-storage",
-          type: "workhorse.prune_terminal_storage_v1",
-          maintenance: expect.objectContaining({
-            intervalMs: 300_000,
-            phases: ["enqueue_idempotency", "terminal_jobs"],
-          }),
-        }),
         expect.objectContaining({
           kind: "user",
           identity: {
@@ -3401,9 +3400,13 @@ describe("Workhorse demo", () => {
     const system = await client.dashboard.system({ window: "1h" });
 
     expect(system.status.level).toBe("degraded");
-    expect(system.status.criticalChecks).toEqual([]);
-    expect(system.status.degradedChecks).toEqual(["History rows use fallback storage (1)"]);
-    expect(system.status.checks).toEqual(system.status.degradedChecks);
+    expect(system.status.reasons).toEqual([
+      expect.objectContaining({
+        code: "default-history-rows",
+        severity: "degraded",
+        observed: 1,
+      }),
+    ]);
     expect(system.integrity.retention.defaultHistoryRows).toEqual({
       jobEvents: 1,
       attemptHistory: 0,
@@ -3423,7 +3426,6 @@ describe("Workhorse demo", () => {
       expect.arrayContaining([
         expect.objectContaining({
           category: "jobEvents",
-          label: "Task events",
           lagMs: null,
           prunedByPartition: true,
         }),
@@ -3448,15 +3450,18 @@ describe("Workhorse demo", () => {
     const system = await dashboardClient(app).dashboard.system({ window: "1h" });
 
     expect(system.status.level).toBe("degraded");
-    expect(system.status.criticalChecks).toEqual([]);
-    expect(system.status.degradedChecks).toEqual(["Retention cleanup is late for schedule runs"]);
-    expect(system.status.checks).toEqual(system.status.degradedChecks);
+    expect(system.status.reasons).toEqual([
+      expect.objectContaining({
+        code: "retention-lag",
+        severity: "degraded",
+        category: "scheduleOccurrences",
+      }),
+    ]);
 
     const scheduleRuns = system.integrity.retention.categories.find(
       (row) => row.category === "scheduleOccurrences",
     );
     expect(scheduleRuns).toMatchObject({
-      label: "Schedule runs",
       retentionDays: 30,
       prunedByPartition: false,
       oldestRetainedAt: expect.any(String),

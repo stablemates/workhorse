@@ -1878,11 +1878,100 @@
           "items": {
             "$ref": "#/$defs/DashboardScheduleRow"
           }
+        },
+        "maintenance": {
+          "type": "object",
+          "properties": {
+            "cadences": {
+              "$ref": "#/$defs/MaintenanceLoopCadences"
+            },
+            "policy": {
+              "type": "object",
+              "properties": {
+                "timezone": {
+                  "type": "string"
+                },
+                "partitionPreparationIntervalMs": {
+                  "type": "number"
+                },
+                "terminalCleanupIntervalMs": {
+                  "type": "number"
+                },
+                "historyRetentionLocalTime": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "timezone",
+                "partitionPreparationIntervalMs",
+                "terminalCleanupIntervalMs",
+                "historyRetentionLocalTime",
+                "updatedAt"
+              ]
+            },
+            "tasks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "task": {
+                    "enum": [
+                      "history_partitions",
+                      "history_retention",
+                      "terminal_storage"
+                    ]
+                  },
+                  "lastStartedAt": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "lastCompletedAt": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "due": {
+                    "type": "boolean"
+                  },
+                  "incomplete": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "task",
+                  "lastStartedAt",
+                  "lastCompletedAt",
+                  "due",
+                  "incomplete"
+                ]
+              }
+            }
+          },
+          "required": [
+            "cadences",
+            "policy",
+            "tasks"
+          ]
         }
       },
       "required": [
         "capturedAt",
-        "schedules"
+        "schedules",
+        "maintenance"
       ]
     },
     "DashboardDurabilityPlan": {
@@ -4056,9 +4145,6 @@
         "category": {
           "$ref": "#/$defs/DashboardRetentionCategory"
         },
-        "label": {
-          "type": "string"
-        },
         "retentionDays": {
           "anyOf": [
             {
@@ -4095,7 +4181,6 @@
       },
       "required": [
         "category",
-        "label",
         "retentionDays",
         "lagMs",
         "oldestRetainedAt",
@@ -4508,19 +4593,13 @@
       "type": "object",
       "properties": {
         "kind": {
-          "enum": [
-            "system",
-            "user"
-          ]
+          "const": "user"
         },
         "identity": {
           "type": "object",
           "properties": {
             "kind": {
-              "enum": [
-                "system",
-                "user"
-              ]
+              "const": "user"
             },
             "namespace": {
               "type": "string"
@@ -4541,41 +4620,17 @@
         "name": {
           "type": "string"
         },
-        "description": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
         "cron": {
           "type": "string"
         },
         "queue": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
+          "type": "string"
         },
         "type": {
           "type": "string"
         },
         "priority": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "number"
-            }
-          ]
+          "type": "number"
         },
         "enabled": {
           "type": "boolean"
@@ -4590,14 +4645,7 @@
           "type": "string"
         },
         "occurrenceCount": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "number"
-            }
-          ]
+          "type": "number"
         },
         "lastFiredAt": {
           "anyOf": [
@@ -4608,112 +4656,6 @@
               "type": "string"
             }
           ]
-        },
-        "lastRun": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "object",
-              "properties": {
-                "status": {
-                  "type": "string"
-                },
-                "startedAt": {
-                  "anyOf": [
-                    {
-                      "type": "null"
-                    },
-                    {
-                      "type": "string"
-                    }
-                  ]
-                },
-                "endedAt": {
-                  "anyOf": [
-                    {
-                      "type": "null"
-                    },
-                    {
-                      "type": "string"
-                    }
-                  ]
-                },
-                "message": {
-                  "anyOf": [
-                    {
-                      "type": "null"
-                    },
-                    {
-                      "type": "string"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "status",
-                "startedAt",
-                "endedAt",
-                "message"
-              ]
-            }
-          ]
-        },
-        "maintenance": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "object",
-              "properties": {
-                "intervalMs": {
-                  "type": "number"
-                },
-                "phases": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                "status": {
-                  "enum": [
-                    "due",
-                    "incomplete",
-                    "scheduled"
-                  ]
-                },
-                "lastStartedAt": {
-                  "anyOf": [
-                    {
-                      "type": "null"
-                    },
-                    {
-                      "type": "string"
-                    }
-                  ]
-                },
-                "lastCompletedAt": {
-                  "anyOf": [
-                    {
-                      "type": "null"
-                    },
-                    {
-                      "type": "string"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "intervalMs",
-                "phases",
-                "status",
-                "lastStartedAt",
-                "lastCompletedAt"
-              ]
-            }
-          ]
         }
       },
       "required": [
@@ -4721,7 +4663,6 @@
         "identity",
         "namespace",
         "name",
-        "description",
         "cron",
         "queue",
         "type",
@@ -4749,11 +4690,94 @@
         "retention": {
           "$ref": "#/$defs/DashboardRetentionPolicy"
         },
-        "recommendations": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/DashboardSettingsRecommendation"
-          }
+        "recommendationInputs": {
+          "type": "object",
+          "properties": {
+            "reasons": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/QueueHealthReason"
+              }
+            },
+            "statistics": {
+              "type": "object",
+              "properties": {
+                "rolledUpThrough": {
+                  "type": "string"
+                },
+                "lagMs": {
+                  "type": "number"
+                },
+                "lastRunAt": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "rolledUpThrough",
+                "lagMs",
+                "lastRunAt"
+              ]
+            },
+            "defaultHistoryRows": {
+              "type": "object",
+              "properties": {
+                "jobEvents": {
+                  "type": "number"
+                },
+                "attemptHistory": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "jobEvents",
+                "attemptHistory"
+              ]
+            },
+            "defaultHistoryRowsCapped": {
+              "type": "object",
+              "properties": {
+                "jobEvents": {
+                  "type": "boolean"
+                },
+                "attemptHistory": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "jobEvents",
+                "attemptHistory"
+              ]
+            },
+            "enqueueRate": {
+              "type": "object",
+              "properties": {
+                "jobs": {
+                  "type": "number"
+                },
+                "windowMs": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "jobs",
+                "windowMs"
+              ]
+            }
+          },
+          "required": [
+            "reasons",
+            "statistics",
+            "defaultHistoryRows",
+            "defaultHistoryRowsCapped",
+            "enqueueRate"
+          ]
         },
         "workers": {
           "type": "array",
@@ -4860,63 +4884,8 @@
         "editable",
         "maintenance",
         "retention",
-        "recommendations",
+        "recommendationInputs",
         "workers"
-      ]
-    },
-    "DashboardSettingsRecommendation": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "enum": [
-            "partition-spill",
-            "retention-lag",
-            "rollup-stalled",
-            "statistics-disabled",
-            "terminal-cleanup-ceiling"
-          ]
-        },
-        "severity": {
-          "enum": [
-            "info",
-            "warning"
-          ]
-        },
-        "settings": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "summary": {
-          "type": "string"
-        },
-        "measured": {
-          "type": "object",
-          "additionalProperties": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              },
-              {
-                "type": "number"
-              },
-              {
-                "type": "string"
-              }
-            ]
-          }
-        }
-      },
-      "required": [
-        "id",
-        "severity",
-        "settings",
-        "summary",
-        "measured"
       ]
     },
     "DashboardSignalTaskResult": {
@@ -5020,16 +4989,6 @@
         "relation": {
           "type": "string"
         },
-        "label": {
-          "type": "string"
-        },
-        "group": {
-          "enum": [
-            "history",
-            "statistics",
-            "tasks"
-          ]
-        },
         "totalBytes": {
           "type": "number"
         },
@@ -5061,8 +5020,6 @@
       },
       "required": [
         "relation",
-        "label",
-        "group",
         "totalBytes",
         "tableBytes",
         "indexBytes",
@@ -5171,30 +5128,16 @@
                 "healthy"
               ]
             },
-            "checks": {
+            "reasons": {
               "type": "array",
               "items": {
-                "type": "string"
-              }
-            },
-            "criticalChecks": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "degradedChecks": {
-              "type": "array",
-              "items": {
-                "type": "string"
+                "$ref": "#/$defs/QueueHealthReason"
               }
             }
           },
           "required": [
             "level",
-            "checks",
-            "criticalChecks",
-            "degradedChecks"
+            "reasons"
           ]
         },
         "pausedQueues": {
@@ -5868,13 +5811,14 @@
     "DashboardSystemRetryBucket": {
       "type": "object",
       "properties": {
-        "label": {
-          "enum": [
-            "15m",
-            "1h",
-            "1m",
-            "5m",
-            "later"
+        "upperBoundMs": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
           ]
         },
         "count": {
@@ -5882,7 +5826,7 @@
         }
       },
       "required": [
-        "label",
+        "upperBoundMs",
         "count"
       ]
     },
@@ -6269,16 +6213,18 @@
         "registered": {
           "type": "boolean"
         },
+        "lastHeartbeatAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
         "paused": {
           "type": "boolean"
-        },
-        "status": {
-          "enum": [
-            "active",
-            "idle",
-            "offline",
-            "recent"
-          ]
         }
       },
       "required": [
@@ -6296,8 +6242,8 @@
         "lastSeenAt",
         "startedAt",
         "registered",
-        "paused",
-        "status"
+        "lastHeartbeatAt",
+        "paused"
       ]
     },
     "DashboardWorkersPage": {
@@ -6348,6 +6294,72 @@
         {
           "type": "string"
         }
+      ]
+    },
+    "MaintenanceLoopCadences": {
+      "type": "object",
+      "properties": {
+        "tickIntervalMs": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "tickIntervalMs"
+      ]
+    },
+    "QueueHealthReason": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/QueueHealthReasonCode"
+        },
+        "severity": {
+          "enum": [
+            "critical",
+            "degraded"
+          ]
+        },
+        "observed": {
+          "type": "number"
+        },
+        "budget": {
+          "type": "number"
+        },
+        "queue": {
+          "type": "string"
+        },
+        "category": {
+          "enum": [
+            "attemptHistory",
+            "jobEvents",
+            "jobIdentity",
+            "scheduleOccurrences",
+            "statistics",
+            "terminalOutcome"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "severity",
+        "observed",
+        "budget"
+      ]
+    },
+    "QueueHealthReasonCode": {
+      "enum": [
+        "concurrency-blocked",
+        "default-history-rows",
+        "eligible-history-partitions",
+        "expired-leases",
+        "missing-history-partitions",
+        "overdue-deadlines",
+        "overdue-execution-timeouts",
+        "overdue-external-waits",
+        "rate-limit-throttled",
+        "retention-lag",
+        "rollup-stalled",
+        "stalled-promotion"
       ]
     },
     "RetentionPolicyImpact": {

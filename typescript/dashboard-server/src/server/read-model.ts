@@ -18,11 +18,8 @@ import {
   DashboardRateLimitPolicySummary,
   DashboardRetentionCategory,
   DashboardRetentionCategoryRow,
-  DashboardScheduleRow,
-  DashboardStorageRelation,
   DashboardSystemPage,
   DashboardSystemRetention,
-  DashboardSystemRetryBucket,
   DashboardSystemStorage,
   DashboardSystemWindow,
   DashboardTaskCounts,
@@ -44,7 +41,6 @@ import {
   statWindow,
   statWindowStart,
 } from "./rolling-stats.js";
-import { deriveSettingsRecommendations } from "./settings-recommendations.js";
 import { sql, type DashboardDatabase, type DashboardSql } from "./sql.js";
 import type { DashboardDurabilityProjector } from "./types.js";
 
@@ -166,12 +162,20 @@ export async function readDashboardSettings(
     editable,
     maintenance: { ...maintenance, updatedAt: toIso(maintenance.updatedAt) },
     retention: { ...retention, updatedAt: toIso(retention.updatedAt) },
-    recommendations: deriveSettingsRecommendations({
-      maintenance,
-      retention,
-      health,
+    recommendationInputs: {
+      reasons: health.status.reasons.map((reason) => ({ ...reason })),
+      statistics: {
+        rolledUpThrough: health.statistics.rolledUpThrough.toISOString(),
+        lagMs: Number(health.statistics.lagMs),
+        lastRunAt: toIsoOrNull(health.statistics.lastRunAt),
+      },
+      defaultHistoryRows: {
+        jobEvents: Number(health.defaultHistoryRows.jobEvents),
+        attemptHistory: Number(health.defaultHistoryRows.attemptHistory),
+      },
+      defaultHistoryRowsCapped: { ...health.defaultHistoryRowsCapped },
       enqueueRate: { jobs: Number(enqueued.rows[0]?.jobs ?? 0), windowMs: 3_600_000 },
-    }),
+    },
     workers: workers.rows.map((worker) => ({
       id: worker.worker_id,
       queue: worker.queue_names[0]!,
@@ -544,10 +548,6 @@ export async function readDashboardQueues(
   };
 }
 
-/** Legend cap for the activity chart; overflow groups are folded into "other". */
-const maxActivityGroups = 10;
-const otherActivityGroup = "other";
-
 export const activityPeriods: Record<
   DashboardActivityPeriod,
   { windowSeconds: number; bucketSeconds: number }
@@ -653,17 +653,8 @@ export async function readDashboardActivity(
     if (row.group_key === null) continue;
     totals.set(row.group_key, (totals.get(row.group_key) ?? 0) + row.count);
   }
-  // Cap the legend at 10 entries: keep the 9 busiest groups and fold the rest into "other".
-  const ranked = [...totals.entries()]
-    // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([group]) => group);
-  const kept = ranked.length > maxActivityGroups ? ranked.slice(0, maxActivityGroups - 1) : ranked;
-  const keptSet = new Set(kept);
-  const hasOther = ranked.length > keptSet.size;
   // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
-  const groups = [...kept].sort();
-  if (hasOther) groups.push(otherActivityGroup);
+  const groups = [...totals.keys()].sort();
   const byBucket = new Map<string, DashboardActivityBucket>();
   for (const row of rows.rows) {
     const bucketStart = toIso(row.bucket_start);
@@ -673,8 +664,7 @@ export async function readDashboardActivity(
       byBucket.set(bucketStart, bucket);
     }
     if (row.group_key === null) continue;
-    const key = keptSet.has(row.group_key) ? row.group_key : otherActivityGroup;
-    bucket.counts[key] = (bucket.counts[key] ?? 0) + row.count;
+    bucket.counts[row.group_key] = row.count;
   }
   return {
     capturedAt: new Date().toISOString(),
@@ -953,149 +943,6 @@ export async function readDashboardTaskFacets(
   };
 }
 
-/** Display-only schedule descriptions; the core schema deliberately has no description column. */
-const scheduleDescriptions: Record<string, string> = {
-  "workhorse:tick": "Makes due tasks ready and recovers tasks with expired leases.",
-  "workhorse:history-partitions": "Prepares daily history storage before Workhorse needs it.",
-  "workhorse:history-retention":
-    "Deletes history and schedule runs after their retention periods end.",
-  "workhorse:terminal-storage":
-    "Deletes expired idempotency records and finished tasks that retention no longer protects.",
-};
-
-function scheduleDescription(namespace: string, name: string): string | null {
-  return scheduleDescriptions[`${namespace}:${name}`] ?? null;
-}
-
-function systemMaintenanceSchedules(
-  cadences: MaintenanceLoopCadences,
-  policy: {
-    timezone: string;
-    partitionPreparationIntervalMs: number;
-    terminalCleanupIntervalMs: number;
-    historyRetentionLocalTime: string;
-    updatedAt: string;
-  },
-  state: Map<
-    string,
-    {
-      lastStartedAt: string | null;
-      lastCompletedAt: string | null;
-      due: boolean;
-      incomplete: boolean;
-    }
-  >,
-): DashboardScheduleRow[] {
-  const updatedAt = policy.updatedAt;
-  const maintenance = (
-    taskName: string,
-    intervalMs: number,
-    phases: string[],
-  ): NonNullable<DashboardScheduleRow["maintenance"]> => {
-    const task = state.get(taskName);
-    return {
-      intervalMs,
-      phases,
-      status: task?.incomplete ? "incomplete" : task?.due ? "due" : "scheduled",
-      lastStartedAt: task?.lastStartedAt ?? null,
-      lastCompletedAt: task?.lastCompletedAt ?? null,
-    };
-  };
-  return [
-    {
-      kind: "system",
-      identity: { kind: "system", namespace: "workhorse", name: "tick" },
-      namespace: "workhorse",
-      name: "tick",
-      description: scheduleDescription("workhorse", "tick"),
-      cron: `every ${cadences.tickIntervalMs}ms`,
-      queue: null,
-      type: "workhorse.tick_v1",
-      priority: null,
-      enabled: true,
-      active: true,
-      revision: "1",
-      updatedAt,
-      occurrenceCount: null,
-      lastFiredAt: null,
-      lastRun: null,
-      maintenance: {
-        intervalMs: cadences.tickIntervalMs,
-        phases: ["promote", "recover"],
-        status: "scheduled",
-        lastStartedAt: null,
-        lastCompletedAt: null,
-      },
-    },
-    {
-      kind: "system",
-      identity: { kind: "system", namespace: "workhorse", name: "history-partitions" },
-      namespace: "workhorse",
-      name: "history-partitions",
-      description: scheduleDescription("workhorse", "history-partitions"),
-      cron: `every ${policy.partitionPreparationIntervalMs}ms`,
-      queue: null,
-      type: "workhorse.prepare_history_partitions_v1",
-      priority: null,
-      enabled: true,
-      active: true,
-      revision: "1",
-      updatedAt,
-      occurrenceCount: null,
-      lastFiredAt: state.get("history_partitions")?.lastCompletedAt ?? null,
-      lastRun: null,
-      maintenance: maintenance("history_partitions", policy.partitionPreparationIntervalMs, [
-        "history_partitions",
-      ]),
-    },
-    {
-      kind: "system",
-      identity: { kind: "system", namespace: "workhorse", name: "history-retention" },
-      namespace: "workhorse",
-      name: "history-retention",
-      description: scheduleDescription("workhorse", "history-retention"),
-      cron: `daily at ${policy.historyRetentionLocalTime} ${policy.timezone}`,
-      queue: null,
-      type: "workhorse.retain_history_v1",
-      priority: null,
-      enabled: true,
-      active: true,
-      revision: "1",
-      updatedAt,
-      occurrenceCount: null,
-      lastFiredAt: state.get("history_retention")?.lastCompletedAt ?? null,
-      lastRun: null,
-      maintenance: maintenance("history_retention", 86_400_000, [
-        "event_retention",
-        "attempt_retention",
-        "schedule_occurrences",
-      ]),
-    },
-    {
-      kind: "system",
-      identity: { kind: "system", namespace: "workhorse", name: "terminal-storage" },
-      namespace: "workhorse",
-      name: "terminal-storage",
-      description: scheduleDescription("workhorse", "terminal-storage"),
-      cron: `every ${policy.terminalCleanupIntervalMs}ms`,
-      queue: null,
-      type: "workhorse.prune_terminal_storage_v1",
-      priority: null,
-      enabled: true,
-      active: true,
-      revision: "1",
-      updatedAt,
-      occurrenceCount: null,
-      lastFiredAt: state.get("terminal_storage")?.lastCompletedAt ?? null,
-      lastRun: null,
-      maintenance: maintenance("terminal_storage", policy.terminalCleanupIntervalMs, [
-        "enqueue_idempotency",
-        "terminal_jobs",
-      ]),
-    },
-  ];
-}
-
 export async function readDashboardCron(
   database: DashboardDatabase,
   maintenanceLoops: MaintenanceLoopCadences,
@@ -1174,57 +1021,60 @@ export async function readDashboardCron(
     `),
   ]);
   const policy = expectOneRow(policyRows, "the maintenance policy read");
-  const state = new Map(
-    stateRows.rows.map((row) => [
-      row.task_name,
+  const maintenanceTasks = stateRows.rows.flatMap((row) => {
+    const task = row.task_name;
+    if (
+      task !== "history_partitions" &&
+      task !== "history_retention" &&
+      task !== "terminal_storage"
+    ) {
+      return [];
+    }
+    const taskName: "history_partitions" | "history_retention" | "terminal_storage" = task;
+    return [
       {
+        task: taskName,
         lastStartedAt: toIsoOrNull(row.last_started_at),
         lastCompletedAt: toIsoOrNull(row.last_completed_at),
         due: row.due,
         incomplete: row.incomplete,
       },
-    ]),
-  );
+    ];
+  });
 
   return {
     capturedAt: now.toISOString(),
-    schedules: [
-      ...systemMaintenanceSchedules(
-        maintenanceLoops,
-        {
-          timezone: policy.timezone,
-          partitionPreparationIntervalMs: Number(policy.partition_preparation_interval_ms),
-          terminalCleanupIntervalMs: Number(policy.terminal_cleanup_interval_ms),
-          historyRetentionLocalTime: policy.history_retention_local_time.slice(0, 5),
-          updatedAt: toIso(policy.updated_at),
-        },
-        state,
-      ),
-      ...scheduleRows.rows.map((row) => {
-        return {
-          kind: "user" as const,
-          identity: { kind: "user" as const, namespace: row.namespace, name: row.name },
-          namespace: row.namespace,
-          name: row.name,
-          description: scheduleDescription(row.namespace, row.name),
-          cron: row.cron,
-          queue: row.queue,
-          type: row.type,
-          priority: row.priority,
-          enabled: row.enabled,
-          active: row.enabled,
-          revision: row.revision,
-          updatedAt: toIso(row.updated_at),
-          occurrenceCount: row.occurrence_count,
-          lastFiredAt: toIsoOrNull(row.last_fired_at),
-          lastRun: null,
-          maintenance: null,
-        };
-      }),
-    ],
+    schedules: scheduleRows.rows.map((row) => {
+      return {
+        kind: "user" as const,
+        identity: { kind: "user" as const, namespace: row.namespace, name: row.name },
+        namespace: row.namespace,
+        name: row.name,
+        cron: row.cron,
+        queue: row.queue,
+        type: row.type,
+        priority: row.priority,
+        enabled: row.enabled,
+        active: row.enabled,
+        revision: row.revision,
+        updatedAt: toIso(row.updated_at),
+        occurrenceCount: row.occurrence_count,
+        lastFiredAt: toIsoOrNull(row.last_fired_at),
+      };
+    }),
+    maintenance: {
+      cadences: maintenanceLoops,
+      policy: {
+        timezone: policy.timezone,
+        partitionPreparationIntervalMs: Number(policy.partition_preparation_interval_ms),
+        terminalCleanupIntervalMs: Number(policy.terminal_cleanup_interval_ms),
+        historyRetentionLocalTime: policy.history_retention_local_time.slice(0, 5),
+        updatedAt: toIso(policy.updated_at),
+      },
+      tasks: maintenanceTasks,
+    },
   };
 }
-
 const dashboardSystemWindowSeconds: Record<DashboardSystemWindow, number> = {
   "15m": 15 * 60,
   "1h": 60 * 60,
@@ -1234,12 +1084,12 @@ const dashboardSystemWindowSeconds: Record<DashboardSystemWindow, number> = {
 // Promotion is expected to complete within a few maintenance ticks under normal operation.
 const dashboardPromotionGraceSeconds = 10;
 
-const dashboardRetryBucketLabels: DashboardSystemRetryBucket["label"][] = [
-  "1m",
-  "5m",
-  "15m",
-  "1h",
-  "later",
+const dashboardRetryBucketUpperBounds: Array<number | null> = [
+  60_000,
+  300_000,
+  900_000,
+  3_600_000,
+  null,
 ];
 
 type QueueHealthSnapshot = Awaited<ReturnType<Queue["health"]>>;
@@ -1255,75 +1105,61 @@ type RetentionDaysKey = {
 
 const dashboardRetentionCategories: ReadonlyArray<{
   category: DashboardRetentionCategory;
-  label: string;
   policyKey: RetentionDaysKey;
   prunedByPartition: boolean;
 }> = [
   {
     category: "jobIdentity",
-    label: "Task records",
     policyKey: "jobIdentityRetentionDays",
     prunedByPartition: false,
   },
   {
     category: "terminalOutcome",
-    label: "Finished results",
     policyKey: "terminalOutcomeRetentionDays",
     prunedByPartition: false,
   },
   {
     category: "jobEvents",
-    label: "Task events",
     policyKey: "jobEventRetentionDays",
     prunedByPartition: true,
   },
   {
     category: "attemptHistory",
-    label: "Attempt history",
     policyKey: "attemptHistoryRetentionDays",
     prunedByPartition: true,
   },
   {
     category: "scheduleOccurrences",
-    label: "Schedule runs",
     policyKey: "scheduleOccurrenceRetentionDays",
     prunedByPartition: false,
   },
   {
     category: "statistics",
-    label: "Rolled-up statistics",
     policyKey: "statisticsRetentionDays",
     prunedByPartition: false,
   },
 ];
 
-/** Relations worth showing an operator, grouped by what they are for. */
-const dashboardStorageRelations: ReadonlyArray<{
-  relation: string;
-  label: string;
-  group: DashboardStorageRelation["group"];
-}> = [
-  { relation: "job", label: "Task records", group: "tasks" },
-  { relation: "job_outcome", label: "Finished results", group: "tasks" },
-  { relation: "job_runtime", label: "Active task state", group: "tasks" },
-  { relation: "job_query", label: "Dashboard task view", group: "tasks" },
-  { relation: "job_event", label: "Task events", group: "history" },
-  { relation: "attempt_history", label: "Attempt history", group: "history" },
-  { relation: "schedule_occurrence", label: "Schedule runs", group: "history" },
-  { relation: "job_stat_bucket", label: "Minute summaries", group: "statistics" },
-  { relation: "job_stat_bucket_hour", label: "Hourly summaries", group: "statistics" },
-  { relation: "job_stat_bucket_day", label: "Daily summaries", group: "statistics" },
-];
+const dashboardStorageRelations = [
+  "job",
+  "job_outcome",
+  "job_runtime",
+  "job_query",
+  "job_event",
+  "attempt_history",
+  "schedule_occurrence",
+  "job_stat_bucket",
+  "job_stat_bucket_hour",
+  "job_stat_bucket_day",
+] as const;
 
 function dashboardStorage(health: QueueHealthSnapshot): DashboardSystemStorage {
   const byRelation = new Map(health.observations.relations.map((row) => [row.relation, row]));
   const relations = dashboardStorageRelations
-    .map((definition) => {
-      const row = byRelation.get(definition.relation);
+    .map((relation) => {
+      const row = byRelation.get(relation);
       return {
-        relation: definition.relation,
-        label: definition.label,
-        group: definition.group,
+        relation,
         totalBytes: Number(row?.totalBytes ?? 0),
         tableBytes: Number(row?.tableBytes ?? 0),
         indexBytes: Number(row?.indexBytes ?? 0),
@@ -1362,7 +1198,6 @@ function dashboardRetention(health: QueueHealthSnapshot): DashboardSystemRetenti
     const lag = health.retentionLagMs[definition.category];
     return {
       category: definition.category,
-      label: definition.label,
       retentionDays: configured === null || configured === undefined ? null : Number(configured),
       lagMs: lag === null || lag === undefined ? null : Number(lag),
       oldestRetainedAt: oldest ? toIso(oldest) : null,
@@ -1405,73 +1240,6 @@ function dashboardRetention(health: QueueHealthSnapshot): DashboardSystemRetenti
       attemptHistory: health.defaultHistoryRowsCapped.attemptHistory,
     },
   };
-}
-
-/**
- * Project core health reasons into operator-facing English.
- *
- * Which conditions degrade and which are critical is decided by `evaluateQueueHealth` in
- * `@workhorse-js/core`, with its budgets; this function only words the result. Retention-lag reasons
- * arrive one per late category and are folded into a single sentence.
- */
-export function healthCheckMessages(health: Pick<QueueHealthSnapshot, "status">): {
-  criticalChecks: string[];
-  degradedChecks: string[];
-} {
-  const criticalChecks: string[] = [];
-  const degradedChecks: string[] = [];
-  const lateRetentionLabels: string[] = [];
-  const labelByCategory = new Map(
-    dashboardRetentionCategories.map((definition) => [definition.category, definition.label]),
-  );
-  for (const reason of health.status.reasons) {
-    switch (reason.code) {
-      case "expired-leases":
-        criticalChecks.push("Expired leases");
-        break;
-      case "overdue-deadlines":
-        criticalChecks.push("Tasks are past their deadlines");
-        break;
-      case "overdue-execution-timeouts":
-        criticalChecks.push("Attempts are past their execution limits");
-        break;
-      case "overdue-external-waits":
-        criticalChecks.push(`External waits are overdue (${reason.observed})`);
-        break;
-      case "stalled-promotion":
-        criticalChecks.push("Scheduled tasks are overdue");
-        break;
-      case "missing-history-partitions":
-        criticalChecks.push("Daily history storage is missing");
-        break;
-      case "rollup-stalled":
-        degradedChecks.push("The statistics summary is behind");
-        break;
-      case "retention-lag": {
-        const label = reason.category ? labelByCategory.get(reason.category) : undefined;
-        if (label) lateRetentionLabels.push(label.toLowerCase());
-        break;
-      }
-      case "eligible-history-partitions":
-        degradedChecks.push(`History days await deletion (${reason.observed})`);
-        break;
-      case "default-history-rows":
-        degradedChecks.push(`History rows use fallback storage (${reason.observed})`);
-        break;
-      case "concurrency-blocked":
-        degradedChecks.push(`Concurrency policy blocks ready tasks on ${reason.queue}`);
-        break;
-      case "rate-limit-throttled":
-        degradedChecks.push(
-          `Queue ${reason.queue} has ${reason.observed}+ ready tasks waiting for rate-limit tokens`,
-        );
-        break;
-    }
-  }
-  if (lateRetentionLabels.length > 0) {
-    degradedChecks.push(`Retention cleanup is late for ${lateRetentionLabels.join(", ")}`);
-  }
-  return { criticalChecks, degradedChecks };
 }
 
 function dashboardAdmissionPolicies(health: QueueHealthSnapshot) {
@@ -1609,14 +1377,14 @@ export async function readDashboardSystem(
                AS due_but_unpromoted
         FROM workhorse.dashboard_job_runtime_v1
     `),
-    database.execute<{ label: DashboardSystemRetryBucket["label"]; count: number }>(sql`
+    database.execute<{ upper_bound_ms: number | null; count: number }>(sql`
       SELECT CASE
-               WHEN run_at <= clock_timestamp() + interval '1 minute' THEN '1m'
-               WHEN run_at <= clock_timestamp() + interval '5 minutes' THEN '5m'
-               WHEN run_at <= clock_timestamp() + interval '15 minutes' THEN '15m'
-               WHEN run_at <= clock_timestamp() + interval '1 hour' THEN '1h'
-               ELSE 'later'
-             END AS label,
+               WHEN run_at <= clock_timestamp() + interval '1 minute' THEN 60000
+               WHEN run_at <= clock_timestamp() + interval '5 minutes' THEN 300000
+               WHEN run_at <= clock_timestamp() + interval '15 minutes' THEN 900000
+               WHEN run_at <= clock_timestamp() + interval '1 hour' THEN 3600000
+               ELSE NULL
+             END AS upper_bound_ms,
              count(*)::integer AS count
         FROM workhorse.dashboard_job_runtime_v1
        WHERE state = 'scheduled' AND current_attempt > 1
@@ -1666,7 +1434,8 @@ export async function readDashboardSystem(
         FROM queue_names q
         LEFT JOIN workhorse.dashboard_queue_control_v1 c USING (queue_name)
         LEFT JOIN runtime r USING (queue_name)
-       LEFT JOIN rolled s USING (queue_name)
+        LEFT JOIN rolled s USING (queue_name)
+       ORDER BY q.queue_name
     `),
     database.execute<{
       queue: string;
@@ -1728,10 +1497,10 @@ export async function readDashboardSystem(
     summary.current_attempts === 0 ? 0 : summary.current_errors / summary.current_attempts;
   const previousErrorRate =
     summary.previous_attempts === 0 ? 0 : summary.previous_errors / summary.previous_attempts;
-  const retryByLabel = new Map(retryRows.rows.map((row) => [row.label, row.count]));
-  const retryBuckets = dashboardRetryBucketLabels.map((label) => ({
-    label,
-    count: retryByLabel.get(label) ?? 0,
+  const retryByUpperBound = new Map(retryRows.rows.map((row) => [row.upper_bound_ms, row.count]));
+  const retryBuckets = dashboardRetryBucketUpperBounds.map((upperBoundMs) => ({
+    upperBoundMs,
+    count: retryByUpperBound.get(upperBoundMs) ?? 0,
   }));
   const partitions = health.historyPartitionDays.map((row) => ({
     day: row.day,
@@ -1739,14 +1508,9 @@ export async function readDashboardSystem(
     eventExists: row.hasJobEvents,
     attemptExists: row.hasAttemptHistory,
   }));
-  // The verdict and every threshold behind it come from the consistent core snapshot; this page
-  // only words the reasons for operators.
-  const { criticalChecks, degradedChecks } = healthCheckMessages(health);
   const status = {
     level: health.status.level as DashboardSystemPage["status"]["level"],
-    checks: [...criticalChecks, ...degradedChecks],
-    criticalChecks,
-    degradedChecks,
+    reasons: health.status.reasons.map((reason) => ({ ...reason })),
   };
 
   const admissionPolicies = dashboardAdmissionPolicies(health);
@@ -1763,27 +1527,20 @@ export async function readDashboardSystem(
     });
     priorityBacklogByQueue.set(row.queue, lanes);
   }
-  const queues = queueRows.rows
-    .map((row) => ({
-      queue: row.queue,
-      paused: row.paused,
-      ready: row.ready,
-      oldestReadyMs: row.oldest_ready_ms,
-      priorityBacklog: priorityBacklogByQueue.get(row.queue) ?? [],
-      dueSoon: row.due_soon,
-      active: row.active,
-      retrying: row.retrying,
-      enqueuedPerMinute: row.enqueued / minutes,
-      completedPerMinute: row.completed / minutes,
-      concurrencyPolicy: admissionPolicies.concurrency.get(row.queue) ?? null,
-      rateLimitPolicy: admissionPolicies.rateLimits.get(row.queue) ?? null,
-    }))
-    // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
-    .sort((left, right) => {
-      const leftRisk = (left.oldestReadyMs ?? 0) + left.ready * 1_000 + left.dueSoon * 100;
-      const rightRisk = (right.oldestReadyMs ?? 0) + right.ready * 1_000 + right.dueSoon * 100;
-      return rightRisk - leftRisk || left.queue.localeCompare(right.queue);
-    });
+  const queues = queueRows.rows.map((row) => ({
+    queue: row.queue,
+    paused: row.paused,
+    ready: row.ready,
+    oldestReadyMs: row.oldest_ready_ms,
+    priorityBacklog: priorityBacklogByQueue.get(row.queue) ?? [],
+    dueSoon: row.due_soon,
+    active: row.active,
+    retrying: row.retrying,
+    enqueuedPerMinute: row.enqueued / minutes,
+    completedPerMinute: row.completed / minutes,
+    concurrencyPolicy: admissionPolicies.concurrency.get(row.queue) ?? null,
+    rateLimitPolicy: admissionPolicies.rateLimits.get(row.queue) ?? null,
+  }));
   const pausedQueues: string[] = [];
   for (const row of queues) {
     if (row.paused) pausedQueues.push(row.queue);
@@ -1864,14 +1621,6 @@ export async function readDashboardSystem(
   };
 }
 
-/**
- * A registration older than this is treated as a stopped process rather than a live worker.
- *
- * Workers refresh on a 5 second cadence by default, so this tolerates several consecutive missed
- * refreshes before a worker is reported offline.
- */
-const WORKER_REGISTRATION_STALE_MS = 30_000;
-
 export async function readDashboardWorkers(
   database: DashboardDatabase,
   configuredWorkers: readonly string[] = [],
@@ -1941,11 +1690,6 @@ export async function readDashboardWorkers(
     capturedAt: now.toISOString(),
     canManageWorkers,
     workers: workerRows.rows.map((row) => {
-      const heartbeatAt = row.last_heartbeat_at ? new Date(row.last_heartbeat_at) : null;
-      const live =
-        row.registered &&
-        heartbeatAt !== null &&
-        heartbeatAt.getTime() >= now.getTime() - WORKER_REGISTRATION_STALE_MS;
       return {
         id: row.id,
         queues: row.queue_names ?? [],
@@ -1961,16 +1705,8 @@ export async function readDashboardWorkers(
         lastSeenAt: toIsoOrNull(row.last_seen_at),
         startedAt: toIsoOrNull(row.started_at),
         registered: row.registered,
+        lastHeartbeatAt: toIsoOrNull(row.last_heartbeat_at),
         paused: row.paused ?? false,
-        status:
-          row.active_jobs > 0
-            ? "active"
-            : live
-              ? "idle"
-              : row.last_seen_at &&
-                  new Date(row.last_seen_at).getTime() >= now.getTime() - 5 * 60_000
-                ? "recent"
-                : "offline",
       };
     }),
   };

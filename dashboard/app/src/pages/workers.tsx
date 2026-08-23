@@ -16,6 +16,7 @@ import {
 import { StatusBadge } from "../status-badge.js";
 import { EmptyState, PageHeader } from "../components/task-list.js";
 import { formatDuration, formatExact, formatRelative } from "../preferences.js";
+import { workerStatus } from "../presentation-policy.js";
 
 export function WorkersPage({
   data,
@@ -62,105 +63,110 @@ export function WorkersPage({
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
-                {data.workers.map((worker) => (
-                  <Table.Tr key={worker.id}>
-                    <Table.Td>
-                      <Stack gap={2}>
-                        <Code
-                          fz="xs"
-                          style={{
-                            background: "transparent",
-                            paddingBlock: 0,
-                            paddingInline: 0,
-                          }}
-                        >
-                          {worker.id}
-                        </Code>
-                        {/* Placement is reported separately from identity, so a worker with a
+                {data.workers.map((worker) => {
+                  const status = workerStatus(worker, data.capturedAt);
+                  return (
+                    <Table.Tr key={worker.id}>
+                      <Table.Td>
+                        <Stack gap={2}>
+                          <Code
+                            fz="xs"
+                            style={{
+                              background: "transparent",
+                              paddingBlock: 0,
+                              paddingInline: 0,
+                            }}
+                          >
+                            {worker.id}
+                          </Code>
+                          {/* Placement is reported separately from identity, so a worker with a
                             stable configured name still says which host and process it is. */}
-                        {worker.hostname ? (
-                          <Text c="dimmed" fz="xs">
-                            {worker.hostname} · pid {worker.pid}
-                          </Text>
-                        ) : null}
-                      </Stack>
-                    </Table.Td>
-                    <Table.Td>{worker.queues.length > 0 ? worker.queues.join(", ") : "—"}</Table.Td>
-                    <Table.Td>
-                      <Group gap={6} wrap="nowrap">
-                        <StatusBadge state={worker.status} />
-                        {worker.paused ? (
-                          <Badge color="yellow" variant="light">
-                            Paused
-                          </Badge>
-                        ) : null}
-                        {worker.draining ? (
-                          <Badge color="orange" variant="light">
-                            Draining
-                          </Badge>
-                        ) : null}
-                      </Group>
-                    </Table.Td>
-                    <Table.Td>
-                      <Tooltip
-                        label="Worker controls are unavailable in read-only mode"
-                        disabled={data.canManageWorkers}
+                          {worker.hostname ? (
+                            <Text c="dimmed" fz="xs">
+                              {worker.hostname} · pid {worker.pid}
+                            </Text>
+                          ) : null}
+                        </Stack>
+                      </Table.Td>
+                      <Table.Td>
+                        {worker.queues.length > 0 ? worker.queues.join(", ") : "—"}
+                      </Table.Td>
+                      <Table.Td>
+                        <Group gap={6} wrap="nowrap">
+                          <StatusBadge state={status} />
+                          {worker.paused ? (
+                            <Badge color="yellow" variant="light">
+                              Paused
+                            </Badge>
+                          ) : null}
+                          {worker.draining ? (
+                            <Badge color="orange" variant="light">
+                              Draining
+                            </Badge>
+                          ) : null}
+                        </Group>
+                      </Table.Td>
+                      <Table.Td>
+                        <Tooltip
+                          label="Worker controls are unavailable in read-only mode"
+                          disabled={data.canManageWorkers}
+                        >
+                          <Box component="span" display="inline-block">
+                            <Switch
+                              size="sm"
+                              checked={!worker.paused}
+                              disabled={!data.canManageWorkers || togglingWorker === worker.id}
+                              aria-label={`${worker.paused ? "Resume" : "Pause"} ${worker.id}`}
+                              onChange={(event) =>
+                                setWorkerPaused(worker.id, !event.currentTarget.checked)
+                              }
+                            />
+                          </Box>
+                        </Tooltip>
+                      </Table.Td>
+                      <Table.Td
+                        ta="right"
+                        // The compact "2 / 3" reading is ambiguous out of column context, so the cell
+                        // carries the spelled-out meaning for assistive technology.
+                        aria-label={
+                          worker.concurrency === null
+                            ? `${worker.id} slot use is unknown because it has never registered`
+                            : `${worker.id} is using ${worker.activeSlots ?? 0} of ${worker.concurrency} configured execution slots`
+                        }
                       >
-                        <Box component="span" display="inline-block">
-                          <Switch
+                        {worker.concurrency === null ? (
+                          <Text
+                            c="dimmed"
                             size="sm"
-                            checked={!worker.paused}
-                            disabled={!data.canManageWorkers || togglingWorker === worker.id}
-                            aria-label={`${worker.paused ? "Resume" : "Pause"} ${worker.id}`}
-                            onChange={(event) =>
-                              setWorkerPaused(worker.id, !event.currentTarget.checked)
-                            }
-                          />
-                        </Box>
-                      </Tooltip>
-                    </Table.Td>
-                    <Table.Td
-                      ta="right"
-                      // The compact "2 / 3" reading is ambiguous out of column context, so the cell
-                      // carries the spelled-out meaning for assistive technology.
-                      aria-label={
-                        worker.concurrency === null
-                          ? `${worker.id} slot use is unknown because it has never registered`
-                          : `${worker.id} is using ${worker.activeSlots ?? 0} of ${worker.concurrency} configured execution slots`
-                      }
-                    >
-                      {worker.concurrency === null ? (
-                        <Text
-                          c="dimmed"
-                          size="sm"
-                          title="This worker has never registered, so its declared capacity is unknown"
-                        >
-                          —
+                            title="This worker has never registered, so its declared capacity is unknown"
+                          >
+                            —
+                          </Text>
+                        ) : (
+                          <Text
+                            size="sm"
+                            title={`${worker.id} uses ${worker.activeSlots ?? 0} of ${worker.concurrency} execution slots`}
+                          >
+                            {worker.activeSlots ?? 0} / {worker.concurrency}
+                          </Text>
+                        )}
+                      </Table.Td>
+                      <Table.Td ta="right">{worker.activeJobs}</Table.Td>
+                      <Table.Td ta="right">{worker.completedAttempts}</Table.Td>
+                      <Table.Td ta="right">
+                        <Text c={worker.failedAttempts > 0 ? "red.7" : undefined} size="sm">
+                          {worker.failedAttempts}
                         </Text>
-                      ) : (
-                        <Text
-                          size="sm"
-                          title={`${worker.id} uses ${worker.activeSlots ?? 0} of ${worker.concurrency} execution slots`}
-                        >
-                          {worker.activeSlots ?? 0} / {worker.concurrency}
+                      </Table.Td>
+                      <Table.Td ta="right">{formatDuration(worker.averageExecutionMs)}</Table.Td>
+                      <Table.Td>
+                        <Text c="dimmed" size="xs" title={formatExact(worker.lastSeenAt)}>
+                          {formatRelative(worker.lastSeenAt)}
                         </Text>
-                      )}
-                    </Table.Td>
-                    <Table.Td ta="right">{worker.activeJobs}</Table.Td>
-                    <Table.Td ta="right">{worker.completedAttempts}</Table.Td>
-                    <Table.Td ta="right">
-                      <Text c={worker.failedAttempts > 0 ? "red.7" : undefined} size="sm">
-                        {worker.failedAttempts}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td ta="right">{formatDuration(worker.averageExecutionMs)}</Table.Td>
-                    <Table.Td>
-                      <Text c="dimmed" size="xs" title={formatExact(worker.lastSeenAt)}>
-                        {formatRelative(worker.lastSeenAt)}
-                      </Text>
-                    </Table.Td>
-                  </Table.Tr>
-                ))}
+                      </Table.Td>
+                    </Table.Tr>
+                  );
+                })}
               </Table.Tbody>
             </Table>
           </ScrollArea>

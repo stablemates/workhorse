@@ -1896,150 +1896,6 @@
                 },
                 "schedules": [
                   {
-                    "kind": "system",
-                    "identity": {
-                      "kind": "system",
-                      "namespace": "workhorse",
-                      "name": "tick"
-                    },
-                    "namespace": "workhorse",
-                    "name": "tick",
-                    "description": "Makes due tasks ready and recovers tasks with expired leases.",
-                    "cron": "every 1000ms",
-                    "queue": null,
-                    "type": "workhorse.tick_v1",
-                    "priority": null,
-                    "enabled": true,
-                    "active": true,
-                    "revision": "1",
-                    "updatedAt": {
-                      "$type": "timestamp"
-                    },
-                    "occurrenceCount": null,
-                    "lastFiredAt": null,
-                    "lastRun": null,
-                    "maintenance": {
-                      "intervalMs": 1000,
-                      "phases": [
-                        "promote",
-                        "recover"
-                      ],
-                      "status": {
-                        "$type": "string"
-                      },
-                      "lastStartedAt": null,
-                      "lastCompletedAt": null
-                    }
-                  },
-                  {
-                    "kind": "system",
-                    "identity": {
-                      "kind": "system",
-                      "namespace": "workhorse",
-                      "name": "history-partitions"
-                    },
-                    "namespace": "workhorse",
-                    "name": "history-partitions",
-                    "description": "Prepares daily history storage before Workhorse needs it.",
-                    "cron": "every 21600000ms",
-                    "queue": null,
-                    "type": "workhorse.prepare_history_partitions_v1",
-                    "priority": null,
-                    "enabled": true,
-                    "active": true,
-                    "revision": "1",
-                    "updatedAt": {
-                      "$type": "timestamp"
-                    },
-                    "occurrenceCount": null,
-                    "lastFiredAt": null,
-                    "lastRun": null,
-                    "maintenance": {
-                      "intervalMs": 21600000,
-                      "phases": [
-                        "history_partitions"
-                      ],
-                      "status": {
-                        "$type": "string"
-                      },
-                      "lastStartedAt": null,
-                      "lastCompletedAt": null
-                    }
-                  },
-                  {
-                    "kind": "system",
-                    "identity": {
-                      "kind": "system",
-                      "namespace": "workhorse",
-                      "name": "history-retention"
-                    },
-                    "namespace": "workhorse",
-                    "name": "history-retention",
-                    "description": "Deletes history and schedule runs after their retention periods end.",
-                    "cron": "daily at 03:00 UTC",
-                    "queue": null,
-                    "type": "workhorse.retain_history_v1",
-                    "priority": null,
-                    "enabled": true,
-                    "active": true,
-                    "revision": "1",
-                    "updatedAt": {
-                      "$type": "timestamp"
-                    },
-                    "occurrenceCount": null,
-                    "lastFiredAt": null,
-                    "lastRun": null,
-                    "maintenance": {
-                      "intervalMs": 86400000,
-                      "phases": [
-                        "event_retention",
-                        "attempt_retention",
-                        "schedule_occurrences"
-                      ],
-                      "status": {
-                        "$type": "string"
-                      },
-                      "lastStartedAt": null,
-                      "lastCompletedAt": null
-                    }
-                  },
-                  {
-                    "kind": "system",
-                    "identity": {
-                      "kind": "system",
-                      "namespace": "workhorse",
-                      "name": "terminal-storage"
-                    },
-                    "namespace": "workhorse",
-                    "name": "terminal-storage",
-                    "description": "Deletes expired idempotency records and finished tasks that retention no longer protects.",
-                    "cron": "every 300000ms",
-                    "queue": null,
-                    "type": "workhorse.prune_terminal_storage_v1",
-                    "priority": null,
-                    "enabled": true,
-                    "active": true,
-                    "revision": "1",
-                    "updatedAt": {
-                      "$type": "timestamp"
-                    },
-                    "occurrenceCount": null,
-                    "lastFiredAt": null,
-                    "lastRun": null,
-                    "maintenance": {
-                      "intervalMs": 300000,
-                      "phases": [
-                        "enqueue_idempotency",
-                        "terminal_jobs"
-                      ],
-                      "status": {
-                        "$type": "string"
-                      },
-                      "lastStartedAt": null,
-                      "lastCompletedAt": null
-                    }
-                  },
-                  {
                     "kind": "user",
                     "identity": {
                       "kind": "user",
@@ -2048,7 +1904,6 @@
                     },
                     "namespace": "conformance",
                     "name": "nightly-report",
-                    "description": null,
                     "cron": "0 3 * * *",
                     "queue": "conformance",
                     "type": "conformance.report",
@@ -2060,11 +1915,46 @@
                       "$type": "timestamp"
                     },
                     "occurrenceCount": 0,
-                    "lastFiredAt": null,
-                    "lastRun": null,
-                    "maintenance": null
+                    "lastFiredAt": null
                   }
-                ]
+                ],
+                "maintenance": {
+                  "cadences": {
+                    "tickIntervalMs": 1000
+                  },
+                  "policy": {
+                    "timezone": "UTC",
+                    "partitionPreparationIntervalMs": 21600000,
+                    "terminalCleanupIntervalMs": 300000,
+                    "historyRetentionLocalTime": "03:00",
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    }
+                  },
+                  "tasks": [
+                    {
+                      "task": "history_partitions",
+                      "lastStartedAt": null,
+                      "lastCompletedAt": null,
+                      "due": true,
+                      "incomplete": false
+                    },
+                    {
+                      "task": "history_retention",
+                      "lastStartedAt": null,
+                      "lastCompletedAt": null,
+                      "due": false,
+                      "incomplete": false
+                    },
+                    {
+                      "task": "terminal_storage",
+                      "lastStartedAt": null,
+                      "lastCompletedAt": null,
+                      "due": true,
+                      "incomplete": false
+                    }
+                  ]
+                }
               }
             }
           },
@@ -2136,9 +2026,7 @@
                 "windowSeconds": 3600,
                 "status": {
                   "level": "healthy",
-                  "checks": [],
-                  "criticalChecks": [],
-                  "degradedChecks": []
+                  "reasons": []
                 },
                 "pausedQueues": [],
                 "kpis": {
@@ -2174,23 +2062,23 @@
                     "dueSoon": 0,
                     "buckets": [
                       {
-                        "label": "1m",
+                        "upperBoundMs": 60000,
                         "count": 0
                       },
                       {
-                        "label": "5m",
+                        "upperBoundMs": 300000,
                         "count": 0
                       },
                       {
-                        "label": "15m",
+                        "upperBoundMs": 900000,
                         "count": 0
                       },
                       {
-                        "label": "1h",
+                        "upperBoundMs": 3600000,
                         "count": 0
                       },
                       {
-                        "label": "later",
+                        "upperBoundMs": null,
                         "count": 0
                       }
                     ]
@@ -3681,23 +3569,23 @@
                 "retryStorm": {
                   "buckets": [
                     {
-                      "label": "1m",
+                      "upperBoundMs": 60000,
                       "count": 0
                     },
                     {
-                      "label": "5m",
+                      "upperBoundMs": 300000,
                       "count": 0
                     },
                     {
-                      "label": "15m",
+                      "upperBoundMs": 900000,
                       "count": 0
                     },
                     {
-                      "label": "1h",
+                      "upperBoundMs": 3600000,
                       "count": 0
                     },
                     {
-                      "label": "later",
+                      "upperBoundMs": null,
                       "count": 0
                     }
                   ],
@@ -3769,7 +3657,6 @@
                     "categories": [
                       {
                         "category": "jobIdentity",
-                        "label": "Task records",
                         "retentionDays": 14,
                         "lagMs": null,
                         "oldestRetainedAt": {
@@ -3779,7 +3666,6 @@
                       },
                       {
                         "category": "terminalOutcome",
-                        "label": "Finished results",
                         "retentionDays": 14,
                         "lagMs": null,
                         "oldestRetainedAt": {
@@ -3789,7 +3675,6 @@
                       },
                       {
                         "category": "jobEvents",
-                        "label": "Task events",
                         "retentionDays": 14,
                         "lagMs": 0,
                         "oldestRetainedAt": {
@@ -3799,7 +3684,6 @@
                       },
                       {
                         "category": "attemptHistory",
-                        "label": "Attempt history",
                         "retentionDays": 14,
                         "lagMs": 0,
                         "oldestRetainedAt": {
@@ -3809,7 +3693,6 @@
                       },
                       {
                         "category": "scheduleOccurrences",
-                        "label": "Schedule runs",
                         "retentionDays": 14,
                         "lagMs": null,
                         "oldestRetainedAt": null,
@@ -3817,7 +3700,6 @@
                       },
                       {
                         "category": "statistics",
-                        "label": "Rolled-up statistics",
                         "retentionDays": 14,
                         "lagMs": null,
                         "oldestRetainedAt": null,
@@ -3860,8 +3742,6 @@
                     "relations": [
                       {
                         "relation": "job_event",
-                        "label": "Task events",
-                        "group": "history",
                         "totalBytes": 229376,
                         "tableBytes": 8192,
                         "indexBytes": 180224,
@@ -3872,8 +3752,6 @@
                       },
                       {
                         "relation": "attempt_history",
-                        "label": "Attempt history",
-                        "group": "history",
                         "totalBytes": 196608,
                         "tableBytes": 8192,
                         "indexBytes": 147456,
@@ -3884,8 +3762,6 @@
                       },
                       {
                         "relation": "job_runtime",
-                        "label": "Active task state",
-                        "group": "tasks",
                         "totalBytes": 163840,
                         "tableBytes": 8192,
                         "indexBytes": 147456,
@@ -3896,8 +3772,6 @@
                       },
                       {
                         "relation": "job_outcome",
-                        "label": "Finished results",
-                        "group": "tasks",
                         "totalBytes": 98304,
                         "tableBytes": 8192,
                         "indexBytes": 81920,
@@ -3908,8 +3782,6 @@
                       },
                       {
                         "relation": "job_query",
-                        "label": "Dashboard task view",
-                        "group": "tasks",
                         "totalBytes": 98304,
                         "tableBytes": 8192,
                         "indexBytes": 81920,
@@ -3920,8 +3792,6 @@
                       },
                       {
                         "relation": "job",
-                        "label": "Task records",
-                        "group": "tasks",
                         "totalBytes": 73728,
                         "tableBytes": 8192,
                         "indexBytes": 57344,
@@ -3932,8 +3802,6 @@
                       },
                       {
                         "relation": "schedule_occurrence",
-                        "label": "Schedule runs",
-                        "group": "history",
                         "totalBytes": 49152,
                         "tableBytes": 0,
                         "indexBytes": 40960,
@@ -3944,8 +3812,6 @@
                       },
                       {
                         "relation": "job_stat_bucket",
-                        "label": "Minute summaries",
-                        "group": "statistics",
                         "totalBytes": 16384,
                         "tableBytes": 0,
                         "indexBytes": 8192,
@@ -3956,8 +3822,6 @@
                       },
                       {
                         "relation": "job_stat_bucket_hour",
-                        "label": "Hourly summaries",
-                        "group": "statistics",
                         "totalBytes": 16384,
                         "tableBytes": 0,
                         "indexBytes": 8192,
@@ -3968,8 +3832,6 @@
                       },
                       {
                         "relation": "job_stat_bucket_day",
-                        "label": "Daily summaries",
-                        "group": "statistics",
                         "totalBytes": 16384,
                         "tableBytes": 0,
                         "indexBytes": 8192,
@@ -4034,17 +3896,14 @@
                       "$type": "timestamp"
                     },
                     "registered": true,
-                    "paused": false,
-                    "status": {
-                      "$type": "string"
-                    }
+                    "lastHeartbeatAt": {
+                      "$type": "timestamp"
+                    },
+                    "paused": false
                   }
                 ]
               }
             }
-          },
-          "coerce": {
-            "body.json.workers.*.status": "string"
           }
         },
         {
@@ -4163,7 +4022,30 @@
                     "$type": "timestamp"
                   }
                 },
-                "recommendations": [],
+                "recommendationInputs": {
+                  "reasons": [],
+                  "statistics": {
+                    "rolledUpThrough": {
+                      "$type": "timestamp"
+                    },
+                    "lagMs": {
+                      "$type": "number"
+                    },
+                    "lastRunAt": null
+                  },
+                  "defaultHistoryRows": {
+                    "jobEvents": 0,
+                    "attemptHistory": 0
+                  },
+                  "defaultHistoryRowsCapped": {
+                    "jobEvents": false,
+                    "attemptHistory": false
+                  },
+                  "enqueueRate": {
+                    "jobs": 8,
+                    "windowMs": 3600000
+                  }
+                },
                 "workers": [
                   {
                     "id": "conformance-worker",
@@ -4185,6 +4067,9 @@
                 ]
               }
             }
+          },
+          "coerce": {
+            "body.json.recommendationInputs.statistics.rolledUpThrough": "timestamp"
           }
         },
         {
@@ -5694,17 +5579,14 @@
                       "$type": "timestamp"
                     },
                     "registered": true,
-                    "paused": false,
-                    "status": {
-                      "$type": "string"
-                    }
+                    "lastHeartbeatAt": {
+                      "$type": "timestamp"
+                    },
+                    "paused": false
                   }
                 ]
               }
             }
-          },
-          "coerce": {
-            "body.json.workers.*.status": "string"
           }
         },
         {
@@ -5824,7 +5706,30 @@
                     "$type": "timestamp"
                   }
                 },
-                "recommendations": [],
+                "recommendationInputs": {
+                  "reasons": [],
+                  "statistics": {
+                    "rolledUpThrough": {
+                      "$type": "timestamp"
+                    },
+                    "lagMs": {
+                      "$type": "number"
+                    },
+                    "lastRunAt": null
+                  },
+                  "defaultHistoryRows": {
+                    "jobEvents": 0,
+                    "attemptHistory": 0
+                  },
+                  "defaultHistoryRowsCapped": {
+                    "jobEvents": false,
+                    "attemptHistory": false
+                  },
+                  "enqueueRate": {
+                    "jobs": 8,
+                    "windowMs": 3600000
+                  }
+                },
                 "workers": [
                   {
                     "id": "conformance-worker",
@@ -5846,6 +5751,9 @@
                 ]
               }
             }
+          },
+          "coerce": {
+            "body.json.recommendationInputs.statistics.rolledUpThrough": "timestamp"
           }
         },
         {

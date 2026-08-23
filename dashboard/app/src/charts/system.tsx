@@ -46,6 +46,7 @@ import {
   systemOldestReadyWarningMs,
 } from "../core.js";
 import { taskDisplayName } from "../components/task-list.js";
+import { retryBucketLabel, sortQueuesByRisk } from "../presentation-policy.js";
 
 export function formatRate(value: number): string {
   if (value === 0) return "0";
@@ -90,9 +91,9 @@ export function RetryBars({ buckets }: { buckets: DashboardSystemRetryBucket[] }
   return (
     <Stack gap={6}>
       {buckets.map((bucket) => (
-        <Group key={bucket.label} gap="xs" wrap="nowrap">
+        <Group key={bucket.upperBoundMs ?? "later"} gap="xs" wrap="nowrap">
           <Text c="dimmed" size="xs" w={34} ta="right">
-            {bucket.label}
+            {retryBucketLabel(bucket)}
           </Text>
           <Box bg="var(--mantine-color-default-hover)" h={7} style={{ flex: 1, borderRadius: 8 }}>
             <Box
@@ -228,6 +229,7 @@ export function QueuePressure({
   data: DashboardSystemPage;
   navigate: (href: string) => void;
 }) {
+  const queues = sortQueuesByRisk(data.queues);
   return (
     // The numeric columns need the wider two-thirds column; narrower viewports scroll the table
     // horizontally rather than dropping any of them.
@@ -245,11 +247,8 @@ export function QueuePressure({
             Largest risk first · select a queue to see its tasks
           </Text>
         </Box>
-        <Badge
-          variant="light"
-          color={data.queues.some((queue) => queue.paused) ? "yellow" : "gray"}
-        >
-          {data.queues.length} queues
+        <Badge variant="light" color={queues.some((queue) => queue.paused) ? "yellow" : "gray"}>
+          {queues.length} queues
         </Badge>
       </Group>
       <ScrollArea>
@@ -278,7 +277,7 @@ export function QueuePressure({
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
-            {data.queues.map((queue) => {
+            {queues.map((queue) => {
               const limit = describeConcurrencyLimit(queue.concurrencyPolicy);
               const blocked = describeConcurrencyBlocked(queue.concurrencyPolicy);
               const ratePolicy = queue.rateLimitPolicy ?? null;

@@ -29,6 +29,7 @@ import {
   setDisplayTimeZone,
 } from "../../preferences.js";
 import { PageHeader } from "../../components/task-list.js";
+import { deriveSettingsRecommendations } from "../../presentation-policy.js";
 
 /** Common timezones plus the browser default; stored values are IANA zone names. */
 export const timeZoneOptions: Array<{ value: string; label: string }> = [
@@ -175,6 +176,7 @@ export function SettingsPage({
   onSaveMaintenance,
   onRevertMaintenance,
 }: SettingsPageProps) {
+  const recommendations = deriveSettingsRecommendations(data);
   const [timeZone, setTimeZone] = useState(currentTimeZoneValue);
   const [maintenance, setMaintenance] = useState(() => ({
     timezone: data.maintenance.timezone,
@@ -281,7 +283,7 @@ export function SettingsPage({
               The connected host did not authorize settings changes.
             </Alert>
           ) : null}
-          {data.recommendations.map((recommendation) => (
+          {recommendations.map((recommendation) => (
             <Alert
               key={recommendation.id}
               color={recommendation.severity === "warning" ? "orange" : "blue"}

@@ -1,6 +1,5 @@
 import type {
   DashboardEventsWindow,
-  DashboardStorageRelation,
   DashboardSystemPage,
   DashboardSystemRetention,
   DashboardSystemStorage,
@@ -42,6 +41,11 @@ import {
 } from "../preferences.js";
 import { SystemOutcomeChart, systemWindows } from "../core.js";
 import { taskDisplayName } from "../components/task-list.js";
+import {
+  healthCheckMessages,
+  presentStorageRelation,
+  retentionCategoryLabels,
+} from "../presentation-policy.js";
 
 export function SystemPage({
   data,
@@ -65,6 +69,8 @@ export function SystemPage({
     canceled: bucket.canceled,
   }));
   const retention = data.integrity.retention;
+  const { criticalChecks, degradedChecks } = healthCheckMessages(data.status.reasons);
+  const checks = [...criticalChecks, ...degradedChecks];
   const defaultSpill =
     retention.defaultHistoryRows.jobEvents + retention.defaultHistoryRows.attemptHistory;
   const eligiblePartitions =
@@ -77,7 +83,7 @@ export function SystemPage({
       : enabledRetention
           .map(
             (row) =>
-              `${row.label}: keeps ${row.retentionDays} days, ${
+              `${retentionCategoryLabels[row.category]}: keeps ${row.retentionDays} days, ${
                 row.lagMs === null
                   ? "nothing retained yet"
                   : row.lagMs === 0
@@ -94,9 +100,7 @@ export function SystemPage({
     (row) => row.category === retention.oldestRetainedCategory,
   );
   // Only a lag check should tint the lag badge; spill and expired days have their own rows.
-  const retentionBehind = data.status.degradedChecks.some((check) =>
-    check.startsWith("Retention cleanup is late"),
-  );
+  const retentionBehind = data.status.reasons.some((reason) => reason.code === "retention-lag");
 
   return (
     <Stack gap="xl">
@@ -113,16 +117,16 @@ export function SystemPage({
             </Badge>
           </Group>
           <Group gap="xs">
-            {data.status.checks.slice(0, 3).map((check) => {
+            {checks.slice(0, 3).map((check) => {
               // Each check keeps its own severity so a degraded note is not painted as critical.
-              const isCritical = data.status.criticalChecks.includes(check);
+              const isCritical = criticalChecks.includes(check);
               return (
                 <Text key={check} c={isCritical ? "red.7" : "yellow.8"} size="sm">
                   {isCritical ? "Critical" : "Degraded"}: {check}
                 </Text>
               );
             })}
-            {data.status.checks.length === 0 ? (
+            {checks.length === 0 ? (
               <Text c="dimmed" size="sm">
                 All checks pass.
               </Text>
@@ -369,7 +373,9 @@ export function SystemPage({
                         : `Furthest behind: ${
                             retention.categories.find(
                               (row) => row.category === retention.maxLagCategory,
-                            )?.label ?? retention.maxLagCategory
+                            )?.category
+                              ? retentionCategoryLabels[retention.maxLagCategory!]
+                              : retention.maxLagCategory
                           }`}
                   </Text>
                 </Box>
@@ -391,7 +397,9 @@ export function SystemPage({
                     Oldest retained
                   </Text>
                   <Text c="dimmed" size="xs">
-                    {oldestRetained ? oldestRetained.label : "No history retained yet"}
+                    {oldestRetained
+                      ? retentionCategoryLabels[oldestRetained.category]
+                      : "No history retained yet"}
                   </Text>
                 </Box>
                 <Badge
@@ -460,7 +468,7 @@ export function SystemPage({
     </Stack>
   );
 }
-export const storageGroupLabels: Record<DashboardStorageRelation["group"], string> = {
+export const storageGroupLabels: Record<"tasks" | "history" | "statistics", string> = {
   tasks: "Tasks",
   history: "History",
   statistics: "Statistics",
@@ -585,45 +593,48 @@ export function StoragePanel({
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
-                {storage.relations.map((row) => (
-                  <Table.Tr key={row.relation}>
-                    <Table.Th scope="row" fw={400}>
-                      <Text size="xs" title={row.relation}>
-                        {row.label}
-                      </Text>
-                      {row.partitions > 0 ? (
-                        <Text c="dimmed" fz={10}>
-                          {row.partitions} daily {row.partitions === 1 ? "part" : "parts"}
+                {storage.relations.map((rawRow) => {
+                  const row = presentStorageRelation(rawRow);
+                  return (
+                    <Table.Tr key={row.relation}>
+                      <Table.Th scope="row" fw={400}>
+                        <Text size="xs" title={row.relation}>
+                          {row.label}
                         </Text>
-                      ) : null}
-                    </Table.Th>
-                    <Table.Td>
-                      <Badge color="gray" variant="light" size="sm">
-                        {storageGroupLabels[row.group]}
-                      </Badge>
-                    </Table.Td>
-                    <Table.Td ta="right">
-                      <Text
-                        size="xs"
-                        title={`${row.tableBytes} B table, ${row.indexBytes} B index`}
-                      >
-                        {formatBytes(row.totalBytes)}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td ta="right">
-                      <Text size="xs">{formatRows(row.rows)}</Text>
-                      {row.deadRows > 0 ? (
+                        {row.partitions > 0 ? (
+                          <Text c="dimmed" fz={10}>
+                            {row.partitions} daily {row.partitions === 1 ? "part" : "parts"}
+                          </Text>
+                        ) : null}
+                      </Table.Th>
+                      <Table.Td>
+                        <Badge color="gray" variant="light" size="sm">
+                          {storageGroupLabels[row.group]}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td ta="right">
                         <Text
-                          c="dimmed"
-                          fz={10}
-                          title="PostgreSQL has not reclaimed these deleted rows yet"
+                          size="xs"
+                          title={`${row.tableBytes} B table, ${row.indexBytes} B index`}
                         >
-                          {formatRows(row.deadRows)} dead
+                          {formatBytes(row.totalBytes)}
                         </Text>
-                      ) : null}
-                    </Table.Td>
-                  </Table.Tr>
-                ))}
+                      </Table.Td>
+                      <Table.Td ta="right">
+                        <Text size="xs">{formatRows(row.rows)}</Text>
+                        {row.deadRows > 0 ? (
+                          <Text
+                            c="dimmed"
+                            fz={10}
+                            title="PostgreSQL has not reclaimed these deleted rows yet"
+                          >
+                            {formatRows(row.deadRows)} dead
+                          </Text>
+                        ) : null}
+                      </Table.Td>
+                    </Table.Tr>
+                  );
+                })}
               </Table.Tbody>
             </Table>
           </ScrollArea.Autosize>

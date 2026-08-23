@@ -64,6 +64,7 @@ import {
   activitySeriesColors,
   useDashboardClient,
 } from "../core.js";
+import { capActivityGroups } from "../presentation-policy.js";
 
 export function DurableProgressBadge({ job }: { job: DashboardJobRow }) {
   if (!job.durability) {
@@ -395,7 +396,7 @@ export function TasksActivityChart({
       void client
         .activity({ filter, period, groupBy, tags, queue, worker })
         .then((page) => {
-          if (!cancelled) setActivity(page);
+          if (!cancelled) setActivity(capActivityGroups(page));
         })
         .catch(() => undefined);
     load();
