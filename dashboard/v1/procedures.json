@@ -1534,6 +1534,91 @@
       }
     }
   },
+  "html": {
+    "runtimeConfigPlaceholder": "/*__WORKHORSE_RUNTIME_CONFIG__*/",
+    "browserModulesPlaceholder": "<!--__WORKHORSE_BROWSER_MODULES__-->",
+    "runtimeConfig": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "basePath": {
+          "type": "string"
+        },
+        "rpcUrl": {
+          "type": "string"
+        },
+        "auditActor": {
+          "type": "string"
+        },
+        "authentication": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "loginUrl": {
+                  "type": "string"
+                },
+                "logoutUrl": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "loginUrl",
+                "logoutUrl"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "demoTools": {
+          "type": "boolean"
+        },
+        "workspaces": {
+          "readOnly": true,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "url"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "basePath",
+        "rpcUrl",
+        "auditActor",
+        "authentication",
+        "demoTools",
+        "workspaces",
+        "workspace"
+      ],
+      "additionalProperties": false
+    }
+  },
   "$defs": {
     "CancelStatus": {
       "enum": [

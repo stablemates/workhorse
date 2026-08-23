@@ -4,6 +4,11 @@ import { fileURLToPath } from "node:url";
 import { isProcedure } from "@orpc/server";
 import { z } from "zod";
 import { dashboardRouter } from "../src/server/router.js";
+import {
+  DASHBOARD_BROWSER_MODULES_PLACEHOLDER,
+  DASHBOARD_RUNTIME_CONFIG_PLACEHOLDER,
+  dashboardRuntimeConfigSchema,
+} from "../src/server/html.js";
 import { generateResponseSchemas } from "./response-schemas.js";
 
 /**
@@ -116,6 +121,14 @@ export function composeDashboardSpec(): Record<string, string> {
     contractVersion: 1,
     $schema: "https://json-schema.org/draft/2020-12/schema",
     procedures: entries,
+    html: {
+      runtimeConfigPlaceholder: DASHBOARD_RUNTIME_CONFIG_PLACEHOLDER,
+      browserModulesPlaceholder: DASHBOARD_BROWSER_MODULES_PLACEHOLDER,
+      runtimeConfig: z.toJSONSchema(dashboardRuntimeConfigSchema, {
+        target: "draft-2020-12",
+        io: "output",
+      }),
+    },
     $defs: definitions,
   };
 

@@ -689,6 +689,7 @@ source = { editable = "." }
 dependencies = [
     { name = "croniter" },
     { name = "python-dateutil" },
+    { name = "typing-extensions" },
 ]
 
 [package.optional-dependencies]
@@ -723,6 +724,7 @@ requires-dist = [
     { name = "opentelemetry-api", marker = "extra == 'telemetry'", specifier = ">=1.44,<2" },
     { name = "psycopg", marker = "extra == 'psycopg'", specifier = ">=3.3,<4" },
     { name = "python-dateutil", specifier = ">=2.9,<3" },
+    { name = "typing-extensions", specifier = ">=4.12,<5" },
 ]
 provides-extras = ["psycopg", "asyncpg", "telemetry"]
 

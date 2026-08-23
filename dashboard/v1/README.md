@@ -20,12 +20,18 @@ directory; this directory then only receives compatible corrections.
 - `procedures.json` gives each procedure its URL path, mutation flag, request-input JSON Schema,
   and response JSON Schema (2020-12). Shared wire types live under `$defs`. An `input` of `null`
   means the procedure accepts an empty request envelope; an `output` of `null` means it produces
-  no result and answers `{}`.
+  no result and answers `{}`. Its `html` member fixes the two template placeholders and the
+  runtime-configuration schema that every backend inserts into `index.html`.
 - `conformance.json` carries the executable HTTP conformance fixtures described under
   [Conformance](#conformance).
 - `bundle/bundle.json` identifies the static archive for this contract's `readSurfaceVersion` and
   records its SHA-256 digest. The archive contains the compiled application under `app/` and the
   shared single-admin page as `login.html`.
+
+`pnpm dashboard-bindings:generate` reads `procedures.json` and writes the Go and Python request
+validators and wire types. `pnpm dashboard-bindings:check` fails when either committed binding is
+stale. The dashboard spec commands run the matching bindings command, so one generation command
+updates the router artifact and both language bindings in order.
 
 `pnpm dashboard-bundle:generate` rebuilds the application, writes the deterministic tracked
 archive, and fetches it into the Go module and Python package. `pnpm dashboard-bundle:check`

@@ -1,4 +1,4 @@
-import type { DashboardAuthenticationRoutes, DashboardWorkspaceLink } from "../runtime-config.js";
+import { z } from "zod";
 
 /**
  * Runtime configuration handed to the dashboard's browser entry.
@@ -6,23 +6,22 @@ import type { DashboardAuthenticationRoutes, DashboardWorkspaceLink } from "../r
  * This is the contract between whatever serves the HTML and the React application that boots from
  * it. It exists as one exported type so a host and a development server cannot drift apart on it.
  */
-export interface DashboardRuntimeConfig {
+export const dashboardRuntimeConfigSchema = z.strictObject({
   /** Normalized mount path. Empty string when the dashboard owns the host root. */
-  basePath: string;
-  rpcUrl: string;
-  auditActor: string;
+  basePath: z.string(),
+  rpcUrl: z.string(),
+  auditActor: z.string(),
   /** Built-in authentication routes. Null when the embedding host owns authorization. */
-  authentication: DashboardAuthenticationRoutes | null;
+  authentication: z.strictObject({ loginUrl: z.string(), logoutUrl: z.string() }).nullable(),
   /** Enables the job-seeding menu. Only hosts that intentionally supply fixtures should set it. */
-  demoTools: boolean;
-  /**
-   * Every named workspace the host serves, in configuration order. Empty when the host serves one
-   * unnamed database, which is the single-workspace mode that predates workspaces.
-   */
-  workspaces: readonly DashboardWorkspaceLink[];
+  demoTools: z.boolean(),
+  /** Every named workspace the host serves, in configuration order. */
+  workspaces: z.array(z.strictObject({ name: z.string(), url: z.string() })).readonly(),
   /** Name of the workspace this document was rendered for. Null in single-workspace mode. */
-  workspace: string | null;
-}
+  workspace: z.string().nullable(),
+});
+
+export type DashboardRuntimeConfig = z.infer<typeof dashboardRuntimeConfigSchema>;
 
 export type { DashboardWorkspaceLink } from "../runtime-config.js";
 
