@@ -16,6 +16,8 @@ bucket.
 
 Deploy rate policies as desired state:
 
+Go applications use `Queue.SyncRateLimitPolicies` through their caller-owned executor. `Queue.ListRateLimitPolicies` returns the persisted definitions.
+
 ```ts
 await queue.syncRateLimitPolicies("billing-workers", [
   {

@@ -46,6 +46,23 @@ func main() {
 	defer tx.Rollback(ctx)
 
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(tx), "module-consumer")
+	maxActivePerKey := 1
+	if _, err := queue.SyncConcurrencyPolicies(ctx, "module-consumer", []workhorse.ConcurrencyPolicyDefinition{{
+		Queue: "module-consumer", MaxActive: 2, MaxActivePerKey: &maxActivePerKey,
+	}}); err != nil {
+		panic(err)
+	}
+	if _, err := queue.ListConcurrencyPolicies(ctx, []string{"module-consumer"}); err != nil {
+		panic(err)
+	}
+	if _, err := queue.SyncRateLimitPolicies(ctx, "module-consumer", []workhorse.RateLimitPolicyDefinition{{
+		Queue: "module-consumer", Rate: workhorse.RateLimit{Limit: 10, IntervalMS: 1000, Burst: 10},
+	}}); err != nil {
+		panic(err)
+	}
+	if _, err := queue.ListRateLimitPolicies(ctx, []string{"module-consumer"}); err != nil {
+		panic(err)
+	}
 	jobID, err := queue.Enqueue(ctx, "consumer.enqueue", map[string]any{"source": "external-module"})
 	if err != nil {
 		panic(err)

@@ -37,6 +37,8 @@ Two boundaries keep this matrix small:
 | Keyed throttle                             | Supported  | Supported | Supported |
 | Job dependencies with terminal policies    | Supported  | Supported | Supported |
 | Concurrency keys                           | Supported  | Supported | Supported |
+| Concurrency policy management              | Supported  | Planned   | Supported |
+| Rate-limit policy management               | Supported  | Planned   | Supported |
 | Recurring schedule definition sync         | Supported  | Supported | Supported |
 | Payload and result contracts               | Supported  | Supported | Supported |
 | Compatibility refusal before mutation      | Supported  | Supported | Supported |
@@ -62,6 +64,9 @@ public package.
 Go workers can fire the recurring definitions that Go clients synchronize. The standalone or
 embedded dashboard reads the shared database, so a Go deployment does not need a TypeScript worker
 runtime.
+The client inventory includes policy synchronization and listing, rather than treating shared
+PostgreSQL admission behavior as proof that every SDK exposes policy management. TypeScript and Go
+support concurrency and rate-limit policy management. Python support is tracked by [WH-367].
 
 ## Worker runtime
 
@@ -162,8 +167,8 @@ suite runs the SQL fixtures through `scripts/verify-sql-protocol.ts` and the run
 `Worker`. All three languages execute `protocol/v1/contracts.json`. The Python suite runs the SQL fixtures through `python/tests/test_protocol_conformance.py`
 and every runtime fixture through `python/tests/test_worker_runtime_conformance.py`.
 
-`typescript/core/test/parity-matrix.test.ts` holds this file to that promise. It parses the three
-tables above and compares them, cell for cell, against the registry in
+`typescript/core/test/parity-matrix.test.ts` holds this file to that promise. It parses the
+language matrices above and compares them, cell for cell, against the registry in
 `typescript/core/test/support/parity-capabilities.ts`. Every Supported cell must name a test file
 in that language which exists and mentions the capability; every Absent cell must record why it is
 absent; every Planned cell must name a Plane work item this file links. Changing a status in one place and not the other fails the check, so a capability cannot
@@ -191,3 +196,4 @@ check is what stops the two halves drifting apart between reviews.
 [WH-356]: https://app.plane.so/techprogress/browse/WH-356/
 [WH-357]: https://app.plane.so/techprogress/browse/WH-357/
 [WH-359]: https://app.plane.so/techprogress/browse/WH-359/
+[WH-367]: https://app.plane.so/techprogress/browse/WH-367/

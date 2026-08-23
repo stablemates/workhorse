@@ -34,6 +34,7 @@ func TestPGXAdaptersReturnRowsAndLeaveOwnershipWithCaller(t *testing.T) {
 	t.Cleanup(func() { _ = connection.Close(ctx) })
 	assertQuery(t, workhorse.NewPGXExecutor(connection))
 	assertAdminQuery(t, workhorse.NewPGXExecutor(connection))
+	assertPolicyQuery(t, workhorse.NewPGXExecutor(connection))
 
 	transaction, err := connection.Begin(ctx)
 	if err != nil {
@@ -42,6 +43,7 @@ func TestPGXAdaptersReturnRowsAndLeaveOwnershipWithCaller(t *testing.T) {
 	t.Cleanup(func() { _ = transaction.Rollback(ctx) })
 	assertQuery(t, workhorse.NewPGXExecutor(transaction))
 	assertAdminQuery(t, workhorse.NewPGXExecutor(transaction))
+	assertPolicyQuery(t, workhorse.NewPGXExecutor(transaction))
 	assertQuery(t, workhorse.NewPGXExecutor(transaction))
 	if err := transaction.Rollback(ctx); err != nil {
 		t.Fatal(err)
@@ -54,6 +56,7 @@ func TestPGXAdaptersReturnRowsAndLeaveOwnershipWithCaller(t *testing.T) {
 	t.Cleanup(pool.Close)
 	assertQuery(t, workhorse.NewPGXExecutor(pool))
 	assertAdminQuery(t, workhorse.NewPGXExecutor(pool))
+	assertPolicyQuery(t, workhorse.NewPGXExecutor(pool))
 }
 
 func TestDatabaseSQLAdaptersReturnRowsAndLeaveOwnershipWithCaller(t *testing.T) {
@@ -67,6 +70,7 @@ func TestDatabaseSQLAdaptersReturnRowsAndLeaveOwnershipWithCaller(t *testing.T) 
 	t.Cleanup(func() { _ = database.Close() })
 	assertQuery(t, workhorse.NewSQLExecutor(database))
 	assertAdminQuery(t, workhorse.NewSQLExecutor(database))
+	assertPolicyQuery(t, workhorse.NewSQLExecutor(database))
 
 	connection, err := database.Conn(ctx)
 	if err != nil {
@@ -75,6 +79,7 @@ func TestDatabaseSQLAdaptersReturnRowsAndLeaveOwnershipWithCaller(t *testing.T) 
 	t.Cleanup(func() { _ = connection.Close() })
 	assertQuery(t, workhorse.NewSQLExecutor(connection))
 	assertAdminQuery(t, workhorse.NewSQLExecutor(connection))
+	assertPolicyQuery(t, workhorse.NewSQLExecutor(connection))
 
 	transaction, err := database.BeginTx(ctx, nil)
 	if err != nil {
@@ -83,6 +88,7 @@ func TestDatabaseSQLAdaptersReturnRowsAndLeaveOwnershipWithCaller(t *testing.T) 
 	t.Cleanup(func() { _ = transaction.Rollback() })
 	assertQuery(t, workhorse.NewSQLExecutor(transaction))
 	assertAdminQuery(t, workhorse.NewSQLExecutor(transaction))
+	assertPolicyQuery(t, workhorse.NewSQLExecutor(transaction))
 	assertQuery(t, workhorse.NewSQLExecutor(transaction))
 	if err := transaction.Rollback(); err != nil {
 		t.Fatal(err)
@@ -170,6 +176,45 @@ func assertAdminQuery(t *testing.T, executor workhorse.Executor) {
 		t.Fatal(err)
 	}
 	if _, err := admin.SetWorkerPaused(ctx, "missing-worker", true, audit("pause-worker")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertPolicyQuery(t *testing.T, executor workhorse.Executor) {
+	t.Helper()
+	ctx := context.Background()
+	namespace := fmt.Sprintf("executor-policy-%d", time.Now().UnixNano())
+	queueName := namespace + "-queue"
+	queue := workhorse.NewQueue(executor, "default")
+
+	concurrency, err := queue.SyncConcurrencyPolicies(ctx, namespace, []workhorse.ConcurrencyPolicyDefinition{{
+		Queue: queueName, MaxActive: 2,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if listed, err := queue.ListConcurrencyPolicies(ctx, []string{queueName}); err != nil {
+		t.Fatal(err)
+	} else if len(concurrency) != 1 || len(listed) != 1 || listed[0].Queue != queueName {
+		t.Fatalf("unexpected concurrency policies: synchronized=%#v listed=%#v", concurrency, listed)
+	}
+
+	rateLimits, err := queue.SyncRateLimitPolicies(ctx, namespace, []workhorse.RateLimitPolicyDefinition{{
+		Queue: queueName, Rate: workhorse.RateLimit{Limit: 2, IntervalMS: 1_000, Burst: 2},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if listed, err := queue.ListRateLimitPolicies(ctx, []string{queueName}); err != nil {
+		t.Fatal(err)
+	} else if len(rateLimits) != 1 || len(listed) != 1 || listed[0].Queue != queueName {
+		t.Fatalf("unexpected rate-limit policies: synchronized=%#v listed=%#v", rateLimits, listed)
+	}
+
+	if _, err := queue.SyncConcurrencyPolicies(ctx, namespace, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queue.SyncRateLimitPolicies(ctx, namespace, nil); err != nil {
 		t.Fatal(err)
 	}
 }

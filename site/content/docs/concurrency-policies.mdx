@@ -14,6 +14,9 @@ claim — scale the fleet and the limit holds.
 `queue.syncConcurrencyPolicies` is a desired-state call, like schedules: declare the policies a
 namespace owns and PostgreSQL reconciles stored state to match.
 
+Go applications call `Queue.SyncConcurrencyPolicies` through the same caller-owned executor used
+for enqueue. `Queue.ListConcurrencyPolicies` returns the persisted typed rows.
+
 ```ts
 await queue.syncConcurrencyPolicies("workers", [
   {

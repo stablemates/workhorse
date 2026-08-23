@@ -51,6 +51,10 @@ const (
 	cancelStatementName                  = "cancel_v1"
 	enqueueManyStatementName             = "enqueue_many_v1"
 	syncScheduleDefinitionsStatementName = "sync_schedule_definitions_v1"
+	syncConcurrencyPoliciesStatementName = "sync_concurrency_policies_v1"
+	listConcurrencyPoliciesStatementName = "list_concurrency_policies"
+	syncRateLimitPoliciesStatementName   = "sync_rate_limit_policies_v1"
+	listRateLimitPoliciesStatementName   = "list_rate_limit_policies"
 	syncContractDefinitionsStatementName = "sync_contract_definitions_v1"
 	getContractDefinitionStatementName   = "get_contract_definition_v1"
 	tickStatementName                    = "tick_v1"
@@ -426,20 +430,36 @@ const (
 	batchDispatchedLogMessage      = "Batch handler dispatched"
 	handlerFailedSpanStatusMessage = "handler failed"
 
-	traceParentField      = "traceparent"
-	traceStateField       = "tracestate"
-	rowExpiredLeasesField = "expired_leases"
-	rowRetriedField       = "retried"
-	rowRowsAffectedField  = "rows_affected"
-	rowPhaseField         = "phase"
-	rowSkippedLockField   = "skipped_lock"
-	rowErrorField         = "error"
-	rowNamespaceField     = "namespace"
-	rowScheduleNameField  = "schedule_name"
-	rowRevisionField      = "revision"
+	traceParentField         = "traceparent"
+	traceStateField          = "tracestate"
+	rowExpiredLeasesField    = "expired_leases"
+	rowRetriedField          = "retried"
+	rowRowsAffectedField     = "rows_affected"
+	rowPhaseField            = "phase"
+	rowSkippedLockField      = "skipped_lock"
+	rowErrorField            = "error"
+	rowNamespaceField        = "namespace"
+	rowQueueNameField        = "queue_name"
+	rowMaxActiveField        = "max_active"
+	rowMaxActivePerKeyField  = "max_active_per_key"
+	rowRateLimitField        = "rate_limit"
+	rowRateIntervalMSField   = "rate_interval_ms"
+	rowRateBurstField        = "rate_burst"
+	rowPerKeyLimitField      = "per_key_limit"
+	rowPerKeyIntervalMSField = "per_key_interval_ms"
+	rowPerKeyBurstField      = "per_key_burst"
+	rowScheduleNameField     = "schedule_name"
+	rowRevisionField         = "revision"
 )
 
 const invalidWorkerRegistrationResultMessage = "PostgreSQL returned an invalid worker registration result"
+
+const (
+	invalidPolicyResultMessage      = "PostgreSQL returned an invalid policy result"
+	invalidPolicyOptionsMessage     = "invalid policy synchronization options"
+	tooManySyncPolicyOptionsMessage = "%w: policy synchronization accepts at most one SyncPolicyOptions value"
+	invalidPolicyFieldFormat        = "%w: invalid %s field"
+)
 
 const (
 	invalidSignalWaitResultMessage      = "PostgreSQL returned an invalid signal wait result"
@@ -470,8 +490,19 @@ const (
 var internalStatementRegistry = map[string]string{
 	schemaVersionStatement:               `SELECT version FROM workhorse.schema_version ORDER BY version`,
 	syncScheduleDefinitionsStatementName: `SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean)`,
-	tickStatementName:                    `SELECT * FROM workhorse.tick_v1($1::integer, $2::integer)`,
-	runMaintenanceStatementName:          `SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)`,
+	syncConcurrencyPoliciesStatementName: `SELECT * FROM workhorse.sync_concurrency_policies_v1($1::text, $2::jsonb, $3::boolean)`,
+	listConcurrencyPoliciesStatementName: `SELECT namespace, queue_name, max_active, max_active_per_key, updated_at
+  FROM workhorse.concurrency_policy
+ WHERE cardinality($1::text[]) = 0 OR queue_name = ANY($1::text[])
+ ORDER BY queue_name`,
+	syncRateLimitPoliciesStatementName: `SELECT * FROM workhorse.sync_rate_limit_policies_v1($1::text, $2::jsonb, $3::boolean)`,
+	listRateLimitPoliciesStatementName: `SELECT namespace, queue_name, rate_limit, rate_interval_ms, rate_burst,
+       per_key_limit, per_key_interval_ms, per_key_burst, updated_at
+  FROM workhorse.rate_limit_policy
+ WHERE cardinality($1::text[]) = 0 OR queue_name = ANY($1::text[])
+ ORDER BY queue_name`,
+	tickStatementName:           `SELECT * FROM workhorse.tick_v1($1::integer, $2::integer)`,
+	runMaintenanceStatementName: `SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)`,
 	registerWorkerStatementName: `SELECT workhorse.register_worker_v1(
        $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::integer,
        $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,

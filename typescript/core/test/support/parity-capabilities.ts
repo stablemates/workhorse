@@ -122,6 +122,24 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
     go: { file: "queue_test.go", pattern: "ConcurrencyKey" },
   },
   {
+    capability: "Concurrency policy management",
+    typescript: {
+      file: "integration-retention-maintenance.test.ts",
+      pattern: "syncConcurrencyPolicies",
+    },
+    python: { planned: "WH-367" },
+    go: { file: "policies_test.go", pattern: "SyncConcurrencyPolicies" },
+  },
+  {
+    capability: "Rate-limit policy management",
+    typescript: {
+      file: "integration-claim-lease-fence.test.ts",
+      pattern: "syncRateLimitPolicies",
+    },
+    python: { planned: "WH-367" },
+    go: { file: "policies_test.go", pattern: "SyncRateLimitPolicies" },
+  },
+  {
     capability: "Recurring schedule definition sync",
     typescript: { file: "integration-cron-schedules.test.ts", pattern: "syncSchedules" },
     python: { file: "test_schedules.py", pattern: "sync_schedules" },

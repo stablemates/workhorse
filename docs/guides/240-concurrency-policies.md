@@ -8,6 +8,8 @@ Use a policy when downstream capacity belongs to the application rather than one
 
 `Queue.syncConcurrencyPolicies` stores desired policies in PostgreSQL. Workers do not need matching in-memory configuration because `claim_v1` reads the policy during admission.
 
+Go applications use `Queue.SyncConcurrencyPolicies` through their caller-owned executor. `Queue.ListConcurrencyPolicies` returns the same persisted policy rows.
+
 Each policy limits one queue. It can also limit jobs that share a `concurrencyKey` inside that queue. The same key text in another queue is independent.
 
 Keyless jobs consume queue capacity but do not consume keyed capacity. A null per-key limit disables keyed admission while retaining the queue limit.
