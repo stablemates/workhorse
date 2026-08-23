@@ -5,6 +5,7 @@ const schemaVersionStatement = "schema_version"
 const (
 	emptyString                          = ""
 	queueHealthStatementName             = "queue_health_v1"
+	cancelStatementName                  = "cancel_v1"
 	enqueueManyStatementName             = "enqueue_many_v1"
 	syncScheduleDefinitionsStatementName = "sync_schedule_definitions_v1"
 	tickStatementName                    = "tick_v1"
@@ -52,6 +53,10 @@ const (
 	rowDeliveredByField                  = "delivered_by"
 	rowCompletedAtField                  = "completed_at"
 	rowCompletedByField                  = "completed_by"
+	rowCurrentAttemptField               = "current_attempt"
+	rowRequestedAtField                  = "requested_at"
+	rowRequestedByField                  = "requested_by"
+	rowFinishedAtField                   = "finished_at"
 	rowContractVersionField              = "contract_version"
 	rowResultMaxBytesField               = "result_max_bytes"
 	rowRedactErrorDetailsField           = "redact_error_details"
@@ -71,12 +76,32 @@ const (
 	invalidHealthRowCountMessage         = "workhorse.queue_health_v1 returned %d rows; expected one"
 	invalidHealthJSONMessage             = "workhorse.queue_health_v1 returned %T; expected JSON"
 	decodeHealthJSONMessage              = "decode workhorse.queue_health_v1: %w"
+	invalidCancelRowCountMessage         = "workhorse.cancel_v1 returned %d rows; expected one"
+	invalidCancelStatusMessage           = "workhorse.cancel_v1 returned an invalid status"
+	unknownCancelStatusFormat            = "workhorse.cancel_v1 returned unknown status %s"
+	invalidCancelStateMessage            = "workhorse.cancel_v1 returned an invalid state"
+	invalidCancelAttemptMessage          = "workhorse.cancel_v1 returned an invalid current attempt"
+	invalidCancelRequestedAtMessage      = "workhorse.cancel_v1 returned an invalid requested timestamp"
+	invalidCancelAttributionMessage      = "workhorse.cancel_v1 returned invalid attribution"
+	invalidCancelReasonMessage           = "workhorse.cancel_v1 returned an invalid reason"
+	invalidCancelFinishedAtMessage       = "workhorse.cancel_v1 returned an invalid finished timestamp"
 
 	enqueueAcceptedValue       = "accepted"
 	enqueueReplayedValue       = "replayed"
 	enqueueReplacedValue       = "replaced"
 	enqueueNonReplaceableValue = "non_replaceable"
 	enqueueCoalescedValue      = "coalesced"
+	canceledValue              = "canceled"
+	cancelRequestedValue       = "cancel_requested"
+	alreadyTerminalValue       = "already_terminal"
+	notFoundValue              = "not_found"
+	jobBlockedValue            = "blocked"
+	jobScheduledValue          = "scheduled"
+	jobReadyValue              = "ready"
+	jobActiveValue             = "active"
+	jobSucceededValue          = "succeeded"
+	jobFailedValue             = "failed"
+	jobCanceledValue           = "canceled"
 
 	reasonIncompatibleKeyModeValue                 = "incompatible_key_mode"
 	reasonNotPendingValue                          = "not_pending"
@@ -421,7 +446,7 @@ var protocolStatementRegistry = map[string]string{
 	recoverExpiredStatementName:      `SELECT * FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)`,
 	completeStatementName:            `SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted`,
 	failStatementName:                `SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state`,
-	"cancel_v1":                      `SELECT status, state, current_attempt, requested_at, requested_by, reason, finished_at FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)`,
+	cancelStatementName:              `SELECT status, state, current_attempt, requested_at, requested_by, reason, finished_at FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)`,
 	acknowledgeCancelStatementName:   `SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted`,
 	saveCheckpointStatementName:      `SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
 	"update_progress_v1":             `SELECT status, progress_value, revision::text, attempt, fence_token::text, worker_id, created_at, updated_at, retry_after_ms::text FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,

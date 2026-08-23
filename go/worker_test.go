@@ -1011,14 +1011,17 @@ func executeWorkerCancellationFixture(t *testing.T, fixture workerRuntimeFixture
 		workerResult <- err
 	}()
 	<-started
-	if _, err := pool.Exec(
-		ctx,
-		"SELECT * FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)",
-		jobID,
-		"go-test",
-		fixture.CancelReason,
-	); err != nil {
+	requestedBy := "go-test"
+	cancelResult, err := queue.Cancel(ctx, jobID, workhorse.CancellationRequest{
+		RequestedBy: &requestedBy,
+		Reason:      &fixture.CancelReason,
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if cancelResult.Status != workhorse.CancelRequested || cancelResult.RequestedBy == nil ||
+		*cancelResult.RequestedBy != "go-test" {
+		t.Fatalf("unexpected cancellation result: %#v", cancelResult)
 	}
 
 	if err := <-workerResult; err != nil {

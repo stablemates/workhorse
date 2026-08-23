@@ -102,6 +102,7 @@ async def asyncpg_enqueue(connection: asyncpg.Connection) -> str:
         idempotency_key="review",
         requested_by="reviewer",
     )
+    await queue.cancel(job_id, requested_by="service", reason="request ended")
     return job_id
 
 

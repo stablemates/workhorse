@@ -21,6 +21,7 @@ class DriverStatement:
 class StatementRegistry:
     compatibility: DriverStatement
     health: DriverStatement
+    cancel: DriverStatement
     enqueue_many: DriverStatement
     sync_schedules: DriverStatement
     tick: DriverStatement
@@ -59,6 +60,16 @@ STATEMENTS = StatementRegistry(
     health=DriverStatement(
         psycopg="SELECT workhorse.queue_health_v1(%s::timestamptz) AS snapshot",
         asyncpg="SELECT workhorse.queue_health_v1($1::timestamptz) AS snapshot",
+    ),
+    cancel=DriverStatement(
+        psycopg=(
+            "SELECT status, state, current_attempt, requested_at, requested_by, reason, "
+            "finished_at FROM workhorse.cancel_v1(%s::uuid, %s::text, %s::text)"
+        ),
+        asyncpg=(
+            "SELECT status, state, current_attempt, requested_at, requested_by, reason, "
+            "finished_at FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)"
+        ),
     ),
     enqueue_many=DriverStatement(
         psycopg=(

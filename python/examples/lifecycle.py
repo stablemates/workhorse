@@ -80,7 +80,7 @@ def run(database_url: str) -> None:
             concurrency=2,
         ).handle(
             child_type,
-            lambda payload, _context: {"completed": payload["step"]},  # type: ignore[index]
+            lambda payload, _context: {"completed": payload["step"]},
         )
 
         assert parent_worker.run_once() is True

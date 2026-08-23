@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +95,45 @@ def test_empty_batch_does_not_open_a_transaction_or_query_postgres() -> None:
 
     assert Queue(connection).enqueue_many([]) == []
     assert connection.calls == []
+
+
+def test_cancel_returns_postgres_cancellation_metadata() -> None:
+    requested_at = datetime(2026, 8, 23, 2, 0, tzinfo=timezone.utc)
+    connection = Connection(
+        [
+            [{"version": 1}],
+            [
+                {
+                    "status": "cancel_requested",
+                    "state": "active",
+                    "current_attempt": 2,
+                    "requested_at": requested_at,
+                    "requested_by": "api",
+                    "reason": "request ended",
+                    "finished_at": None,
+                }
+            ],
+        ]
+    )
+
+    result = Queue(connection).cancel(
+        "00000000-0000-4000-8000-000000000001",
+        requested_by="api",
+        reason="request ended",
+    )
+
+    assert result.status == "cancel_requested"
+    assert result.state == "active"
+    assert result.current_attempt == 2
+    assert result.requested_at == requested_at
+    assert result.requested_by == "api"
+    assert result.reason == "request ended"
+    assert result.finished_at is None
+    assert connection.calls[1][1] == (
+        "00000000-0000-4000-8000-000000000001",
+        "api",
+        "request ended",
+    )
 
 
 def test_batch_preserves_result_order() -> None:

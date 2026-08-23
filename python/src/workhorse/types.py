@@ -22,6 +22,10 @@ SignalDeliveryStatus: TypeAlias = Literal[
 HumanWaitCompletionStatus: TypeAlias = Literal[
     "completed", "duplicate", "not_waiting", "already_completed", "stale", "not_found"
 ]
+CancelStatus: TypeAlias = Literal["canceled", "cancel_requested", "already_terminal", "not_found"]
+JobState: TypeAlias = Literal[
+    "blocked", "scheduled", "ready", "active", "succeeded", "failed", "canceled"
+]
 TJson = TypeVar("TJson", bound=Json)
 
 
@@ -92,6 +96,18 @@ class EnqueueResult:
     job_id: str
     outcome: EnqueueOutcome
     reason: NonReplaceableReason | None = None
+
+
+@dataclass(frozen=True)
+class CancelResult:
+    status: CancelStatus
+    job_id: str
+    state: JobState | None
+    current_attempt: int | None
+    requested_at: datetime | None
+    requested_by: str | None
+    reason: str | None
+    finished_at: datetime | None
 
 
 @dataclass(frozen=True)

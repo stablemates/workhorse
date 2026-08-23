@@ -106,6 +106,63 @@ func TestQueueHealthReturnsTheVersionedPostgreSQLDocument(t *testing.T) {
 	}
 }
 
+func TestQueueCancelReturnsPostgreSQLCancellationMetadata(t *testing.T) {
+	requestedAt := time.Date(2026, time.August, 23, 2, 0, 0, 0, time.UTC)
+	executor := &queueExecutor{responses: [][]workhorse.Row{
+		{{"version": int64(1)}},
+		{{
+			"status": "cancel_requested", "state": "active", "current_attempt": int32(2),
+			"requested_at": requestedAt, "requested_by": "api", "reason": "request ended",
+			"finished_at": nil,
+		}},
+	}}
+	queue := workhorse.NewQueue(executor, "default")
+	requestedBy := "api"
+	reason := "request ended"
+
+	result, err := queue.Cancel(context.Background(), "00000000-0000-4000-8000-000000000001", workhorse.CancellationRequest{
+		RequestedBy: &requestedBy,
+		Reason:      &reason,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != workhorse.CancelRequested || result.JobID != "00000000-0000-4000-8000-000000000001" ||
+		result.State == nil || *result.State != "active" || result.CurrentAttempt == nil || *result.CurrentAttempt != 2 ||
+		result.RequestedAt == nil || !result.RequestedAt.Equal(requestedAt) || result.RequestedBy == nil ||
+		*result.RequestedBy != "api" || result.Reason == nil || *result.Reason != "request ended" ||
+		result.FinishedAt != nil {
+		t.Fatalf("unexpected cancellation result: %#v", result)
+	}
+	if len(executor.calls) != 2 || executor.calls[1].arguments[1] != "api" ||
+		executor.calls[1].arguments[2] != "request ended" {
+		t.Fatalf("unexpected cancellation calls: %#v", executor.calls)
+	}
+}
+
+func TestQueueCancelPreservesExplicitlyEmptyAttributionForPostgreSQLValidation(t *testing.T) {
+	executor := &queueExecutor{responses: [][]workhorse.Row{
+		{{"version": int64(1)}},
+		{{
+			"status": "not_found", "state": nil, "current_attempt": nil,
+			"requested_at": nil, "requested_by": nil, "reason": nil, "finished_at": nil,
+		}},
+	}}
+	queue := workhorse.NewQueue(executor, "default")
+	empty := ""
+
+	_, err := queue.Cancel(context.Background(), "00000000-0000-4000-8000-000000000001", workhorse.CancellationRequest{
+		RequestedBy: &empty,
+		Reason:      &empty,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executor.calls[1].arguments[1] != "" || executor.calls[1].arguments[2] != "" {
+		t.Fatalf("explicit empty attribution was not preserved: %#v", executor.calls[1].arguments)
+	}
+}
+
 func TestQueueSatisfiesSharedRequestFixturesWithinCurrentScope(t *testing.T) {
 	type requestFixture struct {
 		ID          string `json:"id"`

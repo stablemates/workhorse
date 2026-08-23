@@ -170,6 +170,48 @@ type Queue struct {
 // defined by queue_health_v1, so every language receives the same evaluation.
 type QueueHealth map[string]any
 
+// CancellationRequest supplies optional audit attribution.
+// PostgreSQL does not treat it as authorization.
+type CancellationRequest struct {
+	RequestedBy *string
+	Reason      *string
+}
+
+// CancelStatus is PostgreSQL's disposition for a cancellation request.
+type CancelStatus string
+
+const (
+	CancelCanceled        CancelStatus = canceledValue
+	CancelRequested       CancelStatus = cancelRequestedValue
+	CancelAlreadyTerminal CancelStatus = alreadyTerminalValue
+	CancelNotFound        CancelStatus = notFoundValue
+)
+
+// JobState is PostgreSQL's durable lifecycle state for a job.
+type JobState string
+
+const (
+	JobBlocked   JobState = jobBlockedValue
+	JobScheduled JobState = jobScheduledValue
+	JobReady     JobState = jobReadyValue
+	JobActive    JobState = jobActiveValue
+	JobSucceeded JobState = jobSucceededValue
+	JobFailed    JobState = jobFailedValue
+	JobCanceled  JobState = jobCanceledValue
+)
+
+// CancelResult contains safe lifecycle metadata and omits payload and worker ownership.
+type CancelResult struct {
+	Status         CancelStatus
+	JobID          string
+	State          *JobState
+	CurrentAttempt *int
+	RequestedAt    *time.Time
+	RequestedBy    *string
+	Reason         *string
+	FinishedAt     *time.Time
+}
+
 // NewQueue constructs an enqueue client without taking ownership of the executor.
 func NewQueue(executor Executor, defaultQueue string) *Queue {
 	return &Queue{executor: executor, defaultQueue: defaultQueue}
@@ -192,6 +234,112 @@ func (queue *Queue) Health(ctx context.Context) (QueueHealth, error) {
 		return nil, fmt.Errorf(invalidHealthRowCountMessage, len(rows))
 	}
 	return decodeQueueHealth(rows[0][rowSnapshotField])
+}
+
+// Cancel requests cooperative cancellation with optional audit attribution.
+func (queue *Queue) Cancel(
+	ctx context.Context,
+	jobID string,
+	request CancellationRequest,
+) (CancelResult, error) {
+	if err := AssertCompatible(ctx, queue.executor); err != nil {
+		return CancelResult{}, err
+	}
+	rows, err := queue.executor.Query(
+		ctx,
+		protocolStatementRegistry[cancelStatementName],
+		jobID,
+		optionalStringArgument(request.RequestedBy),
+		optionalStringArgument(request.Reason),
+	)
+	if err != nil {
+		return CancelResult{}, err
+	}
+	if len(rows) != 1 {
+		return CancelResult{}, fmt.Errorf(invalidCancelRowCountMessage, len(rows))
+	}
+	return cancelResult(rows[0], jobID)
+}
+
+func cancelResult(row Row, jobID string) (CancelResult, error) {
+	status, ok := row[rowStatusField].(string)
+	if !ok {
+		return CancelResult{}, errors.New(invalidCancelStatusMessage)
+	}
+	result := CancelResult{Status: CancelStatus(status), JobID: jobID}
+	switch result.Status {
+	case CancelCanceled, CancelRequested, CancelAlreadyTerminal, CancelNotFound:
+	default:
+		return CancelResult{}, fmt.Errorf(unknownCancelStatusFormat, status)
+	}
+	var valid bool
+	if result.State, valid = optionalJobState(row[rowStateField]); !valid {
+		return CancelResult{}, errors.New(invalidCancelStateMessage)
+	}
+	if result.CurrentAttempt, valid = optionalInteger(row[rowCurrentAttemptField]); !valid {
+		return CancelResult{}, errors.New(invalidCancelAttemptMessage)
+	}
+	if result.RequestedAt, valid = optionalTime(row[rowRequestedAtField]); !valid {
+		return CancelResult{}, errors.New(invalidCancelRequestedAtMessage)
+	}
+	if result.RequestedBy, valid = optionalString(row[rowRequestedByField]); !valid {
+		return CancelResult{}, errors.New(invalidCancelAttributionMessage)
+	}
+	if result.Reason, valid = optionalString(row[rowReasonField]); !valid {
+		return CancelResult{}, errors.New(invalidCancelReasonMessage)
+	}
+	if result.FinishedAt, valid = optionalTime(row[rowFinishedAtField]); !valid {
+		return CancelResult{}, errors.New(invalidCancelFinishedAtMessage)
+	}
+	return result, nil
+}
+
+func optionalString(value any) (*string, bool) {
+	if value == nil {
+		return nil, true
+	}
+	result, ok := value.(string)
+	return &result, ok
+}
+
+func optionalStringArgument(value *string) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
+func optionalJobState(value any) (*JobState, bool) {
+	if value == nil {
+		return nil, true
+	}
+	state, ok := value.(string)
+	if !ok {
+		return nil, false
+	}
+	result := JobState(state)
+	switch result {
+	case JobBlocked, JobScheduled, JobReady, JobActive, JobSucceeded, JobFailed, JobCanceled:
+		return &result, true
+	default:
+		return nil, false
+	}
+}
+
+func optionalInteger(value any) (*int, bool) {
+	if value == nil {
+		return nil, true
+	}
+	result, ok := integer(value)
+	return &result, ok
+}
+
+func optionalTime(value any) (*time.Time, bool) {
+	if value == nil {
+		return nil, true
+	}
+	result, ok := value.(time.Time)
+	return &result, ok
 }
 
 func decodeQueueHealth(value any) (QueueHealth, error) {

@@ -29,6 +29,7 @@ from .errors import (
     translate_database_error,
 )
 from .types import (
+    CancelResult,
     EnqueueOptions,
     EnqueueRequest,
     EnqueueResult,
@@ -67,6 +68,21 @@ class Queue:
             "workhorse.queue_health_v1",
         )
         return _health_document(row.get("snapshot"))
+
+    def cancel(
+        self,
+        job_id: str,
+        *,
+        requested_by: str | None = None,
+        reason: str | None = None,
+    ) -> CancelResult:
+        """Request cooperative cancellation with optional audit attribution."""
+        assert_sync_compatible(self._executor)
+        row = _one_row(
+            self._executor.rows(STATEMENTS.cancel, (job_id, requested_by, reason)),
+            "workhorse.cancel_v1",
+        )
+        return _cancel_result(row, job_id)
 
     def enqueue_with_result(
         self, type: str, payload: Json, options: EnqueueOptions | None = None
@@ -173,6 +189,21 @@ class AsyncQueue:
         )
         return _health_document(row.get("snapshot"))
 
+    async def cancel(
+        self,
+        job_id: str,
+        *,
+        requested_by: str | None = None,
+        reason: str | None = None,
+    ) -> CancelResult:
+        """Request cooperative cancellation with optional audit attribution."""
+        await assert_async_compatible(self._executor)
+        row = _one_row(
+            await self._executor.rows(STATEMENTS.cancel, (job_id, requested_by, reason)),
+            "workhorse.cancel_v1",
+        )
+        return _cancel_result(row, job_id)
+
     async def enqueue_with_result(
         self, type: str, payload: Json, options: EnqueueOptions | None = None
     ) -> EnqueueResult:
@@ -266,6 +297,19 @@ def _health_document(value: object) -> QueueHealth:
             f"workhorse.queue_health_v1 returned {type(value).__name__}; expected JSON object"
         )
     return cast(QueueHealth, dict(value))
+
+
+def _cancel_result(row: Row, job_id: str) -> CancelResult:
+    return CancelResult(
+        status=cast(Any, row["status"]),
+        job_id=job_id,
+        state=cast(Any, row["state"]),
+        current_attempt=cast(int | None, row["current_attempt"]),
+        requested_at=cast(datetime | None, row["requested_at"]),
+        requested_by=cast(str | None, row["requested_by"]),
+        reason=cast(str | None, row["reason"]),
+        finished_at=cast(datetime | None, row["finished_at"]),
+    )
 
 
 def _results(rows: Sequence[Row]) -> list[EnqueueResult]:

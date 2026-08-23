@@ -117,16 +117,17 @@ changes, and update the capability matrices only when repository tests prove the
 | ------------------------------------------ | ---------- | --------- | --------- |
 | Job lookup, listing, and timeline          | Supported  | Absent    | Absent    |
 | Queue health snapshot                      | Supported  | Supported | Supported |
-| Cancellation requests                      | Supported  | Absent    | Absent    |
+| Cancellation requests                      | Supported  | Supported | Supported |
 | Queue pause, resume, and purge             | Supported  | Absent    | Absent    |
 | Dead-letter listing and redrive            | Supported  | Absent    | Absent    |
 | Checkpoint, wait, and human-decision reads | Supported  | Absent    | Absent    |
 | Durable operator worker pause              | Supported  | Absent    | Absent    |
 
-These Absent cells are deliberate, not backlog: the standalone dashboard and the `workhorse` CLI
-already provide every read and control here against any database, whatever language enqueued the
-work. A language SDK grows one of these APIs only when an application needs it programmatically;
-that need should arrive as its own Plane work item.
+The remaining Absent cells are deliberate, not backlog: the standalone dashboard and the
+`workhorse` CLI already provide those reads and controls against any database, whatever language
+enqueued the work. Cancellation is also application-shaped, so every queue client exposes it with
+audit attribution. Another language API belongs here only when an application needs it
+programmatically through its own Plane work item.
 
 ## Keeping this document honest
 

@@ -15,6 +15,18 @@ class AsyncpgConnection:
         self.calls.append((sql, parameters))
         if "schema_version" in sql:
             return [{"version": 1}]
+        if "cancel_v1" in sql:
+            return [
+                {
+                    "status": "canceled",
+                    "state": "canceled",
+                    "current_attempt": 0,
+                    "requested_at": None,
+                    "requested_by": "api",
+                    "reason": "request ended",
+                    "finished_at": None,
+                }
+            ]
         if "send_signal_v1" in sql:
             return [
                 {
@@ -107,6 +119,25 @@ async def test_asyncpg_schedule_sync_uses_numbered_parameters() -> None:
 
     assert "$1::text, $2::jsonb, $3::boolean" in connection.calls[1][0]
     assert len(connection.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_asyncpg_requests_cancellation() -> None:
+    connection = AsyncpgConnection()
+
+    result = await AsyncQueue.from_asyncpg(connection).cancel(
+        "00000000-0000-4000-8000-000000000001",
+        requested_by="api",
+        reason="request ended",
+    )
+
+    assert result.status == "canceled"
+    assert result.requested_by == "api"
+    assert connection.calls[1][1] == (
+        "00000000-0000-4000-8000-000000000001",
+        "api",
+        "request ended",
+    )
 
 
 @pytest.mark.asyncio

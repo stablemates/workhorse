@@ -269,8 +269,8 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   {
     capability: "Cancellation requests",
     typescript: { file: "integration-operator-reads.test.ts", pattern: "cancel" },
-    python: operatorSurface,
-    go: operatorSurface,
+    python: { file: "test_worker_runtime_conformance.py", pattern: "cancel" },
+    go: { file: "worker_test.go", pattern: "Cancel" },
   },
   {
     capability: "Queue pause, resume, and purge",

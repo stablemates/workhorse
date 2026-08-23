@@ -203,11 +203,13 @@ def execute_cancellation_fixture(
     ).handle(fixture["jobType"], handler)
     thread = run_in_thread(worker.run_once, errors)
     assert started.wait(timeout=5)
-    status = connection.execute(
-        "SELECT status FROM workhorse.cancel_v1(%s::uuid, %s::text, %s::text)",
-        (job_id, "runtime-fixture", fixture["cancelReason"]),
-    ).fetchone()
-    assert status == ("cancel_requested",)
+    cancellation = Queue(connection).cancel(
+        job_id,
+        requested_by="runtime-fixture",
+        reason=fixture["cancelReason"],
+    )
+    assert cancellation.status == "cancel_requested"
+    assert cancellation.requested_by == "runtime-fixture"
     join(thread)
     assert errors == []
     assert abort_reasons == [fixture["expectedAbortReason"]]
