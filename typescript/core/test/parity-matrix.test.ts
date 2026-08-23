@@ -61,7 +61,9 @@ function documentedTables(markdown: string): DocumentedRow[][] {
 }
 
 function statusOf(cell: ParityCell): Status {
-  return "absent" in cell ? "Absent" : "Supported";
+  if ("absent" in cell) return "Absent";
+  if ("planned" in cell) return "Planned";
+  return "Supported";
 }
 
 async function exists(file: string): Promise<boolean> {
@@ -79,7 +81,9 @@ const tables = documentedTables(markdown);
 const registryCells: Array<{ row: ParityRow; language: ParityLanguage }> = PARITY_TABLES.flatMap(
   (table) => table.flatMap((row) => languages.map((language) => ({ row, language }))),
 );
-const supportedCells = registryCells.filter(({ row, language }) => !("absent" in row[language]));
+const supportedCells = registryCells.filter(
+  ({ row, language }) => statusOf(row[language]) === "Supported",
+);
 
 describe("parity matrix", () => {
   it("finds the three documented capability tables", () => {
@@ -109,7 +113,7 @@ describe("parity matrix", () => {
     "%s / %s names evidence that exists",
     async (unusedCapability, unusedLanguage, cell) => {
       const evidence = cell.row[cell.language];
-      if ("absent" in evidence) throw new Error("filtered above");
+      if (!("file" in evidence)) throw new Error("filtered above");
       const file = path.join(repository, PARITY_TEST_ROOTS[cell.language], evidence.file);
       expect(await exists(file), `${evidence.file} does not exist`).toBe(true);
       expect(
@@ -129,17 +133,16 @@ describe("parity matrix", () => {
     expect(unexplained).toEqual([]);
   });
 
-  it("claims nothing for a language the repository does not test", () => {
-    // A Planned cell has no evidence shape yet. If one appears, decide what proves it before this
-    // check starts silently accepting the status.
-    const planned = tables.flat().flatMap((row) =>
-      languages
-        .filter((language) => row.statuses[language] === "Planned")
-        .map((language) => ({
-          capability: row.capability,
-          language,
-        })),
-    );
-    expect(planned).toEqual([]);
+  it("links the Plane work item behind every Planned cell", () => {
+    // A Planned cell's evidence is the open work item that owns the gap. The document must link
+    // it, so the cell cannot outlive the work it points at unnoticed.
+    const unlinked = registryCells
+      .filter(({ row, language }) => "planned" in row[language])
+      .map(({ row, language }) => {
+        const cell = row[language];
+        return "planned" in cell ? cell.planned : "";
+      })
+      .filter((item) => !/^WH-\d+$/.test(item) || !markdown.includes(`[${item}]: https://`));
+    expect(unlinked).toEqual([]);
   });
 });

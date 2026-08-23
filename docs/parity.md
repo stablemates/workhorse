@@ -109,27 +109,37 @@ semantics before any runtime fires a definition.
 | Go worker and module examples             | [WH-236]        | In Review |
 | Go schedule firing                        | [WH-332]        | In Review |
 | Go and Python embedded dashboard backends | [WH-351]        | In Review |
+| TypeScript `Admin` client                 | [WH-355]        | Backlog   |
+| Python `Admin` client                     | [WH-356]        | Backlog   |
+| Go `Admin` client                         | [WH-357]        | Backlog   |
 
 The Plane work items own sequencing, blockers, and completion. Update this table when their state
 changes, and update the capability matrices only when repository tests prove the new support.
 
 ## Operator reads and controls
 
+PostgreSQL implements every operator read and control, and the standalone or embedded dashboard
+and the `workhorse` CLI invoke them against any database, whatever language enqueued the work.
+That product capability does not vary by language. This table records a narrower fact: which
+language lets application code call the operation through its own public SDK.
+
 | Capability                                 | TypeScript | Python    | Go        |
 | ------------------------------------------ | ---------- | --------- | --------- |
-| Job lookup, listing, and timeline          | Supported  | Absent    | Absent    |
+| Job lookup, listing, and timeline          | Supported  | Planned   | Planned   |
 | Queue health snapshot                      | Supported  | Supported | Supported |
 | Cancellation requests                      | Supported  | Supported | Supported |
-| Queue pause, resume, and purge             | Supported  | Absent    | Absent    |
-| Dead-letter listing and redrive            | Supported  | Absent    | Absent    |
-| Checkpoint, wait, and human-decision reads | Supported  | Absent    | Absent    |
-| Durable operator worker pause              | Supported  | Absent    | Absent    |
+| Queue pause, resume, and purge             | Supported  | Planned   | Planned   |
+| Dead-letter listing and redrive            | Supported  | Planned   | Planned   |
+| Checkpoint, wait, and human-decision reads | Supported  | Planned   | Planned   |
+| Durable operator worker pause              | Supported  | Planned   | Planned   |
 
-The remaining Absent cells are deliberate, not backlog: the standalone dashboard and the
-`workhorse` CLI already provide those reads and controls against any database, whatever language
-enqueued the work. Cancellation is also application-shaped, so every queue client exposes it with
-audit attribution. Another language API belongs here only when an application needs it
-programmatically through its own Plane work item.
+TypeScript exposes these methods on `Queue` today because the CLI and the first dashboard backend
+were written in TypeScript. [WH-355] moves them to a dedicated public `Admin` client and routes the
+CLI and dashboard through it. [WH-356] and [WH-357] add the same `Admin` client to Python and Go,
+and switch their embedded dashboard backends from direct SQL to that client. Until then, Python and
+Go application code reach the operator surface only through the dashboard or the CLI. Redrive is
+not a dashboard action, so it needs the CLI. Cancellation is application-shaped, so every queue
+client already exposes it with audit attribution.
 
 ## Keeping this document honest
 
@@ -143,7 +153,7 @@ and every runtime fixture through `python/tests/test_worker_runtime_conformance.
 tables above and compares them, cell for cell, against the registry in
 `typescript/core/test/support/parity-capabilities.ts`. Every Supported cell must name a test file
 in that language which exists and mentions the capability; every Absent cell must record why it is
-absent. Changing a status in one place and not the other fails the check, so a capability cannot
+absent; every Planned cell must name a Plane work item this file links. Changing a status in one place and not the other fails the check, so a capability cannot
 ship, or quietly disappear, without this matrix moving with it.
 
 That check binds the document to declared evidence, not to a proof of behaviour — no static check
@@ -164,3 +174,6 @@ check is what stops the two halves drifting apart between reviews.
 [WH-331]: https://app.plane.so/techprogress/browse/WH-331/
 [WH-332]: https://app.plane.so/techprogress/browse/WH-332/
 [WH-353]: https://app.plane.so/techprogress/browse/WH-353/
+[WH-355]: https://app.plane.so/techprogress/browse/WH-355/
+[WH-356]: https://app.plane.so/techprogress/browse/WH-356/
+[WH-357]: https://app.plane.so/techprogress/browse/WH-357/

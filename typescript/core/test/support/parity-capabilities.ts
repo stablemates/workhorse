@@ -10,8 +10,11 @@
  * static check can prove that. It is the strong half of the contract that matters: you cannot mark
  * a cell Supported for a language whose test suite never mentions the thing.
  *
- * An Absent cell carries a reason instead. Recording why keeps a deliberate boundary (the operator
- * surface belongs to the dashboard and the CLI) distinguishable from a gap that is merely open.
+ * An Absent cell carries a reason instead. Recording why keeps a deliberate boundary distinguishable
+ * from a gap that is merely open.
+ *
+ * A Planned cell carries the Plane work item that owns the gap. The document must link that item,
+ * so a Planned cell cannot outlive the work it points at without someone noticing.
  */
 
 /** Where a language's tests live, relative to the repository root. */
@@ -29,7 +32,7 @@ export interface ParityEvidence {
   pattern: string;
 }
 
-export type ParityCell = ParityEvidence | { absent: string };
+export type ParityCell = ParityEvidence | { absent: string } | { planned: string };
 
 export interface ParityRow {
   /** The capability column, byte for byte as `docs/parity.md` writes it. */
@@ -39,10 +42,12 @@ export interface ParityRow {
   go: ParityCell;
 }
 
-/** Absent because the dashboard and the `workhorse` CLI already serve it against any database. */
-const operatorSurface = {
-  absent: "operator surface: served by the dashboard and the workhorse CLI, not per language",
-} as const;
+/**
+ * The public operator surface is reachable today only through the dashboard, the `workhorse` CLI,
+ * and the TypeScript `Queue`. WH-356 (Python) and WH-357 (Go) add it to the other SDKs.
+ */
+const pythonAdmin = { planned: "WH-356" } as const;
+const goAdmin = { planned: "WH-357" } as const;
 
 export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
@@ -252,8 +257,8 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   {
     capability: "Job lookup, listing, and timeline",
     typescript: { file: "integration-operator-reads.test.ts", pattern: "listJobs" },
-    python: operatorSurface,
-    go: operatorSurface,
+    python: pythonAdmin,
+    go: goAdmin,
   },
   {
     capability: "Queue health snapshot",
@@ -270,26 +275,26 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   {
     capability: "Queue pause, resume, and purge",
     typescript: { file: "integration-queue-administration.test.ts", pattern: "purge" },
-    python: operatorSurface,
-    go: operatorSurface,
+    python: pythonAdmin,
+    go: goAdmin,
   },
   {
     capability: "Dead-letter listing and redrive",
     typescript: { file: "integration-operator-reads.test.ts", pattern: "redrive" },
-    python: operatorSurface,
-    go: operatorSurface,
+    python: pythonAdmin,
+    go: goAdmin,
   },
   {
     capability: "Checkpoint, wait, and human-decision reads",
     typescript: { file: "integration-human-waits.test.ts", pattern: "listHumanWaits" },
-    python: operatorSurface,
-    go: operatorSurface,
+    python: pythonAdmin,
+    go: goAdmin,
   },
   {
     capability: "Durable operator worker pause",
     typescript: { file: "integration-worker-registry.test.ts", pattern: "paused" },
-    python: operatorSurface,
-    go: operatorSurface,
+    python: pythonAdmin,
+    go: goAdmin,
   },
 ];
 
