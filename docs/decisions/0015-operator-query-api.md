@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-03
-- **Related:** [ADR 0001](0001-live-runtime-cold-outcome.md), [ADR 0006](0006-partitioned-history-retention.md), [ADR 0014](0014-dead-letter-redrive.md)
+- **Related:** [ADR 0001](0001-live-runtime-cold-outcome.md), [ADR 0011](0011-daily-retention-and-split-maintenance.md), [ADR 0014](0014-dead-letter-redrive.md)
 
 ## Context
 

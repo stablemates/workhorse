@@ -34,8 +34,8 @@ buffered, so the caller may retry after the handler declares the boundary.
 Go applications call `Queue.SendSignal` with `ExternalWaitDelivery`. The result reports the
 database status and retained payload, while a changed retained key returns a typed conflict error.
 
-The dashboard lists pending signals on its external waits page and marks the waiting task in the
-task table. An operator can enter the JSON payload there or in the task drawer. The dashboard uses
+The dashboard counts pending external waits on its system page and marks each waiting task in the
+task table. An operator can enter the JSON payload in the task drawer. The dashboard uses
 the same queue operation, but its server replaces browser attribution with the authenticated
 principal. Application-owned callers must establish authorization before calling the core API.
 

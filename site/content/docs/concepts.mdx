@@ -14,8 +14,8 @@ Workhorse splits every job across three relations, one per kind of fact.
 `job` stores immutable identity: queue, type, payload, attempt budget, and policy. PostgreSQL
 writes this row when it accepts the job and never changes its semantic fields.
 
-`job_runtime` is the live row. It exists only while the job is `scheduled`, `ready`, or `active`,
-and it is the only mutable lifecycle relation — workers and SQL functions change it as the job
+`job_runtime` is the live row. It exists only while the job is `scheduled`, `blocked`, `ready`,
+or `active`, and it is the only mutable lifecycle relation — workers and SQL functions change it as the job
 becomes eligible, gains an owner, or returns for another attempt.
 
 `job_outcome` is the terminal row. When the job becomes `succeeded`, `failed`, or `canceled`,
@@ -25,14 +25,16 @@ A committed job therefore has one runtime row or one outcome row, never both. No
 a job as live and terminal at the same time, and terminal jobs leave the indexes workers search —
 which is why a million finished jobs do not slow the next claim.
 
-## The six states
+## The seven states
 
 ```
-scheduled ──▶ ready ──▶ active ──▶ succeeded
-                ▲          │  └───▶ failed
-                └──(retry)─┘  └───▶ canceled
+blocked ──▶ scheduled ──▶ ready ──▶ active ──▶ succeeded
+   │                        ▲ ▲        │  └───▶ failed
+   └────────────────────────┘ └(retry)─┘  └───▶ canceled
 ```
 
+- `blocked`: the job waits on prerequisite jobs; its dependency policy decides whether it is
+  released or terminally settled when they finish.
 - `scheduled`: the job has a future `runAt`, a retry delay, or a durable sleep in progress.
 - `ready`: the job is eligible and waiting for a worker slot, in queue-local FIFO order.
 - `active`: one worker owns the job under a lease and is running its handler.
@@ -49,7 +51,7 @@ console.log(job?.state, job?.currentAttempt, job?.result);
 
 ## Who owns active work
 
-When a `Worker` has a free slot, it calls the `claim_v2` SQL function. PostgreSQL checks any queue
+When a `Worker` has a free slot, it calls the `claim_v1` SQL function. PostgreSQL checks any queue
 policy, then records the worker ID, a lease expiry, and a fence token on `job_runtime`. The worker
 sends heartbeats through `heartbeat_v1` while the handler runs.
 

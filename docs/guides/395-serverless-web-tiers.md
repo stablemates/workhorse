@@ -28,22 +28,8 @@ contract or Workhorse's versioned SQL behavior.
 ## Why does Vercel Node work normally?
 
 Vercel's Node.js runtime can open a `pg` connection. If a function owns a transaction, pass it to
-`Queue.enqueue`. PostgreSQL then commits or rolls back the job with the business write.
-
-```ts
-const client = await pool.connect();
-try {
-  await client.query("BEGIN");
-  await client.query("INSERT INTO orders (id) VALUES ($1)", [orderId]);
-  await queue.enqueue("order.fulfill", { orderId }, {}, client);
-  await client.query("COMMIT");
-} catch (error) {
-  await client.query("ROLLBACK");
-  throw error;
-} finally {
-  client.release();
-}
-```
+`Queue.enqueue`. PostgreSQL then commits or rolls back the job with the business write —
+[transactional enqueue](200-transactional-enqueue.md) shows the full pattern.
 
 The platform may manage idle pool clients when it suspends the function. That pool lifecycle does
 not change the transaction boundary.

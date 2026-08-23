@@ -36,8 +36,8 @@ Python exposes this lifecycle through synchronous `Worker` and asynchronous `Asy
 Both rotate across configured queues, fill a bounded set of slots, and drain active handlers before
 `run` returns. `AsyncWorker` uses dedicated native Psycopg or asyncpg query and notification
 connections, and its handler context methods are awaitable. Both surfaces share the same claim,
-heartbeat, batch, settlement, telemetry, and drain core. The TypeScript worker also participates
-in the worker registry.
+heartbeat, batch, settlement, telemetry, and drain core. Workers in all three languages also
+participate in the worker registry.
 Python's `handle_batch` follows the same grouping contract described in
 [Batch handlers](/docs/batch-handlers).
 

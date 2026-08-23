@@ -101,7 +101,8 @@ duplicating.
 ## Prioritize work within a queue
 
 `new Queue(pool, "billing")` sets the client default queue; `options.queue` overrides one job. A
-`Worker` claims from its configured queue only.
+`Worker` claims only from its configured queue set, rotating across those queues under one
+identity and one concurrency budget.
 
 Set `options.priority` when urgent ready work should run before ordinary work in the same queue.
 Workhorse dispatches higher-priority jobs first, and it keeps FIFO order among jobs with the same

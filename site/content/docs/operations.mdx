@@ -26,6 +26,12 @@ requested horizon. Queue-wait percentiles merge a logarithmic sketch across thos
 long-window reads stay bounded without keeping every sample. Worker and tag breakdowns remain live
 queries because their data-controlled cardinality would make aggregate storage unbounded.
 
+A background rollup summarises fully elapsed periods and records how far it got as a watermark.
+Window reads combine pre-computed rows below the watermark with live computation above it, so a
+window is correct the instant a job runs; a lagging rollup means a longer live section and a
+slower query, never a wrong answer. Retention never deletes history the rollup has not summarised
+yet, so a stuck rollup surfaces as growing lag on the health page, not as a hole in your numbers.
+
 ## OpenTelemetry
 
 TypeScript, Python, and Go workers emit the same worker span and metric names, so one set of
@@ -39,6 +45,13 @@ inert and worker behavior is unchanged.
 
 Worker metrics use queue, job type, and a closed outcome vocabulary. Job IDs remain on sampled
 spans and structured events, while payloads, results, and error messages never enter telemetry.
+
+Worker metrics cover only what each process does. Database-wide state — queue depth, the age of
+ready work, expired leases, paused queues, and fleet capacity — needs a dedicated collector.
+Run `WorkhorseMetricsObserver` against a pool, or `registerQueueMetrics` through a `Queue` when
+you also want policy and orchestration gauges, in one long-lived service per database and
+telemetry resource. Do not start a collector in every worker replica: each one reads the same
+rows, so replicas would export duplicate gauges and add unnecessary queries.
 
 ## Fleet controls
 

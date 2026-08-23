@@ -9,8 +9,9 @@ makes most of the rest of the system obvious.
 payload, how many attempts it's allowed. Written once, when you enqueue. Never updated.
 
 **`job_runtime`** holds the things that change while the job is alive: what state it's in
-(`scheduled`, `ready`, or `active`), which attempt it's on, and — if something is running
-it — which worker owns it. One row, updated many times.
+(`scheduled`, `blocked`, `ready`, or `active`), which attempt it's on, and — if something is
+running it — which worker owns it. One row, updated many times. A job is `blocked` while it
+waits on [prerequisite jobs](160-job-dependencies.md).
 
 **`job_outcome`** holds the final answer: succeeded, failed, or canceled, with the result or
 the error. Written once, at the end. Never updated after that.
@@ -32,7 +33,7 @@ Because `job_runtime` is the table the dispatcher searches. It asks "what's read
 this queue?" many times a second.
 
 When a job finishes, its row leaves that table completely. So the table only ever holds work
-that is genuinely live — scheduled, ready, or running. The cost of finding the next job
+that is genuinely live — scheduled, blocked, ready, or running. The cost of finding the next job
 depends on how much work is outstanding, not on how much work the system has ever done.
 
 A queue that has processed ten million jobs dispatches exactly as fast as one that has

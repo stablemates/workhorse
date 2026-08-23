@@ -49,9 +49,10 @@ Each job stores the version selected when PostgreSQL accepted it. When a worker 
 PostgreSQL returns that version. The worker loads that immutable document and caches it by job type
 and version, so a new deployment validates its result against the old contract.
 
-When the shape changes, add a new entry and move `currentVersion`. Until no live or redrivable job
-can still carry the previous entry, keep it configured. A worker that receives an unavailable version
-fails safely with `JobContractUnavailableError`.
+When the shape changes, add a new entry and move `currentVersion`. Once a version has been synced,
+PostgreSQL retains its immutable document, so jobs accepted under it keep validating even after you
+drop that entry from application config. A worker that can find a job's version neither in
+PostgreSQL nor in its own config fails safely with `JobContractUnavailableError`.
 
 Operator reads do not run validators. Historical JSON remains readable even if the application no
 longer accepts that shape for new jobs.

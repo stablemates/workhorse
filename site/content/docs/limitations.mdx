@@ -50,11 +50,12 @@ Workaround: this is the designed model, not an accident. Wrap each effect in a n
 so completed stages never rerun, and give the provider an idempotency key — the job ID or a domain
 ID — to close the final gap between effect and checkpoint commit.
 
-## Python and Go have a smaller operator API
+## Schema and terminal tooling ship in TypeScript
 
-Python and Go ship transactional queue clients and complete worker runtimes over the shared SQL
-protocol. They do not yet ship the public `Admin` client available in TypeScript, so applications
-use the embedded or standalone dashboard for operator reads and controls.
+Python and Go ship transactional queue clients, complete worker runtimes, and `Admin` operator
+clients over the shared SQL protocol. Schema installation and migration (`migrateSchema`) and the
+`workhorse` admin CLI and TUI ship only in the TypeScript package, so a polyglot deployment keeps
+that package available for those operations.
 
 ## No public HTTP ingress
 

@@ -9,7 +9,7 @@ TypeScript and Go application code make that request through `Admin`. Python use
 
 ## Dead letters
 
-When a job exhausts its retries it isn't deleted — it becomes a permanent failed outcome
+When a job exhausts its retries it isn't deleted — it becomes a failed outcome
 with its error attached. Most queues call this the dead letter queue. In Workhorse it's just
 the set of failed jobs, and you can page through it oldest-first to see what's accumulated.
 
@@ -31,7 +31,7 @@ See [dependencies](160-job-dependencies.md), [children](170-child-jobs.md),
 [signals](135-signals.md), and [human decisions](145-human-decisions.md) for those lifecycles.
 
 So the new job starts genuinely clean, and the old one stays untouched as evidence. Its
-error is still there to read next month.
+error stays readable until [retention](330-retention.md) retires it.
 
 ## Why a link and not a copy
 

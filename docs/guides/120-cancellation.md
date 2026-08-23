@@ -10,8 +10,9 @@ This is the easy case. A job sitting in `ready` or `scheduled` isn't running any
 `cancel_v1` just finishes it on the spot: the runtime row is deleted and a `canceled`
 outcome is written. Nothing ever executed, so there's no attempt history to record.
 
-Same for a job that's [waiting on a timer](130-durable-waits.md) — no worker holds it, so it
-can be cancelled cleanly.
+A job that's [waiting on a timer](130-durable-waits.md) also settles on the spot — no worker
+holds it. One difference: if the wait began partway through an attempt, that attempt is closed
+as canceled, so the record keeps the work that had already started.
 
 ## If a handler is running right now
 

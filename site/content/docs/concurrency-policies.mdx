@@ -46,7 +46,8 @@ await queue.enqueue("mail.send", { messageId }, { queue: "mail", concurrencyKey:
 
 Keyless jobs consume queue capacity only. A keyed job also consumes capacity for its key. The same
 key text in another queue is independent, and one saturated key does not block the queue: admission
-can pass over a full key and claim later ready work for another key, within a bounded FIFO window.
+can pass over a full key and claim later ready work for another key, within a bounded window
+ordered by priority first and FIFO among equal priorities.
 
 ## A dispatch budget, not a mutex
 

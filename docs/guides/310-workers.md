@@ -26,8 +26,8 @@ await worker.run()
 
 ## Slots and concurrency
 
-A worker has a fixed number of slots, set by `concurrency`. One slot runs one job. The
-default is 1, and you can raise it.
+A worker has a fixed number of slots, set by `concurrency`. One slot runs one job. By
+default a worker runs one job at a time, and you can raise it.
 
 Each pass, the worker fills whatever slots are free — one claim at a time, because each
 claim is its own database operation. Once the slots are full, or the queue has nothing left,
@@ -85,8 +85,8 @@ A few consequences worth knowing:
 
 - A claim already in flight may still land after shutdown starts. That job gets drained
   properly, not abandoned.
-- There's a deadline — around half a minute by default — after which the process exits
-  anyway. A handler that ignores its abort signal doesn't get to block a deploy forever.
+- There's a configurable drain deadline after which the process exits anyway. A handler
+  that ignores its abort signal doesn't get to block a deploy forever.
 - A hard kill leaves jobs marked active. That's fine: their leases expire and
   [recovery](020-leases-and-fences.md) picks them up. Nothing is lost, it's just slower.
 - Shutting down does **not** cancel jobs. It stops running them here so something else can.

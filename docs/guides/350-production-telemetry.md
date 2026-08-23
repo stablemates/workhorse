@@ -67,11 +67,9 @@ throughput, failures, retries, and runtime by either value.
 Use the [enqueue outcome metric](355-observability.md#reading-the-signals-together) to inspect
 coalescing rates.
 
-Keep both values as stable application identifiers. If a job type contains a customer or request
-identifier, every value creates more time series and makes metric storage grow continuously.
-
-Workhorse never attaches a job id, worker id, schedule name, payload value, or arbitrary job tag to
-a metric. Traces retain job identity because sampling and trace retention bound their event volume.
+Keep both values as stable application identifiers; the [metrics guide](355-observability.md)
+explains which attributes metrics may carry and why unbounded values stay out. Traces retain
+per-job identity instead.
 
 ## Filter every signal by its deployment
 
@@ -96,4 +94,4 @@ use the handler histogram when you need unsampled percentiles for one task type.
 ---
 
 Exact instruments, attributes, storage bounds, and alert thresholds:
-[`architecture.md`](../architecture.md#production-telemetry).
+[`architecture.md`](../architecture.md#opentelemetry-traces-logs-and-baseline-metrics).
