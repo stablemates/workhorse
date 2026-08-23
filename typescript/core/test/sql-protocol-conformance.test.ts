@@ -27,7 +27,7 @@ import type {
   RuntimeWriteOperation,
   SuspensionReplayRuntimeFixture,
 } from "../../../scripts/verify-sql-protocol.js";
-import { Queue, Worker, WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
+import { Admin, Queue, Worker, WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
 import { createDatabaseTestHarness } from "./support/db.js";
 
 const compatibilityDatabase = createDatabaseTestHarness(
@@ -38,8 +38,25 @@ const runtimeDatabase = createDatabaseTestHarness(new URL("?runtime", import.met
 const requestDatabase = createDatabaseTestHarness(new URL("?requests", import.meta.url).href);
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
+type RuntimeQueue = Queue & Pick<Admin, keyof Admin>;
+
+function runtimeQueue(database: Queryable): RuntimeQueue {
+  const queue = Reflect.construct(Queue, [database]) as Queue;
+  const admin = new Admin(database);
+  return new Proxy(queue, {
+    get(target, property, receiver) {
+      if (property in target) {
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      const value = Reflect.get(admin, property, admin) as unknown;
+      return typeof value === "function" ? value.bind(admin) : value;
+    },
+  }) as RuntimeQueue;
+}
+
 async function expectJobStates(
-  queue: Queue,
+  queue: RuntimeQueue,
   ids: Map<string, string>,
   expected: Record<string, { state: string; attempt: number }>,
 ): Promise<void> {
@@ -103,7 +120,7 @@ function waitForAbort(signal: AbortSignal): Promise<unknown> {
 }
 
 async function executeBatchRuntimeFixture(
-  queue: Queue,
+  queue: RuntimeQueue,
   fixture: BatchRuntimeFixture,
 ): Promise<void> {
   const queueName = `runtime-${fixture.id}`;
@@ -152,7 +169,7 @@ async function executeBatchRuntimeFixture(
 }
 
 async function executeSuspensionReplayRuntimeFixture(
-  queue: Queue,
+  queue: RuntimeQueue,
   database: Queryable,
   fixture: SuspensionReplayRuntimeFixture,
 ): Promise<void> {
@@ -204,7 +221,7 @@ async function executeSuspensionReplayRuntimeFixture(
 }
 
 async function executeCooperativeCancellationRuntimeFixture(
-  queue: Queue,
+  queue: RuntimeQueue,
   database: Queryable,
   fixture: CooperativeCancellationRuntimeFixture,
 ): Promise<void> {
@@ -238,7 +255,7 @@ async function executeCooperativeCancellationRuntimeFixture(
 }
 
 async function executeExpirationRuntimeFixture(
-  queue: Queue,
+  queue: RuntimeQueue,
   database: Queryable,
   fixture: ExpirationRuntimeFixture,
 ): Promise<void> {
@@ -299,7 +316,7 @@ async function executeExpirationRuntimeFixture(
 }
 
 async function executeLeaseLossRuntimeFixture(
-  queue: Queue,
+  queue: RuntimeQueue,
   database: Queryable,
   fixture: LeaseLossRuntimeFixture,
 ): Promise<void> {
@@ -370,7 +387,7 @@ async function executeLeaseLossRuntimeFixture(
 }
 
 async function executeHeartbeatCadenceRuntimeFixture(
-  queue: Queue,
+  queue: RuntimeQueue,
   fixture: HeartbeatCadenceRuntimeFixture,
 ): Promise<void> {
   const queueName = `runtime-${fixture.id}`;
@@ -437,7 +454,7 @@ async function executeHeartbeatCadenceRuntimeFixture(
 }
 
 async function executeGracefulDrainRuntimeFixture(
-  queue: Queue,
+  queue: RuntimeQueue,
   fixture: GracefulDrainRuntimeFixture,
 ): Promise<void> {
   const queueName = `runtime-${fixture.id}`;
@@ -490,7 +507,7 @@ async function executeGracefulDrainRuntimeFixture(
 
 async function exerciseQueue<TResult>(
   rows: unknown[],
-  operation: (queue: Queue) => Promise<TResult>,
+  operation: (queue: RuntimeQueue) => Promise<TResult>,
 ): Promise<{ parameters: readonly unknown[] | undefined; result: TResult }> {
   let parameters: readonly unknown[] | undefined;
   const database: Queryable = {
@@ -499,7 +516,7 @@ async function exerciseQueue<TResult>(
       return { rows } as never;
     },
   };
-  const result = await operation(new Queue(database));
+  const result = await operation(runtimeQueue(database));
   return { parameters, result };
 }
 
@@ -634,7 +651,7 @@ describe("SQL protocol conformance fixtures", () => {
     await runtimeDatabase.setup();
     try {
       const fixtures = await loadSqlProtocolFixtures(repository);
-      const queue = new Queue(runtimeDatabase.pool);
+      const queue = runtimeQueue(runtimeDatabase.pool);
       const coverage = new Set<string>();
       for (const fixture of fixtures.runtime) {
         fixture.covers.forEach((capability) => coverage.add(capability));
@@ -756,7 +773,7 @@ describe("SQL protocol conformance fixtures", () => {
             } as never;
           },
         };
-        const queue = new Queue(transaction);
+        const queue = runtimeQueue(transaction);
         await queue.enqueueMany([fixture.application as EnqueueRequest], transaction);
         assertFixtureValue(
           [fixture.postgres],

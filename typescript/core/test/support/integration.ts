@@ -1,7 +1,18 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, beforeAll, beforeEach, expect } from "vitest";
-import { type Json, Queue, type RetentionPolicyDefinition } from "../../src/index.js";
+import {
+  Admin,
+  type BulkRedriveOptions,
+  type BulkRedrivePage,
+  type DeadLetterFilter,
+  type Json,
+  Queue,
+  type RedriveRequest,
+  type RedriveResult,
+  type RetentionPolicyDefinition,
+  type WorkerPauseResult,
+} from "../../src/index.js";
 import { createDatabaseTestHarness } from "./db.js";
 
 const defaultRetentionPolicy: RetentionPolicyDefinition = {
@@ -55,7 +66,88 @@ async function waitForDatabaseCondition(predicate: () => Promise<boolean>): Prom
 export function createIntegrationTestContext(fileUrl: string) {
   const database = createDatabaseTestHarness(fileUrl, { max: 10 });
   const { databaseUrl, pool } = database;
-  const queue = new Queue(pool);
+  const queueClient = new Queue(pool);
+  const admin = new Admin(pool);
+  // Most lifecycle tests need both application and operator calls. Keep their fixture compact while
+  // ensuring every operator call exercises Admin; the public type-contract test uses Queue itself.
+  type IntegrationOperatorClient = Omit<
+    Admin,
+    | "pauseQueue"
+    | "purgeQueue"
+    | "redrive"
+    | "redriveMany"
+    | "resumeQueue"
+    | "runTaskNow"
+    | "setWorkerPaused"
+  > & {
+    pauseQueue(queueName?: string): Promise<void>;
+    purgeQueue(queueName?: string): Promise<number>;
+    redrive(jobId: string, request: RedriveRequest): Promise<RedriveResult>;
+    redriveMany(
+      filter: DeadLetterFilter,
+      request: RedriveRequest,
+      options?: BulkRedriveOptions,
+    ): Promise<BulkRedrivePage>;
+    resumeQueue(queueName?: string): Promise<void>;
+    runTaskNow(jobId: string): ReturnType<Admin["runTaskNow"]>;
+    setWorkerPaused(
+      workerId: string,
+      paused: boolean,
+      request?: { requestedBy?: string; reason?: string },
+    ): Promise<WorkerPauseResult | null>;
+  };
+  const queue = new Proxy(queueClient, {
+    get(target, property, receiver) {
+      if (property in target) {
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      const value = Reflect.get(admin, property, admin) as unknown;
+      if (typeof value !== "function") return value;
+      if (property === "redrive") {
+        return (
+          jobId: string,
+          request: { requestedBy: string; reason: string; requestId: string },
+        ) => admin.redrive(jobId, { actor: request.requestedBy, ...request });
+      }
+      if (property === "redriveMany") {
+        return (
+          filter: Parameters<Admin["redriveMany"]>[0],
+          request: { requestedBy: string; reason: string; requestId: string },
+          options: Parameters<Admin["redriveMany"]>[2],
+        ) => admin.redriveMany(filter, { actor: request.requestedBy, ...request }, options);
+      }
+      if (property === "setWorkerPaused") {
+        return (
+          workerId: string,
+          paused: boolean,
+          request: { requestedBy?: string; reason?: string } = {},
+        ) =>
+          admin.setWorkerPaused(workerId, paused, {
+            actor: request.requestedBy ?? "integration-test",
+            reason: request.reason ?? "integration test",
+            requestId: randomUUID(),
+          });
+      }
+      if (property === "pauseQueue" || property === "resumeQueue" || property === "purgeQueue") {
+        return (queueName = "default") =>
+          (value as (queueName: string, audit: Parameters<Admin["purgeQueue"]>[1]) => unknown).call(
+            admin,
+            queueName,
+            { actor: "integration-test", reason: "integration test", requestId: randomUUID() },
+          );
+      }
+      if (property === "runTaskNow") {
+        return (jobId: string) =>
+          admin.runTaskNow(jobId, {
+            actor: "integration-test",
+            reason: "integration test",
+            requestId: randomUUID(),
+          });
+      }
+      return value.bind(admin);
+    },
+  }) as Queue & IntegrationOperatorClient;
 
   async function createFailedJob({
     type,
@@ -136,6 +228,7 @@ export function createIntegrationTestContext(fileUrl: string) {
     defaultRetentionPolicy,
     deferred,
     pool,
+    admin,
     queue,
     safeKeyDigest,
     safeKeyPreview,

@@ -7,6 +7,7 @@ function context(overrides: Partial<DashboardRpcContext> = {}): DashboardRpcCont
   return {
     database: {} as DashboardRpcContext["database"],
     queue: {} as DashboardRpcContext["queue"],
+    admin: {} as DashboardRpcContext["admin"],
     configuredWorkers: [],
     environment: "test",
     authenticatedActor: "operator",

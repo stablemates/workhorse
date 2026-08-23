@@ -1,5 +1,5 @@
 import { isProcedure, ORPCError, os } from "@orpc/server";
-import { MAX_JOB_PRIORITY, type Queue } from "@workhorse-js/core";
+import { MAX_JOB_PRIORITY, type Admin, type Queue } from "@workhorse-js/core";
 import type {
   CompleteDashboardOptions,
   DashboardDemoFeature,
@@ -47,6 +47,7 @@ import {
 export interface DashboardRpcContext {
   database: DashboardDatabase;
   queue: Queue;
+  admin: Admin;
   configuredWorkers: readonly string[];
   environment: string;
   maintenanceLoops: MaintenanceLoopCadences;
@@ -379,7 +380,7 @@ export const dashboardRouter = {
     settings: procedure.handler(({ context }) =>
       readDashboardSettings(
         context.database,
-        context.queue,
+        context.admin,
         context.operator.mode === "writable" && Boolean(context.settingsController),
       ),
     ),
@@ -391,7 +392,7 @@ export const dashboardRouter = {
         context.database,
         input.id,
         context.projectDurability,
-        context.queue,
+        context.admin,
         context.operator.mode === "writable" && Boolean(context.taskController?.signalTask),
       );
       if (!detail) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
@@ -400,7 +401,7 @@ export const dashboardRouter = {
     humanWaits: procedure.handler(({ context }) =>
       readDashboardHumanWaits(
         context.database,
-        context.queue,
+        context.admin,
         context.operator.mode === "writable" && Boolean(context.taskController?.completeHumanWait),
         context.operator.mode === "writable" && Boolean(context.taskController?.signalTask),
       ),

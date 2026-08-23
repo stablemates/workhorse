@@ -1,6 +1,7 @@
+import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import { expectOneRow } from "../errors.js";
-import { Queue } from "../index.js";
+import { Admin, Queue } from "../index.js";
 import type {
   CancelResult,
   DeadLetterPage,
@@ -80,9 +81,11 @@ export interface AdminRedriveRequest {
  */
 export class WorkhorseAdminClient {
   readonly queue: Queue;
+  readonly admin: Admin;
 
   constructor(private readonly pool: Pool) {
     this.queue = new Queue(pool);
+    this.admin = new Admin(pool);
   }
 
   /** The connected database's own name, which the environment confirmation must match. */
@@ -112,19 +115,19 @@ export class WorkhorseAdminClient {
   }
 
   listJobs(query: JobListQuery = {}): Promise<JobListPage> {
-    return this.queue.listJobs(query);
+    return this.admin.listJobs(query);
   }
 
   getJob(jobId: string): Promise<JobSnapshot | null> {
-    return this.queue.getJob(jobId);
+    return this.admin.getJob(jobId);
   }
 
   getJobTimeline(jobId: string, query: JobTimelineQuery = {}): Promise<JobTimelinePage> {
-    return this.queue.getJobTimeline(jobId, query);
+    return this.admin.getJobTimeline(jobId, query);
   }
 
   listDeadLetters(query: DeadLetterQuery = {}): Promise<DeadLetterPage> {
-    return this.queue.listDeadLetters(query);
+    return this.admin.listDeadLetters(query);
   }
 
   /**
@@ -135,7 +138,7 @@ export class WorkhorseAdminClient {
    */
   async queues(): Promise<AdminQueueStatus[]> {
     const [snapshots, control] = await Promise.all([
-      this.queue.queueMetricSnapshot(),
+      this.admin.queueMetricSnapshot(),
       this.pool.query<{ queue_name: string; paused: boolean }>(
         "SELECT queue_name, paused FROM workhorse.queue_control",
       ),
@@ -192,17 +195,17 @@ export class WorkhorseAdminClient {
   }
 
   workers(): Promise<WorkerRegistryEntry[]> {
-    return this.queue.listWorkers();
+    return this.admin.listWorkers();
   }
 
   health(): Promise<QueueHealth> {
-    return this.queue.health();
+    return this.admin.health();
   }
 
   async maintenance(): Promise<AdminMaintenanceState> {
     const [maintenancePolicy, retentionPolicy] = await Promise.all([
-      this.queue.getMaintenancePolicy(),
-      this.queue.getRetentionPolicy(),
+      this.admin.getMaintenancePolicy(),
+      this.admin.getRetentionPolicy(),
     ]);
     return { maintenancePolicy, retentionPolicy };
   }
@@ -222,16 +225,28 @@ export class WorkhorseAdminClient {
     request: AdminRedriveRequest,
   ): Promise<RedriveResult> {
     void environment;
-    return this.queue.redrive(jobId, request);
+    return this.admin.redrive(jobId, {
+      actor: request.requestedBy,
+      reason: request.reason,
+      requestId: request.requestId,
+    });
   }
 
   async pauseQueue(environment: ConfirmedEnvironment, queueName: string): Promise<void> {
     void environment;
-    await this.queue.pauseQueue(queueName);
+    await this.admin.pauseQueue(queueName, {
+      actor: "workhorse-cli",
+      reason: "pause queue",
+      requestId: randomUUID(),
+    });
   }
 
   async resumeQueue(environment: ConfirmedEnvironment, queueName: string): Promise<void> {
     void environment;
-    await this.queue.resumeQueue(queueName);
+    await this.admin.resumeQueue(queueName, {
+      actor: "workhorse-cli",
+      reason: "resume queue",
+      requestId: randomUUID(),
+    });
   }
 }

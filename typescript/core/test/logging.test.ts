@@ -1,6 +1,7 @@
 import { logs, type LogRecord, type LoggerProvider } from "@opentelemetry/api-logs";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Queue } from "../src/queue.js";
+import { Admin } from "../src/admin.js";
 import type { Queryable } from "../src/types.js";
 import { Worker } from "../src/worker.js";
 
@@ -52,12 +53,17 @@ describe("structured logging", () => {
       },
     } as unknown as Queryable;
     const queue = new Queue(database, "mail");
+    const admin = new Admin(database, "mail");
 
     await queue.enqueue("mail.send", {
       recipient: "reader@example.com",
       accessToken: "never-log-this",
     });
-    await queue.pauseQueue();
+    await admin.pauseQueue("mail", {
+      actor: "logging-test",
+      reason: "verify structured logging",
+      requestId: "logging-test-pause",
+    });
 
     expect(records).toEqual(
       expect.arrayContaining([

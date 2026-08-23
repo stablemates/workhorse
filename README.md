@@ -114,22 +114,22 @@ recurring schedule affects only that occurrence and does not disable the schedul
 ### Dead letters and redrive
 
 Schema version 14 keeps terminal failures in the cold `job_outcome` relation and exposes them through
-`Queue.listDeadLetters()`. Stable `(finishedAt, jobId)` cursors support bounded pages filtered by queue,
+`Admin.listDeadLetters()`. Stable `(finishedAt, jobId)` cursors support bounded pages filtered by queue,
 type, required tags, error name, and completion window. The partial failure index is separate from every
 ready, scheduled, active, and expiry dispatch index.
 
-`Queue.redrive()` creates a new ready job linked to the failed source. It copies queue, type, payload,
+`Admin.redrive()` creates a new ready job linked to the failed source. It copies queue, type, payload,
 tags, retry policy, attempt budget, and per-attempt execution timeout, while clearing the old absolute
 deadline and never copying checkpoints, waits, attempts, result, or cancellation state. The source
 outcome's semantic terminal evidence remains immutable; only its existing retention watermark may
 advance when the append-only redrive event is recorded.
 
 ```ts
-const page = await queue.listDeadLetters({ queue: "billing", errorName: "CardDeclined" });
+const page = await admin.listDeadLetters({ queue: "billing", errorName: "CardDeclined" });
 const source = page.items[0];
 if (source) {
-  await queue.redrive(source.jobId, {
-    requestedBy: "operator@example.com",
+  await admin.redrive(source.jobId, {
+    actor: "operator@example.com",
     reason: "provider incident resolved",
     requestId: "incident-2026-08-03:billing-redrive",
   });
@@ -138,12 +138,12 @@ if (source) {
 
 Every redrive requires actor, reason, and request identity. The raw request ID is never persisted.
 An exact source/request replay returns the original target; a materially different replay raises
-`RedriveIdempotencyConflictError`. `Queue.redriveMany()` returns `{ results, nextCursor }` for at most
+`RedriveIdempotencyConflictError`. `Admin.redriveMany()` returns `{ results, nextCursor }` for at most
 1,000 oldest matching failures. Pass `nextCursor` back as `options.cursor` to advance a large backlog;
 repeating the same cursor and request replays that exact page. `{ dryRun: true }` returns eligible
 sources without writes. Redrive is
 another at-least-once execution and can repeat external effects, so handlers still need provider
-idempotency or compensation. `Queue.getRedriveLineage()` returns bounded retained edges and reports
+idempotency or compensation. `Admin.getRedriveLineage()` returns bounded retained edges and reports
 whether traversal was truncated.
 
 ### Payload contracts
@@ -177,13 +177,13 @@ old jobs can still run or be redriven; reads remain available without running hi
 
 ### Job listing and lifecycle timelines
 
-Schema version 15 adds `Queue.listJobs()` over a dedicated `job_query` projection. Operator reads use
+Schema version 15 adds `Admin.listJobs()` over a dedicated `job_query` projection. Operator reads use
 separate global, queue, type, and state creation-time indexes instead of broadening ready, scheduled,
 active, deadline, timeout, or recovery indexes. Pages are ordered by immutable `(createdAt, jobId)` and
 return a cursor bound to the filter and payload projection that produced it.
 
 ```ts
-const page = await queue.listJobs({
+const page = await admin.listJobs({
   queue: "billing",
   states: ["active", "failed"],
   createdAfter: new Date("2026-08-01T00:00:00Z"),
@@ -194,7 +194,7 @@ const page = await queue.listJobs({
   },
 });
 
-const timeline = await queue.getJobTimeline(page.items[0]!.id, { limit: 100 });
+const timeline = await admin.getJobTimeline(page.items[0]!.id, { limit: 100 });
 ```
 
 Payload is omitted by default. PostgreSQL applies at most 50 unique top-level redaction keys before
@@ -202,11 +202,11 @@ checking the caller's 1-byte through 1-MiB response ceiling. Each row reports `o
 `too_large`; an omitted or oversized payload is returned as `null`. Candidate identities are selected
 before payload rows are joined, so only the bounded page touches payload storage.
 
-`Queue.getJobTimeline()` merges retained lifecycle events and closed attempts into one latest-first,
+`Admin.getJobTimeline()` merges retained lifecycle events and closed attempts into one latest-first,
 cursor-based stream. Pages are capped at 1,000. Listing is intentionally weakly consistent across calls:
 new jobs can appear before an existing cursor, and concurrent state changes can change membership in a
 filtered later page. Timeline retention is independent, so an existing job may have partial or empty
-history. Use `Queue.getJob()` separately when identity existence matters.
+history. Use `Admin.getJob()` separately when identity existence matters.
 
 ### Worker fleet registration
 
@@ -220,17 +220,19 @@ This exists so an operator surface can observe and control a fleet it does not h
 memory cannot answer "which workers exist" once workers are deployed independently of the web tier.
 
 ```ts
-const workers = await queue.listWorkers();
-await queue.setWorkerPaused("billing-worker-1", true, {
-  requestedBy: "operator",
+const workers = await admin.listWorkers();
+await admin.setWorkerPaused("billing-worker-1", true, {
+  actor: "operator",
   reason: "rolling deploy",
+  requestId: "deploy-2026-08-23:billing-worker-1",
 });
 ```
 
 Pause is cooperative in exactly the same sense as cancellation. The worker stops claiming when it
 next refreshes its registration, any handler already executing runs to completion, and a local
 `worker.resume()` cannot override an operator pause that is still in effect. `requestedBy` and
-`reason` are bounded audit attribution, never authorization; callers must enforce their own
+`reason` in PostgreSQL come from the Admin audit actor and reason. They are bounded audit
+attribution, never authorization; callers must enforce their own
 permission checks.
 
 Pause is **process-scoped**. Each worker announces a fresh instance id, so a restarted or replaced
@@ -553,12 +555,13 @@ so existing development databases must be reset before version 40 processes star
 
 ```ts
 import { Pool } from "pg";
-import { installSchema, Queue, Worker } from "@workhorse-js/core";
+import { Admin, installSchema, Queue, Worker } from "@workhorse-js/core";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 await installSchema(pool);
 
 const queue = new Queue(pool);
+const admin = new Admin(pool);
 
 // Run this during every deployment. Omitted names in this namespace are disabled.
 await queue.syncSchedules("billing-production", [

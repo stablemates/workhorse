@@ -35,8 +35,8 @@ change the result.
 
 ## Inspect blocked work
 
-`Queue.getJob` and `Queue.listJobs` expose `prerequisiteJobIds`, `dependencyPolicy`, and
-`blockedReason`. `Queue.getDependencyLineage(jobId)` returns retained edges in both directions,
+`Admin.getJob` and `Admin.listJobs` expose `prerequisiteJobIds`, `dependencyPolicy`, and
+`blockedReason`. `Admin.getDependencyLineage(jobId)` returns retained edges in both directions,
 including policy, resolution, and release evidence. The dashboard exposes the same links and lets
 an operator open related tasks directly.
 

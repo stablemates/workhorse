@@ -10,7 +10,7 @@
  */
 import { setTimeout as sleep } from "node:timers/promises";
 import { Client, Pool } from "pg";
-import { installSchema, Queue, Worker } from "../dist/src/index.js";
+import { Admin, installSchema, Queue, Worker } from "../dist/src/index.js";
 
 declare const Bun: { version: string } | undefined;
 declare const Deno: { version: { deno: string } } | undefined;
@@ -30,11 +30,11 @@ if (!testDatabaseUrl) throw new Error("WORKHORSE_TEST_DATABASE_URL is required")
 const adminUrl = new URL(testDatabaseUrl);
 const smokeDatabase = `${decodeURIComponent(adminUrl.pathname.slice(1))}_smoke_${runtime.name}`;
 
-const admin = new Client({ connectionString: testDatabaseUrl });
-await admin.connect();
-await admin.query(`DROP DATABASE IF EXISTS "${smokeDatabase}"`);
-await admin.query(`CREATE DATABASE "${smokeDatabase}"`);
-await admin.end();
+const adminDatabase = new Client({ connectionString: testDatabaseUrl });
+await adminDatabase.connect();
+await adminDatabase.query(`DROP DATABASE IF EXISTS "${smokeDatabase}"`);
+await adminDatabase.query(`CREATE DATABASE "${smokeDatabase}"`);
+await adminDatabase.end();
 
 const smokeUrl = new URL(testDatabaseUrl);
 smokeUrl.pathname = `/${smokeDatabase}`;
@@ -44,6 +44,7 @@ try {
   await installSchema(pool);
 
   const queue = new Queue(pool);
+  const operator = new Admin(pool);
   const payload = { runtime: runtime.name, sentinel: "runtime-smoke" };
   const worker = new Worker(queue, {
     queue: "runtime-smoke",
@@ -56,7 +57,7 @@ try {
   let state = "pending";
   for (let attempt = 0; attempt < 100; attempt += 1) {
     await worker.runOnce();
-    const snapshot = await queue.getJob(jobId);
+    const snapshot = await operator.getJob(jobId);
     state = snapshot?.state ?? "missing";
     if (state === "succeeded") {
       const echoed = (snapshot?.result as { echoed?: unknown } | null)?.echoed;

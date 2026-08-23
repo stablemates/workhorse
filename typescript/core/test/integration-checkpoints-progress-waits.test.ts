@@ -2,6 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { logs, type LogRecord, type LoggerProvider } from "@opentelemetry/api-logs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  Admin,
   MAX_CHECKPOINT_VALUE_BYTES,
   MAX_PROGRESS_VALUE_BYTES,
   Queue,
@@ -1092,7 +1093,7 @@ describe("checkpoints progress waits", () => {
     >("ordinary-handler", ({ value }) => ({ value }));
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(countingQueue.getJob(id)).resolves.toMatchObject({
+    await expect(new Admin(countingDatabase).getJob(id)).resolves.toMatchObject({
       state: "succeeded",
       result: { value: 42 },
     });

@@ -43,8 +43,8 @@ export interface ParityRow {
 }
 
 /**
- * The public operator surface is reachable today only through the dashboard, the `workhorse` CLI,
- * and the TypeScript `Queue`. WH-356 (Python) and WH-357 (Go) add it to the other SDKs.
+ * The public operator surface is reachable through the dashboard, the `workhorse` CLI, and the
+ * TypeScript `Admin`. WH-356 (Python) and WH-357 (Go) add it to the other SDKs.
  */
 const pythonAdmin = { planned: "WH-356" } as const;
 const goAdmin = { planned: "WH-357" } as const;

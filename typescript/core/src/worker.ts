@@ -205,20 +205,22 @@ export interface WorkerQueueApi {
   heartbeatStatus(job: ClaimedJob, workerId: string, leaseMs?: number): Promise<HeartbeatStatus>;
   expireOwned(job: ClaimedJob, workerId: string): Promise<ExpireOwnedStatus>;
   acknowledgeCancel(job: ClaimedJob, workerId: string): Promise<boolean>;
-  listCheckpoints(jobId: string): Promise<JobCheckpoint[]>;
+  /** Load one retained evidence projection needed to reconstruct a handler context after a claim. */
+  loadHandlerState<TKey extends keyof WorkerHandlerState>(
+    jobId: string,
+    projection: TKey,
+  ): Promise<WorkerHandlerState[TKey]>;
   saveCheckpoint<TValue extends Json>(
     job: ClaimedJob,
     workerId: string,
     name: string,
     value: TValue,
   ): Promise<JobCheckpoint<TValue>>;
-  getProgress(jobId: string): Promise<JobProgress | null>;
   updateProgress<TValue extends Json>(
     job: ClaimedJob,
     workerId: string,
     value: TValue,
   ): Promise<JobProgress<TValue>>;
-  listWaits(jobId: string): Promise<JobWait[]>;
   scheduleWait(
     job: ClaimedJob,
     workerId: string,
@@ -278,6 +280,13 @@ export interface WorkerQueueApi {
   registerWorker(registration: WorkerRegistration): Promise<{ paused: boolean }>;
   deregisterWorker(workerId: string): Promise<boolean>;
   pruneWorkerRegistry(maxAgeMs?: number): Promise<number>;
+}
+
+/** Retained evidence a worker loads after claiming a job. */
+export interface WorkerHandlerState {
+  checkpoints: JobCheckpoint[];
+  progress: JobProgress | null;
+  waits: JobWait[];
 }
 
 export class InjectedCrashError extends WorkhorseError {
@@ -1077,7 +1086,7 @@ export class Worker {
       let checkpoints: Map<string, JobCheckpoint> | undefined;
       let checkpointsLoad: Promise<Map<string, JobCheckpoint>> | undefined;
       const loadCheckpoints = (): Promise<Map<string, JobCheckpoint>> => {
-        checkpointsLoad ??= this.queue.listCheckpoints(job.id).then((items) => {
+        checkpointsLoad ??= this.queue.loadHandlerState(job.id, "checkpoints").then((items) => {
           checkpoints = new Map(items.map((item) => [item.name, item]));
           return checkpoints;
         });
@@ -1086,7 +1095,7 @@ export class Worker {
       let waits: Map<string, JobWait> | undefined;
       let waitsLoad: Promise<Map<string, JobWait>> | undefined;
       const loadWaits = (): Promise<Map<string, JobWait>> => {
-        waitsLoad ??= this.queue.listWaits(job.id).then((items) => {
+        waitsLoad ??= this.queue.loadHandlerState(job.id, "waits").then((items) => {
           waits = new Map(items.map((item) => [item.name, item]));
           return waits;
         });
@@ -1101,7 +1110,7 @@ export class Worker {
         (await loadWaits()).get(name) ?? null;
       let progressLoad: Promise<JobProgress | null> | undefined;
       const getProgress: HandlerContext["getProgress"] = async <TValue extends Json>() => {
-        progressLoad ??= this.queue.getProgress(job.id);
+        progressLoad ??= this.queue.loadHandlerState(job.id, "progress");
         return (await progressLoad) as JobProgress<TValue> | null;
       };
       const setProgress: HandlerContext["setProgress"] = async <TValue extends Json>(

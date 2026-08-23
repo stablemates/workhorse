@@ -113,9 +113,10 @@ dispatch order within one queue; it does not reserve capacity for lower-priority
 Three controls operate on a whole queue:
 
 ```ts
-await queue.pauseQueue("billing"); // workers stop claiming; jobs are unchanged
-await queue.resumeQueue("billing"); // claiming resumes
-await queue.purgeQueue("billing"); // removes waiting work, releases its enqueue keys
+const audit = { actor: actor.email, reason: "provider maintenance", requestId: incidentId };
+await admin.pauseQueue("billing", audit); // workers stop claiming; jobs are unchanged
+await admin.resumeQueue("billing", { ...audit, requestId: `${incidentId}:resume` });
+await admin.purgeQueue("billing", { ...audit, requestId: `${incidentId}:purge` });
 ```
 
 Use `options.concurrencyKey` when a synchronized policy should also limit one application-defined

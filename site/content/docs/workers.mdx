@@ -155,18 +155,18 @@ Three verbs cover controlled slowdown, and each answers a different situation:
   `worker.resume()` lets it claim again; `worker.isPaused()` reads the effective state.
 - **`worker.stop()`** drains: no new claims, active handlers run to completion, then `run`
   resolves. On `SIGTERM`, the worker process does this for you.
-- **`Queue.setWorkerPaused`** stores an operator pause in `worker_registry`. TypeScript, Python,
+- **`Admin.setWorkerPaused`** stores an operator pause in `worker_registry`. TypeScript, Python,
   and Go workers pick it up on their next registration refresh, so a dashboard can pause a process
   it does not host. A local resume cannot clear an operator pause, and an operator pause dies with
   the process incarnation it named.
 
 If work must stop durably — surviving worker restarts — pause the queue with
-`Queue.pauseQueue`, not the worker.
+`Admin.pauseQueue`, not the worker.
 
 ## Read fleet state carefully
 
 `Worker.runtimeState()` reads a TypeScript worker's local process state. The dashboard and
-`Queue.listWorkers` read the durable registry that every runtime refreshes on an interval. Registry
+`Admin.listWorkers` read the durable registry that every runtime refreshes on an interval. Registry
 slot counts are recent observations, not synchronous views of another event loop — treat them as a
 moment-ago snapshot.
 

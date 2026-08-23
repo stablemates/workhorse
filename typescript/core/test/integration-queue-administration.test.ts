@@ -1,11 +1,39 @@
+import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
-import { EnqueueIdempotencyConflictError } from "../src/index.js";
+import { EnqueueIdempotencyConflictError, PurgeIdempotencyConflictError } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { pool, queue } = createIntegrationTestContext(import.meta.url);
+const { admin, pool, queue } = createIntegrationTestContext(import.meta.url);
 
 describe("queue administration", () => {
+  it("replays a purge count without deleting work that arrived after the first request", async () => {
+    const queueName = `purge-replay-${randomUUID()}`;
+    const audit = {
+      actor: "queue-administration-test",
+      reason: "discard invalid imports",
+      requestId: randomUUID(),
+    };
+    await queue.enqueue("purge-before", null, { queue: queueName });
+    await expect(admin.purgeQueue(queueName, audit)).resolves.toBe(1);
+
+    const after = await queue.enqueue("purge-after", null, { queue: queueName });
+    await expect(admin.purgeQueue(queueName, audit)).resolves.toBe(1);
+    await expect(admin.getJob(after)).resolves.toMatchObject({ state: "ready" });
+    await expect(
+      admin.purgeQueue(queueName, { ...audit, reason: "different operation" }),
+    ).rejects.toBeInstanceOf(PurgeIdempotencyConflictError);
+
+    await pool.query(
+      "UPDATE workhorse.queue_purge_request SET requested_at = clock_timestamp() - interval '15 days' WHERE queue_name = $1",
+      [queueName],
+    );
+    await queue.pruneTerminalStorage({ force: true, now: new Date() });
+    await expect(
+      pool.query("SELECT 1 FROM workhorse.queue_purge_request WHERE queue_name = $1", [queueName]),
+    ).resolves.toMatchObject({ rowCount: 0 });
+  });
+
   it("pauses claims, resumes dispatch, and purges only non-active jobs from one queue", async () => {
     const queueName = "managed";
     const activeId = await queue.enqueue("active", {}, { queue: queueName });

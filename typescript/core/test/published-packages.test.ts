@@ -46,6 +46,43 @@ describe("the derived package list", () => {
 });
 
 describe("published package manifests", () => {
+  it("publishes operator methods only on Admin", async () => {
+    const queueDeclaration = await read("typescript/core/dist/src/queue.d.ts");
+    const adminDeclaration = await read("typescript/core/dist/src/admin.d.ts");
+    const operatorMethods = [
+      "getJob",
+      "listJobs",
+      "getJobTimeline",
+      "listDeadLetters",
+      "redrive",
+      "redriveMany",
+      "getRedriveLineage",
+      "getDependencyLineage",
+      "getChildLineage",
+      "getCheckpoint",
+      "listCheckpoints",
+      "getProgress",
+      "getWait",
+      "listWaits",
+      "listSignalWaits",
+      "listHumanWaits",
+      "listWorkers",
+      "setWorkerPaused",
+      "pauseQueue",
+      "resumeQueue",
+      "purgeQueue",
+      "runTaskNow",
+    ];
+
+    expect(queueDeclaration).not.toMatch(/load(?:Checkpoints|Progress|Waits)/);
+    expect(queueDeclaration).toContain("loadHandlerState");
+    for (const method of operatorMethods) {
+      const declaration = new RegExp(`\\b${method}(?:<[^>]+>)?\\s*\\(`);
+      expect(queueDeclaration, `Queue.${method}`).not.toMatch(declaration);
+      expect(adminDeclaration, `Admin.${method}`).toMatch(declaration);
+    }
+  });
+
   it.each(packages.map((entry) => [entry.name, entry] as const))(
     "%s builds under both the full and the development build",
     async (_name, entry) => {
@@ -90,7 +127,9 @@ describe("published package manifests", () => {
     expect(coreManifest.dependencies?.["@workhorse-js/dashboard-contract"]).toBe("workspace:*");
     expect(coreManifest.peerDependencies?.["@workhorse-js/dashboard"]).toBe(">=0.1.0 <0.2.0");
     expect(coreManifest.peerDependenciesMeta?.["@workhorse-js/dashboard"]?.optional).toBe(true);
-    expect(dashboardManifest.dependencies?.["@workhorse-js/dashboard-contract"]).toBe("workspace:*");
+    expect(dashboardManifest.dependencies?.["@workhorse-js/dashboard-contract"]).toBe(
+      "workspace:*",
+    );
     expect(dashboardManifest.exports?.["./standalone"]).toEqual({
       "workhorse-source": "./src/server/standalone.ts",
       types: "./dist/server/standalone.d.ts",

@@ -24,7 +24,7 @@ The TypeScript worker exposes:
 
 - `context.getCheckpoint(name)` for an explicit read;
 - `context.checkpoint(name, operation)` to return an existing value or run and persist the operation;
-- `Queue.getCheckpoint` and `Queue.saveCheckpoint` as the thin protocol client methods.
+- `Admin.getCheckpoint` and `Queue.saveCheckpoint` as the thin protocol client methods.
 
 One handler coalesces overlapping calls for the same checkpoint name. Checkpoints remain readable across retries and after terminal materialization, and are deleted only when their parent job identity is deleted.
 

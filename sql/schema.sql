@@ -251,6 +251,19 @@ CREATE TABLE IF NOT EXISTS workhorse.queue_control (
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
+-- Purge request ids make retries return the original deletion count without deleting newly
+-- enqueued work. Only a digest and bounded audit identity are retained.
+CREATE TABLE IF NOT EXISTS workhorse.queue_purge_request (
+  request_id_hash bytea PRIMARY KEY CHECK (octet_length(request_id_hash) = 32),
+  queue_name text NOT NULL CHECK (queue_name <> ''),
+  requested_by text NOT NULL CHECK (requested_by <> '' AND char_length(requested_by) <= 200),
+  reason text NOT NULL CHECK (reason <> '' AND char_length(reason) <= 2000),
+  deleted_count integer NOT NULL CHECK (deleted_count >= 0),
+  requested_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS queue_purge_request_requested_at_idx
+  ON workhorse.queue_purge_request(requested_at);
+
 -- Deployment-synchronized queue admission budgets. A missing row means no durable concurrency limit.
 CREATE TABLE IF NOT EXISTS workhorse.concurrency_policy (
   queue_name text PRIMARY KEY CHECK (queue_name <> ''),
@@ -6173,15 +6186,45 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.purge_queue_v1(p_queue_name text)
+CREATE OR REPLACE FUNCTION workhorse.purge_queue_v1(
+  p_queue_name text,
+  p_requested_by text,
+  p_reason text,
+  p_request_id text
+)
 RETURNS integer
 LANGUAGE plpgsql
 AS $$
 DECLARE
   v_count integer;
+  v_existing workhorse.queue_purge_request%ROWTYPE;
+  v_request_id_hash bytea;
 BEGIN
   IF p_queue_name IS NULL OR p_queue_name = '' THEN
     RAISE EXCEPTION 'queue_name must not be empty';
+  END IF;
+  IF p_requested_by IS NULL OR p_requested_by = '' OR char_length(p_requested_by) > 200 THEN
+    RAISE EXCEPTION 'requested_by must contain between 1 and 200 characters';
+  END IF;
+  IF p_reason IS NULL OR p_reason = '' OR char_length(p_reason) > 2000 THEN
+    RAISE EXCEPTION 'reason must contain between 1 and 2000 characters';
+  END IF;
+  IF p_request_id IS NULL OR p_request_id = '' OR octet_length(p_request_id) > 512 THEN
+    RAISE EXCEPTION 'request_id must contain between 1 and 512 UTF-8 bytes';
+  END IF;
+  v_request_id_hash := sha256(convert_to(p_request_id, 'UTF8'));
+  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:purge:' || p_request_id, 0));
+  SELECT * INTO v_existing FROM workhorse.queue_purge_request request
+   WHERE request.request_id_hash = v_request_id_hash;
+  IF FOUND THEN
+    IF v_existing.queue_name <> p_queue_name
+      OR v_existing.requested_by <> p_requested_by
+      OR v_existing.reason <> p_reason THEN
+      RAISE EXCEPTION USING
+        ERRCODE = 'P1006',
+        MESSAGE = 'purge request conflict with a retained request';
+    END IF;
+    RETURN v_existing.deleted_count;
   END IF;
   INSERT INTO workhorse.queue_control(queue_name, paused)
     VALUES (p_queue_name, false)
@@ -6212,8 +6255,22 @@ BEGIN
    WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('blocked', 'ready', 'scheduled')
      AND job.id = runtime.job_id;
   GET DIAGNOSTICS v_count = ROW_COUNT;
+  INSERT INTO workhorse.queue_purge_request(
+    request_id_hash, queue_name, requested_by, reason, deleted_count
+  ) VALUES (v_request_id_hash, p_queue_name, p_requested_by, p_reason, v_count);
   RETURN v_count;
 END;
+$$;
+
+-- Compatibility for the Python and Go dashboard backends until WH-356 and WH-357 route them
+-- through their own Admin clients.
+CREATE OR REPLACE FUNCTION workhorse.purge_queue_v1(p_queue_name text)
+RETURNS integer
+LANGUAGE sql
+AS $$
+  SELECT workhorse.purge_queue_v1(
+    p_queue_name, 'legacy-sdk', 'legacy queue purge', gen_random_uuid()::text
+  );
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.promote_v1(p_limit integer DEFAULT 100)
@@ -9102,6 +9159,8 @@ CREATE OR REPLACE FUNCTION workhorse.prune_enqueue_idempotency_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE v_count integer;
+DECLARE v_purge_count integer := 0;
+DECLARE v_purge_retention_days integer;
 BEGIN
   IF p_before IS NULL OR NOT isfinite(p_before) THEN
     RAISE EXCEPTION 'idempotency cutoff is required';
@@ -9121,7 +9180,22 @@ BEGIN
    WHERE idempotency.idempotency_scope = candidates.idempotency_scope
      AND idempotency.idempotency_key_hash = candidates.idempotency_key_hash;
   GET DIAGNOSTICS v_count = ROW_COUNT;
-  RETURN v_count;
+  SELECT job_identity_retention_days INTO v_purge_retention_days
+    FROM workhorse.retention_policy WHERE singleton;
+  IF v_purge_retention_days IS NOT NULL THEN
+    WITH candidates AS MATERIALIZED (
+      SELECT request_id_hash
+        FROM workhorse.queue_purge_request
+       WHERE requested_at < p_before - make_interval(days => v_purge_retention_days)
+       ORDER BY requested_at, request_id_hash
+       FOR UPDATE SKIP LOCKED
+       LIMIT p_limit
+    )
+    DELETE FROM workhorse.queue_purge_request request USING candidates
+     WHERE request.request_id_hash = candidates.request_id_hash;
+    GET DIAGNOSTICS v_purge_count = ROW_COUNT;
+  END IF;
+  RETURN v_count + v_purge_count;
 END;
 $$;
 

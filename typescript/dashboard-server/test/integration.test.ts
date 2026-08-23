@@ -11,7 +11,7 @@ import { readDashboardJobDetail } from "../src/server/read-model.js";
 import { dashboardDatabase } from "../src/server/sql.js";
 import type { DashboardRouter } from "../src/server/router.js";
 
-const { pool, queue } = createIntegrationTestContext(import.meta.url);
+const { admin, pool, queue } = createIntegrationTestContext(import.meta.url);
 
 describe("dashboard signal integration", () => {
   it("rejects an unauthorized delivery before it mutates the waiting execution", async () => {
@@ -23,7 +23,7 @@ describe("dashboard signal integration", () => {
     expect(await worker.runOnce()).toBe(true);
 
     const controllers = createDashboardOperatorControllers({
-      run: (_action, operation) => operation(queue),
+      run: (_action, operation) => operation({ queue, admin }),
     });
     const host = createDashboardHost({
       database: pool,

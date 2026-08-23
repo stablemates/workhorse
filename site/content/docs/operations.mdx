@@ -47,15 +47,16 @@ default, `0` to opt out. That registry is how you see and steer a fleet you do n
 
 ```ts
 // See every registered worker, most recently seen first.
-const workers = await queue.listWorkers();
+const workers = await admin.listWorkers();
 for (const worker of workers) {
   console.log(worker.workerId, worker.activeSlots, worker.paused, worker.lastHeartbeatAt);
 }
 
 // Ask one worker to stop claiming. Attribution is recorded, not authorized.
-await queue.setWorkerPaused("billing-worker-1", true, {
-  requestedBy: actor.email,
+await admin.setWorkerPaused("billing-worker-1", true, {
+  actor: actor.email,
   reason: "investigating slow provider",
+  requestId: incidentId,
 });
 
 // Drop registrations whose process stopped heartbeating long ago.

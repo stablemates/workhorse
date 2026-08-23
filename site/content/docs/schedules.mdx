@@ -95,7 +95,7 @@ Three related calls round out the API:
 
 - `queue.schedules(namespaces)` reads stored definitions and their last occurrence, for operator
   tools.
-- `queue.runTaskNow(jobId)` releases one scheduled job immediately — useful for "run it now"
+- `admin.runTaskNow(jobId, audit)` releases one scheduled job immediately — useful for "run it now"
   buttons on a fired-but-delayed occurrence.
 - `queue.fireSchedule(namespace, name, revision, occurrenceAt)` exposes the revision-fenced firing
   operation itself, for tests and controlled integrations.

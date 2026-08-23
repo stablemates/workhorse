@@ -17,7 +17,7 @@ These mechanisms share some storage details. Timer, signal, and human boundaries
 `scheduled` runtime with `wait_name`. A child join and an enqueue dependency use a `blocked`
 runtime plus `job_dependency`. Those shared states do not make the mechanisms interchangeable.
 
-The public vocabulary blurred the distinction. `Queue.getWait` and `Queue.listWaits` return only
+The public vocabulary blurred the distinction. `Admin.getWait` and `Admin.listWaits` return only
 `job_wait` timer records. `blockedReason` reports `prerequisite_pending` even when a child edge
 caused the blocked state. A workflow runtime built on those names could mistake storage shape for
 user intent.
@@ -30,7 +30,7 @@ and restarts the handler from entry. Every suspension requires replay-safe code 
 Keep four distinct domain mechanisms:
 
 - A **timer wait** is the immutable `job_wait` record created by `sleep` or `sleepUntil`.
-  `Queue.getWait` and `Queue.listWaits` remain timer-only APIs.
+  `Admin.getWait` and `Admin.listWaits` remain timer-only APIs.
 - A **signal boundary** is the `job_signal_wait` record completed by `Queue.sendSignal`.
   It carries a delivered application payload.
 - A **human decision** is the `job_human_wait` record completed by
@@ -65,7 +65,7 @@ release its lease while a shared callback still owes an outcome for every other 
 
 - A workflow runtime composes explicit timers, signals, human decisions, child joins, and
   dependency gates. It does not build on one generic wait abstraction.
-- `Queue.getWait` and `Queue.listWaits` keep their stable timer-record meaning.
+- `Admin.getWait` and `Admin.listWaits` keep their stable timer-record meaning.
 - Operational reads add `child_pending` before they can describe every blocked job accurately.
 - Signal and human list APIs stay separate because their payload, completion, attribution, and
   authorization contracts differ.
@@ -77,7 +77,7 @@ release its lease while a shared callback still owes an outcome for every other 
 ### Model every mechanism as a wait
 
 This would hide whether PostgreSQL needs a clock, an external payload, an operator decision, or a
-job outcome. It would also make `Queue.getWait` return incompatible record shapes.
+job outcome. It would also make `Admin.getWait` return incompatible record shapes.
 
 ### Model dependencies as handler suspension
 

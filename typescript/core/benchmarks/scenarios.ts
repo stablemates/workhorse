@@ -21,6 +21,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import type { Notification, PoolClient, QueryResult, QueryResultRow } from "pg";
 import {
+  Admin,
   CancellationRequestedError,
   DeadlineExceededError,
   EnqueueIdempotencyConflictError,
@@ -32,7 +33,28 @@ import {
   Queue,
   Worker,
 } from "../src/index.js";
-import type { ClaimedJob, Failpoint, Queryable, QueueHealth } from "../src/index.js";
+import type { ClaimedJob, Failpoint, Queryable, QueueHealth, QueueOptions } from "../src/index.js";
+
+type AdminApi = Pick<Admin, keyof Admin>;
+
+function operationalQueue(
+  database: Queryable,
+  defaultQueue = "default",
+  options: QueueOptions = {},
+): Queue & AdminApi {
+  const queue = Reflect.construct(Queue, [database, defaultQueue, options]) as Queue;
+  const admin = new Admin(database, defaultQueue, options);
+  return new Proxy(queue, {
+    get(target, property, receiver) {
+      if (property in target) {
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      const value = Reflect.get(admin, property, admin) as unknown;
+      return typeof value === "function" ? value.bind(admin) : value;
+    },
+  }) as Queue & AdminApi;
+}
 
 export const operationalScenarioNames = [
   "scheduled-promotion-drift",
@@ -891,7 +913,7 @@ async function scheduledPromotionDrift(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
   await reset(context.pool);
-  const queue = new Queue(context.pool, context.queueName);
+  const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
   const runAt = new Date(Date.now() + context.options.scheduleDelayMs);
   for (let index = 0; index < context.options.jobCount; index += 1) {
@@ -957,7 +979,7 @@ async function scheduleCadenceJitter(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
   await reset(context.pool);
-  const queue = new Queue(context.pool, context.queueName);
+  const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
   const namespace = `${context.queueName}-${Date.now()}`;
   const scheduleType = "benchmark-schedule-cadence";
@@ -1095,7 +1117,7 @@ async function heartbeatFencing(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
   await reset(context.pool);
-  const queue = new Queue(context.pool, context.queueName);
+  const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
   const acceptedLatencies: number[] = [];
   const staleLatencies: number[] = [];
@@ -1213,7 +1235,7 @@ async function priorityDispatch(
     throughputJobsPerSecond: number;
     readyIndexBytes: number;
   }> => {
-    const queue = new Queue(context.pool, cohortQueueName);
+    const queue = operationalQueue(context.pool, cohortQueueName);
     for (let offset = 0; offset < priorities.length; offset += 1_000) {
       await queue.enqueueMany(
         priorities.slice(offset, offset + 1_000).map((priority, relativeIndex) => ({
@@ -1292,7 +1314,7 @@ async function priorityDispatch(
   await reset(context.pool);
   const liveQueueName = `${context.queueName}-live`;
   const seedLiveReady = async (): Promise<void> => {
-    const liveQueue = new Queue(context.pool, liveQueueName);
+    const liveQueue = operationalQueue(context.pool, liveQueueName);
     await liveQueue.enqueueMany(
       Array.from({ length: jobsPerCohort }, (_unused, index) => ({
         type: "priority-live",
@@ -1356,7 +1378,7 @@ async function priorityDispatch(
   );
 
   await reset(context.pool);
-  const floodQueue = new Queue(context.pool, `${context.queueName}-starvation`);
+  const floodQueue = operationalQueue(context.pool, `${context.queueName}-starvation`);
   await floodQueue.enqueue("low-priority", null, { priority: 0 });
   const floodStarted = context.now();
   let highPriorityClaims = 0;
@@ -1423,7 +1445,7 @@ async function cancellationLifecycle(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
   await reset(context.pool);
-  const queue = new Queue(context.pool, context.queueName);
+  const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
   const metrics: Record<string, ScenarioMetric> = {};
   const request = { requestedBy: "benchmark-operator", reason: "deterministic lifecycle proof" };
@@ -1799,7 +1821,7 @@ async function deadlineTimeoutLifecycle(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
   await reset(context.pool);
-  const queue = new Queue(context.pool, context.queueName);
+  const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
   const metrics: Record<string, ScenarioMetric> = {};
 
@@ -1989,7 +2011,7 @@ async function deadLetterRedriveLifecycle(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
   await reset(context.pool);
-  const queue = new Queue(context.pool, context.queueName);
+  const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
   const metrics: Record<string, ScenarioMetric> = {};
   const sourceIds: string[] = [];
@@ -2047,7 +2069,7 @@ async function deadLetterRedriveLifecycle(
     queue.redriveMany(
       { queue: context.queueName, type: "redrive-source", tags: ["redrive"] },
       {
-        requestedBy: "operational-scenario",
+        actor: "operational-scenario",
         reason: "preview failed operational sources",
         requestId: "dead-letter-preview",
       },
@@ -2079,7 +2101,7 @@ async function deadLetterRedriveLifecycle(
 
   const sourceJobId = firstPage.items[0]!.jobId;
   const request = {
-    requestedBy: "operational-scenario",
+    actor: "operational-scenario",
     reason: "retry one inspected terminal failure",
     requestId: "dead-letter-single",
   };
@@ -2107,7 +2129,7 @@ async function deadLetterRedriveLifecycle(
     queue.redriveMany(
       { queue: context.queueName, type: "redrive-source", errorName: "Error" },
       {
-        requestedBy: "operational-scenario",
+        actor: "operational-scenario",
         reason: "retry a bounded terminal batch",
         requestId: "dead-letter-bulk",
       },
@@ -2121,7 +2143,7 @@ async function deadLetterRedriveLifecycle(
       : await queue.redriveMany(
           { queue: context.queueName, type: "redrive-source", errorName: "Error" },
           {
-            requestedBy: "operational-scenario",
+            actor: "operational-scenario",
             reason: "retry a bounded terminal batch",
             requestId: "dead-letter-bulk",
           },
@@ -2194,7 +2216,7 @@ async function queryListingLifecycle(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
   await reset(context.pool);
-  const queue = new Queue(context.pool, context.queueName);
+  const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
   const metrics: Record<string, ScenarioMetric> = {};
   const ids = await queue.enqueueMany([
@@ -2340,7 +2362,7 @@ async function crashBeforeCompletion(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
   await reset(context.pool);
-  const queue = new Queue(context.pool, context.queueName);
+  const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
   const boundaries: readonly {
     failpoint: Failpoint;
@@ -2469,7 +2491,7 @@ async function leaseExpiryRecovery(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
   await reset(context.pool);
-  const queue = new Queue(context.pool, context.queueName);
+  const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
   const jobId = await queue.enqueue("recover", {}, { maxAttempts: 2 });
   const first = await queue.claim("expired-worker", { leaseMs: context.options.leaseMs });
@@ -2516,7 +2538,7 @@ async function leaseExpiryRecovery(
 
 async function retryPaths(context: OperationalScenarioContext): Promise<OperationalScenarioResult> {
   await reset(context.pool);
-  const queue = new Queue(context.pool, context.queueName);
+  const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
 
   type RetryEventRow = {
@@ -2674,7 +2696,7 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
        FROM workhorse.retry_delay_v1($1, $2, $3::jsonb, $4, $5, $6)`,
     [jitterId, 1, JSON.stringify(jitterPolicy), null, null, "legacy-handler"],
   );
-  const recreatedQueue = new Queue(context.pool, context.queueName);
+  const recreatedQueue = operationalQueue(context.pool, context.queueName);
   recordInvariant(assertions, "jitter policy schedules retry", jitterState, "scheduled");
   recordInvariant(
     assertions,
@@ -2738,7 +2760,7 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
     "failed",
   );
 
-  const contractQueue = new Queue(context.pool, context.queueName, {
+  const contractQueue = operationalQueue(context.pool, context.queueName, {
     contracts: {
       "retry-contracted": {
         currentVersion: "1",
@@ -2815,7 +2837,7 @@ async function idempotentIngress(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
   await reset(context.pool);
-  const queue = new Queue(context.pool, context.queueName);
+  const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
   const state = async () =>
     (
@@ -3045,7 +3067,7 @@ async function coalescingIngress(
   const runCohort = async (mode: CohortMode) => {
     await reset(context.pool);
     const cohortQueueName = `${context.queueName}-${mode}`;
-    const queue = new Queue(context.pool, cohortQueueName);
+    const queue = operationalQueue(context.pool, cohortQueueName);
     const database = context.pool as Queryable & { connect?: () => Promise<PoolClient> };
     if (database.connect === undefined) {
       throw new Error("coalescing benchmark requires a PostgreSQL pool with LISTEN support");
@@ -3281,7 +3303,11 @@ async function coalescingIngress(
         expectedNotifications,
       );
       const [purged, cleanupMs] = await measured(context.now, () =>
-        queue.purgeQueue(cohortQueueName),
+        queue.purgeQueue(cohortQueueName, {
+          actor: "operational-scenario",
+          reason: "measure queue purge",
+          requestId: `purge-${cohortQueueName}`,
+        }),
       );
       const cleanupState = (
         await context.pool.query<{ bindings: number; jobs: number }>(
@@ -3321,7 +3347,11 @@ async function coalescingIngress(
         recordInvariant(
           assertions,
           `${mode} removes its schedule-check identity`,
-          await queue.purgeQueue(cohortQueueName),
+          await queue.purgeQueue(cohortQueueName, {
+            actor: "operational-scenario",
+            reason: "measure concurrent queue purge",
+            requestId: `purge-concurrent-${cohortQueueName}`,
+          }),
           1,
         );
       }
@@ -3362,7 +3392,7 @@ async function dependencyOperations(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
   await reset(context.pool);
-  const queue = new Queue(context.pool, context.queueName);
+  const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
   const fanIn = Math.max(2, Math.min(context.options.jobCount, 100));
   const prerequisiteIds = await queue.enqueueMany(
@@ -3399,7 +3429,7 @@ async function dependencyOperations(
   recordInvariant(assertions, "fan-in records one release transition", dependencyReleaseEvents, 1);
 
   const fanOut = MAX_JOB_DEPENDENTS;
-  const fanOutQueue = new Queue(context.pool, `${context.queueName}-fan-out`);
+  const fanOutQueue = operationalQueue(context.pool, `${context.queueName}-fan-out`);
   const fanOutPrerequisiteId = await fanOutQueue.enqueue("dependency-fan-out-prerequisite", null);
   const fanOutDependentIds = await fanOutQueue.enqueueMany(
     Array.from({ length: fanOut }, (_unused, index) => ({
@@ -3421,7 +3451,7 @@ async function dependencyOperations(
     fanOut,
   );
 
-  const contentionQueue = new Queue(context.pool, `${context.queueName}-contention`);
+  const contentionQueue = operationalQueue(context.pool, `${context.queueName}-contention`);
   const concurrentDependencyEnqueues = Math.max(
     2,
     Math.min(context.options.jobCount, MAX_JOB_DEPENDENTS),
@@ -3480,7 +3510,7 @@ async function dependencyOperations(
   );
 
   const beforeQueueName = `${context.queueName}-plan-before`;
-  const beforeQueue = new Queue(context.pool, beforeQueueName);
+  const beforeQueue = operationalQueue(context.pool, beforeQueueName);
   await beforeQueue.enqueue("dependency-plan-ready", null);
   await context.pool.query("VACUUM (ANALYZE) workhorse.job_runtime");
   const claimPlanBeforeHistory = await claimPlan(
@@ -3491,7 +3521,7 @@ async function dependencyOperations(
 
   const historyJobs = Math.max(1_000, context.options.jobCount * 100);
   const historyQueueName = `${context.queueName}-history`;
-  const historyQueue = new Queue(context.pool, historyQueueName);
+  const historyQueue = operationalQueue(context.pool, historyQueueName);
   await historyQueue.enqueueMany(
     Array.from({ length: historyJobs }, (_, index) => ({
       type: "dependency-plan-history",
@@ -3506,7 +3536,7 @@ async function dependencyOperations(
   }
 
   const afterQueueName = `${context.queueName}-plan-after`;
-  const afterQueue = new Queue(context.pool, afterQueueName);
+  const afterQueue = operationalQueue(context.pool, afterQueueName);
   await afterQueue.enqueue("dependency-plan-ready", null);
   await context.pool.query("VACUUM (ANALYZE) workhorse.job_runtime");
   const claimPlanAfterHistory = await claimPlan(
@@ -3567,7 +3597,7 @@ async function retentionPruning(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
   await reset(context.pool);
-  const queue = new Queue(context.pool, context.queueName);
+  const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
   const seededJobs = Math.min(context.options.jobCount, context.options.pruneLimit, 10);
   for (let index = 0; index < seededJobs; index += 1) {
@@ -3705,7 +3735,7 @@ async function healthSnapshot(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
   await reset(context.pool);
-  const queue = new Queue(context.pool, context.queueName);
+  const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
   const readyCount = Math.max(1, Math.floor(context.options.jobCount / 2));
   const scheduledCount = Math.max(1, context.options.jobCount - readyCount);
@@ -3747,7 +3777,7 @@ async function progressLifecycle(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
   await reset(context.pool);
-  const queue = new Queue(context.pool, context.queueName);
+  const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
   const id = await queue.enqueue("progress-lifecycle", { source: "benchmark" });
   const job = await queue.claim("benchmark-progress", { leaseMs: 5_000 });
@@ -3862,7 +3892,7 @@ async function workerConcurrency(
 
   for (const concurrency of concurrencyLevels) {
     await reset(context.pool);
-    const seedQueue = new Queue(context.pool, context.queueName);
+    const seedQueue = operationalQueue(context.pool, context.queueName);
     for (let index = 0; index < context.options.jobCount; index += 1) {
       await seedQueue.enqueue("concurrency-throughput", { index });
     }
@@ -3872,7 +3902,7 @@ async function workerConcurrency(
       context.pool,
       () => concurrency - worker.runtimeState().activeSlots,
     );
-    worker = new Worker(new Queue(probe, context.queueName), {
+    worker = new Worker(operationalQueue(probe, context.queueName), {
       concurrency,
       workerId: `benchmark-concurrency-${concurrency}`,
       leaseMs,
@@ -4053,7 +4083,7 @@ async function workerConcurrency(
   for (const profile of topologyProfiles) {
     for (const shape of topologyShapes) {
       await reset(context.pool);
-      const queue = new Queue(context.pool, context.queueName);
+      const queue = operationalQueue(context.pool, context.queueName);
       await queue.enqueueMany(
         Array.from({ length: context.options.jobCount }, (_, index) => ({
           type: "concurrency-topology",
@@ -4070,7 +4100,7 @@ async function workerConcurrency(
       let processingStartedAt = 0;
 
       for (let workerIndex = 0; workerIndex < shape.workerCount; workerIndex += 1) {
-        const worker = new Worker(new Queue(probe, context.queueName), {
+        const worker = new Worker(operationalQueue(probe, context.queueName), {
           concurrency: shape.concurrency,
           workerId: `benchmark-topology-${profile.name}-${shape.name}-${workerIndex + 1}`,
           leaseMs,
@@ -4152,10 +4182,10 @@ async function workerConcurrency(
   }
 
   await reset(context.pool);
-  const firstNullQueue = new Queue(context.pool, context.queueName);
+  const firstNullQueue = operationalQueue(context.pool, context.queueName);
   await firstNullQueue.enqueue("first-null", { only: true });
   const firstNullProbe = new QueryPressureProbe(context.pool);
-  const firstNullWorker = new Worker(new Queue(firstNullProbe, context.queueName), {
+  const firstNullWorker = new Worker(operationalQueue(firstNullProbe, context.queueName), {
     concurrency: 4,
     workerId: "benchmark-first-null",
     leaseMs,
@@ -4187,10 +4217,10 @@ async function workerConcurrency(
   );
 
   await reset(context.pool);
-  const pauseQueue = new Queue(context.pool, context.queueName);
+  const pauseQueue = operationalQueue(context.pool, context.queueName);
   await pauseQueue.enqueue("pause-guard", { paused: true });
   const pauseProbe = new QueryPressureProbe(context.pool);
-  const pauseWorker = new Worker(new Queue(pauseProbe, context.queueName), {
+  const pauseWorker = new Worker(operationalQueue(pauseProbe, context.queueName), {
     concurrency: 4,
     workerId: "benchmark-pause",
     leaseMs,
@@ -4219,12 +4249,12 @@ async function workerConcurrency(
   await reset(context.pool);
   const shutdownConcurrency = 4;
   const shutdownJobs = shutdownConcurrency + 2;
-  const shutdownQueue = new Queue(context.pool, context.queueName);
+  const shutdownQueue = operationalQueue(context.pool, context.queueName);
   for (let index = 0; index < shutdownJobs; index += 1) {
     await shutdownQueue.enqueue("shutdown-drain", { index });
   }
   const shutdownProbe = new QueryPressureProbe(context.pool);
-  const shutdownWorker = new Worker(new Queue(shutdownProbe, context.queueName), {
+  const shutdownWorker = new Worker(operationalQueue(shutdownProbe, context.queueName), {
     concurrency: shutdownConcurrency,
     workerId: "benchmark-shutdown",
     leaseMs,
@@ -4313,7 +4343,7 @@ async function batchDispatch(
     const mixedOutcomes = cohort === "mixed";
     await reset(context.pool);
     const cohortQueueName = `${context.queueName}-${mode}-${cohort}`;
-    const seedQueue = new Queue(context.pool, cohortQueueName);
+    const seedQueue = operationalQueue(context.pool, cohortQueueName);
     const jobIds = await seedQueue.enqueueMany(
       Array.from({ length: cohortJobs }, (_, index) => ({
         type: "batch-dispatch",
@@ -4326,7 +4356,7 @@ async function batchDispatch(
       context.pool,
       () => batchMaxSize - worker.runtimeState().activeSlots,
     );
-    worker = new Worker(new Queue(probe, cohortQueueName), {
+    worker = new Worker(operationalQueue(probe, cohortQueueName), {
       concurrency: batchMaxSize,
       workerId: `benchmark-batch-${mode}`,
       leaseMs,
@@ -4501,7 +4531,7 @@ async function batchDispatch(
   const runPolicyCohort = async (policy: "concurrency" | "rate") => {
     await reset(context.pool);
     const policyQueueName = `${context.queueName}-policy-${policy}`;
-    const policyQueue = new Queue(context.pool, policyQueueName);
+    const policyQueue = operationalQueue(context.pool, policyQueueName);
     if (policy === "concurrency") {
       await policyQueue.syncConcurrencyPolicies("batch-benchmark", [
         { queue: policyQueueName, maxActive: 2 },
@@ -4581,7 +4611,7 @@ async function batchDispatch(
 
   await reset(context.pool);
   const recoveryQueueName = `${context.queueName}-recovery`;
-  const recoveryQueue = new Queue(context.pool, recoveryQueueName);
+  const recoveryQueue = operationalQueue(context.pool, recoveryQueueName);
   const staleId = await recoveryQueue.enqueue(
     "batch-recovery",
     { member: "stale" },
@@ -4662,7 +4692,7 @@ async function batchDispatch(
   const planLiveJobs = jobsPerCohort;
   const historyJobs = jobsPerCohort * 4;
   const seedPlanReady = async (targetQueueName: string) => {
-    const targetQueue = new Queue(context.pool, targetQueueName);
+    const targetQueue = operationalQueue(context.pool, targetQueueName);
     await targetQueue.enqueueMany(
       Array.from({ length: planLiveJobs }, (_, index) => ({
         type: "batch-plan-live",
@@ -4682,7 +4712,7 @@ async function batchDispatch(
 
   await reset(context.pool);
   const historyQueueName = `${context.queueName}-history`;
-  const historyQueue = new Queue(context.pool, historyQueueName);
+  const historyQueue = operationalQueue(context.pool, historyQueueName);
   await historyQueue.enqueueMany(
     Array.from({ length: historyJobs }, (_, index) => ({
       type: "batch-plan-history",
@@ -4825,7 +4855,7 @@ async function rateLimiting(
 ): Promise<OperationalScenarioResult> {
   await reset(context.pool);
   const assertions: ScenarioAssertion[] = [];
-  const queue = new Queue(context.pool, context.queueName);
+  const queue = operationalQueue(context.pool, context.queueName);
   const intervalMs = 100;
   const burst = 2;
   await queue.syncRateLimitPolicies("benchmark", [
@@ -4890,7 +4920,7 @@ async function notificationDispatch(
 
   const runCohort = async (notifications: boolean) => {
     await reset(context.pool);
-    const seedQueue = new Queue(context.pool, context.queueName);
+    const seedQueue = operationalQueue(context.pool, context.queueName);
     const probe = new QueryPressureProbe(context.pool);
     const pollingDatabase: Queryable = { query: probe.query.bind(probe) };
     const connect = (context.pool as Queryable & { connect?: () => Promise<unknown> }).connect;
@@ -4901,7 +4931,7 @@ async function notificationDispatch(
       query: probe.query.bind(probe),
       ...(connect === undefined ? {} : { connect: () => connect.call(context.pool) }),
     };
-    const workerQueue = new Queue(
+    const workerQueue = operationalQueue(
       notifications ? notificationDatabase : pollingDatabase,
       context.queueName,
     );
@@ -5002,8 +5032,8 @@ async function telemetryContext(
   const jobsPerCohort = context.options.jobCount;
   const baselineQueue = `${context.queueName}-baseline`;
   const instrumentedQueue = `${context.queueName}-instrumented`;
-  const baseline = new Queue(context.pool, baselineQueue);
-  const instrumented = new Queue(context.pool, instrumentedQueue);
+  const baseline = operationalQueue(context.pool, baselineQueue);
+  const instrumented = operationalQueue(context.pool, instrumentedQueue);
   const requests = Array.from({ length: jobsPerCohort }, (_, index) => ({
     type: "telemetry-context",
     payload: { index },

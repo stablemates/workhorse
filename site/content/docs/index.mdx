@@ -57,7 +57,7 @@ await worker.run();
 
 Beyond checkpoints, jobs get retries with configurable backoff, durable sleeps that release the
 worker slot, cron-style schedules, idempotent enqueue, dead letters with redrive, and immutable
-history you can query with `Queue.getJob` and `Queue.getJobTimeline`.
+history you can query with `Admin.getJob` and `Admin.getJobTimeline`.
 
 ## When to use it
 

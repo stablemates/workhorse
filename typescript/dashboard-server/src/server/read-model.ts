@@ -1,5 +1,5 @@
 import { expectOneRow, queueHealthFromDocument } from "@workhorse-js/core";
-import type { Queue, QueueHealthDocument, RetryPolicy } from "@workhorse-js/core";
+import type { Admin, QueueHealthDocument, RetryPolicy } from "@workhorse-js/core";
 import {
   DashboardActivityBucket,
   DashboardActivityGroupBy,
@@ -85,13 +85,13 @@ function signalWaitSummary(
 
 export async function readDashboardHumanWaits(
   database: DashboardDatabase,
-  queue: Queue,
+  admin: Admin,
   canComplete: boolean,
   canSignal: boolean,
 ): Promise<DashboardHumanWaitPage> {
   const [waitPage, signalWaitPage, health] = await Promise.all([
-    queue.listHumanWaits(),
-    queue.listSignalWaits(),
+    admin.listHumanWaits(),
+    admin.listSignalWaits(),
     readQueueHealth(database),
   ]);
   return {
@@ -123,12 +123,12 @@ export async function readDashboardHumanWaits(
 
 export async function readDashboardSettings(
   database: DashboardDatabase,
-  queue: Queue,
+  admin: Admin,
   editable: boolean,
 ): Promise<DashboardSettingsPage> {
   const [maintenance, retention, health, enqueued, workers] = await Promise.all([
-    queue.getMaintenancePolicy(),
-    queue.getRetentionPolicy(),
+    admin.getMaintenancePolicy(),
+    admin.getRetentionPolicy(),
     readQueueHealth(database),
     // Measured arrival rate for the recommendation engine, over one stitched statistics hour so
     // the reading works whether or not the rollup has materialized the window yet.
@@ -1092,7 +1092,7 @@ const dashboardRetryBucketUpperBounds: Array<number | null> = [
   null,
 ];
 
-type QueueHealthSnapshot = Awaited<ReturnType<Queue["health"]>>;
+type QueueHealthSnapshot = Awaited<ReturnType<Admin["health"]>>;
 
 /** Only the day-window knobs of the policy; the per-pass limits are not operator-facing here. */
 type RetentionDaysKey = {
@@ -1716,7 +1716,7 @@ export async function readDashboardJobDetail(
   database: DashboardDatabase,
   id: string,
   projectDurability: DashboardDurabilityProjector = () => null,
-  queue?: Queue,
+  admin?: Admin,
   canSignal = false,
 ): Promise<DashboardJobDetail | null> {
   const [
@@ -1974,9 +1974,9 @@ export async function readDashboardJobDetail(
   const job = jobRows.rows[0];
   if (!job) return null;
   const state = job.outcome_state ?? job.runtime_state ?? "unknown";
-  const [currentPolicy, health] = queue
+  const [currentPolicy, health] = admin
     ? await Promise.all([
-        queue.concurrencyPolicies([job.queue]).then((policies) => policies[0] ?? null),
+        admin.concurrencyPolicies([job.queue]).then((policies) => policies[0] ?? null),
         // Terminal detail drops live utilization entirely, so only tasks that can still become
         // active need the bounded health aggregates beside their exact persisted policy.
         job.runtime_state === null ? null : readQueueHealth(database),

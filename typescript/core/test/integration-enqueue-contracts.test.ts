@@ -19,7 +19,7 @@ import {
 } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { pool, queue, safeKeyDigest, safeKeyPreview } = createIntegrationTestContext(
+const { admin, pool, queue, safeKeyDigest, safeKeyPreview } = createIntegrationTestContext(
   import.meta.url,
 );
 
@@ -140,7 +140,7 @@ describe("enqueue contracts", () => {
     ).resolves.toMatchObject({ rows: [{ count: 0 }] });
 
     const id = await contractedQueue.enqueue("mail.send", { recipient: "a@example.test" });
-    await expect(contractedQueue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       id,
       contractVersion: "2026-08-10",
       payload: { recipient: "a@example.test" },
@@ -215,7 +215,7 @@ describe("enqueue contracts", () => {
       JobContractValidationError,
     );
     const id = await nextDeploy.enqueue("contract.policy", { two: true });
-    await expect(nextDeploy.getJob(id)).resolves.toMatchObject({ contractVersion: "two" });
+    await expect(admin.getJob(id)).resolves.toMatchObject({ contractVersion: "two" });
 
     const changedDocument = new Queue(pool, "default", {
       contracts: {
@@ -272,12 +272,12 @@ describe("enqueue contracts", () => {
     await worker.runOnce();
     await worker.runOnce();
 
-    await expect(contractedQueue.getJob(invalidId)).resolves.toMatchObject({
+    await expect(admin.getJob(invalidId)).resolves.toMatchObject({
       state: "failed",
       error: { name: "JobContractValidationError" },
       result: null,
     });
-    await expect(contractedQueue.getJob(oversizedId)).resolves.toMatchObject({
+    await expect(admin.getJob(oversizedId)).resolves.toMatchObject({
       state: "failed",
       error: { name: "JobValueSizeLimitError" },
       result: null,
@@ -293,7 +293,7 @@ describe("enqueue contracts", () => {
         JSON.stringify({ total: 10, note: "x".repeat(40) }),
       ]),
     ).rejects.toThrow(/result exceeds its configured size limit/);
-    await expect(contractedQueue.getJob(sqlLimitedId)).resolves.toMatchObject({
+    await expect(admin.getJob(sqlLimitedId)).resolves.toMatchObject({
       state: "active",
       result: null,
     });
@@ -322,9 +322,9 @@ describe("enqueue contracts", () => {
       JSON.stringify({ name: "Error", message: `could not use ${secret}`, stack: secret }),
     ]);
 
-    const snapshot = await contractedQueue.getJob(id);
-    const timeline = await contractedQueue.getJobTimeline(id);
-    const deadLetters = await contractedQueue.listDeadLetters({ type: "contract.failure" });
+    const snapshot = await admin.getJob(id);
+    const timeline = await admin.getJobTimeline(id);
+    const deadLetters = await admin.listDeadLetters({ type: "contract.failure" });
     expect(
       JSON.stringify({ snapshot, timeline, deadLetters }, (_key, value) =>
         typeof value === "bigint" ? value.toString() : value,
@@ -388,13 +388,13 @@ describe("enqueue contracts", () => {
       }),
     ).toBe(true);
 
-    const snapshot = await secondDeployment.getJob(id);
+    const snapshot = await admin.getJob(id);
     expect(snapshot).toMatchObject({
       contractVersion: "1",
       payload: { revision: 1, visible: "payload-visible" },
       result: { ok: true, visible: "result-visible" },
     });
-    const listed = await secondDeployment.listJobs({
+    const listed = await admin.listJobs({
       type: "contract.versioned",
       payload: { include: true },
     });
@@ -450,11 +450,11 @@ describe("enqueue contracts", () => {
       priority: 75,
       payload: { kind: "scheduled", token: "schedule-secret" },
     });
-    await expect(contractedQueue.getJob(id!)).resolves.toMatchObject({
+    await expect(admin.getJob(id!)).resolves.toMatchObject({
       priority: 75,
       payload: { kind: "scheduled" },
     });
-    expect((await contractedQueue.getJob(id!))?.payload).not.toHaveProperty("token");
+    expect((await admin.getJob(id!))?.payload).not.toHaveProperty("token");
   });
 
   it("refuses to turn an existing v1 schema into a mixed installation", async () => {

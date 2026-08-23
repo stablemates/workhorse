@@ -28,7 +28,7 @@ winner without resuming the handler again.
 A delivery before the wait exists is rejected rather than buffered. A timeout, job deadline, or
 cancellation closes the boundary, so replay cannot continue with an invented payload.
 
-`Queue.listSignalWaits()` provides the actionable operator projection. The dashboard uses the same
+`Admin.listSignalWaits()` provides the actionable operator projection. The dashboard uses the same
 public method, but its server replaces browser-supplied attribution with the authenticated actor.
 
 Go applications deliver through `Queue.SendSignal` with `ExternalWaitDelivery`. The returned

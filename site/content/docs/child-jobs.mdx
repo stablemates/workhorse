@@ -42,8 +42,8 @@ make them independently idempotent.
 
 ## Inspect the tree
 
-`Queue.getJob` and `Queue.listJobs` expose `parentJobId` and `childJobIds`.
-`Queue.getChildLineage(jobId)` reads retained edges in either direction, and the dashboard links
+`Admin.getJob` and `Admin.listJobs` expose `parentJobId` and `childJobIds`.
+`Admin.getChildLineage(jobId)` reads retained edges in either direction, and the dashboard links
 parents and children with their names and join state.
 
 ## Next

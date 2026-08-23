@@ -1,4 +1,4 @@
-import type { Queue } from "@workhorse-js/core";
+import type { Admin, Queue } from "@workhorse-js/core";
 import type { Json } from "@workhorse-js/core";
 import type {
   DashboardAuditContext,
@@ -42,10 +42,11 @@ export type DashboardOperatorAction =
     };
 
 export interface DashboardOperatorControllerOptions {
-  /**
-   * Supplies the Queue used for one mutation and owns any host-specific transaction or audit work.
-   */
-  run<T>(action: DashboardOperatorAction, operation: (queue: Queue) => Promise<T>): Promise<T>;
+  /** Supplies the operator clients and owns any host-specific transaction or audit work. */
+  run<T>(
+    action: DashboardOperatorAction,
+    operation: (clients: { queue: Queue; admin: Admin }) => Promise<T>,
+  ): Promise<T>;
   /** Override browser attribution when the host has a trusted configured actor. */
   requestedBy?: string;
 }
@@ -62,36 +63,40 @@ function isoTimestamp(value: Date | string | null): string | null {
 }
 
 /**
- * Build the Queue-backed dashboard mutations shared by embedded and standalone hosts.
+ * Build the dashboard mutations shared by embedded and standalone hosts.
  *
- * The factory owns Queue calls and wire projection. The injected runner owns the host's audit and
+ * The factory owns client calls and wire projection. The injected runner owns the host's audit and
  * transaction boundary, so an embedded application can keep mutation and audit rows atomic while
- * the standalone CLI can use its already-owned Queue directly.
+ * the standalone CLI can use its already-owned clients directly.
  */
 export function createDashboardOperatorControllers(
   options: DashboardOperatorControllerOptions,
 ): DashboardOperatorControllers {
   const requestedBy = (audit: Pick<DashboardAuditContext, "actor">): string =>
     options.requestedBy ?? audit.actor;
+  const adminAudit = (audit: DashboardAuditContext): DashboardAuditContext => ({
+    ...audit,
+    actor: requestedBy(audit),
+  });
 
   return {
     operator: { mode: "writable" },
     queueController: {
       setQueuePaused: (queueName, paused, audit) =>
-        options.run({ kind: "setQueuePaused", queueName, paused, audit }, async (queue) => {
-          if (paused) await queue.pauseQueue(queueName);
-          else await queue.resumeQueue(queueName);
+        options.run({ kind: "setQueuePaused", queueName, paused, audit }, async ({ admin }) => {
+          if (paused) await admin.pauseQueue(queueName, adminAudit(audit));
+          else await admin.resumeQueue(queueName, adminAudit(audit));
           return { paused };
         }),
       purgeQueue: (queueName, audit) =>
-        options.run({ kind: "purgeQueue", queueName, audit }, async (queue) => ({
-          deletedCount: await queue.purgeQueue(queueName),
+        options.run({ kind: "purgeQueue", queueName, audit }, async ({ admin }) => ({
+          deletedCount: await admin.purgeQueue(queueName, adminAudit(audit)),
         })),
     },
     taskController: {
       runTaskNow: (jobId, audit) =>
-        options.run({ kind: "runTaskNow", jobId, audit }, async (queue) => {
-          const result = await queue.runTaskNow(jobId);
+        options.run({ kind: "runTaskNow", jobId, audit }, async ({ admin }) => {
+          const result = await admin.runTaskNow(jobId, adminAudit(audit));
           return {
             status: result.status,
             id: result.jobId,
@@ -100,7 +105,7 @@ export function createDashboardOperatorControllers(
           };
         }),
       cancelTask: (jobId, audit) =>
-        options.run({ kind: "cancelTask", jobId, audit }, async (queue) => {
+        options.run({ kind: "cancelTask", jobId, audit }, async ({ queue }) => {
           const result = await queue.cancel(jobId, {
             requestedBy: requestedBy(audit),
             reason: audit.reason ?? undefined,
@@ -119,7 +124,7 @@ export function createDashboardOperatorControllers(
       signalTask: (jobId, name, payload, idempotencyKey, audit) =>
         options.run(
           { kind: "signalTask", jobId, name, payload, idempotencyKey, audit },
-          async (queue) => {
+          async ({ queue }) => {
             const result = await queue.sendSignal(jobId, name, payload, {
               idempotencyKey,
               requestedBy: requestedBy(audit),
@@ -133,7 +138,7 @@ export function createDashboardOperatorControllers(
       completeHumanWait: (jobId, name, result, idempotencyKey, audit) =>
         options.run(
           { kind: "completeHumanWait", jobId, name, result, idempotencyKey, audit },
-          async (queue) => {
+          async ({ queue }) => {
             const completed = await queue.completeHumanWait(jobId, name, result, {
               idempotencyKey,
               requestedBy: requestedBy(audit),
@@ -149,11 +154,8 @@ export function createDashboardOperatorControllers(
     },
     workerController: {
       setWorkerPaused: (workerId, paused, audit) =>
-        options.run({ kind: "setWorkerPaused", workerId, paused, audit }, async (queue) => {
-          const result = await queue.setWorkerPaused(workerId, paused, {
-            requestedBy: requestedBy(audit),
-            reason: audit.reason,
-          });
+        options.run({ kind: "setWorkerPaused", workerId, paused, audit }, async ({ admin }) => {
+          const result = await admin.setWorkerPaused(workerId, paused, adminAudit(audit));
           if (!result) throw new Error(`Worker ${workerId} is not registered`);
           return { paused: result.paused };
         }),

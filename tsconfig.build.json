@@ -2,6 +2,7 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "rootDir": "typescript/core",
+    "stripInternal": true,
     "tsBuildInfoFile": ".build/core.tsbuildinfo"
   },
   "include": ["typescript/core/src/**/*.ts", "typescript/core/benchmarks/**/*.ts"],

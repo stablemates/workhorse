@@ -52,11 +52,9 @@ const workerQueueDefaults: WorkerQueueApi = {
   heartbeatStatus: unsupportedWorkerQueueOperation,
   expireOwned: unsupportedWorkerQueueOperation,
   acknowledgeCancel: unsupportedWorkerQueueOperation,
-  listCheckpoints: unsupportedWorkerQueueOperation,
+  loadHandlerState: unsupportedWorkerQueueOperation,
   saveCheckpoint: unsupportedWorkerQueueOperation,
-  getProgress: unsupportedWorkerQueueOperation,
   updateProgress: unsupportedWorkerQueueOperation,
-  listWaits: unsupportedWorkerQueueOperation,
   scheduleWait: unsupportedWorkerQueueOperation,
   waitForSignal: unsupportedWorkerQueueOperation,
   waitForHuman: unsupportedWorkerQueueOperation,
@@ -734,7 +732,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
   });
 
   it("counts redrive requests by their durable result", async () => {
-    const { Queue } = await import("../src/queue.js");
+    const { Admin } = await import("../src/admin.js");
     const database: Queryable = {
       query: async <R extends QueryResultRow>() =>
         queryResult([
@@ -749,8 +747,8 @@ describe("Workhorse OpenTelemetry metrics", () => {
         ] as unknown as R[]),
     };
 
-    await new Queue(database).redrive("failed-job", {
-      requestedBy: "operator",
+    await new Admin(database).redrive("failed-job", {
+      actor: "operator",
       reason: "fixed",
       requestId: "request-1",
     });
@@ -765,7 +763,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
   });
 
   it("counts every result from a bulk redrive page", async () => {
-    const { Queue } = await import("../src/queue.js");
+    const { Admin } = await import("../src/admin.js");
     const database: Queryable = {
       query: async <R extends QueryResultRow>() =>
         queryResult([
@@ -792,9 +790,9 @@ describe("Workhorse OpenTelemetry metrics", () => {
         ] as unknown as R[]),
     };
 
-    await new Queue(database).redriveMany(
+    await new Admin(database).redriveMany(
       {},
-      { requestedBy: "operator", reason: "fixed", requestId: "request-2" },
+      { actor: "operator", reason: "fixed", requestId: "request-2" },
     );
     await collect();
 

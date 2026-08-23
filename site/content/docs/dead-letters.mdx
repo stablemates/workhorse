@@ -11,11 +11,11 @@ an audit trail linking the two.
 
 ## List terminal failures
 
-`queue.listDeadLetters(query)` reads a cold failure index that stays separate from the ready and
+`admin.listDeadLetters(query)` reads a cold failure index that stays separate from the ready and
 active indexes. A backlog of a million failures cannot slow workers as they claim jobs.
 
 ```ts
-const page = await queue.listDeadLetters({
+const page = await admin.listDeadLetters({
   queue: "billing",
   errorName: "ProviderTimeout",
   finishedAfter: new Date("2026-08-12T09:00:00Z"),
@@ -33,12 +33,12 @@ cursor pages by immutable finish time and job identity, so pages stay stable whi
 
 ## Redrive one job
 
-`queue.redrive(sourceJobId, request)` requires three things: who asked, why, and a stable request
+`admin.redrive(sourceJobId, request)` requires three things: who asked, why, and a stable request
 ID. Workhorse records attribution; your operator layer must authorize the actor before calling.
 
 ```ts
-const result = await queue.redrive(sourceJobId, {
-  requestedBy: actor.email,
+const result = await admin.redrive(sourceJobId, {
+  actor: actor.email,
   reason: "provider incident resolved",
   requestId: incidentId,
 });
@@ -51,7 +51,7 @@ budget, and execution timeout. It deliberately does not copy attempts, errors, c
 waits, cancellation state, or the old deadline — the new job starts clean.
 
 The source job stays exactly as it failed. `job_redrive` stores the lineage edge, and
-`queue.getRedriveLineage(jobId)` walks the connected graph in either direction, so you can trace
+`admin.getRedriveLineage(jobId)` walks the connected graph in either direction, so you can trace
 a running job back to the failure that spawned it — or forward through repeated redrives.
 
 ## Repeat safely
@@ -66,13 +66,13 @@ become durable payload — operator views still get safe diagnostics.
 
 ## Work through a backlog
 
-`queue.redriveMany(filter, request, options)` processes a bounded page of matching failures in
+`admin.redriveMany(filter, request, options)` processes a bounded page of matching failures in
 stable order. Start with a dry run:
 
 ```ts
-const preview = await queue.redriveMany(
+const preview = await admin.redriveMany(
   { queue: "billing", errorName: "ProviderTimeout" },
-  { requestedBy: actor.email, reason: "provider incident resolved", requestId: incidentId },
+  { actor: actor.email, reason: "provider incident resolved", requestId: incidentId },
   { dryRun: true, limit: 100 },
 );
 console.log(preview.results.length, "eligible");
@@ -85,9 +85,9 @@ across cursor pages:
 ```ts
 let cursor = undefined;
 do {
-  const page = await queue.redriveMany(
+  const page = await admin.redriveMany(
     { queue: "billing", errorName: "ProviderTimeout" },
-    { requestedBy: actor.email, reason: "provider incident resolved", requestId: incidentId },
+    { actor: actor.email, reason: "provider incident resolved", requestId: incidentId },
     { limit: 100, cursor },
   );
   cursor = page.nextCursor ?? undefined;

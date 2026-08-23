@@ -38,11 +38,11 @@ scheduled ──▶ ready ──▶ active ──▶ succeeded
 - `active`: one worker owns the job under a lease and is running its handler.
 - `succeeded`, `failed`, `canceled`: terminal. Result, error, or cancellation envelope is stored.
 
-`Queue.getJob` returns a snapshot with `state`, `currentAttempt`, `result`, and `error`, whichever
+`Admin.getJob` returns a snapshot with `state`, `currentAttempt`, `result`, and `error`, whichever
 side of the split the job is on.
 
 ```ts
-const job = await queue.getJob(jobId);
+const job = await admin.getJob(jobId);
 console.log(job?.state, job?.currentAttempt, job?.result);
 ```
 
@@ -86,10 +86,10 @@ Execution leaves append-only evidence, kept off the dispatch path so audits neve
 claims.
 
 `job_event` records every lifecycle change; `attempt_history` records how each logical attempt
-closed. `Queue.getJobTimeline` merges both into one cursor stream, so you can answer "what happened
+closed. `Admin.getJobTimeline` merges both into one cursor stream, so you can answer "what happened
 to job X" from SQL-backed records rather than log lines.
 
-`job_query` is a separate bounded projection for operator reads. `Queue.listJobs` and the dashboard
+`job_query` is a separate bounded projection for operator reads. `Admin.listJobs` and the dashboard
 page through it across all states without adding broad indexes to `job_runtime`. Both history
 relations are partitioned by day and retired by retention policy, independently of live dispatch.
 

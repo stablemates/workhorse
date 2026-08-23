@@ -45,7 +45,7 @@ The queue response exposes that accepted decision as `payload`, matching signal 
 Go applications complete decisions through `Queue.CompleteHumanWait` with
 `ExternalWaitDelivery`. The result retains the accepted decision and actor.
 
-`Queue.listHumanWaits()` exposes the same paginated projection for custom operator tools. A timeout,
+`Admin.listHumanWaits()` exposes the same paginated projection for custom operator tools. A timeout,
 job deadline, or cancellation closes the decision and makes late completion stale.
 
 ## Next

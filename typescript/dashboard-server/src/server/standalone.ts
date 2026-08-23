@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { isIP } from "node:net";
 import type { DashboardStandaloneModule } from "@workhorse-js/dashboard-contract";
-import { Queue, type Queryable } from "@workhorse-js/core";
+import { Admin, Queue, type Queryable } from "@workhorse-js/core";
 import { createDashboardHost } from "./host.js";
 import { dashboardNodeMiddleware, normalizeDashboardPublicOrigin } from "./node.js";
 import { createDashboardOperatorControllers } from "./operator-controllers.js";
@@ -53,9 +53,10 @@ export const startDashboardServer: DashboardStandaloneModule<Queryable>["startDa
     // Each database gets its own Queue so mutations in one workspace can never reach another.
     const workspaceControls = (workspaceDatabase: Queryable) => {
       const queue = new Queue(workspaceDatabase);
+      const admin = new Admin(workspaceDatabase);
       return options.allowMutations
         ? createDashboardOperatorControllers({
-            run: (_action, operation) => operation(queue),
+            run: (_action, operation) => operation({ queue, admin }),
           })
         : { operator: { mode: "read-only" as const } };
     };

@@ -18,9 +18,8 @@ Two boundaries keep this matrix small:
   fencing, and structured errors (see `protocol/README.md`). Behavior PostgreSQL owns cannot
   diverge between languages, so it has no row here. A language row exists only for behavior a
   client or worker runtime supplies itself.
-- The operator surface runs against the database and serves every language equally. The dashboard
-  can run standalone or inside TypeScript, Python, and Go applications, while schema commands stay
-  in the `workhorse` CLI. It is listed once, not per worker-language capability.
+- PostgreSQL operator capabilities and public SDK reachability are separate tables below. This
+  keeps a shared database capability from implying that every language exposes a matching client.
 
 ## Client (enqueue side)
 
@@ -109,19 +108,34 @@ semantics before any runtime fires a definition.
 | Go worker and module examples             | [WH-236]        | In Review |
 | Go schedule firing                        | [WH-332]        | In Review |
 | Go and Python embedded dashboard backends | [WH-351]        | In Review |
-| TypeScript `Admin` client                 | [WH-355]        | Backlog   |
+| TypeScript `Admin` client                 | [WH-355]        | In Review |
 | Python `Admin` client                     | [WH-356]        | Backlog   |
 | Go `Admin` client                         | [WH-357]        | Backlog   |
 
 The Plane work items own sequencing, blockers, and completion. Update this table when their state
 changes, and update the capability matrices only when repository tests prove the new support.
 
-## Operator reads and controls
+## Operator product capability
 
 PostgreSQL implements every operator read and control, and the standalone or embedded dashboard
 and the `workhorse` CLI invoke them against any database, whatever language enqueued the work.
-That product capability does not vary by language. This table records a narrower fact: which
-language lets application code call the operation through its own public SDK.
+
+| Capability                                 | PostgreSQL | Dashboard | CLI       |
+| ------------------------------------------ | ---------- | --------- | --------- |
+| Job lookup, listing, and timeline          | Supported  | Supported | Supported |
+| Queue health snapshot                      | Supported  | Supported | Supported |
+| Cancellation requests                      | Supported  | Supported | Supported |
+| Queue pause, resume, and purge             | Supported  | Supported | Supported |
+| Dead-letter listing and redrive            | Supported  | Partial   | Supported |
+| Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported |
+| Durable operator worker pause              | Supported  | Supported | Supported |
+
+The dashboard lists dead letters but does not expose redrive as a general mutation, so that row is
+Partial there. PostgreSQL remains the one transition owner for every Supported or Partial cell.
+
+## Public SDK operator surface
+
+This table records which language lets application code call the operation through its public SDK.
 
 | Capability                                 | TypeScript | Python    | Go        |
 | ------------------------------------------ | ---------- | --------- | --------- |
@@ -133,9 +147,8 @@ language lets application code call the operation through its own public SDK.
 | Checkpoint, wait, and human-decision reads | Supported  | Planned   | Planned   |
 | Durable operator worker pause              | Supported  | Planned   | Planned   |
 
-TypeScript exposes these methods on `Queue` today because the CLI and the first dashboard backend
-were written in TypeScript. [WH-355] moves them to a dedicated public `Admin` client and routes the
-CLI and dashboard through it. [WH-356] and [WH-357] add the same `Admin` client to Python and Go,
+TypeScript exposes these methods through the public `Admin` client, and the CLI and dashboard use
+that same path. [WH-356] and [WH-357] add the same `Admin` client to Python and Go,
 and switch their embedded dashboard backends from direct SQL to that client. Until then, Python and
 Go application code reach the operator surface only through the dashboard or the CLI. Redrive is
 not a dashboard action, so it needs the CLI. Cancellation is application-shaped, so every queue

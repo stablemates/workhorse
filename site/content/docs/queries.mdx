@@ -10,11 +10,11 @@ of terminal jobs without slowing a single worker's claim.
 
 ## Read one known job
 
-`queue.getJob(jobId)` joins the job's immutable identity to its runtime or outcome row and
+`admin.getJob(jobId)` joins the job's immutable identity to its runtime or outcome row and
 returns a `JobSnapshot` — or `null` when the identity is unknown or retired.
 
 ```ts
-const snapshot = await queue.getJob(jobId);
+const snapshot = await admin.getJob(jobId);
 
 if (snapshot) {
   console.log(snapshot.state, snapshot.currentAttempt, snapshot.result);
@@ -28,11 +28,11 @@ was cleaned up", so use `getJob` whenever existence is the question.
 
 ## List jobs with bounded payloads
 
-`queue.listJobs(query)` filters by queue, type, states, tags, and creation time. It orders pages
+`admin.listJobs(query)` filters by queue, type, states, tags, and creation time. It orders pages
 newest-first by immutable creation keys and returns a signed cursor for the next call.
 
 ```ts
-const page = await queue.listJobs({
+const page = await admin.listJobs({
   queue: "billing",
   states: ["active", "failed"],
   payload: {
@@ -47,7 +47,7 @@ for (const job of page.items) {
 }
 
 if (page.nextCursor) {
-  const next = await queue.listJobs({
+  const next = await admin.listJobs({
     queue: "billing",
     states: ["active", "failed"],
     payload: { include: true, maxBytes: 4_096, redactKeys: ["cardNumber", "accessToken"] },
@@ -70,11 +70,11 @@ Two rules keep paging honest:
 
 ## Reconstruct what happened
 
-`queue.getJobTimeline(jobId, query)` merges retained `job_event` rows and closed
+`admin.getJobTimeline(jobId, query)` merges retained `job_event` rows and closed
 `attempt_history` rows into one newest-first stream, with its own cursor for long histories.
 
 ```ts
-const timeline = await queue.getJobTimeline(jobId, { limit: 50 });
+const timeline = await admin.getJobTimeline(jobId, { limit: 50 });
 
 for (const entry of timeline.items) {
   if (entry.kind === "event") {
@@ -90,7 +90,7 @@ outcome, and each event carries its details. One caveat: history categories reti
 retention windows, so a known job can have a partial or empty timeline. Absence of timeline is
 never proof of absence of the job.
 
-For the other durable projections, `queue.getCheckpoint`, `listCheckpoints`, `getWait`,
+For the other durable projections, `admin.getCheckpoint`, `listCheckpoints`, `getWait`,
 `listWaits`, and `getProgress` expose checkpoints, durable waits, and progress without
 interpreting them as lifecycle state.
 

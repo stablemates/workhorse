@@ -24,6 +24,7 @@ import {
   type TypeOrmExecutor,
 } from "@workhorse-js/typeorm";
 import {
+  Admin,
   type AdapterNotificationPool,
   EnqueueIdempotencyConflictError,
   QueryError,
@@ -439,7 +440,7 @@ describe.each(integrationProviders)("$name built-package conformance", (provider
       reason: "timestamp conformance",
     });
 
-    const snapshot = await provider.adapter.queue.getJob(jobId);
+    const snapshot = await new Admin(provider.adapter.database).getJob(jobId);
 
     expect(snapshot).not.toBeNull();
     expect(snapshot!.deadlineAt).toBeInstanceOf(Date);
@@ -516,15 +517,16 @@ describe.each(integrationProviders)("$name built-package conformance", (provider
       ),
     ).toBe("failed");
     const request = {
-      requestedBy: `${provider.name}-operator`,
+      actor: `${provider.name}-operator`,
       reason: "conformance",
       requestId: `${provider.name}-redrive-request`,
     };
 
-    await provider.adapter.queue.redrive(sourceJobId, request);
+    const admin = new Admin(provider.adapter.database);
+    await admin.redrive(sourceJobId, request);
 
     await expect(
-      provider.adapter.queue.redrive(sourceJobId, { ...request, reason: "different" }),
+      admin.redrive(sourceJobId, { ...request, reason: "different" }),
     ).rejects.toBeInstanceOf(RedriveIdempotencyConflictError);
   });
 });

@@ -10,6 +10,7 @@ import {
 import { sql } from "drizzle-orm";
 import { Hono } from "hono";
 import {
+  Admin,
   type EnqueueOptions,
   Queue,
   type CancelStatus,
@@ -798,16 +799,13 @@ async function redriveLatestDeadLetter(
       defaultQueue: DEMO_QUEUE,
       queueOptions: DEMO_QUEUE_OPTIONS,
     });
-    const deadLetters = await workhorse.queue.listDeadLetters({ queue: DEMO_QUEUE, limit: 50 });
+    const admin = new Admin(workhorse.database, DEMO_QUEUE, DEMO_QUEUE_OPTIONS);
+    const deadLetters = await admin.listDeadLetters({ queue: DEMO_QUEUE, limit: 50 });
     const candidate = deadLetters.items.find((deadLetter) => deadLetter.redriveCount === 0);
     if (!candidate) {
       throw new Error("No demo dead letter is awaiting redrive; enqueue a terminal failure first");
     }
-    const result = await workhorse.queue.redrive(candidate.jobId, {
-      requestedBy: audit.actor,
-      reason: audit.reason,
-      requestId: audit.requestId,
-    });
+    const result = await admin.redrive(candidate.jobId, audit);
     if (!result.targetJobId) {
       throw new Error(`Redrive of ${candidate.jobId} was refused: ${result.status}`);
     }
@@ -1069,7 +1067,10 @@ export function createLocalOperatorControllers(database: DemoDatabase) {
           defaultQueue: DEMO_QUEUE,
           queueOptions: DEMO_QUEUE_OPTIONS,
         });
-        const result = await operation(workhorse.queue);
+        const result = await operation({
+          queue: workhorse.queue,
+          admin: new Admin(workhorse.database, DEMO_QUEUE, DEMO_QUEUE_OPTIONS),
+        });
         const status = operatorAuditStatus(action, result);
         const audit = action.audit;
         await transaction.execute(sql`
@@ -1624,15 +1625,16 @@ export async function seedDemoData(database: DemoDatabase) {
           }
           if (example.seedTransition !== "fail") {
             const request = {
-              requestedBy: "demo-seed",
+              actor: "demo-seed",
               reason: `Show redrive lineage for ${example.scenario}`,
               requestId: `feature-showcase:${example.scenario}`,
             };
-            const redrive = await isolated.queue.redrive(sourceJobId, request);
+            const isolatedAdmin = new Admin(isolated.database, queue, DEMO_QUEUE_OPTIONS);
+            const redrive = await isolatedAdmin.redrive(sourceJobId, request);
             if (!redrive.targetJobId) throw new Error(`Redrive did not create ${example.scenario}`);
             jobIds.push(redrive.targetJobId);
             if (example.seedTransition === "fail-and-redrive-replay") {
-              const replay = await isolated.queue.redrive(sourceJobId, request);
+              const replay = await isolatedAdmin.redrive(sourceJobId, request);
               if (replay.status !== "replayed" || replay.targetJobId !== redrive.targetJobId) {
                 throw new Error("Expected idempotent showcase redrive replay");
               }
@@ -1859,7 +1861,11 @@ export async function seedDemoData(database: DemoDatabase) {
       queueOptions: DEMO_QUEUE_OPTIONS,
     });
     await workhorse.queue.recoverExpired();
-    const expiredDeadline = await workhorse.queue.getJob(representativeSeed.expiredDeadlineId);
+    const expiredDeadline = await new Admin(
+      workhorse.database,
+      DEMO_QUEUE,
+      DEMO_QUEUE_OPTIONS,
+    ).getJob(representativeSeed.expiredDeadlineId);
     if (expiredDeadline?.state !== "failed") {
       throw new Error("Expected the representative expired deadline to be materialized");
     }

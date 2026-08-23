@@ -1,4 +1,4 @@
-import { Queue, type Queryable } from "../../../core/src/index.js";
+import { Admin, Queue, type Queryable } from "../../../core/src/index.js";
 import { createDashboardHost } from "../../src/server/host.js";
 import { createDashboardOperatorControllers } from "../../src/server/operator-controllers.js";
 import type {
@@ -26,8 +26,9 @@ export function createDashboardConformanceTransport(
   harness: DashboardConformanceHarness,
 ): DashboardConformanceTransport {
   const queue = new Queue(database);
+  const admin = new Admin(database);
   const controllers = createDashboardOperatorControllers({
-    run: (_action, operation) => operation(queue),
+    run: (_action, operation) => operation({ queue, admin }),
   });
   const settingsController: DashboardSettingsController = {
     async overrideMaintenancePolicy(definition) {

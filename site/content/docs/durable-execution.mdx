@@ -94,7 +94,7 @@ The database defends these rules explicitly:
   bound raises `WaitLimitExceededError`.
 
 For inspection, `HandlerContext.getCheckpoint` and `getWait` read one boundary from inside a
-handler, and `Queue.listCheckpoints` and `Queue.listWaits` expose the retained evidence to
+handler, and `Admin.listCheckpoints` and `Admin.listWaits` expose the retained evidence to
 operator code.
 
 ## Wait for an external result

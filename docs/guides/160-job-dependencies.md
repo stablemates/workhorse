@@ -55,10 +55,10 @@ await queue.enqueue(
 The dependent has the `blocked` state. It has a durable `job_runtime` row, but claim and promotion
 cannot see it because blocked work is absent from their indexes.
 
-`Queue.getJob` and `Queue.listJobs` return its `prerequisiteJobIds` and `dependencyPolicy`. They also return
+`Admin.getJob` and `Admin.listJobs` return its `prerequisiteJobIds` and `dependencyPolicy`. They also return
 `blockedReason: "prerequisite_pending"` while it remains blocked.
 
-Use `Queue.getDependencyLineage(jobId)` when you need both directions. It returns edges where the
+Use `Admin.getDependencyLineage(jobId)` when you need both directions. It returns edges where the
 job is a prerequisite or a dependent, including each policy, resolution, and release time. The
 result says when more edges exist beyond a caller-selected response limit. Each job accepts a
 bounded number of prerequisites and dependents, so the default response covers its complete direct

@@ -30,7 +30,7 @@ worker.handle("catalog.import", async (payload: { source: string }, ctx) => {
 ```
 
 `HandlerContext.getProgress` returns the latest retained value from inside a handler. Outside
-one, `Queue.getProgress` reads it by job ID, and a custom runtime can write through
+one, `Admin.getProgress` reads it by job ID, and a custom runtime can write through
 `Queue.updateProgress` with the claimed job and worker identity. The
 [dashboard](/docs/dashboard) renders the value live.
 

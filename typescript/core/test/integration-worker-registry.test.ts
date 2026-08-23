@@ -5,7 +5,7 @@ import { InjectedCrashError, type MaintenancePhaseResult, Queue, Worker } from "
 import { Pool } from "pg";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { databaseUrl, deferred, pool, queue } = createIntegrationTestContext(import.meta.url);
+const { admin, databaseUrl, deferred, pool, queue } = createIntegrationTestContext(import.meta.url);
 
 describe("worker registry", () => {
   it("claims configured queues through one worker identity and shared slot budget", async () => {
@@ -179,7 +179,7 @@ describe("worker registry", () => {
   it("applies an operator pause written to PostgreSQL by another process", async () => {
     // The pause is written through a separate Queue instance holding no reference to the worker
     // object, which is exactly the situation of a dashboard running outside the worker process.
-    const operatorQueue = new Queue(pool);
+    const operatorQueue = admin;
     const handled: number[] = [];
     const worker = new Worker(queue, {
       workerId: "registry-remote-pause",
@@ -199,8 +199,9 @@ describe("worker registry", () => {
 
     await expect(
       operatorQueue.setWorkerPaused("registry-remote-pause", true, {
-        requestedBy: "operator",
+        actor: "operator",
         reason: "rolling deploy",
+        requestId: randomUUID(),
       }),
     ).resolves.toMatchObject({ paused: true, pausedBy: "operator", reason: "rolling deploy" });
     await vi.waitFor(() => expect(worker.isPaused()).toBe(true));
@@ -218,7 +219,9 @@ describe("worker registry", () => {
     expect(worker.isPaused()).toBe(true);
 
     await operatorQueue.setWorkerPaused("registry-remote-pause", false, {
-      requestedBy: "operator",
+      actor: "operator",
+      reason: "rolling deploy complete",
+      requestId: randomUUID(),
     });
     await vi.waitFor(() => expect(handled).toEqual([1]));
     expect(worker.runtimeState()).toMatchObject({ paused: false, remotelyPaused: false });

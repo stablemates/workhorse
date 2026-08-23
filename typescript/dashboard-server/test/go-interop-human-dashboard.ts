@@ -4,6 +4,7 @@ import type { RouterClient } from "@orpc/server";
 import { Pool } from "pg";
 
 import { Queue } from "../../core/src/queue.js";
+import { Admin } from "../../core/src/admin.js";
 import { createDashboardHost } from "../src/server/host.js";
 import { createDashboardOperatorControllers } from "../src/server/operator-controllers.js";
 import type { DashboardRouter } from "../src/server/router.js";
@@ -16,6 +17,7 @@ if (databaseUrl === undefined || jobId === undefined) {
 const pool = new Pool({ connectionString: databaseUrl });
 try {
   const queue = new Queue(pool);
+  const admin = new Admin(pool);
   const host = createDashboardHost({
     database: pool,
     path: "/",
@@ -23,7 +25,9 @@ try {
       request.headers.get("authorization") === "Bearer valid"
         ? { actor: "dashboard-go-interop" }
         : false,
-    ...createDashboardOperatorControllers({ run: (_action, operation) => operation(queue) }),
+    ...createDashboardOperatorControllers({
+      run: (_action, operation) => operation({ queue, admin }),
+    }),
   });
   const client: RouterClient<DashboardRouter> = createORPCClient(
     new RPCLink({

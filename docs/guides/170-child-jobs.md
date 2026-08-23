@@ -85,8 +85,8 @@ Retention keeps the parent-child record while either side still needs it. A live
 terminal parent, and cleanup removes the old tree only after every linked outcome has crossed its
 configured evidence window.
 
-`Queue.getJob` and `Queue.listJobs` expose `parentJobId` and `childJobIds`. Use
-`Queue.getChildLineage(jobId)` for retained edges in either direction. The dashboard task detail
+`Admin.getJob` and `Admin.listJobs` expose `parentJobId` and `childJobIds`. Use
+`Admin.getChildLineage(jobId)` for retained edges in either direction. The dashboard task detail
 shows the same parent, child, name, type, and join state. Related ids open that task in the drawer.
 For a parent, the detail also summarizes how many retained child results it has joined.
 

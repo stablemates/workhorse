@@ -4,7 +4,7 @@ import { extname, join, normalize } from "node:path";
 import { SeverityNumber, logs } from "@opentelemetry/api-logs";
 import { RPCHandler } from "@orpc/server/fetch";
 import type { DashboardSingleAdminOptions } from "@workhorse-js/dashboard-contract";
-import { assertSchemaCompatible, Queue, type Queryable } from "@workhorse-js/core";
+import { Admin, assertSchemaCompatible, Queue, type Queryable } from "@workhorse-js/core";
 import type { MaintenanceLoopCadences } from "../wire.js";
 import { dashboardAssetsDirectory } from "./assets.js";
 import { createSingleAdminAuthentication } from "./authentication.js";
@@ -137,6 +137,7 @@ interface HostWorkspace {
   queryable: Queryable;
   database: ReturnType<typeof dashboardDatabase>;
   queue: Queue;
+  admin: Admin;
   environment: string;
   configuredWorkers: readonly string[];
   maintenanceLoops: MaintenanceLoopCadences;
@@ -257,8 +258,9 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
     basePath: name === null ? path : `${path}/${name}`,
     queryable: workspace.database,
     database: dashboardDatabase(workspace.database),
-    // Queue-backed policy and wait reads share the dashboard's caller-owned connection.
+    // Queue and Admin share the dashboard's caller-owned connection.
     queue: new Queue(workspace.database),
+    admin: new Admin(workspace.database),
     environment: workspace.environment ?? options.environment ?? "unknown",
     configuredWorkers: workspace.configuredWorkers ?? options.configuredWorkers ?? [],
     maintenanceLoops: workspace.maintenanceLoops ??
@@ -429,6 +431,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
           context: {
             database: workspace.database,
             queue: workspace.queue,
+            admin: workspace.admin,
             configuredWorkers: workspace.configuredWorkers,
             environment: workspace.environment,
             maintenanceLoops: workspace.maintenanceLoops,

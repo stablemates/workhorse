@@ -1,8 +1,4 @@
-import { expectOneRow } from "./errors.js";
 import type {
-  BulkRedrivePage,
-  BulkRedriveOptions,
-  ChildLineage,
   ChildJobOptions,
   ChildJobRequest,
   CancellationRequest,
@@ -16,22 +12,12 @@ import type {
   RateLimitPolicy,
   RateLimitPolicyDefinition,
   RateLimitStatus,
-  DeadLetterFilter,
-  DeadLetterPage,
-  DeadLetterQuery,
-  DependencyLineage,
   EnqueueOptions,
   EnqueueRequest,
   EnqueueResult,
   ExpireOwnedStatus,
-  JobListPage,
-  JobListQuery,
   JobCheckpoint,
   JobProgress,
-  JobSnapshot,
-  JobTimelinePage,
-  JobTimelineQuery,
-  JobWait,
   HeartbeatStatus,
   Json,
   MaintenancePolicy,
@@ -40,19 +26,14 @@ import type {
   Queryable,
   QueueOptions,
   QueueHealth,
-  RedriveLineage,
-  RedriveRequest,
-  RedriveResult,
   RetentionPolicy,
   RetentionPolicyDefinition,
   RetentionPolicyImpact,
   RetentionPolicySetting,
-  WorkerPauseResult,
   WorkerRegistration,
-  WorkerRegistryEntry,
 } from "./types.js";
-import { MAX_JOB_QUERY_PAGE_SIZE } from "./types.js";
-import { logInfo, type QueueMetricSnapshot } from "./telemetry.js";
+import type { QueueMetricSnapshot } from "./telemetry.js";
+import type { WorkerHandlerState } from "./worker.js";
 import {
   subscribeToJobNotifications,
   supportsJobNotifications,
@@ -192,25 +173,8 @@ export type {
   ExternalWaitListOptions,
 };
 export type { ScheduleDefinition, ScheduleJobDefinition, StoredSchedule };
-import { nullableRowTimestamp } from "./queue/row-mapping.js";
 
 export { errorForTelemetry };
-
-export type RunTaskNowStatus =
-  | "released"
-  | "already_ready"
-  | "not_scheduled"
-  | "waiting"
-  | "not_found";
-
-export interface RunTaskNowResult {
-  status: RunTaskNowStatus;
-  jobId: string;
-  state: string | null;
-  runAt: Date | null;
-}
-
-import { MAX_REDRIVE_BATCH_SIZE } from "./types.js";
 
 /**
  * Thin TypeScript facade over the versioned PostgreSQL protocol.
@@ -283,18 +247,6 @@ export class Queue {
     return this.modules.queueAdministration.promote(limit);
   }
 
-  async pauseQueue(queueName = this.defaultQueue): Promise<void> {
-    return this.modules.queueAdministration.pauseQueue(queueName);
-  }
-
-  async resumeQueue(queueName = this.defaultQueue): Promise<void> {
-    return this.modules.queueAdministration.resumeQueue(queueName);
-  }
-
-  async purgeQueue(queueName = this.defaultQueue): Promise<number> {
-    return this.modules.queueAdministration.purgeQueue(queueName);
-  }
-
   /**
    * Announce or refresh this worker's registration and read back the operator-requested pause flag.
    *
@@ -313,26 +265,6 @@ export class Queue {
   /** Remove one worker registration. A killed worker instead ages out of the fleet view. */
   async deregisterWorker(workerId: string): Promise<boolean> {
     return this.modules.workerRegistry.deregisterWorker(workerId);
-  }
-
-  /**
-   * Request or clear an operator pause for one registered worker.
-   *
-   * `requestedBy` and `reason` are bounded audit attribution rather than authorization. The pause
-   * is cooperative: the worker stops claiming when it next refreshes its registration, and any
-   * in-flight handler runs to completion. Returns null when the worker is not registered.
-   */
-  async setWorkerPaused(
-    workerId: string,
-    paused: boolean,
-    options: { requestedBy?: string; reason?: string } = {},
-  ): Promise<WorkerPauseResult | null> {
-    return this.modules.workerRegistry.setWorkerPaused(workerId, paused, options);
-  }
-
-  /** List every registered worker, most recently seen first. */
-  async listWorkers(): Promise<WorkerRegistryEntry[]> {
-    return this.modules.workerRegistry.listWorkers();
   }
 
   /** Drop registrations whose process stopped heartbeating longer ago than the given window. */
@@ -526,67 +458,8 @@ export class Queue {
     return this.modules.cronSchedules.fireDueSchedules(namespaces, now, catchupLimit);
   }
 
-  async runTaskNow(jobId: string): Promise<RunTaskNowResult> {
-    const result = await this.database.query<{
-      status: RunTaskNowStatus;
-      state: string | null;
-      run_at: Date | string | null;
-    }>("SELECT status, state, run_at FROM workhorse.run_task_now_v1($1::uuid)", [jobId]);
-    const row = expectOneRow(result, "workhorse.run_task_now_v1");
-    logInfo("workhorse.job.run_now_requested", "Immediate job run requested", {
-      "workhorse.job.id": jobId,
-      "workhorse.job.state": row.state ?? "not_found",
-      "workhorse.operation.status": row.status,
-    });
-    return {
-      status: row.status,
-      jobId,
-      state: row.state,
-      runAt: nullableRowTimestamp(row.run_at, "run_at"),
-    };
-  }
-
   async cancel(jobId: string, request: CancellationRequest = {}): Promise<CancelResult> {
     return this.modules.claimLeaseFence.cancel(jobId, request);
-  }
-
-  async listJobs(query: JobListQuery = {}): Promise<JobListPage> {
-    return this.modules.operatorReads.listJobs(query);
-  }
-
-  async getJobTimeline(jobId: string, query: JobTimelineQuery = {}): Promise<JobTimelinePage> {
-    return this.modules.operatorReads.getJobTimeline(jobId, query);
-  }
-
-  async listDeadLetters(query: DeadLetterQuery = {}): Promise<DeadLetterPage> {
-    return this.modules.operatorReads.listDeadLetters(query);
-  }
-
-  async redrive(sourceJobId: string, request: RedriveRequest): Promise<RedriveResult> {
-    return this.modules.operatorReads.redrive(sourceJobId, request);
-  }
-
-  async redriveMany(
-    filter: DeadLetterFilter,
-    request: RedriveRequest,
-    options: BulkRedriveOptions = {},
-  ): Promise<BulkRedrivePage> {
-    return this.modules.operatorReads.redriveMany(filter, request, options);
-  }
-
-  async getRedriveLineage(jobId: string, limit = MAX_REDRIVE_BATCH_SIZE): Promise<RedriveLineage> {
-    return this.modules.operatorReads.getRedriveLineage(jobId, limit);
-  }
-
-  async getDependencyLineage(
-    jobId: string,
-    limit = MAX_JOB_QUERY_PAGE_SIZE,
-  ): Promise<DependencyLineage> {
-    return this.modules.operatorReads.getDependencyLineage(jobId, limit);
-  }
-
-  async getChildLineage(jobId: string, limit = MAX_JOB_QUERY_PAGE_SIZE): Promise<ChildLineage> {
-    return this.modules.operatorReads.getChildLineage(jobId, limit);
   }
 
   async claim<TPayload extends Json = Json>(
@@ -626,17 +499,24 @@ export class Queue {
     return this.modules.claimLeaseFence.acknowledgeCancel(job, workerId);
   }
 
-  async getCheckpoint<TValue extends Json = Json>(
+  /** Load one retained evidence projection after a worker claim. */
+  async loadHandlerState<TKey extends keyof WorkerHandlerState>(
     jobId: string,
-    name: string,
-  ): Promise<JobCheckpoint<TValue> | null> {
-    return this.modules.checkpointsProgressWaits.getCheckpoint<TValue>(jobId, name);
-  }
-
-  async listCheckpoints<TValue extends Json = Json>(
-    jobId: string,
-  ): Promise<JobCheckpoint<TValue>[]> {
-    return this.modules.checkpointsProgressWaits.listCheckpoints<TValue>(jobId);
+    projection: TKey,
+  ): Promise<WorkerHandlerState[TKey]> {
+    if (projection === "checkpoints") {
+      return (await this.modules.checkpointsProgressWaits.listCheckpoints(
+        jobId,
+      )) as WorkerHandlerState[TKey];
+    }
+    if (projection === "progress") {
+      return (await this.modules.checkpointsProgressWaits.getProgress(
+        jobId,
+      )) as WorkerHandlerState[TKey];
+    }
+    return (await this.modules.checkpointsProgressWaits.listWaits(
+      jobId,
+    )) as WorkerHandlerState[TKey];
   }
 
   async saveCheckpoint<TValue extends Json>(
@@ -648,26 +528,12 @@ export class Queue {
     return this.modules.checkpointsProgressWaits.saveCheckpoint(job, workerId, name, value);
   }
 
-  async getProgress<TValue extends Json = Json>(
-    jobId: string,
-  ): Promise<JobProgress<TValue> | null> {
-    return this.modules.checkpointsProgressWaits.getProgress<TValue>(jobId);
-  }
-
   async updateProgress<TValue extends Json>(
     job: ClaimedJob,
     workerId: string,
     value: TValue,
   ): Promise<JobProgress<TValue>> {
     return this.modules.checkpointsProgressWaits.updateProgress(job, workerId, value);
-  }
-
-  async getWait(jobId: string, name: string): Promise<JobWait | null> {
-    return this.modules.checkpointsProgressWaits.getWait(jobId, name);
-  }
-
-  async listWaits(jobId: string): Promise<JobWait[]> {
-    return this.modules.checkpointsProgressWaits.listWaits(jobId);
   }
 
   async scheduleWait(
@@ -686,10 +552,6 @@ export class Queue {
     options: ExternalWaitOptions = {},
   ): Promise<WaitForSignalResult<TPayload>> {
     return this.modules.signals.waitForSignal<TPayload>(job, workerId, name, options);
-  }
-
-  async listSignalWaits(options: ExternalWaitListOptions = {}): Promise<SignalWaitPage> {
-    return this.modules.signals.listSignalWaits(options);
   }
 
   async sendSignal<TPayload extends Json>(
@@ -715,12 +577,6 @@ export class Queue {
       context,
       options,
     );
-  }
-
-  async listHumanWaits<TContext extends Json = Json>(
-    options: ExternalWaitListOptions = {},
-  ): Promise<HumanWaitPage<TContext>> {
-    return this.modules.humanWaits.listHumanWaits<TContext>(options);
   }
 
   async completeHumanWait<TResult extends Json>(
@@ -785,10 +641,6 @@ export class Queue {
 
   async recoverExpired(limit = 100, retryDelayMs?: number): Promise<number> {
     return this.modules.claimLeaseFence.recoverExpired(limit, retryDelayMs);
-  }
-
-  async getJob<TResult extends Json = Json>(id: string): Promise<JobSnapshot<TResult> | null> {
-    return this.modules.operatorReads.getJob<TResult>(id);
   }
 
   async health(): Promise<QueueHealth> {
