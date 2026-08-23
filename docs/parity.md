@@ -100,17 +100,17 @@ semantics before any runtime fires a definition.
 
 | Deliverable                               | Plane work item | State     |
 | ----------------------------------------- | --------------- | --------- |
-| Synchronous Python worker                 | [WH-214]        | In Review |
-| Asynchronous Python worker                | [WH-312]        | In Review |
-| Python schedule firing                    | [WH-309]        | In Review |
-| Python SDK release examples               | [WH-313]        | In Review |
-| Go transactional enqueue client           | [WH-228]        | In Review |
-| Go worker and module examples             | [WH-236]        | In Review |
-| Go schedule firing                        | [WH-332]        | In Review |
-| Go and Python embedded dashboard backends | [WH-351]        | In Review |
+| Synchronous Python worker                 | [WH-214]        | Done      |
+| Asynchronous Python worker                | [WH-312]        | Done      |
+| Python schedule firing                    | [WH-309]        | Done      |
+| Python SDK release examples               | [WH-313]        | Done      |
+| Go transactional enqueue client           | [WH-228]        | Done      |
+| Go worker and module examples             | [WH-236]        | Done      |
+| Go schedule firing                        | [WH-332]        | Done      |
+| Go and Python embedded dashboard backends | [WH-351]        | Done      |
 | TypeScript `Admin` client                 | [WH-355]        | In Review |
-| Python `Admin` client                     | [WH-356]        | Backlog   |
-| Go `Admin` client                         | [WH-357]        | Backlog   |
+| Python `Admin` client                     | [WH-356]        | Todo      |
+| Go `Admin` client                         | [WH-357]        | Todo      |
 
 The Plane work items own sequencing, blockers, and completion. Update this table when their state
 changes, and update the capability matrices only when repository tests prove the new support.
