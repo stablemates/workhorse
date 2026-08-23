@@ -39,6 +39,12 @@
     "human-tokens",
     "retention-maintenance"
   ],
+  "contractSchemaProfile": {
+    "dialect": "https://json-schema.org/draft/2020-12/schema",
+    "formats": "annotation",
+    "references": "bundled-local-only",
+    "fixture": "contracts.json"
+  },
   "runtimeCoverage": [
     "batch-handling",
     "durable-wait-suspension",
@@ -63,6 +69,16 @@
       "name": "queue_health_v1",
       "arity": 1,
       "contract": "SELECT workhorse.queue_health_v1($1::timestamptz) AS snapshot"
+    },
+    {
+      "name": "sync_contract_definitions_v1",
+      "arity": 1,
+      "contract": "SELECT workhorse.sync_contract_definitions_v1($1::jsonb)"
+    },
+    {
+      "name": "get_contract_definition_v1",
+      "arity": 2,
+      "contract": "SELECT (definition).* FROM workhorse.get_contract_definition_v1($1::text, $2::text) definition"
     },
     {
       "name": "enqueue_many_v1",

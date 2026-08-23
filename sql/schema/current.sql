@@ -1516,6 +1516,56 @@ CREATE OR REPLACE TRIGGER attempt_history_job_exists
 
 -- Declarative schedules are synchronized from application code and evaluated by worker processes.
 -- Payloads, occurrence ownership, and queue semantics remain owned by the Workhorse protocol.
+CREATE TABLE IF NOT EXISTS workhorse.contract_definition (
+  job_type text NOT NULL CHECK (job_type <> ''),
+  version text NOT NULL CHECK (char_length(version) BETWEEN 1 AND 100),
+  schema jsonb NOT NULL CHECK (
+    jsonb_typeof(schema) = 'object'
+    AND jsonb_typeof(schema->'payload') IN ('object', 'boolean')
+    AND jsonb_typeof(schema->'result') IN ('object', 'boolean')
+  ),
+  payload_max_bytes integer NOT NULL DEFAULT 1048576 CHECK (
+    payload_max_bytes BETWEEN 1 AND 16777216
+  ),
+  result_max_bytes integer NOT NULL DEFAULT 1048576 CHECK (
+    result_max_bytes BETWEEN 1 AND 16777216
+  ),
+  payload_redact_keys text[] NOT NULL DEFAULT '{}'
+    CHECK (workhorse.valid_contract_redact_keys_v1(payload_redact_keys)),
+  result_redact_keys text[] NOT NULL DEFAULT '{}'
+    CHECK (workhorse.valid_contract_redact_keys_v1(result_redact_keys)),
+  source text NOT NULL DEFAULT 'application' CHECK (source IN ('application', 'operator')),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (job_type, version)
+);
+
+CREATE OR REPLACE FUNCTION workhorse.reject_contract_definition_mutation_v1()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RAISE EXCEPTION 'contract documents are immutable; publish a new version'
+    USING ERRCODE = '55000';
+END;
+$$;
+CREATE OR REPLACE TRIGGER contract_definition_immutable
+  BEFORE UPDATE OR DELETE ON workhorse.contract_definition
+  FOR EACH ROW EXECUTE FUNCTION workhorse.reject_contract_definition_mutation_v1();
+
+-- Contract documents never change after insertion. This separate row selects the version for new
+-- jobs and records whether application sync or an operator owns that selection under ADR 0020.
+CREATE TABLE IF NOT EXISTS workhorse.contract_policy (
+  job_type text PRIMARY KEY CHECK (job_type <> ''),
+  current_version text NOT NULL,
+  application_current_version text NOT NULL,
+  operator_override boolean NOT NULL DEFAULT false,
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  FOREIGN KEY (job_type, current_version)
+    REFERENCES workhorse.contract_definition(job_type, version),
+  FOREIGN KEY (job_type, application_current_version)
+    REFERENCES workhorse.contract_definition(job_type, version)
+);
+
 CREATE TABLE IF NOT EXISTS workhorse.schedule_definition (
   namespace text NOT NULL CHECK (namespace <> ''),
   schedule_name text NOT NULL CHECK (schedule_name <> ''),
@@ -3628,6 +3678,163 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION workhorse.sync_contract_definitions_v1(p_definitions jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF p_definitions IS NULL OR jsonb_typeof(p_definitions) <> 'array' THEN
+    RAISE EXCEPTION 'contract definitions must be a JSON array';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+      FROM jsonb_array_elements(p_definitions) definition
+     WHERE jsonb_typeof(definition) <> 'object'
+        OR COALESCE(definition->>'jobType', '') = ''
+        OR char_length(COALESCE(definition->>'currentVersion', '')) NOT BETWEEN 1 AND 100
+        OR jsonb_typeof(definition->'versions') <> 'object'
+        OR NOT (definition->'versions' ? (definition->>'currentVersion'))
+  ) THEN
+    RAISE EXCEPTION 'each contract requires a jobType, currentVersion, and matching versions object';
+  END IF;
+  IF (
+    SELECT count(*) FROM jsonb_array_elements(p_definitions)
+  ) <> (
+    SELECT count(DISTINCT definition->>'jobType')
+      FROM jsonb_array_elements(p_definitions) definition
+  ) THEN
+    RAISE EXCEPTION 'contract job types must be unique';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+      FROM jsonb_array_elements(p_definitions) definition
+      CROSS JOIN LATERAL jsonb_each(definition->'versions') version
+     WHERE char_length(version.key) NOT BETWEEN 1 AND 100
+        OR jsonb_typeof(version.value) <> 'object'
+        OR jsonb_typeof(COALESCE(version.value->'payloadSchema', 'true'::jsonb))
+             NOT IN ('object', 'boolean')
+        OR jsonb_typeof(COALESCE(version.value->'resultSchema', 'true'::jsonb))
+             NOT IN ('object', 'boolean')
+  ) THEN
+    RAISE EXCEPTION 'contract versions require valid names and object or boolean schemas';
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:contracts', 0));
+
+  IF EXISTS (
+    SELECT 1
+      FROM jsonb_array_elements(p_definitions) definition
+      CROSS JOIN LATERAL jsonb_each(definition->'versions') version
+      JOIN workhorse.contract_definition existing
+        ON existing.job_type = definition->>'jobType' AND existing.version = version.key
+     WHERE ROW(
+       existing.schema,
+       existing.payload_max_bytes,
+       existing.result_max_bytes,
+       existing.payload_redact_keys,
+       existing.result_redact_keys
+     ) IS DISTINCT FROM ROW(
+       jsonb_build_object(
+         'payload', COALESCE(version.value->'payloadSchema', 'true'::jsonb),
+         'result', COALESCE(version.value->'resultSchema', 'true'::jsonb)
+       ),
+       COALESCE((version.value->>'maxPayloadBytes')::integer, 1048576),
+       COALESCE((version.value->>'maxResultBytes')::integer, 1048576),
+       ARRAY(SELECT redact_key FROM jsonb_array_elements_text(
+         COALESCE(version.value->'sensitivePayloadKeys', '[]'::jsonb)
+       ) AS payload_keys(redact_key) ORDER BY redact_key COLLATE "C"),
+       ARRAY(SELECT redact_key FROM jsonb_array_elements_text(
+         COALESCE(version.value->'sensitiveResultKeys', '[]'::jsonb)
+       ) AS result_keys(redact_key) ORDER BY redact_key COLLATE "C")
+     )
+  ) THEN
+    RAISE EXCEPTION 'contract documents are immutable; publish a new version';
+  END IF;
+
+  INSERT INTO workhorse.contract_definition(
+    job_type, version, schema, payload_max_bytes, result_max_bytes,
+    payload_redact_keys, result_redact_keys, source
+  )
+  SELECT definition->>'jobType', version.key,
+         jsonb_build_object(
+           'payload', COALESCE(version.value->'payloadSchema', 'true'::jsonb),
+           'result', COALESCE(version.value->'resultSchema', 'true'::jsonb)
+         ),
+         COALESCE((version.value->>'maxPayloadBytes')::integer, 1048576),
+         COALESCE((version.value->>'maxResultBytes')::integer, 1048576),
+         ARRAY(SELECT redact_key FROM jsonb_array_elements_text(
+           COALESCE(version.value->'sensitivePayloadKeys', '[]'::jsonb)
+         ) AS payload_keys(redact_key) ORDER BY redact_key COLLATE "C"),
+         ARRAY(SELECT redact_key FROM jsonb_array_elements_text(
+           COALESCE(version.value->'sensitiveResultKeys', '[]'::jsonb)
+         ) AS result_keys(redact_key) ORDER BY redact_key COLLATE "C"),
+         'application'
+    FROM jsonb_array_elements(p_definitions) definition
+    CROSS JOIN LATERAL jsonb_each(definition->'versions') version
+  ON CONFLICT (job_type, version) DO NOTHING;
+
+  INSERT INTO workhorse.contract_policy AS policy(
+    job_type, current_version, application_current_version, operator_override
+  )
+  SELECT definition->>'jobType', definition->>'currentVersion',
+         definition->>'currentVersion', false
+    FROM jsonb_array_elements(p_definitions) definition
+  ON CONFLICT (job_type) DO UPDATE
+    SET current_version = CASE WHEN policy.operator_override
+          THEN policy.current_version ELSE EXCLUDED.current_version END,
+        application_current_version = EXCLUDED.application_current_version,
+        updated_at = clock_timestamp();
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.get_contract_definition_v1(
+  p_job_type text, p_version text DEFAULT NULL
+) RETURNS SETOF workhorse.contract_definition
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT definition
+    FROM workhorse.contract_definition definition
+    LEFT JOIN workhorse.contract_policy policy ON policy.job_type = definition.job_type
+   WHERE definition.job_type = p_job_type
+     AND definition.version = COALESCE(p_version, policy.current_version);
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.override_contract_version_v1(
+  p_job_type text, p_version text
+) RETURNS workhorse.contract_policy
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_policy workhorse.contract_policy;
+BEGIN
+  UPDATE workhorse.contract_policy policy
+     SET current_version = p_version, operator_override = true,
+         updated_at = clock_timestamp()
+   WHERE policy.job_type = p_job_type
+  RETURNING policy.* INTO v_policy;
+  IF NOT FOUND THEN RAISE EXCEPTION 'contract policy does not exist for %', p_job_type; END IF;
+  RETURN v_policy;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.revert_contract_version_v1(p_job_type text)
+RETURNS workhorse.contract_policy
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_policy workhorse.contract_policy;
+BEGIN
+  UPDATE workhorse.contract_policy policy
+     SET current_version = application_current_version, operator_override = false,
+         updated_at = clock_timestamp()
+   WHERE policy.job_type = p_job_type
+  RETURNING policy.* INTO v_policy;
+  IF NOT FOUND THEN RAISE EXCEPTION 'contract policy does not exist for %', p_job_type; END IF;
+  RETURN v_policy;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.sync_schedule_definitions_v1(
   p_namespace text, p_definitions jsonb, p_prune boolean DEFAULT true
 ) RETURNS void
@@ -3692,12 +3899,12 @@ BEGIN
          definition->>'contractVersion',
          COALESCE((definition->>'payloadMaxBytes')::integer, 1048576),
          COALESCE((definition->>'resultMaxBytes')::integer, 1048576),
-         ARRAY(SELECT key FROM jsonb_array_elements_text(
+         ARRAY(SELECT redact_key FROM jsonb_array_elements_text(
            COALESCE(definition->'sensitivePayloadKeys', '[]'::jsonb)
-         ) key ORDER BY key COLLATE "C"),
-         ARRAY(SELECT key FROM jsonb_array_elements_text(
+         ) AS payload_keys(redact_key) ORDER BY redact_key COLLATE "C"),
+         ARRAY(SELECT redact_key FROM jsonb_array_elements_text(
            COALESCE(definition->'sensitiveResultKeys', '[]'::jsonb)
-         ) key ORDER BY key COLLATE "C"),
+         ) AS result_keys(redact_key) ORDER BY redact_key COLLATE "C"),
          COALESCE((definition->>'maxAttempts')::integer, 25),
          workhorse.normalize_retry_policy_v1(definition->'retryPolicy'),
          COALESCE((definition->>'enabled')::boolean, true)

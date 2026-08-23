@@ -1,4 +1,4 @@
-import type { Json, QueueOptions } from "@workhorse-js/core";
+import type { QueueOptions } from "@workhorse-js/core";
 
 /**
  * The demo's one contracted job type.
@@ -11,22 +11,22 @@ export const DEMO_CONTRACT_JOB_TYPE = "demo.contract-check";
 export const DEMO_CONTRACT_VERSION = "v1";
 export const DEMO_CONTRACT_MAX_RESULT_BYTES = 2_048;
 
-function isPlainObject(value: Json): value is { [key: string]: Json } {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 export const DEMO_QUEUE_OPTIONS: QueueOptions = {
   contracts: {
     [DEMO_CONTRACT_JOB_TYPE]: {
       currentVersion: DEMO_CONTRACT_VERSION,
       versions: {
         [DEMO_CONTRACT_VERSION]: {
-          validatePayload: (payload) =>
-            isPlainObject(payload) &&
-            typeof payload["invoiceId"] === "string" &&
-            payload["invoiceId"].length > 0,
-          validateResult: (result) =>
-            isPlainObject(result) && typeof result["approved"] === "boolean",
+          payloadSchema: {
+            type: "object",
+            required: ["invoiceId"],
+            properties: { invoiceId: { type: "string", minLength: 1 } },
+          },
+          resultSchema: {
+            type: "object",
+            required: ["approved"],
+            properties: { approved: { type: "boolean" } },
+          },
           maxResultBytes: DEMO_CONTRACT_MAX_RESULT_BYTES,
         },
       },

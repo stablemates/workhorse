@@ -25,7 +25,10 @@ import {
   MAX_JOB_PRIORITY,
   MAX_JOB_VALUE_MAX_BYTES,
 } from "../types.js";
+import { assertContractSchema, compileContractSchema } from "../contract-schema.js";
 import { QueueModule } from "./module-context.js";
+
+const contractValidators = new Map<string, ReturnType<typeof compileContractSchema>>();
 
 /** The same scoped enqueue key is still retained for a materially different request. */
 export class EnqueueIdempotencyConflictError extends WorkhorseError {
@@ -379,14 +382,13 @@ export function validateQueueOptions(options: QueueOptions): QueueOptions {
         contract.sensitiveResultKeys,
         `${jobType}.${version}.sensitiveResultKeys`,
       );
-      if (
-        contract.validatePayload !== undefined &&
-        typeof contract.validatePayload !== "function"
-      ) {
-        throw new TypeError(`${jobType}.${version}.validatePayload must be a function`);
+      if (contract.payloadSchema !== undefined) {
+        assertContractSchema(contract.payloadSchema);
+        compileContractSchema(contract.payloadSchema);
       }
-      if (contract.validateResult !== undefined && typeof contract.validateResult !== "function") {
-        throw new TypeError(`${jobType}.${version}.validateResult must be a function`);
+      if (contract.resultSchema !== undefined) {
+        assertContractSchema(contract.resultSchema);
+        compileContractSchema(contract.resultSchema);
       }
     }
   }
@@ -401,15 +403,15 @@ function validateContractValue(
   contract: JobContractVersion,
   maxBytes: number,
 ): void {
-  const validator = kind === "payload" ? contract.validatePayload : contract.validateResult;
-  if (validator !== undefined) {
-    let accepted = false;
-    try {
-      accepted = validator(value);
-    } catch {
-      accepted = false;
+  const schema = kind === "payload" ? contract.payloadSchema : contract.resultSchema;
+  if (schema !== undefined) {
+    const cacheKey = `${jobType}\u0000${version}\u0000${kind}\u0000${JSON.stringify(schema)}`;
+    let validator = contractValidators.get(cacheKey);
+    if (validator === undefined) {
+      validator = compileContractSchema(schema);
+      contractValidators.set(cacheKey, validator);
     }
-    if (!accepted) throw new JobContractValidationError(jobType, version, kind);
+    if (!validator(value)) throw new JobContractValidationError(jobType, version, kind);
   }
   enforceJsonSize(jobType, kind, value, maxBytes);
 }
@@ -434,14 +436,96 @@ interface JobAcceptance {
   sensitiveResultKeys: readonly string[];
 }
 
+interface ContractDefinitionRow {
+  version: string;
+  schema: { payload: Json; result: Json };
+  payload_max_bytes: number;
+  result_max_bytes: number;
+  payload_redact_keys: string[];
+  result_redact_keys: string[];
+}
+
 /** Owns enqueue serialization and process-local job contract validation behind the Queue facade. */
 export class EnqueueContractsModule extends QueueModule {
-  jobAcceptance(jobType: string, payload: Json): JobAcceptance {
+  private contractsSynchronized = false;
+  private readonly databaseContracts = new Map<
+    string,
+    { version: string; contract: JobContractVersion }
+  >();
+
+  async syncContracts(): Promise<void> {
+    const definitions = Object.entries(this.context.options.contracts ?? {}).map(
+      ([jobType, contracts]) => ({
+        jobType,
+        currentVersion: contracts.currentVersion,
+        versions: Object.fromEntries(
+          Object.entries(contracts.versions).map(([version, contract]) => [
+            version,
+            {
+              payloadSchema: contract.payloadSchema,
+              resultSchema: contract.resultSchema,
+              maxPayloadBytes:
+                contract.maxPayloadBytes ??
+                this.context.options.defaultMaxPayloadBytes ??
+                DEFAULT_JOB_VALUE_MAX_BYTES,
+              maxResultBytes:
+                contract.maxResultBytes ??
+                this.context.options.defaultMaxResultBytes ??
+                DEFAULT_JOB_VALUE_MAX_BYTES,
+              sensitivePayloadKeys: contract.sensitivePayloadKeys,
+              sensitiveResultKeys: contract.sensitiveResultKeys,
+            },
+          ]),
+        ),
+      }),
+    );
+    await this.context.database.query("SELECT workhorse.sync_contract_definitions_v1($1::jsonb)", [
+      JSON.stringify(definitions),
+    ]);
+    this.contractsSynchronized = true;
+    for (const jobType of Object.keys(this.context.options.contracts ?? {})) {
+      const definition = await this.loadContract(jobType, null);
+      if (definition !== null) this.databaseContracts.set(jobType, definition);
+    }
+  }
+
+  private async loadContract(
+    jobType: string,
+    version: string | null,
+  ): Promise<{ version: string; contract: JobContractVersion } | null> {
+    const result = await this.context.database.query<ContractDefinitionRow>(
+      "SELECT (definition).* FROM workhorse.get_contract_definition_v1($1::text, $2::text) definition",
+      [jobType, version],
+    );
+    const row = result.rows[0];
+    if (row === undefined) return null;
+    return {
+      version: row.version,
+      contract: {
+        payloadSchema: row.schema.payload,
+        resultSchema: row.schema.result,
+        maxPayloadBytes: row.payload_max_bytes,
+        maxResultBytes: row.result_max_bytes,
+        sensitivePayloadKeys: row.payload_redact_keys,
+        sensitiveResultKeys: row.result_redact_keys,
+      },
+    };
+  }
+
+  async jobAcceptance(jobType: string, payload: Json): Promise<JobAcceptance> {
     const { options } = this.context;
     const typeContracts = options.contracts?.[jobType];
-    const contractVersion = typeContracts?.currentVersion ?? null;
+    const databaseContract =
+      typeContracts === undefined || !this.contractsSynchronized
+        ? undefined
+        : await this.loadContract(jobType, null);
+    if (databaseContract !== undefined && databaseContract !== null) {
+      this.databaseContracts.set(jobType, databaseContract);
+    }
+    const contractVersion = databaseContract?.version ?? typeContracts?.currentVersion ?? null;
     const contract =
-      contractVersion === null ? undefined : typeContracts!.versions[contractVersion]!;
+      databaseContract?.contract ??
+      (contractVersion === null ? undefined : typeContracts!.versions[contractVersion]!);
     const payloadMaxBytes =
       contract?.maxPayloadBytes ?? options.defaultMaxPayloadBytes ?? DEFAULT_JOB_VALUE_MAX_BYTES;
     const resultMaxBytes =
@@ -467,9 +551,17 @@ export class EnqueueContractsModule extends QueueModule {
     };
   }
 
-  validateResult(job: ClaimedJob, result: Json): void {
+  async validateResult(job: ClaimedJob, result: Json): Promise<void> {
     if (job.contractVersion !== null) {
-      const contract = this.context.options.contracts?.[job.type]?.versions[job.contractVersion];
+      const cacheKey = `${job.type}\u0000${job.contractVersion}`;
+      let contract = this.databaseContracts.get(cacheKey)?.contract;
+      if (contract === undefined) {
+        const loaded = await this.loadContract(job.type, job.contractVersion);
+        contract =
+          loaded?.contract ??
+          this.context.options.contracts?.[job.type]?.versions[job.contractVersion];
+        if (loaded !== null) this.databaseContracts.set(cacheKey, loaded);
+      }
       if (contract === undefined) {
         throw new JobContractUnavailableError(job.type, job.contractVersion);
       }
@@ -539,114 +631,116 @@ export class EnqueueContractsModule extends QueueModule {
       },
       async (span) => {
         const traceContext = injectTraceContext();
-        const input = requests.map(({ type, payload, options = {}, tags }) => {
-          const idempotency: EnqueueIdempotency | undefined = options.idempotency;
-          const coalescingModes = [idempotency, options.debounce, options.throttle].filter(
-            (mode) => mode !== undefined,
-          );
-          if (coalescingModes.length > 1) {
-            throw new TypeError(
-              "enqueue options cannot combine idempotency, debounce, or throttle",
+        const input = await Promise.all(
+          requests.map(async ({ type, payload, options = {}, tags }) => {
+            const idempotency: EnqueueIdempotency | undefined = options.idempotency;
+            const coalescingModes = [idempotency, options.debounce, options.throttle].filter(
+              (mode) => mode !== undefined,
             );
-          }
-          if (options.debounce !== undefined && options.runAt !== undefined) {
-            throw new TypeError(
-              "debounced enqueue uses its PostgreSQL-owned window instead of runAt",
-            );
-          }
-          if (
-            (options.debounce !== undefined || options.throttle !== undefined) &&
-            (options.prerequisiteJobId !== undefined || options.dependencies !== undefined)
-          ) {
-            throw new TypeError(
-              "enqueue options cannot combine debounce or throttle with prerequisiteJobId or dependencies",
-            );
-          }
-          const acceptance = this.jobAcceptance(type, payload);
-          if (options.prerequisiteJobId !== undefined && options.dependencies !== undefined) {
-            throw new TypeError(
-              "enqueue options cannot combine prerequisiteJobId and dependencies",
-            );
-          }
-          const dependencies = options.dependencies;
-          if (dependencies !== undefined) {
-            if (
-              dependencies.prerequisiteJobIds.length === 0 ||
-              dependencies.prerequisiteJobIds.length > MAX_JOB_DEPENDENCIES
-            ) {
-              throw new RangeError(
-                `dependencies requires between 1 and ${MAX_JOB_DEPENDENCIES} prerequisiteJobIds`,
+            if (coalescingModes.length > 1) {
+              throw new TypeError(
+                "enqueue options cannot combine idempotency, debounce, or throttle",
+              );
+            }
+            if (options.debounce !== undefined && options.runAt !== undefined) {
+              throw new TypeError(
+                "debounced enqueue uses its PostgreSQL-owned window instead of runAt",
               );
             }
             if (
-              new Set(dependencies.prerequisiteJobIds).size !==
-              dependencies.prerequisiteJobIds.length
+              (options.debounce !== undefined || options.throttle !== undefined) &&
+              (options.prerequisiteJobId !== undefined || options.dependencies !== undefined)
             ) {
-              throw new TypeError("dependencies prerequisiteJobIds must be unique");
+              throw new TypeError(
+                "enqueue options cannot combine debounce or throttle with prerequisiteJobId or dependencies",
+              );
             }
-          }
-          const prerequisiteJobIds = [...(dependencies?.prerequisiteJobIds ?? [])];
-          // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
-          prerequisiteJobIds.sort();
-          return {
-            queue: options.queue ?? this.context.defaultQueue,
-            type,
-            payload,
-            priority: validateJobPriority(options.priority),
-            ...acceptance,
-            ...(traceContext === null ? {} : { traceContext }),
-            ...(options.runAt === undefined &&
-            (idempotency !== undefined ||
-              options.debounce !== undefined ||
-              options.throttle !== undefined)
-              ? {}
-              : { runAt: (options.runAt ?? new Date()).toISOString() }),
-            deadline: options.deadline?.toISOString() ?? null,
-            concurrencyKey: options.concurrencyKey ?? null,
-            executionTimeoutMs: options.executionTimeoutMs ?? null,
-            maxAttempts: options.maxAttempts ?? 25,
-            retryPolicy: options.retryPolicy ?? null,
-            prerequisiteJobId: options.prerequisiteJobId ?? null,
-            dependencies:
-              dependencies === undefined
-                ? null
+            const acceptance = await this.jobAcceptance(type, payload);
+            if (options.prerequisiteJobId !== undefined && options.dependencies !== undefined) {
+              throw new TypeError(
+                "enqueue options cannot combine prerequisiteJobId and dependencies",
+              );
+            }
+            const dependencies = options.dependencies;
+            if (dependencies !== undefined) {
+              if (
+                dependencies.prerequisiteJobIds.length === 0 ||
+                dependencies.prerequisiteJobIds.length > MAX_JOB_DEPENDENCIES
+              ) {
+                throw new RangeError(
+                  `dependencies requires between 1 and ${MAX_JOB_DEPENDENCIES} prerequisiteJobIds`,
+                );
+              }
+              if (
+                new Set(dependencies.prerequisiteJobIds).size !==
+                dependencies.prerequisiteJobIds.length
+              ) {
+                throw new TypeError("dependencies prerequisiteJobIds must be unique");
+              }
+            }
+            const prerequisiteJobIds = [...(dependencies?.prerequisiteJobIds ?? [])];
+            // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+            prerequisiteJobIds.sort();
+            return {
+              queue: options.queue ?? this.context.defaultQueue,
+              type,
+              payload,
+              priority: validateJobPriority(options.priority),
+              ...acceptance,
+              ...(traceContext === null ? {} : { traceContext }),
+              ...(options.runAt === undefined &&
+              (idempotency !== undefined ||
+                options.debounce !== undefined ||
+                options.throttle !== undefined)
+                ? {}
+                : { runAt: (options.runAt ?? new Date()).toISOString() }),
+              deadline: options.deadline?.toISOString() ?? null,
+              concurrencyKey: options.concurrencyKey ?? null,
+              executionTimeoutMs: options.executionTimeoutMs ?? null,
+              maxAttempts: options.maxAttempts ?? 25,
+              retryPolicy: options.retryPolicy ?? null,
+              prerequisiteJobId: options.prerequisiteJobId ?? null,
+              dependencies:
+                dependencies === undefined
+                  ? null
+                  : {
+                      prerequisiteJobIds,
+                      onSuccess: dependencies.onSuccess,
+                      onFailure: dependencies.onFailure,
+                      onCancellation: dependencies.onCancellation,
+                    },
+              tags: tags ?? options.tags ?? [],
+              ...(idempotency === undefined
+                ? {}
                 : {
-                    prerequisiteJobIds,
-                    onSuccess: dependencies.onSuccess,
-                    onFailure: dependencies.onFailure,
-                    onCancellation: dependencies.onCancellation,
-                  },
-            tags: tags ?? options.tags ?? [],
-            ...(idempotency === undefined
-              ? {}
-              : {
-                  idempotency: {
-                    key: idempotency.key,
-                    scope: idempotency.scope ?? DEFAULT_IDEMPOTENCY_SCOPE,
-                    ttlMs: idempotency.ttlMs ?? DEFAULT_IDEMPOTENCY_TTL_MS,
-                  },
-                }),
-            ...(options.debounce === undefined
-              ? {}
-              : {
-                  debounce: {
-                    key: options.debounce.key,
-                    scope: options.debounce.scope ?? DEFAULT_IDEMPOTENCY_SCOPE,
-                    windowMs: options.debounce.windowMs,
-                    schedule: options.debounce.schedule,
-                  },
-                }),
-            ...(options.throttle === undefined
-              ? {}
-              : {
-                  throttle: {
-                    key: options.throttle.key,
-                    scope: options.throttle.scope ?? DEFAULT_IDEMPOTENCY_SCOPE,
-                    windowMs: options.throttle.windowMs,
-                  },
-                }),
-          };
-        });
+                    idempotency: {
+                      key: idempotency.key,
+                      scope: idempotency.scope ?? DEFAULT_IDEMPOTENCY_SCOPE,
+                      ttlMs: idempotency.ttlMs ?? DEFAULT_IDEMPOTENCY_TTL_MS,
+                    },
+                  }),
+              ...(options.debounce === undefined
+                ? {}
+                : {
+                    debounce: {
+                      key: options.debounce.key,
+                      scope: options.debounce.scope ?? DEFAULT_IDEMPOTENCY_SCOPE,
+                      windowMs: options.debounce.windowMs,
+                      schedule: options.debounce.schedule,
+                    },
+                  }),
+              ...(options.throttle === undefined
+                ? {}
+                : {
+                    throttle: {
+                      key: options.throttle.key,
+                      scope: options.throttle.scope ?? DEFAULT_IDEMPOTENCY_SCOPE,
+                      windowMs: options.throttle.windowMs,
+                    },
+                  }),
+            };
+          }),
+        );
         try {
           const result = await transaction.query<{
             ordinal: number;

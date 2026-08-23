@@ -24,6 +24,8 @@ class StatementRegistry:
     cancel: DriverStatement
     enqueue_many: DriverStatement
     sync_schedules: DriverStatement
+    sync_contracts: DriverStatement
+    get_contract: DriverStatement
     tick: DriverStatement
     run_maintenance: DriverStatement
     register_worker: DriverStatement
@@ -85,6 +87,20 @@ STATEMENTS = StatementRegistry(
     sync_schedules=DriverStatement(
         psycopg=("SELECT workhorse.sync_schedule_definitions_v1(%s::text, %s::jsonb, %s::boolean)"),
         asyncpg=("SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean)"),
+    ),
+    sync_contracts=DriverStatement(
+        psycopg="SELECT workhorse.sync_contract_definitions_v1(%s::jsonb)",
+        asyncpg="SELECT workhorse.sync_contract_definitions_v1($1::jsonb)",
+    ),
+    get_contract=DriverStatement(
+        psycopg=(
+            "SELECT (definition).* FROM "
+            "workhorse.get_contract_definition_v1(%s::text, %s::text) definition"
+        ),
+        asyncpg=(
+            "SELECT (definition).* FROM "
+            "workhorse.get_contract_definition_v1($1::text, $2::text) definition"
+        ),
     ),
     tick=DriverStatement(
         psycopg="SELECT * FROM workhorse.tick_v1(%s::integer, %s::integer)",

@@ -108,12 +108,12 @@ export class ChildJobsModule extends QueueModule {
     super(context);
   }
 
-  private childRequest<TPayload extends Json>(
+  private async childRequest<TPayload extends Json>(
     parent: ClaimedJob,
     type: string,
     payload: TPayload,
     options: ChildJobOptions,
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
     const unsafe = options as EnqueueOptions;
     if (
       unsafe.idempotency !== undefined ||
@@ -124,7 +124,7 @@ export class ChildJobsModule extends QueueModule {
     ) {
       throw new TypeError("Child jobs cannot use coalescing or dependency enqueue options");
     }
-    const acceptance = this.enqueueContracts.jobAcceptance(type, payload);
+    const acceptance = await this.enqueueContracts.jobAcceptance(type, payload);
     return {
       queue: options.queue ?? this.context.defaultQueue,
       type,
@@ -156,7 +156,7 @@ export class ChildJobsModule extends QueueModule {
     if (typeof workerId !== "string" || workerId.length === 0) {
       throw new TypeError("Worker ID must be a non-empty string");
     }
-    const request = this.childRequest(parent, type, payload, options);
+    const request = await this.childRequest(parent, type, payload, options);
     const result = await this.context.database.query<CreateChildRow>(
       `SELECT status, child_job_id, child_type, created_at, joined_at, result
          FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
@@ -189,15 +189,17 @@ export class ChildJobsModule extends QueueModule {
     }
     if (children.length > 100) throw new ChildLimitExceededError(parent.id);
     const names = new Set<string>();
-    const requests = children.map(({ name, type, payload, options = {} }) => {
-      validateChildName(name);
-      if (names.has(name)) throw new TypeError("Child names must be unique");
-      names.add(name);
-      return {
-        name,
-        request: this.childRequest(parent, type, payload, options),
-      };
-    });
+    const requests = await Promise.all(
+      children.map(async ({ name, type, payload, options = {} }) => {
+        validateChildName(name);
+        if (names.has(name)) throw new TypeError("Child names must be unique");
+        names.add(name);
+        return {
+          name,
+          request: await this.childRequest(parent, type, payload, options),
+        };
+      }),
+    );
     const result = await this.context.database.query<CreateChildrenRow>(
       `SELECT status, children, results, result_bytes, result_limit_bytes
          FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,

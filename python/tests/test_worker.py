@@ -17,6 +17,9 @@ from workhorse import (
     EnqueueOptions,
     ExecutionTimeoutError,
     HandlerContext,
+    JobContractValidationError,
+    JobContractVersion,
+    JobTypeContracts,
     ProgressLeaseLostError,
     ProgressRateLimitError,
     Queue,
@@ -24,6 +27,51 @@ from workhorse import (
     WaitConflictError,
     Worker,
 )
+
+
+def test_contract_sync_validates_payload_and_worker_result(database_url: str) -> None:
+    contracts = {
+        "contract.python": JobTypeContracts(
+            current_version="current",
+            versions={
+                "current": JobContractVersion(
+                    payload_schema={
+                        "type": "object",
+                        "required": ["name"],
+                        "properties": {"name": {"type": "string"}},
+                    },
+                    result_schema={
+                        "type": "object",
+                        "required": ["ok"],
+                        "properties": {"ok": {"const": True}},
+                    },
+                )
+            },
+        )
+    }
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        queue = Queue(enqueue_connection)
+        queue.sync_contracts(contracts)
+        with pytest.raises(JobContractValidationError):
+            queue.enqueue("contract.python", {"name": 42})
+        job_id = queue.enqueue(
+            "contract.python",
+            {"name": "accepted"},
+            EnqueueOptions(max_attempts=1),
+        )
+        enqueue_connection.commit()
+
+        worker = Worker(worker_connection, worker_id="python-contract-worker").handle(
+            "contract.python", lambda _payload, _context: {"ok": False}
+        )
+        assert worker.run_once() is True
+        outcome = worker_connection.execute(
+            "SELECT state FROM workhorse.job_outcome WHERE job_id = %s", (job_id,)
+        ).fetchone()
+        assert outcome == ("failed",)
 
 
 def test_worker_participates_in_slow_maintenance(database_url: str) -> None:

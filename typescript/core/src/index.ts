@@ -179,7 +179,6 @@ export type {
   ExpireOwnedStatus,
   JobCheckpoint,
   JobDependencies,
-  JobContractValidator,
   JobContractVersion,
   JobTypeContracts,
   JobProgress,

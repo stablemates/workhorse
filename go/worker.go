@@ -166,6 +166,7 @@ type Worker struct {
 	handlers             map[string]Handler
 	compatibility        *CachedCompatibilityCheck
 	onRegistrationError  func(error)
+	contracts            contractCache
 	activeSlots          atomic.Int64
 	draining             atomic.Bool
 	remotelyPaused       atomic.Bool
@@ -317,6 +318,7 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		handlers:             make(map[string]Handler),
 		compatibility:        NewCachedCompatibilityCheck(NewPGXExecutor(pool)),
 		onRegistrationError:  options.OnRegistrationError,
+		contracts:            newContractCache(),
 	}, nil
 }
 
@@ -1227,6 +1229,13 @@ func (worker *Worker) complete(ctx context.Context, executor Executor, job Claim
 	if err != nil {
 		return worker.fail(ctx, executor, job, err)
 	}
+	var normalizedResult any
+	if err := decodeContractJSON(encoded, &normalizedResult); err != nil {
+		return worker.fail(ctx, executor, job, err)
+	}
+	if err := worker.validateResultContract(ctx, executor, job, normalizedResult); err != nil {
+		return worker.fail(ctx, executor, job, err)
+	}
 	lease := worker.fencedLease(job)
 	arguments := append(lease.parameters(), encoded)
 	rows, err := executor.Query(ctx, protocolStatementRegistry[completeStatementName], arguments...)
@@ -1254,6 +1263,48 @@ func (worker *Worker) complete(ctx context.Context, executor Executor, job Claim
 		jobCompletedLogMessage,
 		jobLogAttributes(job, worker.workerID)...,
 	)
+	return nil
+}
+
+func (worker *Worker) validateResultContract(
+	ctx context.Context,
+	executor Executor,
+	job ClaimedJob,
+	result any,
+) error {
+	if job.ContractVersion == nil {
+		return nil
+	}
+	version := *job.ContractVersion
+	key := job.Type + contractCacheSeparator + version + contractCacheSeparator + contractResultKind
+	worker.contracts.mu.RLock()
+	validator := worker.contracts.validators[key]
+	worker.contracts.mu.RUnlock()
+	if validator == nil {
+		rows, err := executor.Query(
+			ctx,
+			protocolStatementRegistry[getContractDefinitionStatementName],
+			job.Type,
+			version,
+		)
+		if err != nil {
+			return err
+		}
+		if len(rows) != 1 {
+			return &JobContractUnavailableError{JobType: job.Type, Version: version}
+		}
+		document, err := contractDocument(rows[0][contractSchemaField])
+		if err != nil {
+			return err
+		}
+		validator, err = worker.contracts.validator(key, document[contractResultSchemaField])
+		if err != nil {
+			return err
+		}
+	}
+	if err := validator.Validate(result); err != nil {
+		return &JobContractValidationError{JobType: job.Type, Version: version, Kind: contractResultKind}
+	}
 	return nil
 }
 

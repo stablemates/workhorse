@@ -6,8 +6,8 @@ with every accepted job.
 
 ## Define contracts where you create the queue
 
-`QueueOptions.contracts` groups versions under each job type. New jobs receive `currentVersion`, while
-older versions stay available for jobs accepted by an earlier deployment.
+`QueueOptions.contracts` groups JSON Schema documents under each job type. New jobs receive
+`currentVersion`, while PostgreSQL retains older documents for jobs accepted by an earlier deploy.
 
 ```ts
 const queue = new Queue(pool, "default", {
@@ -16,13 +16,12 @@ const queue = new Queue(pool, "default", {
       currentVersion: "mail-current",
       versions: {
         "mail-current": {
-          validatePayload: (value) =>
-            typeof value === "object" &&
-            value !== null &&
-            !Array.isArray(value) &&
-            typeof value.recipient === "string",
-          validateResult: (value) =>
-            typeof value === "object" && value !== null && !Array.isArray(value),
+          payloadSchema: {
+            type: "object",
+            required: ["recipient"],
+            properties: { recipient: { type: "string" } },
+          },
+          resultSchema: { type: "object" },
           sensitivePayloadKeys: ["accessToken"],
           sensitiveResultKeys: ["providerReceipt"],
         },
@@ -32,9 +31,13 @@ const queue = new Queue(pool, "default", {
 });
 ```
 
-A validator accepts by returning `true`. Returning `false` or throwing rejects the value with a
-safe `JobContractValidationError`; Workhorse does not copy the rejected value or validator message
-into that error.
+Call `queue.syncContracts()` during application startup. Python exposes `sync_contracts`, and Go
+exposes `SyncContracts`. PostgreSQL inserts each version once and keeps the current version in a
+separate policy row, so an operator override survives the next deploy.
+
+Each SDK rejects keywords outside the shared profile before compiling a schema. References can
+target bundled definitions in the same document, while remote references and custom keywords are
+rejected. Formats remain annotations, so an email format does not create a language-specific gate.
 
 The queue validates a payload before enqueue writes anything. The worker validates a result before
 completion removes the active lease. If a handler returns an invalid result, the worker follows the
@@ -43,7 +46,8 @@ normal failure and retry path instead of recording a successful outcome.
 ## Keep old versions while old jobs can run
 
 Each job stores the version selected when PostgreSQL accepted it. When a worker claims the job,
-PostgreSQL returns that version, so a new deployment validates its result against the old contract.
+PostgreSQL returns that version. The worker loads that immutable document and caches it by job type
+and version, so a new deployment validates its result against the old contract.
 
 When the shape changes, add a new entry and move `currentVersion`. Until no live or redrivable job
 can still carry the previous entry, keep it configured. A worker that receives an unavailable version
@@ -54,9 +58,8 @@ longer accepts that shape for new jobs.
 
 ## Bound storage and hide sensitive fields
 
-`defaultMaxPayloadBytes` and `defaultMaxResultBytes` set queue-wide ceilings. A
-`JobContractVersion` can override them with `maxPayloadBytes` and `maxResultBytes`. PostgreSQL checks
-its canonical JSON representation before the durable write, so every client gets the same decision.
+Queue defaults set size ceilings. A `JobContractVersion` can override them. PostgreSQL checks its
+canonical JSON representation before the durable write, so every client gets the same decision.
 
 `sensitivePayloadKeys` and `sensitiveResultKeys` name top-level object fields. Handlers receive the
 raw payload, but job lookup, listing, dead letters, and dashboard detail remove those fields. If a

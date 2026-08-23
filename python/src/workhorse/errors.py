@@ -208,6 +208,21 @@ class ProtocolCompatibilityError(WorkhorseError):
         super().__init__(f"SQL protocol compatibility check refused mutation: {code}")
 
 
+class JobContractValidationError(WorkhorseError):
+    def __init__(self, job_type: str, version: str, kind: str) -> None:
+        self.job_type = job_type
+        self.version = version
+        self.kind = kind
+        super().__init__(f"{job_type} {kind} does not satisfy contract version {version}")
+
+
+class JobContractUnavailableError(WorkhorseError):
+    def __init__(self, job_type: str, version: str) -> None:
+        self.job_type = job_type
+        self.version = version
+        super().__init__(f"{job_type} contract version {version} is unavailable")
+
+
 class EnqueueIdempotencyConflictError(WorkhorseError):
     def __init__(self, details: Mapping[str, object]) -> None:
         self.details = details

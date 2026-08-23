@@ -3,11 +3,56 @@ package workhorse
 const schemaVersionStatement = "schema_version"
 
 const (
+	contractDialectValue                = "https://json-schema.org/draft/2020-12/schema"
+	contractValidationErrorFormat       = "%s %s does not satisfy contract version %s"
+	contractUnavailableErrorFormat      = "%s contract version %s is unavailable"
+	contractSchemaTypeErrorFormat       = "%s must be an object or boolean JSON Schema"
+	contractBundledReferenceErrorFormat = "%s must be a bundled local reference"
+	contractDialectErrorFormat          = "%s must select Draft 2020-12"
+	contractArrayErrorFormat            = "%s must be an array"
+	contractObjectErrorFormat           = "%s must be an object"
+	contractProfileErrorFormat          = "%s is outside the Workhorse contract profile"
+	invalidContractDefinitionMessage    = "invalid contract definition returned by PostgreSQL"
+	contractRootPath                    = "$"
+	contractPathSeparator               = "."
+	contractArrayPathFormat             = "%s[%d]"
+	contractLocalReferencePrefix        = "#"
+	contractResourceURL                 = "urn:workhorse:contract"
+	contractCacheSeparator              = "\x00"
+	contractPayloadKind                 = "payload"
+	contractResultKind                  = "result"
+	contractSchemaField                 = "schema"
+	contractVersionField                = "version"
+	contractPayloadSchemaField          = "payload"
+	contractResultSchemaField           = "result"
+	contractPayloadSchemaJSONField      = "payloadSchema"
+	contractResultSchemaJSONField       = "resultSchema"
+	contractMaxPayloadBytesJSONField    = "maxPayloadBytes"
+	contractMaxResultBytesJSONField     = "maxResultBytes"
+	contractSensitivePayloadJSONField   = "sensitivePayloadKeys"
+	contractSensitiveResultJSONField    = "sensitiveResultKeys"
+	contractJobTypeJSONField            = "jobType"
+	contractCurrentVersionJSONField     = "currentVersion"
+	contractVersionJSONField            = "contractVersion"
+	contractVersionsJSONField           = "versions"
+	contractReferenceKeyword            = "$ref"
+	contractDialectKeyword              = "$schema"
+)
+
+var contractSchemaValueKeywords = []string{"additionalProperties", "contains", "else", "if", "items", "not", "propertyNames", "then"}
+var contractSchemaArrayKeywords = []string{"allOf", "anyOf", "oneOf", "prefixItems"}
+var contractSchemaMapKeywords = []string{"$defs", "dependentSchemas", "patternProperties", "properties"}
+var contractAnnotationKeywords = []string{"$anchor", "$comment", "$schema", "default", "deprecated", "description", "examples", "format", "readOnly", "title", "writeOnly"}
+var contractValidationKeywords = []string{"const", "dependentRequired", "enum", "exclusiveMaximum", "exclusiveMinimum", "maxContains", "maximum", "maxItems", "maxLength", "maxProperties", "minContains", "minimum", "minItems", "minLength", "minProperties", "multipleOf", "pattern", "required", "type", "uniqueItems"}
+
+const (
 	emptyString                          = ""
 	queueHealthStatementName             = "queue_health_v1"
 	cancelStatementName                  = "cancel_v1"
 	enqueueManyStatementName             = "enqueue_many_v1"
 	syncScheduleDefinitionsStatementName = "sync_schedule_definitions_v1"
+	syncContractDefinitionsStatementName = "sync_contract_definitions_v1"
+	getContractDefinitionStatementName   = "get_contract_definition_v1"
 	tickStatementName                    = "tick_v1"
 	runMaintenanceStatementName          = "run_maintenance_v1"
 	registerWorkerStatementName          = "register_worker_v1"
@@ -61,6 +106,9 @@ const (
 	rowFinishedAtField                   = "finished_at"
 	rowContractVersionField              = "contract_version"
 	rowResultMaxBytesField               = "result_max_bytes"
+	rowPayloadMaxBytesField              = "payload_max_bytes"
+	rowPayloadRedactKeysField            = "payload_redact_keys"
+	rowResultRedactKeysField             = "result_redact_keys"
 	rowRedactErrorDetailsField           = "redact_error_details"
 	rowTraceContextField                 = "trace_context"
 	rowAttemptField                      = "attempt"
@@ -441,28 +489,30 @@ var internalStatementRegistry = map[string]string{
 }
 
 var protocolStatementRegistry = map[string]string{
-	runMaintenanceStatementName:      `SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)`,
-	queueHealthStatementName:         `SELECT workhorse.queue_health_v1($1::timestamptz) AS snapshot`,
-	enqueueManyStatementName:         `SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal`,
-	claimStatementName:               `SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)`,
-	recordBatchDispatchStatementName: `SELECT workhorse.record_batch_dispatch_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
-	recordBatchFailureStatementName:  `SELECT workhorse.record_batch_failure_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
-	heartbeatStatementName:           `SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status`,
-	expireOwnedStatementName:         `SELECT * FROM workhorse.expire_owned_telemetry_v1($1::uuid, $2::text, $3::bigint)`,
-	recoverExpiredStatementName:      `SELECT * FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)`,
-	completeStatementName:            `SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted`,
-	failStatementName:                `SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state`,
-	cancelStatementName:              `SELECT status, state, current_attempt, requested_at, requested_by, reason, finished_at FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)`,
-	acknowledgeCancelStatementName:   `SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted`,
-	saveCheckpointStatementName:      `SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
-	updateProgressStatementName:      `SELECT status, progress_value, revision::text, attempt, fence_token::text, worker_id, created_at, updated_at, retry_after_ms::text FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,
-	scheduleWaitStatementName:        `SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)`,
-	createChildrenStatementName:      `SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,
-	createChildStatementName:         `SELECT status, child_job_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
-	waitForSignalStatementName:       `SELECT status, payload FROM workhorse.wait_for_signal_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint)`,
-	sendSignalStatementName:          `SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
-	waitForHumanStatementName:        `SELECT status, result FROM workhorse.wait_for_human_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::bigint)`,
-	completeHumanWaitStatementName:   `SELECT status, result, completed_at, completed_by FROM workhorse.complete_human_wait_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
-	"dashboard_signal_wait_v1":       `SELECT job_id, queue_name, job_type, signal_name AS wait_name, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_signal_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, job_id, signal_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, job_id, signal_name LIMIT $1::integer`,
-	"dashboard_human_wait_v1":        `SELECT job_id, queue_name, job_type, token_name AS wait_name, context, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_human_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, job_id, token_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, job_id, token_name LIMIT $1::integer`,
+	runMaintenanceStatementName:          `SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)`,
+	queueHealthStatementName:             `SELECT workhorse.queue_health_v1($1::timestamptz) AS snapshot`,
+	syncContractDefinitionsStatementName: `SELECT workhorse.sync_contract_definitions_v1($1::jsonb)`,
+	getContractDefinitionStatementName:   `SELECT (definition).* FROM workhorse.get_contract_definition_v1($1::text, $2::text) definition`,
+	enqueueManyStatementName:             `SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal`,
+	claimStatementName:                   `SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)`,
+	recordBatchDispatchStatementName:     `SELECT workhorse.record_batch_dispatch_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
+	recordBatchFailureStatementName:      `SELECT workhorse.record_batch_failure_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
+	heartbeatStatementName:               `SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status`,
+	expireOwnedStatementName:             `SELECT * FROM workhorse.expire_owned_telemetry_v1($1::uuid, $2::text, $3::bigint)`,
+	recoverExpiredStatementName:          `SELECT * FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)`,
+	completeStatementName:                `SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted`,
+	failStatementName:                    `SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state`,
+	cancelStatementName:                  `SELECT status, state, current_attempt, requested_at, requested_by, reason, finished_at FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)`,
+	acknowledgeCancelStatementName:       `SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted`,
+	saveCheckpointStatementName:          `SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
+	updateProgressStatementName:          `SELECT status, progress_value, revision::text, attempt, fence_token::text, worker_id, created_at, updated_at, retry_after_ms::text FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,
+	scheduleWaitStatementName:            `SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)`,
+	createChildrenStatementName:          `SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,
+	createChildStatementName:             `SELECT status, child_job_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
+	waitForSignalStatementName:           `SELECT status, payload FROM workhorse.wait_for_signal_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint)`,
+	sendSignalStatementName:              `SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
+	waitForHumanStatementName:            `SELECT status, result FROM workhorse.wait_for_human_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::bigint)`,
+	completeHumanWaitStatementName:       `SELECT status, result, completed_at, completed_by FROM workhorse.complete_human_wait_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
+	"dashboard_signal_wait_v1":           `SELECT job_id, queue_name, job_type, signal_name AS wait_name, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_signal_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, job_id, signal_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, job_id, signal_name LIMIT $1::integer`,
+	"dashboard_human_wait_v1":            `SELECT job_id, queue_name, job_type, token_name AS wait_name, context, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_human_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, job_id, token_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, job_id, token_name LIMIT $1::integer`,
 }

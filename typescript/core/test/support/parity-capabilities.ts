@@ -44,11 +44,6 @@ const operatorSurface = {
   absent: "operator surface: served by the dashboard and the workhorse CLI, not per language",
 } as const;
 
-/** Absent because the capability is language-local code, not SDK plumbing over existing SQL. */
-const contractsAreCode = {
-  absent: "contracts are TypeScript closures; portable contracts arrive with WH-349",
-} as const;
-
 export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Transactional enqueue in a caller-owned tx",
@@ -131,8 +126,8 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
   {
     capability: "Payload and result contracts",
     typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "contracts" },
-    python: contractsAreCode,
-    go: contractsAreCode,
+    python: { file: "test_worker.py", pattern: "test_contract_sync_validates" },
+    go: { file: "worker_test.go", pattern: "TestContractSyncValidates" },
   },
   {
     capability: "Compatibility refusal before mutation",

@@ -22,7 +22,7 @@ describe("createWorkhorseAdapter", () => {
         contracts: {
           send: {
             currentVersion: "current",
-            versions: { current: { validatePayload: () => false } },
+            versions: { current: { payloadSchema: false } },
           },
         },
       },

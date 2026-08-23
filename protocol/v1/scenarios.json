@@ -935,6 +935,66 @@
     ]
   },
   {
+    "id": "contract-definition-sync-and-read",
+    "steps": [
+      {
+        "id": "sync-contract-definition",
+        "sql": "SELECT workhorse.sync_contract_definitions_v1($1::jsonb) AS synced",
+        "parameters": [
+          [
+            {
+              "jobType": "protocol.contract",
+              "currentVersion": "v1",
+              "versions": {
+                "v1": {
+                  "payloadSchema": {
+                    "type": "object",
+                    "required": ["message"],
+                    "properties": { "message": { "type": "string" } }
+                  },
+                  "resultSchema": { "type": "boolean" },
+                  "maxPayloadBytes": 2048,
+                  "maxResultBytes": 1024,
+                  "sensitivePayloadKeys": ["token"],
+                  "sensitiveResultKeys": []
+                }
+              }
+            }
+          ]
+        ],
+        "expect": { "rows": [{ "synced": "" }] }
+      },
+      {
+        "id": "read-current-contract-definition",
+        "sql": "SELECT jsonb_build_object('jobType', job_type, 'version', version, 'schema', schema, 'payloadMaxBytes', payload_max_bytes, 'resultMaxBytes', result_max_bytes, 'payloadRedactKeys', payload_redact_keys, 'resultRedactKeys', result_redact_keys, 'source', source) AS value FROM workhorse.get_contract_definition_v1($1::text, $2::text)",
+        "parameters": ["protocol.contract", null],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "jobType": "protocol.contract",
+                "payloadMaxBytes": 2048,
+                "payloadRedactKeys": ["token"],
+                "resultMaxBytes": 1024,
+                "resultRedactKeys": [],
+                "schema": {
+                  "payload": {
+                    "properties": { "message": { "type": "string" } },
+                    "required": ["message"],
+                    "type": "object"
+                  },
+                  "result": { "type": "boolean" }
+                },
+                "source": "application",
+                "version": "v1"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
     "id": "retention-maintenance",
     "steps": [
       {

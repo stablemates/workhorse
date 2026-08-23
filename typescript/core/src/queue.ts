@@ -756,9 +756,14 @@ export class Queue {
     workerId: string,
     result: TResult,
   ): Promise<boolean> {
-    return this.modules.claimLeaseFence.complete(job, workerId, result, () => {
-      this.modules.enqueueContracts.validateResult(job, result);
-    });
+    return this.modules.claimLeaseFence.complete(job, workerId, result, () =>
+      this.modules.enqueueContracts.validateResult(job, result),
+    );
+  }
+
+  /** Seed immutable JSON Schema contracts and the application-selected current versions. */
+  async syncContracts(): Promise<void> {
+    return this.modules.enqueueContracts.syncContracts();
   }
 
   async fail(

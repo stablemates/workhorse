@@ -30,6 +30,22 @@ TJson = TypeVar("TJson", bound=Json)
 
 
 @dataclass(frozen=True)
+class JobContractVersion:
+    payload_schema: Json = True
+    result_schema: Json = True
+    max_payload_bytes: int = 1_048_576
+    max_result_bytes: int = 1_048_576
+    sensitive_payload_keys: Sequence[str] = field(default_factory=tuple)
+    sensitive_result_keys: Sequence[str] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class JobTypeContracts:
+    current_version: str
+    versions: Mapping[str, JobContractVersion]
+
+
+@dataclass(frozen=True)
 class Idempotency:
     key: str
     scope: str = "default"

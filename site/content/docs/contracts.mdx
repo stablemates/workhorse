@@ -21,13 +21,12 @@ const queue = new Queue(pool, "default", {
       currentVersion: "mail-current",
       versions: {
         "mail-current": {
-          validatePayload: (value) =>
-            typeof value === "object" &&
-            value !== null &&
-            !Array.isArray(value) &&
-            typeof value.recipient === "string",
-          validateResult: (value) =>
-            typeof value === "object" && value !== null && !Array.isArray(value),
+          payloadSchema: {
+            type: "object",
+            required: ["recipient"],
+            properties: { recipient: { type: "string" } },
+          },
+          resultSchema: { type: "object" },
           sensitivePayloadKeys: ["accessToken"],
           sensitiveResultKeys: ["providerReceipt"],
         },
@@ -37,15 +36,18 @@ const queue = new Queue(pool, "default", {
 });
 ```
 
-A validator accepts by returning `true`. Any predicate over JSON works — a hand-written check as
-above, or a schema library's boolean output.
+Call `queue.syncContracts()` during application startup. Python exposes `sync_contracts`, and Go
+exposes `SyncContracts`. PostgreSQL inserts an immutable document for every version and keeps the
+current version in a separate policy row, so an operator override survives the next deploy.
+
+Workhorse accepts the shared JSON Schema profile only. Bundled references work inside one document,
+formats stay annotations, and remote references or custom keywords are rejected before compilation.
 
 ## Rejection is safe by construction
 
-Returning `false` or throwing from a validator produces a `JobContractValidationError` that names
-the job type, version, and whether the payload or result failed — and nothing else. Workhorse does
-not copy the rejected value or the validator's message into the error, so a payload that failed
-validation cannot leak through the failure report.
+A schema mismatch produces a `JobContractValidationError` that names the job type, version, and
+whether the payload or result failed. Workhorse does not copy the rejected value or the library's
+diagnostic into that error, so a rejected payload cannot leak through the failure report.
 
 The two directions fail differently:
 
@@ -73,8 +75,8 @@ tracing or persistence — a thrown error that embeds the payload cannot smuggle
 ## Deploy a new version
 
 Contracts are versioned because jobs outlive deployments. Each job stores the version selected
-when PostgreSQL accepted it, and completion always validates against that captured version — a new
-deployment finishing an old job uses the old contract.
+when PostgreSQL accepted it. A worker loads that immutable document and caches it by job type and
+version, so a new deployment finishing an old job uses the old contract.
 
 To change a shape: add the new version, move `currentVersion` to it, and keep old versions
 configured until no live or redrivable job can still carry them. A worker that claims a job whose

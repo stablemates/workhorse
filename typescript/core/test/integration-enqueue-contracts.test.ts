@@ -104,11 +104,11 @@ describe("enqueue contracts", () => {
           currentVersion: "2026-08-10",
           versions: {
             "2026-08-10": {
-              validatePayload: (value) =>
-                typeof value === "object" &&
-                value !== null &&
-                !Array.isArray(value) &&
-                typeof value.recipient === "string",
+              payloadSchema: {
+                type: "object",
+                required: ["recipient"],
+                properties: { recipient: { type: "string" } },
+              },
               maxPayloadBytes: 64,
             },
           },
@@ -147,6 +147,99 @@ describe("enqueue contracts", () => {
     });
   });
 
+  it("stores immutable contract documents and preserves operator current-version overrides", async () => {
+    const first = new Queue(pool, "default", {
+      defaultMaxPayloadBytes: 512,
+      defaultMaxResultBytes: 768,
+      contracts: {
+        "contract.policy": {
+          currentVersion: "one",
+          versions: {
+            one: {
+              payloadSchema: {
+                type: "object",
+                required: ["one"],
+                properties: { one: true },
+              },
+            },
+            two: {
+              payloadSchema: {
+                type: "object",
+                required: ["two"],
+                properties: { two: true },
+              },
+            },
+          },
+        },
+      },
+    });
+    await first.syncContracts();
+    await expect(
+      pool.query(
+        "SELECT payload_max_bytes, result_max_bytes FROM workhorse.get_contract_definition_v1('contract.policy', 'one')",
+      ),
+    ).resolves.toMatchObject({ rows: [{ payload_max_bytes: 512, result_max_bytes: 768 }] });
+    await pool.query("SELECT workhorse.override_contract_version_v1('contract.policy', 'two')");
+    await expect(first.enqueue("contract.policy", { one: true })).rejects.toBeInstanceOf(
+      JobContractValidationError,
+    );
+    await expect(first.enqueue("contract.policy", { two: true })).resolves.toBeTypeOf("string");
+
+    const nextDeploy = new Queue(pool, "default", {
+      defaultMaxPayloadBytes: 512,
+      defaultMaxResultBytes: 768,
+      contracts: {
+        "contract.policy": {
+          currentVersion: "one",
+          versions: {
+            one: {
+              payloadSchema: {
+                type: "object",
+                required: ["one"],
+                properties: { one: true },
+              },
+            },
+            two: {
+              payloadSchema: {
+                type: "object",
+                required: ["two"],
+                properties: { two: true },
+              },
+            },
+          },
+        },
+      },
+    });
+    await nextDeploy.syncContracts();
+    await expect(nextDeploy.enqueue("contract.policy", { one: true })).rejects.toBeInstanceOf(
+      JobContractValidationError,
+    );
+    const id = await nextDeploy.enqueue("contract.policy", { two: true });
+    await expect(nextDeploy.getJob(id)).resolves.toMatchObject({ contractVersion: "two" });
+
+    const changedDocument = new Queue(pool, "default", {
+      contracts: {
+        "contract.policy": {
+          currentVersion: "one",
+          versions: { one: { payloadSchema: { type: "string" } } },
+        },
+      },
+    });
+    await expect(changedDocument.syncContracts()).rejects.toThrow(
+      /contract documents are immutable/,
+    );
+    await expect(
+      pool.query(
+        "UPDATE workhorse.contract_definition SET source = 'operator' WHERE job_type = 'contract.policy' AND version = 'one'",
+      ),
+    ).rejects.toThrow(/contract documents are immutable/);
+    await expect(
+      pool.query(
+        "DELETE FROM workhorse.contract_definition WHERE job_type = 'contract.policy' AND version = 'one'",
+      ),
+    ).rejects.toThrow(/contract documents are immutable/);
+  });
+
   it("fails a handler attempt when its result violates the accepted contract", async () => {
     const contractedQueue = new Queue(pool, "default", {
       contracts: {
@@ -154,12 +247,12 @@ describe("enqueue contracts", () => {
           currentVersion: "1",
           versions: {
             "1": {
-              validatePayload: (value) => typeof value === "object" && value !== null,
-              validateResult: (value) =>
-                typeof value === "object" &&
-                value !== null &&
-                !Array.isArray(value) &&
-                typeof value.total === "number",
+              payloadSchema: { type: "object" },
+              resultSchema: {
+                type: "object",
+                required: ["total"],
+                properties: { total: { type: "number" } },
+              },
               maxResultBytes: 32,
             },
           },
@@ -245,16 +338,19 @@ describe("enqueue contracts", () => {
 
   it("uses the accepted version and redacts its sensitive fields from operator reads", async () => {
     const versionOne = {
-      validatePayload: (value: Json) =>
-        typeof value === "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        value.revision === 1,
-      validateResult: (value: Json) =>
-        typeof value === "object" && value !== null && !Array.isArray(value) && value.ok === true,
+      payloadSchema: {
+        type: "object",
+        required: ["revision"],
+        properties: { revision: { const: 1 } },
+      },
+      resultSchema: {
+        type: "object",
+        required: ["ok"],
+        properties: { ok: { const: true } },
+      },
       sensitivePayloadKeys: ["token"],
       sensitiveResultKeys: ["receiptSecret"],
-    } as const;
+    };
     const firstDeployment = new Queue(pool, "default", {
       contracts: {
         "contract.versioned": { currentVersion: "1", versions: { "1": versionOne } },
@@ -272,11 +368,11 @@ describe("enqueue contracts", () => {
           versions: {
             "1": versionOne,
             "2": {
-              validatePayload: (value) =>
-                typeof value === "object" &&
-                value !== null &&
-                !Array.isArray(value) &&
-                value.revision === 2,
+              payloadSchema: {
+                type: "object",
+                required: ["revision"],
+                properties: { revision: { const: 2 } },
+              },
             },
           },
         },
@@ -318,11 +414,11 @@ describe("enqueue contracts", () => {
           currentVersion: "schedule-current",
           versions: {
             "schedule-current": {
-              validatePayload: (value) =>
-                typeof value === "object" &&
-                value !== null &&
-                !Array.isArray(value) &&
-                value.kind === "scheduled",
+              payloadSchema: {
+                type: "object",
+                required: ["kind"],
+                properties: { kind: { const: "scheduled" } },
+              },
               sensitivePayloadKeys: ["token"],
             },
           },

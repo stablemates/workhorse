@@ -5,6 +5,7 @@ go 1.23.0
 require github.com/jackc/pgx/v5 v5.7.6
 
 require (
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	go.opentelemetry.io/otel v1.38.0
 	go.opentelemetry.io/otel/metric v1.38.0
 	go.opentelemetry.io/otel/sdk v1.38.0

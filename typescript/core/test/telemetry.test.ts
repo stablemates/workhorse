@@ -113,7 +113,7 @@ describe("OpenTelemetry", () => {
           currentVersion: "mail-current",
           versions: {
             "mail-current": {
-              validatePayload: () => true,
+              payloadSchema: true,
               sensitivePayloadKeys: ["accessToken"],
             },
           },

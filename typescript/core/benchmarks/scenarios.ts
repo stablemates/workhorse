@@ -2744,10 +2744,8 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
         currentVersion: "1",
         versions: {
           "1": {
-            validatePayload: (value) =>
-              typeof value === "object" && value !== null && !Array.isArray(value),
-            validateResult: (value) =>
-              typeof value === "object" && value !== null && !Array.isArray(value),
+            payloadSchema: { type: "object" },
+            resultSchema: { type: "object" },
             sensitivePayloadKeys: ["token"],
             sensitiveResultKeys: ["receipt"],
           },

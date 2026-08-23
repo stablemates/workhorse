@@ -621,6 +621,108 @@ func TestWorkerClaimsHandlesAndCompletesAJob(t *testing.T) {
 	}
 }
 
+func TestContractSyncValidatesPayloadAndWorkerResult(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-contract")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-contract")
+	err = queue.SyncContracts(ctx, map[string]workhorse.JobTypeContracts{
+		"contract.go": {
+			CurrentVersion: "current",
+			Versions: map[string]workhorse.JobContractVersion{
+				"current": {
+					PayloadSchema: map[string]any{
+						"type": "object", "required": []any{"name"},
+						"properties": map[string]any{"name": map[string]any{"type": "string"}},
+					},
+					ResultSchema: map[string]any{
+						"type": "object", "required": []any{"ok"},
+						"properties": map[string]any{"ok": map[string]any{"const": true}},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queue.Enqueue(ctx, "contract.go", map[string]any{"name": 42}); err == nil {
+		t.Fatal("expected invalid payload rejection")
+	}
+	jobID, err := queue.Enqueue(
+		ctx,
+		"contract.go",
+		map[string]any{"name": "accepted"},
+		workhorse.EnqueueOptions{MaxAttempts: 1},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type contractPayload struct {
+		Name string `json:"name"`
+	}
+	type contractResult struct {
+		OK bool `json:"ok"`
+	}
+	structJobID, err := queue.Enqueue(
+		ctx,
+		"contract.go",
+		contractPayload{Name: "struct"},
+		workhorse.EnqueueOptions{MaxAttempts: 1},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: "go-contract", WorkerID: "go-contract-worker", LeaseDuration: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.Handle("contract.go", func(_ context.Context, payload any, _ *workhorse.HandlerContext) (any, error) {
+		if document, ok := payload.(map[string]any); ok && document["name"] == "struct" {
+			return contractResult{OK: true}, nil
+		}
+		return map[string]any{"ok": false}, nil
+	})
+	for range 2 {
+		processed, err := worker.RunOnce(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !processed {
+			t.Fatal("worker did not claim the contracted job")
+		}
+	}
+	var state, structState string
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT state FROM workhorse.job_outcome WHERE job_id = $1::uuid",
+		jobID,
+	).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "failed" {
+		t.Fatalf("expected failed outcome, received %s", state)
+	}
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT state FROM workhorse.job_outcome WHERE job_id = $1::uuid",
+		structJobID,
+	).Scan(&structState); err != nil {
+		t.Fatal(err)
+	}
+	if structState != "succeeded" {
+		t.Fatalf("expected struct result to succeed, received %s", structState)
+	}
+}
+
 func TestWorkerRecordsFailureAndLetsPostgreSQLScheduleTheRetry(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-retry")
 	ctx := context.Background()

@@ -38,14 +38,15 @@ Two boundaries keep this matrix small:
 | Job dependencies with terminal policies    | Supported  | Supported | Supported |
 | Concurrency keys                           | Supported  | Supported | Supported |
 | Recurring schedule definition sync         | Supported  | Supported | Supported |
-| Payload and result contracts               | Supported  | Absent    | Absent    |
+| Payload and result contracts               | Supported  | Supported | Supported |
 | Compatibility refusal before mutation      | Supported  | Supported | Supported |
 | SQL protocol conformance fixtures executed | Supported  | Supported | Supported |
 
 The TypeScript client is `@workhorse-js/core` (`Queue`); the Python client is `workhorse-pg`
 (`Queue`/`AsyncQueue` over Psycopg and asyncpg). The Go module's `Queue` supports transactional
 single and batch enqueue over pgx and `database/sql`, including every stable enqueue option except
-payload and result contracts. Go and Python can define and synchronize recurring schedules through
+operator reads. Go and Python can define and synchronize recurring schedules and immutable JSON
+Schema contracts through
 caller-owned executors. The Go test lane enqueues through each documented executor. Its release test
 also runs a worker from a separate module that imports the public package. Compiled process tests
 exercise signal drain and lease recovery after a kill. The Go worker provides
@@ -132,7 +133,7 @@ programmatically through its own Plane work item.
 If a cell says Supported, tests in this repository must exercise that capability in that language.
 The conformance fixtures under `protocol/v1/` are the intended enforcement point. The TypeScript
 suite runs the SQL fixtures through `scripts/verify-sql-protocol.ts` and the runtime fixtures through
-`Worker`. The Python suite runs the SQL fixtures through `python/tests/test_protocol_conformance.py`
+`Worker`. All three languages execute `protocol/v1/contracts.json`. The Python suite runs the SQL fixtures through `python/tests/test_protocol_conformance.py`
 and every runtime fixture through `python/tests/test_worker_runtime_conformance.py`.
 
 `typescript/core/test/parity-matrix.test.ts` holds this file to that promise. It parses the three

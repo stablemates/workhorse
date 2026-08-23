@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
 
 from ._compatibility import CachedCompatibilityCheck, SyncRowExecutor
+from ._contracts import compile_contract_schema
 from ._drivers import PsycopgConnection, Row, SyncExecutor
 from ._external_waits import encode_wait_value, validate_wait_name, validate_wait_timeout
 from ._notifications import (
@@ -58,6 +59,8 @@ from .errors import (
     HumanWaitConflictError,
     HumanWaitLeaseLostError,
     HumanWaitLimitExceededError,
+    JobContractUnavailableError,
+    JobContractValidationError,
     ProgressLeaseLostError,
     ProgressRateLimitError,
     SignalWaitConflictError,
@@ -801,6 +804,7 @@ class Worker:
         self._registered = False
         self._next_queue_index = 0
         self._state_lock = Lock()
+        self._contract_validators: dict[tuple[str, str], Any] = {}
         self._execution_lock = Lock()
         self._wake = Event()
         self._active_threads: set[Thread] = set()
@@ -819,6 +823,28 @@ class Worker:
             {"workhorse.job.type": type, "workhorse.worker.id": self.worker_id},
         )
         return self
+
+    def _validate_result_contract(self, job: ClaimedJob, result: Json) -> None:
+        version = job.contract_version
+        if version is None:
+            return
+        key = (job.type, version)
+        with self._state_lock:
+            validator = self._contract_validators.get(key)
+        if validator is None:
+            rows = self._executor.rows(STATEMENTS.get_contract, (job.type, version))
+            if len(rows) != 1:
+                raise JobContractUnavailableError(job.type, version)
+            document = rows[0].get("schema")
+            if isinstance(document, str):
+                document = json.loads(document)
+            if not isinstance(document, Mapping) or "result" not in document:
+                raise JobContractUnavailableError(job.type, version)
+            validator = compile_contract_schema(cast(Json, document["result"]))
+            with self._state_lock:
+                self._contract_validators[key] = validator
+        if not validator.is_valid(result):
+            raise JobContractValidationError(job.type, version, "result")
 
     def handle_batch(
         self,
@@ -1684,6 +1710,7 @@ class Worker:
 
         try:
             result = handler(job.payload, durability.context())
+            self._validate_result_contract(job, result)
             encoded_result = json.dumps(result, separators=(",", ":"))
         except _DurableWaitSuspension:
             if finish_ownership_lifecycle():

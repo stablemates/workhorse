@@ -165,6 +165,7 @@ type EnqueueResult struct {
 type Queue struct {
 	executor     Executor
 	defaultQueue string
+	contracts    contractCache
 }
 
 // QueueHealth is PostgreSQL's versioned health document. Stable fields and reason codes are
@@ -215,7 +216,7 @@ type CancelResult struct {
 
 // NewQueue constructs an enqueue client without taking ownership of the executor.
 func NewQueue(executor Executor, defaultQueue string) *Queue {
-	return &Queue{executor: executor, defaultQueue: defaultQueue}
+	return &Queue{executor: executor, defaultQueue: defaultQueue, contracts: newContractCache()}
 }
 
 // Health reads PostgreSQL's database-authoritative queue health snapshot.
@@ -429,6 +430,10 @@ func (queue *Queue) EnqueueManyWithResults(
 	if err := AssertCompatible(ctx, queue.executor); err != nil {
 		return nil, err
 	}
+	payload, err = queue.applyPayloadContracts(ctx, requests, payload)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := queue.executor.Query(ctx, protocolStatementRegistry[enqueueManyStatementName], payload)
 	if err != nil {
 		return nil, translateEnqueueError(err)
@@ -452,6 +457,69 @@ func (queue *Queue) EnqueueManyWithResults(
 		seen[ordinal-1] = true
 	}
 	return results, nil
+}
+
+func (queue *Queue) applyPayloadContracts(
+	ctx context.Context,
+	requests []EnqueueRequest,
+	payload []byte,
+) ([]byte, error) {
+	queue.contracts.mu.RLock()
+	contractsEnabled := queue.contracts.enabled
+	queue.contracts.mu.RUnlock()
+	if !contractsEnabled {
+		return payload, nil
+	}
+	var values []map[string]any
+	if err := decodeContractJSON(payload, &values); err != nil {
+		return nil, err
+	}
+	for index, request := range requests {
+		rows, err := queue.executor.Query(
+			ctx,
+			protocolStatementRegistry[getContractDefinitionStatementName],
+			request.Type,
+			nil,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if len(rows) == 0 {
+			continue
+		}
+		if len(rows) != 1 {
+			return nil, errorsNewInvalidContract()
+		}
+		row := rows[0]
+		version, ok := row[contractVersionField].(string)
+		if !ok {
+			return nil, errorsNewInvalidContract()
+		}
+		document, err := contractDocument(row[contractSchemaField])
+		if err != nil {
+			return nil, err
+		}
+		validator, err := queue.contracts.validator(
+			request.Type+contractCacheSeparator+version+contractCacheSeparator+contractPayloadKind,
+			document[contractPayloadSchemaField],
+		)
+		if err != nil {
+			return nil, err
+		}
+		if err := validator.Validate(values[index][rowPayloadField]); err != nil {
+			return nil, &JobContractValidationError{
+				JobType: request.Type,
+				Version: version,
+				Kind:    contractPayloadKind,
+			}
+		}
+		values[index][contractVersionJSONField] = version
+		values[index][contractMaxPayloadBytesJSONField] = row[rowPayloadMaxBytesField]
+		values[index][contractMaxResultBytesJSONField] = row[rowResultMaxBytesField]
+		values[index][contractSensitivePayloadJSONField] = row[rowPayloadRedactKeysField]
+		values[index][contractSensitiveResultJSONField] = row[rowResultRedactKeysField]
+	}
+	return json.Marshal(values)
 }
 
 // SyncSchedules atomically reconciles one namespace of recurring definitions.

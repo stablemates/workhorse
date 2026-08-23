@@ -29,13 +29,10 @@ export interface Queryable {
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
-/** Application validator for one versioned payload or result contract. */
-export type JobContractValidator = (value: Json) => boolean;
-
 /** One immutable application contract version for a job type. */
 export interface JobContractVersion {
-  validatePayload?: JobContractValidator;
-  validateResult?: JobContractValidator;
+  payloadSchema?: Json;
+  resultSchema?: Json;
   maxPayloadBytes?: number;
   maxResultBytes?: number;
   /** Top-level object keys removed from operator payload views. */

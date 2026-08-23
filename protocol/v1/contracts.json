@@ -1,0 +1,55 @@
+[
+  {
+    "id": "object-validation",
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "required": ["recipient"],
+      "properties": { "recipient": { "type": "string", "minLength": 1 } },
+      "additionalProperties": false
+    },
+    "instances": [
+      { "value": { "recipient": "person@example.test" }, "valid": true },
+      { "value": { "recipient": "" }, "valid": false },
+      { "value": { "recipient": "ok", "extra": true }, "valid": false }
+    ]
+  },
+  {
+    "id": "bundled-reference",
+    "schema": {
+      "$defs": { "identifier": { "type": "integer", "minimum": 1 } },
+      "type": "array",
+      "items": { "$ref": "#/$defs/identifier" },
+      "minItems": 1
+    },
+    "instances": [
+      { "value": [1, 2], "valid": true },
+      { "value": [0], "valid": false }
+    ]
+  },
+  {
+    "id": "format-is-annotation",
+    "schema": { "type": "string", "format": "email" },
+    "instances": [{ "value": "deliberately not an email", "valid": true }]
+  },
+  {
+    "id": "remote-reference-rejected",
+    "schema": { "$ref": "https://example.com/external.json" },
+    "schemaError": true
+  },
+  {
+    "id": "dynamic-reference-rejected",
+    "schema": { "$dynamicRef": "#node" },
+    "schemaError": true
+  },
+  {
+    "id": "unevaluated-properties-rejected",
+    "schema": { "type": "object", "unevaluatedProperties": false },
+    "schemaError": true
+  },
+  {
+    "id": "custom-keyword-rejected",
+    "schema": { "type": "string", "workhorseCustom": true },
+    "schemaError": true
+  }
+]

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 
 from ._compatibility import assert_async_compatible, assert_sync_compatible
+from ._contracts import compile_contract_schema, serialize_contracts
 from ._drivers import (
     AsyncpgConnection,
     AsyncpgExecutor,
@@ -34,6 +35,7 @@ from .types import (
     EnqueueRequest,
     EnqueueResult,
     HumanWaitCompletionResult,
+    JobTypeContracts,
     Json,
     QueueHealth,
     ScheduleDefinition,
@@ -56,6 +58,8 @@ class Queue:
     def __init__(self, connection: SyncConnection, default_queue: str = "default") -> None:
         self._executor = SyncExecutor(cast(PsycopgConnection, connection))
         self.default_queue = default_queue
+        self._contract_validators: dict[tuple[str, str], Any] = {}
+        self._contracts_enabled = False
 
     def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str:
         return self.enqueue_with_result(type, payload, options).job_id
@@ -98,7 +102,17 @@ class Queue:
         if not requests:
             return []
         assert_sync_compatible(self._executor)
-        payload = serialize_requests(requests, self.default_queue)
+        values = cast(
+            list[dict[str, Json]], json.loads(serialize_requests(requests, self.default_queue))
+        )
+        if self._contracts_enabled:
+            for request, value in zip(requests, values, strict=True):
+                rows = self._executor.rows(STATEMENTS.get_contract, (request.type, None))
+                if rows:
+                    _apply_contract(
+                        rows[0], request.type, request.payload, value, self._contract_validators
+                    )
+        payload = json.dumps(values, separators=(",", ":"), ensure_ascii=False)
         try:
             return _results(self._executor.rows(STATEMENTS.enqueue_many, (payload,)))
         except Exception as error:
@@ -114,6 +128,12 @@ class Queue:
         assert_sync_compatible(self._executor)
         payload = serialize_schedules(definitions, self.default_queue)
         self._executor.rows(STATEMENTS.sync_schedules, (namespace, payload, prune))
+
+    def sync_contracts(self, contracts: Mapping[str, JobTypeContracts]) -> None:
+        assert_sync_compatible(self._executor)
+        payload = json.dumps(serialize_contracts(contracts), separators=(",", ":"))
+        self._executor.rows(STATEMENTS.sync_contracts, (payload,))
+        self._contracts_enabled = True
 
     def send_signal(
         self,
@@ -164,6 +184,8 @@ class AsyncQueue:
     ) -> None:
         self._executor = executor
         self.default_queue = default_queue
+        self._contract_validators: dict[tuple[str, str], Any] = {}
+        self._contracts_enabled = False
 
     @classmethod
     def from_psycopg(
@@ -222,7 +244,17 @@ class AsyncQueue:
         if not requests:
             return []
         await assert_async_compatible(self._executor)
-        payload = serialize_requests(requests, self.default_queue)
+        values = cast(
+            list[dict[str, Json]], json.loads(serialize_requests(requests, self.default_queue))
+        )
+        if self._contracts_enabled:
+            for request, value in zip(requests, values, strict=True):
+                rows = await self._executor.rows(STATEMENTS.get_contract, (request.type, None))
+                if rows:
+                    _apply_contract(
+                        rows[0], request.type, request.payload, value, self._contract_validators
+                    )
+        payload = json.dumps(values, separators=(",", ":"), ensure_ascii=False)
         try:
             return _results(await self._executor.rows(STATEMENTS.enqueue_many, (payload,)))
         except Exception as error:
@@ -238,6 +270,12 @@ class AsyncQueue:
         await assert_async_compatible(self._executor)
         payload = serialize_schedules(definitions, self.default_queue)
         await self._executor.rows(STATEMENTS.sync_schedules, (namespace, payload, prune))
+
+    async def sync_contracts(self, contracts: Mapping[str, JobTypeContracts]) -> None:
+        await assert_async_compatible(self._executor)
+        payload = json.dumps(serialize_contracts(contracts), separators=(",", ":"))
+        await self._executor.rows(STATEMENTS.sync_contracts, (payload,))
+        self._contracts_enabled = True
 
     async def send_signal(
         self,
@@ -283,6 +321,40 @@ def _raise_translated(error: Exception) -> NoReturn:
     if translated is not None:
         raise translated from error
     raise error
+
+
+def _apply_contract(
+    row: Row,
+    job_type: str,
+    payload: Json,
+    request: dict[str, Json],
+    cache: dict[tuple[str, str], Any],
+) -> None:
+    version = str(row["version"])
+    document = row["schema"]
+    if isinstance(document, str):
+        document = json.loads(document)
+    if not isinstance(document, Mapping) or "payload" not in document:
+        raise RuntimeError("workhorse.get_contract_definition_v1 returned an invalid schema")
+    validator = cache.get((job_type, version))
+    if validator is None:
+        validator = compile_contract_schema(cast(Json, document["payload"]))
+        cache[(job_type, version)] = validator
+    if not validator.is_valid(payload):
+        from .errors import JobContractValidationError
+
+        raise JobContractValidationError(job_type, version, "payload")
+    request.update(
+        {
+            "contractVersion": version,
+            "payloadMaxBytes": cast(int, row["payload_max_bytes"]),
+            "resultMaxBytes": cast(int, row["result_max_bytes"]),
+            "sensitivePayloadKeys": cast(
+                Json, list(cast(Sequence[str], row["payload_redact_keys"]))
+            ),
+            "sensitiveResultKeys": cast(Json, list(cast(Sequence[str], row["result_redact_keys"]))),
+        }
+    )
 
 
 def _health_window_start() -> datetime:

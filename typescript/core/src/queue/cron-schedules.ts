@@ -47,20 +47,22 @@ export class CronSchedulesModule extends QueueModule {
     definitions: readonly ScheduleDefinition[],
     options: { prune?: boolean } = {},
   ): Promise<void> {
-    const scheduleInputs = definitions.map((definition) => ({
-      ...this.enqueueContracts.jobAcceptance(definition.job.type, definition.job.payload),
-      name: definition.name,
-      schedule: definition.schedule,
-      timezone: definition.timezone ?? "UTC",
-      enabled: definition.enabled ?? true,
-      queue: definition.job.queue ?? this.context.defaultQueue,
-      priority: validateJobPriority(definition.job.priority),
-      concurrencyKey: definition.job.concurrencyKey ?? null,
-      type: definition.job.type,
-      payload: definition.job.payload,
-      maxAttempts: definition.job.maxAttempts ?? 25,
-      retryPolicy: definition.job.retryPolicy ?? null,
-    }));
+    const scheduleInputs = await Promise.all(
+      definitions.map(async (definition) => ({
+        ...(await this.enqueueContracts.jobAcceptance(definition.job.type, definition.job.payload)),
+        name: definition.name,
+        schedule: definition.schedule,
+        timezone: definition.timezone ?? "UTC",
+        enabled: definition.enabled ?? true,
+        queue: definition.job.queue ?? this.context.defaultQueue,
+        priority: validateJobPriority(definition.job.priority),
+        concurrencyKey: definition.job.concurrencyKey ?? null,
+        type: definition.job.type,
+        payload: definition.job.payload,
+        maxAttempts: definition.job.maxAttempts ?? 25,
+        retryPolicy: definition.job.retryPolicy ?? null,
+      })),
+    );
     await withSpan(
       "workhorse.schedule.synchronize",
       { "workhorse.schedule.definition_count": definitions.length },

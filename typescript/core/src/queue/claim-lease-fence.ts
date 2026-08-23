@@ -333,10 +333,10 @@ export class ClaimLeaseFenceModule extends QueueModule {
     job: ClaimedJob,
     workerId: string,
     result: TResult,
-    validateResult: () => void,
+    validateResult: () => Promise<void>,
   ): Promise<boolean> {
     return withSpan("workhorse.complete", jobSpanAttributes(job), async (span) => {
-      validateResult();
+      await validateResult();
       const lease = FencedLease.from(job, workerId);
       // Completion is conditional on the exact unexpired lease and fence. A stale worker gets false
       // rather than overwriting the result of a recovered attempt.
