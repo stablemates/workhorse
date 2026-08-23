@@ -538,7 +538,25 @@ func (worker *Worker) runMaintenance(ctx context.Context) error {
 		}
 	}
 	if ownsTick && len(worker.scheduleNamespaces) > 0 {
-		return worker.fireDueSchedules(ctx, executor, time.Now())
+		if err := worker.fireDueSchedules(ctx, executor, time.Now()); err != nil {
+			return err
+		}
+	}
+	maintenance, err := executor.Query(
+		ctx,
+		internalStatementRegistry[runMaintenanceStatementName],
+		time.Now(),
+	)
+	if err != nil {
+		return err
+	}
+	for _, row := range maintenance {
+		if _, ok := row[rowPhaseField].(string); !ok {
+			return errors.New(invalidMaintenanceResultMessage)
+		}
+		if _, ok := row[rowSkippedLockField].(bool); !ok {
+			return errors.New(invalidMaintenanceResultMessage)
+		}
 	}
 	return nil
 }

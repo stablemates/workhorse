@@ -7,6 +7,7 @@ const (
 	enqueueManyStatementName             = "enqueue_many_v1"
 	syncScheduleDefinitionsStatementName = "sync_schedule_definitions_v1"
 	tickStatementName                    = "tick_v1"
+	runMaintenanceStatementName          = "run_maintenance_v1"
 	listSchedulesStatementName           = "list_schedules_v1"
 	fireScheduleStatementName            = "fire_schedule_v1"
 	promoteStatementName                 = "promote_v1"
@@ -375,6 +376,7 @@ var internalStatementRegistry = map[string]string{
 	schemaVersionStatement:               `SELECT version FROM workhorse.schema_version ORDER BY version`,
 	syncScheduleDefinitionsStatementName: `SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean)`,
 	tickStatementName:                    `SELECT * FROM workhorse.tick_v1($1::integer, $2::integer)`,
+	runMaintenanceStatementName:          `SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)`,
 	listSchedulesStatementName: `SELECT definition.namespace, definition.schedule_name, definition.cron_expression,
        definition.revision::text, max(occurrence.occurrence_at) AS last_occurrence_at
   FROM workhorse.schedule_definition definition
@@ -390,6 +392,7 @@ var internalStatementRegistry = map[string]string{
 }
 
 var protocolStatementRegistry = map[string]string{
+	runMaintenanceStatementName:      `SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)`,
 	enqueueManyStatementName:         `SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal`,
 	claimStatementName:               `SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)`,
 	recordBatchDispatchStatementName: `SELECT workhorse.record_batch_dispatch_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,

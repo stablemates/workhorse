@@ -906,6 +906,7 @@ describe("worker registry", () => {
       "background_tasks:enqueue_idempotency",
       "background_tasks:released_dependencies",
       "background_tasks:terminal_jobs",
+      "background_tasks:worker_registry",
     ]);
     expect(worker.maintenanceTelemetry()).toEqual(telemetry);
 

@@ -23,6 +23,7 @@ class StatementRegistry:
     enqueue_many: DriverStatement
     sync_schedules: DriverStatement
     tick: DriverStatement
+    run_maintenance: DriverStatement
     list_schedules: DriverStatement
     fire_schedule: DriverStatement
     promote: DriverStatement
@@ -69,6 +70,10 @@ STATEMENTS = StatementRegistry(
     tick=DriverStatement(
         psycopg="SELECT * FROM workhorse.tick_v1(%s::integer, %s::integer)",
         asyncpg="SELECT * FROM workhorse.tick_v1($1::integer, $2::integer)",
+    ),
+    run_maintenance=DriverStatement(
+        psycopg="SELECT * FROM workhorse.run_maintenance_v1(%s::timestamptz)",
+        asyncpg="SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)",
     ),
     list_schedules=DriverStatement(
         psycopg=(

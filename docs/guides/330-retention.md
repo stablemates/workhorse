@@ -5,6 +5,11 @@ finished attempt is a row. Left alone, those tables become most of your database
 
 Retention deletes the old ones. Doing that safely is more subtle than a nightly `DELETE`.
 
+Every worker runtime offers the same slow maintenance pass through `run_maintenance_v1`.
+PostgreSQL orders statistics, partition preparation, retention, terminal cleanup, and registry
+cleanup, while each task keeps its own due check and lock. A fleet that runs only Python or Go
+therefore keeps the same evidence and partition guarantees as a TypeScript fleet.
+
 ## Windows are minimums, not deadlines
 
 You configure how long to keep each category of data — finished jobs, outcomes, events,

@@ -52,10 +52,7 @@ describe("worker suspension", () => {
       complete: unsupportedWorkerQueueOperation,
       fail: unsupportedWorkerQueueOperation,
       tick: async () => [],
-      prepareHistoryPartitions: async () => [],
-      rollupStatistics: async () => [],
-      retainHistory: async () => [],
-      pruneTerminalStorage: async () => [],
+      runMaintenance: async () => [],
     } as unknown as WorkerQueueApi;
     const worker = new Worker(queue, {
       registryIntervalMs: 0,

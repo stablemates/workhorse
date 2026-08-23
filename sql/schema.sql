@@ -8410,6 +8410,43 @@ BEGIN
 END;
 $$;
 
+-- Run every slow maintenance task in one database-owned order so each language worker participates
+-- in the same housekeeping contract. The individual functions retain their own cadence gates and
+-- advisory locks, and report their expected per-phase failures as telemetry rows. Registry pruning
+-- remains best-effort so its failure cannot reject an otherwise successful maintenance pass.
+CREATE OR REPLACE FUNCTION workhorse.run_maintenance_v1(
+  p_now timestamptz DEFAULT clock_timestamp()
+) RETURNS TABLE (
+  phase text, rows_affected integer, duration_ms integer, skipped_lock boolean, error jsonb
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE v_started_at timestamptz;
+BEGIN
+  IF p_now IS NULL OR NOT isfinite(p_now) THEN RAISE EXCEPTION 'maintenance time is required'; END IF;
+
+  RETURN QUERY SELECT * FROM workhorse.rollup_stats_v1(false, p_now, 240);
+  RETURN QUERY SELECT * FROM workhorse.prepare_history_partitions_v1(false, p_now);
+  RETURN QUERY SELECT * FROM workhorse.retain_history_v1(false, p_now);
+  RETURN QUERY SELECT * FROM workhorse.prune_terminal_storage_v1(false, p_now);
+
+  phase := 'worker_registry';
+  rows_affected := 0;
+  skipped_lock := false;
+  error := NULL;
+  v_started_at := clock_timestamp();
+  BEGIN
+    rows_affected := workhorse.prune_worker_registry_v1(interval '1 minute');
+  EXCEPTION WHEN OTHERS THEN
+    error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
+  END;
+  duration_ms := GREATEST(
+    0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
+  );
+  RETURN NEXT;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.create_history_day_v1(p_day date)
 RETURNS void
 LANGUAGE plpgsql

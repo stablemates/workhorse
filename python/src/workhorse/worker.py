@@ -1193,6 +1193,23 @@ class Worker:
                         "Maintenance phase completed",
                         attributes,
                     )
+            slow_maintenance = self._executor.rows(
+                STATEMENTS.run_maintenance, (datetime.now(timezone.utc),)
+            )
+            for row in slow_maintenance:
+                phase = str(row["phase"])
+                rows_affected = int(cast(int, row["rows_affected"]))
+                duration_ms = float(cast(int | float, row["duration_ms"]))
+                skipped_lock = row["skipped_lock"] is True
+                has_error = row["error"] is not None
+                total_rows += rows_affected
+                record_maintenance(
+                    phase,
+                    rows_affected,
+                    duration_ms,
+                    skipped_lock,
+                    has_error,
+                )
             maintenance_span.set_attribute("workhorse.maintenance.rows_affected", total_rows)
         self._last_maintenance_at = now_monotonic
         owns_tick = bool(tick) and all(row["skipped_lock"] is not True for row in tick)

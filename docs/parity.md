@@ -83,7 +83,7 @@ telemetry, and graceful shutdown.
 | Schedule firing (in-process cron)            | Supported  | Supported | Supported |
 | Worker fleet registration and remote pause   | Supported  | Absent    | Absent    |
 | Graceful stop and signal drain               | Supported  | Supported | Supported |
-| Retention maintenance participation          | Supported  | Absent    | Absent    |
+| Retention maintenance participation          | Supported  | Supported | Supported |
 | OpenTelemetry tracing and metrics            | Supported  | Supported | Supported |
 | Shared runtime fixtures executed             | Supported  | Supported | Supported |
 

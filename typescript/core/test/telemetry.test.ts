@@ -181,13 +181,7 @@ describe("OpenTelemetry", () => {
     let claimed = false;
     const database = queryable(
       vi.fn(async (sql: string) => {
-        if (
-          sql.includes("tick_v1") ||
-          sql.includes("prepare_history_partitions_v1") ||
-          sql.includes("rollup_stats_v1") ||
-          sql.includes("retain_history_v1") ||
-          sql.includes("prune_terminal_storage_v1")
-        ) {
+        if (sql.includes("tick_v1") || sql.includes("run_maintenance_v1")) {
           return { rows: [] };
         }
         if (sql.includes("claim_v1")) {
@@ -322,13 +316,7 @@ describe("OpenTelemetry", () => {
     let persistedError: string | undefined;
     const database = queryable(
       vi.fn(async (sql: string, values?: readonly unknown[]) => {
-        if (
-          sql.includes("tick_v1") ||
-          sql.includes("prepare_history_partitions_v1") ||
-          sql.includes("rollup_stats_v1") ||
-          sql.includes("retain_history_v1") ||
-          sql.includes("prune_terminal_storage_v1")
-        ) {
+        if (sql.includes("tick_v1") || sql.includes("run_maintenance_v1")) {
           return { rows: [] };
         }
         if (sql.includes("claim_v1")) {

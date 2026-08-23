@@ -89,16 +89,9 @@ describe("structured logging", () => {
           registrations += 1;
           return { rows: [{ paused: false }] };
         }
-        if (
-          sql.includes("tick_v1") ||
-          sql.includes("prepare_history_partitions_v1") ||
-          sql.includes("rollup_stats_v1") ||
-          sql.includes("retain_history_v1") ||
-          sql.includes("prune_terminal_storage_v1")
-        ) {
+        if (sql.includes("tick_v1") || sql.includes("run_maintenance_v1")) {
           return { rows: [] };
         }
-        if (sql.includes("prune_worker_registry_v1")) return { rows: [{ count: 0 }] };
         if (sql.includes("claim_v1")) return { rows: [] };
         if (sql.includes("deregister_worker_v1")) return { rows: [{ deregistered: true }] };
         throw new Error(`Unexpected query: ${sql}`);

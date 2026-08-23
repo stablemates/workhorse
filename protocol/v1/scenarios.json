@@ -922,5 +922,30 @@
         "expect": { "rows": [{ "value": { "state": "ready" } }] }
       }
     ]
+  },
+  {
+    "id": "retention-maintenance",
+    "steps": [
+      {
+        "id": "run-all-slow-phases",
+        "covers": ["retention-maintenance"],
+        "sql": "SELECT phase FROM workhorse.run_maintenance_v1($1::timestamptz)",
+        "parameters": ["2030-01-02T04:00:00.000Z"],
+        "expect": {
+          "rows": [
+            { "phase": "stat_rollup" },
+            { "phase": "stat_retention" },
+            { "phase": "history_partitions" },
+            { "phase": "event_retention" },
+            { "phase": "attempt_retention" },
+            { "phase": "schedule_occurrences" },
+            { "phase": "enqueue_idempotency" },
+            { "phase": "released_dependencies" },
+            { "phase": "terminal_jobs" },
+            { "phase": "worker_registry" }
+          ]
+        }
+      }
+    ]
   }
 ]

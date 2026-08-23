@@ -11,6 +11,10 @@ Objects containing only `$ref` reuse a captured value. Objects containing only `
 dynamic PostgreSQL value of `uuid`, `timestamp`, `integer`, or `string` while all surrounding JSON
 remains exact.
 
+The scenarios also pin database-owned maintenance orchestration. Every language executes
+`run_maintenance_v1` and verifies the ordered slow phase list, so a worker SDK cannot claim
+retention participation while depending on another language's process.
+
 `v1/runtime.json` defines behavior that every language worker supplies above the SQL protocol. Its
 fixtures pin batch ordering and settlement as well as durable-wait suspension, slot release,
 single-logical-attempt replay, and checkpoint reuse when a handler restarts. They also pin

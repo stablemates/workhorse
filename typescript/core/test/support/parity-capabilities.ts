@@ -236,8 +236,8 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Retention maintenance participation",
     typescript: { file: "integration-retention-maintenance.test.ts", pattern: "retain" },
-    python: { absent: "calls tick_v1 only; the five slow tasks never run; WH-341" },
-    go: { absent: "calls tick_v1 only; the five slow tasks never run; WH-341" },
+    python: { file: "test_worker.py", pattern: "participates_in_slow_maintenance" },
+    go: { file: "worker_test.go", pattern: "ParticipatesInSlowMaintenance" },
   },
   {
     capability: "OpenTelemetry tracing and metrics",

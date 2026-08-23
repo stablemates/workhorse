@@ -36,7 +36,8 @@
     "dependencies",
     "children",
     "signals",
-    "human-tokens"
+    "human-tokens",
+    "retention-maintenance"
   ],
   "runtimeCoverage": [
     "batch-handling",
@@ -53,6 +54,11 @@
     "graceful-drain"
   ],
   "functions": [
+    {
+      "name": "run_maintenance_v1",
+      "arity": 1,
+      "contract": "SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)"
+    },
     {
       "name": "enqueue_many_v1",
       "arity": 1,
@@ -166,6 +172,7 @@
   ],
   "typescriptContractSources": [
     "typescript/core/src/queue/enqueue-contracts.ts",
+    "typescript/core/src/queue/maintenance-contract.ts",
     "typescript/core/src/queue/claim-lease-fence.ts",
     "typescript/core/src/queue/checkpoints-progress-waits.ts",
     "typescript/core/src/queue/child-jobs.ts",

@@ -27,6 +27,7 @@ The current implementation remains an evidence-first validation release rather t
 - [`docs/decisions/0030-distinguish-suspensions-gates-and-child-joins.md`](docs/decisions/0030-distinguish-suspensions-gates-and-child-joins.md): why timer waits, external boundaries, child joins, and dependency gates remain distinct despite shared runtime storage.
 - [`docs/decisions/0031-keep-keyed-ingress-modes-distinct.md`](docs/decisions/0031-keep-keyed-ingress-modes-distinct.md): why idempotency, debounce, and throttle keep separate caller promises and outcomes.
 - [`docs/decisions/0032-keep-single-admin-authentication-process-local.md`](docs/decisions/0032-keep-single-admin-authentication-process-local.md): the single-process boundary for built-in dashboard sessions and login throttling.
+- [`docs/decisions/0036-database-owned-slow-maintenance-orchestration.md`](docs/decisions/0036-database-owned-slow-maintenance-orchestration.md): why PostgreSQL owns the slow maintenance sequence used by every language worker.
 
 Run the Fumadocs site locally without PostgreSQL:
 

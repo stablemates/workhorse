@@ -347,6 +347,11 @@ export class Queue {
     return this.modules.retentionMaintenance.tick(options);
   }
 
+  /** Offer every database-coordinated slow maintenance phase in its required order. */
+  async runMaintenance(options: { now?: Date } = {}): Promise<MaintenancePhaseResult[]> {
+    return this.modules.retentionMaintenance.runMaintenance(options);
+  }
+
   async prepareHistoryPartitions(
     options: { force?: boolean; now?: Date } = {},
   ): Promise<MaintenancePhaseResult[]> {

@@ -267,20 +267,7 @@ export interface WorkerQueueApi {
     promoteLimit?: number;
     recoverLimit?: number;
   }): Promise<MaintenancePhaseResult[]>;
-  prepareHistoryPartitions(options?: {
-    force?: boolean;
-    now?: Date;
-  }): Promise<MaintenancePhaseResult[]>;
-  rollupStatistics(options?: {
-    force?: boolean;
-    now?: Date;
-    maxBuckets?: number;
-  }): Promise<MaintenancePhaseResult[]>;
-  retainHistory(options?: { force?: boolean; now?: Date }): Promise<MaintenancePhaseResult[]>;
-  pruneTerminalStorage(options?: {
-    force?: boolean;
-    now?: Date;
-  }): Promise<MaintenancePhaseResult[]>;
+  runMaintenance(options?: { now?: Date }): Promise<MaintenancePhaseResult[]>;
   schedules(namespaces: readonly string[]): Promise<StoredSchedule[]>;
   fireSchedule(
     namespace: string,
@@ -1596,22 +1583,11 @@ export class Worker {
         this.maintenanceTaskPollMs,
         "background_tasks",
       );
-      // Statistics roll up before retention rather than after it. Retention refuses to delete raw
-      // history past the rollup watermark, so advancing the watermark first is what lets the same
-      // pass reclaim the history it just summarized. The rollup cadence itself is maintenance
-      // policy: workhorse.rollup_stats_v1 returns without work until the policy interval elapses.
-      for (const result of await this.queue.rollupStatistics())
-        this.recordMaintenance("statistics_rollup", result);
-      for (const result of await this.queue.prepareHistoryPartitions())
-        this.recordMaintenance("background_tasks", result);
-      for (const result of await this.queue.retainHistory())
-        this.recordMaintenance("background_tasks", result);
-      for (const result of await this.queue.pruneTerminalStorage())
-        this.recordMaintenance("background_tasks", result);
-      // Registrations are operator state, not lifecycle attribution, so a failed prune must never
-      // stop maintenance that retention and partitioning depend on.
-      if (this.registryIntervalMs !== 0) {
-        await this.queue.pruneWorkerRegistry().catch(() => 0);
+      for (const result of await this.queue.runMaintenance()) {
+        this.recordMaintenance(
+          result.phase.startsWith("stat_") ? "statistics_rollup" : "background_tasks",
+          result,
+        );
       }
       this.lastMaintenanceTaskPollAt = nowMs;
     }

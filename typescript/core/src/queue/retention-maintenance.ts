@@ -13,6 +13,7 @@ import type {
 } from "../types.js";
 import { recordRecoveryTelemetry } from "./claim-lease-fence.js";
 import { QueueModule } from "./module-context.js";
+import { RUN_MAINTENANCE_SQL } from "./maintenance-contract.js";
 
 export type MaintenancePhase =
   | "promote"
@@ -215,6 +216,15 @@ export class RetentionMaintenanceModule extends QueueModule {
         return result.rows.map(maintenancePhaseResult);
       }),
     );
+  }
+
+  async runMaintenance(options: { now?: Date } = {}): Promise<MaintenancePhaseResult[]> {
+    return this.maintenanceSpan("background_tasks", async () => {
+      const result = await this.context.database.query<MaintenancePhaseRow>(RUN_MAINTENANCE_SQL, [
+        options.now ?? new Date(),
+      ]);
+      return result.rows.map(maintenancePhaseResult);
+    });
   }
 
   async prepareHistoryPartitions(

@@ -24,6 +24,23 @@ from workhorse import (
 )
 
 
+def test_worker_participates_in_slow_maintenance(database_url: str) -> None:
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        connection.execute(
+            "UPDATE workhorse.maintenance_state SET last_completed_at = NULL "
+            "WHERE task_name = 'terminal_storage'"
+        )
+        worker = Worker(connection, worker_id="python-slow-maintenance-worker")
+
+        assert worker.run_once() is False
+        completed_at = connection.execute(
+            "SELECT last_completed_at FROM workhorse.maintenance_state "
+            "WHERE task_name = 'terminal_storage'"
+        ).fetchone()
+        assert completed_at is not None
+        assert completed_at[0] is not None
+
+
 def test_checkpoint_replays_the_saved_value_without_repeating_the_operation(
     database_url: str,
 ) -> None:

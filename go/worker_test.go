@@ -1405,6 +1405,41 @@ func TestWorkerMaintenanceCadenceDoesNotWaitForAHandler(t *testing.T) {
 	}
 }
 
+func TestWorkerParticipatesInSlowMaintenance(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-slow-maintenance")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(
+		ctx,
+		"UPDATE workhorse.maintenance_state SET last_completed_at = NULL WHERE task_name = 'terminal_storage'",
+	); err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: "go-slow-maintenance", WorkerID: "go-slow-maintenance-worker",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed, err := worker.RunOnce(ctx); err != nil || processed {
+		t.Fatalf("maintenance run: processed=%t err=%v", processed, err)
+	}
+	var completedAt *time.Time
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT last_completed_at FROM workhorse.maintenance_state WHERE task_name = 'terminal_storage'",
+	).Scan(&completedAt); err != nil {
+		t.Fatal(err)
+	}
+	if completedAt == nil {
+		t.Fatal("Go worker did not run terminal-storage maintenance")
+	}
+}
+
 func TestWorkerOwnershipLifecycleSupportsASingleConnectionPool(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-single-connection")
 	ctx := context.Background()

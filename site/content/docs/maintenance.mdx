@@ -8,16 +8,20 @@ workers, history partitions filling up, and evidence that eventually outlives it
 Workhorse handles all of it as bounded background work that workers drive automatically.
 PostgreSQL coordinates the passes with advisory locks, so scaling from one worker to fifty never
 multiplies destructive work — one worker wins each due phase, the rest get cheap no-ops.
+TypeScript, Python, and Go workers all call `run_maintenance_v1`, which keeps the slow phase order
+in PostgreSQL. A deployment therefore needs no TypeScript worker to replenish partitions, roll up
+statistics, retire history, or prune terminal and worker records.
 
 ## The phases, and how to watch them
 
-Workers call the same versioned SQL functions you can call yourself:
+`run_maintenance_v1` calls the same versioned SQL functions you can call yourself:
 
 - `queue.tick` promotes due jobs to ready and recovers expired leases.
 - `queue.prepareHistoryPartitions` creates future time partitions before data arrives.
 - `queue.rollupStatistics` folds raw history into minute summaries, then derives hour and day tiers.
 - `queue.retainHistory` retires history the statistics rollup no longer needs.
 - `queue.pruneTerminalStorage` removes expired idempotency bindings, then terminal job bundles.
+- `queue.pruneWorkerRegistry` removes registrations whose processes stopped refreshing them.
 
 Direct calls are for controlled scripts and tests; in production the workers already make them.
 To observe each pass, give any worker an `onMaintenance` callback:
