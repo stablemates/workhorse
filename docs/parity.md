@@ -110,7 +110,7 @@ semantics before any runtime fires a definition.
 | Go and Python embedded dashboard backends | [WH-351]        | Done      |
 | TypeScript `Admin` client                 | [WH-355]        | Done      |
 | Python `Admin` client                     | [WH-356]        | In Review |
-| Go `Admin` client                         | [WH-357]        | Todo      |
+| Go `Admin` client                         | [WH-357]        | In Review |
 
 The Plane work items own sequencing, blockers, and completion. Update this table when their state
 changes, and update the capability matrices only when repository tests prove the new support.
@@ -140,19 +140,18 @@ through its own public SDK.
 
 | Capability                                 | TypeScript | Python    | Go        |
 | ------------------------------------------ | ---------- | --------- | --------- |
-| Job lookup, listing, and timeline          | Supported  | Supported | Planned   |
+| Job lookup, listing, and timeline          | Supported  | Supported | Supported |
 | Queue health snapshot                      | Supported  | Supported | Supported |
 | Cancellation requests                      | Supported  | Supported | Supported |
-| Queue pause, resume, and purge             | Supported  | Supported | Planned   |
-| Dead-letter listing and redrive            | Supported  | Supported | Planned   |
-| Checkpoint, wait, and human-decision reads | Supported  | Supported | Planned   |
-| Durable operator worker pause              | Supported  | Supported | Planned   |
+| Queue pause, resume, and purge             | Supported  | Supported | Supported |
+| Dead-letter listing and redrive            | Supported  | Supported | Supported |
+| Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported |
+| Durable operator worker pause              | Supported  | Supported | Supported |
 
-TypeScript and Python expose these methods through dedicated public `Admin` clients. Python
-provides synchronous `Admin` over Psycopg and `AsyncAdmin` over Psycopg or asyncpg. Their embedded
-dashboards call the same clients for shared operator reads and controls. [WH-357] adds the Go
-client; until then, Go application code reaches this surface through the dashboard or CLI.
-Cancellation remains application-shaped, so every queue client exposes it with audit attribution.
+TypeScript and Go expose these methods through dedicated public `Admin` clients. Python provides
+synchronous `Admin` over Psycopg and `AsyncAdmin` over Psycopg or asyncpg. Their embedded dashboards
+call the same clients for shared operator reads and controls. Cancellation remains
+application-shaped, so every queue client exposes it with audit attribution.
 
 ## Keeping this document honest
 

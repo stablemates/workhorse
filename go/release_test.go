@@ -53,6 +53,10 @@ func main() {
 	if err := tx.Commit(ctx); err != nil {
 		panic(err)
 	}
+	admin := workhorse.NewAdmin(workhorse.NewPGXExecutor(pool))
+	if _, err := admin.GetJob(ctx, jobID); err != nil {
+		panic(err)
+	}
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
 		Queue: "module-consumer",
 		WorkerID: "module-consumer",

@@ -20,6 +20,10 @@ admin = Admin(connection)
 async_admin = AsyncAdmin.from_asyncpg(asyncpg_connection)
 ```
 
+Go applications construct the same operator boundary with `workhorse.NewAdmin(executor)` and call
+`ListDeadLetters`, `Redrive`, or `RedriveMany` through their caller-owned pgx or `database/sql`
+executor.
+
 ## List terminal failures
 
 `admin.listDeadLetters(query)` reads a cold failure index that stays separate from the ready and

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	workhorse "github.com/stablemates/workhorse/go"
 )
 
 func document(input any) (map[string]any, error) {
@@ -15,36 +17,45 @@ func document(input any) (map[string]any, error) {
 	return value, nil
 }
 
-func (service *backend) setQueuePaused(ctx context.Context, input any, _ string) (any, error) {
-	value, _ := document(input)
-	function := "pause_queue_v1"
-	if paused, _ := value["paused"].(bool); !paused {
-		function = "resume_queue_v1"
-	}
-	_, err := service.executor.Query(ctx, "SELECT workhorse."+function+"($1::text)", value["queue"])
-	return map[string]any{"paused": value["paused"]}, err
+func adminAudit(value map[string]any, actor string) workhorse.AdminAudit {
+	audit, _ := value["audit"].(map[string]any)
+	reason, _ := audit["reason"].(string)
+	requestID, _ := audit["requestId"].(string)
+	return workhorse.AdminAudit{Actor: actor, Reason: reason, RequestID: requestID}
 }
 
-func (service *backend) purgeQueue(ctx context.Context, input any, _ string) (any, error) {
+func (service *backend) setQueuePaused(ctx context.Context, input any, actor string) (any, error) {
 	value, _ := document(input)
-	rows, err := service.executor.Query(ctx, "SELECT workhorse.purge_queue_v1($1::text)::integer AS count", value["queue"])
+	paused, _ := value["paused"].(bool)
+	var err error
+	if paused {
+		err = service.admin.PauseQueue(ctx, fmt.Sprint(value["queue"]), adminAudit(value, actor))
+	} else {
+		err = service.admin.ResumeQueue(ctx, fmt.Sprint(value["queue"]), adminAudit(value, actor))
+	}
+	return map[string]any{"paused": paused}, err
+}
+
+func (service *backend) purgeQueue(ctx context.Context, input any, actor string) (any, error) {
+	value, _ := document(input)
+	count, err := service.admin.PurgeQueue(ctx, fmt.Sprint(value["queue"]), adminAudit(value, actor))
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"deletedCount": rows[0]["count"]}, nil
+	return map[string]any{"deletedCount": count}, nil
 }
 
 func (service *backend) setWorkerPaused(ctx context.Context, input any, actor string) (any, error) {
 	value, _ := document(input)
-	audit, _ := value["audit"].(map[string]any)
-	rows, err := service.executor.Query(ctx, `SELECT paused FROM workhorse.set_worker_paused_v1($1::text,$2::boolean,$3::text,$4::text)`, value["workerId"], value["paused"], actor, audit["reason"])
+	paused, _ := value["paused"].(bool)
+	result, err := service.admin.SetWorkerPaused(ctx, fmt.Sprint(value["workerId"]), paused, adminAudit(value, actor))
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) == 0 {
+	if result == nil {
 		return nil, &RPCError{Status: 404, Code: "NOT_FOUND", Message: "Worker not found"}
 	}
-	return map[string]any{"paused": rows[0]["paused"]}, nil
+	return map[string]any{"paused": result.Paused}, nil
 }
 
 func (service *backend) overrideMaintenancePolicy(ctx context.Context, input any, _ string) (any, error) {

@@ -116,7 +116,7 @@ func NewHandler(options HandlerOptions) (http.Handler, error) {
 	if options.MaintenanceLoops == nil {
 		options.MaintenanceLoops = map[string]int{"tickIntervalMs": 1000}
 	}
-	builtins := (&backend{executor: options.Executor, environment: options.Environment, configuredWorkers: options.ConfiguredWorkers, readOnly: options.ReadOnly, maintenanceLoops: options.MaintenanceLoops}).procedures()
+	builtins := (&backend{executor: options.Executor, admin: workhorse.NewAdmin(options.Executor), environment: options.Environment, configuredWorkers: options.ConfiguredWorkers, readOnly: options.ReadOnly, maintenanceLoops: options.MaintenanceLoops}).procedures()
 	for name, procedure := range options.Procedures {
 		builtins[name] = procedure
 	}

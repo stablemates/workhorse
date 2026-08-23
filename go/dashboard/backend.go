@@ -12,6 +12,7 @@ import (
 
 type backend struct {
 	executor          workhorse.Executor
+	admin             *workhorse.Admin
 	environment       string
 	configuredWorkers []string
 	readOnly          bool

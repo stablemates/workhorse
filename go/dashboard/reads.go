@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	workhorse "github.com/stablemates/workhorse/go"
 )
 
 func (service *backend) cron(ctx context.Context, _ any, _ string) (any, error) {
@@ -57,14 +58,46 @@ SELECT jsonb_build_object('capturedAt',clock_timestamp(),'canManageWorkers',$2::
 }
 
 func (service *backend) humanWaits(ctx context.Context, _ any, _ string) (any, error) {
-	return service.jsonQuery(ctx, `WITH health AS (SELECT workhorse.queue_health_v1() AS value), waits AS (
- SELECT COALESCE(jsonb_agg(jsonb_build_object('jobId',job_id::text,'queue',queue_name,'jobType',job_type,'name',token_name,'context',context,'attempt',attempt,'createdAt',created_at,'deadlineAt',deadline_at) ORDER BY created_at,job_id,token_name),'[]'::jsonb) value FROM (SELECT * FROM workhorse.dashboard_human_wait_v1 ORDER BY created_at,job_id,token_name LIMIT 50) rows), signals AS (
- SELECT COALESCE(jsonb_agg(jsonb_build_object('jobId',job_id::text,'queue',queue_name,'jobType',job_type,'name',signal_name,'attempt',attempt,'createdAt',created_at,'deadlineAt',deadline_at) ORDER BY created_at,job_id,signal_name),'[]'::jsonb) value FROM (SELECT * FROM workhorse.dashboard_signal_wait_v1 ORDER BY created_at,job_id,signal_name LIMIT 50) rows)
-SELECT jsonb_build_object('capturedAt',clock_timestamp(),'canComplete',$1::boolean,'canSignal',$1::boolean,
- 'diagnostics',jsonb_build_object('pendingSignals',(value->>'pending_signal_waits')::integer,'pendingHumanDecisions',(value->>'pending_human_waits')::integer,
- 'overdue',(value->>'overdue_external_waits')::integer,'oldestPendingAgeMs',(value->>'oldest_external_wait_age_ms')::double precision,
- 'rejectedDeliveries',(value->>'rejected_wait_deliveries')::integer,'capped',(value->>'external_wait_counts_capped')::boolean),
- 'waits',(SELECT value FROM waits),'signalWaits',(SELECT value FROM signals)) AS result FROM health`, !service.readOnly)
+	waits, err := service.admin.ListHumanWaits(ctx, workhorse.ExternalWaitQuery{Limit: 50})
+	if err != nil {
+		return nil, err
+	}
+	signals, err := service.admin.ListSignalWaits(ctx, workhorse.ExternalWaitQuery{Limit: 50})
+	if err != nil {
+		return nil, err
+	}
+	health, err := service.admin.Health(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"capturedAt": time.Now().UTC(), "canComplete": !service.readOnly, "canSignal": !service.readOnly,
+		"diagnostics": map[string]any{
+			"pendingSignals": integer(health["pending_signal_waits"]), "pendingHumanDecisions": integer(health["pending_human_waits"]),
+			"overdue": integer(health["overdue_external_waits"]), "oldestPendingAgeMs": optionalDecimal(health["oldest_external_wait_age_ms"]),
+			"rejectedDeliveries": integer(health["rejected_wait_deliveries"]), "capped": health["external_wait_counts_capped"],
+		},
+		"waits": dashboardExternalWaits(waits.Items, true), "signalWaits": dashboardExternalWaits(signals.Items, false),
+	}, nil
+}
+
+func optionalDecimal(value any) any {
+	if value == nil {
+		return nil
+	}
+	return decimal(value)
+}
+
+func dashboardExternalWaits(items []workhorse.ExternalWait, includeContext bool) []map[string]any {
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		row := map[string]any{"jobId": item.JobID, "queue": item.Queue, "jobType": item.JobType, "name": item.Name, "attempt": item.Attempt, "createdAt": item.CreatedAt, "deadlineAt": item.DeadlineAt}
+		if includeContext {
+			row["context"] = item.Context
+		}
+		result = append(result, row)
+	}
+	return result
 }
 
 func eventsWindow(value any) (string, int) {
