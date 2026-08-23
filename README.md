@@ -691,12 +691,15 @@ await db.transaction(async (tx) => {
 boundary through each provider's transaction object. Their workers can use an explicitly supplied
 node-postgres pool for notification-assisted dispatch, or poll when no pool is available.
 
-### Mounting the dashboard on any framework
+### Mounting the dashboard in any host
 
 Dashboard behavior lives in a framework-neutral host in `@workhorse-js/dashboard/server` that takes a
 `Request` and returns a `Response`, or `null` when the request is not its own. Fetch-native hosts
 (Hono, Next.js route handlers, SvelteKit, Nitro) call `host.handle(request)` directly;
 Connect-style hosts (Express, Connect, Fastify via `@fastify/middie`) use `dashboardNodeMiddleware`.
+Python applications use the WSGI `workhorse.dashboard.DashboardHost`; Go applications use the
+`net/http` handler returned by `dashboard.NewHandler`. All three backends serve the same packaged
+browser bundle and pass the shared `dashboard/v1` HTTP fixtures.
 
 Mounting requires only a database connection. It does not require a worker runtime,
 because worker identity and runtime state are read from `workhorse.worker_registry` rather than from

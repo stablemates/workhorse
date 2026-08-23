@@ -1936,21 +1936,27 @@
                       "task": "history_partitions",
                       "lastStartedAt": null,
                       "lastCompletedAt": null,
-                      "due": true,
+              "due": {
+                "$type": "boolean"
+              },
                       "incomplete": false
                     },
                     {
                       "task": "history_retention",
                       "lastStartedAt": null,
                       "lastCompletedAt": null,
-                      "due": false,
+              "due": {
+                "$type": "boolean"
+              },
                       "incomplete": false
                     },
                     {
                       "task": "terminal_storage",
                       "lastStartedAt": null,
                       "lastCompletedAt": null,
-                      "due": true,
+              "due": {
+                "$type": "boolean"
+              },
                       "incomplete": false
                     }
                   ]
@@ -1959,7 +1965,7 @@
             }
           },
           "coerce": {
-            "body.json.schedules.*.maintenance.status": "string"
+      "body.json.maintenance.tasks.*.due": "boolean"
           }
         },
         {

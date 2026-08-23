@@ -34,7 +34,13 @@ describe("schema installation", () => {
         "error",
         "occurred_at",
       ],
-      dashboard_concurrency_policy_v1: ["queue_name"],
+      dashboard_concurrency_policy_v1: [
+        "namespace",
+        "queue_name",
+        "max_active",
+        "max_active_per_key",
+        "updated_at",
+      ],
       dashboard_human_wait_v1: [
         "job_id",
         "queue_name",

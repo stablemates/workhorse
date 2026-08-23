@@ -1,0 +1,2218 @@
+# ruff: noqa: E501
+from __future__ import annotations
+
+import json
+from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import cast
+
+from .._drivers import SyncExecutor
+from .._statements import DriverStatement
+from ._errors import DashboardRPCError
+
+
+def _statement(sql: str) -> DriverStatement:
+    return DriverStatement(psycopg=sql, asyncpg=sql)
+
+
+def _iso(value: object) -> object:
+    if isinstance(value, datetime):
+        return (
+            value.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        )
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    if isinstance(value, Mapping):
+        return {str(key): _iso(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        return [_iso(item) for item in value]
+    return value
+
+
+def _integer(value: object) -> int:
+    return 0 if value is None else int(cast(int | str, value))
+
+
+def _float_or_none(value: object) -> float | None:
+    return None if value is None else float(cast(float | int | str, value))
+
+
+def _admission_policies(
+    health: Mapping[str, object],
+) -> tuple[dict[str, object], dict[str, object]]:
+    concurrency: dict[str, object] = {}
+    for raw in cast(Sequence[Mapping[str, object]], health["concurrency_policies"]):
+        active = _integer(raw["active"])
+        maximum = _integer(raw["max_active"])
+        concurrency[cast(str, raw["queue_name"])] = {
+            "namespace": raw["namespace"],
+            "maxActive": maximum,
+            "utilizationKnown": True,
+            "active": active,
+            "available": max(0, maximum - active),
+            "blockedReady": _integer(raw["blocked_ready"]),
+            "maxActivePerKey": None
+            if raw["max_active_per_key"] is None
+            else _integer(raw["max_active_per_key"]),
+            "saturatedKeys": _integer(raw["saturated_keys"]),
+            "highestKeyActive": _integer(raw["highest_key_active"]),
+        }
+    rate_limits: dict[str, object] = {}
+    for raw in cast(Sequence[Mapping[str, object]], health["rate_limit_policies"]):
+        per_key = None
+        if raw["per_key_limit"] is not None:
+            per_key = {
+                "limit": _integer(raw["per_key_limit"]),
+                "intervalMs": _integer(raw["per_key_interval_ms"]),
+                "burst": _integer(raw["per_key_burst"]),
+            }
+        rate_limits[cast(str, raw["queue_name"])] = {
+            "namespace": raw["namespace"],
+            "rate": {
+                "limit": _integer(raw["rate_limit"]),
+                "intervalMs": _integer(raw["rate_interval_ms"]),
+                "burst": _integer(raw["rate_burst"]),
+            },
+            "perKey": per_key,
+            "availableTokens": float(cast(float | int | str, raw["available_tokens"])),
+            "throttledReady": _integer(raw["throttled_ready"]),
+            "throttledKeys": _integer(raw["throttled_keys"]),
+            "nextEligibleAt": _iso(raw["next_eligible_at"]),
+        }
+    return concurrency, rate_limits
+
+
+class DashboardBackend:
+    def __init__(
+        self,
+        executor: SyncExecutor,
+        *,
+        environment: str,
+        configured_workers: Sequence[str],
+        maintenance_loops: Mapping[str, int],
+        read_only: bool,
+    ) -> None:
+        self._executor = executor
+        self._environment = environment
+        self._configured_workers = tuple(configured_workers)
+        self._maintenance_loops = dict(maintenance_loops)
+        self._read_only = read_only
+
+    def procedures(self) -> dict[str, Callable[[object, str], object]]:
+        return {
+            "meta": self.meta,
+            "taskCounts": self.task_counts,
+            "tasks": self.tasks,
+            "activity": self.activity,
+            "taskFacets": self.task_facets,
+            "queues": self.queues,
+            "cron": self.cron,
+            "workers": self.workers,
+            "humanWaits": self.human_waits,
+            "events": self.events,
+            "eventDetail": self.event_detail,
+            "jobDetail": self.job_detail,
+            "settings": self.settings,
+            "system": self.system,
+            "previewRetentionPolicy": self.preview_retention_policy,
+            "setQueuePaused": self.set_queue_paused,
+            "purgeQueue": self.purge_queue,
+            "setWorkerPaused": self.set_worker_paused,
+            "overrideMaintenancePolicy": self.override_maintenance_policy,
+            "revertMaintenancePolicy": self.revert_maintenance_policy,
+            "overrideRetentionPolicy": self.override_retention_policy,
+            "revertRetentionPolicy": self.revert_retention_policy,
+            "runTaskNow": self.run_task_now,
+            "cancelTask": self.cancel_task,
+            "signalTask": self.signal_task,
+            "completeHumanWait": self.complete_human_wait,
+        }
+
+    def _rows(self, sql: str, parameters: Sequence[object] = ()) -> list[Mapping[str, object]]:
+        return self._executor.rows(_statement(sql), parameters)
+
+    def _health(self) -> Mapping[str, object]:
+        value = self._rows("SELECT workhorse.queue_health_v1() AS snapshot")[0]["snapshot"]
+        if isinstance(value, str | bytes):
+            value = json.loads(value)
+        if not isinstance(value, Mapping):
+            raise TypeError("workhorse.queue_health_v1 returned a non-object snapshot")
+        return value
+
+    def _estimate_rows(self, sql: str, parameters: Sequence[object] = ()) -> int:
+        row = self._rows("EXPLAIN (FORMAT JSON) " + sql, parameters)[0]
+        plan = next(iter(row.values()))
+        if isinstance(plan, str | bytes):
+            plan = json.loads(plan)
+        document = cast(Sequence[Mapping[str, object]], plan)[0]
+        root = cast(Mapping[str, object], document["Plan"])
+        return max(0, round(float(cast(int | float, root["Plan Rows"]))))
+
+    def meta(self, _input: object, _actor: str) -> object:
+        return {"environment": self._environment}
+
+    def task_counts(self, _input: object, _actor: str) -> object:
+        estimate = _integer(
+            self._rows("SELECT estimate FROM workhorse.dashboard_job_estimate_v1()")[0]["estimate"]
+        )
+        if estimate >= 50_000:
+            live = self._rows(
+                """SELECT count(*) FILTER(WHERE state='blocked')::integer AS blocked,
+                          count(*) FILTER(WHERE EXISTS(
+                            SELECT 1 FROM workhorse.dashboard_signal_wait_v1 s WHERE s.job_id=runtime.job_id
+                            UNION ALL SELECT 1 FROM workhorse.dashboard_human_wait_v1 h WHERE h.job_id=runtime.job_id
+                          ))::integer AS waiting,
+                          count(*) FILTER(WHERE state='scheduled')::integer AS scheduled,
+                          count(*) FILTER(WHERE state='ready')::integer AS queued,
+                          count(*) FILTER(WHERE state='active')::integer AS running,
+                          count(*) FILTER(WHERE current_attempt>1)::integer AS retried
+                     FROM workhorse.dashboard_job_runtime_v1 runtime"""
+            )[0]
+            outcomes = {
+                state: self._estimate_rows(
+                    f"SELECT 1 FROM workhorse.dashboard_job_outcome_v1 WHERE state='{state}'"
+                )
+                for state in ("succeeded", "failed", "canceled")
+            }
+            retried_terminal = self._estimate_rows(
+                "SELECT 1 FROM workhorse.dashboard_job_outcome_v1 WHERE current_attempt>1"
+            )
+            return {
+                "all": estimate,
+                "blocked": live["blocked"],
+                "waiting": live["waiting"],
+                "scheduled": live["scheduled"],
+                "retried": _integer(live["retried"]) + retried_terminal,
+                "queued": live["queued"],
+                "running": live["running"],
+                "completed": outcomes["succeeded"],
+                "discarded": outcomes["failed"],
+                "canceled": outcomes["canceled"],
+            }
+        row = self._rows(
+            """
+            WITH tasks AS (
+              SELECT COALESCE(r.state, o.state) AS state,
+                     EXISTS (
+                       SELECT 1 FROM workhorse.dashboard_signal_wait_v1 s WHERE s.job_id = j.id
+                       UNION ALL
+                       SELECT 1 FROM workhorse.dashboard_human_wait_v1 h WHERE h.job_id = j.id
+                     ) AS external_wait,
+                     COALESCE(r.current_attempt, o.current_attempt) AS attempt
+                FROM workhorse.dashboard_job_v1 j
+                LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
+                LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
+            )
+            SELECT count(*)::integer AS all,
+                   count(*) FILTER (WHERE state = 'blocked')::integer AS blocked,
+                   count(*) FILTER (WHERE external_wait)::integer AS waiting,
+                   count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled,
+                   count(*) FILTER (WHERE attempt > 1)::integer AS retried,
+                   count(*) FILTER (WHERE state = 'ready')::integer AS queued,
+                   count(*) FILTER (WHERE state = 'active')::integer AS running,
+                   count(*) FILTER (WHERE state = 'succeeded')::integer AS completed,
+                   count(*) FILTER (WHERE state = 'failed')::integer AS discarded,
+                   count(*) FILTER (WHERE state = 'canceled')::integer AS canceled
+              FROM tasks
+            """
+        )[0]
+        return _iso(row)
+
+    def tasks(self, input: object, _actor: str) -> object:
+        supplied = cast(Mapping[str, object], input)
+        query: dict[str, object] = {
+            "filter": "all",
+            "queue": None,
+            "page": 1,
+            "worker": None,
+            "jobType": None,
+            "priority": None,
+            "sort": "updated",
+            "tags": [],
+            "search": None,
+            "pageSize": 50,
+            **supplied,
+        }
+        search = query["search"]
+        search_pattern = None if not search else _search_pattern(str(search))
+        filters = {
+            "all": "true",
+            "blocked": "state = 'blocked'",
+            "waiting": "external_wait",
+            "scheduled": "state = 'scheduled'",
+            "retried": "attempt > 1",
+            "queued": "state = 'ready'",
+            "running": "state = 'active'",
+            "completed": "state = 'succeeded'",
+            "discarded": "state = 'failed'",
+            "canceled": "state = 'canceled'",
+        }
+        filter_sql = filters[cast(str, query["filter"])]
+        base = """
+            WITH parameters AS (
+              SELECT %s::text AS queue_filter, %s::text AS worker_filter,
+                     %s::text AS type_filter, %s::integer AS priority_filter,
+                     %s::text[] AS tag_filter, %s::text AS search_filter
+            ), tasks AS (
+              SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.priority,
+                     COALESCE(r.state, o.state) AS state,
+                     EXISTS (
+                       SELECT 1 FROM workhorse.dashboard_signal_wait_v1 s WHERE s.job_id = j.id
+                       UNION ALL SELECT 1 FROM workhorse.dashboard_human_wait_v1 h
+                         WHERE h.job_id = j.id
+                     ) AS external_wait,
+                     CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END
+                       AS blocked_reason,
+                     ARRAY(
+                       SELECT dependency.prerequisite_job_id
+                         FROM workhorse.dashboard_job_dependency_v1 dependency
+                        WHERE dependency.dependent_job_id = j.id
+                          AND dependency.released_at IS NULL
+                        ORDER BY dependency.prerequisite_job_id
+                     ) AS prerequisite_job_ids,
+                     COALESCE(r.current_attempt, o.current_attempt) AS attempt,
+                     j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms,
+                     j.payload, j.tags, COALESCE(r.run_at, o.run_at) AS run_at,
+                     r.worker_id AS current_worker_id,
+                     COALESCE(r.worker_id, durable_wait.worker_id, attempt_worker.worker_id)
+                       AS worker_id,
+                     o.finished_at, COALESCE(o.error, r.error) AS error, j.created_at,
+                     COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at,
+                     r.wait_name, r.cancel_requested_at, r.cancel_requested_by, r.cancel_reason,
+                     durable_wait.wake_at, durable_wait.mode AS wait_mode,
+                     signal_wait.deadline_at AS signal_wait_deadline_at,
+                     human_wait.token_name AS human_wait_name,
+                     human_wait.context AS human_wait_context,
+                     human_wait.deadline_at AS human_wait_deadline_at,
+                     enqueued_event.details AS enqueued_details,
+                     ARRAY(
+                       SELECT checkpoint.checkpoint_name
+                         FROM workhorse.dashboard_job_checkpoint_v1 checkpoint
+                        WHERE checkpoint.job_id = j.id ORDER BY checkpoint.checkpoint_name
+                     ) AS checkpoint_names
+                FROM workhorse.dashboard_job_v1 j
+                LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
+                LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
+                LEFT JOIN workhorse.dashboard_job_wait_v1 durable_wait
+                  ON durable_wait.job_id = j.id AND durable_wait.wait_name = r.wait_name
+                LEFT JOIN workhorse.dashboard_signal_wait_v1 signal_wait
+                  ON signal_wait.job_id = j.id AND signal_wait.signal_name = r.wait_name
+                LEFT JOIN workhorse.dashboard_human_wait_v1 human_wait
+                  ON human_wait.job_id = j.id AND human_wait.token_name = r.wait_name
+                LEFT JOIN LATERAL (
+                  SELECT event.details FROM workhorse.dashboard_job_event_v1 event
+                   WHERE event.job_id = j.id AND event.event_type = 'enqueued'
+                   ORDER BY event.occurred_at, event.event_id LIMIT 1
+                ) enqueued_event ON true
+                LEFT JOIN LATERAL (
+                  SELECT ah.worker_id FROM workhorse.dashboard_attempt_history_v1 ah
+                   WHERE ah.job_id = j.id ORDER BY ah.attempt DESC LIMIT 1
+                ) attempt_worker ON true
+            )
+        """
+        where = f"""
+            FROM tasks, parameters WHERE {filter_sql}
+             AND (queue_filter IS NULL OR queue = queue_filter)
+             AND (worker_filter IS NULL OR worker_id = worker_filter)
+             AND (type_filter IS NULL OR type = type_filter)
+             AND (priority_filter IS NULL OR priority = priority_filter)
+             AND (cardinality(tag_filter) = 0 OR tags && tag_filter)
+             AND (search_filter IS NULL OR type ILIKE search_filter ESCAPE '!'
+                  OR queue ILIKE search_filter ESCAPE '!'
+                  OR id::text ILIKE search_filter ESCAPE '!')
+        """
+        parameters = (
+            query["queue"],
+            query["worker"],
+            query["jobType"],
+            query["priority"],
+            query["tags"],
+            search_pattern,
+        )
+        total = self._rows(base + " SELECT count(*)::integer AS count " + where, parameters)[0]
+        order = (
+            "priority DESC, updated_at DESC, id DESC"
+            if query["sort"] == "priority"
+            else "updated_at DESC, id DESC"
+        )
+        page = cast(int, query["page"])
+        page_size = cast(int, query["pageSize"])
+        rows = self._rows(
+            base + " SELECT tasks.* " + where + f" ORDER BY {order} LIMIT %s OFFSET %s",
+            (*parameters, page_size, (page - 1) * page_size),
+        )
+        return {
+            "capturedAt": _iso(datetime.now(timezone.utc)),
+            "canCompleteHumanWait": not self._read_only,
+            "filter": query["filter"],
+            "queue": query["queue"],
+            "worker": query["worker"],
+            "jobType": query["jobType"],
+            "priority": query["priority"],
+            "sort": query["sort"],
+            "tags": query["tags"],
+            "search": query["search"],
+            "page": page,
+            "pageSize": page_size,
+            "total": total["count"],
+            "counts": self.task_counts(None, ""),
+            "jobs": [self._task_row(row) for row in rows],
+        }
+
+    def _task_row(self, row: Mapping[str, object]) -> object:
+        error = row["error"]
+        if isinstance(error, str):
+            try:
+                error = json.loads(error)
+            except json.JSONDecodeError:
+                error = None
+        error_message = error.get("message") if isinstance(error, Mapping) else None
+        details = row["enqueued_details"]
+        if isinstance(details, str):
+            try:
+                details = json.loads(details)
+            except json.JSONDecodeError:
+                details = None
+        idempotency = details.get("idempotency") if isinstance(details, Mapping) else None
+        cancellation = None
+        if row["cancel_requested_at"] is not None:
+            cancellation = {
+                "requestedAt": _iso(row["cancel_requested_at"]),
+                "requestedBy": row["cancel_requested_by"] or None,
+                "reason": row["cancel_reason"] or None,
+            }
+        wait = None
+        if row["wait_name"] and row["wake_at"] and row["wait_mode"]:
+            wait = {
+                "name": row["wait_name"],
+                "wakeAt": _iso(row["wake_at"]),
+                "mode": row["wait_mode"],
+            }
+        signal_wait = None
+        if row["wait_name"] and row["signal_wait_deadline_at"]:
+            signal_wait = {
+                "name": row["wait_name"],
+                "deadlineAt": _iso(row["signal_wait_deadline_at"]),
+            }
+        human_wait = None
+        if row["human_wait_name"] and row["human_wait_deadline_at"]:
+            human_wait = {
+                "name": row["human_wait_name"],
+                "context": row["human_wait_context"],
+                "deadlineAt": _iso(row["human_wait_deadline_at"]),
+            }
+        return {
+            "id": str(row["id"]),
+            "queue": row["queue"],
+            "type": row["type"],
+            "priority": row["priority"],
+            "state": row["state"],
+            "blockedReason": row["blocked_reason"],
+            "prerequisiteJobIds": [
+                str(value) for value in cast(Sequence[object], row["prerequisite_job_ids"])
+            ],
+            "attempt": row["attempt"],
+            "maxAttempts": row["max_attempts"],
+            "retryPolicy": row["retry_policy"],
+            "deadlineAt": _iso(row["deadline_at"]),
+            "executionTimeoutMs": None
+            if row["execution_timeout_ms"] is None
+            else int(cast(str | int, row["execution_timeout_ms"])),
+            "payload": row["payload"],
+            "tags": row["tags"],
+            "keyed": isinstance(idempotency, Mapping),
+            "cancellation": cancellation,
+            "runAt": _iso(row["run_at"]),
+            "workerId": row["current_worker_id"],
+            "lastWorkerId": row["worker_id"],
+            "finishedAt": _iso(row["finished_at"]),
+            "errorMessage": error_message,
+            "createdAt": _iso(row["created_at"]),
+            "updatedAt": _iso(row["updated_at"]),
+            "durability": None,
+            "waitName": row["wait_name"],
+            "wakeAt": _iso(row["wake_at"]),
+            "wait": wait,
+            "signalWait": signal_wait,
+            "humanWait": human_wait,
+        }
+
+    def activity(self, input: object, _actor: str) -> object:
+        supplied = cast(Mapping[str, object], input)
+        query: dict[str, object] = {
+            "filter": "all",
+            "period": "1h",
+            "groupBy": "task",
+            "tags": [],
+            "queue": None,
+            "worker": None,
+            **supplied,
+        }
+        periods = {
+            "15m": (15 * 60, 30),
+            "1h": (60 * 60, 2 * 60),
+            "6h": (6 * 60 * 60, 10 * 60),
+            "24h": (24 * 60 * 60, 60 * 60),
+            "7d": (7 * 24 * 60 * 60, 6 * 60 * 60),
+        }
+        window_seconds, bucket_seconds = periods[cast(str, query["period"])]
+        groups = {
+            "queue": "j.queue_name",
+            "task": "j.job_type",
+            "status": "COALESCE(r.state, o.state)",
+            "worker": "COALESCE(r.worker_id, attempt_worker.worker_id, 'unassigned')",
+        }
+        group_sql = groups[cast(str, query["groupBy"])]
+        filters = {
+            "all": "true",
+            "blocked": "t.state = 'blocked'",
+            "waiting": "t.external_wait",
+            "scheduled": "t.state = 'scheduled'",
+            "retried": "t.attempt > 1",
+            "queued": "t.state = 'ready'",
+            "running": "t.state = 'active'",
+            "completed": "t.state = 'succeeded'",
+            "discarded": "t.state = 'failed'",
+            "canceled": "t.state = 'canceled'",
+        }
+        filter_sql = filters[cast(str, query["filter"])]
+        rows = self._rows(
+            f"""
+            WITH candidate AS (
+              SELECT r.job_id FROM workhorse.dashboard_job_runtime_v1 r
+               WHERE r.updated_at >= clock_timestamp() - make_interval(secs => %s)
+              UNION SELECT o.job_id FROM workhorse.dashboard_job_outcome_v1 o
+               WHERE o.updated_at >= clock_timestamp() - make_interval(secs => %s)
+            ), tasks AS (
+              SELECT {group_sql} AS group_key, COALESCE(r.state, o.state) AS state,
+                     EXISTS (
+                       SELECT 1 FROM workhorse.dashboard_signal_wait_v1 s
+                        WHERE s.job_id = candidate.job_id
+                       UNION ALL SELECT 1 FROM workhorse.dashboard_human_wait_v1 h
+                        WHERE h.job_id = candidate.job_id
+                     ) AS external_wait,
+                     COALESCE(r.current_attempt, o.current_attempt) AS attempt,
+                     COALESCE(r.updated_at, o.updated_at) AS updated_at,
+                     j.tags, j.queue_name AS queue,
+                     COALESCE(r.worker_id, attempt_worker.worker_id, 'unassigned') AS worker_id
+                FROM candidate JOIN workhorse.dashboard_job_v1 j ON j.id = candidate.job_id
+                LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = candidate.job_id
+                LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = candidate.job_id
+                LEFT JOIN LATERAL (
+                  SELECT ah.worker_id FROM workhorse.dashboard_attempt_history_v1 ah
+                   WHERE ah.job_id = candidate.job_id ORDER BY ah.attempt DESC LIMIT 1
+                ) attempt_worker ON true
+            ), buckets AS (
+              SELECT generate_series(
+                date_bin(make_interval(secs => %s),
+                  clock_timestamp() - make_interval(secs => %s),
+                  timestamp with time zone '2000-01-01') + make_interval(secs => %s),
+                date_bin(make_interval(secs => %s), clock_timestamp(),
+                  timestamp with time zone '2000-01-01'), make_interval(secs => %s)
+              ) AS bucket_start
+            )
+            SELECT b.bucket_start, t.group_key, count(t.updated_at)::integer AS count
+              FROM buckets b LEFT JOIN tasks t
+                ON t.updated_at >= b.bucket_start
+               AND t.updated_at < b.bucket_start + make_interval(secs => %s)
+               AND {filter_sql}
+               AND (cardinality(%s::text[]) = 0 OR t.tags && %s::text[])
+               AND (%s::text IS NULL OR t.queue = %s::text)
+               AND (%s::text IS NULL OR t.worker_id = %s::text)
+             GROUP BY b.bucket_start, t.group_key ORDER BY b.bucket_start
+            """,
+            (
+                window_seconds,
+                window_seconds,
+                bucket_seconds,
+                window_seconds,
+                bucket_seconds,
+                bucket_seconds,
+                bucket_seconds,
+                bucket_seconds,
+                query["tags"],
+                query["tags"],
+                query["queue"],
+                query["queue"],
+                query["worker"],
+                query["worker"],
+            ),
+        )
+        totals: dict[str, int] = {}
+        buckets: dict[str, dict[str, object]] = {}
+        for row in rows:
+            bucket_start = cast(str, _iso(row["bucket_start"]))
+            bucket = buckets.setdefault(bucket_start, {"bucketStart": bucket_start, "counts": {}})
+            group = row["group_key"]
+            if group is None:
+                continue
+            name = str(group)
+            count = int(cast(int, row["count"]))
+            totals[name] = totals.get(name, 0) + count
+            cast(dict[str, int], bucket["counts"])[name] = count
+        return {
+            "capturedAt": _iso(datetime.now(timezone.utc)),
+            "filter": query["filter"],
+            "period": query["period"],
+            "groupBy": query["groupBy"],
+            "bucketSeconds": bucket_seconds,
+            "groups": sorted(totals),
+            "buckets": list(buckets.values()),
+        }
+
+    def task_facets(self, _input: object, _actor: str) -> object:
+        row = self._rows(
+            """
+            WITH configured_workers(worker) AS (
+              SELECT unnest(%s::text[])
+            ), queue_values AS (
+              SELECT queue_name AS value FROM workhorse.dashboard_job_v1
+              UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1
+            ), worker_values AS (
+              SELECT worker AS value FROM configured_workers
+              UNION SELECT worker_id FROM workhorse.dashboard_job_runtime_v1
+                WHERE worker_id IS NOT NULL
+              UNION SELECT worker_id FROM workhorse.dashboard_attempt_history_v1
+                WHERE worker_id IS NOT NULL
+            ), type_values AS (
+              SELECT DISTINCT job_type AS value FROM workhorse.dashboard_job_v1
+            ), tag_values AS (
+              SELECT DISTINCT unnest(tags) AS value FROM workhorse.dashboard_job_v1
+            )
+            SELECT ARRAY(
+                     SELECT value FROM queue_values WHERE value IS NOT NULL ORDER BY value
+                   ) AS queues,
+                   ARRAY(
+                     SELECT value FROM worker_values WHERE value IS NOT NULL ORDER BY value
+                   ) AS workers,
+                   ARRAY(SELECT value FROM type_values ORDER BY value) AS job_types,
+                   ARRAY(SELECT value FROM tag_values ORDER BY value) AS tags
+            """,
+            (list(self._configured_workers),),
+        )[0]
+        return {
+            "queues": row["queues"],
+            "workers": row["workers"],
+            "jobTypes": row["job_types"],
+            "tags": row["tags"],
+        }
+
+    def queues(self, _input: object, _actor: str) -> object:
+        approximate = (
+            _integer(
+                self._rows("SELECT estimate FROM workhorse.dashboard_job_estimate_v1()")[0][
+                    "estimate"
+                ]
+            )
+            >= 50_000
+        )
+        rows = self._rows(
+            """
+            WITH known_queues AS (
+              SELECT queue_name FROM workhorse.dashboard_job_v1
+              UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1
+              UNION SELECT queue_name FROM workhorse.dashboard_concurrency_policy_v1
+              UNION SELECT queue_name FROM workhorse.dashboard_rate_limit_policy_v1
+            ), live_counts AS (
+              SELECT queue_name,
+                     count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled,
+                     count(*) FILTER (WHERE state = 'ready')::integer AS ready,
+                     count(*) FILTER (WHERE state = 'active')::integer AS active
+                FROM workhorse.dashboard_job_runtime_v1 GROUP BY queue_name
+            ), terminal_counts AS (
+              SELECT job.queue_name,
+                     count(*) FILTER (WHERE outcome.state = 'succeeded')::integer AS succeeded,
+                     count(*) FILTER (WHERE outcome.state = 'failed')::integer AS failed,
+                     count(*) FILTER (WHERE outcome.state = 'canceled')::integer AS canceled
+                FROM workhorse.dashboard_job_outcome_v1 outcome
+                JOIN workhorse.dashboard_job_v1 job ON job.id = outcome.job_id
+               WHERE NOT %s::boolean
+               GROUP BY job.queue_name
+            )
+            SELECT known.queue_name AS queue, COALESCE(control.paused, false) AS paused,
+                   COALESCE(live.scheduled, 0)::integer AS scheduled,
+                   COALESCE(live.ready, 0)::integer AS ready,
+                   COALESCE(live.active, 0)::integer AS active,
+                   COALESCE(terminal.succeeded, 0)::integer AS succeeded,
+                   COALESCE(terminal.failed, 0)::integer AS failed,
+                   COALESCE(terminal.canceled, 0)::integer AS canceled
+              FROM known_queues known
+              LEFT JOIN workhorse.dashboard_queue_control_v1 control USING (queue_name)
+              LEFT JOIN live_counts live USING (queue_name)
+              LEFT JOIN terminal_counts terminal USING (queue_name)
+             ORDER BY known.queue_name
+            """,
+            (approximate,),
+        )
+        queues = [
+            {
+                **cast(dict[str, object], _iso(row)),
+                "terminalCountsApproximate": approximate,
+                "concurrencyPolicy": None,
+                "rateLimitPolicy": None,
+            }
+            for row in rows
+        ]
+        health = self._health()
+        concurrency = cast(list[Mapping[str, object]], health["concurrency_policies"])
+        rate_limits = cast(list[Mapping[str, object]], health["rate_limit_policies"])
+        concurrency_by_queue, rate_limits_by_queue = _admission_policies(health)
+        for queue in queues:
+            name = cast(str, queue["queue"])
+            if approximate:
+                for state, field in (
+                    ("succeeded", "succeeded"),
+                    ("failed", "failed"),
+                    ("canceled", "canceled"),
+                ):
+                    queue[field] = self._estimate_rows(
+                        """SELECT 1 FROM workhorse.dashboard_job_outcome_v1 outcome
+                             JOIN workhorse.dashboard_job_v1 job ON job.id=outcome.job_id
+                            WHERE job.queue_name=%s AND outcome.state=%s""",
+                        (name, state),
+                    )
+            queue["concurrencyPolicy"] = concurrency_by_queue.get(name)
+            queue["rateLimitPolicy"] = rate_limits_by_queue.get(name)
+        return {
+            "capturedAt": _iso(datetime.now(timezone.utc)),
+            "queues": queues,
+            "concurrencyPoliciesCapped": any(bool(row["capped"]) for row in concurrency),
+            "rateLimitPoliciesCapped": any(
+                bool(row["policy_set_capped"]) or bool(row["sample_capped"]) for row in rate_limits
+            ),
+        }
+
+    def workers(self, _input: object, _actor: str) -> object:
+        rows = self._rows(
+            """
+            WITH declared(id) AS (SELECT unnest(%s::text[])), fleet(id) AS (
+              SELECT worker_id FROM workhorse.dashboard_worker_registry_v1
+              UNION SELECT id FROM declared
+            ), active AS (
+              SELECT worker_id AS id, count(*)::integer AS active_jobs,
+                     max(acquired_at) AS last_seen_at
+                FROM workhorse.dashboard_job_runtime_v1
+               WHERE state = 'active' AND worker_id IN (SELECT id FROM fleet)
+               GROUP BY worker_id
+            ), recent_history AS (
+              SELECT worker_id AS id, count(*)::integer AS completed_attempts,
+                     count(*) FILTER (WHERE outcome = 'failed')::integer AS failed_attempts,
+                     avg(extract(epoch FROM finished_at - claimed_at) * 1000)::double precision
+                       AS average_execution_ms,
+                     max(finished_at) AS last_seen_at
+                FROM workhorse.dashboard_attempt_history_v1
+               WHERE occurred_at >= clock_timestamp() - interval '1 hour'
+                 AND finished_at >= clock_timestamp() - interval '1 hour'
+                 AND worker_id IN (SELECT id FROM fleet)
+               GROUP BY worker_id
+            )
+            SELECT f.id, r.worker_id IS NOT NULL AS registered, r.hostname, r.pid, r.queue_names,
+                   r.concurrency, r.active_slots, r.draining, r.paused, r.started_at,
+                   r.last_heartbeat_at, COALESCE(a.active_jobs, 0)::integer AS active_jobs,
+                   COALESCE(h.completed_attempts, 0)::integer AS completed_attempts,
+                   COALESCE(h.failed_attempts, 0)::integer AS failed_attempts,
+                   h.average_execution_ms,
+                   GREATEST(a.last_seen_at, h.last_seen_at, r.last_heartbeat_at) AS last_seen_at
+              FROM fleet f
+              LEFT JOIN workhorse.dashboard_worker_registry_v1 r ON r.worker_id = f.id
+              LEFT JOIN active a ON a.id = f.id
+              LEFT JOIN recent_history h ON h.id = f.id
+             ORDER BY f.id
+            """,
+            (list(self._configured_workers),),
+        )
+        return {
+            "capturedAt": _iso(datetime.now(timezone.utc)),
+            "canManageWorkers": not self._read_only,
+            "workers": [
+                {
+                    "id": row["id"],
+                    "queues": row["queue_names"] or [],
+                    "hostname": row["hostname"],
+                    "pid": row["pid"],
+                    "activeJobs": row["active_jobs"],
+                    "concurrency": row["concurrency"],
+                    "activeSlots": row["active_slots"],
+                    "draining": row["draining"] or False,
+                    "completedAttempts": row["completed_attempts"],
+                    "failedAttempts": row["failed_attempts"],
+                    "averageExecutionMs": _iso(row["average_execution_ms"]),
+                    "lastSeenAt": _iso(row["last_seen_at"]),
+                    "startedAt": _iso(row["started_at"]),
+                    "registered": row["registered"],
+                    "lastHeartbeatAt": _iso(row["last_heartbeat_at"]),
+                    "paused": row["paused"] or False,
+                }
+                for row in rows
+            ],
+        }
+
+    def human_waits(self, _input: object, _actor: str) -> object:
+        waits = self._rows(
+            """
+            SELECT job_id, queue_name, job_type, token_name AS wait_name, context, attempt,
+                   created_at, deadline_at
+              FROM workhorse.dashboard_human_wait_v1
+             ORDER BY created_at, job_id, token_name LIMIT 50
+            """
+        )
+        signals = self._rows(
+            """
+            SELECT job_id, queue_name, job_type, signal_name AS wait_name, attempt,
+                   created_at, deadline_at
+              FROM workhorse.dashboard_signal_wait_v1
+             ORDER BY created_at, job_id, signal_name LIMIT 50
+            """
+        )
+        health = self._health()
+        return {
+            "capturedAt": _iso(datetime.now(timezone.utc)),
+            "canComplete": not self._read_only,
+            "canSignal": not self._read_only,
+            "diagnostics": {
+                "pendingSignals": int(cast(str | int, health["pending_signal_waits"])),
+                "pendingHumanDecisions": int(cast(str | int, health["pending_human_waits"])),
+                "overdue": int(cast(str | int, health["overdue_external_waits"])),
+                "oldestPendingAgeMs": (
+                    None
+                    if health["oldest_external_wait_age_ms"] is None
+                    else float(cast(str | int | float, health["oldest_external_wait_age_ms"]))
+                ),
+                "rejectedDeliveries": int(cast(str | int, health["rejected_wait_deliveries"])),
+                "capped": bool(health["external_wait_counts_capped"]),
+            },
+            "waits": [
+                {
+                    "jobId": str(row["job_id"]),
+                    "queue": row["queue_name"],
+                    "jobType": row["job_type"],
+                    "name": row["wait_name"],
+                    "context": row["context"],
+                    "attempt": row["attempt"],
+                    "createdAt": _iso(row["created_at"]),
+                    "deadlineAt": _iso(row["deadline_at"]),
+                }
+                for row in waits
+            ],
+            "signalWaits": [
+                {
+                    "jobId": str(row["job_id"]),
+                    "queue": row["queue_name"],
+                    "jobType": row["job_type"],
+                    "name": row["wait_name"],
+                    "attempt": row["attempt"],
+                    "createdAt": _iso(row["created_at"]),
+                    "deadlineAt": _iso(row["deadline_at"]),
+                }
+                for row in signals
+            ],
+        }
+
+    def events(self, input: object, _actor: str) -> object:
+        supplied = cast(Mapping[str, object], input)
+        query: dict[str, object] = {
+            "window": "1h",
+            "page": 1,
+            "pageSize": 50,
+            "kind": "all",
+            "queue": None,
+            "jobType": None,
+            "types": [],
+            "jobId": None,
+            **supplied,
+        }
+        seconds = {"15m": 900, "1h": 3600, "6h": 21600, "24h": 86400}[cast(str, query["window"])]
+        page = cast(int, query["page"])
+        page_size = cast(int, query["pageSize"])
+        kind = cast(str, query["kind"])
+        sources: list[str] = []
+        if kind != "attempt":
+            sources.append("""
+              SELECT 'event'::text AS kind, event.event_id::text AS record_id,
+                     event.job_id, job.queue_name, job.job_type, event.occurred_at,
+                     event.attempt, event.event_type AS type, event.details,
+                     NULL::text AS worker_id, NULL::text AS fence_token,
+                     NULL::double precision AS duration_ms, NULL::jsonb AS error, 1 AS kind_rank
+                FROM workhorse.dashboard_job_event_v1 event
+                LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = event.job_id
+            """)
+        if kind != "event":
+            sources.append("""
+              SELECT 'attempt'::text AS kind, history.attempt_id::text AS record_id,
+                     history.job_id, job.queue_name, job.job_type, history.occurred_at,
+                     history.attempt, history.outcome AS type, NULL::jsonb AS details,
+                     history.worker_id, history.fence_token::text,
+                     round(extract(epoch FROM history.finished_at - history.started_at) * 1000)
+                       AS duration_ms, history.error, 0 AS kind_rank
+                FROM workhorse.dashboard_attempt_history_v1 history
+                LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = history.job_id
+            """)
+        union = " UNION ALL ".join(sources)
+        condition = """ WHERE occurred_at >= clock_timestamp() - make_interval(secs => %s)
+          AND (%s::uuid IS NULL OR job_id = %s::uuid)
+          AND (cardinality(%s::text[]) = 0 OR type = ANY (%s::text[]))
+          AND (%s::text IS NULL OR queue_name = %s::text)
+          AND (%s::text IS NULL OR job_type = %s::text)"""
+        parameters = (
+            seconds,
+            query["jobId"],
+            query["jobId"],
+            query["types"],
+            query["types"],
+            query["queue"],
+            query["queue"],
+            query["jobType"],
+            query["jobType"],
+        )
+        total = self._rows(
+            "SELECT count(*)::integer AS count FROM (" + union + ") feed" + condition, parameters
+        )[0]["count"]
+        rows = self._rows(
+            "SELECT * FROM ("
+            + union
+            + ") feed"
+            + condition
+            + " ORDER BY occurred_at DESC, kind_rank DESC, record_id::bigint DESC LIMIT %s OFFSET %s",
+            (*parameters, page_size, (page - 1) * page_size),
+        )
+        retention = self._rows(
+            "SELECT job_event_retention_days, attempt_history_retention_days FROM workhorse.dashboard_retention_policy_v1 WHERE singleton"
+        )[0]
+        return {
+            "capturedAt": _iso(datetime.now(timezone.utc)),
+            "window": query["window"],
+            "windowSeconds": seconds,
+            "page": page,
+            "pageSize": page_size,
+            "total": total,
+            "retention": {
+                "jobEventDays": retention["job_event_retention_days"],
+                "attemptHistoryDays": retention["attempt_history_retention_days"],
+            },
+            "events": [self._event_row(row) for row in rows],
+        }
+
+    def _event_row(self, row: Mapping[str, object]) -> object:
+        error = row["error"]
+        if isinstance(error, str):
+            try:
+                error = json.loads(error)
+            except json.JSONDecodeError:
+                error = None
+        return {
+            "id": f"{row['kind']}:{row['record_id']}",
+            "kind": row["kind"],
+            "recordId": str(row["record_id"]),
+            "jobId": str(row["job_id"]),
+            "queue": row["queue_name"],
+            "jobType": row["job_type"],
+            "occurredAt": _iso(row["occurred_at"]),
+            "attempt": row["attempt"],
+            "type": row["type"],
+            "details": row["details"],
+            "workerId": row["worker_id"],
+            "fenceToken": row["fence_token"],
+            "durationMs": None
+            if row["duration_ms"] is None
+            else int(cast(float, row["duration_ms"])),
+            "errorMessage": error.get("message") if isinstance(error, Mapping) else None,
+        }
+
+    def event_detail(self, input: object, _actor: str) -> object:
+        identity = str(cast(Mapping[str, object], input)["id"])
+        if ":" not in identity or identity.split(":", 1)[0] not in {"event", "attempt"}:
+            raise DashboardRPCError(404, "NOT_FOUND", "Event not found")
+        kind, record_id = identity.split(":", 1)
+        if kind == "event":
+            sql = """
+              SELECT 'event'::text AS kind, event_id::text AS record_id, event.job_id,
+                     job.queue_name, job.job_type, event.occurred_at, event.attempt,
+                     event.event_type AS type, event.details, NULL::text AS worker_id,
+                     NULL::text AS fence_token, NULL::timestamptz AS started_at,
+                     NULL::timestamptz AS claimed_at, NULL::timestamptz AS finished_at,
+                     NULL::double precision AS duration_ms, NULL::jsonb AS error
+                FROM workhorse.dashboard_job_event_v1 event
+                LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = event.job_id
+               WHERE event.event_id = %s::bigint
+            """
+        else:
+            sql = """
+              SELECT 'attempt'::text AS kind, attempt_id::text AS record_id, history.job_id,
+                     job.queue_name, job.job_type, history.occurred_at, history.attempt,
+                     history.outcome AS type, NULL::jsonb AS details, history.worker_id,
+                     history.fence_token::text, history.started_at, history.claimed_at,
+                     history.finished_at,
+                     round(extract(epoch FROM history.finished_at - history.started_at) * 1000) AS duration_ms,
+                     history.error
+                FROM workhorse.dashboard_attempt_history_v1 history
+                LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = history.job_id
+               WHERE history.attempt_id = %s::bigint
+            """
+        rows = self._rows(sql, (record_id,))
+        if not rows:
+            raise DashboardRPCError(404, "NOT_FOUND", "Event not found")
+        row = rows[0]
+        base = cast(dict[str, object], self._event_row(row))
+        error = row["error"]
+        return {
+            **base,
+            "startedAt": _iso(row["started_at"]),
+            "claimedAt": _iso(row["claimed_at"]),
+            "finishedAt": _iso(row["finished_at"]),
+            "error": error,
+        }
+
+    def job_detail(self, input: object, _actor: str) -> object:
+        job_id = cast(Mapping[str, object], input)["id"]
+        jobs = self._rows(
+            """
+            SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.priority, j.payload,
+                   j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms,
+                   j.concurrency_key, j.created_at, r.state AS runtime_state,
+                   r.current_attempt AS runtime_attempt, r.run_at, r.ready_at, r.worker_id,
+                   r.fence_token::text, r.acquired_at, r.heartbeat_at, r.expires_at, r.wait_name,
+                   r.attempt_started_at, r.attempt_timeout_at, r.cancel_requested_at,
+                   r.cancel_requested_by, r.cancel_reason, r.error AS runtime_error,
+                   o.state AS outcome_state, o.current_attempt AS outcome_attempt, o.finished_at,
+                   workhorse.dashboard_job_result_v1(j.id) AS result, o.error AS outcome_error,
+                   p.progress_value, p.revision::text AS progress_revision, p.attempt AS progress_attempt,
+                   p.fence_token::text AS progress_fence_token, p.worker_id AS progress_worker_id,
+                   p.created_at AS progress_created_at, p.updated_at AS progress_updated_at,
+                   signal.deadline_at AS signal_wait_deadline_at
+              FROM workhorse.dashboard_job_v1 j
+              LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
+              LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
+              LEFT JOIN workhorse.dashboard_job_progress_v1 p ON p.job_id = j.id
+              LEFT JOIN workhorse.dashboard_signal_wait_v1 signal
+                ON signal.job_id = j.id AND signal.signal_name = r.wait_name
+             WHERE j.id = %s::uuid
+            """,
+            (job_id,),
+        )
+        if not jobs:
+            raise DashboardRPCError(404, "NOT_FOUND", "Task not found")
+        job = jobs[0]
+        dependencies = self._rows(
+            """SELECT dependent_job_id, prerequisite_job_id, on_success, on_failure,
+                      on_cancellation, created_at, released_at, resolution
+                 FROM workhorse.dashboard_job_dependency_v1
+                WHERE dependent_job_id = %s::uuid OR prerequisite_job_id = %s::uuid
+                ORDER BY dependent_job_id, prerequisite_job_id LIMIT 101""",
+            (job_id, job_id),
+        )
+        own_dependencies = [
+            row for row in dependencies if str(row["dependent_job_id"]) == str(job_id)
+        ]
+        children = self._rows(
+            """SELECT edge.parent_job_id, edge.child_job_id, edge.child_name,
+                      child.job_type AS child_type, edge.created_at, edge.joined_at,
+                      outcome.state AS outcome_state, outcome.error AS outcome_error
+                 FROM workhorse.dashboard_job_child_v1 edge
+                 JOIN workhorse.dashboard_job_v1 child ON child.id = edge.child_job_id
+                 LEFT JOIN workhorse.dashboard_job_outcome_v1 outcome ON outcome.job_id = edge.child_job_id
+                WHERE edge.parent_job_id = %s::uuid OR edge.child_job_id = %s::uuid
+                ORDER BY edge.created_at, edge.parent_job_id, edge.child_job_id LIMIT 102""",
+            (job_id, job_id),
+        )
+        redrives = self._rows(
+            "SELECT * FROM workhorse.redrive_lineage_v1(%s::uuid, 101)", (job_id,)
+        )
+        attempts = self._rows(
+            """SELECT attempt, worker_id, outcome, started_at, claimed_at, finished_at,
+                      extract(epoch FROM finished_at - claimed_at) * 1000 AS execution_ms,
+                      extract(epoch FROM finished_at - started_at) * 1000 AS elapsed_ms, error
+                 FROM workhorse.dashboard_attempt_history_v1 WHERE job_id = %s::uuid
+                ORDER BY attempt, attempt_id""",
+            (job_id,),
+        )
+        checkpoints = self._rows(
+            """SELECT checkpoint_name, checkpoint_value, attempt, fence_token::text,
+                      worker_id, created_at FROM workhorse.dashboard_job_checkpoint_v1
+                WHERE job_id = %s::uuid ORDER BY created_at, checkpoint_name""",
+            (job_id,),
+        )
+        waits = self._rows(
+            """SELECT wait_name, mode, duration_ms::text, requested_wake_at, wake_at,
+                      attempt, fence_token::text, worker_id, created_at
+                 FROM workhorse.dashboard_job_wait_v1 WHERE job_id = %s::uuid
+                ORDER BY created_at, wait_name""",
+            (job_id,),
+        )
+        events = self._rows(
+            """SELECT event_id::text, attempt, event_type, details, occurred_at
+                 FROM workhorse.dashboard_job_event_v1 WHERE job_id = %s::uuid
+                ORDER BY occurred_at, event_id""",
+            (job_id,),
+        )
+        batch_rows = self._rows(
+            """SELECT dispatch.details->>'batch_id' AS batch_id,
+                      dispatch.attempt AS selected_attempt, dispatch.occurred_at AS dispatched_at,
+                      EXISTS (SELECT 1 FROM workhorse.dashboard_job_event_v1 failure
+                        WHERE failure.job_id=dispatch.job_id AND failure.attempt=dispatch.attempt
+                          AND failure.event_type='batch_failed'
+                          AND failure.details->>'batch_id'=dispatch.details->>'batch_id') AS batch_wide_failure,
+                      member.ordinal, member.value->>'job_id' AS job_id,
+                      COALESCE(member_job.job_type, selected_job.job_type) AS job_type,
+                      (member.value->>'attempt')::integer AS attempt,
+                      history.outcome, history.error
+                 FROM workhorse.dashboard_job_event_v1 dispatch
+                 CROSS JOIN LATERAL jsonb_array_elements(dispatch.details->'members')
+                   WITH ORDINALITY AS member(value, ordinal)
+                 JOIN workhorse.dashboard_job_v1 selected_job ON selected_job.id=dispatch.job_id
+                 LEFT JOIN workhorse.dashboard_job_v1 member_job
+                   ON member_job.id=(member.value->>'job_id')::uuid
+                 LEFT JOIN workhorse.dashboard_attempt_history_v1 history
+                   ON history.job_id=(member.value->>'job_id')::uuid
+                  AND history.attempt=(member.value->>'attempt')::integer
+                WHERE dispatch.job_id=%s::uuid AND dispatch.event_type='batch_dispatched'
+                ORDER BY dispatch.occurred_at,dispatch.event_id,member.ordinal""",
+            (job_id,),
+        )
+        executions: list[dict[str, object]] = []
+        by_batch: dict[str, dict[str, object]] = {}
+        for row in batch_rows:
+            batch_id = cast(str, row["batch_id"])
+            execution = by_batch.get(batch_id)
+            if execution is None:
+                execution = {
+                    "id": batch_id,
+                    "attempt": row["selected_attempt"],
+                    "dispatchedAt": _iso(row["dispatched_at"]),
+                    "batchWideFailure": row["batch_wide_failure"],
+                    "members": [],
+                }
+                by_batch[batch_id] = execution
+                executions.append(execution)
+            cast(list[object], execution["members"]).append(
+                {
+                    "id": str(row["job_id"]),
+                    "type": row["job_type"],
+                    "attempt": row["attempt"],
+                    "outcome": row["outcome"],
+                    "error": row["error"],
+                }
+            )
+        policy_rows = self._rows(
+            """SELECT namespace,queue_name,max_active,max_active_per_key
+                 FROM workhorse.dashboard_concurrency_policy_v1 WHERE queue_name=%s""",
+            (job["queue"],),
+        )
+        health = self._health() if job["runtime_state"] is not None else None
+        health_policies = {} if health is None else _admission_policies(health)[0]
+        concurrency_policy = None
+        if policy_rows:
+            policy = policy_rows[0]
+            measured = cast(
+                Mapping[str, object] | None, health_policies.get(cast(str, job["queue"]))
+            )
+            concurrency_policy = {
+                "namespace": policy["namespace"],
+                "maxActive": _integer(policy["max_active"]),
+                "utilizationKnown": measured is not None,
+                "active": 0 if measured is None else measured["active"],
+                "available": 0 if measured is None else measured["available"],
+                "blockedReady": 0 if measured is None else measured["blockedReady"],
+                "maxActivePerKey": None
+                if policy["max_active_per_key"] is None
+                else _integer(policy["max_active_per_key"]),
+                "saturatedKeys": 0 if measured is None else measured["saturatedKeys"],
+                "highestKeyActive": 0 if measured is None else measured["highestKeyActive"],
+            }
+        state = job["outcome_state"] or job["runtime_state"] or "unknown"
+        dependency_policy = None
+        if own_dependencies:
+            first = own_dependencies[0]
+            dependency_policy = {
+                "onSuccess": first["on_success"],
+                "onFailure": first["on_failure"],
+                "onCancellation": first["on_cancellation"],
+            }
+        dependency_released_at: object = None
+        if own_dependencies and all(row["released_at"] is not None for row in own_dependencies):
+            dependency_released_at = max(
+                cast(datetime, row["released_at"]) for row in own_dependencies
+            )
+        cancellation = None
+        if job["cancel_requested_at"] is not None:
+            cancellation = {
+                "requestedAt": _iso(job["cancel_requested_at"]),
+                "requestedBy": job["cancel_requested_by"] or None,
+                "reason": job["cancel_reason"] or None,
+            }
+        runtime = None
+        if job["runtime_state"] is not None:
+            runtime = {
+                "state": job["runtime_state"],
+                "attempt": job["runtime_attempt"],
+                "runAt": _iso(job["run_at"]),
+                "readyAt": _iso(job["ready_at"]),
+                "workerId": job["worker_id"],
+                "fenceToken": job["fence_token"],
+                "acquiredAt": _iso(job["acquired_at"]),
+                "heartbeatAt": _iso(job["heartbeat_at"]),
+                "expiresAt": _iso(job["expires_at"]),
+                "waitName": job["wait_name"],
+                "attemptStartedAt": _iso(job["attempt_started_at"]),
+                "attemptTimeoutAt": _iso(job["attempt_timeout_at"]),
+                "cancellation": cancellation,
+                "error": job["runtime_error"],
+            }
+        outcome = None
+        if job["outcome_state"] is not None:
+            outcome = {
+                "state": job["outcome_state"],
+                "attempt": job["outcome_attempt"],
+                "finishedAt": _iso(job["finished_at"]),
+                "result": job["result"],
+                "error": job["outcome_error"],
+            }
+        progress = None
+        if job["progress_revision"] is not None:
+            progress = {
+                "value": job["progress_value"],
+                "revision": job["progress_revision"],
+                "attempt": job["progress_attempt"],
+                "fenceToken": job["progress_fence_token"],
+                "workerId": job["progress_worker_id"],
+                "createdAt": _iso(job["progress_created_at"]),
+                "updatedAt": _iso(job["progress_updated_at"]),
+            }
+        return {
+            "identity": {
+                "id": str(job["id"]),
+                "queue": job["queue"],
+                "type": job["type"],
+                "priority": job["priority"],
+                "state": state,
+                "createdAt": _iso(job["created_at"]),
+                "retryPolicy": job["retry_policy"],
+                "maxAttempts": job["max_attempts"],
+                "deadlineAt": _iso(job["deadline_at"]),
+                "executionTimeoutMs": None
+                if job["execution_timeout_ms"] is None
+                else int(cast(int, job["execution_timeout_ms"])),
+                "concurrencyKey": job["concurrency_key"],
+                "prerequisiteJobId": str(own_dependencies[0]["prerequisite_job_id"])
+                if len(own_dependencies) == 1
+                else None,
+                "prerequisiteJobIds": [str(row["prerequisite_job_id"]) for row in own_dependencies],
+                "dependencyPolicy": dependency_policy,
+                "dependencyReleasedAt": _iso(dependency_released_at),
+                "blockedReason": "prerequisite_pending"
+                if job["runtime_state"] == "blocked" and own_dependencies
+                else None,
+            },
+            "dependencyLineage": {
+                "records": [
+                    {
+                        "dependentJobId": str(row["dependent_job_id"]),
+                        "prerequisiteJobId": str(row["prerequisite_job_id"]),
+                        "onSuccess": row["on_success"],
+                        "onFailure": row["on_failure"],
+                        "onCancellation": row["on_cancellation"],
+                        "createdAt": _iso(row["created_at"]),
+                        "releasedAt": _iso(row["released_at"]),
+                        "resolution": row["resolution"],
+                    }
+                    for row in dependencies[:100]
+                ],
+                "truncated": len(dependencies) > 100,
+            },
+            "childLineage": {
+                "records": [
+                    {
+                        "parentJobId": str(row["parent_job_id"]),
+                        "childJobId": str(row["child_job_id"]),
+                        "name": row["child_name"],
+                        "type": row["child_type"],
+                        "createdAt": _iso(row["created_at"]),
+                        "joinedAt": _iso(row["joined_at"]),
+                        "outcomeState": row["outcome_state"],
+                        "error": row["outcome_error"],
+                    }
+                    for row in children[:101]
+                ],
+                "truncated": len(children) > 101,
+            },
+            "redriveLineage": {
+                "records": [
+                    {
+                        "sourceJobId": str(row["source_job_id"]),
+                        "targetJobId": str(row["target_job_id"]),
+                        "requestedBy": row["requested_by"],
+                        "reason": row["reason"],
+                        "requestIdPreview": row["request_id_preview"],
+                        "requestIdDigest": row["request_id_digest"],
+                        "requestIdLength": row["request_id_length"],
+                        "sourceState": row["source_state"],
+                        "targetInitialState": row["target_initial_state"],
+                        "requestedAt": _iso(row["requested_at"]),
+                    }
+                    for row in redrives[:100]
+                ],
+                "truncated": len(redrives) > 100,
+            },
+            "concurrencyPolicy": concurrency_policy,
+            "signalWait": None
+            if not job["wait_name"] or not job["signal_wait_deadline_at"]
+            else {"name": job["wait_name"], "deadlineAt": _iso(job["signal_wait_deadline_at"])},
+            "canSignal": not self._read_only,
+            "payload": job["payload"],
+            "progress": progress,
+            "durability": None,
+            "current": {
+                "runtime": runtime,
+                "outcome": outcome,
+                "result": job["result"],
+                "error": job["outcome_error"] or job["runtime_error"],
+            },
+            "batchExecutions": executions,
+            "attempts": [
+                {
+                    "attempt": row["attempt"],
+                    "workerId": row["worker_id"],
+                    "outcome": row["outcome"],
+                    "startedAt": _iso(row["started_at"]),
+                    "claimedAt": _iso(row["claimed_at"]),
+                    "finishedAt": _iso(row["finished_at"]),
+                    "durationMs": float(cast(float, row["execution_ms"])),
+                    "executionMs": float(cast(float, row["execution_ms"])),
+                    "elapsedMs": float(cast(float, row["elapsed_ms"])),
+                    "error": row["error"],
+                }
+                for row in attempts
+            ],
+            "checkpoints": [
+                {
+                    "name": row["checkpoint_name"],
+                    "value": row["checkpoint_value"],
+                    "attempt": row["attempt"],
+                    "fenceToken": row["fence_token"],
+                    "workerId": row["worker_id"],
+                    "createdAt": _iso(row["created_at"]),
+                }
+                for row in checkpoints
+            ],
+            "waits": [
+                {
+                    "name": row["wait_name"],
+                    "mode": row["mode"],
+                    "durationMs": None
+                    if row["duration_ms"] is None
+                    else int(cast(str, row["duration_ms"])),
+                    "requestedWakeAt": _iso(row["requested_wake_at"]),
+                    "wakeAt": _iso(row["wake_at"]),
+                    "attempt": row["attempt"],
+                    "fenceToken": row["fence_token"],
+                    "workerId": row["worker_id"],
+                    "createdAt": _iso(row["created_at"]),
+                }
+                for row in waits
+            ],
+            "events": [
+                {
+                    "id": row["event_id"],
+                    "attempt": row["attempt"],
+                    "type": row["event_type"],
+                    "details": row["details"],
+                    "occurredAt": _iso(row["occurred_at"]),
+                }
+                for row in events
+            ],
+        }
+
+    def settings(self, _input: object, _actor: str) -> object:
+        maintenance = self._rows(
+            "SELECT (policy).* FROM workhorse.get_maintenance_policy_v1() policy"
+        )[0]
+        retention = self._rows("SELECT (policy).* FROM workhorse.get_retention_policy_v1() policy")[
+            0
+        ]
+        health = self._health()
+        enqueued = self._rows(
+            """SELECT COALESCE(sum(enqueued), 0)::integer AS jobs
+                 FROM workhorse.stat_buckets_v1(
+                   date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+                     - interval '1 hour' + interval '1 minute', clock_timestamp())"""
+        )[0]
+        workers = self._rows(
+            """SELECT worker_id, queue_names, concurrency, lease_ms, heartbeat_ms, poll_ms,
+                      maintenance_interval_ms, maintenance_task_poll_ms, registry_interval_ms,
+                      last_heartbeat_at FROM workhorse.dashboard_worker_registry_v1
+                WHERE last_heartbeat_at >= clock_timestamp() - GREATEST(
+                  interval '30 seconds', registry_interval_ms * 3 * interval '1 millisecond')
+                ORDER BY worker_id"""
+        )
+        maintenance_names = (
+            "timezone",
+            "partitionPreparationIntervalMs",
+            "terminalCleanupIntervalMs",
+            "historyRetentionLocalTime",
+            "statisticsRollupIntervalMs",
+            "statisticsGroupLimit",
+            "statisticsRecomputeBuckets",
+        )
+        retention_names = (
+            "jobIdentityRetentionDays",
+            "terminalOutcomeRetentionDays",
+            "jobEventRetentionDays",
+            "attemptHistoryRetentionDays",
+            "scheduleOccurrenceRetentionDays",
+            "statisticsRetentionDays",
+            "terminalJobPruneLimit",
+            "historyPartitionsPerPass",
+            "defaultPartitionRowsPerPass",
+            "occurrenceRowsPerPass",
+            "statisticsRowsPerPass",
+        )
+
+        def policy(row: Mapping[str, object], names: Sequence[str]) -> dict[str, object]:
+            overrides = set(cast(Sequence[str], row["operator_overrides"]))
+            result: dict[str, object] = {}
+            provenance: dict[str, object] = {}
+            for name in names:
+                column = _camel_to_snake(name)
+                value = row[column]
+                application = row["application_" + column]
+                if name == "historyRetentionLocalTime":
+                    value, application = str(value)[:5], str(application)[:5]
+                result[name] = value
+                provenance[name] = {
+                    "source": "operator" if column in overrides else "application",
+                    "applicationDefault": application,
+                }
+            result["provenance"] = provenance
+            result["updatedAt"] = _iso(row["updated_at"])
+            return result
+
+        reasons = cast(Mapping[str, object], health["status"])["reasons"]
+        return {
+            "capturedAt": _iso(datetime.now(timezone.utc)),
+            "editable": not self._read_only,
+            "maintenance": policy(maintenance, maintenance_names),
+            "retention": policy(retention, retention_names),
+            "recommendationInputs": {
+                "reasons": reasons,
+                "statistics": {
+                    "rolledUpThrough": _iso(health["rolled_up_through"]),
+                    "lagMs": float(cast(float, health["rollup_lag_ms"])),
+                    "lastRunAt": _iso(health["last_run_at"]),
+                },
+                "defaultHistoryRows": {
+                    "jobEvents": int(cast(int, health["default_event_rows"])),
+                    "attemptHistory": int(cast(int, health["default_attempt_rows"])),
+                },
+                "defaultHistoryRowsCapped": {
+                    "jobEvents": health["default_event_rows_capped"],
+                    "attemptHistory": health["default_attempt_rows_capped"],
+                },
+                "enqueueRate": {"jobs": enqueued["jobs"], "windowMs": 3_600_000},
+            },
+            "workers": [
+                {
+                    "id": row["worker_id"],
+                    "queue": cast(Sequence[str], row["queue_names"])[0],
+                    "queues": row["queue_names"],
+                    "concurrency": row["concurrency"],
+                    "leaseMs": row["lease_ms"],
+                    "heartbeatMs": row["heartbeat_ms"],
+                    "pollMs": row["poll_ms"],
+                    "maintenanceIntervalMs": row["maintenance_interval_ms"],
+                    "maintenanceTaskPollMs": row["maintenance_task_poll_ms"],
+                    "registryIntervalMs": row["registry_interval_ms"],
+                    "lastSeenAt": _iso(row["last_heartbeat_at"]),
+                }
+                for row in workers
+            ],
+        }
+
+    def system(self, input: object, _actor: str) -> object:
+        supplied = cast(Mapping[str, object], input)
+        window = cast(str, supplied.get("window", "1h"))
+        seconds = {"15m": 900, "1h": 3600, "6h": 21600, "24h": 86400, "7d": 604800}[window]
+        start = "date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01') - make_interval(secs => %s) + interval '1 minute'"
+        stat = f"workhorse.stat_buckets_v1({start}, clock_timestamp())"
+        outcomes = self._rows(
+            f"""WITH buckets AS (SELECT generate_series({start},
+                    date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01'),
+                    interval '1 minute') AS bucket_start), rolled AS (
+                  SELECT bucket_start, sum(enqueued)::integer AS enqueued,
+                    sum(attempt_succeeded)::integer AS succeeded,
+                    sum(attempt_failed)::integer AS failed, sum(attempt_retry)::integer AS retry,
+                    sum(attempt_lease_expired)::integer AS lease_expired,
+                    sum(attempt_canceled)::integer AS canceled FROM {stat} GROUP BY 1)
+                SELECT b.bucket_start, COALESCE(r.enqueued,0)::integer AS enqueued,
+                  COALESCE(r.succeeded,0)::integer AS succeeded, COALESCE(r.failed,0)::integer AS failed,
+                  COALESCE(r.retry,0)::integer AS retry, COALESCE(r.lease_expired,0)::integer AS lease_expired,
+                  COALESCE(r.canceled,0)::integer AS canceled FROM buckets b LEFT JOIN rolled r USING(bucket_start)
+                ORDER BY b.bucket_start""",
+            (seconds, seconds),
+        )
+        completed = "(attempt_succeeded + attempt_failed + attempt_canceled)"
+        attempts_expr = "(attempt_succeeded + attempt_failed + attempt_retry + attempt_lease_expired + attempt_canceled + attempt_other)"
+        errors_expr = "(attempt_failed + attempt_retry + attempt_lease_expired + attempt_other)"
+        summary = self._rows(
+            f"""WITH current_window AS (SELECT COALESCE(sum(enqueued),0)::integer AS enqueued,
+                    COALESCE(sum({completed}),0)::integer AS completed,
+                    COALESCE(sum({attempts_expr}),0)::integer AS attempts,
+                    COALESCE(sum({errors_expr}),0)::integer AS errors,
+                    COALESCE(sum(attempt_lease_expired),0)::integer AS recovered FROM {stat}),
+                  previous_window AS (SELECT COALESCE(sum({attempts_expr}),0)::integer AS attempts,
+                    COALESCE(sum({errors_expr}),0)::integer AS errors FROM workhorse.stat_buckets_v1(
+                    date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+                      - make_interval(secs => %s * 2) + interval '1 minute', {start}))
+                SELECT c.enqueued, c.completed, c.attempts, c.errors, c.recovered,
+                  p.attempts AS previous_attempts, p.errors AS previous_errors
+                  FROM current_window c CROSS JOIN previous_window p""",
+            (seconds, seconds, seconds),
+        )[0]
+        wait = self._rows(
+            f"""WITH merged AS (SELECT workhorse.stat_sketch_merge_v1(array_agg(wait_sketch)) AS sketch FROM {stat})
+                SELECT workhorse.stat_sketch_percentile_v1(sketch,0.50) AS p50,
+                  workhorse.stat_sketch_percentile_v1(sketch,0.95) AS p95,
+                  workhorse.stat_sketch_percentile_v1(sketch,0.99) AS p99 FROM merged""",
+            (seconds,),
+        )[0]
+        runtime = self._rows(
+            """SELECT count(*) FILTER (WHERE state='ready')::integer AS ready,
+                    extract(epoch FROM clock_timestamp()-min(ready_at) FILTER(WHERE state='ready'))*1000 AS oldest_ready_ms,
+                    count(*) FILTER(WHERE state='scheduled' AND current_attempt>1)::integer AS backoff,
+                    count(*) FILTER(WHERE state='scheduled' AND current_attempt>1 AND run_at<=clock_timestamp()+interval '5 minutes')::integer AS due_soon,
+                    count(*) FILTER(WHERE state='active')::integer AS active,
+                    count(*) FILTER(WHERE state='active' AND expires_at<=clock_timestamp())::integer AS expired,
+                    count(*) FILTER(WHERE state='active' AND expires_at>clock_timestamp() AND expires_at<=clock_timestamp()+interval '30 seconds')::integer AS expiring_soon,
+                    count(*) FILTER(WHERE state='scheduled' AND run_at<clock_timestamp()-interval '30 seconds')::integer AS due_but_unpromoted
+               FROM workhorse.dashboard_job_runtime_v1"""
+        )[0]
+        queue_rows = self._rows(
+            f"""WITH rolled AS (SELECT queue_name, COALESCE(sum(enqueued),0)::integer AS enqueued,
+                    COALESCE(sum({completed}),0)::integer AS completed FROM {stat} GROUP BY 1),
+                  names AS (SELECT queue_name FROM workhorse.dashboard_job_runtime_v1 UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1 UNION SELECT queue_name FROM workhorse.dashboard_concurrency_policy_v1 UNION SELECT queue_name FROM workhorse.dashboard_rate_limit_policy_v1 UNION SELECT queue_name FROM rolled),
+                  runtime AS (SELECT queue_name, count(*) FILTER(WHERE state='ready')::integer AS ready,
+                    extract(epoch FROM clock_timestamp()-min(ready_at) FILTER(WHERE state='ready'))*1000 AS oldest_ready_ms,
+                    count(*) FILTER(WHERE state='scheduled' AND run_at<=clock_timestamp()+interval '5 minutes')::integer AS due_soon,
+                    count(*) FILTER(WHERE state='active')::integer AS active,
+                    count(*) FILTER(WHERE state='scheduled' AND current_attempt>1)::integer AS retrying
+                    FROM workhorse.dashboard_job_runtime_v1 GROUP BY queue_name)
+                SELECT n.queue_name AS queue, COALESCE(c.paused,false) AS paused,
+                  COALESCE(r.ready,0)::integer AS ready, r.oldest_ready_ms,
+                  COALESCE(r.due_soon,0)::integer AS due_soon, COALESCE(r.active,0)::integer AS active,
+                  COALESCE(r.retrying,0)::integer AS retrying, COALESCE(s.enqueued,0)::integer AS enqueued,
+                  COALESCE(s.completed,0)::integer AS completed FROM names n
+                  LEFT JOIN workhorse.dashboard_queue_control_v1 c USING(queue_name)
+                  LEFT JOIN runtime r USING(queue_name) LEFT JOIN rolled s USING(queue_name)
+                  ORDER BY n.queue_name""",
+            (seconds,),
+        )
+        priorities = self._rows(
+            """SELECT r.queue_name AS queue, j.priority, count(*)::integer AS ready,
+                    extract(epoch FROM clock_timestamp()-min(r.ready_at))*1000 AS oldest_ready_ms
+                 FROM workhorse.dashboard_job_runtime_v1 r JOIN workhorse.dashboard_job_v1 j ON j.id=r.job_id
+                WHERE r.state='ready' GROUP BY r.queue_name,j.priority ORDER BY r.queue_name,j.priority DESC"""
+        )
+        retry_rows = self._rows(
+            """SELECT CASE
+                     WHEN run_at<=clock_timestamp()+interval '1 minute' THEN 60000
+                     WHEN run_at<=clock_timestamp()+interval '5 minutes' THEN 300000
+                     WHEN run_at<=clock_timestamp()+interval '15 minutes' THEN 900000
+                     WHEN run_at<=clock_timestamp()+interval '1 hour' THEN 3600000
+                     ELSE NULL END AS upper_bound_ms,
+                   count(*)::integer AS count
+                 FROM workhorse.dashboard_job_runtime_v1
+                WHERE state='scheduled' AND current_attempt>1 GROUP BY 1"""
+        )
+        retry_types = self._rows(
+            """SELECT job.queue_name AS queue,job.job_type AS type,count(*)::integer AS count
+                 FROM workhorse.dashboard_job_runtime_v1 runtime
+                 JOIN workhorse.dashboard_job_v1 job ON job.id=runtime.job_id
+                WHERE runtime.state='scheduled' AND runtime.current_attempt>1
+                GROUP BY job.queue_name,job.job_type
+                ORDER BY count DESC,job.queue_name,job.job_type LIMIT 3"""
+        )
+        failing = self._rows(
+            f"""SELECT queue_name AS queue, job_type AS type, sum({attempts_expr})::integer AS attempts,
+                    sum({errors_expr})::integer AS errors, sum(attempt_failed)::integer AS terminal_failures,
+                    (array_agg(last_error ORDER BY last_error_at DESC NULLS LAST) FILTER(WHERE last_error IS NOT NULL))[1] AS last_error,
+                    max(last_attempt_at) AS last_seen_at FROM {stat} GROUP BY 1,2
+                  HAVING sum({errors_expr})>0 ORDER BY errors DESC,last_seen_at DESC LIMIT 8""",
+            (seconds,),
+        )
+        health = self._health()
+        status = cast(Mapping[str, object], health["status"])
+        retry_counts = {row["upper_bound_ms"]: _integer(row["count"]) for row in retry_rows}
+        retries = [
+            {"upperBoundMs": bound, "count": retry_counts.get(bound, 0)}
+            for bound in (60000, 300000, 900000, 3600000, None)
+        ]
+        by_queue: dict[str, list[object]] = {}
+        for row in priorities:
+            by_queue.setdefault(cast(str, row["queue"]), []).append(
+                {
+                    "priority": row["priority"],
+                    "ready": row["ready"],
+                    "oldestReadyMs": str(row["oldest_ready_ms"]),
+                }
+            )
+        minutes = seconds / 60
+        concurrency_by_queue, rate_limits_by_queue = _admission_policies(health)
+        queues = [
+            {
+                "queue": row["queue"],
+                "paused": row["paused"],
+                "ready": row["ready"],
+                "oldestReadyMs": None
+                if row["oldest_ready_ms"] is None
+                else str(row["oldest_ready_ms"]),
+                "priorityBacklog": by_queue.get(cast(str, row["queue"]), []),
+                "dueSoon": row["due_soon"],
+                "active": row["active"],
+                "retrying": row["retrying"],
+                "enqueuedPerMinute": cast(int, row["enqueued"]) / minutes,
+                "completedPerMinute": cast(int, row["completed"]) / minutes,
+                "concurrencyPolicy": concurrency_by_queue.get(cast(str, row["queue"])),
+                "rateLimitPolicy": rate_limits_by_queue.get(cast(str, row["queue"])),
+            }
+            for row in queue_rows
+        ]
+        dependencies = {
+            "blockedJobs": int(cast(int, health["dependency_blocked_jobs"])),
+            "pendingEdges": int(cast(int, health["dependency_pending_edges"])),
+            "failedResolutions": int(cast(int, health["dependency_failed_resolutions"])),
+            "retentionPruneStarved": health["dependency_retention_prune_starved"],
+            "capped": health["dependency_counts_capped"],
+        }
+        children = {
+            "waitingParents": int(cast(int, health["child_waiting_parents"])),
+            "pendingChildren": int(cast(int, health["child_pending_children"])),
+            "unjoinedResults": int(cast(int, health["child_unjoined_results"])),
+            "failedParents": int(cast(int, health["child_failed_parents"])),
+            "canceledParents": int(cast(int, health["child_canceled_parents"])),
+            "capped": health["child_counts_capped"],
+        }
+        external = {
+            "pendingSignals": int(cast(int, health["pending_signal_waits"])),
+            "pendingHumanDecisions": int(cast(int, health["pending_human_waits"])),
+            "overdue": int(cast(int, health["overdue_external_waits"])),
+            "oldestPendingAgeMs": _float_or_none(health["oldest_external_wait_age_ms"]),
+            "rejectedDeliveries": int(cast(int, health["rejected_wait_deliveries"])),
+            "capped": health["external_wait_counts_capped"],
+        }
+        categories = []
+        category_specs = (
+            (
+                "jobIdentity",
+                "job_identity_retention_days",
+                "job_identity_lag_ms",
+                "oldest_job_identity_at",
+                False,
+            ),
+            (
+                "terminalOutcome",
+                "terminal_outcome_retention_days",
+                "terminal_outcome_lag_ms",
+                "oldest_terminal_outcome_at",
+                False,
+            ),
+            (
+                "jobEvents",
+                "job_event_retention_days",
+                "job_event_lag_ms",
+                "oldest_job_event_at",
+                True,
+            ),
+            (
+                "attemptHistory",
+                "attempt_history_retention_days",
+                "attempt_history_lag_ms",
+                "oldest_attempt_history_at",
+                True,
+            ),
+            (
+                "scheduleOccurrences",
+                "schedule_occurrence_retention_days",
+                "schedule_occurrence_lag_ms",
+                "oldest_schedule_occurrence_at",
+                False,
+            ),
+            (
+                "statistics",
+                "statistics_retention_days",
+                "statistics_lag_ms",
+                "oldest_statistics_at",
+                False,
+            ),
+        )
+        for name, days, lag, oldest, partitioned in category_specs:
+            categories.append(
+                {
+                    "category": name,
+                    "retentionDays": health[days],
+                    "lagMs": health[lag],
+                    "oldestRetainedAt": _iso(health[oldest]),
+                    "prunedByPartition": partitioned,
+                }
+            )
+        oldest_category = min(
+            (row for row in categories if row["oldestRetainedAt"] is not None),
+            key=lambda row: cast(str, row["oldestRetainedAt"]),
+            default=None,
+        )
+        lag_category = max(
+            (
+                row
+                for row in categories
+                if row["lagMs"] is not None and cast(float, row["lagMs"]) > 0
+            ),
+            key=lambda row: cast(float, row["lagMs"]),
+            default=None,
+        )
+        observed = {
+            cast(str, row["relation"]): row
+            for row in cast(Mapping[str, Sequence[Mapping[str, object]]], health["observations"])[
+                "relations"
+            ]
+        }
+        relation_names = (
+            "job",
+            "job_outcome",
+            "job_runtime",
+            "job_query",
+            "job_event",
+            "attempt_history",
+            "schedule_occurrence",
+            "job_stat_bucket",
+            "job_stat_bucket_hour",
+            "job_stat_bucket_day",
+        )
+        relations = [
+            {
+                "relation": name,
+                "totalBytes": int(cast(int, observed[name]["total_bytes"])),
+                "tableBytes": int(cast(int, observed[name]["table_bytes"])),
+                "indexBytes": int(cast(int, observed[name]["index_bytes"])),
+                "rows": int(cast(int, observed[name]["live_tuples"])),
+                "deadRows": int(cast(int, observed[name]["dead_tuples"])),
+                "partitions": int(cast(int, observed[name]["partitions"])),
+                "lastVacuumAt": _iso(
+                    observed[name]["last_autovacuum"] or observed[name]["last_vacuum"]
+                ),
+            }
+            for name in relation_names
+        ]
+        relations.sort(key=lambda row: cast(int, row["totalBytes"]), reverse=True)
+        retention = {
+            "policyUpdatedAt": _iso(health["updated_at"]),
+            "categories": categories,
+            "maxLagMs": None if lag_category is None else lag_category["lagMs"],
+            "maxLagCategory": None if lag_category is None else lag_category["category"],
+            "oldestRetainedAt": None
+            if oldest_category is None
+            else oldest_category["oldestRetainedAt"],
+            "oldestRetainedCategory": None
+            if oldest_category is None
+            else oldest_category["category"],
+            "eligibleHistoryPartitions": {
+                "jobEvents": int(cast(int, health["eligible_event_partitions"])),
+                "attemptHistory": int(cast(int, health["eligible_attempt_partitions"])),
+            },
+            "defaultHistoryRows": {
+                "jobEvents": int(cast(int, health["default_event_rows"])),
+                "attemptHistory": int(cast(int, health["default_attempt_rows"])),
+            },
+            "defaultHistoryRowsCapped": {
+                "jobEvents": health["default_event_rows_capped"],
+                "attemptHistory": health["default_attempt_rows_capped"],
+            },
+        }
+        return {
+            "capturedAt": _iso(datetime.now(timezone.utc)),
+            "window": window,
+            "windowSeconds": seconds,
+            "status": status,
+            "pausedQueues": [cast(str, row["queue"]) for row in queues if row["paused"]],
+            "kpis": {
+                "drain": {
+                    "enqueuedPerMinute": cast(int, summary["enqueued"]) / minutes,
+                    "completedPerMinute": cast(int, summary["completed"]) / minutes,
+                    "netPerMinute": (
+                        cast(int, summary["completed"]) - cast(int, summary["enqueued"])
+                    )
+                    / minutes,
+                },
+                "backlog": {
+                    "ready": runtime["ready"],
+                    "oldestReadyMs": None
+                    if runtime["oldest_ready_ms"] is None
+                    else str(runtime["oldest_ready_ms"]),
+                },
+                "errorRate": {
+                    "current": 0
+                    if not summary["attempts"]
+                    else cast(int, summary["errors"]) / cast(int, summary["attempts"]),
+                    "previous": 0
+                    if not summary["previous_attempts"]
+                    else cast(int, summary["previous_errors"])
+                    / cast(int, summary["previous_attempts"]),
+                    "delta": (
+                        0
+                        if not summary["attempts"]
+                        else cast(int, summary["errors"]) / cast(int, summary["attempts"])
+                    )
+                    - (
+                        0
+                        if not summary["previous_attempts"]
+                        else cast(int, summary["previous_errors"])
+                        / cast(int, summary["previous_attempts"])
+                    ),
+                },
+                "queueWait": {
+                    "p50Ms": float(cast(float, wait["p50"])),
+                    "p95Ms": float(cast(float, wait["p95"])),
+                    "p99Ms": float(cast(float, wait["p99"])),
+                },
+                "retry": {
+                    "backoff": runtime["backoff"],
+                    "dueSoon": runtime["due_soon"],
+                    "buckets": retries,
+                },
+                "lease": {
+                    "active": runtime["active"],
+                    "expired": runtime["expired"],
+                    "expiringSoon": runtime["expiring_soon"],
+                    "recovered": summary["recovered"],
+                },
+                "dependencies": dependencies,
+                "children": children,
+                "externalWaits": external,
+                "deadline": {
+                    "pending": int(cast(int, health["pending_deadlines"])),
+                    "overdue": int(cast(int, health["overdue_deadlines"])),
+                    "dueWithinMinute": int(cast(int, health["deadlines_due_within_minute"])),
+                    "earliestAt": _iso(health["earliest_deadline_at"]),
+                    "activeTimeouts": int(cast(int, health["active_execution_timeouts"])),
+                    "overdueTimeouts": int(cast(int, health["overdue_execution_timeouts"])),
+                },
+            },
+            "outcomes": [
+                {
+                    "bucketStart": _iso(row["bucket_start"]),
+                    "enqueued": row["enqueued"],
+                    "succeeded": row["succeeded"],
+                    "failed": row["failed"],
+                    "retry": row["retry"],
+                    "leaseExpired": row["lease_expired"],
+                    "canceled": row["canceled"],
+                }
+                for row in outcomes
+            ],
+            "queues": queues,
+            "concurrencyPoliciesCapped": any(
+                cast(bool, row["capped"])
+                for row in cast(Sequence[Mapping[str, object]], health["concurrency_policies"])
+            ),
+            "rateLimitPoliciesCapped": any(
+                cast(bool, row["policy_set_capped"]) or cast(bool, row["sample_capped"])
+                for row in cast(Sequence[Mapping[str, object]], health["rate_limit_policies"])
+            ),
+            "retryStorm": {
+                "buckets": retries,
+                "topTypes": [
+                    {"queue": row["queue"], "type": row["type"], "count": row["count"]}
+                    for row in retry_types
+                ],
+            },
+            "failingTypes": [
+                {
+                    "queue": row["queue"],
+                    "type": row["type"],
+                    "attempts": row["attempts"],
+                    "errorRate": cast(int, row["errors"]) / cast(int, row["attempts"]),
+                    "terminalFailures": row["terminal_failures"],
+                    "lastError": row["last_error"],
+                    "lastSeenAt": _iso(row["last_seen_at"]),
+                }
+                for row in failing
+            ],
+            "integrity": {
+                "dueButUnpromoted": runtime["due_but_unpromoted"],
+                "partitions": [
+                    {
+                        "day": row["day"],
+                        "startsAt": _iso(row["starts_at"]),
+                        "eventExists": row["has_job_events"],
+                        "attemptExists": row["has_attempt_history"],
+                    }
+                    for row in cast(
+                        Sequence[Mapping[str, object]], health["history_partition_days"]
+                    )
+                ],
+                "defaultEventRows": int(cast(int, health["default_event_rows"])),
+                "defaultAttemptRows": int(cast(int, health["default_attempt_rows"])),
+                "retention": retention,
+                "storage": {
+                    "rollup": {
+                        "rolledUpThrough": _iso(health["rolled_up_through"]),
+                        "lagMs": float(cast(float, health["rollup_lag_ms"])),
+                        "lastRunAt": _iso(health["last_run_at"]),
+                        "buckets": int(cast(int, health["buckets"])),
+                        "oldestBucketAt": _iso(health["oldest_statistics_at"]),
+                        "newestBucketAt": _iso(health["newest_bucket_at"]),
+                        "stalled": any(
+                            cast(Mapping[str, object], reason).get("code") == "rollup-stalled"
+                            for reason in cast(Sequence[object], status["reasons"])
+                        ),
+                    },
+                    "relations": relations,
+                    "totalBytes": sum(cast(int, row["totalBytes"]) for row in relations),
+                },
+            },
+        }
+
+    def cron(self, _input: object, _actor: str) -> object:
+        schedules = self._rows(
+            """
+            SELECT d.namespace, d.schedule_name AS name, d.cron_expression AS cron,
+                   d.queue_name AS queue, d.job_type AS type, d.priority, d.enabled,
+                   d.revision::text AS revision, d.updated_at,
+                   count(o.occurrence_at)::integer AS occurrence_count,
+                   max(o.fired_at) AS last_fired_at
+              FROM workhorse.dashboard_schedule_definition_v1 d
+              LEFT JOIN workhorse.dashboard_schedule_occurrence_v1 o
+                ON o.namespace = d.namespace AND o.schedule_name = d.schedule_name
+             GROUP BY d.namespace, d.schedule_name, d.cron_expression, d.queue_name, d.job_type,
+                      d.priority, d.enabled, d.revision, d.updated_at
+             ORDER BY d.namespace, d.schedule_name LIMIT 50
+            """
+        )
+        policy = self._rows(
+            """
+            SELECT timezone, partition_preparation_interval_ms, terminal_cleanup_interval_ms,
+                   history_retention_local_time::text, updated_at
+              FROM workhorse.dashboard_maintenance_policy_v1 WHERE singleton
+            """
+        )[0]
+        tasks = self._rows(
+            """
+            SELECT state.task_name, state.last_started_at, state.last_completed_at,
+                   CASE state.task_name
+                     WHEN 'history_partitions' THEN state.last_completed_at IS NULL OR
+                       state.last_completed_at <= clock_timestamp() - make_interval(
+                         secs => policy.partition_preparation_interval_ms / 1000.0)
+                     WHEN 'terminal_storage' THEN state.last_completed_at IS NULL OR
+                       state.last_completed_at <= clock_timestamp() - make_interval(
+                         secs => policy.terminal_cleanup_interval_ms / 1000.0)
+                     WHEN 'history_retention' THEN
+                       (clock_timestamp() AT TIME ZONE policy.timezone)::time >=
+                         policy.history_retention_local_time AND (
+                           state.last_completed_local_date IS NULL OR
+                           state.last_completed_local_date <
+                             (clock_timestamp() AT TIME ZONE policy.timezone)::date)
+                     ELSE false
+                   END AS due,
+                   state.last_started_at IS NOT NULL AND (
+                     state.last_completed_at IS NULL OR
+                     state.last_started_at > state.last_completed_at
+                   ) AS incomplete
+              FROM workhorse.dashboard_maintenance_state_v1 state
+              CROSS JOIN workhorse.dashboard_maintenance_policy_v1 policy
+             WHERE policy.singleton ORDER BY state.task_name
+            """
+        )
+        return {
+            "capturedAt": _iso(datetime.now(timezone.utc)),
+            "schedules": [
+                {
+                    "kind": "user",
+                    "identity": {
+                        "kind": "user",
+                        "namespace": row["namespace"],
+                        "name": row["name"],
+                    },
+                    "namespace": row["namespace"],
+                    "name": row["name"],
+                    "cron": row["cron"],
+                    "queue": row["queue"],
+                    "type": row["type"],
+                    "priority": row["priority"],
+                    "enabled": row["enabled"],
+                    "active": row["enabled"],
+                    "revision": row["revision"],
+                    "updatedAt": _iso(row["updated_at"]),
+                    "occurrenceCount": row["occurrence_count"],
+                    "lastFiredAt": _iso(row["last_fired_at"]),
+                }
+                for row in schedules
+            ],
+            "maintenance": {
+                "cadences": self._maintenance_loops,
+                "policy": {
+                    "timezone": policy["timezone"],
+                    "partitionPreparationIntervalMs": policy["partition_preparation_interval_ms"],
+                    "terminalCleanupIntervalMs": policy["terminal_cleanup_interval_ms"],
+                    "historyRetentionLocalTime": str(policy["history_retention_local_time"])[:5],
+                    "updatedAt": _iso(policy["updated_at"]),
+                },
+                "tasks": [
+                    {
+                        "task": row["task_name"],
+                        "lastStartedAt": _iso(row["last_started_at"]),
+                        "lastCompletedAt": _iso(row["last_completed_at"]),
+                        "due": row["due"],
+                        "incomplete": row["incomplete"],
+                    }
+                    for row in tasks
+                    if row["task_name"]
+                    in {"history_partitions", "history_retention", "terminal_storage"}
+                ],
+            },
+        }
+
+    def preview_retention_policy(self, input: object, _actor: str) -> object:
+        document = cast(Mapping[str, object], input)
+        definition = cast(Mapping[str, object], document["definition"])
+        current = self._rows("SELECT (policy).* FROM workhorse.get_retention_policy_v1() policy")[0]
+        names = (
+            "jobIdentityRetentionDays",
+            "terminalOutcomeRetentionDays",
+            "jobEventRetentionDays",
+            "attemptHistoryRetentionDays",
+            "scheduleOccurrenceRetentionDays",
+            "statisticsRetentionDays",
+        )
+        columns = tuple(_camel_to_snake(name) for name in names)
+        values = [
+            definition.get(name, current[column])
+            for name, column in zip(names, columns, strict=True)
+        ]
+        row = self._rows(
+            """
+            SELECT
+              (SELECT count(*)::integer FROM (
+                SELECT 1 FROM workhorse.job job
+                JOIN workhorse.job_outcome outcome ON outcome.job_id = job.id
+                WHERE %s::integer IS NOT NULL AND %s::integer IS NOT NULL
+                  AND job.created_at < clock_timestamp() - make_interval(days => %s)
+                  AND outcome.finished_at < clock_timestamp() - make_interval(days => %s)
+                LIMIT 10001
+              ) rows) AS terminal_jobs,
+              (SELECT count(*)::integer FROM (
+                SELECT 1 FROM workhorse.job_event WHERE %s::integer IS NOT NULL
+                  AND occurred_at < clock_timestamp() - make_interval(days => %s) LIMIT 10001
+              ) rows) AS job_events,
+              (SELECT count(*)::integer FROM (
+                SELECT 1 FROM workhorse.attempt_history WHERE %s::integer IS NOT NULL
+                  AND occurred_at < clock_timestamp() - make_interval(days => %s) LIMIT 10001
+              ) rows) AS attempt_history,
+              (SELECT count(*)::integer FROM (
+                SELECT 1 FROM workhorse.schedule_occurrence WHERE %s::integer IS NOT NULL
+                  AND occurrence_at < clock_timestamp() - make_interval(days => %s) LIMIT 10001
+              ) rows) AS schedule_occurrences,
+              (SELECT count(*)::integer FROM (
+                SELECT 1 FROM workhorse.job_stat_bucket WHERE %s::integer IS NOT NULL
+                  AND bucket_start < clock_timestamp() - make_interval(days => %s)
+                UNION ALL SELECT 1 FROM workhorse.job_stat_bucket_hour WHERE %s::integer IS NOT NULL
+                  AND bucket_start < clock_timestamp() - make_interval(days => %s)
+                UNION ALL SELECT 1 FROM workhorse.job_stat_bucket_day WHERE %s::integer IS NOT NULL
+                  AND bucket_start < clock_timestamp() - make_interval(days => %s) LIMIT 10001
+              ) rows) AS statistics
+            """,
+            (
+                values[0],
+                values[1],
+                values[0],
+                values[1],
+                values[2],
+                values[2],
+                values[3],
+                values[3],
+                values[4],
+                values[4],
+                values[5],
+                values[5],
+                values[5],
+                values[5],
+                values[5],
+                values[5],
+            ),
+        )[0]
+        sampled = {
+            "terminalJobs": int(cast(int, row["terminal_jobs"])),
+            "jobEvents": int(cast(int, row["job_events"])),
+            "attemptHistory": int(cast(int, row["attempt_history"])),
+            "scheduleOccurrences": int(cast(int, row["schedule_occurrences"])),
+            "statistics": int(cast(int, row["statistics"])),
+        }
+        return {
+            "eligible": {name: min(value, 10_000) for name, value in sampled.items()},
+            "capped": {name: value > 10_000 for name, value in sampled.items()},
+        }
+
+    def set_queue_paused(self, input: object, _actor: str) -> object:
+        value = cast(Mapping[str, object], input)
+        function = "pause_queue_v1" if value["paused"] else "resume_queue_v1"
+        self._rows(f"SELECT workhorse.{function}(%s::text)", (value["queue"],))
+        return {"paused": value["paused"]}
+
+    def purge_queue(self, input: object, _actor: str) -> object:
+        value = cast(Mapping[str, object], input)
+        row = self._rows("SELECT workhorse.purge_queue_v1(%s::text) AS count", (value["queue"],))[0]
+        return {"deletedCount": int(cast(int, row["count"]))}
+
+    def set_worker_paused(self, input: object, actor: str) -> object:
+        value = cast(Mapping[str, object], input)
+        audit = cast(Mapping[str, object], value["audit"])
+        rows = self._rows(
+            """
+            SELECT * FROM workhorse.set_worker_paused_v1(
+              %s::text, %s::boolean, %s::text, %s::text)
+            """,
+            (value["workerId"], value["paused"], actor, audit.get("reason")),
+        )
+        if not rows:
+            raise DashboardRPCError(404, "NOT_FOUND", "Worker not found")
+        return {"paused": rows[0]["paused"]}
+
+    def override_maintenance_policy(self, input: object, _actor: str) -> None:
+        definition = cast(Mapping[str, object], cast(Mapping[str, object], input)["definition"])
+        names = (
+            "timezone",
+            "partitionPreparationIntervalMs",
+            "terminalCleanupIntervalMs",
+            "historyRetentionLocalTime",
+            "statisticsRollupIntervalMs",
+            "statisticsGroupLimit",
+            "statisticsRecomputeBuckets",
+        )
+        self._rows(
+            """
+            SELECT (policy).* FROM workhorse.override_maintenance_policy_v1(
+              %s::text, %s::integer, %s::integer, %s::time,
+              %s::integer, %s::integer, %s::integer) policy
+            """,
+            tuple(definition.get(name) for name in names),
+        )
+
+    def revert_maintenance_policy(self, input: object, _actor: str) -> None:
+        settings = cast(Sequence[str], cast(Mapping[str, object], input)["settings"])
+        self._rows(
+            "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v1(%s::text[]) policy",
+            ([_camel_to_snake(name) for name in settings],),
+        )
+
+    def override_retention_policy(self, input: object, _actor: str) -> None:
+        definition = cast(Mapping[str, object], cast(Mapping[str, object], input)["definition"])
+        overrides = {_camel_to_snake(name): value for name, value in definition.items()}
+        self._rows(
+            "SELECT (policy).* FROM workhorse.override_retention_policy_v1(%s::jsonb) policy",
+            (json.dumps(overrides),),
+        )
+
+    def revert_retention_policy(self, input: object, _actor: str) -> None:
+        settings = cast(Sequence[str], cast(Mapping[str, object], input)["settings"])
+        self._rows(
+            "SELECT (policy).* FROM workhorse.revert_retention_policy_v1(%s::text[]) policy",
+            ([_camel_to_snake(name) for name in settings],),
+        )
+
+    def run_task_now(self, input: object, _actor: str) -> object:
+        job_id = cast(Mapping[str, object], input)["id"]
+        row = self._rows(
+            "SELECT status, state, run_at FROM workhorse.run_task_now_v1(%s::uuid)", (job_id,)
+        )[0]
+        if row["status"] == "not_found":
+            raise DashboardRPCError(404, "NOT_FOUND", "Task not found")
+        return {
+            "status": row["status"],
+            "id": str(job_id),
+            "state": row["state"],
+            "runAt": _iso(row["run_at"]),
+        }
+
+    def cancel_task(self, input: object, actor: str) -> object:
+        value = cast(Mapping[str, object], input)
+        audit = cast(Mapping[str, object], value["audit"])
+        row = self._rows(
+            """
+            SELECT status, state, current_attempt, requested_at, requested_by, reason, finished_at
+              FROM workhorse.cancel_v1(%s::uuid, %s::text, %s::text)
+            """,
+            (value["id"], actor, audit.get("reason")),
+        )[0]
+        if row["status"] == "not_found":
+            raise DashboardRPCError(404, "NOT_FOUND", "Task not found")
+        return {
+            "status": row["status"],
+            "jobId": str(value["id"]),
+            "state": row["state"],
+            "currentAttempt": row["current_attempt"],
+            "requestedAt": _iso(row["requested_at"]),
+            "requestedBy": row["requested_by"],
+            "reason": row["reason"],
+            "finishedAt": _iso(row["finished_at"]),
+        }
+
+    def signal_task(self, input: object, actor: str) -> object:
+        value = cast(Mapping[str, object], input)
+        row = self._rows(
+            """
+            SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1(
+              %s::uuid, %s::text, %s::jsonb, %s::text, %s::text)
+            """,
+            (
+                value["id"],
+                value["name"],
+                json.dumps(value["payload"]),
+                value["idempotencyKey"],
+                actor,
+            ),
+        )[0]
+        if row["status"] == "not_found":
+            raise DashboardRPCError(404, "NOT_FOUND", "Task not found")
+        return {
+            "status": row["status"],
+            "jobId": str(value["id"]),
+            "name": value["name"],
+            "payload": row["payload"],
+            "deliveredAt": _iso(row["delivered_at"]),
+            "deliveredBy": row["delivered_by"],
+        }
+
+    def complete_human_wait(self, input: object, actor: str) -> object:
+        value = cast(Mapping[str, object], input)
+        row = self._rows(
+            """
+            SELECT status, result, completed_at, completed_by
+              FROM workhorse.complete_human_wait_v1(
+                %s::uuid, %s::text, %s::jsonb, %s::text, %s::text)
+            """,
+            (
+                value["id"],
+                value["name"],
+                json.dumps(value["result"]),
+                value["idempotencyKey"],
+                actor,
+            ),
+        )[0]
+        if row["status"] == "not_found":
+            raise DashboardRPCError(404, "NOT_FOUND", "Task not found")
+        return {
+            "status": row["status"],
+            "jobId": str(value["id"]),
+            "name": value["name"],
+            "result": row["result"],
+            "completedAt": _iso(row["completed_at"]),
+            "completedBy": row["completed_by"],
+        }
+
+
+def _camel_to_snake(value: str) -> str:
+    return "".join(
+        ("_" + character.lower()) if character.isupper() else character for character in value
+    )
+
+
+def _search_pattern(value: str) -> str:
+    return (
+        "%" + value.replace("!", "!!").replace("%", "!%").replace("_", "!_").replace("*", "%") + "%"
+    )

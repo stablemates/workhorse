@@ -272,7 +272,6 @@ package dashboard
 import (
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"regexp"
 )
 
@@ -310,12 +309,12 @@ func validateSchema(schema, root map[string]any, value any, path string) error {
 		}
 		return fmt.Errorf("%s: value does not match any allowed schema", path)
 	}
-	if expected, ok := schema["const"]; ok && !reflect.DeepEqual(expected, value) {
+	if expected, ok := schema["const"]; ok && !equalJSON(expected, value) {
 		return fmt.Errorf("%s: value must equal %v", path, expected)
 	}
 	if values, ok := schema["enum"].([]any); ok {
 		matched := false
-		for _, expected := range values { if reflect.DeepEqual(expected, value) { matched = true; break } }
+		for _, expected := range values { if equalJSON(expected, value) { matched = true; break } }
 		if !matched { return fmt.Errorf("%s: value is not in the allowed set", path) }
 	}
 	typeName, _ := schema["type"].(string)
@@ -351,6 +350,13 @@ func validateSchema(schema, root map[string]any, value any, path string) error {
 
 func number(value any) (float64, bool) {
 	switch value := value.(type) { case float64: return value, true; case float32: return float64(value), true; case int: return float64(value), true; case int64: return float64(value), true; case json.Number: number, err := value.Float64(); return number, err == nil; default: return 0, false }
+}
+
+func equalJSON(left, right any) bool {
+	leftNumber, leftIsNumber := number(left)
+	rightNumber, rightIsNumber := number(right)
+	if leftIsNumber || rightIsNumber { return leftIsNumber && rightIsNumber && leftNumber == rightNumber }
+	return fmt.Sprint(left) == fmt.Sprint(right)
 }
 `;
 }

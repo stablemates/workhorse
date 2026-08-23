@@ -18,8 +18,9 @@ Two boundaries keep this matrix small:
   fencing, and structured errors (see `protocol/README.md`). Behavior PostgreSQL owns cannot
   diverge between languages, so it has no row here. A language row exists only for behavior a
   client or worker runtime supplies itself.
-- The operator surface — dashboard, standalone `workhorse` CLI, schema install and status — runs
-  against the database and serves every language equally. It is listed once, not per language.
+- The operator surface runs against the database and serves every language equally. The dashboard
+  can run standalone or inside TypeScript, Python, and Go applications, while schema commands stay
+  in the `workhorse` CLI. It is listed once, not per worker-language capability.
 
 ## Client (enqueue side)
 
@@ -59,8 +60,9 @@ human-decision waits, schedule firing, telemetry, and graceful drain through one
 The Python release lane installs the built universal wheel and source distribution into clean
 environments. It exercises both async driver extras and runs the lifecycle example through the
 public package.
-Go workers can fire the recurring definitions that Go clients synchronize. The standalone
-dashboard reads the shared database, so a Go deployment does not need a TypeScript worker runtime.
+Go workers can fire the recurring definitions that Go clients synchronize. The standalone or
+embedded dashboard reads the shared database, so a Go deployment does not need a TypeScript worker
+runtime.
 
 ## Worker runtime
 
@@ -97,15 +99,16 @@ semantics before any runtime fires a definition.
 
 ## Roadmap progress
 
-| Deliverable                     | Plane work item | State     |
-| ------------------------------- | --------------- | --------- |
-| Synchronous Python worker       | [WH-214]        | In Review |
-| Asynchronous Python worker      | [WH-312]        | In Review |
-| Python schedule firing          | [WH-309]        | In Review |
-| Python SDK release examples     | [WH-313]        | In Review |
-| Go transactional enqueue client | [WH-228]        | In Review |
-| Go worker and module examples   | [WH-236]        | In Review |
-| Go schedule firing              | [WH-332]        | In Review |
+| Deliverable                               | Plane work item | State     |
+| ----------------------------------------- | --------------- | --------- |
+| Synchronous Python worker                 | [WH-214]        | In Review |
+| Asynchronous Python worker                | [WH-312]        | In Review |
+| Python schedule firing                    | [WH-309]        | In Review |
+| Python SDK release examples               | [WH-313]        | In Review |
+| Go transactional enqueue client           | [WH-228]        | In Review |
+| Go worker and module examples             | [WH-236]        | In Review |
+| Go schedule firing                        | [WH-332]        | In Review |
+| Go and Python embedded dashboard backends | [WH-351]        | In Review |
 
 The Plane work items own sequencing, blockers, and completion. Update this table when their state
 changes, and update the capability matrices only when repository tests prove the new support.

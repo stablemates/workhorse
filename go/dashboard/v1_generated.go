@@ -4,7 +4,6 @@ package dashboard
 import (
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"regexp"
 )
 
@@ -1327,13 +1326,13 @@ func validateSchema(schema, root map[string]any, value any, path string) error {
 		}
 		return fmt.Errorf("%s: value does not match any allowed schema", path)
 	}
-	if expected, ok := schema["const"]; ok && !reflect.DeepEqual(expected, value) {
+	if expected, ok := schema["const"]; ok && !equalJSON(expected, value) {
 		return fmt.Errorf("%s: value must equal %v", path, expected)
 	}
 	if values, ok := schema["enum"].([]any); ok {
 		matched := false
 		for _, expected := range values {
-			if reflect.DeepEqual(expected, value) {
+			if equalJSON(expected, value) {
 				matched = true
 				break
 			}
@@ -1448,4 +1447,13 @@ func number(value any) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func equalJSON(left, right any) bool {
+	leftNumber, leftIsNumber := number(left)
+	rightNumber, rightIsNumber := number(right)
+	if leftIsNumber || rightIsNumber {
+		return leftIsNumber && rightIsNumber && leftNumber == rightNumber
+	}
+	return fmt.Sprint(left) == fmt.Sprint(right)
 }

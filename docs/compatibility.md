@@ -122,7 +122,7 @@ Nine packages ship from this repository. `@workhorse-js/core` is the TypeScript 
 | `@workhorse-js/dashboard`          | Operator dashboard and its framework-neutral host | `@workhorse-js/core` >= 0.1 and < 0.2, React 19     |
 | `@workhorse-js/dashboard-server`   | Authenticated standalone dashboard server         | `@workhorse-js/dashboard-contract`                  |
 | `@workhorse-js/dashboard-contract` | Type-only dashboard server boundary               | None                                                |
-| `workhorse-pg`                     | Python clients and worker runtimes                | Psycopg >= 3.3 and < 4, or asyncpg >= 0.31 and < 1  |
+| `workhorse-pg`                     | Python clients, workers, and WSGI dashboard       | Psycopg >= 3.3 and < 4, or asyncpg >= 0.31 and < 1  |
 
 The eight TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.
@@ -165,9 +165,10 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
   same schema version speaks the same protocol, whatever language it is written in.
 - **Job payloads are caller-owned JSON.** Workhorse stores and returns them unchanged. Trace context
   and other Workhorse metadata are kept beside the payload, never merged into it.
-- **The dashboard's oRPC transport is private.** It is an implementation detail between
-  `@workhorse-js/dashboard` and its own client, and it changes without a schema version bump. Do not
-  build against it; the supported operator surface is the `Queue` query API.
+- **The dashboard wire contract is versioned separately.** `dashboard/v1` pins the oRPC envelopes,
+  HTML placeholders, request order, and procedure schemas used by the TypeScript, Python, and Go
+  backends. Applications should embed a shipped backend rather than call those procedures as a
+  public operator API.
 
 The TypeScript, Python, and Go clients and workers implement this protocol. Python runs the same
 canonical SQL fixtures and request mapping through Psycopg, plus transaction integration through

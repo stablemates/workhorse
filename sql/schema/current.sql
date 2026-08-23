@@ -11169,7 +11169,8 @@ CREATE OR REPLACE VIEW workhorse.dashboard_attempt_history_v1 AS
   SELECT attempt_id, job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at,
          finished_at, error, occurred_at FROM workhorse.attempt_history;
 CREATE OR REPLACE VIEW workhorse.dashboard_concurrency_policy_v1 AS
-  SELECT queue_name FROM workhorse.concurrency_policy;
+  SELECT namespace, queue_name, max_active, max_active_per_key, updated_at
+    FROM workhorse.concurrency_policy;
 CREATE OR REPLACE VIEW workhorse.dashboard_job_checkpoint_v1 AS
   SELECT job_id, checkpoint_name, checkpoint_value, attempt, fence_token, worker_id, created_at
     FROM workhorse.job_checkpoint;

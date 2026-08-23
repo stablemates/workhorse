@@ -51,5 +51,5 @@ embed, unchanged from ADR 0023.
   demoted to reference implementation (layout per ADR 0028).
 - The private RPC transport stops being private once specified; changes to it become versioned
   contract changes with review, not silent regeneration.
-- Until `dashboard/v1` exists, nothing changes operationally; the specification work is gated on
-  the contract-integrity prerequisites above.
+- Python and Go embedded backends ship only when the shared conformance runner proves every
+  procedure, error envelope, cross-origin rejection, and read-only mutation rejection.
