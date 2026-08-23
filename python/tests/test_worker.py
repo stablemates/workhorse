@@ -17,6 +17,8 @@ from workhorse import (
     EnqueueOptions,
     ExecutionTimeoutError,
     HandlerContext,
+    ProgressLeaseLostError,
+    ProgressRateLimitError,
     Queue,
     StaleLeaseError,
     WaitConflictError,
@@ -258,6 +260,79 @@ def test_checkpoint_rejects_a_stale_fence_with_its_specific_error(database_url: 
         assert len(observed) == 1
         assert observed[0].job_id == job_id
         assert observed[0].checkpoint_name == "too-late"
+
+
+def test_handler_context_reports_and_reads_latest_progress(database_url: str) -> None:
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        job_id = Queue(enqueue_connection).enqueue("progress.report", {})
+        enqueue_connection.commit()
+
+        def handle(_payload: object, context: HandlerContext) -> object:
+            assert context.get_progress() is None
+            updated = context.set_progress({"stage": "reading"})
+            observed = context.get_progress()
+            assert observed is updated
+            assert observed.job_id == job_id
+            assert observed.revision == 1
+            return observed.value
+
+        worker = Worker(worker_connection, worker_id="python-progress-worker").handle(
+            "progress.report", handle
+        )
+        assert worker.run_once() is True
+        assert worker_connection.execute(
+            "SELECT progress_value, revision FROM workhorse.job_progress WHERE job_id = %s",
+            (job_id,),
+        ).fetchone() == ({"stage": "reading"}, 1)
+
+
+def test_handler_context_returns_typed_progress_errors(database_url: str) -> None:
+    observed_rate_limits: list[ProgressRateLimitError] = []
+    observed_lease_losses: list[ProgressLeaseLostError] = []
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+        psycopg.connect(database_url, autocommit=True) as competing_connection,
+    ):
+        job_id = Queue(enqueue_connection).enqueue("progress.errors", {})
+        enqueue_connection.commit()
+
+        def handle(_payload: object, context: HandlerContext) -> None:
+            context.set_progress({"step": 1})
+            competing_connection.execute(
+                "UPDATE workhorse.job_progress "
+                "SET updated_at = clock_timestamp() + interval '1 second' WHERE job_id = %s",
+                (job_id,),
+            )
+            try:
+                context.set_progress({"step": 2})
+            except ProgressRateLimitError as error:
+                observed_rate_limits.append(error)
+            completed = competing_connection.execute(
+                "SELECT workhorse.complete_v1(%s, %s, %s, %s)",
+                (job_id, "python-progress-errors", context.job.fence_token, "{}"),
+            ).fetchone()
+            assert completed == (True,)
+            try:
+                context.set_progress({"step": 3})
+            except ProgressLeaseLostError as error:
+                observed_lease_losses.append(error)
+
+        worker = Worker(worker_connection, worker_id="python-progress-errors").handle(
+            "progress.errors", handle
+        )
+        with pytest.raises(StaleLeaseError):
+            worker.run_once()
+
+    assert len(observed_rate_limits) == 1
+    assert observed_rate_limits[0].job_id == job_id
+    assert observed_rate_limits[0].retry_after_ms > 0
+    assert len(observed_lease_losses) == 1
+    assert observed_lease_losses[0].job_id == job_id
 
 
 def test_registered_handler_claims_exclusively_and_records_its_result(database_url: str) -> None:

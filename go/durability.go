@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -66,6 +67,37 @@ func (err *WaitLimitExceededError) Error() string {
 	return fmt.Sprintf(waitLimitExceededErrorFormat, err.JobID)
 }
 
+// JobProgress is the latest mutable progress projection for a stable job identity.
+type JobProgress struct {
+	JobID      string
+	Value      any
+	Revision   int64
+	Attempt    int
+	FenceToken int64
+	WorkerID   string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// ProgressLeaseLostError identifies a progress write rejected under a stale fence.
+type ProgressLeaseLostError struct{ JobID string }
+
+func (err *ProgressLeaseLostError) Error() string {
+	return fmt.Sprintf(progressLeaseLostErrorFormat, err.JobID)
+}
+
+func (err *ProgressLeaseLostError) Unwrap() error { return ErrLeaseLost }
+
+// ProgressRateLimitError reports when this ownership generation may next change progress.
+type ProgressRateLimitError struct {
+	JobID      string
+	RetryAfter time.Duration
+}
+
+func (err *ProgressRateLimitError) Error() string {
+	return fmt.Sprintf(progressRateLimitErrorFormat, err.JobID, err.RetryAfter)
+}
+
 type checkpointCall struct {
 	done  chan struct{}
 	value any
@@ -86,23 +118,134 @@ type waitRequest struct {
 type HandlerContext struct {
 	Job ClaimedJob
 
-	context      context.Context
-	cancel       context.CancelCauseFunc
-	executor     Executor
-	workerID     string
-	checkpoint   sync.Mutex
-	checkpoints  map[string]*checkpointCall
-	wait         sync.Mutex
-	waits        map[string]*waitCall
-	signal       sync.Mutex
-	signals      map[string]*externalWaitCall
-	human        sync.Mutex
-	humanWaits   map[string]*humanWaitCall
-	child        sync.Mutex
-	children     map[string]*childCall
-	childSet     sync.Mutex
-	childSetCall *childrenCall
-	suspended    atomic.Bool
+	context       context.Context
+	cancel        context.CancelCauseFunc
+	executor      Executor
+	workerID      string
+	checkpoint    sync.Mutex
+	checkpoints   map[string]*checkpointCall
+	wait          sync.Mutex
+	waits         map[string]*waitCall
+	progress      sync.Mutex
+	progressRead  bool
+	progressValue *JobProgress
+	progressError error
+	signal        sync.Mutex
+	signals       map[string]*externalWaitCall
+	human         sync.Mutex
+	humanWaits    map[string]*humanWaitCall
+	child         sync.Mutex
+	children      map[string]*childCall
+	childSet      sync.Mutex
+	childSetCall  *childrenCall
+	suspended     atomic.Bool
+}
+
+// GetProgress returns the latest progress observed by this handler activation.
+func (handler *HandlerContext) GetProgress() (*JobProgress, error) {
+	handler.progress.Lock()
+	defer handler.progress.Unlock()
+	if handler.progressRead {
+		return handler.progressValue, handler.progressError
+	}
+	handler.progressRead = true
+	rows, err := handler.executor.Query(
+		handler.context,
+		internalStatementRegistry[listProgressStatementName],
+		handler.Job.ID,
+	)
+	if err != nil {
+		handler.progressError = err
+		return nil, err
+	}
+	if len(rows) > 1 {
+		handler.progressError = errors.New(invalidProgressResultMessage)
+		return nil, handler.progressError
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	handler.progressValue, handler.progressError = progressRecord(handler.Job.ID, rows[0])
+	return handler.progressValue, handler.progressError
+}
+
+// SetProgress replaces the latest progress under this handler's fenced lease.
+func (handler *HandlerContext) SetProgress(value any) (*JobProgress, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	handler.progress.Lock()
+	defer handler.progress.Unlock()
+	if err := context.Cause(handler.context); err != nil {
+		return nil, err
+	}
+	rows, err := handler.executor.Query(
+		handler.context,
+		protocolStatementRegistry[updateProgressStatementName],
+		handler.Job.ID,
+		handler.workerID,
+		handler.Job.FenceToken,
+		encoded,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) != 1 {
+		return nil, errors.New(invalidProgressResultMessage)
+	}
+	status, _ := rows[0][rowStatusField].(string)
+	switch status {
+	case progressUpdatedValue, progressUnchangedValue:
+		progress, err := progressRecord(handler.Job.ID, rows[0])
+		if err != nil {
+			return nil, err
+		}
+		handler.progressRead = true
+		handler.progressValue = progress
+		handler.progressError = nil
+		return progress, nil
+	case durableStaleValue:
+		return nil, &ProgressLeaseLostError{JobID: handler.Job.ID}
+	case progressRateLimitedValue:
+		retryAfterMS, ok := progressInt64(rows[0][rowRetryAfterMSField])
+		if !ok {
+			return nil, errors.New(invalidProgressResultMessage)
+		}
+		return nil, &ProgressRateLimitError{
+			JobID: handler.Job.ID, RetryAfter: time.Duration(retryAfterMS) * time.Millisecond,
+		}
+	default:
+		return nil, fmt.Errorf(unknownProgressStatusFormat, status)
+	}
+}
+
+func progressRecord(jobID string, row Row) (*JobProgress, error) {
+	value, err := decodedJSON(row[rowProgressValueField])
+	if err != nil {
+		return nil, err
+	}
+	revision, revisionOK := progressInt64(row[rowRevisionField])
+	attempt, attemptOK := integer(row[rowAttemptField])
+	fenceToken, fenceOK := progressInt64(row[rowFenceTokenField])
+	workerID, workerOK := row[rowWorkerIDField].(string)
+	createdAt, createdOK := row[rowCreatedAtField].(time.Time)
+	updatedAt, updatedOK := row[rowUpdatedAtField].(time.Time)
+	if !revisionOK || !attemptOK || !fenceOK || !workerOK || !createdOK || !updatedOK {
+		return nil, errors.New(invalidProgressResultMessage)
+	}
+	return &JobProgress{
+		JobID: jobID, Value: value, Revision: revision, Attempt: attempt,
+		FenceToken: fenceToken, WorkerID: workerID, CreatedAt: createdAt, UpdatedAt: updatedAt,
+	}, nil
+}
+
+func progressInt64(value any) (int64, bool) {
+	if text, ok := value.(string); ok {
+		parsed, err := strconv.ParseInt(text, 10, 64)
+		return parsed, err == nil
+	}
+	return int64Value(value)
 }
 
 // Checkpoint returns the stored value for name, or runs and immutably saves operation once.

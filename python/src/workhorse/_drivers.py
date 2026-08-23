@@ -95,6 +95,7 @@ _JSON_COLUMNS = frozenset(
     {
         "checkpoint_value",
         "payload",
+        "progress_value",
         "result",
         "results",
         "retry_dimensions",

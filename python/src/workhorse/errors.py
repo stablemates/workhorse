@@ -64,6 +64,22 @@ class CheckpointConflictError(WorkhorseError):
         )
 
 
+class ProgressLeaseLostError(LifecycleError):
+    def __init__(self, job_id: str) -> None:
+        self.job_id = job_id
+        super().__init__(f"Cannot update progress for job {job_id} under a stale lease")
+
+
+class ProgressRateLimitError(WorkhorseError):
+    def __init__(self, job_id: str, retry_after_ms: int) -> None:
+        self.job_id = job_id
+        self.retry_after_ms = retry_after_ms
+        super().__init__(
+            f"Cannot update progress for job {job_id} yet; "
+            f"retry after {retry_after_ms} milliseconds"
+        )
+
+
 class ChildLeaseLostError(LifecycleError):
     def __init__(self, parent_job_id: str) -> None:
         self.parent_job_id = parent_job_id

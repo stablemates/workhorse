@@ -57,11 +57,15 @@ async def test_async_psycopg_worker_uses_async_handlers_and_durable_context(
                 return {"operation": operations}
 
             prepared = await context.checkpoint("prepare", prepare)
+            observed = await context.get_progress()
+            assert (observed is None) == (handler_calls == 1)
+            progress = await context.set_progress({"phase": "prepared"})
             await context.sleep("brief-pause", 20)
             return {
                 "value": payload["value"],
                 "prepared": prepared,
                 "handlerCalls": handler_calls,
+                "progressRevision": progress.revision,
             }
 
         worker = AsyncWorker.from_psycopg(connection, worker_id="python-async-psycopg").handle(
@@ -74,7 +78,12 @@ async def test_async_psycopg_worker_uses_async_handlers_and_durable_context(
         assert operations == 1
         assert outcome(database_url, job_id) == (
             "succeeded",
-            {"value": 3, "prepared": {"operation": 1}, "handlerCalls": 2},
+            {
+                "value": 3,
+                "prepared": {"operation": 1},
+                "handlerCalls": 2,
+                "progressRevision": 1,
+            },
         )
     finally:
         await connection.close()
@@ -110,6 +119,32 @@ async def test_asyncpg_worker_reuses_batch_grouping_and_settlement(database_url:
             "succeeded",
             "succeeded",
         ]
+    finally:
+        await connection.close()
+
+
+@pytest.mark.asyncio
+async def test_asyncpg_worker_decodes_progress_values(database_url: str) -> None:
+    job_id = enqueue(database_url, "async.progress", {})
+    connection = await asyncpg.connect(database_url)
+    try:
+
+        async def handler(_payload: object, context: AsyncHandlerContext) -> dict[str, object]:
+            updated = await context.set_progress({"phase": "working"})
+            observed = await context.get_progress()
+            assert observed is updated
+            assert observed.value == {"phase": "working"}
+            return {"progress": observed.value, "revision": observed.revision}
+
+        worker = AsyncWorker.from_asyncpg(connection, worker_id="python-asyncpg-progress").handle(
+            "async.progress", handler
+        )
+
+        assert await worker.run_once() is True
+        assert outcome(database_url, job_id) == (
+            "succeeded",
+            {"progress": {"phase": "working"}, "revision": 1},
+        )
     finally:
         await connection.close()
 

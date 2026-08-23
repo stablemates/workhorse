@@ -24,6 +24,8 @@ const (
 	acknowledgeCancelStatementName       = "acknowledge_cancel_v1"
 	listCheckpointStatementName          = "list_checkpoint"
 	saveCheckpointStatementName          = "save_checkpoint_v1"
+	listProgressStatementName            = "list_progress"
+	updateProgressStatementName          = "update_progress_v1"
 	scheduleWaitStatementName            = "schedule_wait_v1"
 	waitForSignalStatementName           = "wait_for_signal_v1"
 	sendSignalStatementName              = "send_signal_v1"
@@ -70,6 +72,11 @@ const (
 	rowFenceTokenField                   = "fence_token"
 	rowLeaseExpiresAtField               = "lease_expires_at"
 	rowCheckpointValueField              = "checkpoint_value"
+	rowProgressValueField                = "progress_value"
+	rowUpdatedAtField                    = "updated_at"
+	rowCreatedAtField                    = "created_at"
+	rowWorkerIDField                     = "worker_id"
+	rowRetryAfterMSField                 = "retry_after_ms"
 	rowRecordedField                     = "recorded"
 	errorNameField                       = "name"
 	errorMessageField                    = "message"
@@ -145,6 +152,9 @@ const (
 	durableElapsedValue                            = "elapsed"
 	durableScheduledValue                          = "scheduled"
 	durableLimitExceededValue                      = "limit_exceeded"
+	progressUpdatedValue                           = "updated"
+	progressUnchangedValue                         = "unchanged"
+	progressRateLimitedValue                       = "rate_limited"
 	externalWaitingValue                           = "waiting"
 	externalDeliveredValue                         = "delivered"
 	externalAlreadyWaitingValue                    = "already_waiting"
@@ -261,6 +271,10 @@ const (
 	nilCheckpointOperationMessage       = "checkpoint operation must not be nil"
 	invalidCheckpointResultMessage      = "PostgreSQL returned an invalid checkpoint result"
 	unknownCheckpointStatusFormat       = "PostgreSQL returned unknown checkpoint status %q"
+	invalidProgressResultMessage        = "PostgreSQL returned an invalid progress result"
+	unknownProgressStatusFormat         = "PostgreSQL returned unknown progress status %q"
+	progressLeaseLostErrorFormat        = "cannot update progress for job %s because the lease is stale or expired"
+	progressRateLimitErrorFormat        = "cannot update progress for job %s yet; retry after %s"
 	waitDurationRangeFormat             = "wait duration must be a whole number of milliseconds between %s and %s"
 	waitTargetRangeMessage              = "wait target must be a valid time no more than 365 days in the future"
 	invalidDurableWaitResultMessage     = "PostgreSQL returned an invalid durable wait result"
@@ -432,6 +446,10 @@ var internalStatementRegistry = map[string]string{
 	fireScheduleStatementName:   `SELECT workhorse.fire_schedule_v1($1::text, $2::text, $3::bigint, $4::timestamptz) AS job_id`,
 	promoteStatementName:        `SELECT workhorse.promote_v1($1::integer) AS promoted`,
 	listCheckpointStatementName: `SELECT checkpoint_value FROM workhorse.job_checkpoint WHERE job_id = $1::uuid AND checkpoint_name = $2::text`,
+	listProgressStatementName: `SELECT progress_value, revision::text, attempt, fence_token::text,
+       worker_id, created_at, updated_at
+  FROM workhorse.job_progress
+ WHERE job_id = $1::uuid`,
 }
 
 var protocolStatementRegistry = map[string]string{
@@ -449,7 +467,7 @@ var protocolStatementRegistry = map[string]string{
 	cancelStatementName:              `SELECT status, state, current_attempt, requested_at, requested_by, reason, finished_at FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)`,
 	acknowledgeCancelStatementName:   `SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted`,
 	saveCheckpointStatementName:      `SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
-	"update_progress_v1":             `SELECT status, progress_value, revision::text, attempt, fence_token::text, worker_id, created_at, updated_at, retry_after_ms::text FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,
+	updateProgressStatementName:      `SELECT status, progress_value, revision::text, attempt, fence_token::text, worker_id, created_at, updated_at, retry_after_ms::text FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,
 	scheduleWaitStatementName:        `SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)`,
 	createChildrenStatementName:      `SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,
 	createChildStatementName:         `SELECT status, child_job_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,

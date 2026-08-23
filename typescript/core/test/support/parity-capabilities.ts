@@ -206,8 +206,8 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Latest-value progress reporting",
     typescript: { file: "integration-checkpoints-progress-waits.test.ts", pattern: "progress" },
-    python: { absent: "update_progress_v1 exists but no handler-context API; WH-347" },
-    go: { absent: "update_progress_v1 exists but no handler-context API; WH-347" },
+    python: { file: "test_worker.py", pattern: "progress" },
+    go: { file: "worker_test.go", pattern: "Progress" },
   },
   {
     capability: "Batch handler delivery",

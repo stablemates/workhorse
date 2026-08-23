@@ -10,6 +10,9 @@ The handler starts from its entry point after every durable boundary, as describ
 and keep the furthest completed stage in `HandlerContext.setProgress` so replay cannot move the
 operator view backward.
 
+Python uses `HandlerContext.set_progress`, while Go uses `HandlerContext.SetProgress`. Both read the
+retained stage before advancing it, just like the TypeScript handler.
+
 ```js
 const plan = await context.checkpoint("plan", () => callModel(prompt));
 await reportProgress(context, "planned");

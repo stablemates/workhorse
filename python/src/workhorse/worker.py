@@ -63,6 +63,8 @@ from .errors import (
     HumanWaitConflictError,
     HumanWaitLeaseLostError,
     HumanWaitLimitExceededError,
+    ProgressLeaseLostError,
+    ProgressRateLimitError,
     SignalWaitConflictError,
     SignalWaitLeaseLostError,
     SignalWaitLimitExceededError,
@@ -80,6 +82,7 @@ from .types import (
     EnqueueOptions,
     HandlerContext,
     JobCheckpoint,
+    JobProgress,
     JobWait,
     Json,
 )
@@ -171,6 +174,9 @@ class _HandlerDurability:
         self._waits: dict[str, JobWait] | None = None
         self._waits_load_error: BaseException | None = None
         self._waits_load_attempted = False
+        self._progress: JobProgress | None = None
+        self._progress_load_error: BaseException | None = None
+        self._progress_load_attempted = False
         self._checkpoint_calls: dict[str, Future[Json]] = {}
         self._wait_calls: dict[str, Future[None]] = {}
         self._signal_calls: dict[str, Future[Json]] = {}
@@ -184,6 +190,8 @@ class _HandlerDurability:
             self._cancellation,
             self.get_checkpoint,
             self.get_wait,
+            self.get_progress,
+            self.set_progress,
             self.checkpoint,
             self.sleep,
             self.sleep_until,
@@ -231,6 +239,54 @@ class _HandlerDurability:
 
     def get_wait(self, name: str) -> JobWait | None:
         return self._load_waits().get(name)
+
+    def get_progress(self) -> JobProgress | None:
+        with self._lock:
+            if not self._progress_load_attempted:
+                self._progress_load_attempted = True
+                try:
+                    rows = self._executor.rows(STATEMENTS.list_progress, (self._job.id,))
+                    if len(rows) > 1:
+                        raise RuntimeError("PostgreSQL returned an invalid progress result")
+                    self._progress = None if not rows else _progress_record(self._job.id, rows[0])
+                except BaseException as error:
+                    self._progress_load_error = error
+            if self._progress_load_error is not None:
+                raise self._progress_load_error
+            return self._progress
+
+    def set_progress(self, value: Json) -> JobProgress:
+        encoded = json.dumps(value, separators=(",", ":"), allow_nan=False)
+        self._cancellation.raise_if_cancelled()
+        row = _require_lifecycle_row(
+            self._executor.rows(
+                STATEMENTS.update_progress,
+                (self._job.id, self._worker_id, self._job.fence_token, encoded),
+            )
+        )
+        status = row["status"]
+        if status == "stale":
+            raise ProgressLeaseLostError(self._job.id)
+        if status == "rate_limited":
+            raise ProgressRateLimitError(self._job.id, int(cast(int | str, row["retry_after_ms"])))
+        if status not in {"updated", "unchanged"}:
+            raise RuntimeError(f"Unexpected progress status: {status}")
+        progress = _progress_record(self._job.id, row)
+        with self._lock:
+            self._progress_load_attempted = True
+            self._progress_load_error = None
+            self._progress = progress
+        emit_log(
+            "DEBUG",
+            "workhorse.job.progress_updated",
+            "Job progress persisted",
+            {
+                **job_span_attributes(self._job),
+                "workhorse.progress.status": str(status),
+                "workhorse.worker.id": self._worker_id,
+            },
+        )
+        return progress
 
     def checkpoint(self, name: str, operation: Callable[[], Json]) -> Json:
         with self._lock:
@@ -1950,6 +2006,19 @@ def _checkpoint_record(job_id: str, row: Row, *, name: str | None = None) -> Job
         fence_token=int(cast(int, row["fence_token"])),
         worker_id=str(row["worker_id"]),
         created_at=cast(datetime, row["created_at"]),
+    )
+
+
+def _progress_record(job_id: str, row: Row) -> JobProgress:
+    return JobProgress(
+        job_id=job_id,
+        value=cast(Json, row["progress_value"]),
+        revision=int(cast(int | str, row["revision"])),
+        attempt=int(cast(int, row["attempt"])),
+        fence_token=int(cast(int | str, row["fence_token"])),
+        worker_id=str(row["worker_id"]),
+        created_at=cast(datetime, row["created_at"]),
+        updated_at=cast(datetime, row["updated_at"]),
     )
 
 

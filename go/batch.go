@@ -40,6 +40,16 @@ func (handler *BatchHandlerContext) Checkpoint(
 	return handler.handler.Checkpoint(name, operation)
 }
 
+// GetProgress returns the member's latest progress projection.
+func (handler *BatchHandlerContext) GetProgress() (*JobProgress, error) {
+	return handler.handler.GetProgress()
+}
+
+// SetProgress replaces the member's latest progress under its fenced lease.
+func (handler *BatchHandlerContext) SetProgress(value any) (*JobProgress, error) {
+	return handler.handler.SetProgress(value)
+}
+
 // BatchHandlerItem is one claimed payload and its independent fenced context.
 type BatchHandlerItem struct {
 	Payload any

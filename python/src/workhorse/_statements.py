@@ -42,6 +42,8 @@ class StatementRegistry:
     fail: DriverStatement
     list_checkpoints: DriverStatement
     save_checkpoint: DriverStatement
+    list_progress: DriverStatement
+    update_progress: DriverStatement
     list_waits: DriverStatement
     schedule_wait: DriverStatement
     wait_for_signal: DriverStatement
@@ -239,6 +241,28 @@ STATEMENTS = StatementRegistry(
         asyncpg=(
             "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at "
             "FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)"
+        ),
+    ),
+    list_progress=DriverStatement(
+        psycopg=(
+            "SELECT progress_value, revision::text, attempt, fence_token::text, worker_id, "
+            "created_at, updated_at FROM workhorse.job_progress WHERE job_id = %s::uuid"
+        ),
+        asyncpg=(
+            "SELECT progress_value, revision::text, attempt, fence_token::text, worker_id, "
+            "created_at, updated_at FROM workhorse.job_progress WHERE job_id = $1::uuid"
+        ),
+    ),
+    update_progress=DriverStatement(
+        psycopg=(
+            "SELECT status, progress_value, revision::text, attempt, fence_token::text, "
+            "worker_id, created_at, updated_at, retry_after_ms::text "
+            "FROM workhorse.update_progress_v1(%s::uuid, %s::text, %s::bigint, %s::jsonb)"
+        ),
+        asyncpg=(
+            "SELECT status, progress_value, revision::text, attempt, fence_token::text, "
+            "worker_id, created_at, updated_at, retry_after_ms::text "
+            "FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)"
         ),
     ),
     list_waits=DriverStatement(

@@ -211,6 +211,18 @@ class JobCheckpoint:
 
 
 @dataclass(frozen=True)
+class JobProgress:
+    job_id: str
+    value: Json
+    revision: int
+    attempt: int
+    fence_token: int
+    worker_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
 class JobWait:
     job_id: str
     name: str
@@ -250,6 +262,8 @@ class HandlerContext:
     cancellation: CancellationToken
     _get_checkpoint: Callable[[str], JobCheckpoint | None] = field(repr=False)
     _get_wait: Callable[[str], JobWait | None] = field(repr=False)
+    _get_progress: Callable[[], JobProgress | None] = field(repr=False)
+    _set_progress: Callable[[Json], JobProgress] = field(repr=False)
     _checkpoint: Callable[[str, Callable[[], Json]], Json] = field(repr=False)
     _sleep: Callable[[str, int], None] = field(repr=False)
     _sleep_until: Callable[[str, datetime], None] = field(repr=False)
@@ -263,6 +277,12 @@ class HandlerContext:
 
     def get_wait(self, name: str) -> JobWait | None:
         return self._get_wait(name)
+
+    def get_progress(self) -> JobProgress | None:
+        return self._get_progress()
+
+    def set_progress(self, value: Json) -> JobProgress:
+        return self._set_progress(value)
 
     def checkpoint(self, name: str, operation: Callable[[], TJson]) -> TJson:
         return cast(TJson, self._checkpoint(name, operation))
@@ -296,6 +316,8 @@ class HandlerContext:
             self.job,
             self.cancellation,
             self._get_checkpoint,
+            self._get_progress,
+            self._set_progress,
             self._checkpoint,
         )
 
@@ -308,6 +330,8 @@ class AsyncHandlerContext:
     cancellation: AsyncCancellationToken
     _get_checkpoint: Callable[[str], Awaitable[JobCheckpoint | None]] = field(repr=False)
     _get_wait: Callable[[str], Awaitable[JobWait | None]] = field(repr=False)
+    _get_progress: Callable[[], Awaitable[JobProgress | None]] = field(repr=False)
+    _set_progress: Callable[[Json], Awaitable[JobProgress]] = field(repr=False)
     _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]] = field(repr=False)
     _sleep: Callable[[str, int], Awaitable[None]] = field(repr=False)
     _sleep_until: Callable[[str, datetime], Awaitable[None]] = field(repr=False)
@@ -323,6 +347,12 @@ class AsyncHandlerContext:
 
     async def get_wait(self, name: str) -> JobWait | None:
         return await self._get_wait(name)
+
+    async def get_progress(self) -> JobProgress | None:
+        return await self._get_progress()
+
+    async def set_progress(self, value: Json) -> JobProgress:
+        return await self._set_progress(value)
 
     async def checkpoint(self, name: str, operation: Callable[[], Awaitable[TJson]]) -> TJson:
         return cast(TJson, await self._checkpoint(name, operation))
@@ -361,10 +391,18 @@ class BatchHandlerContext:
     job: ClaimedJob
     cancellation: CancellationToken
     _get_checkpoint: Callable[[str], JobCheckpoint | None] = field(repr=False)
+    _get_progress: Callable[[], JobProgress | None] = field(repr=False)
+    _set_progress: Callable[[Json], JobProgress] = field(repr=False)
     _checkpoint: Callable[[str, Callable[[], Json]], Json] = field(repr=False)
 
     def get_checkpoint(self, name: str) -> JobCheckpoint | None:
         return self._get_checkpoint(name)
+
+    def get_progress(self) -> JobProgress | None:
+        return self._get_progress()
+
+    def set_progress(self, value: Json) -> JobProgress:
+        return self._set_progress(value)
 
     def checkpoint(self, name: str, operation: Callable[[], TJson]) -> TJson:
         return cast(TJson, self._checkpoint(name, operation))
@@ -383,10 +421,18 @@ class AsyncBatchHandlerContext:
     job: ClaimedJob
     cancellation: AsyncCancellationToken
     _get_checkpoint: Callable[[str], Awaitable[JobCheckpoint | None]] = field(repr=False)
+    _get_progress: Callable[[], Awaitable[JobProgress | None]] = field(repr=False)
+    _set_progress: Callable[[Json], Awaitable[JobProgress]] = field(repr=False)
     _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]] = field(repr=False)
 
     async def get_checkpoint(self, name: str) -> JobCheckpoint | None:
         return await self._get_checkpoint(name)
+
+    async def get_progress(self) -> JobProgress | None:
+        return await self._get_progress()
+
+    async def set_progress(self, value: Json) -> JobProgress:
+        return await self._set_progress(value)
 
     async def checkpoint(self, name: str, operation: Callable[[], Awaitable[TJson]]) -> TJson:
         return cast(TJson, await self._checkpoint(name, operation))

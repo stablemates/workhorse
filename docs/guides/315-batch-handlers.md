@@ -20,7 +20,11 @@ Python handlers return the same statuses as mappings. They register `max_size` a
 keyword arguments, and receive `BatchHandlerItem` values with a `BatchHandlerContext`.
 
 Go handlers return `BatchSucceeded` or `BatchFailed` values. They register `MaxSize` and `Linger`
-through `BatchHandlerOptions`, and each item's context exposes cancellation and checkpoints.
+through `BatchHandlerOptions`, and each item's context exposes cancellation, checkpoints, and
+latest-value progress.
+
+Python batch contexts use `get_progress` and `set_progress`. Go batch contexts use `GetProgress`
+and `SetProgress`, so every member reports through its own fence.
 
 If the handler itself throws or returns an invalid outcome list, Workhorse submits the failure for every member. Each member still uses its own fence and retry budget.
 

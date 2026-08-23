@@ -21,6 +21,7 @@ from .types import (
     EnqueueOptions,
     HandlerContext,
     JobCheckpoint,
+    JobProgress,
     JobWait,
     Json,
 )
@@ -86,6 +87,10 @@ class _CheckpointContext(Protocol):
 
     def checkpoint(self, name: str, operation: Callable[[], Json]) -> Json: ...
 
+    def get_progress(self) -> JobProgress | None: ...
+
+    def set_progress(self, value: Json) -> JobProgress: ...
+
 
 class _AsyncCheckpointAdapter:
     def __init__(self, context: _CheckpointContext, loop: asyncio.AbstractEventLoop) -> None:
@@ -101,6 +106,12 @@ class _AsyncCheckpointAdapter:
 
         return await asyncio.to_thread(self._checkpoint_context.checkpoint, name, invoke_operation)
 
+    async def get_progress(self) -> JobProgress | None:
+        return await asyncio.to_thread(self._checkpoint_context.get_progress)
+
+    async def set_progress(self, value: Json) -> JobProgress:
+        return await asyncio.to_thread(self._checkpoint_context.set_progress, value)
+
 
 class _AsyncContextAdapter(_AsyncCheckpointAdapter):
     def __init__(self, context: HandlerContext, loop: asyncio.AbstractEventLoop) -> None:
@@ -113,6 +124,8 @@ class _AsyncContextAdapter(_AsyncCheckpointAdapter):
             AsyncCancellationToken(self._context.cancellation),
             self.get_checkpoint,
             self.get_wait,
+            self.get_progress,
+            self.set_progress,
             self.checkpoint,
             self.sleep,
             self.sleep_until,
@@ -156,6 +169,8 @@ class _AsyncBatchContextAdapter(_AsyncCheckpointAdapter):
                 item.context.job,
                 AsyncCancellationToken(item.context.cancellation),
                 self.get_checkpoint,
+                self.get_progress,
+                self.set_progress,
                 self.checkpoint,
             ),
         )

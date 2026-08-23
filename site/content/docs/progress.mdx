@@ -34,6 +34,10 @@ one, `Queue.getProgress` reads it by job ID, and a custom runtime can write thro
 `Queue.updateProgress` with the claimed job and worker identity. The
 [dashboard](/docs/dashboard) renders the value live.
 
+Python exposes the handler methods as `set_progress` and `get_progress`. Go exposes `SetProgress`
+and `GetProgress`. Their returned progress records carry the same revision and ownership provenance
+as the TypeScript record.
+
 ## Why progress is rate-limited
 
 Every changed value updates one `job_progress` row and appends a small `progress_updated`

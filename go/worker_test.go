@@ -247,6 +247,148 @@ func TestHandlerContextReturnsTypedFenceErrorsForCheckpointAndWait(t *testing.T)
 	}
 }
 
+func TestHandlerContextReportsAndReadsLatestProgress(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-progress")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "go-worker-progress"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	jobID, err := queue.Enqueue(ctx, "progress.report", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-progress-worker", LeaseDuration: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	worker.Handle("progress.report", func(
+		_ context.Context,
+		_ any,
+		handlerContext *workhorse.HandlerContext,
+	) (any, error) {
+		initial, err := handlerContext.GetProgress()
+		if err != nil || initial != nil {
+			return nil, fmt.Errorf("initial progress: value=%#v err=%w", initial, err)
+		}
+		updated, err := handlerContext.SetProgress(map[string]any{"stage": "reading"})
+		if err != nil {
+			return nil, err
+		}
+		observed, err := handlerContext.GetProgress()
+		if err != nil {
+			return nil, err
+		}
+		if observed == nil || observed.Revision != updated.Revision || observed.JobID != jobID {
+			return nil, fmt.Errorf("unexpected cached progress: %#v", observed)
+		}
+		return observed.Value, nil
+	})
+
+	if processed, err := worker.RunOnce(ctx); err != nil || !processed {
+		t.Fatalf("progress run: processed=%t err=%v", processed, err)
+	}
+	var value []byte
+	var revision int64
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT progress_value, revision FROM workhorse.job_progress WHERE job_id = $1",
+		jobID,
+	).Scan(&value, &revision); err != nil {
+		t.Fatal(err)
+	}
+	if string(value) != `{"stage": "reading"}` && string(value) != `{"stage":"reading"}` {
+		t.Fatalf("unexpected progress value: %s", value)
+	}
+	if revision != 1 {
+		t.Fatalf("unexpected progress revision: %d", revision)
+	}
+	var state string
+	var result []byte
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT state, result FROM workhorse.job_outcome WHERE job_id = $1",
+		jobID,
+	).Scan(&state, &result); err != nil {
+		t.Fatal(err)
+	}
+	if state != "succeeded" || string(result) != `{"stage": "reading"}` && string(result) != `{"stage":"reading"}` {
+		t.Fatalf("unexpected progress job outcome: state=%s result=%s", state, result)
+	}
+}
+
+func TestHandlerContextReturnsTypedProgressFenceAndRateLimitErrors(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-progress-errors")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "go-worker-progress-errors"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	jobID, err := queue.Enqueue(ctx, "progress.errors", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-progress-errors", LeaseDuration: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var rateLimitError error
+	var firstProgressError error
+	var leaseError error
+	worker.Handle("progress.errors", func(
+		_ context.Context,
+		_ any,
+		handlerContext *workhorse.HandlerContext,
+	) (any, error) {
+		if _, firstProgressError = handlerContext.SetProgress(map[string]any{"step": 1}); firstProgressError != nil {
+			return nil, nil
+		}
+		_, rateLimitError = handlerContext.SetProgress(map[string]any{"step": 2})
+		var accepted bool
+		if err := pool.QueryRow(
+			ctx,
+			"SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, '{}'::jsonb)",
+			jobID,
+			"go-progress-errors",
+			handlerContext.Job.FenceToken,
+		).Scan(&accepted); err != nil {
+			return nil, err
+		}
+		if !accepted {
+			return nil, errors.New("competing settlement was rejected")
+		}
+		_, leaseError = handlerContext.SetProgress(map[string]any{"step": 3})
+		return nil, nil
+	})
+
+	processed, runError := worker.RunOnce(ctx)
+	if !processed || !errors.Is(runError, workhorse.ErrStaleLease) {
+		t.Fatalf("expected stale settlement: processed=%t err=%v", processed, runError)
+	}
+	var limited *workhorse.ProgressRateLimitError
+	if !errors.As(rateLimitError, &limited) || limited.JobID != jobID || limited.RetryAfter <= 0 {
+		t.Fatalf("unexpected progress errors: first=%#v rate_limit=%#v", firstProgressError, rateLimitError)
+	}
+	var lost *workhorse.ProgressLeaseLostError
+	if !errors.As(leaseError, &lost) || lost.JobID != jobID || !errors.Is(leaseError, workhorse.ErrLeaseLost) {
+		t.Fatalf("unexpected progress fence error: %#v", leaseError)
+	}
+}
+
 type scheduleWaitQueryTracer struct {
 	started chan struct{}
 	release chan struct{}

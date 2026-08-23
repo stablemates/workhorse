@@ -35,6 +35,8 @@ def sync_enqueue(connection: psycopg.Connection[Any]) -> str:
 def sync_worker(connection: psycopg.Connection[Any], database_url: str) -> bool:
     def handle(payload: Json, context: HandlerContext) -> Json:
         context.cancellation.raise_if_cancelled()
+        progress = context.set_progress({"phase": "working"})
+        assert context.get_progress() == progress
         prepared = context.checkpoint("prepare", lambda: {"payload": payload})
         signal = context.wait_for_signal("approval", timeout_ms=60_000)
         decision = context.wait_for_human("review", {"signal": signal})
@@ -108,6 +110,8 @@ async def asyncpg_enqueue(connection: asyncpg.Connection) -> str:
 
 async def async_psycopg_worker(connection: psycopg.AsyncConnection[Any]) -> bool:
     async def handle(payload: Json, context: AsyncHandlerContext) -> Json:
+        progress = await context.set_progress({"phase": "working"})
+        assert await context.get_progress() == progress
         prepared = await context.checkpoint("prepare", lambda: async_value(payload))
         await context.sleep("delay", 1)
         return {"prepared": prepared}

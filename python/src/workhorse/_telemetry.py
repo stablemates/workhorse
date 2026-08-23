@@ -37,6 +37,7 @@ WorkhorseLogEvent = Literal[
     "workhorse.job.heartbeat_accepted",
     "workhorse.job.heartbeat_rejected",
     "workhorse.job.ownership_expired",
+    "workhorse.job.progress_updated",
     "workhorse.job.wait_processed",
     "workhorse.leases.recovered",
     "workhorse.maintenance.completed",

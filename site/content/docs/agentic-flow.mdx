@@ -15,6 +15,10 @@ await context.sleep("model-cooldown", cooldownMs);
 const approval = await context.waitForSignal<{ approved: boolean }>("approval");
 ```
 
+Python handlers use `set_progress` and `get_progress`; Go handlers use `SetProgress` and
+`GetProgress`. All three surfaces write the same fenced projection, so the dashboard sees one
+language-independent progress value.
+
 Each child name and request must stay stable across replay. Checkpoints reuse stored results, timers
 keep their first wake target, and the approval signal arrives through `Queue.sendSignal`. Every
 boundary releases the lease instead of retaining an in-memory continuation.

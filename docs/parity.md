@@ -78,7 +78,7 @@ telemetry, and graceful shutdown.
 | Durable timers (`sleep` / `sleepUntil`)      | Supported  | Supported | Supported |
 | Signal and human-decision waits              | Supported  | Supported | Supported |
 | Linked child fan-out and result join         | Supported  | Supported | Supported |
-| Latest-value progress reporting              | Supported  | Absent    | Absent    |
+| Latest-value progress reporting              | Supported  | Supported | Supported |
 | Batch handler delivery                       | Supported  | Supported | Supported |
 | Schedule firing (in-process cron)            | Supported  | Supported | Supported |
 | Worker fleet registration and remote pause   | Supported  | Supported | Supported |

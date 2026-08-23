@@ -5,7 +5,8 @@ description: Process several jobs of one type through a shared application call 
 
 Use TypeScript's `Worker.handleBatch`, Go's `Worker.HandleBatch`, or Python's
 `Worker.handle_batch` when one application call can process several jobs more efficiently. Each
-member keeps its own durable identity, lease, fence, retry budget, checkpoints, and cancellation.
+member keeps its own durable identity, lease, fence, retry budget, checkpoints, progress, and
+cancellation.
 
 ```ts
 new Worker(queue, { concurrency: workerCapacity }).handleBatch(
@@ -30,11 +31,12 @@ The callback returns one ordered outcome per member. If it throws or returns an 
 Workhorse submits the failure for every member, then each job applies its own retry policy.
 
 Python passes `max_size` and `linger_ms` as keyword arguments. Its callback returns mappings with
-the same `succeeded` and `failed` statuses, and each item carries a `BatchHandlerContext`.
+the same `succeeded` and `failed` statuses. Each item carries a `BatchHandlerContext` with
+`get_progress` and `set_progress`.
 
 Go passes `MaxSize` and `Linger` through `BatchHandlerOptions`. Its callback returns positional
 `BatchSucceeded` or `BatchFailed` values, and each item carries a `BatchHandlerContext` with its
-standard cancellation context and checkpoint operation.
+standard cancellation context, checkpoint operation, `GetProgress`, and `SetProgress`.
 
 Workhorse records each shared invocation before the callback starts. The task drawer shows the
 batch size and links the other members. If the shared callback fails, the drawer identifies that
