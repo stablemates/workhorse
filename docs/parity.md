@@ -80,7 +80,7 @@ telemetry, and graceful shutdown.
 | Linked child fan-out and result join         | Supported  | Supported | Supported |
 | Latest-value progress reporting              | Supported  | Supported | Supported |
 | Batch handler delivery                       | Supported  | Supported | Supported |
-| Schedule firing (in-process cron)            | Supported  | Supported | Supported |
+| Schedule firing (database cron evaluation)   | Supported  | Supported | Supported |
 | Worker fleet registration and remote pause   | Supported  | Supported | Supported |
 | Graceful stop and signal drain               | Supported  | Supported | Supported |
 | Retention maintenance participation          | Supported  | Supported | Supported |
@@ -90,11 +90,9 @@ telemetry, and graceful shutdown.
 Python executes every shared worker fixture against the lifecycle core under
 [WH-310]. `python/tests/test_async_worker.py` separately proves both async driver bridges, async
 handlers, durable context replay, batch adaptation, native listeners, and drain through that same
-core. Go executes every shared worker fixture against its public runtime under [WH-331]. All three
-runtimes execute `protocol/v1/cron-occurrences.json`, which fixes their shared cron and time zone
-semantics. One row of that table, `new-every-second-definition`, is marked as a known divergence in
-the Python runner: TypeScript rounds a sub-second `now` up to the next occurrence, and [WH-353]
-owns the fix.
+core. Go executes every shared worker fixture against its public runtime under [WH-331].
+PostgreSQL executes `protocol/v1/cron-occurrences.json`, which fixes the shared cron and timezone
+semantics before any runtime fires a definition.
 
 ## Roadmap progress
 

@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import psycopg
 
 from workhorse import Queue, ScheduleDefinition, ScheduledJob, Worker
 
 
-def _sync_schedule(connection: psycopg.Connection[object], expression: str) -> int:
+def _sync_schedule(
+    connection: psycopg.Connection[object], expression: str, schedule_timezone: str = "UTC"
+) -> int:
     Queue(connection).sync_schedules(
         "python-worker",
         [
             ScheduleDefinition(
                 name="billing-rollup",
                 schedule=expression,
+                timezone=schedule_timezone,
                 job=ScheduledJob(type="billing.rollup", payload={}),
             )
         ],
@@ -84,13 +88,14 @@ def test_worker_fires_cron_catchup_through_the_configured_limit(database_url: st
         ]
 
 
-def test_worker_evaluates_cron_in_the_process_timezone(database_url: str) -> None:
+def test_worker_evaluates_cron_in_the_definition_timezone(database_url: str) -> None:
     with (
         psycopg.connect(database_url) as definition_connection,
         psycopg.connect(database_url, autocommit=True) as worker_connection,
     ):
-        _sync_schedule(definition_connection, "0 0 * * *")
-        local_now = datetime.now().astimezone()
+        schedule_timezone = ZoneInfo("America/New_York")
+        _sync_schedule(definition_connection, "0 0 * * *", schedule_timezone.key)
+        local_now = datetime.now(schedule_timezone)
         today = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
 
         worker = Worker(

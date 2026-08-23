@@ -38,8 +38,7 @@ Package managers: the repository is developed with pnpm, and the packed-install 
 published tarballs with pnpm. npm and yarn are not exercised in CI; the packages are plain ESM with
 no install scripts, so nothing in them is package-manager specific.
 
-The Python package declares Python 3.10 through 3.14 and requires croniter 6.2.4 through the next
-major plus python-dateutil 2.9 through the next major. It supports Psycopg 3.3 through the next major
+The Python package declares Python 3.10 through 3.14. It supports Psycopg 3.3 through the next major
 or asyncpg 0.31 through the next major. Its package lane builds the source distribution and
 universal wheel, checks inline types, runs both real drivers, and executes every shared SQL
 scenario. `python/tests/test_release.py` installs the wheel and source distribution with both driver
@@ -113,17 +112,17 @@ and explains where to deploy workers when the web tier is serverless.
 Nine packages ship from this repository. `@workhorse-js/core` is the TypeScript durable queue;
 `workhorse-pg` is the Python client and worker SDK; the rest are optional TypeScript packages.
 
-| Package                            | Purpose                                           | Peer requirements                                                                                             |
-| ---------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `@workhorse-js/core`               | Queue, worker, schema, CLI                        | `pg` >= 8.13                                                                                                  |
-| `@workhorse-js/drizzle`            | Drizzle ORM provider                              | `@workhorse-js/core`, `drizzle-orm` >= 0.45, `pg`                                                             |
-| `@workhorse-js/prisma`             | Prisma ORM provider                               | `@workhorse-js/core`, `@prisma/client` >= 6 and < 7                                                           |
-| `@workhorse-js/typeorm`            | TypeORM provider                                  | `@workhorse-js/core`, `typeorm` >= 0.3 and < 2                                                                |
-| `@workhorse-js/kysely`             | Kysely provider                                   | `@workhorse-js/core`, `kysely` >= 0.29 and < 0.30                                                             |
-| `@workhorse-js/dashboard`          | Operator dashboard and its framework-neutral host | `@workhorse-js/core` >= 0.1 and < 0.2, React 19                                                               |
-| `@workhorse-js/dashboard-server`   | Authenticated standalone dashboard server         | `@workhorse-js/dashboard-contract`                                                                            |
-| `@workhorse-js/dashboard-contract` | Type-only dashboard server boundary               | None                                                                                                          |
-| `workhorse-pg`                     | Python clients and worker runtimes                | croniter >= 6.2.4 and < 7; python-dateutil >= 2.9 and < 3; Psycopg >= 3.3 and < 4, or asyncpg >= 0.31 and < 1 |
+| Package                            | Purpose                                           | Peer requirements                                   |
+| ---------------------------------- | ------------------------------------------------- | --------------------------------------------------- |
+| `@workhorse-js/core`               | Queue, worker, schema, CLI                        | `pg` >= 8.13                                        |
+| `@workhorse-js/drizzle`            | Drizzle ORM provider                              | `@workhorse-js/core`, `drizzle-orm` >= 0.45, `pg`   |
+| `@workhorse-js/prisma`             | Prisma ORM provider                               | `@workhorse-js/core`, `@prisma/client` >= 6 and < 7 |
+| `@workhorse-js/typeorm`            | TypeORM provider                                  | `@workhorse-js/core`, `typeorm` >= 0.3 and < 2      |
+| `@workhorse-js/kysely`             | Kysely provider                                   | `@workhorse-js/core`, `kysely` >= 0.29 and < 0.30   |
+| `@workhorse-js/dashboard`          | Operator dashboard and its framework-neutral host | `@workhorse-js/core` >= 0.1 and < 0.2, React 19     |
+| `@workhorse-js/dashboard-server`   | Authenticated standalone dashboard server         | `@workhorse-js/dashboard-contract`                  |
+| `@workhorse-js/dashboard-contract` | Type-only dashboard server boundary               | None                                                |
+| `workhorse-pg`                     | Python clients and worker runtimes                | Psycopg >= 3.3 and < 4, or asyncpg >= 0.31 and < 1  |
 
 The eight TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.

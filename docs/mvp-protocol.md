@@ -65,7 +65,7 @@ FIFO sequence is globally monotonic. Enqueue allocates ready sequences in input 
 13. `redrive_v1` locks one source, requires a failed outcome plus audit metadata, resolves source/request idempotency, and creates a new ready identity with copied immutable definition and accepted contract metadata except for a cleared absolute deadline. It appends source and target events and one lineage edge without modifying the source outcome's semantic terminal columns; the existing retention watermark may advance with append-only history. `redrive_many_v1` selects at most 1,000 oldest matching sources after an optional keyset cursor; dry-run returns `eligible` rows without writes.
 14. `list_jobs_v1` validates exact queue/type/state/creation-time filters, a bounded payload projection, and a filter-bound immutable cursor. It selects at most 1,000 candidates from `job_query` before joining `job` for priority and optional top-level-redacted payload output. Persisted contract keys are always combined with caller projection keys.
 15. `list_job_timeline_v1` merges retained `job_event` and `attempt_history` rows into one latest-first bounded cursor stream with immutable job priority. Unknown identities and identities whose history was fully retired both return an empty stream; use point lookup when that distinction matters.
-16. `sync_schedule_definitions_v1` atomically upserts one namespace's desired definitions with accepted contract metadata, increments revisions for material changes, and optionally disables omitted names.
+16. `sync_schedule_definitions_v1` validates cron text and an IANA timezone, then atomically upserts one namespace's desired definitions with accepted contract metadata, increments revisions for material changes, and optionally disables omitted names. `cron_occurrences_v1` evaluates the versioned dialect and bounded catch-up window. `fire_due_schedules_v1` evaluates and fires every due definition for selected namespaces in one call.
 17. `fire_schedule_v1` locks an enabled definition matching the expected revision, reserves one occurrence second, and delegates to `enqueue_v1` with the stored contract version, limits, and redaction keys; stale revisions and duplicate fires return null. Canceling its job does not alter the definition or later occurrences.
 18. `sync_retention_policy_v1` stores explicit nullable minimum windows and work bounds, rejecting policies that could delete identity before retained outcome, event, attempt, occurrence, or redrive-lineage attribution.
 19. `sync_concurrency_policies_v1` atomically reconciles one namespace's queue dispatch budgets, rejects conflicting namespace ownership, and prunes omitted policies by default.
@@ -190,11 +190,11 @@ Before scheduling concerns, the worker execution contract is:
 - Namespaces and names are stable deployment identities using letters, digits, dot, underscore, and hyphen.
 - Definitions contain cron text plus a typed Workhorse queue job; arbitrary SQL is not accepted.
 - Definition upsert is one target-database transaction; a per-namespace advisory lock serializes concurrent deployments.
-- Workers parse cron expressions in process and compute each enabled definition's due occurrences from its last durable occurrence.
+- PostgreSQL parses cron expressions through `cron_occurrences_v1` and computes each enabled definition's due occurrences from its last durable occurrence and stored IANA timezone.
 - Worker tick passes run at most once per `maintenanceIntervalMs` (default one second). Workers poll the three slow tasks at most once per `maintenanceTaskPollMs` (default 60 seconds), while PostgreSQL owns their database-global due state. Transaction-scoped advisory locks inside every maintenance task and `fire_schedule_v1` make concurrent passes no-ops, so any number of workers run without duplicate fires and any surviving worker takes over.
 - Maintenance is bounded: 1,000-row promotion/recovery limits per tick; by default at most 1,000 terminal jobs, four history partitions per category, 10,000 fallback rows per category, and 10,000 occurrences per task pass. Every loop reports per-phase telemetry through `worker.maintenanceTelemetry()` and `onMaintenance`.
-- `Worker` option `scheduleNamespaces` selects which namespaces a worker evaluates; `scheduleCatchupLimit` bounds missed occurrences fired after downtime.
-- Worker fires call `fire_schedule_v1(namespace, name, revision, occurrence)` with the planned occurrence second as the occurrence key; stale, disabled, or missing definitions are no-ops.
+- `Worker` option `scheduleNamespaces` selects which namespaces a worker offers for PostgreSQL evaluation; `scheduleCatchupLimit` bounds missed occurrences fired after downtime.
+- Worker passes call `fire_due_schedules_v1(namespaces, now, catchup_limit)`, which delegates each planned occurrence to `fire_schedule_v1(namespace, name, revision, occurrence)`; stale, disabled, or missing definitions are no-ops.
 - Callers using `Queue.fireSchedule(namespace, name, revision, occurrenceAt)` can supply a stable external occurrence timestamp.
 - Occurrence deduplication is enqueue-level only. Worker delivery remains at least once.
 
@@ -227,7 +227,7 @@ by default; PostgreSQL owns the global due check and separate advisory lock for 
 - `installSchema` supports clean installation. `migrateSchema` validates the current pre-release
   baseline; ordered forward migrations begin after the first public release.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` runs; drift is bounded by the worker tick cadence.
-- Schedule precision is one second and cron expressions are evaluated in the worker's configured timezone.
+- Schedule precision is one second and cron expressions are evaluated in each definition's stored IANA timezone.
 - `Worker.run()` shares one `LISTEN workhorse_jobs` connection per node-postgres pool. Queue payloads
   wake matching workers and `*` wakes all subscribers. Reconnect starts at 100 ms, doubles through
   5 seconds, and applies ±10% jitter. A successful initial connection or reconnect prompts a claim.

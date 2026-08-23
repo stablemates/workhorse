@@ -28,8 +28,7 @@ class StatementRegistry:
     run_maintenance: DriverStatement
     register_worker: DriverStatement
     deregister_worker: DriverStatement
-    list_schedules: DriverStatement
-    fire_schedule: DriverStatement
+    fire_due_schedules: DriverStatement
     promote: DriverStatement
     recover_expired: DriverStatement
     claim: DriverStatement
@@ -111,40 +110,14 @@ STATEMENTS = StatementRegistry(
         psycopg="SELECT workhorse.deregister_worker_v1(%s::text) AS deregistered",
         asyncpg="SELECT workhorse.deregister_worker_v1($1::text) AS deregistered",
     ),
-    list_schedules=DriverStatement(
+    fire_due_schedules=DriverStatement(
         psycopg=(
-            "SELECT definition.namespace, definition.schedule_name, "
-            "definition.cron_expression, definition.revision::text, "
-            "max(occurrence.occurrence_at) AS last_occurrence_at "
-            "FROM workhorse.schedule_definition definition "
-            "LEFT JOIN workhorse.schedule_occurrence occurrence "
-            "ON occurrence.namespace = definition.namespace "
-            "AND occurrence.schedule_name = definition.schedule_name "
-            "WHERE definition.enabled AND definition.namespace = ANY(%s::text[]) "
-            "GROUP BY definition.namespace, definition.schedule_name "
-            "ORDER BY definition.namespace, definition.schedule_name"
+            "SELECT namespace, schedule_name, occurrence_at, job_id "
+            "FROM workhorse.fire_due_schedules_v1(%s::text[], %s::timestamptz, %s::integer)"
         ),
         asyncpg=(
-            "SELECT definition.namespace, definition.schedule_name, "
-            "definition.cron_expression, definition.revision::text, "
-            "max(occurrence.occurrence_at) AS last_occurrence_at "
-            "FROM workhorse.schedule_definition definition "
-            "LEFT JOIN workhorse.schedule_occurrence occurrence "
-            "ON occurrence.namespace = definition.namespace "
-            "AND occurrence.schedule_name = definition.schedule_name "
-            "WHERE definition.enabled AND definition.namespace = ANY($1::text[]) "
-            "GROUP BY definition.namespace, definition.schedule_name "
-            "ORDER BY definition.namespace, definition.schedule_name"
-        ),
-    ),
-    fire_schedule=DriverStatement(
-        psycopg=(
-            "SELECT workhorse.fire_schedule_v1(%s::text, %s::text, %s::bigint, "
-            "%s::timestamptz) AS job_id"
-        ),
-        asyncpg=(
-            "SELECT workhorse.fire_schedule_v1($1::text, $2::text, $3::bigint, "
-            "$4::timestamptz) AS job_id"
+            "SELECT namespace, schedule_name, occurrence_at, job_id "
+            "FROM workhorse.fire_due_schedules_v1($1::text[], $2::timestamptz, $3::integer)"
         ),
     ),
     promote=DriverStatement(

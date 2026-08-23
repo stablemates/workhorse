@@ -1,4 +1,3 @@
-import { CronExpressionParser } from "cron-parser";
 import { expectOneRow } from "../errors.js";
 import { logDebug, logInfo, recordScheduleFired, withSpan } from "../telemetry.js";
 import type { Json, RetryPolicy } from "../types.js";
@@ -19,6 +18,8 @@ export interface ScheduleJobDefinition {
 export interface ScheduleDefinition {
   name: string;
   schedule: string;
+  /** IANA timezone used to interpret cron wall-clock fields. */
+  timezone?: string;
   enabled?: boolean;
   job: ScheduleJobDefinition;
 }
@@ -27,6 +28,7 @@ export interface StoredSchedule {
   namespace: string;
   name: string;
   schedule: string;
+  timezone: string;
   revision: bigint;
   lastOccurrenceAt: Date | null;
 }
@@ -45,19 +47,11 @@ export class CronSchedulesModule extends QueueModule {
     definitions: readonly ScheduleDefinition[],
     options: { prune?: boolean } = {},
   ): Promise<void> {
-    for (const definition of definitions) {
-      try {
-        CronExpressionParser.parse(definition.schedule);
-      } catch (error) {
-        throw new Error(`Invalid cron expression for schedule ${definition.name}`, {
-          cause: error,
-        });
-      }
-    }
     const scheduleInputs = definitions.map((definition) => ({
       ...this.enqueueContracts.jobAcceptance(definition.job.type, definition.job.payload),
       name: definition.name,
       schedule: definition.schedule,
+      timezone: definition.timezone ?? "UTC",
       enabled: definition.enabled ?? true,
       queue: definition.job.queue ?? this.context.defaultQueue,
       priority: validateJobPriority(definition.job.priority),
@@ -89,10 +83,12 @@ export class CronSchedulesModule extends QueueModule {
       namespace: string;
       schedule_name: string;
       cron_expression: string;
+      timezone: string;
       revision: string;
       last_occurrence_at: Date | null;
     }>(
       `SELECT definition.namespace, definition.schedule_name, definition.cron_expression,
+              definition.timezone,
               definition.revision::text,
               max(occurrence.occurrence_at) AS last_occurrence_at
          FROM workhorse.schedule_definition definition
@@ -100,7 +96,7 @@ export class CronSchedulesModule extends QueueModule {
            ON occurrence.namespace = definition.namespace
           AND occurrence.schedule_name = definition.schedule_name
         WHERE definition.enabled AND definition.namespace = ANY($1::text[])
-        GROUP BY definition.namespace, definition.schedule_name
+        GROUP BY definition.namespace, definition.schedule_name, definition.timezone
         ORDER BY definition.namespace, definition.schedule_name`,
       [namespaces],
     );
@@ -108,9 +104,45 @@ export class CronSchedulesModule extends QueueModule {
       namespace: row.namespace,
       name: row.schedule_name,
       schedule: row.cron_expression,
+      timezone: row.timezone,
       revision: BigInt(row.revision),
       lastOccurrenceAt: row.last_occurrence_at,
     }));
+  }
+
+  async fireDueSchedules(
+    namespaces: readonly string[],
+    now: Date,
+    catchupLimit: number,
+  ): Promise<void> {
+    if (namespaces.length === 0) return;
+    const result = await this.context.database.query<{
+      namespace: string;
+      schedule_name: string;
+      occurrence_at: Date | string;
+      job_id: string | null;
+    }>(
+      `SELECT namespace, schedule_name, occurrence_at, job_id
+         FROM workhorse.fire_due_schedules_v1($1::text[], $2::timestamptz, $3::integer)`,
+      [namespaces, now.toISOString(), catchupLimit],
+    );
+    for (const row of result.rows) {
+      if (row.job_id !== null) {
+        const occurrenceAt =
+          row.occurrence_at instanceof Date ? row.occurrence_at : new Date(row.occurrence_at);
+        recordScheduleFired(row.namespace, row.schedule_name, occurrenceAt);
+        logInfo("workhorse.schedule.fired", "Recurring schedule fired", {
+          "workhorse.schedule.namespace": row.namespace,
+          "workhorse.schedule.name": row.schedule_name,
+          "workhorse.job.id": row.job_id,
+        });
+      } else {
+        logDebug("workhorse.schedule.fire_replayed", "Recurring schedule occurrence replayed", {
+          "workhorse.schedule.namespace": row.namespace,
+          "workhorse.schedule.name": row.schedule_name,
+        });
+      }
+    }
   }
 
   async fireSchedule(

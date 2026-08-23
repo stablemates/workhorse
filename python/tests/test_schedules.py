@@ -20,6 +20,7 @@ def test_synchronizes_recurring_definitions_through_the_versioned_sql_function()
             ScheduleDefinition(
                 name=definition["name"],
                 schedule=definition["schedule"],
+                timezone=definition["timezone"],
                 enabled=definition["enabled"],
                 job=ScheduledJob(
                     type=definition["job"]["type"],

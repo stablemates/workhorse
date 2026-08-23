@@ -68,6 +68,7 @@ const workerQueueDefaults: WorkerQueueApi = {
   runMaintenance: async () => [],
   schedules: unsupportedWorkerQueueOperation,
   fireSchedule: unsupportedWorkerQueueOperation,
+  fireDueSchedules: unsupportedWorkerQueueOperation,
   registerWorker: unsupportedWorkerQueueOperation,
   deregisterWorker: unsupportedWorkerQueueOperation,
   pruneWorkerRegistry: unsupportedWorkerQueueOperation,

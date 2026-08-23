@@ -216,7 +216,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
     go: { file: "batch_test.go", pattern: "atch" },
   },
   {
-    capability: "Schedule firing (in-process cron)",
+    capability: "Schedule firing (database cron evaluation)",
     typescript: { file: "integration-cron-schedules.test.ts", pattern: "fireSchedule" },
     python: { file: "test_worker_schedules.py", pattern: "schedule" },
     go: { file: "worker_schedules_test.go", pattern: "chedule" },

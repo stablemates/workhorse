@@ -473,4 +473,5 @@ class ScheduleDefinition:
     name: str
     schedule: str
     job: ScheduledJob
+    timezone: str = "UTC"
     enabled: bool = True

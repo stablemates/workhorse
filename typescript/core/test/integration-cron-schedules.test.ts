@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { Queue, Worker } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
@@ -6,7 +7,35 @@ import { WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
 
 const { pool, queue } = createIntegrationTestContext(import.meta.url);
 
+interface CronOccurrenceFixture {
+  id: string;
+  expression: string;
+  timezone: string;
+  lastOccurrenceAt: string | null;
+  now: string;
+  limit: number;
+  expected: string[];
+}
+
+const cronFixtures = JSON.parse(
+  await readFile(new URL("../../../protocol/v1/cron-occurrences.json", import.meta.url), "utf8"),
+) as CronOccurrenceFixture[];
+
 describe("cron schedules", () => {
+  it.each(cronFixtures)("evaluates $id through PostgreSQL", async (fixture) => {
+    const result = await pool.query<{ occurrence_at: Date }>(
+      `SELECT occurrence_at
+         FROM workhorse.cron_occurrences_v1(
+           $1::text, $2::timestamptz, $3::timestamptz, $4::integer, $5::text
+         ) occurrence_at`,
+      [fixture.expression, fixture.lastOccurrenceAt, fixture.now, fixture.limit, fixture.timezone],
+    );
+
+    expect(result.rows.map((row) => row.occurrence_at.toISOString())).toEqual(
+      fixture.expected.map((occurrence) => new Date(occurrence).toISOString()),
+    );
+  });
+
   it("cancels one recurring occurrence without disabling later occurrences", async () => {
     await queue.syncSchedules("cancel-recurring", [
       {
@@ -85,6 +114,7 @@ describe("cron schedules", () => {
       {
         name: "daily-report",
         schedule: "0 6 * * *",
+        timezone: "America/New_York",
         job: {
           type: "generate-report",
           payload: { scope: "daily" },
@@ -103,7 +133,7 @@ describe("cron schedules", () => {
     expect(
       (
         await pool.query(
-          `SELECT schedule_name, cron_expression, queue_name, job_type, payload, max_attempts,
+          `SELECT schedule_name, cron_expression, timezone, queue_name, job_type, payload, max_attempts,
                   enabled, revision::text
              FROM workhorse.schedule_definition
             WHERE namespace = 'integration'
@@ -114,6 +144,7 @@ describe("cron schedules", () => {
       {
         schedule_name: "daily-report",
         cron_expression: "0 6 * * *",
+        timezone: "America/New_York",
         queue_name: "reports",
         job_type: "generate-report",
         payload: { scope: "daily" },
@@ -124,6 +155,7 @@ describe("cron schedules", () => {
       {
         schedule_name: "disabled-cleanup",
         cron_expression: "0 2 * * 0",
+        timezone: "UTC",
         queue_name: "default",
         job_type: "cleanup",
         payload: null,
@@ -144,6 +176,7 @@ describe("cron schedules", () => {
       {
         name: "daily-report",
         schedule: "30 6 * * *",
+        timezone: "America/New_York",
         job: { type: "generate-report", payload: { scope: "changed" }, queue: "reports" },
       },
     ]);
@@ -185,7 +218,7 @@ describe("cron schedules", () => {
           job: { type: "invalid", payload: {} },
         },
       ]),
-    ).rejects.toThrow(/Invalid cron expression for schedule invalid/);
+    ).rejects.toThrow(/invalid cron expression/);
     expect(
       (await pool.query("SELECT count(*)::integer AS count FROM workhorse.schedule_definition"))
         .rows[0]?.count,

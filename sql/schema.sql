@@ -1522,6 +1522,7 @@ CREATE TABLE IF NOT EXISTS workhorse.schedule_definition (
   namespace text NOT NULL CHECK (namespace <> ''),
   schedule_name text NOT NULL CHECK (schedule_name <> ''),
   cron_expression text NOT NULL CHECK (cron_expression <> ''),
+  timezone text NOT NULL DEFAULT 'UTC' CHECK (timezone <> ''),
   queue_name text NOT NULL CHECK (queue_name <> ''),
   job_type text NOT NULL CHECK (job_type <> ''),
   concurrency_key text CHECK (
@@ -3219,6 +3220,416 @@ AS $$
   SELECT policy FROM workhorse.maintenance_policy policy WHERE singleton;
 $$;
 
+-- Expand the portable descriptor subset before parsing ordinary cron fields. Cadence stays in
+-- worker processes; PostgreSQL owns only deterministic occurrence evaluation.
+CREATE OR REPLACE FUNCTION workhorse.expand_cron_macro_v1(p_expression text)
+RETURNS text
+LANGUAGE plpgsql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+BEGIN
+  RETURN CASE lower(btrim(p_expression))
+    WHEN '@yearly' THEN '0 0 1 1 *'
+    WHEN '@annually' THEN '0 0 1 1 *'
+    WHEN '@monthly' THEN '0 0 1 * *'
+    WHEN '@weekly' THEN '0 0 * * 0'
+    WHEN '@daily' THEN '0 0 * * *'
+    WHEN '@midnight' THEN '0 0 * * *'
+    WHEN '@hourly' THEN '0 * * * *'
+    ELSE btrim(p_expression)
+  END;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.expand_hashed_cron_field_v1(
+  p_field text,
+  p_expression text,
+  p_field_index integer,
+  p_minimum integer,
+  p_maximum integer
+) RETURNS text
+LANGUAGE plpgsql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+DECLARE
+  v_tokens text[] := string_to_array(p_field, ',');
+  v_token text;
+  v_match text[];
+  v_token_index integer := 0;
+  v_lower integer;
+  v_upper integer;
+  v_step integer;
+  v_digest bytea;
+  v_hash bigint;
+  v_width integer;
+  v_chosen integer;
+  v_result text[] := '{}';
+BEGIN
+  FOREACH v_token IN ARRAY v_tokens LOOP
+    v_match := regexp_match(v_token, '^H(?:\(([0-9]+)-([0-9]+)\))?(?:/([0-9]+))?$', 'i');
+    IF v_match IS NULL THEN
+      v_result := array_append(v_result, v_token);
+      CONTINUE;
+    END IF;
+
+    v_lower := COALESCE(v_match[1]::integer, p_minimum);
+    v_upper := COALESCE(v_match[2]::integer, p_maximum);
+    v_step := v_match[3]::integer;
+    IF v_lower < p_minimum OR v_upper > p_maximum OR v_lower > v_upper THEN
+      RAISE EXCEPTION 'invalid hashed cron range in %', p_expression;
+    END IF;
+    IF v_step IS NOT NULL AND v_step < 1 THEN
+      RAISE EXCEPTION 'invalid hashed cron step in %', p_expression;
+    END IF;
+
+    v_digest := sha256(convert_to(
+      p_expression || ':' || p_field_index::text || ':' || v_token_index::text,
+      'UTF8'
+    ));
+    v_hash := (get_byte(v_digest, 0)::bigint << 24)
+      + (get_byte(v_digest, 1)::bigint << 16)
+      + (get_byte(v_digest, 2)::bigint << 8)
+      + get_byte(v_digest, 3)::bigint;
+    v_width := v_upper - v_lower + 1;
+    IF v_step IS NOT NULL THEN v_width := LEAST(v_width, v_step); END IF;
+    v_chosen := v_lower + (v_hash % v_width)::integer;
+    v_result := array_append(
+      v_result,
+      CASE WHEN v_step IS NULL THEN v_chosen::text
+        ELSE v_chosen::text || '-' || v_upper::text || '/' || v_step::text END
+    );
+    v_token_index := v_token_index + 1;
+  END LOOP;
+  RETURN array_to_string(v_result, ',');
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.cron_field_values_v1(
+  p_field text,
+  p_minimum integer,
+  p_maximum integer,
+  p_names text[] DEFAULT '{}',
+  p_sunday_alias boolean DEFAULT false
+) RETURNS integer[]
+LANGUAGE plpgsql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+DECLARE
+  v_field text := upper(p_field);
+  v_token text;
+  v_match text[];
+  v_lower integer;
+  v_upper integer;
+  v_step integer;
+  v_value integer;
+  v_values integer[] := '{}';
+  v_domain_max integer := p_maximum + CASE WHEN p_sunday_alias THEN 1 ELSE 0 END;
+  v_index integer;
+BEGIN
+  IF COALESCE(v_field, '') = '' THEN RAISE EXCEPTION 'cron field must not be empty'; END IF;
+  IF array_length(p_names, 1) IS NOT NULL THEN
+    FOR v_index IN REVERSE array_upper(p_names, 1)..array_lower(p_names, 1) LOOP
+      v_field := replace(v_field, upper(p_names[v_index]), (p_minimum + v_index - 1)::text);
+    END LOOP;
+  END IF;
+
+  FOREACH v_token IN ARRAY string_to_array(v_field, ',') LOOP
+    v_match := regexp_match(v_token, '^(\*|[0-9]+)(?:-([0-9]+))?(?:/([0-9]+))?$');
+    IF v_match IS NULL THEN RAISE EXCEPTION 'invalid cron field %', p_field; END IF;
+    v_step := COALESCE(v_match[3]::integer, 1);
+    IF v_step < 1 THEN RAISE EXCEPTION 'cron field step must be positive'; END IF;
+    IF v_match[1] = '*' THEN
+      v_lower := p_minimum;
+      v_upper := v_domain_max;
+    ELSE
+      v_lower := v_match[1]::integer;
+      v_upper := COALESCE(v_match[2]::integer, CASE WHEN v_match[3] IS NULL THEN v_lower ELSE v_domain_max END);
+    END IF;
+    IF v_lower < p_minimum OR v_upper > v_domain_max OR v_lower > v_upper THEN
+      RAISE EXCEPTION 'cron field % is outside its domain', p_field;
+    END IF;
+    FOR v_value IN v_lower..v_upper BY v_step LOOP
+      v_values := array_append(
+        v_values,
+        CASE WHEN p_sunday_alias AND v_value = 7 THEN 0 ELSE v_value END
+      );
+    END LOOP;
+  END LOOP;
+
+  SELECT array_agg(DISTINCT value ORDER BY value) INTO v_values FROM unnest(v_values) value;
+  RETURN COALESCE(v_values, '{}');
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.resolve_cron_wall_clock_v1(
+  p_wall_clock timestamp,
+  p_timezone text
+) RETURNS timestamptz
+LANGUAGE plpgsql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+DECLARE
+  v_default timestamptz := p_wall_clock AT TIME ZONE p_timezone;
+  v_candidate timestamptz;
+  v_earliest timestamptz;
+  v_probe timestamptz;
+  v_offset interval;
+  v_probe_hours integer;
+BEGIN
+  -- PostgreSQL selects the later instant during a fold. Derive the offsets on both sides of the
+  -- transition so historical sub-hour changes are covered without assuming modern offset widths.
+  FOREACH v_probe_hours IN ARRAY ARRAY[-48, -24, 0, 24, 48] LOOP
+    v_probe := v_default + make_interval(hours => v_probe_hours);
+    v_offset := (v_probe AT TIME ZONE p_timezone) - (v_probe AT TIME ZONE 'UTC');
+    v_candidate := (p_wall_clock - v_offset) AT TIME ZONE 'UTC';
+    IF v_candidate AT TIME ZONE p_timezone = p_wall_clock
+       AND (v_earliest IS NULL OR v_candidate < v_earliest) THEN
+      v_earliest := v_candidate;
+    END IF;
+  END LOOP;
+  RETURN COALESCE(v_earliest, v_default);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.cron_occurrences_v1(
+  p_expression text,
+  p_last_occurrence_at timestamptz,
+  p_now timestamptz,
+  p_limit integer,
+  p_timezone text
+) RETURNS TABLE(occurrence_at timestamptz)
+LANGUAGE plpgsql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+DECLARE
+  v_expression text := workhorse.expand_cron_macro_v1(p_expression);
+  v_fields text[] := regexp_split_to_array(v_expression, '\s+');
+  v_field_count integer;
+  v_seconds integer[];
+  v_minutes integer[];
+  v_hours integer[];
+  v_months integer[];
+  v_dom_field text;
+  v_dow_field text;
+  v_dom_tokens text[] := '{}';
+  v_dow_tokens text[] := '{}';
+  v_dom_values integer[] := '{}';
+  v_dow_values integer[] := '{}';
+  v_last_weekdays integer[] := '{}';
+  v_nth_weekdays text[] := '{}';
+  v_token text;
+  v_match text[];
+  v_dom_wildcard boolean := false;
+  v_dom_last boolean := false;
+  v_dow_wildcard boolean := false;
+  v_date date;
+  v_day_offset integer;
+  v_start_date date;
+  v_end_date date;
+  v_day_of_month integer;
+  v_day_of_week integer;
+  v_dom_match boolean;
+  v_dow_match boolean;
+  v_day_match boolean;
+  v_hour integer;
+  v_minute integer;
+  v_second integer;
+  v_wall timestamp;
+  v_occurrence timestamptz;
+  v_seen_occurrences timestamptz[] := '{}';
+  v_returned integer := 0;
+  v_hour_index integer;
+  v_minute_index integer;
+  v_second_index integer;
+  v_weekday integer;
+  v_ordinal integer;
+BEGIN
+  IF COALESCE(btrim(p_expression), '') = '' THEN RAISE EXCEPTION 'cron expression must not be empty'; END IF;
+  IF p_now IS NULL THEN RAISE EXCEPTION 'cron evaluation time is required'; END IF;
+  IF p_limit NOT BETWEEN 1 AND 10000 THEN RAISE EXCEPTION 'cron catch-up limit must be between 1 and 10000'; END IF;
+  IF COALESCE(p_timezone, '') = '' THEN RAISE EXCEPTION 'schedule timezone must not be empty'; END IF;
+  -- Force PostgreSQL to validate the IANA name even when no occurrence is returned.
+  PERFORM p_now AT TIME ZONE p_timezone;
+
+  v_field_count := array_length(v_fields, 1);
+  IF v_field_count NOT IN (5, 6) THEN
+    RAISE EXCEPTION 'invalid cron expression %', p_expression;
+  END IF;
+  FOR v_ordinal IN 1..v_field_count LOOP
+    v_fields[v_ordinal] := workhorse.expand_hashed_cron_field_v1(
+      v_fields[v_ordinal], p_expression, v_ordinal - 1,
+      CASE
+        WHEN v_field_count = 6 AND v_ordinal IN (1, 2, 3, 6) THEN 0
+        WHEN v_field_count = 6 THEN 1
+        WHEN v_ordinal IN (1, 2, 5) THEN 0
+        ELSE 1
+      END,
+      CASE
+        WHEN v_field_count = 6 AND v_ordinal IN (1, 2) THEN 59
+        WHEN v_field_count = 6 AND v_ordinal = 3 THEN 23
+        WHEN v_field_count = 6 AND v_ordinal = 4 THEN 31
+        WHEN v_field_count = 6 AND v_ordinal = 5 THEN 12
+        WHEN v_field_count = 6 AND v_ordinal = 6 THEN 6
+        WHEN v_field_count = 5 AND v_ordinal = 1 THEN 59
+        WHEN v_field_count = 5 AND v_ordinal = 2 THEN 23
+        WHEN v_field_count = 5 AND v_ordinal = 3 THEN 31
+        WHEN v_field_count = 5 AND v_ordinal = 4 THEN 12
+        ELSE 6
+      END
+    );
+  END LOOP;
+
+  IF v_field_count = 6 THEN
+    v_seconds := workhorse.cron_field_values_v1(v_fields[1], 0, 59);
+    v_minutes := workhorse.cron_field_values_v1(v_fields[2], 0, 59);
+    v_hours := workhorse.cron_field_values_v1(v_fields[3], 0, 23);
+    v_dom_field := v_fields[4];
+    v_months := workhorse.cron_field_values_v1(v_fields[5], 1, 12,
+      ARRAY['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC']);
+    v_dow_field := v_fields[6];
+  ELSE
+    v_seconds := ARRAY[0];
+    v_minutes := workhorse.cron_field_values_v1(v_fields[1], 0, 59);
+    v_hours := workhorse.cron_field_values_v1(v_fields[2], 0, 23);
+    v_dom_field := v_fields[3];
+    v_months := workhorse.cron_field_values_v1(v_fields[4], 1, 12,
+      ARRAY['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC']);
+    v_dow_field := v_fields[5];
+  END IF;
+
+  v_dom_wildcard := v_dom_field IN ('*', '?');
+  FOREACH v_token IN ARRAY string_to_array(v_dom_field, ',') LOOP
+    IF upper(v_token) = 'L' THEN v_dom_last := true; CONTINUE; END IF;
+    IF v_token = '?' THEN
+      IF array_length(string_to_array(v_dom_field, ','), 1) <> 1 THEN RAISE EXCEPTION '? must occupy a cron field'; END IF;
+      CONTINUE;
+    END IF;
+    v_dom_tokens := array_append(v_dom_tokens, v_token);
+  END LOOP;
+  IF array_length(v_dom_tokens, 1) IS NOT NULL THEN
+    v_dom_values := workhorse.cron_field_values_v1(array_to_string(v_dom_tokens, ','), 1, 31);
+  END IF;
+
+  v_dow_wildcard := v_dow_field IN ('*', '?');
+  FOREACH v_token IN ARRAY string_to_array(v_dow_field, ',') LOOP
+    IF v_token = '?' THEN
+      IF array_length(string_to_array(v_dow_field, ','), 1) <> 1 THEN RAISE EXCEPTION '? must occupy a cron field'; END IF;
+      CONTINUE;
+    END IF;
+    v_match := regexp_match(upper(v_token), '^(SUN|MON|TUE|WED|THU|FRI|SAT|[0-7])L$');
+    IF v_match IS NOT NULL THEN
+      v_weekday := CASE v_match[1]
+        WHEN 'SUN' THEN 0 WHEN 'MON' THEN 1 WHEN 'TUE' THEN 2 WHEN 'WED' THEN 3
+        WHEN 'THU' THEN 4 WHEN 'FRI' THEN 5 WHEN 'SAT' THEN 6 ELSE v_match[1]::integer % 7 END;
+      v_last_weekdays := array_append(v_last_weekdays, v_weekday);
+      CONTINUE;
+    END IF;
+    v_match := regexp_match(upper(v_token), '^(SUN|MON|TUE|WED|THU|FRI|SAT|[0-7])#([1-5])$');
+    IF v_match IS NOT NULL THEN
+      v_weekday := CASE v_match[1]
+        WHEN 'SUN' THEN 0 WHEN 'MON' THEN 1 WHEN 'TUE' THEN 2 WHEN 'WED' THEN 3
+        WHEN 'THU' THEN 4 WHEN 'FRI' THEN 5 WHEN 'SAT' THEN 6 ELSE v_match[1]::integer % 7 END;
+      v_nth_weekdays := array_append(v_nth_weekdays, v_weekday::text || ':' || v_match[2]);
+      CONTINUE;
+    END IF;
+    v_dow_tokens := array_append(v_dow_tokens, v_token);
+  END LOOP;
+  IF array_length(v_dow_tokens, 1) IS NOT NULL THEN
+    v_dow_values := workhorse.cron_field_values_v1(array_to_string(v_dow_tokens, ','), 0, 6,
+      ARRAY['SUN','MON','TUE','WED','THU','FRI','SAT'], true);
+  END IF;
+
+  v_end_date := (p_now AT TIME ZONE p_timezone)::date;
+  IF p_last_occurrence_at IS NULL THEN
+    v_start_date := (v_end_date - interval '128 years')::date;
+    FOR v_day_offset IN 0..(v_end_date - v_start_date) LOOP
+      v_date := v_end_date - v_day_offset;
+      IF NOT extract(month FROM v_date)::integer = ANY(v_months) THEN CONTINUE; END IF;
+      v_day_of_month := extract(day FROM v_date)::integer;
+      v_day_of_week := extract(dow FROM v_date)::integer;
+      v_dom_match := v_day_of_month = ANY(v_dom_values)
+        OR (v_dom_last AND extract(month FROM v_date + 1) <> extract(month FROM v_date));
+      v_dow_match := v_day_of_week = ANY(v_dow_values)
+        OR (v_day_of_week = ANY(v_last_weekdays) AND extract(month FROM v_date + 7) <> extract(month FROM v_date));
+      FOREACH v_token IN ARRAY v_nth_weekdays LOOP
+        v_weekday := split_part(v_token, ':', 1)::integer;
+        v_ordinal := split_part(v_token, ':', 2)::integer;
+        v_dow_match := v_dow_match OR (
+          v_day_of_week = v_weekday AND ((v_day_of_month - 1) / 7 + 1) = v_ordinal
+        );
+      END LOOP;
+      v_day_match := CASE WHEN v_dom_wildcard THEN v_dow_match
+        WHEN v_dow_wildcard THEN v_dom_match ELSE v_dom_match OR v_dow_match END;
+      IF NOT v_day_match THEN CONTINUE; END IF;
+      FOR v_hour_index IN REVERSE array_upper(v_hours, 1)..array_lower(v_hours, 1) LOOP
+        v_hour := v_hours[v_hour_index];
+        FOR v_minute_index IN REVERSE array_upper(v_minutes, 1)..array_lower(v_minutes, 1) LOOP
+          v_minute := v_minutes[v_minute_index];
+          FOR v_second_index IN REVERSE array_upper(v_seconds, 1)..array_lower(v_seconds, 1) LOOP
+            v_second := v_seconds[v_second_index];
+            v_wall := v_date + make_interval(hours => v_hour, mins => v_minute, secs => v_second);
+            v_occurrence := workhorse.resolve_cron_wall_clock_v1(v_wall, p_timezone);
+            IF v_occurrence <= date_trunc('second', p_now) THEN
+              occurrence_at := v_occurrence;
+              RETURN NEXT;
+              RETURN;
+            END IF;
+          END LOOP;
+        END LOOP;
+      END LOOP;
+    END LOOP;
+    RAISE EXCEPTION 'cron occurrence search exceeded the 128-year horizon';
+  END IF;
+
+  v_start_date := GREATEST(
+    (p_last_occurrence_at AT TIME ZONE p_timezone)::date,
+    (v_end_date - interval '128 years')::date
+  );
+  FOR v_day_offset IN 0..(v_end_date - v_start_date) LOOP
+    v_date := v_start_date + v_day_offset;
+    IF NOT extract(month FROM v_date)::integer = ANY(v_months) THEN CONTINUE; END IF;
+    v_day_of_month := extract(day FROM v_date)::integer;
+    v_day_of_week := extract(dow FROM v_date)::integer;
+    v_dom_match := v_day_of_month = ANY(v_dom_values)
+      OR (v_dom_last AND extract(month FROM v_date + 1) <> extract(month FROM v_date));
+    v_dow_match := v_day_of_week = ANY(v_dow_values)
+      OR (v_day_of_week = ANY(v_last_weekdays) AND extract(month FROM v_date + 7) <> extract(month FROM v_date));
+    FOREACH v_token IN ARRAY v_nth_weekdays LOOP
+      v_weekday := split_part(v_token, ':', 1)::integer;
+      v_ordinal := split_part(v_token, ':', 2)::integer;
+      v_dow_match := v_dow_match OR (
+        v_day_of_week = v_weekday AND ((v_day_of_month - 1) / 7 + 1) = v_ordinal
+      );
+    END LOOP;
+    v_day_match := CASE WHEN v_dom_wildcard THEN v_dow_match
+      WHEN v_dow_wildcard THEN v_dom_match ELSE v_dom_match OR v_dow_match END;
+    IF NOT v_day_match THEN CONTINUE; END IF;
+    FOREACH v_hour IN ARRAY v_hours LOOP
+      FOREACH v_minute IN ARRAY v_minutes LOOP
+        FOREACH v_second IN ARRAY v_seconds LOOP
+          v_wall := v_date + make_interval(hours => v_hour, mins => v_minute, secs => v_second);
+          v_occurrence := workhorse.resolve_cron_wall_clock_v1(v_wall, p_timezone);
+          IF v_occurrence > p_last_occurrence_at
+             AND v_occurrence <= date_trunc('second', p_now)
+             AND NOT v_occurrence = ANY(v_seen_occurrences) THEN
+            occurrence_at := v_occurrence;
+            v_seen_occurrences := array_append(v_seen_occurrences, v_occurrence);
+            RETURN NEXT;
+            v_returned := v_returned + 1;
+            IF v_returned >= p_limit THEN RETURN; END IF;
+          END IF;
+        END LOOP;
+      END LOOP;
+    END LOOP;
+  END LOOP;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.sync_schedule_definitions_v1(
   p_namespace text, p_definitions jsonb, p_prune boolean DEFAULT true
 ) RETURNS void
@@ -3244,6 +3655,20 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'each schedule requires non-empty name/schedule/queue/type and maxAttempts between 1 and 100';
   END IF;
+  IF EXISTS (
+    SELECT 1
+      FROM jsonb_array_elements(p_definitions) definition
+     WHERE NOT EXISTS (
+       SELECT 1 FROM pg_timezone_names timezone
+        WHERE timezone.name = COALESCE(definition->>'timezone', 'UTC')
+     )
+  ) THEN
+    RAISE EXCEPTION 'each schedule timezone must be a valid IANA timezone name';
+  END IF;
+  PERFORM workhorse.cron_occurrences_v1(
+    definition->>'schedule', NULL, date_trunc('second', clock_timestamp()), 1,
+    COALESCE(definition->>'timezone', 'UTC')
+  ) FROM jsonb_array_elements(p_definitions) definition;
   PERFORM workhorse.normalize_retry_policy_v1(definition->'retryPolicy')
     FROM jsonb_array_elements(p_definitions) definition WHERE definition ? 'retryPolicy';
   IF (
@@ -3257,11 +3682,12 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:schedules:' || p_namespace, 0));
 
   INSERT INTO workhorse.schedule_definition AS existing(
-    namespace, schedule_name, cron_expression, queue_name, job_type, concurrency_key, priority, payload,
+    namespace, schedule_name, cron_expression, timezone, queue_name, job_type, concurrency_key, priority, payload,
     contract_version, payload_max_bytes, result_max_bytes, payload_redact_keys, result_redact_keys,
     max_attempts, retry_policy, enabled
   )
-  SELECT p_namespace, definition->>'name', definition->>'schedule', definition->>'queue',
+  SELECT p_namespace, definition->>'name', definition->>'schedule',
+         COALESCE(definition->>'timezone', 'UTC'), definition->>'queue',
          definition->>'type', definition->>'concurrencyKey',
          COALESCE((definition->>'priority')::integer, 0),
          COALESCE(definition->'payload', 'null'::jsonb),
@@ -3280,19 +3706,20 @@ BEGIN
     FROM jsonb_array_elements(p_definitions) definition
   ON CONFLICT (namespace, schedule_name) DO UPDATE
     SET revision = existing.revision + CASE WHEN ROW(
-          existing.cron_expression, existing.queue_name, existing.job_type,
+          existing.cron_expression, existing.timezone, existing.queue_name, existing.job_type,
           existing.concurrency_key, existing.priority, existing.payload,
           existing.contract_version, existing.payload_max_bytes, existing.result_max_bytes,
           existing.payload_redact_keys, existing.result_redact_keys,
           existing.max_attempts, existing.retry_policy, existing.enabled
         ) IS DISTINCT FROM ROW(
-          EXCLUDED.cron_expression, EXCLUDED.queue_name, EXCLUDED.job_type,
+          EXCLUDED.cron_expression, EXCLUDED.timezone, EXCLUDED.queue_name, EXCLUDED.job_type,
           EXCLUDED.concurrency_key, EXCLUDED.priority, EXCLUDED.payload,
           EXCLUDED.contract_version, EXCLUDED.payload_max_bytes, EXCLUDED.result_max_bytes,
           EXCLUDED.payload_redact_keys, EXCLUDED.result_redact_keys,
           EXCLUDED.max_attempts, EXCLUDED.retry_policy, EXCLUDED.enabled
         ) THEN 1 ELSE 0 END,
         cron_expression = EXCLUDED.cron_expression,
+        timezone = EXCLUDED.timezone,
         queue_name = EXCLUDED.queue_name,
         job_type = EXCLUDED.job_type,
         concurrency_key = EXCLUDED.concurrency_key,
@@ -3381,6 +3808,69 @@ BEGIN
      AND occurrence.schedule_name = p_schedule_name
      AND occurrence.occurrence_at = date_trunc('second', p_occurrence_at);
   RETURN v_job_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.fire_due_schedules_v1(
+  p_namespaces text[],
+  p_now timestamptz,
+  p_catchup_limit integer
+) RETURNS TABLE(
+  namespace text,
+  schedule_name text,
+  occurrence_at timestamptz,
+  job_id uuid
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_definition record;
+  v_occurrence timestamptz;
+BEGIN
+  IF p_namespaces IS NULL OR array_position(p_namespaces, '') IS NOT NULL THEN
+    RAISE EXCEPTION 'schedule namespaces must contain non-empty names';
+  END IF;
+  IF p_now IS NULL THEN RAISE EXCEPTION 'schedule evaluation time is required'; END IF;
+  IF p_catchup_limit NOT BETWEEN 1 AND 10000 THEN
+    RAISE EXCEPTION 'schedule catch-up limit must be between 1 and 10000';
+  END IF;
+
+  FOR v_definition IN
+    SELECT definition.namespace, definition.schedule_name, definition.cron_expression,
+           definition.timezone, definition.revision,
+           max(occurrence.occurrence_at) AS last_occurrence_at
+      FROM workhorse.schedule_definition definition
+      LEFT JOIN workhorse.schedule_occurrence occurrence
+        ON occurrence.namespace = definition.namespace
+       AND occurrence.schedule_name = definition.schedule_name
+     WHERE definition.enabled
+       AND definition.namespace = ANY(p_namespaces)
+     GROUP BY definition.namespace, definition.schedule_name, definition.cron_expression,
+              definition.timezone, definition.revision
+     ORDER BY definition.namespace, definition.schedule_name
+  LOOP
+    FOR v_occurrence IN
+      SELECT evaluated.occurrence_at
+        FROM workhorse.cron_occurrences_v1(
+          v_definition.cron_expression,
+          v_definition.last_occurrence_at,
+          p_now,
+          p_catchup_limit,
+          v_definition.timezone
+        ) evaluated
+    LOOP
+      namespace := v_definition.namespace;
+      schedule_name := v_definition.schedule_name;
+      occurrence_at := v_occurrence;
+      job_id := workhorse.fire_schedule_v1(
+        v_definition.namespace,
+        v_definition.schedule_name,
+        v_definition.revision,
+        v_occurrence
+      );
+      RETURN NEXT;
+    END LOOP;
+  END LOOP;
 END;
 $$;
 
@@ -10548,7 +11038,7 @@ CREATE OR REPLACE VIEW workhorse.dashboard_retention_policy_v1 AS
   SELECT singleton, job_event_retention_days, attempt_history_retention_days
     FROM workhorse.retention_policy;
 CREATE OR REPLACE VIEW workhorse.dashboard_schedule_definition_v1 AS
-  SELECT namespace, schedule_name, cron_expression, queue_name, job_type, enabled, revision,
+  SELECT namespace, schedule_name, cron_expression, timezone, queue_name, job_type, enabled, revision,
          updated_at, priority FROM workhorse.schedule_definition;
 CREATE OR REPLACE VIEW workhorse.dashboard_schedule_occurrence_v1 AS
   SELECT namespace, schedule_name, occurrence_at, fired_at FROM workhorse.schedule_occurrence;

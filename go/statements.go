@@ -12,8 +12,8 @@ const (
 	runMaintenanceStatementName          = "run_maintenance_v1"
 	registerWorkerStatementName          = "register_worker_v1"
 	deregisterWorkerStatementName        = "deregister_worker_v1"
-	listSchedulesStatementName           = "list_schedules_v1"
-	fireScheduleStatementName            = "fire_schedule_v1"
+	fireDueSchedulesStatementName        = "fire_due_schedules_v1"
+	defaultScheduleTimezone              = "UTC"
 	promoteStatementName                 = "promote_v1"
 	claimStatementName                   = "claim_v1"
 	heartbeatStatementName               = "heartbeat_v1"
@@ -292,8 +292,6 @@ const (
 	invalidChildResultMessage           = "PostgreSQL returned an invalid child result"
 	invalidChildrenResultMessage        = "PostgreSQL returned an invalid child-set result"
 	invalidMaintenanceResultMessage     = "PostgreSQL returned an invalid maintenance result"
-	invalidScheduleListResultMessage    = "PostgreSQL returned an invalid schedule definition row"
-	invalidScheduleFireResultMessage    = "PostgreSQL returned an invalid schedule fire result"
 	maintenancePhaseErrorFormat         = "maintenance phase %s failed: %v"
 	unknownChildStatusFormat            = "PostgreSQL returned unknown child status %q"
 	unknownChildrenStatusFormat         = "PostgreSQL returned unknown child-set status %q"
@@ -380,19 +378,17 @@ const (
 	batchDispatchedLogMessage      = "Batch handler dispatched"
 	handlerFailedSpanStatusMessage = "handler failed"
 
-	traceParentField         = "traceparent"
-	traceStateField          = "tracestate"
-	rowExpiredLeasesField    = "expired_leases"
-	rowRetriedField          = "retried"
-	rowRowsAffectedField     = "rows_affected"
-	rowPhaseField            = "phase"
-	rowSkippedLockField      = "skipped_lock"
-	rowErrorField            = "error"
-	rowNamespaceField        = "namespace"
-	rowScheduleNameField     = "schedule_name"
-	rowCronExpressionField   = "cron_expression"
-	rowRevisionField         = "revision"
-	rowLastOccurrenceAtField = "last_occurrence_at"
+	traceParentField      = "traceparent"
+	traceStateField       = "tracestate"
+	rowExpiredLeasesField = "expired_leases"
+	rowRetriedField       = "retried"
+	rowRowsAffectedField  = "rows_affected"
+	rowPhaseField         = "phase"
+	rowSkippedLockField   = "skipped_lock"
+	rowErrorField         = "error"
+	rowNamespaceField     = "namespace"
+	rowScheduleNameField  = "schedule_name"
+	rowRevisionField      = "revision"
 )
 
 const invalidWorkerRegistrationResultMessage = "PostgreSQL returned an invalid worker registration result"
@@ -434,16 +430,8 @@ var internalStatementRegistry = map[string]string{
        $12::integer, $13::integer, $14::boolean
      ) AS paused`,
 	deregisterWorkerStatementName: `SELECT workhorse.deregister_worker_v1($1::text) AS deregistered`,
-	listSchedulesStatementName: `SELECT definition.namespace, definition.schedule_name, definition.cron_expression,
-       definition.revision::text, max(occurrence.occurrence_at) AS last_occurrence_at
-  FROM workhorse.schedule_definition definition
-  LEFT JOIN workhorse.schedule_occurrence occurrence
-    ON occurrence.namespace = definition.namespace
-   AND occurrence.schedule_name = definition.schedule_name
- WHERE definition.enabled AND definition.namespace = ANY($1::text[])
- GROUP BY definition.namespace, definition.schedule_name
- ORDER BY definition.namespace, definition.schedule_name`,
-	fireScheduleStatementName:   `SELECT workhorse.fire_schedule_v1($1::text, $2::text, $3::bigint, $4::timestamptz) AS job_id`,
+	fireDueSchedulesStatementName: `SELECT namespace, schedule_name, occurrence_at, job_id
+  FROM workhorse.fire_due_schedules_v1($1::text[], $2::timestamptz, $3::integer)`,
 	promoteStatementName:        `SELECT workhorse.promote_v1($1::integer) AS promoted`,
 	listCheckpointStatementName: `SELECT checkpoint_value FROM workhorse.job_checkpoint WHERE job_id = $1::uuid AND checkpoint_name = $2::text`,
 	listProgressStatementName: `SELECT progress_value, revision::text, attempt, fence_token::text,

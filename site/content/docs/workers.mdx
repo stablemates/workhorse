@@ -69,7 +69,7 @@ const worker = new Worker(queue, {
   default embeds host and pid, so fleet views stay readable.
 - **`retryDelayMs`** overrides the persisted retry policy — a number, or
   `(attempt, job) => number | undefined`, where `undefined` defers to the database.
-- **`scheduleNamespaces`** and **`scheduleCatchupLimit`** opt this worker into evaluating
+- **`scheduleNamespaces`** and **`scheduleCatchupLimit`** opt this worker into offering
   [recurring schedules](/docs/schedules).
 
 Python uses `schedule_namespaces` and `schedule_catchup_limit` for the same boundary. Go uses
@@ -183,7 +183,7 @@ recovery makes them claimable again.
 - [Deployment and operations](/docs/operations) — supervise and drain the worker process
 - [Batch handlers](/docs/batch-handlers) — share one application call across jobs
 - [Cancellation](/docs/cancellation) — make handlers stop cooperatively
-- [Schedules](/docs/schedules) — let workers evaluate recurring work
+- [Schedules](/docs/schedules) — let workers offer recurring namespaces
 
 ---
 

@@ -1352,7 +1352,7 @@ describe("worker registry", () => {
       .mockResolvedValue([]);
     const retainHistory = vi.spyOn(queue, "retainHistory").mockResolvedValue([]);
     const pruneTerminalStorage = vi.spyOn(queue, "pruneTerminalStorage").mockResolvedValue([]);
-    const schedules = vi.spyOn(queue, "schedules").mockResolvedValue([]);
+    const fireDueSchedules = vi.spyOn(queue, "fireDueSchedules").mockResolvedValue();
     const claim = vi.spyOn(queue, "claim").mockResolvedValue(null);
 
     try {
@@ -1364,20 +1364,20 @@ describe("worker registry", () => {
       });
 
       await worker.runOnce();
-      expect(schedules).not.toHaveBeenCalled();
+      expect(fireDueSchedules).not.toHaveBeenCalled();
 
       tick.mockResolvedValueOnce(ownedTick);
       now.mockReturnValue(100);
       await worker.runOnce();
-      expect(schedules).toHaveBeenCalledOnce();
-      expect(schedules).toHaveBeenCalledWith(["integration"]);
+      expect(fireDueSchedules).toHaveBeenCalledOnce();
+      expect(fireDueSchedules.mock.calls[0]?.[0]).toEqual(["integration"]);
     } finally {
       now.mockRestore();
       tick.mockRestore();
       prepareHistoryPartitions.mockRestore();
       retainHistory.mockRestore();
       pruneTerminalStorage.mockRestore();
-      schedules.mockRestore();
+      fireDueSchedules.mockRestore();
       claim.mockRestore();
     }
   });

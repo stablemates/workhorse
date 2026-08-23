@@ -70,6 +70,7 @@ def serialize_schedules(definitions: Sequence[ScheduleDefinition], default_queue
             {
                 "name": definition.name,
                 "schedule": definition.schedule,
+                "timezone": definition.timezone,
                 "enabled": definition.enabled,
                 "queue": job.queue or default_queue,
                 "priority": job.priority,

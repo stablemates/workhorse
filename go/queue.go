@@ -144,6 +144,7 @@ type ScheduledJob struct {
 type ScheduleDefinition struct {
 	Name     string
 	Schedule string
+	Timezone string
 	Job      ScheduledJob
 	Enabled  *bool
 }
@@ -488,6 +489,7 @@ func (queue *Queue) SyncSchedules(
 type scheduleInput struct {
 	Name                 string   `json:"name"`
 	Schedule             string   `json:"schedule"`
+	Timezone             string   `json:"timezone"`
 	Enabled              bool     `json:"enabled"`
 	Queue                string   `json:"queue"`
 	Priority             int      `json:"priority"`
@@ -525,8 +527,12 @@ func serializeScheduleDefinitions(definitions []ScheduleDefinition, defaultQueue
 		if definition.Enabled != nil {
 			enabled = *definition.Enabled
 		}
+		timezone := definition.Timezone
+		if timezone == emptyString {
+			timezone = defaultScheduleTimezone
+		}
 		input[index] = scheduleInput{
-			Name: definition.Name, Schedule: definition.Schedule, Enabled: enabled,
+			Name: definition.Name, Schedule: definition.Schedule, Timezone: timezone, Enabled: enabled,
 			Queue: queueName, Priority: definition.Job.Priority,
 			ConcurrencyKey: nilIfEmpty(definition.Job.ConcurrencyKey), Type: definition.Job.Type,
 			Payload: definition.Job.Payload, MaxAttempts: maxAttempts,

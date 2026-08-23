@@ -518,6 +518,14 @@ export class Queue {
     return this.modules.cronSchedules.fireSchedule(namespace, name, revision, occurrenceAt);
   }
 
+  async fireDueSchedules(
+    namespaces: readonly string[],
+    now: Date,
+    catchupLimit: number,
+  ): Promise<void> {
+    return this.modules.cronSchedules.fireDueSchedules(namespaces, now, catchupLimit);
+  }
+
   async runTaskNow(jobId: string): Promise<RunTaskNowResult> {
     const result = await this.database.query<{
       status: RunTaskNowStatus;

@@ -223,6 +223,7 @@ func TestQueueSerializesSharedScheduleFixture(t *testing.T) {
 		Application  []struct {
 			Name     string `json:"name"`
 			Schedule string `json:"schedule"`
+			Timezone string `json:"timezone"`
 			Enabled  bool   `json:"enabled"`
 			Job      struct {
 				Type           string         `json:"type"`
@@ -243,7 +244,7 @@ func TestQueueSerializesSharedScheduleFixture(t *testing.T) {
 	for index, definition := range fixture.Application {
 		enabled := definition.Enabled
 		definitions[index] = workhorse.ScheduleDefinition{
-			Name: definition.Name, Schedule: definition.Schedule, Enabled: &enabled,
+			Name: definition.Name, Schedule: definition.Schedule, Timezone: definition.Timezone, Enabled: &enabled,
 			Job: workhorse.ScheduledJob{
 				Type: definition.Job.Type, Payload: definition.Job.Payload, Queue: definition.Job.Queue,
 				Priority: definition.Job.Priority, ConcurrencyKey: definition.Job.ConcurrencyKey,

@@ -1,6 +1,6 @@
 # ADR 0003: Worker-owned in-process scheduling and maintenance
 
-- **Status:** Accepted, amended by [ADR 0004](0004-two-cadence-maintenance.md)
+- **Status:** Accepted, amended by [ADR 0004](0004-two-cadence-maintenance.md) and [ADR 0038](0038-evaluate-cron-occurrences-in-postgresql.md)
 - **Date:** 2026-07-29
 - **Supersedes:** [ADR 0002: pg_cron-backed declarative scheduling and maintenance](0002-pg-cron-scheduler.md)
 
@@ -22,9 +22,9 @@ Meanwhile, the ecosystem shows this dependency is unnecessary. good_job (Ruby), 
 Remove pg_cron entirely. Workers own scheduling and maintenance in process.
 
 1. Schedule definitions remain declarative desired state in the target database's `workhorse.schedule_definition` table, synchronized atomically per namespace during deployment. Definitions still contain typed Workhorse jobs, never arbitrary SQL.
-2. Cron expressions are parsed and evaluated inside the worker process. The worker computes each definition's next occurrence and fires it when due.
+2. Workers own schedule cadence. [ADR 0038](0038-evaluate-cron-occurrences-in-postgresql.md) moves deterministic cron occurrence evaluation into PostgreSQL.
 3. A PostgreSQL advisory lock coordinates scheduling across worker instances, so any number of workers can run the scheduler loop while only one drives a given tick. Every worker is a candidate; losing the lock is not an error. This removes the single-scheduler failure mode without an external coordinator.
-4. Occurrence deduplication stays in SQL. `fire_schedule_v1` reserves one durable `(namespace, schedule_name, occurrence_at)` key before enqueueing, so a fire raced or replayed by multiple workers still enqueues exactly one job for that occurrence second. Because the worker computes the planned occurrence itself, occurrence keys now use the planned slot rather than pg_cron's observed execution second.
+4. Occurrence deduplication stays in SQL. `fire_schedule_v1` reserves one durable `(namespace, schedule_name, occurrence_at)` key before enqueueing, so a fire raced or replayed by multiple workers still enqueues exactly one job for that occurrence second. Because PostgreSQL computes the planned occurrence, occurrence keys use the planned slot rather than pg_cron's observed execution second.
 5. Maintenance (bounded due promotion, expired-lease recovery, occurrence-key pruning, history-partition replenishment) runs on worker-owned cadences coordinated by the same advisory-lock mechanism instead of a pg_cron entry. [ADR 0004](0004-two-cadence-maintenance.md) splits this into a fast tick and a slow housekeeping entry point.
 6. Revision fencing is retained: stale, disabled, or pruned definitions make `fire_schedule_v1` a no-op.
 
@@ -43,7 +43,7 @@ Remove pg_cron entirely. Workers own scheduling and maintenance in process.
 
 - Schedules fire only while at least one worker process is running. pg_cron could fire with zero workers, although those jobs could not execute anyway.
 - After total worker downtime, missed occurrences are governed by worker catch-up policy rather than a cron daemon's history.
-- The worker process takes on cron parsing and timer scheduling responsibility, which the extension previously provided.
+- Workhorse's PostgreSQL schema takes on cron parsing and occurrence evaluation, which the extension previously provided.
 - pg_cron's `cron.job_run_details` execution history is gone; Workhorse's own occurrence, event, and attempt history is now the sole record.
 - Scheduling drift is bounded by the worker's polling/timer cadence rather than a dedicated daemon tick.
 

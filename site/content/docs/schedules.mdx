@@ -5,9 +5,9 @@ description: Synchronize named cron definitions during deployment and let any ma
 
 Some work runs on a clock: a nightly report, an hourly sync, a weekly cleanup. The usual costs are
 a separate scheduler process to deploy and keep alive, and a duplicate-firing problem the moment
-you run more than one of them. Workhorse has neither. Schedules are cron definitions stored in
-PostgreSQL, declared by your deployment, and evaluated by the workers you already run — any number
-of which can race on the same occurrence and still create exactly one job.
+you run more than one of them. Workhorse has neither. Schedules are cron definitions stored and
+evaluated in PostgreSQL, declared by your deployment, and offered by the workers you already run.
+Any number can offer the same namespace while PostgreSQL still creates exactly one job.
 
 ## Synchronize the namespace
 
@@ -20,6 +20,7 @@ await queue.syncSchedules("billing-production", [
   {
     name: "invoice-run",
     schedule: "0 2 * * *",
+    timezone: "America/New_York",
     job: {
       type: "invoice.generate",
       queue: "billing",
@@ -33,7 +34,7 @@ await queue.syncSchedules("billing-production", [
 Disabled, not deleted: the old definition stays, so jobs it fired in the past still have something
 to point at.
 
-Each `ScheduleDefinition` names the occurrence (`name`, `schedule`, optional `enabled`) and
+Each `ScheduleDefinition` names the occurrence (`name`, `schedule`, optional `timezone` and `enabled`) and
 describes the job every occurrence creates — its `type`, `payload`, and optionally `queue`,
 `concurrencyKey`, `maxAttempts`, and `retryPolicy`.
 
@@ -43,10 +44,12 @@ invalid expression fails the call rather than leaving a partial deployment. Pass
 `{ prune: false }` only when you deliberately want an additive update — the normal deployment path
 supplies the complete namespace so code remains the owner of intent.
 
-## Let workers evaluate schedules
+## Let workers offer schedule namespaces
 
-There is no scheduler process and no PostgreSQL extension. A `Worker` evaluates the namespaces
-listed in `WorkerOptions.scheduleNamespaces` as part of its normal maintenance cadence.
+There is no scheduler process and no PostgreSQL extension. A `Worker` offers the namespaces listed
+in `WorkerOptions.scheduleNamespaces` as part of its normal maintenance cadence. PostgreSQL then
+evaluates and fires each due definition through `fire_due_schedules_v1`, so every SDK uses one
+parser and one stored IANA timezone.
 
 ```ts
 const worker = new Worker(queue, {
@@ -60,7 +63,7 @@ synchronize, or its schedules sit idle.
 The synchronous Python `Worker` provides the same participation through `schedule_namespaces` and
 `schedule_catchup_limit`. Go uses `WorkerOptions.ScheduleNamespaces` and
 `WorkerOptions.ScheduleCatchupLimit`. Every runtime evaluates definitions only when PostgreSQL
-grants the maintenance tick, so one process does the cron work for each pass.
+grants the maintenance tick, so one process offers the cron work for each pass.
 
 ## Why competing workers create one job
 
@@ -70,16 +73,16 @@ other call converges on the job that already exists. No leader election, no sing
 number of workers can race and the outcome is one job.
 
 Rolling deployments are covered the same way. Every definition carries a revision that increments
-on change. A worker still holding yesterday's definition passes the old revision when it fires,
-and PostgreSQL turns that stale call into a no-op — an old worker cannot fire yesterday's cron
-expression during a deploy.
+on change. PostgreSQL reads that revision while evaluating the namespace, then requires the same
+revision when it reserves the occurrence. If a deployment changes or disables the definition
+between those operations, the fire becomes a no-op.
 
 If the whole fleet is down, nothing fires. When workers return, catch-up is bounded rather than
 replaying every missed occurrence. Schedules provide durable recurring work, not hard real-time
-alarms; prefer UTC cron expressions. If local clocks skip a scheduled time, Workhorse fires after
+alarms; prefer UTC unless the schedule follows local civil time. If local clocks skip a scheduled time, Workhorse fires after
 the clock advances. If clocks repeat a time, Workhorse fires its first occurrence only. Hashed `H`
 fields choose a stable offset across TypeScript, Python, and Go workers, so every runtime fires the
-same occurrence.
+same occurrence. If several cron fields land on one instant, Workhorse creates one occurrence.
 
 ## What happens after firing
 
@@ -99,7 +102,7 @@ Three related calls round out the API:
 
 ## Next
 
-- [Workers](/docs/workers) — run the process that evaluates namespaces
+- [Workers](/docs/workers) — run the process that offers schedule namespaces
 - [Retries](/docs/retries) — control failures of each fired job
 - [Cancellation](/docs/cancellation) — stop one occurrence without changing the schedule
 

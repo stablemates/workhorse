@@ -6,7 +6,8 @@ Everything else in this guide is detail on top of that.
 Python supplies the same core loop through synchronous `Worker` and asynchronous `AsyncWorker`.
 Both rotate across queues, bound concurrent slots, and drain active work after `stop`. Each claimed
 job renews its lease and delivers ownership signals through its context cancellation token.
-Both workers can open a dedicated notification connection and evaluate recurring definitions.
+Both workers can open a dedicated notification connection and offer recurring namespaces for
+PostgreSQL to evaluate.
 `AsyncWorker` uses native Psycopg or asyncpg connections, while its handlers and durable context
 methods are awaitable. TypeScript, Python, and Go workers all participate in the worker registry.
 Python's `handle_batch` follows the grouping contract in

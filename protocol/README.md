@@ -29,6 +29,10 @@ SQL projection, cast, argument-order, and arity changes.
 PostgreSQL. Python and Go execute the same mapping through their public queue clients, so their
 defaults and field names cannot drift apart.
 
+`v1/cron.md` defines the cron dialect, IANA wall-clock rules, and bounded catch-up contract.
+`v1/cron-occurrences.json` executes that contract through PostgreSQL, including sparse dates,
+macros, special day fields, hashed offsets, and daylight-saving transitions.
+
 The TypeScript verifier lives in `scripts/verify-sql-protocol.ts`. It checks compatibility before
 calling versioned PostgreSQL functions, so another language can implement the same small
 interpreter without inheriting TypeScript behavior. The TypeScript suite separately runs the

@@ -731,77 +731,14 @@ func (worker *Worker) recordRecovery(ctx context.Context, row Row) {
 }
 
 func (worker *Worker) fireDueSchedules(ctx context.Context, executor Executor, now time.Time) error {
-	rows, err := executor.Query(
+	_, err := executor.Query(
 		ctx,
-		internalStatementRegistry[listSchedulesStatementName],
+		internalStatementRegistry[fireDueSchedulesStatementName],
 		worker.scheduleNamespaces,
+		now,
+		worker.scheduleCatchupLimit,
 	)
-	if err != nil {
-		return err
-	}
-	for _, row := range rows {
-		schedule, err := storedScheduleFromRow(row)
-		if err != nil {
-			return err
-		}
-		occurrences, err := dueOccurrences(
-			schedule.expression,
-			schedule.lastOccurrence,
-			now,
-			worker.scheduleCatchupLimit,
-			time.Local,
-		)
-		if err != nil {
-			return err
-		}
-		for _, occurrence := range occurrences {
-			rows, err := executor.Query(
-				ctx,
-				internalStatementRegistry[fireScheduleStatementName],
-				schedule.namespace,
-				schedule.name,
-				schedule.revision,
-				occurrence,
-			)
-			if err != nil {
-				return err
-			}
-			if len(rows) != 1 {
-				return errors.New(invalidScheduleFireResultMessage)
-			}
-		}
-	}
-	return nil
-}
-
-type storedSchedule struct {
-	namespace      string
-	name           string
-	expression     string
-	revision       string
-	lastOccurrence *time.Time
-}
-
-func storedScheduleFromRow(row Row) (storedSchedule, error) {
-	namespace, namespaceOK := row[rowNamespaceField].(string)
-	name, nameOK := row[rowScheduleNameField].(string)
-	expression, expressionOK := row[rowCronExpressionField].(string)
-	revision, revisionOK := row[rowRevisionField].(string)
-	if !namespaceOK || !nameOK || !expressionOK || !revisionOK {
-		return storedSchedule{}, errors.New(invalidScheduleListResultMessage)
-	}
-	var lastOccurrence *time.Time
-	if value := row[rowLastOccurrenceAtField]; value != nil {
-		parsed, ok := value.(time.Time)
-		if !ok {
-			return storedSchedule{}, errors.New(invalidScheduleListResultMessage)
-		}
-		lastOccurrence = &parsed
-	}
-	return storedSchedule{
-		namespace: namespace, name: name, expression: expression,
-		revision: revision, lastOccurrence: lastOccurrence,
-	}, nil
+	return err
 }
 
 func (worker *Worker) runOnce(ctx context.Context, executor Executor) (bool, error) {

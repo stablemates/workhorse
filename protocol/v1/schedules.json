@@ -8,6 +8,7 @@
       {
         "name": "monthly-invoice",
         "schedule": "0 0 1 * *",
+        "timezone": "America/New_York",
         "enabled": true,
         "job": {
           "type": "invoice.create",
@@ -25,6 +26,7 @@
       {
         "name": "disabled-cleanup",
         "schedule": "0 2 * * 0",
+        "timezone": "UTC",
         "enabled": false,
         "job": {
           "type": "billing.cleanup",
@@ -41,6 +43,7 @@
       {
         "name": "monthly-invoice",
         "schedule": "0 0 1 * *",
+        "timezone": "America/New_York",
         "enabled": true,
         "queue": "mail",
         "priority": 80,
@@ -63,6 +66,7 @@
       {
         "name": "disabled-cleanup",
         "schedule": "0 2 * * 0",
+        "timezone": "UTC",
         "enabled": false,
         "queue": "maintenance",
         "priority": 0,

@@ -1,8 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { isDeepStrictEqual } from "node:util";
-import { CronExpressionParser } from "cron-parser";
 import { SpanKind, SpanStatusCode, type Span } from "@opentelemetry/api";
 import { WorkhorseError } from "./errors.js";
 import { errorForTelemetry, type FailureStatus } from "./queue/claim-lease-fence.js";
@@ -275,6 +274,7 @@ export interface WorkerQueueApi {
     revision: bigint,
     occurrenceAt: Date,
   ): Promise<string | null>;
+  fireDueSchedules(namespaces: readonly string[], now: Date, catchupLimit: number): Promise<void>;
   registerWorker(registration: WorkerRegistration): Promise<{ paused: boolean }>;
   deregisterWorker(workerId: string): Promise<boolean>;
   pruneWorkerRegistry(maxAgeMs?: number): Promise<number>;
@@ -1557,22 +1557,11 @@ export class Worker {
 
       const ownsTick = tick.length > 0 && tick.every((result) => !result.skippedLock);
       if (ownsTick && this.scheduleNamespaces.length > 0) {
-        const now = new Date();
-        for (const schedule of await this.queue.schedules(this.scheduleNamespaces)) {
-          for (const occurrence of dueOccurrences(
-            schedule.schedule,
-            schedule.lastOccurrenceAt,
-            now,
-            this.scheduleCatchupLimit,
-          )) {
-            await this.queue.fireSchedule(
-              schedule.namespace,
-              schedule.name,
-              schedule.revision,
-              occurrence,
-            );
-          }
-        }
+        await this.queue.fireDueSchedules(
+          this.scheduleNamespaces,
+          new Date(),
+          this.scheduleCatchupLimit,
+        );
       }
     }
 
@@ -1849,81 +1838,4 @@ export class Worker {
       release();
     }
   }
-}
-
-export function dueOccurrences(
-  expression: string,
-  lastOccurrenceAt: Date | null,
-  now: Date,
-  limit: number,
-  timezone?: string,
-): Date[] {
-  const normalizedExpression = expandHashedCronFields(expression);
-  if (!lastOccurrenceAt) {
-    const cron = CronExpressionParser.parse(normalizedExpression, {
-      currentDate: new Date(now.getTime() + 1_000),
-      tz: timezone,
-    });
-    return [cron.prev().toDate()];
-  }
-
-  const cron = CronExpressionParser.parse(normalizedExpression, {
-    currentDate: lastOccurrenceAt,
-    tz: timezone,
-  });
-  const occurrences: Date[] = [];
-  while (occurrences.length < limit) {
-    const occurrence = cron.next().toDate();
-    if (occurrence.getTime() > now.getTime()) break;
-    occurrences.push(occurrence);
-  }
-  return occurrences;
-}
-
-function expandHashedCronFields(expression: string): string {
-  const fields = expression.trim().split(/\s+/);
-  const domains =
-    fields.length === 6
-      ? ([
-          [0, 59],
-          [0, 59],
-          [0, 23],
-          [1, 31],
-          [1, 12],
-          [0, 6],
-        ] as const)
-      : ([
-          [0, 59],
-          [0, 23],
-          [1, 31],
-          [1, 12],
-          [0, 6],
-        ] as const);
-  if (fields.length !== domains.length) return expression;
-
-  for (const [fieldIndex, [minimum, maximum]] of domains.entries()) {
-    let tokenIndex = 0;
-    fields[fieldIndex] = fields[fieldIndex]!.replace(
-      /(?<![A-Za-z])H(?:\((\d+)-(\d+)\))?(?:\/(\d+))?(?![A-Za-z])/g,
-      (
-        _token,
-        rangeStart: string | undefined,
-        rangeEnd: string | undefined,
-        rawStep: string | undefined,
-      ) => {
-        const lower = rangeStart === undefined ? minimum : Number(rangeStart);
-        const upper = rangeEnd === undefined ? maximum : Number(rangeEnd);
-        const step = rawStep === undefined ? undefined : Number(rawStep);
-        const digest = createHash("sha256")
-          .update(`${expression}:${fieldIndex}:${tokenIndex}`)
-          .digest();
-        tokenIndex += 1;
-        const hashed = digest.readUInt32BE(0);
-        const width = Math.min(upper - lower + 1, step ?? Number.POSITIVE_INFINITY);
-        const chosen = lower + (hashed % width);
-        return step === undefined ? String(chosen) : `${chosen}-${upper}/${step}`;
-      },
-    );
-  }
-  return fields.join(" ");
 }

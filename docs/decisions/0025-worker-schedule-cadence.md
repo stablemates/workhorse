@@ -46,11 +46,14 @@ work did not push any observed fire past one maintenance interval.
 ## Decision
 
 Retain worker-owned recurring schedule cadence. PostgreSQL continues to own durable occurrence
-deduplication through `fire_schedule_v1`, while `Worker` continues to own evaluation and catch-up.
+deduplication through `fire_schedule_v1`, while `Worker` continues to own the cadence that offers
+evaluation and catch-up. [ADR 0038](0038-evaluate-cron-occurrences-in-postgresql.md) later moved
+the deterministic evaluator into a plain PostgreSQL function without changing cadence ownership.
 
 The measured worst delay stayed within the configured maintenance interval under continuous load.
-Moving cadence into SQL would restore the extension and control-plane costs rejected by ADR 0003
-without evidence that process ownership misses the current contract.
+Moving cadence into a database timer would restore the extension and control-plane costs rejected
+by ADR 0003 without evidence that process ownership misses the current contract. Calling a plain
+SQL evaluator from the worker does not incur those costs.
 
 Reopen this decision if the product requires a fire-delay objective below one maintenance interval.
 Also reopen it if repeated controlled runs show longer delays under supported production load.

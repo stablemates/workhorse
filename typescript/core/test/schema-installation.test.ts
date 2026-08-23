@@ -200,6 +200,7 @@ describe("schema installation", () => {
         "namespace",
         "schedule_name",
         "cron_expression",
+        "timezone",
         "queue_name",
         "job_type",
         "enabled",
