@@ -116,10 +116,15 @@ describe("parity matrix", () => {
       if (!("file" in evidence)) throw new Error("filtered above");
       const file = path.join(repository, PARITY_TEST_ROOTS[cell.language], evidence.file);
       expect(await exists(file), `${evidence.file} does not exist`).toBe(true);
-      expect(
-        new RegExp(evidence.pattern).test(await readFile(file, "utf8")),
-        `${evidence.file} never mentions /${evidence.pattern}/`,
-      ).toBe(true);
+      const contents = await readFile(file, "utf8");
+      const patterns = "patterns" in evidence ? evidence.patterns : [evidence.pattern];
+      expect(patterns.length, `${evidence.file} names no evidence patterns`).toBeGreaterThan(0);
+      for (const pattern of patterns) {
+        expect(
+          new RegExp(pattern).test(contents),
+          `${evidence.file} never mentions /${pattern}/`,
+        ).toBe(true);
+      }
     },
   );
 

@@ -65,8 +65,8 @@ Go workers can fire the recurring definitions that Go clients synchronize. The s
 embedded dashboard reads the shared database, so a Go deployment does not need a TypeScript worker
 runtime.
 The client inventory includes policy synchronization and listing, rather than treating shared
-PostgreSQL admission behavior as proof that every SDK exposes policy management. TypeScript and Go
-support concurrency and rate-limit policy management.
+PostgreSQL admission behavior as proof that every SDK exposes policy management. TypeScript,
+Python, and Go support concurrency and rate-limit policy management.
 
 ## Worker runtime
 
@@ -170,10 +170,11 @@ and every runtime fixture through `python/tests/test_worker_runtime_conformance.
 
 `typescript/core/test/parity-matrix.test.ts` holds this file to that promise. It parses the
 language matrices above and compares them, cell for cell, against the registry in
-`typescript/core/test/support/parity-capabilities.ts`. Every Supported cell must name a test file
-in that language which exists and mentions the capability; every Absent cell must record why it is
-absent; every Planned cell must name a Plane work item this file links. Changing a status in one place and not the other fails the check, so a capability cannot
-ship, or quietly disappear, without this matrix moving with it.
+`typescript/core/test/support/parity-capabilities.ts`. Every Supported cell must name an existing
+test file in that language. The file must match every evidence pattern. Every Absent cell must
+record why it is absent. Every Planned cell must name a Plane work item this file links. If the
+document and registry disagree, the check fails. A capability cannot ship or disappear quietly
+without this matrix moving with it.
 
 That check binds the document to declared evidence, not to a proof of behaviour — no static check
 can supply one. Naming a test file that never exercises the capability would satisfy it. The rule

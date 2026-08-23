@@ -5,7 +5,7 @@
  * `parity-matrix.test.ts` fails when the two disagree — so a capability cannot ship, or be
  * withdrawn, by editing only one of them.
  *
- * A Supported cell carries evidence: a test file in that language, and a pattern that must appear
+ * A Supported cell carries evidence: a test file in that language, and patterns that must appear
  * inside it. That is deliberately a weaker claim than "this test proves the capability" — no
  * static check can prove that. It is the strong half of the contract that matters: you cannot mark
  * a cell Supported for a language whose test suite never mentions the thing.
@@ -26,12 +26,18 @@ export const PARITY_TEST_ROOTS = {
 
 export type ParityLanguage = keyof typeof PARITY_TEST_ROOTS;
 
-/** A test file that must exist, and a pattern that must appear in it. */
-export interface ParityEvidence {
+/** A test file that must exist, and one or more patterns that must appear in it. */
+interface SinglePatternEvidence {
   file: string;
   pattern: string;
 }
 
+interface PatternListEvidence {
+  file: string;
+  patterns: readonly string[];
+}
+
+export type ParityEvidence = SinglePatternEvidence | PatternListEvidence;
 export type ParityCell = ParityEvidence | { absent: string } | { planned: string };
 
 export interface ParityRow {
@@ -125,19 +131,31 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
     capability: "Concurrency policy management",
     typescript: {
       file: "integration-retention-maintenance.test.ts",
-      pattern: "syncConcurrencyPolicies",
+      patterns: ["syncConcurrencyPolicies", "concurrencyPolicies"],
     },
-    python: { file: "test_policies.py", pattern: "sync_concurrency_policies" },
-    go: { file: "policies_test.go", pattern: "SyncConcurrencyPolicies" },
+    python: {
+      file: "test_policies.py",
+      patterns: ["sync_concurrency_policies", "list_concurrency_policies"],
+    },
+    go: {
+      file: "policies_test.go",
+      patterns: ["SyncConcurrencyPolicies", "ListConcurrencyPolicies"],
+    },
   },
   {
     capability: "Rate-limit policy management",
     typescript: {
       file: "integration-claim-lease-fence.test.ts",
-      pattern: "syncRateLimitPolicies",
+      patterns: ["syncRateLimitPolicies", "rateLimitPolicies"],
     },
-    python: { file: "test_policies.py", pattern: "sync_rate_limit_policies" },
-    go: { file: "policies_test.go", pattern: "SyncRateLimitPolicies" },
+    python: {
+      file: "test_policies.py",
+      patterns: ["sync_rate_limit_policies", "list_rate_limit_policies"],
+    },
+    go: {
+      file: "policies_test.go",
+      patterns: ["SyncRateLimitPolicies", "ListRateLimitPolicies"],
+    },
   },
   {
     capability: "Recurring schedule definition sync",
