@@ -13,6 +13,13 @@ an audit trail linking the two.
 const admin = new Admin(pool);
 ```
 
+Python operator tools use the same split from application enqueueing:
+
+```python
+admin = Admin(connection)
+async_admin = AsyncAdmin.from_asyncpg(asyncpg_connection)
+```
+
 ## List terminal failures
 
 `admin.listDeadLetters(query)` reads a cold failure index that stays separate from the ready and
@@ -48,6 +55,16 @@ const result = await admin.redrive(sourceJobId, {
 });
 
 console.log(result.status, result.targetJobId);
+```
+
+The Python spelling uses an `AdminAudit` value and returns the same PostgreSQL decision:
+
+```python
+result = admin.redrive(
+    source_job_id,
+    AdminAudit(actor.email, "provider incident resolved", incident_id),
+)
+print(result.status, result.target_job_id)
 ```
 
 The new job copies what defines the work: queue, type, payload, tags, retry policy, attempt

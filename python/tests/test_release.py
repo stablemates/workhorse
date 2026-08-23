@@ -107,6 +107,20 @@ def test_built_distributions_run_the_documented_examples(
     for distribution in ("wheel", "sdist"):
         for driver in ("psycopg", "asyncpg"):
             interpreter = installed_distribution_interpreters[f"{distribution}-{driver}"]
+            import_result = subprocess.run(
+                [
+                    str(interpreter),
+                    "-c",
+                    "from workhorse import Admin, AdminAudit, AsyncAdmin",
+                ],
+                check=False,
+                cwd=tmp_path,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            assert import_result.returncode == 0, import_result.stderr
             worker_result = subprocess.run(
                 [
                     str(interpreter),

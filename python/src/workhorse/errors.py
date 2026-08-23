@@ -241,6 +241,18 @@ class DependencyLimitExceededError(WorkhorseError):
         super().__init__("PostgreSQL rejected a job dependency limit")
 
 
+class RedriveIdempotencyConflictError(WorkhorseError):
+    def __init__(self, details: Mapping[str, object]) -> None:
+        self.details = details
+        super().__init__("PostgreSQL rejected a materially different idempotent redrive")
+
+
+class PurgeIdempotencyConflictError(WorkhorseError):
+    def __init__(self, details: Mapping[str, object]) -> None:
+        self.details = details
+        super().__init__("PostgreSQL rejected a materially different idempotent queue purge")
+
+
 def translate_database_error(error: Exception) -> WorkhorseError | None:
     sqlstate = getattr(error, "sqlstate", None) or getattr(error, "code", None)
     if sqlstate not in {"P1001", "P1003", "P1005"}:

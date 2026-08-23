@@ -70,6 +70,20 @@ any in-flight handler runs to completion. The pause is scoped to the running pro
 restarted worker comes back running, so a forgotten pause can never idle a future deployment. Use
 queue pause when work must stop durably.
 
+Python exposes the same fleet control through caller-owned database connections:
+
+```python
+admin = Admin(connection)
+workers = admin.list_workers()
+admin.set_worker_paused(
+    "billing-worker-1",
+    True,
+    AdminAudit(actor.email, "investigating slow provider", incident_id),
+)
+```
+
+Use `AsyncAdmin.from_psycopg` or `AsyncAdmin.from_asyncpg` when the operator process is async.
+
 ## Job controls
 
 [Cancellation](/docs/cancellation) owns durable requests to stop one job.

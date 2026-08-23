@@ -44,9 +44,9 @@ export interface ParityRow {
 
 /**
  * The public operator surface is reachable through the dashboard, the `workhorse` CLI, and the
- * TypeScript `Admin`. WH-356 (Python) and WH-357 (Go) add it to the other SDKs.
+ * TypeScript and Python `Admin` clients. WH-357 adds it to the Go SDK.
  */
-const pythonAdmin = { planned: "WH-356" } as const;
+const pythonAdmin = { file: "test_admin.py", pattern: "admin." } as const;
 const goAdmin = { planned: "WH-357" } as const;
 
 export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [

@@ -108,8 +108,8 @@ semantics before any runtime fires a definition.
 | Go worker and module examples             | [WH-236]        | Done      |
 | Go schedule firing                        | [WH-332]        | Done      |
 | Go and Python embedded dashboard backends | [WH-351]        | Done      |
-| TypeScript `Admin` client                 | [WH-355]        | In Review |
-| Python `Admin` client                     | [WH-356]        | Todo      |
+| TypeScript `Admin` client                 | [WH-355]        | Done      |
+| Python `Admin` client                     | [WH-356]        | In Review |
 | Go `Admin` client                         | [WH-357]        | Todo      |
 
 The Plane work items own sequencing, blockers, and completion. Update this table when their state
@@ -140,20 +140,19 @@ through its own public SDK.
 
 | Capability                                 | TypeScript | Python    | Go        |
 | ------------------------------------------ | ---------- | --------- | --------- |
-| Job lookup, listing, and timeline          | Supported  | Planned   | Planned   |
+| Job lookup, listing, and timeline          | Supported  | Supported | Planned   |
 | Queue health snapshot                      | Supported  | Supported | Supported |
 | Cancellation requests                      | Supported  | Supported | Supported |
-| Queue pause, resume, and purge             | Supported  | Planned   | Planned   |
-| Dead-letter listing and redrive            | Supported  | Planned   | Planned   |
-| Checkpoint, wait, and human-decision reads | Supported  | Planned   | Planned   |
-| Durable operator worker pause              | Supported  | Planned   | Planned   |
+| Queue pause, resume, and purge             | Supported  | Supported | Planned   |
+| Dead-letter listing and redrive            | Supported  | Supported | Planned   |
+| Checkpoint, wait, and human-decision reads | Supported  | Supported | Planned   |
+| Durable operator worker pause              | Supported  | Supported | Planned   |
 
-TypeScript exposes these methods through a dedicated public `Admin` client, and the CLI and
-dashboard use that same client. [WH-356] and [WH-357] add `Admin` to Python and Go,
-and switch their embedded dashboard backends from direct SQL to that client. Until then, Python and
-Go application code reach the operator surface only through the dashboard or the CLI. Redrive is
-not a dashboard action, so it needs the CLI. Cancellation is application-shaped, so every queue
-client already exposes it with audit attribution.
+TypeScript and Python expose these methods through dedicated public `Admin` clients. Python
+provides synchronous `Admin` over Psycopg and `AsyncAdmin` over Psycopg or asyncpg. Their embedded
+dashboards call the same clients for shared operator reads and controls. [WH-357] adds the Go
+client; until then, Go application code reaches this surface through the dashboard or CLI.
+Cancellation remains application-shaped, so every queue client exposes it with audit attribution.
 
 ## Keeping this document honest
 

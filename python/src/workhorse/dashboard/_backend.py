@@ -9,6 +9,7 @@ from typing import cast
 
 from .._drivers import SyncExecutor
 from .._statements import DriverStatement
+from ..admin import Admin, AdminAudit
 from ._errors import DashboardRPCError
 
 
@@ -94,6 +95,7 @@ class DashboardBackend:
         read_only: bool,
     ) -> None:
         self._executor = executor
+        self._admin = Admin._from_executor(executor)
         self._environment = environment
         self._configured_workers = tuple(configured_workers)
         self._maintenance_loops = dict(maintenance_loops)
@@ -749,22 +751,8 @@ class DashboardBackend:
         }
 
     def human_waits(self, _input: object, _actor: str) -> object:
-        waits = self._rows(
-            """
-            SELECT job_id, queue_name, job_type, token_name AS wait_name, context, attempt,
-                   created_at, deadline_at
-              FROM workhorse.dashboard_human_wait_v1
-             ORDER BY created_at, job_id, token_name LIMIT 50
-            """
-        )
-        signals = self._rows(
-            """
-            SELECT job_id, queue_name, job_type, signal_name AS wait_name, attempt,
-                   created_at, deadline_at
-              FROM workhorse.dashboard_signal_wait_v1
-             ORDER BY created_at, job_id, signal_name LIMIT 50
-            """
-        )
+        waits = self._admin.list_human_waits(limit=50).items
+        signals = self._admin.list_signal_waits(limit=50).items
         health = self._health()
         return {
             "capturedAt": _iso(datetime.now(timezone.utc)),
@@ -784,26 +772,26 @@ class DashboardBackend:
             },
             "waits": [
                 {
-                    "jobId": str(row["job_id"]),
-                    "queue": row["queue_name"],
-                    "jobType": row["job_type"],
-                    "name": row["wait_name"],
-                    "context": row["context"],
-                    "attempt": row["attempt"],
-                    "createdAt": _iso(row["created_at"]),
-                    "deadlineAt": _iso(row["deadline_at"]),
+                    "jobId": row.job_id,
+                    "queue": row.queue,
+                    "jobType": row.job_type,
+                    "name": row.name,
+                    "context": row.context,
+                    "attempt": row.attempt,
+                    "createdAt": _iso(row.created_at),
+                    "deadlineAt": _iso(row.deadline_at),
                 }
                 for row in waits
             ],
             "signalWaits": [
                 {
-                    "jobId": str(row["job_id"]),
-                    "queue": row["queue_name"],
-                    "jobType": row["job_type"],
-                    "name": row["wait_name"],
-                    "attempt": row["attempt"],
-                    "createdAt": _iso(row["created_at"]),
-                    "deadlineAt": _iso(row["deadline_at"]),
+                    "jobId": row.job_id,
+                    "queue": row.queue,
+                    "jobType": row.job_type,
+                    "name": row.name,
+                    "attempt": row.attempt,
+                    "createdAt": _iso(row.created_at),
+                    "deadlineAt": _iso(row.deadline_at),
                 }
                 for row in signals
             ],
@@ -1026,19 +1014,8 @@ class DashboardBackend:
                 ORDER BY attempt, attempt_id""",
             (job_id,),
         )
-        checkpoints = self._rows(
-            """SELECT checkpoint_name, checkpoint_value, attempt, fence_token::text,
-                      worker_id, created_at FROM workhorse.dashboard_job_checkpoint_v1
-                WHERE job_id = %s::uuid ORDER BY created_at, checkpoint_name""",
-            (job_id,),
-        )
-        waits = self._rows(
-            """SELECT wait_name, mode, duration_ms::text, requested_wake_at, wake_at,
-                      attempt, fence_token::text, worker_id, created_at
-                 FROM workhorse.dashboard_job_wait_v1 WHERE job_id = %s::uuid
-                ORDER BY created_at, wait_name""",
-            (job_id,),
-        )
+        checkpoints = self._admin.list_checkpoints(cast(str, job_id))
+        waits = self._admin.list_waits(cast(str, job_id))
         events = self._rows(
             """SELECT event_id::text, attempt, event_type, details, occurred_at
                  FROM workhorse.dashboard_job_event_v1 WHERE job_id = %s::uuid
@@ -1285,28 +1262,26 @@ class DashboardBackend:
             ],
             "checkpoints": [
                 {
-                    "name": row["checkpoint_name"],
-                    "value": row["checkpoint_value"],
-                    "attempt": row["attempt"],
-                    "fenceToken": row["fence_token"],
-                    "workerId": row["worker_id"],
-                    "createdAt": _iso(row["created_at"]),
+                    "name": row.name,
+                    "value": row.value,
+                    "attempt": row.attempt,
+                    "fenceToken": str(row.fence_token),
+                    "workerId": row.worker_id,
+                    "createdAt": _iso(row.created_at),
                 }
                 for row in checkpoints
             ],
             "waits": [
                 {
-                    "name": row["wait_name"],
-                    "mode": row["mode"],
-                    "durationMs": None
-                    if row["duration_ms"] is None
-                    else int(cast(str, row["duration_ms"])),
-                    "requestedWakeAt": _iso(row["requested_wake_at"]),
-                    "wakeAt": _iso(row["wake_at"]),
-                    "attempt": row["attempt"],
-                    "fenceToken": row["fence_token"],
-                    "workerId": row["worker_id"],
-                    "createdAt": _iso(row["created_at"]),
+                    "name": row.name,
+                    "mode": row.mode,
+                    "durationMs": row.duration_ms,
+                    "requestedWakeAt": _iso(row.requested_wake_at),
+                    "wakeAt": _iso(row.wake_at),
+                    "attempt": row.attempt,
+                    "fenceToken": str(row.fence_token),
+                    "workerId": row.worker_id,
+                    "createdAt": _iso(row.created_at),
                 }
                 for row in waits
             ],
@@ -2048,30 +2023,30 @@ class DashboardBackend:
             "capped": {name: value > 10_000 for name, value in sampled.items()},
         }
 
-    def set_queue_paused(self, input: object, _actor: str) -> object:
+    def set_queue_paused(self, input: object, actor: str) -> object:
         value = cast(Mapping[str, object], input)
-        function = "pause_queue_v1" if value["paused"] else "resume_queue_v1"
-        self._rows(f"SELECT workhorse.{function}(%s::text)", (value["queue"],))
+        audit = _admin_audit(value, actor)
+        if value["paused"]:
+            self._admin.pause_queue(cast(str, value["queue"]), audit)
+        else:
+            self._admin.resume_queue(cast(str, value["queue"]), audit)
         return {"paused": value["paused"]}
 
-    def purge_queue(self, input: object, _actor: str) -> object:
+    def purge_queue(self, input: object, actor: str) -> object:
         value = cast(Mapping[str, object], input)
-        row = self._rows("SELECT workhorse.purge_queue_v1(%s::text) AS count", (value["queue"],))[0]
-        return {"deletedCount": int(cast(int, row["count"]))}
+        count = self._admin.purge_queue(cast(str, value["queue"]), _admin_audit(value, actor))
+        return {"deletedCount": count}
 
     def set_worker_paused(self, input: object, actor: str) -> object:
         value = cast(Mapping[str, object], input)
-        audit = cast(Mapping[str, object], value["audit"])
-        rows = self._rows(
-            """
-            SELECT * FROM workhorse.set_worker_paused_v1(
-              %s::text, %s::boolean, %s::text, %s::text)
-            """,
-            (value["workerId"], value["paused"], actor, audit.get("reason")),
+        result = self._admin.set_worker_paused(
+            cast(str, value["workerId"]),
+            cast(bool, value["paused"]),
+            _admin_audit(value, actor),
         )
-        if not rows:
+        if result is None:
             raise DashboardRPCError(404, "NOT_FOUND", "Worker not found")
-        return {"paused": rows[0]["paused"]}
+        return {"paused": result.paused}
 
     def override_maintenance_policy(self, input: object, _actor: str) -> None:
         definition = cast(Mapping[str, object], cast(Mapping[str, object], input)["definition"])
@@ -2209,6 +2184,15 @@ class DashboardBackend:
 def _camel_to_snake(value: str) -> str:
     return "".join(
         ("_" + character.lower()) if character.isupper() else character for character in value
+    )
+
+
+def _admin_audit(input: Mapping[str, object], actor: str) -> AdminAudit:
+    audit = cast(Mapping[str, object], input["audit"])
+    return AdminAudit(
+        actor=actor,
+        reason=cast(str, audit["reason"]),
+        request_id=cast(str, audit["requestId"]),
     )
 
 

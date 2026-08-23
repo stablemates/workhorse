@@ -94,6 +94,9 @@ class AsyncpgExecutor:
 _JSON_COLUMNS = frozenset(
     {
         "checkpoint_value",
+        "context",
+        "details",
+        "error",
         "payload",
         "progress_value",
         "result",

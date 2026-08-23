@@ -7,6 +7,9 @@ import asyncpg  # type: ignore[import-untyped]
 import psycopg
 
 from workhorse import (
+    Admin,
+    AdminAudit,
+    AsyncAdmin,
     AsyncBatchHandlerItem,
     AsyncHandlerContext,
     AsyncQueue,
@@ -14,6 +17,7 @@ from workhorse import (
     BatchHandlerItem,
     BatchHandlerOutcome,
     ChildJobRequest,
+    DeadLetterQuery,
     EnqueueOptions,
     HandlerContext,
     Idempotency,
@@ -30,6 +34,18 @@ def sync_enqueue(connection: psycopg.Connection[Any]) -> str:
         {"message": "hello"},
         EnqueueOptions(idempotency=Idempotency("message")),
     )
+
+
+def sync_admin(connection: psycopg.Connection[Any]) -> str | None:
+    admin = Admin(connection)
+    failures = admin.list_dead_letters(DeadLetterQuery(queue="billing"))
+    if not failures.items:
+        return None
+    result = admin.redrive(
+        failures.items[0].job_id,
+        AdminAudit("operator", "provider recovered", "incident-42"),
+    )
+    return result.target_job_id
 
 
 def sync_worker(connection: psycopg.Connection[Any], database_url: str) -> bool:
@@ -108,6 +124,11 @@ async def asyncpg_enqueue(connection: asyncpg.Connection) -> str:
     return job_id
 
 
+async def asyncpg_admin(connection: asyncpg.Connection) -> int:
+    admin = AsyncAdmin.from_asyncpg(connection)
+    return len((await admin.list_jobs()).items)
+
+
 async def async_psycopg_worker(connection: psycopg.AsyncConnection[Any]) -> bool:
     async def handle(payload: Json, context: AsyncHandlerContext) -> Json:
         progress = await context.set_progress({"phase": "working"})
@@ -136,7 +157,10 @@ async def async_value(value: Json) -> Json:
 
 def unsupported_connections_are_rejected() -> None:
     Queue(object())  # type: ignore[arg-type]
+    Admin(object())  # type: ignore[arg-type]
     AsyncQueue.from_psycopg(object())  # type: ignore[arg-type]
     AsyncQueue.from_asyncpg(object())  # type: ignore[arg-type]
+    AsyncAdmin.from_psycopg(object())  # type: ignore[arg-type]
+    AsyncAdmin.from_asyncpg(object())  # type: ignore[arg-type]
     AsyncWorker.from_psycopg(object())  # type: ignore[arg-type]
     AsyncWorker.from_asyncpg(object())  # type: ignore[arg-type]
