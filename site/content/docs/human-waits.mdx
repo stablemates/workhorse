@@ -7,22 +7,49 @@ description: Store decision context and pause a job until an authenticated opera
 JSON context so an operator can understand the decision, then returns the retained result after the
 handler restarts.
 
-```ts
-const review = await context.waitForHuman<
-  { accountId: string; prompt: string },
-  { approved: boolean }
->("account-review", {
-  accountId,
-  prompt: "Approve this account?",
-});
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const review = await context.waitForHuman<
+      { accountId: string; prompt: string },
+      { approved: boolean }
+    >("account-review", { accountId, prompt: "Approve this account?" });
 
-if (review.approved) await activateAccount(accountId);
-```
+    if (review.approved) await activateAccount(accountId);
+    ```
+
+  </Tab>
+  <Tab value="Python">
+    ```python
+    review = context.wait_for_human(
+        "account-review",
+        {"accountId": account_id, "prompt": "Approve this account?"},
+    )
+    if isinstance(review, dict) and review.get("approved") is True:
+        activate_account(account_id)
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    value, err := handler.WaitForHuman("account-review", map[string]any{
+        "accountId": accountID,
+        "prompt":    "Approve this account?",
+    })
+    if err != nil {
+        return nil, err
+    }
+    review, ok := value.(map[string]any)
+    if ok && review["approved"] == true {
+        activateAccount(accountID)
+    }
+    ```
+  </Tab>
+</Tabs>
 
 Code before the wait runs again, so checkpoint earlier effects or make them idempotent.
 
-Go handlers use `HandlerContext.WaitForHuman` with the stable name and JSON context. They can pass
-`ExternalWaitOptions` when the decision needs a shorter lifetime.
+Go handlers can pass `ExternalWaitOptions` when the decision needs a shorter lifetime. Python
+handlers pass `timeout_ms` for the same boundary.
 
 ## Complete a decision
 

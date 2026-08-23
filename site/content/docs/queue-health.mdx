@@ -6,15 +6,36 @@ description: Read one bounded snapshot with a verdict and stable reason codes fo
 `Queue.health()` reports backlog depth, lease state, external waits, admission pressure, statistics,
 and retention progress with a `healthy`, `degraded`, or `critical` verdict.
 
-```ts
-const health = await queue.health();
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
 
-if (health.status.level !== "healthy") {
-  for (const reason of health.status.reasons) {
-    console.warn(reason.code, reason.observed, reason.budget);
-  }
-}
-```
+    ```ts
+    const health = await queue.health();
+    if (health.status.level !== "healthy") console.warn(health.status.reasons);
+    ```
+
+  </Tab>
+  <Tab value="Python">
+
+    ```python
+    health = queue.health()
+    if health["status"]["level"] != "healthy":
+        print(health["status"]["reasons"])
+    ```
+
+  </Tab>
+  <Tab value="Go">
+
+    ```go
+    health, err := queue.Health(ctx)
+    status := health["status"].(map[string]any)
+    if status["level"] != "healthy" {
+        log.Print(status["reasons"])
+    }
+    ```
+
+  </Tab>
+</Tabs>
 
 PostgreSQL reads correctness-sensitive values in one statement, so every exact count describes the
 same instant at `capturedAt`. Lagging database statistics live under `observations`; when an

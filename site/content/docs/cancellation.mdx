@@ -12,13 +12,35 @@ how quickly it listens.
 
 Call `Queue.cancel` after your application authorizes the actor.
 
-```ts
-const result = await queue.cancel(jobId, {
-  requestedBy: actor.email,
-  reason: "customer withdrew the order",
-});
-// result.status: "canceled" | "cancel_requested" | "already_terminal" | "not_found"
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const result = await queue.cancel(jobId, {
+      requestedBy: actor.email,
+      reason: "customer withdrew the order",
+    });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    result = queue.cancel(
+        job_id,
+        requested_by=actor.email,
+        reason="customer withdrew the order",
+    )
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    requestedBy := actor.Email
+    reason := "customer withdrew the order"
+    result, err := queue.Cancel(ctx, jobID, workhorse.CancellationRequest{
+        RequestedBy: &requestedBy,
+        Reason:      &reason,
+    })
+    ```
+  </Tab>
+</Tabs>
 
 `requestedBy` and `reason` are audit attribution, nothing more. Workhorse records them but
 never decides whether the actor had permission — that check belongs in your application,
@@ -38,16 +60,35 @@ What happens next depends on where the job is:
 Pass `ctx.signal` into every API that accepts an `AbortSignal`, and check it between units of
 work before starting another external effect.
 
-```ts
-worker.handle("export.build", async (payload: { parts: string[] }, ctx) => {
-  for (const part of payload.parts) {
-    if (ctx.signal.aborted) throw ctx.signal.reason;
-    await uploadPart(part, { signal: ctx.signal });
-  }
-
-  return { exported: true };
-});
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    for (const part of payload.parts) {
+      if (ctx.signal.aborted) throw ctx.signal.reason;
+      await uploadPart(part, { signal: ctx.signal });
+    }
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    for part in payload["parts"]:
+        context.cancellation.raise_if_cancelled()
+        upload_part(part, cancellation=context.cancellation)
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    for _, part := range payload.Parts {
+        if err := context.Cause(ctx); err != nil {
+            return nil, err
+        }
+        if err := uploadPart(ctx, part); err != nil {
+            return nil, err
+        }
+    }
+    ```
+  </Tab>
+</Tabs>
 
 Throwing `ctx.signal.reason` lets the worker confirm the cancellation and write the canceled
 outcome. The same signal also aborts for [deadlines and timeouts](/docs/deadlines), each with

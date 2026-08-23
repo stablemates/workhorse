@@ -6,18 +6,38 @@ description: Delegate durable work from a handler and join its result without ho
 `HandlerContext.runChild` creates a child and moves its parent to `blocked` in one transaction. The
 parent releases its lease while the child runs, then restarts from the top when the child settles.
 
-```ts
-worker.handle("orders.checkout", async (order, context) => {
-  const charge = await context.runChild<{ orderId: string }, { receiptId: string }>(
-    "charge",
-    "payments.charge",
-    { orderId: order.id },
-    { queue: "payments" },
-  );
-
-  return { receiptId: charge.receiptId };
-});
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const charge = await context.runChild<{ orderId: string }, { receiptId: string }>(
+      "charge",
+      "payments.charge",
+      { orderId: order.id },
+      { queue: "payments" },
+    );
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    charge = context.run_child(
+        "charge",
+        "payments.charge",
+        {"orderId": order["id"]},
+        EnqueueOptions(queue="payments"),
+    )
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    charge, err := handler.CreateChild(
+        "charge",
+        "payments.charge",
+        map[string]any{"orderId": order.ID},
+        workhorse.EnqueueOptions{Queue: "payments"},
+    )
+    ```
+  </Tab>
+</Tabs>
 
 On replay, the stable child name and request return the retained result instead of creating another
 job. Changing the name, payload, type, options, or set membership raises `ChildConflictError`, so a
@@ -27,15 +47,8 @@ Use `runChildren` to create and join independent work in parallel. PostgreSQL re
 only after the whole set settles; a failed child fails the parent, while cancellation applies only
 when no failure takes precedence.
 
-Go handlers call `CreateChild` or `CreateChildren`. The set method returns named `ChildResult`
-values in request order, so Go callers do not depend on map iteration to preserve the fan-out order.
-
-```go
-results, err := handler.CreateChildren([]workhorse.ChildJobRequest{
-	{Name: "fraud", Type: "orders.check-fraud", Payload: order},
-	{Name: "inventory", Type: "orders.reserve", Payload: order},
-})
-```
+Python handlers call `run_child` or `run_children`. Go handlers call `CreateChild` or
+`CreateChildren`. Both set methods retain the declared names and request order.
 
 Code before either call runs again when the parent resumes. Wrap external effects in checkpoints or
 make them independently idempotent.

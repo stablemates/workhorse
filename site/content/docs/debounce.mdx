@@ -6,20 +6,35 @@ description: Replace pending work under a stable key while updates continue arri
 Debounce keeps one pending job with the latest accepted payload. PostgreSQL serializes concurrent
 replacements, so every caller observes one stable job identity.
 
-```ts
-const result = await queue.enqueueWithResult(
-  "search.reindex",
-  { documentId, revision },
-  {
-    debounce: {
-      key: documentId,
-      scope: "search-index",
-      windowMs: quietPeriodMs,
-      schedule: "reset",
-    },
-  },
-);
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const result = await queue.enqueueWithResult("search.reindex", { documentId, revision }, {
+      debounce: { key: documentId, scope: "search-index", windowMs: quietPeriodMs, schedule: "reset" },
+    });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    result = queue.enqueue_with_result(
+        "search.reindex",
+        {"documentId": document_id, "revision": revision},
+        EnqueueOptions(debounce=Debounce(
+            key=document_id, scope="search-index", window_ms=quiet_period_ms, schedule="reset"
+        )),
+    )
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    result, err := queue.EnqueueWithResult(ctx, "search.reindex", map[string]any{
+        "documentId": documentID, "revision": revision,
+    }, workhorse.EnqueueOptions{Debounce: &workhorse.Debounce{
+        Key: documentID, Scope: "search-index", WindowMS: quietPeriodMS, Schedule: workhorse.DebounceReset,
+    }})
+    ```
+  </Tab>
+</Tabs>
 
 Choose `reset` to start a fresh quiet period after every replacement. Choose `preserve` when the
 first request fixes the run time and later requests should update only the payload.

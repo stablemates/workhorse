@@ -9,37 +9,45 @@ without losing the evidence of what happened, and without replaying anything twi
 redrive: Workhorse keeps the failed job as immutable evidence and creates a new job from it, with
 an audit trail linking the two.
 
-```ts
-const admin = new Admin(pool);
-```
-
-Python operator tools use the same split from application enqueueing:
-
-```python
-admin = Admin(connection)
-async_admin = AsyncAdmin.from_asyncpg(asyncpg_connection)
-```
-
-Go applications construct the same operator boundary with `workhorse.NewAdmin(executor)` and call
-`ListDeadLetters`, `Redrive`, or `RedriveMany` through their caller-owned pgx or `database/sql`
-executor.
+The operator client stays separate from application enqueueing in every SDK. TypeScript constructs
+`Admin` with a pool, Python uses `Admin` or `AsyncAdmin`, and Go calls `NewAdmin` with a
+caller-owned pgx or `database/sql` executor.
 
 ## List terminal failures
 
 `admin.listDeadLetters(query)` reads a cold failure index that stays separate from the ready and
 active indexes. A backlog of a million failures cannot slow workers as they claim jobs.
 
-```ts
-const page = await admin.listDeadLetters({
-  queue: "billing",
-  errorName: "ProviderTimeout",
-  finishedAfter: new Date("2026-08-12T09:00:00Z"),
-});
-
-for (const failure of page.items) {
-  console.log(failure.jobId, failure.error, failure.redriveCount);
-}
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const page = await admin.listDeadLetters({
+      queue: "billing",
+      errorName: "ProviderTimeout",
+      finishedAfter: new Date("2026-08-12T09:00:00Z"),
+    });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    page = admin.list_dead_letters(DeadLetterQuery(
+        queue="billing",
+        error_name="ProviderTimeout",
+        finished_after=datetime.fromisoformat("2026-08-12T09:00:00+00:00"),
+    ))
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    finishedAfter := time.Date(2026, time.August, 12, 9, 0, 0, 0, time.UTC)
+    page, err := admin.ListDeadLetters(ctx, workhorse.DeadLetterQuery{
+        DeadLetterFilter: workhorse.DeadLetterFilter{
+            Queue: "billing", ErrorName: "ProviderTimeout", FinishedAfter: &finishedAfter,
+        },
+    })
+    ```
+  </Tab>
+</Tabs>
 
 Filters cover `queue`, `type`, `tags` (every supplied tag must match), `errorName`,
 `finishedAfter`, and `finishedBefore`. Each `DeadLetter` carries the payload, the terminal error,
@@ -51,25 +59,30 @@ cursor pages by immutable finish time and job identity, so pages stay stable whi
 `admin.redrive(sourceJobId, request)` requires three things: who asked, why, and a stable request
 ID. Workhorse records attribution; your operator layer must authorize the actor before calling.
 
-```ts
-const result = await admin.redrive(sourceJobId, {
-  actor: actor.email,
-  reason: "provider incident resolved",
-  requestId: incidentId,
-});
-
-console.log(result.status, result.targetJobId);
-```
-
-The Python spelling uses an `AdminAudit` value and returns the same PostgreSQL decision:
-
-```python
-result = admin.redrive(
-    source_job_id,
-    AdminAudit(actor.email, "provider incident resolved", incident_id),
-)
-print(result.status, result.target_job_id)
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const result = await admin.redrive(sourceJobId, {
+      actor: actor.email, reason: "provider incident resolved", requestId: incidentId,
+    });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    result = admin.redrive(
+        source_job_id,
+        AdminAudit(actor.email, "provider incident resolved", incident_id),
+    )
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    result, err := admin.Redrive(ctx, sourceJobID, workhorse.AdminAudit{
+        Actor: actor.Email, Reason: "provider incident resolved", RequestID: incidentID,
+    })
+    ```
+  </Tab>
+</Tabs>
 
 The new job copies what defines the work: queue, type, payload, tags, retry policy, attempt
 budget, and execution timeout. It deliberately does not copy attempts, errors, checkpoints,
@@ -94,30 +107,40 @@ become durable payload — operator views still get safe diagnostics.
 `admin.redriveMany(filter, request, options)` processes a bounded page of matching failures in
 stable order. Start with a dry run:
 
-```ts
-const preview = await admin.redriveMany(
-  { queue: "billing", errorName: "ProviderTimeout" },
-  { actor: actor.email, reason: "provider incident resolved", requestId: incidentId },
-  { dryRun: true, limit: 100 },
-);
-console.log(preview.results.length, "eligible");
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const filter = { queue: "billing", errorName: "ProviderTimeout" };
+    const audit = { actor: actor.email, reason: "provider incident resolved", requestId: incidentId };
+    const preview = await admin.redriveMany(filter, audit, { dryRun: true, limit: 100 });
+    const page = await admin.redriveMany(filter, audit, { limit: 100 });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    filter = DeadLetterFilter(queue="billing", error_name="ProviderTimeout")
+    audit = AdminAudit(actor.email, "provider incident resolved", incident_id)
+    preview = admin.redrive_many(filter, audit, BulkRedriveOptions(dry_run=True, limit=100))
+    page = admin.redrive_many(filter, audit, BulkRedriveOptions(limit=100))
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    filter := workhorse.DeadLetterFilter{Queue: "billing", ErrorName: "ProviderTimeout"}
+    audit := workhorse.AdminAudit{
+        Actor: actor.Email, Reason: "provider incident resolved", RequestID: incidentID,
+    }
+    preview, err := admin.RedriveMany(ctx, filter, audit, workhorse.BulkRedriveOptions{
+        DryRun: true, Limit: 100,
+    })
+    page, err := admin.RedriveMany(ctx, filter, audit, workhorse.BulkRedriveOptions{Limit: 100})
+    ```
+  </Tab>
+</Tabs>
 
 A dry run returns eligible sources without creating jobs or lineage. Once you have confirmed the
-external dependency actually recovered, drop `dryRun` and reuse the same incident `requestId`
-across cursor pages:
-
-```ts
-let cursor = undefined;
-do {
-  const page = await admin.redriveMany(
-    { queue: "billing", errorName: "ProviderTimeout" },
-    { actor: actor.email, reason: "provider incident resolved", requestId: incidentId },
-    { limit: 100, cursor },
-  );
-  cursor = page.nextCursor ?? undefined;
-} while (cursor);
-```
+external dependency recovered, drop `dryRun` and reuse the same incident request ID across cursor
+pages.
 
 If the loop crashes mid-backlog, run it again: pages that already redrove converge on their
 existing targets instead of duplicating them.

@@ -14,27 +14,50 @@ Pass `contracts` through the third `Queue` constructor argument, or through an a
 `queueOptions`. Each job type names a `currentVersion` for newly accepted jobs and retains every
 version that live or redrivable jobs may still carry.
 
-```ts
-const queue = new Queue(pool, "default", {
-  contracts: {
-    "mail.send": {
-      currentVersion: "mail-current",
-      versions: {
-        "mail-current": {
-          payloadSchema: {
-            type: "object",
-            required: ["recipient"],
-            properties: { recipient: { type: "string" } },
-          },
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const contracts = {
+      "mail.send": {
+        currentVersion: "mail-current",
+        versions: { "mail-current": {
+          payloadSchema: { type: "object", required: ["recipient"] },
           resultSchema: { type: "object" },
           sensitivePayloadKeys: ["accessToken"],
-          sensitiveResultKeys: ["providerReceipt"],
-        },
+        } },
       },
-    },
-  },
-});
-```
+    };
+    const queue = new Queue(pool, "default", { contracts });
+    await queue.syncContracts();
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    contracts = {"mail.send": JobTypeContracts(
+        current_version="mail-current",
+        versions={"mail-current": JobContractVersion(
+            payload_schema={"type": "object", "required": ["recipient"]},
+            result_schema={"type": "object"},
+            sensitive_payload_keys=["accessToken"],
+        )},
+    )}
+    queue.sync_contracts(contracts)
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    contracts := map[string]workhorse.JobTypeContracts{"mail.send": {
+        CurrentVersion: "mail-current",
+        Versions: map[string]workhorse.JobContractVersion{"mail-current": {
+            PayloadSchema: map[string]any{"type": "object", "required": []string{"recipient"}},
+            ResultSchema: map[string]any{"type": "object"},
+            SensitivePayloadKeys: []string{"accessToken"},
+        }},
+    }}
+    err := queue.SyncContracts(ctx, contracts)
+    ```
+  </Tab>
+</Tabs>
 
 Call `queue.syncContracts()` during application startup. Python exposes `sync_contracts`, and Go
 exposes `SyncContracts`. PostgreSQL inserts an immutable document for every version and keeps the

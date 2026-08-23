@@ -58,42 +58,42 @@ rows, so replicas would export duplicate gauges and add unnecessary queries.
 Every worker registers itself in PostgreSQL on its `registryIntervalMs` cadence — 5 seconds by
 default, `0` to opt out. That registry is how you see and steer a fleet you do not host:
 
-```ts
-const admin = new Admin(pool);
-
-// See every registered worker, most recently seen first.
-const workers = await admin.listWorkers();
-for (const worker of workers) {
-  console.log(worker.workerId, worker.activeSlots, worker.paused, worker.lastHeartbeatAt);
-}
-
-// Ask one worker to stop claiming. Attribution is recorded, not authorized.
-await admin.setWorkerPaused("billing-worker-1", true, {
-  actor: actor.email,
-  reason: "investigating slow provider",
-  requestId: incidentId,
-});
-
-// Drop registrations whose process stopped heartbeating long ago.
-await queue.pruneWorkerRegistry();
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const admin = new Admin(pool);
+    const workers = await admin.listWorkers();
+    await admin.setWorkerPaused("billing-worker-1", true, {
+      actor: actor.email, reason: "investigating slow provider", requestId: incidentId,
+    });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    admin = Admin(connection)
+    workers = admin.list_workers()
+    admin.set_worker_paused(
+        "billing-worker-1",
+        True,
+        AdminAudit(actor.email, "investigating slow provider", incident_id),
+    )
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    admin := workhorse.NewAdmin(workhorse.NewPGXExecutor(pool))
+    workers, err := admin.ListWorkers(ctx)
+    result, err := admin.SetWorkerPaused(ctx, "billing-worker-1", true, workhorse.AdminAudit{
+        Actor: actor.Email, Reason: "investigating slow provider", RequestID: incidentID,
+    })
+    ```
+  </Tab>
+</Tabs>
 
 Pause is cooperative: the worker notices on its next registry refresh, stops asking for jobs, and
 any in-flight handler runs to completion. The pause is scoped to the running process — a
 restarted worker comes back running, so a forgotten pause can never idle a future deployment. Use
 queue pause when work must stop durably.
-
-Python exposes the same fleet control through caller-owned database connections:
-
-```python
-admin = Admin(connection)
-workers = admin.list_workers()
-admin.set_worker_paused(
-    "billing-worker-1",
-    True,
-    AdminAudit(actor.email, "investigating slow provider", incident_id),
-)
-```
 
 Use `AsyncAdmin.from_psycopg` or `AsyncAdmin.from_asyncpg` when the operator process is async.
 

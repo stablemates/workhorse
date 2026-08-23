@@ -13,20 +13,47 @@ between `new Worker(queue)` and a clean shutdown.
 serve many types. Each handler receives the payload and a `HandlerContext`, and returns a JSON
 result that becomes the job's durable outcome.
 
-```ts
-import { Worker } from "@workhorse-js/core";
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const worker = new Worker(queue, { queues: ["email", "billing"], concurrency: 5 });
+    worker.handle("email.send", async (payload: { to: string }, ctx) => {
+      await mailer.send(payload.to, { signal: ctx.signal });
+      return { deliveredTo: payload.to };
+    });
+    await worker.run();
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    worker = Worker(connection, queues=["email", "billing"], concurrency=5)
 
-const worker = new Worker(queue, { queues: ["email", "billing"], concurrency: 5 })
-  .handle("email.send", async (payload: { to: string }, ctx) => {
-    await mailer.send(payload.to, { signal: ctx.signal });
-    return { deliveredTo: payload.to };
-  })
-  .handle("email.digest", async (payload: { userId: string }) => {
-    return { sent: await sendDigest(payload.userId) };
-  });
+    def send_email(payload: object, context: HandlerContext) -> Json:
+        context.cancellation.raise_if_cancelled()
+        return mailer.send(payload)
 
-await worker.run();
-```
+    worker.handle("email.send", send_email)
+    worker.run()
+    ```
+
+  </Tab>
+  <Tab value="Go">
+    ```go
+    worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+        Queues: []string{"email", "billing"}, Concurrency: 5,
+    })
+    if err != nil {
+        return err
+    }
+    worker.Handle("email.send", func(
+        ctx context.Context, payload any, handler *workhorse.HandlerContext,
+    ) (any, error) {
+        return mailer.Send(ctx, payload)
+    })
+    err = worker.Run(ctx)
+    ```
+  </Tab>
+</Tabs>
 
 `run` loops until you stop it; pass an `AbortSignal` as `worker.run(signal)` to tie its
 lifetime to your process. `runOnce` performs a single claim-and-run pass and returns whether
@@ -47,14 +74,35 @@ accidentally write as a stale owner after the job moves on.
 
 ## The options that matter
 
-```ts
-const worker = new Worker(queue, {
-  queues: ["email", "billing"], // queues to claim from
-  concurrency: 5, // simultaneous handler slots, default 1
-  leaseMs: 30_000, // ownership granted per claim and heartbeat (the default)
-  workerId: "email-worker-1", // defaults to <hostname>-<pid>-<random>
-});
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const worker = new Worker(queue, {
+      queues: ["email", "billing"], concurrency: 5, leaseMs: 30_000,
+      workerId: "email-worker-1",
+    });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    worker = Worker(
+        connection,
+        queues=["email", "billing"],
+        concurrency=5,
+        lease_ms=30_000,
+        worker_id="email-worker-1",
+    )
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+        Queues: []string{"email", "billing"}, Concurrency: 5,
+        LeaseDuration: 30 * time.Second, WorkerID: "email-worker-1",
+    })
+    ```
+  </Tab>
+</Tabs>
 
 - **`concurrency`** caps simultaneous handlers in this one `Worker`. Replicas multiply that
   capacity. When the fleet must share one budget, use
@@ -87,16 +135,8 @@ worker when work needs a different lease, retry override, schedule namespace, or
 payloads efficiently. Every member still occupies one concurrency slot and keeps its own lease,
 fence, cancellation signal, progress, retry budget, and final result.
 
-```ts
-worker.handleBatch("email.send", { maxSize: 20, lingerMs: 50 }, async (items) => {
-  const deliveries = await mailer.sendMany(items.map((item) => item.payload));
-  return deliveries.map((delivery) =>
-    delivery.error
-      ? { status: "failed", error: delivery.error }
-      : { status: "succeeded", result: { providerId: delivery.id } },
-  );
-});
-```
+The TypeScript `handleBatch`, Python `handle_batch`, and Go `HandleBatch` forms are shown together
+in [Batch handlers](/docs/batch-handlers), including their positional success and failure results.
 
 The callback must return one ordered outcome per member. Batch contexts omit durable waits,
 signals, human decisions, and child joins because one member cannot suspend independently inside a
@@ -108,37 +148,41 @@ Queue depth and HTTP traffic rarely scale together, so production deployments pu
 their own process. `defineWorkerProcess` describes the adapter and workers; the
 `workhorse worker` CLI loads the compiled definition and adds signal handling and supervision.
 
-```ts
-import { createWorkhorseAdapter, defineWorkerProcess } from "@workhorse-js/core";
-
-export default defineWorkerProcess({
-  adapter: () => createWorkhorseAdapter(adapterOptions),
-  workers: [
-    {
-      options: { queues: ["email", "billing"], concurrency: 5 },
-      configure(worker) {
-        worker.handle("email.send", sendEmail);
-      },
-    },
-  ],
-});
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    export default defineWorkerProcess({
+      adapter: () => createWorkhorseAdapter(adapterOptions),
+      workers: [{
+        options: { queues: ["email", "billing"], concurrency: 5 },
+        configure(worker) { worker.handle("email.send", sendEmail); },
+      }],
+    });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
+        worker = Worker(connection, queues=["email", "billing"], concurrency=5)
+        worker.handle("email.send", send_email)
+        run_worker_process(worker)
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+    defer stop()
+    worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+        Queues: []string{"email", "billing"}, Concurrency: 5,
+    })
+    worker.Handle("email.send", sendEmail)
+    err = worker.Run(ctx)
+    ```
+  </Tab>
+</Tabs>
 
 The process owns its database resources, worker loops, optional probes, and shutdown. Compile
 the definition before the CLI imports it — the CLI does not install a TypeScript loader.
-
-Python keeps ownership explicit through its connection context and adds the same bounded signal
-drain around a configured worker:
-
-```python
-import psycopg
-
-from workhorse import Worker, run_worker_process
-
-with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
-    worker = Worker(connection).handle("email.send", send_email)
-    run_worker_process(worker)
-```
 
 The first termination signal stops claims and drains active jobs. A second signal or an expired
 deadline exits immediately, leaving PostgreSQL to recover any active leases.

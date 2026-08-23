@@ -20,15 +20,31 @@ for enqueue. `Queue.ListConcurrencyPolicies` returns the persisted typed rows.
 Python applications call `sync_concurrency_policies` through `Queue` or `AsyncQueue` on their
 caller-owned connection. `list_concurrency_policies` returns the persisted typed rows.
 
-```ts
-await queue.syncConcurrencyPolicies("workers", [
-  {
-    queue: "mail",
-    maxActive: 20, // at most 20 mail jobs active fleet-wide
-    maxActivePerKey: 3, // and at most 3 per concurrency key
-  },
-]);
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    await queue.syncConcurrencyPolicies("workers", [
+      { queue: "mail", maxActive: 20, maxActivePerKey: 3 },
+    ]);
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    queue.sync_concurrency_policies(
+        "workers",
+        [ConcurrencyPolicyDefinition(queue="mail", max_active=20, max_active_per_key=3)],
+    )
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    maxActivePerKey := 3
+    policies, err := queue.SyncConcurrencyPolicies(ctx, "workers", []workhorse.ConcurrencyPolicyDefinition{{
+        Queue: "mail", MaxActive: 20, MaxActivePerKey: &maxActivePerKey,
+    }})
+    ```
+  </Tab>
+</Tabs>
 
 Workers need no matching in-memory configuration — admission reads the stored policy, so a policy
 change takes effect without redeploying the fleet. Omitted policies are pruned by default, and
@@ -40,9 +56,29 @@ PostgreSQL rejects another namespace that tries to replace a queue this namespac
 
 The key names the group a job competes in — a tenant, a destination host, an account.
 
-```ts
-await queue.enqueue("mail.send", { messageId }, { queue: "mail", concurrencyKey: tenantId });
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    await queue.enqueue("mail.send", { messageId }, { queue: "mail", concurrencyKey: tenantId });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    queue.enqueue(
+        "mail.send",
+        {"messageId": message_id},
+        EnqueueOptions(queue="mail", concurrency_key=tenant_id),
+    )
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    _, err := queue.Enqueue(ctx, "mail.send", map[string]any{
+        "messageId": messageID,
+    }, workhorse.EnqueueOptions{Queue: "mail", ConcurrencyKey: tenantID})
+    ```
+  </Tab>
+</Tabs>
 
 Keyless jobs consume queue capacity only. A keyed job also consumes capacity for its key. The same
 key text in another queue is independent, and one saturated key does not block the queue: admission

@@ -6,19 +6,35 @@ description: Accept one equivalent job during a busy window and coalesce later t
 Throttle keeps an acceptance window in PostgreSQL. The first request creates a job; an equivalent
 request before the window closes returns the same identity with a `coalesced` outcome.
 
-```ts
-const result = await queue.enqueueWithResult(
-  "email.digest",
-  { accountId },
-  {
-    throttle: {
-      key: accountId,
-      scope: "digest",
-      windowMs: digestWindowMs,
-    },
-  },
-);
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const result = await queue.enqueueWithResult("email.digest", { accountId }, {
+      throttle: { key: accountId, scope: "digest", windowMs: digestWindowMs },
+    });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    result = queue.enqueue_with_result(
+        "email.digest",
+        {"accountId": account_id},
+        EnqueueOptions(throttle=Throttle(
+            key=account_id, scope="digest", window_ms=digest_window_ms
+        )),
+    )
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    result, err := queue.EnqueueWithResult(ctx, "email.digest", map[string]any{
+        "accountId": accountID,
+    }, workhorse.EnqueueOptions{Throttle: &workhorse.Throttle{
+        Key: accountID, Scope: "digest", WindowMS: digestWindowMS,
+    }})
+    ```
+  </Tab>
+</Tabs>
 
 The retained job may be waiting, active, or finished. Execution state does not reopen the
 acceptance window. A changed payload, queue, priority, schedule, retry policy, or window conflicts

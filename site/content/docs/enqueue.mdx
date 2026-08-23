@@ -15,36 +15,69 @@ batch, and target a named queue.
 returns its ID. Without `runAt`, PostgreSQL places the job in `ready` and a worker can claim it
 immediately. A future `runAt` places it in `scheduled` until promotion moves it to `ready`.
 
-```ts
-// Run as soon as a worker is free.
-await queue.enqueue("email.send", { to: "person@example.com" });
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    await queue.enqueue("email.send", { to: "person@example.com" });
+    await queue.enqueue("invoice.remind", { invoiceId }, { queue: "billing", runAt: reminderDate });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    queue.enqueue("email.send", {"to": "person@example.com"})
+    queue.enqueue(
+        "invoice.remind",
+        {"invoiceId": invoice_id},
+        EnqueueOptions(queue="billing", run_at=reminder_date),
+    )
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    _, err := queue.Enqueue(ctx, "email.send", map[string]any{
+        "to": "person@example.com",
+    }, workhorse.EnqueueOptions{})
 
-// Run no earlier than the reminder date, on the billing queue.
-await queue.enqueue("invoice.remind", { invoiceId }, { queue: "billing", runAt: reminderDate });
-```
+    _, err = queue.Enqueue(ctx, "invoice.remind", map[string]any{
+        "invoiceId": invoiceID,
+    }, workhorse.EnqueueOptions{Queue: "billing", RunAt: &reminderDate})
+    ```
+
+  </Tab>
+</Tabs>
 
 `runAt` is a not-before boundary, not an appointment. If someone pauses the queue, or workers
 become unavailable, a worker claims the job later than the boundary — never earlier.
 
 `EnqueueOptions` carries everything else a job can be born with:
 
-```ts
-await queue.enqueue(
-  "report.generate",
-  { month: "2026-08" },
-  {
-    queue: "reports",
-    tags: ["tenant:acme"],
-    concurrencyKey: "acme",
-    priority: 10,
-    maxAttempts: 5, // default is 25
-    retryPolicy: { type: "exponential", initialDelayMs: 1_000, multiplier: 2, maxDelayMs: 60_000 },
-    deadline: endOfMonth, // terminal once reached, even with retries left
-    executionTimeoutMs: 120_000, // active-time budget per attempt
-    idempotency: { key: `report:2026-08:acme` },
-  },
-);
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    await queue.enqueue("report.generate", { month: "2026-08" }, {
+      queue: "reports", tags: ["tenant:acme"], concurrencyKey: "acme", priority: 10,
+      maxAttempts: 5, deadline: endOfMonth, executionTimeoutMs: 120_000,
+    });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    queue.enqueue("report.generate", {"month": "2026-08"}, EnqueueOptions(
+        queue="reports", tags=["tenant:acme"], concurrency_key="acme", priority=10,
+        max_attempts=5, deadline=end_of_month, execution_timeout_ms=120_000,
+    ))
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    _, err := queue.Enqueue(ctx, "report.generate", map[string]any{"month": "2026-08"},
+        workhorse.EnqueueOptions{
+            Queue: "reports", Tags: []string{"tenant:acme"}, ConcurrencyKey: "acme", Priority: 10,
+            MaxAttempts: 5, Deadline: &endOfMonth, ExecutionTimeoutMS: 120_000,
+        })
+    ```
+  </Tab>
+</Tabs>
 
 Each option is owned by its own page — [retries](/docs/retries), [deadlines](/docs/deadlines),
 [idempotency](/docs/idempotency) — and the architecture reference owns exact bounds and defaults.
@@ -55,21 +88,32 @@ This is the option that replaces an outbox. Pass your open transaction client as
 argument and PostgreSQL commits the job and your business write together — or rolls both back
 together. There is no window where one exists without the other.
 
-```ts
-const client = await pool.connect();
-
-try {
-  await client.query("BEGIN");
-  await client.query("INSERT INTO account (id, email) VALUES ($1, $2)", [id, email]);
-  await queue.enqueue("account.created", { accountId: id }, {}, client);
-  await client.query("COMMIT");
-} catch (error) {
-  await client.query("ROLLBACK");
-  throw error;
-} finally {
-  client.release();
-}
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    await client.query("BEGIN");
+    await client.query("INSERT INTO account (id, email) VALUES ($1, $2)", [id, email]);
+    await queue.enqueue("account.created", { accountId: id }, {}, client);
+    await client.query("COMMIT");
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    with connection.transaction():
+        connection.execute("INSERT INTO account (id, email) VALUES (%s, %s)", (id, email))
+        Queue(connection).enqueue("account.created", {"accountId": id})
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    tx, err := pool.Begin(ctx)
+    _, err = tx.Exec(ctx, "INSERT INTO account (id, email) VALUES ($1, $2)", id, email)
+    queue := workhorse.NewQueue(workhorse.NewPGXExecutor(tx), "default")
+    _, err = queue.Enqueue(ctx, "account.created", map[string]any{"accountId": id}, workhorse.EnqueueOptions{})
+    err = tx.Commit(ctx)
+    ```
+  </Tab>
+</Tabs>
 
 The fourth argument accepts anything with a pg-compatible `query` method, so the ORM adapters
 pass their own transaction handles the same way.
@@ -83,15 +127,35 @@ If a single operation produces many jobs — a fan-out to every subscriber, an i
 `queue.enqueueMany`. It validates and writes the whole group in one statement, and it also accepts
 a transaction as its second argument.
 
-```ts
-const jobIds = await queue.enqueueMany(
-  recipients.map((recipient) => ({
-    type: "email.digest",
-    payload: { to: recipient.email },
-    options: { queue: "mail", idempotency: { key: `digest:${week}:${recipient.id}` } },
-  })),
-);
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const jobIds = await queue.enqueueMany(recipients.map((recipient) => ({
+      type: "email.digest", payload: { to: recipient.email }, options: { queue: "mail" },
+    })));
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    job_ids = queue.enqueue_many([
+        EnqueueRequest("email.digest", {"to": recipient.email}, EnqueueOptions(queue="mail"))
+        for recipient in recipients
+    ])
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    requests := make([]workhorse.EnqueueRequest, len(recipients))
+    for index, recipient := range recipients {
+        requests[index] = workhorse.EnqueueRequest{
+            Type: "email.digest", Payload: map[string]any{"to": recipient.Email},
+            Options: workhorse.EnqueueOptions{Queue: "mail"},
+        }
+    }
+    jobIDs, err := queue.EnqueueMany(ctx, requests)
+    ```
+  </Tab>
+</Tabs>
 
 Returned IDs preserve input order, and the whole group commits or rolls back together. One call
 accepts at most 1,000 requests; split larger input into several bounded calls. If a caller may
@@ -113,12 +177,30 @@ dispatch order within one queue; it does not reserve capacity for lower-priority
 
 Whole-queue controls belong to `Admin`, and every mutation carries audit identity:
 
-```ts
-const admin = new Admin(pool);
-await admin.pauseQueue("billing", { actor, reason, requestId });
-await admin.resumeQueue("billing", { actor, reason, requestId: resumeRequestId });
-await admin.purgeQueue("billing", { actor, reason: purgeReason, requestId: purgeRequestId });
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    await admin.pauseQueue("billing", { actor, reason, requestId });
+    await admin.resumeQueue("billing", { actor, reason, requestId: resumeRequestId });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    admin.pause_queue("billing", AdminAudit(actor, reason, request_id))
+    admin.resume_queue("billing", AdminAudit(actor, reason, resume_request_id))
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    err := admin.PauseQueue(ctx, "billing", workhorse.AdminAudit{
+        Actor: actor, Reason: reason, RequestID: requestID,
+    })
+    err = admin.ResumeQueue(ctx, "billing", workhorse.AdminAudit{
+        Actor: actor, Reason: reason, RequestID: resumeRequestID,
+    })
+    ```
+  </Tab>
+</Tabs>
 
 Use `options.concurrencyKey` when a synchronized policy should also limit one application-defined
 group — one tenant, one destination host. Keys are scoped to their queue and remain part of

@@ -6,41 +6,47 @@ description: Keep downstream work blocked until its prerequisites reach declared
 Dependencies prevent a job from entering dispatch before its inputs are ready. PostgreSQL stores
 the job and its dependency edges in the enqueue transaction, so a rollback removes both.
 
-```ts
-const importId = await queue.enqueue("contacts.import", { source: "upload" });
-
-await queue.enqueue(
-  "contacts.notify",
-  { importId },
-  {
-    dependencies: {
-      prerequisiteJobIds: [importId],
-      onSuccess: "release",
-      onFailure: "fail",
-      onCancellation: "cancel",
-    },
-  },
-);
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const importId = await queue.enqueue("contacts.import", { source: "upload" });
+    await queue.enqueue("contacts.notify", { importId }, { dependencies: {
+      prerequisiteJobIds: [importId], onSuccess: "release", onFailure: "fail", onCancellation: "cancel",
+    } });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    import_id = queue.enqueue("contacts.import", {"source": "upload"})
+    queue.enqueue(
+        "contacts.notify",
+        {"importId": import_id},
+        EnqueueOptions(dependencies=Dependencies(
+            prerequisite_job_ids=[import_id],
+            on_success="release", on_failure="fail", on_cancellation="cancel",
+        )),
+    )
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    importID, err := queue.Enqueue(ctx, "contacts.import", map[string]any{"source": "upload"}, workhorse.EnqueueOptions{})
+    _, err = queue.Enqueue(ctx, "contacts.notify", map[string]any{"importId": importID}, workhorse.EnqueueOptions{
+        Dependencies: &workhorse.Dependencies{
+            PrerequisiteJobIDs: []string{importID}, OnSuccess: workhorse.DependencyRelease,
+            OnFailure: workhorse.DependencyFail, OnCancellation: workhorse.DependencyCancel,
+        },
+    })
+    ```
+  </Tab>
+</Tabs>
 
 The older `prerequisiteJobId` shorthand is deprecated because it hides the terminal policies.
 
 For fan-in, declare every prerequisite and what each terminal outcome means:
 
-```ts
-await queue.enqueue(
-  "release.announce",
-  { release },
-  {
-    dependencies: {
-      prerequisiteJobIds: [publishId, indexId],
-      onSuccess: "release",
-      onFailure: "fail",
-      onCancellation: "cancel",
-    },
-  },
-);
-```
+The same `Dependencies` value accepts several prerequisite IDs for fan-in. TypeScript uses
+`prerequisiteJobIds`, Python uses `prerequisite_job_ids`, and Go uses `PrerequisiteJobIDs`.
 
 The dependent remains `blocked` until every edge resolves. If policies disagree after fan-in,
 `fail` wins over `cancel`, and `cancel` wins over `release`, so concurrent completion order cannot

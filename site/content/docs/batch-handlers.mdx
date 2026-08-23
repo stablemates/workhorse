@@ -8,20 +8,49 @@ Use TypeScript's `Worker.handleBatch`, Go's `Worker.HandleBatch`, or Python's
 member keeps its own durable identity, lease, fence, retry budget, checkpoints, progress, and
 cancellation.
 
-```ts
-new Worker(queue, { concurrency: workerCapacity }).handleBatch(
-  "email.send",
-  { maxSize: batchSize, lingerMs: batchLingerMs },
-  async (items) => {
-    const deliveries = await emailProvider.sendMany(items.map((item) => item.payload));
-    return deliveries.map((delivery) =>
-      delivery.error
-        ? { status: "failed", error: delivery.error }
-        : { status: "succeeded", result: { providerId: delivery.id } },
-    );
-  },
-);
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    worker.handleBatch("email.send", { maxSize: 20, lingerMs: 50 }, async (items) => {
+      const deliveries = await emailProvider.sendMany(items.map((item) => item.payload));
+      return deliveries.map((delivery) =>
+        delivery.error
+          ? { status: "failed", error: delivery.error }
+          : { status: "succeeded", result: { providerId: delivery.id } },
+      );
+    });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    def send_batch(items: list[BatchHandlerItem]) -> list[BatchSucceeded | BatchFailed]:
+        deliveries = email_provider.send_many([item.payload for item in items])
+        return [
+            {"status": "failed", "error": delivery.error}
+            if delivery.error
+            else {"status": "succeeded", "result": {"providerId": delivery.id}}
+            for delivery in deliveries
+        ]
+
+    worker.handle_batch("email.send", send_batch, max_size=20, linger_ms=50)
+    ```
+
+  </Tab>
+  <Tab value="Go">
+    ```go
+    worker.HandleBatch("email.send", workhorse.BatchHandlerOptions{
+        MaxSize: 20,
+        Linger:  50 * time.Millisecond,
+    }, func(items []workhorse.BatchHandlerItem) []workhorse.BatchHandlerOutcome {
+        outcomes := make([]workhorse.BatchHandlerOutcome, len(items))
+        for index := range items {
+            outcomes[index] = workhorse.BatchSucceeded{Result: map[string]any{"sent": true}}
+        }
+        return outcomes
+    })
+    ```
+  </Tab>
+</Tabs>
 
 `maxSize` caps the group, while `lingerMs` lets a partial group wait briefly for peers. Claims still
 pass through normal priority, queue, concurrency, keyed, and rate-limit admission, so a group can

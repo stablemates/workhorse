@@ -14,9 +14,29 @@ again. Mixing them up is the usual source of confusion, so this page keeps them 
 runs while the job is queued, retrying, sleeping on a durable wait, and executing. Use it when
 the result becomes useless at a known time, even if attempts remain.
 
-```ts
-await queue.enqueue("price.quote", { quoteId }, { deadline: quoteExpiresAt });
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    await queue.enqueue("price.quote", { quoteId }, { deadline: quoteExpiresAt });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    queue.enqueue(
+        "price.quote",
+        {"quoteId": quote_id},
+        EnqueueOptions(deadline=quote_expires_at),
+    )
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    _, err := queue.Enqueue(ctx, "price.quote", map[string]any{
+        "quoteId": quoteID,
+    }, workhorse.EnqueueOptions{Deadline: &quoteExpiresAt})
+    ```
+  </Tab>
+</Tabs>
 
 After the deadline passes, PostgreSQL refuses new claims for the job. If a handler is active,
 the next heartbeat returns `deadline_exceeded` and the worker aborts `ctx.signal` with
@@ -32,9 +52,29 @@ would make the new job fail on arrival.
 Use it when one run must stop consuming resources but a later attempt may still succeed — a
 stuck HTTP call, a wedged subprocess.
 
-```ts
-await queue.enqueue("report.build", { reportId }, { executionTimeoutMs: 30_000, maxAttempts: 5 });
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    await queue.enqueue("report.build", { reportId }, { executionTimeoutMs: 30_000, maxAttempts: 5 });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    queue.enqueue(
+        "report.build",
+        {"reportId": report_id},
+        EnqueueOptions(execution_timeout_ms=30_000, max_attempts=5),
+    )
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    _, err := queue.Enqueue(ctx, "report.build", map[string]any{
+        "reportId": reportID,
+    }, workhorse.EnqueueOptions{ExecutionTimeoutMS: 30_000, MaxAttempts: 5})
+    ```
+  </Tab>
+</Tabs>
 
 Only real execution spends the budget. If the handler suspends on a
 [durable wait](/docs/durable-execution), the job holds no worker slot and the accounting
@@ -48,17 +88,8 @@ ordinary thrown error, so an operator can tell "slow" apart from "broken".
 
 The two compose naturally:
 
-```ts
-await queue.enqueue(
-  "match.reminder",
-  { matchId },
-  {
-    deadline: kickoffTime, // pointless after kickoff, whatever happens
-    executionTimeoutMs: 30_000, // any single attempt is stuck after 30s
-    maxAttempts: 5,
-  },
-);
-```
+The options compose directly: set `deadline` with `executionTimeoutMs` in TypeScript,
+`deadline` with `execution_timeout_ms` in Python, or `Deadline` with `ExecutionTimeoutMS` in Go.
 
 Read that as: retry up to five times, give each attempt thirty seconds, and abandon the whole
 thing at kickoff regardless of attempts left.

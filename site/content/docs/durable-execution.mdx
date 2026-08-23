@@ -15,21 +15,45 @@ first activation finds none, runs the operation, and persists its JSON result un
 current fenced lease. Every later activation finds the value and returns it without running
 the operation again.
 
-```ts
-worker.handle("order.fulfill", async (payload: { orderId: string }, ctx) => {
-  const charge = await ctx.checkpoint("charge", () =>
-    payments.charge(payload.orderId, {
-      idempotencyKey: `charge:${payload.orderId}`,
-    }),
-  );
-
-  const shipment = await ctx.checkpoint("shipment", () =>
-    logistics.createShipment(payload.orderId, charge.id),
-  );
-
-  return { chargeId: charge.id, shipmentId: shipment.id };
-});
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const charge = await ctx.checkpoint("charge", () =>
+      payments.charge(payload.orderId, { idempotencyKey: `charge:${payload.orderId}` }),
+    );
+    const shipment = await ctx.checkpoint("shipment", () =>
+      logistics.createShipment(payload.orderId, charge.id),
+    );
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    charge = context.checkpoint(
+        "charge",
+        lambda: payments.charge(
+            payload["orderId"], idempotency_key=f"charge:{payload['orderId']}"
+        ),
+    )
+    shipment = context.checkpoint(
+        "shipment",
+        lambda: logistics.create_shipment(payload["orderId"], charge["id"]),
+    )
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    charge, err := handler.Checkpoint("charge", func() (any, error) {
+        return payments.Charge(payload.OrderID, "charge:"+payload.OrderID)
+    })
+    if err != nil {
+        return nil, err
+    }
+    shipment, err := handler.Checkpoint("shipment", func() (any, error) {
+        return logistics.CreateShipment(payload.OrderID, charge)
+    })
+    ```
+  </Tab>
+</Tabs>
 
 If this handler fails while creating the shipment, the retry replays the stored `charge`
 result and only reruns `shipment`. The card is charged once across any number of attempts.
@@ -43,8 +67,8 @@ checkpoint makes repeats rare; the provider key makes them harmless.
 Reusing a checkpoint name with a different value raises `CheckpointConflictError` instead of
 silently changing durable evidence.
 
-The synchronous Python worker uses the same `context.checkpoint(name, operation)` shape with a
-regular callable. Replay returns its stored JSON value without invoking the callable again.
+The synchronous Python worker accepts a regular callable, while Go accepts a function returning a
+JSON value and an error. Replay returns the stored value without invoking either callback again.
 
 ## Release the worker slot with a durable wait
 
@@ -61,14 +85,33 @@ The wait drops the lease, frees the worker slot, and places the job in `schedule
 **not** consume an attempt — waiting is normal work, not failure. A job that sleeps five
 times and succeeds has used one attempt.
 
-```ts
-worker.handle("email.follow-up", async (payload: { to: string; followUpAt: string }, ctx) => {
-  await ctx.checkpoint("welcome", () => mailer.welcome(payload.to));
-  await ctx.sleepUntil("follow-up-window", new Date(payload.followUpAt));
-  await ctx.checkpoint("follow-up", () => mailer.followUp(payload.to));
-  return { deliveredTo: payload.to };
-});
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    await ctx.checkpoint("welcome", () => mailer.welcome(payload.to));
+    await ctx.sleepUntil("follow-up-window", new Date(payload.followUpAt));
+    await ctx.checkpoint("follow-up", () => mailer.followUp(payload.to));
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    context.checkpoint("welcome", lambda: mailer.welcome(payload["to"]))
+    context.sleep_until("follow-up-window", datetime.fromisoformat(payload["followUpAt"]))
+    context.checkpoint("follow-up", lambda: mailer.follow_up(payload["to"]))
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    welcome, err := handler.Checkpoint("welcome", func() (any, error) {
+        return mailer.Welcome(payload.To)
+    })
+    err = handler.SleepUntil("follow-up-window", payload.FollowUpAt)
+    followUp, err := handler.Checkpoint("follow-up", func() (any, error) {
+        return mailer.FollowUp(payload.To)
+    })
+    ```
+  </Tab>
+</Tabs>
 
 When the timer is due, promotion makes the job ready and some worker — not necessarily the
 original — calls the handler from the top. The stored `welcome` checkpoint replays, execution
@@ -102,13 +145,28 @@ operator code.
 Timers resume because time passed. Signals and human waits resume because another actor supplied a
 JSON value:
 
-```ts
-const event = await ctx.waitForSignal<{ id: string; delivered: boolean }>("provider-event");
-const review = await ctx.waitForHuman<{ eventId: string }, { approved: boolean }>(
-  "operator-review",
-  { eventId: event.id },
-);
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const event = await ctx.waitForSignal<{ id: string }>("provider-event");
+    const review = await ctx.waitForHuman("operator-review", { eventId: event.id });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    event = context.wait_for_signal("provider-event")
+    review = context.wait_for_human("operator-review", {"eventId": event["id"]})
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    event, err := handler.WaitForSignal("provider-event")
+    review, err := handler.WaitForHuman("operator-review", map[string]any{
+        "eventId": event.(map[string]any)["id"],
+    })
+    ```
+  </Tab>
+</Tabs>
 
 Both calls store a named boundary, release the lease, and restart the handler after delivery.
 Applications deliver signals through `Queue.sendSignal`; authenticated operator surfaces complete

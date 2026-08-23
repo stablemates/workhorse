@@ -7,16 +7,39 @@ description: Release a worker slot until another process delivers a named JSON p
 process delivers the named signal, Workhorse makes the same logical attempt ready and restarts the
 handler from its entry point.
 
-```ts
-const approval = await context.waitForSignal<{ approved: boolean }>("approval");
-if (approval.approved) await publishOrder();
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const approval = await context.waitForSignal<{ approved: boolean }>("approval");
+    if (approval.approved) await publishOrder();
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    approval = context.wait_for_signal("approval")
+    if isinstance(approval, dict) and approval.get("approved") is True:
+        publish_order()
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    value, err := handler.WaitForSignal("approval")
+    if err != nil {
+        return nil, err
+    }
+    approval, ok := value.(map[string]any)
+    if ok && approval["approved"] == true {
+        publishOrder()
+    }
+    ```
+  </Tab>
+</Tabs>
 
 Checkpoint earlier effects because replay starts from the top. When replay reaches the same name,
 `waitForSignal` returns the retained payload.
 
-Go handlers use `HandlerContext.WaitForSignal`. They can pass `ExternalWaitOptions` when the
-boundary needs a shorter lifetime.
+Go handlers can pass `ExternalWaitOptions` when the boundary needs a shorter lifetime. Python
+handlers pass `timeout_ms` for the same boundary.
 
 ## Deliver once, retry safely
 

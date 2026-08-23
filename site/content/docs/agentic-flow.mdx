@@ -6,14 +6,35 @@ description: Compose checkpoints, child tools, durable timers, and approval sign
 An agent loop becomes durable when every restart boundary lives in PostgreSQL. Workhorse provides
 those boundaries while your application continues to own model calls, tool code, and prompts.
 
-```ts
-const plan = await context.checkpoint("plan", () => callModel(prompt));
-await context.setProgress({ stage: "planned" });
-
-const tools = await context.runChildren(toolRequests);
-await context.sleep("model-cooldown", cooldownMs);
-const approval = await context.waitForSignal<{ approved: boolean }>("approval");
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const plan = await context.checkpoint("plan", () => callModel(prompt));
+    await context.setProgress({ stage: "planned" });
+    const tools = await context.runChildren(toolRequests);
+    await context.sleep("model-cooldown", cooldownMs);
+    const approval = await context.waitForSignal<{ approved: boolean }>("approval");
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    plan = context.checkpoint("plan", lambda: call_model(prompt))
+    context.set_progress({"stage": "planned"})
+    tools = context.run_children(tool_requests)
+    context.sleep("model-cooldown", cooldown_ms)
+    approval = context.wait_for_signal("approval")
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    plan, err := handler.Checkpoint("plan", func() (any, error) { return callModel(prompt) })
+    progress, err := handler.SetProgress(map[string]any{"stage": "planned"})
+    tools, err := handler.CreateChildren(toolRequests)
+    err = handler.Sleep("model-cooldown", cooldown)
+    approval, err := handler.WaitForSignal("approval")
+    ```
+  </Tab>
+</Tabs>
 
 Python handlers use `set_progress` and `get_progress`; Go handlers use `SetProgress` and
 `GetProgress`. All three surfaces write the same fenced projection, so the dashboard sees one

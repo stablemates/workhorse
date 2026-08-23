@@ -6,9 +6,27 @@ description: Run urgent ready jobs before ordinary work while preserving FIFO or
 Set `EnqueueOptions.priority` when jobs in one queue should not all compete at the same rank.
 PostgreSQL claims higher values first, then keeps FIFO order among jobs with the same value.
 
-```ts
-await queue.enqueue("invoice.remind", { invoiceId }, { queue: "billing", priority: 10 });
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    await queue.enqueue("invoice.remind", { invoiceId }, { queue: "billing", priority: 10 });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    queue.enqueue(
+        "invoice.remind", {"invoiceId": invoice_id}, EnqueueOptions(queue="billing", priority=10)
+    )
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    _, err := queue.Enqueue(ctx, "invoice.remind", map[string]any{
+        "invoiceId": invoiceID,
+    }, workhorse.EnqueueOptions{Queue: "billing", Priority: 10})
+    ```
+  </Tab>
+</Tabs>
 
 Priority is strict. A steady stream of urgent jobs can delay lower-priority work because Workhorse
 does not age jobs or reserve capacity between priority classes. Put work that must always progress

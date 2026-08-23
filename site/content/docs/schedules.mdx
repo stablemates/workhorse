@@ -15,21 +15,43 @@ Call `queue.syncSchedules` during deployment with every definition the namespace
 It is a desired-state call, like a migration: definitions you list are created or updated, and
 with pruning enabled — the default — definitions you dropped from the list are disabled.
 
-```ts
-await queue.syncSchedules("billing-production", [
-  {
-    name: "invoice-run",
-    schedule: "0 2 * * *",
-    timezone: "America/New_York",
-    job: {
-      type: "invoice.generate",
-      queue: "billing",
-      payload: { scope: "due" },
-      maxAttempts: 5,
-    },
-  },
-]);
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    await queue.syncSchedules("billing-production", [{
+      name: "invoice-run",
+      schedule: "0 2 * * *",
+      timezone: "America/New_York",
+      job: { type: "invoice.generate", queue: "billing", payload: { scope: "due" } },
+    }]);
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    queue.sync_schedules(
+        "billing-production",
+        [ScheduleDefinition(
+            name="invoice-run",
+            schedule="0 2 * * *",
+            timezone="America/New_York",
+            job=ScheduledJob(
+                type="invoice.generate", queue="billing", payload={"scope": "due"}
+            ),
+        )],
+    )
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    err := queue.SyncSchedules(ctx, "billing-production", []workhorse.ScheduleDefinition{{
+        Name: "invoice-run", Schedule: "0 2 * * *", Timezone: "America/New_York",
+        Job: workhorse.ScheduledJob{
+            Type: "invoice.generate", Queue: "billing", Payload: map[string]any{"scope": "due"},
+        },
+    }}, workhorse.SyncSchedulesOptions{Prune: true})
+    ```
+  </Tab>
+</Tabs>
 
 Disabled, not deleted: the old definition stays, so jobs it fired in the past still have something
 to point at.
@@ -51,11 +73,25 @@ in `WorkerOptions.scheduleNamespaces` as part of its normal maintenance cadence.
 evaluates and fires each due definition through `fire_due_schedules_v1`, so every SDK uses one
 parser and one stored IANA timezone.
 
-```ts
-const worker = new Worker(queue, {
-  scheduleNamespaces: ["billing-production"],
-});
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const worker = new Worker(queue, { scheduleNamespaces: ["billing-production"] });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    worker = Worker(connection, schedule_namespaces=["billing-production"])
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+        ScheduleNamespaces: []string{"billing-production"},
+    })
+    ```
+  </Tab>
+</Tabs>
 
 A worker with an empty list fires nothing. Point at least one worker at each namespace you
 synchronize, or its schedules sit idle.

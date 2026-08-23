@@ -14,9 +14,29 @@ when the next attempt runs, and what survives in between.
 a thrown error or a crashed worker's expired lease — spends one. When the budget is gone,
 the database deletes the runtime row and writes an immutable failed outcome.
 
-```ts
-await queue.enqueue("provider.sync", { accountId }, { maxAttempts: 5 });
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    await queue.enqueue("provider.sync", { accountId }, { maxAttempts: 5 });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    queue.enqueue(
+        "provider.sync",
+        {"accountId": account_id},
+        EnqueueOptions(max_attempts=5),
+    )
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    _, err := queue.Enqueue(ctx, "provider.sync", map[string]any{
+        "accountId": accountID,
+    }, workhorse.EnqueueOptions{MaxAttempts: 5})
+    ```
+  </Tab>
+</Tabs>
 
 The budget check happens in SQL, always. A worker override can change retry timing, but no
 client configuration can create extra attempts. You cannot accidentally configure infinite
@@ -28,23 +48,34 @@ Retrying instantly is usually wrong: if a provider is down, hammering it just bu
 `EnqueueOptions.retryPolicy` stores a backoff shape with the immutable job definition, and
 PostgreSQL validates it at enqueue time. Three shapes exist:
 
-```ts
-// Always wait the same time.
-const fixed = { type: "fixed", delayMs: 10_000 };
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const jitter = { type: "decorrelated-jitter", baseDelayMs: 1_000, maxDelayMs: 60_000 };
+    await queue.enqueue("provider.sync", { accountId }, { retryPolicy: jitter, maxAttempts: 5 });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    jitter = {"type": "decorrelated-jitter", "baseDelayMs": 1_000, "maxDelayMs": 60_000}
+    queue.enqueue(
+        "provider.sync", {"accountId": account_id},
+        EnqueueOptions(retry_policy=jitter, max_attempts=5),
+    )
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    jitter := map[string]any{"type": "decorrelated-jitter", "baseDelayMs": 1_000, "maxDelayMs": 60_000}
+    _, err := queue.Enqueue(ctx, "provider.sync", map[string]any{
+        "accountId": accountID,
+    }, workhorse.EnqueueOptions{RetryPolicy: jitter, MaxAttempts: 5})
+    ```
+  </Tab>
+</Tabs>
 
-// Grow toward a ceiling.
-const exponential = {
-  type: "exponential",
-  initialDelayMs: 1_000,
-  multiplier: 2,
-  maxDelayMs: 60_000,
-};
-
-// Randomized growth — the right default for external services.
-const jitter = { type: "decorrelated-jitter", baseDelayMs: 1_000, maxDelayMs: 60_000 };
-
-await queue.enqueue("provider.sync", { accountId }, { retryPolicy: jitter, maxAttempts: 5 });
-```
+Fixed and exponential policies use the same JSON field names in every SDK because PostgreSQL owns
+their validation and execution.
 
 Prefer decorrelated jitter for anything that talks to an external service. When a thousand
 jobs fail together, jitter spreads their wake times so the retry wave cannot knock the

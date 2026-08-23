@@ -20,15 +20,35 @@ Go applications call `Queue.SyncRateLimitPolicies` through their caller-owned ex
 Python applications call `sync_rate_limit_policies` through `Queue` or `AsyncQueue` on their
 caller-owned connection. `list_rate_limit_policies` returns the persisted typed definitions.
 
-```ts
-await queue.syncRateLimitPolicies("workers", [
-  {
-    queue: "provider-api",
-    rate: { limit: 60, intervalMs: 60_000, burst: 10 },
-    perKey: { limit: 5, intervalMs: 60_000, burst: 2 },
-  },
-]);
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    await queue.syncRateLimitPolicies("workers", [{
+      queue: "provider-api",
+      rate: { limit: 60, intervalMs: 60_000, burst: 10 },
+      perKey: { limit: 5, intervalMs: 60_000, burst: 2 },
+    }]);
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    queue.sync_rate_limit_policies("workers", [RateLimitPolicyDefinition(
+        queue="provider-api",
+        rate=RateLimit(limit=60, interval_ms=60_000, burst=10),
+        per_key=RateLimit(limit=5, interval_ms=60_000, burst=2),
+    )])
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    policies, err := queue.SyncRateLimitPolicies(ctx, "workers", []workhorse.RateLimitPolicyDefinition{{
+        Queue: "provider-api",
+        Rate: workhorse.RateLimit{Limit: 60, IntervalMS: 60_000, Burst: 10},
+        PerKey: &workhorse.RateLimit{Limit: 5, IntervalMS: 60_000, Burst: 2},
+    }})
+    ```
+  </Tab>
+</Tabs>
 
 Reading the `rate` bucket: time refills tokens at `limit` per `intervalMs` — sixty starts per
 minute — and each job start consumes one token. `burst` caps how many tokens survive an idle

@@ -17,19 +17,37 @@ Build the key from the business operation that should happen once: an order ID, 
 a webhook delivery ID. A timestamp or random value cannot identify a replay, so it defeats the
 mechanism.
 
-```ts
-const jobId = await queue.enqueue(
-  "invoice.capture",
-  { invoiceId },
-  {
-    queue: "billing",
-    idempotency: {
-      key: `capture:${invoiceId}`,
-      scope: "invoice-capture",
-    },
-  },
-);
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const jobId = await queue.enqueue("invoice.capture", { invoiceId }, {
+      queue: "billing",
+      idempotency: { key: `capture:${invoiceId}`, scope: "invoice-capture" },
+    });
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    job_id = queue.enqueue(
+        "invoice.capture",
+        {"invoiceId": invoice_id},
+        EnqueueOptions(
+            queue="billing",
+            idempotency=Idempotency(key=f"capture:{invoice_id}", scope="invoice-capture"),
+        ),
+    )
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    jobID, err := queue.Enqueue(ctx, "invoice.capture", map[string]any{
+        "invoiceId": invoiceID,
+    }, workhorse.EnqueueOptions{Queue: "billing", Idempotency: &workhorse.Idempotency{
+        Key: "capture:" + invoiceID, Scope: "invoice-capture",
+    }})
+    ```
+  </Tab>
+</Tabs>
 
 If the same scope and key still exist, an equivalent request returns the original job ID.
 PostgreSQL adds no second job, no event, no queue placement, no notification — the call just tells
@@ -43,13 +61,33 @@ works well when every key already carries a feature prefix.
 
 Use `enqueueWithResult` when application behavior or diagnostics need more than the stable job ID:
 
-```ts
-const result = await queue.enqueueWithResult(
-  "invoice.capture",
-  { invoiceId },
-  { idempotency: { key: `capture:${invoiceId}`, scope: "invoice-capture" } },
-);
-```
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const result = await queue.enqueueWithResult(
+      "invoice.capture", { invoiceId }, { idempotency: { key, scope: "invoice-capture" } },
+    );
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python
+    result = queue.enqueue_with_result(
+        "invoice.capture",
+        {"invoiceId": invoice_id},
+        EnqueueOptions(idempotency=Idempotency(key=key, scope="invoice-capture")),
+    )
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```go
+    result, err := queue.EnqueueWithResult(ctx, "invoice.capture", map[string]any{
+        "invoiceId": invoiceID,
+    }, workhorse.EnqueueOptions{Idempotency: &workhorse.Idempotency{
+        Key: key, Scope: "invoice-capture",
+    }})
+    ```
+  </Tab>
+</Tabs>
 
 `result.outcome` is an `EnqueueOutcome`: `accepted` for a new job, `replayed` for an equivalent
 idempotency request, `replaced` or `non_replaceable` for [debounce](/docs/debounce), and `coalesced`
@@ -66,19 +104,9 @@ reused for materially different work — a mistake, not a duplicate — so `queu
 `EnqueueIdempotencyConflictError` and rolls back the statement rather than letting either request
 silently win.
 
-```ts
-import { EnqueueIdempotencyConflictError } from "@workhorse-js/core";
-
-try {
-  await queue.enqueue("invoice.capture", { invoiceId, amount }, { idempotency: { key } });
-} catch (error) {
-  if (error instanceof EnqueueIdempotencyConflictError) {
-    // error.details names the conflicting fields and the existing job ID.
-    console.error(error.details.conflictingFields, error.details.existingJobId);
-  }
-  throw error;
-}
-```
+Every SDK raises a typed idempotency conflict: `EnqueueIdempotencyConflictError` in TypeScript and
+Python, and `EnqueueIdempotencyConflictError` through `errors.As` in Go. The error names the
+existing job and conflicting fields without accepting the changed request.
 
 An omitted `runAt` remains omitted in the fingerprint. A later replay of an immediate job
 therefore does not conflict with the original acceptance time.
