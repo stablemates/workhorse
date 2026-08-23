@@ -111,7 +111,10 @@ def test_built_distributions_run_the_documented_examples(
                 [
                     str(interpreter),
                     "-c",
-                    "from workhorse import Admin, AdminAudit, AsyncAdmin",
+                    (
+                        "from workhorse import Admin, AdminAudit, AsyncAdmin, "
+                        "ConcurrencyPolicyDefinition, RateLimit, RateLimitPolicyDefinition"
+                    ),
                 ],
                 check=False,
                 cwd=tmp_path,

@@ -31,6 +31,8 @@ from .errors import (
 )
 from .types import (
     CancelResult,
+    ConcurrencyPolicy,
+    ConcurrencyPolicyDefinition,
     EnqueueOptions,
     EnqueueRequest,
     EnqueueResult,
@@ -38,6 +40,9 @@ from .types import (
     JobTypeContracts,
     Json,
     QueueHealth,
+    RateLimit,
+    RateLimitPolicy,
+    RateLimitPolicyDefinition,
     ScheduleDefinition,
     SignalDeliveryResult,
 )
@@ -128,6 +133,43 @@ class Queue:
         assert_sync_compatible(self._executor)
         payload = serialize_schedules(definitions, self.default_queue)
         self._executor.rows(STATEMENTS.sync_schedules, (namespace, payload, prune))
+
+    def sync_concurrency_policies(
+        self,
+        namespace: str,
+        definitions: Sequence[ConcurrencyPolicyDefinition],
+        *,
+        prune: bool = True,
+    ) -> list[ConcurrencyPolicy]:
+        assert_sync_compatible(self._executor)
+        rows = self._executor.rows(
+            STATEMENTS.sync_concurrency_policies,
+            (namespace, _concurrency_policy_payload(definitions), prune),
+        )
+        return [_concurrency_policy(row) for row in rows]
+
+    def list_concurrency_policies(self, queue_names: Sequence[str] = ()) -> list[ConcurrencyPolicy]:
+        rows = self._executor.rows(STATEMENTS.list_concurrency_policies, (list(queue_names),))
+        return [_concurrency_policy(row) for row in rows]
+
+    def sync_rate_limit_policies(
+        self,
+        namespace: str,
+        definitions: Sequence[RateLimitPolicyDefinition],
+        *,
+        prune: bool = True,
+    ) -> list[RateLimitPolicy]:
+        assert_sync_compatible(self._executor)
+        rows = self._executor.rows(
+            STATEMENTS.sync_rate_limit_policies,
+            (namespace, _rate_limit_policy_payload(definitions), prune),
+        )
+        return [_rate_limit_policy(row) for row in rows]
+
+    def list_rate_limit_policies(self, queue_names: Sequence[str] = ()) -> list[RateLimitPolicy]:
+        names = list(queue_names)
+        rows = self._executor.rows(STATEMENTS.list_rate_limit_policies, (names,))
+        return [_rate_limit_policy(row) for row in rows]
 
     def sync_contracts(self, contracts: Mapping[str, JobTypeContracts]) -> None:
         assert_sync_compatible(self._executor)
@@ -270,6 +312,48 @@ class AsyncQueue:
         await assert_async_compatible(self._executor)
         payload = serialize_schedules(definitions, self.default_queue)
         await self._executor.rows(STATEMENTS.sync_schedules, (namespace, payload, prune))
+
+    async def sync_concurrency_policies(
+        self,
+        namespace: str,
+        definitions: Sequence[ConcurrencyPolicyDefinition],
+        *,
+        prune: bool = True,
+    ) -> list[ConcurrencyPolicy]:
+        await assert_async_compatible(self._executor)
+        rows = await self._executor.rows(
+            STATEMENTS.sync_concurrency_policies,
+            (namespace, _concurrency_policy_payload(definitions), prune),
+        )
+        return [_concurrency_policy(row) for row in rows]
+
+    async def list_concurrency_policies(
+        self, queue_names: Sequence[str] = ()
+    ) -> list[ConcurrencyPolicy]:
+        names = list(queue_names)
+        rows = await self._executor.rows(STATEMENTS.list_concurrency_policies, (names,))
+        return [_concurrency_policy(row) for row in rows]
+
+    async def sync_rate_limit_policies(
+        self,
+        namespace: str,
+        definitions: Sequence[RateLimitPolicyDefinition],
+        *,
+        prune: bool = True,
+    ) -> list[RateLimitPolicy]:
+        await assert_async_compatible(self._executor)
+        rows = await self._executor.rows(
+            STATEMENTS.sync_rate_limit_policies,
+            (namespace, _rate_limit_policy_payload(definitions), prune),
+        )
+        return [_rate_limit_policy(row) for row in rows]
+
+    async def list_rate_limit_policies(
+        self, queue_names: Sequence[str] = ()
+    ) -> list[RateLimitPolicy]:
+        names = list(queue_names)
+        rows = await self._executor.rows(STATEMENTS.list_rate_limit_policies, (names,))
+        return [_rate_limit_policy(row) for row in rows]
 
     async def sync_contracts(self, contracts: Mapping[str, JobTypeContracts]) -> None:
         await assert_async_compatible(self._executor)
@@ -416,6 +500,75 @@ def _one_row(rows: Sequence[Row], operation: str) -> Row:
     if len(rows) != 1:
         raise RuntimeError(f"{operation} returned {len(rows)} rows; expected one")
     return rows[0]
+
+
+def _concurrency_policy(row: Row) -> ConcurrencyPolicy:
+    return ConcurrencyPolicy(
+        namespace=str(row["namespace"]),
+        queue=str(row["queue_name"]),
+        max_active=int(cast(Any, row["max_active"])),
+        max_active_per_key=(
+            None if row["max_active_per_key"] is None else int(cast(Any, row["max_active_per_key"]))
+        ),
+        updated_at=cast(datetime, row["updated_at"]),
+    )
+
+
+def _concurrency_policy_payload(definitions: Sequence[ConcurrencyPolicyDefinition]) -> str:
+    return json.dumps(
+        [
+            {
+                "queue": definition.queue,
+                "maxActive": definition.max_active,
+                "maxActivePerKey": definition.max_active_per_key,
+            }
+            for definition in definitions
+        ],
+        separators=(",", ":"),
+    )
+
+
+def _rate_limit_policy_payload(definitions: Sequence[RateLimitPolicyDefinition]) -> str:
+    return json.dumps(
+        [
+            {
+                "queue": definition.queue,
+                "rate": _rate_limit_document(definition.rate),
+                "perKey": (
+                    None if definition.per_key is None else _rate_limit_document(definition.per_key)
+                ),
+            }
+            for definition in definitions
+        ],
+        separators=(",", ":"),
+    )
+
+
+def _rate_limit_document(rate: RateLimit) -> dict[str, int]:
+    return {"limit": rate.limit, "intervalMs": rate.interval_ms, "burst": rate.burst}
+
+
+def _rate_limit_policy(row: Row) -> RateLimitPolicy:
+    per_key = (
+        None
+        if row["per_key_limit"] is None
+        else RateLimit(
+            limit=int(cast(Any, row["per_key_limit"])),
+            interval_ms=int(cast(Any, row["per_key_interval_ms"])),
+            burst=int(cast(Any, row["per_key_burst"])),
+        )
+    )
+    return RateLimitPolicy(
+        namespace=str(row["namespace"]),
+        queue=str(row["queue_name"]),
+        rate=RateLimit(
+            limit=int(cast(Any, row["rate_limit"])),
+            interval_ms=int(cast(Any, row["rate_interval_ms"])),
+            burst=int(cast(Any, row["rate_burst"])),
+        ),
+        per_key=per_key,
+        updated_at=cast(datetime, row["updated_at"]),
+    )
 
 
 def _signal_parameters(

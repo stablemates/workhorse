@@ -10,6 +10,8 @@ Use a policy when downstream capacity belongs to the application rather than one
 
 Go applications use `Queue.SyncConcurrencyPolicies` through their caller-owned executor. `Queue.ListConcurrencyPolicies` returns the same persisted policy rows.
 
+Python applications use `Queue.sync_concurrency_policies` or `AsyncQueue.sync_concurrency_policies` through their caller-owned connection. `Queue.list_concurrency_policies` and `AsyncQueue.list_concurrency_policies` return the persisted policy rows.
+
 Each policy limits one queue. It can also limit jobs that share a `concurrencyKey` inside that queue. The same key text in another queue is independent.
 
 Keyless jobs consume queue capacity but do not consume keyed capacity. A null per-key limit disables keyed admission while retaining the queue limit.

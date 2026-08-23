@@ -127,7 +127,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
       file: "integration-retention-maintenance.test.ts",
       pattern: "syncConcurrencyPolicies",
     },
-    python: { planned: "WH-367" },
+    python: { file: "test_policies.py", pattern: "sync_concurrency_policies" },
     go: { file: "policies_test.go", pattern: "SyncConcurrencyPolicies" },
   },
   {
@@ -136,7 +136,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
       file: "integration-claim-lease-fence.test.ts",
       pattern: "syncRateLimitPolicies",
     },
-    python: { planned: "WH-367" },
+    python: { file: "test_policies.py", pattern: "sync_rate_limit_policies" },
     go: { file: "policies_test.go", pattern: "SyncRateLimitPolicies" },
   },
   {

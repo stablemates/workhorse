@@ -17,6 +17,9 @@ namespace owns and PostgreSQL reconciles stored state to match.
 Go applications call `Queue.SyncConcurrencyPolicies` through the same caller-owned executor used
 for enqueue. `Queue.ListConcurrencyPolicies` returns the persisted typed rows.
 
+Python applications call `sync_concurrency_policies` through `Queue` or `AsyncQueue` on their
+caller-owned connection. `list_concurrency_policies` returns the persisted typed rows.
+
 ```ts
 await queue.syncConcurrencyPolicies("workers", [
   {

@@ -18,6 +18,8 @@ Deploy rate policies as desired state:
 
 Go applications use `Queue.SyncRateLimitPolicies` through their caller-owned executor. `Queue.ListRateLimitPolicies` returns the persisted definitions.
 
+Python applications use `Queue.sync_rate_limit_policies` or `AsyncQueue.sync_rate_limit_policies` through their caller-owned connection. `Queue.list_rate_limit_policies` and `AsyncQueue.list_rate_limit_policies` return the persisted definitions.
+
 ```ts
 await queue.syncRateLimitPolicies("billing-workers", [
   {

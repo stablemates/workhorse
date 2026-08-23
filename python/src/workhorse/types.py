@@ -100,6 +100,45 @@ class EnqueueRequest:
 
 
 @dataclass(frozen=True)
+class ConcurrencyPolicyDefinition:
+    queue: str
+    max_active: int
+    max_active_per_key: int | None = None
+
+
+@dataclass(frozen=True)
+class ConcurrencyPolicy:
+    namespace: str
+    queue: str
+    max_active: int
+    max_active_per_key: int | None
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class RateLimit:
+    limit: int
+    interval_ms: int
+    burst: int
+
+
+@dataclass(frozen=True)
+class RateLimitPolicyDefinition:
+    queue: str
+    rate: RateLimit
+    per_key: RateLimit | None = None
+
+
+@dataclass(frozen=True)
+class RateLimitPolicy:
+    namespace: str
+    queue: str
+    rate: RateLimit
+    per_key: RateLimit | None
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
 class ChildJobRequest:
     name: str
     type: str

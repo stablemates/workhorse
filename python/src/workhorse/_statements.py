@@ -23,6 +23,10 @@ class StatementRegistry:
     health: DriverStatement
     cancel: DriverStatement
     enqueue_many: DriverStatement
+    sync_concurrency_policies: DriverStatement
+    list_concurrency_policies: DriverStatement
+    sync_rate_limit_policies: DriverStatement
+    list_rate_limit_policies: DriverStatement
     sync_schedules: DriverStatement
     sync_contracts: DriverStatement
     get_contract: DriverStatement
@@ -82,6 +86,52 @@ STATEMENTS = StatementRegistry(
         asyncpg=(
             "SELECT ordinal, job_id, outcome, reason "
             "FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal"
+        ),
+    ),
+    sync_concurrency_policies=DriverStatement(
+        psycopg=(
+            "SELECT * FROM workhorse.sync_concurrency_policies_v1(%s::text, %s::jsonb, %s::boolean)"
+        ),
+        asyncpg=(
+            "SELECT * FROM workhorse.sync_concurrency_policies_v1($1::text, $2::jsonb, $3::boolean)"
+        ),
+    ),
+    list_concurrency_policies=DriverStatement(
+        psycopg=(
+            "SELECT namespace, queue_name, max_active, max_active_per_key, updated_at "
+            "FROM workhorse.concurrency_policy, (SELECT %s::text[] AS names) AS filter "
+            "WHERE cardinality(filter.names) = 0 OR queue_name = ANY(filter.names) "
+            "ORDER BY queue_name"
+        ),
+        asyncpg=(
+            "SELECT namespace, queue_name, max_active, max_active_per_key, updated_at "
+            "FROM workhorse.concurrency_policy, (SELECT $1::text[] AS names) AS filter "
+            "WHERE cardinality(filter.names) = 0 OR queue_name = ANY(filter.names) "
+            "ORDER BY queue_name"
+        ),
+    ),
+    sync_rate_limit_policies=DriverStatement(
+        psycopg=(
+            "SELECT * FROM workhorse.sync_rate_limit_policies_v1(%s::text, %s::jsonb, %s::boolean)"
+        ),
+        asyncpg=(
+            "SELECT * FROM workhorse.sync_rate_limit_policies_v1($1::text, $2::jsonb, $3::boolean)"
+        ),
+    ),
+    list_rate_limit_policies=DriverStatement(
+        psycopg=(
+            "SELECT namespace, queue_name, rate_limit, rate_interval_ms, rate_burst, "
+            "per_key_limit, per_key_interval_ms, per_key_burst, updated_at "
+            "FROM workhorse.rate_limit_policy, (SELECT %s::text[] AS names) AS filter "
+            "WHERE cardinality(filter.names) = 0 OR queue_name = ANY(filter.names) "
+            "ORDER BY queue_name"
+        ),
+        asyncpg=(
+            "SELECT namespace, queue_name, rate_limit, rate_interval_ms, rate_burst, "
+            "per_key_limit, per_key_interval_ms, per_key_burst, updated_at "
+            "FROM workhorse.rate_limit_policy, (SELECT $1::text[] AS names) AS filter "
+            "WHERE cardinality(filter.names) = 0 OR queue_name = ANY(filter.names) "
+            "ORDER BY queue_name"
         ),
     ),
     sync_schedules=DriverStatement(

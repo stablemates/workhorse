@@ -17,6 +17,9 @@ on deploy.
 Go applications call `Queue.SyncRateLimitPolicies` through their caller-owned executor.
 `Queue.ListRateLimitPolicies` returns the persisted typed definitions.
 
+Python applications call `sync_rate_limit_policies` through `Queue` or `AsyncQueue` on their
+caller-owned connection. `list_rate_limit_policies` returns the persisted typed definitions.
+
 ```ts
 await queue.syncRateLimitPolicies("workers", [
   {

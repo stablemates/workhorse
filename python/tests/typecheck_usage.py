@@ -17,12 +17,15 @@ from workhorse import (
     BatchHandlerItem,
     BatchHandlerOutcome,
     ChildJobRequest,
+    ConcurrencyPolicyDefinition,
     DeadLetterQuery,
     EnqueueOptions,
     HandlerContext,
     Idempotency,
     Json,
     Queue,
+    RateLimit,
+    RateLimitPolicyDefinition,
     Worker,
     run_worker_process,
 )
@@ -34,6 +37,21 @@ def sync_enqueue(connection: psycopg.Connection[Any]) -> str:
         {"message": "hello"},
         EnqueueOptions(idempotency=Idempotency("message")),
     )
+
+
+def sync_policies(connection: psycopg.Connection[Any]) -> None:
+    queue = Queue(connection)
+    queue.sync_concurrency_policies(
+        "application",
+        [ConcurrencyPolicyDefinition("mail", max_active=8, max_active_per_key=2)],
+    )
+    queue.list_concurrency_policies(["mail"])
+    queue.sync_rate_limit_policies(
+        "application",
+        [RateLimitPolicyDefinition("mail", RateLimit(limit=10, interval_ms=1_000, burst=20))],
+        prune=False,
+    )
+    queue.list_rate_limit_policies()
 
 
 def sync_admin(connection: psycopg.Connection[Any]) -> str | None:
@@ -127,6 +145,19 @@ async def asyncpg_enqueue(connection: asyncpg.Connection) -> str:
 async def asyncpg_admin(connection: asyncpg.Connection) -> int:
     admin = AsyncAdmin.from_asyncpg(connection)
     return len((await admin.list_jobs()).items)
+
+
+async def asyncpg_policies(connection: asyncpg.Connection) -> None:
+    queue = AsyncQueue.from_asyncpg(connection)
+    await queue.sync_concurrency_policies(
+        "application", [ConcurrencyPolicyDefinition("mail", max_active=8)]
+    )
+    await queue.list_concurrency_policies()
+    await queue.sync_rate_limit_policies(
+        "application",
+        [RateLimitPolicyDefinition("mail", RateLimit(limit=10, interval_ms=1_000, burst=20))],
+    )
+    await queue.list_rate_limit_policies(["mail"])
 
 
 async def async_psycopg_worker(connection: psycopg.AsyncConnection[Any]) -> bool:

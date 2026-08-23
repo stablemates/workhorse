@@ -37,8 +37,8 @@ Two boundaries keep this matrix small:
 | Keyed throttle                             | Supported  | Supported | Supported |
 | Job dependencies with terminal policies    | Supported  | Supported | Supported |
 | Concurrency keys                           | Supported  | Supported | Supported |
-| Concurrency policy management              | Supported  | Planned   | Supported |
-| Rate-limit policy management               | Supported  | Planned   | Supported |
+| Concurrency policy management              | Supported  | Supported | Supported |
+| Rate-limit policy management               | Supported  | Supported | Supported |
 | Recurring schedule definition sync         | Supported  | Supported | Supported |
 | Payload and result contracts               | Supported  | Supported | Supported |
 | Compatibility refusal before mutation      | Supported  | Supported | Supported |
@@ -66,7 +66,7 @@ embedded dashboard reads the shared database, so a Go deployment does not need a
 runtime.
 The client inventory includes policy synchronization and listing, rather than treating shared
 PostgreSQL admission behavior as proof that every SDK exposes policy management. TypeScript and Go
-support concurrency and rate-limit policy management. Python support is tracked by [WH-367].
+support concurrency and rate-limit policy management.
 
 ## Worker runtime
 
@@ -117,6 +117,7 @@ semantics before any runtime fires a definition.
 | TypeScript `Admin` client                 | [WH-355]        | Done      |
 | Python `Admin` client                     | [WH-356]        | In Review |
 | Go `Admin` client                         | [WH-357]        | In Review |
+| Python policy management                  | [WH-367]        | In Review |
 
 The Plane work items own sequencing, blockers, and completion. Update this table when their state
 changes, and update the capability matrices only when repository tests prove the new support.
