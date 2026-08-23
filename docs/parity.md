@@ -108,6 +108,7 @@ semantics before any runtime fires a definition.
 | Go worker and module examples             | [WH-236]        | Done      |
 | Go schedule firing                        | [WH-332]        | Done      |
 | Go and Python embedded dashboard backends | [WH-351]        | Done      |
+| Go and Python public documentation        | [WH-359]        | Done      |
 | TypeScript `Admin` client                 | [WH-355]        | Done      |
 | Python `Admin` client                     | [WH-356]        | In Review |
 | Go `Admin` client                         | [WH-357]        | In Review |
@@ -189,3 +190,4 @@ check is what stops the two halves drifting apart between reviews.
 [WH-355]: https://app.plane.so/techprogress/browse/WH-355/
 [WH-356]: https://app.plane.so/techprogress/browse/WH-356/
 [WH-357]: https://app.plane.so/techprogress/browse/WH-357/
+[WH-359]: https://app.plane.so/techprogress/browse/WH-359/
