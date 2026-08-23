@@ -9,6 +9,10 @@ without losing the evidence of what happened, and without replaying anything twi
 redrive: Workhorse keeps the failed job as immutable evidence and creates a new job from it, with
 an audit trail linking the two.
 
+```ts
+const admin = new Admin(pool);
+```
+
 ## List terminal failures
 
 `admin.listDeadLetters(query)` reads a cold failure index that stays separate from the ready and

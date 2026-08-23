@@ -4,6 +4,8 @@ A job used up all its attempts and gave up. Later you discover the API it was ca
 been down for an hour. The job would work fine now.
 
 Redriving is an operator saying: make me a fresh copy of this job and run it.
+TypeScript application code makes that request through `Admin`, which is separate from the
+application-shaped `Queue` client.
 
 ## Dead letters
 

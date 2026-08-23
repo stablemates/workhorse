@@ -110,13 +110,13 @@ value. Priority is strict, so a sustained stream of urgent work can delay lower-
 Use separate queue names when work needs independent capacity or worker policy. Priority changes
 dispatch order within one queue; it does not reserve capacity for lower-priority work.
 
-Three controls operate on a whole queue:
+Whole-queue controls belong to `Admin`, and every mutation carries audit identity:
 
 ```ts
-const audit = { actor: actor.email, reason: "provider maintenance", requestId: incidentId };
-await admin.pauseQueue("billing", audit); // workers stop claiming; jobs are unchanged
-await admin.resumeQueue("billing", { ...audit, requestId: `${incidentId}:resume` });
-await admin.purgeQueue("billing", { ...audit, requestId: `${incidentId}:purge` });
+const admin = new Admin(pool);
+await admin.pauseQueue("billing", { actor, reason, requestId });
+await admin.resumeQueue("billing", { actor, reason, requestId: resumeRequestId });
+await admin.purgeQueue("billing", { actor, reason: purgeReason, requestId: purgeRequestId });
 ```
 
 Use `options.concurrencyKey` when a synchronized policy should also limit one application-defined

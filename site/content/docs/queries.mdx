@@ -8,6 +8,12 @@ job in, what happened to it, and is the system healthy? Workhorse answers all th
 PostgreSQL read models that stay separate from the dispatch path. You can page through millions
 of terminal jobs without slowing a single worker's claim.
 
+Construct `Admin` from the same caller-owned pool or executor as `Queue`:
+
+```ts
+const admin = new Admin(pool);
+```
+
 ## Read one known job
 
 `admin.getJob(jobId)` joins the job's immutable identity to its runtime or outcome row and

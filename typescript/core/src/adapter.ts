@@ -1,4 +1,5 @@
 import type { QueryResult, QueryResultRow } from "pg";
+import { Admin } from "./admin.js";
 import { databaseErrorCode, WorkhorseError } from "./errors.js";
 import { Queue } from "./queue.js";
 import type { Queryable, QueueOptions } from "./types.js";
@@ -15,7 +16,9 @@ import type { WorkerOptions } from "./worker.js";
 export interface WorkhorseAdapter<TTransaction = Queryable> {
   readonly database: Queryable;
   readonly queue: Queue;
+  readonly admin: Admin;
   forTransaction(transaction: TTransaction): Queue;
+  adminForTransaction(transaction: TTransaction): Admin;
   createWorker(options?: WorkerOptions): Worker;
   close(): Promise<void>;
 }
@@ -33,13 +36,22 @@ export function createWorkhorseAdapter<TTransaction = Queryable>(
   options: WorkhorseAdapterOptions<TTransaction>,
 ): WorkhorseAdapter<TTransaction> {
   const queue = new Queue(options.database, options.defaultQueue, options.queueOptions);
+  const admin = new Admin(options.database, options.defaultQueue, options.queueOptions);
   let closePromise: Promise<void> | undefined;
 
   return {
     database: options.database,
     queue,
+    admin,
     forTransaction(transaction) {
       return new Queue(
+        options.adaptTransaction(transaction),
+        queue.defaultQueue,
+        options.queueOptions,
+      );
+    },
+    adminForTransaction(transaction) {
+      return new Admin(
         options.adaptTransaction(transaction),
         queue.defaultQueue,
         options.queueOptions,

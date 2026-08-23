@@ -11,7 +11,7 @@ import {
 } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { pool, queue } = createIntegrationTestContext(import.meta.url);
+const { pool, queue, admin } = createIntegrationTestContext(import.meta.url);
 const records: LogRecord[] = [];
 const provider: LoggerProvider = {
   getLogger: () => ({
@@ -44,7 +44,7 @@ describe("checkpoints progress waits", () => {
       fenceToken: job!.fenceToken,
       workerId: "worker-a",
     });
-    await expect(queue.getCheckpoint(id, "payment-authorized")).resolves.toEqual(saved);
+    await expect(admin.getCheckpoint(id, "payment-authorized")).resolves.toEqual(saved);
     await expect(
       queue.saveCheckpoint(job!, "worker-a", "nullable-result", null),
     ).resolves.toMatchObject({
@@ -63,7 +63,7 @@ describe("checkpoints progress waits", () => {
     ).rejects.toThrow(/different value/);
 
     expect(await queue.complete(job!, "worker-a", { ok: true })).toBe(true);
-    await expect(queue.getCheckpoint(id, "payment-authorized")).resolves.toEqual(saved);
+    await expect(admin.getCheckpoint(id, "payment-authorized")).resolves.toEqual(saved);
     const events = await pool.query<{ event_type: string }>(
       "SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY event_id",
       [id],
@@ -94,8 +94,8 @@ describe("checkpoints progress waits", () => {
         [id, "worker-a", job!.fenceToken.toString(), MAX_CHECKPOINT_VALUE_BYTES + 1],
       ),
     ).rejects.toThrow(/at most 1048576 bytes/);
-    await expect(queue.getCheckpoint(id, "oversized")).resolves.toBeNull();
-    await expect(queue.getCheckpoint(id, "oversized-sql")).resolves.toBeNull();
+    await expect(admin.getCheckpoint(id, "oversized")).resolves.toBeNull();
+    await expect(admin.getCheckpoint(id, "oversized-sql")).resolves.toBeNull();
   });
 
   it("rejects checkpoint writes from a stale ownership generation", async () => {
@@ -108,7 +108,7 @@ describe("checkpoints progress waits", () => {
     await expect(
       queue.saveCheckpoint(stale!, "worker-a", "stale-step", { shouldNotPersist: true }),
     ).rejects.toThrow(/lease is stale or expired/);
-    await expect(queue.getCheckpoint(id, "stale-step")).resolves.toBeNull();
+    await expect(admin.getCheckpoint(id, "stale-step")).resolves.toBeNull();
     await expect(
       queue.saveCheckpoint(current!, "worker-b", "current-step", { persisted: true }),
     ).resolves.toMatchObject({ name: "current-step", attempt: 2, workerId: "worker-b" });
@@ -142,8 +142,8 @@ describe("checkpoints progress waits", () => {
         name: "CheckpointLeaseLostError",
         message: expect.stringMatching(/lease is stale or expired/),
       });
-      await expect(queue.getCheckpoint(id, "racing-step")).resolves.toBeNull();
-      await expect(queue.getJob(id)).resolves.toMatchObject({ state: "ready", currentAttempt: 2 });
+      await expect(admin.getCheckpoint(id, "racing-step")).resolves.toBeNull();
+      await expect(admin.getJob(id)).resolves.toMatchObject({ state: "ready", currentAttempt: 2 });
     } finally {
       await transition.query("ROLLBACK").catch(() => undefined);
       transition.release();
@@ -176,8 +176,8 @@ describe("checkpoints progress waits", () => {
       await transition.query("COMMIT");
 
       await expect(rejection).resolves.toMatchObject({ name: "CheckpointLeaseLostError" });
-      await expect(queue.getCheckpoint(id, "too-late")).resolves.toBeNull();
-      await expect(queue.getJob(id)).resolves.toMatchObject({
+      await expect(admin.getCheckpoint(id, "too-late")).resolves.toBeNull();
+      await expect(admin.getJob(id)).resolves.toMatchObject({
         state: "succeeded",
         result: { completed: true },
       });
@@ -195,8 +195,8 @@ describe("checkpoints progress waits", () => {
     });
 
     expect(await queue.fail(job!, "worker-a", new Error("terminal"))).toBe("failed");
-    await expect(queue.getCheckpoint(id, "before-failure")).resolves.toEqual(checkpoint);
-    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "failed" });
+    await expect(admin.getCheckpoint(id, "before-failure")).resolves.toEqual(checkpoint);
+    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "failed" });
   });
 
   it("rechecks checkpoint lease expiry after waiting for the runtime lock", async () => {
@@ -221,8 +221,8 @@ describe("checkpoints progress waits", () => {
         name: "CheckpointLeaseLostError",
         message: expect.stringMatching(/lease is stale or expired/),
       });
-      await expect(queue.getCheckpoint(id, "expired-while-waiting")).resolves.toBeNull();
-      await expect(queue.getJob(id)).resolves.toMatchObject({ state: "active" });
+      await expect(admin.getCheckpoint(id, "expired-while-waiting")).resolves.toBeNull();
+      await expect(admin.getJob(id)).resolves.toMatchObject({ state: "active" });
     } finally {
       await blocker.query("ROLLBACK").catch(() => undefined);
       blocker.release();
@@ -246,8 +246,8 @@ describe("checkpoints progress waits", () => {
       fenceToken: job!.fenceToken,
       workerId: "progress-worker",
     });
-    await expect(queue.getProgress(id)).resolves.toEqual(first);
-    await expect(queue.getJob(id)).resolves.toMatchObject({ progress: first });
+    await expect(admin.getProgress(id)).resolves.toEqual(first);
+    await expect(admin.getJob(id)).resolves.toMatchObject({ progress: first });
 
     const unchanged = await queue.updateProgress(job!, "progress-worker", {
       completed: 2,
@@ -274,7 +274,7 @@ describe("checkpoints progress waits", () => {
     expect(second.updatedAt.getTime()).toBeGreaterThan(first.updatedAt.getTime());
 
     expect(await queue.complete(job!, "progress-worker", { imported: 10 })).toBe(true);
-    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "succeeded", progress: second });
+    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "succeeded", progress: second });
     const events = await pool.query<{ event_type: string; details: Record<string, unknown> }>(
       `SELECT event_type, details FROM workhorse.job_event
         WHERE job_id = $1 AND event_type = 'progress_updated' ORDER BY event_id`,
@@ -324,7 +324,7 @@ describe("checkpoints progress waits", () => {
       await blocker.query("COMMIT");
 
       await expect(updating).resolves.toMatchObject({ name: "ProgressLeaseLostError" });
-      await expect(queue.getProgress(id)).resolves.toBeNull();
+      await expect(admin.getProgress(id)).resolves.toBeNull();
     } finally {
       await blocker.query("ROLLBACK").catch(() => undefined);
       blocker.release();
@@ -349,7 +349,7 @@ describe("checkpoints progress waits", () => {
       null,
       expect.objectContaining({ jobId: id, value: { percent: 50, label: "halfway" } }),
     ]);
-    await expect(queue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       state: "succeeded",
       result: { revision: "1" },
       progress: { value: { percent: 50, label: "halfway" } },
@@ -385,8 +385,8 @@ describe("checkpoints progress waits", () => {
     });
     expect(result.wait.wakeAt.getTime()).toBeGreaterThanOrEqual(before + 5_000);
     expect(result.wait.wakeAt.getTime()).toBeLessThanOrEqual(after + 5_100);
-    await expect(queue.getWait(id, "provider-cooldown")).resolves.toEqual(result.wait);
-    await expect(queue.listWaits(id)).resolves.toEqual([result.wait]);
+    await expect(admin.getWait(id, "provider-cooldown")).resolves.toEqual(result.wait);
+    await expect(admin.listWaits(id)).resolves.toEqual([result.wait]);
 
     const runtime = await pool.query<{
       state: string;
@@ -442,7 +442,7 @@ describe("checkpoints progress waits", () => {
     });
 
     expect(replay).toEqual({ status: "elapsed", wait: first.wait });
-    await expect(queue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       state: "active",
       currentAttempt: 1,
       fenceToken: continuation!.fenceToken,
@@ -490,8 +490,8 @@ describe("checkpoints progress waits", () => {
     await expect(
       queue.scheduleWait(continuation!, "conflict-worker", "embargo", { durationMs: 1 }),
     ).rejects.toMatchObject({ name: "WaitConflictError", existing: first.wait });
-    await expect(queue.getWait(id, "embargo")).resolves.toEqual(first.wait);
-    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "active", currentAttempt: 1 });
+    await expect(admin.getWait(id, "embargo")).resolves.toEqual(first.wait);
+    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "active", currentAttempt: 1 });
   });
 
   it("bounds wait names, relative durations, and absolute timestamps", async () => {
@@ -532,7 +532,7 @@ describe("checkpoints progress waits", () => {
         [id, "bounds-worker", job!.fenceToken.toString()],
       ),
     ).rejects.toThrow(/finite/);
-    await expect(queue.getWait(id, "too-far")).resolves.toBeNull();
+    await expect(admin.getWait(id, "too-far")).resolves.toBeNull();
 
     const maximum = await schedule("maximum", { durationMs: 31_536_000_000 });
     expect(maximum.status).toBe("scheduled");
@@ -564,8 +564,8 @@ describe("checkpoints progress waits", () => {
         )
       ).rows[0].count,
     ).toBe(1_000);
-    await expect(queue.getWait(id, "overflow")).resolves.toBeNull();
-    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "active" });
+    await expect(admin.getWait(id, "overflow")).resolves.toBeNull();
+    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "active" });
   });
 
   it("records a past-due first target without releasing active ownership", async () => {
@@ -581,7 +581,7 @@ describe("checkpoints progress waits", () => {
       status: "elapsed",
       wait: { name: "already-open", requestedWakeAt: target, wakeAt: target },
     });
-    await expect(queue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       state: "active",
       fenceToken: job!.fenceToken,
     });
@@ -663,8 +663,8 @@ describe("checkpoints progress waits", () => {
       await blocker.query("COMMIT");
 
       await expect(scheduling).resolves.toMatchObject({ name: "WaitLeaseLostError" });
-      await expect(queue.getWait(id, "expired-while-blocked")).resolves.toBeNull();
-      await expect(queue.getJob(id)).resolves.toMatchObject({ state: "active" });
+      await expect(admin.getWait(id, "expired-while-blocked")).resolves.toBeNull();
+      await expect(admin.getJob(id)).resolves.toMatchObject({ state: "active" });
     } finally {
       await blocker.query("ROLLBACK").catch(() => undefined);
       blocker.release();
@@ -696,8 +696,8 @@ describe("checkpoints progress waits", () => {
           durationMs: 1_000,
         }),
       ).rejects.toMatchObject({ name: "WaitLeaseLostError" });
-      await expect(queue.getWait(id, "expired-during-transition")).resolves.toBeNull();
-      await expect(queue.getJob(id)).resolves.toMatchObject({ state: "active" });
+      await expect(admin.getWait(id, "expired-during-transition")).resolves.toBeNull();
+      await expect(admin.getJob(id)).resolves.toMatchObject({ state: "active" });
     } finally {
       await pool.query(`
         DROP TRIGGER IF EXISTS test_delay_wait_insert ON workhorse.job_wait;
@@ -747,8 +747,8 @@ describe("checkpoints progress waits", () => {
         await transition.query("COMMIT");
 
         await expect(scheduling).resolves.toMatchObject({ name: "WaitLeaseLostError" });
-        await expect(queue.getWait(id, "racing-wait")).resolves.toBeNull();
-        await expect(queue.getJob(id)).resolves.toMatchObject({
+        await expect(admin.getWait(id, "racing-wait")).resolves.toBeNull();
+        await expect(admin.getJob(id)).resolves.toMatchObject({
           state: transitionKind === "complete" ? "succeeded" : "ready",
         });
       } finally {
@@ -829,7 +829,7 @@ describe("checkpoints progress waits", () => {
     await sleep(110);
     expect(await worker.runOnce()).toBe(true);
 
-    await expect(queue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       state: "succeeded",
       currentAttempt: 1,
       result: { handlerRuns: 2 },
@@ -875,7 +875,7 @@ describe("checkpoints progress waits", () => {
     await sleep(110);
     expect(await worker.runOnce()).toBe(true);
 
-    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "failed", currentAttempt: 1 });
+    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "failed", currentAttempt: 1 });
     expect(handlerRuns).toBe(2);
     const attempts = await pool.query(
       "SELECT attempt, outcome FROM workhorse.attempt_history WHERE job_id = $1",
@@ -907,13 +907,13 @@ describe("checkpoints progress waits", () => {
     await sleep(110);
     expect(await worker.runOnce()).toBe(true);
 
-    await expect(queue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       state: "succeeded",
       currentAttempt: 1,
       result: { handlerRuns: 3 },
     });
     expect(observedFirstWaits).toEqual([null, "first", "first"]);
-    const waits = await queue.listWaits(id);
+    const waits = await admin.listWaits(id);
     expect(waits.map((wait) => [wait.name, wait.mode])).toEqual([
       ["first", "relative"],
       ["second", "absolute"],
@@ -936,11 +936,11 @@ describe("checkpoints progress waits", () => {
     });
     expect(await queue.complete(job!, "retention-worker", { ok: true })).toBe(true);
 
-    await expect(queue.getWait(id, "past")).resolves.toEqual(wait.wait);
-    await expect(queue.listWaits(id)).resolves.toEqual([wait.wait]);
+    await expect(admin.getWait(id, "past")).resolves.toEqual(wait.wait);
+    await expect(admin.listWaits(id)).resolves.toEqual([wait.wait]);
     await pool.query("DELETE FROM workhorse.job WHERE id = $1", [id]);
-    await expect(queue.getWait(id, "past")).resolves.toBeNull();
-    await expect(queue.listWaits(id)).resolves.toEqual([]);
+    await expect(admin.getWait(id, "past")).resolves.toBeNull();
+    await expect(admin.listWaits(id)).resolves.toEqual([]);
   });
 
   it("releases the worker slot immediately when a handler suspends", async () => {
@@ -959,9 +959,9 @@ describe("checkpoints progress waits", () => {
       });
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(queue.getJob(waitingId)).resolves.toMatchObject({ state: "scheduled" });
+    await expect(admin.getJob(waitingId)).resolves.toMatchObject({ state: "scheduled" });
     expect(await worker.runOnce()).toBe(true);
-    await expect(queue.getJob(followingId)).resolves.toMatchObject({ state: "succeeded" });
+    await expect(admin.getJob(followingId)).resolves.toMatchObject({ state: "succeeded" });
     expect(handled).toEqual(["waiting", "following"]);
   });
 
@@ -988,7 +988,7 @@ describe("checkpoints progress waits", () => {
 
     expect(handlerRuns).toBe(2);
     expect(expensiveOperations).toBe(1);
-    await expect(queue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       state: "succeeded",
       result: { prepared: { operation: 1 }, handlerRuns: 2 },
     });
@@ -1015,7 +1015,7 @@ describe("checkpoints progress waits", () => {
     expect(await worker.runOnce()).toBe(true);
     expect(caught).toBe(true);
     expect(codeAfterCatch).toBe(true);
-    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "scheduled" });
+    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "scheduled" });
     const events = await pool.query<{ event_type: string }>(
       "SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY event_id",
       [id],
@@ -1065,7 +1065,7 @@ describe("checkpoints progress waits", () => {
 
     expect(await worker.runOnce()).toBe(true);
     expect(caught).toBeDefined();
-    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "scheduled" });
+    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "scheduled" });
     const events = await pool.query<{ event_type: string }>(
       "SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY event_id",
       [id],
@@ -1093,7 +1093,7 @@ describe("checkpoints progress waits", () => {
     >("ordinary-handler", ({ value }) => ({ value }));
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(new Admin(countingDatabase).getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       state: "succeeded",
       result: { value: 42 },
     });
@@ -1144,15 +1144,15 @@ describe("checkpoints progress waits", () => {
     });
 
     expect(await worker.runOnce()).toBe(true);
-    expect((await queue.getJob(id))?.state).toBe("ready");
+    expect((await admin.getJob(id))?.state).toBe("ready");
     expect(await worker.runOnce()).toBe(true);
 
     expect(externalEffects).toBe(1);
-    await expect(queue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       state: "succeeded",
       result: { authorizationId: "auth-1" },
     });
-    await expect(queue.getCheckpoint(id, "authorize")).resolves.toMatchObject({
+    await expect(admin.getCheckpoint(id, "authorize")).resolves.toMatchObject({
       value: { authorizationId: "auth-1" },
       attempt: 1,
       workerId: "checkpoint-worker",
@@ -1180,7 +1180,7 @@ describe("checkpoints progress waits", () => {
 
     expect(await worker.runOnce()).toBe(true);
     expect(operations).toBe(1);
-    await expect(queue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       result: {
         first: { operation: 1 },
         second: { operation: 1 },

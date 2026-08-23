@@ -44,7 +44,7 @@ try {
   await installSchema(pool);
 
   const queue = new Queue(pool);
-  const operator = new Admin(pool);
+  const workhorseAdmin = new Admin(pool);
   const payload = { runtime: runtime.name, sentinel: "runtime-smoke" };
   const worker = new Worker(queue, {
     queue: "runtime-smoke",
@@ -57,7 +57,7 @@ try {
   let state = "pending";
   for (let attempt = 0; attempt < 100; attempt += 1) {
     await worker.runOnce();
-    const snapshot = await operator.getJob(jobId);
+    const snapshot = await workhorseAdmin.getJob(jobId);
     state = snapshot?.state ?? "missing";
     if (state === "succeeded") {
       const echoed = (snapshot?.result as { echoed?: unknown } | null)?.echoed;

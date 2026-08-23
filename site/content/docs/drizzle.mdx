@@ -35,8 +35,9 @@ const workhorse = createDrizzleAdapter(db, {
 });
 ```
 
-The returned `WorkhorseAdapter` exposes `database`, `queue`, `forTransaction`, `createWorker`, and
-`close`. It gives worker processes one stable surface without adding Drizzle to core.
+The returned `WorkhorseAdapter` exposes `database`, `queue`, `admin`, `forTransaction`,
+`adminForTransaction`, `createWorker`, and `close`. It gives worker processes and operator tools
+one stable surface without adding Drizzle to core.
 
 ## Enqueue inside a Drizzle transaction
 

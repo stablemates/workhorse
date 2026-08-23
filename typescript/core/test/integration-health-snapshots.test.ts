@@ -13,7 +13,9 @@ import { EXTERNAL_WAIT_REJECTION_WINDOW_MS } from "../src/types.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 import { WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
 
-const { defaultRetentionPolicy, pool, queue } = createIntegrationTestContext(import.meta.url);
+const { defaultRetentionPolicy, pool, queue, admin, adminAudit } = createIntegrationTestContext(
+  import.meta.url,
+);
 
 describe("health snapshots", () => {
   it("counts only recent external-wait rejections through the partial event index", async () => {
@@ -93,8 +95,8 @@ describe("health snapshots", () => {
 
     expect(recovery).toMatchObject({ rows_affected: 2, expired_leases: 2, retried: 1 });
     expect(recovery?.retry_dimensions).toEqual([{ queue: "default", type: "telemetry-retry" }]);
-    expect((await queue.getJob(retryId))?.state).toBe("ready");
-    expect((await queue.getJob(terminalId))?.state).toBe("failed");
+    expect((await admin.getJob(retryId))?.state).toBe("ready");
+    expect((await admin.getJob(terminalId))?.state).toBe("failed");
   });
 
   it("returns per-phase tick and background maintenance telemetry", async () => {
@@ -131,7 +133,7 @@ describe("health snapshots", () => {
         error: null,
       },
     ]);
-    expect((await queue.getJob(scheduledId))?.state).toBe("ready");
+    expect((await admin.getJob(scheduledId))?.state).toBe("ready");
 
     await queue.syncRetentionPolicy({ ...defaultRetentionPolicy, occurrenceRowsPerPass: 1 });
     expect([
@@ -347,7 +349,7 @@ describe("health snapshots", () => {
               ($1, 'signal_rejected', clock_timestamp() - interval '23 hours')`,
       [claimed!.id],
     );
-    await queue.pauseQueue("idle-paused");
+    await admin.pauseQueue("idle-paused", adminAudit("observe paused queue"));
 
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
     const provider = new MeterProvider({

@@ -18,6 +18,7 @@ import type {
   ExpireOwnedStatus,
   JobCheckpoint,
   JobProgress,
+  JobWait,
   HeartbeatStatus,
   Json,
   MaintenancePolicy,
@@ -33,7 +34,6 @@ import type {
   WorkerRegistration,
 } from "./types.js";
 import type { QueueMetricSnapshot } from "./telemetry.js";
-import type { WorkerHandlerState } from "./worker.js";
 import {
   subscribeToJobNotifications,
   supportsJobNotifications,
@@ -116,6 +116,7 @@ import type {
   ExternalWaitListOptions,
   ExternalWaitOptions,
 } from "./queue/external-waits.js";
+import { workerCheckpointsRead, workerProgressRead, workerWaitsRead } from "./worker-internal.js";
 
 export type { MaintenancePhase, MaintenancePhaseResult } from "./queue/retention-maintenance.js";
 
@@ -499,24 +500,10 @@ export class Queue {
     return this.modules.claimLeaseFence.acknowledgeCancel(job, workerId);
   }
 
-  /** Load one retained evidence projection after a worker claim. */
-  async loadHandlerState<TKey extends keyof WorkerHandlerState>(
+  async [workerCheckpointsRead]<TValue extends Json = Json>(
     jobId: string,
-    projection: TKey,
-  ): Promise<WorkerHandlerState[TKey]> {
-    if (projection === "checkpoints") {
-      return (await this.modules.checkpointsProgressWaits.listCheckpoints(
-        jobId,
-      )) as WorkerHandlerState[TKey];
-    }
-    if (projection === "progress") {
-      return (await this.modules.checkpointsProgressWaits.getProgress(
-        jobId,
-      )) as WorkerHandlerState[TKey];
-    }
-    return (await this.modules.checkpointsProgressWaits.listWaits(
-      jobId,
-    )) as WorkerHandlerState[TKey];
+  ): Promise<JobCheckpoint<TValue>[]> {
+    return this.modules.checkpointsProgressWaits.listCheckpoints<TValue>(jobId);
   }
 
   async saveCheckpoint<TValue extends Json>(
@@ -528,12 +515,22 @@ export class Queue {
     return this.modules.checkpointsProgressWaits.saveCheckpoint(job, workerId, name, value);
   }
 
+  async [workerProgressRead]<TValue extends Json = Json>(
+    jobId: string,
+  ): Promise<JobProgress<TValue> | null> {
+    return this.modules.checkpointsProgressWaits.getProgress<TValue>(jobId);
+  }
+
   async updateProgress<TValue extends Json>(
     job: ClaimedJob,
     workerId: string,
     value: TValue,
   ): Promise<JobProgress<TValue>> {
     return this.modules.checkpointsProgressWaits.updateProgress(job, workerId, value);
+  }
+
+  async [workerWaitsRead](jobId: string): Promise<JobWait[]> {
+    return this.modules.checkpointsProgressWaits.listWaits(jobId);
   }
 
   async scheduleWait(

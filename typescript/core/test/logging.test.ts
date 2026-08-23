@@ -1,7 +1,7 @@
 import { logs, type LogRecord, type LoggerProvider } from "@opentelemetry/api-logs";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { Queue } from "../src/queue.js";
 import { Admin } from "../src/admin.js";
+import { Queue } from "../src/queue.js";
 import type { Queryable } from "../src/types.js";
 import { Worker } from "../src/worker.js";
 
@@ -48,7 +48,7 @@ describe("structured logging", () => {
             ],
           };
         }
-        if (sql.includes("pause_queue_v1")) return { rows: [] };
+        if (sql.includes("set_queue_paused_v1")) return { rows: [] };
         throw new Error(`Unexpected query: ${sql}`);
       },
     } as unknown as Queryable;
@@ -60,9 +60,9 @@ describe("structured logging", () => {
       accessToken: "never-log-this",
     });
     await admin.pauseQueue("mail", {
-      actor: "logging-test",
-      reason: "verify structured logging",
-      requestId: "logging-test-pause",
+      actor: "test",
+      reason: "logging assertion",
+      requestId: "logging-pause",
     });
 
     expect(records).toEqual(

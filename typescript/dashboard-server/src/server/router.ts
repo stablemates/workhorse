@@ -46,8 +46,8 @@ import {
 
 export interface DashboardRpcContext {
   database: DashboardDatabase;
-  queue: Queue;
   admin: Admin;
+  queue: Queue;
   configuredWorkers: readonly string[];
   environment: string;
   maintenanceLoops: MaintenanceLoopCadences;
@@ -386,7 +386,7 @@ export const dashboardRouter = {
     ),
     previewRetentionPolicy: procedure
       .input(z.object({ definition: retentionDefinition }))
-      .handler(({ context, input }) => context.queue.previewRetentionPolicy(input.definition)),
+      .handler(({ context, input }) => context.admin.previewRetentionPolicy(input.definition)),
     jobDetail: procedure.input(jobDetailInput).handler(async ({ context, input }) => {
       const detail = await readDashboardJobDetail(
         context.database,

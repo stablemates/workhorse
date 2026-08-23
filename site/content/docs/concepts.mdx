@@ -42,6 +42,7 @@ scheduled ──▶ ready ──▶ active ──▶ succeeded
 side of the split the job is on.
 
 ```ts
+const admin = new Admin(pool);
 const job = await admin.getJob(jobId);
 console.log(job?.state, job?.currentAttempt, job?.result);
 ```

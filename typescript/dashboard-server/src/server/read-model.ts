@@ -1,5 +1,5 @@
 import { expectOneRow, queueHealthFromDocument } from "@workhorse-js/core";
-import type { Admin, QueueHealthDocument, RetryPolicy } from "@workhorse-js/core";
+import type { Admin, Queue, QueueHealthDocument, RetryPolicy } from "@workhorse-js/core";
 import {
   DashboardActivityBucket,
   DashboardActivityGroupBy,

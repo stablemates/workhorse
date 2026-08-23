@@ -4,6 +4,7 @@ import { hostname } from "node:os";
 import { isDeepStrictEqual } from "node:util";
 import { SpanKind, SpanStatusCode, type Span } from "@opentelemetry/api";
 import { WorkhorseError } from "./errors.js";
+import { Queue } from "./queue.js";
 import { errorForTelemetry, type FailureStatus } from "./queue/claim-lease-fence.js";
 import { ChildConflictError } from "./queue/child-jobs.js";
 import { jitterDuration } from "./notifications.js";
@@ -44,6 +45,7 @@ import type {
   Json,
   WorkerRegistration,
 } from "./types.js";
+import { workerCheckpointsRead, workerProgressRead, workerWaitsRead } from "./worker-internal.js";
 
 const DURABLE_WAIT_SUSPENSION = Symbol("workhorse.durableWaitSuspension");
 const CHILD_JOB_SUSPENSION = Symbol("workhorse.childJobSuspension");
@@ -205,22 +207,20 @@ export interface WorkerQueueApi {
   heartbeatStatus(job: ClaimedJob, workerId: string, leaseMs?: number): Promise<HeartbeatStatus>;
   expireOwned(job: ClaimedJob, workerId: string): Promise<ExpireOwnedStatus>;
   acknowledgeCancel(job: ClaimedJob, workerId: string): Promise<boolean>;
-  /** Load one retained evidence projection needed to reconstruct a handler context after a claim. */
-  loadHandlerState<TKey extends keyof WorkerHandlerState>(
-    jobId: string,
-    projection: TKey,
-  ): Promise<WorkerHandlerState[TKey]>;
+  listCheckpoints(jobId: string): Promise<JobCheckpoint[]>;
   saveCheckpoint<TValue extends Json>(
     job: ClaimedJob,
     workerId: string,
     name: string,
     value: TValue,
   ): Promise<JobCheckpoint<TValue>>;
+  getProgress(jobId: string): Promise<JobProgress | null>;
   updateProgress<TValue extends Json>(
     job: ClaimedJob,
     workerId: string,
     value: TValue,
   ): Promise<JobProgress<TValue>>;
+  listWaits(jobId: string): Promise<JobWait[]>;
   scheduleWait(
     job: ClaimedJob,
     workerId: string,
@@ -280,13 +280,6 @@ export interface WorkerQueueApi {
   registerWorker(registration: WorkerRegistration): Promise<{ paused: boolean }>;
   deregisterWorker(workerId: string): Promise<boolean>;
   pruneWorkerRegistry(maxAgeMs?: number): Promise<number>;
-}
-
-/** Retained evidence a worker loads after claiming a job. */
-export interface WorkerHandlerState {
-  checkpoints: JobCheckpoint[];
-  progress: JobProgress | null;
-  waits: JobWait[];
 }
 
 export class InjectedCrashError extends WorkhorseError {
@@ -418,6 +411,18 @@ export interface WorkerRuntimeState {
   draining: boolean;
 }
 
+function queueAsWorkerApi(queue: Queue): WorkerQueueApi {
+  return new Proxy(queue, {
+    get(target, property) {
+      if (property === "listCheckpoints") return target[workerCheckpointsRead].bind(target);
+      if (property === "getProgress") return target[workerProgressRead].bind(target);
+      if (property === "listWaits") return target[workerWaitsRead].bind(target);
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as unknown as WorkerQueueApi;
+}
+
 /**
  * Bounded-concurrency polling worker for the validation protocol.
  *
@@ -425,6 +430,7 @@ export interface WorkerRuntimeState {
  * enough jobs to fill its configured local execution slots.
  */
 export class Worker {
+  private readonly queue: WorkerQueueApi;
   private readonly handlers = new Map<string, Handler>();
   private readonly workerId: string;
   private readonly queueNames: readonly string[];
@@ -476,14 +482,15 @@ export class Worker {
   private wakeVersion = 0;
 
   constructor(
-    private readonly queue: WorkerQueueApi,
+    queue: WorkerQueueApi | Queue,
     private readonly options: WorkerOptions = {},
   ) {
+    this.queue = queue instanceof Queue ? queueAsWorkerApi(queue) : queue;
     this.workerId = options.workerId ?? defaultWorkerId();
     if (options.queue !== undefined && options.queues !== undefined) {
       throw new Error("queue and queues cannot be configured together");
     }
-    const configuredQueues = options.queues ?? [options.queue ?? queue.defaultQueue];
+    const configuredQueues = options.queues ?? [options.queue ?? this.queue.defaultQueue];
     this.queueNames = [...new Set(configuredQueues)];
     if (
       this.queueNames.length === 0 ||
@@ -495,7 +502,7 @@ export class Worker {
     this.leaseMs = options.leaseMs ?? 30_000;
     this.heartbeatMs = options.heartbeatMs ?? Math.max(100, Math.floor(this.leaseMs / 3));
     this.pollMs = options.pollMs ?? DEFAULT_POLL_MS;
-    this.jitterDispatchPolling = queue.supportsJobNotifications?.() ?? false;
+    this.jitterDispatchPolling = this.queue.supportsJobNotifications?.() ?? false;
     this.dispatchPollMs =
       options.pollMs ??
       (this.jitterDispatchPolling ? DEFAULT_NOTIFICATION_FALLBACK_POLL_MS : DEFAULT_POLL_MS);
@@ -1086,7 +1093,7 @@ export class Worker {
       let checkpoints: Map<string, JobCheckpoint> | undefined;
       let checkpointsLoad: Promise<Map<string, JobCheckpoint>> | undefined;
       const loadCheckpoints = (): Promise<Map<string, JobCheckpoint>> => {
-        checkpointsLoad ??= this.queue.loadHandlerState(job.id, "checkpoints").then((items) => {
+        checkpointsLoad ??= this.queue.listCheckpoints(job.id).then((items) => {
           checkpoints = new Map(items.map((item) => [item.name, item]));
           return checkpoints;
         });
@@ -1095,7 +1102,7 @@ export class Worker {
       let waits: Map<string, JobWait> | undefined;
       let waitsLoad: Promise<Map<string, JobWait>> | undefined;
       const loadWaits = (): Promise<Map<string, JobWait>> => {
-        waitsLoad ??= this.queue.loadHandlerState(job.id, "waits").then((items) => {
+        waitsLoad ??= this.queue.listWaits(job.id).then((items) => {
           waits = new Map(items.map((item) => [item.name, item]));
           return waits;
         });
@@ -1110,7 +1117,7 @@ export class Worker {
         (await loadWaits()).get(name) ?? null;
       let progressLoad: Promise<JobProgress | null> | undefined;
       const getProgress: HandlerContext["getProgress"] = async <TValue extends Json>() => {
-        progressLoad ??= this.queue.loadHandlerState(job.id, "progress");
+        progressLoad ??= this.queue.getProgress(job.id);
         return (await progressLoad) as JobProgress<TValue> | null;
       };
       const setProgress: HandlerContext["setProgress"] = async <TValue extends Json>(

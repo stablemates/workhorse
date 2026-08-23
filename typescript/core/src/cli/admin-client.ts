@@ -71,21 +71,23 @@ export interface AdminRedriveRequest {
   requestId: string;
 }
 
+export type AdminControlRequest = AdminRedriveRequest;
+
 /**
  * The administrative surface shared by `workhorse admin` and `workhorse tui`.
  *
- * The client is pure composition over {@link Queue} operator APIs plus two reads of existing
- * operator tables (`workhorse.queue_control` and `workhorse.schedule_definition`). Every mutation
+ * The client composes the public {@link Admin} operator API with {@link Queue} application
+ * controls plus two reads of existing operator tables. Every mutation
  * requires a {@link ConfirmedEnvironment}, so no front end can reach a destructive operation
  * without the explicit-target check.
  */
 export class WorkhorseAdminClient {
-  readonly queue: Queue;
   readonly admin: Admin;
+  readonly queue: Queue;
 
   constructor(private readonly pool: Pool) {
-    this.queue = new Queue(pool);
     this.admin = new Admin(pool);
+    this.queue = new Queue(pool);
   }
 
   /** The connected database's own name, which the environment confirmation must match. */
@@ -191,7 +193,7 @@ export class WorkhorseAdminClient {
       );
       targets = result.rows.map((row) => row.namespace);
     }
-    return this.queue.schedules(targets);
+    return this.admin.schedules(targets);
   }
 
   workers(): Promise<WorkerRegistryEntry[]> {
@@ -232,21 +234,29 @@ export class WorkhorseAdminClient {
     });
   }
 
-  async pauseQueue(environment: ConfirmedEnvironment, queueName: string): Promise<void> {
+  async pauseQueue(
+    environment: ConfirmedEnvironment,
+    queueName: string,
+    request: AdminControlRequest,
+  ): Promise<void> {
     void environment;
     await this.admin.pauseQueue(queueName, {
-      actor: "workhorse-cli",
-      reason: "pause queue",
-      requestId: randomUUID(),
+      actor: request.requestedBy,
+      reason: request.reason,
+      requestId: request.requestId,
     });
   }
 
-  async resumeQueue(environment: ConfirmedEnvironment, queueName: string): Promise<void> {
+  async resumeQueue(
+    environment: ConfirmedEnvironment,
+    queueName: string,
+    request: AdminControlRequest,
+  ): Promise<void> {
     void environment;
     await this.admin.resumeQueue(queueName, {
-      actor: "workhorse-cli",
-      reason: "resume queue",
-      requestId: randomUUID(),
+      actor: request.requestedBy,
+      reason: request.reason,
+      requestId: request.requestId,
     });
   }
 }

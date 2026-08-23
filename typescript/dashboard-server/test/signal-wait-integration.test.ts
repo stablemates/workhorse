@@ -8,7 +8,7 @@ import { createDashboardHost } from "../src/server/host.js";
 import { createDashboardOperatorControllers } from "../src/server/operator-controllers.js";
 import type { DashboardRouter } from "../src/server/router.js";
 
-const { admin, pool, queue } = createIntegrationTestContext(import.meta.url);
+const { pool, queue, admin } = createIntegrationTestContext(import.meta.url);
 
 describe("dashboard signal waits", () => {
   it("lists actionable signals, marks their tasks, and delivers an operator payload", async () => {
@@ -22,7 +22,7 @@ describe("dashboard signal waits", () => {
     expect(await worker.runOnce()).toBe(true);
 
     const controllers = createDashboardOperatorControllers({
-      run: (_action, operation) => operation({ queue, admin }),
+      run: (_action, operation) => operation({ admin, queue }),
     });
     const host = createDashboardHost({
       database: pool,
@@ -97,7 +97,7 @@ describe("dashboard signal waits", () => {
     });
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(queue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       state: "succeeded",
       result: { approval: { approved: true } },
     });

@@ -125,6 +125,7 @@ outcome's semantic terminal evidence remains immutable; only its existing retent
 advance when the append-only redrive event is recorded.
 
 ```ts
+const admin = new Admin(pool);
 const page = await admin.listDeadLetters({ queue: "billing", errorName: "CardDeclined" });
 const source = page.items[0];
 if (source) {
@@ -230,9 +231,8 @@ await admin.setWorkerPaused("billing-worker-1", true, {
 
 Pause is cooperative in exactly the same sense as cancellation. The worker stops claiming when it
 next refreshes its registration, any handler already executing runs to completion, and a local
-`worker.resume()` cannot override an operator pause that is still in effect. `requestedBy` and
-`reason` in PostgreSQL come from the Admin audit actor and reason. They are bounded audit
-attribution, never authorization; callers must enforce their own
+`worker.resume()` cannot override an operator pause that is still in effect. `actor`, `reason`, and
+`requestId` are bounded audit attribution, never authorization; callers must enforce their own
 permission checks.
 
 Pause is **process-scoped**. Each worker announces a fresh instance id, so a restarted or replaced

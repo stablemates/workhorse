@@ -71,7 +71,7 @@ const humanWaitWorker = new Worker(adapter.queue, {
   context.waitForHuman("review", { prompt: "Approve the packed contract?" }),
 );
 assert.equal(await humanWaitWorker.runOnce(), true);
-assert.equal((await adapter.queue.getJob(humanWaitJob)).state, "scheduled");
+assert.equal((await adapter.admin.getJob(humanWaitJob)).state, "scheduled");
 const packedCompletion = await adapter.queue.completeHumanWait(
   humanWaitJob,
   "review",
@@ -81,7 +81,7 @@ const packedCompletion = await adapter.queue.completeHumanWait(
 assert.equal(packedCompletion.status, "completed");
 assert.equal(packedCompletion.completedBy, "packed-operator");
 assert.equal(await humanWaitWorker.runOnce(), true);
-assert.deepEqual((await adapter.queue.getJob(humanWaitJob)).result, { approved: true });
+assert.deepEqual((await adapter.admin.getJob(humanWaitJob)).result, { approved: true });
 
 let handlerStartedResolve;
 const handlerStarted = new Promise((resolve) => {
@@ -127,8 +127,8 @@ assert.equal(closeCount, 0, "shutdown must drain the active handler before closi
 releaseHandler();
 await Promise.all([shutdown, running.shutdown()]);
 assert.equal(closeCount, 1);
-assert.equal((await adapter.queue.getJob(shutdownJob)).state, "succeeded");
-assert.equal((await adapter.queue.getJob(unclaimedJob)).state, "ready");
+assert.equal((await adapter.admin.getJob(shutdownJob)).state, "succeeded");
+assert.equal((await adapter.admin.getJob(unclaimedJob)).state, "ready");
 
 await pool.query("DROP TABLE IF EXISTS public.workhorse_packed_test");
 await pool.end();

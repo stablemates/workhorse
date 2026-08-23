@@ -56,14 +56,14 @@ function runtimeQueue(database: Queryable): RuntimeQueue {
 }
 
 async function expectJobStates(
-  queue: RuntimeQueue,
+  admin: Admin,
   ids: Map<string, string>,
   expected: Record<string, { state: string; attempt: number }>,
 ): Promise<void> {
   for (const [key, state] of Object.entries(expected)) {
     const id = ids.get(key);
     expect(id, `runtime fixture has no job named ${key}`).toBeDefined();
-    await expect(queue.getJob(id!)).resolves.toMatchObject({
+    await expect(admin.getJob(id!)).resolves.toMatchObject({
       state: state.state,
       currentAttempt: state.attempt,
     });
@@ -120,7 +120,8 @@ function waitForAbort(signal: AbortSignal): Promise<unknown> {
 }
 
 async function executeBatchRuntimeFixture(
-  queue: RuntimeQueue,
+  queue: Queue,
+  admin: Admin,
   fixture: BatchRuntimeFixture,
 ): Promise<void> {
   const queueName = `runtime-${fixture.id}`;
@@ -163,13 +164,14 @@ async function executeBatchRuntimeFixture(
 
   await expect(worker.runOnce()).resolves.toBe(true);
   expect(seen).toEqual(fixture.expectedHandlerOrder);
-  await expectJobStates(queue, ids, fixture.expectedAfterFirstRun);
+  await expectJobStates(admin, ids, fixture.expectedAfterFirstRun);
   await expect(worker.runOnce()).resolves.toBe(true);
-  await expectJobStates(queue, ids, fixture.expectedAfterSecondRun);
+  await expectJobStates(admin, ids, fixture.expectedAfterSecondRun);
 }
 
 async function executeSuspensionReplayRuntimeFixture(
-  queue: RuntimeQueue,
+  queue: Queue,
+  admin: Admin,
   database: Queryable,
   fixture: SuspensionReplayRuntimeFixture,
 ): Promise<void> {
@@ -201,7 +203,7 @@ async function executeSuspensionReplayRuntimeFixture(
     });
 
   await expect(worker.runOnce()).resolves.toBe(true);
-  await expectJobStates(queue, ids, fixture.expectedAfterSuspension);
+  await expectJobStates(admin, ids, fixture.expectedAfterSuspension);
   await expectAttemptCount(
     database,
     ids.get("suspension")!,
@@ -209,11 +211,11 @@ async function executeSuspensionReplayRuntimeFixture(
   );
 
   await expect(worker.runOnce()).resolves.toBe(true);
-  await expectJobStates(queue, ids, fixture.expectedAfterSlotRelease);
+  await expectJobStates(admin, ids, fixture.expectedAfterSlotRelease);
 
   await sleep(Math.max(110, fixture.waitMs + 80));
   await expect(worker.runOnce()).resolves.toBe(true);
-  await expectJobStates(queue, ids, fixture.expectedAfterReplay);
+  await expectJobStates(admin, ids, fixture.expectedAfterReplay);
   await expectAttemptCount(database, ids.get("suspension")!, fixture.expectedAttemptsAfterReplay);
   expect(seen).toEqual(fixture.expectedHandlerOrder);
   expect(handlerRuns).toBe(fixture.expectedHandlerRuns);
@@ -221,7 +223,8 @@ async function executeSuspensionReplayRuntimeFixture(
 }
 
 async function executeCooperativeCancellationRuntimeFixture(
-  queue: RuntimeQueue,
+  queue: Queue,
+  admin: Admin,
   database: Queryable,
   fixture: CooperativeCancellationRuntimeFixture,
 ): Promise<void> {
@@ -247,7 +250,7 @@ async function executeCooperativeCancellationRuntimeFixture(
   });
   await expect(execution).resolves.toBe(true);
   expect(abortReason).toMatchObject({ name: fixture.expectedAbortReason });
-  await expect(queue.getJob(id)).resolves.toMatchObject({
+  await expect(admin.getJob(id)).resolves.toMatchObject({
     state: fixture.expectedState.state,
     currentAttempt: fixture.expectedState.attempt,
   });
@@ -255,7 +258,8 @@ async function executeCooperativeCancellationRuntimeFixture(
 }
 
 async function executeExpirationRuntimeFixture(
-  queue: RuntimeQueue,
+  queue: Queue,
+  admin: Admin,
   database: Queryable,
   fixture: ExpirationRuntimeFixture,
 ): Promise<void> {
@@ -303,7 +307,7 @@ async function executeExpirationRuntimeFixture(
 
   for (const expected of fixture.expectedAfterRuns) {
     await expect(worker.runOnce()).resolves.toBe(true);
-    await expect(queue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       state: expected.state,
       currentAttempt: expected.attempt,
       ...(expected.errorName === undefined ? {} : { error: { name: expected.errorName } }),
@@ -316,7 +320,8 @@ async function executeExpirationRuntimeFixture(
 }
 
 async function executeLeaseLossRuntimeFixture(
-  queue: RuntimeQueue,
+  queue: Queue,
+  admin: Admin,
   database: Queryable,
   fixture: LeaseLossRuntimeFixture,
 ): Promise<void> {
@@ -378,7 +383,7 @@ async function executeLeaseLossRuntimeFixture(
     expect.arrayContaining(fixture.portableRejectedWrites),
   );
   expect(new Set(rejectedWrites.values())).toEqual(new Set([fixture.expectedRejectedWriteError]));
-  await expect(queue.getJob(id)).resolves.toMatchObject({
+  await expect(admin.getJob(id)).resolves.toMatchObject({
     state: fixture.expectedState.state,
     currentAttempt: fixture.expectedState.attempt,
     result: null,
@@ -454,7 +459,8 @@ async function executeHeartbeatCadenceRuntimeFixture(
 }
 
 async function executeGracefulDrainRuntimeFixture(
-  queue: RuntimeQueue,
+  queue: Queue,
+  admin: Admin,
   fixture: GracefulDrainRuntimeFixture,
 ): Promise<void> {
   const queueName = `runtime-${fixture.id}`;
@@ -495,7 +501,7 @@ async function executeGracefulDrainRuntimeFixture(
     releaseHandlers.resolve();
     await expect(running).resolves.toBeUndefined();
     expect(worker.runtimeState()).toMatchObject({ activeSlots: 0, draining: false });
-    const states = await Promise.all(ids.map(async (id) => (await queue.getJob(id))?.state));
+    const states = await Promise.all(ids.map(async (id) => (await admin.getJob(id))?.state));
     expect(states.filter((state) => state === "succeeded")).toHaveLength(fixture.expectedSucceeded);
     expect(states.filter((state) => state === "ready")).toHaveLength(fixture.expectedReady);
   } finally {
@@ -652,34 +658,41 @@ describe("SQL protocol conformance fixtures", () => {
     try {
       const fixtures = await loadSqlProtocolFixtures(repository);
       const queue = runtimeQueue(runtimeDatabase.pool);
+      const admin = new Admin(runtimeDatabase.pool);
       const coverage = new Set<string>();
       for (const fixture of fixtures.runtime) {
         fixture.covers.forEach((capability) => coverage.add(capability));
         switch (fixture.kind) {
           case "batch":
-            await executeBatchRuntimeFixture(queue, fixture);
+            await executeBatchRuntimeFixture(queue, admin, fixture);
             break;
           case "suspension-replay":
-            await executeSuspensionReplayRuntimeFixture(queue, runtimeDatabase.pool, fixture);
+            await executeSuspensionReplayRuntimeFixture(
+              queue,
+              admin,
+              runtimeDatabase.pool,
+              fixture,
+            );
             break;
           case "cooperative-cancellation":
             await executeCooperativeCancellationRuntimeFixture(
               queue,
+              admin,
               runtimeDatabase.pool,
               fixture,
             );
             break;
           case "expiration":
-            await executeExpirationRuntimeFixture(queue, runtimeDatabase.pool, fixture);
+            await executeExpirationRuntimeFixture(queue, admin, runtimeDatabase.pool, fixture);
             break;
           case "lease-loss":
-            await executeLeaseLossRuntimeFixture(queue, runtimeDatabase.pool, fixture);
+            await executeLeaseLossRuntimeFixture(queue, admin, runtimeDatabase.pool, fixture);
             break;
           case "heartbeat-cadence":
             await executeHeartbeatCadenceRuntimeFixture(queue, fixture);
             break;
           case "graceful-drain":
-            await executeGracefulDrainRuntimeFixture(queue, fixture);
+            await executeGracefulDrainRuntimeFixture(queue, admin, fixture);
         }
       }
       expect(coverage).toEqual(new Set(fixtures.manifest.runtimeCoverage));

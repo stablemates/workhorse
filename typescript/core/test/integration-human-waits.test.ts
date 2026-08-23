@@ -9,7 +9,7 @@ import {
 } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { queue } = createIntegrationTestContext(import.meta.url);
+const { queue, admin } = createIntegrationTestContext(import.meta.url);
 
 describe("human waits", () => {
   it("lists actionable human waits through the public read API", async () => {
@@ -21,7 +21,7 @@ describe("human waits", () => {
     );
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(queue.listHumanWaits()).resolves.toEqual({
+    await expect(admin.listHumanWaits()).resolves.toEqual({
       items: [
         {
           jobId: id,
@@ -43,7 +43,7 @@ describe("human waits", () => {
       { approved: true },
       { idempotencyKey: "human-list-completion", requestedBy: "operator" },
     );
-    await expect(queue.listHumanWaits()).resolves.toEqual({ items: [], nextCursor: null });
+    await expect(admin.listHumanWaits()).resolves.toEqual({ items: [], nextCursor: null });
   });
 
   it("rejects token names the dashboard would normalize to another identity", async () => {
@@ -110,7 +110,7 @@ describe("human waits", () => {
     );
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "scheduled" });
+    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "scheduled" });
 
     const request = { idempotencyKey: "operator-request-1", requestedBy: "operator@example.com" };
     const first = await queue.completeHumanWait(id, "approval", { approved: true }, request);
@@ -124,7 +124,7 @@ describe("human waits", () => {
     ).resolves.toEqual({ ...first, status: "duplicate" });
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(queue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       state: "succeeded",
       result: { decision: { approved: true } },
     });
@@ -163,7 +163,7 @@ describe("human waits", () => {
     );
     expect(completions[0]!.payload).toEqual(completions[1]!.payload);
 
-    const events = (await queue.getJobTimeline(id)).items.filter((item) => item.kind === "event");
+    const events = (await admin.getJobTimeline(id)).items.filter((item) => item.kind === "event");
     expect(events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -221,7 +221,7 @@ describe("human waits", () => {
     await expect(
       queue.waitForHuman(stale!, "human-stale-worker", "review", { prompt: "Review?" }),
     ).rejects.toBeInstanceOf(HumanWaitLeaseLostError);
-    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "ready", currentAttempt: 2 });
+    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "ready", currentAttempt: 2 });
   });
 
   it("bounds decision context and results before writing them", async () => {
@@ -269,7 +269,7 @@ describe("human waits", () => {
     );
     expect(await worker.runOnce()).toBe(true);
     expect(await worker.runOnce()).toBe(true);
-    await expect(queue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       state: "succeeded",
       currentAttempt: 2,
       result: { approved: true },
@@ -303,7 +303,7 @@ describe("human waits", () => {
       ),
     ).resolves.toMatchObject({ status: "stale", payload: null });
 
-    const events = (await queue.getJobTimeline(id)).items.filter((item) => item.kind === "event");
+    const events = (await admin.getJobTimeline(id)).items.filter((item) => item.kind === "event");
     expect(events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ eventType: "canceled" }),
@@ -328,7 +328,7 @@ describe("human waits", () => {
     await sleep(130);
     await queue.tick();
 
-    await expect(queue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       state: "failed",
       error: expect.objectContaining({ name: "DeadlineExceeded" }),
     });
@@ -353,7 +353,7 @@ describe("human waits", () => {
     await sleep(130);
     await queue.tick();
 
-    await expect(queue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       state: "failed",
       error: expect.objectContaining({ name: "DeadlineExceeded" }),
     });
@@ -378,6 +378,6 @@ describe("human waits", () => {
     ]);
     expect(cancellation.status).toBe("canceled");
     expect(["completed", "stale"]).toContain(completion.status);
-    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "canceled" });
+    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "canceled" });
   });
 });

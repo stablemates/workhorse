@@ -55,7 +55,7 @@ Guarded-command options:
   --env <database>   Required. Must equal the connected database's own name.
   --yes              Skip the interactive confirmation prompt.
   --actor <name>     Attribution recorded for the mutation (default: workhorse-admin).
-  --reason <text>    Reason recorded for the mutation. Required for redrive.
+  --reason <text>    Reason recorded for the mutation. Required for redrive, pause, and resume.
   --request-id <id>  Redrive idempotency identity (default: a random UUID).
 
 Listing options:
@@ -353,10 +353,16 @@ export async function runAdminCommand(
       return;
     }
     const queueName = requirePositional(positionals, command, "queue");
+    if (!values.reason) throw new CliUsageError(`admin ${command} requires --reason <text>`);
     const environment = await confirmMutation(client, io, values, command, queueName);
     if (environment === null) return;
-    if (command === "pause") await client.pauseQueue(environment, queueName);
-    else await client.resumeQueue(environment, queueName);
+    const request = {
+      requestedBy: actor,
+      reason: values.reason,
+      requestId: values["request-id"] ?? randomUUID(),
+    };
+    if (command === "pause") await client.pauseQueue(environment, queueName, request);
+    else await client.resumeQueue(environment, queueName, request);
     if (json) io.out(toAdminJson({ queue: queueName, paused: command === "pause" }));
     else io.out(`${command === "pause" ? "Paused" : "Resumed"} queue ${queueName}.\n`);
   } catch (error) {

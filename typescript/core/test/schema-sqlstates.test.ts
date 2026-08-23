@@ -14,7 +14,7 @@ const registry = {
     "a job accepts at most 100 dependent jobs",
     "a job accepts at most 100 unresolved transitive dependent jobs",
   ],
-  P1006: ["purge request conflict with a retained request"],
+  P1006: ["queue purge request conflict with a retained request"],
 } as const;
 
 describe("Workhorse SQLSTATE registry", () => {

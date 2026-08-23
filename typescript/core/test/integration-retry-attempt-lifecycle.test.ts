@@ -3,14 +3,14 @@ import { describe, expect, it } from "vitest";
 import { Queue, Worker } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { pool, queue } = createIntegrationTestContext(import.meta.url);
+const { pool, queue, admin } = createIntegrationTestContext(import.meta.url);
 
 describe("retry and attempt lifecycle", () => {
   it("records immutable retry and success attempts", async () => {
     const id = await queue.enqueue("email", { to: "a@example.com" }, { maxAttempts: 2 });
     const first = await queue.claim("worker-a");
     expect(await queue.fail(first!, "worker-a", new Error("temporary"), 0)).toBe("ready");
-    expect((await queue.getJob(id))?.fenceToken).toBe(0n);
+    expect((await admin.getJob(id))?.fenceToken).toBe(0n);
     const second = await queue.claim("worker-a");
     expect(second?.attempt).toBe(2);
     expect(await queue.complete(second!, "worker-a", { ok: true })).toBe(true);
@@ -99,7 +99,7 @@ describe("retry and attempt lifecycle", () => {
     const [id] = await queue.enqueueMany([
       { type: "mapped", payload: {}, options: { queue: "mapped", retryPolicy } },
     ]);
-    await expect(queue.getJob(id!)).resolves.toMatchObject({ retryPolicy });
+    await expect(admin.getJob(id!)).resolves.toMatchObject({ retryPolicy });
     await expect(queue.claim("mapped-worker", { queue: "mapped" })).resolves.toMatchObject({
       retryPolicy,
     });
@@ -126,7 +126,7 @@ describe("retry and attempt lifecycle", () => {
       BigInt(stored.rows[0]!.revision),
       new Date("2026-08-01T01:00:00Z"),
     );
-    await expect(queue.getJob(scheduledId!)).resolves.toMatchObject({
+    await expect(admin.getJob(scheduledId!)).resolves.toMatchObject({
       retryPolicy: scheduledPolicy,
     });
   });
@@ -299,7 +299,7 @@ describe("retry and attempt lifecycle", () => {
     const id = await queue.enqueue("email", {}, { maxAttempts: 1 });
     const job = await queue.claim("worker-a");
     expect(await queue.fail(job!, "worker-a", new Error("permanent"))).toBe("failed");
-    expect((await queue.getJob(id))?.state).toBe("failed");
+    expect((await admin.getJob(id))?.state).toBe("failed");
     expect(
       (
         await pool.query(

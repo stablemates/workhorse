@@ -7,7 +7,9 @@ import { createIntegrationTestContext } from "./support/integration.js";
 const repository = path.resolve(import.meta.dirname, "../../..");
 const cli = path.join(repository, "typescript/core/src/cli/workhorse.ts");
 const tsxCli = createRequire(import.meta.url).resolve("tsx/cli");
-const { createFailedJob, databaseUrl, queue } = createIntegrationTestContext(import.meta.url);
+const { createFailedJob, databaseUrl, queue, admin } = createIntegrationTestContext(
+  import.meta.url,
+);
 const databaseName = new URL(databaseUrl).pathname.slice(1);
 
 function runCli(args: readonly string[]) {
@@ -121,7 +123,7 @@ describe("admin CLI guarded operations", () => {
     const result = runAdmin(["cancel", jobId, "--yes"]);
     expect(result.code).toBe(64);
     expect(result.stderr).toContain("requires --env");
-    expect((await queue.getJob(jobId))?.state).toBe("ready");
+    expect((await admin.getJob(jobId))?.state).toBe("ready");
   });
 
   it("refuses an --env that does not name the connected database", async () => {
@@ -129,7 +131,7 @@ describe("admin CLI guarded operations", () => {
     const result = runAdmin(["cancel", jobId, "--env", "workhorse_production", "--yes"]);
     expect(result.code).toBe(1);
     expect(result.stderr).toContain(`does not match the connected database "${databaseName}"`);
-    expect((await queue.getJob(jobId))?.state).toBe("ready");
+    expect((await admin.getJob(jobId))?.state).toBe("ready");
   });
 
   it("requires --yes when no interactive confirmation is possible", async () => {
@@ -137,7 +139,7 @@ describe("admin CLI guarded operations", () => {
     const result = runAdmin(["cancel", jobId, "--env", databaseName]);
     expect(result.code).toBe(64);
     expect(result.stderr).toContain("requires --yes");
-    expect((await queue.getJob(jobId))?.state).toBe("ready");
+    expect((await admin.getJob(jobId))?.state).toBe("ready");
   });
 
   it("cancels a job with attribution once confirmed", async () => {
@@ -161,7 +163,7 @@ describe("admin CLI guarded operations", () => {
       requestedBy: "oncall",
       reason: "bad payload",
     });
-    expect((await queue.getJob(jobId))?.state).toBe("canceled");
+    expect((await admin.getJob(jobId))?.state).toBe("canceled");
   });
 
   it("redrives a terminal failure into a new job", async () => {
@@ -179,7 +181,7 @@ describe("admin CLI guarded operations", () => {
     expect(result.code).toBe(0);
     const redrive = JSON.parse(result.stdout) as { status: string; targetJobId: string };
     expect(redrive.status).toBe("redriven");
-    expect((await queue.getJob(redrive.targetJobId))?.state).toBe("ready");
+    expect((await admin.getJob(redrive.targetJobId))?.state).toBe("ready");
   });
 
   it("exits 1 when redriving a job that is not a terminal failure", async () => {
@@ -198,14 +200,30 @@ describe("admin CLI guarded operations", () => {
   });
 
   it("pauses and resumes a queue durably", async () => {
-    const paused = runAdmin(["pause", "default", "--env", databaseName, "--yes"]);
+    const paused = runAdmin([
+      "pause",
+      "default",
+      "--env",
+      databaseName,
+      "--reason",
+      "incident response",
+      "--yes",
+    ]);
     expect(paused).toMatchObject({ code: 0 });
     expect(paused.stdout).toContain("Paused queue default");
     expect(JSON.parse(runAdmin(["queues", "--json"]).stdout)).toEqual(
       expect.arrayContaining([expect.objectContaining({ queue: "default", paused: true })]),
     );
 
-    const resumed = runAdmin(["resume", "default", "--env", databaseName, "--yes"]);
+    const resumed = runAdmin([
+      "resume",
+      "default",
+      "--env",
+      databaseName,
+      "--reason",
+      "incident resolved",
+      "--yes",
+    ]);
     expect(resumed.code).toBe(0);
     expect(JSON.parse(runAdmin(["queues", "--json"]).stdout)).toEqual(
       expect.arrayContaining([expect.objectContaining({ queue: "default", paused: false })]),

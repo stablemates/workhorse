@@ -5,7 +5,9 @@ import { InjectedCrashError, type MaintenancePhaseResult, Queue, Worker } from "
 import { Pool } from "pg";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { admin, databaseUrl, deferred, pool, queue } = createIntegrationTestContext(import.meta.url);
+const { databaseUrl, deferred, pool, queue, admin, adminAudit } = createIntegrationTestContext(
+  import.meta.url,
+);
 
 describe("worker registry", () => {
   it("claims configured queues through one worker identity and shared slot budget", async () => {
@@ -39,7 +41,7 @@ describe("worker registry", () => {
     await worker.runOnce();
 
     await expect(
-      queue
+      admin
         .listWorkers()
         .then((workers) => workers.find((entry) => entry.workerId === "multi-queue-registration")),
     ).resolves.toMatchObject({ queues: ["mail", "billing"] });
@@ -77,7 +79,7 @@ describe("worker registry", () => {
     }).handle("registry-lifecycle", () => ({ ok: true }));
 
     const registration = async () =>
-      (await queue.listWorkers()).find((entry) => entry.workerId === "registry-lifecycle");
+      (await admin.listWorkers()).find((entry) => entry.workerId === "registry-lifecycle");
 
     const running = worker.run();
     await vi.waitFor(async () => {
@@ -112,7 +114,7 @@ describe("worker registry", () => {
       registryIntervalMs: 100,
     }).handle("registry-notification-close-failure", () => null);
     const registration = async () =>
-      (await queue.listWorkers()).find(
+      (await admin.listWorkers()).find(
         (entry) => entry.workerId === "registry-notification-close-failure",
       );
 
@@ -163,7 +165,7 @@ describe("worker registry", () => {
       },
     }).handle("registry-multiple-cleanup-failures", () => null);
     const registration = async () =>
-      (await queue.listWorkers()).find((entry) => entry.workerId === workerId);
+      (await admin.listWorkers()).find((entry) => entry.workerId === workerId);
 
     const running = worker.run();
     await vi.waitFor(async () => expect(await registration()).toBeDefined());
@@ -179,7 +181,6 @@ describe("worker registry", () => {
   it("applies an operator pause written to PostgreSQL by another process", async () => {
     // The pause is written through a separate Queue instance holding no reference to the worker
     // object, which is exactly the situation of a dashboard running outside the worker process.
-    const operatorQueue = admin;
     const handled: number[] = [];
     const worker = new Worker(queue, {
       workerId: "registry-remote-pause",
@@ -192,16 +193,15 @@ describe("worker registry", () => {
 
     const running = worker.run();
     await vi.waitFor(async () => {
-      expect((await operatorQueue.listWorkers()).map((entry) => entry.workerId)).toContain(
+      expect((await admin.listWorkers()).map((entry) => entry.workerId)).toContain(
         "registry-remote-pause",
       );
     });
 
     await expect(
-      operatorQueue.setWorkerPaused("registry-remote-pause", true, {
+      admin.setWorkerPaused("registry-remote-pause", true, {
+        ...adminAudit("rolling deploy"),
         actor: "operator",
-        reason: "rolling deploy",
-        requestId: randomUUID(),
       }),
     ).resolves.toMatchObject({ paused: true, pausedBy: "operator", reason: "rolling deploy" });
     await vi.waitFor(() => expect(worker.isPaused()).toBe(true));
@@ -218,11 +218,7 @@ describe("worker registry", () => {
     expect(handled).toEqual([]);
     expect(worker.isPaused()).toBe(true);
 
-    await operatorQueue.setWorkerPaused("registry-remote-pause", false, {
-      actor: "operator",
-      reason: "rolling deploy complete",
-      requestId: randomUUID(),
-    });
+    await admin.setWorkerPaused("registry-remote-pause", false, adminAudit("resume worker"));
     await vi.waitFor(() => expect(handled).toEqual([1]));
     expect(worker.runtimeState()).toMatchObject({ paused: false, remotelyPaused: false });
 
@@ -231,7 +227,9 @@ describe("worker registry", () => {
   });
 
   it("returns null when pausing a worker that has never registered", async () => {
-    await expect(queue.setWorkerPaused("never-registered", true)).resolves.toBeNull();
+    await expect(
+      admin.setWorkerPaused("never-registered", true, adminAudit("pause missing worker")),
+    ).resolves.toBeNull();
   });
 
   it("scopes an operator pause to the running process rather than to the worker name", async () => {
@@ -248,7 +246,7 @@ describe("worker registry", () => {
 
     await queue.registerWorker({ ...registration, instanceId: instance });
     await expect(
-      queue.setWorkerPaused("registry-process-scope", true, { requestedBy: "operator" }),
+      admin.setWorkerPaused("registry-process-scope", true, adminAudit("pause process")),
     ).resolves.toMatchObject({ paused: true });
 
     // The same process refreshing must keep the pause, or a pause would clear on its own heartbeat.
@@ -261,7 +259,7 @@ describe("worker registry", () => {
     await expect(
       queue.registerWorker({ ...registration, instanceId: randomUUID() }),
     ).resolves.toEqual({ paused: false });
-    const entry = (await queue.listWorkers()).find(
+    const entry = (await admin.listWorkers()).find(
       (worker) => worker.workerId === "registry-process-scope",
     );
     expect(entry).toMatchObject({ paused: false, pausedBy: null, reason: null, pausedAt: null });
@@ -285,7 +283,7 @@ describe("worker registry", () => {
     );
     await expect(queue.pruneWorkerRegistry(60_000)).resolves.toBe(1);
     await expect(
-      queue.listWorkers().then((entries) => entries.map((entry) => entry.workerId)),
+      admin.listWorkers().then((entries) => entries.map((entry) => entry.workerId)),
     ).resolves.not.toContain("registry-prune");
   });
 
@@ -308,7 +306,7 @@ describe("worker registry", () => {
     await worker.runOnce();
 
     await expect(
-      queue.listWorkers().then((entries) => entries.map((entry) => entry.workerId)),
+      admin.listWorkers().then((entries) => entries.map((entry) => entry.workerId)),
     ).resolves.not.toContain("registry-automatic-prune");
   });
 
@@ -456,7 +454,7 @@ describe("worker registry", () => {
       release.resolve();
       await expect(run).resolves.toBe(true);
       expect(await worker.runOnce()).toBe(false);
-      const states = await Promise.all(ids.map(async (id) => (await queue.getJob(id))?.state));
+      const states = await Promise.all(ids.map(async (id) => (await admin.getJob(id))?.state));
       expect(states.filter((state) => state === "ready")).toHaveLength(1);
       expect(states.filter((state) => state === "succeeded")).toHaveLength(2);
     } finally {
@@ -576,7 +574,7 @@ describe("worker registry", () => {
       remotelyPaused: false,
       draining: false,
     });
-    const states = await Promise.all(ids.map(async (id) => (await queue.getJob(id))?.state));
+    const states = await Promise.all(ids.map(async (id) => (await admin.getJob(id))?.state));
     expect(states.filter((state) => state === "ready")).toHaveLength(1);
     expect(states.filter((state) => state === "succeeded")).toHaveLength(2);
   });
@@ -622,14 +620,14 @@ describe("worker registry", () => {
         }
       });
       expect(claim).toHaveBeenCalledTimes(2);
-      await expect(queue.getJob(ids[2]!)).resolves.toMatchObject({ state: "ready" });
+      await expect(admin.getJob(ids[2]!)).resolves.toMatchObject({ state: "ready" });
 
       let runSettled = false;
       void running.then(() => {
         runSettled = true;
       });
       releases[0]!.resolve();
-      await vi.waitFor(async () => expect((await queue.getJob(ids[0]!))?.state).toBe("succeeded"));
+      await vi.waitFor(async () => expect((await admin.getJob(ids[0]!))?.state).toBe("succeeded"));
       expect(runSettled).toBe(false);
       expect(worker.runtimeState().activeSlots).toBe(1);
 
@@ -638,15 +636,15 @@ describe("worker registry", () => {
         expect(heartbeatCount(ids[1]!)).toBeGreaterThan(secondCountAfterFirstRelease),
       );
       expect(claim).toHaveBeenCalledTimes(2);
-      await expect(queue.getJob(ids[2]!)).resolves.toMatchObject({ state: "ready" });
+      await expect(admin.getJob(ids[2]!)).resolves.toMatchObject({ state: "ready" });
 
       releases[1]!.resolve();
       await expect(running).resolves.toBeUndefined();
       expect(worker.runtimeState().activeSlots).toBe(0);
-      await expect(Promise.all(ids.slice(0, 2).map((id) => queue.getJob(id)))).resolves.toEqual(
+      await expect(Promise.all(ids.slice(0, 2).map((id) => admin.getJob(id)))).resolves.toEqual(
         ids.slice(0, 2).map((id) => expect.objectContaining({ id, state: "succeeded" })),
       );
-      await expect(queue.getJob(ids[2]!)).resolves.toMatchObject({ state: "ready" });
+      await expect(admin.getJob(ids[2]!)).resolves.toMatchObject({ state: "ready" });
     } finally {
       controller.abort();
       for (const release of releases) release.resolve();
@@ -669,7 +667,7 @@ describe("worker registry", () => {
       worker.stop();
       await expect(running).resolves.toBeUndefined();
       expect(claim).not.toHaveBeenCalled();
-      await expect(queue.getJob(id)).resolves.toMatchObject({ state: "ready" });
+      await expect(admin.getJob(id)).resolves.toMatchObject({ state: "ready" });
     } finally {
       claim.mockRestore();
     }
@@ -700,8 +698,8 @@ describe("worker registry", () => {
       await expect(once).resolves.toBe(true);
       await expect(queuedRun).resolves.toBeUndefined();
       expect(claim).toHaveBeenCalledTimes(1);
-      await expect(queue.getJob(firstId)).resolves.toMatchObject({ state: "succeeded" });
-      await expect(queue.getJob(secondId)).resolves.toMatchObject({ state: "ready" });
+      await expect(admin.getJob(firstId)).resolves.toMatchObject({ state: "succeeded" });
+      await expect(admin.getJob(secondId)).resolves.toMatchObject({ state: "ready" });
     } finally {
       release.resolve();
       claim.mockRestore();
@@ -773,7 +771,7 @@ describe("worker registry", () => {
         failpoint: "beforeHandler",
       });
       expect(worker.runtimeState().activeSlots).toBe(0);
-      await expect(Promise.all(siblingIds.map((id) => queue.getJob(id)))).resolves.toEqual(
+      await expect(Promise.all(siblingIds.map((id) => admin.getJob(id)))).resolves.toEqual(
         siblingIds.map((id) => expect.objectContaining({ id, state: "succeeded" })),
       );
 
@@ -795,7 +793,7 @@ describe("worker registry", () => {
         worker_id: workerId,
         expires_at: crash.leaseExpiresAt,
       });
-      await expect(queue.getJob(crashedId)).resolves.toMatchObject({
+      await expect(admin.getJob(crashedId)).resolves.toMatchObject({
         state: "active",
         currentAttempt: 1,
         fenceToken: crash.fenceToken,
@@ -816,7 +814,7 @@ describe("worker registry", () => {
         [crashedId],
       );
       expect(await queue.recoverExpired(100, 0)).toBe(1);
-      await expect(queue.getJob(crashedId)).resolves.toMatchObject({
+      await expect(admin.getJob(crashedId)).resolves.toMatchObject({
         state: expectedState,
         currentAttempt: expectedAttempt,
         result: null,
@@ -895,7 +893,7 @@ describe("worker registry", () => {
       onMaintenance: (event) => telemetry.push(event),
     }).handle("scheduled-worker", () => ({ ok: true }));
     expect(await worker.runOnce()).toBe(true);
-    expect((await queue.getJob(jobId))?.state).toBe("succeeded");
+    expect((await admin.getJob(jobId))?.state).toBe("succeeded");
     expect(telemetry.map(({ loop, phase }) => `${loop}:${phase}`)).toEqual([
       "tick:promote",
       "tick:recover",
@@ -1392,7 +1390,7 @@ describe("worker registry", () => {
       { total: number }
     >("sum", ({ a, b }) => ({ total: a + b }));
     expect(await worker.runOnce()).toBe(true);
-    expect((await queue.getJob<{ total: number }>(id))?.result).toEqual({ total: 5 });
+    expect((await admin.getJob<{ total: number }>(id))?.result).toEqual({ total: 5 });
   });
 
   it.each([
@@ -1416,11 +1414,11 @@ describe("worker registry", () => {
 
     await expect(worker.runOnce()).rejects.toBeInstanceOf(InjectedCrashError);
     expect(effects).toBe(expectedEffects);
-    expect((await queue.getJob(id))?.state).toBe(expectedState);
+    expect((await admin.getJob(id))?.state).toBe(expectedState);
 
     if (expectedState === "active") await sleep(130);
     const recovered = await queue.recoverExpired();
-    const stateAfterRecovery = (await queue.getJob(id))?.state;
+    const stateAfterRecovery = (await admin.getJob(id))?.state;
     expect(recovered).toBe(expectedState === "active" ? 1 : 0);
     expect(stateAfterRecovery).toBe(expectedState === "active" ? "ready" : "succeeded");
   });
@@ -1453,7 +1451,7 @@ describe("worker registry", () => {
     }
 
     expect(handledBy).toEqual(["running:1", "running:2", "running:3"]);
-    await expect(Promise.all(initialIds.map((id) => queue.getJob(id)))).resolves.toEqual(
+    await expect(Promise.all(initialIds.map((id) => admin.getJob(id)))).resolves.toEqual(
       initialIds.map((id) => expect.objectContaining({ id, state: "succeeded" })),
     );
 
@@ -1462,7 +1460,7 @@ describe("worker registry", () => {
     expect(pausedWorker.isPaused()).toBe(false);
     expect(await pausedWorker.runOnce()).toBe(true);
     expect(handledBy.at(-1)).toBe("paused:4");
-    await expect(queue.getJob(resumedId)).resolves.toMatchObject({ state: "succeeded" });
+    await expect(admin.getJob(resumedId)).resolves.toMatchObject({ state: "succeeded" });
   });
 
   it("allows an active job to finish after its worker is paused", async () => {
@@ -1492,7 +1490,7 @@ describe("worker registry", () => {
 
     await expect(run).resolves.toBe(true);
     expect(worker.isPaused()).toBe(true);
-    await expect(queue.getJob(jobId)).resolves.toMatchObject({
+    await expect(admin.getJob(jobId)).resolves.toMatchObject({
       state: "succeeded",
       result: { completedWhilePaused: true },
     });

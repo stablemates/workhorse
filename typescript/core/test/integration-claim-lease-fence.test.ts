@@ -11,7 +11,7 @@ import {
 } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { deferred, pool, queue, waitForDatabaseCondition } = createIntegrationTestContext(
+const { deferred, pool, queue, waitForDatabaseCondition, admin } = createIntegrationTestContext(
   import.meta.url,
 );
 
@@ -32,7 +32,7 @@ describe("claim lease fence", () => {
     expect(await queue.fail(promoted!, "priority-promoted", new Error("retry priority"), 0)).toBe(
       "ready",
     );
-    await expect(queue.getJob(scheduledHigh)).resolves.toMatchObject({
+    await expect(admin.getJob(scheduledHigh)).resolves.toMatchObject({
       state: "ready",
       priority: 90,
     });
@@ -57,7 +57,7 @@ describe("claim lease fence", () => {
       expect.arrayContaining([elevatedPeer, highPeers[0]]),
     );
     expect(claims.every((claim) => claim !== null && claim.priority >= 80)).toBe(true);
-    await expect(queue.getJob(low)).resolves.toMatchObject({ state: "ready", priority: 10 });
+    await expect(admin.getJob(low)).resolves.toMatchObject({ state: "ready", priority: 10 });
   });
 
   it("validates cancellation metadata and idempotently cancels never-started jobs", async () => {
@@ -95,7 +95,7 @@ describe("claim lease fence", () => {
       reason: "ignored retry metadata",
     });
     expect(repeated).toEqual(first);
-    expect(await queue.getJob(readyId)).toMatchObject({
+    expect(await admin.getJob(readyId)).toMatchObject({
       state: "canceled",
       currentAttempt: 1,
       fenceToken: 0n,
@@ -230,7 +230,7 @@ describe("claim lease fence", () => {
     expect(await queue.cancel(id, { requestedBy: "operator-8", reason: "duplicate" })).toEqual(
       first,
     );
-    expect(await queue.getJob(id)).toMatchObject({
+    expect(await admin.getJob(id)).toMatchObject({
       state: "active",
       cancelRequestedAt: first.requestedAt,
       cancelRequestedBy: "operator-7",
@@ -259,7 +259,7 @@ describe("claim lease fence", () => {
     expect(requestEvents.rows[0]?.count).toBe(1);
     expect(await queue.acknowledgeCancel(claimed!, "active-cancel-worker")).toBe(true);
     expect(await queue.acknowledgeCancel(claimed!, "active-cancel-worker")).toBe(false);
-    expect(await queue.getJob(id)).toMatchObject({
+    expect(await admin.getJob(id)).toMatchObject({
       state: "canceled",
       cancelRequestedAt: null,
       cancelRequestedBy: null,
@@ -307,7 +307,7 @@ describe("claim lease fence", () => {
     expect((await queue.cancel(id)).status).toBe("cancel_requested");
     expect(await aborted.promise).toBeInstanceOf(CancellationRequestedError);
     await execution;
-    expect(await queue.getJob(id)).toMatchObject({ state: "canceled" });
+    expect(await admin.getJob(id)).toMatchObject({ state: "canceled" });
   });
 
   it("acknowledges cancellation after a default-concurrency handler ignores AbortSignal", async () => {
@@ -335,10 +335,10 @@ describe("claim lease fence", () => {
     await started.promise;
     await queue.cancel(id);
     expect(await aborted.promise).toBeInstanceOf(CancellationRequestedError);
-    expect(await queue.getJob(id)).toMatchObject({ state: "active" });
+    expect(await admin.getJob(id)).toMatchObject({ state: "active" });
     release.resolve();
     await execution;
-    expect(await queue.getJob(id)).toMatchObject({ state: "canceled", result: null });
+    expect(await admin.getJob(id)).toMatchObject({ state: "canceled", result: null });
   });
 
   it("materializes cancellation while a handler is scheduling a durable wait", async () => {
@@ -375,8 +375,8 @@ describe("claim lease fence", () => {
       await execution.catch(() => undefined);
     }
 
-    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "canceled", result: null });
-    await expect(queue.listWaits(id)).resolves.toEqual([]);
+    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "canceled", result: null });
+    await expect(admin.listWaits(id)).resolves.toEqual([]);
   });
 
   it("isolates cancellation across concurrent default-concurrency workers", async () => {
@@ -434,7 +434,7 @@ describe("claim lease fence", () => {
       expect(await canceledSignal.promise).toBeInstanceOf(CancellationRequestedError);
       releaseSibling.resolve();
       await running;
-      expect(await Promise.all(ids.map((id) => queue.getJob(id)))).toEqual([
+      expect(await Promise.all(ids.map((id) => admin.getJob(id)))).toEqual([
         expect.objectContaining({ id: ids[0], state: "canceled" }),
         expect.objectContaining({ id: ids[1], state: "succeeded" }),
       ]);
@@ -457,7 +457,7 @@ describe("claim lease fence", () => {
     );
     expect(await queue.acknowledgeCancel(claimed!, "recover-cancel-worker")).toBe(false);
     expect(await queue.recoverExpired()).toBe(1);
-    expect(await queue.getJob(id)).toMatchObject({ state: "canceled", currentAttempt: 1 });
+    expect(await admin.getJob(id)).toMatchObject({ state: "canceled", currentAttempt: 1 });
     expect(await queue.heartbeatStatus(claimed!, "recover-cancel-worker", 5_000)).toBe("stale");
     expect(await queue.complete(claimed!, "recover-cancel-worker", null)).toBe(false);
     expect(await queue.fail(claimed!, "recover-cancel-worker", new Error("late"), 0)).toBe("stale");
@@ -477,7 +477,7 @@ describe("claim lease fence", () => {
     } as const;
     const first = await queue.enqueue("deadline-definition", { value: 1 }, options);
     expect(await queue.enqueue("deadline-definition", { value: 1 }, options)).toBe(first);
-    expect(await queue.getJob(first)).toMatchObject({
+    expect(await admin.getJob(first)).toMatchObject({
       deadlineAt: deadline,
       executionTimeoutMs: 2_500,
     });
@@ -523,7 +523,7 @@ describe("claim lease fence", () => {
     expect(
       await queue.claim("expired-deadline-worker", { queue: "expired-deadline-only" }),
     ).toBeNull();
-    expect(await queue.getJob(expired)).toMatchObject({
+    expect(await admin.getJob(expired)).toMatchObject({
       state: "failed",
       currentAttempt: 1,
       fenceToken: 0n,
@@ -564,7 +564,7 @@ describe("claim lease fence", () => {
     await started.promise;
     expect(await aborted.promise).toBeInstanceOf(DeadlineExceededError);
     await sleep(25);
-    expect(await queue.getJob(id)).toMatchObject({
+    expect(await admin.getJob(id)).toMatchObject({
       state: "failed",
       currentAttempt: 1,
       result: null,
@@ -610,12 +610,12 @@ describe("claim lease fence", () => {
     });
 
     expect(await worker.runOnce()).toBe(true);
-    expect(await queue.getJob(id)).toMatchObject({ state: "ready", currentAttempt: 2 });
+    expect(await admin.getJob(id)).toMatchObject({ state: "ready", currentAttempt: 2 });
     expect(await worker.runOnce()).toBe(true);
     expect(reasons).toHaveLength(2);
     expect(reasons.every((reason) => reason instanceof ExecutionTimeoutError)).toBe(true);
-    await waitForDatabaseCondition(async () => (await queue.getJob(id))?.state === "failed");
-    expect(await queue.getJob(id)).toMatchObject({
+    await waitForDatabaseCondition(async () => (await admin.getJob(id))?.state === "failed");
+    expect(await admin.getJob(id)).toMatchObject({
       state: "failed",
       currentAttempt: 2,
       error: { name: "ExecutionTimeout" },
@@ -679,11 +679,11 @@ describe("claim lease fence", () => {
     });
 
     expect(await worker.runOnce()).toBe(true);
-    expect(await queue.getJob(id)).toMatchObject({ state: "ready", currentAttempt: 2 });
+    expect(await admin.getJob(id)).toMatchObject({ state: "ready", currentAttempt: 2 });
     expect(await worker.runOnce()).toBe(true);
     expect(reasons).toHaveLength(2);
     expect(reasons.every((reason) => reason instanceof ExecutionTimeoutError)).toBe(true);
-    expect(await queue.getJob(id)).toMatchObject({
+    expect(await admin.getJob(id)).toMatchObject({
       state: "failed",
       currentAttempt: 2,
       error: { name: "ExecutionTimeout" },
@@ -801,7 +801,7 @@ describe("claim lease fence", () => {
     }
 
     expect(reasons).toEqual([expect.any(ExecutionTimeoutError)]);
-    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "ready", currentAttempt: 2 });
+    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "ready", currentAttempt: 2 });
     const history = await pool.query<{ outcome: string }>(
       "SELECT outcome FROM workhorse.attempt_history WHERE job_id = $1",
       [id],
@@ -819,7 +819,7 @@ describe("claim lease fence", () => {
     expect((await queue.cancel(id, { reason: "operator won" })).status).toBe("cancel_requested");
     await sleep(140);
     expect(await queue.recoverExpired()).toBe(1);
-    expect(await queue.getJob(id)).toMatchObject({
+    expect(await admin.getJob(id)).toMatchObject({
       state: "canceled",
       error: { name: "CancellationRequested", reason: "operator won" },
     });
@@ -855,13 +855,13 @@ describe("claim lease fence", () => {
       [timeoutFirstId],
     );
     expect(await queue.recoverExpired()).toBe(1);
-    expect(await queue.getJob(timeoutFirstId)).toMatchObject({
+    expect(await admin.getJob(timeoutFirstId)).toMatchObject({
       state: "ready",
       currentAttempt: 2,
       error: { name: "ExecutionTimeout" },
     });
     expect(await queue.recoverExpired()).toBe(1);
-    expect(await queue.getJob(timeoutFirstId)).toMatchObject({
+    expect(await admin.getJob(timeoutFirstId)).toMatchObject({
       state: "failed",
       currentAttempt: 2,
       error: { name: "DeadlineExceeded" },
@@ -889,7 +889,7 @@ describe("claim lease fence", () => {
     expect(await queue.expireOwned(deadlineFirst!, "deadline-before-timeout-worker")).toBe(
       "deadline_exceeded",
     );
-    expect(await queue.getJob(deadlineFirstId)).toMatchObject({
+    expect(await admin.getJob(deadlineFirstId)).toMatchObject({
       state: "failed",
       currentAttempt: 1,
       error: { name: "DeadlineExceeded" },
@@ -940,7 +940,7 @@ describe("claim lease fence", () => {
       cancelClient.release();
     }
     expect(await queue.acknowledgeCancel(claimed!, "expire-cancel-race-worker")).toBe(true);
-    expect(await queue.getJob(id)).toMatchObject({
+    expect(await admin.getJob(id)).toMatchObject({
       state: "canceled",
       error: { name: "CancellationRequested", reason: "cancel won row lock" },
     });
@@ -964,7 +964,7 @@ describe("claim lease fence", () => {
     await sleep(200);
     await queue.promote();
     expect(await timeoutWorker.runOnce()).toBe(true);
-    expect(await queue.getJob(timeoutId)).toMatchObject({
+    expect(await admin.getJob(timeoutId)).toMatchObject({
       state: "succeeded",
       currentAttempt: 1,
       result: { activations: 2 },
@@ -985,7 +985,7 @@ describe("claim lease fence", () => {
     expect(await deadlineWorker.runOnce()).toBe(true);
     await sleep(140);
     expect(await queue.recoverExpired()).toBe(1);
-    expect(await queue.getJob(deadlineId)).toMatchObject({
+    expect(await admin.getJob(deadlineId)).toMatchObject({
       state: "failed",
       currentAttempt: 1,
       error: { name: "DeadlineExceeded" },
@@ -1128,13 +1128,13 @@ describe("claim lease fence", () => {
     expect(await queue.claim("worker-b", { leaseMs: 100 })).toBeNull();
     await sleep(130);
     expect(await queue.recoverExpired()).toBe(1);
-    expect((await queue.getJob(id))?.fenceToken).toBe(0n);
+    expect((await admin.getJob(id))?.fenceToken).toBe(0n);
     const second = await queue.claim("worker-b", { leaseMs: 1_000 });
     expect(second?.attempt).toBe(2);
     expect(second!.fenceToken).toBeGreaterThan(first!.fenceToken);
     expect(await queue.complete(first!, "worker-a", { stale: true })).toBe(false);
     expect(await queue.complete(second!, "worker-b", { delivered: true })).toBe(true);
-    expect((await queue.getJob<{ delivered: boolean }>(id))?.result).toEqual({ delivered: true });
+    expect((await admin.getJob<{ delivered: boolean }>(id))?.result).toEqual({ delivered: true });
   });
 
   it("enforces queue concurrency atomically across competing claims", async () => {
@@ -1567,7 +1567,7 @@ describe("claim lease fence", () => {
     await queue.claim("worker-a", { leaseMs: 100 });
     await sleep(130);
     expect(await queue.recoverExpired()).toBe(1);
-    expect((await queue.getJob(id))?.state).toBe("failed");
+    expect((await admin.getJob(id))?.state).toBe("failed");
     expect(
       (
         await pool.query(

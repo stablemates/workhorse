@@ -5,7 +5,7 @@ import { Queue, Worker } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 import { WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
 
-const { pool, queue } = createIntegrationTestContext(import.meta.url);
+const { pool, queue, admin, adminAudit } = createIntegrationTestContext(import.meta.url);
 
 interface CronOccurrenceFixture {
   id: string;
@@ -61,7 +61,7 @@ describe("cron schedules", () => {
     );
     expect(secondId).not.toBeNull();
     expect(secondId).not.toBe(firstId);
-    expect(await queue.getJob(secondId!)).toMatchObject({ state: "ready" });
+    expect(await admin.getJob(secondId!)).toMatchObject({ state: "ready" });
     expect((await queue.schedules(["cancel-recurring"])).map((item) => item.name)).toEqual([
       "pulse",
     ]);
@@ -104,7 +104,7 @@ describe("cron schedules", () => {
       stored.revision,
       new Date("2026-08-11T03:00:00Z"),
     );
-    await expect(queue.getJob(jobId!)).resolves.toMatchObject({
+    await expect(admin.getJob(jobId!)).resolves.toMatchObject({
       concurrencyKey: "tenant-scheduled",
     });
   });
@@ -450,17 +450,20 @@ describe("cron schedules", () => {
     );
     const requestedAt = Date.now();
 
-    await expect(queue.runTaskNow(jobId)).resolves.toMatchObject({
+    const runNowAudit = adminAudit("run scheduled job");
+    await expect(admin.runTaskNow(jobId, runNowAudit)).resolves.toMatchObject({
       status: "released",
       jobId,
       state: "ready",
       runAt: expect.any(Date),
     });
-    const released = await queue.getJob(jobId);
+    const released = await admin.getJob(jobId);
     expect(released).toMatchObject({ state: "ready" });
     expect(released!.runAt.getTime()).toBeGreaterThanOrEqual(requestedAt);
     expect(released!.runAt.getTime()).toBeLessThan(originalRunAt.getTime());
-    await expect(queue.runTaskNow(jobId)).resolves.toMatchObject({
+    await expect(
+      admin.runTaskNow(jobId, adminAudit("repeat immediate run")),
+    ).resolves.toMatchObject({
       status: "already_ready",
       state: "ready",
       runAt: released!.runAt,
@@ -472,7 +475,18 @@ describe("cron schedules", () => {
         [jobId],
       ),
     ).resolves.toMatchObject({
-      rows: [{ attempt: 1, event_type: "promoted", details: { reason: "manual" } }],
+      rows: [
+        {
+          attempt: 1,
+          event_type: "promoted",
+          details: expect.objectContaining({
+            reason: "manual",
+            requested_by: runNowAudit.actor,
+            request_reason: runNowAudit.reason,
+            request_id_digest: expect.stringMatching(/^[0-9a-f]{12}$/),
+          }),
+        },
+      ],
     });
     await expect(
       pool.query(
@@ -488,14 +502,16 @@ describe("cron schedules", () => {
     await queue.scheduleWait(claimed!, "wait-worker", "approval", {
       wakeAt: new Date(Date.now() + 3_600_000),
     });
-    const waitingBefore = await queue.getJob(waitingId);
-    await expect(queue.runTaskNow(waitingId)).resolves.toMatchObject({
+    const waitingBefore = await admin.getJob(waitingId);
+    await expect(
+      admin.runTaskNow(waitingId, adminAudit("reject waiting job")),
+    ).resolves.toMatchObject({
       status: "waiting",
       jobId: waitingId,
       state: "scheduled",
       runAt: waitingBefore!.runAt,
     });
-    await expect(queue.getJob(waitingId)).resolves.toMatchObject({
+    await expect(admin.getJob(waitingId)).resolves.toMatchObject({
       state: "scheduled",
       runAt: waitingBefore!.runAt,
     });
@@ -504,12 +520,16 @@ describe("cron schedules", () => {
     const terminalClaim = await queue.claim("terminal-worker", { queue: "run-now-terminal" });
     expect(terminalClaim?.id).toBe(terminalId);
     expect(await queue.complete(terminalClaim!, "terminal-worker", { ok: true })).toBe(true);
-    await expect(queue.runTaskNow(terminalId)).resolves.toMatchObject({
+    await expect(
+      admin.runTaskNow(terminalId, adminAudit("reject terminal job")),
+    ).resolves.toMatchObject({
       status: "not_scheduled",
       jobId: terminalId,
       state: "succeeded",
     });
-    await expect(queue.runTaskNow("00000000-0000-4000-8000-000000000099")).resolves.toEqual({
+    await expect(
+      admin.runTaskNow("00000000-0000-4000-8000-000000000099", adminAudit("run missing job")),
+    ).resolves.toEqual({
       status: "not_found",
       jobId: "00000000-0000-4000-8000-000000000099",
       state: null,

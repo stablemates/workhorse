@@ -28,7 +28,7 @@ export function createDashboardConformanceTransport(
   const queue = new Queue(database);
   const admin = new Admin(database);
   const controllers = createDashboardOperatorControllers({
-    run: (_action, operation) => operation({ queue, admin }),
+    run: (_action, operation) => operation({ admin, queue }),
   });
   const settingsController: DashboardSettingsController = {
     async overrideMaintenancePolicy(definition) {

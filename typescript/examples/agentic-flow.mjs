@@ -1,7 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
-import { assertSchemaCompatible, Queue, Worker } from "@workhorse-js/core";
+import { Admin, assertSchemaCompatible, Queue, Worker } from "@workhorse-js/core";
 import { Pool } from "pg";
 
 const PARENT_QUEUE = "agentic-flow";
@@ -123,6 +123,7 @@ export async function runAgenticFlowExample({
 }) {
   await assertSchemaCompatible(database);
   const queue = new Queue(database);
+  const admin = new Admin(database);
   await queue.syncRateLimitPolicies(
     POLICY_NAMESPACE,
     [
@@ -163,7 +164,7 @@ export async function runAgenticFlowExample({
       approvalDelivered = delivery.status === "delivered" || delivery.status === "duplicate";
     }
 
-    const snapshot = await queue.getJob(jobId);
+    const snapshot = await admin.getJob(jobId);
     if (snapshot?.state === "succeeded") {
       return { jobId, result: snapshot.result, progress: snapshot.progress?.value ?? null };
     }

@@ -1,6 +1,3 @@
-import type { QueryResult } from "pg";
-import { databaseErrorCode, expectOneRow, WorkhorseError } from "./errors.js";
-import { logInfo, type QueueMetricSnapshot } from "./telemetry.js";
 import type {
   BulkRedriveOptions,
   BulkRedrivePage,
@@ -26,54 +23,24 @@ import type {
   RedriveLineage,
   RedriveResult,
   RetentionPolicy,
+  RetentionPolicyDefinition,
+  RetentionPolicyImpact,
   WorkerPauseResult,
   WorkerRegistryEntry,
 } from "./types.js";
+import { databaseErrorCode, databaseErrorDetails, expectOneRow, WorkhorseError } from "./errors.js";
 import { MAX_JOB_QUERY_PAGE_SIZE, MAX_REDRIVE_BATCH_SIZE } from "./types.js";
-import type { SignalWaitPage } from "./queue/signals.js";
-import type { HumanWaitPage } from "./queue/human-waits.js";
-import type { ExternalWaitListOptions } from "./queue/external-waits.js";
+import type { QueueMetricSnapshot } from "./telemetry.js";
+import { logInfo } from "./telemetry.js";
 import { createQueueModuleContext } from "./queue/module-context.js";
 import { createQueueModules, type QueueModules } from "./queue/modules.js";
-import { nullableRowTimestamp } from "./queue/row-mapping.js";
 import { validateQueueOptions } from "./queue/enqueue-contracts.js";
+import type { ExternalWaitListOptions } from "./queue/external-waits.js";
+import type { HumanWaitPage } from "./queue/human-waits.js";
+import type { SignalWaitPage } from "./queue/signals.js";
+import type { StoredSchedule } from "./queue/cron-schedules.js";
+import { nullableRowTimestamp } from "./queue/row-mapping.js";
 import { concurrencyPolicy, type ConcurrencyPolicyRow } from "./queue/operator-reads.js";
-
-/** Audit identity required by every operator mutation. */
-export interface AdminAuditContext {
-  actor: string;
-  reason: string;
-  requestId: string;
-}
-
-/** A purge request ID was replayed with different attribution or a different queue. */
-export class PurgeIdempotencyConflictError extends WorkhorseError {
-  constructor(options?: ErrorOptions) {
-    super("Purge request conflicts with a retained request", options);
-    this.name = "PurgeIdempotencyConflictError";
-  }
-}
-
-function validateAdminAudit(audit: AdminAuditContext): void {
-  if (!audit || typeof audit !== "object") throw new TypeError("Admin audit context is required");
-  if (typeof audit.actor !== "string" || audit.actor.length === 0 || audit.actor.length > 200) {
-    throw new TypeError("Admin audit actor must contain between 1 and 200 characters");
-  }
-  if (
-    typeof audit.reason !== "string" ||
-    audit.reason.length === 0 ||
-    audit.reason.length > 2_000
-  ) {
-    throw new TypeError("Admin audit reason must contain between 1 and 2000 characters");
-  }
-  if (
-    typeof audit.requestId !== "string" ||
-    audit.requestId.length === 0 ||
-    new TextEncoder().encode(audit.requestId).byteLength > 512
-  ) {
-    throw new TypeError("Admin audit requestId must contain between 1 and 512 UTF-8 bytes");
-  }
-}
 
 export type RunTaskNowStatus =
   | "released"
@@ -89,7 +56,84 @@ export interface RunTaskNowResult {
   runAt: Date | null;
 }
 
-/** Public operator facade over the versioned PostgreSQL protocol. */
+/** Required attribution and replay identity for an administrative mutation. */
+export interface AdminAudit {
+  actor: string;
+  reason: string;
+  requestId: string;
+}
+
+export interface PurgeIdempotencyConflictDetails {
+  queue: string;
+  requestIdPreview: string;
+  requestIdDigest: string;
+  requestIdLength: number;
+  conflictingFields: string[];
+  storedRequestDigest: string;
+  rejectedRequestDigest: string;
+}
+
+export class PurgeIdempotencyConflictError extends WorkhorseError {
+  constructor(readonly details: PurgeIdempotencyConflictDetails) {
+    super(
+      `Queue purge conflict for ${details.queue} and request ${details.requestIdPreview} (${details.requestIdDigest}); fields: ${details.conflictingFields.join(", ")}`,
+    );
+    this.name = "PurgeIdempotencyConflictError";
+  }
+}
+
+function validateAdminAudit(audit: AdminAudit): void {
+  if (audit.actor.length === 0 || audit.actor.length > 200) {
+    throw new RangeError("actor must contain between 1 and 200 characters");
+  }
+  if (audit.reason.length === 0 || audit.reason.length > 2_000) {
+    throw new RangeError("reason must contain between 1 and 2000 characters");
+  }
+  const requestBytes = new TextEncoder().encode(audit.requestId).byteLength;
+  if (requestBytes === 0 || requestBytes > 512) {
+    throw new RangeError("requestId must contain between 1 and 512 UTF-8 bytes");
+  }
+}
+
+function purgeConflict(error: unknown): PurgeIdempotencyConflictError | null {
+  if (databaseErrorCode(error) !== "P1006") return null;
+  for (const detail of databaseErrorDetails(error)) {
+    try {
+      const parsed = JSON.parse(detail) as PurgeIdempotencyConflictDetails;
+      if (
+        typeof parsed.queue === "string" &&
+        typeof parsed.requestIdPreview === "string" &&
+        typeof parsed.requestIdDigest === "string" &&
+        typeof parsed.requestIdLength === "number" &&
+        Array.isArray(parsed.conflictingFields) &&
+        parsed.conflictingFields.every((field) => typeof field === "string") &&
+        typeof parsed.storedRequestDigest === "string" &&
+        typeof parsed.rejectedRequestDigest === "string"
+      ) {
+        return new PurgeIdempotencyConflictError(parsed);
+      }
+    } catch {
+      // PostgreSQL or an adapter supplied unrelated DETAIL text; try the next wrapper.
+    }
+  }
+  return new PurgeIdempotencyConflictError({
+    queue: "unknown",
+    requestIdPreview: "unknown",
+    requestIdDigest: "unknown",
+    requestIdLength: 0,
+    conflictingFields: [],
+    storedRequestDigest: "unknown",
+    rejectedRequestDigest: "unknown",
+  });
+}
+
+/**
+ * Public operator client over the versioned PostgreSQL protocol.
+ *
+ * Application code uses {@link import("./queue.js").Queue} to produce and control its own work.
+ * Operational tooling uses Admin so privileged reads and fleet-wide controls have one contract
+ * across the SDKs, CLI, and dashboard.
+ */
 export class Admin {
   private readonly modules: QueueModules;
 
@@ -119,7 +163,7 @@ export class Admin {
     return this.modules.operatorReads.listDeadLetters(query);
   }
 
-  redrive(sourceJobId: string, audit: AdminAuditContext): Promise<RedriveResult> {
+  redrive(sourceJobId: string, audit: AdminAudit): Promise<RedriveResult> {
     validateAdminAudit(audit);
     return this.modules.operatorReads.redrive(sourceJobId, {
       requestedBy: audit.actor,
@@ -130,7 +174,7 @@ export class Admin {
 
   redriveMany(
     filter: DeadLetterFilter,
-    audit: AdminAuditContext,
+    audit: AdminAudit,
     options: BulkRedriveOptions = {},
   ): Promise<BulkRedrivePage> {
     validateAdminAudit(audit);
@@ -193,54 +237,26 @@ export class Admin {
   setWorkerPaused(
     workerId: string,
     paused: boolean,
-    audit: AdminAuditContext,
+    audit: AdminAudit,
   ): Promise<WorkerPauseResult | null> {
     validateAdminAudit(audit);
     return this.modules.workerRegistry.setWorkerPaused(workerId, paused, {
       requestedBy: audit.actor,
       reason: audit.reason,
+      requestId: audit.requestId,
     });
   }
 
-  async pauseQueue(queueName: string, audit: AdminAuditContext): Promise<void> {
-    validateAdminAudit(audit);
-    await this.modules.queueAdministration.pauseQueue(queueName);
-  }
-
-  async resumeQueue(queueName: string, audit: AdminAuditContext): Promise<void> {
-    validateAdminAudit(audit);
-    await this.modules.queueAdministration.resumeQueue(queueName);
-  }
-
-  async purgeQueue(queueName: string, audit: AdminAuditContext): Promise<number> {
-    validateAdminAudit(audit);
-    let result: QueryResult<{ count: number }>;
-    try {
-      result = await this.database.query<{ count: number }>(
-        "SELECT workhorse.purge_queue_v1($1::text, $2::text, $3::text, $4::text) AS count",
-        [queueName, audit.actor, audit.reason, audit.requestId],
-      );
-    } catch (error) {
-      if (databaseErrorCode(error) === "P1006") {
-        throw new PurgeIdempotencyConflictError({ cause: error });
-      }
-      throw error;
-    }
-    const count = expectOneRow(result, "workhorse.purge_queue_v1").count;
-    logInfo("workhorse.queue.purged", "Queue purged", {
-      "workhorse.queue.name": queueName,
-      "workhorse.job.count": count,
-    });
-    return count;
-  }
-
-  async runTaskNow(jobId: string, audit: AdminAuditContext): Promise<RunTaskNowResult> {
+  async runTaskNow(jobId: string, audit: AdminAudit): Promise<RunTaskNowResult> {
     validateAdminAudit(audit);
     const result = await this.database.query<{
       status: RunTaskNowStatus;
       state: string | null;
       run_at: Date | string | null;
-    }>("SELECT status, state, run_at FROM workhorse.run_task_now_v1($1::uuid)", [jobId]);
+    }>(
+      "SELECT status, state, run_at FROM workhorse.run_task_now_v1($1::uuid, $2::text, $3::text, $4::text)",
+      [jobId, audit.actor, audit.reason, audit.requestId],
+    );
     const row = expectOneRow(result, "workhorse.run_task_now_v1");
     logInfo("workhorse.job.run_now_requested", "Immediate job run requested", {
       "workhorse.job.id": jobId,
@@ -255,20 +271,37 @@ export class Admin {
     };
   }
 
-  health(): Promise<QueueHealth> {
-    return this.modules.operatorReads.health();
+  async pauseQueue(queueName: string, audit: AdminAudit): Promise<void> {
+    validateAdminAudit(audit);
+    return this.modules.queueAdministration.pauseQueue(queueName, audit);
+  }
+
+  async resumeQueue(queueName: string, audit: AdminAudit): Promise<void> {
+    validateAdminAudit(audit);
+    return this.modules.queueAdministration.resumeQueue(queueName, audit);
+  }
+
+  async purgeQueue(queueName: string, audit: AdminAudit): Promise<number> {
+    validateAdminAudit(audit);
+    try {
+      const result = await this.database.query<{ deleted_count: number }>(
+        "SELECT * FROM workhorse.purge_queue_v1($1::text, $2::text, $3::text, $4::text)",
+        [queueName, audit.actor, audit.reason, audit.requestId],
+      );
+      return expectOneRow(result, "workhorse.purge_queue_v1").deleted_count;
+    } catch (error) {
+      const conflict = purgeConflict(error);
+      if (conflict) throw conflict;
+      throw error;
+    }
   }
 
   queueMetricSnapshot(): Promise<QueueMetricSnapshot[]> {
     return this.modules.operatorReads.queueMetricSnapshot();
   }
 
-  getMaintenancePolicy(): Promise<MaintenancePolicy> {
-    return this.modules.retentionMaintenance.getMaintenancePolicy();
-  }
-
-  getRetentionPolicy(): Promise<RetentionPolicy> {
-    return this.modules.retentionMaintenance.getRetentionPolicy();
+  health(): Promise<QueueHealth> {
+    return this.modules.operatorReads.health();
   }
 
   async concurrencyPolicies(queueNames: readonly string[] = []): Promise<ConcurrencyPolicy[]> {
@@ -280,5 +313,23 @@ export class Admin {
       [queueNames],
     );
     return result.rows.map(concurrencyPolicy);
+  }
+
+  getRetentionPolicy(): Promise<RetentionPolicy> {
+    return this.modules.retentionMaintenance.getRetentionPolicy();
+  }
+
+  previewRetentionPolicy(
+    definition: Partial<RetentionPolicyDefinition>,
+  ): Promise<RetentionPolicyImpact> {
+    return this.modules.retentionMaintenance.previewRetentionPolicy(definition);
+  }
+
+  getMaintenancePolicy(): Promise<MaintenancePolicy> {
+    return this.modules.retentionMaintenance.getMaintenancePolicy();
+  }
+
+  schedules(namespaces: readonly string[]): Promise<StoredSchedule[]> {
+    return this.modules.cronSchedules.schedules(namespaces);
   }
 }

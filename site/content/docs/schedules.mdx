@@ -93,10 +93,10 @@ future occurrences through the next synchronization.
 
 Three related calls round out the API:
 
-- `queue.schedules(namespaces)` reads stored definitions and their last occurrence, for operator
+- `admin.schedules(namespaces)` reads stored definitions and their last occurrence, for operator
   tools.
-- `admin.runTaskNow(jobId, audit)` releases one scheduled job immediately — useful for "run it now"
-  buttons on a fired-but-delayed occurrence.
+- `admin.runTaskNow(jobId, audit)` releases one scheduled job immediately with the actor, reason,
+  and request identity used by operator controls.
 - `queue.fireSchedule(namespace, name, revision, occurrenceAt)` exposes the revision-fenced firing
   operation itself, for tests and controlled integrations.
 

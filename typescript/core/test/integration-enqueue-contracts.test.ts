@@ -19,9 +19,8 @@ import {
 } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { admin, pool, queue, safeKeyDigest, safeKeyPreview } = createIntegrationTestContext(
-  import.meta.url,
-);
+const { pool, queue, safeKeyDigest, safeKeyPreview, admin, adminAudit } =
+  createIntegrationTestContext(import.meta.url);
 
 const dependencyCoalescingCases = [
   ["debounce", "prerequisiteJobId"],
@@ -488,9 +487,9 @@ describe("enqueue contracts", () => {
     ]);
 
     expect(ids).toHaveLength(3);
-    expect((await queue.getJob(ids[0]!))?.type).toBe("first");
-    expect((await queue.getJob(ids[1]!))?.state).toBe("scheduled");
-    expect((await queue.getJob(ids[2]!))?.maxAttempts).toBe(5);
+    expect((await admin.getJob(ids[0]!))?.type).toBe("first");
+    expect((await admin.getJob(ids[1]!))?.state).toBe("scheduled");
+    expect((await admin.getJob(ids[2]!))?.maxAttempts).toBe(5);
     expect((await queue.claim("worker-a"))?.id).toBe(ids[0]);
     expect((await queue.claim("worker-b"))?.id).toBe(ids[2]);
 
@@ -508,8 +507,8 @@ describe("enqueue contracts", () => {
       { type: "background", payload: { order: 4 }, options: { priority: 1 } },
     ]);
 
-    await expect(queue.getJob(ids[1]!)).resolves.toMatchObject({ priority: 100 });
-    await expect(queue.listJobs({ limit: 10 })).resolves.toMatchObject({
+    await expect(admin.getJob(ids[1]!)).resolves.toMatchObject({ priority: 100 });
+    await expect(admin.listJobs({ limit: 10 })).resolves.toMatchObject({
       items: expect.arrayContaining([
         expect.objectContaining({ id: ids[0], priority: 0 }),
         expect.objectContaining({ id: ids[1], priority: 100 }),
@@ -759,7 +758,7 @@ describe("enqueue contracts", () => {
     await expect(
       queue.enqueue("keyed", { version: 1 }, { concurrencyKey: "tenant-b", idempotency }),
     ).rejects.toMatchObject({ conflictingFields: ["concurrencyKey"] });
-    await expect(queue.getJob(first)).resolves.toMatchObject({ concurrencyKey: "tenant-a" });
+    await expect(admin.getJob(first)).resolves.toMatchObject({ concurrencyKey: "tenant-a" });
   });
 
   it("treats tags as a set for replay while preserving the first job's stored tag order", async () => {
@@ -780,7 +779,7 @@ describe("enqueue contracts", () => {
       },
     );
     expect(replay).toBe(first);
-    expect((await queue.getJob(first))?.tags).toEqual(["zeta", "alpha", "zeta"]);
+    expect((await admin.getJob(first))?.tags).toEqual(["zeta", "alpha", "zeta"]);
   });
 
   it("keeps omitted keyed runAt replayable but treats explicit runAt as material", async () => {
@@ -961,7 +960,7 @@ describe("enqueue contracts", () => {
       { revision: 1 },
       { debounce: reset },
     );
-    const acceptedSnapshot = await queue.getJob(accepted.jobId);
+    const acceptedSnapshot = await admin.getJob(accepted.jobId);
 
     await sleep(10);
     const equivalent = await queue.enqueueWithResult(
@@ -969,7 +968,7 @@ describe("enqueue contracts", () => {
       { revision: 1 },
       { debounce: reset },
     );
-    const equivalentSnapshot = await queue.getJob(equivalent.jobId);
+    const equivalentSnapshot = await admin.getJob(equivalent.jobId);
 
     await sleep(10);
     const replaced = await queue.enqueueWithResult(
@@ -982,7 +981,7 @@ describe("enqueue contracts", () => {
         tags: ["material-change"],
       },
     );
-    const replacedSnapshot = await queue.getJob(replaced.jobId);
+    const replacedSnapshot = await admin.getJob(replaced.jobId);
 
     expect(accepted).toMatchObject({ outcome: "accepted" });
     expect(equivalent).toEqual({ jobId: accepted.jobId, outcome: "replaced" });
@@ -1013,7 +1012,7 @@ describe("enqueue contracts", () => {
       { revision: 1 },
       { debounce: preserve },
     );
-    const originalRunAt = (await queue.getJob(preservedAccepted.jobId))!.runAt;
+    const originalRunAt = (await admin.getJob(preservedAccepted.jobId))!.runAt;
     await sleep(10);
     const preservedReplacement = await queue.enqueueWithResult(
       "debounced-preserve",
@@ -1025,8 +1024,8 @@ describe("enqueue contracts", () => {
       jobId: preservedAccepted.jobId,
       outcome: "replaced",
     });
-    expect((await queue.getJob(preservedAccepted.jobId))!.runAt).toEqual(originalRunAt);
-    const timeline = await queue.getJobTimeline(accepted.jobId);
+    expect((await admin.getJob(preservedAccepted.jobId))!.runAt).toEqual(originalRunAt);
+    const timeline = await admin.getJobTimeline(accepted.jobId);
     expect(
       timeline.items.filter((item) => item.kind === "event" && item.eventType === "debounced"),
     ).toHaveLength(2);
@@ -1047,7 +1046,9 @@ describe("enqueue contracts", () => {
       { revision: 1 },
       { debounce },
     );
-    await expect(queue.runTaskNow(accepted.jobId)).resolves.toMatchObject({ status: "released" });
+    await expect(
+      admin.runTaskNow(accepted.jobId, adminAudit("run contract job")),
+    ).resolves.toMatchObject({ status: "released" });
     const claimed = await queue.claim("debounce-lifecycle-worker");
     expect(claimed).toMatchObject({ id: accepted.jobId, payload: { revision: 1 } });
 
@@ -1068,7 +1069,7 @@ describe("enqueue contracts", () => {
       outcome: "non_replaceable",
       reason: "not_pending",
     });
-    await expect(queue.getJob(accepted.jobId)).resolves.toMatchObject({
+    await expect(admin.getJob(accepted.jobId)).resolves.toMatchObject({
       state: "succeeded",
       payload: { revision: 1 },
     });
@@ -1127,7 +1128,7 @@ describe("enqueue contracts", () => {
       { revision: 1 },
       { queue: queueName, debounce },
     );
-    await expect(queue.purgeQueue(queueName)).resolves.toBe(1);
+    await expect(admin.purgeQueue(queueName, adminAudit("purge debounce"))).resolves.toBe(1);
     const second = await queue.enqueueWithResult(
       "debounce-purged",
       { revision: 2 },
@@ -1151,7 +1152,9 @@ describe("enqueue contracts", () => {
         { revision: 1 },
         { debounce },
       );
-      await expect(queue.runTaskNow(first.jobId)).resolves.toMatchObject({
+      await expect(
+        admin.runTaskNow(first.jobId, adminAudit("run coalesced job")),
+      ).resolves.toMatchObject({
         status: expect.stringMatching(/^(released|already_ready)$/),
       });
       const claimed = await queue.claim(`debounce-expired-${lifecycle}-worker`);
@@ -1191,7 +1194,7 @@ describe("enqueue contracts", () => {
         { debounce },
       );
       if (transition === "claim") {
-        await queue.runTaskNow(accepted.jobId);
+        await admin.runTaskNow(accepted.jobId, adminAudit("run accepted job"));
       }
 
       const transitionClient = await pool.connect();
@@ -1229,7 +1232,7 @@ describe("enqueue contracts", () => {
         transitionClient.release();
       }
 
-      await expect(queue.getJob(accepted.jobId)).resolves.toMatchObject({
+      await expect(admin.getJob(accepted.jobId)).resolves.toMatchObject({
         state: transition === "claim" ? "active" : "canceled",
         payload: { revision: 1 },
       });
@@ -1251,7 +1254,7 @@ describe("enqueue contracts", () => {
     expect(new Set(results.map((result) => result.jobId)).size).toBe(1);
     expect(results.filter((result) => result.outcome === "accepted")).toHaveLength(1);
     expect(results.filter((result) => result.outcome === "replaced")).toHaveLength(11);
-    await expect(queue.getJob(results[0]!.jobId)).resolves.toMatchObject({ state: "scheduled" });
+    await expect(admin.getJob(results[0]!.jobId)).resolves.toMatchObject({ state: "scheduled" });
   });
 
   it("validates debounce bounds and keeps mixed batches atomic", async () => {
@@ -1420,7 +1423,7 @@ describe("enqueue contracts", () => {
       existingJobId: accepted.jobId,
       conflictingFields: ["payload"],
     });
-    await expect(queue.getJob(accepted.jobId)).resolves.toMatchObject({
+    await expect(admin.getJob(accepted.jobId)).resolves.toMatchObject({
       payload: { revision: 1 },
       priority: 25,
     });
@@ -1465,7 +1468,7 @@ describe("enqueue contracts", () => {
       {},
       { queue: queueName, throttle: purgeThrottle },
     );
-    await expect(queue.purgeQueue(queueName)).resolves.toBe(1);
+    await expect(admin.purgeQueue(queueName, adminAudit("purge throttle"))).resolves.toBe(1);
     const purgedSecond = await queue.enqueueWithResult(
       "throttle-purged",
       {},
@@ -1487,7 +1490,7 @@ describe("enqueue contracts", () => {
       { jobId: results[0]!.jobId, outcome: "coalesced" },
       { jobId: results[2]!.jobId, outcome: "accepted" },
     ]);
-    const throttleTimeline = await queue.getJobTimeline(results[0]!.jobId);
+    const throttleTimeline = await admin.getJobTimeline(results[0]!.jobId);
     expect(throttleTimeline.items).toContainEqual(
       expect.objectContaining({
         kind: "event",
@@ -1527,7 +1530,7 @@ describe("enqueue contracts", () => {
         client,
       );
       await client.query("ROLLBACK");
-      await expect(queue.getJob(rolledBack.jobId)).resolves.toBeNull();
+      await expect(admin.getJob(rolledBack.jobId)).resolves.toBeNull();
     } finally {
       client.release();
     }
@@ -1828,8 +1831,8 @@ describe("enqueue contracts", () => {
       },
     );
     expect(reused).not.toBe(first);
-    expect((await queue.getJob(first))?.payload).toEqual({ version: 1 });
-    expect((await queue.getJob(reused))?.payload).toEqual({ version: 2 });
+    expect((await admin.getJob(first))?.payload).toEqual({ version: 1 });
+    expect((await admin.getJob(reused))?.payload).toEqual({ version: 2 });
   });
 
   it("keeps omitted-key enqueue behavior fully non-deduplicating", async () => {
@@ -1863,11 +1866,11 @@ describe("enqueue contracts", () => {
       ])
     )[0]!;
 
-    await expect(queue.getJob(billingId)).resolves.toMatchObject({
+    await expect(admin.getJob(billingId)).resolves.toMatchObject({
       id: billingId,
       tags: ["billing", "priority"],
     });
-    await expect(queue.getJob(reportId)).resolves.toMatchObject({
+    await expect(admin.getJob(reportId)).resolves.toMatchObject({
       id: reportId,
       tags: ["reports", "weekly"],
     });
@@ -2019,11 +2022,11 @@ describe("enqueue contracts", () => {
       { to: "a@example.com" },
       { runAt: new Date(Date.now() + 120) },
     );
-    expect((await queue.getJob(id))?.state).toBe("scheduled");
+    expect((await admin.getJob(id))?.state).toBe("scheduled");
     expect(await queue.claim("worker-a")).toBeNull();
     await sleep(150);
     expect(await queue.promote()).toBe(1);
-    expect((await queue.getJob(id))?.state).toBe("ready");
+    expect((await admin.getJob(id))?.state).toBe("ready");
     expect((await queue.claim("worker-a"))?.id).toBe(id);
   });
 });

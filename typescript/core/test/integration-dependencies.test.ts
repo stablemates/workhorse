@@ -11,7 +11,9 @@ import {
 } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { defaultRetentionPolicy, pool, queue } = createIntegrationTestContext(import.meta.url);
+const { defaultRetentionPolicy, pool, queue, admin } = createIntegrationTestContext(
+  import.meta.url,
+);
 
 const insertDependency = (client: PoolClient, dependentJobId: string, prerequisiteJobId: string) =>
   client.query(
@@ -70,7 +72,7 @@ describe("job dependencies", () => {
       },
     });
 
-    await expect(queue.getDependencyLineage(firstId)).resolves.toEqual({
+    await expect(admin.getDependencyLineage(firstId)).resolves.toEqual({
       records: [
         {
           dependentJobId: dependentId,
@@ -103,7 +105,7 @@ describe("job dependencies", () => {
     expect(first?.id).toBe(firstId);
     expect(await queue.complete(first!, "lineage-first-worker", null)).toBe(true);
 
-    const dependentLineage = await queue.getDependencyLineage(dependentId);
+    const dependentLineage = await admin.getDependencyLineage(dependentId);
     expect(dependentLineage.records).toContainEqual(
       expect.objectContaining({
         dependentJobId: dependentId,
@@ -112,7 +114,7 @@ describe("job dependencies", () => {
         resolution: "release",
       }),
     );
-    await expect(queue.getDependencyLineage(dependentId, 1)).resolves.toMatchObject({
+    await expect(admin.getDependencyLineage(dependentId, 1)).resolves.toMatchObject({
       records: [expect.any(Object)],
       truncated: true,
     });
@@ -203,19 +205,19 @@ describe("job dependencies", () => {
     // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
     expectedPrerequisiteIds.sort();
 
-    await expect(queue.getJob(dependentId)).resolves.toMatchObject({
+    await expect(admin.getJob(dependentId)).resolves.toMatchObject({
       state: "blocked",
       prerequisiteJobIds: expectedPrerequisiteIds,
     });
     const first = await queue.claim("fan-in-first-worker");
     expect(first?.id).toBe(firstId);
     expect(await queue.complete(first!, "fan-in-first-worker", null)).toBe(true);
-    await expect(queue.getJob(dependentId)).resolves.toMatchObject({ state: "blocked" });
+    await expect(admin.getJob(dependentId)).resolves.toMatchObject({ state: "blocked" });
 
     const second = await queue.claim("fan-in-second-worker");
     expect(second?.id).toBe(secondId);
     expect(await queue.complete(second!, "fan-in-second-worker", null)).toBe(true);
-    await expect(queue.getJob(dependentId)).resolves.toMatchObject({ state: "ready" });
+    await expect(admin.getJob(dependentId)).resolves.toMatchObject({ state: "ready" });
   });
 
   it("bounds each prerequisite to 100 dependent jobs", async () => {
@@ -238,7 +240,7 @@ describe("job dependencies", () => {
       limit: "dependents",
       max: MAX_JOB_DEPENDENTS,
     });
-    const lineage = await queue.getDependencyLineage(prerequisiteId);
+    const lineage = await admin.getDependencyLineage(prerequisiteId);
     expect(lineage.records).toHaveLength(MAX_JOB_DEPENDENTS);
     expect(lineage.truncated).toBe(false);
   });
@@ -268,7 +270,7 @@ describe("job dependencies", () => {
     await expect(
       queue.cancel(rootId, { requestedBy: "cascade-bound-test" }),
     ).resolves.toMatchObject({ status: "canceled" });
-    await expect(queue.getJob(prerequisiteId)).resolves.toMatchObject({ state: "canceled" });
+    await expect(admin.getJob(prerequisiteId)).resolves.toMatchObject({ state: "canceled" });
   });
 
   it("fails a dependent when a prerequisite failure selects the fail policy", async () => {
@@ -287,7 +289,7 @@ describe("job dependencies", () => {
     expect(await queue.fail(prerequisite!, "failing-prerequisite-worker", new Error("nope"))).toBe(
       "failed",
     );
-    await expect(queue.getJob(dependentId)).resolves.toMatchObject({
+    await expect(admin.getJob(dependentId)).resolves.toMatchObject({
       state: "failed",
       error: expect.objectContaining({
         name: "DependencyFailed",
@@ -309,7 +311,7 @@ describe("job dependencies", () => {
     const prerequisite = await queue.claim("successful-prerequisite-worker");
     expect(prerequisite?.id).toBe(prerequisiteId);
     expect(await queue.complete(prerequisite!, "successful-prerequisite-worker", null)).toBe(true);
-    await expect(queue.getJob(dependentId)).resolves.toMatchObject({ state: "canceled" });
+    await expect(admin.getJob(dependentId)).resolves.toMatchObject({ state: "canceled" });
   });
 
   it("cancels a dependent when a prerequisite cancellation selects the cancel policy", async () => {
@@ -328,7 +330,7 @@ describe("job dependencies", () => {
     ).resolves.toMatchObject({
       status: "canceled",
     });
-    await expect(queue.getJob(dependentId)).resolves.toMatchObject({
+    await expect(admin.getJob(dependentId)).resolves.toMatchObject({
       state: "canceled",
       error: expect.objectContaining({
         name: "DependencyCanceled",
@@ -358,10 +360,10 @@ describe("job dependencies", () => {
     expect(await queue.fail(failed!, "accepted-failure-worker", new Error("accepted"))).toBe(
       "failed",
     );
-    await expect(queue.getJob(dependentId)).resolves.toMatchObject({ state: "blocked" });
+    await expect(admin.getJob(dependentId)).resolves.toMatchObject({ state: "blocked" });
 
     await expect(queue.cancel(canceledId)).resolves.toMatchObject({ status: "canceled" });
-    await expect(queue.getJob(dependentId)).resolves.toMatchObject({ state: "ready" });
+    await expect(admin.getJob(dependentId)).resolves.toMatchObject({ state: "ready" });
   });
 
   it("records why each terminal prerequisite policy released a dependent", async () => {
@@ -438,7 +440,7 @@ describe("job dependencies", () => {
         onCancellation: "cancel",
       },
     });
-    await expect(queue.getJob(releasedId)).resolves.toMatchObject({ state: "ready" });
+    await expect(admin.getJob(releasedId)).resolves.toMatchObject({ state: "ready" });
 
     const failedId = await queue.enqueue("failed-after-failure", null, {
       dependencies: {
@@ -448,7 +450,7 @@ describe("job dependencies", () => {
         onCancellation: "cancel",
       },
     });
-    await expect(queue.getJob(failedId)).resolves.toMatchObject({
+    await expect(admin.getJob(failedId)).resolves.toMatchObject({
       state: "failed",
       error: expect.objectContaining({ name: "DependencyFailed" }),
     });
@@ -630,7 +632,7 @@ describe("job dependencies", () => {
       queue.fail(failed!, "mixed-race-worker", new Error("failed")),
       queue.cancel(canceledId),
     ]);
-    await expect(queue.getJob(dependentId)).resolves.toMatchObject({
+    await expect(admin.getJob(dependentId)).resolves.toMatchObject({
       state: "failed",
       error: expect.objectContaining({ name: "DependencyFailed" }),
     });
@@ -665,7 +667,7 @@ describe("job dependencies", () => {
         queue.complete(second!, "concurrent-worker-2", null),
       ]),
     ).resolves.toEqual([true, true]);
-    await expect(queue.getJob(dependentId)).resolves.toMatchObject({ state: "ready" });
+    await expect(admin.getJob(dependentId)).resolves.toMatchObject({ state: "ready" });
     await expect(
       pool.query<{ count: number }>(
         `SELECT count(*)::integer AS count FROM workhorse.job_event
@@ -695,7 +697,7 @@ describe("job dependencies", () => {
     const acknowledged = completed
       ? null
       : await queue.acknowledgeCancel(prerequisite!, "racing-cancel-worker");
-    const dependent = await queue.getJob(dependentId);
+    const dependent = await admin.getJob(dependentId);
     expect({
       completed,
       cancellation: cancellation.status,
@@ -761,7 +763,7 @@ describe("job dependencies", () => {
     await Promise.all(
       claims.map((claim, index) => queue.complete(claim!, `bounded-worker-${index}`, null)),
     );
-    await expect(queue.getJob(boundedDependentId)).resolves.toMatchObject({ state: "ready" });
+    await expect(admin.getJob(boundedDependentId)).resolves.toMatchObject({ state: "ready" });
   });
 
   it("keeps a dependent outside dispatch until its prerequisite succeeds", async () => {
@@ -772,12 +774,12 @@ describe("job dependencies", () => {
       { prerequisiteJobId: prerequisiteId },
     );
 
-    await expect(queue.getJob(dependentId)).resolves.toMatchObject({
+    await expect(admin.getJob(dependentId)).resolves.toMatchObject({
       state: "blocked",
       prerequisiteJobId: prerequisiteId,
       blockedReason: "prerequisite_pending",
     });
-    await expect(queue.listJobs({ states: ["blocked"] })).resolves.toMatchObject({
+    await expect(admin.listJobs({ states: ["blocked"] })).resolves.toMatchObject({
       items: [expect.objectContaining({ id: dependentId, prerequisiteJobId: prerequisiteId })],
     });
     await expect(
@@ -800,7 +802,7 @@ describe("job dependencies", () => {
     ]);
     expect(completions).toEqual(expect.arrayContaining([false, true]));
 
-    await expect(queue.getJob(dependentId)).resolves.toMatchObject({
+    await expect(admin.getJob(dependentId)).resolves.toMatchObject({
       state: "ready",
       prerequisiteJobId: prerequisiteId,
       blockedReason: null,
@@ -892,23 +894,23 @@ describe("job dependencies", () => {
       queue.fail(dependent!, "dependency-redrive-work-worker", new Error("dependency work failed")),
     ).resolves.toBe("failed");
 
-    const redrive = await queue.redrive(dependentId, {
-      requestedBy: "dependency-test",
+    const redrive = await admin.redrive(dependentId, {
+      actor: "dependency-test",
       reason: "retry with repaired input",
       requestId: `dependency-redrive-${dependentId}`,
     });
     expect(redrive.status).toBe("redriven");
     const targetId = redrive.targetJobId!;
-    await expect(queue.getJob(targetId)).resolves.toMatchObject({
+    await expect(admin.getJob(targetId)).resolves.toMatchObject({
       state: "ready",
       prerequisiteJobId: null,
       prerequisiteJobIds: [],
     });
-    await expect(queue.getDependencyLineage(targetId)).resolves.toEqual({
+    await expect(admin.getDependencyLineage(targetId)).resolves.toEqual({
       records: [],
       truncated: false,
     });
-    await expect(queue.getDependencyLineage(dependentId)).resolves.toMatchObject({
+    await expect(admin.getDependencyLineage(dependentId)).resolves.toMatchObject({
       records: [
         expect.objectContaining({
           dependentJobId: dependentId,
@@ -932,10 +934,10 @@ describe("job dependencies", () => {
     const claimed = await queue.claim("delayed-dependency-worker");
     expect(claimed?.id).toBe(prerequisiteId);
     expect(await queue.complete(claimed!, "delayed-dependency-worker", null)).toBe(true);
-    await expect(queue.getJob(dependentId)).resolves.toMatchObject({ state: "scheduled", runAt });
+    await expect(admin.getJob(dependentId)).resolves.toMatchObject({ state: "scheduled", runAt });
     await sleep(50);
     expect(await queue.promote()).toBe(1);
-    await expect(queue.getJob(dependentId)).resolves.toMatchObject({ state: "ready" });
+    await expect(admin.getJob(dependentId)).resolves.toMatchObject({ state: "ready" });
   });
 
   it("serializes dependency creation with prerequisite completion", async () => {
@@ -959,7 +961,7 @@ describe("job dependencies", () => {
     transaction.release();
 
     await expect(completion).resolves.toBe(true);
-    await expect(queue.getJob(dependentId)).resolves.toMatchObject({
+    await expect(admin.getJob(dependentId)).resolves.toMatchObject({
       state: "ready",
       prerequisiteJobId: prerequisiteId,
       blockedReason: null,
@@ -989,7 +991,7 @@ describe("job dependencies", () => {
     );
     await transaction.query("ROLLBACK");
     transaction.release();
-    await expect(queue.getJob(rolledBackId)).resolves.toBeNull();
+    await expect(admin.getJob(rolledBackId)).resolves.toBeNull();
 
     const idempotency = { key: "dependency-replay", scope: "dependencies" };
     const acceptedId = await queue.enqueue("idempotent-dependent", null, {
@@ -1016,7 +1018,7 @@ describe("job dependencies", () => {
     await expect(
       pool.query("DELETE FROM workhorse.job WHERE id = $1", [prerequisiteId]),
     ).rejects.toThrow(/job_dependency_prerequisite_job_id_fkey/);
-    await expect(queue.getJob(acceptedId)).resolves.toMatchObject({ state: "blocked" });
+    await expect(admin.getJob(acceptedId)).resolves.toMatchObject({ state: "blocked" });
   });
 
   it("compacts released edges before pruning an older prerequisite", async () => {
@@ -1070,9 +1072,9 @@ describe("job dependencies", () => {
         expect.objectContaining({ phase: "terminal_jobs", rowsAffected: 1, error: null }),
       ]),
     );
-    await expect(queue.getJob(prerequisiteId)).resolves.toBeNull();
-    await expect(queue.getJob(dependentId)).resolves.not.toBeNull();
-    await expect(queue.getDependencyLineage(dependentId)).resolves.toEqual({
+    await expect(admin.getJob(prerequisiteId)).resolves.toBeNull();
+    await expect(admin.getJob(dependentId)).resolves.not.toBeNull();
+    await expect(admin.getDependencyLineage(dependentId)).resolves.toEqual({
       records: [],
       truncated: false,
     });

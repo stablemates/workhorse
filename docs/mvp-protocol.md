@@ -77,11 +77,11 @@ Every closed logical attempt has one immutable `attempt_history` row. Never-star
 
 `Admin.listDeadLetters(query?)` accepts queue, type, required tags, error name, `finishedAfter`, and `finishedBefore` filters. Pages contain at most 1,000 rows and use immutable `(finishedAt, jobId)` cursor order. General live and terminal listing is provided by the schema-v16 `Admin.listJobs` contract above.
 
-`Admin.redrive(sourceJobId, { requestedBy, reason, requestId })` accepts only a retained failed source. Actor is 1 through 200 characters, reason is 1 through 2,000 characters, and request ID is 1 through 512 UTF-8 bytes. The request ID is hashed; audit rows and conflict details expose only its safe preview, digest, and length.
+`Admin.redrive(sourceJobId, { actor, reason, requestId })` accepts only a retained failed source. Actor is 1 through 200 characters, reason is 1 through 2,000 characters, and request ID is 1 through 512 UTF-8 bytes. The request ID is hashed; audit rows and conflict details expose only its safe preview, digest, and length.
 
 The target starts ready at attempt one with source queue, type, payload, accepted contract version, size limits, redaction keys, tags, maximum attempts, retry policy, and execution timeout. Deadline, checkpoints, waits, attempts, results, and cancellation state are not copied. Exact source/request replay returns the retained target with status `replayed`; materially different attribution raises SQLSTATE `P1002` and `RedriveIdempotencyConflictError` without creating side effects.
 
-`Admin.redriveMany(filter, request, { limit?, dryRun?, cursor? })` processes the oldest matching failures in one PostgreSQL statement and returns `{ results, nextCursor }`. The default limit is 100 and the maximum is 1,000. Passing `nextCursor` into the next call advances deterministically across equal timestamps; repeating the same cursor and request replays the same page. A dry-run returns `eligible` rows and performs no job, event, notification, or lineage writes. Each source derives independent idempotency from the shared request ID, so replaying a page cannot duplicate targets.
+`Admin.redriveMany(filter, audit, { limit?, dryRun?, cursor? })` processes the oldest matching failures in one PostgreSQL statement and returns `{ results, nextCursor }`. The default limit is 100 and the maximum is 1,000. Passing `nextCursor` into the next call advances deterministically across equal timestamps; repeating the same cursor and audit identity replays the same page. A dry-run returns `eligible` rows and performs no job, event, notification, or lineage writes. Each source derives independent idempotency from the shared request ID, so replaying a page cannot duplicate targets.
 
 ## Batch enqueue contract
 

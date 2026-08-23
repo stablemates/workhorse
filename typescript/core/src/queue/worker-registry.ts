@@ -49,7 +49,7 @@ export class WorkerRegistryModule extends QueueModule {
   async setWorkerPaused(
     workerId: string,
     paused: boolean,
-    options: { requestedBy?: string; reason?: string } = {},
+    options: { requestedBy: string; reason: string; requestId: string },
   ): Promise<WorkerPauseResult | null> {
     const result = await this.context.database.query<{
       worker_id: string;
@@ -58,12 +58,10 @@ export class WorkerRegistryModule extends QueueModule {
       paused_reason: string | null;
       paused_at: Date | null;
       last_heartbeat_at: Date;
-    }>("SELECT * FROM workhorse.set_worker_paused_v1($1::text, $2::boolean, $3::text, $4::text)", [
-      workerId,
-      paused,
-      options.requestedBy ?? null,
-      options.reason ?? null,
-    ]);
+    }>(
+      "SELECT * FROM workhorse.set_worker_paused_v1($1::text, $2::boolean, $3::text, $4::text, $5::text)",
+      [workerId, paused, options.requestedBy, options.reason, options.requestId],
+    );
     const row = result.rows[0];
     if (!row) return null;
     logInfo(

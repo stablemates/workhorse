@@ -115,27 +115,28 @@ semantics before any runtime fires a definition.
 The Plane work items own sequencing, blockers, and completion. Update this table when their state
 changes, and update the capability matrices only when repository tests prove the new support.
 
-## Operator product capability
+## Product operator capability
 
-PostgreSQL implements every operator read and control, and the standalone or embedded dashboard
-and the `workhorse` CLI invoke them against any database, whatever language enqueued the work.
+PostgreSQL implements every operator read and control. The standalone or embedded dashboard and
+the `workhorse` CLI expose the subsets shown below against any database, whatever language
+enqueued the work. That product capability does not vary by worker language.
 
 | Capability                                 | PostgreSQL | Dashboard | CLI       |
 | ------------------------------------------ | ---------- | --------- | --------- |
 | Job lookup, listing, and timeline          | Supported  | Supported | Supported |
 | Queue health snapshot                      | Supported  | Supported | Supported |
 | Cancellation requests                      | Supported  | Supported | Supported |
-| Queue pause, resume, and purge             | Supported  | Supported | Supported |
-| Dead-letter listing and redrive            | Supported  | Partial   | Supported |
-| Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported |
-| Durable operator worker pause              | Supported  | Supported | Supported |
-
-The dashboard lists dead letters but does not expose redrive as a general mutation, so that row is
-Partial there. PostgreSQL remains the one transition owner for every Supported or Partial cell.
+| Queue pause and resume                     | Supported  | Supported | Supported |
+| Queue purge                                | Supported  | Supported | Absent    |
+| Dead-letter listing                        | Supported  | Supported | Supported |
+| Redrive                                    | Supported  | Absent    | Supported |
+| Checkpoint, wait, and human-decision reads | Supported  | Supported | Absent    |
+| Durable operator worker pause              | Supported  | Supported | Absent    |
 
 ## Public SDK operator surface
 
-This table records which language lets application code call the operation through its public SDK.
+This table records the narrower fact of which language lets application code invoke an operation
+through its own public SDK.
 
 | Capability                                 | TypeScript | Python    | Go        |
 | ------------------------------------------ | ---------- | --------- | --------- |
@@ -147,8 +148,8 @@ This table records which language lets application code call the operation throu
 | Checkpoint, wait, and human-decision reads | Supported  | Planned   | Planned   |
 | Durable operator worker pause              | Supported  | Planned   | Planned   |
 
-TypeScript exposes these methods through the public `Admin` client, and the CLI and dashboard use
-that same path. [WH-356] and [WH-357] add the same `Admin` client to Python and Go,
+TypeScript exposes these methods through a dedicated public `Admin` client, and the CLI and
+dashboard use that same client. [WH-356] and [WH-357] add `Admin` to Python and Go,
 and switch their embedded dashboard backends from direct SQL to that client. Until then, Python and
 Go application code reach the operator surface only through the dashboard or the CLI. Redrive is
 not a dashboard action, so it needs the CLI. Cancellation is application-shaped, so every queue

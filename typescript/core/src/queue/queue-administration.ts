@@ -2,7 +2,7 @@ import { expectOneRow } from "../errors.js";
 import { logInfo } from "../telemetry.js";
 import { QueueModule } from "./module-context.js";
 
-/** Owns queue-wide promotion, pause, resume, and purge operations behind the Queue facade. */
+/** Owns queue-wide promotion, pause, and resume operations behind the public clients. */
 export class QueueAdministrationModule extends QueueModule {
   async promote(limit = 100): Promise<number> {
     // Promotion is bounded so a large delayed backlog cannot create one long lock transaction.
@@ -19,26 +19,25 @@ export class QueueAdministrationModule extends QueueModule {
     return count;
   }
 
-  async pauseQueue(queueName = this.context.defaultQueue): Promise<void> {
-    await this.context.database.query("SELECT workhorse.pause_queue_v1($1::text)", [queueName]);
+  async pauseQueue(
+    queueName: string,
+    audit: { actor: string; reason: string; requestId: string },
+  ): Promise<void> {
+    await this.context.database.query(
+      "SELECT workhorse.set_queue_paused_v1($1::text, true, $2::text, $3::text, $4::text)",
+      [queueName, audit.actor, audit.reason, audit.requestId],
+    );
     logInfo("workhorse.queue.paused", "Queue paused", { "workhorse.queue.name": queueName });
   }
 
-  async resumeQueue(queueName = this.context.defaultQueue): Promise<void> {
-    await this.context.database.query("SELECT workhorse.resume_queue_v1($1::text)", [queueName]);
-    logInfo("workhorse.queue.resumed", "Queue resumed", { "workhorse.queue.name": queueName });
-  }
-
-  async purgeQueue(queueName = this.context.defaultQueue): Promise<number> {
-    const result = await this.context.database.query<{ count: number }>(
-      "SELECT workhorse.purge_queue_v1($1::text) AS count",
-      [queueName],
+  async resumeQueue(
+    queueName: string,
+    audit: { actor: string; reason: string; requestId: string },
+  ): Promise<void> {
+    await this.context.database.query(
+      "SELECT workhorse.set_queue_paused_v1($1::text, false, $2::text, $3::text, $4::text)",
+      [queueName, audit.actor, audit.reason, audit.requestId],
     );
-    const count = expectOneRow(result, "workhorse.purge_queue_v1").count;
-    logInfo("workhorse.queue.purged", "Queue purged", {
-      "workhorse.queue.name": queueName,
-      "workhorse.job.count": count,
-    });
-    return count;
+    logInfo("workhorse.queue.resumed", "Queue resumed", { "workhorse.queue.name": queueName });
   }
 }

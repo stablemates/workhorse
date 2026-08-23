@@ -3,21 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDashboardOperatorControllers } from "./operator-controllers.js";
 
 describe("shared dashboard operator controllers", () => {
-  it("owns the common Queue calls while delegating host audit plumbing", async () => {
-    const admin = {
-      pauseQueue: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
-      resumeQueue: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
-      purgeQueue: vi.fn<() => Promise<number>>().mockResolvedValue(3),
-      runTaskNow: vi.fn<() => Promise<unknown>>().mockResolvedValue({
-        status: "released",
-        jobId: "job-1",
-        state: "ready",
-        runAt: new Date("2026-08-12T12:00:00.000Z"),
-      }),
-      setWorkerPaused: vi.fn<() => Promise<{ paused: boolean }>>().mockResolvedValue({
-        paused: true,
-      }),
-    } as unknown as Admin;
+  it("routes application and operator calls while delegating host audit plumbing", async () => {
     const queue = {
       cancel: vi.fn<() => Promise<unknown>>().mockResolvedValue({
         status: "canceled",
@@ -46,12 +32,26 @@ describe("shared dashboard operator controllers", () => {
         completedBy: "configured-operator",
       }),
     } as unknown as Queue;
+    const admin = {
+      runTaskNow: vi.fn<() => Promise<unknown>>().mockResolvedValue({
+        status: "released",
+        jobId: "job-1",
+        state: "ready",
+        runAt: new Date("2026-08-12T12:00:00.000Z"),
+      }),
+      pauseQueue: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      resumeQueue: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      purgeQueue: vi.fn<() => Promise<number>>().mockResolvedValue(3),
+      setWorkerPaused: vi.fn<() => Promise<{ paused: boolean }>>().mockResolvedValue({
+        paused: true,
+      }),
+    } as unknown as Admin;
     const actions: string[] = [];
     const controllers = createDashboardOperatorControllers({
       requestedBy: "configured-operator",
       run: async (action, operation) => {
         actions.push(action.kind);
-        return operation({ queue, admin });
+        return operation({ admin, queue });
       },
     });
     const audit = { actor: "browser-actor", reason: "deploy", requestId: "request-1" };
@@ -114,11 +114,10 @@ describe("shared dashboard operator controllers", () => {
       "completeHumanWait",
       "setWorkerPaused",
     ]);
-    const trustedAudit = { ...audit, actor: "configured-operator" };
-    expect(admin.pauseQueue).toHaveBeenCalledWith("critical", trustedAudit);
-    expect(admin.resumeQueue).toHaveBeenCalledWith("critical", trustedAudit);
-    expect(admin.purgeQueue).toHaveBeenCalledWith("critical", trustedAudit);
-    expect(admin.runTaskNow).toHaveBeenCalledWith("job-1", trustedAudit);
+    expect(admin.pauseQueue).toHaveBeenCalledWith("critical", audit);
+    expect(admin.resumeQueue).toHaveBeenCalledWith("critical", audit);
+    expect(admin.purgeQueue).toHaveBeenCalledWith("critical", audit);
+    expect(admin.runTaskNow).toHaveBeenCalledWith("job-1", audit);
     expect(queue.cancel).toHaveBeenCalledWith("job-1", {
       requestedBy: "configured-operator",
       reason: "deploy",
@@ -138,7 +137,11 @@ describe("shared dashboard operator controllers", () => {
       { approved: true },
       { idempotencyKey: "request-2", requestedBy: "configured-operator" },
     );
-    expect(admin.setWorkerPaused).toHaveBeenCalledWith("worker-1", true, trustedAudit);
+    expect(admin.setWorkerPaused).toHaveBeenCalledWith("worker-1", true, {
+      actor: "configured-operator",
+      reason: "deploy",
+      requestId: "request-1",
+    });
   });
 
   it("reports a missing worker consistently", async () => {

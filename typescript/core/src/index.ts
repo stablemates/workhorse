@@ -46,7 +46,12 @@ export {
 } from "./telemetry.js";
 export type { QueueMetricSnapshot, QueueMetricSource } from "./telemetry.js";
 export { Admin, PurgeIdempotencyConflictError } from "./admin.js";
-export type { AdminAuditContext, RunTaskNowResult, RunTaskNowStatus } from "./admin.js";
+export type {
+  AdminAudit,
+  PurgeIdempotencyConflictDetails,
+  RunTaskNowResult,
+  RunTaskNowStatus,
+} from "./admin.js";
 export {
   CheckpointConflictError,
   CheckpointLeaseLostError,
@@ -124,7 +129,6 @@ export type {
   HandlerContext,
   WorkerMaintenanceLoop,
   WorkerMaintenanceTelemetry,
-  WorkerHandlerState,
   WorkerOptions,
   WorkerQueueApi,
   WorkerRuntimeState,

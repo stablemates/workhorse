@@ -440,7 +440,7 @@ describe.each(integrationProviders)("$name built-package conformance", (provider
       reason: "timestamp conformance",
     });
 
-    const snapshot = await new Admin(provider.adapter.database).getJob(jobId);
+    const snapshot = await provider.adapter.admin.getJob(jobId);
 
     expect(snapshot).not.toBeNull();
     expect(snapshot!.deadlineAt).toBeInstanceOf(Date);
@@ -522,11 +522,10 @@ describe.each(integrationProviders)("$name built-package conformance", (provider
       requestId: `${provider.name}-redrive-request`,
     };
 
-    const admin = new Admin(provider.adapter.database);
-    await admin.redrive(sourceJobId, request);
+    await provider.adapter.admin.redrive(sourceJobId, request);
 
     await expect(
-      admin.redrive(sourceJobId, { ...request, reason: "different" }),
+      provider.adapter.admin.redrive(sourceJobId, { ...request, reason: "different" }),
     ).rejects.toBeInstanceOf(RedriveIdempotencyConflictError);
   });
 });

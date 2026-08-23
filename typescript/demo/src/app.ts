@@ -799,13 +799,16 @@ async function redriveLatestDeadLetter(
       defaultQueue: DEMO_QUEUE,
       queueOptions: DEMO_QUEUE_OPTIONS,
     });
-    const admin = new Admin(workhorse.database, DEMO_QUEUE, DEMO_QUEUE_OPTIONS);
-    const deadLetters = await admin.listDeadLetters({ queue: DEMO_QUEUE, limit: 50 });
+    const deadLetters = await workhorse.admin.listDeadLetters({ queue: DEMO_QUEUE, limit: 50 });
     const candidate = deadLetters.items.find((deadLetter) => deadLetter.redriveCount === 0);
     if (!candidate) {
       throw new Error("No demo dead letter is awaiting redrive; enqueue a terminal failure first");
     }
-    const result = await admin.redrive(candidate.jobId, audit);
+    const result = await workhorse.admin.redrive(candidate.jobId, {
+      actor: audit.actor,
+      reason: audit.reason,
+      requestId: audit.requestId,
+    });
     if (!result.targetJobId) {
       throw new Error(`Redrive of ${candidate.jobId} was refused: ${result.status}`);
     }
@@ -973,7 +976,7 @@ function operatorAuditStatus(
 }
 
 /**
- * Run a shared Queue-backed controller action inside the demo's audit transaction.
+ * Run a shared Admin- and Queue-backed controller action inside the demo's audit transaction.
  *
  * The shared factory owns the Queue calls and result projection. This runner owns only the demo's
  * before snapshot and audit row, preserving the atomic audit boundary without copying controller
@@ -1068,8 +1071,8 @@ export function createLocalOperatorControllers(database: DemoDatabase) {
           queueOptions: DEMO_QUEUE_OPTIONS,
         });
         const result = await operation({
+          admin: new Admin(workhorse.database),
           queue: workhorse.queue,
-          admin: new Admin(workhorse.database, DEMO_QUEUE, DEMO_QUEUE_OPTIONS),
         });
         const status = operatorAuditStatus(action, result);
         const audit = action.audit;
@@ -1629,12 +1632,11 @@ export async function seedDemoData(database: DemoDatabase) {
               reason: `Show redrive lineage for ${example.scenario}`,
               requestId: `feature-showcase:${example.scenario}`,
             };
-            const isolatedAdmin = new Admin(isolated.database, queue, DEMO_QUEUE_OPTIONS);
-            const redrive = await isolatedAdmin.redrive(sourceJobId, request);
+            const redrive = await isolated.admin.redrive(sourceJobId, request);
             if (!redrive.targetJobId) throw new Error(`Redrive did not create ${example.scenario}`);
             jobIds.push(redrive.targetJobId);
             if (example.seedTransition === "fail-and-redrive-replay") {
-              const replay = await isolatedAdmin.redrive(sourceJobId, request);
+              const replay = await isolated.admin.redrive(sourceJobId, request);
               if (replay.status !== "replayed" || replay.targetJobId !== redrive.targetJobId) {
                 throw new Error("Expected idempotent showcase redrive replay");
               }
@@ -1861,11 +1863,7 @@ export async function seedDemoData(database: DemoDatabase) {
       queueOptions: DEMO_QUEUE_OPTIONS,
     });
     await workhorse.queue.recoverExpired();
-    const expiredDeadline = await new Admin(
-      workhorse.database,
-      DEMO_QUEUE,
-      DEMO_QUEUE_OPTIONS,
-    ).getJob(representativeSeed.expiredDeadlineId);
+    const expiredDeadline = await workhorse.admin.getJob(representativeSeed.expiredDeadlineId);
     if (expiredDeadline?.state !== "failed") {
       throw new Error("Expected the representative expired deadline to be materialized");
     }

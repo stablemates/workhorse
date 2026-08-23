@@ -6,7 +6,7 @@ import { readDashboardJobDetail } from "../../dashboard-server/src/server/read-m
 import { dashboardDatabase } from "../../dashboard-server/src/server/sql.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { createFailedJob, pool, queue } = createIntegrationTestContext(import.meta.url);
+const { createFailedJob, pool, queue, admin } = createIntegrationTestContext(import.meta.url);
 
 describe("operator reads", () => {
   it("preserves priority when a failed job is redriven", async () => {
@@ -21,16 +21,16 @@ describe("operator reads", () => {
     await expect(
       queue.fail(claimed!, "priority-redrive-worker", new Error("terminal priority")),
     ).resolves.toBe("failed");
-    await expect(queue.listDeadLetters({ queue: queueName })).resolves.toMatchObject({
+    await expect(admin.listDeadLetters({ queue: queueName })).resolves.toMatchObject({
       items: [expect.objectContaining({ jobId: source, priority: 85 })],
     });
 
-    const redrive = await queue.redrive(source, {
-      requestedBy: "priority-test",
+    const redrive = await admin.redrive(source, {
+      actor: "priority-test",
       reason: "preserve dispatch rank",
       requestId: randomUUID(),
     });
-    await expect(queue.getJob(redrive.targetJobId!)).resolves.toMatchObject({
+    await expect(admin.getJob(redrive.targetJobId!)).resolves.toMatchObject({
       priority: 85,
       state: "ready",
     });
@@ -139,18 +139,18 @@ describe("operator reads", () => {
     expect(claimed?.id).toBe(sourceId);
     await queue.fail(claimed!, "keyed-redrive-worker", new Error("failed"));
 
-    const redrive = await queue.redrive(sourceId, {
-      requestedBy: "test",
+    const redrive = await admin.redrive(sourceId, {
+      actor: "test",
       reason: "verify concurrency key propagation",
       requestId: `keyed-redrive-${randomUUID()}`,
     });
-    await expect(queue.getJob(redrive.targetJobId!)).resolves.toMatchObject({
+    await expect(admin.getJob(redrive.targetJobId!)).resolves.toMatchObject({
       concurrencyKey: "tenant-redrive",
     });
-    await expect(queue.listDeadLetters({ queue: queueName })).resolves.toMatchObject({
+    await expect(admin.listDeadLetters({ queue: queueName })).resolves.toMatchObject({
       items: [{ jobId: sourceId, concurrencyKey: "tenant-redrive" }],
     });
-    await expect(queue.listJobs({ queue: queueName })).resolves.toMatchObject({
+    await expect(admin.listJobs({ queue: queueName })).resolves.toMatchObject({
       items: expect.arrayContaining([
         expect.objectContaining({ id: sourceId, concurrencyKey: "tenant-redrive" }),
         expect.objectContaining({ id: redrive.targetJobId, concurrencyKey: "tenant-redrive" }),
@@ -391,7 +391,7 @@ describe("operator reads", () => {
     ).toBe(2);
   });
 
-  it("maps dead-letter, redrive, lineage, conflict, and bulk results through the public Queue API", async () => {
+  it("maps dead-letter, redrive, lineage, conflict, and bulk results through the public Admin API", async () => {
     const older = await createFailedJob({
       type: "public-redrive",
       queueName: "public-redrive",
@@ -413,7 +413,7 @@ describe("operator reads", () => {
       [older, newer, now, [older, newer]],
     );
 
-    const firstPage = await queue.listDeadLetters({
+    const firstPage = await admin.listDeadLetters({
       queue: "public-redrive",
       tags: ["public"],
       errorName: "PublicFailure",
@@ -433,7 +433,7 @@ describe("operator reads", () => {
       finishedAt: expect.any(String),
       jobId: newer,
     });
-    const secondPage = await queue.listDeadLetters({
+    const secondPage = await admin.listDeadLetters({
       queue: "public-redrive",
       limit: 1,
       cursor: firstPage.nextCursor!,
@@ -442,11 +442,11 @@ describe("operator reads", () => {
     expect(secondPage.nextCursor).toBeNull();
 
     const request = {
-      requestedBy: "public-operator",
+      actor: "public-operator",
       reason: "validate public mapping",
       requestId: "public-redrive-request",
     };
-    const created = await queue.redrive(older, request);
+    const created = await admin.redrive(older, request);
     expect(created).toMatchObject({
       status: "redriven",
       sourceJobId: older,
@@ -455,13 +455,13 @@ describe("operator reads", () => {
       targetState: "ready",
       requestedAt: expect.any(Date),
     });
-    const lineage = await queue.getRedriveLineage(older);
+    const lineage = await admin.getRedriveLineage(older);
     expect(lineage).toMatchObject({
       records: [
         {
           sourceJobId: older,
           targetJobId: created.targetJobId,
-          requestedBy: request.requestedBy,
+          requestedBy: request.actor,
           reason: request.reason,
           requestIdPreview: "public-r…uest",
           requestIdDigest: expect.stringMatching(/^[0-9a-f]{12}$/),
@@ -475,7 +475,7 @@ describe("operator reads", () => {
     });
     let conflict: unknown;
     try {
-      await queue.redrive(older, { ...request, reason: "materially different" });
+      await admin.redrive(older, { ...request, reason: "materially different" });
     } catch (error) {
       conflict = error;
     }
@@ -488,10 +488,10 @@ describe("operator reads", () => {
       },
     });
 
-    const preview = await queue.redriveMany(
+    const preview = await admin.redriveMany(
       { queue: "public-redrive", type: "public-redrive", tags: ["public"] },
       {
-        requestedBy: "public-operator",
+        actor: "public-operator",
         reason: "bulk public mapping",
         requestId: "public-bulk-request",
       },
@@ -650,20 +650,20 @@ describe("operator reads", () => {
     );
     const orderedTies = ties[0]! < ties[1]! ? ties : [ties[1]!, ties[0]!];
     const request = {
-      requestedBy: "bulk-cursor-operator",
+      actor: "bulk-cursor-operator",
       reason: "drain a bounded backlog",
       requestId: "bulk-cursor-request",
     };
 
-    const first = await queue.redriveMany({ queue: "bulk-cursor" }, request, { limit: 2 });
+    const first = await admin.redriveMany({ queue: "bulk-cursor" }, request, { limit: 2 });
     expect(first.results.map((result) => result.sourceJobId)).toEqual([oldest, orderedTies[0]]);
     expect(first.nextCursor).toEqual({ finishedAt: expect.any(String), jobId: orderedTies[0] });
 
-    const replay = await queue.redriveMany({ queue: "bulk-cursor" }, request, { limit: 2 });
+    const replay = await admin.redriveMany({ queue: "bulk-cursor" }, request, { limit: 2 });
     expect(replay.results.map((result) => result.status)).toEqual(["replayed", "replayed"]);
     expect(replay.nextCursor).toEqual(first.nextCursor);
 
-    const second = await queue.redriveMany({ queue: "bulk-cursor" }, request, {
+    const second = await admin.redriveMany({ queue: "bulk-cursor" }, request, {
       limit: 2,
       cursor: first.nextCursor!,
     });
@@ -682,8 +682,8 @@ describe("operator reads", () => {
       type: "bounded-lineage-source",
       queueName: "bounded-lineage",
     });
-    const first = await queue.redrive(source, {
-      requestedBy: "lineage-operator",
+    const first = await admin.redrive(source, {
+      actor: "lineage-operator",
       reason: "first generation",
       requestId: "lineage-first",
     });
@@ -692,17 +692,17 @@ describe("operator reads", () => {
     expect(
       await queue.fail(firstTarget!, "bounded-lineage-worker", new Error("first target failed")),
     ).toBe("failed");
-    const second = await queue.redrive(first.targetJobId!, {
-      requestedBy: "lineage-operator",
+    const second = await admin.redrive(first.targetJobId!, {
+      actor: "lineage-operator",
       reason: "second generation",
       requestId: "lineage-second",
     });
 
-    expect(await queue.getRedriveLineage(source, 1)).toMatchObject({
+    expect(await admin.getRedriveLineage(source, 1)).toMatchObject({
       records: [{ sourceJobId: source, targetJobId: first.targetJobId }],
       truncated: true,
     });
-    expect(await queue.getRedriveLineage(second.targetJobId!)).toMatchObject({
+    expect(await admin.getRedriveLineage(second.targetJobId!)).toMatchObject({
       records: [
         { sourceJobId: first.targetJobId, targetJobId: second.targetJobId },
         { sourceJobId: source, targetJobId: first.targetJobId },
@@ -716,13 +716,13 @@ describe("operator reads", () => {
       type: "branching-lineage-source",
       queueName: "branching-lineage",
     });
-    const first = await queue.redrive(source, {
-      requestedBy: "lineage-operator",
+    const first = await admin.redrive(source, {
+      actor: "lineage-operator",
       reason: "first branch",
       requestId: "lineage-first-branch",
     });
-    const second = await queue.redrive(source, {
-      requestedBy: "lineage-operator",
+    const second = await admin.redrive(source, {
+      actor: "lineage-operator",
       reason: "second branch",
       requestId: "lineage-second-branch",
     });
@@ -733,8 +733,8 @@ describe("operator reads", () => {
     expect(
       await queue.fail(firstTarget!, "branching-lineage-worker", new Error("branch failed")),
     ).toBe("failed");
-    const descendant = await queue.redrive(first.targetJobId!, {
-      requestedBy: "lineage-operator",
+    const descendant = await admin.redrive(first.targetJobId!, {
+      actor: "lineage-operator",
       reason: "branch descendant",
       requestId: "lineage-branch-descendant",
     });
@@ -753,7 +753,7 @@ describe("operator reads", () => {
       ],
     );
 
-    const bounded = await queue.getRedriveLineage(source, 2);
+    const bounded = await admin.getRedriveLineage(source, 2);
     const dashboard = await readDashboardJobDetail(dashboardDatabase(pool), source);
     expect(bounded.truncated).toBe(true);
     expect(dashboard?.redriveLineage.records.slice(0, 2)).toMatchObject(
@@ -965,8 +965,8 @@ describe("operator reads", () => {
       cancel_reason: "maintenance",
       priority: 63,
     });
-    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "canceled", priority: 63 });
-    expect((await queue.getJobTimeline(id)).items.every((item) => item.priority === 63)).toBe(true);
+    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "canceled", priority: 63 });
+    expect((await admin.getJobTimeline(id)).items.every((item) => item.priority === 63)).toBe(true);
   });
 
   it("lists mixed live and terminal jobs with every filter and immutable same-time cursors", async () => {
@@ -998,7 +998,7 @@ describe("operator reads", () => {
       [ids[1], ids[2], createdAt],
     );
 
-    const filtered = await queue.listJobs({
+    const filtered = await admin.listJobs({
       queue: "query-a",
       type: "email",
       states: ["ready", "succeeded"],
@@ -1009,7 +1009,7 @@ describe("operator reads", () => {
     expect(filtered.items.map((item) => item.id)).toEqual([ids[1], ids[0]]);
     expect(filtered.nextCursor).toBeNull();
 
-    const first = await queue.listJobs({ limit: 2 });
+    const first = await admin.listJobs({ limit: 2 });
     expect(first.items.map((item) => item.id)).toEqual([ids[2], ids[1]]);
     expect(first.nextCursor).not.toBeNull();
     await pool.query(
@@ -1026,7 +1026,7 @@ describe("operator reads", () => {
        )`,
       [createdAt],
     );
-    const second = await queue.listJobs({ limit: 2, cursor: first.nextCursor! });
+    const second = await admin.listJobs({ limit: 2, cursor: first.nextCursor! });
     expect(second.items.map((item) => item.id)).toEqual([ids[0]]);
     expect(second.nextCursor).toBeNull();
     expect(new Set([...first.items, ...second.items].map((item) => item.id)).size).toBe(3);
@@ -1053,13 +1053,13 @@ describe("operator reads", () => {
         [id],
       );
     }
-    const first = await queue.listJobs({ type: "bound-a", limit: 1 });
+    const first = await admin.listJobs({ type: "bound-a", limit: 1 });
     expect(first.nextCursor?.signature).toMatch(/^[0-9a-f]{16}$/);
     await expect(
-      queue.listJobs({ type: "bound-b", limit: 1, cursor: first.nextCursor! }),
+      admin.listJobs({ type: "bound-b", limit: 1, cursor: first.nextCursor! }),
     ).rejects.toThrow(/cursor does not match/);
     await expect(
-      queue.listJobs({
+      admin.listJobs({
         type: "bound-a",
         limit: 1,
         cursor: first.nextCursor!,
@@ -1105,20 +1105,20 @@ describe("operator reads", () => {
   it("preserves the public validation contract while operator queries move behind a module", async () => {
     const invalidDate = new Date(Number.NaN);
     const calls: Array<readonly [() => Promise<unknown>, RegExp]> = [
-      [() => queue.listJobs(null as never), /listJobs query must be an object/],
-      [() => queue.listJobs({ limit: 0 }), /listJobs limit must be an integer between 1 and/],
-      [() => queue.listJobs({ createdAfter: invalidDate }), /must be a finite Date/],
-      [() => queue.listJobs({ states: ["ready", "ready"] }), /states must be unique: ready/],
+      [() => admin.listJobs(null as never), /listJobs query must be an object/],
+      [() => admin.listJobs({ limit: 0 }), /listJobs limit must be an integer between 1 and/],
+      [() => admin.listJobs({ createdAfter: invalidDate }), /must be a finite Date/],
+      [() => admin.listJobs({ states: ["ready", "ready"] }), /states must be unique: ready/],
       [
         () =>
-          queue.listJobs({
+          admin.listJobs({
             cursor: { createdAt: "now", jobId: "job", signature: "signature", extra: true },
           } as never),
         /listJobs cursor contains unknown field: extra/,
       ],
       [
         () =>
-          queue.getJobTimeline("job-a", {
+          admin.getJobTimeline("job-a", {
             cursor: {
               jobId: "job-b",
               occurredAt: "now",
@@ -1139,7 +1139,7 @@ describe("operator reads", () => {
       secret: "x".repeat(10_000),
       nested: { secret: "retained" },
     });
-    const omitted = await queue.listJobs({ type: "payload-object" });
+    const omitted = await admin.listJobs({ type: "payload-object" });
     expect(omitted.items[0]).toMatchObject({
       id: objectId,
       payload: null,
@@ -1160,7 +1160,7 @@ describe("operator reads", () => {
         )
       ).rows[0]?.bytes,
     );
-    const included = await queue.listJobs({
+    const included = await admin.listJobs({
       type: "payload-object",
       payload: { include: true, maxBytes: expectedBytes, redactKeys: ["secret"] },
     });
@@ -1169,7 +1169,7 @@ describe("operator reads", () => {
       payloadStatus: "included",
       payloadBytes: expectedBytes,
     });
-    const tooLarge = await queue.listJobs({
+    const tooLarge = await admin.listJobs({
       type: "payload-object",
       payload: { include: true, maxBytes: expectedBytes - 1, redactKeys: ["secret"] },
     });
@@ -1183,7 +1183,7 @@ describe("operator reads", () => {
     await queue.enqueue("payload-array", ["secret", { secret: "retained" }]);
     expect(
       (
-        await queue.listJobs({
+        await admin.listJobs({
           states: ["ready"],
           payload: { include: true, maxBytes: 1_024, redactKeys: ["secret"] },
         })
@@ -1209,11 +1209,11 @@ describe("operator reads", () => {
         ]),
       ).rejects.toThrow(message);
     }
-    await expect(queue.listJobs({ unknown: true } as never)).rejects.toThrow(
+    await expect(admin.listJobs({ unknown: true } as never)).rejects.toThrow(
       /query contains unknown field: unknown/,
     );
     await expect(
-      queue.listJobs({ payload: { include: true, unknown: true } } as never),
+      admin.listJobs({ payload: { include: true, unknown: true } } as never),
     ).rejects.toThrow(/payload contains unknown field: unknown/);
   });
 
@@ -1298,7 +1298,7 @@ describe("operator reads", () => {
       [jobId, sameTime],
     );
 
-    const first = await queue.getJobTimeline(jobId, { limit: 2 });
+    const first = await admin.getJobTimeline(jobId, { limit: 2 });
     expect(first.items.every((item) => item.priority === 0)).toBe(true);
     expect(
       first.items.map((item) => [item.kind, item.kind === "event" ? item.eventType : item.outcome]),
@@ -1307,7 +1307,7 @@ describe("operator reads", () => {
       ["event", "same-event"],
     ]);
     expect(first.nextCursor).not.toBeNull();
-    const second = await queue.getJobTimeline(jobId, { limit: 2, cursor: first.nextCursor! });
+    const second = await admin.getJobTimeline(jobId, { limit: 2, cursor: first.nextCursor! });
     expect(second.items.every((item) => item.priority === 0)).toBe(true);
     expect(second.items.map((item) => item.kind)).toEqual(["attempt", "event"]);
     expect(second.items[0]).toMatchObject({
@@ -1338,9 +1338,9 @@ describe("operator reads", () => {
     ).rejects.toThrow(/provided together/);
 
     await pool.query("DELETE FROM workhorse.job_event WHERE job_id = $1", [jobId]);
-    expect((await queue.getJobTimeline(jobId)).items.map((item) => item.kind)).toEqual(["attempt"]);
+    expect((await admin.getJobTimeline(jobId)).items.map((item) => item.kind)).toEqual(["attempt"]);
     await pool.query("DELETE FROM workhorse.attempt_history WHERE job_id = $1", [jobId]);
-    expect((await queue.getJobTimeline(jobId)).items).toEqual([]);
-    expect((await queue.getJobTimeline("20000000-0000-0000-0000-000000000099")).items).toEqual([]);
+    expect((await admin.getJobTimeline(jobId)).items).toEqual([]);
+    expect((await admin.getJobTimeline("20000000-0000-0000-0000-000000000099")).items).toEqual([]);
   });
 });

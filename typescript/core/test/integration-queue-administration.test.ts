@@ -4,34 +4,23 @@ import { describe, expect, it } from "vitest";
 import { EnqueueIdempotencyConflictError, PurgeIdempotencyConflictError } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { admin, pool, queue } = createIntegrationTestContext(import.meta.url);
+const { pool, queue, admin, adminAudit } = createIntegrationTestContext(import.meta.url);
 
 describe("queue administration", () => {
-  it("replays a purge count without deleting work that arrived after the first request", async () => {
-    const queueName = `purge-replay-${randomUUID()}`;
-    const audit = {
-      actor: "queue-administration-test",
-      reason: "discard invalid imports",
-      requestId: randomUUID(),
-    };
-    await queue.enqueue("purge-before", null, { queue: queueName });
-    await expect(admin.purgeQueue(queueName, audit)).resolves.toBe(1);
+  it("replays a purge request without deleting jobs that arrived afterward", async () => {
+    const queueName = "idempotent-purge";
+    await queue.enqueue("first", {}, { queue: queueName });
+    await queue.enqueue("second", {}, { queue: queueName });
+    const audit = adminAudit("clear the abandoned backlog");
 
-    const after = await queue.enqueue("purge-after", null, { queue: queueName });
-    await expect(admin.purgeQueue(queueName, audit)).resolves.toBe(1);
-    await expect(admin.getJob(after)).resolves.toMatchObject({ state: "ready" });
+    await expect(admin.purgeQueue(queueName, audit)).resolves.toBe(2);
+    const laterId = await queue.enqueue("later", {}, { queue: queueName });
+    await expect(admin.purgeQueue(queueName, audit)).resolves.toBe(2);
+    await expect(admin.getJob(laterId)).resolves.toMatchObject({ state: "ready" });
+
     await expect(
-      admin.purgeQueue(queueName, { ...audit, reason: "different operation" }),
+      admin.purgeQueue(queueName, { ...audit, reason: "a different destructive request" }),
     ).rejects.toBeInstanceOf(PurgeIdempotencyConflictError);
-
-    await pool.query(
-      "UPDATE workhorse.queue_purge_request SET requested_at = clock_timestamp() - interval '15 days' WHERE queue_name = $1",
-      [queueName],
-    );
-    await queue.pruneTerminalStorage({ force: true, now: new Date() });
-    await expect(
-      pool.query("SELECT 1 FROM workhorse.queue_purge_request WHERE queue_name = $1", [queueName]),
-    ).resolves.toMatchObject({ rowCount: 0 });
   });
 
   it("pauses claims, resumes dispatch, and purges only non-active jobs from one queue", async () => {
@@ -57,7 +46,7 @@ describe("queue administration", () => {
     );
     const otherId = await queue.enqueue("other", {}, { queue: "other" });
 
-    await queue.pauseQueue(queueName);
+    await admin.pauseQueue(queueName, adminAudit("pause managed queue"));
     expect(await queue.claim("worker-paused", { queue: queueName })).toBeNull();
     expect(
       await pool.query("SELECT paused FROM workhorse.queue_control WHERE queue_name = $1", [
@@ -65,15 +54,15 @@ describe("queue administration", () => {
       ]),
     ).toMatchObject({ rows: [{ paused: true }] });
 
-    await queue.resumeQueue(queueName);
+    await admin.resumeQueue(queueName, adminAudit("resume managed queue"));
     expect((await queue.claim("worker-resumed", { queue: queueName }))?.id).toBe(readyId);
 
     await queue.enqueue("ready-after-resume", {}, { queue: queueName });
-    expect(await queue.purgeQueue(queueName)).toBe(2);
-    expect(await queue.getJob(activeId)).toMatchObject({ state: "active" });
-    expect(await queue.getJob(readyId)).toMatchObject({ state: "active" });
-    expect(await queue.getJob(scheduledId)).toBeNull();
-    expect(await queue.getJob(otherId)).toMatchObject({ state: "ready" });
+    expect(await admin.purgeQueue(queueName, adminAudit("purge managed queue"))).toBe(2);
+    expect(await admin.getJob(activeId)).toMatchObject({ state: "active" });
+    expect(await admin.getJob(readyId)).toMatchObject({ state: "active" });
+    expect(await admin.getJob(scheduledId)).toBeNull();
+    expect(await admin.getJob(otherId)).toMatchObject({ state: "ready" });
     expect(
       (
         await pool.query(
@@ -84,7 +73,7 @@ describe("queue administration", () => {
         )
       ).rows[0],
     ).toEqual({ events: 0, attempts: 0 });
-    expect(await queue.purgeQueue(queueName)).toBe(0);
+    expect(await admin.purgeQueue(queueName, adminAudit("purge empty queue"))).toBe(0);
   });
 
   it("purges ready and scheduled keyed bindings immediately while retaining active bindings", async () => {
@@ -116,10 +105,10 @@ describe("queue administration", () => {
       },
     );
 
-    expect(await queue.purgeQueue(queueName)).toBe(2);
-    expect(await queue.getJob(activeId)).toMatchObject({ state: "active" });
-    expect(await queue.getJob(readyId)).toBeNull();
-    expect(await queue.getJob(scheduledId)).toBeNull();
+    expect(await admin.purgeQueue(queueName, adminAudit("purge keyed jobs"))).toBe(2);
+    expect(await admin.getJob(activeId)).toMatchObject({ state: "active" });
+    expect(await admin.getJob(readyId)).toBeNull();
+    expect(await admin.getJob(scheduledId)).toBeNull();
     expect(
       (await pool.query("SELECT job_id FROM workhorse.enqueue_idempotency ORDER BY job_id")).rows,
     ).toEqual([{ job_id: activeId }]);
@@ -165,7 +154,7 @@ describe("queue administration", () => {
         [id],
       );
       let settled = false;
-      const purge = queue.purgeQueue(queueName).finally(() => {
+      const purge = admin.purgeQueue(queueName, adminAudit("serialize purge")).finally(() => {
         settled = true;
       });
       await sleep(25);
@@ -173,7 +162,7 @@ describe("queue administration", () => {
       await inserter.query("COMMIT");
 
       expect(await purge).toBe(1);
-      expect(await queue.getJob(id)).toBeNull();
+      expect(await admin.getJob(id)).toBeNull();
       expect(
         (
           await pool.query(

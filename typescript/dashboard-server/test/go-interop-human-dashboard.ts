@@ -3,6 +3,7 @@ import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
 import { Pool } from "pg";
 
+import { Admin } from "../../core/src/admin.js";
 import { Queue } from "../../core/src/queue.js";
 import { Admin } from "../../core/src/admin.js";
 import { createDashboardHost } from "../src/server/host.js";
@@ -26,7 +27,7 @@ try {
         ? { actor: "dashboard-go-interop" }
         : false,
     ...createDashboardOperatorControllers({
-      run: (_action, operation) => operation({ queue, admin }),
+      run: (_action, operation) => operation({ admin, queue }),
     }),
   });
   const client: RouterClient<DashboardRouter> = createORPCClient(

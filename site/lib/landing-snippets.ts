@@ -5,8 +5,8 @@
  * `.source/landing-code.json`, which `components/code-sample.tsx` renders as
  * static markup — the landing page ships no client JavaScript for code.
  *
- * Every snippet is verified against the current API surface: `Queue` in
- * typescript/core/src/queue.ts, `Worker` and `HandlerContext` in
+ * Every snippet is verified against the current API surface: `Queue` and
+ * `Admin` in typescript/core/src, `Worker` and `HandlerContext` in
  * typescript/core/src/worker.ts, and option types in
  * typescript/core/src/types.ts. Change the source, change the snippet — never
  * the other way around.
@@ -244,14 +244,15 @@ await queue.cancel(jobId, {
   reason: "customer withdrew the request",
 });`,
 
-  deadLetters: `const page = await queue.listDeadLetters({
+  deadLetters: `const admin = new Admin(pool);
+const page = await admin.listDeadLetters({
   queue: "billing",
   errorName: "CardDeclined",
 });
 
 for (const failure of page.items) {
-  await queue.redrive(failure.jobId, {
-    requestedBy: "operator@example.com",
+  await admin.redrive(failure.jobId, {
+    actor: "operator@example.com",
     reason: "provider incident resolved",
     requestId: \`incident-2026-08-03:\${failure.jobId}\`,
   });
@@ -272,7 +273,8 @@ export async function GET(request: Request) {
   );
 }`,
 
-  operateHealth: `const health = await queue.health();
+  operateHealth: `const admin = new Admin(pool);
+const health = await admin.health();
 
 if (health.status.level !== "healthy") {
   for (const reason of health.status.reasons) {
@@ -282,17 +284,19 @@ if (health.status.level !== "healthy") {
 
 // Cross-state listing on a dedicated projection: reading it
 // never slows dispatch down.
-const live = await queue.listJobs({
+const live = await admin.listJobs({
   states: ["active", "scheduled"],
   limit: 100,
 });`,
 
-  operateFleet: `for (const entry of await queue.listWorkers()) {
+  operateFleet: `const admin = new Admin(pool);
+for (const entry of await admin.listWorkers()) {
   if (entry.queue !== "billing") continue;
 
-  await queue.setWorkerPaused(entry.workerId, true, {
-    requestedBy: "operator@example.com",
+  await admin.setWorkerPaused(entry.workerId, true, {
+    actor: "operator@example.com",
     reason: "rolling deploy",
+    requestId: \`deploy-2026-08-23:\${entry.workerId}\`,
   });
 }`,
 

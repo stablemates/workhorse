@@ -75,7 +75,10 @@ describe("published package manifests", () => {
     ];
 
     expect(queueDeclaration).not.toMatch(/load(?:Checkpoints|Progress|Waits)/);
-    expect(queueDeclaration).toContain("loadHandlerState");
+    expect(queueDeclaration).not.toContain("loadHandlerState");
+    expect(queueDeclaration).toContain("[workerCheckpointsRead]");
+    expect(queueDeclaration).toContain("[workerProgressRead]");
+    expect(queueDeclaration).toContain("[workerWaitsRead]");
     for (const method of operatorMethods) {
       const declaration = new RegExp(`\\b${method}(?:<[^>]+>)?\\s*\\(`);
       expect(queueDeclaration, `Queue.${method}`).not.toMatch(declaration);

@@ -132,12 +132,12 @@ const WORKSPACE_NAME = /^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/i;
 
 /** A resolved workspace with its own connection, queue, and request context. */
 interface HostWorkspace {
+  admin: Admin;
   name: string | null;
   basePath: string;
   queryable: Queryable;
   database: ReturnType<typeof dashboardDatabase>;
   queue: Queue;
-  admin: Admin;
   environment: string;
   configuredWorkers: readonly string[];
   maintenanceLoops: MaintenanceLoopCadences;
@@ -258,9 +258,9 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
     basePath: name === null ? path : `${path}/${name}`,
     queryable: workspace.database,
     database: dashboardDatabase(workspace.database),
-    // Queue and Admin share the dashboard's caller-owned connection.
-    queue: new Queue(workspace.database),
+    // Administrative policy and wait reads share the dashboard's caller-owned connection.
     admin: new Admin(workspace.database),
+    queue: new Queue(workspace.database),
     environment: workspace.environment ?? options.environment ?? "unknown",
     configuredWorkers: workspace.configuredWorkers ?? options.configuredWorkers ?? [],
     maintenanceLoops: workspace.maintenanceLoops ??
@@ -429,9 +429,9 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
         const { response } = await rpc.handle(request, {
           prefix: rpcPrefix as `/${string}`,
           context: {
+            admin: workspace.admin,
             database: workspace.database,
             queue: workspace.queue,
-            admin: workspace.admin,
             configuredWorkers: workspace.configuredWorkers,
             environment: workspace.environment,
             maintenanceLoops: workspace.maintenanceLoops,

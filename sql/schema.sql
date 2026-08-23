@@ -248,21 +248,29 @@ $$;
 CREATE TABLE IF NOT EXISTS workhorse.queue_control (
   queue_name text PRIMARY KEY CHECK (queue_name <> ''),
   paused boolean NOT NULL DEFAULT false,
+  updated_by text CHECK (updated_by IS NULL OR updated_by <> ''),
+  reason text CHECK (reason IS NULL OR reason <> ''),
+  request_id_preview text,
+  request_id_digest text CHECK (request_id_digest IS NULL OR char_length(request_id_digest) = 12),
+  request_id_length integer CHECK (request_id_length IS NULL OR request_id_length BETWEEN 1 AND 512),
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
--- Purge request ids make retries return the original deletion count without deleting newly
--- enqueued work. Only a digest and bounded audit identity are retained.
+-- A purge request is both the destructive-operation audit record and its replay barrier. The raw
+-- request id is never stored, and a replay returns the original count without touching jobs that
+-- arrived after the first purge committed.
 CREATE TABLE IF NOT EXISTS workhorse.queue_purge_request (
   request_id_hash bytea PRIMARY KEY CHECK (octet_length(request_id_hash) = 32),
+  request_id_preview text NOT NULL,
+  request_id_digest text NOT NULL CHECK (char_length(request_id_digest) = 12),
+  request_id_length integer NOT NULL CHECK (request_id_length BETWEEN 1 AND 512),
   queue_name text NOT NULL CHECK (queue_name <> ''),
   requested_by text NOT NULL CHECK (requested_by <> '' AND char_length(requested_by) <= 200),
   reason text NOT NULL CHECK (reason <> '' AND char_length(reason) <= 2000),
+  request_fingerprint jsonb NOT NULL,
   deleted_count integer NOT NULL CHECK (deleted_count >= 0),
   requested_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
-CREATE INDEX IF NOT EXISTS queue_purge_request_requested_at_idx
-  ON workhorse.queue_purge_request(requested_at);
 
 -- Deployment-synchronized queue admission budgets. A missing row means no durable concurrency limit.
 CREATE TABLE IF NOT EXISTS workhorse.concurrency_policy (
@@ -355,6 +363,13 @@ CREATE TABLE IF NOT EXISTS workhorse.worker_registry (
   paused boolean NOT NULL DEFAULT false,
   paused_by text CHECK (paused_by IS NULL OR paused_by <> ''),
   paused_reason text CHECK (paused_reason IS NULL OR paused_reason <> ''),
+  paused_request_id_preview text,
+  paused_request_id_digest text CHECK (
+    paused_request_id_digest IS NULL OR char_length(paused_request_id_digest) = 12
+  ),
+  paused_request_id_length integer CHECK (
+    paused_request_id_length IS NULL OR paused_request_id_length BETWEEN 1 AND 512
+  ),
   paused_at timestamptz,
   started_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   last_heartbeat_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -6006,6 +6021,60 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION workhorse.set_queue_paused_v1(
+  p_queue_name text,
+  p_paused boolean,
+  p_requested_by text,
+  p_reason text,
+  p_request_id text
+)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_request_id_hash bytea;
+  v_request_id_length integer;
+  v_request_id_preview text;
+BEGIN
+  IF p_queue_name IS NULL OR p_queue_name = '' THEN
+    RAISE EXCEPTION 'queue_name must not be empty';
+  END IF;
+  IF p_paused IS NULL THEN RAISE EXCEPTION 'paused must not be null'; END IF;
+  IF p_requested_by IS NULL OR p_requested_by = '' OR char_length(p_requested_by) > 200 THEN
+    RAISE EXCEPTION 'requested_by must contain between 1 and 200 characters';
+  END IF;
+  IF p_reason IS NULL OR p_reason = '' OR char_length(p_reason) > 2000 THEN
+    RAISE EXCEPTION 'reason must contain between 1 and 2000 characters';
+  END IF;
+  IF p_request_id IS NULL OR p_request_id = '' OR octet_length(p_request_id) > 512 THEN
+    RAISE EXCEPTION 'request_id must contain between 1 and 512 UTF-8 bytes';
+  END IF;
+  v_request_id_hash := sha256(convert_to(p_request_id, 'UTF8'));
+  v_request_id_length := char_length(p_request_id);
+  v_request_id_preview := CASE
+    WHEN v_request_id_length <= 4 THEN repeat('•', v_request_id_length)
+    WHEN v_request_id_length <= 8 THEN left(p_request_id, 2) || '…' || right(p_request_id, 2)
+    ELSE left(p_request_id, 8) || '…' || right(p_request_id, 4)
+  END;
+  INSERT INTO workhorse.queue_control(
+    queue_name, paused, updated_by, reason, request_id_preview, request_id_digest,
+    request_id_length, updated_at
+  ) VALUES (
+    p_queue_name, p_paused, p_requested_by, p_reason, v_request_id_preview,
+    left(encode(v_request_id_hash, 'hex'), 12), v_request_id_length, clock_timestamp()
+  )
+  ON CONFLICT (queue_name) DO UPDATE SET
+    paused = EXCLUDED.paused,
+    updated_by = EXCLUDED.updated_by,
+    reason = EXCLUDED.reason,
+    request_id_preview = EXCLUDED.request_id_preview,
+    request_id_digest = EXCLUDED.request_id_digest,
+    request_id_length = EXCLUDED.request_id_length,
+    updated_at = EXCLUDED.updated_at;
+  RETURN p_paused;
+END;
+$$;
+
 -- Announce or refresh one worker registration and read back the operator-requested pause flag.
 --
 -- This is intentionally a single round trip: the worker pushes the runtime state it owns and pulls
@@ -6098,6 +6167,18 @@ BEGIN
           WHEN registry.instance_id = EXCLUDED.instance_id THEN registry.paused_reason
           ELSE NULL
         END,
+        paused_request_id_preview = CASE
+          WHEN registry.instance_id = EXCLUDED.instance_id THEN registry.paused_request_id_preview
+          ELSE NULL
+        END,
+        paused_request_id_digest = CASE
+          WHEN registry.instance_id = EXCLUDED.instance_id THEN registry.paused_request_id_digest
+          ELSE NULL
+        END,
+        paused_request_id_length = CASE
+          WHEN registry.instance_id = EXCLUDED.instance_id THEN registry.paused_request_id_length
+          ELSE NULL
+        END,
         paused_at = CASE
           WHEN registry.instance_id = EXCLUDED.instance_id THEN registry.paused_at
           ELSE NULL
@@ -6168,6 +6249,61 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION workhorse.set_worker_paused_v1(
+  p_worker_id text,
+  p_paused boolean,
+  p_requested_by text,
+  p_reason text,
+  p_request_id text
+)
+RETURNS TABLE (
+  worker_id text,
+  paused boolean,
+  paused_by text,
+  paused_reason text,
+  paused_at timestamptz,
+  last_heartbeat_at timestamptz
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_request_id_hash bytea;
+  v_request_id_length integer;
+BEGIN
+  IF p_requested_by IS NULL OR p_requested_by = '' OR char_length(p_requested_by) > 200 THEN
+    RAISE EXCEPTION 'requested_by must contain between 1 and 200 characters';
+  END IF;
+  IF p_reason IS NULL OR p_reason = '' OR char_length(p_reason) > 2000 THEN
+    RAISE EXCEPTION 'reason must contain between 1 and 2000 characters';
+  END IF;
+  IF p_request_id IS NULL OR p_request_id = '' OR octet_length(p_request_id) > 512 THEN
+    RAISE EXCEPTION 'request_id must contain between 1 and 512 UTF-8 bytes';
+  END IF;
+  v_request_id_hash := sha256(convert_to(p_request_id, 'UTF8'));
+  v_request_id_length := char_length(p_request_id);
+  PERFORM workhorse.set_worker_paused_v1(
+    p_worker_id, p_paused, p_requested_by, p_reason
+  );
+  UPDATE workhorse.worker_registry registry SET
+    paused_request_id_preview = CASE WHEN p_paused THEN
+      CASE
+        WHEN v_request_id_length <= 4 THEN repeat('•', v_request_id_length)
+        WHEN v_request_id_length <= 8 THEN left(p_request_id, 2) || '…' || right(p_request_id, 2)
+        ELSE left(p_request_id, 8) || '…' || right(p_request_id, 4)
+      END
+      ELSE NULL END,
+    paused_request_id_digest = CASE WHEN p_paused THEN
+      left(encode(v_request_id_hash, 'hex'), 12) ELSE NULL END,
+    paused_request_id_length = CASE WHEN p_paused THEN v_request_id_length ELSE NULL END
+  WHERE registry.worker_id = p_worker_id;
+  RETURN QUERY
+  SELECT registry.worker_id, registry.paused, registry.paused_by, registry.paused_reason,
+         registry.paused_at, registry.last_heartbeat_at
+    FROM workhorse.worker_registry registry
+   WHERE registry.worker_id = p_worker_id;
+END;
+$$;
+
 -- Drop registrations whose process stopped heartbeating long ago. The relation holds one row per
 -- worker, so this stays a trivial bounded delete regardless of job volume.
 CREATE OR REPLACE FUNCTION workhorse.prune_worker_registry_v1(
@@ -6186,45 +6322,15 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.purge_queue_v1(
-  p_queue_name text,
-  p_requested_by text,
-  p_reason text,
-  p_request_id text
-)
+CREATE OR REPLACE FUNCTION workhorse.purge_queue_v1(p_queue_name text)
 RETURNS integer
 LANGUAGE plpgsql
 AS $$
 DECLARE
   v_count integer;
-  v_existing workhorse.queue_purge_request%ROWTYPE;
-  v_request_id_hash bytea;
 BEGIN
   IF p_queue_name IS NULL OR p_queue_name = '' THEN
     RAISE EXCEPTION 'queue_name must not be empty';
-  END IF;
-  IF p_requested_by IS NULL OR p_requested_by = '' OR char_length(p_requested_by) > 200 THEN
-    RAISE EXCEPTION 'requested_by must contain between 1 and 200 characters';
-  END IF;
-  IF p_reason IS NULL OR p_reason = '' OR char_length(p_reason) > 2000 THEN
-    RAISE EXCEPTION 'reason must contain between 1 and 2000 characters';
-  END IF;
-  IF p_request_id IS NULL OR p_request_id = '' OR octet_length(p_request_id) > 512 THEN
-    RAISE EXCEPTION 'request_id must contain between 1 and 512 UTF-8 bytes';
-  END IF;
-  v_request_id_hash := sha256(convert_to(p_request_id, 'UTF8'));
-  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:purge:' || p_request_id, 0));
-  SELECT * INTO v_existing FROM workhorse.queue_purge_request request
-   WHERE request.request_id_hash = v_request_id_hash;
-  IF FOUND THEN
-    IF v_existing.queue_name <> p_queue_name
-      OR v_existing.requested_by <> p_requested_by
-      OR v_existing.reason <> p_reason THEN
-      RAISE EXCEPTION USING
-        ERRCODE = 'P1006',
-        MESSAGE = 'purge request conflict with a retained request';
-    END IF;
-    RETURN v_existing.deleted_count;
   END IF;
   INSERT INTO workhorse.queue_control(queue_name, paused)
     VALUES (p_queue_name, false)
@@ -6255,22 +6361,93 @@ BEGIN
    WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('blocked', 'ready', 'scheduled')
      AND job.id = runtime.job_id;
   GET DIAGNOSTICS v_count = ROW_COUNT;
-  INSERT INTO workhorse.queue_purge_request(
-    request_id_hash, queue_name, requested_by, reason, deleted_count
-  ) VALUES (v_request_id_hash, p_queue_name, p_requested_by, p_reason, v_count);
   RETURN v_count;
 END;
 $$;
 
--- Compatibility for the Python and Go dashboard backends until WH-356 and WH-357 route them
--- through their own Admin clients.
-CREATE OR REPLACE FUNCTION workhorse.purge_queue_v1(p_queue_name text)
-RETURNS integer
-LANGUAGE sql
+CREATE OR REPLACE FUNCTION workhorse.purge_queue_v1(
+  p_queue_name text,
+  p_requested_by text,
+  p_reason text,
+  p_request_id text
+)
+RETURNS TABLE (deleted_count integer, replayed boolean, requested_at timestamptz)
+LANGUAGE plpgsql
 AS $$
-  SELECT workhorse.purge_queue_v1(
-    p_queue_name, 'legacy-sdk', 'legacy queue purge', gen_random_uuid()::text
+DECLARE
+  v_existing workhorse.queue_purge_request%ROWTYPE;
+  v_fingerprint jsonb;
+  v_conflicting_fields text[];
+  v_request_id_hash bytea;
+  v_request_id_preview text;
+  v_request_id_digest text;
+  v_request_id_length integer;
+  v_deleted_count integer;
+  v_now timestamptz := clock_timestamp();
+BEGIN
+  IF p_queue_name IS NULL OR p_queue_name = '' THEN
+    RAISE EXCEPTION 'queue_name must not be empty';
+  END IF;
+  IF p_requested_by IS NULL OR p_requested_by = '' OR char_length(p_requested_by) > 200 THEN
+    RAISE EXCEPTION 'requested_by must contain between 1 and 200 characters';
+  END IF;
+  IF p_reason IS NULL OR p_reason = '' OR char_length(p_reason) > 2000 THEN
+    RAISE EXCEPTION 'reason must contain between 1 and 2000 characters';
+  END IF;
+  IF p_request_id IS NULL OR p_request_id = '' OR octet_length(p_request_id) > 512 THEN
+    RAISE EXCEPTION 'request_id must contain between 1 and 512 UTF-8 bytes';
+  END IF;
+
+  v_fingerprint := jsonb_build_object(
+    'queue', p_queue_name,
+    'requestedBy', p_requested_by,
+    'reason', p_reason
   );
+  v_request_id_hash := sha256(convert_to(p_request_id, 'UTF8'));
+  v_request_id_digest := left(encode(v_request_id_hash, 'hex'), 12);
+  v_request_id_length := char_length(p_request_id);
+  v_request_id_preview := CASE
+    WHEN v_request_id_length <= 4 THEN repeat('•', v_request_id_length)
+    WHEN v_request_id_length <= 8 THEN left(p_request_id, 2) || '…' || right(p_request_id, 2)
+    ELSE left(p_request_id, 8) || '…' || right(p_request_id, 4)
+  END;
+
+  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:purge:' || p_request_id, 0));
+  SELECT * INTO v_existing FROM workhorse.queue_purge_request request
+   WHERE request.request_id_hash = v_request_id_hash;
+  IF FOUND THEN
+    IF v_existing.request_fingerprint <> v_fingerprint THEN
+      SELECT COALESCE(array_agg(field ORDER BY field COLLATE "C"), '{}')
+        INTO v_conflicting_fields
+        FROM jsonb_object_keys(v_fingerprint) field
+       WHERE v_existing.request_fingerprint->field IS DISTINCT FROM v_fingerprint->field;
+      RAISE EXCEPTION USING
+        ERRCODE = 'P1006',
+        MESSAGE = 'queue purge request conflict with a retained request',
+        DETAIL = jsonb_build_object(
+          'queue', p_queue_name,
+          'requestIdPreview', v_request_id_preview,
+          'requestIdDigest', v_request_id_digest,
+          'requestIdLength', v_request_id_length,
+          'conflictingFields', to_jsonb(v_conflicting_fields),
+          'storedRequestDigest', workhorse.sha256_hex_v1(v_existing.request_fingerprint::text),
+          'rejectedRequestDigest', workhorse.sha256_hex_v1(v_fingerprint::text)
+        )::text;
+    END IF;
+    RETURN QUERY SELECT v_existing.deleted_count, true, v_existing.requested_at;
+    RETURN;
+  END IF;
+
+  v_deleted_count := workhorse.purge_queue_v1(p_queue_name);
+  INSERT INTO workhorse.queue_purge_request(
+    request_id_hash, request_id_preview, request_id_digest, request_id_length,
+    queue_name, requested_by, reason, request_fingerprint, deleted_count, requested_at
+  ) VALUES (
+    v_request_id_hash, v_request_id_preview, v_request_id_digest, v_request_id_length,
+    p_queue_name, p_requested_by, p_reason, v_fingerprint, v_deleted_count, v_now
+  );
+  RETURN QUERY SELECT v_deleted_count, false, v_now;
+END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.promote_v1(p_limit integer DEFAULT 100)
@@ -6354,6 +6531,101 @@ BEGIN
         v_runtime.current_attempt,
         'promoted',
         jsonb_build_object('reason', 'manual')
+      );
+    PERFORM pg_notify('workhorse_jobs', '*');
+    RETURN QUERY VALUES ('released'::text, v_runtime.state, v_runtime.run_at);
+    RETURN;
+  END IF;
+
+  SELECT * INTO v_outcome
+    FROM workhorse.job_outcome outcome
+   WHERE outcome.job_id = p_job_id;
+  IF FOUND THEN
+    RETURN QUERY VALUES ('not_scheduled'::text, v_outcome.state, v_outcome.run_at);
+    RETURN;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM workhorse.job job WHERE job.id = p_job_id) THEN
+    RETURN QUERY VALUES ('not_scheduled'::text, NULL::text, NULL::timestamptz);
+  ELSE
+    RETURN QUERY VALUES ('not_found'::text, NULL::text, NULL::timestamptz);
+  END IF;
+END;
+$$;
+
+-- Audited operator form of run_task_now_v1. The request identity is recorded only when the call
+-- changes the job, and the raw request id never enters retained history.
+CREATE OR REPLACE FUNCTION workhorse.run_task_now_v1(
+  p_job_id uuid,
+  p_requested_by text,
+  p_reason text,
+  p_request_id text
+)
+RETURNS TABLE(status text, state text, run_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_outcome workhorse.job_outcome%ROWTYPE;
+  v_now timestamptz := clock_timestamp();
+  v_request_id_hash bytea;
+  v_request_id_length integer;
+  v_request_id_preview text;
+BEGIN
+  IF p_requested_by IS NULL OR p_requested_by = '' OR char_length(p_requested_by) > 200 THEN
+    RAISE EXCEPTION 'requested_by must contain between 1 and 200 characters';
+  END IF;
+  IF p_reason IS NULL OR p_reason = '' OR char_length(p_reason) > 2000 THEN
+    RAISE EXCEPTION 'reason must contain between 1 and 2000 characters';
+  END IF;
+  IF p_request_id IS NULL OR p_request_id = '' OR octet_length(p_request_id) > 512 THEN
+    RAISE EXCEPTION 'request_id must contain between 1 and 512 UTF-8 bytes';
+  END IF;
+  v_request_id_hash := sha256(convert_to(p_request_id, 'UTF8'));
+  v_request_id_length := char_length(p_request_id);
+  v_request_id_preview := CASE
+    WHEN v_request_id_length <= 4 THEN repeat('•', v_request_id_length)
+    WHEN v_request_id_length <= 8 THEN left(p_request_id, 2) || '…' || right(p_request_id, 2)
+    ELSE left(p_request_id, 8) || '…' || right(p_request_id, 4)
+  END;
+
+  SELECT * INTO v_runtime
+    FROM workhorse.job_runtime runtime
+   WHERE runtime.job_id = p_job_id
+   FOR UPDATE;
+
+  IF FOUND THEN
+    IF v_runtime.state IN ('ready', 'active') THEN
+      RETURN QUERY VALUES ('already_ready'::text, v_runtime.state, v_runtime.run_at);
+      RETURN;
+    END IF;
+    IF v_runtime.wait_name IS NOT NULL OR v_runtime.attempt_started_at IS NOT NULL THEN
+      RETURN QUERY VALUES ('waiting'::text, v_runtime.state, v_runtime.run_at);
+      RETURN;
+    END IF;
+
+    UPDATE workhorse.job_runtime runtime
+       SET state = 'ready', run_at = v_now, ready_at = v_now,
+           sequence = nextval('workhorse.ready_sequence_seq'), updated_at = v_now
+     WHERE runtime.job_id = p_job_id AND runtime.state = 'scheduled'
+    RETURNING * INTO v_runtime;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'locked scheduled task % changed state unexpectedly', p_job_id;
+    END IF;
+
+    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+      VALUES (
+        p_job_id,
+        v_runtime.current_attempt,
+        'promoted',
+        jsonb_build_object(
+          'reason', 'manual',
+          'requested_by', p_requested_by,
+          'request_reason', p_reason,
+          'request_id_preview', v_request_id_preview,
+          'request_id_digest', left(encode(v_request_id_hash, 'hex'), 12),
+          'request_id_length', v_request_id_length
+        )
       );
     PERFORM pg_notify('workhorse_jobs', '*');
     RETURN QUERY VALUES ('released'::text, v_runtime.state, v_runtime.run_at);

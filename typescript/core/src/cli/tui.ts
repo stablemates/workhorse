@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import readline from "node:readline";
 import { Pool } from "pg";
 import type { DeadLetter, JobListItem, QueueHealth, WorkerRegistryEntry } from "../types.js";
@@ -212,8 +213,16 @@ export async function applyTuiPendingAction(
   state.pendingAction = null;
   if (action === null || state.environment === null) return;
   try {
-    if (action.kind === "pause") await client.pauseQueue(state.environment, action.queue);
-    else await client.resumeQueue(state.environment, action.queue);
+    const request = {
+      requestedBy: "workhorse-tui",
+      reason: `${action.kind} queue from workhorse tui`,
+      requestId: randomUUID(),
+    };
+    if (action.kind === "pause") {
+      await client.pauseQueue(state.environment, action.queue, request);
+    } else {
+      await client.resumeQueue(state.environment, action.queue, request);
+    }
     state.message = `${action.kind === "pause" ? "Paused" : "Resumed"} queue ${action.queue}.`;
   } catch (error) {
     state.message = `Failed to ${action.kind} ${action.queue}: ${

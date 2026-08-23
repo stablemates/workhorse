@@ -44,7 +44,8 @@ workhorse admin redrive 7d9f… --env workhorse_production --reason "upstream fi
 
 A redrive always records who asked and why, and carries an idempotency identity, so retrying a
 runbook step cannot replay a job twice. That is the same contract as [redrive](340-redrive.md)
-from code — the CLI adds no separate semantics.
+through the public `Admin` client — the CLI adds no separate semantics. Queue pause and resume
+also require a reason and retain the request's audit identity.
 
 ## The TUI is the same client with a refresh loop
 

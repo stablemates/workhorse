@@ -256,7 +256,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
 export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   {
     capability: "Job lookup, listing, and timeline",
-    typescript: { file: "integration-operator-reads.test.ts", pattern: "listJobs" },
+    typescript: { file: "integration-operator-reads.test.ts", pattern: "admin.listJobs" },
     python: pythonAdmin,
     go: goAdmin,
   },
@@ -274,19 +274,19 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Queue pause, resume, and purge",
-    typescript: { file: "integration-queue-administration.test.ts", pattern: "purge" },
+    typescript: { file: "integration-queue-administration.test.ts", pattern: "admin.purgeQueue" },
     python: pythonAdmin,
     go: goAdmin,
   },
   {
     capability: "Dead-letter listing and redrive",
-    typescript: { file: "integration-operator-reads.test.ts", pattern: "redrive" },
+    typescript: { file: "integration-operator-reads.test.ts", pattern: "admin.redrive" },
     python: pythonAdmin,
     go: goAdmin,
   },
   {
     capability: "Checkpoint, wait, and human-decision reads",
-    typescript: { file: "integration-human-waits.test.ts", pattern: "listHumanWaits" },
+    typescript: { file: "integration-human-waits.test.ts", pattern: "admin.listHumanWaits" },
     python: pythonAdmin,
     go: goAdmin,
   },

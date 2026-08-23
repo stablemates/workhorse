@@ -50,13 +50,13 @@ export const startDashboardServer: DashboardStandaloneModule<Queryable>["startDa
         "An authenticated remote dashboard requires an explicit HTTPS public origin",
       );
     }
-    // Each database gets its own Queue so mutations in one workspace can never reach another.
+    // Each database gets its own clients so mutations in one workspace can never reach another.
     const workspaceControls = (workspaceDatabase: Queryable) => {
       const queue = new Queue(workspaceDatabase);
       const admin = new Admin(workspaceDatabase);
       return options.allowMutations
         ? createDashboardOperatorControllers({
-            run: (_action, operation) => operation({ queue, admin }),
+            run: (_action, operation) => operation({ admin, queue }),
           })
         : { operator: { mode: "read-only" as const } };
     };

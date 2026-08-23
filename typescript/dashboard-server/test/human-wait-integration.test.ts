@@ -8,7 +8,7 @@ import { createDashboardHost } from "../src/server/host.js";
 import { createDashboardOperatorControllers } from "../src/server/operator-controllers.js";
 import type { DashboardRouter } from "../src/server/router.js";
 
-const { admin, pool, queue } = createIntegrationTestContext(import.meta.url);
+const { pool, queue, admin } = createIntegrationTestContext(import.meta.url);
 
 describe("dashboard human waits", () => {
   it("lists bounded decision context and derives completion attribution from the session", async () => {
@@ -25,7 +25,7 @@ describe("dashboard human waits", () => {
     expect(await worker.runOnce()).toBe(true);
 
     const controllers = createDashboardOperatorControllers({
-      run: (_action, operation) => operation({ queue, admin }),
+      run: (_action, operation) => operation({ admin, queue }),
     });
     const host = createDashboardHost({
       database: pool,
@@ -108,7 +108,7 @@ describe("dashboard human waits", () => {
     });
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(queue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       state: "succeeded",
       result: { approved: true },
     });

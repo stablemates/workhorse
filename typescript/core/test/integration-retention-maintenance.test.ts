@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { installSchema, Queue, type RetentionPolicyDefinition, Worker } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { defaultRetentionPolicy, pool, queue, waitForDatabaseCondition } =
+const { defaultRetentionPolicy, pool, queue, waitForDatabaseCondition, admin } =
   createIntegrationTestContext(import.meta.url);
 
 describe("retention maintenance", () => {
@@ -1008,7 +1008,7 @@ describe("retention maintenance", () => {
       rowsAffected: 1,
       error: null,
     });
-    expect(await queue.getJob(deletable)).toBeNull();
+    expect(await admin.getJob(deletable)).toBeNull();
     expect(
       (
         await pool.query(
@@ -1017,7 +1017,7 @@ describe("retention maintenance", () => {
         )
       ).rows[0]?.count,
     ).toBe(0);
-    expect(await queue.getJob(secondDeletable)).not.toBeNull();
+    expect(await admin.getJob(secondDeletable)).not.toBeNull();
     expect(
       (await queue.pruneTerminalStorage({ force: true })).find(
         ({ phase }) => phase === "terminal_jobs",
@@ -1027,9 +1027,9 @@ describe("retention maintenance", () => {
       rowsAffected: 1,
       error: null,
     });
-    expect(await queue.getJob(secondDeletable)).toBeNull();
+    expect(await admin.getJob(secondDeletable)).toBeNull();
     for (const retained of [eventGuard, attemptGuard, occurrenceGuard, recentOutcome, live]) {
-      expect(await queue.getJob(retained)).not.toBeNull();
+      expect(await admin.getJob(retained)).not.toBeNull();
     }
   });
 
@@ -1086,8 +1086,8 @@ describe("retention maintenance", () => {
       error: null,
     });
     expect(phases[2]).toMatchObject({ phase: "terminal_jobs", rowsAffected: 1, error: null });
-    expect(await queue.getJob(expired)).toBeNull();
-    expect(await queue.getJob(retained)).not.toBeNull();
+    expect(await admin.getJob(expired)).toBeNull();
+    expect(await admin.getJob(retained)).not.toBeNull();
     expect(
       (await pool.query("SELECT job_id FROM workhorse.enqueue_idempotency ORDER BY job_id")).rows,
     ).toEqual([{ job_id: retained }]);
@@ -1166,7 +1166,7 @@ describe("retention maintenance", () => {
       phase: "terminal_jobs",
       rowsAffected: 1,
     });
-    await expect(queue.getJob(id)).resolves.toBeNull();
+    await expect(admin.getJob(id)).resolves.toBeNull();
   });
 
   it("serializes terminal deletion with concurrent history insertion", async () => {
@@ -1215,7 +1215,7 @@ describe("retention maintenance", () => {
       deleting.release();
       inserting.release();
     }
-    await expect(queue.getJob(id)).resolves.toBeNull();
+    await expect(admin.getJob(id)).resolves.toBeNull();
     expect(
       (
         await pool.query(

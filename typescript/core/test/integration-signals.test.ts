@@ -8,7 +8,7 @@ import {
 } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { pool, queue } = createIntegrationTestContext(import.meta.url);
+const { pool, queue, admin } = createIntegrationTestContext(import.meta.url);
 
 describe("signals", () => {
   it("rejects names the dashboard would normalize to another identity", async () => {
@@ -65,7 +65,7 @@ describe("signals", () => {
     const secondId = await queue.enqueue("signal-list", {});
     expect(await worker.runOnce()).toBe(true);
 
-    const firstPage = await queue.listSignalWaits({ limit: 1 });
+    const firstPage = await admin.listSignalWaits({ limit: 1 });
     expect(firstPage).toEqual({
       items: [
         {
@@ -81,7 +81,7 @@ describe("signals", () => {
       nextCursor: { createdAt: expect.any(String), jobId: id, name: "approval" },
     });
     await expect(
-      queue.listSignalWaits({ limit: 1, cursor: firstPage.nextCursor! }),
+      admin.listSignalWaits({ limit: 1, cursor: firstPage.nextCursor! }),
     ).resolves.toEqual({
       items: [expect.objectContaining({ jobId: secondId, name: "approval" })],
       nextCursor: null,
@@ -99,7 +99,7 @@ describe("signals", () => {
       { approved: true },
       { idempotencyKey: "signal-list-delivery-2", requestedBy: "operator" },
     );
-    await expect(queue.listSignalWaits()).resolves.toEqual({ items: [], nextCursor: null });
+    await expect(admin.listSignalWaits()).resolves.toEqual({ items: [], nextCursor: null });
   });
 
   it("resumes one waiting execution with the retained signal payload", async () => {
@@ -113,7 +113,7 @@ describe("signals", () => {
     );
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "scheduled" });
+    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "scheduled" });
 
     await expect(
       queue.sendSignal(
@@ -128,7 +128,7 @@ describe("signals", () => {
     ).resolves.toMatchObject({ status: "delivered", payload: { approved: true } });
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(queue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       state: "succeeded",
       result: { signal: { approved: true } },
     });
@@ -150,7 +150,7 @@ describe("signals", () => {
     });
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(queue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       state: "succeeded",
       result: { approved: true },
     });
@@ -283,7 +283,7 @@ describe("signals", () => {
     await expect(
       queue.waitForSignal(stale!, "signal-stale-worker", "approval"),
     ).rejects.toMatchObject({ name: "SignalWaitLeaseLostError" });
-    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "ready", currentAttempt: 2 });
+    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "ready", currentAttempt: 2 });
   });
 
   it("rejects delivery after cancellation closes the pending wait", async () => {
@@ -358,7 +358,7 @@ describe("signals", () => {
     );
     expect(await worker.runOnce()).toBe(true);
     expect(await worker.runOnce()).toBe(true);
-    await expect(queue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       state: "succeeded",
       currentAttempt: 2,
       result: { approved: true },
@@ -384,10 +384,10 @@ describe("signals", () => {
       { idempotencyKey: "signal-redrive-source", requestedBy: "approval-service" },
     );
     await expect(worker.runOnce()).resolves.toBe(true);
-    await expect(queue.getJob(sourceId)).resolves.toMatchObject({ state: "failed" });
+    await expect(admin.getJob(sourceId)).resolves.toMatchObject({ state: "failed" });
 
-    const redrive = await queue.redrive(sourceId, {
-      requestedBy: "signal-test",
+    const redrive = await admin.redrive(sourceId, {
+      actor: "signal-test",
       reason: "retry signal workflow",
       requestId: `signal-redrive-${sourceId}`,
     });
@@ -395,7 +395,7 @@ describe("signals", () => {
     const targetId = redrive.targetJobId!;
 
     await expect(worker.runOnce()).resolves.toBe(true);
-    await expect(queue.getJob(targetId)).resolves.toMatchObject({ state: "scheduled" });
+    await expect(admin.getJob(targetId)).resolves.toMatchObject({ state: "scheduled" });
     await queue.sendSignal(
       targetId,
       "approval",
@@ -403,7 +403,7 @@ describe("signals", () => {
       { idempotencyKey: "signal-redrive-target", requestedBy: "approval-service" },
     );
     await expect(worker.runOnce()).resolves.toBe(true);
-    await expect(queue.getJob(targetId)).resolves.toMatchObject({
+    await expect(admin.getJob(targetId)).resolves.toMatchObject({
       state: "succeeded",
       result: { approved: false },
     });
@@ -435,7 +435,7 @@ describe("signals", () => {
       },
     );
 
-    const timeline = await queue.getJobTimeline(id);
+    const timeline = await admin.getJobTimeline(id);
     const events = timeline.items.filter((item) => item.kind === "event");
     expect(events).toEqual(
       expect.arrayContaining([
@@ -466,7 +466,7 @@ describe("signals", () => {
     await sleep(130);
     await queue.tick();
 
-    await expect(queue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       state: "failed",
       error: expect.objectContaining({ name: "DeadlineExceeded" }),
     });
@@ -490,7 +490,7 @@ describe("signals", () => {
     await sleep(130);
     await queue.tick();
 
-    await expect(queue.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getJob(id)).resolves.toMatchObject({
       state: "failed",
       error: expect.objectContaining({ name: "DeadlineExceeded" }),
     });
@@ -515,6 +515,6 @@ describe("signals", () => {
     ]);
     expect(cancellation.status).toBe("canceled");
     expect(["delivered", "stale"]).toContain(delivery.status);
-    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "canceled" });
+    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "canceled" });
   });
 });

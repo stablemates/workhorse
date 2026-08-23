@@ -154,6 +154,7 @@ export interface ResolvedOperationalScenarioOptions {
 }
 
 export interface OperationalScenarioContext {
+  admin: Admin;
   pool: Queryable;
   options: ResolvedOperationalScenarioOptions;
   queueName: string;
@@ -654,7 +655,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
 ] as const;
 
 export const resetWorkhorseStateSql = `TRUNCATE workhorse.job_event, workhorse.attempt_history,
-  workhorse.job_redrive, workhorse.job_query,
+  workhorse.job_redrive, workhorse.queue_purge_request, workhorse.job_query,
   workhorse.rate_limit_bucket, workhorse.rate_limit_policy, workhorse.concurrency_policy,
   workhorse.enqueue_idempotency, workhorse.job_outcome, workhorse.job_runtime, workhorse.job RESTART IDENTITY CASCADE;
 ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1;
@@ -1583,7 +1584,7 @@ async function cancellationLifecycle(
   recordInvariant(
     assertions,
     "exact fence materializes canceled",
-    (await queue.getJob(activeJobId))?.state,
+    (await context.admin.getJob(activeJobId))?.state,
     "canceled",
   );
   recordInvariant(
@@ -1641,13 +1642,13 @@ async function cancellationLifecycle(
   recordInvariant(
     assertions,
     "expired request becomes canceled",
-    (await queue.getJob(ignoredJobId))?.state,
+    (await context.admin.getJob(ignoredJobId))?.state,
     "canceled",
   );
   recordInvariant(
     assertions,
     "expired requested lease does not create a retry attempt",
-    (await queue.getJob(ignoredJobId))?.currentAttempt,
+    (await context.admin.getJob(ignoredJobId))?.currentAttempt,
     1,
   );
   recordInvariant(
@@ -1786,7 +1787,7 @@ async function cancellationLifecycle(
   recordInvariant(
     assertions,
     "next recurring occurrence remains ready",
-    (await queue.getJob(nextOccurrenceId!))?.state,
+    (await context.admin.getJob(nextOccurrenceId!))?.state,
     "ready",
   );
   const enabledSchedule = await context.pool.query<{ enabled: boolean }>(
@@ -1854,7 +1855,7 @@ async function deadlineTimeoutLifecycle(
   recordInvariant(
     assertions,
     "never-started deadline becomes terminal failure",
-    (await queue.getJob(readyDeadlineId))?.state,
+    (await context.admin.getJob(readyDeadlineId))?.state,
     "failed",
   );
   recordInvariant(
@@ -1900,7 +1901,7 @@ async function deadlineTimeoutLifecycle(
   recordInvariant(
     assertions,
     "active deadline is terminal despite retry budget",
-    (await queue.getJob(activeDeadlineId))?.state,
+    (await context.admin.getJob(activeDeadlineId))?.state,
     "failed",
   );
   if (!deadlineClaim) throw new Error("deadline handler did not expose its claim");
@@ -1949,14 +1950,14 @@ async function deadlineTimeoutLifecycle(
   recordInvariant(
     assertions,
     "execution timeout uses remaining retry budget",
-    (await queue.getJob(timeoutId))?.currentAttempt,
+    (await context.admin.getJob(timeoutId))?.currentAttempt,
     2,
   );
   await timeoutWorker.runOnce();
   recordInvariant(
     assertions,
     "retry after timeout can succeed",
-    (await queue.getJob(timeoutId))?.state,
+    (await context.admin.getJob(timeoutId))?.state,
     "succeeded",
   );
   const timeoutHistory = await context.pool.query<{ outcome: string }>(
@@ -2000,7 +2001,7 @@ async function deadlineTimeoutLifecycle(
   recordInvariant(
     assertions,
     "health timeout seed remains active",
-    (await queue.getJob(healthTimeoutId))?.state,
+    (await context.admin.getJob(healthTimeoutId))?.state,
     "active",
   );
 
@@ -2035,7 +2036,7 @@ async function deadLetterRedriveLifecycle(
   }
 
   const [firstPage, listMs] = await measured(context.now, () =>
-    queue.listDeadLetters({
+    context.admin.listDeadLetters({
       queue: context.queueName,
       type: "redrive-source",
       tags: ["redrive"],
@@ -2043,7 +2044,7 @@ async function deadLetterRedriveLifecycle(
       limit: 2,
     }),
   );
-  const secondPage = await queue.listDeadLetters({
+  const secondPage = await context.admin.listDeadLetters({
     queue: context.queueName,
     type: "redrive-source",
     limit: 2,
@@ -2066,7 +2067,7 @@ async function deadLetterRedriveLifecycle(
     lineage: await rowCount(context.pool, "job_redrive"),
   };
   const [previewPage, dryRunMs] = await measured(context.now, () =>
-    queue.redriveMany(
+    context.admin.redriveMany(
       { queue: context.queueName, type: "redrive-source", tags: ["redrive"] },
       {
         actor: "operational-scenario",
@@ -2106,9 +2107,11 @@ async function deadLetterRedriveLifecycle(
     requestId: "dead-letter-single",
   };
   const [single, singleRedriveMs] = await measured(context.now, () =>
-    queue.redrive(sourceJobId, request),
+    context.admin.redrive(sourceJobId, request),
   );
-  const [replay, replayMs] = await measured(context.now, () => queue.redrive(sourceJobId, request));
+  const [replay, replayMs] = await measured(context.now, () =>
+    context.admin.redrive(sourceJobId, request),
+  );
   metrics.singleRedriveMs = singleRedriveMs;
   metrics.replayMs = replayMs;
   recordInvariant(
@@ -2126,7 +2129,7 @@ async function deadLetterRedriveLifecycle(
   recordInvariant(assertions, "exact replay is classified distinctly", replay.status, "replayed");
 
   const [bulkPage, bulkRedriveMs] = await measured(context.now, () =>
-    queue.redriveMany(
+    context.admin.redriveMany(
       { queue: context.queueName, type: "redrive-source", errorName: "Error" },
       {
         actor: "operational-scenario",
@@ -2140,7 +2143,7 @@ async function deadLetterRedriveLifecycle(
   const bulkContinuation =
     bulkPage.nextCursor === null
       ? { results: [], nextCursor: null }
-      : await queue.redriveMany(
+      : await context.admin.redriveMany(
           { queue: context.queueName, type: "redrive-source", errorName: "Error" },
           {
             actor: "operational-scenario",
@@ -2198,7 +2201,7 @@ async function deadLetterRedriveLifecycle(
     Number(targets.rows[0]?.count ?? 0),
     4,
   );
-  const lineage = await queue.getRedriveLineage(sourceJobId);
+  const lineage = await context.admin.getRedriveLineage(sourceJobId);
   metrics.lineageEdges = await rowCount(context.pool, "job_redrive");
   recordInvariant(
     assertions,
@@ -2264,12 +2267,12 @@ async function queryListingLifecycle(
   );
 
   const [firstPage, listMs] = await measured(context.now, () =>
-    queue.listJobs({ queue: context.queueName, limit: 2 }),
+    context.admin.listJobs({ queue: context.queueName, limit: 2 }),
   );
   const secondPage =
     firstPage.nextCursor === null
       ? { items: [], nextCursor: null }
-      : await queue.listJobs({
+      : await context.admin.listJobs({
           queue: context.queueName,
           limit: 2,
           cursor: firstPage.nextCursor,
@@ -2294,7 +2297,7 @@ async function queryListingLifecycle(
 
   const createdTimes = listed.map((job) => job.createdAt.getTime());
   const [projected, payloadProjectionMs] = await measured(context.now, () =>
-    queue.listJobs({
+    context.admin.listJobs({
       queue: context.queueName,
       type: "query-listing-a",
       states: ["ready", "succeeded"],
@@ -2320,7 +2323,7 @@ async function queryListingLifecycle(
   );
 
   const [timeline, timelineMs] = await measured(context.now, () =>
-    queue.getJobTimeline(completed.id, { limit: 100 }),
+    context.admin.getJobTimeline(completed.id, { limit: 100 }),
   );
   metrics.timelineMs = timelineMs;
   metrics.timelineEntries = timeline.items.length;
@@ -2437,7 +2440,7 @@ async function crashBeforeCompletion(
     } catch (error) {
       crash = error;
     }
-    const snapshot = await queue.getJob(jobId);
+    const snapshot = await context.admin.getJob(jobId);
     const leases = await rowCount(context.pool, "job_runtime", jobId);
     const attemptHistoryRows = await rowCount(context.pool, "attempt_history", jobId);
     recordInvariant(
@@ -2696,7 +2699,6 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
        FROM workhorse.retry_delay_v1($1, $2, $3::jsonb, $4, $5, $6)`,
     [jitterId, 1, JSON.stringify(jitterPolicy), null, null, "legacy-handler"],
   );
-  const recreatedQueue = operationalQueue(context.pool, context.queueName);
   recordInvariant(assertions, "jitter policy schedules retry", jitterState, "scheduled");
   recordInvariant(
     assertions,
@@ -2726,7 +2728,7 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
   recordInvariant(
     assertions,
     "queue recreation preserves persisted jitter policy",
-    (await recreatedQueue.getJob(jitterId))?.retryPolicy,
+    (await context.admin.getJob(jitterId))?.retryPolicy,
     jitterPolicy,
     jsonEquivalent,
   );
@@ -2756,7 +2758,7 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
   recordInvariant(
     assertions,
     "exhausted job snapshot is failed",
-    (await queue.getJob(exhaustedId))?.state,
+    (await context.admin.getJob(exhaustedId))?.state,
     "failed",
   );
 
@@ -2787,7 +2789,7 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
       ok: true,
     }),
   );
-  const contractSnapshot = await contractQueue.getJob(contractId);
+  const contractSnapshot = await context.admin.getJob(contractId);
   recordInvariant(assertions, "contracted completion is accepted", contractCompleted, true);
   recordInvariant(
     assertions,
@@ -2814,8 +2816,8 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
     name: "retry-paths",
     durationMs: 0,
     metrics: {
-      immediateAttempts: (await queue.getJob(immediateId))?.currentAttempt ?? null,
-      delayedAttempts: (await queue.getJob(delayedId))?.currentAttempt ?? null,
+      immediateAttempts: (await context.admin.getJob(immediateId))?.currentAttempt ?? null,
+      delayedAttempts: (await context.admin.getJob(delayedId))?.currentAttempt ?? null,
       delayedPromoted,
       fixedDelayMs: Number(fixedEvent.retry_delay_ms),
       fixedSelectionMs,
@@ -2824,7 +2826,7 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
       jitterDelayMs,
       jitterSelectionMs,
       policySelectionTotalMs: fixedSelectionMs + exponentialSelectionMs + jitterSelectionMs,
-      exhaustedAttempts: (await queue.getJob(exhaustedId))?.currentAttempt ?? null,
+      exhaustedAttempts: (await context.admin.getJob(exhaustedId))?.currentAttempt ?? null,
       contractEnqueueMs,
       contractClaimMs,
       contractCompleteMs,
@@ -3132,7 +3134,7 @@ async function coalescingIngress(
         throw new Error(`${mode} acceptance race did not retain one seed per key`);
       }
       const finalSnapshots = await Promise.all(
-        accepted.map((request) => queue.getJob(request!.result.jobId)),
+        accepted.map((request) => context.admin.getJob(request!.result.jobId)),
       );
       const state = (
         await context.pool.query<{
@@ -3303,10 +3305,10 @@ async function coalescingIngress(
         expectedNotifications,
       );
       const [purged, cleanupMs] = await measured(context.now, () =>
-        queue.purgeQueue(cohortQueueName, {
+        context.admin.purgeQueue(cohortQueueName, {
           actor: "operational-scenario",
-          reason: "measure queue purge",
-          requestId: `purge-${cohortQueueName}`,
+          reason: `clean up ${mode} cohort`,
+          requestId: `coalescing-${mode}-cleanup`,
         }),
       );
       const cleanupState = (
@@ -3330,10 +3332,10 @@ async function coalescingIngress(
 
       if (mode.startsWith("debounce")) {
         const scheduleAccepted = await enqueue(0, 0);
-        const initialRunAt = (await queue.getJob(scheduleAccepted.jobId))!.runAt;
+        const initialRunAt = (await context.admin.getJob(scheduleAccepted.jobId))!.runAt;
         await context.sleep(1);
         await enqueue(0, 1);
-        const replacedRunAt = (await queue.getJob(scheduleAccepted.jobId))!.runAt;
+        const replacedRunAt = (await context.admin.getJob(scheduleAccepted.jobId))!.runAt;
         recordInvariant(
           assertions,
           `${mode} ${mode === "debounce-reset" ? "resets" : "preserves"} its schedule`,
@@ -3347,10 +3349,10 @@ async function coalescingIngress(
         recordInvariant(
           assertions,
           `${mode} removes its schedule-check identity`,
-          await queue.purgeQueue(cohortQueueName, {
+          await context.admin.purgeQueue(cohortQueueName, {
             actor: "operational-scenario",
-            reason: "measure concurrent queue purge",
-            requestId: `purge-concurrent-${cohortQueueName}`,
+            reason: `clean up ${mode} schedule check`,
+            requestId: `coalescing-${mode}-schedule-cleanup`,
           }),
           1,
         );
@@ -3420,10 +3422,10 @@ async function dependencyOperations(
   recordInvariant(
     assertions,
     "fan-in releases once after every prerequisite resolves",
-    (await queue.getJob(dependentId))?.state,
+    (await context.admin.getJob(dependentId))?.state,
     "ready",
   );
-  const dependencyReleaseEvents = (await queue.getJobTimeline(dependentId)).items.filter(
+  const dependencyReleaseEvents = (await context.admin.getJobTimeline(dependentId)).items.filter(
     (entry) => entry.kind === "event" && entry.eventType === "dependency_released",
   ).length;
   recordInvariant(assertions, "fan-in records one release transition", dependencyReleaseEvents, 1);
@@ -3442,7 +3444,7 @@ async function dependencyOperations(
     fanOutQueue.cancel(fanOutPrerequisiteId, { requestedBy: "dependency-operations" }),
   );
   const fanOutStates = await Promise.all(
-    fanOutDependentIds.map((jobId) => fanOutQueue.getJob(jobId)),
+    fanOutDependentIds.map((jobId) => context.admin.getJob(jobId)),
   );
   recordInvariant(
     assertions,
@@ -3505,7 +3507,7 @@ async function dependencyOperations(
   recordInvariant(
     assertions,
     "cancellation applies its declared terminal dependency policy",
-    (await queue.getJob(canceledDependentId))?.state,
+    (await context.admin.getJob(canceledDependentId))?.state,
     "canceled",
   );
 
@@ -3814,9 +3816,9 @@ async function progressLifecycle(
   const [second, secondUpdateMs] = await measured(context.now, () =>
     queue.updateProgress(job, "benchmark-progress", { completed: 2, total: 2 }),
   );
-  const [snapshot, lookupMs] = await measured(context.now, () => queue.getJob(id));
+  const [snapshot, lookupMs] = await measured(context.now, () => context.admin.getJob(id));
   const completed = await queue.complete(job, "benchmark-progress", { ok: true });
-  const terminal = await queue.getJob(id);
+  const terminal = await context.admin.getJob(id);
   const eventResult = await context.pool.query<{ count: string }>(
     `SELECT count(*)::text AS count FROM workhorse.job_event
       WHERE job_id = $1 AND event_type = 'progress_updated'`,
@@ -4409,7 +4411,7 @@ async function batchDispatch(
     const after = probe.snapshot();
     const health = await seedQueue.health();
     const outcomes = await rowCount(context.pool, "job_outcome");
-    const states = await Promise.all(jobIds.map((id) => seedQueue.getJob(id)));
+    const states = await Promise.all(jobIds.map((id) => context.admin.getJob(id)));
     return {
       durationMs,
       jobsPerSecond: (cohortJobs * 1_000) / durationMs,
@@ -4659,8 +4661,8 @@ async function batchDispatch(
     source: "stale",
   });
   const [recoveredJob, peerJob, recoveryHealth] = await Promise.all([
-    recoveryQueue.getJob<{ source: string }>(staleId),
-    recoveryQueue.getJob<{ source: string }>(peerId),
+    context.admin.getJob<{ source: string }>(staleId),
+    context.admin.getJob<{ source: string }>(peerId),
     recoveryQueue.health(),
   ]);
   recordInvariant(
@@ -5192,6 +5194,7 @@ export async function runOperationalScenarios(
   for (const name of resolved.scenarios) {
     const scenarioStarted = now();
     const result = await implementations[name]({
+      admin: new Admin(pool, queueName(resolved.queuePrefix, name)),
       pool,
       options: resolved,
       queueName: queueName(resolved.queuePrefix, name),

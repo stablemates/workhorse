@@ -31,8 +31,9 @@ const workhorse = createTypeOrmAdapter(dataSource, {
 });
 ```
 
-The returned `WorkhorseAdapter` exposes `database`, `queue`, `forTransaction`, `createWorker`, and
-`close` — one stable surface for both request handlers and worker processes.
+The returned `WorkhorseAdapter` exposes `database`, `queue`, `admin`, `forTransaction`,
+`adminForTransaction`, `createWorker`, and `close` — one stable surface for request handlers,
+operator tools, and worker processes.
 
 ## Enqueue inside a transaction
 

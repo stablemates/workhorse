@@ -46,6 +46,8 @@ Every worker registers itself in PostgreSQL on its `registryIntervalMs` cadence 
 default, `0` to opt out. That registry is how you see and steer a fleet you do not host:
 
 ```ts
+const admin = new Admin(pool);
+
 // See every registered worker, most recently seen first.
 const workers = await admin.listWorkers();
 for (const worker of workers) {

@@ -160,7 +160,7 @@ function createTestWorkerRuntime(options: DemoTestRuntimeOptions) {
   let quiescePromise: Promise<void> | undefined;
 
   return {
-    context: { admin, queue: adapter.queue },
+    context: { admin: adapter.admin, queue: adapter.queue },
     start() {
       if (started) return;
       if (quiescePromise) throw new Error("A stopped test worker runtime cannot be restarted");
@@ -495,9 +495,9 @@ async function jobResult(jobId: string): Promise<Json | null> {
   return rows.rows[0]?.result ?? null;
 }
 
-const waitForJobState = (operator: Admin, jobId: string, state: string) =>
+const waitForJobState = (admin: Admin, jobId: string, state: string) =>
   waitFor(
-    async () => (await operator.getJob(jobId))?.state,
+    async () => (await admin.getJob(jobId))?.state,
     (value) => value === state,
     1_600,
   );
@@ -3567,6 +3567,7 @@ describe("Workhorse demo", () => {
     const { app } = createTestApplication({ operator: createLocalOperator(database) });
     const client = dashboardClient(app);
     const queue = new Queue(pool, "demo");
+    const admin = new Admin(pool, "demo");
     const originalRunAt = new Date(Date.now() + 3_600_000);
     const jobId = await queue.enqueue(
       "demo.success",
@@ -4347,9 +4348,9 @@ describe("Workhorse dashboard events feed", () => {
     workhorse.start();
 
     try {
-      await waitForJobState(admin, releasedDependent, "succeeded");
-      await waitForJobState(admin, canceledDependent, "canceled");
-      const lineage = await admin.getDependencyLineage(releasedDependent);
+      await waitForJobState(workhorse.context.admin, releasedDependent, "succeeded");
+      await waitForJobState(workhorse.context.admin, canceledDependent, "canceled");
+      const lineage = await workhorse.context.admin.getDependencyLineage(releasedDependent);
       expect(lineage.records).toMatchObject([
         {
           dependentJobId: releasedDependent,
@@ -4375,7 +4376,7 @@ describe("Workhorse dashboard events feed", () => {
     workhorse.start();
 
     try {
-      await waitForJobState(admin, parentJobId, "succeeded");
+      await waitForJobState(workhorse.context.admin, parentJobId, "succeeded");
       expect(await jobResult(parentJobId)).toMatchObject({
         scenario: "test-fan-out",
         childCount: 2,
@@ -4384,7 +4385,7 @@ describe("Workhorse dashboard events feed", () => {
           "shard-2": { step: "shard-2", completedOnAttempt: 1 },
         },
       });
-      const lineage = await admin.getChildLineage(parentJobId);
+      const lineage = await workhorse.context.admin.getChildLineage(parentJobId);
       expect(lineage.records).toHaveLength(2);
       expect(lineage.records.every((record) => record.outcomeState === "succeeded")).toBe(true);
     } finally {
@@ -4407,7 +4408,7 @@ describe("Workhorse dashboard events feed", () => {
     workhorse.start();
 
     try {
-      await waitForJobState(admin, waiterJobId, "succeeded");
+      await waitForJobState(workhorse.context.admin, waiterJobId, "succeeded");
       expect(await jobResult(waiterJobId)).toMatchObject({
         scenario: "test-handoff",
         behavior: "signal-handoff",
@@ -4434,7 +4435,7 @@ describe("Workhorse dashboard events feed", () => {
 
     try {
       await waitFor(
-        () => admin.listSignalWaits(),
+        () => workhorse.context.admin.listSignalWaits(),
         (page) => page.items.some((wait) => wait.jobId === waiterJobId),
         1_600,
       );
@@ -4445,7 +4446,7 @@ describe("Workhorse dashboard events feed", () => {
         { idempotencyKey: "test-operator-signal", requestedBy: "integration-test" },
       );
       expect(delivery.status).toBe("delivered");
-      await waitForJobState(admin, waiterJobId, "succeeded");
+      await waitForJobState(workhorse.context.admin, waiterJobId, "succeeded");
       expect(await jobResult(waiterJobId)).toMatchObject({ signal: { approved: true } });
     } finally {
       await workhorse.stop();
@@ -4468,7 +4469,7 @@ describe("Workhorse dashboard events feed", () => {
 
     try {
       const pending = await waitFor(
-        () => admin.listHumanWaits(),
+        () => workhorse.context.admin.listHumanWaits(),
         (page) => page.items.some((wait) => wait.jobId === jobId),
         1_600,
       );
@@ -4498,7 +4499,7 @@ describe("Workhorse dashboard events feed", () => {
         { idempotencyKey: "test-human-decision", requestedBy: "integration-test" },
       );
       expect(completion.status).toBe("completed");
-      await waitForJobState(admin, jobId, "succeeded");
+      await waitForJobState(workhorse.context.admin, jobId, "succeeded");
       expect(await jobResult(jobId)).toMatchObject({
         scenario: "test-approval",
         decision: { approved: true, note: "looks good" },
@@ -4533,8 +4534,8 @@ describe("Workhorse dashboard events feed", () => {
 
     workhorse.start();
     try {
-      await waitForJobState(admin, succeedingJobId!, "succeeded");
-      await waitForJobState(admin, failingJobId!, "failed");
+      await waitForJobState(workhorse.context.admin, succeedingJobId!, "succeeded");
+      await waitForJobState(workhorse.context.admin, failingJobId!, "failed");
       expect(await jobResult(succeedingJobId!)).toMatchObject({
         scenario: "test-batch",
         memberIndex: 1,
@@ -4580,19 +4581,19 @@ describe("Workhorse dashboard events feed", () => {
 
     workhorse.start();
     try {
-      await waitForJobState(admin, acceptedJobId, "succeeded");
+      await waitForJobState(workhorse.context.admin, acceptedJobId, "succeeded");
       expect(await jobResult(acceptedJobId)).toMatchObject({
         approved: true,
         invoiceId: "INV-test-accepted",
         contractVersion: "v1",
       });
-      await waitForJobState(admin, rejectedResultJobId, "failed");
+      await waitForJobState(workhorse.context.admin, rejectedResultJobId, "failed");
       const failure = await pool.query<{ message: string }>(
         "SELECT error->>'message' AS message FROM workhorse.job_outcome WHERE job_id = $1",
         [rejectedResultJobId],
       );
       expect(failure.rows[0]!.message).toMatch(/contract/i);
-      await waitForJobState(admin, probeJobId, "succeeded");
+      await waitForJobState(workhorse.context.admin, probeJobId, "succeeded");
       expect(await jobResult(probeJobId)).toMatchObject({
         approved: true,
         probedRejection: { name: "JobContractValidationError" },
