@@ -25,6 +25,8 @@ class StatementRegistry:
     sync_schedules: DriverStatement
     tick: DriverStatement
     run_maintenance: DriverStatement
+    register_worker: DriverStatement
+    deregister_worker: DriverStatement
     list_schedules: DriverStatement
     fire_schedule: DriverStatement
     promote: DriverStatement
@@ -79,6 +81,22 @@ STATEMENTS = StatementRegistry(
     run_maintenance=DriverStatement(
         psycopg="SELECT * FROM workhorse.run_maintenance_v1(%s::timestamptz)",
         asyncpg="SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)",
+    ),
+    register_worker=DriverStatement(
+        psycopg=(
+            "SELECT workhorse.register_worker_v1(%s::text, %s::uuid, %s::text, %s::integer, "
+            "%s::text[], %s::integer, %s::integer, %s::integer, %s::integer, %s::integer, "
+            "%s::integer, %s::integer, %s::integer, %s::boolean) AS paused"
+        ),
+        asyncpg=(
+            "SELECT workhorse.register_worker_v1($1::text, $2::uuid, $3::text, $4::integer, "
+            "$5::text[], $6::integer, $7::integer, $8::integer, $9::integer, $10::integer, "
+            "$11::integer, $12::integer, $13::integer, $14::boolean) AS paused"
+        ),
+    ),
+    deregister_worker=DriverStatement(
+        psycopg="SELECT workhorse.deregister_worker_v1(%s::text) AS deregistered",
+        asyncpg="SELECT workhorse.deregister_worker_v1($1::text) AS deregistered",
     ),
     list_schedules=DriverStatement(
         psycopg=(

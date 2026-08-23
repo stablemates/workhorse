@@ -81,7 +81,7 @@ telemetry, and graceful shutdown.
 | Latest-value progress reporting              | Supported  | Absent    | Absent    |
 | Batch handler delivery                       | Supported  | Supported | Supported |
 | Schedule firing (in-process cron)            | Supported  | Supported | Supported |
-| Worker fleet registration and remote pause   | Supported  | Absent    | Absent    |
+| Worker fleet registration and remote pause   | Supported  | Supported | Supported |
 | Graceful stop and signal drain               | Supported  | Supported | Supported |
 | Retention maintenance participation          | Supported  | Supported | Supported |
 | OpenTelemetry tracing and metrics            | Supported  | Supported | Supported |

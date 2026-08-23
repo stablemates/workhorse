@@ -224,8 +224,8 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   {
     capability: "Worker fleet registration and remote pause",
     typescript: { file: "integration-worker-registry.test.ts", pattern: "register" },
-    python: { absent: "no registration loop; the workers page cannot see the fleet; WH-346" },
-    go: { absent: "no registration loop; the workers page cannot see the fleet; WH-346" },
+    python: { file: "test_worker.py", pattern: "registry_delivers_remote_pause" },
+    go: { file: "worker_test.go", pattern: "RegistryDeliversRemotePause" },
   },
   {
     capability: "Graceful stop and signal drain",

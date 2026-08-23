@@ -809,6 +809,103 @@ def test_run_pauses_resumes_and_drains_active_slots(database_url: str) -> None:
         assert outcomes == sorted((job_id, "succeeded") for job_id in job_ids)
 
 
+def test_worker_registry_delivers_remote_pause_and_deregisters(database_url: str) -> None:
+    handled = Event()
+    stopped = Event()
+    errors: list[BaseException] = []
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+        psycopg.connect(database_url, autocommit=True) as operator_connection,
+    ):
+        worker = Worker(
+            worker_connection,
+            queue="python-registry",
+            worker_id="python-registry-worker",
+            poll_ms=10,
+            registry_interval_ms=100,
+        ).handle("registered", lambda _payload, _context: handled.set())
+
+        def run_worker() -> None:
+            try:
+                worker.run()
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                stopped.set()
+
+        thread = Thread(target=run_worker)
+        thread.start()
+        deadline = monotonic() + 5
+        while monotonic() < deadline:
+            row = operator_connection.execute(
+                "SELECT instance_id::text, queue_names FROM workhorse.worker_registry "
+                "WHERE worker_id = 'python-registry-worker'"
+            ).fetchone()
+            if row is not None:
+                break
+            sleep(0.01)
+        assert row is not None
+        first_instance_id = row[0]
+        assert row[1] == ["python-registry"]
+
+        operator_connection.execute(
+            "SELECT * FROM workhorse.set_worker_paused_v1(%s, true, %s, %s)",
+            ("python-registry-worker", "test", "remote pause"),
+        )
+        deadline = monotonic() + 5
+        while monotonic() < deadline:
+            refreshed = operator_connection.execute(
+                "SELECT last_heartbeat_at > paused_at FROM workhorse.worker_registry "
+                "WHERE worker_id = 'python-registry-worker'"
+            ).fetchone()
+            if refreshed == (True,):
+                break
+            sleep(0.01)
+        assert refreshed == (True,)
+
+        Queue(enqueue_connection, "python-registry").enqueue("registered", {})
+        enqueue_connection.commit()
+        assert not handled.wait(timeout=0.25)
+
+        operator_connection.execute(
+            "SELECT * FROM workhorse.set_worker_paused_v1(%s, false, %s, %s)",
+            ("python-registry-worker", "test", None),
+        )
+        assert handled.wait(timeout=5)
+
+        worker.stop()
+        assert stopped.wait(timeout=5)
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert errors == []
+        assert operator_connection.execute(
+            "SELECT count(*) FROM workhorse.worker_registry "
+            "WHERE worker_id = 'python-registry-worker'"
+        ).fetchone() == (0,)
+
+        stopped.clear()
+        thread = Thread(target=run_worker)
+        thread.start()
+        deadline = monotonic() + 5
+        while monotonic() < deadline:
+            restarted = operator_connection.execute(
+                "SELECT instance_id::text FROM workhorse.worker_registry "
+                "WHERE worker_id = 'python-registry-worker'"
+            ).fetchone()
+            if restarted is not None:
+                break
+            sleep(0.01)
+        assert restarted is not None
+        assert restarted[0] != first_instance_id
+        worker.stop()
+        assert stopped.wait(timeout=5)
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert errors == []
+
+
 def test_stop_reaches_a_run_waiting_behind_an_active_pass(database_url: str) -> None:
     handler_started = Event()
     release_handler = Event()

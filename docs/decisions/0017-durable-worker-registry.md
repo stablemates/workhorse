@@ -14,7 +14,8 @@ Worker control had the same problem from the other side. `Worker.pause()` was a 
 
 ## Decision
 
-Workers register themselves in `workhorse.worker_registry`, one row per live worker, refreshed on `WorkerOptions.registryIntervalMs` (five seconds by default, `0` to opt out).
+Workers register themselves in `workhorse.worker_registry`, one row per live worker. Each SDK
+exposes its own refresh cadence and opt-out option.
 
 Ownership of the row is deliberately split:
 
@@ -27,7 +28,9 @@ Registration refresh runs on its own loop rather than riding maintenance, becaus
 
 ### Operator pause is process-scoped
 
-Each `Worker` announces a fresh `instance_id`. `register_worker_v1` preserves `paused` while that instance keeps refreshing, and clears it — with its attribution — when a new instance takes over the same worker id.
+Each worker lifecycle start announces a fresh `instance_id`. `register_worker_v1` preserves
+`paused` while that instance keeps refreshing, and clears it — with its attribution — when a new
+instance takes over the same worker id.
 
 The alternative, a pause that survives restarts, was considered and rejected. It requires stable worker identities, and it turns a 3am incident action into a flag that silently idles a worker after an unrelated deployment weeks later. Queue pause already provides a durable "stop this work" lever, keyed by queue name and unaffected by worker lifecycles, so the two controls stay distinct rather than overlapping.
 
@@ -39,13 +42,19 @@ The default worker id is `<hostname>-<pid>-<random>`, which is readable in a fle
 
 ### Failure is non-fatal but not silent
 
-Registration is not part of the dispatch contract, so a failure never stops a worker from claiming. It is reported through `WorkerOptions.onRegistrationError`, because a worker that cannot register disappears from every operator surface while continuing to run — indistinguishable from being dead.
+Registration is not part of the dispatch contract, so a failure never stops a worker from claiming.
+TypeScript reports it through `WorkerOptions.onRegistrationError`, Python through
+`on_registration_error`, and Go through `WorkerOptions.OnRegistrationError`, because an invisible
+worker that continues to run is otherwise indistinguishable from a dead one.
 
 ## Consequences
 
 - An operator dashboard mounted in any process reports every live worker. Mounting requires only a database connection.
 - Reported slot use is eventually consistent, bounded by the refresh cadence. It is an operational indicator, not a synchronous read of another process's event loop.
-- Pause takes effect within roughly one `registryIntervalMs` and never interrupts a running handler, matching the cooperative model established for cancellation in ADR 0010. A local `resume()` cannot clear an operator pause that is still in effect; `runtimeState()` reports `locallyPaused` and `remotelyPaused` separately for that reason.
+- Pause takes effect within roughly one registry interval and never interrupts a running handler,
+  matching the cooperative model established for cancellation in ADR 0010. TypeScript and Python
+  keep local pause separate, so a local resume cannot clear an operator pause that is still in
+  effect.
 - `requestedBy` and `reason` remain bounded attribution, never authorization. Callers enforce their own permission checks.
 - Graceful shutdown deregisters. A killed worker stops refreshing, is reported offline once its registration goes stale, and is removed by the bounded `prune_worker_registry_v1`.
 - The relation holds one row per live worker and is never read by the claim path, so it cannot affect dispatch cost.

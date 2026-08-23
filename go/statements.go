@@ -9,6 +9,8 @@ const (
 	syncScheduleDefinitionsStatementName = "sync_schedule_definitions_v1"
 	tickStatementName                    = "tick_v1"
 	runMaintenanceStatementName          = "run_maintenance_v1"
+	registerWorkerStatementName          = "register_worker_v1"
+	deregisterWorkerStatementName        = "deregister_worker_v1"
 	listSchedulesStatementName           = "list_schedules_v1"
 	fireScheduleStatementName            = "fire_schedule_v1"
 	promoteStatementName                 = "promote_v1"
@@ -38,6 +40,7 @@ const (
 	rowAcceptedField                     = "accepted"
 	rowStateField                        = "state"
 	rowStatusField                       = "status"
+	rowPausedField                       = "paused"
 	rowJobTypeField                      = "job_type"
 	rowPriorityField                     = "priority"
 	rowPayloadField                      = "payload"
@@ -192,6 +195,8 @@ const (
 	cronLastDayCandidateRange           = "28-31"
 	recoverMaintenancePhase             = "recover"
 	workerShutdownGraceRangeMessage     = "worker shutdown grace period must be a positive whole number of milliseconds"
+	workerRegistryRangeMessage          = "worker registry interval must be at least 100 whole milliseconds"
+	workerInstanceIDMessage             = "worker instance id could not be generated"
 	notificationListenerLogMessage      = "PostgreSQL notification listener unavailable; worker is using polling"
 	shortPoolListenerLogMessage         = "PostgreSQL notification listener requires at least two pool connections; worker is using polling"
 	pollingOnlyListenerLogMessage       = "PostgreSQL notification listener disabled; worker is using polling"
@@ -351,6 +356,8 @@ const (
 	rowLastOccurrenceAtField = "last_occurrence_at"
 )
 
+const invalidWorkerRegistrationResultMessage = "PostgreSQL returned an invalid worker registration result"
+
 const (
 	invalidSignalWaitResultMessage      = "PostgreSQL returned an invalid signal wait result"
 	unknownSignalWaitStatusFormat       = "PostgreSQL returned unknown signal wait status %q"
@@ -382,6 +389,12 @@ var internalStatementRegistry = map[string]string{
 	syncScheduleDefinitionsStatementName: `SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean)`,
 	tickStatementName:                    `SELECT * FROM workhorse.tick_v1($1::integer, $2::integer)`,
 	runMaintenanceStatementName:          `SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)`,
+	registerWorkerStatementName: `SELECT workhorse.register_worker_v1(
+       $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::integer,
+       $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,
+       $12::integer, $13::integer, $14::boolean
+     ) AS paused`,
+	deregisterWorkerStatementName: `SELECT workhorse.deregister_worker_v1($1::text) AS deregistered`,
 	listSchedulesStatementName: `SELECT definition.namespace, definition.schedule_name, definition.cron_expression,
        definition.revision::text, max(occurrence.occurrence_at) AS last_occurrence_at
   FROM workhorse.schedule_definition definition

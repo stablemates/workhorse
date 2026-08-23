@@ -8,6 +8,7 @@ import traceback
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, tzinfo
 from hashlib import sha256
@@ -668,10 +669,12 @@ class Worker:
         lease_ms: int = 30_000,
         heartbeat_ms: int | None = None,
         maintenance_interval_ms: int = 1_000,
+        registry_interval_ms: int = 5_000,
         schedule_namespaces: Sequence[str] = (),
         schedule_catchup_limit: int = 100,
         notification_connection_factory: NotificationConnectionFactory | None = None,
         on_notification_error: Callable[[BaseException], None] | None = None,
+        on_registration_error: Callable[[BaseException], None] | None = None,
         _executor: SyncRowExecutor | None = None,
     ) -> None:
         if _executor is None and getattr(connection, "autocommit", False) is not True:
@@ -709,6 +712,7 @@ class Worker:
         self._query_connection = connection
         self._notification_connection_factory = notification_connection_factory
         self._on_notification_error = on_notification_error
+        self._on_registration_error = on_registration_error
         if not 100 <= lease_ms <= 86_400_000:
             raise ValueError("lease_ms must be between 100 and 86400000")
         self.lease_ms = lease_ms
@@ -722,6 +726,12 @@ class Worker:
         ):
             raise ValueError("maintenance_interval_ms must be an integer of at least 100")
         if (
+            isinstance(registry_interval_ms, bool)
+            or not isinstance(registry_interval_ms, int)
+            or (registry_interval_ms != 0 and registry_interval_ms < 100)
+        ):
+            raise ValueError("registry_interval_ms must be 0 or an integer of at least 100")
+        if (
             isinstance(schedule_catchup_limit, bool)
             or not isinstance(schedule_catchup_limit, int)
             or not 1 <= schedule_catchup_limit <= 10_000
@@ -731,16 +741,21 @@ class Worker:
         if any(not isinstance(namespace, str) or not namespace for namespace in unique_namespaces):
             raise ValueError("schedule_namespaces must contain non-empty namespace names")
         self.maintenance_interval_ms = maintenance_interval_ms
+        self.registry_interval_ms = registry_interval_ms
         self.schedule_namespaces = unique_namespaces
         self.schedule_catchup_limit = schedule_catchup_limit
         self._last_maintenance_at = float("-inf")
+        self._last_registry_refresh_at = float("-inf")
+        self._instance_id = ""
+        self._registered = False
         self._next_queue_index = 0
         self._state_lock = Lock()
         self._execution_lock = Lock()
         self._wake = Event()
         self._active_threads: set[Thread] = set()
         self._run_errors: list[BaseException] = []
-        self._paused = False
+        self._locally_paused = False
+        self._remotely_paused = False
         self._stopping = False
         self._stop_version = 0
 
@@ -945,7 +960,7 @@ class Worker:
     def pause(self) -> None:
         """Stop new claims without interrupting running handlers."""
         with self._state_lock:
-            self._paused = True
+            self._locally_paused = True
         emit_log(
             "INFO",
             "workhorse.worker.paused",
@@ -957,7 +972,7 @@ class Worker:
     def resume(self) -> None:
         """Allow claims and wake an idle run loop immediately."""
         with self._state_lock:
-            self._paused = False
+            self._locally_paused = False
         emit_log(
             "INFO",
             "workhorse.worker.resumed",
@@ -968,7 +983,7 @@ class Worker:
 
     def is_paused(self) -> bool:
         with self._state_lock:
-            return self._paused
+            return self._locally_paused or self._remotely_paused
 
     def stop(self) -> None:
         """Request a graceful stop; the active run call performs the drain."""
@@ -999,7 +1014,7 @@ class Worker:
         with self._state_lock:
             if self._stopping:
                 return "stopping"
-            if self._paused:
+            if self._locally_paused or self._remotely_paused:
                 return "paused"
             if len(self._active_threads) >= self.concurrency:
                 return "full"
@@ -1007,11 +1022,14 @@ class Worker:
 
     def _run_loop(self, *, continuous: bool, requested_stop_version: int) -> bool:
         self._compatibility.assert_compatible()
+        self._instance_id = str(uuid4())
+        self._registered = False
         with self._state_lock:
             self._stopping = self._stop_version != requested_stop_version
             self._run_errors.clear()
         claimed_any = False
         listener = self._start_notification_listener() if continuous else None
+        self._refresh_registration(force=True)
         emit_log(
             "INFO",
             "workhorse.worker.started",
@@ -1027,6 +1045,7 @@ class Worker:
                 # Clear before the sweep. A completion or state change that arrives while a claim
                 # is in flight remains latched and prevents the following wait from sleeping.
                 self._wake.clear()
+                self._refresh_registration()
                 state = self._dispatch_state()
                 if state == "stopping":
                     break
@@ -1101,7 +1120,9 @@ class Worker:
         finally:
             if listener is not None:
                 listener.close()
+            self._refresh_registration(force=True, draining=True)
             self._drain_active_threads()
+            self._deregister()
             with self._state_lock:
                 self._stopping = False
                 errors = list(self._run_errors)
@@ -1262,6 +1283,82 @@ class Worker:
                     )
         return True
 
+    def _refresh_registration(self, *, force: bool = False, draining: bool = False) -> None:
+        if self.registry_interval_ms == 0:
+            return
+        now = monotonic()
+        if not force and now - self._last_registry_refresh_at < self.registry_interval_ms / 1_000:
+            return
+        self._last_registry_refresh_at = now
+        with self._state_lock:
+            active_slots = len(self._active_threads)
+        try:
+            row = _require_lifecycle_row(
+                self._executor.rows(
+                    STATEMENTS.register_worker,
+                    (
+                        self.worker_id,
+                        self._instance_id,
+                        socket.gethostname() or "python-worker",
+                        os.getpid(),
+                        list(self.queues),
+                        self.concurrency,
+                        self.lease_ms,
+                        self.heartbeat_ms,
+                        self.poll_ms,
+                        self.maintenance_interval_ms,
+                        self.maintenance_interval_ms,
+                        self.registry_interval_ms,
+                        active_slots,
+                        draining,
+                    ),
+                )
+            )
+            paused = row["paused"] is True
+        except Exception as error:
+            emit_log(
+                "INFO",
+                "workhorse.worker.registration_failed",
+                "Worker registration failed",
+                {
+                    "workhorse.worker.id": self.worker_id,
+                    "error.type": error.__class__.__name__,
+                },
+            )
+            if self._on_registration_error is not None:
+                self._on_registration_error(error)
+            return
+        with self._state_lock:
+            changed = self._remotely_paused != paused
+            self._remotely_paused = paused
+            self._registered = True
+        emit_log(
+            "DEBUG",
+            "workhorse.worker.registered",
+            "Worker registration refreshed",
+            {
+                "workhorse.worker.id": self.worker_id,
+                "workhorse.worker.active_slots": active_slots,
+                "workhorse.worker.draining": draining,
+                "workhorse.worker.paused": paused,
+            },
+        )
+        if changed:
+            emit_log(
+                "INFO",
+                "workhorse.worker.paused" if paused else "workhorse.worker.resumed",
+                "Worker paused remotely" if paused else "Worker resumed remotely",
+                {"workhorse.worker.id": self.worker_id},
+            )
+            self._wake.set()
+
+    def _deregister(self) -> None:
+        if not self._registered:
+            return
+        self._registered = False
+        with suppress(Exception):
+            self._executor.rows(STATEMENTS.deregister_worker, (self.worker_id,))
+
     def _recover_expired(self) -> None:
         with start_span("workhorse.recovery", {}) as recovery_span:
             recovery = _require_lifecycle_row(
@@ -1292,6 +1389,8 @@ class Worker:
             if listener is not None and listener.is_listening()
             else self.poll_ms
         )
+        if self.registry_interval_ms > 0:
+            wait_ms = min(wait_ms, self.registry_interval_ms)
         return wait_ms / 1000
 
     def _start_notification_listener(self) -> JobNotificationListener | None:

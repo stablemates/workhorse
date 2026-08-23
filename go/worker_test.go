@@ -1316,6 +1316,158 @@ func TestWorkerMaintenanceRecoversAnExpiredPeerLease(t *testing.T) {
 	}
 }
 
+func TestWorkerRegistryDeliversRemotePauseAndDeregisters(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-registry-pause")
+	ctx, cancel := context.WithCancel(context.Background())
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "go-registry"
+	workerID := "go-registry-worker"
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue:            queueName,
+		WorkerID:         workerID,
+		PollInterval:     10 * time.Millisecond,
+		RegistryInterval: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled := make(chan struct{}, 1)
+	worker.Handle("registered", func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
+		handled <- struct{}{}
+		return nil, nil
+	})
+	runResult := make(chan error, 1)
+	go func() { runResult <- worker.Run(ctx) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	registered := false
+	var firstInstanceID string
+	for time.Now().Before(deadline) {
+		var queues []string
+		err = pool.QueryRow(
+			ctx,
+			"SELECT instance_id::text, queue_names FROM workhorse.worker_registry WHERE worker_id = $1",
+			workerID,
+		).Scan(&firstInstanceID, &queues)
+		if err == nil {
+			registered = len(queues) == 1 && queues[0] == queueName
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !registered {
+		t.Fatal("worker did not register")
+	}
+	if _, err := pool.Exec(
+		ctx,
+		"SELECT * FROM workhorse.set_worker_paused_v1($1, true, $2, $3)",
+		workerID,
+		"test",
+		"remote pause",
+	); err != nil {
+		t.Fatal(err)
+	}
+	refreshed := false
+	for time.Now().Before(deadline) {
+		if err := pool.QueryRow(
+			ctx,
+			"SELECT last_heartbeat_at > paused_at FROM workhorse.worker_registry WHERE worker_id = $1",
+			workerID,
+		).Scan(&refreshed); err != nil {
+			t.Fatal(err)
+		}
+		if refreshed {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !refreshed {
+		t.Fatal("worker did not consume the remote pause")
+	}
+
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	if _, err := queue.Enqueue(ctx, "registered", nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-handled:
+		t.Fatal("worker claimed while remotely paused")
+	case <-time.After(250 * time.Millisecond):
+	}
+	if _, err := pool.Exec(
+		ctx,
+		"SELECT * FROM workhorse.set_worker_paused_v1($1, false, $2, NULL)",
+		workerID,
+		"test",
+	); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-handled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not resume after the remote pause cleared")
+	}
+
+	cancel()
+	if err := <-runResult; err != nil {
+		t.Fatal(err)
+	}
+	var registrations int
+	if err := pool.QueryRow(
+		context.Background(),
+		"SELECT count(*) FROM workhorse.worker_registry WHERE worker_id = $1",
+		workerID,
+	).Scan(&registrations); err != nil {
+		t.Fatal(err)
+	}
+	if registrations != 0 {
+		t.Fatalf("expected graceful deregistration, received %d rows", registrations)
+	}
+
+	restartContext, stopRestart := context.WithCancel(context.Background())
+	restartResult := make(chan error, 1)
+	go func() { restartResult <- worker.Run(restartContext) }()
+	deadline = time.Now().Add(5 * time.Second)
+	var secondInstanceID string
+	for time.Now().Before(deadline) {
+		err = pool.QueryRow(
+			restartContext,
+			"SELECT instance_id::text FROM workhorse.worker_registry WHERE worker_id = $1",
+			workerID,
+		).Scan(&secondInstanceID)
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if secondInstanceID == "" || secondInstanceID == firstInstanceID {
+		t.Fatalf("expected a fresh worker instance, received first=%s second=%s", firstInstanceID, secondInstanceID)
+	}
+	stopRestart()
+	if err := <-restartResult; err != nil {
+		t.Fatal(err)
+	}
+	processed, err := worker.RunOnce(context.Background())
+	if err != nil || processed {
+		t.Fatalf("one-shot lifecycle: processed=%t err=%v", processed, err)
+	}
+	if err := pool.QueryRow(
+		context.Background(),
+		"SELECT count(*) FROM workhorse.worker_registry WHERE worker_id = $1",
+		workerID,
+	).Scan(&registrations); err != nil {
+		t.Fatal(err)
+	}
+	if registrations != 0 {
+		t.Fatalf("expected one-shot deregistration, received %d rows", registrations)
+	}
+}
+
 func TestWorkerMaintenanceCadenceDoesNotWaitForAHandler(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-maintenance-cadence")
 	ctx := context.Background()

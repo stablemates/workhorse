@@ -172,6 +172,7 @@ class AsyncWorker:
         *,
         notification_connection_factory: AsyncNotificationConnectionFactory | None = None,
         on_notification_error: Callable[[BaseException], None] | None = None,
+        on_registration_error: Callable[[BaseException], None] | None = None,
         **worker_options: Any,
     ) -> None:
         self._bridge = _AsyncExecutorBridge(executor)
@@ -184,6 +185,7 @@ class AsyncWorker:
         self._inner = Worker(
             cast(Any, query_connection),
             on_notification_error=on_notification_error,
+            on_registration_error=on_registration_error,
             _executor=self._bridge,
             **worker_options,
         )
@@ -201,10 +203,12 @@ class AsyncWorker:
         lease_ms: int = 30_000,
         heartbeat_ms: int | None = None,
         maintenance_interval_ms: int = 1_000,
+        registry_interval_ms: int = 5_000,
         schedule_namespaces: Sequence[str] = (),
         schedule_catchup_limit: int = 100,
         notification_connection_factory: AsyncNotificationConnectionFactory | None = None,
         on_notification_error: Callable[[BaseException], None] | None = None,
+        on_registration_error: Callable[[BaseException], None] | None = None,
     ) -> AsyncWorker:
         from ._drivers import AsyncPsycopgExecutor
 
@@ -218,6 +222,7 @@ class AsyncWorker:
             "psycopg",
             notification_connection_factory=notification_connection_factory,
             on_notification_error=on_notification_error,
+            on_registration_error=on_registration_error,
             queue=queue,
             queues=queues,
             worker_id=worker_id,
@@ -226,6 +231,7 @@ class AsyncWorker:
             lease_ms=lease_ms,
             heartbeat_ms=heartbeat_ms,
             maintenance_interval_ms=maintenance_interval_ms,
+            registry_interval_ms=registry_interval_ms,
             schedule_namespaces=schedule_namespaces,
             schedule_catchup_limit=schedule_catchup_limit,
         )
@@ -243,10 +249,12 @@ class AsyncWorker:
         lease_ms: int = 30_000,
         heartbeat_ms: int | None = None,
         maintenance_interval_ms: int = 1_000,
+        registry_interval_ms: int = 5_000,
         schedule_namespaces: Sequence[str] = (),
         schedule_catchup_limit: int = 100,
         notification_connection_factory: AsyncNotificationConnectionFactory | None = None,
         on_notification_error: Callable[[BaseException], None] | None = None,
+        on_registration_error: Callable[[BaseException], None] | None = None,
     ) -> AsyncWorker:
         from ._drivers import AsyncpgExecutor
 
@@ -258,6 +266,7 @@ class AsyncWorker:
             "asyncpg",
             notification_connection_factory=notification_connection_factory,
             on_notification_error=on_notification_error,
+            on_registration_error=on_registration_error,
             queue=queue,
             queues=queues,
             worker_id=worker_id,
@@ -266,6 +275,7 @@ class AsyncWorker:
             lease_ms=lease_ms,
             heartbeat_ms=heartbeat_ms,
             maintenance_interval_ms=maintenance_interval_ms,
+            registry_interval_ms=registry_interval_ms,
             schedule_namespaces=schedule_namespaces,
             schedule_catchup_limit=schedule_catchup_limit,
         )

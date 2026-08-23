@@ -252,7 +252,7 @@ func (coordinator *batchCoordinator) dispatch(batch []*batchMember) {
 		slog.Float64(batchLingerAttribute, float64(linger)/float64(time.Millisecond)),
 		slog.Bool(batchFullAttribute, full),
 	)
-	batchID, hasBatchID := newBatchID()
+	batchID, hasBatchID := newUUID()
 	if hasBatchID {
 		coordinator.record(batch[0].item.Context.Context, recordBatchDispatchStatementName, batchID, batch)
 	}
@@ -358,7 +358,7 @@ func normalizeBatchOutcomes(
 	return results, nil
 }
 
-func newBatchID() (string, bool) {
+func newUUID() (string, bool) {
 	var value [16]byte
 	if _, err := rand.Read(value[:]); err != nil {
 		return emptyString, false

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"reflect"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -22,6 +23,7 @@ const (
 	defaultWorkerLease         = 30 * time.Second
 	defaultWorkerPollInterval  = time.Second
 	defaultMaintenanceInterval = time.Second
+	defaultRegistryInterval    = 5 * time.Second
 	defaultShutdownGracePeriod = 30 * time.Second
 	minimumWorkerLease         = 100 * time.Millisecond
 	maximumWorkerLease         = 24 * time.Hour
@@ -129,11 +131,14 @@ type WorkerOptions struct {
 	HeartbeatInterval    time.Duration
 	PollInterval         time.Duration
 	MaintenanceInterval  time.Duration
+	RegistryInterval     time.Duration
+	DisableRegistry      bool
 	ScheduleNamespaces   []string
 	ScheduleCatchupLimit int
 	ShutdownGracePeriod  time.Duration
 	PollingOnly          bool
 	Logger               *slog.Logger
+	OnRegistrationError  func(error)
 }
 
 // Worker claims and settles jobs through a caller-owned pool.
@@ -147,6 +152,9 @@ type Worker struct {
 	heartbeatInterval    time.Duration
 	pollInterval         time.Duration
 	maintenanceInterval  time.Duration
+	registryInterval     time.Duration
+	registryEnabled      bool
+	instanceID           string
 	scheduleNamespaces   []string
 	scheduleCatchupLimit int
 	shutdownGracePeriod  time.Duration
@@ -157,6 +165,11 @@ type Worker struct {
 	handlerSlots         chan struct{}
 	handlers             map[string]Handler
 	compatibility        *CachedCompatibilityCheck
+	onRegistrationError  func(error)
+	activeSlots          atomic.Int64
+	draining             atomic.Bool
+	remotelyPaused       atomic.Bool
+	registered           atomic.Bool
 }
 
 type fencedLease struct {
@@ -232,6 +245,13 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 	if maintenanceInterval < time.Millisecond || maintenanceInterval%time.Millisecond != 0 {
 		return nil, errors.New(workerMaintenanceRangeMessage)
 	}
+	registryInterval := options.RegistryInterval
+	if registryInterval == 0 {
+		registryInterval = defaultRegistryInterval
+	}
+	if registryInterval < 100*time.Millisecond || registryInterval%time.Millisecond != 0 {
+		return nil, errors.New(workerRegistryRangeMessage)
+	}
 	scheduleNamespaces := make([]string, 0, len(options.ScheduleNamespaces))
 	seenScheduleNamespaces := make(map[string]struct{}, len(options.ScheduleNamespaces))
 	for _, namespace := range options.ScheduleNamespaces {
@@ -284,6 +304,8 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		heartbeatInterval:    heartbeatInterval,
 		pollInterval:         pollInterval,
 		maintenanceInterval:  maintenanceInterval,
+		registryInterval:     registryInterval,
+		registryEnabled:      !options.DisableRegistry,
 		scheduleNamespaces:   scheduleNamespaces,
 		scheduleCatchupLimit: scheduleCatchupLimit,
 		shutdownGracePeriod:  shutdownGracePeriod,
@@ -294,6 +316,7 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		handlerSlots:         make(chan struct{}, concurrency),
 		handlers:             make(map[string]Handler),
 		compatibility:        NewCachedCompatibilityCheck(NewPGXExecutor(pool)),
+		onRegistrationError:  options.OnRegistrationError,
 	}, nil
 }
 
@@ -322,7 +345,22 @@ func (worker *Worker) Run(ctx context.Context) error {
 	if err := worker.compatibility.Assert(ctx); err != nil {
 		return err
 	}
+	instanceID, ok := newUUID()
+	if !ok {
+		return errors.New(workerInstanceIDMessage)
+	}
+	worker.instanceID = instanceID
+	worker.registered.Store(false)
 	executor := NewPGXExecutor(worker.pool)
+	worker.draining.Store(false)
+	worker.refreshRegistration(ctx, executor, false)
+	registryContext, stopRegistry := context.WithCancel(context.WithoutCancel(ctx))
+	registryWake := make(chan struct{}, 1)
+	registryDone := make(chan struct{})
+	go func() {
+		defer close(registryDone)
+		worker.registrationLoop(registryContext, executor, registryWake)
+	}()
 	notificationContext, stopNotifications := context.WithCancel(ctx)
 	notificationWake := make(chan struct{}, 1)
 	notificationDone := make(chan struct{})
@@ -371,6 +409,9 @@ func (worker *Worker) Run(ctx context.Context) error {
 	for !stopping {
 	fillSlots:
 		for {
+			if worker.remotelyPaused.Load() {
+				break fillSlots
+			}
 			select {
 			case worker.handlerSlots <- struct{}{}:
 			default:
@@ -399,6 +440,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 				break
 			}
 			active++
+			worker.activeSlots.Add(1)
 			go func(claimed ClaimedJob) {
 				handler := worker.handlers[claimed.Type]
 				var err error
@@ -409,6 +451,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 					err = worker.execute(executionContext, executor, claimed, handler)
 				}
 				<-worker.handlerSlots
+				worker.activeSlots.Add(-1)
 				executionResults <- err
 			}(*job)
 		}
@@ -435,9 +478,12 @@ func (worker *Worker) Run(ctx context.Context) error {
 		case <-pollTimer.C:
 			pollTimer.Reset(worker.pollInterval)
 		case <-notificationWake:
+		case <-registryWake:
 		}
 	}
 
+	worker.draining.Store(true)
+	worker.refreshRegistration(context.WithoutCancel(ctx), executor, true)
 	stopMaintenance()
 	graceTimer := time.NewTimer(worker.shutdownGracePeriod)
 	forcedCancellation := false
@@ -459,6 +505,9 @@ func (worker *Worker) Run(ctx context.Context) error {
 		default:
 		}
 	}
+	stopRegistry()
+	<-registryDone
+	worker.deregister(context.WithoutCancel(ctx), executor)
 	return firstError
 }
 
@@ -472,10 +521,99 @@ func (worker *Worker) RunOnce(ctx context.Context) (bool, error) {
 	if err := worker.compatibility.Assert(ctx); err != nil {
 		return false, err
 	}
+	instanceID, ok := newUUID()
+	if !ok {
+		return false, errors.New(workerInstanceIDMessage)
+	}
+	worker.instanceID = instanceID
+	worker.registered.Store(false)
+	executor := NewPGXExecutor(worker.pool)
+	worker.refreshRegistration(ctx, executor, false)
+	defer worker.deregister(context.WithoutCancel(ctx), executor)
+	if worker.remotelyPaused.Load() {
+		return false, nil
+	}
 	if err := worker.runMaintenance(ctx); err != nil {
 		return false, err
 	}
-	return worker.runOnce(ctx, NewPGXExecutor(worker.pool))
+	return worker.runOnce(ctx, executor)
+}
+
+func (worker *Worker) registrationLoop(ctx context.Context, executor Executor, wake chan<- struct{}) {
+	if !worker.registryEnabled {
+		return
+	}
+	ticker := time.NewTicker(worker.registryInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			before := worker.remotelyPaused.Load()
+			worker.refreshRegistration(ctx, executor, worker.draining.Load())
+			if before != worker.remotelyPaused.Load() {
+				select {
+				case wake <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}
+}
+
+func (worker *Worker) refreshRegistration(ctx context.Context, executor Executor, draining bool) {
+	if !worker.registryEnabled {
+		return
+	}
+	hostname, err := os.Hostname()
+	if err != nil || hostname == emptyString {
+		hostname = defaultWorkerName
+	}
+	maintenanceMS := max(int(worker.maintenanceInterval/time.Millisecond), 100)
+	rows, err := executor.Query(
+		ctx,
+		internalStatementRegistry[registerWorkerStatementName],
+		worker.workerID,
+		worker.instanceID,
+		hostname,
+		os.Getpid(),
+		worker.queues,
+		worker.concurrency,
+		int(worker.leaseDuration/time.Millisecond),
+		int(worker.heartbeatInterval/time.Millisecond),
+		int(worker.pollInterval/time.Millisecond),
+		maintenanceMS,
+		maintenanceMS,
+		int(worker.registryInterval/time.Millisecond),
+		int(worker.activeSlots.Load()),
+		draining,
+	)
+	if err == nil && len(rows) != 1 {
+		err = errors.New(invalidWorkerRegistrationResultMessage)
+	}
+	if err != nil {
+		if worker.onRegistrationError != nil {
+			worker.onRegistrationError(err)
+		}
+		return
+	}
+	paused, ok := rows[0][rowPausedField].(bool)
+	if !ok {
+		if worker.onRegistrationError != nil {
+			worker.onRegistrationError(errors.New(invalidWorkerRegistrationResultMessage))
+		}
+		return
+	}
+	worker.remotelyPaused.Store(paused)
+	worker.registered.Store(true)
+}
+
+func (worker *Worker) deregister(ctx context.Context, executor Executor) {
+	if !worker.registryEnabled || !worker.registered.Swap(false) {
+		return
+	}
+	_, _ = executor.Query(ctx, internalStatementRegistry[deregisterWorkerStatementName], worker.workerID)
 }
 
 func (worker *Worker) acquireRun(ctx context.Context) (func(), error) {

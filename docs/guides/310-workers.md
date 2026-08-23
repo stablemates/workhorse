@@ -8,7 +8,7 @@ Both rotate across queues, bound concurrent slots, and drain active work after `
 job renews its lease and delivers ownership signals through its context cancellation token.
 Both workers can open a dedicated notification connection and evaluate recurring definitions.
 `AsyncWorker` uses native Psycopg or asyncpg connections, while its handlers and durable context
-methods are awaitable. The TypeScript worker also participates in the worker registry.
+methods are awaitable. TypeScript, Python, and Go workers all participate in the worker registry.
 Python's `handle_batch` follows the grouping contract in
 [315-batch-handlers.md](315-batch-handlers.md).
 
@@ -102,11 +102,15 @@ A worker that's killed stops refreshing and is reported offline once its row goe
 maintenance eventually cleans up that row. Slot counts are therefore a moment-ago snapshot, not a
 live read.
 
+Registration failures do not stop dispatch. A worker keeps the last remote pause it received, so a
+temporary database error cannot silently resume claims that an operator stopped.
+
 ## Pausing
 
 Two different things share the word "pause":
 
-- **Local**: your code calls `pause()` on a worker object. Claims stop; running jobs finish.
+- **Local**: TypeScript and Python code can call `pause()` on a worker object. Claims stop; running
+  jobs finish.
 - **Operator**: someone clicks pause in the dashboard. That's stored in the database, and
   the worker picks it up on its next refresh.
 
