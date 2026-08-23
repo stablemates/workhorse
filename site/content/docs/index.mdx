@@ -8,7 +8,7 @@ rebuild the report. The moment that work moves to a separate broker, you have tw
 disagree — an order row without its job, or a job for an order that rolled back.
 
 Workhorse removes the second system. It is a durable job queue built from PostgreSQL tables and
-versioned SQL functions, driven by the `@workhorse-js/core` TypeScript library. There is no broker, no
+versioned SQL functions, with supported SDKs for TypeScript, Python, and Go. There is no broker, no
 Redis, and no PostgreSQL extension — one database owns your business data, your queued work, your
 execution state, and the evidence of what happened.
 
@@ -62,7 +62,7 @@ history you can query with `Admin.getJob` and `Admin.getJobTimeline`.
 ## When to use it
 
 If your application already runs on PostgreSQL and needs reliable background work, Workhorse fits.
-It needs Node.js 22 or newer and PostgreSQL 15 or newer, and it installs with two commands.
+Choose its TypeScript, Python, or Go SDK and connect it to PostgreSQL 15 or newer.
 
 Be aware of what it is not. This is an evidence-first validation release, not a battle-hardened
 platform. Workhorse supports strict priority, dependency fan-in, child jobs, external signals, and
@@ -73,14 +73,17 @@ independently of your database, a dedicated broker remains the right tool.
 ## Which package do I need?
 
 - `@workhorse-js/core` provides `Queue`, `Admin`, `Worker`, schema tools, process orchestration, and the CLI.
+- `workhorse-pg` provides synchronous and asynchronous Python queue clients and workers.
+- `github.com/stablemates/workhorse/go` provides Go queue clients and workers over pgx or `database/sql`.
 - `@workhorse-js/dashboard` provides the operator interface and its framework-neutral server host.
 - `@workhorse-js/drizzle` adapts Drizzle databases and transactions to the core `Queryable` protocol.
 - `@workhorse-js/prisma` adapts Prisma clients and interactive transactions.
 - `@workhorse-js/typeorm` adapts TypeORM data sources and transactional entity managers.
 - `@workhorse-js/kysely` adapts Kysely databases and transactions.
 
-Most applications start with `@workhorse-js/core` plus the `pg` driver. Add an adapter only when you
-want to enqueue inside your ORM's transactions.
+TypeScript applications start with `@workhorse-js/core` plus `pg`. Python and Go applications use
+their native SDK with an existing PostgreSQL driver. TypeScript applications add an adapter when
+they want to enqueue inside an ORM transaction.
 
 ## Next
 
