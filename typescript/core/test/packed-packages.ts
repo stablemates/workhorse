@@ -179,6 +179,7 @@ try {
     "dist/server/standalone.js",
     "dist/server/standalone.d.ts",
     "dist/app/index.html",
+    "dist/app/login.html",
   ]) {
     await readFile(path.join(dashboardServerExtracted, "package", required));
   }

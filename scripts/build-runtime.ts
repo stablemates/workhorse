@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { cp, readFile } from "node:fs/promises";
+import { cp, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { corePackage, repositoryRoot, workspacePackages } from "./packages.js";
 
@@ -9,6 +9,7 @@ interface Manifest {
 }
 
 const development = process.argv.includes("--dev");
+const checkDashboardBundle = process.argv.includes("--check-dashboard-bundle");
 const requestedTarget = process.argv.find((argument) =>
   ["--core", "--adapters", "--dashboard"].includes(argument),
 );
@@ -36,12 +37,27 @@ async function buildPackage(location: string): Promise<void> {
 }
 
 async function copyDashboardApplication(): Promise<void> {
-  if (development) return;
+  const target = path.join(repositoryRoot, "typescript/dashboard-server/dist/app");
+  await mkdir(target, { recursive: true });
+  if (!development) {
+    await cp(path.join(repositoryRoot, "dashboard/app/dist/app"), target, { recursive: true });
+  }
   await cp(
-    path.join(repositoryRoot, "dashboard/app/dist/app"),
-    path.join(repositoryRoot, "typescript/dashboard-server/dist/app"),
-    { recursive: true },
+    path.join(repositoryRoot, "dashboard/app/browser/login.html"),
+    path.join(target, "login.html"),
   );
+}
+
+async function buildDashboardApplication(): Promise<void> {
+  await buildPackage("dashboard/app");
+  if (!development) {
+    await run([
+      "exec",
+      "tsx",
+      "scripts/generate-dashboard-bundle.ts",
+      ...(checkDashboardBundle ? ["--check"] : []),
+    ]);
+  }
 }
 
 const core = await corePackage();
@@ -79,7 +95,7 @@ if (requestedTarget === "--core") {
   await buildPackage(core.location);
   await buildPackage(dashboardContract.location);
   await buildPackage(dashboardServer.location);
-  await buildPackage("dashboard/app");
+  await buildDashboardApplication();
   await Promise.all(compatibilityFacades.map((entry) => buildPackage(entry.location)));
   await copyDashboardApplication();
 } else {
@@ -89,7 +105,7 @@ if (requestedTarget === "--core") {
     buildPackage(dashboardServer.location),
     ...adapters.map((entry) => buildPackage(entry.location)),
   ]);
-  await buildPackage("dashboard/app");
+  await buildDashboardApplication();
   await Promise.all(compatibilityFacades.map((entry) => buildPackage(entry.location)));
   await copyDashboardApplication();
 }

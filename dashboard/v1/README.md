@@ -23,6 +23,14 @@ directory; this directory then only receives compatible corrections.
   no result and answers `{}`.
 - `conformance.json` carries the executable HTTP conformance fixtures described under
   [Conformance](#conformance).
+- `bundle/bundle.json` identifies the static archive for this contract's `readSurfaceVersion` and
+  records its SHA-256 digest. The archive contains the compiled application under `app/` and the
+  shared single-admin page as `login.html`.
+
+`pnpm dashboard-bundle:generate` rebuilds the application, writes the deterministic tracked
+archive, and fetches it into the Go module and Python package. `pnpm dashboard-bundle:check`
+rebuilds and compares all three copies. `pnpm dashboard-bundle:fetch` materializes the committed
+archive without rebuilding the application, which is the language release-build seam.
 
 ## Transport
 
@@ -90,6 +98,14 @@ authentication, demoTools, workspaces, workspace }` (`DashboardRuntimeConfig`), 
   host-owned module tags. `authentication` is null when the host owns authorization; otherwise it
   names the mounted `loginUrl` and `logoutUrl`, and the application redirects there when RPC
   answers 401.
+
+The archive also carries `login.html` with `<!--__WORKHORSE_LOGIN_ERROR__-->` as its only runtime
+placeholder. A backend replaces it with either an empty string or the generic invalid-credential
+paragraph; session and password verification remain language-specific.
+
+`dashboard/app` keeps its build-time dependency on `@workhorse-js/dashboard-server` because the
+Vite development transform invokes the reference server's `renderDashboardHtml`. The compiled
+archive contains no server module, so Go and Python consumers have no Node.js dependency.
 
 A backend configured with named workspaces serves each one as its own instance of this contract:
 `{basePath}` above is then the workspace mount `{path}/{workspace}` (`DashboardHostOptions.workspaces`

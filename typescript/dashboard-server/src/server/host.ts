@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { readFile as readFileAsync } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { SeverityNumber, logs } from "@opentelemetry/api-logs";
 import { RPCHandler } from "@orpc/server/fetch";
@@ -239,10 +240,13 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
     throw new TypeError("Configure exactly one of a dashboard database or dashboard workspaces");
   }
   const path = normalizeDashboardPath(options.path ?? "/workhorse");
-  const singleAdmin = options.singleAdmin
-    ? createSingleAdminAuthentication(options.singleAdmin)
-    : undefined;
   const assets = dashboardAssetsDirectory();
+  const singleAdmin = options.singleAdmin
+    ? createSingleAdminAuthentication(
+        options.singleAdmin,
+        readFileSync(join(assets, "login.html"), "utf8"),
+      )
+    : undefined;
   const rpc = new RPCHandler(dashboardRouter);
 
   const resolveWorkspace = (
@@ -313,7 +317,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
   ): Promise<Response> {
     const template = options.dev
       ? await options.dev.readTemplate()
-      : await readFile(join(assets, "index.html"), "utf8");
+      : await readFileAsync(join(assets, "index.html"), "utf8");
     const rendered = renderDashboardHtml(template, {
       runtime: {
         basePath: workspace.basePath,
@@ -339,7 +343,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
     const safe = normalize(relative).replaceAll("\\", "/");
     if (!safe.startsWith("assets/") || safe.includes("../")) return null;
     try {
-      const body = await readFile(join(assets, safe));
+      const body = await readFileAsync(join(assets, safe));
       return new Response(body, {
         headers: {
           "content-type": contentTypes[extname(safe)] ?? "application/octet-stream",
