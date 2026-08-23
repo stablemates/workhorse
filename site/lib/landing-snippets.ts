@@ -521,6 +521,75 @@ await queue.enqueue(
   { queue: "mail", concurrencyKey: \`tenant:\${tenantId}\` },
 );`,
 
+  flowControlPython: `from workhorse import (
+    ConcurrencyPolicyDefinition,
+    EnqueueOptions,
+    Queue,
+    RateLimit,
+    RateLimitPolicyDefinition,
+)
+
+
+def configure_flow_control(queue: Queue, message_id: str, tenant_id: str) -> None:
+    queue.sync_concurrency_policies(
+        "workers",
+        (
+            ConcurrencyPolicyDefinition(
+                queue="mail", max_active=20, max_active_per_key=2
+            ),
+        ),
+    )
+    queue.sync_rate_limit_policies(
+        "workers",
+        (
+            RateLimitPolicyDefinition(
+                queue="provider-api",
+                rate=RateLimit(limit=100, interval_ms=1_000, burst=200),
+            ),
+        ),
+    )
+    queue.enqueue(
+        "mail.send",
+        {"messageId": message_id},
+        EnqueueOptions(queue="mail", concurrency_key=f"tenant:{tenant_id}"),
+    )`,
+
+  flowControlGo: `package example
+
+import (
+	"context"
+
+	workhorse "github.com/stablemates/workhorse/go"
+)
+
+func configureFlowControl(
+	ctx context.Context,
+	queue *workhorse.Queue,
+	messageID string,
+	tenantID string,
+) error {
+	maxPerTenant := 2
+	if _, err := queue.SyncConcurrencyPolicies(ctx, "workers", []workhorse.ConcurrencyPolicyDefinition{
+		{Queue: "mail", MaxActive: 20, MaxActivePerKey: &maxPerTenant},
+	}); err != nil {
+		return err
+	}
+	if _, err := queue.SyncRateLimitPolicies(ctx, "workers", []workhorse.RateLimitPolicyDefinition{
+		{
+			Queue: "provider-api",
+			Rate:  workhorse.RateLimit{Limit: 100, IntervalMS: 1_000, Burst: 200},
+		},
+	}); err != nil {
+		return err
+	}
+	_, err := queue.Enqueue(ctx, "mail.send", map[string]any{
+		"messageId": messageID,
+	}, workhorse.EnqueueOptions{
+		Queue: "mail", ConcurrencyKey: "tenant:" + tenantID,
+	})
+	return err
+}`,
+
   dependencies: `const inventoryId = await queue.enqueue(
   "inventory.reserve",
   { orderId },
@@ -1181,9 +1250,10 @@ export const landingFeatureSnippets = {
     python: "schedulesPython",
     go: "schedulesGo",
   },
-  // WH-366 and WH-367 add native policy APIs; WH-369 restores these language tabs.
   flowControl: {
     typescript: "flowControl",
+    python: "flowControlPython",
+    go: "flowControlGo",
   },
   dependencies: {
     typescript: "dependencies",
@@ -1259,6 +1329,8 @@ export const landingSnippetLanguages: Partial<Record<LandingSnippetId, "python" 
   idempotencyGo: "go",
   schedulesPython: "python",
   schedulesGo: "go",
+  flowControlPython: "python",
+  flowControlGo: "go",
   dependenciesPython: "python",
   dependenciesGo: "go",
   coalescingPython: "python",

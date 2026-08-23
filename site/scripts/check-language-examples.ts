@@ -33,8 +33,6 @@ function assertVerifiedLanguageSnippets(
 }
 
 for (const [name, snippets] of Object.entries(landingFeatureSnippets)) {
-  // Native Python and Go policy APIs are tracked by WH-367 and WH-366; WH-369 removes this exception.
-  if (name === "flowControl") continue;
   assertVerifiedLanguageSnippets(name, snippets);
 }
 for (const [name, snippets] of Object.entries(landingSupplementalSnippets)) {
