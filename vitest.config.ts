@@ -7,12 +7,12 @@ const require = createRequire(import.meta.url);
 
 export const databaseTestFiles = [
   "typescript/demo/test/app.integration.test.ts",
+  "typescript/*/test/*-integration.test.ts",
+  "typescript/*/test/*conformance.test.ts",
   "typescript/*/test/integration.test.ts",
-  "typescript/dashboard-server/test/conformance.test.ts",
   "typescript/core/test/benchmark-conventional.test.ts",
   "typescript/core/test/integration-*.test.ts",
   "typescript/core/test/isolation-canary-*.test.ts",
-  "typescript/core/test/sql-protocol-conformance.test.ts",
   "typescript/core/test/schema-installation.test.ts",
   "typescript/core/test/schema-migrations.test.ts",
 ];
