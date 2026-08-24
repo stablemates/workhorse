@@ -145,7 +145,7 @@ A claim is owned only while `job_runtime.state = 'active'` and job ID, worker ID
 
 Worker failpoints at `afterClaim`, `beforeHandler`, `afterHandler`, `beforeComplete`, and `afterComplete` model process loss. Pre-completion crashes leave active runtime for recovery. An `afterComplete` crash leaves immutable succeeded outcome and closed attempt history.
 
-Delivery is at least once. Enqueue idempotency deduplicates durable acceptance, not handler effects. Cancellation is cooperative: `heartbeat_v1` delivers the request through `AbortSignal`, but cannot forcibly preempt JavaScript or roll back committed effects. External effects require provider idempotency, an outbox/inbox, or compensation. `requestedBy` is attribution only and callers must authorize requests before invoking the core transition.
+Delivery is at least once. Enqueue idempotency deduplicates durable acceptance, not handler effects. Cancellation is cooperative: the job's `heartbeat_many_v1` result delivers the request through `AbortSignal`, but cannot forcibly preempt JavaScript or roll back committed effects. External effects require provider idempotency, an outbox/inbox, or compensation. `requestedBy` is attribution only and callers must authorize requests before invoking the core transition.
 
 `HandlerContext.checkpoint(name, operation)` first returns an existing immutable value when present. Otherwise it runs the operation and saves its JSON result under the active fence. Concurrent calls for the same name within one handler are coalesced. A crash after an external effect but before PostgreSQL commits the checkpoint can still repeat that effect, so checkpoints do not replace provider idempotency, outbox/inbox, or compensation.
 

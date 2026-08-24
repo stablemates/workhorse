@@ -5,8 +5,8 @@ guarantees it, because almost every other rule in Workhorse depends on it.
 
 ## Claiming a job
 
-When a worker is free, it calls `claim_v1`. That picks an admissible ready job in the queue and
-stamps the `job_runtime` row with three things:
+When a worker has free slots, it calls `claim_many_v1`. PostgreSQL applies `claim_v1` to each
+admissible ready job and stamps its `job_runtime` row with three things:
 
 - **the worker's id** — who owns it
 - **`expires_at`** — until when
@@ -17,8 +17,8 @@ The worker now holds a **lease**. It owns the job, but not forever — only unti
 
 ## Keeping the lease
 
-While your handler runs, the worker calls `heartbeat_v1` on a timer in the background. Each
-successful heartbeat pushes `expires_at` further into the future.
+While your handlers run, the worker calls `heartbeat_many_v1` on a background timer. The call
+submits every active lease, and each accepted result pushes that job's `expires_at` forward.
 
 You never call this yourself. It happens for you as long as your handler is running.
 

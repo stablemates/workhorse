@@ -29,10 +29,12 @@ await worker.run()
 A worker has a fixed number of slots, set by `concurrency`. One slot runs one job. By
 default a worker runs one job at a time, and you can raise it.
 
-Each pass, the worker fills whatever slots are free — one claim at a time, because each
-claim is its own database operation. Once the slots are full, or the queue has nothing left,
-it stops asking. One worker timer renews every running lease in one batch. Each job still has
-its own abort signal and final write, so cancellation and settlement remain independent.
+Each pass, the worker asks PostgreSQL to fill its free slots in one claim batch. PostgreSQL
+still checks every job independently, so ordering and admission policies apply to each one.
+The worker stops asking when its slots are full or the queue has nothing left. One worker
+timer submits every running lease in one heartbeat batch. Each accepted result renews its
+job. Every job still has its own abort signal and final write, so cancellation and settlement
+remain independent.
 
 Concurrency here is per worker. More workers add more process slots. Use a
 [concurrency policy](240-concurrency-policies.md) when the fleet must share one durable budget.
