@@ -1,4 +1,6 @@
 import { scryptSync } from "node:crypto";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
@@ -15,6 +17,13 @@ const passwordHash = `scrypt-v1$${salt.toString("base64url")}$${scryptSync("corr
 const database = {
   query: async () => ({ rows: [{ version: WORKHORSE_SCHEMA_VERSION }] }),
 } as unknown as Queryable;
+const dashboardAuthenticationSuite = existsSync(
+  path.resolve(import.meta.dirname, "../dist/app/login.html"),
+)
+  ? describe
+  : describe.skip;
+const dashboardAuthenticationSuiteName =
+  "dashboard single-admin authentication (requires the built dashboard browser bundle)";
 
 async function login(
   host: ReturnType<typeof createDashboardHost>,
@@ -47,7 +56,7 @@ function mutationClient(
   );
 }
 
-describe("dashboard single-admin authentication", () => {
+dashboardAuthenticationSuite(dashboardAuthenticationSuiteName, () => {
   it("serves a branded login page that follows the browser color scheme", async () => {
     const host = createDashboardHost({
       database,

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
@@ -11,6 +12,13 @@ const database = {
   query: async () => ({ rows: [{ version: WORKHORSE_SCHEMA_VERSION }] }),
 } as Queryable;
 const scratchRoots: string[] = [];
+const dashboardBrowserTest = existsSync(
+  path.resolve(import.meta.dirname, "../dist/app/index.html"),
+)
+  ? it
+  : it.skip;
+const dashboardBrowserTestName =
+  "allows the unauthenticated development bypass on a Unix socket (requires the built dashboard browser bundle)";
 
 afterEach(async () => {
   await Promise.all(
@@ -39,7 +47,7 @@ describe("standalone dashboard listener security", () => {
     ).rejects.toThrow(/unauthenticated.*remote public origin/i);
   });
 
-  it("allows the unauthenticated development bypass on a Unix socket", async () => {
+  dashboardBrowserTest(dashboardBrowserTestName, async () => {
     const scratch = await mkdtemp(path.join(tmpdir(), "workhorse-dashboard-socket-"));
     scratchRoots.push(scratch);
     const socketPath = path.join(scratch, "dashboard.sock");

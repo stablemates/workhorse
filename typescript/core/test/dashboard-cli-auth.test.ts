@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { scryptSync } from "node:crypto";
 import { createServer } from "node:net";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -52,7 +53,9 @@ afterEach(async () => {
   );
 });
 
-describe("workhorse dashboard authentication", () => {
+describe.skipIf(
+  !existsSync(path.join(repository, "typescript/dashboard-server/dist/app/index.html")),
+)("workhorse dashboard authentication (requires the built dashboard browser bundle)", () => {
   it("refuses an unauthenticated remote listener", async () => {
     const child = spawn(
       process.execPath,

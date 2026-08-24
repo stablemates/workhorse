@@ -212,6 +212,7 @@ func completeHumanWaitFromDashboard(t *testing.T, databaseURL, jobID string) {
 		"pnpm",
 		"exec",
 		"tsx",
+		"--conditions=workhorse-source",
 		"typescript/dashboard-server/test/go-interop-human-dashboard.ts",
 		databaseURL,
 		jobID,

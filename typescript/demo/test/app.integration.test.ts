@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
@@ -83,6 +84,14 @@ import { createDemoWorkerDefinition } from "../src/worker-definition.js";
  * fleet then sees extra workers beyond the demo workers the test started.
  */
 const databaseUrl = localDatabaseUrl("test");
+const hasDashboardBrowserBundle = existsSync(
+  new URL("../../dashboard-server/dist/app/index.html", import.meta.url),
+);
+const dashboardBrowserTest = hasDashboardBrowserBundle ? it : it.skip;
+const settingsDashboardTestName =
+  "loads the settings dashboard route and its read model (requires the built dashboard browser bundle)";
+const workspaceDashboardTestName =
+  "serves two switchable workspaces when a staging database is configured (requires the built dashboard browser bundle)";
 assertLocalDatabasePurpose(databaseUrl, "test");
 const pool = new Pool({ connectionString: databaseUrl, max: 4 });
 const database = createDemoDatabase(pool);
@@ -323,7 +332,7 @@ it("disallows crawler indexing across the public demo", async () => {
   expect(dashboard.headers.get("x-robots-tag")).toBe("noindex, nofollow, noarchive");
 });
 
-it("loads the settings dashboard route and its read model", async () => {
+dashboardBrowserTest(settingsDashboardTestName, async () => {
   const { app } = createTestApplication({
     workers: false,
     operator: createLocalOperator(database),
@@ -364,7 +373,7 @@ it("accepts same-origin mutations behind a TLS-terminating proxy", async () => {
   ).resolves.toEqual({ paused: true });
 });
 
-it("serves two switchable workspaces when a staging database is configured", async () => {
+dashboardBrowserTest(workspaceDashboardTestName, async () => {
   // Routing is what this test asserts, so production and staging may share the test database.
   const { app } = createTestApplication({ workers: false, stagingDatabase: database });
 

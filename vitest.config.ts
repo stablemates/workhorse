@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { defaultServerConditions } from "vite";
 import { defineConfig } from "vitest/config";
 
 const require = createRequire(import.meta.url);
@@ -18,6 +19,7 @@ export const databaseTestFiles = [
 
 export default defineConfig({
   resolve: {
+    conditions: ["workhorse-source", ...defaultServerConditions],
     alias: [
       {
         find: "@workhorse-js/core/version",
@@ -32,6 +34,16 @@ export default defineConfig({
       // in typescript/dashboard-server/spec/response-schemas.ts, so pin the installed package.
       { find: /^typescript$/, replacement: require.resolve("typescript") },
     ],
+  },
+  ssr: {
+    resolve: {
+      // Vitest 3 reads worker conditions here with Vite 6 and later, then forwards them to Node.
+      // Node 24 cannot use Vite's `module` condition because OpenTelemetry's ESM entry is extensionless.
+      conditions: [
+        "workhorse-source",
+        ...defaultServerConditions.filter((condition) => condition !== "module"),
+      ],
+    },
   },
   test: {
     // Files run in parallel because no two files share mutable state. Every database-backed suite
