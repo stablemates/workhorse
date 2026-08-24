@@ -35,7 +35,8 @@ import {
 } from "../src/types.js";
 
 // PostgreSQL enforces every bound in this system, so each named limit exists twice: once as a literal
-// inside sql/schema.sql, and once as an exported constant that callers read before they send work.
+// inside sql/schema/current.sql, and once as an exported constant that callers read before they
+// send work.
 // Nothing links the two. This file is that link. Each rule below anchors a constant to the SQL sites
 // that enforce it, and the suite fails when either side moves alone.
 //
@@ -45,6 +46,11 @@ import {
 // what keeps a guard and its explanation from disagreeing.
 
 const repository = path.resolve(import.meta.dirname, "../../..");
+const schemaPath = path.join(repository, "sql", "schema", "current.sql");
+
+function readSchemaSource(): Promise<string> {
+  return readFile(schemaPath, "utf8");
+}
 
 interface LimitRule {
   /** Name of the exported constant, used in failure messages. */
@@ -389,7 +395,7 @@ function findDrift(schema: string, against: readonly LimitRule[] = rules): strin
 
 describe("schema limit parity", () => {
   it("agrees with every exported limit constant", async () => {
-    const schema = await readFile(path.join(repository, "sql", "schema.sql"), "utf8");
+    const schema = await readSchemaSource();
     expect(findDrift(schema)).toEqual([]);
   });
 
@@ -403,7 +409,7 @@ describe("schema limit parity", () => {
   });
 
   it("fails when the SQL side of a limit moves alone", async () => {
-    const schema = await readFile(path.join(repository, "sql", "schema.sql"), "utf8");
+    const schema = await readSchemaSource();
     // The wording stays identical; only the enforced bound moves. Anchoring on message text alone
     // would miss exactly this edit, which is why the rules anchor on the guard.
     const loosened = schema.replaceAll(
@@ -417,7 +423,7 @@ describe("schema limit parity", () => {
   });
 
   it("fails when the TypeScript side of a limit moves alone", async () => {
-    const schema = await readFile(path.join(repository, "sql", "schema.sql"), "utf8");
+    const schema = await readSchemaSource();
     const batchRule = rules.find((rule) => rule.constant === "MAX_ENQUEUE_BATCH_SIZE");
     expect(batchRule).toBeDefined();
     const shifted: LimitRule = {
@@ -432,7 +438,7 @@ describe("schema limit parity", () => {
   });
 
   it("fails when an anchored SQL site disappears", async () => {
-    const schema = await readFile(path.join(repository, "sql", "schema.sql"), "utf8");
+    const schema = await readSchemaSource();
     const removed = schema.replaceAll("v_max_bytes integer := 16384;", "v_max_bytes integer;");
     expect(removed).not.toBe(schema);
     expect(findDrift(removed)).toContainEqual(

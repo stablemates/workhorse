@@ -24,9 +24,9 @@ const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [];
 
 function sqlAsset(relativePath: string): URL {
   const packaged = new URL(`../sql/${relativePath}`, import.meta.url);
-  return existsSync(fileURLToPath(packaged))
-    ? packaged
-    : new URL(`../../../sql/${relativePath}`, import.meta.url);
+  if (existsSync(fileURLToPath(packaged))) return packaged;
+  const repositoryPath = relativePath === "schema.sql" ? "schema/current.sql" : relativePath;
+  return new URL(`../../../sql/${repositoryPath}`, import.meta.url);
 }
 
 export { isMissingDatabaseRelationError, readProtocolVersions, readSchemaVersion };

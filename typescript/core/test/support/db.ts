@@ -13,7 +13,7 @@ const databaseDropAttempts = 40;
 const databaseDropRetryMs = 25;
 const databaseObjectInUseCode = "55006";
 const schemaTemplatePrefix = "workhorse_test_template_";
-const schemaUrl = new URL("../../../../sql/schema.sql", import.meta.url);
+const schemaUrl = new URL("../../../../sql/schema/current.sql", import.meta.url);
 
 /**
  * Each test file gets a database derived from the checkout's guarded test URL. Separate databases

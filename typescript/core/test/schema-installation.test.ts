@@ -245,7 +245,7 @@ describe("schema installation", () => {
   });
 
   it("ships a clean-install artifact without upgrade residue", async () => {
-    const schema = await readFile(path.join(repository, "sql", "schema.sql"), "utf8");
+    const schema = await readFile(path.join(repository, "sql", "schema", "current.sql"), "utf8");
 
     expect(schema).not.toMatch(/^ALTER TABLE /m);
     expect(schema).not.toMatch(/^ALTER FUNCTION /m);

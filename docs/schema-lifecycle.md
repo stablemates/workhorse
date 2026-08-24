@@ -2,12 +2,12 @@
 
 ## Current policy
 
-Schema version 1 is the whole schema. `sql/schema/current.sql` is the hand-edited source,
-`sql/schema.sql` is the generated clean-install artifact, and `sql/migrations/` is empty.
+Schema version 1 is the whole schema. `sql/schema/current.sql` is the tracked source,
+`sql/schema.sql` is a build artifact for published packages, and `sql/migrations/` is empty.
 
 **While the published line is `0.x`, the schema changes in place.** A schema change is a reinstall,
-not an upgrade: edit `sql/schema/current.sql`, run `pnpm schema:generate`, and recreate the
-database. Function names may be renamed and `_vN` suffixes reused freely, because no compatibility
+not an upgrade: edit `sql/schema/current.sql` and recreate the database. Package builds generate
+`sql/schema.sql` from that source. Function names may be renamed and `_vN` suffixes reused freely, because no compatibility
 window exists to protect.
 
 What licenses that is not the version number, it is the promise attached to it. `0.x` states, in
@@ -26,10 +26,10 @@ ships as an ordered, immutable step:
    the step to `SCHEMA_MIGRATIONS` in `typescript/core/src/schema.ts` with its description. Clean
    installation inserts one `workhorse.schema_migration` row per lineage version, so both paths
    record the identical baseline-to-current history.
-3. Run `pnpm schema:generate` to refresh the shipped clean-install artifact at `sql/schema.sql`,
-   and advance the compatibility manifest (`protocol/v1/manifest.json`,
+3. Advance the compatibility manifest (`protocol/v1/manifest.json`,
    `protocol/v1/compatibility.json`) and the Python and Go client bounds
-   (`python/src/workhorse/_protocol.py`, `go/compatibility.go`) with the same schema version.
+   (`python/src/workhorse/_protocol.py`, `go/compatibility.go`) with the same schema version. The
+   package build generates its clean-install artifact from the tracked source.
 4. When a version has shipped in a published release, freeze its clean-install artifact as
    `sql/releases/<NNNN>.sql`. Released artifacts and released migrations are never edited, and a
    released migration never renames a function or reinterprets its `_vN` suffix.

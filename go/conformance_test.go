@@ -682,7 +682,7 @@ func createConformanceDatabase(t *testing.T, sourceURL, adapter string) string {
 
 	databaseURL := *parsed
 	databaseURL.Path = "/" + databaseName
-	schema, err := os.ReadFile(filepath.Join("..", "sql", "schema.sql"))
+	schema, err := os.ReadFile(filepath.Join("..", "sql", "schema", "current.sql"))
 	if err != nil {
 		t.Fatal(err)
 	}

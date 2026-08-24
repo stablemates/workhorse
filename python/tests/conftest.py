@@ -87,7 +87,7 @@ def database_url(request: pytest.FixtureRequest) -> Iterator[str]:
         admin.execute(f'CREATE DATABASE "{database_name}"')
     try:
         with psycopg.connect(isolated_url, autocommit=True) as connection:
-            connection.execute((REPOSITORY / "sql/schema.sql").read_text())
+            connection.execute((REPOSITORY / "sql/schema/current.sql").read_text())
         yield isolated_url
     finally:
         with psycopg.connect(admin_url, autocommit=True) as admin:

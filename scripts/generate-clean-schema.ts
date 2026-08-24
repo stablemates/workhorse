@@ -11,13 +11,4 @@ const generatedNotice =
 
 const source = await readFile(sourcePath, "utf8");
 assertSchemaSourceOrder(source);
-const artifact = `${generatedNotice}${source}`;
-
-if (process.argv.includes("--check")) {
-  const current = await readFile(artifactPath, "utf8").catch(() => "");
-  if (current !== artifact) {
-    throw new Error("sql/schema.sql is stale; run pnpm schema:generate");
-  }
-} else {
-  await writeFile(artifactPath, artifact);
-}
+await writeFile(artifactPath, `${generatedNotice}${source}`);

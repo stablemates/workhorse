@@ -19,7 +19,7 @@ const registry = {
 
 describe("Workhorse SQLSTATE registry", () => {
   it("assigns each declared SQLSTATE to exactly one registered failure meaning", async () => {
-    const schema = await readFile(path.join(repository, "sql", "schema.sql"), "utf8");
+    const schema = await readFile(path.join(repository, "sql", "schema", "current.sql"), "utf8");
     const declarations = [
       ...schema.matchAll(/ERRCODE\s*=\s*'(P\d{4})'\s*,\s*MESSAGE\s*=\s*(?:'([^']+)'|([a-z_]+))/g),
     ];

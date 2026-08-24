@@ -28,3 +28,4 @@ scripts/with-env-probe.tmp.*
 /site/public/llms.txt
 /site/public/docs.md
 /site/public/docs/
+/sql/schema.sql
