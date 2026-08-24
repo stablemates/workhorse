@@ -1,15 +1,56 @@
 pre-commit:
+  parallel: true
   jobs:
-    - name: check types
-      run: pnpm typecheck
-    - name: test changed scope
-      run: pnpm test:changed {staged_files}
-    - name: test changed database scope
-      glob: "{typescript/*/src/**,typescript/core/benchmarks/**,typescript/demo/test/app.integration.test.ts,typescript/*/test/integration.test.ts,typescript/core/test/support/**,typescript/core/test/benchmark-conventional.test.ts,typescript/core/test/integration-*.test.ts,typescript/core/test/isolation-canary-*.test.ts,typescript/core/test/schema-installation.test.ts}"
-      run: pnpm build && pnpm test:database:changed {staged_files}
-    - name: test database scope after SQL changes
-      glob: "sql/**"
-      run: pnpm test:schema
+    - name: check adapter conformance types
+      glob: "typescript/adapter-conformance/**"
+      run: pnpm --filter @workhorse-js/adapter-conformance typecheck
+    - name: check core types
+      glob: "typescript/core/**"
+      run: pnpm --filter @workhorse-js/core typecheck
+    - name: check dashboard contract types
+      glob: "typescript/dashboard-contract/**"
+      run: pnpm --filter @workhorse-js/dashboard-contract typecheck
+    - name: check dashboard server types
+      glob: "typescript/dashboard-server/**"
+      run: pnpm --filter @workhorse-js/dashboard-server typecheck
+    - name: check dashboard types
+      glob: "typescript/dashboard/**"
+      run: pnpm --filter @workhorse-js/dashboard typecheck
+    - name: check demo types
+      glob: "typescript/demo/**"
+      run: pnpm --filter @workhorse-js/demo typecheck
+    - name: check drizzle types
+      glob: "typescript/drizzle/**"
+      run: pnpm --filter @workhorse-js/drizzle typecheck
+    - name: check kysely types
+      glob: "typescript/kysely/**"
+      run: pnpm --filter @workhorse-js/kysely typecheck
+    - name: check prisma types
+      glob: "typescript/prisma/**"
+      run: pnpm --filter @workhorse-js/prisma typecheck
+    - name: check typeorm types
+      glob: "typescript/typeorm/**"
+      run: pnpm --filter @workhorse-js/typeorm typecheck
+    - name: check Python types
+      glob: "python/**"
+      run: pnpm python:typecheck
+    - name: vet Go
+      glob: "go/**"
+      run: pnpm go:vet
+    - name: check site types
+      glob: "site/**"
+      run: pnpm docs:typecheck
+    - name: test changed scopes
+      group:
+        jobs:
+          - name: test changed scope
+            run: pnpm test:changed {staged_files}
+          - name: test changed database scope
+            glob: "{typescript/*/src/**,typescript/core/benchmarks/**,typescript/demo/test/app.integration.test.ts,typescript/*/test/integration.test.ts,typescript/core/test/support/**,typescript/core/test/benchmark-conventional.test.ts,typescript/core/test/integration-*.test.ts,typescript/core/test/isolation-canary-*.test.ts,typescript/core/test/schema-installation.test.ts}"
+            run: pnpm test:database:changed {staged_files}
+          - name: test database scope after SQL changes
+            glob: "sql/**"
+            run: pnpm test:schema
 
 post-checkout:
   jobs:
