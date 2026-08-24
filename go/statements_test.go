@@ -27,6 +27,37 @@ type protocolManifest struct {
 		Name     string `json:"name"`
 		Contract string `json:"contract"`
 	} `json:"views"`
+	Statements []struct {
+		Name     string `json:"name"`
+		Arity    int    `json:"arity"`
+		Contract string `json:"contract"`
+	} `json:"statements"`
+}
+
+func TestGeneratedCataloguesMatchProtocolManifest(t *testing.T) {
+	manifest := readProtocolManifest(t)
+	got := make(map[string]string, len(manifest.Statements))
+	for _, registry := range []map[string]string{internalStatementRegistry, protocolStatementRegistry, adminStatementRegistry} {
+		for name, contract := range registry {
+			if previous, exists := got[name]; exists && previous != contract {
+				t.Fatalf("generated catalogues disagree about %s", name)
+			}
+			got[name] = contract
+		}
+	}
+	placeholder := regexp.MustCompile(`\$(\d+)`)
+	for _, statement := range manifest.Statements {
+		if got[statement.Name] != statement.Contract {
+			t.Errorf("%s SQL differs from the manifest", statement.Name)
+		}
+		if statementArity(statement.Contract, placeholder) != statement.Arity {
+			t.Errorf("%s has the wrong manifest arity", statement.Name)
+		}
+		delete(got, statement.Name)
+	}
+	if len(got) != 0 {
+		t.Errorf("generated Go catalogue has entries absent from the manifest: %v", got)
+	}
 }
 
 func TestStatementRegistryMatchesProtocolManifest(t *testing.T) {
@@ -85,7 +116,7 @@ func TestProductionSQLLiteralsLiveInStatementRegistry(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") || entry.Name() == "statements.go" || entry.Name() == "admin_protocol.go" {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") || entry.Name() == "statements.go" || entry.Name() == "sql_catalogue_generated.go" || entry.Name() == "admin_protocol.go" {
 			continue
 		}
 		file, err := parser.ParseFile(token.NewFileSet(), entry.Name(), nil, 0)

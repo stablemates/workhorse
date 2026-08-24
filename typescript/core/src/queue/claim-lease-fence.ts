@@ -1,3 +1,4 @@
+import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import type { Span } from "@opentelemetry/api";
 import { expectOneRow } from "../errors.js";
 import {
@@ -183,11 +184,11 @@ export class ClaimLeaseFenceModule extends QueueModule {
   async cancel(jobId: string, request: CancellationRequest = {}): Promise<CancelResult> {
     // PostgreSQL validates metadata and serializes cancellation with every lifecycle transition.
     // requestedBy is caller attribution only; this API does not claim authorization.
-    const result = await this.context.database.query<CancelRow>(
-      `SELECT status, state, current_attempt, requested_at, requested_by, reason, finished_at
-         FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)`,
-      [jobId, request.requestedBy ?? null, request.reason ?? null],
-    );
+    const result = await this.context.database.query<CancelRow>(SQL_STATEMENTS["cancel_v1"], [
+      jobId,
+      request.requestedBy ?? null,
+      request.reason ?? null,
+    ]);
     const row = expectOneRow(result, "workhorse.cancel_v1");
     recordCancellation(row.status);
     logInfo("workhorse.job.cancellation_processed", "Job cancellation processed", {
@@ -216,10 +217,11 @@ export class ClaimLeaseFenceModule extends QueueModule {
     return withSpan("workhorse.claim", { "workhorse.queue.name": queueName }, async (span) => {
       // claim_v1 commits ownership before returning the payload. Handler code must run only after
       // this query resolves so no row lock or claim transaction spans user code.
-      const result = await this.context.database.query<ClaimRow>(
-        "SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
-        [queueName, workerId, options.leaseMs ?? 30_000],
-      );
+      const result = await this.context.database.query<ClaimRow>(SQL_STATEMENTS["claim_v1"], [
+        queueName,
+        workerId,
+        options.leaseMs ?? 30_000,
+      ]);
       const row = result.rows[0];
       const job = row ? this.claimedJob<TPayload>(row, queueName) : null;
       this.recordClaims(span, job ? [job] : [], queueName, workerId, startedAt);
@@ -235,10 +237,12 @@ export class ClaimLeaseFenceModule extends QueueModule {
     const queueName = options.queue ?? this.context.defaultQueue;
     const startedAt = performance.now();
     return withSpan("workhorse.claim", { "workhorse.queue.name": queueName }, async (span) => {
-      const result = await this.context.database.query<ClaimRow>(
-        "SELECT * FROM workhorse.claim_many_v1($1::text, $2::text, $3::integer, $4::integer)",
-        [queueName, workerId, limit, options.leaseMs ?? 30_000],
-      );
+      const result = await this.context.database.query<ClaimRow>(SQL_STATEMENTS["claim_many_v1"], [
+        queueName,
+        workerId,
+        limit,
+        options.leaseMs ?? 30_000,
+      ]);
       const jobs = result.rows.map((row) => this.claimedJob<TPayload>(row, queueName));
       this.recordClaims(span, jobs, queueName, workerId, startedAt);
       return jobs;
@@ -268,7 +272,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
 
   async recordBatchDispatch(batch: BatchExecutionRecord): Promise<void> {
     const result = await this.context.database.query<{ recorded: number }>(
-      "SELECT workhorse.record_batch_dispatch_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded",
+      SQL_STATEMENTS["record_batch_dispatch_v1"],
       this.batchEventParameters(batch),
     );
     this.assertBatchRecorded(result, "record_batch_dispatch_v1", batch.jobs.length);
@@ -276,7 +280,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
 
   async recordBatchFailure(batch: BatchExecutionRecord): Promise<void> {
     const result = await this.context.database.query<{ recorded: number }>(
-      "SELECT workhorse.record_batch_failure_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded",
+      SQL_STATEMENTS["record_batch_failure_v1"],
       this.batchEventParameters(batch),
     );
     this.assertBatchRecorded(result, "record_batch_failure_v1", batch.jobs.length);
@@ -296,7 +300,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
       // Cancellation and stale ownership both stop compatibility callers, while workers can use the
       // status API to deliver a distinct cooperative cancellation signal.
       const result = await this.context.database.query<{ status: HeartbeatStatus }>(
-        "SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status",
+        SQL_STATEMENTS["heartbeat_v1"],
         [...lease.sqlParameters, leaseMs],
       );
       const status = expectOneRow(result, "workhorse.heartbeat_v1").status;
@@ -331,10 +335,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
     const result = await this.context.database.query<{
       job_id: string;
       status: HeartbeatStatus;
-    }>(
-      "SELECT job_id::text AS job_id, status FROM workhorse.heartbeat_many_v1($1::text, $2::jsonb) ORDER BY ordinal",
-      [workerId, JSON.stringify(leases)],
-    );
+    }>(SQL_STATEMENTS["heartbeat_many_v1"], [workerId, JSON.stringify(leases)]);
     const statuses = new Map(result.rows.map((row) => [row.job_id, row.status]));
     for (const job of jobs) {
       const status = statuses.get(job.id) ?? "stale";
@@ -360,10 +361,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
     const result = await this.context.database.query<{
       status: ExpireOwnedStatus;
       retry_state: "ready" | "scheduled" | null;
-    }>(
-      "SELECT * FROM workhorse.expire_owned_telemetry_v1($1::uuid, $2::text, $3::bigint)",
-      lease.sqlParameters,
-    );
+    }>(SQL_STATEMENTS["expire_owned_telemetry_v1"], lease.sqlParameters);
     const expiration = expectOneRow(result, "workhorse.expire_owned_telemetry_v1");
     if (expiration.retry_state !== null) {
       await withSpan("workhorse.retry", jobSpanAttributes(job), async (span) => {
@@ -382,7 +380,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
   async acknowledgeCancel(job: ClaimedJob, workerId: string): Promise<boolean> {
     const lease = FencedLease.from(job, workerId);
     const result = await this.context.database.query<{ accepted: boolean }>(
-      "SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted",
+      SQL_STATEMENTS["acknowledge_cancel_v1"],
       lease.sqlParameters,
     );
     const accepted = expectOneRow(result, "workhorse.acknowledge_cancel_v1").accepted;
@@ -406,7 +404,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
       // Completion is conditional on the exact unexpired lease and fence. A stale worker gets false
       // rather than overwriting the result of a recovered attempt.
       const query = await this.context.database.query<{ accepted: boolean }>(
-        "SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted",
+        SQL_STATEMENTS["complete_v1"],
         [...lease.sqlParameters, serializedResult],
       );
       const accepted = expectOneRow(query, "workhorse.complete_v1").accepted;
@@ -437,7 +435,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
       // creating the next projection. Undefined selects SQL-owned backoff; a number explicitly
       // overrides it, including zero for an immediate retry.
       const result = await this.context.database.query<{ state: FailureStatus }>(
-        "SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state",
+        SQL_STATEMENTS["fail_v1"],
         [
           ...lease.sqlParameters,
           JSON.stringify(errorEnvelope(error, job.redactErrorDetails)),
@@ -467,7 +465,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
       // Recovery may be called by many workers. SKIP LOCKED inside the function partitions work
       // between callers while fence checks prevent an old lease from recovering a newer attempt.
       const result = await this.context.database.query<RecoveryTelemetry>(
-        "SELECT * FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)",
+        SQL_STATEMENTS["recover_expired_telemetry_v1"],
         [limit, retryDelayMs ?? null],
       );
       const recovery = expectOneRow(result, "workhorse.recover_expired_telemetry_v1");

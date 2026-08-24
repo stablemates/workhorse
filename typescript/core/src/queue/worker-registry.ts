@@ -1,3 +1,4 @@
+import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { expectOneRow } from "../errors.js";
 import { logDebug, logInfo } from "../telemetry.js";
 import type { WorkerPauseResult, WorkerRegistration, WorkerRegistryEntry } from "../types.js";
@@ -7,11 +8,7 @@ import { QueueModule } from "./module-context.js";
 export class WorkerRegistryModule extends QueueModule {
   async registerWorker(registration: WorkerRegistration): Promise<{ paused: boolean }> {
     const result = await this.context.database.query<{ paused: boolean }>(
-      `SELECT workhorse.register_worker_v1(
-         $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::integer,
-         $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,
-         $12::integer, $13::integer, $14::boolean
-       ) AS paused`,
+      SQL_STATEMENTS["register_worker_v1"],
       [
         registration.workerId,
         registration.instanceId,
@@ -35,7 +32,7 @@ export class WorkerRegistryModule extends QueueModule {
 
   async deregisterWorker(workerId: string): Promise<boolean> {
     const result = await this.context.database.query<{ deregistered: boolean }>(
-      "SELECT workhorse.deregister_worker_v1($1::text) AS deregistered",
+      SQL_STATEMENTS["deregister_worker_v1"],
       [workerId],
     );
     const deregistered = expectOneRow(result, "workhorse.deregister_worker_v1").deregistered;
@@ -58,10 +55,13 @@ export class WorkerRegistryModule extends QueueModule {
       paused_reason: string | null;
       paused_at: Date | null;
       last_heartbeat_at: Date;
-    }>(
-      "SELECT * FROM workhorse.set_worker_paused_v1($1::text, $2::boolean, $3::text, $4::text, $5::text)",
-      [workerId, paused, options.requestedBy, options.reason, options.requestId],
-    );
+    }>(SQL_STATEMENTS["set_worker_paused_v1"], [
+      workerId,
+      paused,
+      options.requestedBy,
+      options.reason,
+      options.requestId,
+    ]);
     const row = result.rows[0];
     if (!row) return null;
     logInfo(
@@ -96,12 +96,7 @@ export class WorkerRegistryModule extends QueueModule {
       paused_at: Date | null;
       started_at: Date;
       last_heartbeat_at: Date;
-    }>(
-      `SELECT worker_id, instance_id, hostname, pid, queue_names, queue_name, concurrency, active_slots, draining, paused, paused_by,
-              paused_reason, paused_at, started_at, last_heartbeat_at
-         FROM workhorse.worker_registry
-        ORDER BY last_heartbeat_at DESC, worker_id`,
-    );
+    }>(SQL_STATEMENTS["worker_registry__worker_registry"]);
     return result.rows.map((row) => ({
       workerId: row.worker_id,
       instanceId: row.instance_id,
@@ -123,7 +118,7 @@ export class WorkerRegistryModule extends QueueModule {
 
   async pruneWorkerRegistry(maxAgeMs: number): Promise<number> {
     const result = await this.context.database.query<{ count: number }>(
-      "SELECT workhorse.prune_worker_registry_v1(make_interval(secs => $1::double precision)) AS count",
+      SQL_STATEMENTS["prune_worker_registry_v1"],
       [maxAgeMs / 1_000],
     );
     const count = expectOneRow(result, "workhorse.prune_worker_registry_v1").count;

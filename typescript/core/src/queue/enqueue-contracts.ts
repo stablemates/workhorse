@@ -1,3 +1,4 @@
+import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { databaseErrorCode, databaseErrorDetails, WorkhorseError } from "../errors.js";
 import { injectTraceContext, logDebug, telemetryMetrics, withSpan } from "../telemetry.js";
 import type {
@@ -479,7 +480,7 @@ export class EnqueueContractsModule extends QueueModule {
         ),
       }),
     );
-    await this.context.database.query("SELECT workhorse.sync_contract_definitions_v1($1::jsonb)", [
+    await this.context.database.query(SQL_STATEMENTS["sync_contract_definitions_v1"], [
       JSON.stringify(definitions),
     ]);
     const currentContracts = new Map<string, CachedContractDefinition>();
@@ -500,7 +501,7 @@ export class EnqueueContractsModule extends QueueModule {
     database: Queryable = this.context.database,
   ): Promise<{ version: string; contract: JobContractVersion } | null> {
     const result = await database.query<ContractDefinitionRow>(
-      "SELECT (definition).* FROM workhorse.get_contract_definition_v1($1::text, $2::text) definition",
+      SQL_STATEMENTS["get_contract_definition_v1"],
       [jobType, version],
     );
     const row = result.rows[0];
@@ -794,10 +795,7 @@ export class EnqueueContractsModule extends QueueModule {
             job_id: string | null;
             outcome: EnqueueOutcome | "contract_mismatch";
             reason: string | null;
-          }>(
-            "SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
-            [serializedInput],
-          );
+          }>(SQL_STATEMENTS["enqueue_many_v1"], [serializedInput]);
           const mismatchRow = result.rows.find((row) => row.outcome === "contract_mismatch");
           if (mismatchRow !== undefined) {
             const mismatch = JSON.parse(mismatchRow.reason ?? "null") as {

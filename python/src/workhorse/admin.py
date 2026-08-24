@@ -15,7 +15,7 @@ from ._drivers import (
     Row,
     SyncExecutor,
 )
-from ._statements import DriverStatement
+from ._statements import SQL_STATEMENTS, DriverStatement
 from .errors import (
     PurgeIdempotencyConflictError,
     RedriveIdempotencyConflictError,
@@ -40,6 +40,30 @@ MAX_REDACT_KEYS = 50
 JOB_STATES = frozenset(
     {"blocked", "scheduled", "ready", "active", "succeeded", "failed", "canceled"}
 )
+
+
+def _catalogue_statement(name: str) -> DriverStatement:
+    psycopg, asyncpg = SQL_STATEMENTS[name]
+    return DriverStatement(psycopg=psycopg, asyncpg=asyncpg)
+
+
+LIST_JOBS = _catalogue_statement("list_jobs")
+GET_JOB = _catalogue_statement("get_job")
+LIST_TIMELINE = _catalogue_statement("list_job_timeline")
+LIST_DEAD_LETTERS = _catalogue_statement("list_dead_letters")
+REDRIVE = _catalogue_statement("redrive")
+REDRIVE_MANY = _catalogue_statement("redrive_many")
+GET_CHECKPOINT = _catalogue_statement("get_checkpoint")
+LIST_CHECKPOINTS = _catalogue_statement("list_checkpoints")
+GET_PROGRESS = _catalogue_statement("get_progress")
+GET_WAIT = _catalogue_statement("get_wait")
+LIST_WAITS = _catalogue_statement("list_waits")
+LIST_SIGNAL_WAITS = _catalogue_statement("list_signal_waits")
+LIST_HUMAN_WAITS = _catalogue_statement("list_human_waits")
+LIST_WORKERS = _catalogue_statement("list_workers")
+SET_WORKER_PAUSED = _catalogue_statement("set_worker_paused")
+SET_QUEUE_PAUSED = _catalogue_statement("set_queue_paused")
+PURGE_QUEUE = _catalogue_statement("purge_queue")
 
 
 @dataclass(frozen=True)
@@ -323,309 +347,6 @@ class WorkerRegistryEntry(WorkerPauseResult):
     active_slots: int
     draining: bool
     started_at: datetime
-
-
-def _statement(psycopg: str, asyncpg: str) -> DriverStatement:
-    return DriverStatement(psycopg=psycopg, asyncpg=asyncpg)
-
-
-def _same_statement(sql: str) -> DriverStatement:
-    return _statement(sql, sql)
-
-
-LIST_JOBS = _statement(
-    """SELECT listed.job_id, listed.queue_name, listed.job_type, listed.concurrency_key,
-              listed.priority, listed.tags, listed.state, dependency.prerequisite_job_id,
-              dependency.prerequisite_job_ids, dependency.on_success AS dependency_on_success,
-              dependency.on_failure AS dependency_on_failure,
-              dependency.on_cancellation AS dependency_on_cancellation,
-              CASE WHEN listed.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
-              parent_edge.parent_job_id, children.child_job_ids, listed.current_attempt,
-              listed.max_attempts, listed.retry_policy, listed.deadline_at,
-              listed.execution_timeout_ms::text AS execution_timeout_ms, listed.run_at,
-              listed.cancel_requested_at, listed.cancel_requested_by, listed.cancel_reason,
-              listed.created_at, listed.updated_at, listed.payload, listed.payload_status,
-              listed.payload_bytes, listed.has_more,
-              listed.cursor_created_at::text AS cursor_created_at, listed.cursor_signature
-         FROM workhorse.list_jobs_v1(
-           %s::jsonb, %s::integer, %s::timestamptz, %s::uuid, %s::text, %s::jsonb
-         ) listed
-         LEFT JOIN LATERAL (
-           SELECT CASE WHEN count(*) = 1 THEN (array_agg(edge.prerequisite_job_id))[1] END
-                    AS prerequisite_job_id,
-                  COALESCE(array_agg(edge.prerequisite_job_id ORDER BY edge.prerequisite_job_id)
-                    FILTER (WHERE edge.prerequisite_job_id IS NOT NULL), '{}')
-                    AS prerequisite_job_ids,
-                  min(edge.on_success) AS on_success, min(edge.on_failure) AS on_failure,
-                  min(edge.on_cancellation) AS on_cancellation
-             FROM workhorse.job_dependency edge
-            WHERE edge.dependent_job_id = listed.job_id
-         ) dependency ON true
-         LEFT JOIN workhorse.job_child parent_edge ON parent_edge.child_job_id = listed.job_id
-         LEFT JOIN LATERAL (
-           SELECT COALESCE(array_agg(edge.child_job_id ORDER BY edge.child_job_id)
-                    FILTER (WHERE edge.child_job_id IS NOT NULL), '{}') AS child_job_ids
-             FROM workhorse.job_child edge WHERE edge.parent_job_id = listed.job_id
-         ) children ON true""",
-    """SELECT listed.job_id, listed.queue_name, listed.job_type, listed.concurrency_key,
-              listed.priority, listed.tags, listed.state, dependency.prerequisite_job_id,
-              dependency.prerequisite_job_ids, dependency.on_success AS dependency_on_success,
-              dependency.on_failure AS dependency_on_failure,
-              dependency.on_cancellation AS dependency_on_cancellation,
-              CASE WHEN listed.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
-              parent_edge.parent_job_id, children.child_job_ids, listed.current_attempt,
-              listed.max_attempts, listed.retry_policy, listed.deadline_at,
-              listed.execution_timeout_ms::text AS execution_timeout_ms, listed.run_at,
-              listed.cancel_requested_at, listed.cancel_requested_by, listed.cancel_reason,
-              listed.created_at, listed.updated_at, listed.payload, listed.payload_status,
-              listed.payload_bytes, listed.has_more,
-              listed.cursor_created_at::text AS cursor_created_at, listed.cursor_signature
-         FROM workhorse.list_jobs_v1(
-           $1::jsonb, $2::integer, $3::timestamptz, $4::uuid, $5::text, $6::jsonb
-         ) listed
-         LEFT JOIN LATERAL (
-           SELECT CASE WHEN count(*) = 1 THEN (array_agg(edge.prerequisite_job_id))[1] END
-                    AS prerequisite_job_id,
-                  COALESCE(array_agg(edge.prerequisite_job_id ORDER BY edge.prerequisite_job_id)
-                    FILTER (WHERE edge.prerequisite_job_id IS NOT NULL), '{}')
-                    AS prerequisite_job_ids,
-                  min(edge.on_success) AS on_success, min(edge.on_failure) AS on_failure,
-                  min(edge.on_cancellation) AS on_cancellation
-             FROM workhorse.job_dependency edge
-            WHERE edge.dependent_job_id = listed.job_id
-         ) dependency ON true
-         LEFT JOIN workhorse.job_child parent_edge ON parent_edge.child_job_id = listed.job_id
-         LEFT JOIN LATERAL (
-           SELECT COALESCE(array_agg(edge.child_job_id ORDER BY edge.child_job_id)
-                    FILTER (WHERE edge.child_job_id IS NOT NULL), '{}') AS child_job_ids
-             FROM workhorse.job_child edge WHERE edge.parent_job_id = listed.job_id
-         ) children ON true""",
-)
-
-GET_JOB = _statement(
-    """SELECT j.id, j.queue_name, j.job_type, j.concurrency_key, j.priority,
-              workhorse.redact_top_level_keys_v1(j.payload, j.payload_redact_keys) AS payload,
-              j.contract_version, j.tags, j.retry_policy, j.deadline_at,
-              j.execution_timeout_ms::text, COALESCE(r.state, o.state) AS state,
-              dependency.prerequisite_job_id, dependency.prerequisite_job_ids,
-              dependency.on_success AS dependency_on_success,
-              dependency.on_failure AS dependency_on_failure,
-              dependency.on_cancellation AS dependency_on_cancellation,
-              CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
-              parent_edge.parent_job_id, children.child_job_ids,
-              COALESCE(r.current_attempt, o.current_attempt) AS current_attempt, j.max_attempts,
-              COALESCE(r.fence_token, o.fence_token)::text AS version,
-              COALESCE(r.run_at, o.run_at) AS run_at,
-              workhorse.redact_top_level_keys_v1(o.result, j.result_redact_keys) AS result,
-              COALESCE(r.error, o.error) AS error, r.cancel_requested_at,
-              r.cancel_requested_by, r.cancel_reason, p.progress_value,
-              p.revision::text AS progress_revision, p.attempt AS progress_attempt,
-              p.fence_token::text AS progress_fence_token, p.worker_id AS progress_worker_id,
-              p.created_at AS progress_created_at, p.updated_at AS progress_updated_at,
-              j.created_at, COALESCE(r.updated_at, o.updated_at) AS updated_at
-         FROM workhorse.job j
-         LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
-         LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
-         LEFT JOIN LATERAL (
-           SELECT CASE WHEN count(*) = 1 THEN (array_agg(edge.prerequisite_job_id))[1] END
-                    AS prerequisite_job_id,
-                  COALESCE(array_agg(edge.prerequisite_job_id ORDER BY edge.prerequisite_job_id)
-                    FILTER (WHERE edge.prerequisite_job_id IS NOT NULL), '{}')
-                    AS prerequisite_job_ids,
-                  min(edge.on_success) AS on_success, min(edge.on_failure) AS on_failure,
-                  min(edge.on_cancellation) AS on_cancellation
-             FROM workhorse.job_dependency edge WHERE edge.dependent_job_id = j.id
-         ) dependency ON true
-         LEFT JOIN workhorse.job_child parent_edge ON parent_edge.child_job_id = j.id
-         LEFT JOIN LATERAL (
-           SELECT COALESCE(array_agg(edge.child_job_id ORDER BY edge.child_job_id)
-                    FILTER (WHERE edge.child_job_id IS NOT NULL), '{}') AS child_job_ids
-             FROM workhorse.job_child edge WHERE edge.parent_job_id = j.id
-         ) children ON true
-         LEFT JOIN workhorse.job_progress p ON p.job_id = j.id
-        WHERE j.id = %s::uuid""",
-    """SELECT j.id, j.queue_name, j.job_type, j.concurrency_key, j.priority,
-              workhorse.redact_top_level_keys_v1(j.payload, j.payload_redact_keys) AS payload,
-              j.contract_version, j.tags, j.retry_policy, j.deadline_at,
-              j.execution_timeout_ms::text, COALESCE(r.state, o.state) AS state,
-              dependency.prerequisite_job_id, dependency.prerequisite_job_ids,
-              dependency.on_success AS dependency_on_success,
-              dependency.on_failure AS dependency_on_failure,
-              dependency.on_cancellation AS dependency_on_cancellation,
-              CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
-              parent_edge.parent_job_id, children.child_job_ids,
-              COALESCE(r.current_attempt, o.current_attempt) AS current_attempt, j.max_attempts,
-              COALESCE(r.fence_token, o.fence_token)::text AS version,
-              COALESCE(r.run_at, o.run_at) AS run_at,
-              workhorse.redact_top_level_keys_v1(o.result, j.result_redact_keys) AS result,
-              COALESCE(r.error, o.error) AS error, r.cancel_requested_at,
-              r.cancel_requested_by, r.cancel_reason, p.progress_value,
-              p.revision::text AS progress_revision, p.attempt AS progress_attempt,
-              p.fence_token::text AS progress_fence_token, p.worker_id AS progress_worker_id,
-              p.created_at AS progress_created_at, p.updated_at AS progress_updated_at,
-              j.created_at, COALESCE(r.updated_at, o.updated_at) AS updated_at
-         FROM workhorse.job j
-         LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
-         LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
-         LEFT JOIN LATERAL (
-           SELECT CASE WHEN count(*) = 1 THEN (array_agg(edge.prerequisite_job_id))[1] END
-                    AS prerequisite_job_id,
-                  COALESCE(array_agg(edge.prerequisite_job_id ORDER BY edge.prerequisite_job_id)
-                    FILTER (WHERE edge.prerequisite_job_id IS NOT NULL), '{}')
-                    AS prerequisite_job_ids,
-                  min(edge.on_success) AS on_success, min(edge.on_failure) AS on_failure,
-                  min(edge.on_cancellation) AS on_cancellation
-             FROM workhorse.job_dependency edge WHERE edge.dependent_job_id = j.id
-         ) dependency ON true
-         LEFT JOIN workhorse.job_child parent_edge ON parent_edge.child_job_id = j.id
-         LEFT JOIN LATERAL (
-           SELECT COALESCE(array_agg(edge.child_job_id ORDER BY edge.child_job_id)
-                    FILTER (WHERE edge.child_job_id IS NOT NULL), '{}') AS child_job_ids
-             FROM workhorse.job_child edge WHERE edge.parent_job_id = j.id
-         ) children ON true
-         LEFT JOIN workhorse.job_progress p ON p.job_id = j.id
-        WHERE j.id = $1::uuid""",
-)
-
-LIST_TIMELINE = _statement(
-    """SELECT kind, record_id::text, priority, attempt, event_type, details,
-              fence_token::text, worker_id, outcome, started_at, claimed_at, finished_at,
-              error, occurred_at, has_more, cursor_occurred_at::text
-         FROM workhorse.list_job_timeline_v1(
-           %s::uuid, %s::integer, %s::timestamptz, %s::text, %s::bigint)""",
-    """SELECT kind, record_id::text, priority, attempt, event_type, details,
-              fence_token::text, worker_id, outcome, started_at, claimed_at, finished_at,
-              error, occurred_at, has_more, cursor_occurred_at::text
-         FROM workhorse.list_job_timeline_v1(
-           $1::uuid, $2::integer, $3::timestamptz, $4::text, $5::bigint)""",
-)
-
-LIST_DEAD_LETTERS = _statement(
-    """SELECT * FROM workhorse.list_dead_letters_v1(
-         %s::jsonb, %s::integer, %s::timestamptz, %s::uuid)""",
-    """SELECT * FROM workhorse.list_dead_letters_v1(
-         $1::jsonb, $2::integer, $3::timestamptz, $4::uuid)""",
-)
-REDRIVE = _statement(
-    "SELECT * FROM workhorse.redrive_v1(%s::uuid, %s::text, %s::text, %s::text)",
-    "SELECT * FROM workhorse.redrive_v1($1::uuid, $2::text, $3::text, $4::text)",
-)
-REDRIVE_MANY = _statement(
-    """SELECT status, source_job_id, target_job_id, source_state, target_state,
-              requested_at, source_finished_at_cursor, has_more
-         FROM workhorse.redrive_many_v1(
-           %s::jsonb, %s::integer, %s::boolean, %s::text, %s::text, %s::text,
-           %s::timestamptz, %s::uuid) ORDER BY ordinal""",
-    """SELECT status, source_job_id, target_job_id, source_state, target_state,
-              requested_at, source_finished_at_cursor, has_more
-         FROM workhorse.redrive_many_v1(
-           $1::jsonb, $2::integer, $3::boolean, $4::text, $5::text, $6::text,
-           $7::timestamptz, $8::uuid) ORDER BY ordinal""",
-)
-GET_CHECKPOINT = _statement(
-    """SELECT job_id, checkpoint_name, checkpoint_value, attempt, fence_token::text,
-              worker_id, created_at FROM workhorse.job_checkpoint
-        WHERE job_id = %s::uuid AND checkpoint_name = %s::text""",
-    """SELECT job_id, checkpoint_name, checkpoint_value, attempt, fence_token::text,
-              worker_id, created_at FROM workhorse.job_checkpoint
-        WHERE job_id = $1::uuid AND checkpoint_name = $2::text""",
-)
-LIST_CHECKPOINTS = _statement(
-    """SELECT job_id, checkpoint_name, checkpoint_value, attempt, fence_token::text,
-              worker_id, created_at FROM workhorse.job_checkpoint
-        WHERE job_id = %s::uuid ORDER BY created_at, checkpoint_name""",
-    """SELECT job_id, checkpoint_name, checkpoint_value, attempt, fence_token::text,
-              worker_id, created_at FROM workhorse.job_checkpoint
-        WHERE job_id = $1::uuid ORDER BY created_at, checkpoint_name""",
-)
-GET_PROGRESS = _statement(
-    """SELECT job_id, progress_value, revision::text, attempt, fence_token::text,
-              worker_id, created_at, updated_at FROM workhorse.job_progress
-        WHERE job_id = %s::uuid""",
-    """SELECT job_id, progress_value, revision::text, attempt, fence_token::text,
-              worker_id, created_at, updated_at FROM workhorse.job_progress
-        WHERE job_id = $1::uuid""",
-)
-GET_WAIT = _statement(
-    """SELECT job_id, wait_name, mode, duration_ms::text, requested_wake_at, wake_at,
-              attempt, fence_token::text, worker_id, created_at FROM workhorse.job_wait
-        WHERE job_id = %s::uuid AND wait_name = %s::text""",
-    """SELECT job_id, wait_name, mode, duration_ms::text, requested_wake_at, wake_at,
-              attempt, fence_token::text, worker_id, created_at FROM workhorse.job_wait
-        WHERE job_id = $1::uuid AND wait_name = $2::text""",
-)
-LIST_WAITS = _statement(
-    """SELECT job_id, wait_name, mode, duration_ms::text, requested_wake_at, wake_at,
-              attempt, fence_token::text, worker_id, created_at FROM workhorse.job_wait
-        WHERE job_id = %s::uuid ORDER BY created_at, wait_name""",
-    """SELECT job_id, wait_name, mode, duration_ms::text, requested_wake_at, wake_at,
-              attempt, fence_token::text, worker_id, created_at FROM workhorse.job_wait
-        WHERE job_id = $1::uuid ORDER BY created_at, wait_name""",
-)
-LIST_SIGNAL_WAITS = _statement(
-    """WITH parameters AS (
-         SELECT %s::integer AS page_limit, %s::timestamptz AS cursor_created_at,
-                %s::uuid AS cursor_job_id, %s::text AS cursor_name
-       )
-       SELECT job_id, queue_name, job_type, signal_name AS wait_name, attempt, created_at,
-              deadline_at, created_at::text AS cursor_created_at
-         FROM workhorse.dashboard_signal_wait_v1, parameters
-        WHERE parameters.cursor_created_at IS NULL OR (created_at, job_id, signal_name) >
-              (parameters.cursor_created_at, parameters.cursor_job_id, parameters.cursor_name)
-        ORDER BY created_at, job_id, signal_name LIMIT (SELECT page_limit FROM parameters)""",
-    """WITH parameters AS (
-         SELECT $1::integer AS page_limit, $2::timestamptz AS cursor_created_at,
-                $3::uuid AS cursor_job_id, $4::text AS cursor_name
-       )
-       SELECT job_id, queue_name, job_type, signal_name AS wait_name, attempt, created_at,
-              deadline_at, created_at::text AS cursor_created_at
-         FROM workhorse.dashboard_signal_wait_v1, parameters
-        WHERE parameters.cursor_created_at IS NULL OR (created_at, job_id, signal_name) >
-              (parameters.cursor_created_at, parameters.cursor_job_id, parameters.cursor_name)
-        ORDER BY created_at, job_id, signal_name LIMIT (SELECT page_limit FROM parameters)""",
-)
-LIST_HUMAN_WAITS = _statement(
-    """WITH parameters AS (
-         SELECT %s::integer AS page_limit, %s::timestamptz AS cursor_created_at,
-                %s::uuid AS cursor_job_id, %s::text AS cursor_name
-       )
-       SELECT job_id, queue_name, job_type, token_name AS wait_name, context, attempt,
-              created_at, deadline_at, created_at::text AS cursor_created_at
-         FROM workhorse.dashboard_human_wait_v1, parameters
-        WHERE parameters.cursor_created_at IS NULL OR (created_at, job_id, token_name) >
-              (parameters.cursor_created_at, parameters.cursor_job_id, parameters.cursor_name)
-        ORDER BY created_at, job_id, token_name LIMIT (SELECT page_limit FROM parameters)""",
-    """WITH parameters AS (
-         SELECT $1::integer AS page_limit, $2::timestamptz AS cursor_created_at,
-                $3::uuid AS cursor_job_id, $4::text AS cursor_name
-       )
-       SELECT job_id, queue_name, job_type, token_name AS wait_name, context, attempt,
-              created_at, deadline_at, created_at::text AS cursor_created_at
-         FROM workhorse.dashboard_human_wait_v1, parameters
-        WHERE parameters.cursor_created_at IS NULL OR (created_at, job_id, token_name) >
-              (parameters.cursor_created_at, parameters.cursor_job_id, parameters.cursor_name)
-        ORDER BY created_at, job_id, token_name LIMIT (SELECT page_limit FROM parameters)""",
-)
-LIST_WORKERS = _same_statement(
-    """SELECT worker_id, instance_id::text, hostname, pid, queue_names, queue_name,
-              concurrency, active_slots, draining, paused, paused_by, paused_reason,
-              paused_at, started_at, last_heartbeat_at FROM workhorse.worker_registry
-        ORDER BY last_heartbeat_at DESC, worker_id"""
-)
-SET_WORKER_PAUSED = _statement(
-    """SELECT * FROM workhorse.set_worker_paused_v1(
-         %s::text, %s::boolean, %s::text, %s::text, %s::text)""",
-    """SELECT * FROM workhorse.set_worker_paused_v1(
-         $1::text, $2::boolean, $3::text, $4::text, $5::text)""",
-)
-SET_QUEUE_PAUSED = _statement(
-    "SELECT workhorse.set_queue_paused_v1(%s::text, %s::boolean, %s::text, %s::text, %s::text)",
-    "SELECT workhorse.set_queue_paused_v1($1::text, $2::boolean, $3::text, $4::text, $5::text)",
-)
-PURGE_QUEUE = _statement(
-    "SELECT * FROM workhorse.purge_queue_v1(%s::text, %s::text, %s::text, %s::text)",
-    "SELECT * FROM workhorse.purge_queue_v1($1::text, $2::text, $3::text, $4::text)",
-)
 
 
 class _AdminOperations:

@@ -1,3 +1,4 @@
+import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { expectOneRow, WorkhorseError } from "../errors.js";
 import { logInfo } from "../telemetry.js";
 import { MAX_EXTERNAL_WAITS_PER_JOB, type ClaimedJob, type Json } from "../types.js";
@@ -118,13 +119,7 @@ export class HumanWaitsModule extends QueueModule {
   ): Promise<HumanWaitPage<TContext>> {
     const { limit, cursor } = validateExternalWaitListOptions(options);
     const result = await this.context.database.query<HumanWaitRow>(
-      `SELECT job_id, queue_name, job_type, token_name AS wait_name, context, attempt,
-              created_at, deadline_at, created_at::text AS cursor_created_at
-         FROM workhorse.dashboard_human_wait_v1
-        WHERE ($2::timestamptz IS NULL OR (created_at, job_id, token_name) >
-              ($2::timestamptz, $3::uuid, $4::text))
-        ORDER BY created_at, job_id, token_name
-        LIMIT $1::integer`,
+      SQL_STATEMENTS["dashboard_human_wait_v1"],
       [limit + 1, cursor?.createdAt ?? null, cursor?.jobId ?? null, cursor?.name ?? null],
     );
     const pageRows = result.rows.slice(0, limit);
@@ -149,18 +144,14 @@ export class HumanWaitsModule extends QueueModule {
     if (typeof workerId !== "string" || workerId.length === 0) {
       throw new TypeError("Worker ID must be a non-empty string");
     }
-    const query = await this.context.database.query<WaitRow>(
-      `SELECT status, result
-         FROM workhorse.wait_for_human_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::bigint)`,
-      [
-        job.id,
-        workerId,
-        job.fenceToken.toString(),
-        name,
-        encodeExternalWaitValue(context, "Human wait context"),
-        validateExternalWaitOptions(options),
-      ],
-    );
+    const query = await this.context.database.query<WaitRow>(SQL_STATEMENTS["wait_for_human_v1"], [
+      job.id,
+      workerId,
+      job.fenceToken.toString(),
+      name,
+      encodeExternalWaitValue(context, "Human wait context"),
+      validateExternalWaitOptions(options),
+    ]);
     const row = expectOneRow(query, "workhorse.wait_for_human_v1");
     if (row.status === "already_waiting") throw new HumanWaitAlreadyWaitingError(job.id, name);
     if (row.status === "stale") throw new HumanWaitLeaseLostError(job.id, name);
@@ -181,8 +172,7 @@ export class HumanWaitsModule extends QueueModule {
     validateExternalWaitName(name, "Human wait");
     validateExternalWaitDeliveryRequest(request, "Human wait");
     const query = await this.context.database.query<CompleteRow>(
-      `SELECT status, result, completed_at, completed_by
-         FROM workhorse.complete_human_wait_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
+      SQL_STATEMENTS["complete_human_wait_v1"],
       [
         jobId,
         name,

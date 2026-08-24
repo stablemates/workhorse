@@ -1,3 +1,4 @@
+import { SQL_STATEMENTS } from "./queue/sql-catalogue.generated.js";
 import type { Queryable } from "./types.js";
 
 /**
@@ -70,8 +71,7 @@ export function describePostgresSupport(
 /** Read the connected server's version without creating or changing any database object. */
 export async function readPostgresSupport(database: Queryable): Promise<PostgresSupport> {
   const result = await database.query<{ number: string; version: string }>(
-    `SELECT current_setting('server_version_num') AS number,
-            current_setting('server_version') AS version`,
+    SQL_STATEMENTS["postgres_support"],
   );
   const row = result.rows[0];
   if (!row) throw new Error("PostgreSQL did not report a server version");

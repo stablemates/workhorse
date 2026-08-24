@@ -14,6 +14,12 @@ export interface SqlProtocolManifest {
   runtimeCoverage: string[];
   functions: { name: string; arity: number; contract: string }[];
   views: { name: string; contract: string }[];
+  statements: {
+    name: string;
+    arity: number;
+    contract: string;
+    catalogues: ("internal" | "protocol" | "admin")[];
+  }[];
   typescriptContractSources: string[];
 }
 

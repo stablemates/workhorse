@@ -1,3 +1,4 @@
+import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { expectOneRow, WorkhorseError } from "../errors.js";
 import { logInfo } from "../telemetry.js";
 import { MAX_EXTERNAL_WAITS_PER_JOB, type ClaimedJob, type Json } from "../types.js";
@@ -109,13 +110,7 @@ export class SignalsModule extends QueueModule {
   async listSignalWaits(options: ExternalWaitListOptions = {}): Promise<SignalWaitPage> {
     const { limit, cursor } = validateExternalWaitListOptions(options);
     const result = await this.context.database.query<ExternalWaitRow>(
-      `SELECT job_id, queue_name, job_type, signal_name AS wait_name, attempt,
-              created_at, deadline_at, created_at::text AS cursor_created_at
-         FROM workhorse.dashboard_signal_wait_v1
-        WHERE ($2::timestamptz IS NULL OR (created_at, job_id, signal_name) >
-              ($2::timestamptz, $3::uuid, $4::text))
-        ORDER BY created_at, job_id, signal_name
-        LIMIT $1::integer`,
+      SQL_STATEMENTS["dashboard_signal_wait_v1"],
       [limit + 1, cursor?.createdAt ?? null, cursor?.jobId ?? null, cursor?.name ?? null],
     );
     const pageRows = result.rows.slice(0, limit);
@@ -137,8 +132,7 @@ export class SignalsModule extends QueueModule {
       throw new TypeError("Worker ID must be a non-empty string");
     }
     const result = await this.context.database.query<WaitForSignalRow>(
-      `SELECT status, payload
-         FROM workhorse.wait_for_signal_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint)`,
+      SQL_STATEMENTS["wait_for_signal_v1"],
       [job.id, workerId, job.fenceToken.toString(), name, validateExternalWaitOptions(options)],
     );
     const row = expectOneRow(result, "workhorse.wait_for_signal_v1");
@@ -161,8 +155,7 @@ export class SignalsModule extends QueueModule {
     validateExternalWaitDeliveryRequest(request, "Signal");
     const encodedPayload = encodeExternalWaitValue(payload, "Signal payload");
     const result = await this.context.database.query<SendSignalRow>(
-      `SELECT status, payload, delivered_at, delivered_by
-         FROM workhorse.send_signal_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
+      SQL_STATEMENTS["send_signal_v1"],
       [jobId, name, encodedPayload, request.idempotencyKey, request.requestedBy],
     );
     const row = expectOneRow(result, "workhorse.send_signal_v1");

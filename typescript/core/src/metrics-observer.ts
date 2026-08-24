@@ -1,5 +1,5 @@
+import { SQL_STATEMENTS } from "./queue/sql-catalogue.generated.js";
 import { diag } from "@opentelemetry/api";
-import { perQueueDepthSelect } from "./queue-depth.js";
 import { lazyGauge } from "./telemetry.js";
 import { EXTERNAL_WAIT_REJECTION_WINDOW_MS, type Queryable } from "./types.js";
 
@@ -130,103 +130,8 @@ export class WorkhorseMetricsObserver {
   private async collectOnce(): Promise<void> {
     const rejectedSince = new Date(Date.now() - EXTERNAL_WAIT_REJECTION_WINDOW_MS);
     const [queues, workers] = await Promise.all([
-      this.database.query<QueueObservationRow>(
-        `
-        WITH queue_names AS (
-          SELECT queue_name FROM workhorse.job_runtime
-          UNION
-          SELECT queue_name FROM workhorse.queue_control
-        ), depth AS (
-          ${perQueueDepthSelect(
-            [
-              "scheduled",
-              "ready",
-              "active",
-              "oldest_ready_age_ms",
-              "expired",
-              "overdue_deadlines",
-              "overdue_execution_timeouts",
-            ],
-            "queue_names",
-          )}
-        )
-        SELECT depth.*, coalesce(control.paused, false) AS paused,
-               waits.pending_signal_waits, waits.pending_human_waits,
-               waits.overdue_signal_waits, waits.overdue_human_waits,
-               waits.rejected_signals, waits.rejected_human_waits
-          FROM depth
-          LEFT JOIN workhorse.queue_control control USING (queue_name)
-          CROSS JOIN LATERAL (
-            SELECT
-              (SELECT count(*)::text FROM (
-                SELECT 1 FROM workhorse.job_signal_wait signal
-                 JOIN workhorse.job_runtime runtime ON runtime.job_id = signal.job_id
-                WHERE runtime.queue_name = depth.queue_name
-                  AND runtime.state = 'scheduled' AND runtime.wait_name = signal.signal_name
-                  AND runtime.current_attempt = signal.attempt AND signal.delivered_at IS NULL
-                LIMIT 10001
-              ) sampled) AS pending_signal_waits,
-              (SELECT count(*)::text FROM (
-                SELECT 1 FROM workhorse.job_human_wait human_wait
-                 JOIN workhorse.job_runtime runtime ON runtime.job_id = human_wait.job_id
-                WHERE runtime.queue_name = depth.queue_name
-                  AND runtime.state = 'scheduled' AND runtime.wait_name = human_wait.token_name
-                  AND runtime.current_attempt = human_wait.attempt
-                  AND human_wait.completed_at IS NULL
-                LIMIT 10001
-              ) sampled) AS pending_human_waits,
-              (SELECT count(*)::text FROM (
-                SELECT 1 FROM workhorse.job_signal_wait signal
-                 JOIN workhorse.job_runtime runtime ON runtime.job_id = signal.job_id
-                WHERE runtime.queue_name = depth.queue_name
-                  AND runtime.state = 'scheduled' AND runtime.wait_name = signal.signal_name
-                  AND runtime.current_attempt = signal.attempt AND signal.delivered_at IS NULL
-                  AND runtime.deadline_at <= clock_timestamp()
-                LIMIT 10001
-              ) sampled) AS overdue_signal_waits,
-              (SELECT count(*)::text FROM (
-                SELECT 1 FROM workhorse.job_human_wait human_wait
-                 JOIN workhorse.job_runtime runtime ON runtime.job_id = human_wait.job_id
-                WHERE runtime.queue_name = depth.queue_name
-                  AND runtime.state = 'scheduled' AND runtime.wait_name = human_wait.token_name
-                  AND runtime.current_attempt = human_wait.attempt
-                  AND human_wait.completed_at IS NULL
-                  AND runtime.deadline_at <= clock_timestamp()
-                LIMIT 10001
-              ) sampled) AS overdue_human_waits,
-              (SELECT count(*)::text FROM (
-                SELECT 1 FROM workhorse.job_event event
-                 JOIN workhorse.job job ON job.id = event.job_id
-                WHERE job.queue_name = depth.queue_name AND event.event_type = 'signal_rejected'
-                  AND event.occurred_at >= $1::timestamptz
-                LIMIT 10001
-              ) sampled) AS rejected_signals,
-              (SELECT count(*)::text FROM (
-                SELECT 1 FROM workhorse.job_event event
-                 JOIN workhorse.job job ON job.id = event.job_id
-                WHERE job.queue_name = depth.queue_name
-                  AND event.event_type = 'human_wait_rejected'
-                  AND event.occurred_at >= $1::timestamptz
-                LIMIT 10001
-              ) sampled) AS rejected_human_waits
-          ) waits
-         ORDER BY depth.queue_name`,
-        [rejectedSince],
-      ),
-      this.database.query<WorkerObservationRow>(`
-        SELECT served.queue_name,
-               CASE WHEN last_heartbeat_at < clock_timestamp() - interval '30 seconds'
-                      THEN 'offline'
-                    WHEN draining THEN 'draining'
-                    WHEN paused THEN 'paused'
-                    ELSE 'running' END AS state,
-               count(*)::text AS workers,
-               sum(concurrency)::text AS capacity,
-               sum(active_slots)::text AS active_slots
-          FROM workhorse.worker_registry registry
-          CROSS JOIN LATERAL unnest(registry.queue_names) served(queue_name)
-         GROUP BY served.queue_name, state
-         ORDER BY served.queue_name, state`),
+      this.database.query<QueueObservationRow>(SQL_STATEMENTS["metrics_observer"], [rejectedSince]),
+      this.database.query<WorkerObservationRow>(SQL_STATEMENTS["worker_registry"]),
     ]);
 
     for (const row of queues.rows) {

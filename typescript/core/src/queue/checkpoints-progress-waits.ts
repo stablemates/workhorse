@@ -1,3 +1,4 @@
+import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { expectOneRow, WorkhorseError } from "../errors.js";
 import { jobSpanAttributes, logDebug, logInfo } from "../telemetry.js";
 import type { ClaimedJob, JobCheckpoint, JobProgress, JobWait, Json } from "../types.js";
@@ -180,10 +181,7 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
     name: string,
   ): Promise<JobCheckpoint<TValue> | null> {
     const result = await this.context.database.query<CheckpointRow>(
-      `SELECT job_id, checkpoint_name, checkpoint_value, attempt, fence_token::text,
-              worker_id, created_at
-         FROM workhorse.job_checkpoint
-        WHERE job_id = $1::uuid AND checkpoint_name = $2::text`,
+      SQL_STATEMENTS["get_checkpoint"],
       [jobId, name],
     );
     const row = result.rows[0];
@@ -194,11 +192,7 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
     jobId: string,
   ): Promise<JobCheckpoint<TValue>[]> {
     const result = await this.context.database.query<CheckpointRow>(
-      `SELECT job_id, checkpoint_name, checkpoint_value, attempt, fence_token::text,
-              worker_id, created_at
-         FROM workhorse.job_checkpoint
-        WHERE job_id = $1::uuid
-        ORDER BY created_at, checkpoint_name`,
+      SQL_STATEMENTS["list_checkpoints"],
       [jobId],
     );
     return result.rows.map((row) => checkpointRecord<TValue>(row));
@@ -215,8 +209,7 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
       throw new TypeError("Checkpoint value must be JSON serializable");
     }
     const result = await this.context.database.query<SaveCheckpointRow>(
-      `SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at
-         FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
+      SQL_STATEMENTS["save_checkpoint_v1"],
       [job.id, workerId, job.fenceToken.toString(), name, encodedValue],
     );
     const row = expectOneRow(result, "workhorse.save_checkpoint_v1");
@@ -237,13 +230,9 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
   async getProgress<TValue extends Json = Json>(
     jobId: string,
   ): Promise<JobProgress<TValue> | null> {
-    const result = await this.context.database.query<ProgressRow>(
-      `SELECT job_id, progress_value, revision::text, attempt, fence_token::text,
-              worker_id, created_at, updated_at
-         FROM workhorse.job_progress
-        WHERE job_id = $1::uuid`,
-      [jobId],
-    );
+    const result = await this.context.database.query<ProgressRow>(SQL_STATEMENTS["get_progress"], [
+      jobId,
+    ]);
     const row = result.rows[0];
     return row ? progressRecord<TValue>(row) : null;
   }
@@ -258,9 +247,7 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
       throw new TypeError("Progress value must be JSON serializable");
     }
     const result = await this.context.database.query<UpdateProgressRow>(
-      `SELECT status, progress_value, revision::text, attempt, fence_token::text,
-              worker_id, created_at, updated_at, retry_after_ms::text
-         FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,
+      SQL_STATEMENTS["update_progress_v1"],
       [job.id, workerId, job.fenceToken.toString(), encodedValue],
     );
     const row = expectOneRow(result, "workhorse.update_progress_v1");
@@ -281,26 +268,18 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
 
   async getWait(jobId: string, name: string): Promise<JobWait | null> {
     validateWaitName(name);
-    const result = await this.context.database.query<WaitRow>(
-      `SELECT job_id, wait_name, mode, duration_ms::text, requested_wake_at, wake_at,
-              attempt, fence_token::text, worker_id, created_at
-         FROM workhorse.job_wait
-        WHERE job_id = $1::uuid AND wait_name = $2::text`,
-      [jobId, name],
-    );
+    const result = await this.context.database.query<WaitRow>(SQL_STATEMENTS["get_wait"], [
+      jobId,
+      name,
+    ]);
     const row = result.rows[0];
     return row ? waitRecord(row) : null;
   }
 
   async listWaits(jobId: string): Promise<JobWait[]> {
-    const result = await this.context.database.query<WaitRow>(
-      `SELECT job_id, wait_name, mode, duration_ms::text, requested_wake_at, wake_at,
-              attempt, fence_token::text, worker_id, created_at
-         FROM workhorse.job_wait
-        WHERE job_id = $1::uuid
-        ORDER BY created_at, wait_name`,
-      [jobId],
-    );
+    const result = await this.context.database.query<WaitRow>(SQL_STATEMENTS["list_waits"], [
+      jobId,
+    ]);
     return result.rows.map(waitRecord);
   }
 
@@ -345,9 +324,7 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
     }
 
     const result = await this.context.database.query<ScheduleWaitRow>(
-      `SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at,
-              attempt, fence_token::text, worker_id, created_at
-         FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)`,
+      SQL_STATEMENTS["schedule_wait_v1"],
       [job.id, workerId, job.fenceToken.toString(), name, durationWire, wakeAtWire],
     );
     const row = expectOneRow(result, "workhorse.schedule_wait_v1");

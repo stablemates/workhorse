@@ -1,3 +1,4 @@
+import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { WorkhorseError } from "../errors.js";
 import { logInfo } from "../telemetry.js";
 import type {
@@ -158,8 +159,7 @@ export class ChildJobsModule extends QueueModule {
     }
     const request = await this.childRequest(parent, type, payload, options);
     const result = await this.context.database.query<CreateChildRow>(
-      `SELECT status, child_job_id, child_type, created_at, joined_at, result
-         FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
+      SQL_STATEMENTS["create_child_v1"],
       [parent.id, workerId, parent.fenceToken.toString(), name, JSON.stringify(request)],
     );
     const row = expectOneRow(result, "workhorse.create_child_v1");
@@ -201,8 +201,7 @@ export class ChildJobsModule extends QueueModule {
       }),
     );
     const result = await this.context.database.query<CreateChildrenRow>(
-      `SELECT status, children, results, result_bytes, result_limit_bytes
-         FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,
+      SQL_STATEMENTS["create_children_v1"],
       [parent.id, workerId, parent.fenceToken.toString(), JSON.stringify(requests)],
     );
     const row = expectOneRow(result, "workhorse.create_children_v1");

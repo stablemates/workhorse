@@ -1,3 +1,4 @@
+import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { expectOneRow } from "../errors.js";
 import { logDebug, logInfo, recordScheduleFired, withSpan } from "../telemetry.js";
 import type { Json, RetryPolicy } from "../types.js";
@@ -67,10 +68,11 @@ export class CronSchedulesModule extends QueueModule {
       "workhorse.schedule.synchronize",
       { "workhorse.schedule.definition_count": definitions.length },
       async () => {
-        await this.context.database.query(
-          "SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean)",
-          [namespace, JSON.stringify(scheduleInputs), options.prune ?? true],
-        );
+        await this.context.database.query(SQL_STATEMENTS["sync_schedule_definitions_v1"], [
+          namespace,
+          JSON.stringify(scheduleInputs),
+          options.prune ?? true,
+        ]);
         logInfo("workhorse.schedules.synchronized", "Recurring schedules synchronized", {
           "workhorse.schedule.namespace": namespace,
           "workhorse.schedule.count": definitions.length,
@@ -88,20 +90,7 @@ export class CronSchedulesModule extends QueueModule {
       timezone: string;
       revision: string;
       last_occurrence_at: Date | null;
-    }>(
-      `SELECT definition.namespace, definition.schedule_name, definition.cron_expression,
-              definition.timezone,
-              definition.revision::text,
-              max(occurrence.occurrence_at) AS last_occurrence_at
-         FROM workhorse.schedule_definition definition
-         LEFT JOIN workhorse.schedule_occurrence occurrence
-           ON occurrence.namespace = definition.namespace
-          AND occurrence.schedule_name = definition.schedule_name
-        WHERE definition.enabled AND definition.namespace = ANY($1::text[])
-        GROUP BY definition.namespace, definition.schedule_name, definition.timezone
-        ORDER BY definition.namespace, definition.schedule_name`,
-      [namespaces],
-    );
+    }>(SQL_STATEMENTS["schedule_definition__cron_schedules"], [namespaces]);
     return result.rows.map((row) => ({
       namespace: row.namespace,
       name: row.schedule_name,
@@ -123,11 +112,7 @@ export class CronSchedulesModule extends QueueModule {
       schedule_name: string;
       occurrence_at: Date | string;
       job_id: string | null;
-    }>(
-      `SELECT namespace, schedule_name, occurrence_at, job_id
-         FROM workhorse.fire_due_schedules_v1($1::text[], $2::timestamptz, $3::integer)`,
-      [namespaces, now.toISOString(), catchupLimit],
-    );
+    }>(SQL_STATEMENTS["fire_due_schedules_v1"], [namespaces, now.toISOString(), catchupLimit]);
     for (const row of result.rows) {
       if (row.job_id !== null) {
         const occurrenceAt =
@@ -154,7 +139,7 @@ export class CronSchedulesModule extends QueueModule {
     occurrenceAt: Date,
   ): Promise<string | null> {
     const result = await this.context.database.query<{ job_id: string | null }>(
-      "SELECT workhorse.fire_schedule_v1($1::text, $2::text, $3::bigint, $4::timestamptz) AS job_id",
+      SQL_STATEMENTS["fire_schedule_v1"],
       [namespace, name, revision.toString(), occurrenceAt.toISOString()],
     );
     const jobId = expectOneRow(result, "workhorse.fire_schedule_v1").job_id;

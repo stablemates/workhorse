@@ -1,3 +1,4 @@
+import { SQL_STATEMENTS } from "./queue/sql-catalogue.generated.js";
 import { databaseErrorCode } from "./errors.js";
 import type { Queryable } from "./types.js";
 
@@ -27,18 +28,14 @@ export function isMissingDatabaseRelationError(error: unknown): boolean {
 const transactionControl = /^\s*(?:BEGIN|COMMIT|ROLLBACK|START\s+TRANSACTION)\b/im;
 
 export async function readSchemaVersion(database: Queryable): Promise<number | null> {
-  const result = await database.query<{ version: number }>(
-    "SELECT version FROM workhorse.schema_version ORDER BY version",
-  );
+  const result = await database.query<{ version: number }>(SQL_STATEMENTS["schema_version"]);
   return result.rows.length === 1 ? (result.rows[0]?.version ?? null) : null;
 }
 
 /** SQL protocol versions the installed schema serves, or null when the relation is absent. */
 export async function readProtocolVersions(database: Queryable): Promise<number[] | null> {
   try {
-    const result = await database.query<{ version: number }>(
-      "SELECT version FROM workhorse.protocol_version ORDER BY version",
-    );
+    const result = await database.query<{ version: number }>(SQL_STATEMENTS["protocol_version"]);
     return result.rows.map((row) => row.version);
   } catch (error) {
     if (isMissingDatabaseRelationError(error)) return null;

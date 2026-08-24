@@ -1,3 +1,4 @@
+import { SQL_STATEMENTS } from "./queue/sql-catalogue.generated.js";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -89,22 +90,12 @@ export async function installSchema(database: Queryable): Promise<void> {
     schema_exists: boolean;
     version_table_exists: boolean;
     legacy_relation_exists: boolean;
-  }>(`
-    SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'workhorse') AS schema_exists,
-           to_regclass('workhorse.schema_version') IS NOT NULL AS version_table_exists,
-           EXISTS (
-             SELECT 1
-               FROM unnest(ARRAY['job_current', 'ready_job', 'scheduled_job', 'lease'])
-                 AS legacy(relation_name)
-              WHERE to_regclass(format('workhorse.%I', relation_name)) IS NOT NULL
-           ) AS legacy_relation_exists`);
+  }>(SQL_STATEMENTS["schema_installation_probe"]);
   const state = expectOneRow(existing, "the schema installation probe");
   if (state.schema_exists) {
     if (!state.version_table_exists)
       throw new Error("refusing to install into an unversioned existing workhorse schema");
-    const versions = await database.query<{ version: number }>(
-      "SELECT version FROM workhorse.schema_version ORDER BY version",
-    );
+    const versions = await database.query<{ version: number }>(SQL_STATEMENTS["schema_version"]);
     if (
       versions.rows.length !== 1 ||
       versions.rows[0]?.version !== WORKHORSE_SCHEMA_VERSION ||

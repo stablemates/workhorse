@@ -1,3 +1,4 @@
+import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { expectOneRow } from "../errors.js";
 import { logInfo, withSpan } from "../telemetry.js";
 import type {
@@ -203,7 +204,7 @@ export class RetentionMaintenanceModule extends QueueModule {
     return this.maintenanceSpan("tick", () =>
       withSpan("workhorse.recovery", {}, async (span) => {
         const result = await this.context.database.query<MaintenancePhaseRow>(
-          "SELECT * FROM workhorse.tick_v1($1::integer, $2::integer)",
+          SQL_STATEMENTS["tick_v1"],
           [options.promoteLimit ?? 1_000, options.recoverLimit ?? 1_000],
         );
         const recovery = result.rows.find((row) => row.phase === "recover");
@@ -232,7 +233,7 @@ export class RetentionMaintenanceModule extends QueueModule {
   ): Promise<MaintenancePhaseResult[]> {
     return this.maintenanceSpan("history_partitions", async () => {
       const result = await this.context.database.query<MaintenancePhaseRow>(
-        "SELECT * FROM workhorse.prepare_history_partitions_v1($1::boolean, $2::timestamptz)",
+        SQL_STATEMENTS["prepare_history_partitions_v1"],
         [options.force ?? false, options.now ?? new Date()],
       );
       return result.rows.map(maintenancePhaseResult);
@@ -244,7 +245,7 @@ export class RetentionMaintenanceModule extends QueueModule {
   ): Promise<MaintenancePhaseResult[]> {
     return this.maintenanceSpan("statistics_rollup", async () => {
       const result = await this.context.database.query<MaintenancePhaseRow>(
-        "SELECT * FROM workhorse.rollup_stats_v1($1::boolean, $2::timestamptz, $3::integer)",
+        SQL_STATEMENTS["rollup_stats_v1"],
         [options.force ?? false, options.now ?? new Date(), options.maxBuckets ?? 240],
       );
       return result.rows.map(maintenancePhaseResult);
@@ -256,7 +257,7 @@ export class RetentionMaintenanceModule extends QueueModule {
   ): Promise<MaintenancePhaseResult[]> {
     return this.maintenanceSpan("history_retention", async () => {
       const result = await this.context.database.query<MaintenancePhaseRow>(
-        "SELECT * FROM workhorse.retain_history_v1($1::boolean, $2::timestamptz)",
+        SQL_STATEMENTS["retain_history_v1"],
         [options.force ?? false, options.now ?? new Date()],
       );
       return result.rows.map(maintenancePhaseResult);
@@ -268,7 +269,7 @@ export class RetentionMaintenanceModule extends QueueModule {
   ): Promise<MaintenancePhaseResult[]> {
     return this.maintenanceSpan("terminal_storage", async () => {
       const result = await this.context.database.query<MaintenancePhaseRow>(
-        "SELECT * FROM workhorse.prune_terminal_storage_v1($1::boolean, $2::timestamptz)",
+        SQL_STATEMENTS["prune_terminal_storage_v1"],
         [options.force ?? false, options.now ?? new Date()],
       );
       return result.rows.map(maintenancePhaseResult);
@@ -280,11 +281,7 @@ export class RetentionMaintenanceModule extends QueueModule {
     options: { force?: boolean } = {},
   ): Promise<RetentionPolicy> {
     const result = await this.context.database.query<RetentionPolicyRow>(
-      `SELECT (policy).* FROM workhorse.sync_retention_policy_v1(
-         $1::integer, $2::integer, $3::integer, $4::integer, $5::integer,
-         $6::integer, $7::integer, $8::integer, $9::integer, $10::integer,
-         $11::integer, $12::boolean
-       ) policy`,
+      SQL_STATEMENTS["sync_retention_policy_v1"],
       [
         definition.jobIdentityRetentionDays,
         definition.terminalOutcomeRetentionDays,
@@ -314,7 +311,7 @@ export class RetentionMaintenanceModule extends QueueModule {
         .map(([setting, value]) => [RETENTION_POLICY_COLUMNS[setting], value]),
     );
     const result = await this.context.database.query<RetentionPolicyRow>(
-      "SELECT (policy).* FROM workhorse.override_retention_policy_v1($1::jsonb) policy",
+      SQL_STATEMENTS["override_retention_policy_v1"],
       [JSON.stringify(overrides)],
     );
     return retentionPolicy(expectOneRow(result, "workhorse.override_retention_policy_v1"));
@@ -324,7 +321,7 @@ export class RetentionMaintenanceModule extends QueueModule {
     settings: readonly RetentionPolicySetting[],
   ): Promise<RetentionPolicy> {
     const result = await this.context.database.query<RetentionPolicyRow>(
-      "SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1::text[]) policy",
+      SQL_STATEMENTS["revert_retention_policy_v1"],
       [policyColumnNames(settings, RETENTION_POLICY_COLUMNS)],
     );
     return retentionPolicy(expectOneRow(result, "workhorse.revert_retention_policy_v1"));
@@ -341,57 +338,14 @@ export class RetentionMaintenanceModule extends QueueModule {
       attempt_history: number;
       schedule_occurrences: number;
       statistics: number;
-    }>(
-      `SELECT
-        (SELECT count(*)::integer FROM (
-          SELECT 1 FROM workhorse.job job
-          JOIN workhorse.job_outcome outcome ON outcome.job_id = job.id
-          WHERE $1::integer IS NOT NULL AND $2::integer IS NOT NULL
-            AND job.created_at < clock_timestamp() - make_interval(days => $1)
-            AND outcome.finished_at < clock_timestamp() - make_interval(days => $2)
-          LIMIT 10001
-        ) rows) AS terminal_jobs,
-        (SELECT count(*)::integer FROM (
-          SELECT 1 FROM workhorse.job_event
-          WHERE $3::integer IS NOT NULL
-            AND occurred_at < clock_timestamp() - make_interval(days => $3)
-          LIMIT 10001
-        ) rows) AS job_events,
-        (SELECT count(*)::integer FROM (
-          SELECT 1 FROM workhorse.attempt_history
-          WHERE $4::integer IS NOT NULL
-            AND occurred_at < clock_timestamp() - make_interval(days => $4)
-          LIMIT 10001
-        ) rows) AS attempt_history,
-        (SELECT count(*)::integer FROM (
-          SELECT 1 FROM workhorse.schedule_occurrence
-          WHERE $5::integer IS NOT NULL
-            AND occurrence_at < clock_timestamp() - make_interval(days => $5)
-          LIMIT 10001
-        ) rows) AS schedule_occurrences,
-        (SELECT count(*)::integer FROM (
-          SELECT 1 FROM workhorse.job_stat_bucket
-          WHERE $6::integer IS NOT NULL
-            AND bucket_start < clock_timestamp() - make_interval(days => $6)
-          UNION ALL
-          SELECT 1 FROM workhorse.job_stat_bucket_hour
-          WHERE $6::integer IS NOT NULL
-            AND bucket_start < clock_timestamp() - make_interval(days => $6)
-          UNION ALL
-          SELECT 1 FROM workhorse.job_stat_bucket_day
-          WHERE $6::integer IS NOT NULL
-            AND bucket_start < clock_timestamp() - make_interval(days => $6)
-          LIMIT 10001
-        ) rows) AS statistics`,
-      [
-        candidate.jobIdentityRetentionDays,
-        candidate.terminalOutcomeRetentionDays,
-        candidate.jobEventRetentionDays,
-        candidate.attemptHistoryRetentionDays,
-        candidate.scheduleOccurrenceRetentionDays,
-        candidate.statisticsRetentionDays,
-      ],
-    );
+    }>(SQL_STATEMENTS["retention_policy_preview"], [
+      candidate.jobIdentityRetentionDays,
+      candidate.terminalOutcomeRetentionDays,
+      candidate.jobEventRetentionDays,
+      candidate.attemptHistoryRetentionDays,
+      candidate.scheduleOccurrenceRetentionDays,
+      candidate.statisticsRetentionDays,
+    ]);
     const row = expectOneRow(result, "the retention policy preview");
     const sampled = {
       terminalJobs: Number(row.terminal_jobs),
@@ -412,7 +366,7 @@ export class RetentionMaintenanceModule extends QueueModule {
 
   async getRetentionPolicy(): Promise<RetentionPolicy> {
     const result = await this.context.database.query<RetentionPolicyRow>(
-      "SELECT (policy).* FROM workhorse.get_retention_policy_v1() policy",
+      SQL_STATEMENTS["get_retention_policy_v1"],
     );
     return retentionPolicy(expectOneRow(result, "workhorse.get_retention_policy_v1"));
   }
@@ -423,10 +377,7 @@ export class RetentionMaintenanceModule extends QueueModule {
   ): Promise<MaintenancePolicy> {
     this.validateMaintenanceTime(definition.historyRetentionLocalTime);
     const result = await this.context.database.query<MaintenancePolicyRow>(
-      `SELECT (policy).* FROM workhorse.sync_maintenance_policy_v1(
-         $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer,
-         $8::boolean
-       ) policy`,
+      SQL_STATEMENTS["sync_maintenance_policy_v1"],
       [
         definition.timezone,
         definition.partitionPreparationIntervalMs ?? null,
@@ -450,9 +401,7 @@ export class RetentionMaintenanceModule extends QueueModule {
   ): Promise<MaintenancePolicy> {
     this.validateMaintenanceTime(definition.historyRetentionLocalTime);
     const result = await this.context.database.query<MaintenancePolicyRow>(
-      `SELECT (policy).* FROM workhorse.override_maintenance_policy_v1(
-         $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer
-       ) policy`,
+      SQL_STATEMENTS["override_maintenance_policy_v1"],
       [
         definition.timezone ?? null,
         definition.partitionPreparationIntervalMs ?? null,
@@ -470,7 +419,7 @@ export class RetentionMaintenanceModule extends QueueModule {
     settings: readonly MaintenancePolicySetting[],
   ): Promise<MaintenancePolicy> {
     const result = await this.context.database.query<MaintenancePolicyRow>(
-      "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v1($1::text[]) policy",
+      SQL_STATEMENTS["revert_maintenance_policy_v1"],
       [policyColumnNames(settings, MAINTENANCE_POLICY_COLUMNS)],
     );
     return maintenancePolicy(expectOneRow(result, "workhorse.revert_maintenance_policy_v1"));
@@ -478,7 +427,7 @@ export class RetentionMaintenanceModule extends QueueModule {
 
   async getMaintenancePolicy(): Promise<MaintenancePolicy> {
     const result = await this.context.database.query<MaintenancePolicyRow>(
-      "SELECT (policy).* FROM workhorse.get_maintenance_policy_v1() policy",
+      SQL_STATEMENTS["get_maintenance_policy_v1"],
     );
     return maintenancePolicy(expectOneRow(result, "workhorse.get_maintenance_policy_v1"));
   }

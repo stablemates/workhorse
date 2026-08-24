@@ -1,6 +1,9 @@
 pre-commit:
   parallel: true
   jobs:
+    - name: check generated SQL catalogues
+      glob: "{protocol/v1/manifest.json,scripts/generate-sql-catalogues.ts,go/sql_catalogue_generated.go,typescript/core/src/queue/sql-catalogue.generated.ts,python/src/workhorse/_statements.py}"
+      run: pnpm sql-catalogues:check
     - name: check adapter conformance types
       glob: "typescript/adapter-conformance/**"
       run: pnpm --filter @workhorse-js/adapter-conformance typecheck

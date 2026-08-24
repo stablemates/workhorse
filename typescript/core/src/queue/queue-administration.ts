@@ -1,3 +1,4 @@
+import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { expectOneRow } from "../errors.js";
 import { logInfo } from "../telemetry.js";
 import { QueueModule } from "./module-context.js";
@@ -7,7 +8,7 @@ export class QueueAdministrationModule extends QueueModule {
   async promote(limit = 100): Promise<number> {
     // Promotion is bounded so a large delayed backlog cannot create one long lock transaction.
     const result = await this.context.database.query<{ count: number }>(
-      "SELECT workhorse.promote_v1($1::integer) AS count",
+      SQL_STATEMENTS["promote_v1__queue_administration"],
       [limit],
     );
     const count = expectOneRow(result, "workhorse.promote_v1").count;
@@ -23,10 +24,12 @@ export class QueueAdministrationModule extends QueueModule {
     queueName: string,
     audit: { actor: string; reason: string; requestId: string },
   ): Promise<void> {
-    await this.context.database.query(
-      "SELECT workhorse.set_queue_paused_v1($1::text, true, $2::text, $3::text, $4::text)",
-      [queueName, audit.actor, audit.reason, audit.requestId],
-    );
+    await this.context.database.query(SQL_STATEMENTS["set_queue_paused_v1"], [
+      queueName,
+      audit.actor,
+      audit.reason,
+      audit.requestId,
+    ]);
     logInfo("workhorse.queue.paused", "Queue paused", { "workhorse.queue.name": queueName });
   }
 
@@ -34,10 +37,12 @@ export class QueueAdministrationModule extends QueueModule {
     queueName: string,
     audit: { actor: string; reason: string; requestId: string },
   ): Promise<void> {
-    await this.context.database.query(
-      "SELECT workhorse.set_queue_paused_v1($1::text, false, $2::text, $3::text, $4::text)",
-      [queueName, audit.actor, audit.reason, audit.requestId],
-    );
+    await this.context.database.query(SQL_STATEMENTS["set_queue_paused_v1__queue_administration"], [
+      queueName,
+      audit.actor,
+      audit.reason,
+      audit.requestId,
+    ]);
     logInfo("workhorse.queue.resumed", "Queue resumed", { "workhorse.queue.name": queueName });
   }
 }

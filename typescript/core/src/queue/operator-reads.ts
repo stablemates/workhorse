@@ -1,5 +1,5 @@
+import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { databaseErrorCode, databaseErrorDetails, WorkhorseError } from "../errors.js";
-import { perQueueDepthSelect } from "../queue-depth.js";
 import { logInfo, recordRedrive, type QueueMetricSnapshot } from "../telemetry.js";
 import type {
   BulkRedriveOptions,
@@ -184,11 +184,7 @@ export type RateLimitStatusRow = RateLimitPolicyRow & {
   policy_set_capped: boolean;
 };
 
-import {
-  RATE_LIMIT_STATUS_SQL,
-  childPressureProjectionSql,
-  childPressureSamplesSql,
-} from "./operator-read-sql.js";
+const RATE_LIMIT_STATUS_SQL = SQL_STATEMENTS["rate_limit_policy__operator_read_sql"];
 
 // Adapters such as Drizzle can hand back timestamptz columns as raw strings rather than pg's
 // parsed Dates, so every snapshot timestamp is normalized before it reaches callers.
@@ -783,50 +779,14 @@ export class OperatorReadsModule extends QueueModule {
 
   async listJobs(query: JobListQuery = {}): Promise<JobListPage> {
     const { limit, cursor, payloadProjection } = this.validateJobListQuery(query);
-    const result = await this.context.database.query<JobListRow>(
-      `SELECT listed.job_id, listed.queue_name, listed.job_type, listed.concurrency_key,
-              listed.priority, listed.tags, listed.state, dependency.prerequisite_job_id,
-              dependency.prerequisite_job_ids, dependency.on_success AS dependency_on_success,
-              dependency.on_failure AS dependency_on_failure,
-              dependency.on_cancellation AS dependency_on_cancellation,
-              CASE WHEN listed.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
-              parent_edge.parent_job_id, children.child_job_ids,
-              listed.current_attempt, listed.max_attempts, listed.retry_policy,
-              listed.deadline_at,
-              listed.execution_timeout_ms::text AS execution_timeout_ms,
-              listed.run_at, listed.cancel_requested_at, listed.cancel_requested_by,
-              listed.cancel_reason, listed.created_at, listed.updated_at, listed.payload,
-              listed.payload_status, listed.payload_bytes, listed.has_more,
-              listed.cursor_created_at::text AS cursor_created_at, listed.cursor_signature
-         FROM workhorse.list_jobs_v1(
-           $1::jsonb, $2::integer, $3::timestamptz, $4::uuid, $5::text, $6::jsonb
-         ) listed
-         LEFT JOIN LATERAL (
-           SELECT CASE WHEN count(*) = 1
-                    THEN (array_agg(edge.prerequisite_job_id))[1] END AS prerequisite_job_id,
-                  COALESCE(array_agg(edge.prerequisite_job_id ORDER BY edge.prerequisite_job_id)
-                    FILTER (WHERE edge.prerequisite_job_id IS NOT NULL), '{}') AS prerequisite_job_ids,
-                  min(edge.on_success) AS on_success,
-                  min(edge.on_failure) AS on_failure,
-                  min(edge.on_cancellation) AS on_cancellation
-             FROM workhorse.job_dependency edge
-            WHERE edge.dependent_job_id = listed.job_id
-         ) dependency ON true
-         LEFT JOIN workhorse.job_child parent_edge ON parent_edge.child_job_id = listed.job_id
-         LEFT JOIN LATERAL (
-           SELECT COALESCE(array_agg(edge.child_job_id ORDER BY edge.child_job_id)
-                    FILTER (WHERE edge.child_job_id IS NOT NULL), '{}') AS child_job_ids
-             FROM workhorse.job_child edge WHERE edge.parent_job_id = listed.job_id
-         ) children ON true`,
-      [
-        JSON.stringify(jobListFilter(query)),
-        limit,
-        cursor?.createdAt ?? null,
-        cursor?.jobId ?? null,
-        cursor?.signature ?? null,
-        JSON.stringify(payloadProjection),
-      ],
-    );
+    const result = await this.context.database.query<JobListRow>(SQL_STATEMENTS["list_jobs_v1"], [
+      JSON.stringify(jobListFilter(query)),
+      limit,
+      cursor?.createdAt ?? null,
+      cursor?.jobId ?? null,
+      cursor?.signature ?? null,
+      JSON.stringify(payloadProjection),
+    ]);
     const items = result.rows.map(jobListItem);
     const last = result.rows.at(-1);
     return {
@@ -846,13 +806,7 @@ export class OperatorReadsModule extends QueueModule {
     const { limit, cursor } = this.validateJobTimelineQuery(jobId, query.limit, query.cursor);
 
     const result = await this.context.database.query<JobTimelineRow>(
-      `SELECT kind, record_id::text AS record_id, priority, attempt, event_type, details,
-              fence_token::text AS fence_token, worker_id, outcome, started_at, claimed_at,
-              finished_at, error, occurred_at, has_more,
-              cursor_occurred_at::text AS cursor_occurred_at
-         FROM workhorse.list_job_timeline_v1(
-           $1::uuid, $2::integer, $3::timestamptz, $4::text, $5::bigint
-         )`,
+      SQL_STATEMENTS["list_job_timeline_v1"],
       [jobId, limit, cursor?.occurredAt ?? null, cursor?.kind ?? null, cursor?.recordId ?? null],
     );
     const items = result.rows.map(jobTimelineEntry);
@@ -879,7 +833,7 @@ export class OperatorReadsModule extends QueueModule {
       );
     }
     const result = await this.context.database.query<DeadLetterRow>(
-      "SELECT * FROM workhorse.list_dead_letters_v1($1::jsonb, $2::integer, $3::timestamptz, $4::uuid)",
+      SQL_STATEMENTS["list_dead_letters_v1"],
       [
         JSON.stringify(deadLetterFilter(query)),
         limit,
@@ -900,10 +854,12 @@ export class OperatorReadsModule extends QueueModule {
 
   async redrive(sourceJobId: string, request: RedriveRequest): Promise<RedriveResult> {
     try {
-      const result = await this.context.database.query<RedriveRow>(
-        "SELECT * FROM workhorse.redrive_v1($1::uuid, $2::text, $3::text, $4::text)",
-        [sourceJobId, request.requestedBy, request.reason, request.requestId],
-      );
+      const result = await this.context.database.query<RedriveRow>(SQL_STATEMENTS["redrive"], [
+        sourceJobId,
+        request.requestedBy,
+        request.reason,
+        request.requestId,
+      ]);
       const row = result.rows[0];
       if (!row) throw new Error("redrive_v1 returned no result");
       recordRedrive(row.status);
@@ -931,7 +887,7 @@ export class OperatorReadsModule extends QueueModule {
     }
     try {
       const result = await this.context.database.query<BulkRedriveRow>(
-        "SELECT status, source_job_id, target_job_id, source_state, target_state, requested_at, source_finished_at_cursor, has_more FROM workhorse.redrive_many_v1($1::jsonb, $2::integer, $3::boolean, $4::text, $5::text, $6::text, $7::timestamptz, $8::uuid) ORDER BY ordinal",
+        SQL_STATEMENTS["redrive_many_v1"],
         [
           JSON.stringify(deadLetterFilter(filter)),
           limit,
@@ -973,7 +929,7 @@ export class OperatorReadsModule extends QueueModule {
       );
     }
     const result = await this.context.database.query<RedriveLineageRow>(
-      "SELECT * FROM workhorse.redrive_lineage_v1($1::uuid, $2::integer)",
+      SQL_STATEMENTS["redrive_lineage_v1"],
       [jobId, limit + 1],
     );
     return {
@@ -1001,15 +957,7 @@ export class OperatorReadsModule extends QueueModule {
       created_at: Date | string;
       released_at: Date | string | null;
       resolution: DependencyLineageRecord["resolution"];
-    }>(
-      `SELECT dependent_job_id, prerequisite_job_id, on_success, on_failure, on_cancellation,
-              created_at, released_at, resolution
-         FROM workhorse.job_dependency
-        WHERE dependent_job_id = $1::uuid OR prerequisite_job_id = $1::uuid
-        ORDER BY dependent_job_id, prerequisite_job_id
-        LIMIT $2::integer`,
-      [jobId, limit + 1],
-    );
+    }>(SQL_STATEMENTS["job_dependency"], [jobId, limit + 1]);
     return {
       records: result.rows.slice(0, limit).map((row) => ({
         dependentJobId: row.dependent_job_id,
@@ -1044,18 +992,7 @@ export class OperatorReadsModule extends QueueModule {
       joined_at: Date | string | null;
       outcome_state: "succeeded" | "failed" | "canceled" | null;
       outcome_error: Json | null;
-    }>(
-      `SELECT edge.parent_job_id, edge.child_job_id, edge.child_name,
-              child.job_type AS child_type, edge.created_at, edge.joined_at,
-              outcome.state AS outcome_state, outcome.error AS outcome_error
-         FROM workhorse.job_child edge
-         JOIN workhorse.job child ON child.id = edge.child_job_id
-         LEFT JOIN workhorse.job_outcome outcome ON outcome.job_id = edge.child_job_id
-        WHERE edge.parent_job_id = $1::uuid OR edge.child_job_id = $1::uuid
-        ORDER BY edge.created_at, edge.parent_job_id, edge.child_job_id
-        LIMIT $2::integer`,
-      [jobId, limit + 1],
-    );
+    }>(SQL_STATEMENTS["job_child"], [jobId, limit + 1]);
     return {
       records: result.rows.slice(0, limit).map((row) => ({
         parentJobId: row.parent_job_id,
@@ -1112,54 +1049,7 @@ export class OperatorReadsModule extends QueueModule {
       progress_updated_at: Date | string | null;
       created_at: Date | string;
       updated_at: Date | string;
-    }>(
-      `SELECT j.id, j.queue_name, j.job_type, j.concurrency_key, j.priority,
-              workhorse.redact_top_level_keys_v1(j.payload, j.payload_redact_keys) AS payload,
-              j.contract_version, j.tags, j.retry_policy,
-              j.deadline_at, j.execution_timeout_ms::text,
-              COALESCE(r.state, o.state) AS state,
-              dependency.prerequisite_job_id,
-              dependency.prerequisite_job_ids,
-              dependency.on_success AS dependency_on_success,
-              dependency.on_failure AS dependency_on_failure,
-              dependency.on_cancellation AS dependency_on_cancellation,
-              CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
-              parent_edge.parent_job_id, children.child_job_ids,
-              COALESCE(r.current_attempt, o.current_attempt) AS current_attempt,
-              j.max_attempts, COALESCE(r.fence_token, o.fence_token) AS version,
-              COALESCE(r.run_at, o.run_at) AS run_at,
-              workhorse.redact_top_level_keys_v1(o.result, j.result_redact_keys) AS result,
-              COALESCE(r.error, o.error) AS error, r.cancel_requested_at,
-              r.cancel_requested_by, r.cancel_reason,
-              p.progress_value, p.revision::text AS progress_revision,
-              p.attempt AS progress_attempt, p.fence_token::text AS progress_fence_token,
-              p.worker_id AS progress_worker_id, p.created_at AS progress_created_at,
-              p.updated_at AS progress_updated_at, j.created_at,
-              COALESCE(r.updated_at, o.updated_at) AS updated_at
-         FROM workhorse.job j
-         LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
-         LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
-         LEFT JOIN LATERAL (
-           SELECT CASE WHEN count(*) = 1
-                    THEN (array_agg(edge.prerequisite_job_id))[1] END AS prerequisite_job_id,
-                  COALESCE(array_agg(edge.prerequisite_job_id ORDER BY edge.prerequisite_job_id)
-                    FILTER (WHERE edge.prerequisite_job_id IS NOT NULL), '{}') AS prerequisite_job_ids,
-                  min(edge.on_success) AS on_success,
-                  min(edge.on_failure) AS on_failure,
-                  min(edge.on_cancellation) AS on_cancellation
-             FROM workhorse.job_dependency edge
-            WHERE edge.dependent_job_id = j.id
-         ) dependency ON true
-         LEFT JOIN workhorse.job_child parent_edge ON parent_edge.child_job_id = j.id
-         LEFT JOIN LATERAL (
-           SELECT COALESCE(array_agg(edge.child_job_id ORDER BY edge.child_job_id)
-                    FILTER (WHERE edge.child_job_id IS NOT NULL), '{}') AS child_job_ids
-             FROM workhorse.job_child edge WHERE edge.parent_job_id = j.id
-         ) children ON true
-         LEFT JOIN workhorse.job_progress p ON p.job_id = j.id
-        WHERE j.id = $1::uuid`,
-      [id],
-    );
+    }>(SQL_STATEMENTS["redact_top_level_keys_v1"], [id]);
     const row = result.rows[0];
     if (!row) return null;
     return {
@@ -1249,91 +1139,7 @@ export class OperatorReadsModule extends QueueModule {
         child_failed_parents: string;
         child_canceled_parents: string;
         child_counts_capped: boolean;
-      }>(
-        `WITH queue_names AS (
-         SELECT $1::text AS queue_name
-         UNION SELECT queue_name FROM workhorse.job_runtime
-         UNION SELECT queue_name FROM workhorse.queue_control
-         UNION SELECT queue_name FROM workhorse.concurrency_policy
-         UNION SELECT queue_name FROM workhorse.rate_limit_policy
-         UNION SELECT unnest(queue_names) FROM workhorse.worker_registry
-         UNION SELECT query.queue_name FROM workhorse.job_query query
-          JOIN workhorse.job_outcome outcome ON outcome.job_id = query.job_id
-         WHERE outcome.state = 'failed' AND outcome.error->>'name' = 'DependencyFailed'
-         UNION SELECT query.queue_name FROM workhorse.job_query query
-          JOIN workhorse.job_child edge ON edge.parent_job_id = query.job_id
-       ), usage AS (
-         ${perQueueDepthSelect(
-           ["ready", "scheduled", "active", "concurrency_active", "oldest_ready_age_ms"],
-           "queue_names",
-         )}
-       )
-       SELECT usage.*, policy.max_active,
-              COALESCE(blocked.blocked_ready, 0)::text AS blocked_ready,
-              LEAST(dependencies.blocked_jobs, ${DEPENDENCY_OPERATIONS_SCAN_LIMIT})::text
-                AS dependency_blocked,
-              LEAST(dependencies.pending_edges, ${DEPENDENCY_OPERATIONS_SCAN_LIMIT})::text
-                AS dependency_pending_edges,
-              LEAST(dependencies.failed_resolutions, ${DEPENDENCY_OPERATIONS_SCAN_LIMIT})::text
-               AS dependency_failed_resolutions,
-             dependencies.blocked_jobs > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
-               OR dependencies.pending_edges > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
-               OR dependencies.failed_resolutions > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
-               AS dependency_counts_capped,
-              ${childPressureProjectionSql("children")}
-         FROM usage
-         LEFT JOIN workhorse.concurrency_policy policy ON policy.queue_name = usage.queue_name
-         LEFT JOIN LATERAL (
-           SELECT count(*) FILTER (
-                    WHERE usage.concurrency_active::integer >= policy.max_active
-                       OR (
-                         policy.max_active_per_key IS NOT NULL
-                         AND sample.concurrency_key IS NOT NULL
-                         AND sample.key_active >= policy.max_active_per_key
-                       )
-                  )::integer AS blocked_ready
-             FROM (
-               SELECT ready.concurrency_key,
-                      (SELECT count(*)::integer FROM workhorse.job_runtime active
-                        WHERE active.state = 'active'
-                          AND active.queue_name = usage.queue_name
-                          AND active.concurrency_key = ready.concurrency_key
-                          AND active.expires_at > clock_timestamp()) AS key_active
-                 FROM workhorse.job_runtime ready
-                WHERE ready.state = 'ready' AND ready.queue_name = usage.queue_name
-                ORDER BY ready.sequence, ready.job_id LIMIT 100
-             ) sample
-         ) blocked ON policy.queue_name IS NOT NULL
-         CROSS JOIN LATERAL (
-           SELECT
-             (SELECT count(*) FROM (
-               SELECT 1 FROM workhorse.job_runtime runtime
-                WHERE runtime.queue_name = usage.queue_name AND runtime.state = 'blocked'
-                LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
-             ) sampled_blocked)
-               AS blocked_jobs,
-             (SELECT count(*) FROM (
-               SELECT 1 FROM workhorse.job_dependency edge
-                JOIN workhorse.job_runtime runtime ON runtime.job_id = edge.dependent_job_id
-               WHERE runtime.queue_name = usage.queue_name AND runtime.state = 'blocked'
-                 AND edge.released_at IS NULL
-               LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
-             ) sampled_pending)
-               AS pending_edges,
-             (SELECT count(*) FROM (
-               SELECT 1 FROM workhorse.job_outcome outcome
-                JOIN workhorse.job_query query ON query.job_id = outcome.job_id
-               WHERE query.queue_name = usage.queue_name AND outcome.state = 'failed'
-                 AND outcome.error->>'name' = 'DependencyFailed'
-               LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
-             ) sampled_failed) AS failed_resolutions
-         ) dependencies
-         CROSS JOIN LATERAL (
-           ${childPressureSamplesSql("usage.queue_name")}
-         ) children
-        ORDER BY usage.queue_name`,
-        [this.context.defaultQueue],
-      ),
+      }>(SQL_STATEMENTS["queue_metric_snapshot"], [this.context.defaultQueue]),
       this.rateLimitStatuses(),
     ]);
     const rateLimits = new Map(rateLimitStatuses.map((status) => [status.queue, status]));

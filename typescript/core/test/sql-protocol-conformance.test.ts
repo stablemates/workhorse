@@ -751,8 +751,22 @@ describe("SQL protocol conformance fixtures", () => {
       .flatMap(({ steps }) => steps.map(({ sql }) => sql))
       .join("\n");
     const intentionallyUnpinnedSqlFunctions = new Set<string>();
-    const pinnedFunctions = new Set(fixtures.manifest.functions.map(({ name }) => name));
-    const pinnedViews = new Set(fixtures.manifest.views.map(({ name }) => name));
+    const pinnedFunctions = new Set([
+      ...fixtures.manifest.functions.map(({ name }) => name),
+      ...fixtures.manifest.statements.flatMap(({ contract: statementContract }) =>
+        [...statementContract.matchAll(/workhorse\.([a-z0-9_]+_v\d+)\s*\(/g)].map(
+          (match) => match[1]!,
+        ),
+      ),
+    ]);
+    const pinnedViews = new Set([
+      ...fixtures.manifest.views.map(({ name }) => name),
+      ...fixtures.manifest.statements.flatMap(({ contract: statementContract }) =>
+        [...statementContract.matchAll(/FROM workhorse\.(dashboard_[a-z0-9_]+_v\d+)/g)].map(
+          (match) => match[1]!,
+        ),
+      ),
+    ]);
     const contractFunctions = new Set(
       [...contract.matchAll(/workhorse\.([a-z0-9_]+_v\d+)\s*\(/g)].map((match) => match[1]!),
     );

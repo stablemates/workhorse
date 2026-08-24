@@ -1,3 +1,4 @@
+import { SQL_STATEMENTS } from "./queue/sql-catalogue.generated.js";
 import type {
   ChildJobOptions,
   ChildJobRequest,
@@ -357,7 +358,7 @@ export class Queue {
       maxActivePerKey: definition.maxActivePerKey ?? null,
     }));
     const result = await this.database.query<ConcurrencyPolicyRow>(
-      "SELECT * FROM workhorse.sync_concurrency_policies_v1($1::text, $2::jsonb, $3::boolean)",
+      SQL_STATEMENTS["sync_concurrency_policies_v1"],
       [namespace, JSON.stringify(input), options.prune ?? true],
     );
     return result.rows.map(concurrencyPolicy);
@@ -365,10 +366,7 @@ export class Queue {
 
   async concurrencyPolicies(queueNames: readonly string[] = []): Promise<ConcurrencyPolicy[]> {
     const result = await this.database.query<ConcurrencyPolicyRow>(
-      `SELECT namespace, queue_name, max_active, max_active_per_key, updated_at
-         FROM workhorse.concurrency_policy
-        WHERE cardinality($1::text[]) = 0 OR queue_name = ANY($1::text[])
-        ORDER BY queue_name`,
+      SQL_STATEMENTS["concurrency_policy"],
       [queueNames],
     );
     return result.rows.map(concurrencyPolicy);
@@ -385,7 +383,7 @@ export class Queue {
       perKey: definition.perKey ?? null,
     }));
     const result = await this.database.query<RateLimitPolicyRow>(
-      "SELECT * FROM workhorse.sync_rate_limit_policies_v1($1, $2::jsonb, $3)",
+      SQL_STATEMENTS["sync_rate_limit_policies_v1__queue"],
       [namespace, JSON.stringify(input), options.prune ?? true],
     );
     return result.rows.map(rateLimitPolicy);
@@ -393,11 +391,7 @@ export class Queue {
 
   async rateLimitPolicies(queueNames: readonly string[] = []): Promise<RateLimitPolicy[]> {
     const result = await this.database.query<RateLimitPolicyRow>(
-      `SELECT namespace, queue_name, rate_limit, rate_interval_ms, rate_burst,
-              per_key_limit, per_key_interval_ms, per_key_burst, updated_at
-         FROM workhorse.rate_limit_policy
-        WHERE cardinality($1::text[]) = 0 OR queue_name = ANY($1::text[])
-        ORDER BY queue_name`,
+      SQL_STATEMENTS["rate_limit_policy"],
       [queueNames],
     );
     return result.rows.map(rateLimitPolicy);

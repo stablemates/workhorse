@@ -1,3 +1,4 @@
+import { SQL_STATEMENTS } from "./queue/sql-catalogue.generated.js";
 import type {
   BulkRedriveOptions,
   BulkRedrivePage,
@@ -253,10 +254,7 @@ export class Admin {
       status: RunTaskNowStatus;
       state: string | null;
       run_at: Date | string | null;
-    }>(
-      "SELECT status, state, run_at FROM workhorse.run_task_now_v1($1::uuid, $2::text, $3::text, $4::text)",
-      [jobId, audit.actor, audit.reason, audit.requestId],
-    );
+    }>(SQL_STATEMENTS["run_task_now_v1"], [jobId, audit.actor, audit.reason, audit.requestId]);
     const row = expectOneRow(result, "workhorse.run_task_now_v1");
     logInfo("workhorse.job.run_now_requested", "Immediate job run requested", {
       "workhorse.job.id": jobId,
@@ -285,7 +283,7 @@ export class Admin {
     validateAdminAudit(audit);
     try {
       const result = await this.database.query<{ deleted_count: number }>(
-        "SELECT * FROM workhorse.purge_queue_v1($1::text, $2::text, $3::text, $4::text)",
+        SQL_STATEMENTS["purge_queue"],
         [queueName, audit.actor, audit.reason, audit.requestId],
       );
       return expectOneRow(result, "workhorse.purge_queue_v1").deleted_count;
@@ -306,10 +304,7 @@ export class Admin {
 
   async concurrencyPolicies(queueNames: readonly string[] = []): Promise<ConcurrencyPolicy[]> {
     const result = await this.database.query<ConcurrencyPolicyRow>(
-      `SELECT namespace, queue_name, max_active, max_active_per_key, updated_at
-         FROM workhorse.concurrency_policy
-        WHERE cardinality($1::text[]) = 0 OR queue_name = ANY($1::text[])
-        ORDER BY queue_name`,
+      SQL_STATEMENTS["concurrency_policy"],
       [queueNames],
     );
     return result.rows.map(concurrencyPolicy);

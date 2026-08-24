@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { SQL_STATEMENTS } from "../queue/sql-catalogue.generated.js";
 import type { Pool } from "pg";
 import { expectOneRow } from "../errors.js";
 import { Admin, Queue } from "../index.js";
@@ -92,9 +92,7 @@ export class WorkhorseAdminClient {
 
   /** The connected database's own name, which the environment confirmation must match. */
   async targetDatabase(): Promise<string> {
-    const result = await this.pool.query<{ database: string }>(
-      "SELECT current_database() AS database",
-    );
+    const result = await this.pool.query<{ database: string }>(SQL_STATEMENTS["current_database"]);
     return expectOneRow(result, "current_database").database;
   }
 
@@ -141,9 +139,7 @@ export class WorkhorseAdminClient {
   async queues(): Promise<AdminQueueStatus[]> {
     const [snapshots, control] = await Promise.all([
       this.admin.queueMetricSnapshot(),
-      this.pool.query<{ queue_name: string; paused: boolean }>(
-        "SELECT queue_name, paused FROM workhorse.queue_control",
-      ),
+      this.pool.query<{ queue_name: string; paused: boolean }>(SQL_STATEMENTS["queue_control"]),
     ]);
     const pausedByQueue = new Map(control.rows.map((row) => [row.queue_name, row.paused]));
     const statuses = new Map<string, AdminQueueStatus>();
@@ -189,7 +185,7 @@ export class WorkhorseAdminClient {
     let targets = namespaces;
     if (targets === undefined || targets.length === 0) {
       const result = await this.pool.query<{ namespace: string }>(
-        "SELECT DISTINCT namespace FROM workhorse.schedule_definition ORDER BY namespace",
+        SQL_STATEMENTS["schedule_definition"],
       );
       targets = result.rows.map((row) => row.namespace);
     }
