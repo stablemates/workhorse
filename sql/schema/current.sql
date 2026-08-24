@@ -1006,26 +1006,13 @@ CREATE INDEX IF NOT EXISTS job_outcome_dependency_canceled_idx
 CREATE INDEX IF NOT EXISTS job_outcome_updated_idx
   ON workhorse.job_outcome (updated_at, job_id);
 
--- Bounded operator metadata projection. Payloads and heartbeat-owned fields deliberately remain in
--- their authoritative relations so operator reads cannot become claim paths or churn on heartbeats.
+-- Bounded operator routing projection. Mutable lifecycle fields remain in their authoritative
+-- relations so claims, retries, promotion, cancellation, and completion never rewrite this row.
 CREATE TABLE IF NOT EXISTS workhorse.job_query (
   job_id uuid PRIMARY KEY REFERENCES workhorse.job(id) ON DELETE CASCADE,
   queue_name text NOT NULL CHECK (queue_name <> ''),
   job_type text NOT NULL CHECK (job_type <> ''),
-  state text NOT NULL CHECK (
-    state IN ('blocked', 'scheduled', 'ready', 'active', 'succeeded', 'failed', 'canceled')
-  ),
-  current_attempt integer NOT NULL CHECK (current_attempt BETWEEN 1 AND 100),
-  run_at timestamptz NOT NULL,
-  created_at timestamptz NOT NULL,
-  updated_at timestamptz NOT NULL,
-  cancel_requested_at timestamptz,
-  cancel_requested_by text,
-  cancel_reason text,
-  CHECK (
-    (cancel_requested_at IS NULL AND cancel_requested_by IS NULL AND cancel_reason IS NULL)
-    OR (state IN ('active', 'canceled') AND cancel_requested_at IS NOT NULL)
-  )
+  created_at timestamptz NOT NULL
 );
 CREATE INDEX IF NOT EXISTS job_query_created_idx
   ON workhorse.job_query (created_at DESC, job_id DESC);
@@ -1033,122 +1020,25 @@ CREATE INDEX IF NOT EXISTS job_query_queue_created_idx
   ON workhorse.job_query (queue_name, created_at DESC, job_id DESC);
 CREATE INDEX IF NOT EXISTS job_query_type_created_idx
   ON workhorse.job_query (job_type, created_at DESC, job_id DESC);
-CREATE INDEX IF NOT EXISTS job_query_state_created_idx
-  ON workhorse.job_query (state, created_at DESC, job_id DESC);
-
-CREATE OR REPLACE FUNCTION workhorse.project_job_runtime_v1()
+CREATE OR REPLACE FUNCTION workhorse.project_job_query_v1()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  INSERT INTO workhorse.job_query(
-    job_id, queue_name, job_type, state, current_attempt, run_at, created_at, updated_at,
-    cancel_requested_at, cancel_requested_by, cancel_reason
-  )
-  SELECT
-    NEW.job_id, NEW.queue_name, job.job_type, NEW.state, NEW.current_attempt, NEW.run_at,
-    job.created_at, NEW.updated_at, NEW.cancel_requested_at, NEW.cancel_requested_by,
-    NEW.cancel_reason
-  FROM workhorse.job job
-  WHERE job.id = NEW.job_id
+  INSERT INTO workhorse.job_query(job_id, queue_name, job_type, created_at)
+  VALUES (NEW.id, NEW.queue_name, NEW.job_type, NEW.created_at)
   ON CONFLICT (job_id) DO UPDATE SET
     queue_name = EXCLUDED.queue_name,
-    job_type = EXCLUDED.job_type,
-    state = EXCLUDED.state,
-    current_attempt = EXCLUDED.current_attempt,
-    run_at = EXCLUDED.run_at,
-    created_at = EXCLUDED.created_at,
-    updated_at = EXCLUDED.updated_at,
-    cancel_requested_at = EXCLUDED.cancel_requested_at,
-    cancel_requested_by = EXCLUDED.cancel_requested_by,
-    cancel_reason = EXCLUDED.cancel_reason;
+    job_type = EXCLUDED.job_type;
   RETURN NEW;
 END;
 $$;
-CREATE OR REPLACE TRIGGER job_runtime_query_projection_insert
-  AFTER INSERT ON workhorse.job_runtime
-  FOR EACH ROW EXECUTE FUNCTION workhorse.project_job_runtime_v1();
-CREATE OR REPLACE TRIGGER job_runtime_query_projection_update
-  AFTER UPDATE OF queue_name, state, current_attempt, run_at,
-    cancel_requested_at, cancel_requested_by, cancel_reason
-  ON workhorse.job_runtime
-  FOR EACH ROW EXECUTE FUNCTION workhorse.project_job_runtime_v1();
-
-CREATE OR REPLACE FUNCTION workhorse.project_job_outcome_v1()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
-BEGIN
-  INSERT INTO workhorse.job_query(
-    job_id, queue_name, job_type, state, current_attempt, run_at, created_at, updated_at,
-    cancel_requested_at, cancel_requested_by, cancel_reason
-  )
-  SELECT
-    NEW.job_id, job.queue_name, job.job_type, NEW.state, NEW.current_attempt, NEW.run_at,
-    job.created_at, NEW.updated_at,
-    CASE WHEN NEW.state = 'canceled' THEN NULLIF(NEW.error->>'requested_at', '')::timestamptz END,
-    CASE WHEN NEW.state = 'canceled' THEN NEW.error->>'requested_by' END,
-    CASE WHEN NEW.state = 'canceled' THEN NEW.error->>'reason' END
-  FROM workhorse.job job
-  WHERE job.id = NEW.job_id
-  ON CONFLICT (job_id) DO UPDATE SET
-    queue_name = EXCLUDED.queue_name,
-    job_type = EXCLUDED.job_type,
-    state = EXCLUDED.state,
-    current_attempt = EXCLUDED.current_attempt,
-    run_at = EXCLUDED.run_at,
-    created_at = EXCLUDED.created_at,
-    updated_at = EXCLUDED.updated_at,
-    cancel_requested_at = EXCLUDED.cancel_requested_at,
-    cancel_requested_by = EXCLUDED.cancel_requested_by,
-    cancel_reason = EXCLUDED.cancel_reason;
-  RETURN NEW;
-END;
-$$;
-CREATE OR REPLACE TRIGGER job_outcome_query_projection_insert
-  AFTER INSERT ON workhorse.job_outcome
-  FOR EACH ROW EXECUTE FUNCTION workhorse.project_job_outcome_v1();
-
--- Repeated v15 installation converges the projection from authoritative state without touching
--- payloads. Removing impossible orphan rows also repairs interrupted/manual pre-release installs.
-INSERT INTO workhorse.job_query(
-  job_id, queue_name, job_type, state, current_attempt, run_at, created_at, updated_at,
-  cancel_requested_at, cancel_requested_by, cancel_reason
-)
-SELECT
-  runtime.job_id, runtime.queue_name, job.job_type, runtime.state, runtime.current_attempt,
-  runtime.run_at, job.created_at, runtime.updated_at, runtime.cancel_requested_at,
-  runtime.cancel_requested_by, runtime.cancel_reason
-FROM workhorse.job_runtime runtime
-JOIN workhorse.job job ON job.id = runtime.job_id
-UNION ALL
-SELECT
-  outcome.job_id, job.queue_name, job.job_type, outcome.state, outcome.current_attempt,
-  outcome.run_at, job.created_at, outcome.updated_at,
-  CASE WHEN outcome.state = 'canceled'
-    THEN NULLIF(outcome.error->>'requested_at', '')::timestamptz END,
-  CASE WHEN outcome.state = 'canceled' THEN outcome.error->>'requested_by' END,
-  CASE WHEN outcome.state = 'canceled' THEN outcome.error->>'reason' END
-FROM workhorse.job_outcome outcome
-JOIN workhorse.job job ON job.id = outcome.job_id
-ON CONFLICT (job_id) DO UPDATE SET
-  queue_name = EXCLUDED.queue_name,
-  job_type = EXCLUDED.job_type,
-  state = EXCLUDED.state,
-  current_attempt = EXCLUDED.current_attempt,
-  run_at = EXCLUDED.run_at,
-  created_at = EXCLUDED.created_at,
-  updated_at = EXCLUDED.updated_at,
-  cancel_requested_at = EXCLUDED.cancel_requested_at,
-  cancel_requested_by = EXCLUDED.cancel_requested_by,
-  cancel_reason = EXCLUDED.cancel_reason;
-DELETE FROM workhorse.job_query query_row
-WHERE NOT EXISTS (
-  SELECT 1 FROM workhorse.job_runtime runtime WHERE runtime.job_id = query_row.job_id
-)
-AND NOT EXISTS (
-  SELECT 1 FROM workhorse.job_outcome outcome WHERE outcome.job_id = query_row.job_id
-);
+CREATE OR REPLACE TRIGGER job_query_projection_insert
+  AFTER INSERT ON workhorse.job
+  FOR EACH ROW EXECUTE FUNCTION workhorse.project_job_query_v1();
+CREATE OR REPLACE TRIGGER job_query_projection_update
+  AFTER UPDATE OF queue_name, job_type ON workhorse.job
+  FOR EACH ROW EXECUTE FUNCTION workhorse.project_job_query_v1();
 
 -- Durable redrive lineage is both the idempotency record and the audit record. A source identity
 -- cannot be removed while any descendant target still exists. Deleting a target removes its
@@ -10730,11 +10620,29 @@ BEGIN
 
   RETURN QUERY
   WITH candidates AS MATERIALIZED (
-    SELECT query_row.*
+    SELECT query_row.job_id, query_row.queue_name, query_row.job_type,
+           lifecycle.state, lifecycle.current_attempt, lifecycle.run_at,
+           query_row.created_at, lifecycle.updated_at,
+           lifecycle.cancel_requested_at, lifecycle.cancel_requested_by,
+           lifecycle.cancel_reason
     FROM workhorse.job_query query_row
+    JOIN LATERAL (
+      SELECT runtime.state, runtime.current_attempt, runtime.run_at, runtime.updated_at,
+             runtime.cancel_requested_at, runtime.cancel_requested_by, runtime.cancel_reason
+        FROM workhorse.job_runtime runtime
+       WHERE runtime.job_id = query_row.job_id
+      UNION ALL
+      SELECT outcome.state, outcome.current_attempt, outcome.run_at, outcome.updated_at,
+             CASE WHEN outcome.state = 'canceled'
+               THEN NULLIF(outcome.error->>'requested_at', '')::timestamptz END,
+             CASE WHEN outcome.state = 'canceled' THEN outcome.error->>'requested_by' END,
+             CASE WHEN outcome.state = 'canceled' THEN outcome.error->>'reason' END
+        FROM workhorse.job_outcome outcome
+       WHERE outcome.job_id = query_row.job_id
+    ) lifecycle ON true
     WHERE (v_queue IS NULL OR query_row.queue_name = v_queue)
       AND (v_type IS NULL OR query_row.job_type = v_type)
-      AND (v_states IS NULL OR query_row.state = ANY(v_states))
+      AND (v_states IS NULL OR lifecycle.state = ANY(v_states))
       AND (v_created_after IS NULL OR query_row.created_at >= v_created_after)
       AND (v_created_before IS NULL OR query_row.created_at < v_created_before)
       AND (p_cursor_created_at IS NULL

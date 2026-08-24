@@ -322,8 +322,8 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
     invariants: [
       "cross-state pages use an immutable cursor and list every seeded identity once",
       "payloads are omitted by default and top-level redaction precedes byte classification",
-      "queue, type, state, and creation-time filters share the same bounded projection",
-      "heartbeats do not churn the operator projection while lifecycle transitions do",
+      "queue, type, and creation-time filters use the bounded routing projection while state comes from authoritative lifecycle rows",
+      "claims, retries, promotion, cancellation, completion, and heartbeats do not rewrite routing rows",
       "events and closed attempts form one deterministic retained timeline",
       "operator indexes remain separate from every claim-critical index",
     ],
@@ -2244,26 +2244,31 @@ async function queryListingLifecycle(
       options: { queue: context.queueName, tags: ["query", "delta"] },
     },
   ]);
+  const projectionBeforeLifecycle = await context.pool.query<{ job_id: string; xmin: string }>(
+    "SELECT job_id, xmin::text AS xmin FROM workhorse.job_query WHERE job_id = ANY($1::uuid[])",
+    [ids],
+  );
   const completed = await queue.claim("query-listing-complete", { queue: context.queueName });
   if (!completed) throw new Error("query listing scenario could not claim its completed job");
   await queue.complete(completed, "query-listing-complete", { ok: true });
   const active = await queue.claim("query-listing-active", { queue: context.queueName });
   if (!active) throw new Error("query listing scenario could not claim its active job");
 
-  const projectionBeforeHeartbeat = await context.pool.query<{ updated_at: Date }>(
-    "SELECT updated_at FROM workhorse.job_query WHERE job_id = $1",
-    [active.id],
-  );
   await queue.heartbeat(active, "query-listing-active", 30_000);
-  const projectionAfterHeartbeat = await context.pool.query<{ updated_at: Date }>(
-    "SELECT updated_at FROM workhorse.job_query WHERE job_id = $1",
-    [active.id],
+  const projectionAfterLifecycle = await context.pool.query<{ job_id: string; xmin: string }>(
+    "SELECT job_id, xmin::text AS xmin FROM workhorse.job_query WHERE job_id = ANY($1::uuid[])",
+    [ids],
   );
   recordInvariant(
     assertions,
-    "heartbeat leaves operator projection timestamp unchanged",
-    projectionAfterHeartbeat.rows[0]?.updated_at.getTime(),
-    projectionBeforeHeartbeat.rows[0]?.updated_at.getTime(),
+    "lifecycle transitions leave operator routing rows unchanged",
+    new Map(projectionAfterLifecycle.rows.map((row) => [row.job_id, row.xmin])),
+    new Map(projectionBeforeLifecycle.rows.map((row) => [row.job_id, row.xmin])),
+    (actual, expected) =>
+      actual instanceof Map &&
+      expected instanceof Map &&
+      actual.size === expected.size &&
+      [...expected].every(([jobId, xmin]) => actual.get(jobId) === xmin),
   );
 
   const [firstPage, listMs] = await measured(context.now, () =>

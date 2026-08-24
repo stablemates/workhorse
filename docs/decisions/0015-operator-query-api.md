@@ -12,9 +12,9 @@ Lifecycle history is split between append-only `job_event` and `attempt_history`
 
 ## Decision
 
-Workhorse maintains a dedicated `job_query` projection in the same PostgreSQL transactions that create or change lifecycle state. The projection contains only bounded routing and lifecycle metadata. It does not contain payload, result, error, checkpoints, waits, or worker heartbeat fields. Runtime and outcome triggers update it for meaningful lifecycle transitions and cancellation requests; heartbeats do not churn it.
+Workhorse maintains a dedicated `job_query` projection containing only job identity, bounded routing metadata, and immutable creation time. The job trigger inserts it with the identity and updates routing only when debounce replaces a pending definition. Lifecycle state, attempts, run time, and cancellation metadata remain authoritative in `job_runtime` or `job_outcome`.
 
-`list_jobs_v1` reads only this operator projection to select a bounded candidate page and joins immutable `job` rows afterward. Dedicated global, queue, type, and state creation-time indexes serve these reads. Claim, promotion, recovery, deadline, and timeout indexes remain unchanged and are not operator query paths.
+`list_jobs_v1` scans the projection in creation order, joins the authoritative runtime or outcome row to derive lifecycle fields and apply state filters, then joins `job` for optional payload output. Dedicated global, queue, and type creation-time indexes serve routing filters. Claim, retry, promotion, cancellation, completion, recovery, deadline, and timeout transitions do not write the projection.
 
 Pages are ordered descending by immutable `(created_at, job_id)`. The cursor contains the exact PostgreSQL timestamp text, job identity, and a PostgreSQL-generated signature bound to the normalized filter and payload projection. Reusing a cursor with different filters or projection controls is rejected. Pagination is intentionally weakly consistent: jobs accepted after the first page may appear before its boundary, while concurrent state changes can make a row enter or leave a later filtered page. Snapshot pagination remains deferred to P0-06.
 
@@ -28,7 +28,7 @@ Payloads are omitted by default. A caller may request payload inclusion with a b
 
 ### Positive
 
-- Operator pagination never scans or expands dispatch indexes.
+- Operator pagination adds no broad dispatch index and probes lifecycle rows by job identity.
 - Immutable creation-time cursors avoid duplicates caused by heartbeat or state-update timestamps.
 - Filter-bound cursors fail closed when accidentally reused with another query.
 - Payload omission is the default, with server-side redaction and explicit byte bounds.
@@ -37,8 +37,8 @@ Payloads are omitted by default. A caller may request payload inclusion with a b
 
 ### Negative
 
-- Every meaningful lifecycle transition performs an additional projection write.
-- Four operator indexes consume storage and add acceptance/transition maintenance cost.
+- State-filtered pages can inspect more routing candidates because lifecycle state is no longer indexed in the projection.
+- Three operator indexes consume storage and add acceptance maintenance cost.
 - Requested payload projection still has to detoast and inspect each selected value.
 - The page cap bounds returned rows and payload work, but metadata scan and sort work still depends on filter selectivity; broad operator queries remain isolated to `job_query` rather than claiming a constant database-work bound.
 - Cross-page results are not a database snapshot and may reflect concurrent state changes.
@@ -47,9 +47,9 @@ Payloads are omitted by default. A caller may request payload inclusion with a b
 
 ## Rejected alternatives
 
-### Query runtime and outcome directly
+### Query runtime and outcome without a routing projection
 
-This mixes operator traffic with hot lifecycle relations, makes global ordering depend on mutable timestamps, and encourages adding broad indexes to dispatch tables.
+This makes global ordering start from wide identity rows or mutable lifecycle timestamps. The small routing projection keeps immutable pagination keys separate while lifecycle joins use primary-key probes.
 
 ### Store payload in the query projection
 

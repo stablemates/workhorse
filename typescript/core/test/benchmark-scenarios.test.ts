@@ -125,7 +125,7 @@ describe("operational scenario contracts", () => {
     expect(contract).toBeDefined();
     expect(contract!.invariants.join("\n")).toMatch(/immutable cursor/);
     expect(contract!.invariants.join("\n")).toMatch(/omitted by default/);
-    expect(contract!.invariants.join("\n")).toMatch(/heartbeats do not churn/);
+    expect(contract!.invariants.join("\n")).toMatch(/claims.*do not rewrite routing rows/);
     expect(contract!.invariants.join("\n")).toMatch(/events and closed attempts/);
     expect(contract!.invariants.join("\n")).toMatch(/separate from every claim-critical index/);
     expect(contract!.metrics).toEqual(

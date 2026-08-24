@@ -92,9 +92,11 @@ claims.
 closed. `Admin.getJobTimeline` merges both into one cursor stream, so you can answer "what happened
 to job X" from SQL-backed records rather than log lines.
 
-`job_query` is a separate bounded projection for operator reads. `Admin.listJobs` and the dashboard
-page through it across all states without adding broad indexes to `job_runtime`. Both history
-relations are partitioned by day and retired by retention policy, independently of live dispatch.
+`job_query` is a separate bounded routing projection for operator reads. `Admin.listJobs` pages
+through its immutable creation order, then reads each job's current state from `job_runtime` or
+`job_outcome`. Claims and other lifecycle changes don't rewrite the projection or maintain broad
+state indexes on `job_runtime`. Both history relations are partitioned by day and retired by
+retention policy, independently of live dispatch.
 
 ## Next
 

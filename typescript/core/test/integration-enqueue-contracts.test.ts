@@ -972,9 +972,10 @@ describe("enqueue contracts", () => {
 
     await sleep(10);
     const replaced = await queue.enqueueWithResult(
-      "debounced-reset",
+      "debounced-reset-v2",
       { revision: 2 },
       {
+        queue: "debounce-updated",
         debounce: reset,
         maxAttempts: 4,
         retryPolicy: { type: "fixed", delayMs: 250 },
@@ -1000,6 +1001,9 @@ describe("enqueue contracts", () => {
       tags: ["material-change"],
     });
     expect(replacedSnapshot!.runAt.getTime()).toBeGreaterThan(equivalentSnapshot!.runAt.getTime());
+    await expect(
+      admin.listJobs({ queue: "debounce-updated", type: "debounced-reset-v2" }),
+    ).resolves.toMatchObject({ items: [expect.objectContaining({ id: accepted.jobId })] });
 
     const preserve = {
       key: "preserve",

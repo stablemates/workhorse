@@ -1936,27 +1936,27 @@
                       "task": "history_partitions",
                       "lastStartedAt": null,
                       "lastCompletedAt": null,
-              "due": {
-                "$type": "boolean"
-              },
+                      "due": {
+                        "$type": "boolean"
+                      },
                       "incomplete": false
                     },
                     {
                       "task": "history_retention",
                       "lastStartedAt": null,
                       "lastCompletedAt": null,
-              "due": {
-                "$type": "boolean"
-              },
+                      "due": {
+                        "$type": "boolean"
+                      },
                       "incomplete": false
                     },
                     {
                       "task": "terminal_storage",
                       "lastStartedAt": null,
                       "lastCompletedAt": null,
-              "due": {
-                "$type": "boolean"
-              },
+                      "due": {
+                        "$type": "boolean"
+                      },
                       "incomplete": false
                     }
                   ]
@@ -1965,7 +1965,7 @@
             }
           },
           "coerce": {
-      "body.json.maintenance.tasks.*.due": "boolean"
+            "body.json.maintenance.tasks.*.due": "boolean"
           }
         },
         {
@@ -3788,9 +3788,9 @@
                       },
                       {
                         "relation": "job_query",
-                        "totalBytes": 98304,
+                        "totalBytes": 81920,
                         "tableBytes": 8192,
-                        "indexBytes": 81920,
+                        "indexBytes": 65536,
                         "rows": 0,
                         "deadRows": 0,
                         "partitions": 0,
@@ -3847,7 +3847,7 @@
                         "lastVacuumAt": null
                       }
                     ],
-                    "totalBytes": 958464
+                    "totalBytes": 942080
                   }
                 }
               }
