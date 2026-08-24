@@ -13,6 +13,9 @@ pre-commit:
     - name: check dashboard server types
       glob: "typescript/dashboard-server/**"
       run: pnpm --filter @workhorse-js/dashboard-server typecheck
+    - name: check generated dashboard specification
+      glob: "{dashboard/v1/**,typescript/dashboard-server/spec/**,typescript/dashboard-server/src/router.ts,typescript/dashboard-server/src/wire.ts,go/dashboard/v1_generated.go,python/src/workhorse/dashboard_v1.py}"
+      run: pnpm dashboard-spec:check
     - name: check dashboard types
       glob: "typescript/dashboard/**"
       run: pnpm --filter @workhorse-js/dashboard typecheck

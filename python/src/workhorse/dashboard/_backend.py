@@ -163,50 +163,6 @@ class DashboardBackend:
         root = cast(Mapping[str, object], document["Plan"])
         return max(0, round(float(cast(int | float, root["Plan Rows"]))))
 
-    def _estimate_queue_terminal_counts(self, queues: Sequence[str]) -> dict[str, dict[str, int]]:
-        states = ("succeeded", "failed", "canceled")
-        if not queues:
-            return {}
-        branch = """SELECT %s::text AS queue, %s::text AS state
-                      FROM workhorse.dashboard_job_outcome_v1 outcome
-                      JOIN workhorse.dashboard_job_v1 job ON job.id=outcome.job_id
-                     WHERE job.queue_name=%s AND outcome.state=%s"""
-        parameters: list[object] = []
-        for queue in queues:
-            for state in states:
-                parameters.extend((queue, state, queue, state))
-        row = self._rows(
-            "EXPLAIN (FORMAT JSON) "
-            + " UNION ALL ".join(branch for _queue in queues for _state in states),
-            parameters,
-        )[0]
-        plan = next(iter(row.values()))
-        if isinstance(plan, str | bytes):
-            plan = json.loads(plan)
-        root = cast(Mapping[str, object], cast(Sequence[Mapping[str, object]], plan)[0]["Plan"])
-
-        def append_plans(item: Mapping[str, object]) -> Sequence[Mapping[str, object]] | None:
-            children = cast(Sequence[Mapping[str, object]], item.get("Plans", []))
-            if item.get("Node Type") == "Append":
-                return children
-            for child in children:
-                found = append_plans(child)
-                if found is not None:
-                    return found
-            return None
-
-        plans = append_plans(root) or [root]
-        if len(plans) != len(queues) * len(states):
-            raise TypeError("grouped queue estimate returned an unexpected plan shape")
-        estimates: dict[str, dict[str, int]] = {}
-        for index, item in enumerate(plans):
-            queue = queues[index // len(states)]
-            state = states[index % len(states)]
-            estimates.setdefault(queue, {})[state] = max(
-                0, round(float(cast(int | float, item["Plan Rows"])))
-            )
-        return estimates
-
     def meta(self, _input: object, _actor: str) -> object:
         return {"environment": self._environment}
 
@@ -291,211 +247,13 @@ class DashboardBackend:
             "search": None,
             "pageSize": 50,
             **supplied,
-        }
-        search = query["search"]
-        search_pattern = None if not search else _search_pattern(str(search))
-        filters = {
-            "all": "true",
-            "blocked": "state = 'blocked'",
-            "waiting": "external_wait",
-            "scheduled": "state = 'scheduled'",
-            "retried": "attempt > 1",
-            "queued": "state = 'ready'",
-            "running": "state = 'active'",
-            "completed": "state = 'succeeded'",
-            "discarded": "state = 'failed'",
-            "canceled": "state = 'canceled'",
-        }
-        filter_sql = filters[cast(str, query["filter"])]
-        attempt_worker_join = (
-            ""
-            if query["worker"] is None
-            else """
-                LEFT JOIN LATERAL (
-                  SELECT ah.worker_id FROM workhorse.dashboard_attempt_history_v1 ah
-                   WHERE ah.job_id = j.id ORDER BY ah.attempt DESC LIMIT 1
-                ) attempt_worker ON true
-        """
-        )
-        attempt_worker_id = "NULL::text" if query["worker"] is None else "attempt_worker.worker_id"
-        base = f"""
-            WITH parameters AS (
-              SELECT %s::text AS queue_filter, %s::text AS worker_filter,
-                     %s::text AS type_filter, %s::integer AS priority_filter,
-                     %s::text[] AS tag_filter, %s::text AS search_filter
-            ), tasks AS (
-              SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.priority,
-                     COALESCE(r.state, o.state) AS state,
-                     EXISTS (
-                       SELECT 1 FROM workhorse.dashboard_signal_wait_v1 s WHERE s.job_id = j.id
-                       UNION ALL SELECT 1 FROM workhorse.dashboard_human_wait_v1 h
-                         WHERE h.job_id = j.id
-                     ) AS external_wait,
-                     CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END
-                       AS blocked_reason,
-                     ARRAY(
-                       SELECT dependency.prerequisite_job_id
-                         FROM workhorse.dashboard_job_dependency_v1 dependency
-                        WHERE dependency.dependent_job_id = j.id
-                          AND dependency.released_at IS NULL
-                        ORDER BY dependency.prerequisite_job_id
-                     ) AS prerequisite_job_ids,
-                     COALESCE(r.current_attempt, o.current_attempt) AS attempt,
-                     j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms,
-                     j.tags, COALESCE(r.run_at, o.run_at) AS run_at,
-                     r.worker_id AS current_worker_id,
-                     COALESCE(r.worker_id, durable_wait.worker_id, {attempt_worker_id})
-                       AS worker_id,
-                     o.finished_at, COALESCE(o.error, r.error) AS error, j.created_at,
-                     COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at,
-                     r.wait_name, r.cancel_requested_at, r.cancel_requested_by, r.cancel_reason,
-                     durable_wait.wake_at, durable_wait.mode AS wait_mode,
-                     signal_wait.deadline_at AS signal_wait_deadline_at,
-                     human_wait.token_name AS human_wait_name,
-                     human_wait.context AS human_wait_context,
-                     human_wait.deadline_at AS human_wait_deadline_at,
-                     enqueued_event.details AS enqueued_details
-                FROM workhorse.dashboard_job_v1 j
-                LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
-                LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
-                LEFT JOIN workhorse.dashboard_job_wait_v1 durable_wait
-                  ON durable_wait.job_id = j.id AND durable_wait.wait_name = r.wait_name
-                LEFT JOIN workhorse.dashboard_signal_wait_v1 signal_wait
-                  ON signal_wait.job_id = j.id AND signal_wait.signal_name = r.wait_name
-                LEFT JOIN workhorse.dashboard_human_wait_v1 human_wait
-                  ON human_wait.job_id = j.id AND human_wait.token_name = r.wait_name
-                LEFT JOIN LATERAL (
-                  SELECT event.details FROM workhorse.dashboard_job_event_v1 event
-                   WHERE event.job_id = j.id AND event.event_type = 'enqueued'
-                   ORDER BY event.occurred_at, event.event_id LIMIT 1
-                ) enqueued_event ON true
-                {attempt_worker_join}
-            )
-        """
-        where = f"""
-            FROM tasks, parameters WHERE {filter_sql}
-             AND (queue_filter IS NULL OR queue = queue_filter)
-             AND (worker_filter IS NULL OR worker_id = worker_filter)
-             AND (type_filter IS NULL OR type = type_filter)
-             AND (priority_filter IS NULL OR priority = priority_filter)
-             AND (cardinality(tag_filter) = 0 OR tags && tag_filter)
-             AND (search_filter IS NULL OR type ILIKE search_filter ESCAPE '!'
-                  OR queue ILIKE search_filter ESCAPE '!'
-                  OR id::text ILIKE search_filter ESCAPE '!')
-        """
-        parameters = (
-            query["queue"],
-            query["worker"],
-            query["jobType"],
-            query["priority"],
-            query["tags"],
-            search_pattern,
-        )
-        total = self._rows(base + " SELECT count(*)::integer AS count " + where, parameters)[0]
-        order = (
-            "priority DESC, updated_at DESC, id DESC"
-            if query["sort"] == "priority"
-            else "updated_at DESC, id DESC"
-        )
-        page = cast(int, query["page"])
-        page_size = cast(int, query["pageSize"])
-        rows = self._rows(
-            base + " SELECT tasks.* " + where + f" ORDER BY {order} LIMIT %s OFFSET %s",
-            (*parameters, page_size, (page - 1) * page_size),
-        )
-        return {
-            "capturedAt": _iso(datetime.now(timezone.utc)),
             "canCompleteHumanWait": not self._read_only,
-            "filter": query["filter"],
-            "queue": query["queue"],
-            "worker": query["worker"],
-            "jobType": query["jobType"],
-            "priority": query["priority"],
-            "sort": query["sort"],
-            "tags": query["tags"],
-            "search": query["search"],
-            "page": page,
-            "pageSize": page_size,
-            "total": total["count"],
-            "jobs": [self._task_row(row) for row in rows],
         }
-
-    def _task_row(self, row: Mapping[str, object]) -> object:
-        error = row["error"]
-        if isinstance(error, str):
-            try:
-                error = json.loads(error)
-            except json.JSONDecodeError:
-                error = None
-        error_message = error.get("message") if isinstance(error, Mapping) else None
-        details = row["enqueued_details"]
-        if isinstance(details, str):
-            try:
-                details = json.loads(details)
-            except json.JSONDecodeError:
-                details = None
-        idempotency = details.get("idempotency") if isinstance(details, Mapping) else None
-        cancellation = None
-        if row["cancel_requested_at"] is not None:
-            cancellation = {
-                "requestedAt": _iso(row["cancel_requested_at"]),
-                "requestedBy": row["cancel_requested_by"] or None,
-                "reason": row["cancel_reason"] or None,
-            }
-        wait = None
-        if row["wait_name"] and row["wake_at"] and row["wait_mode"]:
-            wait = {
-                "name": row["wait_name"],
-                "wakeAt": _iso(row["wake_at"]),
-                "mode": row["wait_mode"],
-            }
-        signal_wait = None
-        if row["wait_name"] and row["signal_wait_deadline_at"]:
-            signal_wait = {
-                "name": row["wait_name"],
-                "deadlineAt": _iso(row["signal_wait_deadline_at"]),
-            }
-        human_wait = None
-        if row["human_wait_name"] and row["human_wait_deadline_at"]:
-            human_wait = {
-                "name": row["human_wait_name"],
-                "context": row["human_wait_context"],
-                "deadlineAt": _iso(row["human_wait_deadline_at"]),
-            }
-        return {
-            "id": str(row["id"]),
-            "queue": row["queue"],
-            "type": row["type"],
-            "priority": row["priority"],
-            "state": row["state"],
-            "blockedReason": row["blocked_reason"],
-            "prerequisiteJobIds": [
-                str(value) for value in cast(Sequence[object], row["prerequisite_job_ids"])
-            ],
-            "attempt": row["attempt"],
-            "maxAttempts": row["max_attempts"],
-            "retryPolicy": row["retry_policy"],
-            "deadlineAt": _iso(row["deadline_at"]),
-            "executionTimeoutMs": None
-            if row["execution_timeout_ms"] is None
-            else int(cast(str | int, row["execution_timeout_ms"])),
-            "tags": row["tags"],
-            "keyed": isinstance(idempotency, Mapping),
-            "cancellation": cancellation,
-            "runAt": _iso(row["run_at"]),
-            "workerId": row["current_worker_id"],
-            "lastWorkerId": row["worker_id"],
-            "finishedAt": _iso(row["finished_at"]),
-            "errorMessage": error_message,
-            "createdAt": _iso(row["created_at"]),
-            "updatedAt": _iso(row["updated_at"]),
-            "durability": None,
-            "waitName": row["wait_name"],
-            "wakeAt": _iso(row["wake_at"]),
-            "wait": wait,
-            "signalWait": signal_wait,
-            "humanWait": human_wait,
-        }
+        value = self._rows(
+            "SELECT workhorse.dashboard_tasks_v1(%s::jsonb) AS result",
+            (json.dumps(query),),
+        )[0]["result"]
+        return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
     def activity(self, input: object, _actor: str) -> object:
         supplied = cast(Mapping[str, object], input)
@@ -658,82 +416,10 @@ class DashboardBackend:
         }
 
     def queues(self, _input: object, _actor: str) -> object:
-        job_estimate = _integer(
-            self._rows("SELECT estimate FROM workhorse.dashboard_job_estimate_v1()")[0]["estimate"]
-        )
-        approximate = job_estimate >= 50_000
-        rows = self._rows(
-            """
-            WITH known_queues AS (
-              SELECT queue_name FROM workhorse.dashboard_job_v1
-              UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1
-              UNION SELECT queue_name FROM workhorse.dashboard_concurrency_policy_v1
-              UNION SELECT queue_name FROM workhorse.dashboard_rate_limit_policy_v1
-            ), live_counts AS (
-              SELECT queue_name,
-                     count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled,
-                     count(*) FILTER (WHERE state = 'ready')::integer AS ready,
-                     count(*) FILTER (WHERE state = 'active')::integer AS active
-                FROM workhorse.dashboard_job_runtime_v1 GROUP BY queue_name
-            ), terminal_counts AS (
-              SELECT job.queue_name,
-                     count(*) FILTER (WHERE outcome.state = 'succeeded')::integer AS succeeded,
-                     count(*) FILTER (WHERE outcome.state = 'failed')::integer AS failed,
-                     count(*) FILTER (WHERE outcome.state = 'canceled')::integer AS canceled
-                FROM workhorse.dashboard_job_outcome_v1 outcome
-                JOIN workhorse.dashboard_job_v1 job ON job.id = outcome.job_id
-               WHERE NOT %s::boolean
-               GROUP BY job.queue_name
-            )
-            SELECT known.queue_name AS queue, COALESCE(control.paused, false) AS paused,
-                   COALESCE(live.scheduled, 0)::integer AS scheduled,
-                   COALESCE(live.ready, 0)::integer AS ready,
-                   COALESCE(live.active, 0)::integer AS active,
-                   COALESCE(terminal.succeeded, 0)::integer AS succeeded,
-                   COALESCE(terminal.failed, 0)::integer AS failed,
-                   COALESCE(terminal.canceled, 0)::integer AS canceled
-              FROM known_queues known
-              LEFT JOIN workhorse.dashboard_queue_control_v1 control USING (queue_name)
-              LEFT JOIN live_counts live USING (queue_name)
-              LEFT JOIN terminal_counts terminal USING (queue_name)
-             ORDER BY known.queue_name
-            """,
-            (approximate,),
-        )
-        queues = [
-            {
-                **cast(dict[str, object], _iso(row)),
-                "terminalCountsApproximate": approximate,
-                "concurrencyPolicy": None,
-                "rateLimitPolicy": None,
-            }
-            for row in rows
+        value = self._rows("SELECT workhorse.dashboard_queues_v1('{}'::jsonb) AS result")[0][
+            "result"
         ]
-        health = self._health()
-        concurrency = cast(list[Mapping[str, object]], health["concurrency_policies"])
-        rate_limits = cast(list[Mapping[str, object]], health["rate_limit_policies"])
-        concurrency_by_queue, rate_limits_by_queue = _admission_policies(health)
-        for queue in queues:
-            name = cast(str, queue["queue"])
-            queue["concurrencyPolicy"] = concurrency_by_queue.get(name)
-            queue["rateLimitPolicy"] = rate_limits_by_queue.get(name)
-        if approximate:
-            estimates_by_queue = self._estimate_queue_terminal_counts(
-                [cast(str, queue["queue"]) for queue in queues]
-            )
-            for queue in queues:
-                estimate = estimates_by_queue.get(cast(str, queue["queue"]), {})
-                queue["succeeded"] = _integer(estimate.get("succeeded"))
-                queue["failed"] = _integer(estimate.get("failed"))
-                queue["canceled"] = _integer(estimate.get("canceled"))
-        return {
-            "capturedAt": _iso(datetime.now(timezone.utc)),
-            "queues": queues,
-            "concurrencyPoliciesCapped": any(bool(row["capped"]) for row in concurrency),
-            "rateLimitPoliciesCapped": any(
-                bool(row["policy_set_capped"]) or bool(row["sample_capped"]) for row in rate_limits
-            ),
-        }
+        return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
     def workers(self, _input: object, _actor: str) -> object:
         rows = self._rows(
@@ -2244,10 +1930,4 @@ def _admin_audit(input: Mapping[str, object], actor: str) -> AdminAudit:
         actor=actor,
         reason=cast(str, audit["reason"]),
         request_id=cast(str, audit["requestId"]),
-    )
-
-
-def _search_pattern(value: str) -> str:
-    return (
-        "%" + value.replace("!", "!!").replace("%", "!%").replace("_", "!_").replace("*", "%") + "%"
     )

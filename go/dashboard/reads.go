@@ -177,47 +177,23 @@ func stringDefault(value any, fallback string) string {
 	return fallback
 }
 
-func searchPattern(value any) any {
-	if value == nil || fmt.Sprint(value) == "" {
-		return nil
-	}
-	text := strings.NewReplacer("!", "!!", "%", "!%", "_", "!_", "*", "%").Replace(fmt.Sprint(value))
-	return "%" + text + "%"
-}
-
 func (service *backend) tasks(ctx context.Context, input any, _ string) (any, error) {
 	value, _ := document(input)
-	filter := stringDefault(value["filter"], "all")
-	sort := stringDefault(value["sort"], "updated")
-	page, pageSize := numberDefault(value["page"], 1), numberDefault(value["pageSize"], 50)
-	filters := map[string]string{"all": "true", "blocked": "state='blocked'", "waiting": "external_wait", "scheduled": "state='scheduled'", "retried": "attempt>1", "queued": "state='ready'", "running": "state='active'", "completed": "state='succeeded'", "discarded": "state='failed'", "canceled": "state='canceled'"}
-	order := "updated_at DESC,id DESC"
-	if sort == "priority" {
-		order = "priority DESC,updated_at DESC,id DESC"
+	defaults := map[string]any{
+		"filter": "all", "queue": nil, "page": 1, "worker": nil, "jobType": nil,
+		"priority": nil, "sort": "updated", "tags": []any{}, "search": nil, "pageSize": 50,
 	}
-	attemptWorkerID, attemptWorkerJoin := "NULL::text", ""
-	if value["worker"] != nil {
-		attemptWorkerID = "a.worker_id"
-		attemptWorkerJoin = " LEFT JOIN LATERAL(SELECT worker_id FROM workhorse.dashboard_attempt_history_v1 x WHERE x.job_id=j.id ORDER BY attempt DESC LIMIT 1)a ON true"
+	for key, defaultValue := range defaults {
+		if _, exists := value[key]; !exists {
+			value[key] = defaultValue
+		}
 	}
-	statement := `WITH tasks AS (SELECT j.id,j.queue_name AS queue,j.job_type AS type,j.priority,COALESCE(r.state,o.state) AS state,
- EXISTS(SELECT 1 FROM workhorse.dashboard_signal_wait_v1 s WHERE s.job_id=j.id UNION ALL SELECT 1 FROM workhorse.dashboard_human_wait_v1 h WHERE h.job_id=j.id) AS external_wait,
- CASE WHEN r.state='blocked' THEN 'prerequisite_pending' END blocked_reason,ARRAY(SELECT d.prerequisite_job_id::text FROM workhorse.dashboard_job_dependency_v1 d WHERE d.dependent_job_id=j.id AND d.released_at IS NULL ORDER BY d.prerequisite_job_id) prerequisite_job_ids,
- COALESCE(r.current_attempt,o.current_attempt) attempt,j.max_attempts,j.retry_policy,j.deadline_at,j.execution_timeout_ms,j.tags,COALESCE(r.run_at,o.run_at) run_at,r.worker_id current_worker_id,
- COALESCE(r.worker_id,w.worker_id,` + attemptWorkerID + `) worker_id,o.finished_at,COALESCE(o.error,r.error) error,j.created_at,COALESCE(r.updated_at,o.updated_at,j.created_at) updated_at,r.wait_name,r.cancel_requested_at,r.cancel_requested_by,r.cancel_reason,
- w.wake_at,w.mode wait_mode,s.deadline_at signal_wait_deadline_at,h.token_name human_wait_name,h.context human_wait_context,h.deadline_at human_wait_deadline_at,e.details enqueued_details
- FROM workhorse.dashboard_job_v1 j LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id=j.id LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id=j.id
- LEFT JOIN workhorse.dashboard_job_wait_v1 w ON w.job_id=j.id AND w.wait_name=r.wait_name LEFT JOIN workhorse.dashboard_signal_wait_v1 s ON s.job_id=j.id AND s.signal_name=r.wait_name LEFT JOIN workhorse.dashboard_human_wait_v1 h ON h.job_id=j.id AND h.token_name=r.wait_name
- LEFT JOIN LATERAL(SELECT details FROM workhorse.dashboard_job_event_v1 x WHERE x.job_id=j.id AND event_type='enqueued' ORDER BY occurred_at,event_id LIMIT 1)e ON true` + attemptWorkerJoin + `),
- filtered AS (SELECT * FROM tasks WHERE ` + filters[filter] + ` AND ($1::text IS NULL OR queue=$1) AND ($2::text IS NULL OR worker_id=$2) AND ($3::text IS NULL OR type=$3) AND ($4::integer IS NULL OR priority=$4) AND (cardinality($5::text[])=0 OR tags&&$5) AND ($6::text IS NULL OR type ILIKE $6 ESCAPE '!' OR queue ILIKE $6 ESCAPE '!' OR id::text ILIKE $6 ESCAPE '!')),
- page AS (SELECT * FROM filtered ORDER BY ` + order + ` LIMIT $7 OFFSET $8)
- SELECT jsonb_build_object('capturedAt',clock_timestamp(),'canCompleteHumanWait',true,'filter',$9::text,'queue',$1::text,'worker',$2::text,'jobType',$3::text,'priority',$4::integer,'sort',$10::text,'tags',$5::text[],'search',$11::text,'page',$12::integer,'pageSize',$7::integer,'total',(SELECT count(*) FROM filtered),
- 'jobs',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id::text,'queue',queue,'type',type,'priority',priority,'state',state,'blockedReason',blocked_reason,'prerequisiteJobIds',prerequisite_job_ids,'attempt',attempt,'maxAttempts',max_attempts,'retryPolicy',retry_policy,'deadlineAt',deadline_at,'executionTimeoutMs',execution_timeout_ms,'tags',tags,'keyed',COALESCE(jsonb_typeof(enqueued_details->'idempotency')='object',false),'cancellation',CASE WHEN cancel_requested_at IS NULL THEN NULL ELSE jsonb_build_object('requestedAt',cancel_requested_at,'requestedBy',NULLIF(cancel_requested_by,''),'reason',NULLIF(cancel_reason,'')) END,'runAt',run_at,'workerId',current_worker_id,'lastWorkerId',worker_id,'finishedAt',finished_at,'errorMessage',error->>'message','createdAt',created_at,'updatedAt',updated_at,'durability',NULL,'waitName',wait_name,'wakeAt',wake_at,'wait',CASE WHEN wait_name IS NOT NULL AND wake_at IS NOT NULL AND wait_mode IS NOT NULL THEN jsonb_build_object('name',wait_name,'wakeAt',wake_at,'mode',wait_mode) END,'signalWait',CASE WHEN wait_name IS NOT NULL AND signal_wait_deadline_at IS NOT NULL THEN jsonb_build_object('name',wait_name,'deadlineAt',signal_wait_deadline_at) END,'humanWait',CASE WHEN human_wait_name IS NOT NULL AND human_wait_deadline_at IS NOT NULL THEN jsonb_build_object('name',human_wait_name,'context',human_wait_context,'deadlineAt',human_wait_deadline_at) END) ORDER BY ` + order + `) FROM page),'[]'::jsonb)) result`
-	result, err := service.jsonQuery(ctx, statement, value["queue"], value["worker"], value["jobType"], value["priority"], interfaceSlice(value["tags"]), searchPattern(value["search"]), pageSize, (page-1)*pageSize, filter, sort, value["search"], page)
-	if page, ok := result.(map[string]any); ok {
-		page["canCompleteHumanWait"] = !service.readOnly
-	}
-	return result, err
+	value["canCompleteHumanWait"] = !service.readOnly
+	return service.jsonQuery(
+		ctx,
+		"SELECT workhorse.dashboard_tasks_v1($1::jsonb) AS result",
+		string(mustJSON(value)),
+	)
 }
 
 func (service *backend) activity(ctx context.Context, input any, _ string) (any, error) {

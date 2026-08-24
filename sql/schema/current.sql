@@ -11359,6 +11359,296 @@ AS $$
   SELECT reltuples::bigint FROM pg_class WHERE oid = 'workhorse.job'::regclass;
 $$;
 
+-- Dashboard procedures return the versioned wire document directly. Language backends validate
+-- the request, call one function, and decode one JSON cell; they do not own a second SQL read model.
+CREATE OR REPLACE FUNCTION workhorse.dashboard_iso_v1(p_value timestamptz)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+RETURNS NULL ON NULL INPUT
+AS $$
+  SELECT to_char(p_value AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.dashboard_tasks_v1(p_input jsonb)
+RETURNS jsonb
+LANGUAGE sql
+AS $$
+  WITH parameters AS (
+    SELECT COALESCE(NULLIF(p_input->>'filter', ''), 'all') AS filter,
+           NULLIF(p_input->>'queue', '') AS queue_filter,
+           NULLIF(p_input->>'worker', '') AS worker_filter,
+           NULLIF(p_input->>'jobType', '') AS type_filter,
+           NULLIF(p_input->>'priority', '')::integer AS priority_filter,
+           COALESCE(ARRAY(SELECT jsonb_array_elements_text(p_input->'tags')), ARRAY[]::text[])
+             AS tag_filter,
+           NULLIF(p_input->>'search', '') AS search,
+           CASE WHEN NULLIF(p_input->>'search', '') IS NULL THEN NULL ELSE
+             '%' || replace(replace(replace(replace(
+               p_input->>'search', '!', '!!'), '%', '!%'), '_', '!_'), '*', '%') || '%'
+           END AS search_filter,
+           COALESCE(NULLIF(p_input->>'page', '')::integer, 1) AS page,
+           COALESCE(NULLIF(p_input->>'pageSize', '')::integer, 50) AS page_size,
+           COALESCE(NULLIF(p_input->>'sort', ''), 'updated') AS sort,
+           COALESCE((p_input->>'canCompleteHumanWait')::boolean, false)
+             AS can_complete_human_wait
+  ), tasks AS (
+    SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.priority,
+           COALESCE(r.state, o.state) AS state,
+           EXISTS (
+             SELECT 1 FROM workhorse.dashboard_signal_wait_v1 signal_wait
+              WHERE signal_wait.job_id = j.id
+             UNION ALL
+             SELECT 1 FROM workhorse.dashboard_human_wait_v1 human_wait
+              WHERE human_wait.job_id = j.id
+           ) AS external_wait,
+           CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
+           COALESCE((
+             SELECT jsonb_agg(dependency.prerequisite_job_id::text
+                              ORDER BY dependency.prerequisite_job_id)
+               FROM workhorse.dashboard_job_dependency_v1 dependency
+              WHERE dependency.dependent_job_id = j.id AND dependency.released_at IS NULL
+           ), '[]'::jsonb) AS prerequisite_job_ids,
+           COALESCE(r.current_attempt, o.current_attempt) AS attempt,
+           j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.tags,
+           COALESCE(r.run_at, o.run_at) AS run_at,
+           r.worker_id AS current_worker_id,
+           COALESCE(r.worker_id, durable_wait.worker_id, attempt_worker.worker_id) AS worker_id,
+           o.finished_at, COALESCE(o.error, r.error) AS error, j.created_at,
+           COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at,
+           r.wait_name, r.cancel_requested_at, r.cancel_requested_by, r.cancel_reason,
+           durable_wait.wake_at, durable_wait.mode AS wait_mode,
+           signal_wait.deadline_at AS signal_wait_deadline_at,
+           human_wait.token_name AS human_wait_name,
+           human_wait.context AS human_wait_context,
+           human_wait.deadline_at AS human_wait_deadline_at,
+           enqueued_event.details AS enqueued_details
+      FROM workhorse.dashboard_job_v1 j
+      CROSS JOIN parameters
+      LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
+      LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
+      LEFT JOIN workhorse.dashboard_job_wait_v1 durable_wait
+        ON durable_wait.job_id = j.id AND durable_wait.wait_name = r.wait_name
+      LEFT JOIN workhorse.dashboard_signal_wait_v1 signal_wait
+        ON signal_wait.job_id = j.id AND signal_wait.signal_name = r.wait_name
+      LEFT JOIN workhorse.dashboard_human_wait_v1 human_wait
+        ON human_wait.job_id = j.id AND human_wait.token_name = r.wait_name
+      LEFT JOIN LATERAL (
+        SELECT event.details FROM workhorse.dashboard_job_event_v1 event
+         WHERE event.job_id = j.id AND event.event_type = 'enqueued'
+         ORDER BY event.occurred_at, event.event_id LIMIT 1
+      ) enqueued_event ON true
+      LEFT JOIN LATERAL (
+        SELECT history.worker_id FROM workhorse.dashboard_attempt_history_v1 history
+         WHERE history.job_id = j.id ORDER BY history.attempt DESC LIMIT 1
+      ) attempt_worker ON parameters.worker_filter IS NOT NULL
+  ), filtered AS (
+    SELECT tasks.* FROM tasks CROSS JOIN parameters
+     WHERE CASE parameters.filter
+       WHEN 'blocked' THEN state = 'blocked'
+       WHEN 'waiting' THEN external_wait
+       WHEN 'scheduled' THEN state = 'scheduled'
+       WHEN 'retried' THEN attempt > 1
+       WHEN 'queued' THEN state = 'ready'
+       WHEN 'running' THEN state = 'active'
+       WHEN 'completed' THEN state = 'succeeded'
+       WHEN 'discarded' THEN state = 'failed'
+       WHEN 'canceled' THEN state = 'canceled'
+       ELSE true
+     END
+       AND (parameters.queue_filter IS NULL OR queue = parameters.queue_filter)
+       AND (parameters.worker_filter IS NULL OR worker_id = parameters.worker_filter)
+       AND (parameters.type_filter IS NULL OR type = parameters.type_filter)
+       AND (parameters.priority_filter IS NULL OR priority = parameters.priority_filter)
+       AND (cardinality(parameters.tag_filter) = 0 OR tags && parameters.tag_filter)
+       AND (parameters.search_filter IS NULL
+            OR type ILIKE parameters.search_filter ESCAPE '!'
+            OR queue ILIKE parameters.search_filter ESCAPE '!'
+            OR id::text ILIKE parameters.search_filter ESCAPE '!')
+  ), page AS (
+    SELECT filtered.* FROM filtered CROSS JOIN parameters
+     ORDER BY CASE WHEN parameters.sort = 'priority' THEN priority END DESC,
+              updated_at DESC, id DESC
+     LIMIT (SELECT page_size FROM parameters)
+    OFFSET (SELECT (page - 1) * page_size FROM parameters)
+  )
+  SELECT jsonb_build_object(
+    'capturedAt', workhorse.dashboard_iso_v1(clock_timestamp()),
+    'canCompleteHumanWait', parameters.can_complete_human_wait,
+    'filter', parameters.filter,
+    'queue', parameters.queue_filter,
+    'worker', parameters.worker_filter,
+    'jobType', parameters.type_filter,
+    'priority', parameters.priority_filter,
+    'sort', parameters.sort,
+    'tags', to_jsonb(parameters.tag_filter),
+    'search', parameters.search,
+    'page', parameters.page,
+    'pageSize', parameters.page_size,
+    'total', (SELECT count(*) FROM filtered),
+    'jobs', COALESCE((
+      SELECT jsonb_agg(jsonb_build_object(
+        'id', id::text, 'queue', queue, 'type', type, 'priority', priority, 'state', state,
+        'blockedReason', blocked_reason, 'prerequisiteJobIds', prerequisite_job_ids,
+        'attempt', attempt, 'maxAttempts', max_attempts, 'retryPolicy', retry_policy,
+        'deadlineAt', workhorse.dashboard_iso_v1(deadline_at),
+        'executionTimeoutMs', execution_timeout_ms, 'tags', tags,
+        'keyed', COALESCE(jsonb_typeof(enqueued_details->'idempotency') = 'object', false),
+        'cancellation', CASE WHEN cancel_requested_at IS NULL THEN NULL ELSE jsonb_build_object(
+          'requestedAt', workhorse.dashboard_iso_v1(cancel_requested_at),
+          'requestedBy', NULLIF(cancel_requested_by, ''),
+          'reason', NULLIF(cancel_reason, '')) END,
+        'runAt', workhorse.dashboard_iso_v1(run_at), 'workerId', current_worker_id,
+        'lastWorkerId', worker_id, 'finishedAt', workhorse.dashboard_iso_v1(finished_at),
+        'errorMessage', error->>'message', 'createdAt', workhorse.dashboard_iso_v1(created_at),
+        'updatedAt', workhorse.dashboard_iso_v1(updated_at), 'durability', NULL,
+        'waitName', wait_name, 'wakeAt', workhorse.dashboard_iso_v1(wake_at),
+        'wait', CASE WHEN wait_name IS NOT NULL AND wake_at IS NOT NULL AND wait_mode IS NOT NULL
+          THEN jsonb_build_object('name', wait_name,
+                                  'wakeAt', workhorse.dashboard_iso_v1(wake_at),
+                                  'mode', wait_mode) END,
+        'signalWait', CASE WHEN wait_name IS NOT NULL AND signal_wait_deadline_at IS NOT NULL
+          THEN jsonb_build_object('name', wait_name,
+                                  'deadlineAt',
+                                  workhorse.dashboard_iso_v1(signal_wait_deadline_at)) END,
+        'humanWait', CASE WHEN human_wait_name IS NOT NULL AND human_wait_deadline_at IS NOT NULL
+          THEN jsonb_build_object('name', human_wait_name, 'context', human_wait_context,
+                                  'deadlineAt',
+                                  workhorse.dashboard_iso_v1(human_wait_deadline_at)) END
+      ) ORDER BY CASE WHEN parameters.sort = 'priority' THEN priority END DESC,
+                 updated_at DESC, id DESC)
+        FROM page CROSS JOIN parameters
+    ), '[]'::jsonb)
+  ) FROM parameters;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.dashboard_queues_v1(p_input jsonb)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_approximate boolean;
+  v_health jsonb;
+  v_queues jsonb := '[]'::jsonb;
+  v_row record;
+  v_plan jsonb;
+  v_state text;
+  v_estimate integer;
+  v_succeeded integer;
+  v_failed integer;
+  v_canceled integer;
+  v_concurrency jsonb;
+  v_rate_limit jsonb;
+BEGIN
+  SELECT estimate >= 50000 INTO v_approximate
+    FROM workhorse.dashboard_job_estimate_v1();
+  v_health := workhorse.queue_health_v1();
+
+  FOR v_row IN
+    WITH known_queues AS (
+      SELECT queue_name FROM workhorse.dashboard_job_v1
+      UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1
+      UNION SELECT queue_name FROM workhorse.dashboard_concurrency_policy_v1
+      UNION SELECT queue_name FROM workhorse.dashboard_rate_limit_policy_v1
+    ), live_counts AS (
+      SELECT queue_name,
+             count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled,
+             count(*) FILTER (WHERE state = 'ready')::integer AS ready,
+             count(*) FILTER (WHERE state = 'active')::integer AS active
+        FROM workhorse.dashboard_job_runtime_v1 GROUP BY queue_name
+    ), terminal_counts AS (
+      SELECT job.queue_name,
+             count(*) FILTER (WHERE outcome.state = 'succeeded')::integer AS succeeded,
+             count(*) FILTER (WHERE outcome.state = 'failed')::integer AS failed,
+             count(*) FILTER (WHERE outcome.state = 'canceled')::integer AS canceled
+        FROM workhorse.dashboard_job_outcome_v1 outcome
+        JOIN workhorse.dashboard_job_v1 job ON job.id = outcome.job_id
+       WHERE NOT v_approximate GROUP BY job.queue_name
+    )
+    SELECT known.queue_name AS queue, COALESCE(control.paused, false) AS paused,
+           COALESCE(live.scheduled, 0)::integer AS scheduled,
+           COALESCE(live.ready, 0)::integer AS ready,
+           COALESCE(live.active, 0)::integer AS active,
+           COALESCE(terminal.succeeded, 0)::integer AS succeeded,
+           COALESCE(terminal.failed, 0)::integer AS failed,
+           COALESCE(terminal.canceled, 0)::integer AS canceled
+      FROM known_queues known
+      LEFT JOIN workhorse.dashboard_queue_control_v1 control USING (queue_name)
+      LEFT JOIN live_counts live USING (queue_name)
+      LEFT JOIN terminal_counts terminal USING (queue_name)
+     ORDER BY known.queue_name
+  LOOP
+    v_succeeded := v_row.succeeded;
+    v_failed := v_row.failed;
+    v_canceled := v_row.canceled;
+    IF v_approximate THEN
+      FOREACH v_state IN ARRAY ARRAY['succeeded', 'failed', 'canceled'] LOOP
+        EXECUTE 'EXPLAIN (FORMAT JSON) SELECT 1 '
+                'FROM workhorse.dashboard_job_outcome_v1 outcome '
+                'JOIN workhorse.dashboard_job_v1 job ON job.id=outcome.job_id '
+                'WHERE job.queue_name=$1 AND outcome.state=$2'
+          INTO v_plan USING v_row.queue, v_state;
+        v_estimate := GREATEST(0, round((v_plan->0->'Plan'->>'Plan Rows')::numeric));
+        CASE v_state
+          WHEN 'succeeded' THEN v_succeeded := v_estimate;
+          WHEN 'failed' THEN v_failed := v_estimate;
+          WHEN 'canceled' THEN v_canceled := v_estimate;
+        END CASE;
+      END LOOP;
+    END IF;
+
+    SELECT jsonb_build_object(
+             'namespace', policy->>'namespace',
+             'maxActive', (policy->>'max_active')::integer,
+             'utilizationKnown', true,
+             'active', (policy->>'active')::integer,
+             'available', GREATEST(0, (policy->>'max_active')::integer -
+                                       (policy->>'active')::integer),
+             'blockedReady', (policy->>'blocked_ready')::integer,
+             'maxActivePerKey', (policy->>'max_active_per_key')::integer,
+             'saturatedKeys', (policy->>'saturated_keys')::integer,
+             'highestKeyActive', (policy->>'highest_key_active')::integer)
+      INTO v_concurrency
+      FROM jsonb_array_elements(v_health->'concurrency_policies') policy
+     WHERE policy->>'queue_name' = v_row.queue;
+    SELECT jsonb_build_object(
+             'namespace', policy->>'namespace',
+             'rate', jsonb_build_object('limit', (policy->>'rate_limit')::integer,
+               'intervalMs', (policy->>'rate_interval_ms')::integer,
+               'burst', (policy->>'rate_burst')::integer),
+             'perKey', CASE WHEN policy->'per_key_limit' = 'null'::jsonb THEN NULL
+               ELSE jsonb_build_object('limit', (policy->>'per_key_limit')::integer,
+                 'intervalMs', (policy->>'per_key_interval_ms')::integer,
+                 'burst', (policy->>'per_key_burst')::integer) END,
+             'availableTokens', (policy->>'available_tokens')::numeric,
+             'throttledReady', (policy->>'throttled_ready')::integer,
+             'throttledKeys', (policy->>'throttled_keys')::integer,
+             'nextEligibleAt',
+             workhorse.dashboard_iso_v1((policy->>'next_eligible_at')::timestamptz))
+      INTO v_rate_limit
+      FROM jsonb_array_elements(v_health->'rate_limit_policies') policy
+     WHERE policy->>'queue_name' = v_row.queue;
+
+    v_queues := v_queues || jsonb_build_array(jsonb_build_object(
+      'queue', v_row.queue, 'paused', v_row.paused, 'scheduled', v_row.scheduled,
+      'ready', v_row.ready, 'active', v_row.active, 'succeeded', v_succeeded,
+      'failed', v_failed, 'canceled', v_canceled,
+      'terminalCountsApproximate', v_approximate,
+      'concurrencyPolicy', v_concurrency, 'rateLimitPolicy', v_rate_limit));
+  END LOOP;
+
+  RETURN jsonb_build_object(
+    'capturedAt', workhorse.dashboard_iso_v1(clock_timestamp()), 'queues', v_queues,
+    'concurrencyPoliciesCapped', EXISTS (
+      SELECT 1 FROM jsonb_array_elements(v_health->'concurrency_policies') policy
+       WHERE (policy->>'capped')::boolean),
+    'rateLimitPoliciesCapped', EXISTS (
+      SELECT 1 FROM jsonb_array_elements(v_health->'rate_limit_policies') policy
+       WHERE (policy->>'policy_set_capped')::boolean OR (policy->>'sample_capped')::boolean));
+END;
+$$;
+
 INSERT INTO workhorse.schema_migration(version, description) VALUES
   (1, 'baseline')
 ON CONFLICT DO NOTHING;

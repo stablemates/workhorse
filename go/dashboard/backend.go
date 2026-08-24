@@ -188,83 +188,10 @@ SELECT ARRAY(SELECT value FROM queue_values WHERE value IS NOT NULL ORDER BY val
 }
 
 func (service *backend) queues(ctx context.Context, _ any, _ string) (any, error) {
-	estimateRows, err := service.executor.Query(ctx, "SELECT estimate FROM workhorse.dashboard_job_estimate_v1()")
-	if err != nil {
-		return nil, err
-	}
-	jobEstimate := integer(estimateRows[0]["estimate"])
-	approximate := jobEstimate >= 50_000
-	rows, err := service.executor.Query(ctx, `
-WITH known_queues AS (
-  SELECT queue_name FROM workhorse.dashboard_job_v1
-  UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1
-  UNION SELECT queue_name FROM workhorse.dashboard_concurrency_policy_v1
-  UNION SELECT queue_name FROM workhorse.dashboard_rate_limit_policy_v1
-), live_counts AS (
-  SELECT queue_name,
-         count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled,
-         count(*) FILTER (WHERE state = 'ready')::integer AS ready,
-         count(*) FILTER (WHERE state = 'active')::integer AS active
-    FROM workhorse.dashboard_job_runtime_v1 GROUP BY queue_name
-), terminal_counts AS (
-  SELECT job.queue_name,
-         count(*) FILTER (WHERE outcome.state = 'succeeded')::integer AS succeeded,
-         count(*) FILTER (WHERE outcome.state = 'failed')::integer AS failed,
-         count(*) FILTER (WHERE outcome.state = 'canceled')::integer AS canceled
-	FROM workhorse.dashboard_job_outcome_v1 outcome
-	JOIN workhorse.dashboard_job_v1 job ON job.id = outcome.job_id
-	WHERE NOT $1::boolean
-	GROUP BY job.queue_name
-)
-SELECT known.queue_name AS queue, COALESCE(control.paused, false) AS paused,
-       COALESCE(live.scheduled, 0)::integer AS scheduled,
-       COALESCE(live.ready, 0)::integer AS ready,
-       COALESCE(live.active, 0)::integer AS active,
-       COALESCE(terminal.succeeded, 0)::integer AS succeeded,
-       COALESCE(terminal.failed, 0)::integer AS failed,
-       COALESCE(terminal.canceled, 0)::integer AS canceled
-  FROM known_queues known
-  LEFT JOIN workhorse.dashboard_queue_control_v1 control USING (queue_name)
-  LEFT JOIN live_counts live USING (queue_name)
-  LEFT JOIN terminal_counts terminal USING (queue_name)
-	 ORDER BY known.queue_name`, approximate)
-	if err != nil {
-		return nil, err
-	}
-	estimates := make(map[string]map[string]any)
-	if approximate {
-		var estimateErr error
-		estimates, estimateErr = service.estimateQueueTerminalCounts(ctx, rows)
-		if estimateErr != nil {
-			return nil, estimateErr
-		}
-	}
-	health, err := service.health(ctx)
-	if err != nil {
-		return nil, err
-	}
-	concurrency, rateLimits, concurrencyCapped, rateCapped := admissionPolicies(health)
-	queues := make([]map[string]any, 0, len(rows))
-	for _, row := range rows {
-		projected := make(map[string]any, len(row)+3)
-		for key, value := range row {
-			projected[key] = value
-		}
-		projected["terminalCountsApproximate"] = approximate
-		name := fmt.Sprint(row["queue"])
-		if approximate {
-			projected["succeeded"] = integer(estimates[name]["succeeded"])
-			projected["failed"] = integer(estimates[name]["failed"])
-			projected["canceled"] = integer(estimates[name]["canceled"])
-		}
-		projected["concurrencyPolicy"] = concurrency[name]
-		projected["rateLimitPolicy"] = rateLimits[name]
-		queues = append(queues, projected)
-	}
-	return map[string]any{
-		"capturedAt": time.Now().UTC().Format(time.RFC3339Nano), "queues": queues,
-		"concurrencyPoliciesCapped": concurrencyCapped, "rateLimitPoliciesCapped": rateCapped,
-	}, nil
+	return service.jsonQuery(
+		ctx,
+		"SELECT workhorse.dashboard_queues_v1('{}'::jsonb) AS result",
+	)
 }
 
 func (service *backend) estimateRows(ctx context.Context, statement string, arguments ...any) (int, error) {
@@ -297,86 +224,6 @@ func (service *backend) estimateRows(ctx context.Context, statement string, argu
 		return 0, fmt.Errorf("row estimate document omitted Plan")
 	}
 	return max(0, integer(plan["Plan Rows"])), nil
-}
-
-func (service *backend) estimateQueueTerminalCounts(ctx context.Context, queues []workhorse.Row) (map[string]map[string]any, error) {
-	states := []string{"succeeded", "failed", "canceled"}
-	if len(queues) == 0 {
-		return map[string]map[string]any{}, nil
-	}
-	branches, arguments := make([]string, 0, len(queues)*len(states)), make([]any, 0, len(queues)*len(states)*4)
-	for _, queueRow := range queues {
-		queue := fmt.Sprint(queueRow["queue"])
-		for _, state := range states {
-			start := len(arguments) + 1
-			branches = append(branches, fmt.Sprintf(`SELECT $%d::text queue,$%d::text state FROM workhorse.dashboard_job_outcome_v1 outcome JOIN workhorse.dashboard_job_v1 job ON job.id=outcome.job_id WHERE job.queue_name=$%d AND outcome.state=$%d`, start, start+1, start+2, start+3))
-			arguments = append(arguments, queue, state, queue, state)
-		}
-	}
-	rows, err := service.executor.Query(ctx, "EXPLAIN (FORMAT JSON) "+strings.Join(branches, " UNION ALL "), arguments...)
-	if err != nil {
-		return nil, err
-	}
-	row, err := oneRow(rows, "grouped queue estimate")
-	if err != nil {
-		return nil, err
-	}
-	var encoded any
-	for _, cell := range row {
-		encoded, err = decodeJSONCell(cell)
-		if err != nil {
-			return nil, err
-		}
-		break
-	}
-	documents, ok := encoded.([]any)
-	if !ok || len(documents) == 0 {
-		return nil, fmt.Errorf("grouped queue estimate returned %T", encoded)
-	}
-	document, ok := documents[0].(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("grouped queue estimate document returned %T", documents[0])
-	}
-	root, ok := document["Plan"].(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("grouped queue estimate document omitted Plan")
-	}
-	var findAppendPlans func(map[string]any) []any
-	findAppendPlans = func(plan map[string]any) []any {
-		children, _ := plan["Plans"].([]any)
-		if plan["Node Type"] == "Append" {
-			return children
-		}
-		for _, rawChild := range children {
-			if child, ok := rawChild.(map[string]any); ok {
-				if found := findAppendPlans(child); found != nil {
-					return found
-				}
-			}
-		}
-		return nil
-	}
-	plans := findAppendPlans(root)
-	if plans == nil {
-		plans = []any{root}
-	}
-	if len(plans) != len(branches) {
-		return nil, fmt.Errorf("grouped queue estimate returned %d plans; expected %d", len(plans), len(branches))
-	}
-	estimates := make(map[string]map[string]any, len(queues))
-	for index, rawPlan := range plans {
-		plan, ok := rawPlan.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("grouped queue estimate plan returned %T", rawPlan)
-		}
-		queue := fmt.Sprint(queues[index/len(states)]["queue"])
-		state := states[index%len(states)]
-		if estimates[queue] == nil {
-			estimates[queue] = make(map[string]any, len(states))
-		}
-		estimates[queue][state] = max(0, integer(plan["Plan Rows"]))
-	}
-	return estimates, nil
 }
 
 func admissionPolicies(health map[string]any) (map[string]any, map[string]any, bool, bool) {

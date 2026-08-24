@@ -368,9 +368,7 @@ export const dashboardRouter = {
     cron: procedure.handler(({ context }) =>
       readDashboardCron(context.database, context.maintenanceLoops),
     ),
-    queues: procedure.handler(({ context }) =>
-      readDashboardQueues(context.database, context.readQueueHealth),
-    ),
+    queues: procedure.handler(({ context }) => readDashboardQueues(context.database)),
     system: procedure
       .input(systemInput)
       .handler(({ context, input }) =>

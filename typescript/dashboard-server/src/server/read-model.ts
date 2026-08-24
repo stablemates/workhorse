@@ -32,7 +32,6 @@ import {
   MaintenanceLoopCadences,
   dashboardConcurrencyPolicySummary,
   dashboardRateLimitPolicySummary,
-  readIdempotencyEvidence,
 } from "../wire.js";
 import {
   statAttemptErrors,
@@ -90,16 +89,6 @@ const currentSignalWaitJoin = sql`
   LEFT JOIN workhorse.dashboard_signal_wait_v1 signal_wait
     ON signal_wait.job_id = j.id AND signal_wait.signal_name = r.wait_name
 `;
-const currentHumanWaitColumns = sql`
-  human_wait.token_name AS human_wait_name,
-  human_wait.context AS human_wait_context,
-  human_wait.deadline_at AS human_wait_deadline_at
-`;
-const currentHumanWaitJoin = sql`
-  LEFT JOIN workhorse.dashboard_human_wait_v1 human_wait
-    ON human_wait.job_id = j.id AND human_wait.token_name = r.wait_name
-`;
-
 function signalWaitSummary(
   name: string | null,
   deadlineAt: Date | string | null,
@@ -296,37 +285,6 @@ function externalWaitExists(jobId: DashboardSql) {
   `;
 }
 
-function taskSearchPattern(search: string | null): string | null {
-  if (!search) return null;
-  // ILIKE is case-insensitive. User * is the only wildcard; literal !, %, and _ are escaped.
-  return `%${search.replaceAll("!", "!!").replaceAll("%", "!%").replaceAll("_", "!_").replaceAll("*", "%")}%`;
-}
-
-function taskQueryCondition(options: {
-  queue: string | null;
-  worker: string | null;
-  jobType: string | null;
-  tags: readonly string[];
-  searchPattern: string | null;
-  priority: number | null;
-}) {
-  const { queue, worker, jobType, tags, searchPattern, priority } = options;
-  const tagArray = textArrayExpression(tags);
-  return sql`
-    (${queue}::text IS NULL OR queue = ${queue})
-    AND (${worker}::text IS NULL OR worker_id = ${worker})
-    AND (${jobType}::text IS NULL OR type = ${jobType})
-    AND (${priority}::integer IS NULL OR priority = ${priority})
-    -- Multiple selected tags use OR semantics through PostgreSQL array overlap.
-    AND (cardinality(${tagArray}) = 0 OR tags && ${tagArray})
-    AND (
-      ${searchPattern}::text IS NULL
-      OR type ILIKE ${searchPattern} ESCAPE '!'
-      OR queue ILIKE ${searchPattern} ESCAPE '!'
-      OR id::text ILIKE ${searchPattern} ESCAPE '!'
-    )`;
-}
-
 /**
  * Above this size, sidebar counts switch from exact scans to planner estimates.
  * job_runtime stays small by design (live jobs only), so it is always counted
@@ -341,54 +299,6 @@ async function estimateRows(database: DashboardDatabase, query: ReturnType<typeo
   const parsed: unknown = typeof cell === "string" ? JSON.parse(cell) : cell;
   const rows = (parsed as Array<{ Plan?: { "Plan Rows"?: number } }>)[0]?.Plan?.["Plan Rows"];
   return typeof rows === "number" ? Math.max(0, Math.round(rows)) : 0;
-}
-
-const terminalStates = ["succeeded", "failed", "canceled"] as const;
-
-function findAppendPlans(plan: Record<string, unknown> | undefined): unknown[] | null {
-  if (!plan) return null;
-  if (plan["Node Type"] === "Append" && Array.isArray(plan.Plans)) return plan.Plans;
-  if (!Array.isArray(plan.Plans)) return null;
-  for (const child of plan.Plans) {
-    const found = findAppendPlans(child as Record<string, unknown>);
-    if (found) return found;
-  }
-  return null;
-}
-
-/** Read every queue/state planner estimate from one EXPLAIN document. */
-async function estimateQueueTerminalCounts(database: DashboardDatabase, queues: readonly string[]) {
-  const estimates = new Map<string, { succeeded: number; failed: number; canceled: number }>();
-  if (queues.length === 0) return estimates;
-  const branches = queues.flatMap((queue) =>
-    terminalStates.map(
-      (state) => sql`
-      SELECT ${queue}::text AS queue, ${state}::text AS state
-        FROM workhorse.dashboard_job_outcome_v1 outcome
-        JOIN workhorse.dashboard_job_v1 job ON job.id = outcome.job_id
-       WHERE job.queue_name = ${queue} AND outcome.state = ${state}
-    `,
-    ),
-  );
-  const result = await database.execute<Record<string, unknown>>(
-    sql`EXPLAIN (FORMAT JSON) ${sql.join(branches, sql` UNION ALL `)}`,
-  );
-  const cell = Object.values(result.rows[0] ?? {})[0];
-  const parsed: unknown = typeof cell === "string" ? JSON.parse(cell) : cell;
-  const root = (parsed as Array<{ Plan?: Record<string, unknown> }>)[0]?.Plan;
-  const plans = findAppendPlans(root) ?? (root ? [root] : []);
-  if (!Array.isArray(plans) || plans.length !== branches.length) {
-    throw new Error("the grouped queue estimate returned an unexpected plan shape");
-  }
-  for (const [index, rawPlan] of plans.entries()) {
-    const queue = queues[Math.floor(index / terminalStates.length)]!;
-    const state = terminalStates[index % terminalStates.length]!;
-    const plan = rawPlan as Record<string, unknown>;
-    const current = estimates.get(queue) ?? { succeeded: 0, failed: 0, canceled: 0 };
-    current[state] = Math.max(0, Math.round(Number(plan["Plan Rows"] ?? 0)));
-    estimates.set(queue, current);
-  }
-  return estimates;
 }
 
 export async function readDashboardTaskCounts(
@@ -508,97 +418,11 @@ async function readDashboardTaskCountsExact(
 /** Queue management rows keep hot live-state counts exact and estimate cold outcomes at scale. */
 export async function readDashboardQueues(
   database: DashboardDatabase,
-  readQueueHealth: DashboardQueueHealthReader = createDashboardQueueHealthReader(database),
 ): Promise<DashboardQueuesPage> {
-  const [queueRows, relationRows, health] = await Promise.all([
-    database.execute<{
-      queue: string;
-      paused: boolean;
-      scheduled: number;
-      ready: number;
-      active: number;
-    }>(sql`
-      WITH known_queues AS (
-        SELECT queue_name FROM workhorse.dashboard_job_v1
-        UNION
-        SELECT queue_name FROM workhorse.dashboard_queue_control_v1
-        UNION
-        SELECT queue_name FROM workhorse.dashboard_concurrency_policy_v1
-        UNION
-        SELECT queue_name FROM workhorse.dashboard_rate_limit_policy_v1
-      ), live_counts AS (
-        SELECT queue_name,
-               count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled,
-               count(*) FILTER (WHERE state = 'ready')::integer AS ready,
-               count(*) FILTER (WHERE state = 'active')::integer AS active
-          FROM workhorse.dashboard_job_runtime_v1
-         GROUP BY queue_name
-      )
-      SELECT known.queue_name AS queue, COALESCE(control.paused, false) AS paused,
-             COALESCE(live.scheduled, 0)::integer AS scheduled,
-             COALESCE(live.ready, 0)::integer AS ready,
-             COALESCE(live.active, 0)::integer AS active
-        FROM known_queues known
-        LEFT JOIN workhorse.dashboard_queue_control_v1 control USING (queue_name)
-        LEFT JOIN live_counts live USING (queue_name)
-       ORDER BY known.queue_name
-    `),
-    database.execute<{ estimate: string | number }>(sql`
-      SELECT estimate FROM workhorse.dashboard_job_estimate_v1()
-    `),
-    readQueueHealth(),
-  ]);
-  const approximate = Number(relationRows.rows[0]?.estimate ?? -1) >= approximateCountThreshold;
-
-  let terminalCounts: Map<string, { succeeded: number; failed: number; canceled: number }>;
-  if (approximate) {
-    terminalCounts = await estimateQueueTerminalCounts(
-      database,
-      queueRows.rows.map((row) => row.queue),
-    );
-  } else {
-    const exactRows = await database.execute<{
-      queue: string;
-      succeeded: number;
-      failed: number;
-      canceled: number;
-    }>(sql`
-      SELECT job.queue_name AS queue,
-             count(*) FILTER (WHERE outcome.state = 'succeeded')::integer AS succeeded,
-             count(*) FILTER (WHERE outcome.state = 'failed')::integer AS failed,
-             count(*) FILTER (WHERE outcome.state = 'canceled')::integer AS canceled
-        FROM workhorse.dashboard_job_outcome_v1 outcome
-        JOIN workhorse.dashboard_job_v1 job ON job.id = outcome.job_id
-       GROUP BY job.queue_name
-    `);
-    terminalCounts = new Map(
-      exactRows.rows.map((row) => [
-        row.queue,
-        { succeeded: row.succeeded, failed: row.failed, canceled: row.canceled },
-      ]),
-    );
-  }
-
-  const admissionPolicies = dashboardAdmissionPolicies(health);
-
-  return {
-    capturedAt: new Date().toISOString(),
-    queues: queueRows.rows.map((row) => ({
-      queue: row.queue,
-      paused: row.paused,
-      scheduled: row.scheduled,
-      ready: row.ready,
-      active: row.active,
-      succeeded: terminalCounts.get(row.queue)?.succeeded ?? 0,
-      failed: terminalCounts.get(row.queue)?.failed ?? 0,
-      canceled: terminalCounts.get(row.queue)?.canceled ?? 0,
-      terminalCountsApproximate: approximate,
-      concurrencyPolicy: admissionPolicies.concurrency.get(row.queue) ?? null,
-      rateLimitPolicy: admissionPolicies.rateLimits.get(row.queue) ?? null,
-    })),
-    concurrencyPoliciesCapped: health.concurrencyPolicies.capped,
-    rateLimitPoliciesCapped: health.rateLimitPolicies.capped,
-  };
+  const result = await database.execute<{ result: DashboardQueuesPage }>(sql`
+    SELECT workhorse.dashboard_queues_v1('{}'::jsonb) AS result
+  `);
+  return expectOneRow(result, "the dashboard queues procedure").result;
 }
 
 export const activityPeriods: Record<
@@ -751,216 +575,47 @@ export async function readDashboardTasks(
   projectDurability: DashboardDurabilityProjector = noDashboardDurability,
   canCompleteHumanWait = false,
 ): Promise<DashboardTasksPage> {
-  const { filter, page, pageSize, queue, tags, search, worker, jobType, priority, sort } = query;
-  const offset = (page - 1) * pageSize;
-  const searchPattern = taskSearchPattern(search);
-  const queryCondition = taskQueryCondition({
-    queue,
-    worker,
-    jobType,
-    tags,
-    searchPattern,
-    priority,
-  });
-  const taskOrder =
-    sort === "priority"
-      ? sql`priority DESC, updated_at DESC, id DESC`
-      : sql`updated_at DESC, id DESC`;
-  const attemptWorkerJoin =
-    worker === null
-      ? sql``
-      : sql`
-          LEFT JOIN LATERAL (
-            SELECT ah.worker_id FROM workhorse.dashboard_attempt_history_v1 ah
-             WHERE ah.job_id = j.id ORDER BY ah.attempt DESC LIMIT 1
-          ) attempt_worker ON true
-        `;
-  const attemptWorkerId = worker === null ? sql`NULL::text` : sql`attempt_worker.worker_id`;
-  const durabilityColumns =
-    projectDurability === noDashboardDurability
-      ? sql`NULL::jsonb AS payload, ARRAY[]::text[] AS checkpoint_names`
-      : sql`j.payload,
-            ARRAY(SELECT checkpoint.checkpoint_name
-                    FROM workhorse.dashboard_job_checkpoint_v1 checkpoint
-                   WHERE checkpoint.job_id = j.id
-                   ORDER BY checkpoint.checkpoint_name) AS checkpoint_names`;
-  const [totalRows, jobRows] = await Promise.all([
-    database.execute<{ count: number }>(sql`
-      WITH tasks AS (
-        SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.tags, j.priority,
-               COALESCE(r.state, o.state) AS state,
-               ${externalWaitExists(sql`j.id`)} AS external_wait,
-               COALESCE(r.current_attempt, o.current_attempt) AS attempt,
-               COALESCE(r.worker_id, current_wait.worker_id, ${attemptWorkerId},
-                        'unassigned') AS worker_id
-          FROM workhorse.dashboard_job_v1 j
-          LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
-          LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
-          LEFT JOIN workhorse.dashboard_job_wait_v1 current_wait
-            ON current_wait.job_id = j.id AND current_wait.wait_name = r.wait_name
-          ${attemptWorkerJoin}
-      )
-      SELECT count(*)::integer AS count FROM tasks
-       WHERE ${taskFilterCondition(filter)} AND ${queryCondition}
-    `),
-    database.execute<{
-      id: string;
-      queue: string;
-      type: string;
-      priority: number;
-      state: string;
-      blocked_reason: "prerequisite_pending" | null;
-      prerequisite_job_ids: string[];
-      attempt: number;
-      max_attempts: number;
-      retry_policy: RetryPolicy | null;
-      deadline_at: Date | string | null;
-      execution_timeout_ms: string | number | null;
-      payload: unknown;
-      tags: string[];
-      run_at: Date | string | null;
-      current_worker_id: string | null;
-      worker_id: string | null;
-      finished_at: Date | string | null;
-      error: unknown;
-      created_at: Date | string;
-      updated_at: Date | string;
-      checkpoint_names: string[];
-      wait_name: string | null;
-      wake_at: Date | string | null;
-      wait_mode: "relative" | "absolute" | null;
-      signal_wait_deadline_at: Date | string | null;
-      human_wait_name: string | null;
-      human_wait_context: unknown;
-      human_wait_deadline_at: Date | string | null;
-      cancel_requested_at: Date | string | null;
-      cancel_requested_by: string | null;
-      cancel_reason: string | null;
-      enqueued_details: unknown;
-    }>(sql`
-      WITH tasks AS (
-        SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.priority,
-               COALESCE(r.state, o.state) AS state,
-               ${externalWaitExists(sql`j.id`)} AS external_wait,
-               CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
-               ARRAY(
-                 SELECT dependency.prerequisite_job_id
-                   FROM workhorse.dashboard_job_dependency_v1 dependency
-                  WHERE dependency.dependent_job_id = j.id
-                    AND dependency.released_at IS NULL
-                  ORDER BY dependency.prerequisite_job_id
-               ) AS prerequisite_job_ids,
-               COALESCE(r.current_attempt, o.current_attempt) AS attempt,
-               j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.tags,
-               ${durabilityColumns},
-               COALESCE(r.run_at, o.run_at) AS run_at,
-               r.worker_id AS current_worker_id,
-               COALESCE(r.worker_id, durable_wait.worker_id, ${attemptWorkerId})
-                 AS worker_id,
-               o.finished_at,
-               COALESCE(o.error, r.error) AS error,
-               j.created_at,
-               COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at,
-               r.wait_name,
-               r.cancel_requested_at,
-               r.cancel_requested_by,
-               r.cancel_reason,
-               durable_wait.wake_at,
-               durable_wait.mode AS wait_mode,
-               ${currentSignalWaitColumn},
-               ${currentHumanWaitColumns},
-               enqueued_event.details AS enqueued_details
-          FROM workhorse.dashboard_job_v1 j
-          LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
-          LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
-          LEFT JOIN workhorse.dashboard_job_wait_v1 durable_wait
-            ON durable_wait.job_id = j.id AND durable_wait.wait_name = r.wait_name
-          ${currentSignalWaitJoin}
-          ${currentHumanWaitJoin}
-          LEFT JOIN LATERAL (
-            SELECT event.details FROM workhorse.dashboard_job_event_v1 event
-             WHERE event.job_id = j.id AND event.event_type = 'enqueued'
-             ORDER BY event.occurred_at, event.event_id LIMIT 1
-          ) enqueued_event ON true
-          ${attemptWorkerJoin}
-      )
-      SELECT *
-        FROM tasks
-       WHERE ${taskFilterCondition(filter)} AND ${queryCondition}
-       ORDER BY ${taskOrder}
-       LIMIT ${pageSize}
-      OFFSET ${offset}
-    `),
-  ]);
-  return {
-    capturedAt: new Date().toISOString(),
-    canCompleteHumanWait,
-    filter,
-    queue,
-    worker,
-    jobType,
-    priority,
-    sort,
-    tags: [...tags],
-    search,
-    page,
-    pageSize,
-    total: totalRows.rows[0]?.count ?? 0,
-    jobs: jobRows.rows.map((row) => {
+  const input = JSON.stringify({ ...query, canCompleteHumanWait });
+  const rows = await database.execute<{ result: DashboardTasksPage }>(sql`
+    SELECT workhorse.dashboard_tasks_v1(${input}::jsonb) AS result
+  `);
+  const page = expectOneRow(rows, "the dashboard tasks procedure").result;
+  if (projectDurability === noDashboardDurability || page.jobs.length === 0) return page;
+
+  const durabilityRows = await database.execute<{
+    id: string;
+    type: string;
+    payload: unknown;
+    checkpoint_names: string[];
+  }>(sql`
+    SELECT job.id::text AS id, job.job_type AS type, job.payload,
+           ARRAY(SELECT checkpoint.checkpoint_name
+                   FROM workhorse.dashboard_job_checkpoint_v1 checkpoint
+                  WHERE checkpoint.job_id = job.id
+                  ORDER BY checkpoint.checkpoint_name) AS checkpoint_names
+      FROM workhorse.dashboard_job_v1 job
+     WHERE job.id = ANY(${page.jobs.map((job) => job.id)}::uuid[])
+  `);
+  const durabilityByJob = new Map(
+    durabilityRows.rows.map((row) => {
       const plan = projectDurability(row.type, row.payload);
       const checkpointNames = new Set(row.checkpoint_names);
-      return {
-        id: row.id,
-        queue: row.queue,
-        type: row.type,
-        priority: row.priority,
-        state: row.state,
-        blockedReason: row.blocked_reason,
-        prerequisiteJobIds: row.prerequisite_job_ids,
-        attempt: row.attempt,
-        maxAttempts: row.max_attempts,
-        retryPolicy: row.retry_policy,
-        deadlineAt: toIsoOrNull(row.deadline_at),
-        executionTimeoutMs:
-          row.execution_timeout_ms === null ? null : Number(row.execution_timeout_ms),
-        tags: row.tags,
-        keyed:
-          readIdempotencyEvidence({ type: "enqueued", details: row.enqueued_details }) !== null,
-        cancellation: cancellationRequest(
-          row.cancel_requested_at,
-          row.cancel_requested_by,
-          row.cancel_reason,
-        ),
-        runAt: toIsoOrNull(row.run_at),
-        workerId: row.current_worker_id,
-        lastWorkerId: row.worker_id,
-        finishedAt: toIsoOrNull(row.finished_at),
-        errorMessage: errorMessageOrNull(row.error),
-        createdAt: toIso(row.created_at),
-        updatedAt: toIso(row.updated_at),
-        durability: plan
+      return [
+        row.id,
+        plan
           ? {
               completedSteps: plan.steps.filter((step) => checkpointNames.has(step.name)).length,
               totalSteps: plan.steps.length,
             }
           : null,
-        waitName: row.wait_name,
-        wakeAt: toIsoOrNull(row.wake_at),
-        wait:
-          row.wait_name && row.wake_at && row.wait_mode
-            ? { name: row.wait_name, wakeAt: toIso(row.wake_at), mode: row.wait_mode }
-            : null,
-        signalWait: signalWaitSummary(row.wait_name, row.signal_wait_deadline_at),
-        humanWait:
-          row.human_wait_name && row.human_wait_deadline_at
-            ? {
-                name: row.human_wait_name,
-                context: row.human_wait_context,
-                deadlineAt: toIso(row.human_wait_deadline_at),
-              }
-            : null,
-      };
+      ] as const;
     }),
+  );
+  return {
+    ...page,
+    jobs: page.jobs.map((job) =>
+      Object.assign(job, { durability: durabilityByJob.get(job.id) ?? null }),
+    ),
   };
 }
 
