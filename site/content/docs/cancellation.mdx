@@ -116,6 +116,9 @@ outcome; PostgreSQL never creates duplicate terminal rows or events.
 Canceling a job created by a [schedule](/docs/schedules) affects that occurrence only. The
 schedule definition stays enabled until deployment synchronization changes it.
 
+All clients reach this database-owned transition through `cancel_v1`, even when their public method
+names follow different language conventions.
+
 ## Next
 
 - [Deadlines and timeouts](/docs/deadlines) — stop work when a clock expires

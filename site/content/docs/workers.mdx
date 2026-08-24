@@ -231,6 +231,11 @@ A worker that dies stops refreshing and goes stale in the registry. Automatic ma
 that row eligible for removal after one minute. Its jobs are not lost: their leases expire and
 recovery makes them claimable again.
 
+The protocol names make this lifecycle greppable. `claim_v1` writes the `job_runtime` row and its
+`expires_at` lease, `heartbeat_v1` extends it, and `recover_expired_v1` makes abandoned work ready.
+Workers claim from `workhorse_jobs`, TypeScript configures fallback polling with `pollMs`, and
+processes commonly begin graceful drain after `SIGINT`.
+
 ## Next
 
 - [Deployment and operations](/docs/operations) — supervise and drain the worker process

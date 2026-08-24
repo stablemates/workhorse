@@ -55,6 +55,9 @@ PostgreSQL owns the budgets and returns the applied values under `budgets`. Appl
 defaults without replacing operator overrides, so TypeScript, Go, Python, the dashboard, and
 `workhorse health --json` all use the same evaluation.
 
+Every client decodes the database response into its language's `QueueHealth` type, preserving the
+same reason codes and the `capped` lower-bound marker for operator tooling.
+
 ## Next
 
 - [Operations](/docs/operations) — act on unhealthy queue state

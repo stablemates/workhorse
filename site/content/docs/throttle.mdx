@@ -44,6 +44,9 @@ After the window closes, the key can accept a new job. One request cannot combin
 idempotency, debounce, or dependencies. The dashboard shows a safe key digest, the window, and the
 number of absorbed requests without exposing the raw key.
 
+If the retained job depends on earlier work, `prerequisiteJobId` continues to identify that
+dependency while the throttle key controls repeated acceptance.
+
 ## Next
 
 - [Debounce](/docs/debounce) — replace pending payloads during a quiet period

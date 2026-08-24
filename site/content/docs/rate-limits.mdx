@@ -85,6 +85,11 @@ queue-level configured rate, tokens, throttle depth, and eligibility delay.
 The dashboard's Queues page keeps concurrency and start rate in separate columns, so an
 active-work cap stays visually distinct from a ready job waiting for its next token.
 
+Python synchronizes policies through `Queue.sync_rate_limit_policies` or
+`AsyncQueue.sync_rate_limit_policies`, then reads them through `Queue.list_rate_limit_policies` or
+`AsyncQueue.list_rate_limit_policies`. TypeScript exposes current pressure through
+`Queue.rateLimitStatuses`.
+
 ## Next
 
 - [Concurrency policies](/docs/concurrency-policies) — limit simultaneous active work

@@ -62,6 +62,11 @@ an operator open related tasks directly.
 PostgreSQL bounds direct edges and downstream settlement work. A cycle or an oversized graph raises
 `DependencyCycleError` or `DependencyLimitExceededError` before unbounded work reaches dispatch.
 
+Producers declare edges with `EnqueueOptions.dependencies`. PostgreSQL stores blocked work in
+`job_runtime` until its `runAt` gate and prerequisites allow a `dependency_released` transition.
+`Queue.cancel` can settle that graph, while `Queue.health()` reports `Blocked` work through the
+public `Queue` client.
+
 ## Next
 
 - [Child jobs](/docs/child-jobs) — delegate work from inside a handler

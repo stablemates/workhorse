@@ -9,12 +9,10 @@ import {
   type ParityRow,
 } from "./support/parity-capabilities.js";
 
-// docs/parity.md is the authoritative per-language support matrix, and it used to be the only
-// place that knowledge lived. This file makes it a checked claim: the markdown tables and the
-// registry in support/parity-capabilities.ts must agree cell for cell, and every Supported cell
-// must name a test file in that language which actually exists and actually mentions the
-// capability. Absent cells are recorded too, so shipping a capability without flipping its cell
-// fails here rather than going unnoticed.
+// The registry in support/parity-capabilities.ts owns the per-language support matrix, while the
+// generated docs/parity.md publishes it. These tests validate the rendered artifact and require
+// every Supported cell to name a test file that exists and mentions the capability. Absent cells
+// are recorded too, so shipping a capability without flipping its cell fails here.
 
 const repository = path.resolve(import.meta.dirname, "../../..");
 const languages: readonly ParityLanguage[] = ["typescript", "python", "go"];
@@ -29,8 +27,7 @@ interface DocumentedRow {
 /**
  * Read the three capability tables out of the markdown.
  *
- * Parsing the document rather than importing a generated copy is the point: the file a human edits
- * is the file this test reads.
+ * Parse the generated document to verify that readers see every registry row and status.
  */
 function documentedTables(markdown: string): DocumentedRow[][] {
   const tables: DocumentedRow[][] = [];

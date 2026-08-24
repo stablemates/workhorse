@@ -5,7 +5,7 @@ description: Give jobs an attempt budget and a persisted backoff policy that Pos
 
 When a handler throws, the job usually is not finished — it has failed one attempt. PostgreSQL
 records the failure evidence, checks whether budget remains, and moves the job back to
-`scheduled` with a wake time or to a terminal failed outcome. This page covers who decides,
+`scheduled` with a wake time before returning it to `ready`, or to a terminal failed outcome. This page covers who decides,
 when the next attempt runs, and what survives in between.
 
 ## Set an attempt budget

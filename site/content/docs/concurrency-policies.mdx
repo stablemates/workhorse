@@ -100,6 +100,11 @@ counts, all bounded. OpenTelemetry publishes the same queue-level gauges without
 If ready work sits behind a full policy, it shows up as `blockedReady` rather than as a mystery
 latency.
 
+TypeScript synchronizes desired state with `Queue.syncConcurrencyPolicies`; Python uses
+`Queue.sync_concurrency_policies` or `AsyncQueue.sync_concurrency_policies`. Python reads policy
+state through `Queue.list_concurrency_policies` or `AsyncQueue.list_concurrency_policies`.
+PostgreSQL applies the policy in `claim_v1`, and `Queue.health()` exposes the resulting pressure.
+
 ## Next
 
 - [Rate limits](/docs/rate-limits) — limit how quickly work starts, not how much runs

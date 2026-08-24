@@ -131,6 +131,14 @@ programmatic APIs.
 read-only unless launched with a verified `--env`, which enables pausing and resuming the
 selected queue behind an explicit confirmation.
 
+Telemetry attributes producer calls such as `Queue.enqueue` to `deployment.environment.name` and
+`service.name`; Go accepts a `*slog.Logger` for the same runtime context. Stable metrics include
+`workhorse.jobs.enqueued`, `workhorse.jobs.claimed`, `workhorse.queue.paused`,
+`workhorse.jobs.enqueue.outcomes`, `workhorse.handler.executions`, `workhorse.handler.duration`,
+`workhorse.jobs.completed`, `workhorse.jobs.failed`, and `workhorse.jobs.retried`. The
+`non_replaceable` outcome distinguishes a rejected keyed replacement from a transport failure.
+Enqueue outcome labels remain `accepted`, `replayed`, `replaced`, and `coalesced` across runtimes.
+
 ## Next
 
 - [Worker processes](/docs/worker-processes) — deploy and drain runtime processes

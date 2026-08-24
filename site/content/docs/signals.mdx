@@ -48,6 +48,9 @@ trusted actor. An equivalent network retry returns the retained delivery. Reusin
 changed payload or attribution conflicts, and a competing late delivery returns the accepted
 winner without resuming the handler again.
 
+If another transition has already closed the boundary, the delivery returns `stale` and leaves the
+retained outcome unchanged.
+
 A delivery before the wait exists is rejected rather than buffered. A timeout, job deadline, or
 cancellation closes the boundary, so replay cannot continue with an invented payload.
 
@@ -56,6 +59,10 @@ public method, but its server replaces browser-supplied attribution with the aut
 
 Go applications deliver through `Queue.SendSignal` with `ExternalWaitDelivery`. The returned
 `SignalDeliveryResult` contains the database status and retained payload.
+
+TypeScript handlers call `ctx.waitForSignal` and pass `timeoutMs` when the wait needs a deadline. Go
+uses `HandlerContext.WaitForSignal`; both return a `nextCursor` that prevents an earlier signal from
+being consumed again.
 
 ## Next
 

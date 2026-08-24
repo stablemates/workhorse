@@ -75,6 +75,10 @@ Batch contexts omit timers, signals, human waits, and child joins because one me
 and replay independently inside a shared invocation. Register an ordinary handler when a job needs
 those boundaries.
 
+TypeScript configures grouping with `BatchHandlerOptions.maxSize` and
+`BatchHandlerOptions.lingerMs`; each option changes assembly of the batch without changing an
+individual job's lifecycle.
+
 ## Next
 
 - [Workers](/docs/workers) — size the capacity that batch members occupy

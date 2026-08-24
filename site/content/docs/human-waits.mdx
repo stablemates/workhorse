@@ -75,6 +75,11 @@ Go applications complete decisions through `Queue.CompleteHumanWait` with
 `Admin.listHumanWaits()` exposes the same paginated projection for custom operator tools. A timeout,
 job deadline, or cancellation closes the decision and makes late completion stale.
 
+TypeScript handlers call `ctx.waitForHuman` and can pass `timeoutMs`. Go exposes the same boundary
+as `HandlerContext.WaitForHuman`. Both return a `nextCursor`. The completion response uses the same
+retained-payload shape as `Queue.sendSignal`, although human decisions have their own completion
+method and authorization path.
+
 ## Next
 
 - [Dashboard](/docs/dashboard) — protect operator mutations

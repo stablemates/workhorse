@@ -46,6 +46,9 @@ The dashboard sorts the task list with higher priority first and shows the store
 details. The System page groups ready work by priority and shows the oldest task in each group, so
 operators can see lower-priority work waiting behind urgent arrivals.
 
+In TypeScript, `ScheduleJobDefinition` stores the recurring job's priority before `fireSchedule`
+creates an occurrence, so scheduled work enters the ordinary priority order.
+
 ## Next
 
 - [Job dependencies](/docs/job-dependencies) — release blocked work into priority dispatch

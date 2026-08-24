@@ -113,6 +113,9 @@ guessing.
 Operator reads never run validators, so historical JSON stays readable even after the application
 stops accepting that shape for new jobs.
 
+TypeScript applications provide the versioned registry through `QueueOptions.contracts`, so both
+enqueue validation and worker result validation use the same configured documents.
+
 ## Next
 
 - [Enqueue and transactions](/docs/enqueue) — create jobs atomically

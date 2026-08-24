@@ -150,6 +150,10 @@ provider's own idempotency key. `HandlerContext.checkpoint` can reuse a complete
 crash can still land after the effect and before the checkpoint commit — only the system
 performing the effect can close that final gap.
 
+Use a stable domain value such as `orderId` as the key. TypeScript can call
+`Queue.enqueueWithResult` and read `result.jobId` from its `EnqueueResult`; `Queue.enqueue` returns
+only the accepted job identifier when the outcome details are unnecessary.
+
 ## Next
 
 - [Enqueue and transactions](/docs/enqueue) — place the key on accepted work

@@ -1,9 +1,9 @@
 /**
- * The second source for `docs/parity.md`.
+ * The source for the generated language tables in `docs/parity.md`.
  *
- * The matrix in that file is prose, and prose rots. This registry restates every cell as data, and
- * `parity-matrix.test.ts` fails when the two disagree — so a capability cannot ship, or be
- * withdrawn, by editing only one of them.
+ * `scripts/generate-parity-tables.ts` renders every cell from this registry. Its check mode fails
+ * when the checked-in document is stale, so a capability cannot ship or be withdrawn by editing
+ * prose separately.
  *
  * A Supported cell carries evidence: a test file in that language, and patterns that must appear
  * inside it. That is deliberately a weaker claim than "this test proves the capability" — no
@@ -13,8 +13,8 @@
  * An Absent cell carries a reason instead. Recording why keeps a deliberate boundary distinguishable
  * from a gap that is merely open.
  *
- * A Planned cell carries the Plane work item that owns the gap. The document must link that item,
- * so a Planned cell cannot outlive the work it points at without someone noticing.
+ * A Planned cell carries the Plane work item that owns the gap. The generator writes its link into
+ * the document, so a Planned cell cannot outlive the work it points at unnoticed.
  */
 
 /** Where a language's tests live, relative to the repository root. */

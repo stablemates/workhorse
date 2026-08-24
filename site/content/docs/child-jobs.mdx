@@ -59,6 +59,11 @@ make them independently idempotent.
 `Admin.getChildLineage(jobId)` reads retained edges in either direction, and the dashboard links
 parents and children with their names and join state.
 
+TypeScript handlers create children with `HandlerContext.runChildren`, which returns each
+`ChildResult`. Use `HandlerContext.checkpoint` around replay-sensitive surrounding work. Workhorse
+raises `ChildLimitExceededError` or `ChildResultLimitExceededError` before a tree or retained result
+can grow without a bound.
+
 ## Next
 
 - [Job dependencies](/docs/job-dependencies) — block work declared by a producer

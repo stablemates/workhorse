@@ -43,8 +43,14 @@ first request fixes the run time and later requests should update only the paylo
 the job, it becomes terminal, or its window elapses, PostgreSQL returns `non_replaceable` and keeps
 the accepted payload unchanged.
 
+Only `scheduled` or `ready` jobs can be replaced. A refused replacement includes a stable `reason`
+so callers can distinguish lifecycle movement from an incompatible request.
+
 Debounce cannot share a request with idempotency, throttle, or dependencies because each mechanism
 assigns a different meaning to a repeated key or immutable edge.
+
+The result's `jobId` identifies the retained pending job. When replacement depends on earlier work,
+`prerequisiteJobId` identifies that immutable dependency instead of the debounce candidate.
 
 ## Next
 

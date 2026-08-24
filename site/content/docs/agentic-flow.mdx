@@ -54,6 +54,11 @@ compensation path when an external effect cannot safely repeat.
 parent, joins tool children, crosses a durable timer, delivers an idempotent approval signal, and
 prints the final result and progress.
 
+The example combines `HandlerContext.setProgress`, `HandlerContext.runChildren`,
+`Queue.syncRateLimitPolicies`, a per-tenant `concurrencyKey`, `HandlerContext.sleep`, and
+`HandlerContext.waitForSignal`. Python names progress updates `HandlerContext.set_progress`, while
+Go uses `HandlerContext.SetProgress`; every runtime reads its database from `DATABASE_URL`.
+
 ## Next
 
 - [Child jobs](/docs/child-jobs) — delegate and join tool work
