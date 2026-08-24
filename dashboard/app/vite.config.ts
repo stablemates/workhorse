@@ -55,7 +55,24 @@ export default defineConfig({
       },
     },
   ],
-  build: { outDir: "../dist/app", emptyOutDir: false },
+  build: {
+    outDir: "../dist/app",
+    emptyOutDir: false,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("/node_modules/@mantine/charts/")) return "mantine-charts";
+          if (id.includes("/node_modules/@mantine/notifications/")) return "notifications";
+          if (id.includes("/node_modules/@mantine/")) return "mantine";
+          if (id.includes("/node_modules/@phosphor-icons/")) return "icons";
+          if (id.includes("/node_modules/react") || id.includes("/node_modules/scheduler")) {
+            return "react";
+          }
+          return undefined;
+        },
+      },
+    },
+  },
   // The workspace packages expose their TypeScript source under `workhorse-source`, so this
   // harness compiles them from source instead of waiting for a build. The published packages keep
   // resolving to `dist`, because nothing outside this repository asks for that condition.

@@ -5,7 +5,7 @@ import type {
 } from "@workhorse-js/dashboard-server/wire";
 import { taskPageSizes, type TaskLocationState, type TaskPageSize } from "../task-location.js";
 import { type RunNowFeedback } from "../run-now.js";
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { dashboardDemoFeatureExamples, humanWaitQuickAction } from "../presentation.js";
 import type { TaskRowActionId } from "../presentation.js";
 import { notifyDashboard, notifyFailure, notifyRunNow } from "../notifications.js";
@@ -16,6 +16,7 @@ import {
   Code,
   Divider,
   Group,
+  Loader,
   Modal,
   Pagination,
   Paper,
@@ -48,11 +49,12 @@ import {
   TaskStatusDetail,
   TaskTags,
   TaskWaitBadge,
-  TasksActivityChart,
   taskDuration,
   useTaskFacets,
 } from "../components/task-list.js";
 import { copyToClipboard, formatExact, formatJson, formatRelative } from "../preferences.js";
+
+const TasksActivityChart = lazy(() => import("../charts/activity.js"));
 
 export interface DemoJobOptions {
   scenario?: DurableDemoScenario;
@@ -247,15 +249,26 @@ export function TasksPage({
           </Button>
         </Group>
       </Modal>
-      <TasksActivityChart
-        filter={data.filter}
-        period={locationState.period}
-        groupBy={locationState.group}
-        tags={data.tags}
-        queue={data.queue}
-        worker={data.worker}
-        updateLocation={updateLocation}
-      />
+      <Suspense
+        fallback={
+          <Paper withBorder p="md">
+            <Center h={320}>
+              <Loader size="sm" />
+            </Center>
+          </Paper>
+        }
+      >
+        <TasksActivityChart
+          filter={data.filter}
+          period={locationState.period}
+          groupBy={locationState.group}
+          tags={data.tags}
+          queue={data.queue}
+          worker={data.worker}
+          refreshKey={data}
+          updateLocation={updateLocation}
+        />
+      </Suspense>
       <Paper withBorder>
         <Stack gap="xs" p="md">
           <TaskListingFilters

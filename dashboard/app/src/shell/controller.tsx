@@ -18,6 +18,8 @@ import { useDisclosure } from "@mantine/hooks";
 import {
   useCallback,
   useEffect,
+  lazy,
+  Suspense,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -64,13 +66,29 @@ import {
   useDashboardClient,
 } from "../core.js";
 import { subscribeTimeZone } from "../preferences.js";
-import { DemoJobOptions, TasksPage } from "../pages/tasks.js";
-import { EventsPage } from "../pages/events.js";
-import { CronPage } from "../pages/schedules.js";
-import { QueuesPage } from "../pages/queues.js";
-import { SystemPage } from "../pages/overview.js";
-import { WorkersPage } from "../pages/workers.js";
-import { SettingsPage } from "../pages/settings/index.js";
+import type { DemoJobOptions } from "../pages/tasks.js";
+
+const TasksPage = lazy(() =>
+  import("../pages/tasks.js").then((module) => ({ default: module.TasksPage })),
+);
+const EventsPage = lazy(() =>
+  import("../pages/events.js").then((module) => ({ default: module.EventsPage })),
+);
+const CronPage = lazy(() =>
+  import("../pages/schedules.js").then((module) => ({ default: module.CronPage })),
+);
+const QueuesPage = lazy(() =>
+  import("../pages/queues.js").then((module) => ({ default: module.QueuesPage })),
+);
+const SystemPage = lazy(() =>
+  import("../pages/overview.js").then((module) => ({ default: module.SystemPage })),
+);
+const WorkersPage = lazy(() =>
+  import("../pages/workers.js").then((module) => ({ default: module.WorkersPage })),
+);
+const SettingsPage = lazy(() =>
+  import("../pages/settings/index.js").then((module) => ({ default: module.SettingsPage })),
+);
 
 export const refreshStorageKey = "workhorse-auto-refresh";
 export function readStoredRefreshInterval(): DashboardRefreshIntervalValue {
@@ -259,11 +277,13 @@ export function useDashboardController(
     async ({ background = false }: { background?: boolean } = {}) => {
       if (shouldDiscardBackgroundRefresh(background)) return;
       const activeRequest = ++requestId.current;
-      setLoadState((current) => ({
-        status: "loading",
-        data: current.data,
-        error: null,
-      }));
+      if (!background) {
+        setLoadState((current) => ({
+          status: "loading",
+          data: current.data,
+          error: null,
+        }));
+      }
       try {
         let data: PageData;
         if (route === "/tasks") {
@@ -314,21 +334,13 @@ export function useDashboardController(
           };
         }
         if (activeRequest === requestId.current) {
-          if (shouldDiscardBackgroundRefresh(background)) {
-            setLoadState((current) =>
-              current.data ? { status: "ready", data: current.data, error: null } : current,
-            );
-          } else {
+          if (!shouldDiscardBackgroundRefresh(background)) {
             setLoadState({ status: "ready", data, error: null });
           }
         }
       } catch (cause) {
         if (activeRequest === requestId.current) {
-          if (shouldDiscardBackgroundRefresh(background)) {
-            setLoadState((current) =>
-              current.data ? { status: "ready", data: current.data, error: null } : current,
-            );
-          } else {
+          if (!shouldDiscardBackgroundRefresh(background)) {
             setLoadState((current) => ({
               status: "error",
               data: current.data,
@@ -951,6 +963,20 @@ export function useDashboardController(
     );
   } else {
     content = null;
+  }
+
+  if (content !== null) {
+    content = (
+      <Suspense
+        fallback={
+          <Center mih="60vh">
+            <Loader size="sm" />
+          </Center>
+        }
+      >
+        {content}
+      </Suspense>
+    );
   }
 
   return {

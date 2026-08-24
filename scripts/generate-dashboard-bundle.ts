@@ -69,6 +69,15 @@ async function bundleFiles(directory: string, prefix = ""): Promise<readonly [st
 
 async function createArchive(directory: string): Promise<Buffer> {
   const files = await bundleFiles(directory);
+  const oversizedJavaScript = files.find(
+    ([name, content]) => name.endsWith(".js") && content.length >= 500_000,
+  );
+  if (oversizedJavaScript) {
+    const [name, content] = oversizedJavaScript;
+    throw new Error(
+      `Dashboard JavaScript chunk ${name} is ${content.length} bytes; every chunk must stay under 500 KB`,
+    );
+  }
   const tar = Buffer.concat([
     ...files.map(([name, content]) => tarEntry(name, content)),
     Buffer.alloc(1024),
