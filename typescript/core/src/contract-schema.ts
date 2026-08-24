@@ -54,6 +54,9 @@ const VALIDATION_KEYWORDS = new Set([
   "type",
   "uniqueItems",
 ]);
+const ajv = new Ajv2020({ strict: true, validateFormats: false });
+const objectValidators = new WeakMap<object, ValidateFunction<Json>>();
+const booleanValidators = new Map<boolean, ValidateFunction<Json>>();
 
 export function assertContractSchema(schema: Json): void {
   visitSchema(schema, "$");
@@ -90,7 +93,22 @@ function visitSchema(schema: Json, path: string): void {
 }
 
 export function compileContractSchema(schema: Json): ValidateFunction<Json> {
+  if (typeof schema === "boolean") {
+    const cached = booleanValidators.get(schema);
+    if (cached !== undefined) return cached;
+    assertContractSchema(schema);
+    const validator = ajv.compile<Json>(schema);
+    booleanValidators.set(schema, validator);
+    return validator;
+  }
+  if (schema === null || Array.isArray(schema) || typeof schema !== "object") {
+    assertContractSchema(schema);
+  }
+  const schemaObject = schema as object;
+  const cached = objectValidators.get(schemaObject);
+  if (cached !== undefined) return cached;
   assertContractSchema(schema);
-  const ajv = new Ajv2020({ strict: true, validateFormats: false });
-  return ajv.compile<Json>(schema as AnySchema);
+  const validator = ajv.compile<Json>(schema as AnySchema);
+  objectValidators.set(schemaObject, validator);
+  return validator;
 }

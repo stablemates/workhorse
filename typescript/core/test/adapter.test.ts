@@ -39,6 +39,119 @@ describe("createWorkhorseAdapter", () => {
     expect(transactionDatabase.query).not.toHaveBeenCalled();
   });
 
+  it("shares synchronized contract state with transaction-bound queues", async () => {
+    const database: Queryable = {
+      query: vi.fn<(statement: string) => Promise<never>>(async (statement: string) => {
+        if (statement.includes("get_contract_definition_v1")) {
+          return {
+            rows: [
+              {
+                version: "current",
+                schema: { payload: true, result: true },
+                payload_max_bytes: 1_048_576,
+                result_max_bytes: 1_048_576,
+                payload_redact_keys: [],
+                result_redact_keys: [],
+              },
+            ],
+          } as never;
+        }
+        return { rows: [] } as never;
+      }) as Queryable["query"],
+    };
+    const transactionDatabase: Queryable = {
+      query: vi.fn<() => Promise<never>>(
+        async () =>
+          ({
+            rows: [
+              {
+                ordinal: 1,
+                job_id: "123e4567-e89b-42d3-a456-426614174000",
+                outcome: "accepted",
+                reason: null,
+                contract_mismatch: null,
+              },
+            ],
+          }) as never,
+      ) as unknown as Queryable["query"],
+    };
+    const adapter = createWorkhorseAdapter<object>({
+      database,
+      adaptTransaction: () => transactionDatabase,
+      queueOptions: {
+        contracts: {
+          send: { currentVersion: "current", versions: { current: {} } },
+        },
+      },
+    });
+    await adapter.queue.syncContracts();
+
+    await adapter.forTransaction({}).enqueue("send", {});
+
+    expect(transactionDatabase.query).toHaveBeenCalledOnce();
+    expect(transactionDatabase.query).toHaveBeenCalledWith(
+      expect.stringContaining("enqueue_many_v1"),
+      expect.any(Array),
+    );
+  });
+
+  it("uses a database contract discovered after an enqueue version mismatch", async () => {
+    const database: Queryable = {
+      query: vi.fn(async () => ({ rows: [] })) as unknown as Queryable["query"],
+    };
+    let enqueueAttempts = 0;
+    const transactionDatabase: Queryable = {
+      query: vi.fn(async (statement: string) => {
+        if (statement.includes("get_contract_definition_v1")) {
+          return {
+            rows: [
+              {
+                version: "database-current",
+                schema: { payload: true, result: true },
+                payload_max_bytes: 1_048_576,
+                result_max_bytes: 1_048_576,
+                payload_redact_keys: [],
+                result_redact_keys: [],
+              },
+            ],
+          };
+        }
+        enqueueAttempts += 1;
+        return enqueueAttempts === 1
+          ? {
+              rows: [
+                {
+                  ordinal: 0,
+                  job_id: null,
+                  outcome: "contract_mismatch",
+                  reason: JSON.stringify({ jobTypes: ["send"] }),
+                },
+              ],
+            }
+          : {
+              rows: [
+                {
+                  ordinal: 1,
+                  job_id: "123e4567-e89b-42d3-a456-426614174000",
+                  outcome: "accepted",
+                  reason: null,
+                },
+              ],
+            };
+      }) as unknown as Queryable["query"],
+    };
+    const adapter = createWorkhorseAdapter<object>({
+      database,
+      adaptTransaction: () => transactionDatabase,
+    });
+    await adapter.queue.syncContracts();
+
+    await adapter.forTransaction({}).enqueue("send", {});
+
+    expect(enqueueAttempts).toBe(2);
+    expect(transactionDatabase.query).toHaveBeenCalledTimes(3);
+  });
+
   it("creates workers from the shared queue and closes provider resources once", async () => {
     const close = vi.fn<() => Promise<void>>(async () => undefined);
     const adapter = createWorkhorseAdapter({

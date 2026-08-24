@@ -11,6 +11,27 @@ import { SignalsModule } from "./signals.js";
 import { HumanWaitsModule } from "./human-waits.js";
 import { WorkerRegistryModule } from "./worker-registry.js";
 
+export interface CachedContractDefinition {
+  readonly version: string;
+  readonly contract: import("../types.js").JobContractVersion;
+}
+
+/** @internal */
+export interface QueueModuleState {
+  readonly currentDatabaseContracts: Map<string, CachedContractDefinition>;
+  readonly retainedDatabaseContracts: Map<string, Map<string, CachedContractDefinition>>;
+  contractsSynchronized: boolean;
+}
+
+/** @internal */
+export function createQueueModuleState(): QueueModuleState {
+  return {
+    currentDatabaseContracts: new Map(),
+    retainedDatabaseContracts: new Map(),
+    contractsSynchronized: false,
+  };
+}
+
 export interface QueueModules {
   readonly enqueueContracts: EnqueueContractsModule;
   readonly claimLeaseFence: ClaimLeaseFenceModule;
@@ -25,8 +46,11 @@ export interface QueueModules {
   readonly operatorReads: OperatorReadsModule;
 }
 
-export function createQueueModules(context: QueueModuleContext): QueueModules {
-  const enqueueContracts = new EnqueueContractsModule(context);
+export function createQueueModules(
+  context: QueueModuleContext,
+  state: QueueModuleState = createQueueModuleState(),
+): QueueModules {
+  const enqueueContracts = new EnqueueContractsModule(context, state);
   return Object.freeze({
     enqueueContracts,
     claimLeaseFence: new ClaimLeaseFenceModule(context),

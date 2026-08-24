@@ -15,6 +15,11 @@ const fixtures = JSON.parse(
 ) as Fixture[];
 
 describe("contract schema profile", () => {
+  it("reuses a compiled validator for the same schema object", () => {
+    const schema = { type: "object" } as const;
+    expect(compileContractSchema(schema)).toBe(compileContractSchema(schema));
+  });
+
   it.each(fixtures)("matches the shared table for $id", (fixture) => {
     let validator: ReturnType<typeof compileContractSchema> | undefined;
     let schemaError: unknown;

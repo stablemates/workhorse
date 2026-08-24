@@ -63,6 +63,10 @@ Call `queue.syncContracts()` during application startup. Python exposes `sync_co
 exposes `SyncContracts`. PostgreSQL inserts an immutable document for every version and keeps the
 current version in a separate policy row, so an operator override survives the next deploy.
 
+After synchronization, the TypeScript client caches the selected document for each job type. If an
+operator changes the selected version, PostgreSQL reports the stale selection so the client can
+refresh the document and validate the enqueue again.
+
 Workhorse accepts the shared JSON Schema profile only. Bundled references work inside one document,
 formats stay annotations, and remote references or custom keywords are rejected before compilation.
 

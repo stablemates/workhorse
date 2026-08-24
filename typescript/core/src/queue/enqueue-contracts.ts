@@ -25,10 +25,9 @@ import {
   MAX_JOB_PRIORITY,
   MAX_JOB_VALUE_MAX_BYTES,
 } from "../types.js";
-import { assertContractSchema, compileContractSchema } from "../contract-schema.js";
-import { QueueModule } from "./module-context.js";
-
-const contractValidators = new Map<string, ReturnType<typeof compileContractSchema>>();
+import { compileContractSchema } from "../contract-schema.js";
+import { QueueModule, type QueueModuleContext } from "./module-context.js";
+import type { CachedContractDefinition, QueueModuleState } from "./modules.js";
 
 /** The same scoped enqueue key is still retained for a materially different request. */
 export class EnqueueIdempotencyConflictError extends WorkhorseError {
@@ -383,11 +382,9 @@ export function validateQueueOptions(options: QueueOptions): QueueOptions {
         `${jobType}.${version}.sensitiveResultKeys`,
       );
       if (contract.payloadSchema !== undefined) {
-        assertContractSchema(contract.payloadSchema);
         compileContractSchema(contract.payloadSchema);
       }
       if (contract.resultSchema !== undefined) {
-        assertContractSchema(contract.resultSchema);
         compileContractSchema(contract.resultSchema);
       }
     }
@@ -402,30 +399,27 @@ function validateContractValue(
   value: Json,
   contract: JobContractVersion,
   maxBytes: number,
-): void {
+): string {
   const schema = kind === "payload" ? contract.payloadSchema : contract.resultSchema;
   if (schema !== undefined) {
-    const cacheKey = `${jobType}\u0000${version}\u0000${kind}\u0000${JSON.stringify(schema)}`;
-    let validator = contractValidators.get(cacheKey);
-    if (validator === undefined) {
-      validator = compileContractSchema(schema);
-      contractValidators.set(cacheKey, validator);
-    }
+    const validator = compileContractSchema(schema);
     if (!validator(value)) throw new JobContractValidationError(jobType, version, kind);
   }
-  enforceJsonSize(jobType, kind, value, maxBytes);
+  return serializeJsonWithinLimit(jobType, kind, value, maxBytes);
 }
 
-function enforceJsonSize(
+function serializeJsonWithinLimit(
   jobType: string,
   kind: "payload" | "result",
   value: Json,
   maxBytes: number,
-): void {
-  const actualBytes = Buffer.byteLength(JSON.stringify(value), "utf8");
+): string {
+  const serialized = JSON.stringify(value);
+  const actualBytes = Buffer.byteLength(serialized, "utf8");
   if (actualBytes > maxBytes) {
     throw new JobValueSizeLimitError(jobType, kind, actualBytes, maxBytes);
   }
+  return serialized;
 }
 
 interface JobAcceptance {
@@ -434,6 +428,11 @@ interface JobAcceptance {
   resultMaxBytes: number;
   sensitivePayloadKeys: readonly string[];
   sensitiveResultKeys: readonly string[];
+}
+
+interface SerializedJobAcceptance {
+  acceptance: JobAcceptance;
+  serializedPayload: string;
 }
 
 interface ContractDefinitionRow {
@@ -447,11 +446,12 @@ interface ContractDefinitionRow {
 
 /** Owns enqueue serialization and process-local job contract validation behind the Queue facade. */
 export class EnqueueContractsModule extends QueueModule {
-  private contractsSynchronized = false;
-  private readonly databaseContracts = new Map<
-    string,
-    { version: string; contract: JobContractVersion }
-  >();
+  constructor(
+    context: QueueModuleContext,
+    private readonly state: QueueModuleState,
+  ) {
+    super(context);
+  }
 
   async syncContracts(): Promise<void> {
     const definitions = Object.entries(this.context.options.contracts ?? {}).map(
@@ -482,18 +482,24 @@ export class EnqueueContractsModule extends QueueModule {
     await this.context.database.query("SELECT workhorse.sync_contract_definitions_v1($1::jsonb)", [
       JSON.stringify(definitions),
     ]);
-    this.contractsSynchronized = true;
+    const currentContracts = new Map<string, CachedContractDefinition>();
     for (const jobType of Object.keys(this.context.options.contracts ?? {})) {
       const definition = await this.loadContract(jobType, null);
-      if (definition !== null) this.databaseContracts.set(jobType, definition);
+      if (definition !== null) currentContracts.set(jobType, definition);
     }
+    this.state.currentDatabaseContracts.clear();
+    for (const [jobType, definition] of currentContracts) {
+      this.state.currentDatabaseContracts.set(jobType, definition);
+    }
+    this.state.contractsSynchronized = true;
   }
 
   private async loadContract(
     jobType: string,
     version: string | null,
+    database: Queryable = this.context.database,
   ): Promise<{ version: string; contract: JobContractVersion } | null> {
-    const result = await this.context.database.query<ContractDefinitionRow>(
+    const result = await database.query<ContractDefinitionRow>(
       "SELECT (definition).* FROM workhorse.get_contract_definition_v1($1::text, $2::text) definition",
       [jobType, version],
     );
@@ -513,15 +519,18 @@ export class EnqueueContractsModule extends QueueModule {
   }
 
   async jobAcceptance(jobType: string, payload: Json): Promise<JobAcceptance> {
+    return (await this.serializedJobAcceptance(jobType, payload)).acceptance;
+  }
+
+  private async serializedJobAcceptance(
+    jobType: string,
+    payload: Json,
+  ): Promise<SerializedJobAcceptance> {
     const { options } = this.context;
     const typeContracts = options.contracts?.[jobType];
-    const databaseContract =
-      typeContracts === undefined || !this.contractsSynchronized
-        ? undefined
-        : await this.loadContract(jobType, null);
-    if (databaseContract !== undefined && databaseContract !== null) {
-      this.databaseContracts.set(jobType, databaseContract);
-    }
+    const databaseContract = !this.state.contractsSynchronized
+      ? undefined
+      : this.state.currentDatabaseContracts.get(jobType);
     const contractVersion = databaseContract?.version ?? typeContracts?.currentVersion ?? null;
     const contract =
       databaseContract?.contract ??
@@ -531,7 +540,7 @@ export class EnqueueContractsModule extends QueueModule {
     const resultMaxBytes =
       contract?.maxResultBytes ?? options.defaultMaxResultBytes ?? DEFAULT_JOB_VALUE_MAX_BYTES;
     if (contract !== undefined) {
-      validateContractValue(
+      const serializedPayload = validateContractValue(
         jobType,
         contractVersion!,
         "payload",
@@ -539,33 +548,55 @@ export class EnqueueContractsModule extends QueueModule {
         contract,
         payloadMaxBytes,
       );
+      return {
+        acceptance: {
+          contractVersion,
+          payloadMaxBytes,
+          resultMaxBytes,
+          sensitivePayloadKeys: contract.sensitivePayloadKeys ?? [],
+          sensitiveResultKeys: contract.sensitiveResultKeys ?? [],
+        },
+        serializedPayload,
+      };
     } else {
-      enforceJsonSize(jobType, "payload", payload, payloadMaxBytes);
+      const serializedPayload = serializeJsonWithinLimit(
+        jobType,
+        "payload",
+        payload,
+        payloadMaxBytes,
+      );
+      return {
+        acceptance: {
+          contractVersion,
+          payloadMaxBytes,
+          resultMaxBytes,
+          sensitivePayloadKeys: [],
+          sensitiveResultKeys: [],
+        },
+        serializedPayload,
+      };
     }
-    return {
-      contractVersion,
-      payloadMaxBytes,
-      resultMaxBytes,
-      sensitivePayloadKeys: contract?.sensitivePayloadKeys ?? [],
-      sensitiveResultKeys: contract?.sensitiveResultKeys ?? [],
-    };
   }
 
-  async validateResult(job: ClaimedJob, result: Json): Promise<void> {
+  async validateResult(job: ClaimedJob, result: Json): Promise<string> {
     if (job.contractVersion !== null) {
-      const cacheKey = `${job.type}\u0000${job.contractVersion}`;
-      let contract = this.databaseContracts.get(cacheKey)?.contract;
+      const retainedVersions = this.state.retainedDatabaseContracts.get(job.type);
+      let contract = retainedVersions?.get(job.contractVersion)?.contract;
       if (contract === undefined) {
         const loaded = await this.loadContract(job.type, job.contractVersion);
         contract =
           loaded?.contract ??
           this.context.options.contracts?.[job.type]?.versions[job.contractVersion];
-        if (loaded !== null) this.databaseContracts.set(cacheKey, loaded);
+        if (loaded !== null) {
+          const versions = retainedVersions ?? new Map<string, CachedContractDefinition>();
+          versions.set(job.contractVersion, loaded);
+          this.state.retainedDatabaseContracts.set(job.type, versions);
+        }
       }
       if (contract === undefined) {
         throw new JobContractUnavailableError(job.type, job.contractVersion);
       }
-      validateContractValue(
+      return validateContractValue(
         job.type,
         job.contractVersion,
         "result",
@@ -573,9 +604,8 @@ export class EnqueueContractsModule extends QueueModule {
         contract,
         job.resultMaxBytes,
       );
-      return;
     }
-    enforceJsonSize(job.type, "result", result, job.resultMaxBytes);
+    return serializeJsonWithinLimit(job.type, "result", result, job.resultMaxBytes);
   }
 
   async enqueue<TPayload extends Json>(
@@ -611,6 +641,14 @@ export class EnqueueContractsModule extends QueueModule {
   async enqueueManyWithResults(
     requests: readonly EnqueueRequest[],
     transaction: Queryable = this.context.database,
+  ): Promise<EnqueueResult[]> {
+    return this.enqueueManyWithResultsAttempt(requests, transaction, true);
+  }
+
+  private async enqueueManyWithResultsAttempt(
+    requests: readonly EnqueueRequest[],
+    transaction: Queryable,
+    refreshOnMismatch: boolean,
   ): Promise<EnqueueResult[]> {
     if (requests.length === 0) return [];
     if (requests.length > MAX_ENQUEUE_BATCH_SIZE) {
@@ -655,7 +693,10 @@ export class EnqueueContractsModule extends QueueModule {
                 "enqueue options cannot combine debounce or throttle with prerequisiteJobId or dependencies",
               );
             }
-            const acceptance = await this.jobAcceptance(type, payload);
+            const { serializedPayload, acceptance } = await this.serializedJobAcceptance(
+              type,
+              payload,
+            );
             if (options.prerequisiteJobId !== undefined && options.dependencies !== undefined) {
               throw new TypeError(
                 "enqueue options cannot combine prerequisiteJobId and dependencies",
@@ -684,7 +725,7 @@ export class EnqueueContractsModule extends QueueModule {
             return {
               queue: options.queue ?? this.context.defaultQueue,
               type,
-              payload,
+              serializedPayload,
               priority: validateJobPriority(options.priority),
               ...acceptance,
               ...(traceContext === null ? {} : { traceContext }),
@@ -742,16 +783,47 @@ export class EnqueueContractsModule extends QueueModule {
           }),
         );
         try {
+          const serializedInput = `[${input
+            .map(({ serializedPayload, ...request }) => {
+              const serializedRequest = JSON.stringify(request);
+              return `${serializedRequest.slice(0, -1)},"payload":${serializedPayload}}`;
+            })
+            .join(",")}]`;
           const result = await transaction.query<{
             ordinal: number;
-            job_id: string;
-            outcome: EnqueueOutcome;
+            job_id: string | null;
+            outcome: EnqueueOutcome | "contract_mismatch";
             reason: string | null;
           }>(
             "SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
-            [JSON.stringify(input)],
+            [serializedInput],
           );
+          const mismatchRow = result.rows.find((row) => row.outcome === "contract_mismatch");
+          if (mismatchRow !== undefined) {
+            const mismatch = JSON.parse(mismatchRow.reason ?? "null") as {
+              jobTypes?: unknown;
+            } | null;
+            if (
+              mismatch === null ||
+              !Array.isArray(mismatch.jobTypes) ||
+              mismatch.jobTypes.some((jobType) => typeof jobType !== "string")
+            ) {
+              throw new Error("PostgreSQL returned invalid contract mismatch details");
+            }
+            for (const jobType of mismatch.jobTypes) {
+              const definition = await this.loadContract(jobType, null, transaction);
+              if (definition === null) this.state.currentDatabaseContracts.delete(jobType);
+              else this.state.currentDatabaseContracts.set(jobType, definition);
+            }
+            if (!refreshOnMismatch) {
+              throw new Error("Contract policy changed again while retrying enqueue");
+            }
+            return this.enqueueManyWithResultsAttempt(requests, transaction, false);
+          }
           const enqueueResults = result.rows.map((row): EnqueueResult => {
+            if (row.job_id === null || row.outcome === "contract_mismatch") {
+              throw new Error("PostgreSQL returned an incomplete enqueue result");
+            }
             if (row.outcome !== "non_replaceable") {
               return { jobId: row.job_id, outcome: row.outcome };
             }
@@ -770,6 +842,7 @@ export class EnqueueContractsModule extends QueueModule {
             const request = requests[(row.ordinal ?? index + 1) - 1];
             if (!request) continue;
             const outcome = row.outcome;
+            if (outcome === "contract_mismatch" || row.job_id === null) continue;
             const logDetailsByOutcome: Record<
               EnqueueOutcome,
               readonly [Parameters<typeof logDebug>[0], string]

@@ -369,17 +369,17 @@ export class ClaimLeaseFenceModule extends QueueModule {
   async complete<TResult extends Json>(
     job: ClaimedJob,
     workerId: string,
-    result: TResult,
-    validateResult: () => Promise<void>,
+    _result: TResult,
+    validateResult: () => Promise<string>,
   ): Promise<boolean> {
     return withSpan("workhorse.complete", jobSpanAttributes(job), async (span) => {
-      await validateResult();
+      const serializedResult = await validateResult();
       const lease = FencedLease.from(job, workerId);
       // Completion is conditional on the exact unexpired lease and fence. A stale worker gets false
       // rather than overwriting the result of a recovered attempt.
       const query = await this.context.database.query<{ accepted: boolean }>(
         "SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted",
-        [...lease.sqlParameters, JSON.stringify(result)],
+        [...lease.sqlParameters, serializedResult],
       );
       const accepted = expectOneRow(query, "workhorse.complete_v1").accepted;
       span.setAttribute("workhorse.complete.accepted", accepted);

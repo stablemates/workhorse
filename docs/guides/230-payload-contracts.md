@@ -35,6 +35,10 @@ Call `queue.syncContracts()` during application startup. Python exposes `sync_co
 exposes `SyncContracts`. PostgreSQL inserts each version once and keeps the current version in a
 separate policy row, so an operator override survives the next deploy.
 
+After synchronization, the TypeScript client caches the selected document for each job type. If an
+operator changes the selected version, PostgreSQL reports the stale selection so the client can
+refresh the document and validate the enqueue again.
+
 Each SDK rejects keywords outside the shared profile before compiling a schema. References can
 target bundled definitions in the same document, while remote references and custom keywords are
 rejected. Formats remain annotations, so an email format does not create a language-specific gate.

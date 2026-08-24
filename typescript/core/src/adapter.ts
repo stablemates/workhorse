@@ -44,11 +44,7 @@ export function createWorkhorseAdapter<TTransaction = Queryable>(
     queue,
     admin,
     forTransaction(transaction) {
-      return new Queue(
-        options.adaptTransaction(transaction),
-        queue.defaultQueue,
-        options.queueOptions,
-      );
+      return queue.forDatabase(options.adaptTransaction(transaction));
     },
     adminForTransaction(transaction) {
       return new Admin(

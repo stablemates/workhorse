@@ -5289,12 +5289,33 @@ DECLARE
   v_lock record;
   v_error_message text;
   v_error_detail text;
+  v_contract_mismatch jsonb;
 BEGIN
   IF p_requests IS NULL OR jsonb_typeof(p_requests) <> 'array' THEN
     RAISE EXCEPTION 'requests must be a JSON array';
   END IF;
   IF jsonb_array_length(p_requests) > 1000 THEN
     RAISE EXCEPTION 'enqueue batch exceeds maximum size of 1000';
+  END IF;
+
+  SELECT jsonb_build_object(
+           'jobTypes', jsonb_agg(mismatch.job_type ORDER BY mismatch.job_type COLLATE "C")
+         )
+    INTO v_contract_mismatch
+    FROM (
+      SELECT DISTINCT request->>'type' AS job_type
+        FROM jsonb_array_elements(p_requests) input(request)
+        JOIN workhorse.contract_policy policy ON policy.job_type = request->>'type'
+       WHERE request ? 'contractVersion'
+         AND request->>'contractVersion' IS DISTINCT FROM policy.current_version
+  ) mismatch;
+  IF jsonb_typeof(v_contract_mismatch->'jobTypes') = 'array' THEN
+    ordinal := 0;
+    job_id := NULL;
+    outcome := 'contract_mismatch';
+    reason := v_contract_mismatch::text;
+    RETURN NEXT;
+    RETURN;
   END IF;
 
   IF EXISTS (

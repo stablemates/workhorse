@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   DEFAULT_IDEMPOTENCY_SCOPE,
   DEFAULT_IDEMPOTENCY_TTL_MS,
@@ -61,6 +61,73 @@ function dependencyBearingCoalescingOptions(
 }
 
 describe("enqueue contracts", () => {
+  it("uses the synchronized contract cache for one-statement batch enqueue", async () => {
+    let queryCount = 0;
+    const countedDatabase: Queryable = {
+      query(statement, values) {
+        queryCount += 1;
+        return pool.query(statement, values as unknown[]);
+      },
+    };
+    const contractedQueue = new Queue(countedDatabase, "default", {
+      contracts: {
+        "cached.batch": {
+          currentVersion: "1",
+          versions: { "1": { payloadSchema: { type: "object" } } },
+        },
+      },
+    });
+    await contractedQueue.syncContracts();
+    queryCount = 0;
+
+    await contractedQueue.enqueueMany(
+      Array.from({ length: 100 }, (_, value) => ({
+        type: "cached.batch",
+        payload: { value },
+      })),
+    );
+
+    expect(queryCount).toBe(1);
+  });
+
+  it("serializes an enqueue payload once before sending the batch", async () => {
+    const toJSON = vi.fn<() => { value: number }>(() => ({ value: 1 }));
+    let serializedInput = "";
+    const transaction: Queryable = {
+      async query(_statement, values) {
+        serializedInput = String(values?.[0]);
+        return {
+          rows: [
+            {
+              ordinal: 1,
+              job_id: "123e4567-e89b-42d3-a456-426614174000",
+              outcome: "accepted",
+              reason: null,
+              contract_mismatch: null,
+            },
+          ],
+        } as never;
+      },
+    };
+
+    await queue.enqueue("serialize-once", { toJSON } as unknown as Json, {}, transaction);
+
+    expect(toJSON).toHaveBeenCalledOnce();
+    expect(JSON.parse(serializedInput)).toMatchObject([{ payload: { value: 1 } }]);
+  });
+
+  it("serializes a completion result once before sending it", async () => {
+    const jobId = await queue.enqueue("serialize-result-once", {});
+    const claimed = await queue.claim("serialize-result-worker");
+    expect(claimed?.id).toBe(jobId);
+    const toJSON = vi.fn<() => { value: number }>(() => ({ value: 1 }));
+
+    await queue.complete(claimed!, "serialize-result-worker", { toJSON } as unknown as Json);
+
+    expect(toJSON).toHaveBeenCalledOnce();
+    await expect(admin.getJob(jobId)).resolves.toMatchObject({ result: { value: 1 } });
+  });
+
   it("makes keyed ingress modes and dependency forms mutually exclusive in EnqueueOptions", () => {
     type IdempotencyAndDebounce = {
       idempotency: { key: string };

@@ -40,7 +40,12 @@ import {
   type JobNotificationSubscription,
 } from "./notifications.js";
 import { createQueueModuleContext } from "./queue/module-context.js";
-import { createQueueModules, type QueueModules } from "./queue/modules.js";
+import {
+  createQueueModules,
+  createQueueModuleState,
+  type QueueModules,
+  type QueueModuleState,
+} from "./queue/modules.js";
 import {
   RedriveIdempotencyConflictError,
   concurrencyPolicy,
@@ -186,16 +191,33 @@ export { errorForTelemetry };
 export class Queue {
   private readonly options: QueueOptions;
   private readonly modules: QueueModules;
+  private readonly moduleState: QueueModuleState;
 
+  constructor(database: Queryable, defaultQueue?: string, options?: QueueOptions);
+  /** @internal */
+  constructor(
+    database: Queryable,
+    defaultQueue: string,
+    options: QueueOptions,
+    moduleState: QueueModuleState,
+  );
   constructor(
     private readonly database: Queryable,
     readonly defaultQueue = "default",
     options: QueueOptions = {},
+    moduleState: QueueModuleState = createQueueModuleState(),
   ) {
     this.options = validateQueueOptions(options);
+    this.moduleState = moduleState;
     this.modules = createQueueModules(
       createQueueModuleContext(database, defaultQueue, this.options),
+      moduleState,
     );
+  }
+
+  /** @internal Bind the facade to another database while retaining process-local module caches. */
+  forDatabase(database: Queryable): Queue {
+    return new Queue(database, this.defaultQueue, this.options, this.moduleState);
   }
 
   /** @internal Whether workers can reserve a node-postgres LISTEN connection. */
