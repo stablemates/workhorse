@@ -1,7 +1,21 @@
 {
-  "extends": "../../tsconfig.json",
+  "extends": [
+    "../../tsconfig.json",
+    "../../tsconfig.source-paths.json",
+    "../../tsconfig.typecheck-base.json"
+  ],
   "include": ["test/**/*.ts"],
   "compilerOptions": {
-    "incremental": false
-  }
+    "outDir": "../../.build/typecheck/adapter-conformance",
+    "rootDir": "../..",
+    "tsBuildInfoFile": "../../.build/typecheck/adapter-conformance.tsbuildinfo"
+  },
+  "references": [
+    { "path": "../core/tsconfig.source.json" },
+    { "path": "../core/tsconfig.typecheck.json" },
+    { "path": "../drizzle/tsconfig.typecheck.json" },
+    { "path": "../kysely/tsconfig.typecheck.json" },
+    { "path": "../prisma/tsconfig.typecheck.json" },
+    { "path": "../typeorm/tsconfig.typecheck.json" }
+  ]
 }

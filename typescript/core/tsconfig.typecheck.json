@@ -1,8 +1,15 @@
 {
-  "extends": ["../../tsconfig.json", "../../tsconfig.source-paths.json"],
+  "extends": ["../../tsconfig.json", "../../tsconfig.typecheck-base.json"],
   "compilerOptions": {
-    "noEmit": true,
+    "outDir": "../../.build/typecheck/core-tests",
     "rootDir": "../..",
-    "incremental": false
-  }
+    "tsBuildInfoFile": "../../.build/typecheck/core-tests.tsbuildinfo"
+  },
+  "include": ["test/**/*.ts"],
+  "exclude": ["test/runtime-smoke.ts"],
+  "references": [
+    { "path": "tsconfig.source.json" },
+    { "path": "../../tsconfig.scripts.json" },
+    { "path": "../dashboard-server/tsconfig.typecheck.json" }
+  ]
 }

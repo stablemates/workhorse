@@ -1,9 +1,17 @@
 {
-  "extends": ["./tsconfig.json", "../../tsconfig.source-paths.json"],
+  "extends": [
+    "./tsconfig.json",
+    "../../tsconfig.source-paths.json",
+    "../../tsconfig.typecheck-base.json"
+  ],
   "compilerOptions": {
-    "noEmit": true,
+    "outDir": "../../.build/typecheck/dashboard-app",
     "rootDir": "../..",
-    "incremental": false
+    "tsBuildInfoFile": "../../.build/typecheck/dashboard-app.tsbuildinfo"
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"],
+  "references": [
+    { "path": "../../typescript/core/tsconfig.source.json" },
+    { "path": "../../typescript/dashboard-server/tsconfig.typecheck.json" }
+  ]
 }

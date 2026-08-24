@@ -192,7 +192,12 @@ export function generateResponseSchemas(): ResponseSchemas {
   );
   if (!parsed) throw new Error(`Unreadable TypeScript configuration: ${configPath}`);
   const entry = join(specDirectory, "responses.ts");
-  const program = ts.createProgram([entry], parsed.options);
+  const program = ts.createProgram([entry], {
+    ...parsed.options,
+    composite: false,
+    incremental: false,
+    tsBuildInfoFile: undefined,
+  });
   const source = program.getSourceFile(entry);
   if (!source) throw new Error(`Missing spec entry point: ${entry}`);
   const errors = ts

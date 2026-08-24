@@ -1,7 +1,14 @@
 {
-  "extends": ["../../dashboard/app/tsconfig.typecheck.json"],
+  "extends": [
+    "../../dashboard/app/tsconfig.json",
+    "../../tsconfig.source-paths.json",
+    "../../tsconfig.typecheck-base.json"
+  ],
   "include": ["src/**/*.ts", "../../dashboard/app/src/assets.d.ts"],
   "compilerOptions": {
-    "incremental": false
-  }
+    "outDir": "../../.build/typecheck/dashboard",
+    "rootDir": "../..",
+    "tsBuildInfoFile": "../../.build/typecheck/dashboard.tsbuildinfo"
+  },
+  "references": [{ "path": "../../dashboard/app/tsconfig.typecheck.json" }]
 }

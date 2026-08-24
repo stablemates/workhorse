@@ -1,0 +1,9 @@
+{
+  "extends": ["../../tsconfig.json", "../../tsconfig.typecheck-base.json"],
+  "compilerOptions": {
+    "outDir": "../../.build/typecheck/core-source",
+    "rootDir": "../..",
+    "tsBuildInfoFile": "../../.build/typecheck/core-source.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts", "benchmarks/**/*.ts"]
+}

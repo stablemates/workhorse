@@ -1,8 +1,9 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 import {
   landingFeatureSnippets,
@@ -14,6 +15,7 @@ import type { LandingSnippetId } from "../lib/landing-snippets.js";
 
 const siteRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(siteRoot, "..");
+const execFileAsync = promisify(execFile);
 const quickstartSource = readFileSync(resolve(siteRoot, "content/docs/quickstart.mdx"), "utf8");
 const examplesSource = readFileSync(resolve(siteRoot, "content/docs/examples.mdx"), "utf8");
 const documentationSources = [quickstartSource, examplesSource];
@@ -199,27 +201,11 @@ try {
       .filter(([, language]) => language === "python")
       .map(([snippet]) => landingSnippets[snippet as LandingSnippetId]),
   ];
+  const pythonPaths: string[] = [];
   for (const [index, example] of pythonExamples.entries()) {
     const pythonPath = resolve(temporaryRoot, `example-${index}.py`);
     writeFileSync(pythonPath, `${example}\n`);
-    execFileSync(
-      "uv",
-      [
-        "run",
-        "--project",
-        resolve(repositoryRoot, "python"),
-        "ruff",
-        "format",
-        "--check",
-        pythonPath,
-      ],
-      { stdio: "inherit" },
-    );
-    execFileSync(
-      "uv",
-      ["run", "--project", resolve(repositoryRoot, "python"), "mypy", pythonPath],
-      { stdio: "inherit" },
-    );
+    pythonPaths.push(pythonPath);
   }
 
   writeFileSync(
@@ -232,6 +218,7 @@ try {
       .filter(([, language]) => language === "go")
       .map(([snippet]) => landingSnippets[snippet as LandingSnippetId]),
   ];
+  const goPaths: string[] = [];
   for (const [index, example] of goExamples.entries()) {
     const goPath = resolve(temporaryRoot, `example-${index}.go`);
     writeFileSync(goPath, `${example}\n`);
@@ -239,8 +226,31 @@ try {
     if (formattingDiff) {
       throw new Error(`Go example ${index} is not gofmt-formatted:\n${formattingDiff}`);
     }
-    execFileSync("go", ["test", "-mod=mod", goPath], { cwd: temporaryRoot, stdio: "inherit" });
+    goPaths.push(goPath);
   }
+
+  await execFileAsync("go", ["mod", "tidy"], { cwd: temporaryRoot });
+  await Promise.all([
+    execFileAsync("uv", [
+      "run",
+      "--project",
+      resolve(repositoryRoot, "python"),
+      "ruff",
+      "format",
+      "--check",
+      ...pythonPaths,
+    ]),
+    execFileAsync("uv", [
+      "run",
+      "--project",
+      resolve(repositoryRoot, "python"),
+      "mypy",
+      ...pythonPaths,
+    ]),
+    ...goPaths.map((goPath) =>
+      execFileAsync("go", ["test", "-mod=readonly", goPath], { cwd: temporaryRoot }),
+    ),
+  ]);
 } finally {
   rmSync(temporaryRoot, { recursive: true, force: true });
 }

@@ -1,8 +1,13 @@
 {
-  "extends": ["./tsconfig.json", "../../tsconfig.source-paths.json"],
+  "extends": [
+    "./tsconfig.json",
+    "../../tsconfig.source-paths.json",
+    "../../tsconfig.typecheck-base.json"
+  ],
   "compilerOptions": {
-    "noEmit": true,
+    "outDir": "../../.build/typecheck/drizzle",
     "rootDir": "../..",
-    "incremental": false
-  }
+    "tsBuildInfoFile": "../../.build/typecheck/drizzle.tsbuildinfo"
+  },
+  "references": [{ "path": "../core/tsconfig.source.json" }]
 }

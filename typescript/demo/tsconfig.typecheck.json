@@ -1,8 +1,17 @@
 {
-  "extends": ["./tsconfig.json", "../../tsconfig.source-paths.json"],
+  "extends": [
+    "./tsconfig.json",
+    "../../tsconfig.source-paths.json",
+    "../../tsconfig.typecheck-base.json"
+  ],
   "compilerOptions": {
-    "noEmit": true,
+    "outDir": "../../.build/typecheck/demo",
     "rootDir": "../..",
-    "incremental": false
-  }
+    "tsBuildInfoFile": "../../.build/typecheck/demo.tsbuildinfo"
+  },
+  "references": [
+    { "path": "../core/tsconfig.source.json" },
+    { "path": "../drizzle/tsconfig.typecheck.json" },
+    { "path": "../dashboard/tsconfig.typecheck.json" }
+  ]
 }

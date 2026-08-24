@@ -1,0 +1,17 @@
+{
+  "files": [],
+  "references": [
+    { "path": "typescript/core/tsconfig.source.json" },
+    { "path": "typescript/core/tsconfig.typecheck.json" },
+    { "path": "tsconfig.scripts.json" },
+    { "path": "typescript/drizzle/tsconfig.typecheck.json" },
+    { "path": "typescript/kysely/tsconfig.typecheck.json" },
+    { "path": "typescript/prisma/tsconfig.typecheck.json" },
+    { "path": "typescript/typeorm/tsconfig.typecheck.json" },
+    { "path": "typescript/dashboard-server/tsconfig.typecheck.json" },
+    { "path": "dashboard/app/tsconfig.typecheck.json" },
+    { "path": "typescript/dashboard/tsconfig.typecheck.json" },
+    { "path": "typescript/demo/tsconfig.typecheck.json" },
+    { "path": "typescript/adapter-conformance/tsconfig.json" }
+  ]
+}

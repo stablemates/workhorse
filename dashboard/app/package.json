@@ -50,7 +50,7 @@
     }
   },
   "scripts": {
-    "build": "rm -f ../../.build/dashboard-app.tsbuildinfo && rm -rf dist && tsc -p tsconfig.json && cp src/styles.css dist/library/styles.css && cp -R src/assets dist/library/assets && vite build",
+    "build": "tsc -p tsconfig.json && cp src/styles.css dist/library/styles.css && rm -rf dist/library/assets dist/app && mkdir -p dist/library/assets && cp -R src/assets/. dist/library/assets/ && vite build",
     "build:dev": "pnpm build:library",
     "build:library": "tsc -p tsconfig.json && cp src/styles.css dist/library/styles.css && cp -R src/assets dist/library/assets",
     "dev": "vite",

@@ -1,9 +1,14 @@
 {
-  "extends": ["./tsconfig.json", "../../tsconfig.source-paths.json"],
+  "extends": [
+    "./tsconfig.json",
+    "../../tsconfig.source-paths.json",
+    "../../tsconfig.typecheck-base.json"
+  ],
   "compilerOptions": {
-    "noEmit": true,
+    "outDir": "../../.build/typecheck/dashboard-server",
     "rootDir": "../..",
-    "incremental": false
+    "tsBuildInfoFile": "../../.build/typecheck/dashboard-server.tsbuildinfo"
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "spec/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "spec/**/*.ts"],
+  "references": [{ "path": "../core/tsconfig.source.json" }]
 }

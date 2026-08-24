@@ -8,7 +8,7 @@
     "dev": "tsx scripts/gen-docs-index.ts && tsx scripts/gen-landing-code.ts && vite dev",
     "build": "tsx scripts/check-language-examples.ts && tsx scripts/gen-docs-index.ts && tsx scripts/gen-landing-code.ts && vite build",
     "start": "vite preview",
-    "typecheck": "tsx scripts/check-language-examples.ts && tsx scripts/gen-docs-index.ts && tsx scripts/gen-landing-code.ts && tsc --noEmit"
+    "typecheck": "fumadocs-mdx && tsx scripts/check-language-examples.ts && tsx scripts/gen-docs-index.ts && tsx scripts/gen-landing-code.ts && tsc --noEmit"
   },
   "dependencies": {
     "@hugeicons/core-free-icons": "^4.2.3",
