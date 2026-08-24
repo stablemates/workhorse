@@ -5,7 +5,9 @@ import { describe, expect, it } from "vitest";
 import { WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { pool, queue } = createIntegrationTestContext(import.meta.url);
+const { pool, queue } = createIntegrationTestContext(import.meta.url, {
+  schemaProvisioning: "install",
+});
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 describe("schema installation", () => {

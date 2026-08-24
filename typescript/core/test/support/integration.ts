@@ -60,8 +60,14 @@ function adminAudit(reason = "integration test") {
   };
 }
 
-export function createIntegrationTestContext(fileUrl: string) {
-  const database = createDatabaseTestHarness(fileUrl, { max: 10 });
+export function createIntegrationTestContext(
+  fileUrl: string,
+  options: { schemaProvisioning?: "install" | "template" } = {},
+) {
+  const database = createDatabaseTestHarness(fileUrl, {
+    max: 10,
+    schemaProvisioning: options.schemaProvisioning,
+  });
   const { databaseUrl, pool } = database;
   const queue = new Queue(pool);
   const admin = new Admin(pool);

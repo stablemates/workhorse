@@ -13,12 +13,19 @@ import {
 import { applySchemaMigrationPlan } from "../src/schema-migrations.js";
 import { createDatabaseTestHarness } from "./support/db.js";
 
-const cleanDatabase = createDatabaseTestHarness(new URL("?clean-install", import.meta.url).href);
-const fixtureDatabase = createDatabaseTestHarness(new URL("?fixture", import.meta.url).href);
+const cleanDatabase = createDatabaseTestHarness(new URL("?clean-install", import.meta.url).href, {
+  schemaProvisioning: "install",
+});
+const fixtureDatabase = createDatabaseTestHarness(new URL("?fixture", import.meta.url).href, {
+  schemaProvisioning: "install",
+});
 const fixtureCleanDatabase = createDatabaseTestHarness(
   new URL("?fixture-clean", import.meta.url).href,
+  { schemaProvisioning: "install" },
 );
-const releaseDatabase = createDatabaseTestHarness(new URL("?release", import.meta.url).href);
+const releaseDatabase = createDatabaseTestHarness(new URL("?release", import.meta.url).href, {
+  schemaProvisioning: "install",
+});
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const executeFile = promisify(execFile);
 
