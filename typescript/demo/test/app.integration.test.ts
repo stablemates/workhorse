@@ -95,7 +95,6 @@ const workspaceDashboardTestName =
 assertLocalDatabasePurpose(databaseUrl, "test");
 const pool = new Pool({ connectionString: databaseUrl, max: 4 });
 const database = createDemoDatabase(pool);
-const admin = new Admin(pool, DEMO_QUEUE, DEMO_QUEUE_OPTIONS);
 
 /**
  * Slot use and operator pause both travel through the durable worker registry, so these tests need
@@ -648,22 +647,23 @@ describe("Workhorse demo", () => {
         expect.objectContaining({
           state: "blocked",
           blockedReason: "prerequisite_pending",
-          payload: expect.objectContaining({
-            family: "job-dependencies",
-            scenario: "release-after-success",
-            role: "dependent",
-          }),
+          tags: expect.arrayContaining(["dependency", "release", "dependent"]),
         }),
       ]),
     );
     const visibleBlockedTask = blockedTasks.jobs.find(
-      (job) =>
-        job.payload &&
-        typeof job.payload === "object" &&
-        "scenario" in job.payload &&
-        job.payload.scenario === "release-after-success",
+      (job) => job.tags.includes("dependency") && job.tags.includes("release"),
     );
     expect(visibleBlockedTask).toBeDefined();
+    await expect(
+      dashboardClient(app).dashboard.jobDetail({ id: visibleBlockedTask!.id }),
+    ).resolves.toMatchObject({
+      payload: {
+        family: "job-dependencies",
+        scenario: "release-after-success",
+        role: "dependent",
+      },
+    });
     const scheduledTasks = await dashboardClient(app).dashboard.tasks({
       filter: "scheduled",
       page: 1,
@@ -935,7 +935,13 @@ describe("Workhorse demo", () => {
       page: 1,
       pageSize: 25,
       total: 448,
-      counts: { all: 448, scheduled: 10, queued: 62, completed: 350, discarded: 21 },
+    });
+    await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
+      all: 448,
+      scheduled: 10,
+      queued: 62,
+      completed: 350,
+      discarded: 21,
     });
     expect(firstPage.jobs).toHaveLength(25);
     expect(firstPage).not.toHaveProperty("facets");
@@ -969,9 +975,7 @@ describe("Workhorse demo", () => {
     ).toMatchObject({
       filter: "scheduled",
       total: 10,
-      jobs: expect.arrayContaining([
-        expect.objectContaining({ state: "scheduled", payload: { source: "scheduled-seed" } }),
-      ]),
+      jobs: expect.arrayContaining([expect.objectContaining({ state: "scheduled" })]),
     });
     await expect(
       client.dashboard.tasks({ filter: "all", page: 1, pageSize: 10 as 25 }),
@@ -1560,10 +1564,6 @@ describe("Workhorse demo", () => {
               maxAttempts: 25,
               retryPolicy: DEMO_PERSISTENT_RETRY_POLICIES[index],
               runAt: expect.any(String),
-              payload: expect.objectContaining({
-                failureMode: "continuous",
-                source: "persistent-failure-seed",
-              }),
               tags: expect.arrayContaining(["intentionally-failing"]),
             }),
           ),
@@ -1573,6 +1573,11 @@ describe("Workhorse demo", () => {
         const expected = persistentScenarios[index]!;
         const detail = await client.dashboard.jobDetail({ id: row.job_id });
         expect(detail).toMatchObject({
+          payload: {
+            failureMode: "continuous",
+            source: "persistent-failure-seed",
+            scenario: expected.scenario,
+          },
           identity: {
             id: row.job_id,
             state: "scheduled",
@@ -1691,7 +1696,11 @@ describe("Workhorse demo", () => {
         filter: "retried",
         total: 1,
         jobs: [{ id: accepted.jobId, state: "succeeded", attempt: 2 }],
-        counts: { all: 1, retried: 1, completed: 1 },
+      });
+      await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
+        all: 1,
+        retried: 1,
+        completed: 1,
       });
       const workers = await client.dashboard.workers();
       expect(workers.workers).toHaveLength(DEMO_WORKER_CONCURRENCY.length);
@@ -2239,7 +2248,10 @@ describe("Workhorse demo", () => {
         filter: "discarded",
         total: 1,
         jobs: [{ id: accepted.jobId, type: "demo.failure", state: "failed" }],
-        counts: { all: 1, discarded: 1 },
+      });
+      await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
+        all: 1,
+        discarded: 1,
       });
       expect(await client.dashboard.system({ window: "1h" })).toMatchObject({
         status: { level: "healthy", reasons: [] },

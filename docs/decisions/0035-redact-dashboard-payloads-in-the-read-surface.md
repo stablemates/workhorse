@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-22
+- **Amended:** 2026-08-24 by WH-388; task pages no longer return payloads.
 - **Related:** [ADR 0015](0015-operator-query-api.md), [ADR 0027](0027-keep-versioned-dashboard-views.md), [ADR 0029](0029-embeddable-dashboard-backends.md)
 
 ## Context
@@ -96,11 +97,15 @@ the wrong trade.
 
 ## Validation
 
-The `tasks` and `jobDetail` procedures return the same redacted payload for a job with
-`payload_redact_keys` set, and neither response carries a redacted key. The `dashboard/v1`
-conformance fixtures regenerate and pass. `pnpm benchmark:dashboard-read-surface` reproduces the
+The `jobDetail` procedure returns the redacted payload for a job with `payload_redact_keys` set.
+WH-388 later removed payloads from `tasks`, so the list cannot carry a redacted key. The
+`dashboard/v1` conformance fixtures regenerate and pass. `pnpm benchmark:dashboard-read-surface` reproduces the
 planner cost, node sequence, base relations, and indexes recorded in
 `docs/benchmarks/results/2026-08-12-dashboard-read-surface.json`. The run for this change is
 `docs/benchmarks/results/2026-08-22-dashboard-read-surface.json`: all four families report
 `equivalentResults`, `viewPlanMatchesDirect`, and `functionPlanMatchesDirect`, and the verdict
-remains `views`.
+remains `views`. WH-388 adds request-level evidence in
+`docs/benchmarks/results/2026-08-24-dashboard-read-surface.json`. Task reads fall from eight
+statements to two and p95 falls from 23.82 ms to 21.93 ms. Nearby queue reads fall from 27
+statements to three and p95 falls from 1,722.93 ms to 27.86 ms. They reuse the cached health
+snapshot and group every terminal estimate into one statement.

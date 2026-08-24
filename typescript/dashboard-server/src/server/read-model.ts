@@ -1,5 +1,5 @@
 import { expectOneRow, queueHealthFromDocument } from "@workhorse-js/core";
-import type { Admin, Queue, QueueHealthDocument, RetryPolicy } from "@workhorse-js/core";
+import type { Admin, QueueHealth, QueueHealthDocument, RetryPolicy } from "@workhorse-js/core";
 import {
   DashboardActivityBucket,
   DashboardActivityGroupBy,
@@ -52,11 +52,35 @@ function toIsoOrNull(value: Date | string | null): string | null {
   return value ? toIso(value) : null;
 }
 
-async function readQueueHealth(database: DashboardDatabase) {
-  const result = await database.execute<{ snapshot: QueueHealthDocument }>(sql`
-    SELECT workhorse.queue_health_v1() AS snapshot
-  `);
-  return queueHealthFromDocument(expectOneRow(result, "the queue health snapshot").snapshot);
+export type DashboardQueueHealthReader = () => Promise<QueueHealth>;
+
+/** Share the expensive canonical health snapshot across nearby reads for one dashboard context. */
+export function createDashboardQueueHealthReader(
+  database: DashboardDatabase,
+  ttlMs = 3_000,
+): DashboardQueueHealthReader {
+  let cached: { expiresAt: number; value: QueueHealth } | null = null;
+  let pending: Promise<QueueHealth> | null = null;
+  return async () => {
+    const now = Date.now();
+    if (cached && cached.expiresAt > now) return cached.value;
+    if (pending) return pending;
+    pending = database
+      .execute<{ snapshot: QueueHealthDocument }>(sql`
+        SELECT workhorse.queue_health_v1() AS snapshot
+      `)
+      .then((result) => {
+        const value = queueHealthFromDocument(
+          expectOneRow(result, "the queue health snapshot").snapshot,
+        );
+        cached = { expiresAt: Date.now() + ttlMs, value };
+        return value;
+      })
+      .finally(() => {
+        pending = null;
+      });
+    return pending;
+  };
 }
 
 const currentSignalWaitColumn = sql`
@@ -88,11 +112,12 @@ export async function readDashboardHumanWaits(
   admin: Admin,
   canComplete: boolean,
   canSignal: boolean,
+  readQueueHealth: DashboardQueueHealthReader = createDashboardQueueHealthReader(database),
 ): Promise<DashboardHumanWaitPage> {
   const [waitPage, signalWaitPage, health] = await Promise.all([
     admin.listHumanWaits(),
     admin.listSignalWaits(),
-    readQueueHealth(database),
+    readQueueHealth(),
   ]);
   return {
     capturedAt: new Date().toISOString(),
@@ -125,11 +150,12 @@ export async function readDashboardSettings(
   database: DashboardDatabase,
   admin: Admin,
   editable: boolean,
+  readQueueHealth: DashboardQueueHealthReader = createDashboardQueueHealthReader(database),
 ): Promise<DashboardSettingsPage> {
   const [maintenance, retention, health, enqueued, workers] = await Promise.all([
     admin.getMaintenancePolicy(),
     admin.getRetentionPolicy(),
-    readQueueHealth(database),
+    readQueueHealth(),
     // Measured arrival rate for the recommendation engine, over one stitched statistics hour so
     // the reading works whether or not the rollup has materialized the window yet.
     database.execute<{ jobs: string | number }>(sql`
@@ -317,6 +343,54 @@ async function estimateRows(database: DashboardDatabase, query: ReturnType<typeo
   return typeof rows === "number" ? Math.max(0, Math.round(rows)) : 0;
 }
 
+const terminalStates = ["succeeded", "failed", "canceled"] as const;
+
+function findAppendPlans(plan: Record<string, unknown> | undefined): unknown[] | null {
+  if (!plan) return null;
+  if (plan["Node Type"] === "Append" && Array.isArray(plan.Plans)) return plan.Plans;
+  if (!Array.isArray(plan.Plans)) return null;
+  for (const child of plan.Plans) {
+    const found = findAppendPlans(child as Record<string, unknown>);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Read every queue/state planner estimate from one EXPLAIN document. */
+async function estimateQueueTerminalCounts(database: DashboardDatabase, queues: readonly string[]) {
+  const estimates = new Map<string, { succeeded: number; failed: number; canceled: number }>();
+  if (queues.length === 0) return estimates;
+  const branches = queues.flatMap((queue) =>
+    terminalStates.map(
+      (state) => sql`
+      SELECT ${queue}::text AS queue, ${state}::text AS state
+        FROM workhorse.dashboard_job_outcome_v1 outcome
+        JOIN workhorse.dashboard_job_v1 job ON job.id = outcome.job_id
+       WHERE job.queue_name = ${queue} AND outcome.state = ${state}
+    `,
+    ),
+  );
+  const result = await database.execute<Record<string, unknown>>(
+    sql`EXPLAIN (FORMAT JSON) ${sql.join(branches, sql` UNION ALL `)}`,
+  );
+  const cell = Object.values(result.rows[0] ?? {})[0];
+  const parsed: unknown = typeof cell === "string" ? JSON.parse(cell) : cell;
+  const root = (parsed as Array<{ Plan?: Record<string, unknown> }>)[0]?.Plan;
+  const plans = findAppendPlans(root) ?? (root ? [root] : []);
+  if (!Array.isArray(plans) || plans.length !== branches.length) {
+    throw new Error("the grouped queue estimate returned an unexpected plan shape");
+  }
+  for (const [index, rawPlan] of plans.entries()) {
+    const queue = queues[Math.floor(index / terminalStates.length)]!;
+    const state = terminalStates[index % terminalStates.length]!;
+    const plan = rawPlan as Record<string, unknown>;
+    const current = estimates.get(queue) ?? { succeeded: 0, failed: 0, canceled: 0 };
+    current[state] = Math.max(0, Math.round(Number(plan["Plan Rows"] ?? 0)));
+    estimates.set(queue, current);
+  }
+  return estimates;
+}
+
 export async function readDashboardTaskCounts(
   database: DashboardDatabase,
 ): Promise<DashboardTaskCounts> {
@@ -434,6 +508,7 @@ async function readDashboardTaskCountsExact(
 /** Queue management rows keep hot live-state counts exact and estimate cold outcomes at scale. */
 export async function readDashboardQueues(
   database: DashboardDatabase,
+  readQueueHealth: DashboardQueueHealthReader = createDashboardQueueHealthReader(database),
 ): Promise<DashboardQueuesPage> {
   const [queueRows, relationRows, health] = await Promise.all([
     database.execute<{
@@ -471,38 +546,16 @@ export async function readDashboardQueues(
     database.execute<{ estimate: string | number }>(sql`
       SELECT estimate FROM workhorse.dashboard_job_estimate_v1()
     `),
-    readQueueHealth(database),
+    readQueueHealth(),
   ]);
   const approximate = Number(relationRows.rows[0]?.estimate ?? -1) >= approximateCountThreshold;
 
   let terminalCounts: Map<string, { succeeded: number; failed: number; canceled: number }>;
   if (approximate) {
-    const estimates = await Promise.all(
-      queueRows.rows.map(async (row) => {
-        const [succeeded, failed, canceled] = await Promise.all([
-          estimateRows(
-            database,
-            sql`SELECT 1 FROM workhorse.dashboard_job_outcome_v1 outcome
-                  JOIN workhorse.dashboard_job_v1 job ON job.id = outcome.job_id
-                 WHERE job.queue_name = ${row.queue} AND outcome.state = 'succeeded'`,
-          ),
-          estimateRows(
-            database,
-            sql`SELECT 1 FROM workhorse.dashboard_job_outcome_v1 outcome
-                  JOIN workhorse.dashboard_job_v1 job ON job.id = outcome.job_id
-                 WHERE job.queue_name = ${row.queue} AND outcome.state = 'failed'`,
-          ),
-          estimateRows(
-            database,
-            sql`SELECT 1 FROM workhorse.dashboard_job_outcome_v1 outcome
-                  JOIN workhorse.dashboard_job_v1 job ON job.id = outcome.job_id
-                 WHERE job.queue_name = ${row.queue} AND outcome.state = 'canceled'`,
-          ),
-        ]);
-        return [row.queue, { succeeded, failed, canceled }] as const;
-      }),
+    terminalCounts = await estimateQueueTerminalCounts(
+      database,
+      queueRows.rows.map((row) => row.queue),
     );
-    terminalCounts = new Map(estimates);
   } else {
     const exactRows = await database.execute<{
       queue: string;
@@ -690,10 +743,12 @@ export interface DashboardTasksQuery {
   sort: DashboardTaskSort;
 }
 
+const noDashboardDurability: DashboardDurabilityProjector = () => null;
+
 export async function readDashboardTasks(
   database: DashboardDatabase,
   query: DashboardTasksQuery,
-  projectDurability: DashboardDurabilityProjector = () => null,
+  projectDurability: DashboardDurabilityProjector = noDashboardDurability,
   canCompleteHumanWait = false,
 ): Promise<DashboardTasksPage> {
   const { filter, page, pageSize, queue, tags, search, worker, jobType, priority, sort } = query;
@@ -711,25 +766,39 @@ export async function readDashboardTasks(
     sort === "priority"
       ? sql`priority DESC, updated_at DESC, id DESC`
       : sql`updated_at DESC, id DESC`;
-  const [counts, totalRows, jobRows] = await Promise.all([
-    readDashboardTaskCounts(database),
+  const attemptWorkerJoin =
+    worker === null
+      ? sql``
+      : sql`
+          LEFT JOIN LATERAL (
+            SELECT ah.worker_id FROM workhorse.dashboard_attempt_history_v1 ah
+             WHERE ah.job_id = j.id ORDER BY ah.attempt DESC LIMIT 1
+          ) attempt_worker ON true
+        `;
+  const attemptWorkerId = worker === null ? sql`NULL::text` : sql`attempt_worker.worker_id`;
+  const durabilityColumns =
+    projectDurability === noDashboardDurability
+      ? sql`NULL::jsonb AS payload, ARRAY[]::text[] AS checkpoint_names`
+      : sql`j.payload,
+            ARRAY(SELECT checkpoint.checkpoint_name
+                    FROM workhorse.dashboard_job_checkpoint_v1 checkpoint
+                   WHERE checkpoint.job_id = j.id
+                   ORDER BY checkpoint.checkpoint_name) AS checkpoint_names`;
+  const [totalRows, jobRows] = await Promise.all([
     database.execute<{ count: number }>(sql`
       WITH tasks AS (
         SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.tags, j.priority,
                COALESCE(r.state, o.state) AS state,
                ${externalWaitExists(sql`j.id`)} AS external_wait,
                COALESCE(r.current_attempt, o.current_attempt) AS attempt,
-               COALESCE(r.worker_id, current_wait.worker_id, attempt_worker.worker_id,
+               COALESCE(r.worker_id, current_wait.worker_id, ${attemptWorkerId},
                         'unassigned') AS worker_id
           FROM workhorse.dashboard_job_v1 j
           LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
           LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
           LEFT JOIN workhorse.dashboard_job_wait_v1 current_wait
             ON current_wait.job_id = j.id AND current_wait.wait_name = r.wait_name
-          LEFT JOIN LATERAL (
-            SELECT ah.worker_id FROM workhorse.dashboard_attempt_history_v1 ah
-             WHERE ah.job_id = j.id ORDER BY ah.attempt DESC LIMIT 1
-          ) attempt_worker ON true
+          ${attemptWorkerJoin}
       )
       SELECT count(*)::integer AS count FROM tasks
        WHERE ${taskFilterCondition(filter)} AND ${queryCondition}
@@ -782,10 +851,11 @@ export async function readDashboardTasks(
                   ORDER BY dependency.prerequisite_job_id
                ) AS prerequisite_job_ids,
                COALESCE(r.current_attempt, o.current_attempt) AS attempt,
-               j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.payload, j.tags,
+               j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.tags,
+               ${durabilityColumns},
                COALESCE(r.run_at, o.run_at) AS run_at,
                r.worker_id AS current_worker_id,
-               COALESCE(r.worker_id, durable_wait.worker_id, attempt_worker.worker_id)
+               COALESCE(r.worker_id, durable_wait.worker_id, ${attemptWorkerId})
                  AS worker_id,
                o.finished_at,
                COALESCE(o.error, r.error) AS error,
@@ -799,11 +869,7 @@ export async function readDashboardTasks(
                durable_wait.mode AS wait_mode,
                ${currentSignalWaitColumn},
                ${currentHumanWaitColumns},
-               enqueued_event.details AS enqueued_details,
-               ARRAY(SELECT checkpoint.checkpoint_name
-                       FROM workhorse.dashboard_job_checkpoint_v1 checkpoint
-                      WHERE checkpoint.job_id = j.id
-                      ORDER BY checkpoint.checkpoint_name) AS checkpoint_names
+               enqueued_event.details AS enqueued_details
           FROM workhorse.dashboard_job_v1 j
           LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
           LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
@@ -816,10 +882,7 @@ export async function readDashboardTasks(
              WHERE event.job_id = j.id AND event.event_type = 'enqueued'
              ORDER BY event.occurred_at, event.event_id LIMIT 1
           ) enqueued_event ON true
-          LEFT JOIN LATERAL (
-            SELECT ah.worker_id FROM workhorse.dashboard_attempt_history_v1 ah
-             WHERE ah.job_id = j.id ORDER BY ah.attempt DESC LIMIT 1
-          ) attempt_worker ON true
+          ${attemptWorkerJoin}
       )
       SELECT *
         FROM tasks
@@ -843,7 +906,6 @@ export async function readDashboardTasks(
     page,
     pageSize,
     total: totalRows.rows[0]?.count ?? 0,
-    counts,
     jobs: jobRows.rows.map((row) => {
       const plan = projectDurability(row.type, row.payload);
       const checkpointNames = new Set(row.checkpoint_names);
@@ -861,7 +923,6 @@ export async function readDashboardTasks(
         deadlineAt: toIsoOrNull(row.deadline_at),
         executionTimeoutMs:
           row.execution_timeout_ms === null ? null : Number(row.execution_timeout_ms),
-        payload: row.payload,
         tags: row.tags,
         keyed:
           readIdempotencyEvidence({ type: "enqueued", details: row.enqueued_details }) !== null,
@@ -1262,6 +1323,7 @@ function dashboardAdmissionPolicies(health: QueueHealthSnapshot) {
 export async function readDashboardSystem(
   database: DashboardDatabase,
   window: DashboardSystemWindow = "1h",
+  readQueueHealth: DashboardQueueHealthReader = createDashboardQueueHealthReader(database),
 ): Promise<DashboardSystemPage> {
   const windowSeconds = dashboardSystemWindowSeconds[window];
   const [
@@ -1484,7 +1546,7 @@ export async function readDashboardSystem(
     `),
     // Retention facts, partition existence, and the status verdict come from the canonical queue
     // read model rather than duplicated SQL here.
-    readQueueHealth(database),
+    readQueueHealth(),
   ]);
 
   const summary = expectOneRow(summaryRows, "the snapshot summary read");
@@ -1718,6 +1780,7 @@ export async function readDashboardJobDetail(
   projectDurability: DashboardDurabilityProjector = () => null,
   admin?: Admin,
   canSignal = false,
+  readQueueHealth: DashboardQueueHealthReader = createDashboardQueueHealthReader(database),
 ): Promise<DashboardJobDetail | null> {
   const [
     jobRows,
@@ -1979,7 +2042,7 @@ export async function readDashboardJobDetail(
         admin.concurrencyPolicies([job.queue]).then((policies) => policies[0] ?? null),
         // Terminal detail drops live utilization entirely, so only tasks that can still become
         // active need the bounded health aggregates beside their exact persisted policy.
-        job.runtime_state === null ? null : readQueueHealth(database),
+        job.runtime_state === null ? null : readQueueHealth(),
       ])
     : [null, null];
   const healthPolicy = health?.concurrencyPolicies.policies.find(

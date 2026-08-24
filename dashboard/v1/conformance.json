@@ -65,6 +65,17 @@
           }
         },
         {
+          "id": "stall-statistics-rollup",
+          "sql": "UPDATE workhorse.job_stat_state SET rolled_up_through=clock_timestamp()-interval '1 hour' WHERE singleton RETURNING true AS stalled",
+          "expect": {
+            "rows": [
+              {
+                "stalled": true
+              }
+            ]
+          }
+        },
+        {
           "id": "register-worker",
           "sql": "SELECT workhorse.register_worker_v1($1::text, $2::uuid, $3::text, $4::integer, ARRAY[$5::text], $6::integer, $7::integer, $8::integer, $9::integer, $10::integer, $11::integer, $12::integer, $13::integer, $14::boolean) AS paused",
           "parameters": [
@@ -627,18 +638,6 @@
                 "page": 1,
                 "pageSize": 50,
                 "total": 8,
-                "counts": {
-                  "all": 8,
-                  "blocked": 0,
-                  "waiting": 2,
-                  "scheduled": 3,
-                  "retried": 0,
-                  "queued": 3,
-                  "running": 0,
-                  "completed": 1,
-                  "discarded": 1,
-                  "canceled": 0
-                },
                 "jobs": [
                   {
                     "id": {
@@ -655,7 +654,6 @@
                     "retryPolicy": null,
                     "deadlineAt": null,
                     "executionTimeoutMs": null,
-                    "payload": {},
                     "tags": [],
                     "keyed": false,
                     "cancellation": null,
@@ -694,7 +692,6 @@
                     "retryPolicy": null,
                     "deadlineAt": null,
                     "executionTimeoutMs": null,
-                    "payload": {},
                     "tags": [],
                     "keyed": false,
                     "cancellation": null,
@@ -733,7 +730,6 @@
                     "retryPolicy": null,
                     "deadlineAt": null,
                     "executionTimeoutMs": null,
-                    "payload": {},
                     "tags": [],
                     "keyed": false,
                     "cancellation": null,
@@ -770,7 +766,6 @@
                     "retryPolicy": null,
                     "deadlineAt": null,
                     "executionTimeoutMs": null,
-                    "payload": {},
                     "tags": [
                       "conformance"
                     ],
@@ -811,7 +806,6 @@
                     "retryPolicy": null,
                     "deadlineAt": null,
                     "executionTimeoutMs": null,
-                    "payload": {},
                     "tags": [],
                     "keyed": false,
                     "cancellation": null,
@@ -856,7 +850,6 @@
                     "retryPolicy": null,
                     "deadlineAt": null,
                     "executionTimeoutMs": null,
-                    "payload": {},
                     "tags": [],
                     "keyed": false,
                     "cancellation": null,
@@ -898,7 +891,6 @@
                     "retryPolicy": null,
                     "deadlineAt": null,
                     "executionTimeoutMs": null,
-                    "payload": {},
                     "tags": [],
                     "keyed": false,
                     "cancellation": null,
@@ -906,7 +898,7 @@
                       "$type": "timestamp"
                     },
                     "workerId": null,
-                    "lastWorkerId": "conformance-worker",
+                    "lastWorkerId": null,
                     "finishedAt": {
                       "$type": "timestamp"
                     },
@@ -939,9 +931,6 @@
                     "retryPolicy": null,
                     "deadlineAt": null,
                     "executionTimeoutMs": null,
-                    "payload": {
-                      "step": 1
-                    },
                     "tags": [
                       "conformance"
                     ],
@@ -951,7 +940,7 @@
                       "$type": "timestamp"
                     },
                     "workerId": null,
-                    "lastWorkerId": "conformance-worker",
+                    "lastWorkerId": null,
                     "finishedAt": {
                       "$type": "timestamp"
                     },
@@ -1007,18 +996,6 @@
                 "page": 1,
                 "pageSize": 50,
                 "total": 0,
-                "counts": {
-                  "all": 8,
-                  "blocked": 0,
-                  "waiting": 2,
-                  "scheduled": 3,
-                  "retried": 0,
-                  "queued": 3,
-                  "running": 0,
-                  "completed": 1,
-                  "discarded": 1,
-                  "canceled": 0
-                },
                 "jobs": []
               }
             }
@@ -2031,8 +2008,17 @@
                 "window": "1h",
                 "windowSeconds": 3600,
                 "status": {
-                  "level": "healthy",
-                  "reasons": []
+                  "level": "degraded",
+                  "reasons": [
+                    {
+                      "code": "rollup-stalled",
+                      "budget": 1800000,
+                      "observed": {
+                        "$type": "number"
+                      },
+                      "severity": "degraded"
+                    }
+                  ]
                 },
                 "pausedQueues": [],
                 "kpis": {
@@ -3743,7 +3729,7 @@
                       "buckets": 0,
                       "oldestBucketAt": null,
                       "newestBucketAt": null,
-                      "stalled": false
+                      "stalled": true
                     },
                     "relations": [
                       {
@@ -3854,6 +3840,7 @@
             }
           },
           "coerce": {
+            "body.json.kpis.queueWait.p50Ms": "number",
             "body.json.outcomes.*.bucketStart": "timestamp",
             "body.json.outcomes.*.enqueued": "integer",
             "body.json.outcomes.*.succeeded": "integer",
@@ -4029,7 +4016,16 @@
                   }
                 },
                 "recommendationInputs": {
-                  "reasons": [],
+                  "reasons": [
+                    {
+                      "code": "rollup-stalled",
+                      "budget": 1800000,
+                      "observed": {
+                        "$type": "number"
+                      },
+                      "severity": "degraded"
+                    }
+                  ],
                   "statistics": {
                     "rolledUpThrough": {
                       "$type": "timestamp"
@@ -5201,18 +5197,6 @@
                 "page": 1,
                 "pageSize": 50,
                 "total": 8,
-                "counts": {
-                  "all": 8,
-                  "blocked": 0,
-                  "waiting": 2,
-                  "scheduled": 3,
-                  "retried": 0,
-                  "queued": 3,
-                  "running": 0,
-                  "completed": 1,
-                  "discarded": 1,
-                  "canceled": 0
-                },
                 "jobs": [
                   {
                     "id": {
@@ -5229,7 +5213,6 @@
                     "retryPolicy": null,
                     "deadlineAt": null,
                     "executionTimeoutMs": null,
-                    "payload": {},
                     "tags": [],
                     "keyed": false,
                     "cancellation": null,
@@ -5268,7 +5251,6 @@
                     "retryPolicy": null,
                     "deadlineAt": null,
                     "executionTimeoutMs": null,
-                    "payload": {},
                     "tags": [],
                     "keyed": false,
                     "cancellation": null,
@@ -5307,7 +5289,6 @@
                     "retryPolicy": null,
                     "deadlineAt": null,
                     "executionTimeoutMs": null,
-                    "payload": {},
                     "tags": [],
                     "keyed": false,
                     "cancellation": null,
@@ -5344,7 +5325,6 @@
                     "retryPolicy": null,
                     "deadlineAt": null,
                     "executionTimeoutMs": null,
-                    "payload": {},
                     "tags": [
                       "conformance"
                     ],
@@ -5385,7 +5365,6 @@
                     "retryPolicy": null,
                     "deadlineAt": null,
                     "executionTimeoutMs": null,
-                    "payload": {},
                     "tags": [],
                     "keyed": false,
                     "cancellation": null,
@@ -5430,7 +5409,6 @@
                     "retryPolicy": null,
                     "deadlineAt": null,
                     "executionTimeoutMs": null,
-                    "payload": {},
                     "tags": [],
                     "keyed": false,
                     "cancellation": null,
@@ -5472,7 +5450,6 @@
                     "retryPolicy": null,
                     "deadlineAt": null,
                     "executionTimeoutMs": null,
-                    "payload": {},
                     "tags": [],
                     "keyed": false,
                     "cancellation": null,
@@ -5480,7 +5457,7 @@
                       "$type": "timestamp"
                     },
                     "workerId": null,
-                    "lastWorkerId": "conformance-worker",
+                    "lastWorkerId": null,
                     "finishedAt": {
                       "$type": "timestamp"
                     },
@@ -5513,9 +5490,6 @@
                     "retryPolicy": null,
                     "deadlineAt": null,
                     "executionTimeoutMs": null,
-                    "payload": {
-                      "step": 1
-                    },
                     "tags": [
                       "conformance"
                     ],
@@ -5525,7 +5499,7 @@
                       "$type": "timestamp"
                     },
                     "workerId": null,
-                    "lastWorkerId": "conformance-worker",
+                    "lastWorkerId": null,
                     "finishedAt": {
                       "$type": "timestamp"
                     },
@@ -5713,7 +5687,16 @@
                   }
                 },
                 "recommendationInputs": {
-                  "reasons": [],
+                  "reasons": [
+                    {
+                      "code": "rollup-stalled",
+                      "budget": 1800000,
+                      "observed": {
+                        "$type": "number"
+                      },
+                      "severity": "degraded"
+                    }
+                  ],
                   "statistics": {
                     "rolledUpThrough": {
                       "$type": "timestamp"

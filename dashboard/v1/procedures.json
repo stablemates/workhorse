@@ -3663,7 +3663,6 @@
             }
           ]
         },
-        "payload": {},
         "tags": {
           "type": "array",
           "items": {
@@ -3842,7 +3841,6 @@
         "attempt",
         "maxAttempts",
         "retryPolicy",
-        "payload",
         "tags",
         "keyed",
         "cancellation",
@@ -6173,9 +6171,6 @@
         "total": {
           "type": "number"
         },
-        "counts": {
-          "$ref": "#/$defs/DashboardTaskCounts"
-        },
         "jobs": {
           "type": "array",
           "items": {
@@ -6197,7 +6192,6 @@
         "page",
         "pageSize",
         "total",
-        "counts",
         "jobs"
       ]
     },

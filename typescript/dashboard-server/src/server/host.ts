@@ -10,6 +10,7 @@ import { dashboardAssetsDirectory } from "./assets.js";
 import { createSingleAdminAuthentication } from "./authentication.js";
 import { renderDashboardHtml } from "./html.js";
 import { dashboardRouter, isDashboardMutation } from "./router.js";
+import { createDashboardQueueHealthReader, type DashboardQueueHealthReader } from "./read-model.js";
 import { dashboardDatabase } from "./sql.js";
 import type {
   DashboardDurabilityProjector,
@@ -148,6 +149,7 @@ interface HostWorkspace {
   workerController?: DashboardWorkerController;
   settingsController?: DashboardSettingsController;
   projectDurability?: DashboardDurabilityProjector;
+  readQueueHealth: DashboardQueueHealthReader;
   compatibility?: Promise<void>;
 }
 
@@ -253,26 +255,30 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
   const resolveWorkspace = (
     name: string | null,
     workspace: DashboardWorkspaceOptions,
-  ): HostWorkspace => ({
-    name,
-    basePath: name === null ? path : `${path}/${name}`,
-    queryable: workspace.database,
-    database: dashboardDatabase(workspace.database),
-    // Administrative policy and wait reads share the dashboard's caller-owned connection.
-    admin: new Admin(workspace.database),
-    queue: new Queue(workspace.database),
-    environment: workspace.environment ?? options.environment ?? "unknown",
-    configuredWorkers: workspace.configuredWorkers ?? options.configuredWorkers ?? [],
-    maintenanceLoops: workspace.maintenanceLoops ??
-      options.maintenanceLoops ?? { tickIntervalMs: 1_000 },
-    operator: workspace.operator ?? options.operator ?? { mode: "read-only" },
-    scheduleController: workspace.scheduleController ?? options.scheduleController,
-    queueController: workspace.queueController ?? options.queueController,
-    taskController: workspace.taskController ?? options.taskController,
-    workerController: workspace.workerController ?? options.workerController,
-    settingsController: workspace.settingsController ?? options.settingsController,
-    projectDurability: workspace.projectDurability ?? options.projectDurability,
-  });
+  ): HostWorkspace => {
+    const database = dashboardDatabase(workspace.database);
+    return {
+      name,
+      basePath: name === null ? path : `${path}/${name}`,
+      queryable: workspace.database,
+      database,
+      // Administrative policy and wait reads share the dashboard's caller-owned connection.
+      admin: new Admin(workspace.database),
+      queue: new Queue(workspace.database),
+      environment: workspace.environment ?? options.environment ?? "unknown",
+      configuredWorkers: workspace.configuredWorkers ?? options.configuredWorkers ?? [],
+      maintenanceLoops: workspace.maintenanceLoops ??
+        options.maintenanceLoops ?? { tickIntervalMs: 1_000 },
+      operator: workspace.operator ?? options.operator ?? { mode: "read-only" },
+      scheduleController: workspace.scheduleController ?? options.scheduleController,
+      queueController: workspace.queueController ?? options.queueController,
+      taskController: workspace.taskController ?? options.taskController,
+      workerController: workspace.workerController ?? options.workerController,
+      settingsController: workspace.settingsController ?? options.settingsController,
+      projectDurability: workspace.projectDurability ?? options.projectDurability,
+      readQueueHealth: createDashboardQueueHealthReader(database),
+    };
+  };
 
   const workspaces = new Map<string, HostWorkspace>();
   for (const [name, workspace] of Object.entries(options.workspaces ?? {})) {
@@ -443,6 +449,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
             settingsController: workspace.settingsController,
             projectDurability: workspace.projectDurability,
             authenticatedActor,
+            readQueueHealth: workspace.readQueueHealth,
           },
         });
         if (response) {

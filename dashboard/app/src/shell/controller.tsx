@@ -319,7 +319,6 @@ export function useDashboardController(
               current.data ? { status: "ready", data: current.data, error: null } : current,
             );
           } else {
-            if (data.route === "/tasks") setTaskCounts(data.value.counts);
             setLoadState({ status: "ready", data, error: null });
           }
         }

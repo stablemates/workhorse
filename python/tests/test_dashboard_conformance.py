@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 from collections.abc import Iterable
+from time import sleep
 from typing import Any, cast
 
 import psycopg
@@ -117,6 +118,7 @@ def test_python_dashboard_read_procedures_match_the_shared_contract(database_url
                 (job["id"], job["current_attempt"], job["id"], job["current_attempt"]),
             )
 
+            sleep(3.1)
             _, queues_body = request(
                 host,
                 harness["origin"],

@@ -29,6 +29,7 @@ import type {
 } from "./types.js";
 import type { DashboardDatabase } from "./sql.js";
 import {
+  type DashboardQueueHealthReader,
   readDashboardActivity,
   readDashboardCron,
   readDashboardEvents,
@@ -59,6 +60,7 @@ export interface DashboardRpcContext {
   settingsController?: DashboardSettingsController;
   projectDurability?: DashboardDurabilityProjector;
   authenticatedActor: string;
+  readQueueHealth: DashboardQueueHealthReader;
 }
 
 interface DashboardProcedureMeta {
@@ -366,11 +368,17 @@ export const dashboardRouter = {
     cron: procedure.handler(({ context }) =>
       readDashboardCron(context.database, context.maintenanceLoops),
     ),
-    queues: procedure.handler(({ context }) => readDashboardQueues(context.database)),
+    queues: procedure.handler(({ context }) =>
+      readDashboardQueues(context.database, context.readQueueHealth),
+    ),
     system: procedure
       .input(systemInput)
       .handler(({ context, input }) =>
-        readDashboardSystem(context.database, input.window as DashboardSystemWindow),
+        readDashboardSystem(
+          context.database,
+          input.window as DashboardSystemWindow,
+          context.readQueueHealth,
+        ),
       ),
     workers: procedure.handler(({ context }) => {
       const canManageWorkers =
@@ -382,6 +390,7 @@ export const dashboardRouter = {
         context.database,
         context.admin,
         context.operator.mode === "writable" && Boolean(context.settingsController),
+        context.readQueueHealth,
       ),
     ),
     previewRetentionPolicy: procedure
@@ -394,6 +403,7 @@ export const dashboardRouter = {
         context.projectDurability,
         context.admin,
         context.operator.mode === "writable" && Boolean(context.taskController?.signalTask),
+        context.readQueueHealth,
       );
       if (!detail) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
       return detail;
@@ -404,6 +414,7 @@ export const dashboardRouter = {
         context.admin,
         context.operator.mode === "writable" && Boolean(context.taskController?.completeHumanWait),
         context.operator.mode === "writable" && Boolean(context.taskController?.signalTask),
+        context.readQueueHealth,
       ),
     ),
     enqueueTest: mutationProcedure.input(enqueueTestInput).handler(async ({ context, input }) => {

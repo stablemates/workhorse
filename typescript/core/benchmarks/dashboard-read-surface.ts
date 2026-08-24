@@ -1,8 +1,14 @@
 import { createHash } from "node:crypto";
 import { cpus, platform, release } from "node:os";
+import { performance } from "node:perf_hooks";
 import type { Pool, QueryResultRow } from "pg";
 import { installSchema } from "../src/schema.js";
-import { summarizeNumbers, type NumericSummary } from "./statistics.js";
+import {
+  summarizeLatencies,
+  summarizeNumbers,
+  type LatencySummary,
+  type NumericSummary,
+} from "./statistics.js";
 
 export type DashboardReadStrategy = "direct-sql" | "views" | "functions";
 
@@ -56,6 +62,20 @@ export interface DashboardReadCaseMeasurement {
   functionPlanMatchesDirect: boolean;
 }
 
+export interface DashboardRequestVariantMeasurement {
+  name: "baseline" | "current";
+  statementsPerCall: number;
+  latencyMs: LatencySummary;
+}
+
+export interface DashboardRequestComparison {
+  name: "tasks" | "queues";
+  repetitions: number;
+  variants: [DashboardRequestVariantMeasurement, DashboardRequestVariantMeasurement];
+  fewerStatements: boolean;
+  lowerP95: boolean;
+}
+
 export interface DashboardReadSurfaceReport {
   generatedAt: string;
   environment: {
@@ -77,6 +97,7 @@ export interface DashboardReadSurfaceReport {
   };
   executionOrder: DashboardReadStrategy[][];
   cases: DashboardReadCaseMeasurement[];
+  requests: DashboardRequestComparison[];
   verdict: {
     selected: DashboardReadStrategy;
     rationale: string;
@@ -269,19 +290,6 @@ function relation(surface: DashboardReadSurface, name: DashboardRelation): strin
   return `workhorse.${dashboardRelations[surface][name]}`;
 }
 
-/**
- * The job payload as the dashboard actually receives it.
- *
- * `dashboard_job_v1` redacts the operator-declared sensitive keys (ADR 0035), so a direct-SQL arm
- * that selected the raw column would be measuring a different query and would report a plan
- * difference that is only the missing redaction. Both arms compute the same value.
- */
-function payloadColumn(surface: DashboardReadSurface, alias: string): string {
-  return surface === "tables"
-    ? `workhorse.redact_top_level_keys_v1(${alias}.payload, ${alias}.payload_redact_keys) AS payload`
-    : `${alias}.payload`;
-}
-
 function jsonRows(innerSql: string): string {
   return `SELECT to_jsonb(result) AS result_row FROM (${innerSql}) result`;
 }
@@ -296,18 +304,14 @@ function taskPageSql(
              COALESCE(r.state, o.state) AS state,
              COALESCE(r.current_attempt, o.current_attempt) AS attempt,
              j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms,
-             ${payloadColumn(surface, "j")}, j.tags,
+             j.tags,
              COALESCE(r.run_at, o.run_at) AS run_at,
              r.worker_id AS current_worker_id,
-             COALESCE(r.worker_id, durable_wait.worker_id, attempt_worker.worker_id) AS worker_id,
+             COALESCE(r.worker_id, durable_wait.worker_id) AS worker_id,
              o.finished_at, COALESCE(o.error, r.error) AS error, j.created_at,
              COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at,
              r.wait_name, durable_wait.wake_at, durable_wait.mode AS wait_mode,
-             enqueued_event.details AS enqueued_details,
-             ARRAY(SELECT checkpoint.checkpoint_name
-                     FROM ${relation(surface, "checkpoint")} checkpoint
-                    WHERE checkpoint.job_id = j.id
-                    ORDER BY checkpoint.checkpoint_name) AS checkpoint_names
+             enqueued_event.details AS enqueued_details
         FROM ${relation(surface, "job")} j
         LEFT JOIN ${relation(surface, "runtime")} r ON r.job_id = j.id
         LEFT JOIN ${relation(surface, "outcome")} o ON o.job_id = j.id
@@ -318,8 +322,56 @@ function taskPageSql(
            WHERE event.job_id = j.id AND event.event_type = 'enqueued'
            ORDER BY event.occurred_at, event.event_id LIMIT 1
         ) enqueued_event ON true
+    )
+    SELECT * FROM tasks
+     WHERE queue = ${parameters.queue}
+       AND tags && ARRAY[${parameters.tag}]::text[]
+       AND (
+         type ILIKE ${parameters.search} ESCAPE '!'
+         OR queue ILIKE ${parameters.search} ESCAPE '!'
+         OR id::text ILIKE ${parameters.search} ESCAPE '!'
+       )
+     ORDER BY updated_at DESC, id DESC
+     LIMIT ${parameters.limit} OFFSET ${parameters.offset}
+  `);
+}
+
+function baselineTaskPageSql(parameters: {
+  queue: string;
+  tag: string;
+  search: string;
+  limit: string;
+  offset: string;
+}): string {
+  return jsonRows(`
+    WITH tasks AS (
+      SELECT j.id, j.queue_name AS queue, j.job_type AS type,
+             COALESCE(r.state, o.state) AS state,
+             COALESCE(r.current_attempt, o.current_attempt) AS attempt,
+             j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms,
+             j.payload, j.tags, COALESCE(r.run_at, o.run_at) AS run_at,
+             r.worker_id AS current_worker_id,
+             COALESCE(r.worker_id, durable_wait.worker_id, attempt_worker.worker_id) AS worker_id,
+             o.finished_at, COALESCE(o.error, r.error) AS error, j.created_at,
+             COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at,
+             r.wait_name, durable_wait.wake_at, durable_wait.mode AS wait_mode,
+             enqueued_event.details AS enqueued_details,
+             ARRAY(SELECT checkpoint.checkpoint_name
+                     FROM workhorse.dashboard_job_checkpoint_v1 checkpoint
+                    WHERE checkpoint.job_id = j.id
+                    ORDER BY checkpoint.checkpoint_name) AS checkpoint_names
+        FROM workhorse.dashboard_job_v1 j
+        LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
+        LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
+        LEFT JOIN workhorse.dashboard_job_wait_v1 durable_wait
+          ON durable_wait.job_id = j.id AND durable_wait.wait_name = r.wait_name
         LEFT JOIN LATERAL (
-          SELECT history.worker_id FROM ${relation(surface, "attempt")} history
+          SELECT event.details FROM workhorse.dashboard_job_event_v1 event
+           WHERE event.job_id = j.id AND event.event_type = 'enqueued'
+           ORDER BY event.occurred_at, event.event_id LIMIT 1
+        ) enqueued_event ON true
+        LEFT JOIN LATERAL (
+          SELECT history.worker_id FROM workhorse.dashboard_attempt_history_v1 history
            WHERE history.job_id = j.id ORDER BY history.attempt DESC LIMIT 1
         ) attempt_worker ON true
     )
@@ -703,11 +755,273 @@ async function measureFamily(
   };
 }
 
+interface CountedQueryRunner {
+  query<Row extends QueryResultRow = QueryResultRow>(query: QuerySpec): Promise<Row[]>;
+  statementCount(): number;
+}
+
+function countedQueryRunner(pool: Pool): CountedQueryRunner {
+  let statements = 0;
+  return {
+    async query<Row extends QueryResultRow = QueryResultRow>(query: QuerySpec) {
+      statements += 1;
+      return (await pool.query<Row>(query.text, [...query.values])).rows;
+    },
+    statementCount: () => statements,
+  };
+}
+
+const taskRequestValues = ["queue-3", "tag-3", "%task-3%", 50, 0];
+const taskRequestParameters = {
+  queue: "$1",
+  tag: "$2",
+  search: "$3",
+  limit: "$4",
+  offset: "$5",
+};
+
+function taskTotalSql(includeAttemptHistory: boolean): string {
+  const attemptJoin = includeAttemptHistory
+    ? `LEFT JOIN LATERAL (
+         SELECT history.worker_id FROM workhorse.dashboard_attempt_history_v1 history
+          WHERE history.job_id=j.id ORDER BY history.attempt DESC LIMIT 1
+       ) attempt_worker ON true`
+    : "";
+  const attemptWorker = includeAttemptHistory ? "attempt_worker.worker_id" : "NULL::text";
+  return `WITH tasks AS (
+            SELECT j.id,j.queue_name AS queue,j.job_type AS type,j.tags,
+                   COALESCE(r.worker_id,current_wait.worker_id,${attemptWorker},'unassigned') worker_id
+              FROM workhorse.dashboard_job_v1 j
+              LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id=j.id
+              LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id=j.id
+              LEFT JOIN workhorse.dashboard_job_wait_v1 current_wait
+                ON current_wait.job_id=j.id AND current_wait.wait_name=r.wait_name
+              ${attemptJoin}
+          )
+          SELECT count(*)::integer FROM tasks
+           WHERE queue=$1 AND tags&&ARRAY[$2]::text[]
+             AND (type ILIKE $3 ESCAPE '!' OR queue ILIKE $3 ESCAPE '!'
+                  OR id::text ILIKE $3 ESCAPE '!')`;
+}
+
+async function readBaselineTasks(query: CountedQueryRunner): Promise<void> {
+  await Promise.all([
+    query
+      .query({
+        text: "SELECT estimate FROM workhorse.dashboard_job_estimate_v1()",
+        values: [],
+      })
+      .then(async () => {
+        await query.query({
+          text: `SELECT count(*) FILTER(WHERE state='blocked')::integer,
+                        count(*) FILTER(WHERE state='scheduled')::integer,
+                        count(*) FILTER(WHERE state='ready')::integer,
+                        count(*) FILTER(WHERE state='active')::integer
+                   FROM workhorse.dashboard_job_runtime_v1`,
+          values: [],
+        });
+        for (const condition of [
+          "state='succeeded'",
+          "state='failed'",
+          "state='canceled'",
+          "current_attempt>1",
+        ]) {
+          await query.query({
+            text: `EXPLAIN (FORMAT JSON) SELECT 1
+                     FROM workhorse.dashboard_job_outcome_v1 WHERE ${condition}`,
+            values: [],
+          });
+        }
+      }),
+    query.query({
+      text: taskTotalSql(true),
+      values: taskRequestValues.slice(0, 3),
+    }),
+    query.query({
+      text: baselineTaskPageSql(taskRequestParameters),
+      values: taskRequestValues,
+    }),
+  ]);
+}
+
+async function readCurrentTasks(query: CountedQueryRunner): Promise<void> {
+  await Promise.all([
+    query.query({
+      text: taskTotalSql(false),
+      values: taskRequestValues.slice(0, 3),
+    }),
+    query.query({ text: taskPageSql("views", taskRequestParameters), values: taskRequestValues }),
+  ]);
+}
+
+const queuePageQuery: QuerySpec = {
+  text: `WITH known_queues AS (
+           SELECT queue_name FROM workhorse.dashboard_job_v1
+           UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1
+           UNION SELECT queue_name FROM workhorse.dashboard_concurrency_policy_v1
+           UNION SELECT queue_name FROM workhorse.dashboard_rate_limit_policy_v1
+         ), live_counts AS (
+           SELECT queue_name,
+                  count(*) FILTER (WHERE state='scheduled')::integer AS scheduled,
+                  count(*) FILTER (WHERE state='ready')::integer AS ready,
+                  count(*) FILTER (WHERE state='active')::integer AS active
+             FROM workhorse.dashboard_job_runtime_v1 GROUP BY queue_name
+         )
+         SELECT known.queue_name AS queue, COALESCE(control.paused,false) AS paused,
+                COALESCE(live.scheduled,0)::integer AS scheduled,
+                COALESCE(live.ready,0)::integer AS ready,
+                COALESCE(live.active,0)::integer AS active
+           FROM known_queues known
+           LEFT JOIN workhorse.dashboard_queue_control_v1 control USING(queue_name)
+           LEFT JOIN live_counts live USING(queue_name)
+          ORDER BY known.queue_name`,
+  values: [],
+};
+
+async function readBaselineQueues(query: CountedQueryRunner): Promise<void> {
+  const [queueRows] = await Promise.all([
+    query.query<{ queue: string }>(queuePageQuery),
+    query.query({
+      text: "SELECT estimate FROM workhorse.dashboard_job_estimate_v1()",
+      values: [],
+    }),
+    query.query({
+      text: "SELECT workhorse.queue_health_v1() AS snapshot",
+      values: [],
+    }),
+  ]);
+  await Promise.all(
+    queueRows.flatMap((row) =>
+      (["succeeded", "failed", "canceled"] as const).map((state) =>
+        query.query({
+          text: `EXPLAIN (FORMAT JSON)
+                 SELECT 1 FROM workhorse.dashboard_job_outcome_v1 outcome
+                 JOIN workhorse.dashboard_job_v1 job ON job.id=outcome.job_id
+                WHERE job.queue_name=$1 AND outcome.state=$2`,
+          values: [row.queue, state],
+        }),
+      ),
+    ),
+  );
+}
+
+let benchmarkQueueHealthExpiresAt = 0;
+
+async function readCurrentQueues(query: CountedQueryRunner): Promise<void> {
+  const readHealth = performance.now() >= benchmarkQueueHealthExpiresAt;
+  const queueReads = [
+    query.query<{ queue: string }>(queuePageQuery),
+    query.query({
+      text: "SELECT estimate FROM workhorse.dashboard_job_estimate_v1()",
+      values: [],
+    }),
+    ...(readHealth
+      ? [
+          query.query({
+            text: "SELECT workhorse.queue_health_v1() AS snapshot",
+            values: [],
+          }),
+        ]
+      : []),
+  ] as const;
+  const [queueRows] = await Promise.all(queueReads);
+  if (readHealth) benchmarkQueueHealthExpiresAt = performance.now() + 3_000;
+  const values: unknown[] = [];
+  const branches: string[] = [];
+  for (const row of queueRows) {
+    for (const state of ["succeeded", "failed", "canceled"] as const) {
+      const start = values.length + 1;
+      branches.push(`SELECT $${start}::text queue,$${start + 1}::text state
+                       FROM workhorse.dashboard_job_outcome_v1 outcome
+                       JOIN workhorse.dashboard_job_v1 job ON job.id=outcome.job_id
+                      WHERE job.queue_name=$${start + 2} AND outcome.state=$${start + 3}`);
+      values.push(row.queue, state, row.queue, state);
+    }
+  }
+  await query.query({
+    text: `EXPLAIN (FORMAT JSON) ${branches.join(" UNION ALL ")}`,
+    values,
+  });
+}
+
+type DashboardRequestAction = (query: CountedQueryRunner) => Promise<void>;
+
+async function measureDashboardRequest(
+  pool: Pool,
+  action: DashboardRequestAction,
+): Promise<{ latencyMs: number; statements: number }> {
+  const counted = countedQueryRunner(pool);
+  const startedAt = performance.now();
+  await action(counted);
+  return { latencyMs: performance.now() - startedAt, statements: counted.statementCount() };
+}
+
+async function measureDashboardRequestComparison(
+  pool: Pool,
+  name: DashboardRequestComparison["name"],
+  baseline: DashboardRequestAction,
+  current: DashboardRequestAction,
+  options: ResolvedDashboardReadSurfaceOptions,
+  groupVariants = false,
+): Promise<DashboardRequestComparison> {
+  for (let repetition = 0; repetition < options.warmupRepetitions; repetition += 1) {
+    await measureDashboardRequest(pool, baseline);
+  }
+  for (let repetition = 0; repetition < options.warmupRepetitions; repetition += 1) {
+    await measureDashboardRequest(pool, current);
+  }
+  const samples = { baseline: [] as number[], current: [] as number[] };
+  const statementCounts = { baseline: new Set<number>(), current: new Set<number>() };
+  const repetitions = Math.max(options.repetitions, 20);
+  const groupedOrder = [
+    ...Array.from({ length: repetitions }, () => "current" as const),
+    ...Array.from({ length: repetitions }, () => "baseline" as const),
+  ];
+  const alternatingOrder = Array.from({ length: repetitions }, (_, repetition) =>
+    repetition % 2 === 0 ? (["baseline", "current"] as const) : (["current", "baseline"] as const),
+  ).flat();
+  for (const variant of groupVariants ? groupedOrder : alternatingOrder) {
+    const measured = await measureDashboardRequest(
+      pool,
+      variant === "baseline" ? baseline : current,
+    );
+    samples[variant].push(measured.latencyMs);
+    statementCounts[variant].add(measured.statements);
+  }
+  if (statementCounts.baseline.size !== 1 || statementCounts.current.size !== 1) {
+    throw new Error(`${name} emitted a variable number of statements per call`);
+  }
+  const variants: DashboardRequestComparison["variants"] = [
+    {
+      name: "baseline",
+      statementsPerCall: [...statementCounts.baseline][0]!,
+      latencyMs: summarizeLatencies(samples.baseline),
+    },
+    {
+      name: "current",
+      statementsPerCall: [...statementCounts.current][0]!,
+      latencyMs: summarizeLatencies(samples.current),
+    },
+  ];
+  const [baselineMeasurement, currentMeasurement] = variants;
+  return {
+    name,
+    repetitions,
+    variants,
+    fewerStatements: currentMeasurement.statementsPerCall < baselineMeasurement.statementsPerCall,
+    lowerP95:
+      currentMeasurement.latencyMs.p95 !== null &&
+      baselineMeasurement.latencyMs.p95 !== null &&
+      currentMeasurement.latencyMs.p95 < baselineMeasurement.latencyMs.p95,
+  };
+}
+
 export async function runDashboardReadSurfaceBenchmark(
   pool: Pool,
   suppliedOptions: DashboardReadSurfaceOptions = {},
 ): Promise<DashboardReadSurfaceReport> {
   const options = resolveDashboardReadSurfaceOptions(suppliedOptions);
+  benchmarkQueueHealthExpiresAt = 0;
   await resetAndInstall(pool);
   await loadDataset(pool, options);
   await installCandidateFunctions(pool);
@@ -720,6 +1034,23 @@ export async function runDashboardReadSurfaceBenchmark(
   for (const [index, family] of queryFamilies(activityCutoff, activityEnd).entries()) {
     cases.push(await measureFamily(pool, family, options, index, executionOrder));
   }
+  const requests = [
+    await measureDashboardRequestComparison(
+      pool,
+      "tasks",
+      readBaselineTasks,
+      readCurrentTasks,
+      options,
+    ),
+    await measureDashboardRequestComparison(
+      pool,
+      "queues",
+      readBaselineQueues,
+      readCurrentQueues,
+      options,
+      true,
+    ),
+  ];
   const viewsPass = cases.every(
     (measurement) => measurement.equivalentResults && measurement.viewPlanMatchesDirect,
   );
@@ -757,6 +1088,7 @@ export async function runDashboardReadSurfaceBenchmark(
     },
     executionOrder,
     cases,
+    requests,
     verdict: { selected, rationale },
   };
 }

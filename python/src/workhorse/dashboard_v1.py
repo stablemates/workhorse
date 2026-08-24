@@ -475,7 +475,6 @@ class DashboardJobRow(TypedDict, total=False):
     retryPolicy: Required[DashboardJobRowRetryPolicyVariant2 | DashboardJobRowRetryPolicyVariant3 | DashboardJobRowRetryPolicyVariant4 | None]
     deadlineAt: NotRequired[str | None]
     executionTimeoutMs: NotRequired[float | None]
-    payload: Required[object]
     tags: Required[list[str]]
     keyed: Required[bool]
     cancellation: Required[DashboardCancellationRequest | None]
@@ -1068,7 +1067,6 @@ class DashboardTasksPage(TypedDict, total=False):
     page: Required[float]
     pageSize: Required[float]
     total: Required[float]
-    counts: Required[DashboardTaskCounts]
     jobs: Required[list[DashboardJobRow]]
 
 

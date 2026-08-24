@@ -368,7 +368,6 @@ type DashboardJobRow struct {
 	RetryPolicy        any                           `json:"retryPolicy"`
 	DeadlineAt         *string                       `json:"deadlineAt,omitempty"`
 	ExecutionTimeoutMs *float64                      `json:"executionTimeoutMs,omitempty"`
-	Payload            any                           `json:"payload"`
 	Tags               []string                      `json:"tags"`
 	Keyed              bool                          `json:"keyed"`
 	Cancellation       *DashboardCancellationRequest `json:"cancellation"`
@@ -852,21 +851,20 @@ type DashboardTaskFacets struct {
 }
 
 type DashboardTasksPage struct {
-	CapturedAt           string              `json:"capturedAt"`
-	CanCompleteHumanWait bool                `json:"canCompleteHumanWait"`
-	Filter               string              `json:"filter"`
-	Queue                *string             `json:"queue"`
-	Worker               *string             `json:"worker"`
-	JobType              *string             `json:"jobType"`
-	Priority             *float64            `json:"priority"`
-	Sort                 string              `json:"sort"`
-	Tags                 []string            `json:"tags"`
-	Search               *string             `json:"search"`
-	Page                 float64             `json:"page"`
-	PageSize             float64             `json:"pageSize"`
-	Total                float64             `json:"total"`
-	Counts               DashboardTaskCounts `json:"counts"`
-	Jobs                 []DashboardJobRow   `json:"jobs"`
+	CapturedAt           string            `json:"capturedAt"`
+	CanCompleteHumanWait bool              `json:"canCompleteHumanWait"`
+	Filter               string            `json:"filter"`
+	Queue                *string           `json:"queue"`
+	Worker               *string           `json:"worker"`
+	JobType              *string           `json:"jobType"`
+	Priority             *float64          `json:"priority"`
+	Sort                 string            `json:"sort"`
+	Tags                 []string          `json:"tags"`
+	Search               *string           `json:"search"`
+	Page                 float64           `json:"page"`
+	PageSize             float64           `json:"pageSize"`
+	Total                float64           `json:"total"`
+	Jobs                 []DashboardJobRow `json:"jobs"`
 }
 
 type DashboardWorkerRow struct {

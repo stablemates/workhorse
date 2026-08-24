@@ -1,16 +1,19 @@
 import { createRouterClient } from "@orpc/server";
 import { describe, expect, it, vi } from "vitest";
 import { dashboardRouter, type DashboardRpcContext } from "./server/router.js";
+import { createDashboardQueueHealthReader } from "./server/read-model.js";
 import type { DashboardSettingsController } from "./server/types.js";
 
 function context(overrides: Partial<DashboardRpcContext> = {}): DashboardRpcContext {
+  const database = {} as DashboardRpcContext["database"];
   return {
-    database: {} as DashboardRpcContext["database"],
+    database,
     queue: {} as DashboardRpcContext["queue"],
     admin: {} as DashboardRpcContext["admin"],
     configuredWorkers: [],
     environment: "test",
     authenticatedActor: "operator",
+    readQueueHealth: createDashboardQueueHealthReader(database),
     maintenanceLoops: { tickIntervalMs: 1_000 },
     operator: { mode: "read-only" },
     ...overrides,

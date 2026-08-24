@@ -311,7 +311,6 @@ export interface DashboardJobRow extends Record<string, unknown> {
   retryPolicy: RetryPolicy | null;
   deadlineAt?: string | null;
   executionTimeoutMs?: number | null;
-  payload: unknown;
   tags: string[];
   /**
    * True when the accepted enqueue recorded deduplication evidence. Derived only from the safe
@@ -467,7 +466,6 @@ export interface DashboardTasksPage {
   page: number;
   pageSize: number;
   total: number;
-  counts: DashboardTaskCounts;
   jobs: DashboardJobRow[];
 }
 

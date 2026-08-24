@@ -5,6 +5,8 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from decimal import Decimal
+from threading import Lock
+from time import monotonic
 from typing import cast
 
 from .._drivers import SyncExecutor
@@ -100,6 +102,8 @@ class DashboardBackend:
         self._configured_workers = tuple(configured_workers)
         self._maintenance_loops = dict(maintenance_loops)
         self._read_only = read_only
+        self._health_cache: tuple[float, Mapping[str, object]] | None = None
+        self._health_lock = Lock()
 
     def procedures(self) -> dict[str, Callable[[object, str], object]]:
         return {
@@ -135,12 +139,20 @@ class DashboardBackend:
         return self._executor.rows(_statement(sql), parameters)
 
     def _health(self) -> Mapping[str, object]:
-        value = self._rows("SELECT workhorse.queue_health_v1() AS snapshot")[0]["snapshot"]
-        if isinstance(value, str | bytes):
-            value = json.loads(value)
-        if not isinstance(value, Mapping):
-            raise TypeError("workhorse.queue_health_v1 returned a non-object snapshot")
-        return value
+        cached = self._health_cache
+        if cached is not None and cached[0] > monotonic():
+            return cached[1]
+        with self._health_lock:
+            cached = self._health_cache
+            if cached is not None and cached[0] > monotonic():
+                return cached[1]
+            value = self._rows("SELECT workhorse.queue_health_v1() AS snapshot")[0]["snapshot"]
+            if isinstance(value, str | bytes):
+                value = json.loads(value)
+            if not isinstance(value, Mapping):
+                raise TypeError("workhorse.queue_health_v1 returned a non-object snapshot")
+            self._health_cache = (monotonic() + 3, value)
+            return value
 
     def _estimate_rows(self, sql: str, parameters: Sequence[object] = ()) -> int:
         row = self._rows("EXPLAIN (FORMAT JSON) " + sql, parameters)[0]
@@ -150,6 +162,50 @@ class DashboardBackend:
         document = cast(Sequence[Mapping[str, object]], plan)[0]
         root = cast(Mapping[str, object], document["Plan"])
         return max(0, round(float(cast(int | float, root["Plan Rows"]))))
+
+    def _estimate_queue_terminal_counts(self, queues: Sequence[str]) -> dict[str, dict[str, int]]:
+        states = ("succeeded", "failed", "canceled")
+        if not queues:
+            return {}
+        branch = """SELECT %s::text AS queue, %s::text AS state
+                      FROM workhorse.dashboard_job_outcome_v1 outcome
+                      JOIN workhorse.dashboard_job_v1 job ON job.id=outcome.job_id
+                     WHERE job.queue_name=%s AND outcome.state=%s"""
+        parameters: list[object] = []
+        for queue in queues:
+            for state in states:
+                parameters.extend((queue, state, queue, state))
+        row = self._rows(
+            "EXPLAIN (FORMAT JSON) "
+            + " UNION ALL ".join(branch for _queue in queues for _state in states),
+            parameters,
+        )[0]
+        plan = next(iter(row.values()))
+        if isinstance(plan, str | bytes):
+            plan = json.loads(plan)
+        root = cast(Mapping[str, object], cast(Sequence[Mapping[str, object]], plan)[0]["Plan"])
+
+        def append_plans(item: Mapping[str, object]) -> Sequence[Mapping[str, object]] | None:
+            children = cast(Sequence[Mapping[str, object]], item.get("Plans", []))
+            if item.get("Node Type") == "Append":
+                return children
+            for child in children:
+                found = append_plans(child)
+                if found is not None:
+                    return found
+            return None
+
+        plans = append_plans(root) or [root]
+        if len(plans) != len(queues) * len(states):
+            raise TypeError("grouped queue estimate returned an unexpected plan shape")
+        estimates: dict[str, dict[str, int]] = {}
+        for index, item in enumerate(plans):
+            queue = queues[index // len(states)]
+            state = states[index % len(states)]
+            estimates.setdefault(queue, {})[state] = max(
+                0, round(float(cast(int | float, item["Plan Rows"])))
+            )
+        return estimates
 
     def meta(self, _input: object, _actor: str) -> object:
         return {"environment": self._environment}
@@ -251,7 +307,18 @@ class DashboardBackend:
             "canceled": "state = 'canceled'",
         }
         filter_sql = filters[cast(str, query["filter"])]
-        base = """
+        attempt_worker_join = (
+            ""
+            if query["worker"] is None
+            else """
+                LEFT JOIN LATERAL (
+                  SELECT ah.worker_id FROM workhorse.dashboard_attempt_history_v1 ah
+                   WHERE ah.job_id = j.id ORDER BY ah.attempt DESC LIMIT 1
+                ) attempt_worker ON true
+        """
+        )
+        attempt_worker_id = "NULL::text" if query["worker"] is None else "attempt_worker.worker_id"
+        base = f"""
             WITH parameters AS (
               SELECT %s::text AS queue_filter, %s::text AS worker_filter,
                      %s::text AS type_filter, %s::integer AS priority_filter,
@@ -275,9 +342,9 @@ class DashboardBackend:
                      ) AS prerequisite_job_ids,
                      COALESCE(r.current_attempt, o.current_attempt) AS attempt,
                      j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms,
-                     j.payload, j.tags, COALESCE(r.run_at, o.run_at) AS run_at,
+                     j.tags, COALESCE(r.run_at, o.run_at) AS run_at,
                      r.worker_id AS current_worker_id,
-                     COALESCE(r.worker_id, durable_wait.worker_id, attempt_worker.worker_id)
+                     COALESCE(r.worker_id, durable_wait.worker_id, {attempt_worker_id})
                        AS worker_id,
                      o.finished_at, COALESCE(o.error, r.error) AS error, j.created_at,
                      COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at,
@@ -287,12 +354,7 @@ class DashboardBackend:
                      human_wait.token_name AS human_wait_name,
                      human_wait.context AS human_wait_context,
                      human_wait.deadline_at AS human_wait_deadline_at,
-                     enqueued_event.details AS enqueued_details,
-                     ARRAY(
-                       SELECT checkpoint.checkpoint_name
-                         FROM workhorse.dashboard_job_checkpoint_v1 checkpoint
-                        WHERE checkpoint.job_id = j.id ORDER BY checkpoint.checkpoint_name
-                     ) AS checkpoint_names
+                     enqueued_event.details AS enqueued_details
                 FROM workhorse.dashboard_job_v1 j
                 LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
                 LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
@@ -307,10 +369,7 @@ class DashboardBackend:
                    WHERE event.job_id = j.id AND event.event_type = 'enqueued'
                    ORDER BY event.occurred_at, event.event_id LIMIT 1
                 ) enqueued_event ON true
-                LEFT JOIN LATERAL (
-                  SELECT ah.worker_id FROM workhorse.dashboard_attempt_history_v1 ah
-                   WHERE ah.job_id = j.id ORDER BY ah.attempt DESC LIMIT 1
-                ) attempt_worker ON true
+                {attempt_worker_join}
             )
         """
         where = f"""
@@ -358,7 +417,6 @@ class DashboardBackend:
             "page": page,
             "pageSize": page_size,
             "total": total["count"],
-            "counts": self.task_counts(None, ""),
             "jobs": [self._task_row(row) for row in rows],
         }
 
@@ -421,7 +479,6 @@ class DashboardBackend:
             "executionTimeoutMs": None
             if row["execution_timeout_ms"] is None
             else int(cast(str | int, row["execution_timeout_ms"])),
-            "payload": row["payload"],
             "tags": row["tags"],
             "keyed": isinstance(idempotency, Mapping),
             "cancellation": cancellation,
@@ -601,14 +658,10 @@ class DashboardBackend:
         }
 
     def queues(self, _input: object, _actor: str) -> object:
-        approximate = (
-            _integer(
-                self._rows("SELECT estimate FROM workhorse.dashboard_job_estimate_v1()")[0][
-                    "estimate"
-                ]
-            )
-            >= 50_000
+        job_estimate = _integer(
+            self._rows("SELECT estimate FROM workhorse.dashboard_job_estimate_v1()")[0]["estimate"]
         )
+        approximate = job_estimate >= 50_000
         rows = self._rows(
             """
             WITH known_queues AS (
@@ -662,20 +715,17 @@ class DashboardBackend:
         concurrency_by_queue, rate_limits_by_queue = _admission_policies(health)
         for queue in queues:
             name = cast(str, queue["queue"])
-            if approximate:
-                for state, field in (
-                    ("succeeded", "succeeded"),
-                    ("failed", "failed"),
-                    ("canceled", "canceled"),
-                ):
-                    queue[field] = self._estimate_rows(
-                        """SELECT 1 FROM workhorse.dashboard_job_outcome_v1 outcome
-                             JOIN workhorse.dashboard_job_v1 job ON job.id=outcome.job_id
-                            WHERE job.queue_name=%s AND outcome.state=%s""",
-                        (name, state),
-                    )
             queue["concurrencyPolicy"] = concurrency_by_queue.get(name)
             queue["rateLimitPolicy"] = rate_limits_by_queue.get(name)
+        if approximate:
+            estimates_by_queue = self._estimate_queue_terminal_counts(
+                [cast(str, queue["queue"]) for queue in queues]
+            )
+            for queue in queues:
+                estimate = estimates_by_queue.get(cast(str, queue["queue"]), {})
+                queue["succeeded"] = _integer(estimate.get("succeeded"))
+                queue["failed"] = _integer(estimate.get("failed"))
+                queue["canceled"] = _integer(estimate.get("canceled"))
         return {
             "capturedAt": _iso(datetime.now(timezone.utc)),
             "queues": queues,
