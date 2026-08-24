@@ -705,6 +705,8 @@ CREATE TABLE IF NOT EXISTS workhorse.enqueue_idempotency (
 );
 CREATE INDEX IF NOT EXISTS enqueue_idempotency_expiry_idx
   ON workhorse.enqueue_idempotency (expires_at, idempotency_scope, idempotency_key_hash);
+CREATE INDEX IF NOT EXISTS enqueue_idempotency_job_idx
+  ON workhorse.enqueue_idempotency (job_id);
 
 -- Immutable explicit restart boundaries. A name can be completed once for a stable job identity and
 -- remains available across retries and terminal materialization.

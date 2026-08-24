@@ -11,6 +11,30 @@ const { pool, queue } = createIntegrationTestContext(import.meta.url, {
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 describe("schema installation", () => {
+  it("uses the enqueue ownership index during terminal pruning", async () => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL enable_seqscan = off");
+      const plan = (
+        await client.query<{ "QUERY PLAN": string }>(`EXPLAIN (COSTS OFF)
+          SELECT candidate.id
+            FROM (VALUES ('00000000-0000-0000-0000-000000000000'::uuid)) candidate(id)
+           WHERE NOT EXISTS (
+             SELECT 1 FROM workhorse.enqueue_idempotency idempotency
+              WHERE idempotency.job_id = candidate.id
+           )`)
+      ).rows
+        .map((row) => row["QUERY PLAN"])
+        .join("\n");
+
+      expect(plan).toContain("enqueue_idempotency_job_idx");
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
+  });
+
   it("installs the versioned dashboard read surface", async () => {
     const views = await pool.query<{ table_name: string; columns: string[] }>(`
       SELECT table_name, json_agg(column_name ORDER BY ordinal_position) AS columns
@@ -408,11 +432,13 @@ describe("schema installation", () => {
           "job_dependency_released_retention_idx",
           "job_tags_gin_idx",
           "enqueue_idempotency_expiry_idx",
+          "enqueue_idempotency_job_idx",
         ],
       ],
     );
     expect(indexes.rows.map((row) => row.indexname)).toEqual([
       "enqueue_idempotency_expiry_idx",
+      "enqueue_idempotency_job_idx",
       "job_dependency_dependent_pending_idx",
       "job_dependency_prerequisite_idx",
       "job_dependency_released_retention_idx",
