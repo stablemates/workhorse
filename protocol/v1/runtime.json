@@ -159,6 +159,16 @@
     "expectedMaximumOverlap": 1
   },
   {
+    "id": "empty-polls-back-off-with-jitter",
+    "kind": "poll-cadence",
+    "covers": ["empty-claim-backoff"],
+    "jobType": "protocol.poll-cadence",
+    "pollMs": 100,
+    "idleMs": 150,
+    "expectedMinimumDelayMs": 100,
+    "expectedMaximumDelayMs": 300
+  },
+  {
     "id": "stop-drains-active-slots-without-new-claims",
     "kind": "graceful-drain",
     "covers": ["graceful-drain"],

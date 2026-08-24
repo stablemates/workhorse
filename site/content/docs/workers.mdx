@@ -74,6 +74,8 @@ An idle worker listens for committed wake hints and receives only notifications 
 queues. Promotion and recovery notify each affected queue separately, so activity on one queue does
 not wake workers assigned to another. Notifications wake dispatch without changing the cadence of
 maintenance or worker registration, while bounded polling still covers a lost listener or message.
+Workers briefly stagger notification-triggered claims. Workers without an active listener back off
+after consecutive empty checks and reset that delay when a claim succeeds.
 
 The `HandlerContext` carries the claimed job, its `AbortSignal`, checkpoints, durable waits,
 and progress. Every context method writes under the current fence, so handler code cannot

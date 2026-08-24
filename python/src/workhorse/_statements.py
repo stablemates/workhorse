@@ -38,6 +38,7 @@ class StatementRegistry:
     promote: DriverStatement
     recover_expired: DriverStatement
     claim: DriverStatement
+    claim_many: DriverStatement
     record_batch_dispatch: DriverStatement
     record_batch_failure: DriverStatement
     heartbeat: DriverStatement
@@ -198,6 +199,14 @@ STATEMENTS = StatementRegistry(
     claim=DriverStatement(
         psycopg="SELECT * FROM workhorse.claim_v1(%s::text, %s::text, %s::integer)",
         asyncpg="SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
+    ),
+    claim_many=DriverStatement(
+        psycopg=(
+            "SELECT * FROM workhorse.claim_many_v1(%s::text, %s::text, %s::integer, %s::integer)"
+        ),
+        asyncpg=(
+            "SELECT * FROM workhorse.claim_many_v1($1::text, $2::text, $3::integer, $4::integer)"
+        ),
     ),
     record_batch_dispatch=DriverStatement(
         psycopg=(

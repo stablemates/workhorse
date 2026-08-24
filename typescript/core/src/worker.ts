@@ -51,6 +51,8 @@ const DURABLE_WAIT_SUSPENSION = Symbol("workhorse.durableWaitSuspension");
 const CHILD_JOB_SUSPENSION = Symbol("workhorse.childJobSuspension");
 const DEFAULT_POLL_MS = 250;
 const DEFAULT_NOTIFICATION_FALLBACK_POLL_MS = 5_000;
+const MAX_EMPTY_POLL_MS = 5_000;
+const NOTIFICATION_CLAIM_DELAY_MS = 50;
 
 type AttemptOutcome =
   | "completed"
@@ -202,6 +204,11 @@ export interface WorkerQueueApi {
     workerId: string,
     options?: { queue?: string; leaseMs?: number },
   ): Promise<ClaimedJob | null>;
+  claimMany?(
+    workerId: string,
+    limit: number,
+    options?: { queue?: string; leaseMs?: number },
+  ): Promise<ClaimedJob[]>;
   recordBatchDispatch?(batch: BatchExecutionRecord): Promise<void>;
   recordBatchFailure?(batch: BatchExecutionRecord): Promise<void>;
   heartbeatStatus(job: ClaimedJob, workerId: string, leaseMs?: number): Promise<HeartbeatStatus>;
@@ -447,7 +454,7 @@ export class Worker {
   private readonly heartbeatMs: number;
   private readonly pollMs: number;
   private readonly dispatchPollMs: number;
-  private readonly jitterDispatchPolling: boolean;
+  private readonly supportsNotifications: boolean;
   private readonly maintenanceIntervalMs: number;
   private readonly maintenanceTaskPollMs: number;
   private readonly registryIntervalMs: number;
@@ -552,6 +559,9 @@ export class Worker {
   private wakeVersion = 0;
   private dispatchWakeController = new AbortController();
   private dispatchWakeVersion = 0;
+  private consecutiveEmptyClaims = 0;
+  private notificationClaimDelayPending = false;
+  private notificationSubscriptions: JobNotificationSubscription[] = [];
 
   constructor(
     queue: WorkerQueueApi | Queue,
@@ -574,10 +584,10 @@ export class Worker {
     this.leaseMs = options.leaseMs ?? 30_000;
     this.heartbeatMs = options.heartbeatMs ?? Math.max(100, Math.floor(this.leaseMs / 3));
     this.pollMs = options.pollMs ?? DEFAULT_POLL_MS;
-    this.jitterDispatchPolling = this.queue.supportsJobNotifications?.() ?? false;
+    this.supportsNotifications = this.queue.supportsJobNotifications?.() ?? false;
     this.dispatchPollMs =
       options.pollMs ??
-      (this.jitterDispatchPolling ? DEFAULT_NOTIFICATION_FALLBACK_POLL_MS : DEFAULT_POLL_MS);
+      (this.supportsNotifications ? DEFAULT_NOTIFICATION_FALLBACK_POLL_MS : DEFAULT_POLL_MS);
     this.maintenanceIntervalMs = options.maintenanceIntervalMs ?? 1_000;
     this.maintenanceTaskPollMs = options.maintenanceTaskPollMs ?? 60_000;
     this.registryIntervalMs = options.registryIntervalMs ?? 5_000;
@@ -887,17 +897,42 @@ export class Worker {
     return this.withExclusiveExecution(() => this.runBatch(true));
   }
 
-  private async claimNext(): Promise<ClaimedJob | null> {
-    for (let checked = 0; checked < this.queueNames.length; checked += 1) {
+  private async claimNextMany(limit: number): Promise<ClaimedJob[]> {
+    const jobs: ClaimedJob[] = [];
+    if (!this.queue.claimMany) {
+      let emptyQueues = 0;
+      while (jobs.length < limit && emptyQueues < this.queueNames.length) {
+        const queueName = this.queueNames[this.nextQueueIndex]!;
+        this.nextQueueIndex = (this.nextQueueIndex + 1) % this.queueNames.length;
+        const job = await this.queue.claim(this.workerId, {
+          queue: queueName,
+          leaseMs: this.leaseMs,
+        });
+        if (job) {
+          jobs.push(job);
+          emptyQueues = 0;
+        } else {
+          emptyQueues += 1;
+        }
+      }
+      return jobs;
+    }
+    for (let checked = 0; checked < this.queueNames.length && jobs.length < limit; checked += 1) {
       const queueName = this.queueNames[this.nextQueueIndex]!;
       this.nextQueueIndex = (this.nextQueueIndex + 1) % this.queueNames.length;
-      const job = await this.queue.claim(this.workerId, {
-        queue: queueName,
-        leaseMs: this.leaseMs,
-      });
-      if (job) return job;
+      const remaining = limit - jobs.length;
+      jobs.push(
+        ...(await this.queue.claimMany(this.workerId, remaining, {
+          queue: queueName,
+          leaseMs: this.leaseMs,
+        })),
+      );
     }
-    return null;
+    return jobs;
+  }
+
+  private async claimNext(): Promise<ClaimedJob | null> {
+    return (await this.claimNextMany(1))[0] ?? null;
   }
 
   private async runBatch(
@@ -914,19 +949,14 @@ export class Worker {
     let claimError: unknown;
     let claimFailed = false;
     const freeSlots = this.concurrency - this.activeSlots;
-    for (let slot = 0; slot < freeSlots; slot += 1) {
-      if (shouldStop() || this.paused) break;
-      let job: ClaimedJob | null;
+    if (!shouldStop() && !this.paused && freeSlots > 0) {
       try {
-        job = await this.claimNext();
+        const jobs = await this.claimNextMany(freeSlots);
+        executions.push(...jobs.map((job) => this.startExecution(job)));
       } catch (error) {
         claimError = error;
         claimFailed = true;
-        break;
       }
-      if (!job) break;
-
-      executions.push(this.startExecution(job));
     }
 
     const claimed = executions.length > 0;
@@ -1694,6 +1724,7 @@ export class Worker {
     };
 
     const notificationSubscriptions: JobNotificationSubscription[] = [];
+    this.notificationSubscriptions = notificationSubscriptions;
     const runFailure = await (async () => {
       if (shouldStop()) return;
       await this.runMaintenance();
@@ -1705,7 +1736,10 @@ export class Worker {
           const subscription = await subscribeToJobNotifications.call(
             this.queue,
             queueName,
-            () => this.wakeDispatch(),
+            () => {
+              this.notificationClaimDelayPending = true;
+              this.wakeDispatch();
+            },
             (error) => this.options.onNotificationError?.(error),
           );
           if (subscription) notificationSubscriptions.push(subscription);
@@ -1733,6 +1767,7 @@ export class Worker {
         failures.push(error);
       }
     }
+    this.notificationSubscriptions = [];
     try {
       await this.deregister();
     } catch (error) {
@@ -1833,23 +1868,30 @@ export class Worker {
       let empty = false;
       let emptyWakeVersion = this.dispatchWakeVersion;
       while (active.size < this.concurrency && !shouldStop() && !this.paused) {
+        if (this.notificationClaimDelayPending) {
+          this.notificationClaimDelayPending = false;
+          await sleep(Math.random() * NOTIFICATION_CLAIM_DELAY_MS);
+          if (shouldStop() || this.paused) break;
+        }
         this.lastClaimAt = Date.now();
         const claimWakeVersion = this.dispatchWakeVersion;
-        let job: ClaimedJob | null;
+        let jobs: ClaimedJob[];
         try {
-          job = await this.claimNext();
+          jobs = await this.claimNextMany(this.concurrency - active.size);
         } catch (error) {
           claimError = error;
           break;
         }
-        if (!job) {
+        if (jobs.length === 0) {
           this.previousPassWorked = false;
+          this.consecutiveEmptyClaims += 1;
           empty = true;
           emptyWakeVersion = claimWakeVersion;
           break;
         }
         this.previousPassWorked = true;
-        launch(job);
+        this.consecutiveEmptyClaims = 0;
+        for (const job of jobs) launch(job);
       }
 
       if (shouldStop() || this.paused || firstFailure || claimError !== undefined) continue;
@@ -1867,8 +1909,14 @@ export class Worker {
   }
 
   private nextDispatchPollMs(): number {
-    const durationMs = Math.max(1, this.dispatchPollMs);
-    if (!this.jitterDispatchPolling || durationMs === 1) return durationMs;
+    const listening = this.notificationSubscriptions.some(
+      (subscription) => subscription.isListening?.() === true,
+    );
+    const exponent = listening ? 0 : Math.max(0, this.consecutiveEmptyClaims - 1);
+    const durationMs = Math.min(
+      MAX_EMPTY_POLL_MS,
+      Math.max(1, this.dispatchPollMs) * 2 ** Math.min(exponent, 30),
+    );
     return jitterDuration(durationMs);
   }
 

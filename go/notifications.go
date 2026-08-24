@@ -3,6 +3,7 @@ package workhorse
 import (
 	"context"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -40,6 +41,7 @@ func listenForJobNotifications(
 	pollingOnly bool,
 	logger *slog.Logger,
 	wake chan<- struct{},
+	listening *atomic.Bool,
 ) {
 	if pollingOnly {
 		logger.WarnContext(ctx, pollingOnlyListenerLogMessage)
@@ -53,12 +55,13 @@ func listenForJobNotifications(
 	reconnectDelay := notificationReconnectInitial
 	for ctx.Err() == nil {
 		connection, err := pool.Acquire(ctx)
-		listening := false
+		listenSucceeded := false
 		if err == nil {
 			_, err = connection.Exec(ctx, listenForJobsStatement)
-			listening = err == nil
+			listenSucceeded = err == nil
 		}
 		if err == nil {
+			listening.Store(true)
 			reconnectDelay = notificationReconnectInitial
 			wakeWorker(wake)
 			for ctx.Err() == nil {
@@ -72,8 +75,9 @@ func listenForJobNotifications(
 				}
 			}
 		}
+		listening.Store(false)
 		if connection != nil {
-			if listening && ctx.Err() != nil {
+			if listenSucceeded && ctx.Err() != nil {
 				cleanupContext, cancelCleanup := context.WithTimeout(context.Background(), notificationCleanupTimeout)
 				_, cleanupError := connection.Exec(cleanupContext, unlistenForJobsStatement)
 				cancelCleanup()

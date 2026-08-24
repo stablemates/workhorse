@@ -16,6 +16,7 @@ interface NotificationSubscriber {
 }
 
 export interface JobNotificationSubscription {
+  isListening?(): boolean;
   close(): Promise<void>;
 }
 
@@ -99,6 +100,7 @@ class JobNotificationHub {
   private nextSubscriberId = 0;
   private controller: AbortController | null = null;
   private running: Promise<void> | null = null;
+  private listening = false;
 
   constructor(private readonly database: NotificationDatabase) {}
 
@@ -112,6 +114,7 @@ class JobNotificationHub {
 
     let closed = false;
     return {
+      isListening: () => this.listening,
       close: async () => {
         if (closed) return;
         closed = true;
@@ -173,6 +176,7 @@ class JobNotificationHub {
           connectionError = new Error("PostgreSQL notification setup was aborted");
           return;
         }
+        this.listening = true;
         reconnectMs = RECONNECT_INITIAL_MS;
         this.wakeAll();
         connectionError = await Promise.race([
@@ -187,6 +191,7 @@ class JobNotificationHub {
         connectionError = error instanceof Error ? error : new Error(String(error));
         this.report(error);
       } finally {
+        this.listening = false;
         if (client) {
           client.removeListener("notification", onNotification);
           client.removeListener("error", onError);

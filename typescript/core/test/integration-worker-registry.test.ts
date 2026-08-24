@@ -315,7 +315,7 @@ describe("worker registry", () => {
     let active = 0;
     let maxActive = 0;
     for (const sequence of [1, 2]) await queue.enqueue("bounded-batch", { sequence });
-    const claim = vi.spyOn(queue, "claim");
+    const claim = vi.spyOn(queue, "claimMany");
     const worker = new Worker(queue, {
       workerId: "bounded-batch-worker",
       concurrency: 5,
@@ -332,7 +332,7 @@ describe("worker registry", () => {
       const run = worker.runOnce();
       await vi.waitFor(() => expect(worker.runtimeState().activeSlots).toBe(2));
 
-      expect(claim).toHaveBeenCalledTimes(3);
+      expect(claim).toHaveBeenCalledTimes(1);
       expect(worker.runtimeState()).toEqual({
         concurrency: 5,
         activeSlots: 2,
@@ -579,7 +579,7 @@ describe("worker registry", () => {
     for (const sequence of [0, 1, 2]) {
       ids.push(await queue.enqueue("signal-abort-drain", { sequence }));
     }
-    const claim = vi.spyOn(queue, "claim");
+    const claim = vi.spyOn(queue, "claimMany");
     const heartbeat = vi.spyOn(queue, "heartbeatMany");
     const worker = new Worker(queue, {
       workerId: "signal-abort-drain-worker",
@@ -610,7 +610,7 @@ describe("worker registry", () => {
           expect(heartbeatCount(id)).toBeGreaterThan(countsAtAbort.get(id)!);
         }
       });
-      expect(claim).toHaveBeenCalledTimes(2);
+      expect(claim).toHaveBeenCalledTimes(1);
       await expect(admin.getJob(ids[2]!)).resolves.toMatchObject({ state: "ready" });
 
       let runSettled = false;
@@ -626,7 +626,7 @@ describe("worker registry", () => {
       await vi.waitFor(() =>
         expect(heartbeatCount(ids[1]!)).toBeGreaterThan(secondCountAfterFirstRelease),
       );
-      expect(claim).toHaveBeenCalledTimes(2);
+      expect(claim).toHaveBeenCalledTimes(1);
       await expect(admin.getJob(ids[2]!)).resolves.toMatchObject({ state: "ready" });
 
       releases[1]!.resolve();
@@ -647,7 +647,7 @@ describe("worker registry", () => {
 
   it("honors a same-turn stop before run starts without claiming", async () => {
     const id = await queue.enqueue("same-turn-stop", {});
-    const claim = vi.spyOn(queue, "claim");
+    const claim = vi.spyOn(queue, "claimMany");
     const worker = new Worker(queue, { workerId: "same-turn-stop-worker" }).handle(
       "same-turn-stop",
       () => null,
@@ -669,14 +669,14 @@ describe("worker registry", () => {
     const started = deferred();
     const firstId = await queue.enqueue("queued-run-stop", { sequence: 1 });
     const secondId = await queue.enqueue("queued-run-stop", { sequence: 2 });
-    const claim = vi.spyOn(queue, "claim");
+    const claim = vi.spyOn(queue, "claimMany");
     const worker = new Worker(queue, {
       workerId: "queued-run-stop-worker",
       pollMs: 0,
     }).handle("queued-run-stop", async () => {
       started.resolve();
       await release.promise;
-      return null;
+      return [];
     });
 
     try {
@@ -1027,7 +1027,7 @@ describe("worker registry", () => {
     const pruneTerminalStorage = vi
       .spyOn(queue, "pruneTerminalStorage")
       .mockResolvedValue(terminalResults);
-    const claim = vi.spyOn(queue, "claim").mockResolvedValue(null);
+    const claim = vi.spyOn(queue, "claimMany").mockResolvedValue([]);
 
     try {
       const worker = new Worker(queue, {
@@ -1063,7 +1063,7 @@ describe("worker registry", () => {
 
   it("wakes idle dispatch when PostgreSQL notifies a matching queue", async () => {
     const handled: string[] = [];
-    const claim = vi.spyOn(queue, "claim");
+    const claim = vi.spyOn(queue, "claimMany");
     const worker = new Worker(queue, {
       workerId: "notification-dispatch",
       pollMs: 15_000,
@@ -1121,10 +1121,10 @@ describe("worker registry", () => {
     const claimStarted = deferred();
     const releaseEmptyClaim = deferred();
     const handled: string[] = [];
-    const claim = vi.spyOn(queue, "claim").mockImplementationOnce(async () => {
+    const claim = vi.spyOn(queue, "claimMany").mockImplementationOnce(async () => {
       claimStarted.resolve();
       await releaseEmptyClaim.promise;
-      return null;
+      return [];
     });
     const worker = new Worker(queue, {
       workerId: "notification-during-claim",
@@ -1206,7 +1206,7 @@ describe("worker registry", () => {
   it("keeps bounded polling as the fallback when the database cannot LISTEN", async () => {
     const pollingQueue = new Queue({ query: pool.query.bind(pool) });
     const handled: string[] = [];
-    const claim = vi.spyOn(pollingQueue, "claim");
+    const claim = vi.spyOn(pollingQueue, "claimMany");
     const worker = new Worker(pollingQueue, {
       workerId: "notification-fallback",
       pollMs: 100,
@@ -1235,7 +1235,12 @@ describe("worker registry", () => {
       connect: () => new Promise<never>(() => undefined),
     };
     const pendingQueue = new Queue(pendingListenerDatabase);
-    const claim = vi.spyOn(pendingQueue, "claim");
+    const claimTimes: number[] = [];
+    const claim = vi.spyOn(pendingQueue, "claimMany").mockImplementation(async () => {
+      claimTimes.push(performance.now());
+      return [];
+    });
+    const random = vi.spyOn(Math, "random").mockReturnValue(0.5);
     const worker = new Worker(pendingQueue, {
       workerId: "notification-pending-listener",
       pollMs: 100,
@@ -1243,10 +1248,17 @@ describe("worker registry", () => {
     });
 
     const running = worker.run();
-    await vi.waitFor(() => expect(claim).toHaveBeenCalled(), { timeout: 1_000 });
-    worker.stop();
-    await expect(running).resolves.toBeUndefined();
-    claim.mockRestore();
+    try {
+      await vi.waitFor(() => expect(claim).toHaveBeenCalledTimes(3), { timeout: 1_000 });
+      const firstWait = claimTimes[1]! - claimTimes[0]!;
+      const secondWait = claimTimes[2]! - claimTimes[1]!;
+      expect(secondWait).toBeGreaterThan(firstWait * 1.5);
+    } finally {
+      worker.stop();
+      await expect(running).resolves.toBeUndefined();
+      random.mockRestore();
+      claim.mockRestore();
+    }
   });
 
   it("starts polling and stops while the initial LISTEN query is still pending", async () => {
@@ -1261,7 +1273,7 @@ describe("worker registry", () => {
       connect: async () => listener,
     };
     const pendingQueue = new Queue(pendingListenerDatabase);
-    const claim = vi.spyOn(pendingQueue, "claim");
+    const claim = vi.spyOn(pendingQueue, "claimMany");
     const worker = new Worker(pendingQueue, {
       workerId: "notification-pending-listen",
       pollMs: 100,
@@ -1288,7 +1300,7 @@ describe("worker registry", () => {
   it("notifies only the queue whose scheduled work was promoted", async () => {
     const queueName = `notification-routing-${randomUUID()}`;
     const handled: string[] = [];
-    const claim = vi.spyOn(queue, "claim");
+    const claim = vi.spyOn(queue, "claimMany");
     const worker = new Worker(queue, {
       queue: queueName,
       workerId: "notification-routing",
@@ -1303,6 +1315,17 @@ describe("worker registry", () => {
     const running = worker.run();
     try {
       await vi.waitFor(() => expect(claim).toHaveBeenCalled());
+      await vi.waitFor(async () => {
+        const listeners = await pool.query<{ count: number }>(
+          `SELECT count(*)::integer AS count
+             FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND state = 'idle'
+              AND query = 'LISTEN workhorse_jobs'`,
+        );
+        expect(listeners.rows[0]?.count).toBeGreaterThan(0);
+      });
+      await sleep(75);
       const initialClaimCount = claim.mock.calls.length;
       await queue.enqueue("other-queue-notification", null, {
         queue: `${queueName}-other`,
@@ -1331,8 +1354,8 @@ describe("worker registry", () => {
   it("shares one notification connection across workers backed by the same pool", async () => {
     const firstQueue = new Queue(pool, `notification-shared-${randomUUID()}`);
     const secondQueue = new Queue(pool, `notification-shared-${randomUUID()}`);
-    const firstClaim = vi.spyOn(firstQueue, "claim");
-    const secondClaim = vi.spyOn(secondQueue, "claim");
+    const firstClaim = vi.spyOn(firstQueue, "claimMany");
+    const secondClaim = vi.spyOn(secondQueue, "claimMany");
     const first = new Worker(firstQueue, {
       workerId: "notification-shared-first",
       pollMs: 15_000,
@@ -1397,7 +1420,7 @@ describe("worker registry", () => {
     const retainHistory = vi.spyOn(queue, "retainHistory").mockResolvedValue([]);
     const pruneTerminalStorage = vi.spyOn(queue, "pruneTerminalStorage").mockResolvedValue([]);
     const fireDueSchedules = vi.spyOn(queue, "fireDueSchedules").mockResolvedValue();
-    const claim = vi.spyOn(queue, "claim").mockResolvedValue(null);
+    const claim = vi.spyOn(queue, "claimMany").mockResolvedValue([]);
 
     try {
       const worker = new Worker(queue, {

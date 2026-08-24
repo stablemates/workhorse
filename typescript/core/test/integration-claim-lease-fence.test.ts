@@ -826,7 +826,10 @@ describe("claim lease fence", () => {
     try {
       await expirationStarted.promise;
       await pool.query(
-        "UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 ms' WHERE job_id = $1",
+        `UPDATE workhorse.job_runtime
+            SET expires_at = clock_timestamp() - interval '1 ms',
+                attempt_timeout_at = clock_timestamp() + interval '1 second'
+          WHERE job_id = $1`,
         [id],
       );
       expect(await queue.recoverExpired(100, 0)).toBe(1);

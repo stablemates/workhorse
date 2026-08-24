@@ -153,6 +153,14 @@ export interface HeartbeatCadenceRuntimeFixture extends RuntimeFixtureBase {
   expectedMaximumOverlap: number;
 }
 
+export interface PollCadenceRuntimeFixture extends RuntimeFixtureBase {
+  kind: "poll-cadence";
+  pollMs: number;
+  idleMs: number;
+  expectedMinimumDelayMs: number;
+  expectedMaximumDelayMs: number;
+}
+
 export interface GracefulDrainRuntimeFixture extends RuntimeFixtureBase {
   kind: "graceful-drain";
   concurrency: number;
@@ -170,6 +178,7 @@ export type RuntimeFixture =
   | ExpirationRuntimeFixture
   | LeaseLossRuntimeFixture
   | HeartbeatCadenceRuntimeFixture
+  | PollCadenceRuntimeFixture
   | GracefulDrainRuntimeFixture;
 
 export interface RequestFixture {

@@ -272,15 +272,15 @@ def emit_log(
     )
 
 
-def record_claim(queue: str, duration_ms: float, job: Job | None) -> None:
+def record_claim(queue: str, duration_ms: float, jobs: Sequence[Job]) -> None:
     _claim_duration.record(
         duration_ms,
         {
             "workhorse.queue.name": queue,
-            "workhorse.claim.result": "empty" if job is None else "claimed",
+            "workhorse.claim.result": "empty" if not jobs else "claimed",
         },
     )
-    if job is not None:
+    for job in jobs:
         _claimed.add(1, job_metric_attributes(job))
 
 

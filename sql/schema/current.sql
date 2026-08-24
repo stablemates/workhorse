@@ -6667,6 +6667,37 @@ BEGIN
 END;
 $$;
 
+-- Claim several jobs through one client round trip while retaining claim_v1 as the single owner
+-- of ordering, policy admission, rate tokens, fencing, and claim event semantics.
+CREATE OR REPLACE FUNCTION workhorse.claim_many_v1(
+  p_queue_name text,
+  p_worker_id text,
+  p_limit integer,
+  p_lease_ms integer DEFAULT 30000
+) RETURNS TABLE (
+  job_id uuid, job_type text, priority integer, payload jsonb, contract_version text, result_max_bytes integer,
+  redact_error_details boolean,
+  trace_context jsonb,
+  attempt integer, max_attempts integer,
+  retry_policy jsonb, deadline_at timestamptz, execution_timeout_ms bigint,
+  attempt_timeout_at timestamptz, fence_token bigint, lease_expires_at timestamptz
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_claimed integer;
+BEGIN
+  IF p_limit NOT BETWEEN 1 AND 100 THEN
+    RAISE EXCEPTION 'limit must be between 1 and 100';
+  END IF;
+  FOR v_index IN 1..p_limit LOOP
+    RETURN QUERY SELECT * FROM workhorse.claim_v1(p_queue_name, p_worker_id, p_lease_ms);
+    GET DIAGNOSTICS v_claimed = ROW_COUNT;
+    EXIT WHEN v_claimed = 0;
+  END LOOP;
+END;
+$$;
+
 -- Record process-local batch evidence against the immutable claims that entered the coordinator.
 CREATE OR REPLACE FUNCTION workhorse.record_batch_event_v1(
   p_event_type text,

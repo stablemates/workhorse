@@ -65,6 +65,7 @@ const (
 	defaultScheduleTimezone              = "UTC"
 	promoteStatementName                 = "promote_v1"
 	claimStatementName                   = "claim_v1"
+	claimManyStatementName               = "claim_many_v1"
 	heartbeatStatementName               = "heartbeat_v1"
 	heartbeatManyStatementName           = "heartbeat_many_v1"
 	expireOwnedStatementName             = "expire_owned_telemetry_v1"
@@ -527,6 +528,7 @@ var protocolStatementRegistry = map[string]string{
 	getContractDefinitionStatementName:   `SELECT (definition).* FROM workhorse.get_contract_definition_v1($1::text, $2::text) definition`,
 	enqueueManyStatementName:             `SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal`,
 	claimStatementName:                   `SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)`,
+	claimManyStatementName:               `SELECT * FROM workhorse.claim_many_v1($1::text, $2::text, $3::integer, $4::integer)`,
 	recordBatchDispatchStatementName:     `SELECT workhorse.record_batch_dispatch_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
 	recordBatchFailureStatementName:      `SELECT workhorse.record_batch_failure_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
 	heartbeatStatementName:               `SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status`,

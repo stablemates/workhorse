@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	pseudorand "math/rand/v2"
 	"os"
 	"reflect"
 	"sync"
@@ -33,7 +34,35 @@ const (
 	workerRecoveryLimit        = 100
 	expirationRetryInterval    = 5 * time.Millisecond
 	expirationRetryBudget      = time.Second
+	maximumEmptyPollInterval   = 5 * time.Second
+	notificationClaimDelay     = 50 * time.Millisecond
 )
+
+func workerPollDelay(base time.Duration, consecutiveEmpty int, backoff bool) time.Duration {
+	delay := base
+	if backoff {
+		delay = min(delay, maximumEmptyPollInterval)
+		for range min(max(consecutiveEmpty-1, 0), 30) {
+			if delay >= maximumEmptyPollInterval/2 {
+				delay = maximumEmptyPollInterval
+				break
+			}
+			delay *= 2
+		}
+	}
+	jitter := 0.9 + pseudorand.Float64()*0.2
+	return max(time.Millisecond, time.Duration(float64(delay)*jitter))
+}
+
+func resetTimer(timer *time.Timer, delay time.Duration) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	timer.Reset(delay)
+}
 
 type ownershipStatus string
 
@@ -380,6 +409,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 	notificationContext, stopNotifications := context.WithCancel(ctx)
 	notificationWake := make(chan struct{}, 1)
 	notificationDone := make(chan struct{})
+	var notificationListening atomic.Bool
 	go func() {
 		defer close(notificationDone)
 		listenForJobNotifications(
@@ -389,6 +419,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 			worker.pollingOnly,
 			worker.logger,
 			notificationWake,
+			&notificationListening,
 		)
 	}()
 	defer func() {
@@ -409,7 +440,8 @@ func (worker *Worker) Run(ctx context.Context) error {
 	executionContext, cancelExecutions := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancelExecutions()
 	executionResults := make(chan error, worker.concurrency)
-	pollTimer := time.NewTimer(worker.pollInterval)
+	consecutiveEmptyClaims := 0
+	pollTimer := time.NewTimer(workerPollDelay(worker.pollInterval, 0, false))
 	defer func() {
 		if !pollTimer.Stop() {
 			select {
@@ -423,57 +455,67 @@ func (worker *Worker) Run(ctx context.Context) error {
 	var firstError error
 
 	for !stopping {
+		claimedInPass := false
 	fillSlots:
 		for {
 			if worker.remotelyPaused.Load() {
 				break fillSlots
 			}
-			select {
-			case worker.handlerSlots <- struct{}{}:
-			default:
+			freeSlots := worker.concurrency - active
+			if freeSlots == 0 {
 				break fillSlots
 			}
 			select {
 			case <-ctx.Done():
-				<-worker.handlerSlots
 				stopping = true
 			default:
 			}
 			if stopping {
 				break
 			}
-			job, err := worker.claimNext(ctx, executor)
+			jobs, err := worker.claimNextMany(ctx, executor, freeSlots)
 			if err != nil {
-				<-worker.handlerSlots
 				if ctx.Err() == nil {
 					firstError = err
 				}
 				stopping = true
 				break
 			}
-			if job == nil {
-				<-worker.handlerSlots
+			if len(jobs) == 0 {
+				consecutiveEmptyClaims++
 				break
 			}
-			active++
-			worker.activeSlots.Add(1)
-			go func(claimed ClaimedJob) {
-				handler := worker.handlers[claimed.Type]
-				var err error
-				if handler == nil {
-					err = fmt.Errorf(missingWorkerHandlerFormat, claimed.Type)
-					err = worker.fail(executionContext, executor, claimed, err)
-				} else {
-					err = worker.execute(executionContext, executor, claimed, handler)
-				}
-				<-worker.handlerSlots
-				worker.activeSlots.Add(-1)
-				executionResults <- err
-			}(*job)
+			claimedInPass = true
+			consecutiveEmptyClaims = 0
+			for _, job := range jobs {
+				worker.handlerSlots <- struct{}{}
+				active++
+				worker.activeSlots.Add(1)
+				go func(claimed ClaimedJob) {
+					handler := worker.handlers[claimed.Type]
+					var err error
+					if handler == nil {
+						err = fmt.Errorf(missingWorkerHandlerFormat, claimed.Type)
+						err = worker.fail(executionContext, executor, claimed, err)
+					} else {
+						err = worker.execute(executionContext, executor, claimed, handler)
+					}
+					<-worker.handlerSlots
+					worker.activeSlots.Add(-1)
+					executionResults <- err
+				}(job)
+			}
 		}
 		if stopping {
 			break
 		}
+		if claimedInPass {
+			consecutiveEmptyClaims = 0
+		}
+		resetTimer(
+			pollTimer,
+			workerPollDelay(worker.pollInterval, consecutiveEmptyClaims, !notificationListening.Load()),
+		)
 
 		select {
 		case <-ctx.Done():
@@ -492,8 +534,16 @@ func (worker *Worker) Run(ctx context.Context) error {
 				stopping = true
 			}
 		case <-pollTimer.C:
-			pollTimer.Reset(worker.pollInterval)
 		case <-notificationWake:
+			delay := time.NewTimer(time.Duration(pseudorand.Int64N(int64(notificationClaimDelay) + 1)))
+			select {
+			case <-ctx.Done():
+				if !delay.Stop() {
+					<-delay.C
+				}
+				stopping = true
+			case <-delay.C:
+			}
 		case <-registryWake:
 		}
 	}
@@ -772,6 +822,14 @@ func (worker *Worker) runOnce(ctx context.Context, executor Executor) (bool, err
 }
 
 func (worker *Worker) claimNext(ctx context.Context, executor Executor) (*ClaimedJob, error) {
+	jobs, err := worker.claimNextMany(ctx, executor, 1)
+	if err != nil || len(jobs) == 0 {
+		return nil, err
+	}
+	return &jobs[0], nil
+}
+
+func (worker *Worker) claimNextMany(ctx context.Context, executor Executor, limit int) ([]ClaimedJob, error) {
 	if _, err := executor.Query(
 		ctx,
 		internalStatementRegistry[promoteStatementName],
@@ -779,15 +837,17 @@ func (worker *Worker) claimNext(ctx context.Context, executor Executor) (*Claime
 	); err != nil {
 		return nil, err
 	}
+	jobs := make([]ClaimedJob, 0, limit)
 	for range worker.queues {
 		queue := worker.queues[worker.nextQueueIndex]
 		worker.nextQueueIndex = (worker.nextQueueIndex + 1) % len(worker.queues)
 		startedAt := time.Now()
 		rows, err := executor.Query(
 			ctx,
-			protocolStatementRegistry[claimStatementName],
+			protocolStatementRegistry[claimManyStatementName],
 			queue,
 			worker.workerID,
+			limit-len(jobs),
 			int(worker.leaseDuration/time.Millisecond),
 		)
 		if err != nil {
@@ -810,27 +870,29 @@ func (worker *Worker) claimNext(ctx context.Context, executor Executor) (*Claime
 		if len(rows) == 0 {
 			continue
 		}
-		if len(rows) != 1 {
-			return nil, errors.New(invalidClaimResultMessage)
+		for _, row := range rows {
+			job, err := claimedJob(row, queue)
+			if err != nil {
+				return nil, err
+			}
+			logWorkerEvent(
+				ctx,
+				worker.logger,
+				slog.LevelDebug,
+				jobClaimedEvent,
+				jobClaimedLogMessage,
+				jobLogAttributes(job, worker.workerID)...,
+			)
+			if worker.metrics.enabled {
+				worker.metrics.claimed.Add(ctx, 1, jobMetricOptions(job))
+			}
+			jobs = append(jobs, job)
 		}
-		job, err := claimedJob(rows[0], queue)
-		if err != nil {
-			return nil, err
+		if len(jobs) == limit {
+			break
 		}
-		logWorkerEvent(
-			ctx,
-			worker.logger,
-			slog.LevelDebug,
-			jobClaimedEvent,
-			jobClaimedLogMessage,
-			jobLogAttributes(job, worker.workerID)...,
-		)
-		if worker.metrics.enabled {
-			worker.metrics.claimed.Add(ctx, 1, jobMetricOptions(job))
-		}
-		return &job, nil
 	}
-	return nil, nil
+	return jobs, nil
 }
 
 type ownershipResult struct {

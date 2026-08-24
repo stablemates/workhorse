@@ -26,8 +26,8 @@
       {
         "id": "claim",
         "covers": ["claim"],
-        "sql": "SELECT jsonb_build_object('jobId', job_id, 'jobType', job_type, 'payload', payload, 'attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
-        "parameters": ["protocol-batch", "protocol-success", 30000],
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'jobType', job_type, 'payload', payload, 'attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.claim_many_v1($1::text, $2::text, $3::integer, $4::integer)",
+        "parameters": ["protocol-batch", "protocol-success", 2, 30000],
         "expect": {
           "rows": [
             {
@@ -38,17 +38,7 @@
                 "jobType": "protocol.first",
                 "payload": { "index": 1 }
               }
-            }
-          ]
-        },
-        "capture": { "successfulFence": "0.value.fenceToken" }
-      },
-      {
-        "id": "claim-batch-peer",
-        "sql": "SELECT jsonb_build_object('jobId', job_id, 'jobType', job_type, 'payload', payload, 'attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
-        "parameters": ["protocol-batch", "protocol-success", 30000],
-        "expect": {
-          "rows": [
+            },
             {
               "value": {
                 "attempt": 1,
@@ -60,7 +50,10 @@
             }
           ]
         },
-        "capture": { "batchPeerFence": "0.value.fenceToken" }
+        "capture": {
+          "successfulFence": "0.value.fenceToken",
+          "batchPeerFence": "1.value.fenceToken"
+        }
       },
       {
         "id": "record-batch-dispatch",
@@ -1006,6 +999,70 @@
                 "version": "v1"
               }
             }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "batch-claim-admission",
+    "steps": [
+      {
+        "id": "install-per-key-policy",
+        "sql": "SELECT count(*)::integer AS count FROM workhorse.sync_concurrency_policies_v1($1::text, $2::jsonb, $3::boolean)",
+        "parameters": [
+          "protocol-batch-admission",
+          [{ "queue": "protocol-batch-admission", "maxActive": 3, "maxActivePerKey": 1 }],
+          true
+        ],
+        "expect": { "rows": [{ "count": 1 }] }
+      },
+      {
+        "id": "enqueue-priority-and-key-candidates",
+        "sql": "SELECT count(*)::integer AS count FROM workhorse.enqueue_many_v1($1::jsonb)",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-batch-admission",
+              "type": "protocol.admission",
+              "payload": { "key": "c" },
+              "concurrencyKey": "c",
+              "priority": 0
+            },
+            {
+              "queue": "protocol-batch-admission",
+              "type": "protocol.admission",
+              "payload": { "key": "a1" },
+              "concurrencyKey": "a",
+              "priority": 100
+            },
+            {
+              "queue": "protocol-batch-admission",
+              "type": "protocol.admission",
+              "payload": { "key": "a2" },
+              "concurrencyKey": "a",
+              "priority": 90
+            },
+            {
+              "queue": "protocol-batch-admission",
+              "type": "protocol.admission",
+              "payload": { "key": "b" },
+              "concurrencyKey": "b",
+              "priority": 80
+            }
+          ]
+        ],
+        "expect": { "rows": [{ "count": 4 }] }
+      },
+      {
+        "id": "claim-in-priority-order-with-per-key-admission",
+        "sql": "SELECT priority, payload FROM workhorse.claim_many_v1($1::text, $2::text, $3::integer, $4::integer)",
+        "parameters": ["protocol-batch-admission", "protocol-admission-worker", 3, 30000],
+        "expect": {
+          "rows": [
+            { "priority": 100, "payload": { "key": "a1" } },
+            { "priority": 80, "payload": { "key": "b" } },
+            { "priority": 0, "payload": { "key": "c" } }
           ]
         }
       }

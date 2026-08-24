@@ -26,6 +26,7 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 		"expiration":               executeWorkerExpirationFixture,
 		"lease-loss":               executeWorkerLeaseLossFixture,
 		"heartbeat-cadence":        executeWorkerHeartbeatFixture,
+		"poll-cadence":             executeWorkerPollCadenceFixture,
 		"graceful-drain":           executeWorkerGracefulDrainFixture,
 	}
 	coverage := make(map[string]struct{}, len(manifest.RuntimeCoverage))
@@ -51,6 +52,56 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 	sort.Strings(expected)
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("runtime fixture coverage differs from the manifest: expected %v, received %v", expected, actual)
+	}
+}
+
+func executeWorkerPollCadenceFixture(t *testing.T, fixture workerRuntimeFixture) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-poll-cadence-fixture")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "runtime-" + fixture.ID
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-" + fixture.ID,
+		PollInterval:    time.Duration(fixture.PollMS) * time.Millisecond,
+		DisableRegistry: true, PollingOnly: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled := make(chan time.Time, 1)
+	worker.Handle(fixture.JobType, func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
+		handled <- time.Now()
+		return nil, nil
+	})
+	runContext, stop := context.WithCancel(ctx)
+	runResult := make(chan error, 1)
+	go func() { runResult <- worker.Run(runContext) }()
+	time.Sleep(time.Duration(fixture.IdleMS) * time.Millisecond)
+	if _, err := queue.Enqueue(ctx, fixture.JobType, map[string]any{}); err != nil {
+		stop()
+		t.Fatal(err)
+	}
+	enqueuedAt := time.Now()
+	select {
+	case handledAt := <-handled:
+		delay := handledAt.Sub(enqueuedAt)
+		if delay < time.Duration(fixture.ExpectedMinimumDelayMS)*time.Millisecond ||
+			delay > time.Duration(fixture.ExpectedMaximumDelayMS)*time.Millisecond {
+			t.Fatalf("poll delay %s fell outside fixture bounds", delay)
+		}
+	case <-time.After(time.Duration(fixture.ExpectedMaximumDelayMS+1000) * time.Millisecond):
+		stop()
+		t.Fatal("worker did not claim after the polling backoff")
+	}
+	stop()
+	if err := <-runResult; err != nil {
+		t.Fatal(err)
 	}
 }
 

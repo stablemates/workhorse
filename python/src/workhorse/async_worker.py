@@ -423,6 +423,7 @@ class AsyncWorker:
                     self._on_notification_error(error)
                 self._inner._wake_dispatcher()
             finally:
+                self._inner._set_notification_listening(False)
                 if connection is not None:
                     try:
                         closed = connection.close()
@@ -440,11 +441,12 @@ class AsyncWorker:
         if getattr(connection, "autocommit", False) is not True:
             raise ValueError("Notification connection must use autocommit mode")
         await connection.execute(f"LISTEN {_CHANNEL}")
-        self._inner._wake_dispatcher()
+        self._inner._set_notification_listening(True)
+        self._inner._wake_from_notification()
         while not stop.is_set():
             async for notification in connection.notifies(timeout=0.1, stop_after=1):
                 if notification.payload == "*" or notification.payload in self.queues:
-                    self._inner._wake_dispatcher()
+                    self._inner._wake_from_notification()
 
     async def _listen_asyncpg(self, connection: Any, stop: asyncio.Event) -> None:
         if connection.is_in_transaction():
@@ -452,10 +454,11 @@ class AsyncWorker:
 
         def wake(_connection: object, _pid: int, _channel: str, payload: str) -> None:
             if payload == "*" or payload in self.queues:
-                self._inner._wake_dispatcher()
+                self._inner._wake_from_notification()
 
         await connection.add_listener(_CHANNEL, wake)
-        self._inner._wake_dispatcher()
+        self._inner._set_notification_listening(True)
+        self._inner._wake_from_notification()
         while not stop.is_set() and not connection.is_closed():
             with suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=0.1)

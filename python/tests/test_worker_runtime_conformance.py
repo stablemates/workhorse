@@ -47,6 +47,7 @@ def execute_runtime_fixture(
         "expiration": execute_expiration_fixture,
         "lease-loss": execute_lease_loss_fixture,
         "heartbeat-cadence": execute_heartbeat_fixture,
+        "poll-cadence": execute_poll_cadence_fixture,
         "graceful-drain": execute_graceful_drain_fixture,
     }
     assert fixture["kind"] in executors, f"Unsupported runtime fixture kind: {fixture['kind']}"
@@ -259,7 +260,7 @@ def execute_expiration_fixture(
 
     def early_claim(statement: DriverStatement, parameters: Any = ()) -> list[Mapping[str, object]]:
         rows = original_rows(statement, parameters)
-        if statement is STATEMENTS.claim and rows:
+        if statement is STATEMENTS.claim_many and rows:
             claimed = dict(rows[0])
             field = "deadline_at" if fixture["mode"] == "deadline" else "attempt_timeout_at"
             value = claimed[field]
@@ -419,6 +420,42 @@ def execute_heartbeat_fixture(
     calls_at_settlement = heartbeat_calls
     sleep(fixture["heartbeatMs"] * 3 / 1000)
     assert heartbeat_calls == calls_at_settlement
+
+
+def execute_poll_cadence_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> None:
+    queue_name = runtime_queue(fixture)
+    handled = Event()
+    handled_at = 0.0
+    worker = Worker(
+        connection,
+        queue=queue_name,
+        worker_id=f"python-{fixture['id']}",
+        poll_ms=fixture["pollMs"],
+        registry_interval_ms=0,
+    )
+
+    def handle(_payload: object, _context: HandlerContext) -> None:
+        nonlocal handled_at
+        handled_at = monotonic()
+        handled.set()
+
+    worker.handle(fixture["jobType"], handle)
+    running = Thread(target=worker.run)
+    running.start()
+    try:
+        sleep(fixture["idleMs"] / 1_000)
+        Queue(connection).enqueue(fixture["jobType"], {}, EnqueueOptions(queue=queue_name))
+        enqueued_at = monotonic()
+        assert handled.wait(fixture["expectedMaximumDelayMs"] / 1_000 + 1)
+        delay_ms = (handled_at - enqueued_at) * 1_000
+        assert delay_ms >= fixture["expectedMinimumDelayMs"]
+        assert delay_ms <= fixture["expectedMaximumDelayMs"]
+    finally:
+        worker.stop()
+        running.join(timeout=2)
+        assert not running.is_alive()
 
 
 def execute_graceful_drain_fixture(

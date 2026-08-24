@@ -57,6 +57,7 @@
     "database-authoritative-expiration",
     "lease-loss-fencing",
     "non-overlapping-heartbeats",
+    "empty-claim-backoff",
     "graceful-drain"
   ],
   "functions": [
@@ -89,6 +90,11 @@
       "name": "claim_v1",
       "arity": 3,
       "contract": "SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)"
+    },
+    {
+      "name": "claim_many_v1",
+      "arity": 4,
+      "contract": "SELECT * FROM workhorse.claim_many_v1($1::text, $2::text, $3::integer, $4::integer)"
     },
     {
       "name": "record_batch_dispatch_v1",

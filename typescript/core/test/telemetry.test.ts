@@ -184,7 +184,7 @@ describe("OpenTelemetry", () => {
         if (sql.includes("tick_v1") || sql.includes("run_maintenance_v1")) {
           return { rows: [] };
         }
-        if (sql.includes("claim_v1")) {
+        if (sql.includes("claim_many_v1")) {
           if (claimed) return { rows: [] };
           claimed = true;
           return {
@@ -319,7 +319,7 @@ describe("OpenTelemetry", () => {
         if (sql.includes("tick_v1") || sql.includes("run_maintenance_v1")) {
           return { rows: [] };
         }
-        if (sql.includes("claim_v1")) {
+        if (sql.includes("claim_many_v1")) {
           if (claimed) return { rows: [] };
           claimed = true;
           return {

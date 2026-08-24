@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import socket
 import traceback
 from collections.abc import Callable, Mapping, Sequence
@@ -774,6 +775,8 @@ class Worker:
         self._notification_poll_ms = poll_ms if poll_ms is not None else 5_000
         self._query_connection = connection
         self._notification_connection_factory = notification_connection_factory
+        self._notification_wake = Event()
+        self._notification_listening = Event()
         self._on_notification_error = on_notification_error
         self._on_registration_error = on_registration_error
         if not 100 <= lease_ms <= 86_400_000:
@@ -1240,6 +1243,7 @@ class Worker:
             self._stopping = self._stop_version != requested_stop_version
             self._run_errors.clear()
         claimed_any = False
+        consecutive_empty_claims = 0
         listener = self._start_notification_listener() if continuous else None
         self._refresh_registration(force=True)
         emit_log(
@@ -1264,11 +1268,17 @@ class Worker:
                 if state == "paused":
                     if not continuous:
                         break
-                    self._wake.wait(self._dispatch_wait_seconds(listener))
+                    self._wake.wait(self._dispatch_wait_seconds(listener, consecutive_empty_claims))
                     continue
                 if state == "full":
-                    self._wake.wait(self._dispatch_wait_seconds(listener))
+                    self._wake.wait(self._dispatch_wait_seconds(listener, consecutive_empty_claims))
                     continue
+
+                if self._notification_wake.is_set():
+                    self._notification_wake.clear()
+                    self._wake.wait(random.uniform(0, 0.05))
+                    if self._dispatch_state() != "ready":
+                        continue
 
                 maintenance_was_due = self._run_maintenance_if_due()
                 if not maintenance_was_due:
@@ -1279,6 +1289,7 @@ class Worker:
                     if self._dispatch_state() != "ready":
                         break
                     with self._state_lock:
+                        free_slots = self.concurrency - len(self._active_threads)
                         queue_name = self.queues[self._next_queue_index]
                         self._next_queue_index = (self._next_queue_index + 1) % len(self.queues)
                     claim_started_at = monotonic()
@@ -1287,35 +1298,36 @@ class Worker:
                         {"workhorse.queue.name": queue_name},
                     ) as claim_span:
                         rows = self._executor.rows(
-                            STATEMENTS.claim,
-                            (queue_name, self.worker_id, self.lease_ms),
+                            STATEMENTS.claim_many,
+                            (queue_name, self.worker_id, free_slots, self.lease_ms),
                         )
-                        job = _claimed_job(rows[0], queue_name) if rows else None
+                        claimed_jobs = tuple(_claimed_job(row, queue_name) for row in rows)
                         record_claim(
                             queue_name,
                             (monotonic() - claim_started_at) * 1_000,
-                            job,
+                            claimed_jobs,
                         )
-                        if job is not None:
-                            for key, value in job_span_attributes(job).items():
+                        if rows:
+                            for key, value in job_span_attributes(claimed_jobs[0]).items():
                                 claim_span.set_attribute(key, value)
                     if not rows:
                         empty_attempts += 1
                         continue
                     empty_attempts = 0
+                    consecutive_empty_claims = 0
                     claimed_any = True
-                    assert job is not None
-                    emit_log(
-                        "DEBUG",
-                        "workhorse.job.claimed",
-                        "Job claimed",
-                        {
-                            **job_span_attributes(job),
-                            "workhorse.queue.name": queue_name,
-                            "workhorse.worker.id": self.worker_id,
-                        },
-                    )
-                    self._start_claimed_job(job)
+                    for job in claimed_jobs:
+                        emit_log(
+                            "DEBUG",
+                            "workhorse.job.claimed",
+                            "Job claimed",
+                            {
+                                **job_span_attributes(job),
+                                "workhorse.queue.name": queue_name,
+                                "workhorse.worker.id": self.worker_id,
+                            },
+                        )
+                        self._start_claimed_job(job)
 
                 state = self._dispatch_state()
                 if state == "stopping":
@@ -1323,12 +1335,13 @@ class Worker:
                 if state == "paused":
                     continue
                 if empty_attempts >= len(self.queues):
+                    consecutive_empty_claims += 1
                     if not continuous:
                         break
-                    self._wake.wait(self._dispatch_wait_seconds(listener))
+                    self._wake.wait(self._dispatch_wait_seconds(listener, consecutive_empty_claims))
                     continue
                 if state == "full":
-                    self._wake.wait(self._dispatch_wait_seconds(listener))
+                    self._wake.wait(self._dispatch_wait_seconds(listener, consecutive_empty_claims))
         finally:
             if listener is not None:
                 listener.close()
@@ -1581,15 +1594,34 @@ class Worker:
                     },
                 )
 
-    def _dispatch_wait_seconds(self, listener: JobNotificationListener | None) -> float:
+    def _dispatch_wait_seconds(
+        self, listener: JobNotificationListener | None, consecutive_empty_claims: int = 0
+    ) -> float:
+        listening = self._notification_listening.is_set() or (
+            listener is not None and listener.is_listening()
+        )
         wait_ms = (
             self._notification_poll_ms
-            if listener is not None and listener.is_listening()
-            else self.poll_ms
+            if listening
+            else min(
+                5_000,
+                self.poll_ms * 2 ** max(0, consecutive_empty_claims - 1),
+            )
         )
+        wait_ms = max(1, round(wait_ms * random.uniform(0.9, 1.1)))
         if self.registry_interval_ms > 0:
             wait_ms = min(wait_ms, self.registry_interval_ms)
         return wait_ms / 1000
+
+    def _wake_from_notification(self) -> None:
+        self._notification_wake.set()
+        self._wake.set()
+
+    def _set_notification_listening(self, listening: bool) -> None:
+        if listening:
+            self._notification_listening.set()
+        else:
+            self._notification_listening.clear()
 
     def _start_notification_listener(self) -> JobNotificationListener | None:
         if self._notification_connection_factory is None:
@@ -1597,7 +1629,7 @@ class Worker:
         listener = JobNotificationListener(
             self._notification_connection_factory,
             self.queues,
-            self._wake.set,
+            self._wake_from_notification,
             self._on_notification_error,
             self._query_connection,
         )

@@ -492,6 +492,14 @@ export class Queue {
     return this.modules.claimLeaseFence.claim<TPayload>(workerId, options);
   }
 
+  async claimMany<TPayload extends Json = Json>(
+    workerId: string,
+    limit: number,
+    options: { queue?: string; leaseMs?: number } = {},
+  ): Promise<ClaimedJob<TPayload>[]> {
+    return this.modules.claimLeaseFence.claimMany<TPayload>(workerId, limit, options);
+  }
+
   /** @internal Persist the ordered membership chosen by a worker's batch coordinator. */
   async recordBatchDispatch(batch: BatchExecutionRecord): Promise<void> {
     return this.modules.claimLeaseFence.recordBatchDispatch(batch);

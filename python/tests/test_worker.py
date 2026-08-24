@@ -1106,7 +1106,7 @@ def test_run_wakes_from_a_dedicated_notification_connection(database_url: str) -
 
         def execute(self, query: str, parameters: object = ()) -> object:
             result = self.cursor.execute(query, parameters)  # type: ignore[union-attr]
-            if "workhorse.claim_v1" in query and not empty_claim_finished.is_set():
+            if "workhorse.claim_many_v1" in query and not empty_claim_finished.is_set():
                 empty_claim_finished.set()
                 assert release_empty_claim.wait(timeout=5)
             return result

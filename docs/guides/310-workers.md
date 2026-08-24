@@ -63,6 +63,10 @@ The notification is only a hint. If PostgreSQL drops the listener or a message i
 worker reconnects and still checks through `pollMs`. This keeps the database state authoritative:
 a missing notification can delay a claim, but it cannot strand the job.
 
+Workers add a small random delay before a notification-triggered claim, so one enqueue does not
+make every process query at the same instant. Without a listener, consecutive empty checks back off
+to a cap and reset as soon as a claim succeeds.
+
 ## Running workers in their own process
 
 The recommended deployment is a dedicated worker process, separate from your web app. The

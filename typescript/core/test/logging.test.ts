@@ -98,7 +98,7 @@ describe("structured logging", () => {
         if (sql.includes("tick_v1") || sql.includes("run_maintenance_v1")) {
           return { rows: [] };
         }
-        if (sql.includes("claim_v1")) return { rows: [] };
+        if (sql.includes("claim_many_v1")) return { rows: [] };
         if (sql.includes("deregister_worker_v1")) return { rows: [{ deregistered: true }] };
         throw new Error(`Unexpected query: ${sql}`);
       },

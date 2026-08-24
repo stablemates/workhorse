@@ -44,6 +44,10 @@ type workerRuntimeFixture struct {
 	ExpectedCallsWhileBlocked            int                              `json:"expectedCallsWhileBlocked"`
 	ExpectedMinimumCallsBeforeSettlement int                              `json:"expectedMinimumCallsBeforeSettlement"`
 	ExpectedMaximumOverlap               int                              `json:"expectedMaximumOverlap"`
+	PollMS                               int                              `json:"pollMs"`
+	IdleMS                               int                              `json:"idleMs"`
+	ExpectedMinimumDelayMS               int                              `json:"expectedMinimumDelayMs"`
+	ExpectedMaximumDelayMS               int                              `json:"expectedMaximumDelayMs"`
 	Mode                                 string                           `json:"mode"`
 	LocalClockLeadMS                     int                              `json:"localClockLeadMs"`
 	ExpectedAbortReason                  string                           `json:"expectedAbortReason"`

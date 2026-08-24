@@ -132,6 +132,54 @@ export function recordRecoveryTelemetry(span: Span, recovery: RecoveryTelemetry)
 
 /** Owns cancellation, claiming, fenced settlement, heartbeat, and lease recovery. */
 export class ClaimLeaseFenceModule extends QueueModule {
+  private claimedJob<TPayload extends Json>(
+    row: ClaimRow,
+    queueName: string,
+  ): ClaimedJob<TPayload> {
+    return {
+      id: row.job_id,
+      queue: queueName,
+      type: row.job_type,
+      priority: row.priority,
+      payload: row.payload as TPayload,
+      contractVersion: row.contract_version,
+      resultMaxBytes: row.result_max_bytes,
+      redactErrorDetails: row.redact_error_details === true,
+      traceContext: row.trace_context,
+      attempt: row.attempt,
+      maxAttempts: row.max_attempts,
+      retryPolicy: row.retry_policy,
+      deadlineAt: nullableRowTimestamp(row.deadline_at, "deadline_at"),
+      executionTimeoutMs:
+        row.execution_timeout_ms === null ? null : Number(row.execution_timeout_ms),
+      attemptTimeoutAt: nullableRowTimestamp(row.attempt_timeout_at, "attempt_timeout_at"),
+      fenceToken: BigInt(row.fence_token),
+      leaseExpiresAt: rowTimestamp(row.lease_expires_at, "lease_expires_at"),
+    };
+  }
+
+  private recordClaims(
+    span: Span,
+    jobs: ClaimedJob[],
+    queueName: string,
+    workerId: string,
+    startedAt: number,
+  ): void {
+    telemetryMetrics.claimDuration.record(performance.now() - startedAt, {
+      "workhorse.queue.name": queueName,
+      "workhorse.claim.result": jobs.length === 0 ? "empty" : "claimed",
+    });
+    if (jobs[0]) span.setAttributes(jobSpanAttributes(jobs[0]));
+    for (const job of jobs) {
+      telemetryMetrics.claimed.add(1, jobMetricAttributes(job));
+      logDebug("workhorse.job.claimed", "Job claimed", {
+        ...jobSpanAttributes(job),
+        "workhorse.queue.name": queueName,
+        "workhorse.worker.id": workerId,
+      });
+    }
+  }
+
   async cancel(jobId: string, request: CancellationRequest = {}): Promise<CancelResult> {
     // PostgreSQL validates metadata and serializes cancellation with every lifecycle transition.
     // requestedBy is caller attribution only; this API does not claim authorization.
@@ -173,47 +221,27 @@ export class ClaimLeaseFenceModule extends QueueModule {
         [queueName, workerId, options.leaseMs ?? 30_000],
       );
       const row = result.rows[0];
-      telemetryMetrics.claimDuration.record(performance.now() - startedAt, {
-        "workhorse.queue.name": queueName,
-        "workhorse.claim.result": row === undefined ? "empty" : "claimed",
-      });
-      if (!row) return null;
-      span.setAttributes({
-        "workhorse.job.id": row.job_id,
-        "workhorse.job.type": row.job_type,
-        "workhorse.job.attempt": row.attempt,
-      });
-      telemetryMetrics.claimed.add(1, {
-        "workhorse.queue.name": queueName,
-        "workhorse.job.type": row.job_type,
-      });
-      logDebug("workhorse.job.claimed", "Job claimed", {
-        "workhorse.job.id": row.job_id,
-        "workhorse.job.type": row.job_type,
-        "workhorse.job.attempt": row.attempt,
-        "workhorse.queue.name": queueName,
-        "workhorse.worker.id": workerId,
-      });
-      return {
-        id: row.job_id,
-        queue: queueName,
-        type: row.job_type,
-        priority: row.priority,
-        payload: row.payload as TPayload,
-        contractVersion: row.contract_version,
-        resultMaxBytes: row.result_max_bytes,
-        redactErrorDetails: row.redact_error_details === true,
-        traceContext: row.trace_context,
-        attempt: row.attempt,
-        maxAttempts: row.max_attempts,
-        retryPolicy: row.retry_policy,
-        deadlineAt: nullableRowTimestamp(row.deadline_at, "deadline_at"),
-        executionTimeoutMs:
-          row.execution_timeout_ms === null ? null : Number(row.execution_timeout_ms),
-        attemptTimeoutAt: nullableRowTimestamp(row.attempt_timeout_at, "attempt_timeout_at"),
-        fenceToken: BigInt(row.fence_token),
-        leaseExpiresAt: rowTimestamp(row.lease_expires_at, "lease_expires_at"),
-      };
+      const job = row ? this.claimedJob<TPayload>(row, queueName) : null;
+      this.recordClaims(span, job ? [job] : [], queueName, workerId, startedAt);
+      return job;
+    });
+  }
+
+  async claimMany<TPayload extends Json = Json>(
+    workerId: string,
+    limit: number,
+    options: { queue?: string; leaseMs?: number } = {},
+  ): Promise<ClaimedJob<TPayload>[]> {
+    const queueName = options.queue ?? this.context.defaultQueue;
+    const startedAt = performance.now();
+    return withSpan("workhorse.claim", { "workhorse.queue.name": queueName }, async (span) => {
+      const result = await this.context.database.query<ClaimRow>(
+        "SELECT * FROM workhorse.claim_many_v1($1::text, $2::text, $3::integer, $4::integer)",
+        [queueName, workerId, limit, options.leaseMs ?? 30_000],
+      );
+      const jobs = result.rows.map((row) => this.claimedJob<TPayload>(row, queueName));
+      this.recordClaims(span, jobs, queueName, workerId, startedAt);
+      return jobs;
     });
   }
 

@@ -51,8 +51,8 @@ console.log(job?.state, job?.currentAttempt, job?.result);
 
 ## Who owns active work
 
-When a `Worker` has a free slot, it calls the `claim_v1` SQL function. PostgreSQL checks any queue
-policy, then records the worker ID, a lease expiry, and a fence token on `job_runtime`. The worker
+When a `Worker` has free slots, it calls `claim_many_v1` with that count. PostgreSQL applies the
+`claim_v1` queue-policy transition to each member, then records the worker ID, a lease expiry, and a fence token on `job_runtime`. The worker
 sends heartbeats through `heartbeat_v1` while the handler runs.
 
 If heartbeats stop, recovery closes the old attempt and makes the job eligible again. Every

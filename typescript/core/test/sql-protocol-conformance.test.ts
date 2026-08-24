@@ -24,6 +24,7 @@ import type {
   HeartbeatCadenceRuntimeFixture,
   JsonValue,
   LeaseLossRuntimeFixture,
+  PollCadenceRuntimeFixture,
   RuntimeWriteOperation,
   SuspensionReplayRuntimeFixture,
 } from "../../../scripts/verify-sql-protocol.js";
@@ -458,6 +459,39 @@ async function executeHeartbeatCadenceRuntimeFixture(
   }
 }
 
+async function executePollCadenceRuntimeFixture(
+  database: Queryable,
+  fixture: PollCadenceRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  const pollingDatabase = {
+    query: database.query.bind(database),
+  } as Queryable;
+  const queue = new Queue(pollingDatabase);
+  const handled = deferred<number>();
+  const worker = new Worker(queue, {
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    pollMs: fixture.pollMs,
+    registryIntervalMs: 0,
+  }).handle(fixture.jobType, () => {
+    handled.resolve(performance.now());
+    return null;
+  });
+  const running = worker.run();
+  try {
+    await sleep(fixture.idleMs);
+    const enqueuedAt = performance.now();
+    await queue.enqueue(fixture.jobType, {}, { queue: queueName });
+    const delayMs = (await handled.promise) - enqueuedAt;
+    expect(delayMs).toBeGreaterThanOrEqual(fixture.expectedMinimumDelayMs);
+    expect(delayMs).toBeLessThanOrEqual(fixture.expectedMaximumDelayMs);
+  } finally {
+    worker.stop();
+    await running;
+  }
+}
+
 async function executeGracefulDrainRuntimeFixture(
   queue: Queue,
   admin: Admin,
@@ -690,6 +724,9 @@ describe("SQL protocol conformance fixtures", () => {
             break;
           case "heartbeat-cadence":
             await executeHeartbeatCadenceRuntimeFixture(queue, fixture);
+            break;
+          case "poll-cadence":
+            await executePollCadenceRuntimeFixture(runtimeDatabase.pool, fixture);
             break;
           case "graceful-drain":
             await executeGracefulDrainRuntimeFixture(queue, admin, fixture);

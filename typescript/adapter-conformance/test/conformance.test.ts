@@ -454,7 +454,7 @@ describe.each(integrationProviders)("$name built-package conformance", (provider
 
   it("uses the configured notification capability to wake a worker", async () => {
     const handled: string[] = [];
-    const claim = vi.spyOn(provider.adapter.queue, "claim");
+    const claim = vi.spyOn(provider.adapter.queue, "claimMany");
     const worker = provider.adapter
       .createWorker({
         workerId: `${provider.name}-notification-worker`,

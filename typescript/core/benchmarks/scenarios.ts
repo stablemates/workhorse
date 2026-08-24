@@ -822,7 +822,10 @@ async function rowCount(pool: Queryable, relation: string, jobId?: string): Prom
 interface QueryPressureSnapshot {
   queries: number;
   claimCalls: number;
+  claimedJobs: number;
+  emptyClaimCalls: number;
   heartbeatCalls: number;
+  heartbeatJobs: number;
   maxConcurrentQueries: number;
   maxConcurrentClaims: number;
   claimsWithoutFreeSlot: number;
@@ -836,7 +839,10 @@ class QueryPressureProbe implements Queryable {
   private activeClaims = 0;
   private queries = 0;
   private claimCalls = 0;
+  private claimedJobs = 0;
+  private emptyClaimCalls = 0;
   private heartbeatCalls = 0;
+  private heartbeatJobs = 0;
   private maxConcurrentQueries = 0;
   private maxConcurrentClaims = 0;
   private claimsWithoutFreeSlot = 0;
@@ -853,7 +859,7 @@ class QueryPressureProbe implements Queryable {
     text: string,
     values?: readonly unknown[],
   ): Promise<QueryResult<R>> {
-    const claim = text.includes("workhorse.claim_v1");
+    const claim = text.includes("workhorse.claim_v1") || text.includes("workhorse.claim_many_v1");
     const claimStartedAt = claim ? performance.now() : 0;
     this.queries += 1;
     this.activeQueries += 1;
@@ -866,16 +872,22 @@ class QueryPressureProbe implements Queryable {
         this.claimsWithoutFreeSlot += 1;
       }
     }
-    if (text.includes("workhorse.heartbeat_v1") || text.includes("workhorse.heartbeat_v1")) {
+    const heartbeat =
+      text.includes("workhorse.heartbeat_v1") || text.includes("workhorse.heartbeat_many_v1");
+    if (heartbeat) {
       this.heartbeatCalls += 1;
     }
     try {
       const result = await this.target.query<R>(text, values);
+      if (heartbeat) this.heartbeatJobs += result.rows.length;
       if (claim) {
         this.claimDurationsMs.push(Math.max(0, performance.now() - claimStartedAt));
         if (result.rows.length > 0) {
+          this.claimedJobs += result.rows.length;
           this.lastSuccessfulClaimAt = performance.now();
           this.successfulClaimTimes.push(this.lastSuccessfulClaimAt);
+        } else {
+          this.emptyClaimCalls += 1;
         }
       }
       return result;
@@ -889,7 +901,10 @@ class QueryPressureProbe implements Queryable {
     return {
       queries: this.queries,
       claimCalls: this.claimCalls,
+      claimedJobs: this.claimedJobs,
+      emptyClaimCalls: this.emptyClaimCalls,
       heartbeatCalls: this.heartbeatCalls,
+      heartbeatJobs: this.heartbeatJobs,
       maxConcurrentQueries: this.maxConcurrentQueries,
       maxConcurrentClaims: this.maxConcurrentClaims,
       claimsWithoutFreeSlot: this.claimsWithoutFreeSlot,
@@ -3909,6 +3924,7 @@ async function workerConcurrency(
   const pollingSchedulingSlack = 2;
   const nullClaimRates: number[] = [];
   const pollingPressureChecks: boolean[] = [];
+  const july2026ClaimStatementsPerCompletedJob = 1;
 
   metrics.concurrencyLevels = concurrencyLevels.join(",");
   metrics.jobsPerLevel = context.options.jobCount;
@@ -3917,6 +3933,7 @@ async function workerConcurrency(
   metrics.heartbeatMs = heartbeatMs;
   metrics.pollMs = pollMs;
   metrics.pollingSchedulingSlack = pollingSchedulingSlack;
+  metrics.july2026ClaimStatementsPerCompletedJob = july2026ClaimStatementsPerCompletedJob;
 
   for (const concurrency of concurrencyLevels) {
     await reset(context.pool);
@@ -3974,7 +3991,7 @@ async function workerConcurrency(
     const runtimeState = worker.runtimeState();
     const prefix = `concurrency${concurrency}`;
     const claimCalls = afterTiming.claimCalls - beforeTiming.claimCalls;
-    const nullClaimCalls = Math.max(0, claimCalls - context.options.jobCount);
+    const nullClaimCalls = afterTiming.emptyClaimCalls - beforeTiming.emptyClaimCalls;
     const elapsedPollingWindows = Math.ceil(durationMs / pollMs);
     const claimCallUpperBound = pollingClaimUpperBound(
       context.options.jobCount,
@@ -3993,6 +4010,7 @@ async function workerConcurrency(
     metrics[`${prefix}MaxActiveSlots`] = maxActiveSlots;
     metrics[`${prefix}QueryCalls`] = afterTiming.queries - beforeTiming.queries;
     metrics[`${prefix}ClaimCalls`] = claimCalls;
+    metrics[`${prefix}ClaimStatementsPerCompletedJob`] = claimCalls / context.options.jobCount;
     metrics[`${prefix}NullClaimCalls`] = nullClaimCalls;
     metrics[`${prefix}ElapsedPollingWindows`] = elapsedPollingWindows;
     metrics[`${prefix}ClaimCallUpperBound`] = claimCallUpperBound;
@@ -4055,6 +4073,15 @@ async function workerConcurrency(
       claimCallUpperBound,
       (actual, expected) => Number(actual) <= Number(expected),
     );
+    if (concurrency === 8) {
+      recordInvariant(
+        assertions,
+        `${prefix} improves on the 2026-07-22 claim-statement baseline`,
+        claimCalls / context.options.jobCount,
+        july2026ClaimStatementsPerCompletedJob,
+        (actual, expected) => Number(actual) < Number(expected),
+      );
+    }
     recordInvariant(
       assertions,
       `${prefix} connection pressure tracks slots`,
@@ -4065,7 +4092,7 @@ async function workerConcurrency(
     recordInvariant(
       assertions,
       `${prefix} every job receives a heartbeat`,
-      afterTiming.heartbeatCalls - beforeTiming.heartbeatCalls,
+      afterTiming.heartbeatJobs - beforeTiming.heartbeatJobs,
       context.options.jobCount,
       (actual, expected) => Number(actual) >= Number(expected),
     );
@@ -4233,9 +4260,9 @@ async function workerConcurrency(
   recordInvariant(assertions, "first-null run handles one job", firstNullHandled, 1);
   recordInvariant(
     assertions,
-    "first-null run stops after job plus null",
+    "first-null run batches the job and empty result",
     firstNullPressure.claimCalls,
-    2,
+    1,
   );
   recordInvariant(
     assertions,
@@ -4323,9 +4350,9 @@ async function workerConcurrency(
   recordInvariant(assertions, "stop enters draining state", drainingState.draining, true);
   recordInvariant(
     assertions,
-    "stop drains configured active slots",
+    "stop fills configured active slots in one claim statement",
     claimsAtStop,
-    shutdownConcurrency,
+    1,
   );
   recordInvariant(
     assertions,
