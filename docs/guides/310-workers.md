@@ -31,8 +31,8 @@ default a worker runs one job at a time, and you can raise it.
 
 Each pass, the worker fills whatever slots are free — one claim at a time, because each
 claim is its own database operation. Once the slots are full, or the queue has nothing left,
-it stops asking. Every running job gets its own heartbeat timer, its own abort signal, and
-its own final write, so they don't interfere with each other.
+it stops asking. One worker timer renews every running lease in one batch. Each job still has
+its own abort signal and final write, so cancellation and settlement remain independent.
 
 Concurrency here is per worker. More workers add more process slots. Use a
 [concurrency policy](240-concurrency-policies.md) when the fleet must share one durable budget.

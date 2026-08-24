@@ -99,6 +99,23 @@
         "expect": { "rows": [{ "status": "accepted" }] }
       },
       {
+        "id": "heartbeat-many",
+        "sql": "SELECT job_id::text AS job_id, status FROM workhorse.heartbeat_many_v1($1::text, $2::jsonb) ORDER BY ordinal",
+        "parameters": [
+          "protocol-success",
+          [
+            {
+              "jobId": { "$ref": "successfulJob" },
+              "fenceToken": { "$ref": "successfulFence" },
+              "leaseMs": 30000
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [{ "job_id": { "$ref": "successfulJob" }, "status": "accepted" }]
+        }
+      },
+      {
         "id": "checkpoint",
         "covers": ["checkpoint"],
         "sql": "SELECT jsonb_build_object('status', status, 'value', checkpoint_value, 'attempt', attempt, 'fenceToken', fence_token, 'workerId', worker_id) AS value FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",

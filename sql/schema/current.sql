@@ -929,9 +929,9 @@ CREATE INDEX IF NOT EXISTS job_runtime_scheduled_wait_idx
   ON workhorse.job_runtime (run_at, job_id)
   WHERE state = 'scheduled' AND wait_name IS NOT NULL;
 CREATE INDEX IF NOT EXISTS job_runtime_expired_active_idx
-  ON workhorse.job_runtime (expires_at, job_id) WHERE state = 'active';
+  ON workhorse.job_runtime (job_id) WHERE state = 'active';
 CREATE INDEX IF NOT EXISTS job_runtime_active_queue_key_expiry_idx
-  ON workhorse.job_runtime (queue_name, concurrency_key, expires_at, job_id)
+  ON workhorse.job_runtime (queue_name, concurrency_key, job_id)
   WHERE state = 'active';
 CREATE INDEX IF NOT EXISTS job_runtime_deadline_idx
   ON workhorse.job_runtime (deadline_at, job_id) WHERE deadline_at IS NOT NULL;
@@ -7124,50 +7124,110 @@ CREATE OR REPLACE FUNCTION workhorse.heartbeat_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_runtime workhorse.job_runtime%ROWTYPE;
-  v_queue_name text;
+  v_now timestamptz := clock_timestamp();
+  v_status text;
 BEGIN
   IF p_worker_id IS NULL OR p_worker_id = '' THEN RAISE EXCEPTION 'worker_id must not be empty'; END IF;
   IF p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
     RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
   END IF;
-  SELECT r.queue_name INTO v_queue_name
-    FROM workhorse.job_runtime r
-   WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
-     AND r.fence_token = p_fence_token;
-  IF NOT FOUND THEN RETURN 'stale'; END IF;
-  PERFORM pg_advisory_xact_lock_shared(
-    hashtextextended('workhorse:concurrency-policy:' || v_queue_name, 0)
-  );
-  PERFORM 1 FROM workhorse.concurrency_policy policy
-   WHERE policy.queue_name = v_queue_name
-   FOR UPDATE;
-  SELECT * INTO v_runtime
-    FROM workhorse.job_runtime r
+  UPDATE workhorse.job_runtime r
+     SET heartbeat_at = CASE
+           WHEN r.cancel_requested_at IS NULL
+             AND (r.deadline_at IS NULL OR r.deadline_at > v_now)
+             AND (r.attempt_timeout_at IS NULL OR r.attempt_timeout_at > v_now)
+             AND r.expires_at > v_now THEN v_now
+           ELSE r.heartbeat_at END,
+         expires_at = CASE
+           WHEN r.cancel_requested_at IS NULL
+             AND (r.deadline_at IS NULL OR r.deadline_at > v_now)
+             AND (r.attempt_timeout_at IS NULL OR r.attempt_timeout_at > v_now)
+             AND r.expires_at > v_now
+           THEN v_now + make_interval(secs => p_lease_ms::double precision / 1000.0)
+           ELSE r.expires_at END,
+         updated_at = CASE
+           WHEN r.cancel_requested_at IS NULL
+             AND (r.deadline_at IS NULL OR r.deadline_at > v_now)
+             AND (r.attempt_timeout_at IS NULL OR r.attempt_timeout_at > v_now)
+             AND r.expires_at > v_now THEN v_now
+           ELSE r.updated_at END
    WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
      AND r.fence_token = p_fence_token
-   FOR UPDATE;
-  IF NOT FOUND THEN RETURN 'stale'; END IF;
-  IF v_runtime.cancel_requested_at IS NOT NULL THEN RETURN 'cancel_requested'; END IF;
-  IF v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= clock_timestamp() THEN
-    RETURN workhorse.expire_owned_v1(p_job_id, p_worker_id, p_fence_token);
+  RETURNING CASE
+    WHEN r.cancel_requested_at IS NOT NULL THEN 'cancel_requested'
+    WHEN r.deadline_at IS NOT NULL AND r.deadline_at <= v_now THEN 'deadline_exceeded'
+    WHEN r.attempt_timeout_at IS NOT NULL AND r.attempt_timeout_at <= v_now THEN 'timeout_exceeded'
+    WHEN r.expires_at <= v_now THEN 'stale'
+    ELSE 'accepted'
+  END INTO v_status;
+  RETURN COALESCE(v_status, 'stale');
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.heartbeat_many_v1(
+  p_worker_id text, p_leases jsonb
+) RETURNS TABLE (ordinal bigint, job_id uuid, status text)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_now timestamptz := clock_timestamp();
+BEGIN
+  IF p_worker_id IS NULL OR p_worker_id = '' THEN RAISE EXCEPTION 'worker_id must not be empty'; END IF;
+  IF p_leases IS NULL OR jsonb_typeof(p_leases) <> 'array'
+     OR jsonb_array_length(p_leases) NOT BETWEEN 1 AND 100 THEN
+    RAISE EXCEPTION 'leases must contain between 1 and 100 entries';
   END IF;
-  IF v_runtime.attempt_timeout_at IS NOT NULL
-     AND v_runtime.attempt_timeout_at <= clock_timestamp() THEN
-    RETURN workhorse.expire_owned_v1(p_job_id, p_worker_id, p_fence_token);
+  IF EXISTS (
+    SELECT 1 FROM jsonb_array_elements(p_leases) item
+     WHERE item->>'jobId' IS NULL OR item->>'fenceToken' IS NULL OR item->>'leaseMs' IS NULL
+       OR (item->>'leaseMs')::integer NOT BETWEEN 100 AND 86400000
+  ) THEN
+    RAISE EXCEPTION 'each lease requires jobId, fenceToken, and leaseMs between 100 and 86400000';
   END IF;
-  IF v_runtime.expires_at <= clock_timestamp() THEN RETURN 'stale'; END IF;
-  UPDATE workhorse.job_runtime r
-     SET heartbeat_at = clock_timestamp(),
-         expires_at = clock_timestamp() + make_interval(secs => p_lease_ms::double precision / 1000.0),
-         updated_at = clock_timestamp()
-   WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
-     AND r.fence_token = p_fence_token AND r.expires_at > clock_timestamp()
-     AND (r.deadline_at IS NULL OR r.deadline_at > clock_timestamp())
-     AND (r.attempt_timeout_at IS NULL OR r.attempt_timeout_at > clock_timestamp())
-     AND r.cancel_requested_at IS NULL;
-  IF NOT FOUND THEN RETURN 'stale'; END IF;
-  RETURN 'accepted';
+  RETURN QUERY
+  WITH leases AS MATERIALIZED (
+    SELECT item.ordinality AS ordinal,
+           (item.value->>'jobId')::uuid AS job_id,
+           (item.value->>'fenceToken')::bigint AS fence_token,
+           (item.value->>'leaseMs')::integer AS lease_ms
+      FROM jsonb_array_elements(p_leases) WITH ORDINALITY AS item(value, ordinality)
+  ), heartbeated AS (
+    UPDATE workhorse.job_runtime runtime
+       SET heartbeat_at = CASE
+             WHEN runtime.cancel_requested_at IS NULL
+               AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
+               AND (runtime.attempt_timeout_at IS NULL OR runtime.attempt_timeout_at > v_now)
+               AND runtime.expires_at > v_now THEN v_now
+             ELSE runtime.heartbeat_at END,
+           expires_at = CASE
+             WHEN runtime.cancel_requested_at IS NULL
+               AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
+               AND (runtime.attempt_timeout_at IS NULL OR runtime.attempt_timeout_at > v_now)
+               AND runtime.expires_at > v_now
+             THEN v_now + make_interval(secs => lease.lease_ms::double precision / 1000.0)
+             ELSE runtime.expires_at END,
+           updated_at = CASE
+             WHEN runtime.cancel_requested_at IS NULL
+               AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
+               AND (runtime.attempt_timeout_at IS NULL OR runtime.attempt_timeout_at > v_now)
+               AND runtime.expires_at > v_now THEN v_now
+             ELSE runtime.updated_at END
+      FROM leases lease
+     WHERE runtime.job_id = lease.job_id AND runtime.state = 'active'
+       AND runtime.worker_id = p_worker_id AND runtime.fence_token = lease.fence_token
+    RETURNING lease.ordinal, runtime.job_id,
+      CASE
+        WHEN runtime.cancel_requested_at IS NOT NULL THEN 'cancel_requested'
+        WHEN runtime.deadline_at IS NOT NULL AND runtime.deadline_at <= v_now THEN 'deadline_exceeded'
+        WHEN runtime.attempt_timeout_at IS NOT NULL AND runtime.attempt_timeout_at <= v_now THEN 'timeout_exceeded'
+        WHEN runtime.expires_at <= v_now THEN 'stale'
+        ELSE 'accepted'
+      END AS status
+  )
+  SELECT lease.ordinal, lease.job_id, COALESCE(heartbeated.status, 'stale')
+    FROM leases lease
+    LEFT JOIN heartbeated USING (ordinal, job_id)
+   ORDER BY lease.ordinal;
 END;
 $$;
 

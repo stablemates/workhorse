@@ -104,6 +104,15 @@ class _PendingBatchMember:
     result: Future[Json]
 
 
+@dataclass(eq=False, slots=True)
+class _HeartbeatMember:
+    job: ClaimedJob
+    deliver_status: Callable[[object], bool]
+    cancellation: CancellationToken
+    errors: list[BaseException]
+    parent_context: object
+
+
 _REDACTED_ERROR_NAME = "RedactedJobError"
 _REDACTED_ERROR_MESSAGE = "Job handler failed; details redacted"
 AttemptOutcome = Literal[
@@ -813,6 +822,132 @@ class Worker:
         self._remotely_paused = False
         self._stopping = False
         self._stop_version = 0
+        self._heartbeat_lock = Lock()
+        self._heartbeat_members: dict[str, _HeartbeatMember] = {}
+        self._heartbeat_thread: Thread | None = None
+        self._heartbeat_wake = Event()
+
+    def _register_heartbeat(
+        self,
+        job: ClaimedJob,
+        deliver_status: Callable[[object], bool],
+        cancellation: CancellationToken,
+        errors: list[BaseException],
+        parent_context: object,
+    ) -> Callable[[], None]:
+        member = _HeartbeatMember(job, deliver_status, cancellation, errors, parent_context)
+        with self._heartbeat_lock:
+            self._heartbeat_members[job.id] = member
+            if self._heartbeat_thread is None or not self._heartbeat_thread.is_alive():
+                self._heartbeat_wake.clear()
+                self._heartbeat_thread = Thread(
+                    target=self._run_heartbeats,
+                    name=f"workhorse-heartbeats-{self.worker_id}",
+                    daemon=True,
+                )
+                self._heartbeat_thread.start()
+
+        def unregister() -> None:
+            with self._heartbeat_lock:
+                if self._heartbeat_members.get(job.id) is member:
+                    del self._heartbeat_members[job.id]
+                if not self._heartbeat_members:
+                    self._heartbeat_wake.set()
+
+        return unregister
+
+    def _run_heartbeats(self) -> None:
+        while True:
+            if self._heartbeat_wake.wait(self.heartbeat_ms / 1000):
+                self._heartbeat_wake.clear()
+            with self._heartbeat_lock:
+                members = list(self._heartbeat_members.values())
+                if not members:
+                    self._heartbeat_thread = None
+                    return
+            try:
+                leases = [
+                    {
+                        "jobId": job.id,
+                        "fenceToken": str(job.fence_token),
+                        "leaseMs": self.lease_ms,
+                    }
+                    for job in (member.job for member in members)
+                ]
+                rows = self._executor.rows(
+                    STATEMENTS.heartbeat_many,
+                    (self.worker_id, json.dumps(leases, separators=(",", ":"))),
+                )
+                statuses = {str(row["job_id"]): row["status"] for row in rows}
+                for member in members:
+                    job = member.job
+                    with self._heartbeat_lock:
+                        if self._heartbeat_members.get(job.id) is not member:
+                            continue
+                    status = statuses.get(job.id, "stale")
+                    if status == "accepted":
+                        emit_log(
+                            "DEBUG",
+                            "workhorse.job.heartbeat_accepted",
+                            "Job heartbeat accepted",
+                            {**job_span_attributes(job), "workhorse.worker.id": self.worker_id},
+                        )
+                    else:
+                        record_heartbeat_failure(str(status))
+                        emit_log(
+                            "INFO",
+                            "workhorse.job.heartbeat_rejected",
+                            "Job heartbeat rejected",
+                            {
+                                **job_span_attributes(job),
+                                "workhorse.heartbeat.status": str(status),
+                                "workhorse.worker.id": self.worker_id,
+                            },
+                        )
+                    if status in {"deadline_exceeded", "timeout_exceeded"}:
+                        status = self._expire_owned_job(job, member.parent_context)
+                        if status == "not_due":
+                            continue
+                    member.deliver_status(status)
+            except BaseException as error:
+                for member in members:
+                    job = member.job
+                    with self._heartbeat_lock:
+                        if self._heartbeat_members.get(job.id) is not member:
+                            continue
+                    member.errors.append(error)
+                    member.cancellation._cancel(error)
+
+    def _expire_owned_job(self, job: ClaimedJob, parent_context: object) -> object:
+        expiration = _require_lifecycle_row(
+            self._executor.rows(
+                STATEMENTS.expire_owned,
+                (job.id, self.worker_id, job.fence_token),
+            )
+        )
+        status = expiration["status"]
+        if status == "not_due":
+            return status
+        retry_state = expiration["retry_state"]
+        if retry_state is not None:
+            with start_span(
+                "workhorse.retry",
+                job_span_attributes(job),
+                parent_context=parent_context,
+            ) as retry_span:
+                retry_span.set_attribute("workhorse.retry.outcome", str(retry_state))
+                record_retry(job)
+        emit_log(
+            "INFO",
+            "workhorse.job.ownership_expired",
+            "Owned job lease expired",
+            {
+                **job_span_attributes(job),
+                "workhorse.expiration.status": str(status),
+                "workhorse.worker.id": self.worker_id,
+            },
+        )
+        return status
 
     def handle(self, type: str, handler: Handler) -> Worker:
         self._handlers[type] = handler
@@ -1593,102 +1728,34 @@ class Worker:
                 cancellation._cancel(StaleLeaseError(job.id))
             return True
 
-        def heartbeat() -> None:
-            next_heartbeat_at = monotonic() + self.heartbeat_ms / 1000
+        def watch_expiration() -> None:
             expiration_at = _earliest_expiration(job)
             expiration_retry_at: float | None = None
             while True:
-                now = monotonic()
-                heartbeat_delay = max(0.0, next_heartbeat_at - now)
                 expiration_delay = _expiration_delay(expiration_at, expiration_retry_at)
-                wait_seconds = (
-                    heartbeat_delay
-                    if expiration_delay is None
-                    else min(heartbeat_delay, expiration_delay)
-                )
+                if expiration_delay is None:
+                    heartbeat_stop.wait()
+                    return
+                wait_seconds = max(0.0, expiration_delay)
                 if heartbeat_stop.wait(wait_seconds):
                     return
                 try:
-                    expiration_is_due = expiration_delay is not None and expiration_delay <= 0
-                    if expiration_is_due:
-                        expiration = _require_lifecycle_row(
-                            self._executor.rows(
-                                STATEMENTS.expire_owned,
-                                (job.id, self.worker_id, job.fence_token),
-                            )
-                        )
-                        status = expiration["status"]
-                        if status == "not_due":
-                            expiration_retry_at = monotonic() + 0.005
-                            continue
-                        retry_state = expiration["retry_state"]
-                        if retry_state is not None:
-                            with start_span(
-                                "workhorse.retry",
-                                job_span_attributes(job),
-                                parent_context=handler_parent_context,
-                            ) as retry_span:
-                                retry_span.set_attribute(
-                                    "workhorse.retry.outcome", str(retry_state)
-                                )
-                                record_retry(job)
-                        emit_log(
-                            "INFO",
-                            "workhorse.job.ownership_expired",
-                            "Owned job lease expired",
-                            {
-                                **job_span_attributes(job),
-                                "workhorse.expiration.status": str(status),
-                                "workhorse.worker.id": self.worker_id,
-                            },
-                        )
-                        deliver_status(status)
-                        return
-                    with start_span(
-                        "workhorse.heartbeat",
-                        job_span_attributes(job),
-                        parent_context=handler_parent_context,
-                    ) as heartbeat_span:
-                        status = _require_lifecycle_row(
-                            self._executor.rows(
-                                STATEMENTS.heartbeat,
-                                (job.id, self.worker_id, job.fence_token, self.lease_ms),
-                            )
-                        )["status"]
-                        status_text = str(status)
-                        heartbeat_span.set_attribute("workhorse.heartbeat.status", status_text)
-                        if status_text == "accepted":
-                            emit_log(
-                                "DEBUG",
-                                "workhorse.job.heartbeat_accepted",
-                                "Job heartbeat accepted",
-                                {
-                                    **job_span_attributes(job),
-                                    "workhorse.worker.id": self.worker_id,
-                                },
-                            )
-                        else:
-                            record_heartbeat_failure(status_text)
-                            emit_log(
-                                "INFO",
-                                "workhorse.job.heartbeat_rejected",
-                                "Job heartbeat rejected",
-                                {
-                                    **job_span_attributes(job),
-                                    "workhorse.heartbeat.status": status_text,
-                                    "workhorse.worker.id": self.worker_id,
-                                },
-                            )
-                    if deliver_status(status):
-                        return
-                    next_heartbeat_at = monotonic() + self.heartbeat_ms / 1000
+                    status = self._expire_owned_job(job, handler_parent_context)
+                    if status == "not_due":
+                        expiration_retry_at = monotonic() + 0.005
+                        continue
+                    deliver_status(status)
+                    return
                 except BaseException as error:
                     heartbeat_error.append(error)
                     cancellation._cancel(error)
                     return
 
-        heartbeat_thread = Thread(target=heartbeat, name=f"workhorse-heartbeat-{job.id}")
-        heartbeat_thread.start()
+        unregister_heartbeat = self._register_heartbeat(
+            job, deliver_status, cancellation, heartbeat_error, handler_parent_context
+        )
+        expiration_thread = Thread(target=watch_expiration, name=f"workhorse-expiration-{job.id}")
+        expiration_thread.start()
         durability = _HandlerDurability(
             self._executor,
             job,
@@ -1698,8 +1765,9 @@ class Worker:
         )
 
         def finish_ownership_lifecycle(cause: Exception | None = None) -> bool:
+            unregister_heartbeat()
             heartbeat_stop.set()
-            heartbeat_thread.join()
+            expiration_thread.join()
             if self._finish_lifecycle_outcome(job, arbiter.outcome):
                 return True
             if heartbeat_error:

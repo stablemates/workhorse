@@ -66,6 +66,7 @@ const (
 	promoteStatementName                 = "promote_v1"
 	claimStatementName                   = "claim_v1"
 	heartbeatStatementName               = "heartbeat_v1"
+	heartbeatManyStatementName           = "heartbeat_many_v1"
 	expireOwnedStatementName             = "expire_owned_telemetry_v1"
 	recoverExpiredStatementName          = "recover_expired_telemetry_v1"
 	completeStatementName                = "complete_v1"
@@ -529,6 +530,7 @@ var protocolStatementRegistry = map[string]string{
 	recordBatchDispatchStatementName:     `SELECT workhorse.record_batch_dispatch_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
 	recordBatchFailureStatementName:      `SELECT workhorse.record_batch_failure_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
 	heartbeatStatementName:               `SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status`,
+	heartbeatManyStatementName:           `SELECT job_id::text AS job_id, status FROM workhorse.heartbeat_many_v1($1::text, $2::jsonb) ORDER BY ordinal`,
 	expireOwnedStatementName:             `SELECT * FROM workhorse.expire_owned_telemetry_v1($1::uuid, $2::text, $3::bigint)`,
 	recoverExpiredStatementName:          `SELECT * FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)`,
 	completeStatementName:                `SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted`,

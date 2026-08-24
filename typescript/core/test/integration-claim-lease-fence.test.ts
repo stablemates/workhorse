@@ -16,6 +16,43 @@ const { deferred, pool, queue, waitForDatabaseCondition, admin } = createIntegra
 );
 
 describe("claim lease fence", () => {
+  it("heartbeats every owned lease in one HOT batch update", async () => {
+    const workerId = `heartbeat-batch-${randomUUID()}`;
+    const ids = await queue.enqueueMany(
+      ["first", "second"].map((name) => ({ type: `heartbeat-${name}`, payload: null })),
+    );
+    const jobs = await Promise.all(ids.map(() => queue.claim(workerId, { leaseMs: 5_000 })));
+    expect(jobs.every((job) => job !== null)).toBe(true);
+
+    await pool.query("SELECT pg_stat_force_next_flush()");
+    const before = await pool.query<{ hot_updates: string }>(
+      `SELECT n_tup_hot_upd::text AS hot_updates
+         FROM pg_stat_user_tables
+        WHERE schemaname = 'workhorse' AND relname = 'job_runtime'`,
+    );
+    const hotUpdatesBefore = Number(before.rows[0]?.hot_updates ?? 0);
+    await expect(
+      queue.heartbeatMany(jobs as NonNullable<(typeof jobs)[number]>[], workerId, 5_000),
+    ).resolves.toEqual(new Map(ids.map((id) => [id, "accepted"])));
+    await pool.query("SELECT pg_stat_force_next_flush()");
+    await waitForDatabaseCondition(async () => {
+      const result = await pool.query<{ hot_updates: string }>(
+        `SELECT n_tup_hot_upd::text AS hot_updates
+           FROM pg_stat_user_tables
+          WHERE schemaname = 'workhorse' AND relname = 'job_runtime'`,
+      );
+      return Number(result.rows[0]?.hot_updates ?? 0) - hotUpdatesBefore >= jobs.length;
+    });
+
+    const stale = { ...jobs[1]!, fenceToken: jobs[1]!.fenceToken + 1n };
+    await expect(queue.heartbeatMany([jobs[0]!, stale], workerId, 5_000)).resolves.toEqual(
+      new Map([
+        [jobs[0]!.id, "accepted"],
+        [stale.id, "stale"],
+      ]),
+    );
+  });
+
   it("preserves strict priority through promotion and retry under competing claims", async () => {
     const queueName = `priority-${randomUUID()}`;
     const low = await queue.enqueue("low", null, { queue: queueName, priority: 10 });
@@ -1185,7 +1222,7 @@ describe("claim lease fence", () => {
     }
   });
 
-  it("serializes heartbeat lease renewal with policy admission", async () => {
+  it("does not serialize heartbeat lease renewal with policy admission", async () => {
     const queueName = `concurrency-heartbeat-${randomUUID()}`;
     await queue.syncConcurrencyPolicies("heartbeat-test", [{ queue: queueName, maxActive: 1 }]);
     await queue.enqueue("limited", { ordinal: 1 }, { queue: queueName });
@@ -1203,14 +1240,9 @@ describe("claim lease fence", () => {
       ).resolves.toMatchObject({ rows: [{ status: "accepted" }] });
       await sleep(120);
 
-      let settled = false;
-      const competing = queue
-        .claim("heartbeat-competitor", { queue: queueName })
-        .finally(() => (settled = true));
-      await sleep(20);
-      expect(settled).toBe(false);
+      const competing = queue.claim("heartbeat-competitor", { queue: queueName });
+      await expect(competing).resolves.toMatchObject({ type: "limited" });
       await heartbeat.query("COMMIT");
-      await expect(competing).resolves.toBeNull();
     } finally {
       await heartbeat.query("ROLLBACK").catch(() => undefined);
       heartbeat.release();

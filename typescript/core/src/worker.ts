@@ -205,6 +205,11 @@ export interface WorkerQueueApi {
   recordBatchDispatch?(batch: BatchExecutionRecord): Promise<void>;
   recordBatchFailure?(batch: BatchExecutionRecord): Promise<void>;
   heartbeatStatus(job: ClaimedJob, workerId: string, leaseMs?: number): Promise<HeartbeatStatus>;
+  heartbeatMany?(
+    jobs: readonly ClaimedJob[],
+    workerId: string,
+    leaseMs?: number,
+  ): Promise<Map<string, HeartbeatStatus>>;
   expireOwned(job: ClaimedJob, workerId: string): Promise<ExpireOwnedStatus>;
   acknowledgeCancel(job: ClaimedJob, workerId: string): Promise<boolean>;
   listCheckpoints(jobId: string): Promise<JobCheckpoint[]>;
@@ -478,6 +483,71 @@ export class Worker {
   private executionTail: Promise<void> = Promise.resolve();
   /** Serializes only durable batch announcements; batch callbacks still execute concurrently. */
   private batchDispatchRecording: Promise<void> = Promise.resolve();
+  private readonly heartbeatLeases = new Map<
+    string,
+    {
+      job: ClaimedJob;
+      status: (status: HeartbeatStatus) => void;
+      error: (error: unknown) => void;
+    }
+  >();
+  private heartbeatTimer: NodeJS.Timeout | undefined;
+
+  private scheduleHeartbeatBatch(): void {
+    if (this.heartbeatTimer !== undefined || this.heartbeatLeases.size === 0) return;
+    this.heartbeatTimer = setTimeout(() => {
+      this.heartbeatTimer = undefined;
+      const leases = [...this.heartbeatLeases.values()];
+      const heartbeat = this.queue.heartbeatMany
+        ? this.queue.heartbeatMany(
+            leases.map((lease) => lease.job),
+            this.workerId,
+            this.leaseMs,
+          )
+        : Promise.all(
+            leases.map(
+              async (lease) =>
+                [
+                  lease.job.id,
+                  await this.queue.heartbeatStatus(lease.job, this.workerId, this.leaseMs),
+                ] as const,
+            ),
+          ).then((statuses) => new Map(statuses));
+      void heartbeat
+        .then(
+          (statuses) => {
+            for (const lease of leases) {
+              if (this.heartbeatLeases.get(lease.job.id) !== lease) continue;
+              lease.status(statuses.get(lease.job.id) ?? "stale");
+            }
+          },
+          (error: unknown) => {
+            for (const lease of leases) {
+              if (this.heartbeatLeases.get(lease.job.id) === lease) lease.error(error);
+            }
+          },
+        )
+        .finally(() => this.scheduleHeartbeatBatch());
+    }, this.heartbeatMs);
+    this.heartbeatTimer.unref();
+  }
+
+  private addHeartbeatLease(
+    job: ClaimedJob,
+    status: (status: HeartbeatStatus) => void,
+    error: (error: unknown) => void,
+  ): () => void {
+    const lease = { job, status, error };
+    this.heartbeatLeases.set(job.id, lease);
+    this.scheduleHeartbeatBatch();
+    return () => {
+      if (this.heartbeatLeases.get(job.id) === lease) this.heartbeatLeases.delete(job.id);
+      if (this.heartbeatLeases.size === 0 && this.heartbeatTimer !== undefined) {
+        clearTimeout(this.heartbeatTimer);
+        this.heartbeatTimer = undefined;
+      }
+    };
+  }
   private wakeController = new AbortController();
   private wakeVersion = 0;
   private dispatchWakeController = new AbortController();
@@ -962,18 +1032,13 @@ export class Worker {
       if (arbiter.submit(outcome)) controller.abort(reason);
       throw reason;
     };
-    // Each job owns an independent self-scheduling heartbeat. The next delay starts only after the
-    // previous query settles, so a slow database call cannot overlap another heartbeat for this job.
-    let heartbeatTimer: NodeJS.Timeout | undefined;
     let expirationTimer: NodeJS.Timeout | undefined;
     let expirationPromise: Promise<ExpireOwnedStatus> | undefined;
     let heartbeatStopped = false;
+    let removeHeartbeatLease: (() => void) | undefined;
     const stopHeartbeat = (): void => {
       heartbeatStopped = true;
-      if (heartbeatTimer) {
-        clearTimeout(heartbeatTimer);
-        heartbeatTimer = undefined;
-      }
+      removeHeartbeatLease?.();
       if (expirationTimer) {
         clearTimeout(expirationTimer);
         expirationTimer = undefined;
@@ -1004,8 +1069,7 @@ export class Worker {
       // original rejection, while a handler that ignores abort cannot cause an unhandled rejection.
       void expireOwnership().catch((error: unknown) => controller.abort(error));
     };
-    const refreshOwnership = async () => {
-      const status = await this.queue.heartbeatStatus(job, this.workerId, this.leaseMs);
+    const refreshOwnership = (status: HeartbeatStatus): void => {
       if (status === "cancel_requested") {
         markCancellationRequested();
       } else if (status === "deadline_exceeded") {
@@ -1022,7 +1086,6 @@ export class Worker {
         stopHeartbeat();
         if (!controller.signal.aborted) controller.abort(new Error("Job lease was lost"));
       }
-      return status;
     };
     const expirationAt = [job.deadlineAt, job.attemptTimeoutAt].reduce<Date | null>(
       (earliest, candidate) =>
@@ -1052,29 +1115,11 @@ export class Worker {
       );
       expirationTimer.unref();
     }
-    const scheduleHeartbeat = (): void => {
+    removeHeartbeatLease = this.addHeartbeatLease(job, refreshOwnership, (error) => {
       if (heartbeatStopped) return;
-      heartbeatTimer = setTimeout(() => {
-        heartbeatTimer = undefined;
-        void Promise.resolve()
-          .then(() => refreshOwnership())
-          .then(
-            () => {
-              if (heartbeatStopped) return;
-            },
-            (error: unknown) => {
-              if (heartbeatStopped) return;
-              stopHeartbeat();
-              controller.abort(error);
-            },
-          )
-          .finally(() => {
-            if (!heartbeatStopped && !controller.signal.aborted) scheduleHeartbeat();
-          });
-      }, this.heartbeatMs);
-      heartbeatTimer.unref();
-    };
-    scheduleHeartbeat();
+      stopHeartbeat();
+      controller.abort(error);
+    });
 
     try {
       await this.inject("afterClaim", job);

@@ -385,7 +385,7 @@ def execute_heartbeat_fixture(
         statement: DriverStatement, parameters: Any = ()
     ) -> list[Mapping[str, object]]:
         nonlocal heartbeat_calls, active_heartbeats, maximum_overlap
-        if statement is not STATEMENTS.heartbeat:
+        if statement is not STATEMENTS.heartbeat_many:
             return original_rows(statement, parameters)
         with counter_lock:
             heartbeat_calls += 1

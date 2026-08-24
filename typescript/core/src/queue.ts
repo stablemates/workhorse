@@ -492,6 +492,15 @@ export class Queue {
     return this.modules.claimLeaseFence.heartbeatStatus(job, workerId, leaseMs);
   }
 
+  /** @internal Renew every active lease owned by one worker in a single statement. */
+  async heartbeatMany(
+    jobs: readonly ClaimedJob[],
+    workerId: string,
+    leaseMs = 30_000,
+  ): Promise<Map<string, HeartbeatStatus>> {
+    return this.modules.claimLeaseFence.heartbeatMany(jobs, workerId, leaseMs);
+  }
+
   async expireOwned(job: ClaimedJob, workerId: string): Promise<ExpireOwnedStatus> {
     return this.modules.claimLeaseFence.expireOwned(job, workerId);
   }

@@ -198,19 +198,21 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
   },
   {
     name: "heartbeat-fencing",
-    purpose: "Compare accepted heartbeat cost with rejected stale-fence cost.",
+    purpose: "Compare individual and worker-batched heartbeat cost at concurrency 100.",
     invariants: [
-      "current heartbeats are accepted",
-      "heartbeats with a newer, unowned fence are rejected",
-      "valid owners can still complete every sampled job",
+      "all 100 current leases are accepted by individual and batched heartbeats",
+      "the batched heartbeat uses one statement and rejects an unowned fence",
+      "accepted lease renewals produce HOT runtime updates",
     ],
     metrics: [
-      "jobs",
-      "accepted",
-      "staleRejected",
-      "acceptedMeanMs",
-      "staleMeanMs",
-      "staleOverheadMs",
+      "concurrency",
+      "beforeStatements",
+      "afterStatements",
+      "beforeDurationMs",
+      "afterDurationMs",
+      "beforeStatementsPerSecond",
+      "afterStatementsPerSecond",
+      "hotUpdates",
     ],
   },
   {
@@ -1120,51 +1122,70 @@ async function heartbeatFencing(
   await reset(context.pool);
   const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
-  const acceptedLatencies: number[] = [];
-  const staleLatencies: number[] = [];
-  let accepted = 0;
-  let staleRejected = 0;
-
-  for (let index = 0; index < context.options.heartbeatCount; index += 1) {
+  const concurrency = 100;
+  const workerId = "heartbeat-benchmark-worker";
+  const leaseMs = 30_000;
+  const heartbeatIntervalMs = leaseMs / 3;
+  const jobs: ClaimedJob[] = [];
+  for (let index = 0; index < concurrency; index += 1) {
     await queue.enqueue("heartbeat", { index });
-    const job = await queue.claim(`heartbeat-worker-${index}`, {
-      leaseMs: context.options.leaseMs * 4,
+    const job = await queue.claim(workerId, {
+      leaseMs,
     });
-    recordInvariant(assertions, `heartbeat job ${index} claimed`, job !== null, true);
-    const [currentAccepted, acceptedMs] = await measured(context.now, () =>
-      queue.heartbeat(job!, `heartbeat-worker-${index}`, context.options.leaseMs * 4),
-    );
-    const staleJob = { ...job!, fenceToken: job!.fenceToken + 1n };
-    const [staleAccepted, staleMs] = await measured(context.now, () =>
-      queue.heartbeat(staleJob, `heartbeat-worker-${index}`, context.options.leaseMs * 4),
-    );
-    acceptedLatencies.push(acceptedMs);
-    staleLatencies.push(staleMs);
-    if (currentAccepted) accepted += 1;
-    if (!staleAccepted) staleRejected += 1;
-    recordInvariant(assertions, `current heartbeat ${index} accepted`, currentAccepted, true);
-    recordInvariant(assertions, `stale heartbeat ${index} rejected`, staleAccepted, false);
-    recordInvariant(
-      assertions,
-      `heartbeat job ${index} completed`,
-      await queue.complete(job!, `heartbeat-worker-${index}`, { ok: true }),
-      true,
-    );
+    if (job !== null) jobs.push(job);
   }
-
-  const acceptedMean = mean(acceptedLatencies);
-  const staleMean = mean(staleLatencies);
+  recordInvariant(assertions, "claimed 100 concurrent leases", jobs.length, concurrency);
+  await context.pool.query("SELECT pg_stat_force_next_flush()");
+  const beforeStats = await context.pool.query<{ hot_updates: string }>(
+    `SELECT n_tup_hot_upd::text AS hot_updates FROM pg_stat_user_tables
+      WHERE schemaname = 'workhorse' AND relname = 'job_runtime'`,
+  );
+  const hotBefore = Number(beforeStats.rows[0]?.hot_updates ?? 0);
+  const [individualStatuses, beforeDurationMs] = await measured(context.now, () =>
+    Promise.all(jobs.map((job) => queue.heartbeatStatus(job, workerId, leaseMs))),
+  );
+  const [batchStatuses, afterDurationMs] = await measured(context.now, () =>
+    queue.heartbeatMany(jobs, workerId, leaseMs),
+  );
+  for (let sample = 1; sample < 5; sample += 1) {
+    await queue.heartbeatMany(jobs, workerId, leaseMs);
+  }
+  const stale = { ...jobs[0]!, fenceToken: jobs[0]!.fenceToken + 1n };
+  const staleStatuses = await queue.heartbeatMany([stale], workerId, leaseMs);
+  await delay(1_100);
+  await context.pool.query("SELECT pg_stat_force_next_flush()");
+  const afterStats = await context.pool.query<{ hot_updates: string }>(
+    `SELECT n_tup_hot_upd::text AS hot_updates FROM pg_stat_user_tables
+      WHERE schemaname = 'workhorse' AND relname = 'job_runtime'`,
+  );
+  const hotUpdates = Number(afterStats.rows[0]?.hot_updates ?? 0) - hotBefore;
+  recordInvariant(
+    assertions,
+    "individual heartbeats accepted",
+    individualStatuses.every((status) => status === "accepted"),
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "batch accepted every current lease",
+    [...batchStatuses.values()].filter((status) => status === "accepted").length,
+    concurrency,
+  );
+  recordInvariant(assertions, "stale fence rejected", staleStatuses.get(stale.id), "stale");
+  recordInvariant(assertions, "heartbeat updates were HOT", hotUpdates > 0, true);
+  for (const job of jobs) await queue.complete(job, workerId, { ok: true });
   return {
     name: "heartbeat-fencing",
     durationMs: 0,
     metrics: {
-      jobs: context.options.heartbeatCount,
-      accepted,
-      staleRejected,
-      acceptedMeanMs: acceptedMean,
-      staleMeanMs: staleMean,
-      staleOverheadMs:
-        acceptedMean === null || staleMean === null ? null : staleMean - acceptedMean,
+      concurrency,
+      beforeStatements: concurrency,
+      afterStatements: 1,
+      beforeDurationMs,
+      afterDurationMs,
+      beforeStatementsPerSecond: concurrency / (heartbeatIntervalMs / 1_000),
+      afterStatementsPerSecond: 1 / (heartbeatIntervalMs / 1_000),
+      hotUpdates,
     },
     assertions,
   };

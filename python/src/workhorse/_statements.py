@@ -41,6 +41,7 @@ class StatementRegistry:
     record_batch_dispatch: DriverStatement
     record_batch_failure: DriverStatement
     heartbeat: DriverStatement
+    heartbeat_many: DriverStatement
     expire_owned: DriverStatement
     acknowledge_cancel: DriverStatement
     complete: DriverStatement
@@ -224,6 +225,16 @@ STATEMENTS = StatementRegistry(
         ),
         asyncpg=(
             "SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status"
+        ),
+    ),
+    heartbeat_many=DriverStatement(
+        psycopg=(
+            "SELECT job_id::text, status FROM workhorse.heartbeat_many_v1(%s::text, %s::jsonb) "
+            "ORDER BY ordinal"
+        ),
+        asyncpg=(
+            "SELECT job_id::text, status FROM workhorse.heartbeat_many_v1($1::text, $2::jsonb) "
+            "ORDER BY ordinal"
         ),
     ),
     expire_owned=DriverStatement(

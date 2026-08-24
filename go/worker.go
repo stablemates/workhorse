@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -171,6 +172,17 @@ type Worker struct {
 	draining             atomic.Bool
 	remotelyPaused       atomic.Bool
 	registered           atomic.Bool
+	heartbeatMu          sync.Mutex
+	heartbeatMembers     map[*heartbeatMember]struct{}
+	heartbeatWake        chan struct{}
+	heartbeatRunning     bool
+}
+
+type heartbeatMember struct {
+	ctx           context.Context
+	job           ClaimedJob
+	cancelHandler context.CancelCauseFunc
+	result        chan ownershipResult
 }
 
 type fencedLease struct {
@@ -319,6 +331,8 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		compatibility:        NewCachedCompatibilityCheck(NewPGXExecutor(pool)),
 		onRegistrationError:  options.OnRegistrationError,
 		contracts:            newContractCache(),
+		heartbeatMembers:     make(map[*heartbeatMember]struct{}),
+		heartbeatWake:        make(chan struct{}, 1),
 	}, nil
 }
 
@@ -895,11 +909,11 @@ func (worker *Worker) execute(
 	}
 	if ownership.status == workerOwnershipDeadline {
 		outcome = handlerOutcomeDeadlineExceeded
-		return nil
+		return worker.settleExpiration(ctx, executor, job)
 	}
 	if ownership.status == workerOwnershipTimeout {
 		outcome = handlerOutcomeTimeout
-		return nil
+		return worker.settleExpiration(ctx, executor, job)
 	}
 	if ownership.status == workerOwnershipStale {
 		outcome = handlerOutcomeLeaseLost
@@ -982,9 +996,12 @@ func (worker *Worker) superviseOwnership(
 ) (func(), <-chan ownershipResult) {
 	stop := make(chan struct{})
 	done := make(chan ownershipResult, 1)
+	member := &heartbeatMember{
+		ctx: ctx, job: job, cancelHandler: cancelHandler, result: make(chan ownershipResult, 1),
+	}
+	worker.registerHeartbeat(member)
 	go func() {
-		heartbeatTimer := time.NewTimer(worker.heartbeatInterval)
-		defer heartbeatTimer.Stop()
+		defer worker.unregisterHeartbeat(member)
 		expirationTimer, expirationCause := ownershipExpirationTimer(job)
 		if expirationTimer != nil {
 			defer expirationTimer.Stop()
@@ -1001,24 +1018,13 @@ func (worker *Worker) superviseOwnership(
 			case <-ctx.Done():
 				done <- ownershipResult{err: ctx.Err()}
 				return
+			case result := <-member.result:
+				done <- result
+				return
 			case <-expiration:
 				cancelHandler(expirationCause)
 				status, err := worker.expireOwnership(ctx, job)
 				done <- ownershipResult{status: status, err: err}
-				return
-			case <-heartbeatTimer.C:
-				status, err := worker.refreshOwnership(ctx, job)
-				if err != nil {
-					cancelHandler(err)
-					done <- ownershipResult{err: err}
-					return
-				}
-				if status == workerOwnershipAccepted {
-					heartbeatTimer.Reset(worker.heartbeatInterval)
-					continue
-				}
-				cancelHandler(ownershipCause(job, status))
-				done <- ownershipResult{status: status}
 				return
 			}
 		}
@@ -1030,6 +1036,139 @@ func (worker *Worker) superviseOwnership(
 			close(stop)
 		}
 	}, done
+}
+
+func (worker *Worker) registerHeartbeat(member *heartbeatMember) {
+	worker.heartbeatMu.Lock()
+	defer worker.heartbeatMu.Unlock()
+	worker.heartbeatMembers[member] = struct{}{}
+	if worker.heartbeatRunning {
+		return
+	}
+	worker.heartbeatRunning = true
+	go worker.runHeartbeats()
+}
+
+func (worker *Worker) unregisterHeartbeat(member *heartbeatMember) {
+	worker.heartbeatMu.Lock()
+	delete(worker.heartbeatMembers, member)
+	empty := len(worker.heartbeatMembers) == 0
+	worker.heartbeatMu.Unlock()
+	if empty {
+		select {
+		case worker.heartbeatWake <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (worker *Worker) heartbeatRegistered(member *heartbeatMember) bool {
+	worker.heartbeatMu.Lock()
+	defer worker.heartbeatMu.Unlock()
+	_, registered := worker.heartbeatMembers[member]
+	return registered
+}
+
+func (worker *Worker) runHeartbeats() {
+	timer := time.NewTimer(worker.heartbeatInterval)
+	defer timer.Stop()
+	for {
+		select {
+		case <-worker.heartbeatWake:
+		case <-timer.C:
+		}
+		worker.heartbeatMu.Lock()
+		members := make([]*heartbeatMember, 0, len(worker.heartbeatMembers))
+		for member := range worker.heartbeatMembers {
+			members = append(members, member)
+		}
+		if len(members) == 0 {
+			worker.heartbeatRunning = false
+			worker.heartbeatMu.Unlock()
+			return
+		}
+		worker.heartbeatMu.Unlock()
+		worker.refreshOwnershipMany(members)
+		timer.Reset(worker.heartbeatInterval)
+	}
+}
+
+func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
+	type lease struct {
+		JobID      string `json:"jobId"`
+		FenceToken string `json:"fenceToken"`
+		LeaseMS    int    `json:"leaseMs"`
+	}
+	requests := make([]lease, 0, len(members))
+	for _, member := range members {
+		requests = append(requests, lease{
+			JobID: member.job.ID, FenceToken: fmt.Sprint(member.job.FenceToken),
+			LeaseMS: int(worker.leaseDuration / time.Millisecond),
+		})
+	}
+	payload, err := json.Marshal(requests)
+	if err != nil {
+		worker.deliverHeartbeatError(members, err)
+		return
+	}
+	rows, err := NewPGXExecutor(worker.pool).Query(
+		context.WithoutCancel(members[0].ctx),
+		protocolStatementRegistry[heartbeatManyStatementName],
+		worker.workerID,
+		string(payload),
+	)
+	if err != nil {
+		worker.deliverHeartbeatError(members, err)
+		return
+	}
+	statuses := make(map[string]ownershipStatus, len(rows))
+	for _, row := range rows {
+		status, parseErr := parseOwnershipStatus([]Row{row})
+		if parseErr != nil {
+			worker.deliverHeartbeatError(members, parseErr)
+			return
+		}
+		statuses[stringValue(row[rowJobIDField])] = status
+	}
+	for _, member := range members {
+		if !worker.heartbeatRegistered(member) {
+			continue
+		}
+		status := statuses[member.job.ID]
+		if status == emptyString {
+			status = workerOwnershipStale
+		}
+		if status == workerOwnershipAccepted {
+			continue
+		}
+		member.cancelHandler(ownershipCause(member.job, status))
+		worker.recordRejectedHeartbeat(member.ctx, member.job, status)
+		member.result <- ownershipResult{status: status}
+	}
+}
+
+func (worker *Worker) deliverHeartbeatError(members []*heartbeatMember, err error) {
+	for _, member := range members {
+		if worker.heartbeatRegistered(member) {
+			member.cancelHandler(err)
+			member.result <- ownershipResult{err: err}
+		}
+	}
+}
+
+func (worker *Worker) recordRejectedHeartbeat(
+	ctx context.Context, job ClaimedJob, status ownershipStatus,
+) {
+	if worker.metrics.enabled {
+		worker.metrics.heartbeatFailures.Add(
+			ctx, 1,
+			metric.WithAttributes(attribute.String(heartbeatStatusAttribute, string(status))),
+		)
+	}
+	logWorkerEvent(
+		ctx, worker.logger, slog.LevelInfo, heartbeatRejectedEvent, heartbeatRejectedLogMessage,
+		append(jobLogAttributes(job, worker.workerID), slog.String(heartbeatStatusAttribute, string(status)))...,
+	)
 }
 
 func ownershipExpirationTimer(job ClaimedJob) (*time.Timer, error) {

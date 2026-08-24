@@ -290,6 +290,43 @@ export class ClaimLeaseFenceModule extends QueueModule {
     });
   }
 
+  async heartbeatMany(
+    jobs: readonly ClaimedJob[],
+    workerId: string,
+    leaseMs = 30_000,
+  ): Promise<Map<string, HeartbeatStatus>> {
+    const leases = jobs.map((job) => ({
+      jobId: job.id,
+      fenceToken: job.fenceToken.toString(),
+      leaseMs,
+    }));
+    const result = await this.context.database.query<{
+      job_id: string;
+      status: HeartbeatStatus;
+    }>(
+      "SELECT job_id::text AS job_id, status FROM workhorse.heartbeat_many_v1($1::text, $2::jsonb) ORDER BY ordinal",
+      [workerId, JSON.stringify(leases)],
+    );
+    const statuses = new Map(result.rows.map((row) => [row.job_id, row.status]));
+    for (const job of jobs) {
+      const status = statuses.get(job.id) ?? "stale";
+      if (status !== "accepted") {
+        recordHeartbeatFailure(status);
+        logInfo("workhorse.job.heartbeat_rejected", "Job heartbeat rejected", {
+          ...jobSpanAttributes(job),
+          "workhorse.heartbeat.status": status,
+          "workhorse.worker.id": workerId,
+        });
+      } else {
+        logDebug("workhorse.job.heartbeat_accepted", "Job heartbeat accepted", {
+          ...jobSpanAttributes(job),
+          "workhorse.worker.id": workerId,
+        });
+      }
+    }
+    return statuses;
+  }
+
   async expireOwned(job: ClaimedJob, workerId: string): Promise<ExpireOwnedStatus> {
     const lease = FencedLease.from(job, workerId);
     const result = await this.context.database.query<{

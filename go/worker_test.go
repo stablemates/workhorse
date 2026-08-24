@@ -520,7 +520,7 @@ func (tracer *heartbeatQueryTracer) TraceQueryStart(
 	_ *pgx.Conn,
 	data pgx.TraceQueryStartData,
 ) context.Context {
-	if !strings.Contains(data.SQL, "heartbeat_v1") {
+	if !strings.Contains(data.SQL, "heartbeat_many_v1") {
 		return ctx
 	}
 	tracer.mu.Lock()

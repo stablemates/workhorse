@@ -115,9 +115,9 @@ accidentally write as a stale owner after the job moves on.
   capacity. When the fleet must share one budget, use
   [concurrency policies](/docs/concurrency-policies); for a shared start rate, use
   [rate limits](/docs/rate-limits).
-- **`leaseMs`** is how long a claim owns a job before the database may recover it. Each
-  active job runs its own background heartbeat — every `heartbeatMs`, defaulting to a third
-  of `leaseMs` — that extends the lease while the handler runs. A shorter lease means faster
+- **`leaseMs`** is how long a claim owns a job before the database may recover it. One
+  background timer batches every active lease owned by the worker — every `heartbeatMs`,
+  defaulting to a third of `leaseMs`. A shorter lease means faster
   recovery after a crash; a longer one tolerates worse network pauses.
 - **`workerId`** identifies the lease owner. Leave it generated unless a process manager
   guarantees uniqueness: two live workers sharing one identity collide over ownership. The

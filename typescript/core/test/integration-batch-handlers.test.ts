@@ -371,12 +371,18 @@ describe("batch handlers", () => {
       { queue: queueName },
     );
     const workerId = "batch-isolation-worker";
-    const heartbeatStatus = queue.heartbeatStatus.bind(queue);
+    const heartbeatMany = queue.heartbeatMany.bind(queue);
     const heartbeat = vi
-      .spyOn(queue, "heartbeatStatus")
-      .mockImplementation((job, owner, leaseMs) =>
-        job.id === staleId ? Promise.resolve("accepted") : heartbeatStatus(job, owner, leaseMs),
-      );
+      .spyOn(queue, "heartbeatMany")
+      .mockImplementation(async (jobs, owner, leaseMs) => {
+        const renewable = jobs.filter((job) => job.id !== staleId);
+        const statuses =
+          renewable.length === 0
+            ? new Map<string, "accepted">()
+            : await heartbeatMany(renewable, owner, leaseMs);
+        statuses.set(staleId, "accepted");
+        return statuses;
+      });
     const worker = new Worker(queue, {
       workerId,
       queue: queueName,

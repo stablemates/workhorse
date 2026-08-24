@@ -406,8 +406,8 @@ async function executeHeartbeatCadenceRuntimeFixture(
   let maximumOverlap = 0;
   const delayedHeartbeatQueue = new Proxy(queue, {
     get(target, property, receiver) {
-      if (property !== "heartbeatStatus") return Reflect.get(target, property, receiver);
-      return async (...args: Parameters<Queue["heartbeatStatus"]>) => {
+      if (property !== "heartbeatMany") return Reflect.get(target, property, receiver);
+      return async (...args: Parameters<Queue["heartbeatMany"]>) => {
         heartbeatCalls += 1;
         activeHeartbeats += 1;
         maximumOverlap = Math.max(maximumOverlap, activeHeartbeats);
@@ -416,7 +416,7 @@ async function executeHeartbeatCadenceRuntimeFixture(
             firstHeartbeatStarted.resolve();
             await releaseFirstHeartbeat.promise;
           }
-          return await target.heartbeatStatus(...args);
+          return await target.heartbeatMany(...args);
         } finally {
           activeHeartbeats -= 1;
         }

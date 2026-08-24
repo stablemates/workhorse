@@ -423,12 +423,12 @@ describe("worker registry", () => {
     expect(worker.runtimeState().activeSlots).toBe(0);
   });
 
-  it("keeps per-job heartbeats running while paused and does not claim more work", async () => {
+  it("keeps batched heartbeats running while paused and does not claim more work", async () => {
     const release = deferred();
     const ids = await Promise.all(
       [1, 2, 3].map((sequence) => queue.enqueue("paused-concurrency", { sequence })),
     );
-    const heartbeat = vi.spyOn(queue, "heartbeatStatus");
+    const heartbeat = vi.spyOn(queue, "heartbeatMany");
     const worker = new Worker(queue, {
       workerId: "paused-concurrency-worker",
       concurrency: 2,
@@ -445,7 +445,9 @@ describe("worker registry", () => {
       await vi.waitFor(() => expect(worker.runtimeState().activeSlots).toBe(2));
       worker.pause();
       await vi.waitFor(() => {
-        const heartbeatingIds = new Set(heartbeat.mock.calls.map(([job]) => job.id));
+        const heartbeatingIds = new Set(
+          heartbeat.mock.calls.flatMap(([jobs]) => jobs.map((job) => job.id)),
+        );
         expect(heartbeatingIds.size).toBe(2);
         expect([...heartbeatingIds].every((id) => ids.includes(id))).toBe(true);
       });
@@ -462,24 +464,23 @@ describe("worker registry", () => {
     }
   });
 
-  it("runs independent per-job heartbeats without overlapping a slow heartbeat", async () => {
+  it("batches per-job heartbeats without overlapping a slow batch", async () => {
     const releaseHandlers = deferred();
-    const heartbeatGates = new Map<string, ReturnType<typeof deferred<"accepted">>[]>();
-    const heartbeatCalls = new Map<string, number>();
-    const inFlight = new Map<string, number>();
-    const maxInFlight = new Map<string, number>();
+    const heartbeatGates: ReturnType<typeof deferred<Map<string, "accepted">>>[] = [];
+    let heartbeatCalls = 0;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let latestIds: string[] = [];
     for (const sequence of [1, 2]) await queue.enqueue("slow-heartbeat", { sequence });
-    const heartbeat = vi.spyOn(queue, "heartbeatStatus").mockImplementation((job) => {
-      const active = (inFlight.get(job.id) ?? 0) + 1;
-      inFlight.set(job.id, active);
-      maxInFlight.set(job.id, Math.max(maxInFlight.get(job.id) ?? 0, active));
-      heartbeatCalls.set(job.id, (heartbeatCalls.get(job.id) ?? 0) + 1);
-      const gate = deferred<"accepted">();
-      const gates = heartbeatGates.get(job.id) ?? [];
-      gates.push(gate);
-      heartbeatGates.set(job.id, gates);
+    const heartbeat = vi.spyOn(queue, "heartbeatMany").mockImplementation((jobs) => {
+      heartbeatCalls += 1;
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      latestIds = jobs.map((job) => job.id);
+      const gate = deferred<Map<string, "accepted">>();
+      heartbeatGates.push(gate);
       return gate.promise.finally(() => {
-        inFlight.set(job.id, (inFlight.get(job.id) ?? 1) - 1);
+        inFlight -= 1;
       });
     });
     const worker = new Worker(queue, {
@@ -496,35 +497,25 @@ describe("worker registry", () => {
     try {
       const run = worker.runOnce();
       await vi.waitFor(() => expect(worker.runtimeState().activeSlots).toBe(2));
-      await vi.waitFor(() => expect(heartbeatGates.size).toBe(2));
-      const [firstId, secondId] = [...heartbeatGates.keys()];
-      expect(firstId).toBeDefined();
-      expect(secondId).toBeDefined();
+      await vi.waitFor(() => expect(heartbeatGates).toHaveLength(1));
+      expect(latestIds).toHaveLength(2);
 
       await sleep(40);
-      expect(heartbeatCalls.get(firstId!)).toBe(1);
-      expect(heartbeatCalls.get(secondId!)).toBe(1);
-      heartbeatGates.get(firstId!)![0]!.resolve("accepted");
-      await vi.waitFor(() => expect(heartbeatCalls.get(firstId!)).toBe(2));
-
-      expect(heartbeatCalls.get(secondId!)).toBe(1);
-      expect(inFlight.get(firstId!)).toBe(1);
-      expect(inFlight.get(secondId!)).toBe(1);
-      expect(maxInFlight.get(firstId!)).toBe(1);
-      expect(maxInFlight.get(secondId!)).toBe(1);
+      expect(heartbeatCalls).toBe(1);
+      heartbeatGates[0]!.resolve(new Map(latestIds.map((id) => [id, "accepted"])));
+      await vi.waitFor(() => expect(heartbeatCalls).toBe(2));
+      expect(maxInFlight).toBe(1);
 
       releaseHandlers.resolve();
+      heartbeatGates[1]!.resolve(new Map(latestIds.map((id) => [id, "accepted"])));
       await expect(run).resolves.toBe(true);
-      const callsAtSettlement = new Map(heartbeatCalls);
-      for (const gates of heartbeatGates.values()) {
-        for (const gate of gates) gate.resolve("accepted");
-      }
+      const callsAtSettlement = heartbeatCalls;
       await sleep(30);
-      expect(heartbeatCalls).toEqual(callsAtSettlement);
+      expect(heartbeatCalls).toBe(callsAtSettlement);
     } finally {
       releaseHandlers.resolve();
-      for (const gates of heartbeatGates.values()) {
-        for (const gate of gates) gate.resolve("accepted");
+      for (const gate of heartbeatGates) {
+        gate.resolve(new Map(latestIds.map((id) => [id, "accepted"])));
       }
       heartbeat.mockRestore();
     }
@@ -589,7 +580,7 @@ describe("worker registry", () => {
       ids.push(await queue.enqueue("signal-abort-drain", { sequence }));
     }
     const claim = vi.spyOn(queue, "claim");
-    const heartbeat = vi.spyOn(queue, "heartbeatStatus");
+    const heartbeat = vi.spyOn(queue, "heartbeatMany");
     const worker = new Worker(queue, {
       workerId: "signal-abort-drain-worker",
       concurrency: 2,
@@ -604,7 +595,7 @@ describe("worker registry", () => {
     });
 
     const heartbeatCount = (id: string) =>
-      heartbeat.mock.calls.filter(([job]) => job.id === id).length;
+      heartbeat.mock.calls.filter(([jobs]) => jobs.some((job) => job.id === id)).length;
     const running = worker.run(controller.signal);
 
     try {

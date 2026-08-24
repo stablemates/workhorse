@@ -83,6 +83,21 @@
     "expectedAttemptOutcomes": ["deadline_exceeded"]
   },
   {
+    "id": "deadline-settles-after-database-first-heartbeat",
+    "kind": "expiration",
+    "covers": ["deadline-settlement", "database-authoritative-expiration"],
+    "jobType": "protocol.deadline-heartbeat",
+    "mode": "deadline",
+    "durationMs": 300,
+    "localClockLeadMs": -150,
+    "leaseMs": 5000,
+    "heartbeatMs": 20,
+    "maxAttempts": 2,
+    "expectedAbortReasons": ["DeadlineExceededError"],
+    "expectedAfterRuns": [{ "state": "failed", "attempt": 1, "errorName": "DeadlineExceeded" }],
+    "expectedAttemptOutcomes": ["deadline_exceeded"]
+  },
+  {
     "id": "execution-timeout-settles-after-early-local-timer",
     "kind": "expiration",
     "covers": ["execution-timeout-settlement", "database-authoritative-expiration"],

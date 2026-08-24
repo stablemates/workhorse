@@ -19,7 +19,7 @@ retention participation while depending on another language's process.
 fixtures pin batch ordering and settlement as well as durable-wait suspension, slot release,
 single-logical-attempt replay, and checkpoint reuse when a handler restarts. They also pin
 cooperative cancellation, deadline and execution-timeout settlement against the database clock,
-lease-loss fencing, serialized per-job heartbeats, and graceful drain without further claims.
+lease-loss fencing, serialized worker-level heartbeat batches, and graceful drain without further claims.
 
 `v1/requests.json` maps public enqueue inputs to the exact JSON request sent to PostgreSQL. The
 TypeScript suite executes these mappings through `Queue`, so serialization changes fail alongside

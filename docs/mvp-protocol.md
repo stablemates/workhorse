@@ -38,7 +38,7 @@ A committed job has exactly one live runtime or one terminal outcome, never both
 
 - Ready claims use `job_runtime_ready_idx (queue_name, sequence, job_id) WHERE state = 'ready'`.
 - Scheduled promotion uses `job_runtime_scheduled_idx (run_at, job_id) WHERE state = 'scheduled'`.
-- Expiry recovery uses `job_runtime_expired_active_idx (expires_at, job_id) WHERE state = 'active'`.
+- Expiry recovery uses `job_runtime_expired_active_idx (job_id) WHERE state = 'active'` and reads expiry from the heap, so lease renewal stays HOT.
 - Dead-letter listing uses a cold partial `job_outcome` index ordered by `(finished_at, job_id)` where state is `failed`; it is never consulted by claim.
 - Cross-state listing uses dedicated `job_query` indexes ordered by immutable `(created_at, job_id)`, optionally prefixed by queue or type. State filters join authoritative runtime and outcome rows, so claims and other lifecycle transitions never maintain an operator state index.
 - Lifecycle timelines use job/time indexes on the partitioned event and attempt relations.
@@ -178,7 +178,7 @@ Before scheduling concerns, the worker execution contract is:
   `{ concurrency, activeSlots, paused, draining }` for this in-process worker.
 - A fill pass claims serially into free slots, starts one independent handler task per accepted job, never
   exceeds the configured slot count, and stops at the first null claim.
-- Every active job has its own heartbeat, abort signal, and fenced completion/failure lifecycle.
+- Every worker batches active heartbeats, while each job retains its own abort signal and fenced completion/failure lifecycle.
 - `pause()` blocks new claims but does not cancel active handlers; `resume()` reopens claims immediately.
 - `stop()` blocks new claims and drains active handlers before `run()` resolves.
 - Worker concurrency is local execution capacity. `concurrency_policy` and `rate_limit_policy`
