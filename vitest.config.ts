@@ -22,7 +22,7 @@ export default defineConfig({
     conditions: ["workhorse-source", ...defaultServerConditions],
     alias: [
       {
-        find: "@workhorse-js/core/version",
+        find: "@stablemates/workhorse/version",
         replacement: fileURLToPath(new URL("./typescript/core/src/version.ts", import.meta.url)),
       },
       {

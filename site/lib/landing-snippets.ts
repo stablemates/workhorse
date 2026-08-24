@@ -12,8 +12,7 @@
  * the other way around.
  */
 export const landingSnippets = {
-  hero: `import { Pool } from "pg";
-import { installSchema, Queue, Worker } from "@workhorse-js/core";
+  hero: `import { installSchema, Pool, Queue, Worker } from "@stablemates/workhorse";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 await installSchema(pool);
@@ -77,8 +76,7 @@ func run(ctx context.Context, pool *pgxpool.Pool) error {
 	return worker.Run(ctx)
 }`,
 
-  languageTypeScript: `import { Pool } from "pg";
-import { Queue } from "@workhorse-js/core";
+  languageTypeScript: `import { Pool, Queue } from "@stablemates/workhorse";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const queue = new Queue(pool);
@@ -1204,8 +1202,7 @@ await database.transaction().execute(async (tx) => {
 });`,
 
   deploy: `// workhorse.worker.ts — run with: workhorse worker --config ./dist/worker.js
-import { createWorkhorseAdapter, defineWorkerProcess } from "@workhorse-js/core";
-import { Pool } from "pg";
+import { createWorkhorseAdapter, defineWorkerProcess, Pool } from "@stablemates/workhorse";
 import { generateReport, sendEmail } from "./jobs.js";
 
 export default defineWorkerProcess({

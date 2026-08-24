@@ -12,7 +12,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Outlet, createFileRoute } from "@tanstack/react-router";
-import { WORKHORSE_VERSION } from "@workhorse-js/core/version";
+import { WORKHORSE_VERSION } from "@stablemates/workhorse/version";
 import type { Node, Root } from "fumadocs-core/page-tree";
 import { DocsLayout } from "fumadocs-ui/layouts/docs";
 import type { ReactNode } from "react";

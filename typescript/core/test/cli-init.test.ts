@@ -101,6 +101,8 @@ describe("workhorse init", () => {
     });
     expect(config).not.toContain("activityNotifications");
     expect(config).toContain("createWorkhorseAdapter");
+    expect(config).toContain('Pool } from "@stablemates/workhorse"');
+    expect(config).not.toContain('from "pg"');
   });
 
   it("scaffolds ORM workers with explicit notification pools", () => {

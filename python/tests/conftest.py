@@ -39,7 +39,7 @@ def installed_distribution_interpreters(
     interpreters: dict[str, Path] = {}
     for distribution, artifact in artifacts.items():
         environments = (
-            (distribution, "psycopg,asyncpg"),
+            (distribution, None),
             (f"{distribution}-psycopg", "psycopg"),
             (f"{distribution}-asyncpg", "asyncpg"),
         )
@@ -58,7 +58,7 @@ def installed_distribution_interpreters(
                     "install",
                     "--python",
                     str(installed_python),
-                    f"{artifact}[{extras}]",
+                    f"{artifact}[{extras}]" if extras else str(artifact),
                 ],
                 check=True,
                 cwd=REPOSITORY,

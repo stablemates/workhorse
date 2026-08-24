@@ -1,4 +1,4 @@
-import type { DependencyTerminalPolicy, Json, RetryPolicy } from "@workhorse-js/core";
+import type { DependencyTerminalPolicy, Json, RetryPolicy } from "@stablemates/workhorse";
 
 export const DEMO_FEATURE_SHOWCASE_SEED_NAME = "feature-showcase-v2";
 export const DEMO_FEATURE_SHOWCASE_SOURCE = "feature-showcase-seed";

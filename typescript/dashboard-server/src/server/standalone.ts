@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { isIP } from "node:net";
 import type { DashboardStandaloneModule } from "@workhorse-js/dashboard-contract";
-import { Admin, Queue, type Queryable } from "@workhorse-js/core";
+import { Admin, Queue, type Queryable } from "@stablemates/workhorse";
 import { createDashboardHost } from "./host.js";
 import { dashboardNodeMiddleware, normalizeDashboardPublicOrigin } from "./node.js";
 import { createDashboardOperatorControllers } from "./operator-controllers.js";

@@ -125,7 +125,7 @@ export function renderWorkerConfig(project: DetectedProject): string {
       break;
     }
     case "pg": {
-      adapterImport = 'import { createWorkhorseAdapter } from "@workhorse-js/core";';
+      adapterImport = "";
       adapterBody = `    const pool = new Pool({ connectionString: databaseUrl });
     return createWorkhorseAdapter({
       database: pool,
@@ -137,9 +137,12 @@ export function renderWorkerConfig(project: DetectedProject): string {
     }
   }
 
-  return `import { defineWorkerProcess } from "@workhorse-js/core";
+  const coreImports =
+    project.orm === "pg"
+      ? "createWorkhorseAdapter, defineWorkerProcess, Pool"
+      : "defineWorkerProcess, Pool";
+  return `import { ${coreImports} } from "@stablemates/workhorse";
 ${adapterImport}
-import { Pool } from "pg";
 
 /**
  * Workhorse worker process.

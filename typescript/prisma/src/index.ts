@@ -6,7 +6,7 @@ import {
   type ProviderAdapterOptions,
   type Queryable,
   type WorkhorseAdapter,
-} from "@workhorse-js/core";
+} from "@stablemates/workhorse";
 import type { QueryResultRow } from "pg";
 
 /** Public subset shared by PrismaClient and Prisma.TransactionClient. */

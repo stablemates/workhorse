@@ -62,11 +62,11 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@workhorse-js/core": "workspace:*",
+    "@stablemates/workhorse": "workspace:*",
     "typescript": "^5.8.3"
   },
   "peerDependencies": {
-    "@workhorse-js/core": ">=0.1.0 <0.2.0"
+    "@stablemates/workhorse": ">=0.1.0 <0.2.0"
   },
   "engines": {
     "node": ">=22"

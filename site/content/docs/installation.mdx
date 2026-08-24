@@ -23,30 +23,29 @@ failing partway through with a syntax error that reads like a Workhorse bug.
 
 ## Add the package
 
-Install the SDK beside the PostgreSQL driver your application already uses.
+Install the SDK. Each package includes its default PostgreSQL driver.
 
 <Tabs items={["TypeScript", "Python", "Go"]}>
   <Tab value="TypeScript">
 
     ```bash
-    npm install @workhorse-js/core pg
+    npm install @stablemates/workhorse
     ```
 
   </Tab>
   <Tab value="Python">
 
     ```bash
-    pip install "workhorse-pg[psycopg]"
+    pip install stablemates-workhorse
     ```
 
-    Use the `asyncpg` extra when that is your application's driver.
+    Use the `asyncpg` extra when that is your application's driver instead of Psycopg.
 
   </Tab>
   <Tab value="Go">
 
     ```bash
     go get github.com/stablemates/workhorse/go@latest
-    go get github.com/jackc/pgx/v5
     ```
 
   </Tab>
@@ -79,10 +78,10 @@ When the target database is new, install from a deployment step. `schema status`
 installed version against what the runtime expects.
 
 ```bash
-npx --package @workhorse-js/core workhorse schema install
-npx --package @workhorse-js/core workhorse schema migrate
-npx --package @workhorse-js/core workhorse schema status
-npx --package @workhorse-js/core workhorse schema status --json
+npx --package @stablemates/workhorse workhorse schema install
+npx --package @stablemates/workhorse workhorse schema migrate
+npx --package @stablemates/workhorse workhorse schema status
+npx --package @stablemates/workhorse workhorse schema status --json
 ```
 
 Every command rejects unknown options and accepts both `--flag value` and `--flag=value`.
@@ -91,8 +90,7 @@ Command-specific help exits before the CLI connects to PostgreSQL.
 TypeScript deployment code can call the same step as `installSchema`.
 
 ```ts
-import { Pool } from "pg";
-import { installSchema } from "@workhorse-js/core";
+import { installSchema, Pool } from "@stablemates/workhorse";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 await installSchema(pool);
@@ -109,7 +107,7 @@ Run `migrateSchema` from a deployment step before processes from the new release
 the package's immutable, forward-only migration steps in order.
 
 ```ts
-import { migrateSchema } from "@workhorse-js/core";
+import { migrateSchema } from "@stablemates/workhorse";
 
 await migrateSchema(pool);
 ```
@@ -127,7 +125,7 @@ Application and worker processes should verify the schema, never install it. Tha
 destructive authority to create database objects out of every long-lived process.
 
 ```ts
-import { assertSchemaCompatible } from "@workhorse-js/core";
+import { assertSchemaCompatible } from "@stablemates/workhorse";
 
 await assertSchemaCompatible(pool);
 ```
@@ -140,7 +138,7 @@ When you want the raw values instead of an assertion — for a health endpoint, 
 `readSchemaVersion` and compare against the exported `WORKHORSE_SCHEMA_VERSION` constant.
 
 ```ts
-import { readSchemaVersion, WORKHORSE_SCHEMA_VERSION } from "@workhorse-js/core";
+import { readSchemaVersion, WORKHORSE_SCHEMA_VERSION } from "@stablemates/workhorse";
 
 const installed = await readSchemaVersion(pool); // number, or null when absent
 console.log({ installed, expected: WORKHORSE_SCHEMA_VERSION });

@@ -4,7 +4,7 @@ import { extname, join, normalize } from "node:path";
 import { SeverityNumber, logs } from "@opentelemetry/api-logs";
 import { RPCHandler } from "@orpc/server/fetch";
 import type { DashboardSingleAdminOptions } from "@workhorse-js/dashboard-contract";
-import { Admin, assertSchemaCompatible, Queue, type Queryable } from "@workhorse-js/core";
+import { Admin, assertSchemaCompatible, Queue, type Queryable } from "@stablemates/workhorse";
 import type { MaintenanceLoopCadences } from "../wire.js";
 import { dashboardAssetsDirectory } from "./assets.js";
 import { createSingleAdminAuthentication } from "./authentication.js";

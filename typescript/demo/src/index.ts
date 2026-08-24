@@ -1,5 +1,5 @@
 import { getRequestListener } from "@hono/node-server";
-import { assertSchemaCompatible, installSchema } from "@workhorse-js/core";
+import { assertSchemaCompatible, installSchema } from "@stablemates/workhorse";
 import { createServer } from "node:http";
 import { Pool } from "pg";
 import {

@@ -1,8 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
-import { Admin, assertSchemaCompatible, Queue, Worker } from "@workhorse-js/core";
-import { Pool } from "pg";
+import { Admin, assertSchemaCompatible, Pool, Queue, Worker } from "@stablemates/workhorse";
 
 const PARENT_QUEUE = "agentic-flow";
 const TOOL_QUEUE = "agentic-tools";

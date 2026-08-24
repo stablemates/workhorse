@@ -1,9 +1,9 @@
 # Changelog
 
 Eight published packages are versioned in lockstep and released from one tag. They are
-`@workhorse-js/core`, `@workhorse-js/drizzle`, `@workhorse-js/prisma`, `@workhorse-js/typeorm`,
+`@stablemates/workhorse`, `@workhorse-js/drizzle`, `@workhorse-js/prisma`, `@workhorse-js/typeorm`,
 `@workhorse-js/kysely`, `@workhorse-js/dashboard`, `@workhorse-js/dashboard-server`, and
-`@workhorse-js/dashboard-contract`. The `workhorse-pg` Python distribution floats independently and
+`@workhorse-js/dashboard-contract`. The `stablemates-workhorse` Python distribution floats independently and
 declares compatibility through the SQL protocol. Each entry states its required schema version and
 upgrade steps.
 
@@ -25,15 +25,15 @@ First published line. Requires **schema v1**, Node.js **22 or 24**, PostgreSQL *
   failures without stopping the worker. Compiled process and external-module coverage verifies
   graceful signal drain, crash recovery, and the public worker API under the race detector.
 
-- `workhorse-pg`: synchronous handlers can suspend through named signal and human-decision waits,
+- `stablemates-workhorse`: synchronous handlers can suspend through named signal and human-decision waits,
   then replay the retained external value in the same logical attempt. Synchronous and asynchronous
   queue clients deliver attributed values with idempotency and typed conflict errors.
 
-- `workhorse-pg`: `run_worker_process` adds bounded `SIGINT` and `SIGTERM` drain handling for the
+- `stablemates-workhorse`: `run_worker_process` adds bounded `SIGINT` and `SIGTERM` drain handling for the
   synchronous worker. A second signal exits with its conventional code, while an expired deadline
   exits with failure so PostgreSQL can recover active leases.
 
-- `@workhorse-js/core`: the schema ships as a single baseline at version 1. Nothing has been
+- `@stablemates/workhorse`: the schema ships as a single baseline at version 1. Nothing has been
   published, so the pre-release migration history was squashed into `sql/schema/current.sql` rather
   than carried as steps no deployment could ever have applied. `workhorse.protocol_version` records
   the served SQL protocol versions independently of the `workhorse.schema_migration` history;
@@ -42,54 +42,54 @@ First published line. Requires **schema v1**, Node.js **22 or 24**, PostgreSQL *
   atomic per-step rollback — remains and has nothing to apply until the first ordered step ships at
   1.0.0. Upgrade steps: recreate the database. Development worktrees run `pnpm worktree:setup`.
 
-- `@workhorse-js/core`: durable PostgreSQL job queue with at-least-once delivery, leases and fencing,
+- `@stablemates/workhorse`: durable PostgreSQL job queue with at-least-once delivery, leases and fencing,
   cooperative cancellation, deadlines and execution timeouts, durable waits, progress and
   checkpoints, dead letters and redrive, enqueue idempotency keys, persisted retry policies,
   queue and per-key token-bucket rate limits,
   declarative recurring schedules, versioned payload and result contracts, durable JSON size
   limits, operator redaction, automated history retention, and a durable worker registry.
-- `@workhorse-js/core`: database-authoritative maintenance and retention settings with application
+- `@stablemates/workhorse`: database-authoritative maintenance and retention settings with application
   defaults, operator overrides, per-setting provenance, revert operations, and bounded retention
   impact previews.
-- `@workhorse-js/core`: versioned dashboard read views and a planner-estimate function that isolate
+- `@stablemates/workhorse`: versioned dashboard read views and a planner-estimate function that isolate
   the dashboard server from private table changes.
-- `@workhorse-js/core`: strict job priority from 0 through 100 across direct, batched, delayed, and
+- `@stablemates/workhorse`: strict job priority from 0 through 100 across direct, batched, delayed, and
   recurring enqueue, with FIFO order inside each priority and preservation through retries,
   promotion, and redrive.
-- `@workhorse-js/core`: PostgreSQL-owned keyed debounce and throttle windows with structured enqueue
+- `@stablemates/workhorse`: PostgreSQL-owned keyed debounce and throttle windows with structured enqueue
   outcomes, atomic batch and transaction behavior, and shared safe key diagnostics.
-- `@workhorse-js/core`: durable dependency edges keep jobs blocked until every prerequisite satisfies
+- `@stablemates/workhorse`: durable dependency edges keep jobs blocked until every prerequisite satisfies
   its fan-in terminal policy. Bounded lineage and job queries expose those edges, while health
   snapshots and per-queue telemetry report dependency pressure.
-- `@workhorse-js/core`: bounded dependency fan-in with terminal policies, plus fenced child creation
+- `@stablemates/workhorse`: bounded dependency fan-in with terminal policies, plus fenced child creation
   and result joining through `HandlerContext.runChild` and `HandlerContext.runChildren`.
-- `@workhorse-js/core`: child lineage survives retry and cancellation, redrive keeps the source tree
+- `@stablemates/workhorse`: child lineage survives retry and cancellation, redrive keeps the source tree
   immutable, retention avoids parent-child cleanup cycles, and health, metrics, and dashboard
   detail expose bounded orchestration evidence.
-- `@workhorse-js/core`: named signal waits release worker leases, and application or authenticated
+- `@stablemates/workhorse`: named signal waits release worker leases, and application or authenticated
   dashboard callers can deliver bounded payloads exactly once at the waiting-state transition.
   Callers can shorten the PostgreSQL-owned timeout; unanswered boundaries fail terminally.
-- `@workhorse-js/core`: named human waits retain bounded decision context, release worker leases, and
+- `@stablemates/workhorse`: named human waits retain bounded decision context, release worker leases, and
   resume once after an application or authenticated dashboard operator supplies a bounded result.
   They share the signal-wait timeout and terminal failure contract.
-- `@workhorse-js/core`: `Worker.handleBatch` for compatible full and linger-bounded partial batches,
+- `@stablemates/workhorse`: `Worker.handleBatch` for compatible full and linger-bounded partial batches,
   with explicit per-job success or failure outcomes, independent retries, leases, contexts, fencing,
   cancellation, timeout handling, policy accounting, priority order, and bounded batch telemetry.
-- `workhorse-pg`: synchronous `Worker.handle_batch` delivery with queue-isolated full and partial
+- `stablemates-workhorse`: synchronous `Worker.handle_batch` delivery with queue-isolated full and partial
   groups, explicit per-member outcomes, independent fences and retries, and durable batch evidence.
-- `@workhorse-js/core`: transactionally consistent `Queue.health()` snapshots — one SQL statement
+- `@stablemates/workhorse`: transactionally consistent `Queue.health()` snapshots — one SQL statement
   for every correctness-sensitive value, size-capped history scans with explicit lower-bound
   flags, PostgreSQL estimates separated under `observations`, and caller-overridable health
   budgets producing machine-readable `status.reasons` shared by the `workhorse health --json`
   exit code, the benchmark invariants, and the dashboard verdict.
-- `@workhorse-js/core`: the `workhorse` CLI — `init`, `schema install`, `schema status`, `worker`,
+- `@stablemates/workhorse`: the `workhorse` CLI — `init`, `schema install`, `schema status`, `worker`,
   `dashboard`, `health`, `bench`, and `bench competitors`.
-- `@workhorse-js/core`: the `workhorse admin` command set — inspection of jobs, queues, schedules,
+- `@stablemates/workhorse`: the `workhorse admin` command set — inspection of jobs, queues, schedules,
   failures, workers, and maintenance state with table and `--json` output, plus guarded `cancel`,
   `redrive`, `pause`, and `resume` that require an explicit verified `--env` target and
   confirmation — and the `workhorse tui` terminal application rendering the same views over the
   same administrative client and safety checks.
-- `@workhorse-js/core`: notification-assisted worker dispatch through one process-local
+- `@stablemates/workhorse`: notification-assisted worker dispatch through one process-local
   `workhorse_jobs` listener per node-postgres pool, with queue routing, reconnect backoff, and
   jittered bounded polling as the durable fallback.
 - `@workhorse-js/drizzle`: Drizzle ORM provider with caller-owned transactions.
@@ -107,7 +107,7 @@ First published line. Requires **schema v1**, Node.js **22 or 24**, PostgreSQL *
   files, and a supported container that requires an HTTPS public origin for remote listeners.
 - `@workhorse-js/dashboard-contract`: the type-only standalone server contract shared by the core CLI
   and dashboard package, so both compile against one optional embedding boundary.
-- `workhorse-pg`: typed synchronous Psycopg and asynchronous Psycopg/asyncpg enqueue clients with
+- `stablemates-workhorse`: typed synchronous Psycopg and asynchronous Psycopg/asyncpg enqueue clients with
   delayed and recurring work, priority, atomic batches, idempotency, debounce, throttle,
   dependencies, caller-owned transactions, compatibility refusal, and shared SQL conformance.
 - Language-neutral SQL protocol conformance fixtures under `protocol/v1`, covering compatibility,
@@ -118,14 +118,14 @@ First published line. Requires **schema v1**, Node.js **22 or 24**, PostgreSQL *
   signal.
 - A supported-version contract: `MINIMUM_POSTGRES_MAJOR`, `SUPPORTED_POSTGRES_MAJORS`,
   `MINIMUM_NODE_MAJOR`, `SUPPORTED_NODE_MAJORS`, and `readPostgresSupport` are exported from
-  `@workhorse-js/core`, exercised by the CI matrix, and reported by `workhorse schema status`.
-- `@workhorse-js/core`: `WorkhorseError`, the base class every error Workhorse raises now extends, so
+  `@stablemates/workhorse`, exercised by the CI matrix, and reported by `workhorse schema status`.
+- `@stablemates/workhorse`: `WorkhorseError`, the base class every error Workhorse raises now extends, so
   one `instanceof` test recognizes a rejected call without enumerating seventeen class names.
-- `@workhorse-js/core`: `databaseErrorCode`, `expectOneRow`, and `MissingRowError`. `databaseErrorCode`
+- `@stablemates/workhorse`: `databaseErrorCode`, `expectOneRow`, and `MissingRowError`. `databaseErrorCode`
   reads a SQLSTATE through the wrappers an ORM adds around a driver error; `expectOneRow` takes the
   single row a statement is defined to return and throws `MissingRowError` naming that statement
   when the result is empty.
-- `@workhorse-js/core`: the shared adapter core an ORM provider is built from — `QueryError`,
+- `@stablemates/workhorse`: the shared adapter core an ORM provider is built from — `QueryError`,
   `rowsToQueryResult`, `attachNotificationPool`, `createProviderQueryable`, and
   `createProviderAdapter`, alongside the existing `createWorkhorseAdapter`. A provider now supplies
   only how its ORM runs a statement; error translation, the result shape, the notification
@@ -139,18 +139,18 @@ The line is unreleased, so these changes precede first publication and no deploy
 through them. They are recorded because the pre-release dashboards and ADRs in this repository
 name the retired instruments.
 
-- **Breaking:** `@workhorse-js/core` now publishes only the `workhorse` binary. Replace
+- **Breaking:** `@stablemates/workhorse` now publishes only the `workhorse` binary. Replace
   `workhorse-health`, `workhorse-bench`, and `workhorse-bench-competitors` with `workhorse health`,
   `workhorse bench`, and `workhorse bench competitors`. The CLI rejects unknown options, supports
   both string-option spellings, provides help at each command depth, and uses exit 64 for usage
   errors. `schema status --json` separates schema drift from PostgreSQL support. `health --json`
   preserves the machine-readable health output; human output is now the default.
 
-- `@workhorse-js/core`: health snapshots and per-queue metrics now count rejected signal deliveries
+- `@stablemates/workhorse`: health snapshots and per-queue metrics now count rejected signal deliveries
   and human decisions over a trailing 24-hour window. A partial event index bounds these polling
   reads to recent rejection evidence instead of scanning all retained event history.
 
-- **Breaking:** `@workhorse-js/core`: every SQL function is at version 1. `claim_v3`,
+- **Breaking:** `@stablemates/workhorse`: every SQL function is at version 1. `claim_v3`,
   `heartbeat_v2`, `list_jobs_v2`, `list_job_timeline_v2`, `list_dead_letters_v2`, and
   `register_worker_v2` lost suffixes that recorded compatibility windows nobody could have been
   inside. `enqueue_many_v2` became `enqueue_many_v1`, and the internal batch function that held
@@ -158,7 +158,7 @@ name the retired instruments.
   multi-queue signature owns the name. Existing development worktrees must run
   `pnpm worktree:setup` once to recreate their dedicated databases.
 
-- **Breaking:** `@workhorse-js/core`: the rolling-statistics cadence is maintenance policy rather
+- **Breaking:** `@stablemates/workhorse`: the rolling-statistics cadence is maintenance policy rather
   than a worker option. `WorkerOptions.statisticsRollupIntervalMs` is removed; set
   `statisticsRollupIntervalMs`, and the newly policy-owned `statisticsGroupLimit` and
   `statisticsRecomputeBuckets`, through `Queue.syncMaintenancePolicy` or an operator override.
@@ -169,31 +169,31 @@ name the retired instruments.
   settings page shows the new settings and derives recommendations from measured state — arrival rate against the terminal-cleanup ceiling, retention lag, a stalled or
   opted-out rollup, and default-partition spill — in `DashboardSettingsPage.recommendations`.
 
-- `@workhorse-js/core`: metric instruments are created on first emission and re-created when the
+- `@stablemates/workhorse`: metric instruments are created on first emission and re-created when the
   global meter provider changes. An application may now install its OpenTelemetry SDK after
-  importing `@workhorse-js/core` and still receive metrics; previously every instrument bound to
+  importing `@stablemates/workhorse` and still receive metrics; previously every instrument bound to
   whichever provider existed at import, so a later SDK silently received nothing.
   [ADR 0024](docs/decisions/0024-metrics-instrument-lifecycle.md) records the measurement behind
   this.
-- `@workhorse-js/core`: two instrumentation modules emitted separately on the same lifecycle events.
+- `@stablemates/workhorse`: two instrumentation modules emitted separately on the same lifecycle events.
   They are now one. `typescript/core/src/metrics.ts` is deleted; `typescript/core/src/telemetry.ts` owns every instrument, and
   `WorkhorseMetricsObserver` moves to `typescript/core/src/metrics-observer.ts`. The package export is unchanged —
-  `WorkhorseMetricsObserver` is still exported from `@workhorse-js/core` — and no other export from
+  `WorkhorseMetricsObserver` is still exported from `@stablemates/workhorse` — and no other export from
   either module was public.
-- `@workhorse-js/core`: `JobValueSizeLimitError` extends `WorkhorseError` rather than `RangeError`.
+- `@stablemates/workhorse`: `JobValueSizeLimitError` extends `WorkhorseError` rather than `RangeError`.
   Code testing `instanceof RangeError` on it must test `instanceof JobValueSizeLimitError` or
   `instanceof WorkhorseError` instead. Its name, message, and fields are unchanged.
-- `@workhorse-js/core`: enqueue and redrive idempotency conflicts are now recognized through an ORM's
+- `@stablemates/workhorse`: enqueue and redrive idempotency conflicts are now recognized through an ORM's
   error wrapper rather than only on the error object the driver threw. A conflict raised inside a
   Drizzle, Prisma, TypeORM, or Kysely transaction reaches the caller as
   `EnqueueIdempotencyConflictError` or `RedriveIdempotencyConflictError` instead of the adapter's
   own query error.
-- `@workhorse-js/core`: the duplicated instruments are retired in favor of one name per event.
+- `@stablemates/workhorse`: the duplicated instruments are retired in favor of one name per event.
   `workhorse.job.enqueued` becomes `workhorse.jobs.enqueued`, `workhorse.job.claimed` becomes
   `workhorse.jobs.claimed`, `workhorse.lease.recovered` becomes `workhorse.leases.expired`,
   `workhorse.job.cancellation` becomes `workhorse.jobs.cancellation`, `workhorse.job.redrive`
   becomes `workhorse.jobs.redrive`, and `workhorse.job.count` becomes `workhorse.jobs.count`.
-- `@workhorse-js/core`: `workhorse.job.execution` becomes `workhorse.handler.executions`, and its
+- `@stablemates/workhorse`: `workhorse.job.execution` becomes `workhorse.handler.executions`, and its
   `workhorse.job.outcome` attribute becomes `workhorse.handler.outcome`. The
   `workhorse.job.execution.duration` histogram is removed; `workhorse.handler.duration` now carries
   the outcome attribute and times the same activation in **milliseconds rather than seconds**.

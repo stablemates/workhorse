@@ -1,4 +1,4 @@
-import type { RetryPolicy } from "@workhorse-js/core";
+import type { RetryPolicy } from "@stablemates/workhorse";
 
 /**
  * Shared demo constants.

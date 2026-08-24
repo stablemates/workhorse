@@ -10,7 +10,7 @@ RUN pnpm install --frozen-lockfile
 RUN pnpm build:runtime
 RUN mkdir /artifacts \
   && pnpm --silent --dir typescript/core pack --pack-destination /artifacts \
-  && mv /artifacts/workhorse-js-core-*.tgz /artifacts/workhorse-core.tgz \
+  && mv /artifacts/stablemates-workhorse-*.tgz /artifacts/workhorse-core.tgz \
   && pnpm --silent --dir typescript/dashboard-contract pack --pack-destination /artifacts \
   && mv /artifacts/workhorse-js-dashboard-contract-*.tgz /artifacts/workhorse-dashboard-contract.tgz \
   && pnpm --silent --dir typescript/dashboard-server pack --pack-destination /artifacts \
@@ -36,4 +36,4 @@ COPY --from=production-dependencies --chown=node:node /opt/workhorse/ ./
 
 USER node
 EXPOSE 3000
-CMD ["node", "node_modules/@workhorse-js/core/dist/src/cli/workhorse.js", "dashboard", "--host", "0.0.0.0", "--port", "3000"]
+CMD ["node", "node_modules/@stablemates/workhorse/dist/src/cli/workhorse.js", "dashboard", "--host", "0.0.0.0", "--port", "3000"]

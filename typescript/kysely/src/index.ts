@@ -6,7 +6,7 @@ import {
   type ProviderAdapterOptions,
   type Queryable,
   type WorkhorseAdapter,
-} from "@workhorse-js/core";
+} from "@stablemates/workhorse";
 import type { CompiledQuery, QueryResult } from "kysely";
 import { executeKysely } from "./query.js";
 

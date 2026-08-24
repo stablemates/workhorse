@@ -44,11 +44,14 @@ def test_python_support_contract_matches_repository_declarations(database_url: s
     postgres_majors = _supported_postgres_majors()
     assert f"PostgreSQL {', '.join(postgres_majors)}" in readme
     assert re.search(r"Python\s+\| 3\.10.3\.14", compatibility)
-    assert 'psycopg = ["psycopg>=3.3,<4"]' in manifest
+    assert 'dependencies = ["jsonschema>=4.25,<5", "psycopg>=3.3,<4",' in manifest
+    assert "psycopg = []" in manifest
     assert 'asyncpg = ["asyncpg>=0.31,<1"]' in manifest
     assert "Psycopg 3.3 through the next major" in readme
     assert re.search(r"asyncpg 0\.31 through\s+the next major", readme)
-    assert 'pip install "workhorse-pg[psycopg]"' in readme
+    assert 'name = "stablemates-workhorse"' in manifest
+    assert 'version = "0.1.0a1"' in manifest
+    assert "pip install stablemates-workhorse" in readme
     assert "run_worker_process(worker)" in readme
     assert 'workhorse dashboard --database-url "$DATABASE_URL"' in readme
     assert (
@@ -90,7 +93,7 @@ def test_built_distributions_run_the_documented_examples(
 
     async_result = subprocess.run(
         [
-            str(installed_distribution_interpreters["sdist"]),
+            str(installed_distribution_interpreters["sdist-asyncpg"]),
             str(repository / "python" / "examples" / "async_enqueue.py"),
             database_url,
         ],

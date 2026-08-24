@@ -11,7 +11,7 @@ import {
   type Json,
   type Queue,
   type Worker,
-} from "@workhorse-js/core";
+} from "@stablemates/workhorse";
 import { and, eq } from "drizzle-orm";
 import {
   DURABLE_DEMO_JOB_TYPE,

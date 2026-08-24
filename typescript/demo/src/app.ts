@@ -21,7 +21,7 @@ import {
   type RetentionPolicyDefinition,
   type RetentionPolicySetting,
   isMissingDatabaseRelationError,
-} from "@workhorse-js/core";
+} from "@stablemates/workhorse";
 import type { Pool } from "pg";
 import {
   DURABLE_DEMO_JOB_TYPE,

@@ -36,14 +36,14 @@
   },
   "devDependencies": {
     "@prisma/client": "6.19.3",
+    "@stablemates/workhorse": "workspace:*",
     "@types/pg": "^8.15.5",
-    "@workhorse-js/core": "workspace:*",
     "pg": "^8.16.3",
     "prisma": "6.19.3"
   },
   "peerDependencies": {
     "@prisma/client": ">=6 <7",
-    "@workhorse-js/core": ">=0.1.0 <1"
+    "@stablemates/workhorse": ">=0.1.0 <1"
   },
   "engines": {
     "node": ">=22"

@@ -24,7 +24,7 @@ import {
   isTerminalTaskState,
 } from "../presentation.js";
 import { readIdempotencyEvidence } from "@workhorse-js/dashboard-server/wire";
-import type { RetryPolicy } from "@workhorse-js/core";
+import type { RetryPolicy } from "@stablemates/workhorse";
 import { Fragment, useEffect, useRef } from "react";
 import { CheckCircle, Copy, Prohibit } from "@phosphor-icons/react";
 import {

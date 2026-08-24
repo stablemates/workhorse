@@ -9,7 +9,7 @@ import type {
   DashboardSystemRetryBucket,
   DashboardWorkerRow,
 } from "@workhorse-js/dashboard-server/wire";
-import type { QueueHealthReason } from "@workhorse-js/core";
+import type { QueueHealthReason } from "@stablemates/workhorse";
 
 const DAY_MS = 86_400_000;
 const CEILING_PRESSURE = 0.8;

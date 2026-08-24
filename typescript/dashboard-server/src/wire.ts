@@ -5,7 +5,7 @@ import type {
   QueueHealthReason,
   RetentionPolicy,
   RetryPolicy,
-} from "@workhorse-js/core";
+} from "@stablemates/workhorse";
 
 export type DashboardMaintenancePolicy = Omit<MaintenancePolicy, "updatedAt"> & {
   updatedAt: string;

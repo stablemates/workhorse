@@ -29,7 +29,7 @@ async function loadDashboard(): Promise<DashboardStandaloneModule<Pool>> {
     return module;
   } catch (error) {
     throw new Error(
-      "The dashboard command requires @workhorse-js/dashboard. Install it alongside @workhorse-js/core.",
+      "The dashboard command requires @workhorse-js/dashboard. Install it alongside @stablemates/workhorse.",
       { cause: error },
     );
   }

@@ -32,7 +32,7 @@ import {
   type Queryable,
   type Queue,
   type WorkhorseAdapter,
-} from "@workhorse-js/core";
+} from "@stablemates/workhorse";
 import { sql as drizzleSql, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Kysely, PostgresDialect, sql as kyselySql } from "kysely";

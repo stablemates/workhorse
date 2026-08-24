@@ -4,7 +4,7 @@ import { createDrizzleAdapter, DrizzleQueryError } from "@workhorse-js/drizzle";
 import { createKyselyAdapter, KyselyQueryError } from "@workhorse-js/kysely";
 import { createPrismaAdapter, PrismaQueryError, type PrismaExecutor } from "@workhorse-js/prisma";
 import { createTypeOrmAdapter, TypeOrmQueryError } from "@workhorse-js/typeorm";
-import type { Queue, WorkhorseAdapter } from "@workhorse-js/core";
+import type { Queue, WorkhorseAdapter } from "@stablemates/workhorse";
 import { sql as drizzleSql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Kysely, PostgresDialect, sql as kyselySql } from "kysely";

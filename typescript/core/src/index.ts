@@ -1,3 +1,4 @@
+export { Pool } from "pg";
 export {
   attachNotificationPool,
   createProviderAdapter,

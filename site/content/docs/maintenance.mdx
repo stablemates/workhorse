@@ -113,7 +113,7 @@ activity automatically once your application configures an SDK. Database-wide ga
 depth, ready-work age, expired leases, fleet capacity — come from a dedicated observer:
 
 ```ts
-import { WorkhorseMetricsObserver } from "@workhorse-js/core";
+import { WorkhorseMetricsObserver } from "@stablemates/workhorse";
 
 const observer = new WorkhorseMetricsObserver(pool, {
   onError: (error) => logger.error({ error }, "workhorse metrics collection failed"),

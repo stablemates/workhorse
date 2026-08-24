@@ -1,4 +1,4 @@
-import type { QueueOptions } from "@workhorse-js/core";
+import type { QueueOptions } from "@stablemates/workhorse";
 
 /**
  * The demo's one contracted job type.

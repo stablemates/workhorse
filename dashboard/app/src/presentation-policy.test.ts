@@ -5,7 +5,7 @@ import type {
   DashboardSystemQueueRow,
   DashboardWorkerRow,
 } from "@workhorse-js/dashboard-server/wire";
-import type { MaintenancePolicy, RetentionPolicy } from "@workhorse-js/core";
+import type { MaintenancePolicy, RetentionPolicy } from "@stablemates/workhorse";
 import { describe, expect, it } from "vitest";
 import {
   capActivityGroups,

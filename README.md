@@ -554,8 +554,7 @@ so existing development databases must be reset before version 40 processes star
 ## Minimal usage
 
 ```ts
-import { Pool } from "pg";
-import { Admin, installSchema, Queue, Worker } from "@workhorse-js/core";
+import { Admin, installSchema, Pool, Queue, Worker } from "@stablemates/workhorse";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 await installSchema(pool);

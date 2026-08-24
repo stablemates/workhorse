@@ -1,4 +1,4 @@
-import type { Json, RetryPolicy } from "@workhorse-js/core";
+import type { Json, RetryPolicy } from "@stablemates/workhorse";
 import type {
   DashboardCancellationRequest,
   DashboardCancelStatus,

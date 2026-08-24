@@ -19,7 +19,7 @@
     "forceConsistentCasingInFileNames": true,
     "paths": {
       "@/*": ["./*"],
-      "@workhorse-js/core/version": ["../typescript/core/src/version.ts"]
+      "@stablemates/workhorse/version": ["../typescript/core/src/version.ts"]
     }
   },
   "include": ["**/*.ts", "**/*.tsx"],

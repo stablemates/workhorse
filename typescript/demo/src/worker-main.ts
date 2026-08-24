@@ -1,4 +1,4 @@
-import { runWorkerProcess } from "@workhorse-js/core";
+import { runWorkerProcess } from "@stablemates/workhorse";
 import definition from "./worker.js";
 
 /**

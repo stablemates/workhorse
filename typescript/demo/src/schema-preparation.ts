@@ -1,4 +1,4 @@
-import { isMissingDatabaseRelationError } from "@workhorse-js/core";
+import { isMissingDatabaseRelationError } from "@stablemates/workhorse";
 
 export interface ApplicationSchemaOperations {
   assertCompatible(): Promise<void>;

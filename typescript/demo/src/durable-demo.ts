@@ -1,4 +1,4 @@
-import type { Json } from "@workhorse-js/core";
+import type { Json } from "@stablemates/workhorse";
 
 export const DURABLE_DEMO_JOB_TYPE = "demo.durable-pipeline";
 

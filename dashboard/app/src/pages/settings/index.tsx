@@ -3,7 +3,7 @@ import type {
   MaintenancePolicyDefinition,
   MaintenancePolicySetting,
   RetentionPolicySetting,
-} from "@workhorse-js/core";
+} from "@stablemates/workhorse";
 import {
   Accordion,
   Alert,

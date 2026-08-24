@@ -25,7 +25,7 @@ import type {
   TraceContext,
 } from "./types.js";
 
-const INSTRUMENTATION_NAME = "@workhorse-js/core";
+const INSTRUMENTATION_NAME = "@stablemates/workhorse";
 
 export const MAX_TRACE_CONTEXT_BYTES = 1_024;
 /** Maximum span attributes Workhorse emits on any one span. */

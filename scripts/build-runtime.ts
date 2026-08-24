@@ -80,7 +80,7 @@ const compatibilityFacades = packages.filter(
 const adapters = packages.filter((entry) => {
   const manifest = manifests.get(entry.location);
   return (
-    manifest?.peerDependencies?.["@workhorse-js/core"] !== undefined &&
+    manifest?.peerDependencies?.["@stablemates/workhorse"] !== undefined &&
     manifest.dependencies?.["@workhorse-js/dashboard-contract"] === undefined &&
     !compatibilityFacades.includes(entry)
   );

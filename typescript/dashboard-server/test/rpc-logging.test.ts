@@ -2,11 +2,11 @@ import { logs, type LogRecord, type LoggerProvider } from "@opentelemetry/api-lo
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
-import type { Queryable } from "@workhorse-js/core";
+import type { Queryable } from "@stablemates/workhorse";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDashboardHost } from "../src/server/host.js";
 import type { DashboardRouter } from "../src/server/router.js";
-import { WORKHORSE_SCHEMA_VERSION } from "@workhorse-js/core";
+import { WORKHORSE_SCHEMA_VERSION } from "@stablemates/workhorse";
 
 const records: LogRecord[] = [];
 const provider: LoggerProvider = {

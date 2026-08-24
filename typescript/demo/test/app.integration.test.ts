@@ -3,7 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
-import { Admin, installSchema, Queue, type Json, type Worker } from "@workhorse-js/core";
+import { Admin, installSchema, Queue, type Json, type Worker } from "@stablemates/workhorse";
 import { createDrizzleAdapter } from "@workhorse-js/drizzle";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";

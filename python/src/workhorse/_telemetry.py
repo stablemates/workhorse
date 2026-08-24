@@ -52,7 +52,7 @@ WorkhorseLogEvent = Literal[
     "workhorse.worker.stopped",
 ]
 
-INSTRUMENTATION_NAME = "workhorse-pg"
+INSTRUMENTATION_NAME = "workhorse"
 TRACE_ATTRIBUTE_COUNT_LIMIT = 8
 METRIC_ATTRIBUTE_CARDINALITY_LIMIT = 2_000
 

@@ -1,4 +1,4 @@
-import type { Admin, Queue } from "@workhorse-js/core";
+import type { Admin, Queue } from "@stablemates/workhorse";
 import { describe, expect, it, vi } from "vitest";
 import { createDashboardOperatorControllers } from "./operator-controllers.js";
 

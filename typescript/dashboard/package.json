@@ -75,14 +75,14 @@
     "recharts": "^3.10.1"
   },
   "devDependencies": {
-    "@workhorse-js/core": "workspace:*",
+    "@stablemates/workhorse": "workspace:*",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "typescript": "^5.8.3",
     "vite": "^7.1.7"
   },
   "peerDependencies": {
-    "@workhorse-js/core": ">=0.1.0 <0.2.0",
+    "@stablemates/workhorse": ">=0.1.0 <0.2.0",
     "react": ">=19 <20",
     "react-dom": ">=19 <20",
     "vite": ">=6 <9"

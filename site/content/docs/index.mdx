@@ -18,8 +18,7 @@ execution state, and the evidence of what happened.
 job exists; if it rolls back, PostgreSQL removes the business write and the job together.
 
 ```ts
-import { Pool } from "pg";
-import { Queue } from "@workhorse-js/core";
+import { Pool, Queue } from "@stablemates/workhorse";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const queue = new Queue(pool);
@@ -44,7 +43,7 @@ after a crash. Named checkpoints make that safe. If a handler restarts, `ctx.che
 each completed stage's stored result instead of running it again.
 
 ```ts
-import { Worker } from "@workhorse-js/core";
+import { Worker } from "@stablemates/workhorse";
 
 const worker = new Worker(queue).handle("order.fulfill", async (payload, ctx) => {
   const charge = await ctx.checkpoint("charge", () => chargeCard(payload.orderId));
@@ -72,8 +71,8 @@ independently of your database, a dedicated broker remains the right tool.
 
 ## Which package do I need?
 
-- `@workhorse-js/core` provides `Queue`, `Admin`, `Worker`, schema tools, process orchestration, and the CLI.
-- `workhorse-pg` provides synchronous and asynchronous Python queue clients and workers.
+- `@stablemates/workhorse` provides `Queue`, `Admin`, `Worker`, schema tools, process orchestration, and the CLI.
+- `stablemates-workhorse` provides synchronous and asynchronous Python queue clients and workers.
 - `github.com/stablemates/workhorse/go` provides Go queue clients and workers over pgx or `database/sql`.
 - `@workhorse-js/dashboard` provides the operator interface and its framework-neutral server host.
 - `@workhorse-js/drizzle` adapts Drizzle databases and transactions to the core `Queryable` protocol.
@@ -81,9 +80,9 @@ independently of your database, a dedicated broker remains the right tool.
 - `@workhorse-js/typeorm` adapts TypeORM data sources and transactional entity managers.
 - `@workhorse-js/kysely` adapts Kysely databases and transactions.
 
-TypeScript applications start with `@workhorse-js/core` plus `pg`. Python and Go applications use
-their native SDK with an existing PostgreSQL driver. TypeScript applications add an adapter when
-they want to enqueue inside an ORM transaction.
+TypeScript applications start with `@stablemates/workhorse`, which includes its default PostgreSQL
+driver. Python includes Psycopg by default and offers an asyncpg extra, while Go includes pgx.
+TypeScript applications add an adapter when they want to enqueue inside an ORM transaction.
 
 ## Next
 

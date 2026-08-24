@@ -1,7 +1,7 @@
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
-import type { Queryable } from "@workhorse-js/core";
+import type { Queryable } from "@stablemates/workhorse";
 import { describe, expect, it } from "vitest";
 import { createDashboardHost } from "../src/server/host.js";
 import {
@@ -9,7 +9,7 @@ import {
   DASHBOARD_RUNTIME_CONFIG_PLACEHOLDER,
 } from "../src/server/html.js";
 import type { DashboardRouter } from "../src/server/router.js";
-import { WORKHORSE_SCHEMA_VERSION } from "@workhorse-js/core";
+import { WORKHORSE_SCHEMA_VERSION } from "@stablemates/workhorse";
 
 const fakeDatabase = (): Queryable =>
   ({

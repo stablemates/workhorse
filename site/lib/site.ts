@@ -8,7 +8,7 @@ export const siteConfig = {
   url: siteUrl,
   socialImage: `${siteUrl}/brand/workhorse-mark.png`,
   github: "https://github.com/stablemates/workhorse",
-  npm: "https://www.npmjs.com/package/@workhorse-js/core",
+  npm: "https://www.npmjs.com/package/@stablemates/workhorse",
 } as const;
 
 /**

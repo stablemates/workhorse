@@ -2,8 +2,8 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
-      "@workhorse-js/core": ["typescript/core/src/index.ts"],
-      "@workhorse-js/core/version": ["typescript/core/src/version.ts"],
+      "@stablemates/workhorse": ["typescript/core/src/index.ts"],
+      "@stablemates/workhorse/version": ["typescript/core/src/version.ts"],
       "@workhorse-js/dashboard": ["typescript/dashboard/src/index.ts"],
       "@workhorse-js/dashboard/dev": ["typescript/dashboard/src/dev.ts"],
       "@workhorse-js/dashboard/presentation": ["typescript/dashboard/src/presentation.ts"],

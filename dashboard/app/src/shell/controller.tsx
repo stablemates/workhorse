@@ -48,7 +48,7 @@ import {
 } from "../events-location.js";
 import { taskDetailNavigation, taskListingKey } from "../task-location.js";
 import { notifyCancel, notifyDashboard, notifyFailure } from "../notifications.js";
-import type { MaintenancePolicyDefinition, MaintenancePolicySetting } from "@workhorse-js/core";
+import type { MaintenancePolicyDefinition, MaintenancePolicySetting } from "@stablemates/workhorse";
 import { requestRunNow, type RunNowFeedback } from "../run-now.js";
 import { Button, Center, Loader, Stack, Text } from "@mantine/core";
 import { WarningCircle } from "@phosphor-icons/react";

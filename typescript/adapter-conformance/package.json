@@ -7,7 +7,7 @@
   },
   "devDependencies": {
     "@prisma/client": "6.19.3",
-    "@workhorse-js/core": "workspace:*",
+    "@stablemates/workhorse": "workspace:*",
     "@workhorse-js/drizzle": "workspace:*",
     "@workhorse-js/kysely": "workspace:*",
     "@workhorse-js/prisma": "workspace:*",

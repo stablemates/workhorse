@@ -26,8 +26,8 @@ workers then reserve a connection for `LISTEN/NOTIFY` and pick up new jobs immed
 
 ```ts
 import { createKyselyAdapter } from "@workhorse-js/kysely";
+import { Pool } from "@stablemates/workhorse";
 import { Kysely, PostgresDialect } from "kysely";
-import { Pool } from "pg";
 
 interface AppDatabase {
   account: { id: string; email: string };

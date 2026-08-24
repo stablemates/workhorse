@@ -3,8 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { createDrizzleAdapter, DrizzleQueryError, drizzleQueryable } from "@workhorse-js/drizzle";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { sql } from "drizzle-orm";
-import { installSchema, startWorkerProcess, Worker } from "@workhorse-js/core";
-import { Pool } from "pg";
+import { installSchema, Pool, startWorkerProcess, Worker } from "@stablemates/workhorse";
 
 const databaseUrl =
   process.env.WORKHORSE_TEST_DATABASE_URL ??

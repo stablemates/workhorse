@@ -26,7 +26,7 @@ This boundary is about correctness only. It is not a performance claim; see
 | Runtime    | Supported      | Minimum | Notes                                                   |
 | ---------- | -------------- | ------- | ------------------------------------------------------- |
 | Node.js    | 22, 24         | 22      | Even-numbered releases only. `engines.node` is `>=22`.  |
-| Python     | 3.10–3.14      | 3.10    | `workhorse-pg` ships one `py3-none-any` wheel.          |
+| Python     | 3.10–3.14      | 3.10    | `stablemates-workhorse` ships one `py3-none-any` wheel. |
 | Go         | 1.23 and newer | 1.23    | The module pins pgx v5.7.6.                             |
 | PostgreSQL | 15, 16, 17, 18 | 15      | No extension beyond the default `plpgsql` is installed. |
 
@@ -38,11 +38,11 @@ Package managers: the repository is developed with pnpm, and the packed-install 
 published tarballs with pnpm. npm and yarn are not exercised in CI; the packages are plain ESM with
 no install scripts, so nothing in them is package-manager specific.
 
-The Python package declares Python 3.10 through 3.14. It supports Psycopg 3.3 through the next major
-or asyncpg 0.31 through the next major. Its package lane builds the source distribution and
-universal wheel, checks inline types, runs both real drivers, and executes every shared SQL
-scenario. `python/tests/test_release.py` installs the wheel and source distribution with both driver
-extras into clean environments. It runs the lifecycle and async enqueue examples without repository imports, then
+The Python package declares Python 3.10 through 3.14 and includes Psycopg 3.3 through the next
+major. Its `asyncpg` extra supports asyncpg 0.31 through the next major. Its package lane builds the
+source distribution and universal wheel, checks inline types, runs both real drivers, and executes
+every shared SQL scenario. `python/tests/test_release.py` installs the wheel and source distribution
+bare, with the compatibility `psycopg` extra, and with the `asyncpg` extra. It runs the lifecycle and async enqueue examples without repository imports, then
 checks that the active Python and PostgreSQL versions belong to this matrix. GitHub Actions remain
 intentionally disabled while the repository is private; when they are restored, each declared
 Python version and PostgreSQL major must run this lane before publication.
@@ -59,7 +59,7 @@ to the lane. GitHub Actions wiring waits for the CI unfreeze.
 Node.js is the only supported runtime. Bun and Deno sit in a deliberately weaker tier declared by
 `SMOKE_TESTED_JS_RUNTIMES` in `typescript/core/src/support.ts`: the `runtime-smoke` CI lane runs
 `typescript/core/test/runtime-smoke.ts` — `installSchema`, then an enqueue, claim, and complete
-round-trip through the built `@workhorse-js/core` entry point — against the newest supported
+round-trip through the built `@stablemates/workhorse` entry point — against the newest supported
 PostgreSQL, under the latest release of each runtime. A green lane proves the driver connects, the
 schema installs, and one job completes there. It proves nothing else: the full vitest suites run
 under Node.js only, so this tier carries no correctness claim beyond the round-trip.
@@ -87,14 +87,14 @@ a supported client and a PostgreSQL connection. A worker also needs an autonomou
 hold connections, renew leases, send heartbeats, and drain after a termination signal. Database
 connectivity does not turn a request-scoped function into a worker host.
 
-| Platform              | Runtime                | Enqueue with the published client | Host a worker | Requirement or boundary                                                                                                                                           |
-| --------------------- | ---------------------- | --------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Cloudflare Workers    | Workers isolate        | No                                | No            | Hyperdrive provides verified `pg` connectivity under `nodejs_compat`, but `@workhorse-js/core` supports Node.js, not the Workers runtime. Use a Node.js producer. |
-| Vercel Functions      | Node.js                | Yes                               | No            | Use `@workhorse-js/core` and `pg` normally. The caller can pass its open `pg` transaction to `Queue.enqueue`.                                                     |
-| Vercel Functions      | Edge                   | No                                | No            | The Edge runtime omits the Node.js APIs required by `pg` and `@workhorse-js/core`. Move the route to the Node.js runtime.                                         |
-| AWS Lambda            | Node.js                | Yes                               | No            | Use `@workhorse-js/core` and `pg` over a network path to PostgreSQL. Lambda owns the execution environment lifetime.                                              |
-| Cloud Run service     | Node.js, request-based | Yes                               | No            | Use `@workhorse-js/core` and `pg` in the request. Request-based CPU allocation and instance scaling cannot own a continuous worker loop.                          |
-| Cloud Run worker pool | Node.js container      | Yes                               | Yes           | Run the dedicated Workhorse worker process with at least one worker-pool instance.                                                                                |
+| Platform              | Runtime                | Enqueue with the published client | Host a worker | Requirement or boundary                                                                                                                                               |
+| --------------------- | ---------------------- | --------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cloudflare Workers    | Workers isolate        | No                                | No            | Hyperdrive provides verified `pg` connectivity under `nodejs_compat`, but `@stablemates/workhorse` supports Node.js, not the Workers runtime. Use a Node.js producer. |
+| Vercel Functions      | Node.js                | Yes                               | No            | Use `@stablemates/workhorse` normally. The caller can pass its open `pg` transaction to `Queue.enqueue`.                                                              |
+| Vercel Functions      | Edge                   | No                                | No            | The Edge runtime omits the Node.js APIs required by `pg` and `@stablemates/workhorse`. Move the route to the Node.js runtime.                                         |
+| AWS Lambda            | Node.js                | Yes                               | No            | Use `@stablemates/workhorse` over a network path to PostgreSQL. Lambda owns the execution environment lifetime.                                                       |
+| Cloud Run service     | Node.js, request-based | Yes                               | No            | Use `@stablemates/workhorse` in the request. Request-based CPU allocation and instance scaling cannot own a continuous worker loop.                                   |
+| Cloud Run worker pool | Node.js container      | Yes                               | Yes           | Run the dedicated Workhorse worker process with at least one worker-pool instance.                                                                                    |
 
 We verified these claims on 2026-08-18. A Wrangler 4.124 local Worker used `nodejs_compat`, the
 repository's `pg` dependency, and a local Hyperdrive binding to execute `SELECT 1` against the
@@ -109,20 +109,20 @@ and explains where to deploy workers when the web tier is serverless.
 
 ## Packages and versioning
 
-Nine packages ship from this repository. `@workhorse-js/core` is the TypeScript durable queue;
-`workhorse-pg` is the Python client and worker SDK; the rest are optional TypeScript packages.
+Nine packages ship from this repository. `@stablemates/workhorse` is the TypeScript durable queue;
+`stablemates-workhorse` is the Python client and worker SDK; the rest are optional TypeScript packages.
 
-| Package                            | Purpose                                           | Peer requirements                                   |
-| ---------------------------------- | ------------------------------------------------- | --------------------------------------------------- |
-| `@workhorse-js/core`               | Queue, worker, schema, CLI                        | `pg` >= 8.13                                        |
-| `@workhorse-js/drizzle`            | Drizzle ORM provider                              | `@workhorse-js/core`, `drizzle-orm` >= 0.45, `pg`   |
-| `@workhorse-js/prisma`             | Prisma ORM provider                               | `@workhorse-js/core`, `@prisma/client` >= 6 and < 7 |
-| `@workhorse-js/typeorm`            | TypeORM provider                                  | `@workhorse-js/core`, `typeorm` >= 0.3 and < 2      |
-| `@workhorse-js/kysely`             | Kysely provider                                   | `@workhorse-js/core`, `kysely` >= 0.29 and < 0.30   |
-| `@workhorse-js/dashboard`          | Operator dashboard and its framework-neutral host | `@workhorse-js/core` >= 0.1 and < 0.2, React 19     |
-| `@workhorse-js/dashboard-server`   | Authenticated standalone dashboard server         | `@workhorse-js/dashboard-contract`                  |
-| `@workhorse-js/dashboard-contract` | Type-only dashboard server boundary               | None                                                |
-| `workhorse-pg`                     | Python clients, workers, and WSGI dashboard       | Psycopg >= 3.3 and < 4, or asyncpg >= 0.31 and < 1  |
+| Package                            | Purpose                                           | Peer requirements                                                               |
+| ---------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `@stablemates/workhorse`           | Queue, worker, schema, CLI                        | None; includes `pg` >= 8.16.3 and < 9                                           |
+| `@workhorse-js/drizzle`            | Drizzle ORM provider                              | `@stablemates/workhorse`, `drizzle-orm` >= 0.45, `pg`                           |
+| `@workhorse-js/prisma`             | Prisma ORM provider                               | `@stablemates/workhorse`, `@prisma/client` >= 6 and < 7                         |
+| `@workhorse-js/typeorm`            | TypeORM provider                                  | `@stablemates/workhorse`, `typeorm` >= 0.3 and < 2                              |
+| `@workhorse-js/kysely`             | Kysely provider                                   | `@stablemates/workhorse`, `kysely` >= 0.29 and < 0.30                           |
+| `@workhorse-js/dashboard`          | Operator dashboard and its framework-neutral host | `@stablemates/workhorse` >= 0.1 and < 0.2, React 19                             |
+| `@workhorse-js/dashboard-server`   | Authenticated standalone dashboard server         | `@workhorse-js/dashboard-contract`                                              |
+| `@workhorse-js/dashboard-contract` | Type-only dashboard server boundary               | None                                                                            |
+| `stablemates-workhorse`            | Python clients, workers, and WSGI dashboard       | None; includes Psycopg >= 3.3 and < 4; `asyncpg` extra supports >= 0.31 and < 1 |
 
 The eight TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.
@@ -188,7 +188,7 @@ Every release is a tag, and every tag runs the full check suite before anything 
    if `CHANGELOG.md` has no entry for it.
 3. `pnpm check` runs — format, lint, types, unit and integration tests, the packed-package install
    test, the site smoke test, and the demo smoke test.
-4. Each package is packed and published with `npm publish --provenance`. `@workhorse-js/core` is
+4. Each package is packed and published with `npm publish --provenance`. `@stablemates/workhorse` is
    published first, because the other five declare it as a peer.
 
 **Provenance.** Every published tarball carries an npm provenance attestation linking it to this

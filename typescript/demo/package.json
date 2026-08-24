@@ -25,7 +25,7 @@
     "@opentelemetry/sdk-node": "0.221.0",
     "@orpc/client": "^1.14.8",
     "@orpc/server": "^1.14.8",
-    "@workhorse-js/core": "workspace:*",
+    "@stablemates/workhorse": "workspace:*",
     "@workhorse-js/dashboard": "workspace:*",
     "@workhorse-js/drizzle": "workspace:*",
     "drizzle-orm": "^0.45.2",

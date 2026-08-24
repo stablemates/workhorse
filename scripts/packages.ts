@@ -70,7 +70,7 @@ async function describe(relativePath: string, directory: string): Promise<Publis
   };
 }
 
-/** `@workhorse-js/core`, which lives at `typescript/core`. */
+/** `@stablemates/workhorse`, which lives at `typescript/core`. */
 export async function corePackage(): Promise<PublishedPackage> {
   return describe("typescript/core/package.json", "core");
 }
@@ -97,7 +97,7 @@ export async function workspacePackages(): Promise<readonly PublishedPackage[]> 
 /**
  * Every published package, core first.
  *
- * Order matters to the release: the packages under `typescript/` declare `@workhorse-js/core` as a
+ * Order matters to the release: the packages under `typescript/` declare `@stablemates/workhorse` as a
  * peer, so a failed core publish must not leave dependents pointing at a version nobody can
  * install.
  */

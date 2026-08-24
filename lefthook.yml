@@ -9,7 +9,7 @@ pre-commit:
       run: pnpm --filter @workhorse-js/adapter-conformance typecheck
     - name: check core types
       glob: "typescript/core/**"
-      run: pnpm --filter @workhorse-js/core typecheck
+      run: pnpm --filter @stablemates/workhorse typecheck
     - name: check dashboard contract types
       glob: "typescript/dashboard-contract/**"
       run: pnpm --filter @workhorse-js/dashboard-contract typecheck

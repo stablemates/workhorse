@@ -1,4 +1,4 @@
-import { defineWorkerProcess } from "@workhorse-js/core";
+import { defineWorkerProcess } from "@stablemates/workhorse";
 import { createDrizzleAdapter } from "@workhorse-js/drizzle";
 import { Pool } from "pg";
 import {

@@ -16,7 +16,6 @@ import {
 
 const packages = await workspacePackages();
 const core = await corePackage();
-const npmScope = core.name.slice(1, core.name.indexOf("/"));
 const packageDeclarationsTest = existsSync(
   path.join(repositoryRoot, "typescript/core/dist/src/queue.d.ts"),
 )
@@ -40,7 +39,7 @@ describe("the derived package list", () => {
       ...new Set(packages.map((entry) => entry.directory)),
     ]);
     // Core is published too, but is kept first because the other packages consume it.
-    expect(core.name).toBe("@workhorse-js/core");
+    expect(core.name).toBe("@stablemates/workhorse");
     expect((await publishedPackages())[0]).toEqual(core);
   });
 
@@ -216,7 +215,7 @@ describe("published package manifests", () => {
       peerDependencies?: Record<string, string>;
     };
 
-    expect(dashboardManifest.peerDependencies?.["@workhorse-js/core"]).toBe(">=0.1.0 <0.2.0");
+    expect(dashboardManifest.peerDependencies?.["@stablemates/workhorse"]).toBe(">=0.1.0 <0.2.0");
     expect(dashboardManifest.version).toBe(core.version);
   });
 
@@ -235,13 +234,13 @@ describe("ORM adapter entry points", () => {
   it.each(adapters)("keeps %s as thin glue over the public core adapter API", async (adapter) => {
     const source = await read(`typescript/${adapter}/src/index.ts`);
     expect(source.trimEnd().split("\n").length).toBeLessThanOrEqual(50);
-    expect(source).not.toMatch(/from ["']@workhorse-js\/core\//);
+    expect(source).not.toMatch(/from ["']@stablemates\/workhorse\//);
     expect(source).not.toMatch(/from ["'](?:\.\.\/)+\.\.\/src\//);
   });
 });
 
 describe("consumers of the package list", () => {
-  it("packs and publishes the derived list rather than a copy", async () => {
+  it("leaves the disabled release workflow unchanged until publication is restored", async () => {
     const workflow = await read(".github/workflows/release.yml");
     const loops = [...workflow.matchAll(/^\s*for package in (.+); do$/gm)].map(
       (match) => match[1]!,
@@ -249,16 +248,19 @@ describe("consumers of the package list", () => {
     expect(loops.length).toBeGreaterThan(0);
     for (const loop of loops) expect(loop).toBe("$(pnpm --silent exec tsx scripts/packages.ts)");
 
-    expect(workflow).toContain(`dist-tarballs/${npmScope}-core-$version.tgz`);
-    expect(workflow).toContain(`dist-tarballs/${npmScope}-$package-$version.tgz`);
+    expect(workflow).toContain("dist-tarballs/workhorse-js-core-$version.tgz");
+    expect(workflow).toContain("dist-tarballs/workhorse-js-$package-$version.tgz");
   });
 
   it("moves scoped dashboard tarballs to stable container artifact names", async () => {
     const dockerfile = await read("Dockerfile.dashboard");
-    for (const directory of ["core", "dashboard-contract", "dashboard-server"]) {
-      expect(dockerfile).toContain(`/artifacts/${npmScope}-${directory}-*.tgz`);
+    expect(dockerfile).toContain(`/artifacts/${core.tarball.replace(core.version, "*")}`);
+    for (const directory of ["dashboard-contract", "dashboard-server"]) {
+      const entry = packages.find((candidate) => candidate.directory === directory);
+      expect(entry).toBeDefined();
+      expect(dockerfile).toContain(`/artifacts/${entry!.tarball.replace(entry!.version, "*")}`);
     }
-    expect(dockerfile).toContain(`/artifacts/${npmScope}-dashboard-[0-9]*.tgz`);
+    expect(dockerfile).toContain("/artifacts/workhorse-js-dashboard-[0-9]*.tgz");
   });
 
   it("keeps the development build script free of a hand-written package list", async () => {

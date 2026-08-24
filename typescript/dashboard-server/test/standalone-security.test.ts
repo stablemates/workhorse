@@ -3,18 +3,16 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { Queryable } from "@workhorse-js/core";
+import type { Queryable } from "@stablemates/workhorse";
 import { afterEach, describe, expect, it } from "vitest";
 import { startDashboardServer } from "../src/server/standalone.js";
-import { WORKHORSE_SCHEMA_VERSION } from "@workhorse-js/core";
+import { WORKHORSE_SCHEMA_VERSION } from "@stablemates/workhorse";
 
 const database = {
   query: async () => ({ rows: [{ version: WORKHORSE_SCHEMA_VERSION }] }),
 } as Queryable;
 const scratchRoots: string[] = [];
-const dashboardBrowserTest = existsSync(
-  path.resolve(import.meta.dirname, "../dist/app/index.html"),
-)
+const dashboardBrowserTest = existsSync(path.resolve(import.meta.dirname, "../dist/app/index.html"))
   ? it
   : it.skip;
 const dashboardBrowserTestName =
