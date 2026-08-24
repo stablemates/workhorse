@@ -480,6 +480,8 @@ export class Worker {
   private batchDispatchRecording: Promise<void> = Promise.resolve();
   private wakeController = new AbortController();
   private wakeVersion = 0;
+  private dispatchWakeController = new AbortController();
+  private dispatchWakeVersion = 0;
 
   constructor(
     queue: WorkerQueueApi | Queue,
@@ -1658,7 +1660,7 @@ export class Worker {
           const subscription = await subscribeToJobNotifications.call(
             this.queue,
             queueName,
-            () => this.wakeLoops(),
+            () => this.wakeDispatch(),
             (error) => this.options.onNotificationError?.(error),
           );
           if (subscription) notificationSubscriptions.push(subscription);
@@ -1758,10 +1760,12 @@ export class Worker {
       const deadline = Date.now() + this.nextDispatchPollMs();
       while (true) {
         if (shouldStop() || this.paused || firstFailure) return;
-        if (this.wakeVersion !== observedWakeVersion) return;
+        if (this.dispatchWakeVersion !== observedWakeVersion) return;
         const remainingMs = deadline - Date.now();
         if (remainingMs <= 0) return;
-        const wake = this.waitForWake(remainingMs, signal, observedWakeVersion).then(() => null);
+        const wake = this.waitForDispatchWake(remainingMs, signal, observedWakeVersion).then(
+          () => null,
+        );
         const result = await Promise.race<DispatchSettlement | null>([...active.values(), wake]);
         if (result === null) return;
         observe(result);
@@ -1772,9 +1776,9 @@ export class Worker {
       if (shouldStop() || firstFailure || claimError !== undefined) break;
       if (this.paused) {
         if (active.size === 0) {
-          await this.waitForWake(this.nextDispatchPollMs(), signal);
+          await this.waitForDispatchWake(this.nextDispatchPollMs(), signal);
         } else {
-          const wake = this.waitForWake(this.nextDispatchPollMs(), signal).then(() => null);
+          const wake = this.waitForDispatchWake(this.nextDispatchPollMs(), signal).then(() => null);
           const result = await Promise.race<DispatchSettlement | null>([...active.values(), wake]);
           if (result) observe(result);
         }
@@ -1782,10 +1786,10 @@ export class Worker {
       }
 
       let empty = false;
-      let emptyWakeVersion = this.wakeVersion;
+      let emptyWakeVersion = this.dispatchWakeVersion;
       while (active.size < this.concurrency && !shouldStop() && !this.paused) {
         this.lastClaimAt = Date.now();
-        const claimWakeVersion = this.wakeVersion;
+        const claimWakeVersion = this.dispatchWakeVersion;
         let job: ClaimedJob | null;
         try {
           job = await this.claimNext();
@@ -1834,11 +1838,30 @@ export class Worker {
     await sleep(durationMs, undefined, { signal: waitSignal }).catch(() => undefined);
   }
 
+  private async waitForDispatchWake(
+    durationMs: number,
+    signal?: AbortSignal,
+    observedWakeVersion = this.dispatchWakeVersion,
+  ): Promise<void> {
+    const wakeSignal = this.dispatchWakeController.signal;
+    if (this.dispatchWakeVersion !== observedWakeVersion) return;
+    const waitSignal = signal ? AbortSignal.any([wakeSignal, signal]) : wakeSignal;
+    await sleep(durationMs, undefined, { signal: waitSignal }).catch(() => undefined);
+  }
+
+  private wakeDispatch(): void {
+    const waiting = this.dispatchWakeController;
+    this.dispatchWakeController = new AbortController();
+    this.dispatchWakeVersion += 1;
+    waiting.abort();
+  }
+
   private wakeLoops(): void {
     const waiting = this.wakeController;
     this.wakeController = new AbortController();
     this.wakeVersion += 1;
     waiting.abort();
+    this.wakeDispatch();
   }
 
   private async withExclusiveExecution<T>(operation: () => Promise<T>): Promise<T> {

@@ -55,8 +55,9 @@ client's default. A batch callback still receives jobs from only one queue at a 
 
 An idle worker listens for `workhorse_jobs`, so a committed enqueue can wake it immediately.
 Workers that share a database pool also share the listener connection, while each worker receives
-only its queue's wake hints. Promotion and recovery can wake every worker because either may make
-work claimable across queues.
+only its queue's wake hints. Promotion and recovery notify each affected queue separately, so work
+on one queue does not wake workers assigned to another. A notification wakes dispatch without
+changing the cadence of maintenance or registration.
 
 The notification is only a hint. If PostgreSQL drops the listener or a message is missed, the
 worker reconnects and still checks through `pollMs`. This keeps the database state authoritative:

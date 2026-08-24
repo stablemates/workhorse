@@ -4010,6 +4010,7 @@ DECLARE
   v_max_active numeric;
   v_max_active_per_key numeric;
   v_seen text[] := '{}';
+  v_notify_queues text[] := '{}';
 BEGIN
   IF p_namespace IS NULL OR p_namespace = '' OR octet_length(p_namespace) > 256 THEN
     RAISE EXCEPTION 'concurrency policy namespace must contain between 1 and 256 UTF-8 bytes';
@@ -4054,6 +4055,7 @@ BEGIN
       RAISE EXCEPTION 'max_active_per_key must be an integer between 1 and max_active';
     END IF;
     v_seen := array_append(v_seen, v_queue_name);
+    v_notify_queues := array_append(v_notify_queues, v_queue_name);
     PERFORM pg_advisory_xact_lock(
       hashtextextended('workhorse:concurrency-policy:' || v_queue_name, 0)
     );
@@ -4086,6 +4088,7 @@ BEGIN
        WHERE policy.namespace = p_namespace AND NOT (policy.queue_name = ANY(v_seen))
        ORDER BY policy.queue_name
     LOOP
+      v_notify_queues := array_append(v_notify_queues, v_queue_name);
       PERFORM pg_advisory_xact_lock(
         hashtextextended('workhorse:concurrency-policy:' || v_queue_name, 0)
       );
@@ -4094,7 +4097,13 @@ BEGIN
      WHERE policy.namespace = p_namespace AND NOT (policy.queue_name = ANY(v_seen));
   END IF;
 
-  PERFORM pg_notify('workhorse_jobs', '*');
+  FOR v_queue_name IN
+    SELECT DISTINCT affected.queue_name
+      FROM unnest(v_notify_queues) AS affected(queue_name)
+     ORDER BY affected.queue_name
+  LOOP
+    PERFORM pg_notify('workhorse_jobs', v_queue_name);
+  END LOOP;
 
   RETURN QUERY
     SELECT policy.namespace, policy.queue_name, policy.max_active, policy.max_active_per_key,
@@ -4136,6 +4145,7 @@ DECLARE
   v_per_key_interval_ms numeric;
   v_per_key_burst numeric;
   v_seen text[] := '{}';
+  v_notify_queues text[] := '{}';
 BEGIN
   IF p_namespace IS NULL OR p_namespace = '' OR octet_length(p_namespace) > 256 THEN
     RAISE EXCEPTION 'rate-limit policy namespace must contain between 1 and 256 UTF-8 bytes';
@@ -4206,6 +4216,7 @@ BEGIN
       RAISE EXCEPTION 'perKey values must be bounded positive integers';
     END IF;
     v_seen := array_append(v_seen, v_queue_name);
+    v_notify_queues := array_append(v_notify_queues, v_queue_name);
     PERFORM pg_advisory_xact_lock(
       hashtextextended('workhorse:rate-limit-policy:' || v_queue_name, 0)
     );
@@ -4245,6 +4256,7 @@ BEGIN
        WHERE policy.namespace = p_namespace AND NOT (policy.queue_name = ANY(v_seen))
        ORDER BY policy.queue_name
     LOOP
+      v_notify_queues := array_append(v_notify_queues, v_queue_name);
       PERFORM pg_advisory_xact_lock(
         hashtextextended('workhorse:rate-limit-policy:' || v_queue_name, 0)
       );
@@ -4253,7 +4265,13 @@ BEGIN
      WHERE policy.namespace = p_namespace AND NOT (policy.queue_name = ANY(v_seen));
   END IF;
 
-  PERFORM pg_notify('workhorse_jobs', '*');
+  FOR v_queue_name IN
+    SELECT DISTINCT affected.queue_name
+      FROM unnest(v_notify_queues) AS affected(queue_name)
+     ORDER BY affected.queue_name
+  LOOP
+    PERFORM pg_notify('workhorse_jobs', v_queue_name);
+  END LOOP;
   RETURN QUERY
     SELECT policy.namespace, policy.queue_name, policy.rate_limit, policy.rate_interval_ms,
            policy.rate_burst, policy.per_key_limit, policy.per_key_interval_ms,
@@ -6307,6 +6325,8 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   v_count integer;
+  v_notify_queues text[];
+  v_notify_queue text;
 BEGIN
   WITH due AS (
     SELECT r.job_id, r.wait_name, r.run_at AS wake_at FROM workhorse.job_runtime r
@@ -6329,9 +6349,15 @@ BEGIN
         FROM promoted WHERE wait_name IS NOT NULL
     RETURNING 1
   )
-  SELECT count(*)::integer INTO v_count FROM promoted
+  SELECT count(*)::integer, array_agg(DISTINCT queue_name)
+    INTO v_count, v_notify_queues
+    FROM promoted
    WHERE (SELECT count(*) FROM events) >= 0;
-  IF v_count > 0 THEN PERFORM pg_notify('workhorse_jobs', '*'); END IF;
+  FOR v_notify_queue IN
+    SELECT unnest(COALESCE(v_notify_queues, '{}'::text[]))
+  LOOP
+    PERFORM pg_notify('workhorse_jobs', v_notify_queue);
+  END LOOP;
   RETURN v_count;
 END;
 $$;
@@ -6383,7 +6409,7 @@ BEGIN
         'promoted',
         jsonb_build_object('reason', 'manual')
       );
-    PERFORM pg_notify('workhorse_jobs', '*');
+    PERFORM pg_notify('workhorse_jobs', v_runtime.queue_name);
     RETURN QUERY VALUES ('released'::text, v_runtime.state, v_runtime.run_at);
     RETURN;
   END IF;
@@ -6478,7 +6504,7 @@ BEGIN
           'request_id_length', v_request_id_length
         )
       );
-    PERFORM pg_notify('workhorse_jobs', '*');
+    PERFORM pg_notify('workhorse_jobs', v_runtime.queue_name);
     RETURN QUERY VALUES ('released'::text, v_runtime.state, v_runtime.run_at);
     RETURN;
   END IF;
@@ -8830,6 +8856,8 @@ DECLARE
   v_expired_leases integer := 0;
   v_retried integer := 0;
   v_retry_dimensions jsonb := '[]'::jsonb;
+  v_notify_queues text[] := '{}';
+  v_notify_queue text;
 BEGIN
   PERFORM set_config('workhorse.recovery_expired_leases', '0', true);
   PERFORM set_config('workhorse.recovery_retried', '0', true);
@@ -8848,6 +8876,7 @@ BEGIN
   LOOP
     IF workhorse.terminalize_deadline_v1(v_runtime.job_id) THEN
       v_count := v_count + 1;
+      v_notify_queues := array_append(v_notify_queues, v_runtime.queue_name);
     END IF;
   END LOOP;
 
@@ -8869,6 +8898,7 @@ BEGIN
         v_runtime.job_id, v_runtime.worker_id, v_runtime.fence_token
       ) THEN
         v_count := v_count + 1;
+        v_notify_queues := array_append(v_notify_queues, v_job.queue_name);
         IF v_runtime.current_attempt < v_job.max_attempts THEN
           v_retried := v_retried + 1;
           v_retry_dimensions := v_retry_dimensions || jsonb_build_array(jsonb_build_object(
@@ -8883,7 +8913,13 @@ BEGIN
     PERFORM set_config('workhorse.recovery_expired_leases', v_expired_leases::text, true);
     PERFORM set_config('workhorse.recovery_retried', v_retried::text, true);
     PERFORM set_config('workhorse.recovery_retry_dimensions', v_retry_dimensions::text, true);
-    IF v_count > 0 THEN PERFORM pg_notify('workhorse_jobs', '*'); END IF;
+    FOR v_notify_queue IN
+      SELECT DISTINCT affected.queue_name
+        FROM unnest(v_notify_queues) AS affected(queue_name)
+       ORDER BY affected.queue_name
+    LOOP
+      PERFORM pg_notify('workhorse_jobs', v_notify_queue);
+    END LOOP;
     RETURN v_count;
   END IF;
 
@@ -8940,6 +8976,7 @@ BEGIN
         );
       v_count := v_count + 1;
       v_expired_leases := v_expired_leases + 1;
+      v_notify_queues := array_append(v_notify_queues, v_job.queue_name);
       CONTINUE;
     END IF;
     IF v_runtime.current_attempt < v_job.max_attempts THEN
@@ -8995,11 +9032,18 @@ BEGIN
           'retry_delay_source', v_retry_source));
     v_count := v_count + 1;
     v_expired_leases := v_expired_leases + 1;
+    v_notify_queues := array_append(v_notify_queues, v_job.queue_name);
   END LOOP;
   PERFORM set_config('workhorse.recovery_expired_leases', v_expired_leases::text, true);
   PERFORM set_config('workhorse.recovery_retried', v_retried::text, true);
   PERFORM set_config('workhorse.recovery_retry_dimensions', v_retry_dimensions::text, true);
-  IF v_count > 0 THEN PERFORM pg_notify('workhorse_jobs', '*'); END IF;
+  FOR v_notify_queue IN
+    SELECT DISTINCT affected.queue_name
+      FROM unnest(v_notify_queues) AS affected(queue_name)
+     ORDER BY affected.queue_name
+  LOOP
+    PERFORM pg_notify('workhorse_jobs', v_notify_queue);
+  END LOOP;
   RETURN v_count;
 END;
 $$;

@@ -876,6 +876,53 @@ describe("worker registry", () => {
     }
   });
 
+  it("does not wake maintenance when a job notification wakes dispatch", async () => {
+    let notify: (() => void) | undefined;
+    const subscribe = vi
+      .spyOn(queue, "subscribeToJobNotifications")
+      .mockImplementation(async (_queueName, onJobsAvailable) => {
+        notify = onJobsAvailable;
+        return { close: async () => undefined };
+      });
+    const worker = new Worker(queue, {
+      workerId: "notification-dispatch-only",
+      pollMs: 15_000,
+      maintenanceIntervalMs: 100,
+      maintenanceTaskPollMs: 100,
+      registryIntervalMs: 0,
+    });
+    const maintenanceTimes: number[] = [];
+    const privateWorker = worker as unknown as { runMaintenance(): Promise<void> };
+    const originalRunMaintenance = privateWorker.runMaintenance.bind(worker);
+    const runMaintenance = vi
+      .spyOn(privateWorker, "runMaintenance")
+      .mockImplementation(async () => {
+        maintenanceTimes.push(Date.now());
+        await originalRunMaintenance();
+      });
+
+    const running = worker.run();
+    let notificationLoad: NodeJS.Timeout | undefined;
+    try {
+      await vi.waitFor(() => expect(subscribe).toHaveBeenCalledOnce());
+      expect(runMaintenance).toHaveBeenCalledOnce();
+      expect(notify).toBeDefined();
+      notificationLoad = setInterval(() => notify?.(), 10);
+      await vi.waitFor(() => expect(runMaintenance).toHaveBeenCalledTimes(3), { timeout: 500 });
+      clearInterval(notificationLoad);
+      notificationLoad = undefined;
+
+      for (let index = 1; index < maintenanceTimes.length; index += 1) {
+        expect(maintenanceTimes[index]! - maintenanceTimes[index - 1]!).toBeGreaterThanOrEqual(80);
+      }
+    } finally {
+      if (notificationLoad) clearInterval(notificationLoad);
+      worker.stop();
+      await running;
+      subscribe.mockRestore();
+    }
+  });
+
   it("runs tick and scheduled maintenance tasks on independent cadences with phase telemetry", async () => {
     const jobId = await queue.enqueue(
       "scheduled-worker",
@@ -1247,7 +1294,7 @@ describe("worker registry", () => {
     }
   });
 
-  it("ignores notifications for other queues and wakes for wildcard promotion", async () => {
+  it("notifies only the queue whose scheduled work was promoted", async () => {
     const queueName = `notification-routing-${randomUUID()}`;
     const handled: string[] = [];
     const claim = vi.spyOn(queue, "claim");
@@ -1255,7 +1302,7 @@ describe("worker registry", () => {
       queue: queueName,
       workerId: "notification-routing",
       pollMs: 15_000,
-      maintenanceIntervalMs: 100,
+      maintenanceIntervalMs: 10_000,
       registryIntervalMs: 0,
     }).handle<{ message: string }>("notification-routing", ({ message }) => {
       handled.push(message);
@@ -1268,15 +1315,20 @@ describe("worker registry", () => {
       const initialClaimCount = claim.mock.calls.length;
       await queue.enqueue("other-queue-notification", null, {
         queue: `${queueName}-other`,
+        runAt: new Date(Date.now() + 100),
       });
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      await sleep(120);
+      await queue.promote();
+      await sleep(50);
       expect(claim).toHaveBeenCalledTimes(initialClaimCount);
 
       await queue.enqueue(
         "notification-routing",
         { message: "promoted" },
-        { queue: queueName, runAt: new Date(Date.now() + 150) },
+        { queue: queueName, runAt: new Date(Date.now() + 100) },
       );
+      await sleep(120);
+      await queue.promote();
       await vi.waitFor(() => expect(handled).toEqual(["promoted"]), { timeout: 1_000 });
     } finally {
       worker.stop();
