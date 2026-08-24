@@ -1237,7 +1237,7 @@ $$;
 -- Append-only lifecycle audit.
 CREATE TABLE IF NOT EXISTS workhorse.job_event (
   event_id bigint GENERATED ALWAYS AS IDENTITY,
-  job_id uuid NOT NULL,
+  job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE CASCADE,
   attempt integer,
   event_type text NOT NULL,
   details jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -1260,7 +1260,7 @@ CREATE INDEX IF NOT EXISTS job_event_batch_id_idx
 -- One immutable row for every closed attempt.
 CREATE TABLE IF NOT EXISTS workhorse.attempt_history (
   attempt_id bigint GENERATED ALWAYS AS IDENTITY,
-  job_id uuid NOT NULL,
+  job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE CASCADE,
   attempt integer NOT NULL,
   fence_token bigint NOT NULL,
   worker_id text NOT NULL,
@@ -1502,45 +1502,6 @@ VALUES (
   date_bin('1 day', clock_timestamp(), timestamp with time zone '2000-01-01')
 )
 ON CONFLICT (singleton) DO NOTHING;
-
--- History deliberately has no reverse foreign key to job. Parent deletion would otherwise probe
--- every retained history partition. This insert-side lock preserves the important half of the
--- relationship: history must be attributed to an existing job, and insertion serializes with
--- terminal identity deletion without making deletion inspect every child partition.
-CREATE OR REPLACE FUNCTION workhorse.lock_history_job_v1()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
-BEGIN
-  PERFORM 1 FROM workhorse.job WHERE id = NEW.job_id FOR KEY SHARE;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION USING
-      ERRCODE = 'foreign_key_violation',
-      MESSAGE = format('history references missing workhorse job %s', NEW.job_id),
-      CONSTRAINT = TG_TABLE_NAME || '_job_exists';
-  END IF;
-  UPDATE workhorse.job_outcome outcome
-     SET history_through_at = GREATEST(outcome.history_through_at, NEW.occurred_at)
-   WHERE outcome.job_id = NEW.job_id
-     AND outcome.history_through_at < NEW.occurred_at;
-  UPDATE workhorse.maintenance_state state
-     SET history_retained_before = LEAST(
-           state.history_retained_before,
-           date_trunc('day', NEW.occurred_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-         ),
-         updated_at = clock_timestamp()
-   WHERE state.task_name = 'history_retention'
-     AND state.history_retained_before IS NOT NULL
-     AND NEW.occurred_at < state.history_retained_before;
-  RETURN NEW;
-END;
-$$;
-CREATE OR REPLACE TRIGGER job_event_job_exists
-  BEFORE INSERT OR UPDATE OF job_id ON workhorse.job_event
-  FOR EACH ROW EXECUTE FUNCTION workhorse.lock_history_job_v1();
-CREATE OR REPLACE TRIGGER attempt_history_job_exists
-  BEFORE INSERT OR UPDATE OF job_id ON workhorse.attempt_history
-  FOR EACH ROW EXECUTE FUNCTION workhorse.lock_history_job_v1();
 
 -- Declarative schedules are synchronized from application code and evaluated by worker processes.
 -- Payloads, occurrence ownership, and queue semantics remain owned by the Workhorse protocol.
@@ -5822,8 +5783,8 @@ BEGIN
     v_request_id_digest, v_request_id_length, p_requested_by, p_reason,
     v_fingerprint, 'failed', 'ready', v_now
   );
-  -- The history trigger may advance history_through_at for retention safety. Semantic terminal
-  -- evidence remains immutable and the lifecycle event keeps its truthful request-time chronology.
+  -- The history foreign key keeps the source identity while this event is retained. Semantic
+  -- terminal evidence and its materialization watermark remain immutable.
   INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
     VALUES (p_source_job_id, v_outcome.current_attempt, 'redriven', jsonb_build_object(
       'target_job_id', target_job_id,
@@ -7013,10 +6974,10 @@ BEGIN
     );
     DELETE FROM workhorse.job_runtime runtime WHERE runtime.job_id = p_job_id;
     INSERT INTO workhorse.job_outcome(
-      job_id, state, current_attempt, fence_token, run_at, error
+      job_id, state, current_attempt, fence_token, run_at, error, history_through_at
     ) VALUES (
       p_job_id, 'canceled', v_runtime.current_attempt, v_runtime.fence_token,
-      v_runtime.run_at, v_error
+      v_runtime.run_at, v_error, clock_timestamp()
     );
     INSERT INTO workhorse.attempt_history(
       job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
@@ -7060,9 +7021,10 @@ BEGIN
   END IF;
   DELETE FROM workhorse.job_runtime runtime WHERE runtime.job_id = p_job_id;
   INSERT INTO workhorse.job_outcome(
-    job_id, state, current_attempt, fence_token, run_at, error
+    job_id, state, current_attempt, fence_token, run_at, error, history_through_at
   ) VALUES (
-    p_job_id, 'failed', v_runtime.current_attempt, v_fence_token, v_runtime.run_at, v_error
+    p_job_id, 'failed', v_runtime.current_attempt, v_fence_token, v_runtime.run_at, v_error,
+    clock_timestamp()
   );
   IF v_runtime.attempt_started_at IS NOT NULL THEN
     INSERT INTO workhorse.attempt_history(
@@ -7160,9 +7122,10 @@ BEGIN
   ELSE
     DELETE FROM workhorse.job_runtime runtime WHERE runtime.job_id = p_job_id;
     INSERT INTO workhorse.job_outcome(
-      job_id, state, current_attempt, fence_token, run_at, error
+      job_id, state, current_attempt, fence_token, run_at, error, history_through_at
     ) VALUES (
-      p_job_id, 'failed', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, v_error
+      p_job_id, 'failed', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, v_error,
+      clock_timestamp()
     );
     INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
       VALUES (
@@ -7385,10 +7348,11 @@ BEGIN
     v_envelope := workhorse.cancellation_envelope_v1(v_now, p_requested_by, p_reason);
     DELETE FROM workhorse.job_runtime runtime WHERE runtime.job_id = p_job_id;
     INSERT INTO workhorse.job_outcome(
-      job_id, state, current_attempt, fence_token, run_at, error, finished_at, updated_at
+      job_id, state, current_attempt, fence_token, run_at, error, finished_at, updated_at,
+      history_through_at
     ) VALUES (
       p_job_id, 'canceled', v_runtime.current_attempt, v_fence_token, v_runtime.run_at,
-      v_envelope, v_now, v_now
+      v_envelope, v_now, v_now, v_now
     ) RETURNING * INTO v_outcome;
     IF v_runtime.attempt_started_at IS NOT NULL THEN
       INSERT INTO workhorse.attempt_history(
@@ -7472,9 +7436,12 @@ BEGIN
      AND runtime.worker_id = p_worker_id AND runtime.fence_token = p_fence_token
      AND runtime.expires_at > clock_timestamp() AND runtime.cancel_requested_at IS NOT NULL;
   IF NOT FOUND THEN RETURN false; END IF;
-  INSERT INTO workhorse.job_outcome(job_id, state, current_attempt, fence_token, run_at, error)
+  INSERT INTO workhorse.job_outcome(
+    job_id, state, current_attempt, fence_token, run_at, error, history_through_at
+  )
     VALUES (
-      p_job_id, 'canceled', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, v_envelope
+      p_job_id, 'canceled', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, v_envelope,
+      clock_timestamp()
     );
   INSERT INTO workhorse.attempt_history(
     job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
@@ -8736,11 +8703,12 @@ BEGIN
        WHERE runtime.job_id = v_dependency.dependent_job_id AND runtime.state = 'blocked';
       IF NOT FOUND THEN CONTINUE; END IF;
       INSERT INTO workhorse.job_outcome(
-        job_id, state, current_attempt, fence_token, run_at, error, finished_at, updated_at
+        job_id, state, current_attempt, fence_token, run_at, error, finished_at, updated_at,
+        history_through_at
       ) VALUES (
         v_dependency.dependent_job_id,
         CASE WHEN v_final_action = 'fail' THEN 'failed' ELSE 'canceled' END,
-        v_runtime.current_attempt, 0, v_runtime.run_at, v_error, v_now, v_now
+        v_runtime.current_attempt, 0, v_runtime.run_at, v_error, v_now, v_now, v_now
       );
       INSERT INTO workhorse.job_event(job_id, event_type, details)
         VALUES (
@@ -8834,8 +8802,12 @@ BEGIN
   RETURNING * INTO v_runtime;
   IF NOT FOUND THEN RETURN false; END IF;
 
-  INSERT INTO workhorse.job_outcome(job_id, state, current_attempt, fence_token, run_at, result)
-    VALUES (p_job_id, 'succeeded', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, p_result);
+  INSERT INTO workhorse.job_outcome(
+    job_id, state, current_attempt, fence_token, run_at, result, history_through_at
+  ) VALUES (
+    p_job_id, 'succeeded', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, p_result,
+    clock_timestamp()
+  );
   INSERT INTO workhorse.attempt_history(
     job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at
   ) VALUES (
@@ -8928,8 +8900,12 @@ BEGIN
     RETURNING * INTO v_runtime;
     IF NOT FOUND THEN RETURN 'stale'; END IF;
     v_state := 'failed';
-    INSERT INTO workhorse.job_outcome(job_id, state, current_attempt, fence_token, run_at, error)
-      VALUES (p_job_id, 'failed', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, v_error);
+    INSERT INTO workhorse.job_outcome(
+      job_id, state, current_attempt, fence_token, run_at, error, history_through_at
+    ) VALUES (
+      p_job_id, 'failed', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, v_error,
+      clock_timestamp()
+    );
     INSERT INTO workhorse.attempt_history(
       job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
     ) VALUES (
@@ -9043,10 +9019,12 @@ BEGIN
          AND r.fence_token = v_runtime.fence_token AND r.expires_at <= clock_timestamp()
          AND r.cancel_requested_at IS NOT NULL;
       IF NOT FOUND THEN CONTINUE; END IF;
-      INSERT INTO workhorse.job_outcome(job_id, state, current_attempt, fence_token, run_at, error)
+      INSERT INTO workhorse.job_outcome(
+        job_id, state, current_attempt, fence_token, run_at, error, history_through_at
+      )
         VALUES (
           v_runtime.job_id, 'canceled', v_runtime.current_attempt, v_runtime.fence_token,
-          v_runtime.run_at, v_envelope
+          v_runtime.run_at, v_envelope, clock_timestamp()
         );
       INSERT INTO workhorse.attempt_history(
         job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
@@ -9106,9 +9084,12 @@ BEGIN
        WHERE r.job_id = v_runtime.job_id AND r.state = 'active'
          AND r.fence_token = v_runtime.fence_token AND r.expires_at <= clock_timestamp();
       IF NOT FOUND THEN CONTINUE; END IF;
-      INSERT INTO workhorse.job_outcome(job_id, state, current_attempt, fence_token, run_at, error)
-        VALUES (v_runtime.job_id, 'failed', v_runtime.current_attempt, v_runtime.fence_token,
-          v_runtime.run_at, v_error);
+      INSERT INTO workhorse.job_outcome(
+        job_id, state, current_attempt, fence_token, run_at, error, history_through_at
+      ) VALUES (
+        v_runtime.job_id, 'failed', v_runtime.current_attempt, v_runtime.fence_token,
+        v_runtime.run_at, v_error, clock_timestamp()
+      );
     END IF;
     INSERT INTO workhorse.attempt_history(
       job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
@@ -9332,6 +9313,10 @@ BEGIN
        AND outcome.finished_at < p_outcome_before
        AND outcome.history_through_at < p_history_before
        AND NOT EXISTS (SELECT 1 FROM workhorse.job_runtime runtime WHERE runtime.job_id = job.id)
+       AND NOT EXISTS (SELECT 1 FROM workhorse.job_event event WHERE event.job_id = job.id)
+       AND NOT EXISTS (
+             SELECT 1 FROM workhorse.attempt_history attempt WHERE attempt.job_id = job.id
+           )
      ORDER BY outcome.finished_at, job.id
      FOR UPDATE OF job SKIP LOCKED
      LIMIT LEAST(p_limit * 4, 100000)
@@ -11266,10 +11251,10 @@ BEGIN
     );
     DELETE FROM workhorse.job_runtime runtime WHERE runtime.job_id = p_job_id;
     INSERT INTO workhorse.job_outcome(
-      job_id, state, current_attempt, fence_token, run_at, error
+      job_id, state, current_attempt, fence_token, run_at, error, history_through_at
     ) VALUES (
       p_job_id, 'canceled', v_runtime.current_attempt, v_runtime.fence_token,
-      v_runtime.run_at, v_error
+      v_runtime.run_at, v_error, clock_timestamp()
     );
     INSERT INTO workhorse.attempt_history(
       job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
@@ -11319,9 +11304,10 @@ BEGIN
   END IF;
   DELETE FROM workhorse.job_runtime runtime WHERE runtime.job_id = p_job_id;
   INSERT INTO workhorse.job_outcome(
-    job_id, state, current_attempt, fence_token, run_at, error
+    job_id, state, current_attempt, fence_token, run_at, error, history_through_at
   ) VALUES (
-    p_job_id, 'failed', v_runtime.current_attempt, v_fence_token, v_runtime.run_at, v_error
+    p_job_id, 'failed', v_runtime.current_attempt, v_fence_token, v_runtime.run_at, v_error,
+    clock_timestamp()
   );
   IF v_runtime.attempt_started_at IS NOT NULL THEN
     INSERT INTO workhorse.attempt_history(
@@ -11447,10 +11433,11 @@ BEGIN
     v_envelope := workhorse.cancellation_envelope_v1(v_now, p_requested_by, p_reason);
     DELETE FROM workhorse.job_runtime runtime WHERE runtime.job_id = p_job_id;
     INSERT INTO workhorse.job_outcome(
-      job_id, state, current_attempt, fence_token, run_at, error, finished_at, updated_at
+      job_id, state, current_attempt, fence_token, run_at, error, finished_at, updated_at,
+      history_through_at
     ) VALUES (
       p_job_id, 'canceled', v_runtime.current_attempt, v_fence_token, v_runtime.run_at,
-      v_envelope, v_now, v_now
+      v_envelope, v_now, v_now, v_now
     ) RETURNING * INTO v_outcome;
     IF v_runtime.attempt_started_at IS NOT NULL THEN
       INSERT INTO workhorse.attempt_history(

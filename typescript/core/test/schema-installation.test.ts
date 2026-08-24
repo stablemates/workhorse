@@ -376,8 +376,8 @@ describe("schema installation", () => {
                AND NOT tgisinternal
           ) triggers) AS triggers`);
     expect(historyIntegrity.rows[0]).toEqual({
-      foreign_keys: 0,
-      triggers: ["attempt_history_job_exists", "job_event_job_exists"],
+      foreign_keys: 2,
+      triggers: null,
     });
 
     const relations = await pool.query<{ relname: string }>(

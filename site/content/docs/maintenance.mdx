@@ -80,6 +80,10 @@ PostgreSQL guards the dependency order: it rejects any `RetentionPolicyDefinitio
 remove a job's identity before its retained evidence, and a retained `job_redrive` descendant
 keeps its source identity available for lineage.
 
+Delete terminal data through the retention functions rather than deleting `job` rows directly.
+Direct deletion cascades into retained history, so it can remove evidence before the configured
+windows expire or statistics consume it.
+
 ## Set maintenance cadence
 
 `queue.syncMaintenancePolicy` stores one set of scheduling defaults for the database, including

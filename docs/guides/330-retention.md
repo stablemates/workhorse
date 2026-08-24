@@ -66,8 +66,8 @@ maintenance falls behind, so that condition can't stay invisible.
 ## Don't delete jobs yourself
 
 It's tempting to write your own `DELETE FROM job WHERE ...`. Don't. The cleanup functions
-exist to enforce the ordering rules above, and raw SQL bypasses all of them — leaving
-history that points at nothing and statistics that can never be rebuilt.
+exist to enforce the ordering rules above. Raw SQL bypasses them, cascading into retained
+history and removing evidence before statistics can be rebuilt.
 
 ## Next
 

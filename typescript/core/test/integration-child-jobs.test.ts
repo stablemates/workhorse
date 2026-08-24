@@ -777,6 +777,12 @@ describe("child jobs", () => {
         WHERE job_id = $1::uuid`,
       [created.child.childJobId, expiredAt],
     );
+    await pool.query("DELETE FROM workhorse.job_event WHERE job_id = ANY($1::uuid[])", [
+      [parentId, created.child.childJobId],
+    ]);
+    await pool.query("DELETE FROM workhorse.attempt_history WHERE job_id = ANY($1::uuid[])", [
+      [parentId, created.child.childJobId],
+    ]);
     const firstPass = await pool.query<{ count: number }>(
       "SELECT workhorse.prune_terminal_jobs_v1($1, $1, $1, 100) AS count",
       [new Date("2021-01-01T00:00:00.000Z")],
