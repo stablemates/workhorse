@@ -2093,7 +2093,8 @@ class DashboardBackend:
     def run_task_now(self, input: object, _actor: str) -> object:
         job_id = cast(Mapping[str, object], input)["id"]
         row = self._rows(
-            "SELECT status, state, run_at FROM workhorse.run_task_now_v1(%s::uuid)", (job_id,)
+            "SELECT status, state, run_at FROM workhorse.dashboard_run_task_now_v1(%s::uuid)",
+            (job_id,),
         )[0]
         if row["status"] == "not_found":
             raise DashboardRPCError(404, "NOT_FOUND", "Task not found")

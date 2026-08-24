@@ -1612,10 +1612,11 @@ func TestWorkerRegistryDeliversRemotePauseAndDeregisters(t *testing.T) {
 	}
 	if _, err := pool.Exec(
 		ctx,
-		"SELECT * FROM workhorse.set_worker_paused_v1($1, true, $2, $3)",
+		"SELECT * FROM workhorse.set_worker_paused_v1($1, true, $2, $3, $4)",
 		workerID,
 		"test",
 		"remote pause",
+		"pause-request",
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -1648,9 +1649,11 @@ func TestWorkerRegistryDeliversRemotePauseAndDeregisters(t *testing.T) {
 	}
 	if _, err := pool.Exec(
 		ctx,
-		"SELECT * FROM workhorse.set_worker_paused_v1($1, false, $2, NULL)",
+		"SELECT * FROM workhorse.set_worker_paused_v1($1, false, $2, $3, $4)",
 		workerID,
 		"test",
+		"remote resume",
+		"resume-request",
 	); err != nil {
 		t.Fatal(err)
 	}

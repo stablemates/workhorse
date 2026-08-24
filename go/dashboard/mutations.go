@@ -112,7 +112,7 @@ func (service *backend) revertRetentionPolicy(ctx context.Context, input any, _ 
 
 func (service *backend) runTaskNow(ctx context.Context, input any, _ string) (any, error) {
 	value, _ := document(input)
-	rows, err := service.executor.Query(ctx, "SELECT status,state,run_at FROM workhorse.run_task_now_v1($1::uuid)", value["id"])
+	rows, err := service.executor.Query(ctx, "SELECT status,state,run_at FROM workhorse.dashboard_run_task_now_v1($1::uuid)", value["id"])
 	if err != nil {
 		return nil, err
 	}

@@ -974,8 +974,8 @@ def test_worker_registry_delivers_remote_pause_and_deregisters(database_url: str
         assert row[1] == ["python-registry"]
 
         operator_connection.execute(
-            "SELECT * FROM workhorse.set_worker_paused_v1(%s, true, %s, %s)",
-            ("python-registry-worker", "test", "remote pause"),
+            "SELECT * FROM workhorse.set_worker_paused_v1(%s, true, %s, %s, %s)",
+            ("python-registry-worker", "test", "remote pause", "pause-request"),
         )
         deadline = monotonic() + 5
         while monotonic() < deadline:
@@ -993,8 +993,8 @@ def test_worker_registry_delivers_remote_pause_and_deregisters(database_url: str
         assert not handled.wait(timeout=0.25)
 
         operator_connection.execute(
-            "SELECT * FROM workhorse.set_worker_paused_v1(%s, false, %s, %s)",
-            ("python-registry-worker", "test", None),
+            "SELECT * FROM workhorse.set_worker_paused_v1(%s, false, %s, %s, %s)",
+            ("python-registry-worker", "test", "remote resume", "resume-request"),
         )
         assert handled.wait(timeout=5)
 

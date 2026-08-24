@@ -277,6 +277,16 @@ describe("schema installation", () => {
     expect(schema).not.toMatch(/^DO \$migration\$/m);
   });
 
+  it("defines each schema function name once", async () => {
+    const schema = await readFile(path.join(repository, "sql", "schema", "current.sql"), "utf8");
+    const names = [
+      ...schema.matchAll(/^CREATE OR REPLACE FUNCTION workhorse\.([a-z0-9_]+)\(/gm),
+    ].map(([, name]) => name);
+    const duplicates = names.filter((name, index) => names.indexOf(name) !== index);
+
+    expect(duplicates).toEqual([]);
+  });
+
   it("carries no function or view version above v1", async () => {
     // The baseline reset left one version of everything. A `_v2` in a clean install would mean a
     // compatibility window nobody can be inside, because version 1 is the only version there has
