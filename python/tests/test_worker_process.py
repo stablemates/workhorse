@@ -16,6 +16,7 @@ from workhorse import Queue, Worker, run_worker_process
 PROCESS_RUNNER_FIXTURE = Path(__file__).parent / "fixtures" / "process_runner.py"
 CRASH_FIXTURE = Path(__file__).parent / "fixtures" / "crash_worker.py"
 DEDICATED_WORKER_EXAMPLE = Path(__file__).parents[1] / "examples" / "dedicated_worker.py"
+pytestmark = pytest.mark.slow
 
 
 def _start_fixture(mode: str, timeout_ms: int) -> subprocess.Popen[str]:

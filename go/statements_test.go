@@ -60,6 +60,107 @@ func TestGeneratedCataloguesMatchProtocolManifest(t *testing.T) {
 	}
 }
 
+func TestGeneratedCatalogueCoversGoStatementUsage(t *testing.T) {
+	registries := map[string]map[string]string{
+		"internalStatementRegistry": internalStatementRegistry,
+		"protocolStatementRegistry": protocolStatementRegistry,
+		"adminStatementRegistry":    adminStatementRegistry,
+	}
+	constants := make(map[string]string)
+	uses := make(map[string]int)
+	files := parseProductionGoFiles(t)
+
+	for _, file := range files {
+		ast.Inspect(file, func(node ast.Node) bool {
+			declaration, ok := node.(*ast.ValueSpec)
+			if !ok {
+				return true
+			}
+			for index, name := range declaration.Names {
+				if !strings.HasSuffix(name.Name, "StatementName") || index >= len(declaration.Values) {
+					continue
+				}
+				literal, ok := declaration.Values[index].(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					continue
+				}
+				value, err := strconv.Unquote(literal.Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				constants[name.Name] = value
+			}
+			return true
+		})
+	}
+
+	for _, file := range files {
+		ast.Inspect(file, func(node ast.Node) bool {
+			if identifier, ok := node.(*ast.Ident); ok {
+				uses[identifier.Name]++
+			}
+			lookup, ok := node.(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			registryName, ok := lookup.X.(*ast.Ident)
+			if !ok || registries[registryName.Name] == nil {
+				return true
+			}
+			statementName := ""
+			switch index := lookup.Index.(type) {
+			case *ast.BasicLit:
+				if index.Kind == token.STRING {
+					statementName, _ = strconv.Unquote(index.Value)
+				}
+			case *ast.Ident:
+				statementName = constants[index.Name]
+			}
+			if statementName != "" && registries[registryName.Name][statementName] == "" {
+				t.Errorf("%s lookup names missing generated statement %s", registryName.Name, statementName)
+			}
+			return true
+		})
+	}
+
+	for name, statementName := range constants {
+		if uses[name] == 1 {
+			t.Errorf("%s is declared but never used by Go runtime code", name)
+		}
+		found := false
+		for _, registry := range registries {
+			if registry[statementName] != "" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("%s names missing generated statement %s", name, statementName)
+		}
+	}
+}
+
+func parseProductionGoFiles(t *testing.T) []*ast.File {
+	t.Helper()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := make([]*ast.File, 0, len(entries))
+	set := token.NewFileSet()
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(set, entry.Name(), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, file)
+	}
+	return files
+}
+
 func TestStatementRegistryMatchesProtocolManifest(t *testing.T) {
 	manifest := readProtocolManifest(t)
 	want := make(map[string]string, len(manifest.Functions)+len(manifest.Views))

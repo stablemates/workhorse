@@ -54,11 +54,13 @@ await writeFile(
 await chmod(targetEnvironmentPath, 0o600);
 
 await writeResourceRegistry(context.commonGitDirectory, resources);
+await run("uv", ["sync", "--project", "python", "--frozen"], { cwd: context.worktreeRoot });
+await run("go", ["-C", "go", "mod", "download"], { cwd: context.worktreeRoot });
 await run("pnpm", ["db:reset:all"], {
   cwd: context.worktreeRoot,
   env: { ...process.env, ...generatedEnvironment },
 });
 
 console.log(
-  `Configured linked worktree ${context.worktreeId}: copied ${copied.length} env file(s) and provisioned five databases`,
+  `Configured linked worktree ${context.worktreeId}: copied ${copied.length} env file(s), synchronized language dependencies, and provisioned five databases`,
 );

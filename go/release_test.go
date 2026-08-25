@@ -221,7 +221,7 @@ func TestGoSupportContractMatchesRepositoryDeclarations(t *testing.T) {
 	if !strings.Contains(packageManifest, `"go:vuln": "tsx scripts/with-env.ts go -C go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./..."`) {
 		t.Fatal("package.json does not expose the pinned Go vulnerability scan through the worktree environment")
 	}
-	if !strings.Contains(packageManifest, `pnpm lint && pnpm go:vuln && pnpm typecheck`) {
+	if !strings.Contains(packageManifest, `pnpm lint && pnpm python:vuln && pnpm go:vuln && pnpm typecheck`) {
 		t.Fatal("the full check does not run the Go vulnerability scan")
 	}
 	if !strings.Contains(packageManifest, `pnpm test && pnpm go:test:race && pnpm test:packed`) {

@@ -76,6 +76,9 @@ type dashboardExchangeExpected struct {
 }
 
 func TestDashboardSatisfiesEverySharedHTTPScenario(t *testing.T) {
+	if testing.Short() {
+		t.Skip("PostgreSQL integration tests do not run in short mode")
+	}
 	sourceURL := os.Getenv("DATABASE_URL_TEST")
 	if sourceURL == "" {
 		t.Skip("DATABASE_URL_TEST is required for dashboard conformance tests")

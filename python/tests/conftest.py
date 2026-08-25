@@ -14,6 +14,13 @@ import pytest
 REPOSITORY = Path(__file__).parents[2]
 
 
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Keep every test that provisions PostgreSQL out of the fast unit lane."""
+    for item in items:
+        if "database_url" in getattr(item, "fixturenames", ()):
+            item.add_marker(pytest.mark.integration)
+
+
 @pytest.fixture(scope="session")
 def installed_distribution_interpreters(
     tmp_path_factory: pytest.TempPathFactory,

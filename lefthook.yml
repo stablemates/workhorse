@@ -49,12 +49,18 @@ pre-commit:
     - name: lint Python
       glob: "python/**"
       run: pnpm python:lint
+    - name: test Python unit scope
+      glob: "python/**"
+      run: pnpm python:test:unit
     - name: vet Go
       glob: "go/**"
       run: pnpm go:vet
     - name: lint Go
       glob: "go/**"
       run: pnpm go:lint
+    - name: test Go unit scope
+      glob: "go/**"
+      run: pnpm go:test:unit
     - name: check site types
       glob: "site/**"
       run: pnpm docs:typecheck
@@ -93,9 +99,27 @@ post-checkout:
         elif [ "{3}" = "1" ] && ! git diff --quiet "{1}" "{2}" -- pnpm-lock.yaml; then
           pnpm install --frozen-lockfile
         fi
+        if [ "{3}" = "1" ] && [ "{1}" != "0000000000000000000000000000000000000000" ]; then
+          if ! git diff --quiet "{1}" "{2}" -- python/uv.lock; then
+            uv sync --project python --frozen
+          fi
+          if ! git diff --quiet "{1}" "{2}" -- go/go.sum; then
+            go -C go mod download
+          fi
+        fi
         pnpm worktree:prune
 
 post-merge:
   jobs:
-    - name: clean resources left by removed worktrees
-      run: pnpm worktree:prune
+    - name: synchronize changed dependencies and clean removed worktrees
+      run: |
+        if ! git diff --quiet ORIG_HEAD HEAD -- pnpm-lock.yaml; then
+          pnpm install --frozen-lockfile
+        fi
+        if ! git diff --quiet ORIG_HEAD HEAD -- python/uv.lock; then
+          uv sync --project python --frozen
+        fi
+        if ! git diff --quiet ORIG_HEAD HEAD -- go/go.sum; then
+          go -C go mod download
+        fi
+        pnpm worktree:prune

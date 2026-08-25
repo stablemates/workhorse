@@ -58,6 +58,8 @@ def test_python_support_contract_matches_repository_declarations(database_url: s
         '"python:test": "tsx scripts/with-env.ts uv run --project python pytest python/tests"'
         in package_manifest
     )
+    assert '"python:vuln": "sh scripts/audit-python-dependencies.sh"' in package_manifest
+    assert "pnpm lint && pnpm python:vuln && pnpm go:vuln" in package_manifest
 
     with psycopg.connect(database_url) as connection:
         version_number = connection.execute(

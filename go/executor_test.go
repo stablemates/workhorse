@@ -221,6 +221,9 @@ func assertPolicyQuery(t *testing.T, executor workhorse.Executor) {
 
 func testDatabaseURL(t *testing.T) string {
 	t.Helper()
+	if testing.Short() {
+		t.Skip("PostgreSQL integration tests do not run in short mode")
+	}
 
 	databaseURL := os.Getenv("DATABASE_URL_TEST")
 	if databaseURL == "" {

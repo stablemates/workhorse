@@ -368,10 +368,16 @@ persisted policy. `retry_scheduled` and `lease_expired` event details expose `re
 
 ## Development
 
-Requirements: Node.js **>= 22**, pnpm, Python **>= 3.10**, uv, and PostgreSQL **15 or newer**. No
-PostgreSQL extension is required. CI runs the TypeScript suite against every combination of Node.js
+Requirements: Node.js **>= 22**, pnpm, Go **>= 1.25**, Python **>= 3.10**, uv, and
+PostgreSQL **15 or newer**. No PostgreSQL extension is required. CI runs the TypeScript suite against every combination of Node.js
 22, 24 and PostgreSQL 15, 16, 17, 18; see [`docs/compatibility.md`](docs/compatibility.md) for the
 Python package matrix and what the support boundary does and does not promise.
+
+The repository's `mise.toml` pins Node.js, pnpm, Go, Python, and uv, so `mise install` provides the
+supported toolchain in one step. If you manage the toolchains yourself, synchronize all three
+dependency sets with `pnpm install --frozen-lockfile`, `uv sync --project python --frozen`, and
+`go -C go mod download`. `pnpm sql-catalogues:generate` needs `gofmt`, Ruff through uv, and `oxfmt`
+because it formats every generated client before writing it.
 
 The repository keeps language implementations under `typescript/`, `python/`, and `go/`. Shared
 contracts and product artifacts remain at the root: PostgreSQL under `sql/`, protocol fixtures under
