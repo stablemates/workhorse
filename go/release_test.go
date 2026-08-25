@@ -33,7 +33,7 @@ import (
 
 func main() {
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, os.Getenv("WORKHORSE_TEST_DATABASE_URL"))
+pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL_TEST"))
 	if err != nil {
 		panic(err)
 	}
@@ -104,7 +104,7 @@ func main() {
 
 	command := exec.Command("go", "run", "-mod=mod", ".")
 	command.Dir = consumerRoot
-	command.Env = append(os.Environ(), "GOWORK=off", "WORKHORSE_TEST_DATABASE_URL="+databaseURL)
+	command.Env = append(os.Environ(), "GOWORK=off", "DATABASE_URL_TEST="+databaseURL)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("run external module: %v\n%s", err, output)
@@ -228,9 +228,9 @@ func TestGoSupportContractMatchesRepositoryDeclarations(t *testing.T) {
 		t.Fatal("the full check does not run the Go race lane")
 	}
 
-	databaseURL := os.Getenv("WORKHORSE_TEST_DATABASE_URL")
+	databaseURL := os.Getenv("DATABASE_URL_TEST")
 	if databaseURL == "" {
-		t.Skip("WORKHORSE_TEST_DATABASE_URL is required to exercise the PostgreSQL support lane")
+		t.Skip("DATABASE_URL_TEST is required to exercise the PostgreSQL support lane")
 	}
 	pool, err := pgxpool.New(context.Background(), databaseURL)
 	if err != nil {

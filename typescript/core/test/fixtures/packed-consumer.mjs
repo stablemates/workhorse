@@ -10,8 +10,7 @@ import { sql } from "drizzle-orm";
 import { installSchema, Pool, startWorkerProcess, Worker } from "@stablemates/workhorse";
 
 const databaseUrl =
-  process.env.WORKHORSE_TEST_DATABASE_URL ??
-  "postgres://workhorse:workhorse@localhost:5432/workhorse_test";
+  process.env.DATABASE_URL_TEST ?? "postgres://workhorse:workhorse@localhost:5432/workhorse_test";
 const pool = new Pool({ connectionString: databaseUrl, max: 2 });
 const db = drizzle({ client: pool });
 let closeCount = 0;

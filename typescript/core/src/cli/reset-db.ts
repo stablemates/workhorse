@@ -15,7 +15,7 @@ const purposeIndex = process.argv.indexOf("--database");
 const purpose = purposeIndex === -1 ? undefined : process.argv[purposeIndex + 1];
 if (!purpose || !isLocalDatabasePurpose(purpose)) {
   throw new Error(
-    "Pass --database dev, --database test, --database bench, --database demo, or --database demo_staging",
+    "Pass --database dev_primary, --database dev_secondary, --database test, --database bench, or --database test_packed",
   );
 }
 

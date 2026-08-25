@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { resourceEnvironment, type WorktreeResources } from "./worktree-resources.js";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const worktreeCommandModules = [
@@ -14,6 +15,30 @@ const worktreeCommandModules = [
 ];
 
 describe("worktree resource commands", () => {
+  it("owns only the five purpose-specific database variables", () => {
+    const resources: WorktreeResources = {
+      version: 1,
+      worktreeId: "feature",
+      worktreeRoot: "/checkout",
+      gitDirectory: "/git/worktrees/feature",
+      databaseUrls: {
+        dev_primary: "postgres://localhost/workhorse_dev_primary_feature",
+        dev_secondary: "postgres://localhost/workhorse_dev_secondary_feature",
+        test: "postgres://localhost/workhorse_test_feature",
+        bench: "postgres://localhost/workhorse_bench_feature",
+        test_packed: "postgres://localhost/workhorse_test_packed_feature",
+      },
+    };
+
+    expect(resourceEnvironment(resources)).toEqual({
+      DATABASE_URL_DEV_PRIMARY: resources.databaseUrls.dev_primary,
+      DATABASE_URL_DEV_SECONDARY: resources.databaseUrls.dev_secondary,
+      DATABASE_URL_TEST: resources.databaseUrls.test,
+      DATABASE_URL_BENCH: resources.databaseUrls.bench,
+      DATABASE_URL_TEST_PACKED: resources.databaseUrls.test_packed,
+    });
+  });
+
   it("declares every external module imported by their root package", async () => {
     const manifest = JSON.parse(
       await readFile(resolve(repositoryRoot, "package.json"), "utf8"),

@@ -39,13 +39,10 @@ func workerID() (string, error) {
 }
 
 func databaseURL() (string, error) {
-	if value := os.Getenv("WORKHORSE_DEMO_DATABASE_URL"); value != "" {
+	if value := os.Getenv("DATABASE_URL_DEV_PRIMARY"); value != "" {
 		return value, nil
 	}
-	if value := os.Getenv("DATABASE_URL"); value != "" {
-		return value, nil
-	}
-	return "", errors.New("WORKHORSE_DEMO_DATABASE_URL or DATABASE_URL is required")
+	return "", errors.New("DATABASE_URL_DEV_PRIMARY is required")
 }
 
 func pollInterval() (time.Duration, error) {

@@ -10,8 +10,8 @@ await mkdir(scratchRoot, { recursive: true });
 const checkout = await mkdtemp(join(scratchRoot, "workhorse-demo-smoke-"));
 const port = 31_000 + Math.floor(Math.random() * 1_000);
 const demoDatabaseUrl =
-  process.env.WORKHORSE_DEMO_DATABASE_URL ??
-  "postgresql://workhorse:workhorse@localhost:5432/workhorse_demo";
+  process.env.DATABASE_URL_DEV_PRIMARY ??
+  "postgresql://workhorse:workhorse@localhost:5432/workhorse_dev_primary";
 
 interface CommandResult {
   code: number;
@@ -87,11 +87,11 @@ try {
     env: {
       ...process.env,
       PORT: String(port),
-      DATABASE_URL: demoDatabaseUrl,
+      DATABASE_URL_DEV_PRIMARY: demoDatabaseUrl,
       // The smoke test asserts the documented single-workspace URLs, so a provisioned staging
       // workspace database in the ambient environment must not switch the demo into multi-workspace
       // mode here. The empty string means "not configured".
-      WORKHORSE_DEMO_STAGING_DATABASE_URL: "",
+      DATABASE_URL_DEV_SECONDARY: "",
       WORKHORSE_DISABLE_PORTLESS: "1",
       WORKHORSE_WORKER_POLL_MS: "15",
     },
@@ -248,7 +248,7 @@ try {
     ]);
   }
   if (installed) {
-    await run("pnpm", ["db:reset:demo"], { cwd: checkout }).catch(() => undefined);
+    await run("pnpm", ["db:reset:dev-primary"], { cwd: checkout }).catch(() => undefined);
   }
   await rm(checkout, { recursive: true, force: true });
 }

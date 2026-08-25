@@ -76,9 +76,9 @@ type dashboardExchangeExpected struct {
 }
 
 func TestDashboardSatisfiesEverySharedHTTPScenario(t *testing.T) {
-	sourceURL := os.Getenv("WORKHORSE_TEST_DATABASE_URL")
+	sourceURL := os.Getenv("DATABASE_URL_TEST")
 	if sourceURL == "" {
-		t.Skip("WORKHORSE_TEST_DATABASE_URL is required for dashboard conformance tests")
+		t.Skip("DATABASE_URL_TEST is required for dashboard conformance tests")
 	}
 	ctx := context.Background()
 	databaseURL := createDashboardConformanceDatabase(t, sourceURL)
@@ -548,7 +548,7 @@ func createDashboardConformanceDatabase(t *testing.T, sourceURL string) string {
 		t.Fatalf("Go dashboard conformance tests refuse non-loopback database host %q", parsed.Hostname())
 	}
 	if !strings.Contains(sourceName, "test") {
-		t.Fatalf("WORKHORSE_TEST_DATABASE_URL must name a test database")
+		t.Fatalf("DATABASE_URL_TEST must name a test database")
 	}
 	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(t.Name()+strconv.Itoa(os.Getpid()))))[:10]
 	prefix := sourceName

@@ -3,7 +3,7 @@
  *
  * `node --env-file` deliberately loses to variables already present in the environment, which is
  * the wrong precedence for a repository whose worktrees each own a set of databases. A shell that
- * exported one checkout's `WORKHORSE_*_DATABASE_URL` values carries them into a command run from
+ * exported one checkout's repository database URLs carries them into a command run from
  * another checkout, and that command then quietly reads and resets the first checkout's data.
  *
  * Interactive shells hide this when a directory-aware loader such as mise or direnv re-exports on
@@ -26,10 +26,9 @@ import {
 import { readEnvironment } from "./environment-file.js";
 
 /** Variables this repository provisions per worktree, and so is entitled to overwrite. */
-const ownedVariables = new Set([
-  "DATABASE_URL",
-  ...localDatabasePurposes.map((purpose) => localDatabaseEnvironmentVariable(purpose)),
-]);
+const ownedVariables = new Set(
+  localDatabasePurposes.map((purpose) => localDatabaseEnvironmentVariable(purpose)),
+);
 
 const [command, ...commandArguments] = process.argv.slice(2);
 if (!command) {

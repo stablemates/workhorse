@@ -6,6 +6,7 @@ import { isMissing } from "./environment-file.js";
 import {
   assertLocalDatabasePurpose,
   databaseName,
+  isLocalDatabasePurpose,
   localDatabaseEnvironmentVariable,
   localDatabasePurposes,
   localDatabaseUrl,
@@ -85,15 +86,12 @@ export function createWorktreeResources(
 }
 
 export function resourceEnvironment(resources: WorktreeResources): Record<string, string> {
-  return {
-    DATABASE_URL: resources.databaseUrls.dev,
-    ...Object.fromEntries(
-      localDatabasePurposes.map((purpose) => [
-        localDatabaseEnvironmentVariable(purpose),
-        resources.databaseUrls[purpose],
-      ]),
-    ),
-  };
+  return Object.fromEntries(
+    localDatabasePurposes.map((purpose) => [
+      localDatabaseEnvironmentVariable(purpose),
+      resources.databaseUrls[purpose],
+    ]),
+  );
 }
 
 export async function writeResourceRegistry(
@@ -111,21 +109,21 @@ export async function readResourceRegistry(path: string): Promise<WorktreeResour
 }
 
 export async function dropWorktreeDatabases(resources: WorktreeResources): Promise<void> {
-  for (const purpose of localDatabasePurposes) {
-    const databaseUrl = resources.databaseUrls[purpose];
-    // A registry written before a purpose existed simply has nothing to drop for it.
-    if (databaseUrl === undefined) continue;
-    assertLocalDatabasePurpose(databaseUrl, purpose);
+  for (const [purpose, databaseUrl] of Object.entries(resources.databaseUrls)) {
+    const currentPurpose = isLocalDatabasePurpose(purpose);
+    const legacySuffix = legacyDatabaseSuffixes[purpose];
+    if (currentPurpose) assertLocalDatabasePurpose(databaseUrl, purpose);
+    else if (!legacySuffix || !databaseName(databaseUrl).includes(legacySuffix)) {
+      throw new Error(`Refusing to drop database for unknown worktree purpose ${purpose}`);
+    }
     const target = new URL(databaseUrl);
     if (!isLocalHost(target.hostname) && process.env.WORKHORSE_ALLOW_REMOTE_RESET !== "1") {
       throw new Error(`Refusing to drop remote worktree database at ${target.hostname}`);
     }
 
     const name = databaseName(databaseUrl);
-    if (
-      !name.includes(`_${purpose}_`) ||
-      !name.endsWith(`_${worktreeHash(resources.worktreeId)}`)
-    ) {
+    const purposeMarker = currentPurpose ? `_${purpose}_` : `${legacySuffix}_`;
+    if (!name.includes(purposeMarker) || !name.endsWith(`_${worktreeHash(resources.worktreeId)}`)) {
       throw new Error(`Refusing to drop database without the expected worktree marker: ${name}`);
     }
 
@@ -140,6 +138,14 @@ export async function dropWorktreeDatabases(resources: WorktreeResources): Promi
     }
   }
 }
+
+const legacyDatabaseSuffixes: Readonly<Record<string, string>> = {
+  dev: "_dev",
+  test: "_test",
+  bench: "_bench",
+  demo: "_demo",
+  demo_staging: "_demo_staging",
+};
 
 export async function removeResourceRegistry(path: string): Promise<void> {
   await rm(path, { force: true });

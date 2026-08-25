@@ -636,7 +636,7 @@ func createConformanceDatabase(t *testing.T, sourceURL, adapter string) string {
 		t.Fatalf("Go conformance tests refuse non-loopback database host %q", parsed.Hostname())
 	}
 	if !strings.Contains(sourceName, "test") {
-		t.Fatalf("WORKHORSE_TEST_DATABASE_URL must name a test database")
+		t.Fatalf("DATABASE_URL_TEST must name a test database")
 	}
 	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(t.Name()+adapter+strconv.Itoa(os.Getpid()))))[:10]
 	prefix := sourceName

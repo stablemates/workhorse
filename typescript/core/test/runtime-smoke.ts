@@ -22,8 +22,8 @@ const runtime =
       ? { name: "deno", version: Deno.version.deno }
       : { name: "node", version: process.versions.node };
 
-const testDatabaseUrl = process.env.WORKHORSE_TEST_DATABASE_URL;
-if (!testDatabaseUrl) throw new Error("WORKHORSE_TEST_DATABASE_URL is required");
+const testDatabaseUrl = process.env.DATABASE_URL_TEST;
+if (!testDatabaseUrl) throw new Error("DATABASE_URL_TEST is required");
 
 // A dedicated database per runtime keeps concurrent lanes and the vitest suites out of each
 // other's way, and its name keeps the `test` suffix rule of local-database.ts visible to operators.

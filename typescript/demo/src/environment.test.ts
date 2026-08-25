@@ -2,18 +2,12 @@ import { describe, expect, it } from "vitest";
 import { resolveDemoDatabaseUrl } from "./environment.js";
 
 describe("demo environment", () => {
-  it("prefers the demo-specific database over a generic application database", () => {
+  it("reads the repository development primary database", () => {
     expect(
       resolveDemoDatabaseUrl({
         DATABASE_URL: "postgres://localhost/workhorse_dev",
-        WORKHORSE_DEMO_DATABASE_URL: "postgres://localhost/workhorse_demo",
+        DATABASE_URL_DEV_PRIMARY: "postgres://localhost/workhorse_dev_primary",
       }),
-    ).toBe("postgres://localhost/workhorse_demo");
-  });
-
-  it("accepts DATABASE_URL when no demo-specific override is defined", () => {
-    expect(resolveDemoDatabaseUrl({ DATABASE_URL: "postgres://localhost/custom" })).toBe(
-      "postgres://localhost/custom",
-    );
+    ).toBe("postgres://localhost/workhorse_dev_primary");
   });
 });

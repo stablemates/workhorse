@@ -41,7 +41,7 @@ continuation, or durable call stack.
 ## Run the complete example
 
 The repository command builds the publishable packages and runs `typescript/examples/agentic-flow.mjs` against
-the configured `DATABASE_URL`:
+the configured `DATABASE_URL_TEST_PACKED`:
 
 ```sh
 pnpm example:agentic-flow

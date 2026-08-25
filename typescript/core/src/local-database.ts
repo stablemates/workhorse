@@ -1,5 +1,10 @@
-/** Local database roles used by repository tooling. Application code may still use DATABASE_URL. */
-export type LocalDatabasePurpose = "dev" | "test" | "bench" | "demo" | "demo_staging";
+/** Local database roles used by repository tooling. */
+export type LocalDatabasePurpose =
+  | "dev_primary"
+  | "dev_secondary"
+  | "test"
+  | "bench"
+  | "test_packed";
 
 const POSTGRES_IDENTIFIER_LIMIT = 63;
 
@@ -13,39 +18,39 @@ interface LocalDatabaseDefinition {
 }
 
 const localDatabaseDefinitions: Record<LocalDatabasePurpose, LocalDatabaseDefinition> = {
-  dev: {
-    environmentVariable: "WORKHORSE_DEV_DATABASE_URL",
-    suffix: "_dev",
-    defaultUrl: "postgres://workhorse:workhorse@localhost:5432/workhorse_dev",
+  dev_primary: {
+    environmentVariable: "DATABASE_URL_DEV_PRIMARY",
+    suffix: "_dev_primary",
+    defaultUrl: "postgres://workhorse:workhorse@localhost:5432/workhorse_dev_primary",
+  },
+  dev_secondary: {
+    environmentVariable: "DATABASE_URL_DEV_SECONDARY",
+    suffix: "_dev_secondary",
+    defaultUrl: "postgres://workhorse:workhorse@localhost:5432/workhorse_dev_secondary",
   },
   test: {
-    environmentVariable: "WORKHORSE_TEST_DATABASE_URL",
+    environmentVariable: "DATABASE_URL_TEST",
     suffix: "_test",
     defaultUrl: "postgres://workhorse:workhorse@localhost:5432/workhorse_test",
   },
   bench: {
-    environmentVariable: "WORKHORSE_BENCH_DATABASE_URL",
+    environmentVariable: "DATABASE_URL_BENCH",
     suffix: "_bench",
     defaultUrl: "postgres://workhorse:workhorse@localhost:5432/workhorse_bench",
   },
-  demo: {
-    environmentVariable: "WORKHORSE_DEMO_DATABASE_URL",
-    suffix: "_demo",
-    defaultUrl: "postgres://workhorse:workhorse@localhost:5432/workhorse_demo",
-  },
-  demo_staging: {
-    environmentVariable: "WORKHORSE_DEMO_STAGING_DATABASE_URL",
-    suffix: "_demo_staging",
-    defaultUrl: "postgres://workhorse:workhorse@localhost:5432/workhorse_demo_staging",
+  test_packed: {
+    environmentVariable: "DATABASE_URL_TEST_PACKED",
+    suffix: "_test_packed",
+    defaultUrl: "postgres://workhorse:workhorse@localhost:5432/workhorse_test_packed",
   },
 };
 
 export const localDatabasePurposes: readonly LocalDatabasePurpose[] = [
-  "dev",
+  "dev_primary",
+  "dev_secondary",
   "test",
   "bench",
-  "demo",
-  "demo_staging",
+  "test_packed",
 ];
 
 /** Name the environment override dedicated to a role, so tooling never hardcodes the string. */

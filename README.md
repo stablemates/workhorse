@@ -398,28 +398,29 @@ automatically prefixes linked worktrees with their branch name, for example
 frozen lockfile, running `pnpm demo`, and exercising the dashboard snapshot, recurring schedule
 synchronization, transactional order, worker, retry, and terminal-failure paths.
 
-Local tooling keeps four databases separate:
+Local tooling keeps five databases separate:
 
-| Database          | Purpose                                      | Commands                                |
-| ----------------- | -------------------------------------------- | --------------------------------------- |
-| `workhorse_dev`   | Manual development and `pnpm health`         | `pnpm db:reset` or `pnpm db:reset:dev`  |
-| `workhorse_test`  | Automated integration tests only             | `pnpm db:reset:test`, `pnpm test`       |
-| `workhorse_bench` | Destructive benchmark runs and their history | `pnpm db:reset:bench`, `pnpm benchmark` |
-| `workhorse_demo`  | Reproducible local demo data                 | `pnpm db:reset:demo`, `pnpm dev:reset`  |
+| Database                  | Purpose                                      | Commands                                        |
+| ------------------------- | -------------------------------------------- | ----------------------------------------------- |
+| `workhorse_dev_primary`   | Demo primary and `pnpm health`               | `pnpm db:reset` or `pnpm db:reset:dev-primary`  |
+| `workhorse_dev_secondary` | Demo secondary workspace                     | `pnpm db:reset:dev-secondary`                   |
+| `workhorse_test`          | Automated integration tests                  | `pnpm db:reset:test`, `pnpm test`               |
+| `workhorse_bench`         | Destructive benchmark runs and their history | `pnpm db:reset:bench`, `pnpm benchmark`         |
+| `workhorse_test_packed`   | Packed agentic-flow consumer                 | `pnpm db:reset:test-packed`, `pnpm test:packed` |
 
-`pnpm db:reset:all` recreates all four databases and installs canonical `sql/schema.sql`. Run it after every schema change. Each destructive command verifies its purpose-specific `_dev`, `_test`, `_bench`, or `_demo` suffix, requires confirmation internally, and refuses remote hosts unless `WORKHORSE_ALLOW_REMOTE_RESET=1` is deliberately set.
+`pnpm db:reset:all` recreates all five databases and installs canonical `sql/schema.sql`. Run it after every schema change. Each destructive command verifies its purpose-specific suffix, requires confirmation internally, and refuses remote hosts unless `WORKHORSE_ALLOW_REMOTE_RESET=1` is deliberately set.
 
-The defaults use the local `workhorse` role. Override them independently with `WORKHORSE_DEV_DATABASE_URL`, `WORKHORSE_TEST_DATABASE_URL`, `WORKHORSE_BENCH_DATABASE_URL`, and `WORKHORSE_DEMO_DATABASE_URL`. Purpose-specific destructive reset, test, and benchmark tooling intentionally ignores generic `DATABASE_URL`. Application runtimes may still accept `DATABASE_URL`; the demo otherwise inherits `WORKHORSE_DEMO_DATABASE_URL`.
+The defaults use the local `workhorse` role. Override them independently with `DATABASE_URL_DEV_PRIMARY`, `DATABASE_URL_DEV_SECONDARY`, `DATABASE_URL_TEST`, `DATABASE_URL_BENCH`, and `DATABASE_URL_TEST_PACKED`. Repository tooling does not own generic `DATABASE_URL`; application runtimes and the published CLI may still accept it.
 
 ### Worktrees
 
 Use linked Git worktrees for medium and large features. The Lefthook `post-checkout` hook installs
 the frozen lockfile, copies local `.env` files from the primary checkout with mode `0600`, rewrites
-all four database URLs with a stable worktree suffix, and provisions the four databases. Portless
+all five database URLs with a stable worktree suffix, and provisions the five databases. Portless
 uses the branch name in the public `.localhost` URL, while each demo run allocates a free internal
 API port.
 
-Remove a worktree with `pnpm worktree:remove <path>` so its four databases are dropped before Git
+Remove a worktree with `pnpm worktree:remove <path>` so its five databases are dropped before Git
 removes the checkout. Git has no `post-worktree-remove` hook, so `post-checkout` and `post-merge`
 also run `pnpm worktree:prune` to clean registered databases left behind by a manual
 `git worktree remove`. Run `pnpm worktree:cleanup` inside a linked worktree only when you want to
@@ -436,8 +437,8 @@ artifacts:
 pnpm dev
 ```
 
-Run `pnpm dev:reset` when you need a clean `workhorse_demo` database. `pnpm demo` remains an alias
-for `pnpm dev`.
+Run `pnpm dev:reset` to recreate all five repository databases before starting the demo. `pnpm demo`
+remains an alias for `pnpm dev`.
 
 The demo deliberately runs each worker in its own process. The server and workers share nothing but
 PostgreSQL: the workers

@@ -19,9 +19,9 @@ DEFAULT_POLL_MS = 15_000
 
 
 def database_url(environment: Mapping[str, str] = os.environ) -> str:
-    value = environment.get("WORKHORSE_DEMO_DATABASE_URL") or environment.get("DATABASE_URL")
+    value = environment.get("DATABASE_URL_DEV_PRIMARY")
     if not value:
-        raise RuntimeError("WORKHORSE_DEMO_DATABASE_URL or DATABASE_URL is required")
+        raise RuntimeError("DATABASE_URL_DEV_PRIMARY is required")
     return value
 
 

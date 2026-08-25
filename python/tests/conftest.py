@@ -69,15 +69,15 @@ def installed_distribution_interpreters(
 
 @pytest.fixture
 def database_url(request: pytest.FixtureRequest) -> Iterator[str]:
-    source = os.environ.get("WORKHORSE_TEST_DATABASE_URL")
+    source = os.environ.get("DATABASE_URL_TEST")
     if source is None:
-        pytest.skip("WORKHORSE_TEST_DATABASE_URL is required for integration tests")
+        pytest.skip("DATABASE_URL_TEST is required for integration tests")
     parsed = urlsplit(source)
     if parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
         pytest.fail("Python integration tests refuse a non-loopback database")
     source_name = parsed.path.removeprefix("/")
     if "test" not in source_name:
-        pytest.fail("WORKHORSE_TEST_DATABASE_URL must name a test database")
+        pytest.fail("DATABASE_URL_TEST must name a test database")
     digest = hashlib.sha256(f"{request.node.nodeid}\0{os.getpid()}".encode()).hexdigest()[:10]
     database_name = f"{source_name[:45]}_py_{digest}"
     admin_url = urlunsplit(parsed._replace(path="/postgres"))

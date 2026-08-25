@@ -24,15 +24,15 @@ def test_worker_uses_dedicated_and_shared_queues() -> None:
     )
 
 
-def test_database_url_prefers_demo_database() -> None:
+def test_database_url_reads_development_primary_database() -> None:
     assert (
         demo_worker.database_url(
             {
-                "WORKHORSE_DEMO_DATABASE_URL": "postgresql:///demo",
+                "DATABASE_URL_DEV_PRIMARY": "postgresql:///dev_primary",
                 "DATABASE_URL": "postgresql:///ambient",
             }
         )
-        == "postgresql:///demo"
+        == "postgresql:///dev_primary"
     )
 
 

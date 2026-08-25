@@ -47,7 +47,7 @@ const pool = new Pool({ connectionString: databaseUrl, max: 10 });
 // A provisioned staging database turns the dashboard into two switchable workspaces: the busy
 // worker-driven "production" one, and a quiet seeded "staging" one that no worker ever touches.
 // Without the variable the demo keeps its familiar single-workspace URLs.
-const stagingDatabaseUrl = process.env.WORKHORSE_DEMO_STAGING_DATABASE_URL;
+const stagingDatabaseUrl = process.env.DATABASE_URL_DEV_SECONDARY;
 const stagingPool = stagingDatabaseUrl
   ? new Pool({ connectionString: stagingDatabaseUrl, max: 3 })
   : undefined;
@@ -60,7 +60,7 @@ if (stagingPool) {
 } else {
   demoLogger.info(
     "workhorse.demo.single_workspace_fallback",
-    "WORKHORSE_DEMO_STAGING_DATABASE_URL is not set; the dashboard serves a single workspace and renders no workspace switcher",
+    "DATABASE_URL_DEV_SECONDARY is not set; the dashboard serves a single workspace and renders no workspace switcher",
   );
 }
 

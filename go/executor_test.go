@@ -222,9 +222,9 @@ func assertPolicyQuery(t *testing.T, executor workhorse.Executor) {
 func testDatabaseURL(t *testing.T) string {
 	t.Helper()
 
-	databaseURL := os.Getenv("WORKHORSE_TEST_DATABASE_URL")
+	databaseURL := os.Getenv("DATABASE_URL_TEST")
 	if databaseURL == "" {
-		t.Skip("WORKHORSE_TEST_DATABASE_URL is required for integration tests")
+		t.Skip("DATABASE_URL_TEST is required for integration tests")
 	}
 	return databaseURL
 }

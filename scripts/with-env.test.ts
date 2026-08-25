@@ -14,7 +14,8 @@ const probePath = resolve(repositoryRoot, "scripts/with-env-probe.tmp.cjs");
 const probeSource = `require("node:fs").writeFileSync(
   process.env.PROBE_OUTPUT,
   JSON.stringify({
-    demo: process.env.WORKHORSE_DEMO_DATABASE_URL,
+    primary: process.env.DATABASE_URL_DEV_PRIMARY,
+    generic: process.env.DATABASE_URL,
     port: process.env.WORKHORSE_API_PORT,
     cwd: process.cwd(),
   }),
@@ -40,7 +41,8 @@ async function runWrapper(environment: NodeJS.ProcessEnv, cwd: string) {
   });
   expect(exitCode).toBe(0);
   return JSON.parse(await readFile(output, "utf8")) as {
-    demo?: string;
+    primary?: string;
+    generic?: string;
     port?: string;
     cwd: string;
   };
@@ -51,19 +53,22 @@ describe("repository command environment", () => {
     "overrides a database URL inherited from another checkout",
     async () => {
       const expected = (await readFile(environmentPath, "utf8")).match(
-        /^WORKHORSE_DEMO_DATABASE_URL=(.*)$/m,
+        /^DATABASE_URL_DEV_PRIMARY=(.*)$/m,
       )?.[1];
       expect(expected).toBeDefined();
 
       const result = await runWrapper(
         {
           ...process.env,
-          WORKHORSE_DEMO_DATABASE_URL: "postgres://workhorse:workhorse@localhost:5432/other_demo",
+          DATABASE_URL_DEV_PRIMARY:
+            "postgres://workhorse:workhorse@localhost:5432/other_dev_primary",
+          DATABASE_URL: "postgres://workhorse:workhorse@localhost:5432/caller_owned",
         },
         repositoryRoot,
       );
 
-      expect(result.demo).toBe(expected);
+      expect(result.primary).toBe(expected);
+      expect(result.generic).toContain("caller_owned");
     },
   );
 
@@ -72,7 +77,7 @@ describe("repository command environment", () => {
     async () => {
       const result = await runWrapper({ ...process.env }, resolve(repositoryRoot, ".."));
 
-      expect(result.demo).toMatch(/_demo(_|$)/);
+      expect(result.primary).toMatch(/_dev_primary(_|$)/);
       expect(resolve(result.cwd)).toBe(repositoryRoot);
     },
   );

@@ -57,7 +57,7 @@ prints the final result and progress.
 The example combines `HandlerContext.setProgress`, `HandlerContext.runChildren`,
 `Queue.syncRateLimitPolicies`, a per-tenant `concurrencyKey`, `HandlerContext.sleep`, and
 `HandlerContext.waitForSignal`. Python names progress updates `HandlerContext.set_progress`, while
-Go uses `HandlerContext.SetProgress`; every runtime reads its database from `DATABASE_URL`.
+Go uses `HandlerContext.SetProgress`; the repository example reads `DATABASE_URL_TEST_PACKED`.
 
 ## Next
 

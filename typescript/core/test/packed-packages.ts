@@ -538,7 +538,7 @@ try {
   await run("node", ["dashboard-development.mjs"], consumer);
   const agenticFlow = JSON.parse(
     await run("node", ["agentic-flow.mjs"], consumer, {
-      DATABASE_URL: process.env.WORKHORSE_TEST_DATABASE_URL,
+      DATABASE_URL_TEST_PACKED: process.env.DATABASE_URL_TEST_PACKED,
     }),
   ) as {
     result?: { status?: string };

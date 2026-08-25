@@ -8,27 +8,32 @@ import {
 
 describe("local database roles", () => {
   it.each([
-    ["dev", "workhorse_dev"],
+    ["dev_primary", "workhorse_dev_primary"],
+    ["dev_secondary", "workhorse_dev_secondary"],
     ["test", "workhorse_test"],
     ["bench", "workhorse_bench"],
-    ["demo", "workhorse_demo"],
+    ["test_packed", "workhorse_test_packed"],
   ] as const)("resolves the %s role independently", (purpose, expectedName) => {
     expect(databaseName(localDatabaseUrl(purpose, {}))).toBe(expectedName);
   });
 
   it("uses only the environment override for the requested role", () => {
     const environment = {
-      WORKHORSE_DEV_DATABASE_URL: "postgres://localhost/custom_dev",
-      WORKHORSE_TEST_DATABASE_URL: "postgres://localhost/custom_test",
-      WORKHORSE_BENCH_DATABASE_URL: "postgres://localhost/custom_bench",
-      WORKHORSE_DEMO_DATABASE_URL: "postgres://localhost/custom_demo",
+      DATABASE_URL_DEV_PRIMARY: "postgres://localhost/custom_dev_primary",
+      DATABASE_URL_DEV_SECONDARY: "postgres://localhost/custom_dev_secondary",
+      DATABASE_URL_TEST: "postgres://localhost/custom_test",
+      DATABASE_URL_BENCH: "postgres://localhost/custom_bench",
+      DATABASE_URL_TEST_PACKED: "postgres://localhost/custom_test_packed",
       DATABASE_URL: "postgres://localhost/ignored",
     };
 
-    expect(databaseName(localDatabaseUrl("dev", environment))).toBe("custom_dev");
+    expect(databaseName(localDatabaseUrl("dev_primary", environment))).toBe("custom_dev_primary");
+    expect(databaseName(localDatabaseUrl("dev_secondary", environment))).toBe(
+      "custom_dev_secondary",
+    );
     expect(databaseName(localDatabaseUrl("test", environment))).toBe("custom_test");
     expect(databaseName(localDatabaseUrl("bench", environment))).toBe("custom_bench");
-    expect(databaseName(localDatabaseUrl("demo", environment))).toBe("custom_demo");
+    expect(databaseName(localDatabaseUrl("test_packed", environment))).toBe("custom_test_packed");
   });
 
   it("rejects cross-purpose destructive targets", () => {
@@ -39,14 +44,18 @@ describe("local database roles", () => {
 
   it("accepts and creates purpose-safe worktree database names", () => {
     const url = worktreeDatabaseUrl(
-      "postgres://workhorse:workhorse@localhost:5432/workhorse_demo",
-      "demo",
+      "postgres://workhorse:workhorse@localhost:5432/workhorse_dev_primary",
+      "dev_primary",
       "feature/my useful branch",
     );
 
-    expect(databaseName(url)).toMatch(/^workhorse_demo_feature_my_useful_branch_[a-f0-9]{8}$/);
-    expect(() => assertLocalDatabasePurpose(url, "demo")).not.toThrow();
-    expect(() => assertLocalDatabasePurpose(url, "dev")).toThrow("must end in _dev");
+    expect(databaseName(url)).toMatch(
+      /^workhorse_dev_primary_feature_my_useful_branch_[a-f0-9]{8}$/,
+    );
+    expect(() => assertLocalDatabasePurpose(url, "dev_primary")).not.toThrow();
+    expect(() => assertLocalDatabasePurpose(url, "dev_secondary")).toThrow(
+      "must end in _dev_secondary",
+    );
   });
 
   it("keeps long worktree database names within PostgreSQL's identifier limit", () => {

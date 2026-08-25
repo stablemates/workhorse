@@ -1,7 +1,22 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
-import { Admin, assertSchemaCompatible, Pool, Queue, Worker } from "@stablemates/workhorse";
+
+let workhorse;
+try {
+  workhorse = await import("@stablemates/workhorse");
+} catch (error) {
+  if (
+    !error ||
+    typeof error !== "object" ||
+    error.code !== "ERR_MODULE_NOT_FOUND" ||
+    !String(error.message).includes("'@stablemates/workhorse'")
+  ) {
+    throw error;
+  }
+  workhorse = await import("../core/dist/src/index.js");
+}
+const { Admin, assertSchemaCompatible, Pool, Queue, Worker } = workhorse;
 
 const PARENT_QUEUE = "agentic-flow";
 const TOOL_QUEUE = "agentic-tools";
@@ -178,8 +193,8 @@ export async function runAgenticFlowExample({
 
 const invokedPath = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : null;
 if (invokedPath === import.meta.url) {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) throw new Error("DATABASE_URL is required");
+  const databaseUrl = process.env.DATABASE_URL_TEST_PACKED;
+  if (!databaseUrl) throw new Error("DATABASE_URL_TEST_PACKED is required");
   const pool = new Pool({ connectionString: databaseUrl, max: 4 });
   try {
     const outcome = await runAgenticFlowExample({ database: pool });

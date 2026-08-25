@@ -3,9 +3,13 @@ import { join } from "node:path";
 import {
   copyIgnoredEnvironmentFiles,
   createWorktreeResources,
+  dropWorktreeDatabases,
+  pathExists,
   parseEnvironment,
   readEnvironment,
+  readResourceRegistry,
   resourceEnvironment,
+  resourceRegistryPath,
   run,
   updateEnvironment,
   worktreeContext,
@@ -39,6 +43,10 @@ const resources = createWorktreeResources(
   primaryEnvironment,
 );
 const generatedEnvironment = resourceEnvironment(resources);
+const registryPath = resourceRegistryPath(context.commonGitDirectory, context.worktreeId);
+if (await pathExists(registryPath)) {
+  await dropWorktreeDatabases(await readResourceRegistry(registryPath));
+}
 await writeFile(
   targetEnvironmentPath,
   updateEnvironment(targetEnvironmentContents, generatedEnvironment),
@@ -52,5 +60,5 @@ await run("pnpm", ["db:reset:all"], {
 });
 
 console.log(
-  `Configured linked worktree ${context.worktreeId}: copied ${copied.length} env file(s) and provisioned four databases`,
+  `Configured linked worktree ${context.worktreeId}: copied ${copied.length} env file(s) and provisioned five databases`,
 );
