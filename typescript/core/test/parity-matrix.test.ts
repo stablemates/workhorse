@@ -4,9 +4,12 @@ import { describe, expect, it } from "vitest";
 import {
   PARITY_TABLES,
   PARITY_TEST_ROOTS,
+  PRODUCT_PARITY_ROWS,
+  PRODUCT_PARITY_TEST_ROOTS,
   type ParityCell,
   type ParityLanguage,
   type ParityRow,
+  type ProductParityTarget,
 } from "./support/parity-capabilities.js";
 
 // The registry in support/parity-capabilities.ts owns the per-language support matrix, while the
@@ -16,6 +19,7 @@ import {
 
 const repository = path.resolve(import.meta.dirname, "../../..");
 const languages: readonly ParityLanguage[] = ["typescript", "python", "go"];
+const productTargets: readonly ProductParityTarget[] = ["postgresql", "dashboard", "cli"];
 
 type Status = "Supported" | "Planned" | "Absent";
 
@@ -72,6 +76,24 @@ async function exists(file: string): Promise<boolean> {
   }
 }
 
+async function expectEvidence(root: string, evidence: ParityCell): Promise<void> {
+  if (!("file" in evidence)) throw new Error("expected Supported evidence");
+  const file = path.join(repository, root, evidence.file);
+  expect(await exists(file), `${evidence.file} does not exist`).toBe(true);
+  const contents = await readFile(file, "utf8");
+  const patterns = "patterns" in evidence ? evidence.patterns : [evidence.pattern];
+  expect(patterns.length, `${evidence.file} names no evidence patterns`).toBeGreaterThan(0);
+  for (const pattern of patterns) {
+    expect(new RegExp(pattern).test(contents), `${evidence.file} never mentions /${pattern}/`).toBe(
+      true,
+    );
+  }
+}
+
+function unexplainedAbsent(cells: readonly ParityCell[]): ParityCell[] {
+  return cells.filter((cell) => "absent" in cell && cell.absent.trim().length === 0);
+}
+
 const markdown = await readFile(path.join(repository, "docs", "parity.md"), "utf8");
 const tables = documentedTables(markdown);
 
@@ -80,6 +102,12 @@ const registryCells: Array<{ row: ParityRow; language: ParityLanguage }> = PARIT
 );
 const supportedCells = registryCells.filter(
   ({ row, language }) => statusOf(row[language]) === "Supported",
+);
+const productCells = PRODUCT_PARITY_ROWS.flatMap((row) =>
+  productTargets.map((target) => ({ row, target })),
+);
+const supportedProductCells = productCells.filter(
+  ({ row, target }) => statusOf(row[target]) === "Supported",
 );
 
 describe("parity matrix", () => {
@@ -109,41 +137,50 @@ describe("parity matrix", () => {
   it.each(supportedCells.map((cell) => [cell.row.capability, cell.language, cell] as const))(
     "%s / %s names evidence that exists",
     async (unusedCapability, unusedLanguage, cell) => {
-      const evidence = cell.row[cell.language];
-      if (!("file" in evidence)) throw new Error("filtered above");
-      const file = path.join(repository, PARITY_TEST_ROOTS[cell.language], evidence.file);
-      expect(await exists(file), `${evidence.file} does not exist`).toBe(true);
-      const contents = await readFile(file, "utf8");
-      const patterns = "patterns" in evidence ? evidence.patterns : [evidence.pattern];
-      expect(patterns.length, `${evidence.file} names no evidence patterns`).toBeGreaterThan(0);
-      for (const pattern of patterns) {
-        expect(
-          new RegExp(pattern).test(contents),
-          `${evidence.file} never mentions /${pattern}/`,
-        ).toBe(true);
-      }
+      await expectEvidence(PARITY_TEST_ROOTS[cell.language], cell.row[cell.language]);
     },
   );
 
   it("records a reason for every Absent cell", () => {
-    const unexplained = registryCells
-      .filter(({ row, language }) => "absent" in row[language])
-      .filter(({ row, language }) => {
-        const cell = row[language];
-        return !("absent" in cell) || cell.absent.trim().length === 0;
-      });
-    expect(unexplained).toEqual([]);
+    expect(unexplainedAbsent(registryCells.map(({ row, language }) => row[language]))).toEqual([]);
+  });
+
+  it("lists the product operator capabilities and statuses from the registry", () => {
+    const productTable = markdown.match(
+      /\|\s*Capability\s*\|\s*PostgreSQL\s*\|\s*Dashboard\s*\|\s*CLI\s*\|[\s\S]*?(?=\n\n)/,
+    )?.[0];
+    expect(productTable).toBeDefined();
+    for (const row of PRODUCT_PARITY_ROWS) {
+      const documented = productTable
+        ?.split("\n")
+        .find((line) => line.includes(`| ${row.capability}`));
+      expect(documented).toBeDefined();
+      for (const target of productTargets) {
+        expect(documented).toContain(statusOf(row[target]));
+      }
+    }
+  });
+
+  it.each(supportedProductCells.map((cell) => [cell.row.capability, cell.target, cell] as const))(
+    "%s / %s names product evidence that exists",
+    async (_capability, _target, cell) => {
+      await expectEvidence(PRODUCT_PARITY_TEST_ROOTS[cell.target], cell.row[cell.target]);
+    },
+  );
+
+  it("records a reason for every Absent product cell", () => {
+    expect(unexplainedAbsent(productCells.map(({ row, target }) => row[target]))).toEqual([]);
   });
 
   it("links the Plane work item behind every Planned cell", () => {
     // A Planned cell's evidence is the open work item that owns the gap. The document must link
     // it, so the cell cannot outlive the work it points at unnoticed.
-    const unlinked = registryCells
-      .filter(({ row, language }) => "planned" in row[language])
-      .map(({ row, language }) => {
-        const cell = row[language];
-        return "planned" in cell ? cell.planned : "";
-      })
+    const unlinked = [
+      ...registryCells.map(({ row, language }) => row[language]),
+      ...productCells.map(({ row, target }) => row[target]),
+    ]
+      .filter((cell) => "planned" in cell)
+      .map((cell) => ("planned" in cell ? cell.planned : ""))
       .filter((item) => !/^WH-\d+$/.test(item) || !markdown.includes(`[${item}]: https://`));
     expect(unlinked).toEqual([]);
   });

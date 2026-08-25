@@ -48,6 +48,23 @@ export interface ParityRow {
   go: ParityCell;
 }
 
+/** Where each product operator surface's tests live, relative to the repository root. */
+export const PRODUCT_PARITY_TEST_ROOTS = {
+  postgresql: "typescript/core/test",
+  dashboard: "typescript/dashboard-server",
+  cli: "typescript/core/test",
+} as const;
+
+export type ProductParityTarget = keyof typeof PRODUCT_PARITY_TEST_ROOTS;
+
+export interface ProductParityRow {
+  /** The capability column, byte for byte as `docs/parity.md` writes it. */
+  capability: string;
+  postgresql: ParityCell;
+  dashboard: ParityCell;
+  cli: ParityCell;
+}
+
 /**
  * The public operator surface is reachable through the dashboard, the `workhorse` CLI, and the
  * TypeScript, Python, and Go `Admin` clients.
@@ -330,6 +347,76 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
     typescript: { file: "integration-worker-registry.test.ts", pattern: "paused" },
     python: pythonAdmin,
     go: { file: "admin_test.go", pattern: "SetWorkerPaused" },
+  },
+];
+
+/** Operator capabilities implemented by PostgreSQL and exposed through product surfaces. */
+export const PRODUCT_PARITY_ROWS: readonly ProductParityRow[] = [
+  {
+    capability: "Job lookup, listing, and timeline",
+    postgresql: {
+      file: "integration-operator-reads.test.ts",
+      patterns: ["list_jobs_v1", "list_job_timeline_v1"],
+    },
+    dashboard: { file: "test/conformance.test.ts", pattern: "verifyDashboardConformanceFixtures" },
+    cli: { file: "integration-admin-cli.test.ts", patterns: ["jobs", "timeline"] },
+  },
+  {
+    capability: "Queue health snapshot",
+    postgresql: { file: "integration-health-snapshots.test.ts", pattern: "queue.health" },
+    dashboard: { file: "test/conformance.test.ts", pattern: "verifyDashboardConformanceFixtures" },
+    cli: { file: "integration-admin-cli.test.ts", pattern: "queues" },
+  },
+  {
+    capability: "Cancellation requests",
+    postgresql: { file: "integration-claim-lease-fence.test.ts", pattern: "cancel_v1" },
+    dashboard: { file: "src/server/operator-controllers.test.ts", pattern: "cancelTask" },
+    cli: { file: "integration-admin-cli.test.ts", pattern: "cancel" },
+  },
+  {
+    capability: "Queue pause and resume",
+    postgresql: {
+      file: "integration-queue-administration.test.ts",
+      patterns: ["pauseQueue", "resumeQueue"],
+    },
+    dashboard: {
+      file: "src/server/operator-controllers.test.ts",
+      patterns: ["pauseQueue", "resumeQueue"],
+    },
+    cli: { file: "integration-admin-cli.test.ts", patterns: ["pause", "resume"] },
+  },
+  {
+    capability: "Queue purge",
+    postgresql: { file: "integration-queue-administration.test.ts", pattern: "purgeQueue" },
+    dashboard: { file: "src/server/operator-controllers.test.ts", pattern: "purgeQueue" },
+    cli: { absent: "The CLI does not expose queue purge." },
+  },
+  {
+    capability: "Dead-letter listing",
+    postgresql: { file: "integration-operator-reads.test.ts", pattern: "list_dead_letters_v1" },
+    dashboard: { file: "test/conformance.test.ts", pattern: "verifyDashboardConformanceFixtures" },
+    cli: { file: "integration-admin-cli.test.ts", pattern: "failures" },
+  },
+  {
+    capability: "Redrive",
+    postgresql: { file: "integration-operator-reads.test.ts", pattern: "redrive_v1" },
+    dashboard: { absent: "The dashboard does not expose redrive." },
+    cli: { file: "integration-admin-cli.test.ts", pattern: "redrive" },
+  },
+  {
+    capability: "Checkpoint, wait, and human-decision reads",
+    postgresql: {
+      file: "integration-human-waits.test.ts",
+      patterns: ["listHumanWaits", "human wait"],
+    },
+    dashboard: { file: "test/human-wait-integration.test.ts", pattern: "humanWaits" },
+    cli: { absent: "The CLI does not expose checkpoint, wait, or human-decision reads." },
+  },
+  {
+    capability: "Durable operator worker pause",
+    postgresql: { file: "integration-worker-registry.test.ts", pattern: "setWorkerPaused" },
+    dashboard: { file: "src/server/operator-controllers.test.ts", pattern: "setWorkerPaused" },
+    cli: { absent: "The CLI does not expose durable worker pause." },
   },
 ];
 

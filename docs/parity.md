@@ -87,6 +87,8 @@ PostgreSQL implements every operator read and control. The standalone or embedde
 the `workhorse` CLI expose the subsets shown below against any database, whatever language
 enqueued the work. That product capability does not vary by worker language.
 
+<!-- BEGIN GENERATED PARITY PRODUCT -->
+
 | Capability                                 | PostgreSQL | Dashboard | CLI       |
 | ------------------------------------------ | ---------- | --------- | --------- |
 | Job lookup, listing, and timeline          | Supported  | Supported | Supported |
@@ -98,6 +100,8 @@ enqueued the work. That product capability does not vary by worker language.
 | Redrive                                    | Supported  | Absent    | Supported |
 | Checkpoint, wait, and human-decision reads | Supported  | Supported | Absent    |
 | Durable operator worker pause              | Supported  | Supported | Absent    |
+
+<!-- END GENERATED PARITY PRODUCT -->
 
 ## Public SDK operator surface
 
@@ -131,9 +135,9 @@ suite runs the SQL fixtures through `scripts/verify-sql-protocol.ts` and the run
 `Worker`. All three languages execute `protocol/v1/contracts.json`. The Python suite runs the SQL fixtures through `python/tests/test_protocol_conformance.py`
 and every runtime fixture through `python/tests/test_worker_runtime_conformance.py`.
 
-`scripts/generate-parity-tables.ts` renders the language matrices from
+`scripts/generate-parity-tables.ts` renders every capability matrix from
 `typescript/core/test/support/parity-capabilities.ts`. `pnpm parity:check` fails if the checked-in
-document is stale. Every Supported cell must name an existing test file in that language. The file
+document is stale. Every Supported cell must name an existing test file for that surface. The file
 must match every evidence pattern. Every Absent cell must record why it is absent. Every Planned
 cell must name a Plane work item, whose link the generator also writes.
 
