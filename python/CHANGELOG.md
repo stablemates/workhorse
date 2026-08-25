@@ -5,6 +5,11 @@ releases independently from the TypeScript packages and the Go module.
 
 ## 0.1.0a1 — unreleased
 
+### Changed
+
+- The distribution uses the Apache License, Version 2.0. Contributions require the
+  repository `CLA.md`.
+
 ### Added
 
 - Synchronous and asynchronous queue clients, workers, administrative clients, and an embedded

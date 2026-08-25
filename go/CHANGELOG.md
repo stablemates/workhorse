@@ -5,6 +5,11 @@ releases independently from the TypeScript packages and the Python distribution.
 
 ## 0.1.0 — unreleased
 
+### Changed
+
+- The module uses the Apache License, Version 2.0 from the repository root.
+  Contributions require the repository `CLA.md`.
+
 ### Added
 
 - Queue, worker, and administrative APIs implement the Workhorse SQL protocol through pgx,

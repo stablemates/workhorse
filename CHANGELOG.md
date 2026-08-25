@@ -20,6 +20,11 @@ migrations begin at 1.0.0. Breaking changes are always listed with upgrade steps
 
 First published line. Requires **schema v1**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
 
+### Changed
+
+- All eight npm packages, the Python distribution, and the Go module use the Apache
+  License, Version 2.0. Contributions require the agreement in `CLA.md`.
+
 ### Added
 
 - `@stablemates/workhorse`: the schema ships as a single baseline at version 1. Nothing has been

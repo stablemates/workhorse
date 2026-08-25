@@ -28,6 +28,7 @@ The current implementation remains an evidence-first validation release rather t
 - [`docs/decisions/0031-keep-keyed-ingress-modes-distinct.md`](docs/decisions/0031-keep-keyed-ingress-modes-distinct.md): why idempotency, debounce, and throttle keep separate caller promises and outcomes.
 - [`docs/decisions/0032-keep-single-admin-authentication-process-local.md`](docs/decisions/0032-keep-single-admin-authentication-process-local.md): the single-process boundary for built-in dashboard sessions and login throttling.
 - [`docs/decisions/0036-database-owned-slow-maintenance-orchestration.md`](docs/decisions/0036-database-owned-slow-maintenance-orchestration.md): why PostgreSQL owns the slow maintenance sequence used by every language worker.
+- [`docs/decisions/0040-apache-2-and-contributor-agreement.md`](docs/decisions/0040-apache-2-and-contributor-agreement.md): Apache-2.0 on the published packages, the contributor agreement, and why the beta does not withhold OpenTelemetry emission.
 
 Run the Fumadocs site locally without PostgreSQL:
 
@@ -40,7 +41,10 @@ The site listens on `http://localhost:3000`. Run `pnpm demo` separately when you
 
 ## License
 
-Workhorse is available under the [MIT License](LICENSE).
+Workhorse is available under the [Apache License, Version 2.0](LICENSE).
+Attribution lives in [`NOTICE`](NOTICE). The first pull request from a person or
+company must include the signature block in [`CLA.md`](CLA.md). See
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Included scope
 
