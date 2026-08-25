@@ -1,11 +1,12 @@
 # Changelog
 
-Eight published packages are versioned in lockstep and released from one tag. They are
+This changelog covers eight published packages on npm. They are versioned in lockstep and released
+from one tag:
 `@stablemates/workhorse`, `@stablemates/workhorse-drizzle`, `@stablemates/workhorse-prisma`, `@stablemates/workhorse-typeorm`,
 `@stablemates/workhorse-kysely`, `@stablemates/workhorse-dashboard`, `@stablemates/workhorse-dashboard-server`, and
-`@stablemates/workhorse-dashboard-contract`. The `stablemates-workhorse` Python distribution floats independently and
-declares compatibility through the SQL protocol. Each entry states its required schema version and
-upgrade steps.
+`@stablemates/workhorse-dashboard-contract`. The Python distribution and Go module release
+independently, so their notes live in [`python/CHANGELOG.md`](python/CHANGELOG.md) and
+[`go/CHANGELOG.md`](go/CHANGELOG.md). Each entry states its required schema version and upgrade steps.
 
 The supported Node.js and PostgreSQL versions, the schema compatibility guarantees, and the release
 process are in [`docs/compatibility.md`](docs/compatibility.md).
@@ -20,18 +21,6 @@ migrations begin at 1.0.0. Breaking changes are always listed with upgrade steps
 First published line. Requires **schema v1**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
 
 ### Added
-
-- `github.com/stablemates/workhorse/go`: individual handler panics now become recorded attempt
-  failures without stopping the worker. Compiled process and external-module coverage verifies
-  graceful signal drain, crash recovery, and the public worker API under the race detector.
-
-- `stablemates-workhorse`: synchronous handlers can suspend through named signal and human-decision waits,
-  then replay the retained external value in the same logical attempt. Synchronous and asynchronous
-  queue clients deliver attributed values with idempotency and typed conflict errors.
-
-- `stablemates-workhorse`: `run_worker_process` adds bounded `SIGINT` and `SIGTERM` drain handling for the
-  synchronous worker. A second signal exits with its conventional code, while an expired deadline
-  exits with failure so PostgreSQL can recover active leases.
 
 - `@stablemates/workhorse`: the schema ships as a single baseline at version 1. Nothing has been
   published, so the pre-release migration history was squashed into `sql/schema/current.sql` rather
@@ -75,8 +64,6 @@ First published line. Requires **schema v1**, Node.js **22 or 24**, PostgreSQL *
 - `@stablemates/workhorse`: `Worker.handleBatch` for compatible full and linger-bounded partial batches,
   with explicit per-job success or failure outcomes, independent retries, leases, contexts, fencing,
   cancellation, timeout handling, policy accounting, priority order, and bounded batch telemetry.
-- `stablemates-workhorse`: synchronous `Worker.handle_batch` delivery with queue-isolated full and partial
-  groups, explicit per-member outcomes, independent fences and retries, and durable batch evidence.
 - `@stablemates/workhorse`: transactionally consistent `Queue.health()` snapshots — one SQL statement
   for every correctness-sensitive value, size-capped history scans with explicit lower-bound
   flags, PostgreSQL estimates separated under `observations`, and caller-overridable health
@@ -107,9 +94,6 @@ First published line. Requires **schema v1**, Node.js **22 or 24**, PostgreSQL *
   files, and a supported container that requires an HTTPS public origin for remote listeners.
 - `@stablemates/workhorse-dashboard-contract`: the type-only standalone server contract shared by the core CLI
   and dashboard package, so both compile against one optional embedding boundary.
-- `stablemates-workhorse`: typed synchronous Psycopg and asynchronous Psycopg/asyncpg enqueue clients with
-  delayed and recurring work, priority, atomic batches, idempotency, debounce, throttle,
-  dependencies, caller-owned transactions, compatibility refusal, and shared SQL conformance.
 - Language-neutral SQL protocol conformance fixtures under `protocol/v1`, covering compatibility,
   canonical enqueue requests, lifecycle scenarios, runtime behavior, and structured errors for
   TypeScript and future language clients.

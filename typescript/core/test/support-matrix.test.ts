@@ -244,8 +244,39 @@ describe("continuous integration", () => {
     expect(workflow).toContain("npm publish --provenance");
   });
 
+  it("publishes Python distributions from a checked, versioned tag", async () => {
+    const workflow = await read(".github/workflows/release-python.yml");
+
+    expect(workflow).toContain('tags: ["python/v*"]');
+    expect(workflow).toContain("pnpm release:check python $GITHUB_REF_NAME");
+    expect(workflow).toContain("pnpm db:reset:test-packed");
+    expect(workflow).toContain("pnpm check");
+    expect(workflow).toContain("uv build --project python");
+    expect(workflow).toContain("needs: build");
+    expect(workflow).toContain("environment: pypi");
+    expect(workflow).toContain("id-token: write");
+    expect(workflow).toContain("uv publish --trusted-publishing always");
+  });
+
+  it("creates Go module tags only after the release check and full repository gate", async () => {
+    const script = await read("scripts/release-go.sh");
+
+    expect(script.indexOf('pnpm release:check go "$tag"')).toBeLessThan(
+      script.indexOf("pnpm check"),
+    );
+    expect(script.indexOf("pnpm check")).toBeLessThan(script.indexOf('git tag --annotate "$tag"'));
+    expect(script).toContain("pnpm db:reset:test");
+    expect(script).toContain("pnpm db:reset:test-packed");
+    expect(script).toContain("git diff --quiet");
+    expect(script).toContain('git push origin "$tag"');
+  });
+
   it("installs the non-Node toolchains before static and release checks", async () => {
-    for (const workflowPath of [".github/workflows/ci.yml", ".github/workflows/release.yml"]) {
+    for (const workflowPath of [
+      ".github/workflows/ci.yml",
+      ".github/workflows/release.yml",
+      ".github/workflows/release-python.yml",
+    ]) {
       const workflow = await read(workflowPath);
       expect(workflow).toContain("actions/setup-go@v7");
       expect(workflow).toContain("go-version-file: go/go.mod");

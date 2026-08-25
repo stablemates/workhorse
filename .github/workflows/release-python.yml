@@ -1,0 +1,85 @@
+# Builds and publishes the independently-versioned Python distribution from python/vX.Y.Z tags.
+#
+# GitHub Actions remain disabled while this repository is private. This definition is ready for
+# that restriction to be lifted, but it must not be dispatched until then. The build job carries
+# no publication identity; only the separate PyPI environment can mint the trusted-publisher token.
+name: Release Python
+
+on:
+  push:
+    tags: ["python/v*"]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Build and validate without publishing
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: workhorse
+          POSTGRES_PASSWORD: workhorse
+          POSTGRES_DB: workhorse_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U workhorse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      WORKHORSE_TEST_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_test
+      WORKHORSE_DEMO_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_demo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go/go.mod
+      - uses: astral-sh/setup-uv@v9
+      - run: pnpm install --frozen-lockfile
+
+      - name: Check the tag against the Python version and changelog
+        if: startsWith(github.ref, 'refs/tags/python/v')
+        run: pnpm release:check python $GITHUB_REF_NAME
+
+      - run: pnpm db:reset:test
+      - run: pnpm db:reset:test-packed
+      - run: pnpm check
+      - run: uv build --project python
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-distributions
+          path: python/dist/*
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/python/v') && inputs.dry-run != true
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: astral-sh/setup-uv@v9
+        with:
+          enable-cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: python/dist
+      - run: uv publish --trusted-publishing always python/dist/*

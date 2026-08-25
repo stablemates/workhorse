@@ -139,11 +139,14 @@ schema. There is no upgrade path within `0.x`: the schema is edited in place, so
 1.0.0. Breaking changes are listed in [`CHANGELOG.md`](../CHANGELOG.md) with the upgrade steps for
 that release.
 
-The Python package releases independently from a `python/vX.Y.Z` tag. Its version comes from
-`python/pyproject.toml`, and its release candidate is the source distribution plus universal wheel
-produced by `pnpm python:build`. Before publication, the Python format, lint, type, test, packed, and
-site smoke lanes must pass from that tag. Publication remains disabled while GitHub Actions are
-frozen.
+The Python package releases independently from a `python/vX.Y.Z` tag. The tag must match
+`python/pyproject.toml` and a heading in `python/CHANGELOG.md`. `.github/workflows/release-python.yml`
+runs `pnpm check`, then uv builds a source distribution and universal wheel. A separate `pypi`
+environment publishes those artifacts through PyPI trusted publishing with `id-token: write`.
+
+The Go module releases independently from a `go/vX.Y.Z` tag. `scripts/release-go.sh X.Y.Z` requires
+a clean worktree and a matching `go/CHANGELOG.md` heading. It resets the test database, runs
+`pnpm check`, creates an annotated tag, and pushes that tag to `origin`.
 
 ## Protocol and schema compatibility
 
@@ -175,27 +178,45 @@ canonical SQL fixtures and request mapping through Psycopg, plus transaction int
 Psycopg async and asyncpg. Its synchronous and asynchronous workers share one lifecycle core; the
 asynchronous surface uses native Psycopg or asyncpg query and notification connections. The Go
 worker supports bounded multi-queue dispatch, fenced ownership, cooperative
-cancellation, durable checkpoints, durable timers, and graceful drain. Its release remains
-unsupported until the runtime and worker module-consumer matrices exist.
+cancellation, durable checkpoints, durable timers, and graceful drain. Repository tests compile
+and exercise external module consumers before a release can create the module tag.
 
 ## Release process
 
 Every release is a tag, and every tag runs the full check suite before anything is published.
 
-1. Update all six package versions in lockstep and add the `CHANGELOG.md` entry for the release,
+### npm packages
+
+1. Update all eight package versions in lockstep and add the `CHANGELOG.md` entry for the release,
    including upgrade notes for any breaking change.
 2. Tag `vX.Y.Z`. The release workflow refuses to continue if the tag disagrees with any manifest or
    if `CHANGELOG.md` has no entry for it.
 3. `pnpm check` runs — format, lint, types, unit and integration tests, the packed-package install
    test, the site smoke test, and the demo smoke test.
 4. Each package is packed and published with `npm publish --provenance`. `@stablemates/workhorse` is
-   published first, because the other five declare it as a peer.
+   published first, because the other packages declare it as a peer.
 
 **Provenance.** Every published tarball carries an npm provenance attestation linking it to this
 repository, the commit it was built from, and the workflow that built it. Verify a downloaded
 release with `npm audit signatures` in a project that depends on it, or inspect the "Provenance"
 section on the package's npm page. A release without an attestation did not come from this
 pipeline.
+
+### Python distribution
+
+1. Update `python/pyproject.toml` and add the same version to `python/CHANGELOG.md`.
+2. Tag `python/vX.Y.Z`. `pnpm release:check` refuses a mismatched or undocumented version.
+3. `pnpm check` runs before uv builds either distribution artifact.
+4. The `pypi` environment publishes the downloaded artifacts through trusted publishing.
+
+### Go module
+
+1. Add the intended version to `go/CHANGELOG.md` and commit the release candidate.
+2. Run `scripts/release-go.sh X.Y.Z` from a clean worktree.
+3. The script runs `pnpm check`, creates `go/vX.Y.Z`, and pushes the tag only after the gate passes.
+
+GitHub Actions remain disabled while the repository is private. These definitions must not be
+dispatched, and release tags must not be pushed, until that restriction is lifted.
 
 ## Benchmark validation is not the support boundary
 
