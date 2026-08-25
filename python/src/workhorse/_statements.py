@@ -479,11 +479,9 @@ class StatementRegistry:
     fire_due_schedules: DriverStatement
     promote: DriverStatement
     recover_expired: DriverStatement
-    claim: DriverStatement
     claim_many: DriverStatement
     record_batch_dispatch: DriverStatement
     record_batch_failure: DriverStatement
-    heartbeat: DriverStatement
     heartbeat_many: DriverStatement
     expire_owned: DriverStatement
     acknowledge_cancel: DriverStatement
@@ -522,11 +520,9 @@ STATEMENTS = StatementRegistry(
     fire_due_schedules=_statement("fire_due_schedules_v1"),
     promote=_statement("promote_v1"),
     recover_expired=_statement("recover_expired_telemetry_v1"),
-    claim=_statement("claim_v1"),
     claim_many=_statement("claim_many_v1"),
     record_batch_dispatch=_statement("record_batch_dispatch_v1"),
     record_batch_failure=_statement("record_batch_failure_v1"),
-    heartbeat=_statement("heartbeat_v1"),
     heartbeat_many=_statement("heartbeat_many_v1"),
     expire_owned=_statement("expire_owned_telemetry_v1"),
     acknowledge_cancel=_statement("acknowledge_cancel_v1"),
