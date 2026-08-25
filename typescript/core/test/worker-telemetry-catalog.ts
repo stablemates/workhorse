@@ -66,7 +66,7 @@ const catalog = Object.fromEntries(
         unit: metric.descriptor.unit,
         attributes: [
           ...new Set(metric.dataPoints.flatMap((point) => Object.keys(point.attributes))),
-        ].sort(),
+        ].toSorted(),
       },
     ]),
 );

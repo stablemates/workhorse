@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from collections.abc import Iterable, Mapping
 from contextlib import suppress
+from pathlib import Path
 from typing import Any
 
 import psycopg
@@ -18,6 +20,12 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import StatusCode
 
 from workhorse import EnqueueOptions, HandlerContext, Queue, Worker
+from workhorse._telemetry import (
+    record_batch,
+    record_failure,
+    record_heartbeat_failure,
+    record_recovery,
+)
 
 SPAN_EXPORTER = InMemorySpanExporter()
 TRACE_PROVIDER = TracerProvider()
@@ -43,6 +51,18 @@ def _metrics() -> Iterable[Metric]:
 
 def _metric_attributes(metric: Metric) -> list[Mapping[str, Any]]:
     return [point.attributes for point in metric.data.data_points]
+
+
+def _typescript_worker_metric_catalog() -> dict[str, dict[str, object]]:
+    repository_root = Path(__file__).parents[2]
+    result = subprocess.run(
+        ("pnpm", "exec", "tsx", "typescript/core/test/worker-telemetry-catalog.ts"),
+        cwd=repository_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout)
 
 
 def test_worker_telemetry_matches_the_typescript_contract(database_url: str) -> None:
@@ -96,15 +116,29 @@ def test_worker_telemetry_matches_the_typescript_contract(database_url: str) -> 
     assert "workhorse.recovery.expired_leases" in maintenance_recovery_span.attributes
     assert "workhorse.recovery.retried" in maintenance_recovery_span.attributes
 
-    exported_metrics = {metric.name: metric for metric in _metrics()}
-    for name in (
-        "workhorse.jobs.claimed",
-        "workhorse.jobs.completed",
-        "workhorse.handler.runtime",
-        "workhorse.handler.duration",
-        "workhorse.handler.executions",
-    ):
-        assert exported_metrics[name]
+    catalog_job = observed_contexts[0].job
+    record_failure(catalog_job, "scheduled")
+    record_recovery(1, 0, [])
+    record_batch(catalog_job.queue, catalog_job.type, 1, 0, True)
+    record_heartbeat_failure("stale")
+
+    expected_metrics = _typescript_worker_metric_catalog()
+    exported_metrics = {
+        metric.name: metric
+        for metric in _metrics()
+        if not metric.name.startswith(("workhorse.maintenance.", "workhorse.schedule."))
+    }
+    observed_catalog = {
+        name: {
+            "unit": metric.unit,
+            "attributes": sorted(
+                {key for attributes in _metric_attributes(metric) for key in attributes}
+            ),
+        }
+        for name, metric in exported_metrics.items()
+    }
+    assert observed_catalog == expected_metrics
+    assert len(exported_metrics) == len(expected_metrics)
     expected_job_attributes = {
         "workhorse.queue.name": "mail",
         "workhorse.job.type": "mail.send",

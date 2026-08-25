@@ -98,7 +98,7 @@ type metricCatalogEntry struct {
 
 func typeScriptWorkerMetricCatalog(t *testing.T) map[string]metricCatalogEntry {
 	t.Helper()
-	command := exec.Command("pnpm", "exec", "tsx", "typescript/core/test/go-telemetry-catalog.ts")
+	command := exec.Command("pnpm", "exec", "tsx", "typescript/core/test/worker-telemetry-catalog.ts")
 	command.Dir = ".."
 	output, err := command.Output()
 	if err != nil {
