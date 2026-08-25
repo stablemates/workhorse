@@ -186,127 +186,11 @@ class DashboardBackend:
         return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
     def activity(self, input: object, _actor: str) -> object:
-        supplied = cast(Mapping[str, object], input)
-        query: dict[str, object] = {
-            "filter": "all",
-            "period": "1h",
-            "groupBy": "task",
-            "tags": [],
-            "queue": None,
-            "worker": None,
-            **supplied,
-        }
-        periods = {
-            "15m": (15 * 60, 30),
-            "1h": (60 * 60, 2 * 60),
-            "6h": (6 * 60 * 60, 10 * 60),
-            "24h": (24 * 60 * 60, 60 * 60),
-            "7d": (7 * 24 * 60 * 60, 6 * 60 * 60),
-        }
-        window_seconds, bucket_seconds = periods[cast(str, query["period"])]
-        groups = {
-            "queue": "j.queue_name",
-            "task": "j.job_type",
-            "status": "COALESCE(r.state, o.state)",
-            "worker": "COALESCE(r.worker_id, attempt_worker.worker_id, 'unassigned')",
-        }
-        group_sql = groups[cast(str, query["groupBy"])]
-        filters = {
-            "all": "true",
-            "blocked": "t.state = 'blocked'",
-            "waiting": "t.external_wait",
-            "scheduled": "t.state = 'scheduled'",
-            "retried": "t.attempt > 1",
-            "queued": "t.state = 'ready'",
-            "running": "t.state = 'active'",
-            "completed": "t.state = 'succeeded'",
-            "discarded": "t.state = 'failed'",
-            "canceled": "t.state = 'canceled'",
-        }
-        filter_sql = filters[cast(str, query["filter"])]
-        rows = self._rows(
-            f"""
-            WITH candidate AS (
-              SELECT r.job_id FROM workhorse.dashboard_job_runtime_v1 r
-               WHERE r.updated_at >= clock_timestamp() - make_interval(secs => %s)
-              UNION SELECT o.job_id FROM workhorse.dashboard_job_outcome_v1 o
-               WHERE o.updated_at >= clock_timestamp() - make_interval(secs => %s)
-            ), tasks AS (
-              SELECT {group_sql} AS group_key, COALESCE(r.state, o.state) AS state,
-                     EXISTS (
-                       SELECT 1 FROM workhorse.dashboard_signal_wait_v1 s
-                        WHERE s.job_id = candidate.job_id
-                       UNION ALL SELECT 1 FROM workhorse.dashboard_human_wait_v1 h
-                        WHERE h.job_id = candidate.job_id
-                     ) AS external_wait,
-                     COALESCE(r.current_attempt, o.current_attempt) AS attempt,
-                     COALESCE(r.updated_at, o.updated_at) AS updated_at,
-                     j.tags, j.queue_name AS queue,
-                     COALESCE(r.worker_id, attempt_worker.worker_id, 'unassigned') AS worker_id
-                FROM candidate JOIN workhorse.dashboard_job_v1 j ON j.id = candidate.job_id
-                LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = candidate.job_id
-                LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = candidate.job_id
-                LEFT JOIN LATERAL (
-                  SELECT ah.worker_id FROM workhorse.dashboard_attempt_history_v1 ah
-                   WHERE ah.job_id = candidate.job_id ORDER BY ah.attempt DESC LIMIT 1
-                ) attempt_worker ON true
-            ), buckets AS (
-              SELECT generate_series(
-                date_bin(make_interval(secs => %s),
-                  clock_timestamp() - make_interval(secs => %s),
-                  timestamp with time zone '2000-01-01') + make_interval(secs => %s),
-                date_bin(make_interval(secs => %s), clock_timestamp(),
-                  timestamp with time zone '2000-01-01'), make_interval(secs => %s)
-              ) AS bucket_start
-            )
-            SELECT b.bucket_start, t.group_key, count(t.updated_at)::integer AS count
-              FROM buckets b LEFT JOIN tasks t
-                ON t.updated_at >= b.bucket_start
-               AND t.updated_at < b.bucket_start + make_interval(secs => %s)
-               AND {filter_sql}
-               AND (cardinality(%s::text[]) = 0 OR t.tags && %s::text[])
-               AND (%s::text IS NULL OR t.queue = %s::text)
-               AND (%s::text IS NULL OR t.worker_id = %s::text)
-             GROUP BY b.bucket_start, t.group_key ORDER BY b.bucket_start
-            """,
-            (
-                window_seconds,
-                window_seconds,
-                bucket_seconds,
-                window_seconds,
-                bucket_seconds,
-                bucket_seconds,
-                bucket_seconds,
-                bucket_seconds,
-                query["tags"],
-                query["tags"],
-                query["queue"],
-                query["queue"],
-                query["worker"],
-                query["worker"],
-            ),
-        )
-        totals: dict[str, int] = {}
-        buckets: dict[str, dict[str, object]] = {}
-        for row in rows:
-            bucket_start = cast(str, _iso(row["bucket_start"]))
-            bucket = buckets.setdefault(bucket_start, {"bucketStart": bucket_start, "counts": {}})
-            group = row["group_key"]
-            if group is None:
-                continue
-            name = str(group)
-            count = int(cast(int, row["count"]))
-            totals[name] = totals.get(name, 0) + count
-            cast(dict[str, int], bucket["counts"])[name] = count
-        return {
-            "capturedAt": _iso(datetime.now(timezone.utc)),
-            "filter": query["filter"],
-            "period": query["period"],
-            "groupBy": query["groupBy"],
-            "bucketSeconds": bucket_seconds,
-            "groups": sorted(totals),
-            "buckets": list(buckets.values()),
-        }
+        value = self._rows(
+            "SELECT workhorse.dashboard_activity_v1(%s::jsonb) AS result",
+            (json.dumps(input),),
+        )[0]["result"]
+        return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
     def task_facets(self, _input: object, _actor: str) -> object:
         value = self._rows(
@@ -434,158 +318,20 @@ class DashboardBackend:
         }
 
     def events(self, input: object, _actor: str) -> object:
-        supplied = cast(Mapping[str, object], input)
-        query: dict[str, object] = {
-            "window": "1h",
-            "page": 1,
-            "pageSize": 50,
-            "kind": "all",
-            "queue": None,
-            "jobType": None,
-            "types": [],
-            "jobId": None,
-            **supplied,
-        }
-        seconds = {"15m": 900, "1h": 3600, "6h": 21600, "24h": 86400}[cast(str, query["window"])]
-        page = cast(int, query["page"])
-        page_size = cast(int, query["pageSize"])
-        kind = cast(str, query["kind"])
-        sources: list[str] = []
-        if kind != "attempt":
-            sources.append("""
-              SELECT 'event'::text AS kind, event.event_id::text AS record_id,
-                     event.job_id, job.queue_name, job.job_type, event.occurred_at,
-                     event.attempt, event.event_type AS type, event.details,
-                     NULL::text AS worker_id, NULL::text AS fence_token,
-                     NULL::double precision AS duration_ms, NULL::jsonb AS error, 1 AS kind_rank
-                FROM workhorse.dashboard_job_event_v1 event
-                LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = event.job_id
-            """)
-        if kind != "event":
-            sources.append("""
-              SELECT 'attempt'::text AS kind, history.attempt_id::text AS record_id,
-                     history.job_id, job.queue_name, job.job_type, history.occurred_at,
-                     history.attempt, history.outcome AS type, NULL::jsonb AS details,
-                     history.worker_id, history.fence_token::text,
-                     round(extract(epoch FROM history.finished_at - history.started_at) * 1000)
-                       AS duration_ms, history.error, 0 AS kind_rank
-                FROM workhorse.dashboard_attempt_history_v1 history
-                LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = history.job_id
-            """)
-        union = " UNION ALL ".join(sources)
-        condition = """ WHERE occurred_at >= clock_timestamp() - make_interval(secs => %s)
-          AND (%s::uuid IS NULL OR job_id = %s::uuid)
-          AND (cardinality(%s::text[]) = 0 OR type = ANY (%s::text[]))
-          AND (%s::text IS NULL OR queue_name = %s::text)
-          AND (%s::text IS NULL OR job_type = %s::text)"""
-        parameters = (
-            seconds,
-            query["jobId"],
-            query["jobId"],
-            query["types"],
-            query["types"],
-            query["queue"],
-            query["queue"],
-            query["jobType"],
-            query["jobType"],
-        )
-        total = self._rows(
-            "SELECT count(*)::integer AS count FROM (" + union + ") feed" + condition, parameters
-        )[0]["count"]
-        rows = self._rows(
-            "SELECT * FROM ("
-            + union
-            + ") feed"
-            + condition
-            + " ORDER BY occurred_at DESC, kind_rank DESC, record_id::bigint DESC LIMIT %s OFFSET %s",
-            (*parameters, page_size, (page - 1) * page_size),
-        )
-        retention = self._rows(
-            "SELECT job_event_retention_days, attempt_history_retention_days FROM workhorse.dashboard_retention_policy_v1 WHERE singleton"
-        )[0]
-        return {
-            "capturedAt": _iso(datetime.now(timezone.utc)),
-            "window": query["window"],
-            "windowSeconds": seconds,
-            "page": page,
-            "pageSize": page_size,
-            "total": total,
-            "retention": {
-                "jobEventDays": retention["job_event_retention_days"],
-                "attemptHistoryDays": retention["attempt_history_retention_days"],
-            },
-            "events": [self._event_row(row) for row in rows],
-        }
-
-    def _event_row(self, row: Mapping[str, object]) -> object:
-        error = row["error"]
-        if isinstance(error, str):
-            try:
-                error = json.loads(error)
-            except json.JSONDecodeError:
-                error = None
-        return {
-            "id": f"{row['kind']}:{row['record_id']}",
-            "kind": row["kind"],
-            "recordId": str(row["record_id"]),
-            "jobId": str(row["job_id"]),
-            "queue": row["queue_name"],
-            "jobType": row["job_type"],
-            "occurredAt": _iso(row["occurred_at"]),
-            "attempt": row["attempt"],
-            "type": row["type"],
-            "details": row["details"],
-            "workerId": row["worker_id"],
-            "fenceToken": row["fence_token"],
-            "durationMs": None
-            if row["duration_ms"] is None
-            else int(cast(float, row["duration_ms"])),
-            "errorMessage": error.get("message") if isinstance(error, Mapping) else None,
-        }
+        value = self._rows(
+            "SELECT workhorse.dashboard_events_v1(%s::jsonb) AS result",
+            (json.dumps(input),),
+        )[0]["result"]
+        return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
     def event_detail(self, input: object, _actor: str) -> object:
-        identity = str(cast(Mapping[str, object], input)["id"])
-        if ":" not in identity or identity.split(":", 1)[0] not in {"event", "attempt"}:
+        value = self._rows(
+            "SELECT workhorse.dashboard_event_detail_v1(%s::jsonb) AS result",
+            (json.dumps(input),),
+        )[0]["result"]
+        if value is None:
             raise DashboardRPCError(404, "NOT_FOUND", "Event not found")
-        kind, record_id = identity.split(":", 1)
-        if kind == "event":
-            sql = """
-              SELECT 'event'::text AS kind, event_id::text AS record_id, event.job_id,
-                     job.queue_name, job.job_type, event.occurred_at, event.attempt,
-                     event.event_type AS type, event.details, NULL::text AS worker_id,
-                     NULL::text AS fence_token, NULL::timestamptz AS started_at,
-                     NULL::timestamptz AS claimed_at, NULL::timestamptz AS finished_at,
-                     NULL::double precision AS duration_ms, NULL::jsonb AS error
-                FROM workhorse.dashboard_job_event_v1 event
-                LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = event.job_id
-               WHERE event.event_id = %s::bigint
-            """
-        else:
-            sql = """
-              SELECT 'attempt'::text AS kind, attempt_id::text AS record_id, history.job_id,
-                     job.queue_name, job.job_type, history.occurred_at, history.attempt,
-                     history.outcome AS type, NULL::jsonb AS details, history.worker_id,
-                     history.fence_token::text, history.started_at, history.claimed_at,
-                     history.finished_at,
-                     round(extract(epoch FROM history.finished_at - history.started_at) * 1000) AS duration_ms,
-                     history.error
-                FROM workhorse.dashboard_attempt_history_v1 history
-                LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = history.job_id
-               WHERE history.attempt_id = %s::bigint
-            """
-        rows = self._rows(sql, (record_id,))
-        if not rows:
-            raise DashboardRPCError(404, "NOT_FOUND", "Event not found")
-        row = rows[0]
-        base = cast(dict[str, object], self._event_row(row))
-        error = row["error"]
-        return {
-            **base,
-            "startedAt": _iso(row["started_at"]),
-            "claimedAt": _iso(row["claimed_at"]),
-            "finishedAt": _iso(row["finished_at"]),
-            "error": error,
-        }
+        return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
     def job_detail(self, input: object, _actor: str) -> object:
         job_id = cast(Mapping[str, object], input)["id"]

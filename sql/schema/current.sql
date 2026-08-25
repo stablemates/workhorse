@@ -11523,6 +11523,313 @@ AS $$
   ) FROM parameters;
 $$;
 
+CREATE OR REPLACE FUNCTION workhorse.dashboard_activity_v1(p_input jsonb)
+RETURNS jsonb
+LANGUAGE sql
+AS $$
+  WITH parameters AS (
+    SELECT clock_timestamp() AS captured_at,
+           COALESCE(NULLIF(p_input->>'filter', ''), 'all') AS filter,
+           COALESCE(NULLIF(p_input->>'period', ''), '1h') AS period,
+           COALESCE(NULLIF(p_input->>'groupBy', ''), 'task') AS group_by,
+           COALESCE(ARRAY(
+             SELECT jsonb_array_elements_text(
+               CASE WHEN jsonb_typeof(p_input->'tags') = 'array'
+                    THEN p_input->'tags' ELSE '[]'::jsonb END
+             )
+           ), ARRAY[]::text[]) AS tags,
+           NULLIF(p_input->>'queue', '') AS queue_filter,
+           NULLIF(p_input->>'worker', '') AS worker_filter
+  ), windowed AS (
+    SELECT parameters.*,
+           CASE period
+             WHEN '15m' THEN 900 WHEN '1h' THEN 3600 WHEN '6h' THEN 21600
+             WHEN '24h' THEN 86400 WHEN '7d' THEN 604800
+           END AS window_seconds,
+           CASE period
+             WHEN '15m' THEN 30 WHEN '1h' THEN 120 WHEN '6h' THEN 600
+             WHEN '24h' THEN 3600 WHEN '7d' THEN 21600
+           END AS bucket_seconds
+      FROM parameters
+  ), candidate AS (
+    SELECT runtime.job_id FROM workhorse.dashboard_job_runtime_v1 runtime CROSS JOIN windowed
+     WHERE runtime.updated_at >= windowed.captured_at
+                                 - make_interval(secs => windowed.window_seconds)
+    UNION
+    SELECT outcome.job_id FROM workhorse.dashboard_job_outcome_v1 outcome CROSS JOIN windowed
+     WHERE outcome.updated_at >= windowed.captured_at
+                                 - make_interval(secs => windowed.window_seconds)
+  ), tasks AS (
+    SELECT CASE windowed.group_by
+             WHEN 'queue' THEN job.queue_name
+             WHEN 'task' THEN job.job_type
+             WHEN 'status' THEN COALESCE(runtime.state, outcome.state)
+             WHEN 'worker' THEN COALESCE(runtime.worker_id, attempt_worker.worker_id, 'unassigned')
+           END AS group_key,
+           COALESCE(runtime.state, outcome.state) AS state,
+           EXISTS (
+             SELECT 1 FROM workhorse.dashboard_signal_wait_v1 signal_wait
+              WHERE signal_wait.job_id = candidate.job_id
+             UNION ALL
+             SELECT 1 FROM workhorse.dashboard_human_wait_v1 human_wait
+              WHERE human_wait.job_id = candidate.job_id
+           ) AS external_wait,
+           COALESCE(runtime.current_attempt, outcome.current_attempt) AS attempt,
+           COALESCE(runtime.updated_at, outcome.updated_at) AS updated_at,
+           job.tags, job.queue_name AS queue,
+           COALESCE(runtime.worker_id, attempt_worker.worker_id, 'unassigned') AS worker_id
+      FROM candidate
+      CROSS JOIN windowed
+      JOIN workhorse.dashboard_job_v1 job ON job.id = candidate.job_id
+      LEFT JOIN workhorse.dashboard_job_runtime_v1 runtime
+        ON runtime.job_id = candidate.job_id
+      LEFT JOIN workhorse.dashboard_job_outcome_v1 outcome
+        ON outcome.job_id = candidate.job_id
+      LEFT JOIN LATERAL (
+        SELECT history.worker_id FROM workhorse.dashboard_attempt_history_v1 history
+         WHERE history.job_id = candidate.job_id
+         ORDER BY history.attempt DESC LIMIT 1
+      ) attempt_worker ON windowed.group_by = 'worker' OR windowed.worker_filter IS NOT NULL
+  ), buckets AS (
+    SELECT generate_series(
+             date_bin(make_interval(secs => windowed.bucket_seconds),
+                      windowed.captured_at - make_interval(secs => windowed.window_seconds),
+                      timestamp with time zone '2000-01-01')
+               + make_interval(secs => windowed.bucket_seconds),
+             date_bin(make_interval(secs => windowed.bucket_seconds), windowed.captured_at,
+                      timestamp with time zone '2000-01-01'),
+             make_interval(secs => windowed.bucket_seconds)
+           ) AS bucket_start
+      FROM windowed
+  ), activity_rows AS (
+    SELECT buckets.bucket_start, tasks.group_key,
+           count(tasks.updated_at)::integer AS count
+      FROM buckets CROSS JOIN windowed
+      LEFT JOIN tasks
+        ON tasks.updated_at >= buckets.bucket_start
+       AND tasks.updated_at < buckets.bucket_start
+                              + make_interval(secs => windowed.bucket_seconds)
+       AND CASE windowed.filter
+         WHEN 'blocked' THEN tasks.state = 'blocked'
+         WHEN 'waiting' THEN tasks.external_wait
+         WHEN 'scheduled' THEN tasks.state = 'scheduled'
+         WHEN 'retried' THEN tasks.attempt > 1
+         WHEN 'queued' THEN tasks.state = 'ready'
+         WHEN 'running' THEN tasks.state = 'active'
+         WHEN 'completed' THEN tasks.state = 'succeeded'
+         WHEN 'discarded' THEN tasks.state = 'failed'
+         WHEN 'canceled' THEN tasks.state = 'canceled'
+         ELSE true
+       END
+       AND (cardinality(windowed.tags) = 0 OR tasks.tags && windowed.tags)
+       AND (windowed.queue_filter IS NULL OR tasks.queue = windowed.queue_filter)
+       AND (windowed.worker_filter IS NULL OR tasks.worker_id = windowed.worker_filter)
+     GROUP BY buckets.bucket_start, tasks.group_key
+  ), activity_groups AS (
+    SELECT DISTINCT group_key FROM activity_rows WHERE group_key IS NOT NULL
+  ), activity_buckets AS (
+    SELECT bucket_start,
+           COALESCE(jsonb_object_agg(group_key, count)
+                    FILTER (WHERE group_key IS NOT NULL), '{}'::jsonb) AS counts
+      FROM activity_rows GROUP BY bucket_start
+  )
+  SELECT jsonb_build_object(
+    'capturedAt', workhorse.dashboard_iso_v1(windowed.captured_at),
+    'filter', windowed.filter, 'period', windowed.period, 'groupBy', windowed.group_by,
+    'bucketSeconds', windowed.bucket_seconds,
+    'groups', COALESCE((
+      SELECT jsonb_agg(group_key ORDER BY group_key) FROM activity_groups
+    ), '[]'::jsonb),
+    'buckets', COALESCE((
+      SELECT jsonb_agg(jsonb_build_object(
+               'bucketStart', workhorse.dashboard_iso_v1(bucket_start), 'counts', counts)
+               ORDER BY bucket_start)
+        FROM activity_buckets
+    ), '[]'::jsonb))
+    FROM windowed;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.dashboard_events_v1(p_input jsonb)
+RETURNS jsonb
+LANGUAGE sql
+AS $$
+  WITH parameters AS (
+    SELECT clock_timestamp() AS captured_at,
+           COALESCE(NULLIF(p_input->>'window', ''), '1h') AS window,
+           COALESCE(NULLIF(p_input->>'page', '')::integer, 1) AS page,
+           COALESCE(NULLIF(p_input->>'pageSize', '')::integer, 50) AS page_size,
+           COALESCE(NULLIF(p_input->>'kind', ''), 'all') AS kind,
+           NULLIF(p_input->>'queue', '') AS queue_filter,
+           NULLIF(p_input->>'jobType', '') AS type_filter,
+           CASE WHEN jsonb_typeof(p_input->'types') = 'array'
+                THEN ARRAY(SELECT jsonb_array_elements_text(p_input->'types'))
+                ELSE ARRAY[]::text[] END AS event_types,
+           NULLIF(p_input->>'jobId', '')::uuid AS job_id,
+           CASE COALESCE(NULLIF(p_input->>'window', ''), '1h')
+             WHEN '15m' THEN 900 WHEN '1h' THEN 3600 WHEN '6h' THEN 21600
+             WHEN '24h' THEN 86400
+           END AS window_seconds
+  ), event_feed AS (
+    SELECT 'event'::text AS kind, event.event_id AS record_id, event.job_id,
+           event.occurred_at, event.attempt, event.event_type AS type, event.details,
+           NULL::text AS worker_id, NULL::bigint AS fence_token,
+           NULL::timestamptz AS started_at, NULL::timestamptz AS finished_at,
+           NULL::jsonb AS error, 1 AS kind_rank
+      FROM workhorse.dashboard_job_event_v1 event CROSS JOIN parameters
+     WHERE parameters.kind <> 'attempt'
+       AND event.occurred_at >= parameters.captured_at
+                                   - make_interval(secs => parameters.window_seconds)
+       AND (parameters.job_id IS NULL OR event.job_id = parameters.job_id)
+       AND (cardinality(parameters.event_types) = 0
+            OR event.event_type = ANY (parameters.event_types))
+       AND ((parameters.queue_filter IS NULL AND parameters.type_filter IS NULL) OR EXISTS (
+         SELECT 1 FROM workhorse.dashboard_job_v1 job WHERE job.id = event.job_id
+           AND (parameters.queue_filter IS NULL OR job.queue_name = parameters.queue_filter)
+           AND (parameters.type_filter IS NULL OR job.job_type = parameters.type_filter)
+       ))
+     ORDER BY event.occurred_at DESC, event.event_id DESC
+     LIMIT (SELECT page * page_size FROM parameters)
+  ), attempt_feed AS (
+    SELECT 'attempt'::text AS kind, history.attempt_id AS record_id, history.job_id,
+           history.occurred_at, history.attempt, history.outcome AS type,
+           NULL::jsonb AS details, history.worker_id, history.fence_token,
+           history.started_at, history.finished_at, history.error, 0 AS kind_rank
+      FROM workhorse.dashboard_attempt_history_v1 history CROSS JOIN parameters
+     WHERE parameters.kind <> 'event'
+       AND history.occurred_at >= parameters.captured_at
+                                     - make_interval(secs => parameters.window_seconds)
+       AND (parameters.job_id IS NULL OR history.job_id = parameters.job_id)
+       AND (cardinality(parameters.event_types) = 0
+            OR history.outcome = ANY (parameters.event_types))
+       AND ((parameters.queue_filter IS NULL AND parameters.type_filter IS NULL) OR EXISTS (
+         SELECT 1 FROM workhorse.dashboard_job_v1 job WHERE job.id = history.job_id
+           AND (parameters.queue_filter IS NULL OR job.queue_name = parameters.queue_filter)
+           AND (parameters.type_filter IS NULL OR job.job_type = parameters.type_filter)
+       ))
+     ORDER BY history.occurred_at DESC, history.attempt_id DESC
+     LIMIT (SELECT page * page_size FROM parameters)
+  ), merged AS MATERIALIZED (
+    SELECT * FROM event_feed UNION ALL SELECT * FROM attempt_feed
+  ), event_page AS MATERIALIZED (
+    SELECT merged.* FROM merged
+     ORDER BY occurred_at DESC, kind_rank DESC, record_id DESC
+     LIMIT (SELECT page_size FROM parameters)
+    OFFSET (SELECT (page - 1) * page_size FROM parameters)
+  ), total AS (
+    SELECT count(*) AS count FROM (
+      SELECT event.event_id
+        FROM workhorse.dashboard_job_event_v1 event CROSS JOIN parameters
+       WHERE parameters.kind <> 'attempt'
+         AND event.occurred_at >= parameters.captured_at
+                                     - make_interval(secs => parameters.window_seconds)
+         AND (parameters.job_id IS NULL OR event.job_id = parameters.job_id)
+         AND (cardinality(parameters.event_types) = 0
+              OR event.event_type = ANY (parameters.event_types))
+         AND ((parameters.queue_filter IS NULL AND parameters.type_filter IS NULL) OR EXISTS (
+           SELECT 1 FROM workhorse.dashboard_job_v1 job WHERE job.id = event.job_id
+             AND (parameters.queue_filter IS NULL OR job.queue_name = parameters.queue_filter)
+             AND (parameters.type_filter IS NULL OR job.job_type = parameters.type_filter)
+         ))
+      UNION ALL
+      SELECT history.attempt_id
+        FROM workhorse.dashboard_attempt_history_v1 history CROSS JOIN parameters
+       WHERE parameters.kind <> 'event'
+         AND history.occurred_at >= parameters.captured_at
+                                       - make_interval(secs => parameters.window_seconds)
+         AND (parameters.job_id IS NULL OR history.job_id = parameters.job_id)
+         AND (cardinality(parameters.event_types) = 0
+              OR history.outcome = ANY (parameters.event_types))
+         AND ((parameters.queue_filter IS NULL AND parameters.type_filter IS NULL) OR EXISTS (
+           SELECT 1 FROM workhorse.dashboard_job_v1 job WHERE job.id = history.job_id
+             AND (parameters.queue_filter IS NULL OR job.queue_name = parameters.queue_filter)
+             AND (parameters.type_filter IS NULL OR job.job_type = parameters.type_filter)
+         ))
+    ) records
+  )
+  SELECT jsonb_build_object(
+    'capturedAt', workhorse.dashboard_iso_v1(parameters.captured_at),
+    'window', parameters.window, 'windowSeconds', parameters.window_seconds,
+    'page', parameters.page, 'pageSize', parameters.page_size,
+    'total', (SELECT count FROM total),
+    'retention', jsonb_build_object(
+      'jobEventDays', retention.job_event_retention_days,
+      'attemptHistoryDays', retention.attempt_history_retention_days),
+    'events', COALESCE((
+      SELECT jsonb_agg(jsonb_build_object(
+        'id', event_page.kind || ':' || event_page.record_id::text,
+        'kind', event_page.kind, 'recordId', event_page.record_id::text,
+        'jobId', event_page.job_id::text, 'queue', job.queue_name,
+        'jobType', job.job_type,
+        'occurredAt', workhorse.dashboard_iso_v1(event_page.occurred_at),
+        'attempt', event_page.attempt, 'type', event_page.type,
+        'details', event_page.details, 'workerId', event_page.worker_id,
+        'fenceToken', event_page.fence_token::text,
+        'durationMs', CASE WHEN event_page.started_at IS NULL
+                                OR event_page.finished_at IS NULL THEN NULL
+                           ELSE round(extract(epoch FROM event_page.finished_at
+                                                        - event_page.started_at) * 1000) END,
+        'errorMessage', event_page.error->>'message')
+        ORDER BY event_page.occurred_at DESC, event_page.kind_rank DESC,
+                 event_page.record_id DESC)
+        FROM event_page
+        LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = event_page.job_id
+    ), '[]'::jsonb))
+    FROM parameters CROSS JOIN workhorse.dashboard_retention_policy_v1 retention
+   WHERE retention.singleton;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.dashboard_event_detail_v1(p_input jsonb)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_identity text := p_input->>'id';
+  v_kind text;
+  v_record_id bigint;
+  v_result jsonb;
+BEGIN
+  IF v_identity IS NULL OR v_identity !~ '^(event|attempt):[0-9]+$' THEN
+    RETURN NULL;
+  END IF;
+  v_kind := split_part(v_identity, ':', 1);
+  v_record_id := split_part(v_identity, ':', 2)::bigint;
+
+  IF v_kind = 'event' THEN
+    SELECT jsonb_build_object(
+      'id', 'event:' || event.event_id::text, 'kind', 'event',
+      'recordId', event.event_id::text, 'jobId', event.job_id::text,
+      'queue', job.queue_name, 'jobType', job.job_type,
+      'occurredAt', workhorse.dashboard_iso_v1(event.occurred_at),
+      'attempt', event.attempt, 'type', event.event_type, 'details', event.details,
+      'workerId', NULL, 'fenceToken', NULL, 'startedAt', NULL, 'claimedAt', NULL,
+      'finishedAt', NULL, 'durationMs', NULL, 'error', NULL, 'errorMessage', NULL)
+      INTO v_result
+      FROM workhorse.dashboard_job_event_v1 event
+      LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = event.job_id
+     WHERE event.event_id = v_record_id;
+  ELSE
+    SELECT jsonb_build_object(
+      'id', 'attempt:' || history.attempt_id::text, 'kind', 'attempt',
+      'recordId', history.attempt_id::text, 'jobId', history.job_id::text,
+      'queue', job.queue_name, 'jobType', job.job_type,
+      'occurredAt', workhorse.dashboard_iso_v1(history.occurred_at),
+      'attempt', history.attempt, 'type', history.outcome, 'details', NULL,
+      'workerId', history.worker_id, 'fenceToken', history.fence_token::text,
+      'startedAt', workhorse.dashboard_iso_v1(history.started_at),
+      'claimedAt', workhorse.dashboard_iso_v1(history.claimed_at),
+      'finishedAt', workhorse.dashboard_iso_v1(history.finished_at),
+      'durationMs', round(extract(epoch FROM history.finished_at - history.started_at) * 1000),
+      'error', history.error, 'errorMessage', history.error->>'message')
+      INTO v_result
+      FROM workhorse.dashboard_attempt_history_v1 history
+      LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = history.job_id
+     WHERE history.attempt_id = v_record_id;
+  END IF;
+
+  RETURN v_result;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.dashboard_task_counts_v1(p_input jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql

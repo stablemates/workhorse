@@ -1,7 +1,6 @@
 import { expectOneRow, queueHealthFromDocument } from "@stablemates/workhorse";
 import type { Admin, QueueHealth, QueueHealthDocument, RetryPolicy } from "@stablemates/workhorse";
 import {
-  DashboardActivityBucket,
   DashboardActivityGroupBy,
   DashboardActivityPage,
   DashboardActivityPeriod,
@@ -40,7 +39,7 @@ import {
   statWindow,
   statWindowStart,
 } from "./rolling-stats.js";
-import { sql, type DashboardDatabase, type DashboardSql } from "./sql.js";
+import { sql, type DashboardDatabase } from "./sql.js";
 import type { DashboardDurabilityProjector } from "./types.js";
 
 function toIso(value: Date | string): string {
@@ -226,15 +225,6 @@ function cancellationRequest(
   };
 }
 
-/** Extract the human-readable message from a stored error envelope without shipping stacks. */
-function errorMessageOrNull(error: unknown): string | null {
-  if (error && typeof error === "object" && "message" in error) {
-    const message = (error as { message: unknown }).message;
-    if (typeof message === "string" && message.length > 0) return message;
-  }
-  return null;
-}
-
 function workerValues(workers: readonly string[]) {
   return sql.join(
     workers.map((worker) => sql`(${worker})`),
@@ -252,37 +242,6 @@ function declaredWorkerRows(workers: readonly string[]) {
   return workers.length === 0
     ? sql`SELECT NULL::text AS id WHERE false`
     : sql`SELECT id FROM (VALUES ${workerValues(workers)}) declared(id)`;
-}
-
-function textArrayExpression(values: readonly string[]) {
-  return sql`ARRAY[${sql.join(
-    values.map((value) => sql`${value}`),
-    sql`, `,
-  )}]::text[]`;
-}
-
-function taskFilterCondition(filter: DashboardTaskFilter) {
-  if (filter === "blocked") return sql`state = 'blocked'`;
-  if (filter === "waiting") return sql`external_wait`;
-  if (filter === "scheduled") return sql`state = 'scheduled'`;
-  if (filter === "retried") return sql`attempt > 1`;
-  if (filter === "queued") return sql`state = 'ready'`;
-  if (filter === "running") return sql`state = 'active'`;
-  if (filter === "completed") return sql`state = 'succeeded'`;
-  // Discarded means the handler exhausted its attempts. An operator-canceled task never lands
-  // here: cancellation is its own terminal state and is never folded into failure.
-  if (filter === "discarded") return sql`state = 'failed'`;
-  if (filter === "canceled") return sql`state = 'canceled'`;
-  return sql`true`;
-}
-
-function externalWaitExists(jobId: DashboardSql) {
-  return sql`
-    EXISTS (SELECT 1 FROM workhorse.dashboard_signal_wait_v1 signal_wait
-             WHERE signal_wait.job_id = ${jobId})
-    OR EXISTS (SELECT 1 FROM workhorse.dashboard_human_wait_v1 human_wait
-                WHERE human_wait.job_id = ${jobId})
-  `;
 }
 
 export async function readDashboardTaskCounts(
@@ -304,17 +263,6 @@ export async function readDashboardQueues(
   return expectOneRow(result, "the dashboard queues procedure").result;
 }
 
-const activityPeriods: Record<
-  DashboardActivityPeriod,
-  { windowSeconds: number; bucketSeconds: number }
-> = {
-  "15m": { windowSeconds: 15 * 60, bucketSeconds: 30 },
-  "1h": { windowSeconds: 60 * 60, bucketSeconds: 2 * 60 },
-  "6h": { windowSeconds: 6 * 60 * 60, bucketSeconds: 10 * 60 },
-  "24h": { windowSeconds: 24 * 60 * 60, bucketSeconds: 60 * 60 },
-  "7d": { windowSeconds: 7 * 24 * 60 * 60, bucketSeconds: 6 * 60 * 60 },
-};
-
 /** Bucketed task activity over a trailing window, grouped by queue, worker, task type, or status. */
 export async function readDashboardActivity(
   database: DashboardDatabase,
@@ -325,112 +273,11 @@ export async function readDashboardActivity(
   queue: string | null = null,
   worker: string | null = null,
 ): Promise<DashboardActivityPage> {
-  const { windowSeconds, bucketSeconds } = activityPeriods[period];
-  const tagArray = textArrayExpression(tags);
-  // Attributing a task to a worker means reading its latest attempt, which is one probe per task.
-  // Only worker grouping and the worker filter need it, so it stays out of every other view.
-  const needsAttemptWorker = groupBy === "worker" || worker !== null;
-  const workerExpression = needsAttemptWorker
-    ? sql`COALESCE(r.worker_id, attempt_worker.worker_id, 'unassigned')`
-    : sql`COALESCE(r.worker_id, 'unassigned')`;
-  const attemptWorkerJoin = needsAttemptWorker
-    ? sql`
-        LEFT JOIN LATERAL (
-          SELECT ah.worker_id
-            FROM workhorse.dashboard_attempt_history_v1 ah
-           WHERE ah.job_id = candidate.job_id
-           ORDER BY ah.attempt DESC
-           LIMIT 1
-        ) attempt_worker ON true`
-    : sql``;
-  const groupExpression =
-    groupBy === "queue"
-      ? sql`j.queue_name`
-      : groupBy === "task"
-        ? sql`j.job_type`
-        : groupBy === "status"
-          ? sql`COALESCE(r.state, o.state)`
-          : workerExpression;
-  const rows = await database.execute<{
-    bucket_start: Date | string;
-    group_key: string | null;
-    count: number;
-  }>(sql`
-    -- Start from the tasks that changed inside the window rather than from every task that ever
-    -- existed. A live runtime row and a terminal outcome row can briefly coexist for one task, so
-    -- the candidate set is a UNION and the projection keeps the runtime-wins precedence.
-    WITH candidate AS (
-      SELECT r.job_id FROM workhorse.dashboard_job_runtime_v1 r
-       WHERE r.updated_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
-      UNION
-      SELECT o.job_id FROM workhorse.dashboard_job_outcome_v1 o
-       WHERE o.updated_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
-    ), tasks AS (
-      SELECT ${groupExpression} AS group_key,
-             COALESCE(r.state, o.state) AS state,
-             ${externalWaitExists(sql`candidate.job_id`)} AS external_wait,
-             COALESCE(r.current_attempt, o.current_attempt) AS attempt,
-             COALESCE(r.updated_at, o.updated_at) AS updated_at,
-             j.tags, j.queue_name AS queue,
-             ${workerExpression} AS worker_id
-        FROM candidate
-        JOIN workhorse.dashboard_job_v1 j ON j.id = candidate.job_id
-        LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = candidate.job_id
-        LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = candidate.job_id${attemptWorkerJoin}
-    ), buckets AS (
-      SELECT generate_series(
-        date_bin(
-          make_interval(secs => ${bucketSeconds}),
-          clock_timestamp() - make_interval(secs => ${windowSeconds}),
-          timestamp with time zone '2000-01-01'
-        ) + make_interval(secs => ${bucketSeconds}),
-        date_bin(
-          make_interval(secs => ${bucketSeconds}),
-          clock_timestamp(),
-          timestamp with time zone '2000-01-01'
-        ),
-        make_interval(secs => ${bucketSeconds})
-      ) AS bucket_start
-    )
-    SELECT b.bucket_start, t.group_key, count(t.updated_at)::integer AS count
-      FROM buckets b
-      LEFT JOIN tasks t
-        ON t.updated_at >= b.bucket_start
-       AND t.updated_at < b.bucket_start + make_interval(secs => ${bucketSeconds})
-       AND ${taskFilterCondition(filter)}
-       AND (cardinality(${tagArray}) = 0 OR t.tags && ${tagArray})
-       AND (${queue}::text IS NULL OR t.queue = ${queue})
-       AND (${worker}::text IS NULL OR t.worker_id = ${worker})
-     GROUP BY b.bucket_start, t.group_key
-     ORDER BY b.bucket_start
+  const input = JSON.stringify({ filter, period, groupBy, tags, queue, worker });
+  const rows = await database.execute<{ result: DashboardActivityPage }>(sql`
+    SELECT workhorse.dashboard_activity_v1(${input}::jsonb) AS result
   `);
-  const totals = new Map<string, number>();
-  for (const row of rows.rows) {
-    if (row.group_key === null) continue;
-    totals.set(row.group_key, (totals.get(row.group_key) ?? 0) + row.count);
-  }
-  // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
-  const groups = [...totals.keys()].sort();
-  const byBucket = new Map<string, DashboardActivityBucket>();
-  for (const row of rows.rows) {
-    const bucketStart = toIso(row.bucket_start);
-    let bucket = byBucket.get(bucketStart);
-    if (!bucket) {
-      bucket = { bucketStart, counts: {} };
-      byBucket.set(bucketStart, bucket);
-    }
-    if (row.group_key === null) continue;
-    bucket.counts[row.group_key] = row.count;
-  }
-  return {
-    capturedAt: new Date().toISOString(),
-    filter,
-    period,
-    groupBy,
-    bucketSeconds,
-    groups,
-    buckets: [...byBucket.values()],
-  };
+  return expectOneRow(rows, "the dashboard activity procedure").result;
 }
 
 export interface DashboardTasksQuery {
@@ -1763,13 +1610,6 @@ export async function readDashboardJobDetail(
   };
 }
 
-const eventsWindows: Record<DashboardEventsWindow, number> = {
-  "15m": 900,
-  "1h": 3_600,
-  "6h": 21_600,
-  "24h": 86_400,
-};
-
 export interface DashboardEventsQuery {
   window?: DashboardEventsWindow;
   /** 1-based page index. */
@@ -1803,194 +1643,11 @@ export async function readDashboardEvents(
   database: DashboardDatabase,
   query: DashboardEventsQuery = {},
 ): Promise<DashboardEventsPage> {
-  const window = query.window ?? "1h";
-  const windowSeconds = eventsWindows[window];
-  const pageSize = query.pageSize ?? 50;
-  const page = Math.max(1, query.page ?? 1);
-  const offset = (page - 1) * pageSize;
-  // Either source can supply the whole page on its own, so each must be able to reach past the
-  // offset by a full page before the merge picks between them.
-  const reach = offset + pageSize;
-  const kind = query.kind ?? "all";
-  const queue = query.queue ?? null;
-  const jobType = query.jobType ?? null;
-  const jobId = query.jobId ?? null;
-  const types = query.types ?? [];
-  const typeArray = textArrayExpression([...types]);
-
-  // Queue and task filters live on `job`, which history rows only reference. Testing them with a
-  // primary-key EXISTS keeps the driving scan on the time-ordered history index; joining `job`
-  // first would sort the whole window before the limit could apply.
-  const jobMatches = (column: DashboardSql) => sql`(
-    (${queue}::text IS NULL AND ${jobType}::text IS NULL)
-    OR EXISTS (
-      SELECT 1 FROM workhorse.dashboard_job_v1 j
-       WHERE j.id = ${column}
-         AND (${queue}::text IS NULL OR j.queue_name = ${queue})
-         AND (${jobType}::text IS NULL OR j.job_type = ${jobType})
-    )
-  )`;
-
-  const eventCondition = sql`
-    event.occurred_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
-    AND (${jobId}::uuid IS NULL OR event.job_id = ${jobId}::uuid)
-    AND (cardinality(${typeArray}) = 0 OR event.event_type = ANY (${typeArray}))
-    AND ${jobMatches(sql`event.job_id`)}
-  `;
-  const attemptCondition = sql`
-    history.occurred_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
-    AND (${jobId}::uuid IS NULL OR history.job_id = ${jobId}::uuid)
-    AND (cardinality(${typeArray}) = 0 OR history.outcome = ANY (${typeArray}))
-    AND ${jobMatches(sql`history.job_id`)}
-  `;
-
-  const eventSource = sql`
-    SELECT 'event'::text AS kind,
-           event.event_id AS record_id,
-           event.job_id,
-           event.occurred_at,
-           event.attempt,
-           event.event_type AS type,
-           event.details,
-           NULL::text AS worker_id,
-           NULL::bigint AS fence_token,
-           NULL::timestamptz AS started_at,
-           NULL::timestamptz AS finished_at,
-           NULL::jsonb AS error,
-           1 AS kind_rank
-      FROM workhorse.dashboard_job_event_v1 event
-     WHERE ${eventCondition}
-     ORDER BY event.occurred_at DESC, event.event_id DESC
-     LIMIT ${reach}
-  `;
-  const attemptSource = sql`
-    SELECT 'attempt'::text AS kind,
-           history.attempt_id AS record_id,
-           history.job_id,
-           history.occurred_at,
-           history.attempt,
-           history.outcome AS type,
-           NULL::jsonb AS details,
-           history.worker_id,
-           history.fence_token,
-           history.started_at,
-           history.finished_at,
-           history.error,
-           0 AS kind_rank
-      FROM workhorse.dashboard_attempt_history_v1 history
-     WHERE ${attemptCondition}
-     ORDER BY history.occurred_at DESC, history.attempt_id DESC
-     LIMIT ${reach}
-  `;
-  const sources =
-    kind === "event"
-      ? eventSource
-      : kind === "attempt"
-        ? attemptSource
-        : // Each branch carries its own ORDER BY and LIMIT so neither source can starve the other,
-          // which is only legal inside parentheses.
-          sql`
-      (${eventSource})
-      UNION ALL
-      (${attemptSource})
-    `;
-
-  // Counted from the source tables rather than from `merged`, which stops at one page's reach.
-  const countedEvents =
-    kind === "attempt"
-      ? sql`0::bigint`
-      : sql`(SELECT count(*) FROM workhorse.dashboard_job_event_v1 event WHERE ${eventCondition})`;
-  const countedAttempts =
-    kind === "event"
-      ? sql`0::bigint`
-      : sql`(SELECT count(*) FROM workhorse.dashboard_attempt_history_v1 history WHERE ${attemptCondition})`;
-
-  const [rows, totals, retention] = await Promise.all([
-    database.execute<{
-      kind: DashboardEventKind;
-      record_id: string;
-      job_id: string;
-      queue_name: string | null;
-      job_type: string | null;
-      occurred_at: Date | string;
-      attempt: number | null;
-      type: string;
-      details: unknown;
-      worker_id: string | null;
-      fence_token: string | null;
-      duration_ms: string | null;
-      error: unknown;
-    }>(sql`
-      WITH merged AS MATERIALIZED (
-        ${sources}
-      ), page AS MATERIALIZED (
-        SELECT merged.* FROM merged
-        ORDER BY merged.occurred_at DESC, merged.kind_rank DESC, merged.record_id DESC
-        LIMIT ${pageSize}
-       OFFSET ${offset}
-      )
-      SELECT page.kind,
-             page.record_id::text,
-             page.job_id::text,
-             job.queue_name,
-             job.job_type,
-             page.occurred_at,
-             page.attempt,
-             page.type,
-             page.details,
-             page.worker_id,
-             page.fence_token::text,
-             CASE
-               WHEN page.started_at IS NULL OR page.finished_at IS NULL THEN NULL
-               ELSE round(extract(epoch FROM page.finished_at - page.started_at) * 1000)::text
-             END AS duration_ms,
-             page.error
-        FROM page
-        LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = page.job_id
-       ORDER BY page.occurred_at DESC, page.kind_rank DESC, page.record_id DESC
-    `),
-    database.execute<{ count: string }>(sql`
-      SELECT (${countedEvents} + ${countedAttempts})::text AS count
-    `),
-    database.execute<{
-      job_event_retention_days: number | null;
-      attempt_history_retention_days: number | null;
-    }>(sql`
-      SELECT job_event_retention_days, attempt_history_retention_days
-        FROM workhorse.dashboard_retention_policy_v1
-       WHERE singleton
-    `),
-  ]);
-
-  const policy = retention.rows[0];
-  return {
-    capturedAt: new Date().toISOString(),
-    window,
-    windowSeconds,
-    page,
-    pageSize,
-    total: Number(totals.rows[0]?.count ?? 0),
-    retention: {
-      jobEventDays: policy?.job_event_retention_days ?? null,
-      attemptHistoryDays: policy?.attempt_history_retention_days ?? null,
-    },
-    events: rows.rows.map((row) => ({
-      id: `${row.kind}:${row.record_id}`,
-      kind: row.kind,
-      recordId: row.record_id,
-      jobId: row.job_id,
-      queue: row.queue_name,
-      jobType: row.job_type,
-      occurredAt: toIso(row.occurred_at),
-      attempt: row.attempt,
-      type: row.type,
-      details: row.details ?? null,
-      workerId: row.worker_id,
-      fenceToken: row.fence_token,
-      durationMs: row.duration_ms === null ? null : Number(row.duration_ms),
-      errorMessage: errorMessageOrNull(row.error),
-    })),
-  };
+  const input = JSON.stringify(query);
+  const rows = await database.execute<{ result: DashboardEventsPage }>(sql`
+    SELECT workhorse.dashboard_events_v1(${input}::jsonb) AS result
+  `);
+  return expectOneRow(rows, "the dashboard events procedure").result;
 }
 
 /** Read one history record by the stable identity used in Events URLs. */
@@ -1998,93 +1655,9 @@ export async function readDashboardEventDetail(
   database: DashboardDatabase,
   id: string,
 ): Promise<DashboardEventDetail | null> {
-  const match = /^(event|attempt):(\d+)$/.exec(id);
-  if (!match) return null;
-  const kind = match[1] as DashboardEventKind;
-  const recordId = match[2]!;
-  const source =
-    kind === "event"
-      ? sql`
-        SELECT 'event'::text AS kind,
-               event.event_id::text AS record_id,
-               event.job_id::text AS job_id,
-               job.queue_name,
-               job.job_type,
-               event.occurred_at,
-               event.attempt,
-               event.event_type AS type,
-               event.details,
-               NULL::text AS worker_id,
-               NULL::text AS fence_token,
-               NULL::timestamptz AS started_at,
-               NULL::timestamptz AS claimed_at,
-               NULL::timestamptz AS finished_at,
-               NULL::text AS duration_ms,
-               NULL::jsonb AS error
-          FROM workhorse.dashboard_job_event_v1 event
-          LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = event.job_id
-         WHERE event.event_id = ${recordId}::bigint
-      `
-      : sql`
-        SELECT 'attempt'::text AS kind,
-               history.attempt_id::text AS record_id,
-               history.job_id::text AS job_id,
-               job.queue_name,
-               job.job_type,
-               history.occurred_at,
-               history.attempt,
-               history.outcome AS type,
-               NULL::jsonb AS details,
-               history.worker_id,
-               history.fence_token::text,
-               history.started_at,
-               history.claimed_at,
-               history.finished_at,
-               round(extract(epoch FROM history.finished_at - history.started_at) * 1000)::text
-                 AS duration_ms,
-               history.error
-          FROM workhorse.dashboard_attempt_history_v1 history
-          LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = history.job_id
-         WHERE history.attempt_id = ${recordId}::bigint
-      `;
-  const result = await database.execute<{
-    kind: DashboardEventKind;
-    record_id: string;
-    job_id: string;
-    queue_name: string | null;
-    job_type: string | null;
-    occurred_at: Date | string;
-    attempt: number | null;
-    type: string;
-    details: unknown;
-    worker_id: string | null;
-    fence_token: string | null;
-    started_at: Date | string | null;
-    claimed_at: Date | string | null;
-    finished_at: Date | string | null;
-    duration_ms: string | null;
-    error: unknown;
-  }>(source);
-  const row = result.rows[0];
-  if (!row) return null;
-  return {
-    id: `${row.kind}:${row.record_id}`,
-    kind: row.kind,
-    recordId: row.record_id,
-    jobId: row.job_id,
-    queue: row.queue_name,
-    jobType: row.job_type,
-    occurredAt: toIso(row.occurred_at),
-    attempt: row.attempt,
-    type: row.type,
-    details: row.details ?? null,
-    workerId: row.worker_id,
-    fenceToken: row.fence_token,
-    startedAt: row.started_at === null ? null : toIso(row.started_at),
-    claimedAt: row.claimed_at === null ? null : toIso(row.claimed_at),
-    finishedAt: row.finished_at === null ? null : toIso(row.finished_at),
-    durationMs: row.duration_ms === null ? null : Number(row.duration_ms),
-    error: row.error ?? null,
-    errorMessage: errorMessageOrNull(row.error),
-  };
+  const input = JSON.stringify({ id });
+  const rows = await database.execute<{ result: DashboardEventDetail | null }>(sql`
+    SELECT workhorse.dashboard_event_detail_v1(${input}::jsonb) AS result
+  `);
+  return expectOneRow(rows, "the dashboard event detail procedure").result;
 }

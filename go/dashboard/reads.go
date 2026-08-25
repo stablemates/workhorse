@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -100,74 +99,27 @@ func dashboardExternalWaits(items []workhorse.ExternalWait, includeContext bool)
 	return result
 }
 
-func eventsWindow(value any) (string, int) {
-	document, _ := value.(map[string]any)
-	window, _ := document["window"].(string)
-	if window == "" {
-		window = "1h"
-	}
-	seconds := map[string]int{"15m": 900, "1h": 3600, "6h": 21600, "24h": 86400}[window]
-	return window, seconds
-}
-
 func (service *backend) events(ctx context.Context, input any, _ string) (any, error) {
-	value, _ := document(input)
-	window, seconds := eventsWindow(input)
-	page := numberDefault(value["page"], 1)
-	pageSize := numberDefault(value["pageSize"], 50)
-	kind, _ := value["kind"].(string)
-	if kind == "" {
-		kind = "all"
-	}
-	types := interfaceSlice(value["types"])
-	return service.jsonQuery(ctx, `WITH feed AS (
- SELECT 'event'::text kind,e.event_id record_id,e.job_id,j.queue_name,j.job_type,e.occurred_at,e.attempt,e.event_type type,e.details,NULL::text worker_id,NULL::bigint fence_token,NULL::numeric duration_ms,NULL::jsonb error,1 kind_rank FROM workhorse.dashboard_job_event_v1 e LEFT JOIN workhorse.dashboard_job_v1 j ON j.id=e.job_id WHERE $1<>'attempt'
- UNION ALL SELECT 'attempt',h.attempt_id,h.job_id,j.queue_name,j.job_type,h.occurred_at,h.attempt,h.outcome,NULL::jsonb,h.worker_id,h.fence_token,round(extract(epoch FROM h.finished_at-h.started_at)*1000),h.error,0 FROM workhorse.dashboard_attempt_history_v1 h LEFT JOIN workhorse.dashboard_job_v1 j ON j.id=h.job_id WHERE $1<>'event'), filtered AS (
- SELECT * FROM feed WHERE occurred_at>=clock_timestamp()-make_interval(secs=>$2) AND ($3::uuid IS NULL OR job_id=$3) AND (cardinality($4::text[])=0 OR type=ANY($4)) AND ($5::text IS NULL OR queue_name=$5) AND ($6::text IS NULL OR job_type=$6)), page AS (SELECT * FROM filtered ORDER BY occurred_at DESC,kind_rank DESC,record_id DESC LIMIT $7 OFFSET $8), retention AS (SELECT * FROM workhorse.dashboard_retention_policy_v1 WHERE singleton)
-SELECT jsonb_build_object('capturedAt',clock_timestamp(),'window',$9::text,'windowSeconds',$2::integer,'page',$10::integer,'pageSize',$7::integer,'total',(SELECT count(*) FROM filtered),
- 'retention',jsonb_build_object('jobEventDays',r.job_event_retention_days,'attemptHistoryDays',r.attempt_history_retention_days),
- 'events',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',kind||':'||record_id::text,'kind',kind,'recordId',record_id::text,'jobId',job_id::text,'queue',queue_name,'jobType',job_type,'occurredAt',occurred_at,'attempt',attempt,'type',type,'details',details,'workerId',worker_id,'fenceToken',fence_token::text,'durationMs',duration_ms,'errorMessage',error->>'message') ORDER BY occurred_at DESC,kind_rank DESC,record_id DESC) FROM page),'[]'::jsonb)) AS result FROM retention r`, kind, seconds, value["jobId"], types, value["queue"], value["jobType"], pageSize, (page-1)*pageSize, window, page)
+	return service.jsonQuery(
+		ctx,
+		"SELECT workhorse.dashboard_events_v1($1::jsonb) AS result",
+		string(mustJSON(input)),
+	)
 }
 
 func (service *backend) eventDetail(ctx context.Context, input any, _ string) (any, error) {
-	value, _ := document(input)
-	id := fmt.Sprint(value["id"])
-	split := strings.IndexByte(id, ':')
-	if split < 0 {
-		return nil, &RPCError{Status: 404, Code: "NOT_FOUND", Message: "Event not found"}
-	}
-	kind, record := id[:split], id[split+1:]
-	var query string
-	if kind == "event" {
-		query = `SELECT jsonb_build_object('id','event:'||e.event_id::text,'kind','event','recordId',e.event_id::text,'jobId',e.job_id::text,'queue',j.queue_name,'jobType',j.job_type,'occurredAt',e.occurred_at,'attempt',e.attempt,'type',e.event_type,'details',e.details,'workerId',NULL,'fenceToken',NULL,'startedAt',NULL,'claimedAt',NULL,'finishedAt',NULL,'durationMs',NULL,'error',NULL,'errorMessage',NULL) result FROM workhorse.dashboard_job_event_v1 e LEFT JOIN workhorse.dashboard_job_v1 j ON j.id=e.job_id WHERE e.event_id=$1::bigint`
-	} else if kind == "attempt" {
-		query = `SELECT jsonb_build_object('id','attempt:'||h.attempt_id::text,'kind','attempt','recordId',h.attempt_id::text,'jobId',h.job_id::text,'queue',j.queue_name,'jobType',j.job_type,'occurredAt',h.occurred_at,'attempt',h.attempt,'type',h.outcome,'details',NULL,'workerId',h.worker_id,'fenceToken',h.fence_token::text,'startedAt',h.started_at,'claimedAt',h.claimed_at,'finishedAt',h.finished_at,'durationMs',round(extract(epoch FROM h.finished_at-h.started_at)*1000),'error',h.error,'errorMessage',h.error->>'message') result FROM workhorse.dashboard_attempt_history_v1 h LEFT JOIN workhorse.dashboard_job_v1 j ON j.id=h.job_id WHERE h.attempt_id=$1::bigint`
-	} else {
-		return nil, &RPCError{Status: 404, Code: "NOT_FOUND", Message: "Event not found"}
-	}
-	rows, err := service.executor.Query(ctx, query, record)
+	rows, err := service.executor.Query(
+		ctx,
+		"SELECT workhorse.dashboard_event_detail_v1($1::jsonb) AS result",
+		string(mustJSON(input)),
+	)
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) == 0 {
+	if len(rows) == 0 || rows[0]["result"] == nil {
 		return nil, &RPCError{Status: 404, Code: "NOT_FOUND", Message: "Event not found"}
 	}
 	return decodeJSONCell(rows[0]["result"])
-}
-
-func numberDefault(value any, fallback int) int {
-	if value == nil {
-		return fallback
-	}
-	var result int
-	fmt.Sscan(fmt.Sprint(value), &result)
-	return result
-}
-func interfaceSlice(value any) []any {
-	if result, ok := value.([]any); ok {
-		return result
-	}
-	return []any{}
 }
 
 func stringDefault(value any, fallback string) string {
@@ -197,15 +149,11 @@ func (service *backend) tasks(ctx context.Context, input any, _ string) (any, er
 }
 
 func (service *backend) activity(ctx context.Context, input any, _ string) (any, error) {
-	value, _ := document(input)
-	period, groupBy, filter := stringDefault(value["period"], "1h"), stringDefault(value["groupBy"], "task"), stringDefault(value["filter"], "all")
-	windows := map[string][2]int{"15m": {900, 30}, "1h": {3600, 120}, "6h": {21600, 600}, "24h": {86400, 3600}, "7d": {604800, 21600}}
-	span := windows[period]
-	groups := map[string]string{"queue": "j.queue_name", "task": "j.job_type", "status": "COALESCE(r.state,o.state)", "worker": "COALESCE(r.worker_id,a.worker_id,'unassigned')"}
-	filters := map[string]string{"all": "true", "blocked": "state='blocked'", "waiting": "external_wait", "scheduled": "state='scheduled'", "retried": "attempt>1", "queued": "state='ready'", "running": "state='active'", "completed": "state='succeeded'", "discarded": "state='failed'", "canceled": "state='canceled'"}
-	statement := `WITH candidate AS(SELECT job_id FROM workhorse.dashboard_job_runtime_v1 WHERE updated_at>=clock_timestamp()-make_interval(secs=>$1) UNION SELECT job_id FROM workhorse.dashboard_job_outcome_v1 WHERE updated_at>=clock_timestamp()-make_interval(secs=>$1)), tasks AS(SELECT ` + groups[groupBy] + ` group_key,COALESCE(r.state,o.state) state,EXISTS(SELECT 1 FROM workhorse.dashboard_signal_wait_v1 s WHERE s.job_id=c.job_id UNION ALL SELECT 1 FROM workhorse.dashboard_human_wait_v1 h WHERE h.job_id=c.job_id) external_wait,COALESCE(r.current_attempt,o.current_attempt) attempt,COALESCE(r.updated_at,o.updated_at) updated_at,j.tags,j.queue_name queue,COALESCE(r.worker_id,a.worker_id,'unassigned') worker_id FROM candidate c JOIN workhorse.dashboard_job_v1 j ON j.id=c.job_id LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id=c.job_id LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id=c.job_id LEFT JOIN LATERAL(SELECT worker_id FROM workhorse.dashboard_attempt_history_v1 x WHERE x.job_id=c.job_id ORDER BY attempt DESC LIMIT 1)a ON true), buckets AS(SELECT generate_series(date_bin(make_interval(secs=>$2),clock_timestamp()-make_interval(secs=>$1),timestamp with time zone '2000-01-01')+make_interval(secs=>$2),date_bin(make_interval(secs=>$2),clock_timestamp(),timestamp with time zone '2000-01-01'),make_interval(secs=>$2)) bucket_start), rows AS(SELECT b.bucket_start,t.group_key,count(t.updated_at)::integer count FROM buckets b LEFT JOIN tasks t ON t.updated_at>=b.bucket_start AND t.updated_at<b.bucket_start+make_interval(secs=>$2) AND ` + filters[filter] + ` AND(cardinality($3::text[])=0 OR t.tags&&$3) AND($4::text IS NULL OR t.queue=$4) AND($5::text IS NULL OR t.worker_id=$5) GROUP BY b.bucket_start,t.group_key ORDER BY b.bucket_start), groups AS(SELECT DISTINCT group_key FROM rows WHERE group_key IS NOT NULL), series AS(SELECT g.group_key,jsonb_agg(jsonb_build_object('bucketStart',r.bucket_start,'count',r.count) ORDER BY r.bucket_start) buckets,sum(r.count)::integer total FROM groups g JOIN rows r ON r.group_key=g.group_key GROUP BY g.group_key)
-SELECT jsonb_build_object('capturedAt',clock_timestamp(),'filter',$8::text,'period',$6::text,'groupBy',$7::text,'bucketSeconds',$2::integer,'groups',COALESCE((SELECT jsonb_agg(group_key ORDER BY group_key)FROM groups),'[]'::jsonb),'buckets',COALESCE((SELECT jsonb_agg(jsonb_build_object('bucketStart',bucket_start,'counts',counts)ORDER BY bucket_start)FROM(SELECT bucket_start,COALESCE(jsonb_object_agg(group_key,count)FILTER(WHERE group_key IS NOT NULL),'{}'::jsonb)counts FROM rows GROUP BY bucket_start)x),'[]'::jsonb)) result`
-	return service.jsonQuery(ctx, statement, span[0], span[1], interfaceSlice(value["tags"]), value["queue"], value["worker"], period, groupBy, filter)
+	return service.jsonQuery(
+		ctx,
+		"SELECT workhorse.dashboard_activity_v1($1::jsonb) AS result",
+		string(mustJSON(input)),
+	)
 }
 
 func (service *backend) previewRetentionPolicy(ctx context.Context, input any, _ string) (any, error) {
