@@ -111,12 +111,139 @@ func TestProductionSQLLiteralsLiveInStatementRegistry(t *testing.T) {
 		"3F000":                   {},
 		"version":                 {},
 	}
+	// admin_protocol.go is hand-written, so pin every non-SQL runtime string rather
+	// than exempting the file from the statement-registry check.
+	adminProtocolLiterals := map[string]struct{}{
+		"":             {},
+		"active_slots": {},
+		"actor must contain between 1 and 200 characters": {},
+		"attempt":                         {},
+		"blocked_reason":                  {},
+		"cancel_reason":                   {},
+		"cancel_requested_at":             {},
+		"cancel_requested_by":             {},
+		"checkpoint_name":                 {},
+		"checkpoint_value":                {},
+		"child_job_ids":                   {},
+		"claimed_at":                      {},
+		"concurrency":                     {},
+		"concurrency_key":                 {},
+		"context":                         {},
+		"contract_version":                {},
+		"createdAfter":                    {},
+		"createdBefore":                   {},
+		"created_at":                      {},
+		"current_attempt":                 {},
+		"cursor_created_at":               {},
+		"cursor_finished_at":              {},
+		"cursor_occurred_at":              {},
+		"cursor_signature":                {},
+		"deadline_at":                     {},
+		"default":                         {},
+		"deleted_count":                   {},
+		"details":                         {},
+		"draining":                        {},
+		"duration_ms":                     {},
+		"error":                           {},
+		"errorName":                       {},
+		"event_type":                      {},
+		"execution_timeout_ms":            {},
+		"fence_token":                     {},
+		"finishedAfter":                   {},
+		"finishedBefore":                  {},
+		"finished_at":                     {},
+		"get job returned %d rows":        {},
+		"get_checkpoint":                  {},
+		"get_job":                         {},
+		"get_progress":                    {},
+		"get_wait":                        {},
+		"has_more":                        {},
+		"hostname":                        {},
+		"id":                              {},
+		"include":                         {},
+		"instance_id":                     {},
+		"job_id":                          {},
+		"job_type":                        {},
+		"kind":                            {},
+		"last_heartbeat_at":               {},
+		"limit must be between 1 and %d":  {},
+		"list_checkpoints":                {},
+		"list_dead_letters":               {},
+		"list_human_waits":                {},
+		"list_job_timeline":               {},
+		"list_jobs":                       {},
+		"list_signal_waits":               {},
+		"list_waits":                      {},
+		"list_workers":                    {},
+		"maxBytes":                        {},
+		"max_attempts":                    {},
+		"mode":                            {},
+		"occurred_at":                     {},
+		"outcome":                         {},
+		"parent_job_id":                   {},
+		"paused":                          {},
+		"paused_at":                       {},
+		"paused_by":                       {},
+		"paused_reason":                   {},
+		"payload":                         {},
+		"payload_bytes":                   {},
+		"payload_status":                  {},
+		"pid":                             {},
+		"prerequisite_job_id":             {},
+		"prerequisite_job_ids":            {},
+		"priority":                        {},
+		"progress_attempt":                {},
+		"progress_created_at":             {},
+		"progress_fence_token":            {},
+		"progress_revision":               {},
+		"progress_updated_at":             {},
+		"progress_value":                  {},
+		"progress_worker_id":              {},
+		"purge_queue":                     {},
+		"purge_queue_v1 returned %d rows": {},
+		"queue":                           {},
+		"queue_name":                      {},
+		"queue_names":                     {},
+		"reason must contain between 1 and 2000 characters": {},
+		"record_id":                {},
+		"redactKeys":               {},
+		"redrive returned %d rows": {},
+		"redrive":                  {},
+		"redrive_count":            {},
+		"redrive_many":             {},
+		"request ID must contain between 1 and %d UTF-8 bytes": {},
+		"requested_at":                         {},
+		"requested_wake_at":                    {},
+		"result":                               {},
+		"retry_policy":                         {},
+		"revision":                             {},
+		"run_at":                               {},
+		"set_queue_paused":                     {},
+		"set_queue_paused_v1 returned %d rows": {},
+		"set_worker_paused":                    {},
+		"source_finished_at_cursor":            {},
+		"source_job_id":                        {},
+		"source_state":                         {},
+		"started_at":                           {},
+		"state":                                {},
+		"states":                               {},
+		"status":                               {},
+		"tags":                                 {},
+		"target_job_id":                        {},
+		"target_state":                         {},
+		"type":                                 {},
+		"updated_at":                           {},
+		"wait_name":                            {},
+		"wake_at":                              {},
+		"worker_id":                            {},
+		"{}":                                   {},
+	}
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") || entry.Name() == "statements.go" || entry.Name() == "sql_catalogue_generated.go" || entry.Name() == "admin_protocol.go" {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") || entry.Name() == "statements.go" || entry.Name() == "sql_catalogue_generated.go" {
 			continue
 		}
 		file, err := parser.ParseFile(token.NewFileSet(), entry.Name(), nil, 0)
@@ -146,9 +273,15 @@ func TestProductionSQLLiteralsLiveInStatementRegistry(t *testing.T) {
 					t.Errorf("%s contains an invalid string literal: %s", entry.Name(), node.Value)
 					return true
 				}
-				if _, ok := nonSQLLiterals[value]; !ok {
-					t.Errorf("%s contains an unclassified production string outside statements.go: %q", entry.Name(), value)
+				if _, ok := nonSQLLiterals[value]; ok {
+					return true
 				}
+				if entry.Name() == "admin_protocol.go" {
+					if _, ok := adminProtocolLiterals[value]; ok {
+						return true
+					}
+				}
+				t.Errorf("%s contains an unclassified production string outside statements.go: %q", entry.Name(), value)
 				return true
 			}
 			return true
