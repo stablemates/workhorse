@@ -11956,6 +11956,144 @@ AS $$
     ), '[]'::jsonb));
 $$;
 
+CREATE OR REPLACE FUNCTION workhorse.dashboard_workers_v1(p_input jsonb)
+RETURNS jsonb
+LANGUAGE sql
+AS $$
+  WITH configured_workers AS (
+    SELECT jsonb_array_elements_text(
+             CASE WHEN jsonb_typeof(p_input->'configuredWorkers') = 'array'
+                  THEN p_input->'configuredWorkers' END
+           ) AS id
+  ), fleet AS (
+    SELECT worker_id AS id FROM workhorse.dashboard_worker_registry_v1
+    UNION SELECT id FROM configured_workers
+  ), active AS (
+    SELECT worker_id AS id, count(*)::integer AS active_jobs, max(acquired_at) AS last_seen_at
+      FROM workhorse.dashboard_job_runtime_v1
+     WHERE state = 'active' AND worker_id IN (SELECT id FROM fleet)
+     GROUP BY worker_id
+  ), recent_history AS (
+    SELECT worker_id AS id, count(*)::integer AS completed_attempts,
+           count(*) FILTER (WHERE outcome = 'failed')::integer AS failed_attempts,
+           avg(extract(epoch FROM finished_at - claimed_at) * 1000)::double precision
+             AS average_execution_ms,
+           max(finished_at) AS last_seen_at
+      FROM workhorse.dashboard_attempt_history_v1
+     WHERE occurred_at >= clock_timestamp() - interval '1 hour'
+       AND finished_at >= clock_timestamp() - interval '1 hour'
+       AND worker_id IN (SELECT id FROM fleet)
+     GROUP BY worker_id
+  ), workers AS (
+    SELECT fleet.id, registry.worker_id IS NOT NULL AS registered,
+           registry.hostname, registry.pid, registry.queue_names, registry.concurrency,
+           registry.active_slots, registry.draining, registry.paused, registry.started_at,
+           registry.last_heartbeat_at,
+           COALESCE(active.active_jobs, 0)::integer AS active_jobs,
+           COALESCE(recent_history.completed_attempts, 0)::integer AS completed_attempts,
+           COALESCE(recent_history.failed_attempts, 0)::integer AS failed_attempts,
+           recent_history.average_execution_ms,
+           GREATEST(active.last_seen_at, recent_history.last_seen_at,
+                    registry.last_heartbeat_at) AS last_seen_at
+      FROM fleet
+      LEFT JOIN workhorse.dashboard_worker_registry_v1 registry
+        ON registry.worker_id = fleet.id
+      LEFT JOIN active ON active.id = fleet.id
+      LEFT JOIN recent_history ON recent_history.id = fleet.id
+  )
+  SELECT jsonb_build_object(
+    'capturedAt', workhorse.dashboard_iso_v1(clock_timestamp()),
+    'canManageWorkers', COALESCE((p_input->>'canManageWorkers')::boolean, false),
+    'workers', COALESCE((
+      SELECT jsonb_agg(jsonb_build_object(
+        'id', id, 'queues', COALESCE(to_jsonb(queue_names), '[]'::jsonb),
+        'hostname', hostname, 'pid', pid, 'activeJobs', active_jobs,
+        'concurrency', concurrency, 'activeSlots', active_slots,
+        'draining', COALESCE(draining, false), 'completedAttempts', completed_attempts,
+        'failedAttempts', failed_attempts, 'averageExecutionMs', average_execution_ms,
+        'lastSeenAt', workhorse.dashboard_iso_v1(last_seen_at),
+        'startedAt', workhorse.dashboard_iso_v1(started_at), 'registered', registered,
+        'lastHeartbeatAt', workhorse.dashboard_iso_v1(last_heartbeat_at),
+        'paused', COALESCE(paused, false)
+      ) ORDER BY id) FROM workers
+    ), '[]'::jsonb));
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.dashboard_cron_v1(p_input jsonb)
+RETURNS jsonb
+LANGUAGE sql
+AS $$
+  WITH schedule_rows AS (
+    SELECT definition.namespace, definition.schedule_name, definition.cron_expression,
+           definition.queue_name, definition.job_type, definition.priority, definition.enabled,
+           definition.revision, definition.updated_at,
+           count(occurrence.occurrence_at)::integer AS occurrence_count,
+           max(occurrence.fired_at) AS last_fired_at
+      FROM workhorse.dashboard_schedule_definition_v1 definition
+      LEFT JOIN workhorse.dashboard_schedule_occurrence_v1 occurrence
+        ON occurrence.namespace = definition.namespace
+       AND occurrence.schedule_name = definition.schedule_name
+     GROUP BY definition.namespace, definition.schedule_name, definition.cron_expression,
+              definition.queue_name, definition.job_type, definition.priority,
+              definition.enabled, definition.revision, definition.updated_at
+     ORDER BY definition.namespace, definition.schedule_name
+     LIMIT 50
+  ), schedules AS (
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'kind', 'user',
+      'identity', jsonb_build_object(
+        'kind', 'user', 'namespace', namespace, 'name', schedule_name),
+      'namespace', namespace, 'name', schedule_name, 'cron', cron_expression,
+      'queue', queue_name, 'type', job_type, 'priority', priority, 'enabled', enabled,
+      'active', enabled, 'revision', revision::text,
+      'updatedAt', workhorse.dashboard_iso_v1(updated_at),
+      'occurrenceCount', occurrence_count,
+      'lastFiredAt', workhorse.dashboard_iso_v1(last_fired_at)
+    ) ORDER BY namespace, schedule_name), '[]'::jsonb) AS value FROM schedule_rows
+  ), policy AS (
+    SELECT * FROM workhorse.dashboard_maintenance_policy_v1 WHERE singleton
+  ), tasks AS (
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'task', state.task_name,
+      'lastStartedAt', workhorse.dashboard_iso_v1(state.last_started_at),
+      'lastCompletedAt', workhorse.dashboard_iso_v1(state.last_completed_at),
+      'due', CASE state.task_name
+        WHEN 'history_partitions' THEN state.last_completed_at IS NULL
+          OR state.last_completed_at <= clock_timestamp()
+            - make_interval(secs => policy.partition_preparation_interval_ms / 1000.0)
+        WHEN 'terminal_storage' THEN state.last_completed_at IS NULL
+          OR state.last_completed_at <= clock_timestamp()
+            - make_interval(secs => policy.terminal_cleanup_interval_ms / 1000.0)
+        WHEN 'history_retention' THEN
+          (clock_timestamp() AT TIME ZONE policy.timezone)::time
+            >= policy.history_retention_local_time
+          AND (state.last_completed_local_date IS NULL
+            OR state.last_completed_local_date
+              < (clock_timestamp() AT TIME ZONE policy.timezone)::date)
+        ELSE false END,
+      'incomplete', state.last_started_at IS NOT NULL
+        AND (state.last_completed_at IS NULL
+          OR state.last_started_at > state.last_completed_at)
+    ) ORDER BY state.task_name), '[]'::jsonb) AS value
+      FROM workhorse.dashboard_maintenance_state_v1 state
+      CROSS JOIN policy
+     WHERE state.task_name IN ('history_partitions', 'history_retention', 'terminal_storage')
+  )
+  SELECT jsonb_build_object(
+    'capturedAt', workhorse.dashboard_iso_v1(clock_timestamp()),
+    'schedules', schedules.value,
+    'maintenance', jsonb_build_object(
+      'cadences', COALESCE(p_input->'maintenanceLoops', '{}'::jsonb),
+      'policy', jsonb_build_object(
+        'timezone', policy.timezone,
+        'partitionPreparationIntervalMs', policy.partition_preparation_interval_ms,
+        'terminalCleanupIntervalMs', policy.terminal_cleanup_interval_ms,
+        'historyRetentionLocalTime', left(policy.history_retention_local_time::text, 5),
+        'updatedAt', workhorse.dashboard_iso_v1(policy.updated_at)),
+      'tasks', tasks.value))
+    FROM policy CROSS JOIN schedules CROSS JOIN tasks;
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.dashboard_queues_v1(p_input jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql

@@ -225,25 +225,6 @@ function cancellationRequest(
   };
 }
 
-function workerValues(workers: readonly string[]) {
-  return sql.join(
-    workers.map((worker) => sql`(${worker})`),
-    sql`, `,
-  );
-}
-
-/**
- * Declared worker identities as a relation, or an empty relation when none are declared.
- *
- * Declaring workers is optional now that live workers register themselves durably. It remains
- * useful for showing an expected fleet member that has never started.
- */
-function declaredWorkerRows(workers: readonly string[]) {
-  return workers.length === 0
-    ? sql`SELECT NULL::text AS id WHERE false`
-    : sql`SELECT id FROM (VALUES ${workerValues(workers)}) declared(id)`;
-}
-
 export async function readDashboardTaskCounts(
   database: DashboardDatabase,
 ): Promise<DashboardTaskCounts> {
@@ -360,133 +341,11 @@ export async function readDashboardCron(
   database: DashboardDatabase,
   maintenanceLoops: MaintenanceLoopCadences,
 ): Promise<DashboardCronPage> {
-  const now = new Date();
-  const [scheduleRows, policyRows, stateRows] = await Promise.all([
-    database.execute<{
-      namespace: string;
-      name: string;
-      cron: string;
-      queue: string;
-      type: string;
-      priority: number;
-      enabled: boolean;
-      revision: string;
-      updated_at: Date | string;
-      occurrence_count: number;
-      last_fired_at: Date | string | null;
-    }>(sql`
-      SELECT d.namespace, d.schedule_name AS name, d.cron_expression AS cron,
-             d.queue_name AS queue, d.job_type AS type, d.priority, d.enabled,
-             d.revision::text AS revision, d.updated_at,
-             count(o.occurrence_at)::integer AS occurrence_count,
-             max(o.fired_at) AS last_fired_at
-        FROM workhorse.dashboard_schedule_definition_v1 d
-        LEFT JOIN workhorse.dashboard_schedule_occurrence_v1 o
-          ON o.namespace = d.namespace AND o.schedule_name = d.schedule_name
-       GROUP BY d.namespace, d.schedule_name, d.cron_expression, d.queue_name, d.job_type, d.priority,
-                d.enabled, d.revision, d.updated_at
-       ORDER BY d.namespace, d.schedule_name
-       LIMIT 50
-    `),
-    database.execute<{
-      timezone: string;
-      partition_preparation_interval_ms: number;
-      terminal_cleanup_interval_ms: number;
-      history_retention_local_time: string;
-      updated_at: Date | string;
-    }>(sql`
-      SELECT timezone, partition_preparation_interval_ms, terminal_cleanup_interval_ms,
-             history_retention_local_time::text, updated_at
-        FROM workhorse.dashboard_maintenance_policy_v1 WHERE singleton
-    `),
-    database.execute<{
-      task_name: string;
-      last_started_at: Date | string | null;
-      last_completed_at: Date | string | null;
-      due: boolean;
-      incomplete: boolean;
-    }>(sql`
-      SELECT state.task_name, state.last_started_at, state.last_completed_at,
-             CASE state.task_name
-               WHEN 'history_partitions' THEN state.last_completed_at IS NULL
-                 OR state.last_completed_at <= clock_timestamp()
-                   - make_interval(secs => policy.partition_preparation_interval_ms / 1000.0)
-               WHEN 'terminal_storage' THEN state.last_completed_at IS NULL
-                 OR state.last_completed_at <= clock_timestamp()
-                   - make_interval(secs => policy.terminal_cleanup_interval_ms / 1000.0)
-               WHEN 'history_retention' THEN
-                 (clock_timestamp() AT TIME ZONE policy.timezone)::time
-                   >= policy.history_retention_local_time
-                 AND (
-                   state.last_completed_local_date IS NULL
-                   OR state.last_completed_local_date
-                     < (clock_timestamp() AT TIME ZONE policy.timezone)::date
-                 )
-               ELSE false
-             END AS due,
-             state.last_started_at IS NOT NULL
-               AND (state.last_completed_at IS NULL OR state.last_started_at > state.last_completed_at)
-               AS incomplete
-        FROM workhorse.dashboard_maintenance_state_v1 state
-        CROSS JOIN workhorse.dashboard_maintenance_policy_v1 policy
-       WHERE policy.singleton
-       ORDER BY state.task_name
-    `),
-  ]);
-  const policy = expectOneRow(policyRows, "the maintenance policy read");
-  const maintenanceTasks = stateRows.rows.flatMap((row) => {
-    const task = row.task_name;
-    if (
-      task !== "history_partitions" &&
-      task !== "history_retention" &&
-      task !== "terminal_storage"
-    ) {
-      return [];
-    }
-    const taskName: "history_partitions" | "history_retention" | "terminal_storage" = task;
-    return [
-      {
-        task: taskName,
-        lastStartedAt: toIsoOrNull(row.last_started_at),
-        lastCompletedAt: toIsoOrNull(row.last_completed_at),
-        due: row.due,
-        incomplete: row.incomplete,
-      },
-    ];
-  });
-
-  return {
-    capturedAt: now.toISOString(),
-    schedules: scheduleRows.rows.map((row) => {
-      return {
-        kind: "user" as const,
-        identity: { kind: "user" as const, namespace: row.namespace, name: row.name },
-        namespace: row.namespace,
-        name: row.name,
-        cron: row.cron,
-        queue: row.queue,
-        type: row.type,
-        priority: row.priority,
-        enabled: row.enabled,
-        active: row.enabled,
-        revision: row.revision,
-        updatedAt: toIso(row.updated_at),
-        occurrenceCount: row.occurrence_count,
-        lastFiredAt: toIsoOrNull(row.last_fired_at),
-      };
-    }),
-    maintenance: {
-      cadences: maintenanceLoops,
-      policy: {
-        timezone: policy.timezone,
-        partitionPreparationIntervalMs: Number(policy.partition_preparation_interval_ms),
-        terminalCleanupIntervalMs: Number(policy.terminal_cleanup_interval_ms),
-        historyRetentionLocalTime: policy.history_retention_local_time.slice(0, 5),
-        updatedAt: toIso(policy.updated_at),
-      },
-      tasks: maintenanceTasks,
-    },
-  };
+  const input = JSON.stringify({ maintenanceLoops });
+  const rows = await database.execute<{ result: DashboardCronPage }>(sql`
+    SELECT workhorse.dashboard_cron_v1(${input}::jsonb) AS result
+  `);
+  return expectOneRow(rows, "the dashboard cron procedure").result;
 }
 const dashboardSystemWindowSeconds: Record<DashboardSystemWindow, number> = {
   "15m": 15 * 60,
@@ -1040,90 +899,11 @@ export async function readDashboardWorkers(
   configuredWorkers: readonly string[] = [],
   canManageWorkers = false,
 ): Promise<DashboardWorkersPage> {
-  const now = new Date();
-  const workerRows = await database.execute<{
-    id: string;
-    registered: boolean;
-    hostname: string | null;
-    pid: number | null;
-    queue_names: string[] | null;
-    concurrency: number | null;
-    active_slots: number | null;
-    draining: boolean | null;
-    paused: boolean | null;
-    started_at: Date | string | null;
-    last_heartbeat_at: Date | string | null;
-    active_jobs: number;
-    completed_attempts: number;
-    failed_attempts: number;
-    average_execution_ms: number | null;
-    last_seen_at: Date | string | null;
-  }>(sql`
-    WITH declared AS (${declaredWorkerRows(configuredWorkers)}
-    ), fleet(id) AS (
-      -- Live workers register themselves, so the fleet is discovered rather than configured. Any
-      -- explicitly declared worker is unioned in so an expected-but-never-started worker is visible.
-      SELECT worker_id FROM workhorse.dashboard_worker_registry_v1
-      UNION
-      SELECT id FROM declared
-    ), active AS (
-      SELECT worker_id AS id, count(*)::integer AS active_jobs, max(acquired_at) AS last_seen_at
-        FROM workhorse.dashboard_job_runtime_v1
-       WHERE state = 'active' AND worker_id IN (SELECT id FROM fleet)
-       GROUP BY worker_id
-    ), recent_history AS (
-      -- Exact counts are cheap here because both time predicates keep partition scans to one hour.
-      SELECT worker_id AS id, count(*)::integer AS completed_attempts,
-             count(*) FILTER (WHERE outcome = 'failed')::integer AS failed_attempts,
-             avg(extract(epoch FROM finished_at - claimed_at) * 1000)::double precision
-               AS average_execution_ms,
-             max(finished_at) AS last_seen_at
-        FROM workhorse.dashboard_attempt_history_v1
-       WHERE occurred_at >= clock_timestamp() - interval '1 hour'
-         AND finished_at >= clock_timestamp() - interval '1 hour'
-         AND worker_id IN (SELECT id FROM fleet)
-       GROUP BY worker_id
-    )
-    SELECT f.id,
-           r.worker_id IS NOT NULL AS registered,
-           r.hostname, r.pid, r.queue_names,
-           r.concurrency, r.active_slots, r.draining, r.paused, r.started_at, r.last_heartbeat_at,
-           COALESCE(a.active_jobs, 0)::integer AS active_jobs,
-           COALESCE(h.completed_attempts, 0)::integer AS completed_attempts,
-           COALESCE(h.failed_attempts, 0)::integer AS failed_attempts,
-           h.average_execution_ms,
-           GREATEST(a.last_seen_at, h.last_seen_at, r.last_heartbeat_at) AS last_seen_at
-      FROM fleet f
-      LEFT JOIN workhorse.dashboard_worker_registry_v1 r ON r.worker_id = f.id
-      LEFT JOIN active a ON a.id = f.id
-      LEFT JOIN recent_history h ON h.id = f.id
-     ORDER BY f.id
+  const input = JSON.stringify({ configuredWorkers, canManageWorkers });
+  const rows = await database.execute<{ result: DashboardWorkersPage }>(sql`
+    SELECT workhorse.dashboard_workers_v1(${input}::jsonb) AS result
   `);
-
-  return {
-    capturedAt: now.toISOString(),
-    canManageWorkers,
-    workers: workerRows.rows.map((row) => {
-      return {
-        id: row.id,
-        queues: row.queue_names ?? [],
-        hostname: row.hostname,
-        pid: row.pid,
-        activeJobs: row.active_jobs,
-        concurrency: row.concurrency,
-        activeSlots: row.active_slots,
-        draining: row.draining ?? false,
-        completedAttempts: row.completed_attempts,
-        failedAttempts: row.failed_attempts,
-        averageExecutionMs: row.average_execution_ms,
-        lastSeenAt: toIsoOrNull(row.last_seen_at),
-        startedAt: toIsoOrNull(row.started_at),
-        registered: row.registered,
-        lastHeartbeatAt: toIsoOrNull(row.last_heartbeat_at),
-        paused: row.paused ?? false,
-      };
-    }),
-  };
+  return expectOneRow(rows, "the dashboard workers procedure").result;
 }
 
 export async function readDashboardJobDetail(

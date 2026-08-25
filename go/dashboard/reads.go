@@ -11,49 +11,26 @@ import (
 )
 
 func (service *backend) cron(ctx context.Context, _ any, _ string) (any, error) {
-	return service.jsonQuery(ctx, `WITH schedule_rows AS (
-  SELECT d.namespace,d.schedule_name,d.cron_expression,d.queue_name,d.job_type,d.priority,d.enabled,d.revision,d.updated_at,
-    count(o.occurrence_at)::integer occurrence_count,max(o.fired_at) last_fired_at
-  FROM workhorse.dashboard_schedule_definition_v1 d LEFT JOIN workhorse.dashboard_schedule_occurrence_v1 o
-    ON o.namespace=d.namespace AND o.schedule_name=d.schedule_name
-  GROUP BY d.namespace,d.schedule_name,d.cron_expression,d.queue_name,d.job_type,d.priority,d.enabled,d.revision,d.updated_at
-), schedule_page AS (SELECT COALESCE(jsonb_agg(jsonb_build_object(
-    'kind','user','identity',jsonb_build_object('kind','user','namespace',d.namespace,'name',d.schedule_name),
-    'namespace',d.namespace,'name',d.schedule_name,'cron',d.cron_expression,'queue',d.queue_name,
-    'type',d.job_type,'priority',d.priority,'enabled',d.enabled,'active',d.enabled,
-    'revision',d.revision::text,'updatedAt',d.updated_at,'occurrenceCount',d.occurrence_count,
-    'lastFiredAt',d.last_fired_at) ORDER BY d.namespace,d.schedule_name),'[]'::jsonb) AS value FROM schedule_rows d),
-policy AS (SELECT * FROM workhorse.dashboard_maintenance_policy_v1 WHERE singleton),
-tasks AS (SELECT COALESCE(jsonb_agg(jsonb_build_object('task',s.task_name,'lastStartedAt',s.last_started_at,
-  'lastCompletedAt',s.last_completed_at,'due',CASE s.task_name
-    WHEN 'history_partitions' THEN s.last_completed_at IS NULL OR s.last_completed_at<=clock_timestamp()-make_interval(secs=>p.partition_preparation_interval_ms/1000.0)
-    WHEN 'terminal_storage' THEN s.last_completed_at IS NULL OR s.last_completed_at<=clock_timestamp()-make_interval(secs=>p.terminal_cleanup_interval_ms/1000.0)
-    WHEN 'history_retention' THEN (clock_timestamp() AT TIME ZONE p.timezone)::time>=p.history_retention_local_time AND (s.last_completed_local_date IS NULL OR s.last_completed_local_date<(clock_timestamp() AT TIME ZONE p.timezone)::date)
-    ELSE false END,'incomplete',s.last_started_at IS NOT NULL AND (s.last_completed_at IS NULL OR s.last_started_at>s.last_completed_at)) ORDER BY s.task_name),'[]'::jsonb) AS value
-  FROM workhorse.dashboard_maintenance_state_v1 s CROSS JOIN policy p
-  WHERE s.task_name IN ('history_partitions','history_retention','terminal_storage'))
-SELECT jsonb_build_object('capturedAt',clock_timestamp(),'schedules',(SELECT value FROM schedule_page),
-  'maintenance',jsonb_build_object('cadences',$1::jsonb,
-  'policy',jsonb_build_object('timezone',p.timezone,'partitionPreparationIntervalMs',p.partition_preparation_interval_ms,
-  'terminalCleanupIntervalMs',p.terminal_cleanup_interval_ms,'historyRetentionLocalTime',left(p.history_retention_local_time::text,5),'updatedAt',p.updated_at),
-  'tasks',(SELECT value FROM tasks))) AS result FROM policy p`, mustJSON(service.maintenanceLoops))
+	return service.jsonQuery(
+		ctx,
+		"SELECT workhorse.dashboard_cron_v1($1::jsonb) AS result",
+		string(mustJSON(map[string]any{"maintenanceLoops": service.maintenanceLoops})),
+	)
 }
 
 func (service *backend) workers(ctx context.Context, _ any, _ string) (any, error) {
-	return service.jsonQuery(ctx, `WITH declared(id) AS (SELECT unnest($1::text[])), fleet(id) AS (
- SELECT worker_id FROM workhorse.dashboard_worker_registry_v1 UNION SELECT id FROM declared), active AS (
- SELECT worker_id AS id,count(*)::integer AS active_jobs,max(acquired_at) AS last_seen_at
- FROM workhorse.dashboard_job_runtime_v1 WHERE state='active' AND worker_id IN(SELECT id FROM fleet) GROUP BY worker_id), history AS (
- SELECT worker_id AS id,count(*)::integer AS completed_attempts,count(*) FILTER(WHERE outcome='failed')::integer AS failed_attempts,
- avg(extract(epoch FROM finished_at-claimed_at)*1000)::double precision AS average_execution_ms,max(finished_at) AS last_seen_at
- FROM workhorse.dashboard_attempt_history_v1 WHERE occurred_at>=clock_timestamp()-interval '1 hour' AND finished_at>=clock_timestamp()-interval '1 hour' AND worker_id IN(SELECT id FROM fleet) GROUP BY worker_id), rows AS (
- SELECT f.id,r.worker_id IS NOT NULL AS registered,r.hostname,r.pid,r.queue_names,r.concurrency,r.active_slots,r.draining,r.paused,r.started_at,r.last_heartbeat_at,
- COALESCE(a.active_jobs,0)::integer AS active_jobs,COALESCE(h.completed_attempts,0)::integer AS completed_attempts,COALESCE(h.failed_attempts,0)::integer AS failed_attempts,h.average_execution_ms,
- GREATEST(a.last_seen_at,h.last_seen_at,r.last_heartbeat_at) AS last_seen_at FROM fleet f LEFT JOIN workhorse.dashboard_worker_registry_v1 r ON r.worker_id=f.id LEFT JOIN active a ON a.id=f.id LEFT JOIN history h ON h.id=f.id ORDER BY f.id)
-SELECT jsonb_build_object('capturedAt',clock_timestamp(),'canManageWorkers',$2::boolean,'workers',COALESCE(jsonb_agg(jsonb_build_object(
- 'id',id,'queues',COALESCE(queue_names,'{}'),'hostname',hostname,'pid',pid,'activeJobs',active_jobs,'concurrency',concurrency,'activeSlots',active_slots,
- 'draining',COALESCE(draining,false),'completedAttempts',completed_attempts,'failedAttempts',failed_attempts,'averageExecutionMs',average_execution_ms,
- 'lastSeenAt',last_seen_at,'startedAt',started_at,'registered',registered,'lastHeartbeatAt',last_heartbeat_at,'paused',COALESCE(paused,false)) ORDER BY id),'[]'::jsonb)) AS result FROM rows`, service.configuredWorkers, !service.readOnly)
+	workers := service.configuredWorkers
+	if workers == nil {
+		workers = []string{}
+	}
+	return service.jsonQuery(
+		ctx,
+		"SELECT workhorse.dashboard_workers_v1($1::jsonb) AS result",
+		string(mustJSON(map[string]any{
+			"configuredWorkers": workers,
+			"canManageWorkers":  !service.readOnly,
+		})),
+	)
 }
 
 func (service *backend) humanWaits(ctx context.Context, _ any, _ string) (any, error) {

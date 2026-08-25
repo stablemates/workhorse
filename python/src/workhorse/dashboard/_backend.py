@@ -138,6 +138,10 @@ class DashboardBackend:
     def _rows(self, sql: str, parameters: Sequence[object] = ()) -> list[Mapping[str, object]]:
         return self._executor.rows(_statement(sql), parameters)
 
+    def _json_result(self, sql: str, parameters: Sequence[object] = ()) -> object:
+        value = self._rows(sql, parameters)[0]["result"]
+        return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
+
     def _health(self) -> Mapping[str, object]:
         cached = self._health_cache
         if cached is not None and cached[0] > monotonic():
@@ -158,10 +162,7 @@ class DashboardBackend:
         return {"environment": self._environment}
 
     def task_counts(self, _input: object, _actor: str) -> object:
-        value = self._rows("SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb) AS result")[0][
-            "result"
-        ]
-        return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
+        return self._json_result("SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb) AS result")
 
     def tasks(self, input: object, _actor: str) -> object:
         supplied = cast(Mapping[str, object], input)
@@ -179,11 +180,10 @@ class DashboardBackend:
             **supplied,
             "canCompleteHumanWait": not self._read_only,
         }
-        value = self._rows(
+        return self._json_result(
             "SELECT workhorse.dashboard_tasks_v1(%s::jsonb) AS result",
             (json.dumps(query),),
-        )[0]["result"]
-        return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
+        )
 
     def activity(self, input: object, _actor: str) -> object:
         value = self._rows(
@@ -193,82 +193,26 @@ class DashboardBackend:
         return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
     def task_facets(self, _input: object, _actor: str) -> object:
-        value = self._rows(
+        return self._json_result(
             "SELECT workhorse.dashboard_task_facets_v1(%s::jsonb) AS result",
             (json.dumps({"configuredWorkers": list(self._configured_workers)}),),
-        )[0]["result"]
-        return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
+        )
 
     def queues(self, _input: object, _actor: str) -> object:
-        value = self._rows("SELECT workhorse.dashboard_queues_v1('{}'::jsonb) AS result")[0][
-            "result"
-        ]
-        return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
+        return self._json_result("SELECT workhorse.dashboard_queues_v1('{}'::jsonb) AS result")
 
     def workers(self, _input: object, _actor: str) -> object:
-        rows = self._rows(
-            """
-            WITH declared(id) AS (SELECT unnest(%s::text[])), fleet(id) AS (
-              SELECT worker_id FROM workhorse.dashboard_worker_registry_v1
-              UNION SELECT id FROM declared
-            ), active AS (
-              SELECT worker_id AS id, count(*)::integer AS active_jobs,
-                     max(acquired_at) AS last_seen_at
-                FROM workhorse.dashboard_job_runtime_v1
-               WHERE state = 'active' AND worker_id IN (SELECT id FROM fleet)
-               GROUP BY worker_id
-            ), recent_history AS (
-              SELECT worker_id AS id, count(*)::integer AS completed_attempts,
-                     count(*) FILTER (WHERE outcome = 'failed')::integer AS failed_attempts,
-                     avg(extract(epoch FROM finished_at - claimed_at) * 1000)::double precision
-                       AS average_execution_ms,
-                     max(finished_at) AS last_seen_at
-                FROM workhorse.dashboard_attempt_history_v1
-               WHERE occurred_at >= clock_timestamp() - interval '1 hour'
-                 AND finished_at >= clock_timestamp() - interval '1 hour'
-                 AND worker_id IN (SELECT id FROM fleet)
-               GROUP BY worker_id
-            )
-            SELECT f.id, r.worker_id IS NOT NULL AS registered, r.hostname, r.pid, r.queue_names,
-                   r.concurrency, r.active_slots, r.draining, r.paused, r.started_at,
-                   r.last_heartbeat_at, COALESCE(a.active_jobs, 0)::integer AS active_jobs,
-                   COALESCE(h.completed_attempts, 0)::integer AS completed_attempts,
-                   COALESCE(h.failed_attempts, 0)::integer AS failed_attempts,
-                   h.average_execution_ms,
-                   GREATEST(a.last_seen_at, h.last_seen_at, r.last_heartbeat_at) AS last_seen_at
-              FROM fleet f
-              LEFT JOIN workhorse.dashboard_worker_registry_v1 r ON r.worker_id = f.id
-              LEFT JOIN active a ON a.id = f.id
-              LEFT JOIN recent_history h ON h.id = f.id
-             ORDER BY f.id
-            """,
-            (list(self._configured_workers),),
+        return self._json_result(
+            "SELECT workhorse.dashboard_workers_v1(%s::jsonb) AS result",
+            (
+                json.dumps(
+                    {
+                        "configuredWorkers": list(self._configured_workers),
+                        "canManageWorkers": not self._read_only,
+                    }
+                ),
+            ),
         )
-        return {
-            "capturedAt": _iso(datetime.now(timezone.utc)),
-            "canManageWorkers": not self._read_only,
-            "workers": [
-                {
-                    "id": row["id"],
-                    "queues": row["queue_names"] or [],
-                    "hostname": row["hostname"],
-                    "pid": row["pid"],
-                    "activeJobs": row["active_jobs"],
-                    "concurrency": row["concurrency"],
-                    "activeSlots": row["active_slots"],
-                    "draining": row["draining"] or False,
-                    "completedAttempts": row["completed_attempts"],
-                    "failedAttempts": row["failed_attempts"],
-                    "averageExecutionMs": _iso(row["average_execution_ms"]),
-                    "lastSeenAt": _iso(row["last_seen_at"]),
-                    "startedAt": _iso(row["started_at"]),
-                    "registered": row["registered"],
-                    "lastHeartbeatAt": _iso(row["last_heartbeat_at"]),
-                    "paused": row["paused"] or False,
-                }
-                for row in rows
-            ],
-        }
 
     def human_waits(self, _input: object, _actor: str) -> object:
         waits = self._admin.list_human_waits(limit=50).items
@@ -1227,103 +1171,10 @@ class DashboardBackend:
         }
 
     def cron(self, _input: object, _actor: str) -> object:
-        schedules = self._rows(
-            """
-            SELECT d.namespace, d.schedule_name AS name, d.cron_expression AS cron,
-                   d.queue_name AS queue, d.job_type AS type, d.priority, d.enabled,
-                   d.revision::text AS revision, d.updated_at,
-                   count(o.occurrence_at)::integer AS occurrence_count,
-                   max(o.fired_at) AS last_fired_at
-              FROM workhorse.dashboard_schedule_definition_v1 d
-              LEFT JOIN workhorse.dashboard_schedule_occurrence_v1 o
-                ON o.namespace = d.namespace AND o.schedule_name = d.schedule_name
-             GROUP BY d.namespace, d.schedule_name, d.cron_expression, d.queue_name, d.job_type,
-                      d.priority, d.enabled, d.revision, d.updated_at
-             ORDER BY d.namespace, d.schedule_name LIMIT 50
-            """
+        return self._json_result(
+            "SELECT workhorse.dashboard_cron_v1(%s::jsonb) AS result",
+            (json.dumps({"maintenanceLoops": self._maintenance_loops}),),
         )
-        policy = self._rows(
-            """
-            SELECT timezone, partition_preparation_interval_ms, terminal_cleanup_interval_ms,
-                   history_retention_local_time::text, updated_at
-              FROM workhorse.dashboard_maintenance_policy_v1 WHERE singleton
-            """
-        )[0]
-        tasks = self._rows(
-            """
-            SELECT state.task_name, state.last_started_at, state.last_completed_at,
-                   CASE state.task_name
-                     WHEN 'history_partitions' THEN state.last_completed_at IS NULL OR
-                       state.last_completed_at <= clock_timestamp() - make_interval(
-                         secs => policy.partition_preparation_interval_ms / 1000.0)
-                     WHEN 'terminal_storage' THEN state.last_completed_at IS NULL OR
-                       state.last_completed_at <= clock_timestamp() - make_interval(
-                         secs => policy.terminal_cleanup_interval_ms / 1000.0)
-                     WHEN 'history_retention' THEN
-                       (clock_timestamp() AT TIME ZONE policy.timezone)::time >=
-                         policy.history_retention_local_time AND (
-                           state.last_completed_local_date IS NULL OR
-                           state.last_completed_local_date <
-                             (clock_timestamp() AT TIME ZONE policy.timezone)::date)
-                     ELSE false
-                   END AS due,
-                   state.last_started_at IS NOT NULL AND (
-                     state.last_completed_at IS NULL OR
-                     state.last_started_at > state.last_completed_at
-                   ) AS incomplete
-              FROM workhorse.dashboard_maintenance_state_v1 state
-              CROSS JOIN workhorse.dashboard_maintenance_policy_v1 policy
-             WHERE policy.singleton ORDER BY state.task_name
-            """
-        )
-        return {
-            "capturedAt": _iso(datetime.now(timezone.utc)),
-            "schedules": [
-                {
-                    "kind": "user",
-                    "identity": {
-                        "kind": "user",
-                        "namespace": row["namespace"],
-                        "name": row["name"],
-                    },
-                    "namespace": row["namespace"],
-                    "name": row["name"],
-                    "cron": row["cron"],
-                    "queue": row["queue"],
-                    "type": row["type"],
-                    "priority": row["priority"],
-                    "enabled": row["enabled"],
-                    "active": row["enabled"],
-                    "revision": row["revision"],
-                    "updatedAt": _iso(row["updated_at"]),
-                    "occurrenceCount": row["occurrence_count"],
-                    "lastFiredAt": _iso(row["last_fired_at"]),
-                }
-                for row in schedules
-            ],
-            "maintenance": {
-                "cadences": self._maintenance_loops,
-                "policy": {
-                    "timezone": policy["timezone"],
-                    "partitionPreparationIntervalMs": policy["partition_preparation_interval_ms"],
-                    "terminalCleanupIntervalMs": policy["terminal_cleanup_interval_ms"],
-                    "historyRetentionLocalTime": str(policy["history_retention_local_time"])[:5],
-                    "updatedAt": _iso(policy["updated_at"]),
-                },
-                "tasks": [
-                    {
-                        "task": row["task_name"],
-                        "lastStartedAt": _iso(row["last_started_at"]),
-                        "lastCompletedAt": _iso(row["last_completed_at"]),
-                        "due": row["due"],
-                        "incomplete": row["incomplete"],
-                    }
-                    for row in tasks
-                    if row["task_name"]
-                    in {"history_partitions", "history_retention", "terminal_storage"}
-                ],
-            },
-        }
 
     def preview_retention_policy(self, input: object, _actor: str) -> object:
         document = cast(Mapping[str, object], input)
