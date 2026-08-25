@@ -56,8 +56,8 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
         "SELECT status, child_job_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
     ),
     "create_children_v1": (
-        "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1(%s::uuid, %s::text, %s::bigint, %s::jsonb)",
-        "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)",
+        "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1(%s::uuid, %s::text, %s::bigint, %s::jsonb, %s::text)",
+        "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)",
     ),
     "dashboard_human_wait_v1": (
         "SELECT job_id, queue_name, job_type, token_name AS wait_name, context, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_human_wait_v1 WHERE (%s::timestamptz IS NULL OR (created_at, job_id, token_name) > (%s::timestamptz, %s::uuid, %s::text)) ORDER BY created_at, job_id, token_name LIMIT %s::integer",

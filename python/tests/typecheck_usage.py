@@ -75,7 +75,7 @@ def sync_worker(connection: psycopg.Connection[Any], database_url: str) -> bool:
         signal = context.wait_for_signal("approval", timeout_ms=60_000)
         decision = context.wait_for_human("review", {"signal": signal})
         child = context.run_child("audit", "audit.write", {"decision": decision})
-        children = context.run_children(
+        children = context.run_children_all(
             (ChildJobRequest("notify", "notify.send", {"child": child}),)
         )
         return {

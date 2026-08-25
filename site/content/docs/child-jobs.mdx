@@ -44,11 +44,15 @@ job. Changing the name, payload, type, options, or set membership raises `ChildC
 deploy cannot silently rewrite an in-flight parent.
 
 Use `runChildren` to create and join independent work in parallel. PostgreSQL releases the parent
-only after the whole set settles; a failed child fails the parent, while cancellation applies only
-when no failure takes precedence.
+only after the whole set settles. The method returns a tagged `succeeded`, `failed`, or `canceled`
+outcome for every child, so the parent handler chooses its own final result.
 
 Python handlers call `run_child` or `run_children`. Go handlers call `CreateChild` or
-`CreateChildren`. Both set methods retain the declared names and request order.
+`CreateChildren`. Both set methods retain the declared names and request order. Use
+`runChildrenAll`, `run_children_all`, or `CreateChildrenAll` when a child failure or cancellation
+must propagate to the parent.
+
+Go represents the three tags as `ChildSucceeded`, `ChildFailed`, and `ChildCanceled`.
 
 Code before either call runs again when the parent resumes. Wrap external effects in checkpoints or
 make them independently idempotent.
@@ -60,7 +64,7 @@ make them independently idempotent.
 parents and children with their names and join state.
 
 TypeScript handlers create children with `HandlerContext.runChildren`, which returns each
-`ChildResult`. Use `HandlerContext.checkpoint` around replay-sensitive surrounding work. Workhorse
+`ChildOutcome`. Use `HandlerContext.checkpoint` around replay-sensitive surrounding work. Workhorse
 raises `ChildLimitExceededError` or `ChildResultLimitExceededError` before a tree or retained result
 can grow without a bound.
 

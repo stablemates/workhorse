@@ -17,7 +17,7 @@ retained stage before advancing it, just like the TypeScript handler.
 const plan = await context.checkpoint("plan", () => callModel(prompt));
 await reportProgress(context, "planned");
 
-const tools = await context.runChildren(toolRequests);
+const tools = await context.runChildrenAll(toolRequests);
 await context.sleep("model-cooldown", cooldownMs);
 const approval = await context.waitForSignal("approval");
 ```
@@ -25,7 +25,8 @@ const approval = await context.waitForSignal("approval");
 The child set must keep stable names and requests, because changed replay conflicts. A checkpoint
 reuses its stored result after persistence, while a relative timer keeps its first wake target.
 
-`HandlerContext.runChildren` joins independent [child jobs](170-child-jobs.md). The example puts them
+`HandlerContext.runChildrenAll` joins independent [child jobs](170-child-jobs.md) and propagates a
+rejected tool outcome. Use `runChildren` when the model should inspect every settled outcome. The example puts them
 on a queue governed by `Queue.syncRateLimitPolicies`, with the conversation identity as each
 `concurrencyKey` for [per-key traffic control](250-rate-limits.md).
 

@@ -676,6 +676,17 @@ export interface ChildJobRequest<TPayload extends Json = Json> {
   options?: ChildJobOptions;
 }
 
+/** One terminal child outcome returned by the default settled join. */
+export type ChildOutcome<TResult extends Json = Json> =
+  | { status: "succeeded"; result: TResult }
+  | { status: "failed"; error: Json }
+  | { status: "canceled"; error: Json };
+
+/** Settled outcomes keyed by the stable child names in a requested result shape. */
+export type ChildOutcomes<TResult extends Record<string, Json> = Record<string, Json>> = {
+  [TName in keyof TResult]: ChildOutcome<TResult[TName]>;
+};
+
 /** PostgreSQL's decision when a handler creates or replays its single named child. */
 export type CreateChildResult<TResult extends Json = Json> =
   | { status: "created"; child: ChildJob<TResult> }

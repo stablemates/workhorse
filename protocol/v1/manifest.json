@@ -167,8 +167,8 @@
     },
     {
       "name": "create_children_v1",
-      "arity": 4,
-      "contract": "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)"
+      "arity": 5,
+      "contract": "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)"
     },
     {
       "name": "create_child_v1",
@@ -259,8 +259,8 @@
     {
       "name": "create_children_v1",
       "pythonBinding": "create_children",
-      "arity": 4,
-      "contract": "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)",
+      "arity": 5,
+      "contract": "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)",
       "catalogues": ["protocol"]
     },
     {

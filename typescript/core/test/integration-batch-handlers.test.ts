@@ -41,7 +41,8 @@ describe("batch handlers", () => {
       | "waitForSignal"
       | "waitForHuman"
       | "runChild"
-      | "runChildren";
+      | "runChildren"
+      | "runChildrenAll";
 
     expectTypeOf<
       Extract<keyof BatchHandlerItem["context"], SuspensionMethod>

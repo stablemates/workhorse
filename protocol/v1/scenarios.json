@@ -673,21 +673,39 @@
       {
         "id": "create-child",
         "covers": ["children"],
-        "sql": "SELECT jsonb_build_object('status', status, 'children', children) AS value FROM workhorse.create_children_v1($1::uuid, $2, $3::bigint, $4::jsonb)",
+        "sql": "SELECT jsonb_build_object('status', status, 'children', children) AS value FROM workhorse.create_children_v1($1::uuid, $2, $3::bigint, $4::jsonb, $5::text)",
         "parameters": [
           { "$ref": "parentJob" },
           "protocol-parent-worker",
           { "$ref": "parentFence" },
           [
             {
-              "name": "only",
+              "name": "accepted",
               "request": {
-                "queue": "protocol-child",
+                "queue": "protocol-child-success",
                 "type": "protocol.child",
                 "payload": { "value": 7 }
               }
+            },
+            {
+              "name": "rejected",
+              "request": {
+                "queue": "protocol-child-failure",
+                "type": "protocol.child",
+                "payload": null,
+                "maxAttempts": 1
+              }
+            },
+            {
+              "name": "skipped",
+              "request": {
+                "queue": "protocol-child-canceled",
+                "type": "protocol.child",
+                "payload": null
+              }
             }
-          ]
+          ],
+          "settled"
         ],
         "expect": {
           "rows": [
@@ -698,7 +716,21 @@
                     "childJobId": { "$type": "uuid" },
                     "createdAt": { "$type": "timestamp" },
                     "joinedAt": null,
-                    "name": "only",
+                    "name": "accepted",
+                    "type": "protocol.child"
+                  },
+                  {
+                    "childJobId": { "$type": "uuid" },
+                    "createdAt": { "$type": "timestamp" },
+                    "joinedAt": null,
+                    "name": "rejected",
+                    "type": "protocol.child"
+                  },
+                  {
+                    "childJobId": { "$type": "uuid" },
+                    "createdAt": { "$type": "timestamp" },
+                    "joinedAt": null,
+                    "name": "skipped",
                     "type": "protocol.child"
                   }
                 ],
@@ -707,19 +739,232 @@
             }
           ]
         },
-        "capture": { "childJob": "0.value.children.0.childJobId" }
+        "capture": {
+          "childJob": "0.value.children.0.childJobId",
+          "failedChildJob": "0.value.children.1.childJobId",
+          "canceledChildJob": "0.value.children.2.childJobId"
+        }
       },
       {
         "id": "complete-child",
         "sql": "WITH claimed AS (SELECT * FROM workhorse.claim_v1($1, $2, 30000)) SELECT workhorse.complete_v1(job_id, $2, fence_token, $3::jsonb) AS accepted FROM claimed",
-        "parameters": ["protocol-child", "protocol-child-worker", { "value": 7 }],
+        "parameters": ["protocol-child-success", "protocol-child-worker", { "value": 7 }],
         "expect": { "rows": [{ "accepted": true }] }
+      },
+      {
+        "id": "fail-child",
+        "sql": "WITH claimed AS (SELECT * FROM workhorse.claim_v1($1, $2, 30000)) SELECT workhorse.fail_v1(job_id, $2, fence_token, $3::jsonb, NULL) AS state FROM claimed",
+        "parameters": [
+          "protocol-child-failure",
+          "protocol-child-worker",
+          { "name": "Error", "message": "rejected" }
+        ],
+        "expect": { "rows": [{ "state": "failed" }] }
+      },
+      {
+        "id": "cancel-child",
+        "sql": "SELECT status FROM workhorse.cancel_v1($1::uuid, $2, NULL)",
+        "parameters": [{ "$ref": "canceledChildJob" }, "protocol-fixture"],
+        "expect": { "rows": [{ "status": "canceled" }] }
       },
       {
         "id": "parent-released",
         "sql": "SELECT jsonb_build_object('state', state) AS value FROM workhorse.dashboard_job_runtime_v1 WHERE job_id = $1::uuid",
         "parameters": [{ "$ref": "parentJob" }],
         "expect": { "rows": [{ "value": { "state": "ready" } }] }
+      },
+      {
+        "id": "claim-released-parent",
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1, $2, 30000)",
+        "parameters": ["protocol-parent", "protocol-parent-worker"],
+        "expect": {
+          "rows": [
+            { "value": { "fenceToken": { "$type": "integer" }, "jobId": { "$ref": "parentJob" } } }
+          ]
+        },
+        "capture": { "resumedParentFence": "0.value.fenceToken" }
+      },
+      {
+        "id": "join-settled-child",
+        "sql": "SELECT jsonb_build_object('status', status, 'children', children) AS value FROM workhorse.create_children_v1($1::uuid, $2, $3::bigint, $4::jsonb, $5::text)",
+        "parameters": [
+          { "$ref": "parentJob" },
+          "protocol-parent-worker",
+          { "$ref": "resumedParentFence" },
+          [
+            {
+              "name": "accepted",
+              "request": {
+                "queue": "protocol-child-success",
+                "type": "protocol.child",
+                "payload": { "value": 7 }
+              }
+            },
+            {
+              "name": "rejected",
+              "request": {
+                "queue": "protocol-child-failure",
+                "type": "protocol.child",
+                "payload": null,
+                "maxAttempts": 1
+              }
+            },
+            {
+              "name": "skipped",
+              "request": {
+                "queue": "protocol-child-canceled",
+                "type": "protocol.child",
+                "payload": null
+              }
+            }
+          ],
+          "settled"
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "children": [
+                  {
+                    "childJobId": { "$ref": "childJob" },
+                    "createdAt": { "$type": "timestamp" },
+                    "joinedAt": { "$type": "timestamp" },
+                    "name": "accepted",
+                    "outcome": { "status": "succeeded", "result": { "value": 7 } },
+                    "type": "protocol.child"
+                  },
+                  {
+                    "childJobId": { "$ref": "failedChildJob" },
+                    "createdAt": { "$type": "timestamp" },
+                    "joinedAt": { "$type": "timestamp" },
+                    "name": "rejected",
+                    "outcome": {
+                      "status": "failed",
+                      "error": { "name": "Error", "message": "rejected" }
+                    },
+                    "type": "protocol.child"
+                  },
+                  {
+                    "childJobId": { "$ref": "canceledChildJob" },
+                    "createdAt": { "$type": "timestamp" },
+                    "joinedAt": { "$type": "timestamp" },
+                    "name": "skipped",
+                    "outcome": {
+                      "status": "canceled",
+                      "error": {
+                        "name": "CancellationRequested",
+                        "message": "job cancellation was requested",
+                        "requested_by": "protocol-fixture",
+                        "requested_at": { "$type": "timestamp" },
+                        "reason": null
+                      }
+                    },
+                    "type": "protocol.child"
+                  }
+                ],
+                "status": "completed"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "enqueue-empty-parent",
+        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS job_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v1($1, $3, 30000) claim) SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM claimed",
+        "parameters": ["protocol-empty-parent", "protocol.empty-parent", "protocol-empty-worker"],
+        "expect": {
+          "rows": [
+            { "value": { "fenceToken": { "$type": "integer" }, "jobId": { "$type": "uuid" } } }
+          ]
+        },
+        "capture": {
+          "emptyParentJob": "0.value.jobId",
+          "emptyParentFence": "0.value.fenceToken"
+        }
+      },
+      {
+        "id": "join-empty-set",
+        "sql": "SELECT jsonb_build_object('status', status, 'children', children, 'results', results) AS value FROM workhorse.create_children_v1($1::uuid, $2, $3::bigint, '[]'::jsonb, 'settled')",
+        "parameters": [
+          { "$ref": "emptyParentJob" },
+          "protocol-empty-worker",
+          { "$ref": "emptyParentFence" }
+        ],
+        "expect": {
+          "rows": [{ "value": { "status": "completed", "children": [], "results": {} } }]
+        }
+      },
+      {
+        "id": "enqueue-all-success-parent",
+        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS job_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v1($1, $3, 30000) claim) SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM claimed",
+        "parameters": [
+          "protocol-all-success-parent",
+          "protocol.all-success-parent",
+          "protocol-all-success-worker"
+        ],
+        "expect": {
+          "rows": [
+            { "value": { "fenceToken": { "$type": "integer" }, "jobId": { "$type": "uuid" } } }
+          ]
+        },
+        "capture": {
+          "allSuccessParentJob": "0.value.jobId",
+          "allSuccessParentFence": "0.value.fenceToken"
+        }
+      },
+      {
+        "id": "create-all-success-child",
+        "sql": "SELECT jsonb_build_object('status', status, 'children', children) AS value FROM workhorse.create_children_v1($1::uuid, $2, $3::bigint, $4::jsonb, 'all_success')",
+        "parameters": [
+          { "$ref": "allSuccessParentJob" },
+          "protocol-all-success-worker",
+          { "$ref": "allSuccessParentFence" },
+          [
+            {
+              "name": "rejected",
+              "request": {
+                "queue": "protocol-all-success-child",
+                "type": "protocol.all-success-child",
+                "payload": null,
+                "maxAttempts": 1
+              }
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "status": "created",
+                "children": [
+                  {
+                    "childJobId": { "$type": "uuid" },
+                    "createdAt": { "$type": "timestamp" },
+                    "joinedAt": null,
+                    "name": "rejected",
+                    "type": "protocol.all-success-child"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "fail-all-success-child",
+        "sql": "WITH claimed AS (SELECT * FROM workhorse.claim_v1($1, $2, 30000)) SELECT workhorse.fail_v1(job_id, $2, fence_token, $3::jsonb, NULL) AS state FROM claimed",
+        "parameters": [
+          "protocol-all-success-child",
+          "protocol-all-success-child-worker",
+          { "name": "Error", "message": "rejected" }
+        ],
+        "expect": { "rows": [{ "state": "failed" }] }
+      },
+      {
+        "id": "all-success-parent-failed",
+        "sql": "SELECT state FROM workhorse.job_outcome WHERE job_id = $1::uuid",
+        "parameters": [{ "$ref": "allSuccessParentJob" }],
+        "expect": { "rows": [{ "state": "failed" }] }
       },
       {
         "id": "enqueue-and-claim-single-parent",

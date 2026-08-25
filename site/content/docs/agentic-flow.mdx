@@ -11,7 +11,7 @@ those boundaries while your application continues to own model calls, tool code,
     ```ts
     const plan = await context.checkpoint("plan", () => callModel(prompt));
     await context.setProgress({ stage: "planned" });
-    const tools = await context.runChildren(toolRequests);
+    const tools = await context.runChildrenAll(toolRequests);
     await context.sleep("model-cooldown", cooldownMs);
     const approval = await context.waitForSignal<{ approved: boolean }>("approval");
     ```
@@ -20,7 +20,7 @@ those boundaries while your application continues to own model calls, tool code,
     ```python
     plan = context.checkpoint("plan", lambda: call_model(prompt))
     context.set_progress({"stage": "planned"})
-    tools = context.run_children(tool_requests)
+    tools = context.run_children_all(tool_requests)
     context.sleep("model-cooldown", cooldown_ms)
     approval = context.wait_for_signal("approval")
     ```
@@ -29,7 +29,7 @@ those boundaries while your application continues to own model calls, tool code,
     ```go
     plan, err := handler.Checkpoint("plan", func() (any, error) { return callModel(prompt) })
     progress, err := handler.SetProgress(map[string]any{"stage": "planned"})
-    tools, err := handler.CreateChildren(toolRequests)
+    tools, err := handler.CreateChildrenAll(toolRequests)
     err = handler.Sleep("model-cooldown", cooldown)
     approval, err := handler.WaitForSignal("approval")
     ```
@@ -54,7 +54,7 @@ compensation path when an external effect cannot safely repeat.
 parent, joins tool children, crosses a durable timer, delivers an idempotent approval signal, and
 prints the final result and progress.
 
-The example combines `HandlerContext.setProgress`, `HandlerContext.runChildren`,
+The example combines `HandlerContext.setProgress`, `HandlerContext.runChildrenAll`,
 `Queue.syncRateLimitPolicies`, a per-tenant `concurrencyKey`, `HandlerContext.sleep`, and
 `HandlerContext.waitForSignal`. Python names progress updates `HandlerContext.set_progress`, while
 Go uses `HandlerContext.SetProgress`; the repository example reads `DATABASE_URL_TEST_PACKED`.

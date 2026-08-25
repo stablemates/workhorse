@@ -77,6 +77,7 @@ from .types import (
     BatchHandlerOutcome,
     CancellationToken,
     ChildJobRequest,
+    ChildOutcome,
     ClaimedJob,
     EnqueueOptions,
     HandlerContext,
@@ -207,6 +208,7 @@ class _HandlerDurability:
             self.wait_for_human,
             self.run_child,
             self.run_children,
+            self.run_children_all,
         )
 
     def _load_checkpoints(self) -> dict[str, JobCheckpoint]:
@@ -625,7 +627,15 @@ class _HandlerDurability:
                 if current is not None and current[1] is pending:
                     del self._child_calls[name]
 
-    def run_children(self, children: Sequence[ChildJobRequest]) -> dict[str, Json]:
+    def run_children(self, children: Sequence[ChildJobRequest]) -> dict[str, ChildOutcome]:
+        return cast(dict[str, ChildOutcome], self._run_child_set(children, "settled"))
+
+    def run_children_all(self, children: Sequence[ChildJobRequest]) -> dict[str, Json]:
+        return self._run_child_set(children, "all_success")
+
+    def _run_child_set(
+        self, children: Sequence[ChildJobRequest], mode: Literal["settled", "all_success"]
+    ) -> dict[str, Json]:
         if isinstance(children, (str, bytes)) or not isinstance(children, Sequence):
             raise TypeError("Children must be a sequence")
         if len(children) > 100:
@@ -653,15 +663,16 @@ class _HandlerDurability:
                 }
             )
         encoded = json.dumps(requests, separators=(",", ":"), allow_nan=False, sort_keys=True)
+        call_key = f"{mode}:{encoded}"
         with self._lock:
             current = self._children_call
             if current is None:
                 pending: Future[dict[str, Json]] = Future()
-                self._children_call = (encoded, pending)
+                self._children_call = (call_key, pending)
                 owns_call = True
             else:
                 pending_request, pending = current
-                if pending_request != encoded:
+                if pending_request != call_key:
                     raise ChildConflictError(self._job.id, "child set")
                 owns_call = False
         if not owns_call:
@@ -671,7 +682,7 @@ class _HandlerDurability:
             row = _require_lifecycle_row(
                 self._executor.rows(
                     STATEMENTS.create_children,
-                    (self._job.id, self._worker_id, self._job.fence_token, encoded),
+                    (self._job.id, self._worker_id, self._job.fence_token, encoded, mode),
                 )
             )
             status = row["status"]
@@ -705,7 +716,9 @@ class _HandlerDurability:
                 raise _DURABLE_WAIT_SUSPENSION
             if status != "completed":
                 raise RuntimeError(f"Unexpected child-set status: {status}")
-            result = cast(dict[str, Json], row["results"] or {})
+            joined = cast(list[dict[str, Json]], row["children"] or [])
+            field = "outcome" if mode == "settled" else "result"
+            result = {str(child["name"]): child[field] for child in joined}
             pending.set_result(result)
             return result
         except BaseException as error:

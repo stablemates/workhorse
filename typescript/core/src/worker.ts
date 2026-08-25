@@ -32,6 +32,7 @@ import {
 } from "./telemetry.js";
 import type {
   ChildJobOptions,
+  ChildOutcomes,
   ChildJobRequest,
   BatchExecutionRecord,
   ClaimedJob,
@@ -133,8 +134,12 @@ export interface HandlerContext<TPayload extends Json = Json> {
     payload: TChildPayload,
     options?: ChildJobOptions,
   ): Promise<TResult>;
-  /** Create or replay a bounded named child set and join successful results by name. */
+  /** Create or replay a bounded named child set and return every terminal outcome by name. */
   runChildren<TResult extends Record<string, Json> = Record<string, Json>>(
+    children: readonly ChildJobRequest[],
+  ): Promise<ChildOutcomes<TResult>>;
+  /** Join a bounded child set only when every child succeeds. */
+  runChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(
     children: readonly ChildJobRequest[],
   ): Promise<TResult>;
 }
@@ -147,7 +152,13 @@ export type Handler<TPayload extends Json = Json, TResult extends Json = Json> =
 /** Per-job batch context without APIs that suspend and replay an individual handler. */
 export type BatchHandlerContext<TPayload extends Json = Json> = Omit<
   HandlerContext<TPayload>,
-  "sleep" | "sleepUntil" | "waitForSignal" | "waitForHuman" | "runChild" | "runChildren"
+  | "sleep"
+  | "sleepUntil"
+  | "waitForSignal"
+  | "waitForHuman"
+  | "runChild"
+  | "runChildren"
+  | "runChildrenAll"
 >;
 
 /** One independently leased job delivered to a shared batch-handler invocation. */
@@ -261,6 +272,11 @@ export interface WorkerQueueApi {
     options?: ChildJobOptions,
   ): Promise<CreateChildResult<TResult>>;
   createChildren<TResult extends Record<string, Json> = Record<string, Json>>(
+    parent: ClaimedJob,
+    workerId: string,
+    children: readonly ChildJobRequest[],
+  ): Promise<CreateChildrenResult<ChildOutcomes<TResult>>>;
+  createChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(
     parent: ClaimedJob,
     workerId: string,
     children: readonly ChildJobRequest[],
@@ -1377,27 +1393,29 @@ export class Worker {
       let inFlightChildSet:
         | { request: unknown; execution: Promise<Record<string, Json>> }
         | undefined;
-      const runChildren: HandlerContext["runChildren"] = <
-        TResult extends Record<string, Json> = Record<string, Json>,
-      >(
+      const runChildSet = <TJoined extends Record<string, Json>>(
         children: readonly ChildJobRequest[],
-      ): Promise<TResult> => {
-        const request = structuredClone(children);
+        mode: "settled" | "all_success",
+      ): Promise<TJoined> => {
+        const request = { children: structuredClone(children), mode };
         if (inFlightChildSet) {
           if (!isDeepStrictEqual(inFlightChildSet.request, request)) {
             return Promise.reject(new ChildConflictError(job.id, "child set"));
           }
-          return inFlightChildSet.execution as Promise<TResult>;
+          return inFlightChildSet.execution as Promise<TJoined>;
         }
-        const execution = (async (): Promise<TResult> => {
+        const execution = (async (): Promise<TJoined> => {
           if (controller.signal.aborted) {
             throw controller.signal.reason ?? new Error("Job lease was lost");
           }
-          const processed = await this.queue.createChildren<TResult>(job, this.workerId, children);
+          const processed =
+            mode === "settled"
+              ? await this.queue.createChildren(job, this.workerId, children)
+              : await this.queue.createChildrenAll(job, this.workerId, children);
           if (processed.status === "created") {
             return suspend("suspended_for_child");
           }
-          return processed.results;
+          return processed.results as TJoined;
         })();
         inFlightChildSet = { request, execution: execution as Promise<Record<string, Json>> };
         void execution
@@ -1407,6 +1425,10 @@ export class Worker {
           .catch(() => undefined);
         return execution;
       };
+      const runChildren: HandlerContext["runChildren"] = (children) =>
+        runChildSet(children, "settled");
+      const runChildrenAll: HandlerContext["runChildrenAll"] = (children) =>
+        runChildSet(children, "all_success");
       const result = await handler(job.payload, {
         job,
         signal: controller.signal,
@@ -1421,6 +1443,7 @@ export class Worker {
         waitForHuman,
         runChild,
         runChildren,
+        runChildrenAll,
       });
       await this.inject("afterHandler", job);
       if (arbiter.isSuspended()) {

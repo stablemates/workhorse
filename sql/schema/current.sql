@@ -586,7 +586,9 @@ BEGIN
       FROM workhorse.job_dependency dependency
       JOIN (
         SELECT DISTINCT inserted.dependent_job_id FROM inserted_dependencies inserted
+         WHERE inserted.released_at IS NULL
       ) touched USING (dependent_job_id)
+     WHERE dependency.released_at IS NULL
      GROUP BY dependency.dependent_job_id
     HAVING count(*) > 100
      ORDER BY dependency.dependent_job_id
@@ -666,7 +668,9 @@ BEGIN
       FROM workhorse.job_dependency dependency
       JOIN (
         SELECT DISTINCT inserted.dependent_job_id FROM inserted_dependencies inserted
+         WHERE inserted.released_at IS NULL
       ) touched USING (dependent_job_id)
+     WHERE dependency.released_at IS NULL
      GROUP BY dependency.dependent_job_id
     HAVING count(DISTINCT (
       dependency.on_success,
@@ -8116,7 +8120,8 @@ CREATE OR REPLACE FUNCTION workhorse.create_children_v1(
   p_parent_job_id uuid,
   p_worker_id text,
   p_fence_token bigint,
-  p_children jsonb
+  p_children jsonb,
+  p_mode text
 ) RETURNS TABLE (
   status text,
   children jsonb,
@@ -8138,6 +8143,9 @@ DECLARE
   v_now timestamptz;
   v_had_unjoined boolean;
 BEGIN
+  IF p_mode NOT IN ('settled', 'all_success') THEN
+    RAISE EXCEPTION 'child join mode must be settled or all_success';
+  END IF;
   IF p_children IS NULL OR jsonb_typeof(p_children) <> 'array' THEN
     RAISE EXCEPTION 'children must be a JSON array';
   END IF;
@@ -8216,6 +8224,18 @@ BEGIN
     ) OR EXISTS (
       SELECT 1 FROM workhorse.job_child edge
        WHERE edge.parent_job_id = p_parent_job_id AND NOT edge.created_as_set
+    ) OR EXISTS (
+      SELECT 1
+        FROM workhorse.job_dependency dependency
+        JOIN workhorse.job_child edge
+          ON edge.parent_job_id = p_parent_job_id
+         AND edge.child_job_id = dependency.prerequisite_job_id
+       WHERE dependency.dependent_job_id = p_parent_job_id
+         AND (
+           dependency.on_success <> 'release'
+           OR dependency.on_failure <> CASE WHEN p_mode = 'settled' THEN 'release' ELSE 'fail' END
+           OR dependency.on_cancellation <> CASE WHEN p_mode = 'settled' THEN 'release' ELSE 'cancel' END
+         )
     ) THEN
       RETURN QUERY VALUES (
         'conflict'::text, NULL::jsonb, NULL::jsonb, NULL::integer, v_result_limit
@@ -8226,7 +8246,10 @@ BEGIN
       SELECT 1 FROM workhorse.job_child edge
       LEFT JOIN workhorse.job_outcome outcome ON outcome.job_id = edge.child_job_id
        WHERE edge.parent_job_id = p_parent_job_id
-         AND (outcome.job_id IS NULL OR outcome.state <> 'succeeded')
+         AND (
+           outcome.job_id IS NULL
+           OR (p_mode = 'all_success' AND outcome.state <> 'succeeded')
+         )
     ) THEN
       RETURN QUERY VALUES (
         'stale'::text, NULL::jsonb, NULL::jsonb, NULL::integer, v_result_limit
@@ -8234,14 +8257,15 @@ BEGIN
       RETURN;
     END IF;
 
-    SELECT jsonb_object_agg(edge.child_name, outcome.result),
+    SELECT jsonb_object_agg(edge.child_name, joined.value),
            jsonb_agg(jsonb_build_object(
              'childJobId', edge.child_job_id,
              'name', edge.child_name,
              'type', job.job_type,
              'createdAt', edge.created_at,
              'joinedAt', COALESCE(edge.joined_at, v_now),
-             'result', outcome.result
+             CASE WHEN p_mode = 'all_success' THEN 'result' ELSE 'outcome' END,
+             joined.value
            ) ORDER BY input.ordinality),
            bool_or(edge.joined_at IS NULL)
       INTO v_results, v_children, v_had_unjoined
@@ -8249,7 +8273,22 @@ BEGIN
       JOIN workhorse.job_child edge
         ON edge.parent_job_id = p_parent_job_id AND edge.child_name = input.item->>'name'
       JOIN workhorse.job job ON job.id = edge.child_job_id
-      JOIN workhorse.job_outcome outcome ON outcome.job_id = edge.child_job_id;
+      JOIN workhorse.job_outcome outcome ON outcome.job_id = edge.child_job_id
+      CROSS JOIN LATERAL (
+        SELECT CASE WHEN p_mode = 'all_success' THEN outcome.result ELSE
+          CASE outcome.state
+            WHEN 'succeeded' THEN jsonb_build_object(
+              'status', 'succeeded', 'result', outcome.result
+            )
+            WHEN 'failed' THEN jsonb_build_object(
+              'status', 'failed', 'error', outcome.error
+            )
+            WHEN 'canceled' THEN jsonb_build_object(
+              'status', 'canceled', 'error', outcome.error
+            )
+          END
+        END AS value
+      ) joined;
     v_result_bytes := octet_length(v_results::text);
     IF v_result_bytes > v_result_limit THEN
       RETURN QUERY VALUES (
@@ -8297,7 +8336,10 @@ BEGIN
       INSERT INTO workhorse.job_dependency(
         dependent_job_id, prerequisite_job_id, on_success, on_failure, on_cancellation, created_at
       ) VALUES (
-        p_parent_job_id, v_enqueue.job_id, 'release', 'fail', 'cancel', v_now
+        p_parent_job_id, v_enqueue.job_id, 'release',
+        CASE WHEN p_mode = 'settled' THEN 'release' ELSE 'fail' END,
+        CASE WHEN p_mode = 'settled' THEN 'release' ELSE 'cancel' END,
+        v_now
       );
       INSERT INTO workhorse.job_event(job_id, event_type, details)
         VALUES (

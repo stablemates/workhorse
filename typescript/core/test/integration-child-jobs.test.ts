@@ -74,7 +74,10 @@ describe("child jobs", () => {
     expect(await worker.runOnce()).toBe(true);
     await expect(admin.getJob(parentId)).resolves.toMatchObject({
       state: "succeeded",
-      result: { first: { value: 10 }, second: { value: 20 } },
+      result: {
+        first: { status: "succeeded", result: { value: 10 } },
+        second: { status: "succeeded", result: { value: 20 } },
+      },
     });
     expect(activations).toBe(2);
   });
@@ -102,13 +105,57 @@ describe("child jobs", () => {
     });
   });
 
+  it("returns mixed settled outcomes in request order and lets the parent decide", async () => {
+    const parentId = await queue.enqueue("settled-parent", null, { queue: "settled-parents" });
+    const worker = new Worker(queue, {
+      queue: "settled-parents",
+      workerId: "settled-parent-worker",
+    });
+    let joinedNames: string[] = [];
+    worker.handle("settled-parent", async (_payload, context) => {
+      const outcomes = await context.runChildren<{
+        accepted: { value: number };
+        rejected: null;
+        skipped: null;
+      }>([
+        { name: "accepted", type: "settled-child", payload: null, options: { maxAttempts: 1 } },
+        { name: "rejected", type: "settled-child", payload: null, options: { maxAttempts: 1 } },
+        { name: "skipped", type: "settled-child", payload: null, options: { maxAttempts: 1 } },
+      ]);
+      joinedNames = Object.keys(outcomes);
+      return outcomes;
+    });
+
+    expect(await worker.runOnce()).toBe(true);
+    const accepted = await queue.claim("settled-child-worker");
+    expect(await queue.complete(accepted!, "settled-child-worker", { value: 1 })).toBe(true);
+    const rejected = await queue.claim("settled-child-worker");
+    expect(await queue.fail(rejected!, "settled-child-worker", new Error("rejected"))).toBe(
+      "failed",
+    );
+    const skipped = await queue.claim("settled-child-worker");
+    expect((await queue.cancel(skipped!.id)).status).toBe("cancel_requested");
+    expect(await queue.acknowledgeCancel(skipped!, "settled-child-worker")).toBe(true);
+
+    expect(await worker.runOnce()).toBe(true);
+    expect(joinedNames).toEqual(["accepted", "rejected", "skipped"]);
+    await expect(admin.getJob(parentId)).resolves.toMatchObject({
+      state: "succeeded",
+      result: {
+        accepted: { status: "succeeded", result: { value: 1 } },
+        rejected: { status: "failed", error: expect.any(Object) },
+        skipped: { status: "canceled", error: expect.any(Object) },
+      },
+    });
+  });
+
   it.each([
     ["failed", "failed"],
     ["canceled", "canceled"],
   ] as const)("makes a fan-out parent %s when one child is %s", async (childState, parentState) => {
     const parentId = await queue.enqueue(`partial-${childState}-parent`, null);
     const parent = await queue.claim(`partial-${childState}-parent-worker`);
-    const created = await queue.createChildren(parent!, `partial-${childState}-parent-worker`, [
+    const created = await queue.createChildrenAll(parent!, `partial-${childState}-parent-worker`, [
       { name: "accepted", type: "partial-child", payload: null, options: { maxAttempts: 1 } },
       { name: "rejected", type: "partial-child", payload: null, options: { maxAttempts: 1 } },
     ]);
@@ -161,7 +208,7 @@ describe("child jobs", () => {
     expect(await worker.runOnce()).toBe(true);
     await expect(admin.getJob(parentId)).resolves.toMatchObject({
       state: "succeeded",
-      result: { child: { value: 7 } },
+      result: { child: { status: "succeeded", result: { value: 7 } } },
     });
     const timeline = await admin.getJobTimeline(parentId, { limit: 100 });
     expect(
@@ -217,10 +264,45 @@ describe("child jobs", () => {
     expect(single.status).toBe("created");
   });
 
+  it("replays a settled child set for a parent that had its own prerequisite", async () => {
+    const prerequisiteId = await queue.enqueue("child-parent-prerequisite", null);
+    const parentId = await queue.enqueue("dependent-child-parent", null, {
+      dependencies: {
+        prerequisiteJobIds: [prerequisiteId],
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+    const prerequisite = await queue.claim("child-parent-prerequisite-worker");
+    expect(await queue.complete(prerequisite!, "child-parent-prerequisite-worker", null)).toBe(
+      true,
+    );
+    const parent = await queue.claim("dependent-child-parent-worker");
+    expect(parent?.id).toBe(parentId);
+    const request = [{ name: "child", type: "dependent-parent-child", payload: null }] as const;
+    expect(
+      await queue.createChildren(parent!, "dependent-child-parent-worker", request),
+    ).toMatchObject({ status: "created" });
+    const child = await queue.claim("dependent-parent-child-worker");
+    expect(await queue.complete(child!, "dependent-parent-child-worker", { value: 1 })).toBe(true);
+    const resumed = await queue.claim("dependent-child-parent-worker");
+    await expect(
+      queue.createChildren<{ child: { value: number } }>(
+        resumed!,
+        "dependent-child-parent-worker",
+        request,
+      ),
+    ).resolves.toMatchObject({
+      status: "completed",
+      results: { child: { status: "succeeded", result: { value: 1 } } },
+    });
+  });
+
   it("attributes a late fan-out failure to the child that failed", async () => {
     const parentId = await queue.enqueue("late-failure-parent", null);
     const parent = await queue.claim("late-failure-parent-worker");
-    const created = await queue.createChildren(parent!, "late-failure-parent-worker", [
+    const created = await queue.createChildrenAll(parent!, "late-failure-parent-worker", [
       { name: "rejected", type: "late-failure-child", payload: null, options: { maxAttempts: 1 } },
       { name: "accepted", type: "late-failure-child", payload: null, options: { maxAttempts: 1 } },
     ]);
@@ -897,7 +979,7 @@ describe("child jobs", () => {
     const parent = await queue.claim("observed-child-parent-worker", {
       queue: "observed-parents",
     });
-    await queue.createChildren(parent!, "observed-child-parent-worker", [
+    await queue.createChildrenAll(parent!, "observed-child-parent-worker", [
       { name: "success", type: "observed-child", payload: null, options: { maxAttempts: 1 } },
       { name: "failure", type: "observed-child", payload: null, options: { maxAttempts: 1 } },
     ]);

@@ -4447,8 +4447,14 @@ describe("Workhorse dashboard events feed", () => {
         scenario: "test-fan-out",
         childCount: 2,
         children: {
-          "shard-1": { step: "shard-1", completedOnAttempt: 1 },
-          "shard-2": { step: "shard-2", completedOnAttempt: 1 },
+          "shard-1": {
+            status: "succeeded",
+            result: { step: "shard-1", completedOnAttempt: 1 },
+          },
+          "shard-2": {
+            status: "succeeded",
+            result: { step: "shard-2", completedOnAttempt: 1 },
+          },
         },
       });
       const lineage = await workhorse.context.admin.getChildLineage(parentJobId);

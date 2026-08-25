@@ -62,6 +62,7 @@ const workerQueueDefaults: WorkerQueueApi = {
   waitForHuman: unsupportedWorkerQueueOperation,
   createChild: unsupportedWorkerQueueOperation,
   createChildren: unsupportedWorkerQueueOperation,
+  createChildrenAll: unsupportedWorkerQueueOperation,
   complete: unsupportedWorkerQueueOperation,
   fail: unsupportedWorkerQueueOperation,
   tick: async () => [],

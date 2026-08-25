@@ -20,9 +20,60 @@ type ChildJobRequest struct {
 	Options EnqueueOptions
 }
 
-// ChildResult retains one joined result beside its stable child name.
-// CreateChildren returns these records in request order.
+// ChildOutcome is one tagged terminal outcome returned by CreateChildren.
+type ChildOutcome interface {
+	OutcomeStatus() string
+	childOutcome()
+}
+
+type ChildSucceeded struct {
+	Result any `json:"result"`
+}
+
+func (ChildSucceeded) OutcomeStatus() string { return jobSucceededValue }
+func (ChildSucceeded) childOutcome()         {}
+func (outcome ChildSucceeded) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Status string `json:"status"`
+		Result any    `json:"result"`
+	}{Status: outcome.OutcomeStatus(), Result: outcome.Result})
+}
+
+type ChildFailed struct {
+	Error any `json:"error"`
+}
+
+func (ChildFailed) OutcomeStatus() string { return jobFailedValue }
+func (ChildFailed) childOutcome()         {}
+func (outcome ChildFailed) MarshalJSON() ([]byte, error) {
+	return marshalChildErrorOutcome(outcome.OutcomeStatus(), outcome.Error)
+}
+
+type ChildCanceled struct {
+	Error any `json:"error"`
+}
+
+func (ChildCanceled) OutcomeStatus() string { return jobCanceledValue }
+func (ChildCanceled) childOutcome()         {}
+func (outcome ChildCanceled) MarshalJSON() ([]byte, error) {
+	return marshalChildErrorOutcome(outcome.OutcomeStatus(), outcome.Error)
+}
+
+func marshalChildErrorOutcome(status string, value any) ([]byte, error) {
+	return json.Marshal(struct {
+		Status string `json:"status"`
+		Error  any    `json:"error"`
+	}{Status: status, Error: value})
+}
+
+// ChildResult retains one settled outcome beside its stable child name.
 type ChildResult struct {
+	Name    string       `json:"name"`
+	Outcome ChildOutcome `json:"outcome"`
+}
+
+// ChildSuccessResult is one successful result from CreateChildrenAll.
+type ChildSuccessResult struct {
 	Name   string `json:"name"`
 	Result any    `json:"result"`
 }
@@ -31,6 +82,8 @@ type childSetInput struct {
 	Name    string            `json:"name"`
 	Request childEnqueueInput `json:"request"`
 }
+
+type childJoinMode string
 
 type childEnqueueInput struct {
 	Queue                string   `json:"queue"`
@@ -101,7 +154,7 @@ type childCall struct {
 type childrenCall struct {
 	done    chan struct{}
 	request string
-	value   []ChildResult
+	value   any
 	err     error
 }
 
@@ -193,6 +246,23 @@ func (handler *HandlerContext) createChild(name string, request []byte) (any, er
 // CreateChildren creates one bounded child set or joins its results after parent replay.
 // Results retain request order, while Name provides stable keyed lookup to callers.
 func (handler *HandlerContext) CreateChildren(children []ChildJobRequest) ([]ChildResult, error) {
+	value, err := handler.createChildSet(children, childSettledModeValue)
+	if err != nil {
+		return nil, err
+	}
+	return value.([]ChildResult), nil
+}
+
+// CreateChildrenAll preserves propagation semantics and returns only successful child results.
+func (handler *HandlerContext) CreateChildrenAll(children []ChildJobRequest) ([]ChildSuccessResult, error) {
+	value, err := handler.createChildSet(children, childAllSuccessModeValue)
+	if err != nil {
+		return nil, err
+	}
+	return value.([]ChildSuccessResult), nil
+}
+
+func (handler *HandlerContext) createChildSet(children []ChildJobRequest, mode childJoinMode) (any, error) {
 	if len(children) > MaxChildJobs {
 		return nil, &ChildLimitExceededError{ParentJobID: handler.Job.ID}
 	}
@@ -216,7 +286,7 @@ func (handler *HandlerContext) CreateChildren(children []ChildJobRequest) ([]Chi
 	if err != nil {
 		return nil, err
 	}
-	canonical := string(encoded)
+	canonical := string(mode) + childCallModeSeparator + string(encoded)
 
 	handler.childSet.Lock()
 	if pending := handler.childSetCall; pending != nil {
@@ -232,7 +302,7 @@ func (handler *HandlerContext) CreateChildren(children []ChildJobRequest) ([]Chi
 	handler.childSetCall = pending
 	handler.childSet.Unlock()
 
-	pending.value, pending.err = handler.createChildren(encoded)
+	pending.value, pending.err = handler.createChildren(encoded, mode)
 	handler.childSet.Lock()
 	handler.childSetCall = nil
 	close(pending.done)
@@ -240,7 +310,7 @@ func (handler *HandlerContext) CreateChildren(children []ChildJobRequest) ([]Chi
 	return pending.value, pending.err
 }
 
-func (handler *HandlerContext) createChildren(requests []byte) ([]ChildResult, error) {
+func (handler *HandlerContext) createChildren(requests []byte, mode childJoinMode) (any, error) {
 	if err := context.Cause(handler.context); err != nil {
 		return nil, err
 	}
@@ -251,6 +321,7 @@ func (handler *HandlerContext) createChildren(requests []byte) ([]ChildResult, e
 		handler.workerID,
 		handler.Job.FenceToken,
 		requests,
+		mode,
 	)
 	if err != nil {
 		return nil, err
@@ -265,7 +336,7 @@ func (handler *HandlerContext) createChildren(requests []byte) ([]ChildResult, e
 		handler.cancel(errChildSuspension)
 		return nil, errChildSuspension
 	case childCompletedValue:
-		return orderedChildResults(rows[0][rowChildrenField])
+		return orderedChildResults(rows[0][rowChildrenField], mode)
 	case durableStaleValue:
 		return nil, &ChildLeaseLostError{ParentJobID: handler.Job.ID}
 	case durableConflictValue:
@@ -326,7 +397,7 @@ func serializeChildRequest(
 	return request, string(encoded), nil
 }
 
-func orderedChildResults(value any) ([]ChildResult, error) {
+func orderedChildResults(value any, mode childJoinMode) (any, error) {
 	decoded, err := decodedJSON(value)
 	if err != nil {
 		return nil, err
@@ -336,15 +407,34 @@ func orderedChildResults(value any) ([]ChildResult, error) {
 		return nil, err
 	}
 	var children []struct {
-		Name   string `json:"name"`
-		Result any    `json:"result"`
+		Name    string         `json:"name"`
+		Result  any            `json:"result"`
+		Outcome map[string]any `json:"outcome"`
 	}
 	if err := json.Unmarshal(encoded, &children); err != nil {
 		return nil, errors.New(invalidChildrenResultMessage)
 	}
+	if mode == childAllSuccessModeValue {
+		results := make([]ChildSuccessResult, len(children))
+		for index, child := range children {
+			results[index] = ChildSuccessResult{Name: child.Name, Result: child.Result}
+		}
+		return results, nil
+	}
 	results := make([]ChildResult, len(children))
 	for index, child := range children {
-		results[index] = ChildResult{Name: child.Name, Result: child.Result}
+		var outcome ChildOutcome
+		switch child.Outcome[rowStatusField] {
+		case jobSucceededValue:
+			outcome = ChildSucceeded{Result: child.Outcome[rowResultField]}
+		case jobFailedValue:
+			outcome = ChildFailed{Error: child.Outcome[rowErrorField]}
+		case jobCanceledValue:
+			outcome = ChildCanceled{Error: child.Outcome[rowErrorField]}
+		default:
+			return nil, errors.New(invalidChildrenResultMessage)
+		}
+		results[index] = ChildResult{Name: child.Name, Outcome: outcome}
 	}
 	return results, nil
 }

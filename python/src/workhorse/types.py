@@ -147,6 +147,24 @@ class ChildJobRequest:
     options: EnqueueOptions = field(default_factory=EnqueueOptions)
 
 
+class ChildSucceeded(TypedDict):
+    status: Literal["succeeded"]
+    result: Json
+
+
+class ChildFailed(TypedDict):
+    status: Literal["failed"]
+    error: Json
+
+
+class ChildCanceled(TypedDict):
+    status: Literal["canceled"]
+    error: Json
+
+
+ChildOutcome: TypeAlias = ChildSucceeded | ChildFailed | ChildCanceled
+
+
 @dataclass(frozen=True)
 class EnqueueResult:
     job_id: str
@@ -324,7 +342,10 @@ class HandlerContext:
     _wait_for_signal: Callable[[str, int | None], Json] = field(repr=False)
     _wait_for_human: Callable[[str, Json, int | None], Json] = field(repr=False)
     _run_child: Callable[[str, str, Json, EnqueueOptions], Json] = field(repr=False)
-    _run_children: Callable[[Sequence[ChildJobRequest]], dict[str, Json]] = field(repr=False)
+    _run_children: Callable[[Sequence[ChildJobRequest]], dict[str, ChildOutcome]] = field(
+        repr=False
+    )
+    _run_children_all: Callable[[Sequence[ChildJobRequest]], dict[str, Json]] = field(repr=False)
 
     def get_checkpoint(self, name: str) -> JobCheckpoint | None:
         return self._get_checkpoint(name)
@@ -362,8 +383,11 @@ class HandlerContext:
     ) -> Json:
         return self._run_child(name, type, payload, options or EnqueueOptions())
 
-    def run_children(self, children: Sequence[ChildJobRequest]) -> dict[str, Json]:
+    def run_children(self, children: Sequence[ChildJobRequest]) -> dict[str, ChildOutcome]:
         return self._run_children(children)
+
+    def run_children_all(self, children: Sequence[ChildJobRequest]) -> dict[str, Json]:
+        return self._run_children_all(children)
 
     def _as_batch_context(self) -> BatchHandlerContext:
         return BatchHandlerContext(
@@ -392,7 +416,10 @@ class AsyncHandlerContext:
     _wait_for_signal: Callable[[str, int | None], Awaitable[Json]] = field(repr=False)
     _wait_for_human: Callable[[str, Json, int | None], Awaitable[Json]] = field(repr=False)
     _run_child: Callable[[str, str, Json, EnqueueOptions], Awaitable[Json]] = field(repr=False)
-    _run_children: Callable[[Sequence[ChildJobRequest]], Awaitable[dict[str, Json]]] = field(
+    _run_children: Callable[[Sequence[ChildJobRequest]], Awaitable[dict[str, ChildOutcome]]] = (
+        field(repr=False)
+    )
+    _run_children_all: Callable[[Sequence[ChildJobRequest]], Awaitable[dict[str, Json]]] = field(
         repr=False
     )
 
@@ -434,8 +461,11 @@ class AsyncHandlerContext:
     ) -> Json:
         return await self._run_child(name, type, payload, options or EnqueueOptions())
 
-    async def run_children(self, children: Sequence[ChildJobRequest]) -> dict[str, Json]:
+    async def run_children(self, children: Sequence[ChildJobRequest]) -> dict[str, ChildOutcome]:
         return await self._run_children(children)
+
+    async def run_children_all(self, children: Sequence[ChildJobRequest]) -> dict[str, Json]:
+        return await self._run_children_all(children)
 
 
 @dataclass(frozen=True)

@@ -228,6 +228,9 @@ const (
 	childCreatedValue                              = "created"
 	childCompletedValue                            = "completed"
 	childResultTooLargeValue                       = "result_too_large"
+	childSettledModeValue          childJoinMode   = "settled"
+	childAllSuccessModeValue       childJoinMode   = "all_success"
+	childCallModeSeparator                         = ":"
 
 	enqueueBatchTooLargeMessage         = "enqueue batch exceeds the shared limit"
 	invalidEnqueueResultMessage         = "PostgreSQL returned an invalid enqueue result"

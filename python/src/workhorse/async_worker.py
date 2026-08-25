@@ -23,6 +23,7 @@ from .types import (
     BatchHandlerItem,
     BatchHandlerOutcome,
     ChildJobRequest,
+    ChildOutcome,
     EnqueueOptions,
     HandlerContext,
     JobCheckpoint,
@@ -138,6 +139,7 @@ class _AsyncContextAdapter(_AsyncCheckpointAdapter):
             self.wait_for_human,
             self.run_child,
             self.run_children,
+            self.run_children_all,
         )
 
     async def get_wait(self, name: str) -> JobWait | None:
@@ -160,8 +162,11 @@ class _AsyncContextAdapter(_AsyncCheckpointAdapter):
     async def run_child(self, name: str, type: str, payload: Json, options: EnqueueOptions) -> Json:
         return await asyncio.to_thread(self._context.run_child, name, type, payload, options)
 
-    async def run_children(self, children: Sequence[ChildJobRequest]) -> dict[str, Json]:
+    async def run_children(self, children: Sequence[ChildJobRequest]) -> dict[str, ChildOutcome]:
         return await asyncio.to_thread(self._context.run_children, children)
+
+    async def run_children_all(self, children: Sequence[ChildJobRequest]) -> dict[str, Json]:
+        return await asyncio.to_thread(self._context.run_children_all, children)
 
 
 class _AsyncBatchContextAdapter(_AsyncCheckpointAdapter):

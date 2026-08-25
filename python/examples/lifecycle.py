@@ -36,7 +36,7 @@ def run(database_url: str) -> None:
         if context.job.attempt == 1:
             raise RuntimeError("demonstrate a PostgreSQL-owned retry")
         context.sleep("provider-backoff", 20)
-        children = context.run_children(
+        children = context.run_children_all(
             (
                 ChildJobRequest(
                     "invoice",

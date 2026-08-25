@@ -29,8 +29,8 @@ worker claims it with a new fence. Workhorse restarts the handler from its entry
 The repeated `runChild` call recognizes the same name and request. It returns the child result
 instead of creating another job.
 
-Use `HandlerContext.runChildren` when the delegated work can run in parallel. It creates the named
-set in one transaction and returns successful results under the same names:
+Use `HandlerContext.runChildren` when delegated work can run in parallel. It creates the named set
+in one transaction and returns a tagged outcome under each name:
 
 ```ts
 const results = await ctx.runChildren<{
@@ -40,11 +40,15 @@ const results = await ctx.runChildren<{
   { name: "fraud", type: "orders.check-fraud", payload: { orderId } },
   { name: "inventory", type: "orders.reserve", payload: { orderId } },
 ]);
+
+if (results.fraud.status === "failed") {
+  return { accepted: false, reason: results.fraud.error };
+}
 ```
 
 Go handlers use `CreateChild` for one child and `CreateChildren` for a stable set. The set method
-returns named `ChildResult` values in request order, so callers can preserve order without relying
-on map iteration.
+returns named `ChildResult` values in request order. Each result contains a `ChildSucceeded`,
+`ChildFailed`, or `ChildCanceled` outcome, so a type switch covers every terminal state.
 
 ```go
 results, err := handler.CreateChildren([]workhorse.ChildJobRequest{
@@ -54,7 +58,12 @@ results, err := handler.CreateChildren([]workhorse.ChildJobRequest{
 ```
 
 An empty set returns immediately. A non-empty set suspends the parent once, and PostgreSQL releases
-it only after every child reaches a terminal state. The set joins only when every child succeeds.
+it only after every child reaches a terminal state. A failed or canceled child stays in the returned
+set, so the parent decides its own result.
+
+Use `runChildrenAll`, `run_children_all`, or `CreateChildrenAll` when every child must succeed. That
+operation preserves propagation: a failed child fails the parent, while cancellation cancels it
+unless a failure takes precedence.
 
 ## Keep work before the child replay-safe
 
@@ -67,8 +76,8 @@ joined object exceeds the parent's result contract, `ChildResultLimitExceededErr
 
 ## Failure, cancellation, and lookup
 
-If any child fails, PostgreSQL fails the parent after the set settles. If any child is canceled,
-PostgreSQL cancels the parent unless another child failure takes precedence.
+The default set join returns failures and cancellations as outcomes. The all-success operation
+propagates them to the parent after the set settles.
 
 Canceling a blocked parent leaves the child independent. A later child outcome cannot return that
 terminal parent to dispatch.

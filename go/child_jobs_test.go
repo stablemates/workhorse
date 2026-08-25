@@ -69,11 +69,136 @@ func TestGoParentJoinsTypeScriptChildrenInCreationOrderWithoutDuplicatingThem(t 
 		t.Fatalf("expected two parent activations, received %d", activations)
 	}
 	expected := []workhorse.ChildResult{
-		{Name: "second", Result: map[string]any{"value": float64(20)}},
-		{Name: "first", Result: map[string]any{"value": float64(10)}},
+		{Name: "second", Outcome: workhorse.ChildSucceeded{Result: map[string]any{"value": float64(20)}}},
+		{Name: "first", Outcome: workhorse.ChildSucceeded{Result: map[string]any{"value": float64(10)}}},
 	}
 	if !reflect.DeepEqual(joined, expected) {
 		t.Fatalf("joined results lost creation order: %#v", joined)
+	}
+}
+
+func TestGoParentReceivesMixedSettledOutcomes(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "go-child-settled")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-settled-parents")
+	parentID, err := queue.Enqueue(ctx, "go.settled-parent", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: "go-settled-parents", WorkerID: "go-settled-parent-worker", LeaseDuration: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var joined []workhorse.ChildResult
+	parent.Handle("go.settled-parent", func(_ context.Context, _ any, handler *workhorse.HandlerContext) (any, error) {
+		results, err := handler.CreateChildren([]workhorse.ChildJobRequest{
+			{Name: "accepted", Type: "go.settled-success", Options: workhorse.EnqueueOptions{Queue: "go-settled-success", MaxAttempts: 1}},
+			{Name: "rejected", Type: "go.settled-failure", Options: workhorse.EnqueueOptions{Queue: "go-settled-failure", MaxAttempts: 1}},
+			{Name: "skipped", Type: "go.settled-canceled", Options: workhorse.EnqueueOptions{Queue: "go-settled-canceled", MaxAttempts: 1}},
+		})
+		if err == nil {
+			joined = results
+		}
+		return results, err
+	})
+	if processed, err := parent.RunOnce(ctx); err != nil || !processed {
+		t.Fatalf("create children: processed=%t err=%v", processed, err)
+	}
+
+	success, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{Queue: "go-settled-success", WorkerID: "go-settled-success-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	success.Handle("go.settled-success", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+		return map[string]any{"value": 1}, nil
+	})
+	failure, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{Queue: "go-settled-failure", WorkerID: "go-settled-failure-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure.Handle("go.settled-failure", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+		return nil, errors.New("rejected")
+	})
+	if processed, err := success.RunOnce(ctx); err != nil || !processed {
+		t.Fatalf("complete child: processed=%t err=%v", processed, err)
+	}
+	if processed, err := failure.RunOnce(ctx); err != nil || !processed {
+		t.Fatalf("fail child: processed=%t err=%v", processed, err)
+	}
+	var canceledID string
+	if err := pool.QueryRow(ctx,
+		"SELECT child_job_id FROM workhorse.job_child WHERE parent_job_id = $1 AND child_name = $2",
+		parentID, "skipped",
+	).Scan(&canceledID); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := queue.Cancel(ctx, canceledID, workhorse.CancellationRequest{}); err != nil || result.Status != workhorse.CancelCanceled {
+		t.Fatalf("cancel child: result=%#v err=%v", result, err)
+	}
+	if processed, err := parent.RunOnce(ctx); err != nil || !processed {
+		t.Fatalf("join children: processed=%t err=%v", processed, err)
+	}
+	if len(joined) != 3 || joined[0].Name != "accepted" || joined[1].Name != "rejected" || joined[2].Name != "skipped" {
+		t.Fatalf("settled results lost request order: %#v", joined)
+	}
+	if _, ok := joined[0].Outcome.(workhorse.ChildSucceeded); !ok {
+		t.Fatalf("expected success outcome: %#v", joined[0])
+	}
+	if _, ok := joined[1].Outcome.(workhorse.ChildFailed); !ok {
+		t.Fatalf("expected failure outcome: %#v", joined[1])
+	}
+	if _, ok := joined[2].Outcome.(workhorse.ChildCanceled); !ok {
+		t.Fatalf("expected cancellation outcome: %#v", joined[2])
+	}
+}
+
+func TestGoCreateChildrenAllPropagatesFailure(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "go-child-all-success")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-all-success-parent")
+	parentID, err := queue.Enqueue(ctx, "go.all-success-parent", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{Queue: "go-all-success-parent", WorkerID: "go-all-success-parent-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent.Handle("go.all-success-parent", func(_ context.Context, _ any, handler *workhorse.HandlerContext) (any, error) {
+		return handler.CreateChildrenAll([]workhorse.ChildJobRequest{{Name: "rejected", Type: "go.all-success-child", Options: workhorse.EnqueueOptions{Queue: "go-all-success-child", MaxAttempts: 1}}})
+	})
+	child, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{Queue: "go-all-success-child", WorkerID: "go-all-success-child-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child.Handle("go.all-success-child", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+		return nil, errors.New("rejected")
+	})
+	if processed, err := parent.RunOnce(ctx); err != nil || !processed {
+		t.Fatalf("create child: processed=%t err=%v", processed, err)
+	}
+	if processed, err := child.RunOnce(ctx); err != nil || !processed {
+		t.Fatalf("fail child: processed=%t err=%v", processed, err)
+	}
+	var state string
+	if err := pool.QueryRow(ctx, "SELECT state FROM workhorse.job_outcome WHERE job_id = $1", parentID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "failed" {
+		t.Fatalf("all-success failure did not propagate: %s", state)
 	}
 }
 

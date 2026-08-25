@@ -1,6 +1,7 @@
 import { SQL_STATEMENTS } from "./queue/sql-catalogue.generated.js";
 import type {
   ChildJobOptions,
+  ChildOutcomes,
   ChildJobRequest,
   CancellationRequest,
   CancelResult,
@@ -630,8 +631,16 @@ export class Queue {
     parent: ClaimedJob,
     workerId: string,
     children: readonly ChildJobRequest[],
-  ): Promise<CreateChildrenResult<TResult>> {
+  ): Promise<CreateChildrenResult<ChildOutcomes<TResult>>> {
     return this.modules.childJobs.createChildren<TResult>(parent, workerId, children);
+  }
+
+  async createChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(
+    parent: ClaimedJob,
+    workerId: string,
+    children: readonly ChildJobRequest[],
+  ): Promise<CreateChildrenResult<TResult>> {
+    return this.modules.childJobs.createChildrenAll<TResult>(parent, workerId, children);
   }
 
   async complete<TResult extends Json>(

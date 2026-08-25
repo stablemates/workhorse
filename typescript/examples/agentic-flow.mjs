@@ -76,7 +76,7 @@ export function createAgenticWorkers(queue, effects = defaultEffects(), cooldown
     );
     await reportProgress(context, "planned");
 
-    const toolResults = await context.runChildren([
+    const toolResults = await context.runChildrenAll([
       {
         name: "research",
         type: "agent.tool",

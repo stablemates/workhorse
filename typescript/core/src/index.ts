@@ -155,6 +155,8 @@ export type {
   ClaimedJob,
   ChildJob,
   ChildJobRequest,
+  ChildOutcome,
+  ChildOutcomes,
   ChildLineage,
   CreateChildResult,
   CreateChildrenResult,

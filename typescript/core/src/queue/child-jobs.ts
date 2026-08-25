@@ -5,6 +5,7 @@ import type {
   ChildJob,
   ChildJobOptions,
   ChildJobRequest,
+  ChildOutcomes,
   ClaimedJob,
   CreateChildResult,
   CreateChildrenResult,
@@ -34,6 +35,7 @@ interface CreateChildrenRow {
     createdAt: string;
     joinedAt: string | null;
     result?: Json;
+    outcome?: Json;
   }> | null;
   results: Record<string, Json> | null;
   result_bytes: number | null;
@@ -182,6 +184,28 @@ export class ChildJobsModule extends QueueModule {
     parent: ClaimedJob,
     workerId: string,
     children: readonly ChildJobRequest[],
+  ): Promise<CreateChildrenResult<ChildOutcomes<TResult>>> {
+    return this.createChildrenWithMode<ChildOutcomes<TResult>>(
+      parent,
+      workerId,
+      children,
+      "settled",
+    );
+  }
+
+  async createChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(
+    parent: ClaimedJob,
+    workerId: string,
+    children: readonly ChildJobRequest[],
+  ): Promise<CreateChildrenResult<TResult>> {
+    return this.createChildrenWithMode<TResult>(parent, workerId, children, "all_success");
+  }
+
+  private async createChildrenWithMode<TResult extends Record<string, Json>>(
+    parent: ClaimedJob,
+    workerId: string,
+    children: readonly ChildJobRequest[],
+    mode: "settled" | "all_success",
   ): Promise<CreateChildrenResult<TResult>> {
     if (!Array.isArray(children)) throw new TypeError("Children must be an array");
     if (typeof workerId !== "string" || workerId.length === 0) {
@@ -202,7 +226,7 @@ export class ChildJobsModule extends QueueModule {
     );
     const result = await this.context.database.query<CreateChildrenRow>(
       SQL_STATEMENTS["create_children_v1"],
-      [parent.id, workerId, parent.fenceToken.toString(), JSON.stringify(requests)],
+      [parent.id, workerId, parent.fenceToken.toString(), JSON.stringify(requests), mode],
     );
     const row = expectOneRow(result, "workhorse.create_children_v1");
     if (row.status === "stale") throw new ChildLeaseLostError(parent.id);
@@ -233,8 +257,11 @@ export class ChildJobsModule extends QueueModule {
       "workhorse.child.status": row.status,
       "workhorse.worker.id": workerId,
     });
+    const joinedResults = Object.fromEntries(
+      row.children.map((child) => [child.name, mode === "settled" ? child.outcome : child.result]),
+    ) as TResult;
     return row.status === "created"
       ? { status: "created", children: mapped }
-      : { status: "completed", children: mapped, results: (row.results ?? {}) as TResult };
+      : { status: "completed", children: mapped, results: joinedResults };
   }
 }
