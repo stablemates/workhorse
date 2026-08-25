@@ -208,8 +208,8 @@ idempotent enqueue identity.
 
 The TypeScript `Queue.enqueue` and `Queue.enqueueMany` methods accept a `PoolClient` directly or a
 client produced by `forTransaction`. ORM integrations use `createDrizzleAdapter` from
-`@workhorse-js/drizzle`, `createPrismaAdapter` from `@workhorse-js/prisma`, `createTypeOrmAdapter`
-from `@workhorse-js/typeorm`, or `createKyselyAdapter` from `@workhorse-js/kysely`.
+`@stablemates/workhorse-drizzle`, `createPrismaAdapter` from `@stablemates/workhorse-prisma`, `createTypeOrmAdapter`
+from `@stablemates/workhorse-typeorm`, or `createKyselyAdapter` from `@stablemates/workhorse-kysely`.
 The queue does not `close` a connection or transaction supplied by its caller.
 
 ## Next

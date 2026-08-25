@@ -40,7 +40,7 @@ already own and exposes `forTransaction`, which returns a `Queue` bound to your 
 transaction. The provider never commits, rolls back, or closes that transaction — your ORM
 stays in charge, and Workhorse rides along on the transaction's own connection.
 
-Drizzle, with `createDrizzleAdapter` from `@workhorse-js/drizzle`:
+Drizzle, with `createDrizzleAdapter` from `@stablemates/workhorse-drizzle`:
 
 ```ts
 const db = drizzle({ client: pool });
@@ -52,7 +52,7 @@ await db.transaction(async (tx) => {
 });
 ```
 
-Prisma, with `createPrismaAdapter` from `@workhorse-js/prisma`:
+Prisma, with `createPrismaAdapter` from `@stablemates/workhorse-prisma`:
 
 ```ts
 const prisma = new PrismaClient();
@@ -64,7 +64,7 @@ await prisma.$transaction(async (tx) => {
 });
 ```
 
-TypeORM, with `createTypeOrmAdapter` from `@workhorse-js/typeorm`:
+TypeORM, with `createTypeOrmAdapter` from `@stablemates/workhorse-typeorm`:
 
 ```ts
 const workhorse = createTypeOrmAdapter(dataSource, { close: () => dataSource.destroy() });
@@ -75,7 +75,7 @@ await dataSource.transaction(async (manager) => {
 });
 ```
 
-Kysely, with `createKyselyAdapter` from `@workhorse-js/kysely`:
+Kysely, with `createKyselyAdapter` from `@stablemates/workhorse-kysely`:
 
 ```ts
 const workhorse = createKyselyAdapter(db, { close: () => db.destroy() });

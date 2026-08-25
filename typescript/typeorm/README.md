@@ -1,9 +1,9 @@
-# `@workhorse-js/typeorm`
+# `@stablemates/workhorse-typeorm`
 
 TypeORM provider for Workhorse's PostgreSQL protocol.
 
 ```ts
-import { createTypeOrmAdapter } from "@workhorse-js/typeorm";
+import { createTypeOrmAdapter } from "@stablemates/workhorse-typeorm";
 
 const workhorse = createTypeOrmAdapter(dataSource, { close: () => dataSource.destroy() });
 

@@ -1,5 +1,5 @@
 {
-  "name": "@workhorse-js/drizzle",
+  "name": "@stablemates/workhorse-drizzle",
   "version": "0.1.0",
   "description": "Drizzle ORM provider for Workhorse",
   "homepage": "https://workhorse.run",

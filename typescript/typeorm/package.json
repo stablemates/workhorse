@@ -1,5 +1,5 @@
 {
-  "name": "@workhorse-js/typeorm",
+  "name": "@stablemates/workhorse-typeorm",
   "version": "0.1.0",
   "description": "TypeORM provider for Workhorse",
   "homepage": "https://workhorse.run",

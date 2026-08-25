@@ -41,6 +41,15 @@ describe("the derived package list", () => {
     ]);
     // Core is published too, but is kept first because the other packages consume it.
     expect(core.name).toBe("@stablemates/workhorse");
+    expect(packages.map((entry) => entry.name)).toEqual([
+      "@stablemates/workhorse-dashboard",
+      "@stablemates/workhorse-dashboard-contract",
+      "@stablemates/workhorse-dashboard-server",
+      "@stablemates/workhorse-drizzle",
+      "@stablemates/workhorse-kysely",
+      "@stablemates/workhorse-prisma",
+      "@stablemates/workhorse-typeorm",
+    ]);
     expect((await publishedPackages())[0]).toEqual(core);
   });
 
@@ -135,10 +144,16 @@ describe("published package manifests", () => {
     expect(contractManifest.private).not.toBe(true);
     expect(contractManifest.dependencies).toBeUndefined();
     expect(contractManifest.devDependencies).toEqual({ typescript: "^5.8.3" });
-    expect(coreManifest.dependencies?.["@workhorse-js/dashboard-contract"]).toBe("workspace:*");
-    expect(coreManifest.peerDependencies?.["@workhorse-js/dashboard"]).toBe(">=0.1.0 <0.2.0");
-    expect(coreManifest.peerDependenciesMeta?.["@workhorse-js/dashboard"]?.optional).toBe(true);
-    expect(dashboardManifest.dependencies?.["@workhorse-js/dashboard-contract"]).toBe(
+    expect(coreManifest.dependencies?.["@stablemates/workhorse-dashboard-contract"]).toBe(
+      "workspace:*",
+    );
+    expect(coreManifest.peerDependencies?.["@stablemates/workhorse-dashboard"]).toBe(
+      ">=0.1.0 <0.2.0",
+    );
+    expect(coreManifest.peerDependenciesMeta?.["@stablemates/workhorse-dashboard"]?.optional).toBe(
+      true,
+    );
+    expect(dashboardManifest.dependencies?.["@stablemates/workhorse-dashboard-contract"]).toBe(
       "workspace:*",
     );
     expect(dashboardManifest.exports?.["./standalone"]).toEqual({
@@ -146,8 +161,8 @@ describe("published package manifests", () => {
       types: "./dist/server/standalone.d.ts",
       import: "./dist/server/standalone.js",
     });
-    expect(coreDashboardSource).toContain('from "@workhorse-js/dashboard-contract"');
-    expect(coreDashboardSource).toContain('"@workhorse-js/dashboard/standalone"');
+    expect(coreDashboardSource).toContain('from "@stablemates/workhorse-dashboard-contract"');
+    expect(coreDashboardSource).toContain('"@stablemates/workhorse-dashboard/standalone"');
     expect(coreDashboardSource).not.toContain('.join("/")');
     expect(coreDashboardSource).not.toContain("interface DashboardServerModule");
     expect(standaloneSource).toContain("DashboardStandaloneModule<Queryable>");
@@ -261,7 +276,7 @@ describe("consumers of the package list", () => {
       expect(entry).toBeDefined();
       expect(dockerfile).toContain(`/artifacts/${entry!.tarball.replace(entry!.version, "*")}`);
     }
-    expect(dockerfile).toContain("/artifacts/workhorse-js-dashboard-[0-9]*.tgz");
+    expect(dockerfile).toContain("/artifacts/stablemates-workhorse-dashboard-[0-9]*.tgz");
   });
 
   it("keeps the development build script free of a hand-written package list", async () => {

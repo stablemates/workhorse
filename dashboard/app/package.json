@@ -1,5 +1,5 @@
 {
-  "name": "@workhorse-js/dashboard-app",
+  "name": "@stablemates/workhorse-dashboard-app",
   "private": true,
   "description": "Shared operator dashboard application for Workhorse",
   "homepage": "https://workhorse.run",
@@ -62,7 +62,7 @@
     "@mantine/hooks": "^8.3.14",
     "@mantine/notifications": "^8.3.18",
     "@phosphor-icons/react": "^2.1.10",
-    "@workhorse-js/dashboard-server": "workspace:*",
+    "@stablemates/workhorse-dashboard-server": "workspace:*",
     "recharts": "^3.10.1"
   },
   "devDependencies": {

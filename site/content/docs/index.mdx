@@ -74,11 +74,11 @@ independently of your database, a dedicated broker remains the right tool.
 - `@stablemates/workhorse` provides `Queue`, `Admin`, `Worker`, schema tools, process orchestration, and the CLI.
 - `stablemates-workhorse` provides synchronous and asynchronous Python queue clients and workers.
 - `github.com/stablemates/workhorse/go` provides Go queue clients and workers over pgx or `database/sql`.
-- `@workhorse-js/dashboard` provides the operator interface and its framework-neutral server host.
-- `@workhorse-js/drizzle` adapts Drizzle databases and transactions to the core `Queryable` protocol.
-- `@workhorse-js/prisma` adapts Prisma clients and interactive transactions.
-- `@workhorse-js/typeorm` adapts TypeORM data sources and transactional entity managers.
-- `@workhorse-js/kysely` adapts Kysely databases and transactions.
+- `@stablemates/workhorse-dashboard` provides the operator interface and its framework-neutral server host.
+- `@stablemates/workhorse-drizzle` adapts Drizzle databases and transactions to the core `Queryable` protocol.
+- `@stablemates/workhorse-prisma` adapts Prisma clients and interactive transactions.
+- `@stablemates/workhorse-typeorm` adapts TypeORM data sources and transactional entity managers.
+- `@stablemates/workhorse-kysely` adapts Kysely databases and transactions.
 
 TypeScript applications start with `@stablemates/workhorse`, which includes its default PostgreSQL
 driver. Python includes Psycopg by default and offers an asyncpg extra, while Go includes pgx.

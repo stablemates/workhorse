@@ -24,7 +24,7 @@ const commands: Array<{
 }> = [
   {
     command: "pnpm",
-    arguments: ["--filter", "@workhorse-js/demo", serverScript],
+    arguments: ["--filter", "@stablemates/workhorse-demo", serverScript],
     env: {
       ...process.env,
       PORT: String(publicPort),
@@ -35,7 +35,7 @@ const commands: Array<{
   {
     // Each demo worker owns a process and database client. PostgreSQL is their only shared state.
     command: "pnpm",
-    arguments: ["--filter", "@workhorse-js/demo", typescriptWorkerScript],
+    arguments: ["--filter", "@stablemates/workhorse-demo", typescriptWorkerScript],
     env: {
       ...process.env,
       WORKHORSE_DEMO_MODE: mode,
@@ -74,7 +74,7 @@ const commands: Array<{
 if (mode === "development" && process.env.WORKHORSE_DEMO_DASHBOARD_DEV === "true") {
   commands.push({
     command: "pnpm",
-    arguments: ["--filter", "@workhorse-js/dashboard", "dev"],
+    arguments: ["--filter", "@stablemates/workhorse-dashboard", "dev"],
     env: {
       ...process.env,
       PORT: String(dashboardDevPort),

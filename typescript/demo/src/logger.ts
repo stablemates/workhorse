@@ -1,6 +1,6 @@
 import { SeverityNumber, logs, type LogAttributes } from "@opentelemetry/api-logs";
 
-const logger = logs.getLogger("@workhorse-js/demo");
+const logger = logs.getLogger("@stablemates/workhorse-demo");
 
 function writeConsole(
   severity: "debug" | "info" | "error",

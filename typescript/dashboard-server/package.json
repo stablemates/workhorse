@@ -1,5 +1,5 @@
 {
-  "name": "@workhorse-js/dashboard-server",
+  "name": "@stablemates/workhorse-dashboard-server",
   "version": "0.1.0",
   "description": "Node.js backend for the Workhorse operator dashboard",
   "homepage": "https://workhorse.run",
@@ -58,7 +58,7 @@
     "@opentelemetry/api-logs": "0.221.0",
     "@orpc/client": "^1.14.8",
     "@orpc/server": "^1.14.8",
-    "@workhorse-js/dashboard-contract": "workspace:*",
+    "@stablemates/workhorse-dashboard-contract": "workspace:*",
     "zod": "^4.4.3"
   },
   "devDependencies": {

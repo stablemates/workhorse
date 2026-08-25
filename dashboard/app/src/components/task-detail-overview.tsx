@@ -18,7 +18,7 @@ import {
   readTaskResultEvidence,
   type TaskResultState,
 } from "../presentation.js";
-import type { DashboardJobDetail } from "@workhorse-js/dashboard-server/wire";
+import type { DashboardJobDetail } from "@stablemates/workhorse-dashboard-server/wire";
 import {
   checkpointOutput,
   formatExact,

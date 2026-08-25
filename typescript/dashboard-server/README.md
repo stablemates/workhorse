@@ -1,8 +1,8 @@
-# `@workhorse-js/dashboard-server`
+# `@stablemates/workhorse-dashboard-server`
 
 TypeScript backend for the shared Workhorse operator dashboard. The package owns the provider-neutral
 read model, request host, Node bridge, and the compiled application from `dashboard/app`. Existing
-imports through `@workhorse-js/dashboard` continue to work through the compatibility package.
+imports through `@stablemates/workhorse-dashboard` continue to work through the compatibility package.
 
 ## Mounting
 
@@ -10,7 +10,7 @@ The dashboard host is framework-neutral: it takes a `Request` and returns a `Res
 when the request does not belong to its mount path.
 
 ```ts
-import { createDashboardHost } from "@workhorse-js/dashboard-server/server";
+import { createDashboardHost } from "@stablemates/workhorse-dashboard-server/server";
 
 const host = createDashboardHost({
   path: "/workhorse",
@@ -32,7 +32,7 @@ const response = (await host.handle(request)) ?? new Response("Not found", { sta
 **Connect-style hosts** — Express, Connect, Fastify via `@fastify/middie` — use the Node bridge:
 
 ```ts
-import { dashboardNodeMiddleware } from "@workhorse-js/dashboard-server/server";
+import { dashboardNodeMiddleware } from "@stablemates/workhorse-dashboard-server/server";
 
 app.use(dashboardNodeMiddleware(host));
 ```
@@ -92,7 +92,7 @@ Hosts can instead embed the same thing in their own development server, which ke
 one origin:
 
 ```ts
-import { createDashboardDevServer } from "@workhorse-js/dashboard/dev";
+import { createDashboardDevServer } from "@stablemates/workhorse-dashboard/dev";
 
 const dev = process.env.NODE_ENV === "development" ? await createDashboardDevServer() : undefined;
 
@@ -110,9 +110,9 @@ private transport, including a `workhorse dashboard` console.
 ## Custom React integrations
 
 ```tsx
-import { Dashboard, WorkhorseThemeProvider } from "@workhorse-js/dashboard";
-import { createDashboardClient } from "@workhorse-js/dashboard/client";
-import "@workhorse-js/dashboard/styles.css";
+import { Dashboard, WorkhorseThemeProvider } from "@stablemates/workhorse-dashboard";
+import { createDashboardClient } from "@stablemates/workhorse-dashboard/client";
+import "@stablemates/workhorse-dashboard/styles.css";
 
 const client = createDashboardClient("/workhorse/rpc");
 root.render(
@@ -125,7 +125,7 @@ root.render(
 `WorkhorseThemeProvider` also mounts the notification container every operator result is reported
 in — pausing a queue, clearing one, releasing a scheduled task, cancelling a task — as a toast in
 the bottom-right corner. A custom integration that renders `Dashboard` without this provider gets no
-results at all, and `@workhorse-js/dashboard/styles.css` carries the styles the container needs.
+results at all, and `@stablemates/workhorse-dashboard/styles.css` carries the styles the container needs.
 
 The demo's job-seeding menu is not part of the required client contract. Opt into it with `demoTools`
 only when a host intentionally supplies demo fixtures. All sample and seed data remain owned by the

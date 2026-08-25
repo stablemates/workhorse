@@ -8,7 +8,7 @@ import {
   runNowOutcomeTone,
   type DashboardResultTone,
 } from "./presentation.js";
-import type { DashboardCancelStatus } from "@workhorse-js/dashboard-server/wire";
+import type { DashboardCancelStatus } from "@stablemates/workhorse-dashboard-server/wire";
 import type { RunNowFeedback } from "./run-now.js";
 
 /**

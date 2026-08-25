@@ -1,5 +1,5 @@
 import { createContext, lazy, useContext } from "react";
-import type { DashboardClient } from "@workhorse-js/dashboard-server";
+import type { DashboardClient } from "@stablemates/workhorse-dashboard-server";
 import type {
   DashboardCronPage,
   DashboardEventsPage,
@@ -10,7 +10,7 @@ import type {
   DashboardTasksPage,
   DashboardWorkersPage,
   DashboardSettingsPage,
-} from "@workhorse-js/dashboard-server/wire";
+} from "@stablemates/workhorse-dashboard-server/wire";
 import {
   ArrowCounterClockwise,
   CheckCircle,
@@ -23,7 +23,7 @@ import {
   WarningCircle,
   XCircle,
 } from "@phosphor-icons/react";
-import { dashboardTaskFilters } from "@workhorse-js/dashboard-server/wire";
+import { dashboardTaskFilters } from "@stablemates/workhorse-dashboard-server/wire";
 import { parseEventsLocation, type EventsLocationState } from "./events-location.js";
 import { parseTaskLocation, taskLocationHref, type TaskLocationState } from "./task-location.js";
 

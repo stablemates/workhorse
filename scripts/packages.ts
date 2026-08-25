@@ -17,7 +17,7 @@ import path from "node:path";
 export const repositoryRoot = path.resolve(import.meta.dirname, "..");
 
 export interface PublishedPackage {
-  /** Package name as npm knows it, for example `@workhorse-js/dashboard`. */
+  /** Package name as npm knows it, for example `@stablemates/workhorse-dashboard`. */
   readonly name: string;
   /** Directory name under `typescript/`, for example `dashboard-server`. */
   readonly directory: string;
@@ -27,7 +27,7 @@ export interface PublishedPackage {
   readonly manifest: string;
   /** Declared version. Every published package moves in lockstep with the root manifest. */
   readonly version: string;
-  /** Tarball `pnpm pack` writes, for example `workhorse-js-dashboard-0.1.0.tgz`. */
+  /** Tarball `pnpm pack` writes, for example `stablemates-workhorse-dashboard-0.1.0.tgz`. */
   readonly tarball: string;
 }
 
@@ -50,7 +50,7 @@ async function readWorkspaceManifest(relativePath: string): Promise<Manifest | u
   }
 }
 
-/** The tarball basename `pnpm pack` produces: `@workhorse-js/x` -> `workhorse-js-x`. */
+/** The tarball basename `pnpm pack` produces: `@stablemates/workhorse-x` -> `stablemates-workhorse-x`. */
 function tarballName(name: string, version: string): string {
   return `${name.replace(/^@/, "").replace(/\//g, "-")}-${version}.tgz`;
 }

@@ -1,1 +1,1 @@
-export * from "@workhorse-js/dashboard-server/server";
+export * from "@stablemates/workhorse-dashboard-server/server";

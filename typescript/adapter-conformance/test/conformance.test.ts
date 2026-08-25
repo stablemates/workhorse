@@ -4,25 +4,25 @@ import {
   DrizzleQueryError,
   drizzleQueryable,
   type DrizzleExecutor,
-} from "@workhorse-js/drizzle";
+} from "@stablemates/workhorse-drizzle";
 import {
   createKyselyAdapter,
   KyselyQueryError,
   kyselyQueryable,
   type KyselyExecutor,
-} from "@workhorse-js/kysely";
+} from "@stablemates/workhorse-kysely";
 import {
   createPrismaAdapter,
   PrismaQueryError,
   prismaQueryable,
   type PrismaExecutor,
-} from "@workhorse-js/prisma";
+} from "@stablemates/workhorse-prisma";
 import {
   createTypeOrmAdapter,
   TypeOrmQueryError,
   typeOrmQueryable,
   type TypeOrmExecutor,
-} from "@workhorse-js/typeorm";
+} from "@stablemates/workhorse-typeorm";
 import {
   type AdapterNotificationPool,
   EnqueueIdempotencyConflictError,

@@ -1,9 +1,13 @@
 import { createRequire } from "node:module";
 import { setTimeout as sleep } from "node:timers/promises";
-import { createDrizzleAdapter, DrizzleQueryError } from "@workhorse-js/drizzle";
-import { createKyselyAdapter, KyselyQueryError } from "@workhorse-js/kysely";
-import { createPrismaAdapter, PrismaQueryError, type PrismaExecutor } from "@workhorse-js/prisma";
-import { createTypeOrmAdapter, TypeOrmQueryError } from "@workhorse-js/typeorm";
+import { createDrizzleAdapter, DrizzleQueryError } from "@stablemates/workhorse-drizzle";
+import { createKyselyAdapter, KyselyQueryError } from "@stablemates/workhorse-kysely";
+import {
+  createPrismaAdapter,
+  PrismaQueryError,
+  type PrismaExecutor,
+} from "@stablemates/workhorse-prisma";
+import { createTypeOrmAdapter, TypeOrmQueryError } from "@stablemates/workhorse-typeorm";
 import type { Queue, WorkhorseAdapter } from "@stablemates/workhorse";
 import { sql as drizzleSql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";

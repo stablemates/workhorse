@@ -1,10 +1,10 @@
-# `@workhorse-js/prisma`
+# `@stablemates/workhorse-prisma`
 
 Prisma ORM provider for Workhorse's PostgreSQL protocol.
 
 ```ts
 import { PrismaClient } from "@prisma/client";
-import { createPrismaAdapter } from "@workhorse-js/prisma";
+import { createPrismaAdapter } from "@stablemates/workhorse-prisma";
 
 const prisma = new PrismaClient();
 const workhorse = createPrismaAdapter(prisma, { close: () => prisma.$disconnect() });

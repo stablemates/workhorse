@@ -3,7 +3,7 @@ import type {
   DashboardJobRow,
   DashboardTaskFacets,
   DashboardTasksPage,
-} from "@workhorse-js/dashboard-server/wire";
+} from "@stablemates/workhorse-dashboard-server/wire";
 import {
   ActionIcon,
   Badge,

@@ -19,7 +19,7 @@ import type {
   DashboardSystemPage,
   DashboardSystemRetryBucket,
   DashboardSystemWindow,
-} from "@workhorse-js/dashboard-server/wire";
+} from "@stablemates/workhorse-dashboard-server/wire";
 import {
   ArrowCounterClockwise,
   ArrowClockwise,

@@ -15,7 +15,7 @@ export type {
   DashboardDemoJobKind,
   DashboardDemoScenario,
   DashboardDemoTools,
-} from "@workhorse-js/dashboard-server";
+} from "@stablemates/workhorse-dashboard-server";
 export {
   parseTaskLocation,
   taskDetailNavigation,

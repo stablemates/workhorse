@@ -12,11 +12,11 @@ RUN mkdir /artifacts \
   && pnpm --silent --dir typescript/core pack --pack-destination /artifacts \
   && mv /artifacts/stablemates-workhorse-*.tgz /artifacts/workhorse-core.tgz \
   && pnpm --silent --dir typescript/dashboard-contract pack --pack-destination /artifacts \
-  && mv /artifacts/workhorse-js-dashboard-contract-*.tgz /artifacts/workhorse-dashboard-contract.tgz \
+  && mv /artifacts/stablemates-workhorse-dashboard-contract-*.tgz /artifacts/workhorse-dashboard-contract.tgz \
   && pnpm --silent --dir typescript/dashboard-server pack --pack-destination /artifacts \
-  && mv /artifacts/workhorse-js-dashboard-server-*.tgz /artifacts/workhorse-dashboard-server.tgz \
+  && mv /artifacts/stablemates-workhorse-dashboard-server-*.tgz /artifacts/workhorse-dashboard-server.tgz \
   && pnpm --silent --dir typescript/dashboard pack --pack-destination /artifacts \
-  && mv /artifacts/workhorse-js-dashboard-[0-9]*.tgz /artifacts/workhorse-dashboard.tgz
+  && mv /artifacts/stablemates-workhorse-dashboard-[0-9]*.tgz /artifacts/workhorse-dashboard.tgz
 
 FROM node:24-alpine AS production-dependencies
 

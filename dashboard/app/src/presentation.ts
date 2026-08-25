@@ -10,11 +10,11 @@ import type {
   DashboardRunNowStatus,
   CompleteDashboardOptions,
   IdempotencyEvidence,
-} from "@workhorse-js/dashboard-server/wire";
+} from "@stablemates/workhorse-dashboard-server/wire";
 import {
   dashboardAttemptOutcomes as wireAttemptOutcomes,
   dashboardJobEventTypes as wireJobEventTypes,
-} from "@workhorse-js/dashboard-server/wire";
+} from "@stablemates/workhorse-dashboard-server/wire";
 
 export const dashboardJobEventTypes = wireJobEventTypes;
 export const dashboardAttemptOutcomes = wireAttemptOutcomes;

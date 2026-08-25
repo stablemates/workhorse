@@ -9,16 +9,16 @@ pre-commit:
       run: pnpm parity:check
     - name: check adapter conformance types
       glob: "typescript/adapter-conformance/**"
-      run: pnpm --filter @workhorse-js/adapter-conformance typecheck
+      run: pnpm --filter @stablemates/workhorse-adapter-conformance typecheck
     - name: check core types
       glob: "typescript/core/**"
       run: pnpm --filter @stablemates/workhorse typecheck
     - name: check dashboard contract types
       glob: "typescript/dashboard-contract/**"
-      run: pnpm --filter @workhorse-js/dashboard-contract typecheck
+      run: pnpm --filter @stablemates/workhorse-dashboard-contract typecheck
     - name: check dashboard server types
       glob: "typescript/dashboard-server/**"
-      run: pnpm --filter @workhorse-js/dashboard-server typecheck
+      run: pnpm --filter @stablemates/workhorse-dashboard-server typecheck
     - name: check generated dashboard specification
       glob: "{dashboard/v1/**,typescript/dashboard-server/spec/**,typescript/dashboard-server/src/router.ts,typescript/dashboard-server/src/wire.ts,go/dashboard/v1_generated.go,python/src/workhorse/dashboard_v1.py}"
       run: pnpm dashboard-spec:check
@@ -27,22 +27,22 @@ pre-commit:
       run: pnpm dashboard-bundle:check
     - name: check dashboard types
       glob: "typescript/dashboard/**"
-      run: pnpm --filter @workhorse-js/dashboard typecheck
+      run: pnpm --filter @stablemates/workhorse-dashboard typecheck
     - name: check demo types
       glob: "typescript/demo/**"
-      run: pnpm --filter @workhorse-js/demo typecheck
+      run: pnpm --filter @stablemates/workhorse-demo typecheck
     - name: check drizzle types
       glob: "typescript/drizzle/**"
-      run: pnpm --filter @workhorse-js/drizzle typecheck
+      run: pnpm --filter @stablemates/workhorse-drizzle typecheck
     - name: check kysely types
       glob: "typescript/kysely/**"
-      run: pnpm --filter @workhorse-js/kysely typecheck
+      run: pnpm --filter @stablemates/workhorse-kysely typecheck
     - name: check prisma types
       glob: "typescript/prisma/**"
-      run: pnpm --filter @workhorse-js/prisma typecheck
+      run: pnpm --filter @stablemates/workhorse-prisma typecheck
     - name: check typeorm types
       glob: "typescript/typeorm/**"
-      run: pnpm --filter @workhorse-js/typeorm typecheck
+      run: pnpm --filter @stablemates/workhorse-typeorm typecheck
     - name: check Python types
       glob: "python/**"
       run: pnpm python:typecheck

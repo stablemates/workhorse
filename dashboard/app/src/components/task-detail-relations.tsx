@@ -1,4 +1,4 @@
-import type { DashboardJobDetail } from "@workhorse-js/dashboard-server/wire";
+import type { DashboardJobDetail } from "@stablemates/workhorse-dashboard-server/wire";
 import {
   ActionIcon,
   Badge,
@@ -23,7 +23,7 @@ import {
   idempotencyEvidenceLine,
   isTerminalTaskState,
 } from "../presentation.js";
-import { readIdempotencyEvidence } from "@workhorse-js/dashboard-server/wire";
+import { readIdempotencyEvidence } from "@stablemates/workhorse-dashboard-server/wire";
 import type { RetryPolicy } from "@stablemates/workhorse";
 import { Fragment, useEffect, useRef } from "react";
 import { CheckCircle, Copy, Prohibit } from "@phosphor-icons/react";

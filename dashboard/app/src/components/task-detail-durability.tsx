@@ -1,7 +1,7 @@
-import type { DashboardJobDetail } from "@workhorse-js/dashboard-server/wire";
+import type { DashboardJobDetail } from "@stablemates/workhorse-dashboard-server/wire";
 import { Badge, Box, Code, Divider, Group, Paper, Stack, Text } from "@mantine/core";
 import { describeTaskConcurrency } from "../concurrency-policy.js";
-import { readIdempotencyEvidence } from "@workhorse-js/dashboard-server/wire";
+import { readIdempotencyEvidence } from "@stablemates/workhorse-dashboard-server/wire";
 import {
   DependencyEdge,
   LineageNavigationProps,

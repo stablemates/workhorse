@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
-import { createDrizzleAdapter, DrizzleQueryError, drizzleQueryable } from "@workhorse-js/drizzle";
+import {
+  createDrizzleAdapter,
+  DrizzleQueryError,
+  drizzleQueryable,
+} from "@stablemates/workhorse-drizzle";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { sql } from "drizzle-orm";
 import { installSchema, Pool, startWorkerProcess, Worker } from "@stablemates/workhorse";

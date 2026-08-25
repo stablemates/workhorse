@@ -1,10 +1,10 @@
-import type { DashboardClient } from "@workhorse-js/dashboard-server";
+import type { DashboardClient } from "@stablemates/workhorse-dashboard-server";
 import { parseHumanWaitResult } from "../presentation.js";
 import { notifyDashboard, notifyFailure } from "../notifications.js";
 import type {
   DashboardJobDetail,
   DashboardSignalWaitRow,
-} from "@workhorse-js/dashboard-server/wire";
+} from "@stablemates/workhorse-dashboard-server/wire";
 import { Box, Button, Code, Group, Paper, Stack, Text } from "@mantine/core";
 import { ExternalWaitDeadline, SignalPayloadEditor } from "../external-wait-controls.js";
 import { useState } from "react";

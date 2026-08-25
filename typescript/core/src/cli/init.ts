@@ -73,7 +73,7 @@ export function renderWorkerConfig(project: DetectedProject): string {
   switch (project.orm) {
     case "drizzle": {
       adapterImport =
-        'import { createDrizzleAdapter } from "@workhorse-js/drizzle";\nimport { drizzle as createDrizzle } from "drizzle-orm/node-postgres";';
+        'import { createDrizzleAdapter } from "@stablemates/workhorse-drizzle";\nimport { drizzle as createDrizzle } from "drizzle-orm/node-postgres";';
       adapterBody = `    const pool = new Pool({ connectionString: databaseUrl });
     return createDrizzleAdapter(createDrizzle({ client: pool }), {
       defaultQueue: QUEUE,
@@ -83,7 +83,7 @@ export function renderWorkerConfig(project: DetectedProject): string {
     }
     case "prisma": {
       adapterImport =
-        'import { PrismaClient } from "@prisma/client";\nimport { createPrismaAdapter } from "@workhorse-js/prisma";';
+        'import { PrismaClient } from "@prisma/client";\nimport { createPrismaAdapter } from "@stablemates/workhorse-prisma";';
       adapterBody = `    const pool = new Pool({ connectionString: databaseUrl });
     const database = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
     return createPrismaAdapter(database, {
@@ -98,7 +98,7 @@ export function renderWorkerConfig(project: DetectedProject): string {
     }
     case "typeorm": {
       adapterImport =
-        'import { createTypeOrmAdapter } from "@workhorse-js/typeorm";\nimport { DataSource } from "typeorm";';
+        'import { createTypeOrmAdapter } from "@stablemates/workhorse-typeorm";\nimport { DataSource } from "typeorm";';
       adapterBody = `    const pool = new Pool({ connectionString: databaseUrl });
     const database = new DataSource({ type: "postgres", url: databaseUrl });
     await database.initialize();
@@ -114,7 +114,7 @@ export function renderWorkerConfig(project: DetectedProject): string {
     }
     case "kysely": {
       adapterImport =
-        'import { createKyselyAdapter } from "@workhorse-js/kysely";\nimport { Kysely, PostgresDialect } from "kysely";';
+        'import { createKyselyAdapter } from "@stablemates/workhorse-kysely";\nimport { Kysely, PostgresDialect } from "kysely";';
       adapterBody = `    const pool = new Pool({ connectionString: databaseUrl });
     const database = new Kysely({ dialect: new PostgresDialect({ pool }) });
     return createKyselyAdapter(database, {
@@ -184,7 +184,7 @@ ${adapterBody}
 /** The mount snippet printed for the detected framework. Nothing is written into user routes. */
 export function renderMountSnippet(project: DetectedProject): string {
   if (project.framework === "hono") {
-    return `import { createDashboardHost } from "@workhorse-js/dashboard/server";
+    return `import { createDashboardHost } from "@stablemates/workhorse-dashboard/server";
 
 const host = createDashboardHost({
   path: "/workhorse",
@@ -202,7 +202,7 @@ for (const route of ["/workhorse", "/workhorse/*"]) {
       project.framework === "express"
         ? "app.use(dashboardNodeMiddleware(host));"
         : "await app.register(middie);\napp.use(dashboardNodeMiddleware(host));";
-    return `import { createDashboardHost, dashboardNodeMiddleware } from "@workhorse-js/dashboard/server";
+    return `import { createDashboardHost, dashboardNodeMiddleware } from "@stablemates/workhorse-dashboard/server";
 
 const host = createDashboardHost({
   path: "/workhorse",
@@ -213,7 +213,7 @@ ${mount}`;
   }
   if (project.framework === "next") {
     return `// app/workhorse/[[...path]]/route.ts
-import { createDashboardHost } from "@workhorse-js/dashboard/server";
+import { createDashboardHost } from "@stablemates/workhorse-dashboard/server";
 
 const host = createDashboardHost({
   path: "/workhorse",
@@ -227,7 +227,7 @@ async function handler(request: Request) {
 
 export { handler as GET, handler as POST };`;
   }
-  return `import { createDashboardHost } from "@workhorse-js/dashboard/server";
+  return `import { createDashboardHost } from "@stablemates/workhorse-dashboard/server";
 
 // The host is framework-neutral: give it a Request, it returns a Response or null.
 const host = createDashboardHost({

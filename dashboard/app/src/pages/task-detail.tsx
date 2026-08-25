@@ -1,4 +1,4 @@
-import type { DashboardJobDetail } from "@workhorse-js/dashboard-server/wire";
+import type { DashboardJobDetail } from "@stablemates/workhorse-dashboard-server/wire";
 import { Badge, Box, Center, Code, Drawer, Group, Loader, Paper, Stack, Text } from "@mantine/core";
 import { StatusBadge } from "../status-badge.js";
 import { formatClock, formatDuration, formatExact, formatRelative } from "../preferences.js";

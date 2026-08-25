@@ -3,7 +3,7 @@ import type {
   DashboardEventKind,
   DashboardEventsWindow,
   DashboardEventTypeFilter,
-} from "@workhorse-js/dashboard-server/wire";
+} from "@stablemates/workhorse-dashboard-server/wire";
 
 const eventPageSizes = [25, 50, 100] as const;
 type EventPageSize = (typeof eventPageSizes)[number];

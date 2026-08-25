@@ -2,7 +2,10 @@ import { MantineProvider } from "@mantine/core";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { DashboardEventRow, DashboardJobDetail } from "@workhorse-js/dashboard-server/wire";
+import type {
+  DashboardEventRow,
+  DashboardJobDetail,
+} from "@stablemates/workhorse-dashboard-server/wire";
 import { dashboardJobEventTypes } from "./presentation.js";
 
 Object.defineProperty(globalThis, "localStorage", {

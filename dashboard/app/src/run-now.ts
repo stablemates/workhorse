@@ -1,6 +1,6 @@
-import type { DashboardClient } from "@workhorse-js/dashboard-server";
+import type { DashboardClient } from "@stablemates/workhorse-dashboard-server";
 import { describeRunNowOutcome } from "./presentation.js";
-import type { DashboardRunNowStatus } from "@workhorse-js/dashboard-server/wire";
+import type { DashboardRunNowStatus } from "@stablemates/workhorse-dashboard-server/wire";
 
 /**
  * What one run-now request reported, held so the list can state it and offer the released task.

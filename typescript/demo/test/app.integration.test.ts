@@ -5,7 +5,7 @@ import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
 import { Admin, installSchema, Queue, type Json, type Worker } from "@stablemates/workhorse";
-import { createDrizzleAdapter } from "@workhorse-js/drizzle";
+import { createDrizzleAdapter } from "@stablemates/workhorse-drizzle";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { assertLocalDatabasePurpose, localDatabaseUrl } from "../../core/src/local-database.js";
@@ -63,8 +63,8 @@ import {
   TYPESCRIPT_WORKER_SCHEDULE_NAME,
 } from "../src/app.js";
 import type { CreateDemoApplicationOptions } from "../src/app.js";
-import type { DashboardRouter } from "@workhorse-js/dashboard/server";
-import { dashboardDatabase, readDashboardWorkers } from "@workhorse-js/dashboard/server";
+import type { DashboardRouter } from "@stablemates/workhorse-dashboard/server";
+import { dashboardDatabase, readDashboardWorkers } from "@stablemates/workhorse-dashboard/server";
 import { DEMO_QUEUE_OPTIONS } from "../src/contracts.js";
 import { durableDemoScenarios } from "../src/durable-demo.js";
 import {
@@ -76,7 +76,10 @@ import {
   type DemoFeatureFamily,
   type DemoFeaturePayload,
 } from "../src/feature-showcase.js";
-import { readIdempotencyEvidence, type DashboardWorkerRow } from "@workhorse-js/dashboard/wire";
+import {
+  readIdempotencyEvidence,
+  type DashboardWorkerRow,
+} from "@stablemates/workhorse-dashboard/wire";
 import { createDemoWorkerDefinition } from "../src/worker-definition.js";
 
 /**

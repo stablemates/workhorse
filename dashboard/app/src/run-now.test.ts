@@ -1,8 +1,8 @@
 import { createORPCClient } from "@orpc/client";
 import { describe, expect, it } from "vitest";
-import type { DashboardClient } from "@workhorse-js/dashboard-server";
+import type { DashboardClient } from "@stablemates/workhorse-dashboard-server";
 import { describeRunNowOutcome, runNowOutcomeTone } from "./presentation.js";
-import type { DashboardRunNowStatus } from "@workhorse-js/dashboard-server/wire";
+import type { DashboardRunNowStatus } from "@stablemates/workhorse-dashboard-server/wire";
 import { requestRunNow } from "./run-now.js";
 
 const statuses: DashboardRunNowStatus[] = [

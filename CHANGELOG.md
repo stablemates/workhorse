@@ -1,9 +1,9 @@
 # Changelog
 
 Eight published packages are versioned in lockstep and released from one tag. They are
-`@stablemates/workhorse`, `@workhorse-js/drizzle`, `@workhorse-js/prisma`, `@workhorse-js/typeorm`,
-`@workhorse-js/kysely`, `@workhorse-js/dashboard`, `@workhorse-js/dashboard-server`, and
-`@workhorse-js/dashboard-contract`. The `stablemates-workhorse` Python distribution floats independently and
+`@stablemates/workhorse`, `@stablemates/workhorse-drizzle`, `@stablemates/workhorse-prisma`, `@stablemates/workhorse-typeorm`,
+`@stablemates/workhorse-kysely`, `@stablemates/workhorse-dashboard`, `@stablemates/workhorse-dashboard-server`, and
+`@stablemates/workhorse-dashboard-contract`. The `stablemates-workhorse` Python distribution floats independently and
 declares compatibility through the SQL protocol. Each entry states its required schema version and
 upgrade steps.
 
@@ -92,20 +92,20 @@ First published line. Requires **schema v1**, Node.js **22 or 24**, PostgreSQL *
 - `@stablemates/workhorse`: notification-assisted worker dispatch through one process-local
   `workhorse_jobs` listener per node-postgres pool, with queue routing, reconnect backoff, and
   jittered bounded polling as the durable fallback.
-- `@workhorse-js/drizzle`: Drizzle ORM provider with caller-owned transactions.
-- `@workhorse-js/prisma`: Prisma ORM provider with caller-owned interactive transactions and optional
+- `@stablemates/workhorse-drizzle`: Drizzle ORM provider with caller-owned transactions.
+- `@stablemates/workhorse-prisma`: Prisma ORM provider with caller-owned interactive transactions and optional
   node-postgres notification connections.
-- `@workhorse-js/typeorm`: TypeORM provider with caller-owned `EntityManager` transactions and optional
+- `@stablemates/workhorse-typeorm`: TypeORM provider with caller-owned `EntityManager` transactions and optional
   node-postgres notification connections.
-- `@workhorse-js/kysely`: Kysely provider with caller-owned transactions and optional node-postgres
+- `@stablemates/workhorse-kysely`: Kysely provider with caller-owned transactions and optional node-postgres
   notification connections.
-- `@workhorse-js/dashboard`: the operator dashboard, its framework-neutral `Request`/`Response` host,
+- `@stablemates/workhorse-dashboard`: the operator dashboard, its framework-neutral `Request`/`Response` host,
   a settings page with audited policy changes, and a Connect-style Node bridge for Express,
   Connect, and Fastify.
-- `@workhorse-js/dashboard-server`: single-administrator sessions protect standalone dashboard reads
+- `@stablemates/workhorse-dashboard-server`: single-administrator sessions protect standalone dashboard reads
   and mutations, including credential rotation, login throttling, secure cookies, container secret
   files, and a supported container that requires an HTTPS public origin for remote listeners.
-- `@workhorse-js/dashboard-contract`: the type-only standalone server contract shared by the core CLI
+- `@stablemates/workhorse-dashboard-contract`: the type-only standalone server contract shared by the core CLI
   and dashboard package, so both compile against one optional embedding boundary.
 - `stablemates-workhorse`: typed synchronous Psycopg and asynchronous Psycopg/asyncpg enqueue clients with
   delayed and recurring work, priority, atomic batches, idempotency, debounce, throttle,
@@ -199,14 +199,14 @@ name the retired instruments.
   the outcome attribute and times the same activation in **milliseconds rather than seconds**.
   Dashboards and alerts that read the retired histogram need both the new name and the new unit.
 
-- `@workhorse-js/dashboard`: `DashboardClient` is inferred from the router that serves it rather than
+- `@stablemates/workhorse-dashboard`: `DashboardClient` is inferred from the router that serves it rather than
   written out a second time by hand. The method names and shapes are the ones the dashboard already
   spoke, so a host built against the packaged client needs no change; a host that answered a
   slightly different shape now hears about it from the type-checker. Filter arguments that were
   typed as `string` are now the vocabulary the router accepts — `events({ types })` takes event
   types and attempt outcomes, exported as `DashboardEventTypeFilter`. Adding a procedure is an edit
   to the router alone.
-- `@workhorse-js/dashboard`: the server read model uses core-owned versioned views and functions. Its
+- `@stablemates/workhorse-dashboard`: the server read model uses core-owned versioned views and functions. Its
   core peer range now permits independent patch releases within the same minor line.
 
 ### Upgrade notes

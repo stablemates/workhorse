@@ -9,7 +9,7 @@ import type {
   DashboardQueuesPage,
   DashboardRateLimitPolicySummary,
   DashboardSystemPage,
-} from "@workhorse-js/dashboard-server/wire";
+} from "@stablemates/workhorse-dashboard-server/wire";
 import {
   concurrencyCappedFootnote,
   describeConcurrencyBlocked,

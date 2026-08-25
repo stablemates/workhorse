@@ -4,7 +4,7 @@ import type {
   DashboardSettingsPage,
   DashboardSystemQueueRow,
   DashboardWorkerRow,
-} from "@workhorse-js/dashboard-server/wire";
+} from "@stablemates/workhorse-dashboard-server/wire";
 import type { MaintenancePolicy, RetentionPolicy } from "@stablemates/workhorse";
 import { describe, expect, it } from "vitest";
 import {

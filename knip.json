@@ -15,7 +15,7 @@
     },
     "typescript/core": {
       "entry": ["src/cli/reset-db.ts", "src/cli/workhorse.ts"],
-      "ignoreDependencies": ["@workhorse-js/dashboard"]
+      "ignoreDependencies": ["@stablemates/workhorse-dashboard"]
     },
     "typescript/dashboard": {
       "ignoreDependencies": [
@@ -25,7 +25,7 @@
         "@mantine/notifications",
         "@phosphor-icons/react",
         "@stablemates/workhorse",
-        "@workhorse-js/dashboard-server",
+        "@stablemates/workhorse-dashboard-server",
         "react",
         "react-dom",
         "recharts",

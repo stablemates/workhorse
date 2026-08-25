@@ -1,4 +1,4 @@
-import type { DashboardSettingsPage } from "@workhorse-js/dashboard-server/wire";
+import type { DashboardSettingsPage } from "@stablemates/workhorse-dashboard-server/wire";
 import type {
   MaintenancePolicyDefinition,
   MaintenancePolicySetting,

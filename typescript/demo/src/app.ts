@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { createDrizzleAdapter } from "@workhorse-js/drizzle";
+import { createDrizzleAdapter } from "@stablemates/workhorse-drizzle";
 import {
   createDashboardHost,
   createDashboardOperatorControllers,
   normalizeDashboardPublicOrigin,
   type DashboardOperatorAction,
   type DashboardSingleAdminOptions,
-} from "@workhorse-js/dashboard/server";
+} from "@stablemates/workhorse-dashboard/server";
 import { sql } from "drizzle-orm";
 import { Hono } from "hono";
 import {

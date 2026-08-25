@@ -1,5 +1,5 @@
 {
-  "name": "@workhorse-js/adapter-conformance",
+  "name": "@stablemates/workhorse-adapter-conformance",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,10 +8,10 @@
   "devDependencies": {
     "@prisma/client": "6.19.3",
     "@stablemates/workhorse": "workspace:*",
-    "@workhorse-js/drizzle": "workspace:*",
-    "@workhorse-js/kysely": "workspace:*",
-    "@workhorse-js/prisma": "workspace:*",
-    "@workhorse-js/typeorm": "workspace:*",
+    "@stablemates/workhorse-drizzle": "workspace:*",
+    "@stablemates/workhorse-kysely": "workspace:*",
+    "@stablemates/workhorse-prisma": "workspace:*",
+    "@stablemates/workhorse-typeorm": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "kysely": "0.29.5",
     "pg": "^8.16.3",

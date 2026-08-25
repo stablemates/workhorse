@@ -4,23 +4,27 @@
     "paths": {
       "@stablemates/workhorse": ["typescript/core/src/index.ts"],
       "@stablemates/workhorse/version": ["typescript/core/src/version.ts"],
-      "@workhorse-js/dashboard": ["typescript/dashboard/src/index.ts"],
-      "@workhorse-js/dashboard/dev": ["typescript/dashboard/src/dev.ts"],
-      "@workhorse-js/dashboard/presentation": ["typescript/dashboard/src/presentation.ts"],
-      "@workhorse-js/dashboard/server": ["typescript/dashboard/src/server.ts"],
-      "@workhorse-js/dashboard/wire": ["typescript/dashboard/src/wire.ts"],
-      "@workhorse-js/dashboard/*": ["typescript/dashboard/src/*"],
-      "@workhorse-js/dashboard-server": ["typescript/dashboard-server/src/index.ts"],
-      "@workhorse-js/dashboard-server/client": ["typescript/dashboard-server/src/rpc-client.ts"],
-      "@workhorse-js/dashboard-server/server": ["typescript/dashboard-server/src/server/index.ts"],
-      "@workhorse-js/dashboard-server/standalone": [
+      "@stablemates/workhorse-dashboard": ["typescript/dashboard/src/index.ts"],
+      "@stablemates/workhorse-dashboard/dev": ["typescript/dashboard/src/dev.ts"],
+      "@stablemates/workhorse-dashboard/presentation": ["typescript/dashboard/src/presentation.ts"],
+      "@stablemates/workhorse-dashboard/server": ["typescript/dashboard/src/server.ts"],
+      "@stablemates/workhorse-dashboard/wire": ["typescript/dashboard/src/wire.ts"],
+      "@stablemates/workhorse-dashboard/*": ["typescript/dashboard/src/*"],
+      "@stablemates/workhorse-dashboard-server": ["typescript/dashboard-server/src/index.ts"],
+      "@stablemates/workhorse-dashboard-server/client": [
+        "typescript/dashboard-server/src/rpc-client.ts"
+      ],
+      "@stablemates/workhorse-dashboard-server/server": [
+        "typescript/dashboard-server/src/server/index.ts"
+      ],
+      "@stablemates/workhorse-dashboard-server/standalone": [
         "typescript/dashboard-server/src/server/standalone.ts"
       ],
-      "@workhorse-js/dashboard-server/*": ["typescript/dashboard-server/src/*"],
-      "@workhorse-js/drizzle": ["typescript/drizzle/src/index.ts"],
-      "@workhorse-js/kysely": ["typescript/kysely/src/index.ts"],
-      "@workhorse-js/prisma": ["typescript/prisma/src/index.ts"],
-      "@workhorse-js/typeorm": ["typescript/typeorm/src/index.ts"]
+      "@stablemates/workhorse-dashboard-server/*": ["typescript/dashboard-server/src/*"],
+      "@stablemates/workhorse-drizzle": ["typescript/drizzle/src/index.ts"],
+      "@stablemates/workhorse-kysely": ["typescript/kysely/src/index.ts"],
+      "@stablemates/workhorse-prisma": ["typescript/prisma/src/index.ts"],
+      "@stablemates/workhorse-typeorm": ["typescript/typeorm/src/index.ts"]
     }
   }
 }

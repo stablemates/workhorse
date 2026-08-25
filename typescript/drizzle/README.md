@@ -1,9 +1,9 @@
-# `@workhorse-js/drizzle`
+# `@stablemates/workhorse-drizzle`
 
 Drizzle ORM provider for Workhorse's PostgreSQL protocol.
 
 ```ts
-import { createDrizzleAdapter } from "@workhorse-js/drizzle";
+import { createDrizzleAdapter } from "@stablemates/workhorse-drizzle";
 import { Pool } from "@stablemates/workhorse";
 import { drizzle } from "drizzle-orm/node-postgres";
 

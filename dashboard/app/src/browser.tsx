@@ -5,7 +5,7 @@ import {
   createDashboardClient,
   type DashboardAuthenticationRoutes,
   type DashboardWorkspaceLink,
-} from "@workhorse-js/dashboard-server/client";
+} from "@stablemates/workhorse-dashboard-server/client";
 // oxlint-disable-next-line import/no-unassigned-import -- Browser entrypoint owns the complete package stylesheet.
 import "./styles.css";
 import { WorkhorseThemeProvider } from "./theme.js";

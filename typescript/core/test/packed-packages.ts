@@ -99,8 +99,8 @@ try {
     return path.join(tarballs, entry.tarball);
   };
   const coreTarball = tarballFor("@stablemates/workhorse");
-  const dashboardTarball = tarballFor("@workhorse-js/dashboard");
-  const dashboardServerTarball = tarballFor("@workhorse-js/dashboard-server");
+  const dashboardTarball = tarballFor("@stablemates/workhorse-dashboard");
+  const dashboardServerTarball = tarballFor("@stablemates/workhorse-dashboard-server");
   const dashboardContainer = await readFile(path.join(repository, "Dockerfile.dashboard"), "utf8");
   for (const artifact of [
     "workhorse-core.tgz",
@@ -248,18 +248,18 @@ try {
   );
   await writeFile(
     path.join(consumer, "type-smoke.ts"),
-    `import { createDrizzleAdapter } from "@workhorse-js/drizzle";
-import { createPrismaAdapter } from "@workhorse-js/prisma";
-import { createTypeOrmAdapter } from "@workhorse-js/typeorm";
-import { createKyselyAdapter } from "@workhorse-js/kysely";
+    `import { createDrizzleAdapter } from "@stablemates/workhorse-drizzle";
+import { createPrismaAdapter } from "@stablemates/workhorse-prisma";
+import { createTypeOrmAdapter } from "@stablemates/workhorse-typeorm";
+import { createKyselyAdapter } from "@stablemates/workhorse-kysely";
 import { defineWorkerProcess, Pool } from "@stablemates/workhorse";
-import type { DashboardClient, DashboardProps } from "@workhorse-js/dashboard";
-import { createDashboardHost, dashboardNodeMiddleware } from "@workhorse-js/dashboard/server";
-import type { DashboardNodeMiddleware } from "@workhorse-js/dashboard/server";
-import { startDashboardServer as startStandaloneDashboard } from "@workhorse-js/dashboard/standalone";
-import type { DashboardCommandOptions, DashboardStandaloneModule } from "@workhorse-js/dashboard-contract";
-import type { DashboardTaskCounts } from "@workhorse-js/dashboard/wire";
-import { describeRetryPolicy } from "@workhorse-js/dashboard/presentation";
+import type { DashboardClient, DashboardProps } from "@stablemates/workhorse-dashboard";
+import { createDashboardHost, dashboardNodeMiddleware } from "@stablemates/workhorse-dashboard/server";
+import type { DashboardNodeMiddleware } from "@stablemates/workhorse-dashboard/server";
+import { startDashboardServer as startStandaloneDashboard } from "@stablemates/workhorse-dashboard/standalone";
+import type { DashboardCommandOptions, DashboardStandaloneModule } from "@stablemates/workhorse-dashboard-contract";
+import type { DashboardTaskCounts } from "@stablemates/workhorse-dashboard/wire";
+import { describeRetryPolicy } from "@stablemates/workhorse-dashboard/presentation";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { PrismaClient, Prisma } from "@prisma/client";
 import type { DataSource, EntityManager } from "typeorm";
@@ -340,11 +340,11 @@ datasource db {
     path.join(consumer, "dashboard-auth.mjs"),
     `import assert from "node:assert/strict";
 import { scryptSync } from "node:crypto";
-import { createDashboardClient } from "@workhorse-js/dashboard/client";
-import { createDashboardHost } from "@workhorse-js/dashboard/server";
+import { createDashboardClient } from "@stablemates/workhorse-dashboard/client";
+import { createDashboardHost } from "@stablemates/workhorse-dashboard/server";
 
 globalThis.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
-const { Dashboard } = await import("@workhorse-js/dashboard");
+const { Dashboard } = await import("@stablemates/workhorse-dashboard");
 assert.equal(typeof Dashboard, "function");
 const salt = Buffer.from("packed-dashboard-auth-salt");
 const passwordHash = \`scrypt-v1$\${salt.toString("base64url")}$\${scryptSync("correct horse", salt, 32).toString("base64url")}\`;
@@ -444,7 +444,7 @@ assert.equal(loggedOut.status, 302);
   await writeFile(
     path.join(consumer, "dashboard-development.mjs"),
     `import assert from "node:assert/strict";
-import { createDashboardDevServer } from "@workhorse-js/dashboard/dev";
+import { createDashboardDevServer } from "@stablemates/workhorse-dashboard/dev";
 
 const development = await createDashboardDevServer();
 try {

@@ -13,7 +13,7 @@ function assertIncludesTokens(body: string, page: string, tokens: readonly strin
   }
 }
 
-const site = spawn("pnpm", ["--filter", "@workhorse-js/site", "start"], {
+const site = spawn("pnpm", ["--filter", "@stablemates/workhorse-site", "start"], {
   cwd: repositoryRoot,
   env: {
     ...process.env,

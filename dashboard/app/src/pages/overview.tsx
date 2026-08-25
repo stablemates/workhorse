@@ -4,7 +4,7 @@ import type {
   DashboardSystemRetention,
   DashboardSystemStorage,
   DashboardSystemWindow,
-} from "@workhorse-js/dashboard-server/wire";
+} from "@stablemates/workhorse-dashboard-server/wire";
 import {
   Badge,
   Box,

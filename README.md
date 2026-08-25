@@ -75,7 +75,7 @@ Workhorse is available under the [MIT License](LICENSE).
 - a durable worker registry that discovers the live fleet, reports declared concurrency, slot use,
   and draining, and carries cooperative operator pause to workers in any process;
 - separate Drizzle, Prisma, TypeORM, and Kysely integration packages;
-- a separately packaged `@workhorse-js/dashboard` React operator dashboard with a framework-neutral
+- a separately packaged `@stablemates/workhorse-dashboard` React operator dashboard with a framework-neutral
   request host, a Connect-style Node bridge, an injected transport-neutral client boundary,
   package-owned styles/assets, and audited local controls;
 - `workhorse init` project scaffolding, `workhorse schema install`/`status`, and a standalone
@@ -674,11 +674,11 @@ one-second maintenance cadence makes sub-second durable waits inefficient. Use
 
 ### Database provider packages
 
-`@workhorse-js/drizzle` adapts node-postgres Drizzle databases and caller-owned transactions without
+`@stablemates/workhorse-drizzle` adapts node-postgres Drizzle databases and caller-owned transactions without
 adding Drizzle to the core package:
 
 ```ts
-import { createDrizzleAdapter } from "@workhorse-js/drizzle";
+import { createDrizzleAdapter } from "@stablemates/workhorse-drizzle";
 import { drizzle } from "drizzle-orm/node-postgres";
 
 const db = drizzle({ client: pool });
@@ -690,13 +690,13 @@ await db.transaction(async (tx) => {
 });
 ```
 
-`@workhorse-js/prisma`, `@workhorse-js/typeorm`, and `@workhorse-js/kysely` expose the same transaction
+`@stablemates/workhorse-prisma`, `@stablemates/workhorse-typeorm`, and `@stablemates/workhorse-kysely` expose the same transaction
 boundary through each provider's transaction object. Their workers can use an explicitly supplied
 node-postgres pool for notification-assisted dispatch, or poll when no pool is available.
 
 ### Mounting the dashboard in any host
 
-Dashboard behavior lives in a framework-neutral host in `@workhorse-js/dashboard/server` that takes a
+Dashboard behavior lives in a framework-neutral host in `@stablemates/workhorse-dashboard/server` that takes a
 `Request` and returns a `Response`, or `null` when the request is not its own. Fetch-native hosts
 (Hono, Next.js route handlers, SvelteKit, Nitro) call `host.handle(request)` directly;
 Connect-style hosts (Express, Connect, Fastify via `@fastify/middie`) use `dashboardNodeMiddleware`.

@@ -1,5 +1,5 @@
 {
-  "name": "@workhorse-js/kysely",
+  "name": "@stablemates/workhorse-kysely",
   "version": "0.1.0",
   "description": "Kysely provider for Workhorse",
   "homepage": "https://workhorse.run",

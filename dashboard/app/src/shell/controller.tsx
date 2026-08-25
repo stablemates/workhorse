@@ -8,7 +8,7 @@ import {
   discardBackgroundRefresh,
   type DashboardRefreshIntervalValue,
 } from "../refresh-policy.js";
-import type { DashboardDemoTools } from "@workhorse-js/dashboard-server";
+import type { DashboardDemoTools } from "@stablemates/workhorse-dashboard-server";
 import {
   dashboardRefreshBlockers,
   useRefreshBlocker,
@@ -33,7 +33,7 @@ import type {
   DashboardJobDetail,
   DashboardSystemWindow,
   DashboardTaskCounts,
-} from "@workhorse-js/dashboard-server/wire";
+} from "@stablemates/workhorse-dashboard-server/wire";
 import {
   cancelResultAppliesTo,
   clearPendingCancel,

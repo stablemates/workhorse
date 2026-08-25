@@ -3,7 +3,7 @@ import { readFile as readFileAsync } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { SeverityNumber, logs } from "@opentelemetry/api-logs";
 import { RPCHandler } from "@orpc/server/fetch";
-import type { DashboardSingleAdminOptions } from "@workhorse-js/dashboard-contract";
+import type { DashboardSingleAdminOptions } from "@stablemates/workhorse-dashboard-contract";
 import { Admin, assertSchemaCompatible, Queue, type Queryable } from "@stablemates/workhorse";
 import type { MaintenanceLoopCadences } from "../wire.js";
 import { dashboardAssetsDirectory } from "./assets.js";
@@ -67,7 +67,7 @@ export interface DashboardHostOptions {
   /**
    * Serve the browser entry from source instead of the packaged bundle.
    *
-   * Supply `createDashboardDevServer()` from `@workhorse-js/dashboard/dev` in development. The HTML
+   * Supply `createDashboardDevServer()` from `@stablemates/workhorse-dashboard/dev` in development. The HTML
    * still goes through this host and the same `renderDashboardHtml` contract; only the module
    * source changes, which is what makes one origin able to hot-reload without a second server.
    */
@@ -196,7 +196,7 @@ function logRpcRequest(
       : durationMs >= SLOW_RPC_REQUEST_MS
         ? rpcLogRecords.slow
         : rpcLogRecords.completed;
-  logs.getLogger("@workhorse-js/dashboard").emit({
+  logs.getLogger("@stablemates/workhorse-dashboard").emit({
     ...record,
     attributes: {
       "rpc.system": "orpc",
@@ -302,7 +302,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
     url: workspace.basePath,
   }));
   if (workspaces.size > 0) {
-    logs.getLogger("@workhorse-js/dashboard").emit({
+    logs.getLogger("@stablemates/workhorse-dashboard").emit({
       severityNumber: SeverityNumber.INFO,
       severityText: "INFO",
       eventName: "workhorse.dashboard.workspaces_configured",

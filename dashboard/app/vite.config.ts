@@ -1,7 +1,7 @@
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
 import { defaultClientConditions, defineConfig } from "vite";
-import { renderDashboardHtml } from "@workhorse-js/dashboard-server/server";
+import { renderDashboardHtml } from "@stablemates/workhorse-dashboard-server/server";
 
 /**
  * Build and development configuration for the dashboard's own browser application.

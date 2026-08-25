@@ -1,5 +1,5 @@
 {
-  "name": "@workhorse-js/prisma",
+  "name": "@stablemates/workhorse-prisma",
   "version": "0.1.0",
   "description": "Prisma ORM provider for Workhorse",
   "homepage": "https://workhorse.run",

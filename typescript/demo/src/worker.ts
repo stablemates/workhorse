@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { defineWorkerProcess } from "@stablemates/workhorse";
-import { createDrizzleAdapter } from "@workhorse-js/drizzle";
+import { createDrizzleAdapter } from "@stablemates/workhorse-drizzle";
 import { Pool } from "pg";
 import {
   DEMO_QUEUE,

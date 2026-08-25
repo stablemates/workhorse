@@ -109,7 +109,7 @@ The archive also carries `login.html` with `<!--__WORKHORSE_LOGIN_ERROR__-->` as
 placeholder. A backend replaces it with either an empty string or the generic invalid-credential
 paragraph; session and password verification remain language-specific.
 
-`dashboard/app` keeps its build-time dependency on `@workhorse-js/dashboard-server` because the
+`dashboard/app` keeps its build-time dependency on `@stablemates/workhorse-dashboard-server` because the
 Vite development transform invokes the reference server's `renderDashboardHtml`. The compiled
 archive contains no server module, so Go and Python consumers have no Node.js dependency.
 

@@ -8,7 +8,7 @@ import type {
   DashboardSystemQueueRow,
   DashboardSystemRetryBucket,
   DashboardWorkerRow,
-} from "@workhorse-js/dashboard-server/wire";
+} from "@stablemates/workhorse-dashboard-server/wire";
 import type { QueueHealthReason } from "@stablemates/workhorse";
 
 const DAY_MS = 86_400_000;

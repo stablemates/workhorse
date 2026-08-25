@@ -1,4 +1,4 @@
-import type { DashboardTaskFilter } from "@workhorse-js/dashboard-server/wire";
+import type { DashboardTaskFilter } from "@stablemates/workhorse-dashboard-server/wire";
 import { BarChart } from "@mantine/charts";
 import { Group, Paper, SegmentedControl, Text } from "@mantine/core";
 import { useEffect, useState } from "react";

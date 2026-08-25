@@ -2,7 +2,7 @@ import type {
   DashboardDemoFeature,
   DashboardJobRow,
   DashboardTasksPage,
-} from "@workhorse-js/dashboard-server/wire";
+} from "@stablemates/workhorse-dashboard-server/wire";
 import { taskPageSizes, type TaskLocationState, type TaskPageSize } from "../task-location.js";
 import { type RunNowFeedback } from "../run-now.js";
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";

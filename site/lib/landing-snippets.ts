@@ -1009,7 +1009,7 @@ func redriveBilling(ctx context.Context, admin *workhorse.Admin) error {
 	return nil
 }`,
 
-  operateDashboard: `import { createDashboardHost } from "@workhorse-js/dashboard/server";
+  operateDashboard: `import { createDashboardHost } from "@stablemates/workhorse-dashboard/server";
 
 const host = createDashboardHost({
   path: "/workhorse",
@@ -1148,7 +1148,7 @@ func pauseBilling(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }`,
 
-  ormDrizzle: `import { createDrizzleAdapter } from "@workhorse-js/drizzle";
+  ormDrizzle: `import { createDrizzleAdapter } from "@stablemates/workhorse-drizzle";
 import { drizzle } from "drizzle-orm/node-postgres";
 
 const db = drizzle({ client: pool });
@@ -1162,7 +1162,7 @@ await db.transaction(async (tx) => {
 });`,
 
   ormPrisma: `import { PrismaClient } from "@prisma/client";
-import { createPrismaAdapter } from "@workhorse-js/prisma";
+import { createPrismaAdapter } from "@stablemates/workhorse-prisma";
 
 const prisma = new PrismaClient();
 const workhorse = createPrismaAdapter(prisma);
@@ -1174,7 +1174,7 @@ await prisma.$transaction(async (tx) => {
   });
 });`,
 
-  ormTypeorm: `import { createTypeOrmAdapter } from "@workhorse-js/typeorm";
+  ormTypeorm: `import { createTypeOrmAdapter } from "@stablemates/workhorse-typeorm";
 
 const workhorse = createTypeOrmAdapter(dataSource);
 
@@ -1185,7 +1185,7 @@ await dataSource.transaction(async (manager) => {
   });
 });`,
 
-  ormKysely: `import { createKyselyAdapter } from "@workhorse-js/kysely";
+  ormKysely: `import { createKyselyAdapter } from "@stablemates/workhorse-kysely";
 
 const workhorse = createKyselyAdapter(database);
 

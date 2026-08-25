@@ -5,7 +5,7 @@ description: Adapt a Prisma client and enqueue jobs inside caller-owned interact
 
 Your application already writes through Prisma. When a request creates an account and enqueues a
 follow-up job, those two writes must commit together — a job for a row that rolled back is a bug,
-and a committed row with no job is a silent gap. `@workhorse-js/prisma` closes that gap: it converts
+and a committed row with no job is a silent gap. `@stablemates/workhorse-prisma` closes that gap: it converts
 Prisma clients and interactive transaction clients into the core `Queryable` protocol, so
 `Queue.enqueue` runs inside the same transaction as your Prisma writes.
 
@@ -17,7 +17,7 @@ owns its versioned SQL functions.
 Install the integration beside Prisma Client.
 
 ```bash
-pnpm add @workhorse-js/prisma @prisma/client
+pnpm add @stablemates/workhorse-prisma @prisma/client
 ```
 
 Pass the client to `createPrismaAdapter`. The close callback is optional because the adapter does
@@ -25,7 +25,7 @@ not disconnect caller-owned clients by default.
 
 ```ts
 import { PrismaClient } from "@prisma/client";
-import { createPrismaAdapter } from "@workhorse-js/prisma";
+import { createPrismaAdapter } from "@stablemates/workhorse-prisma";
 
 const prisma = new PrismaClient();
 const workhorse = createPrismaAdapter(prisma, {
