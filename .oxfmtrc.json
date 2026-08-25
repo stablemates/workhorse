@@ -2,9 +2,12 @@
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
   "ignorePatterns": [
     "dashboard/v1/*.json",
+    "docs/benchmarks/results/2026-08-24-dashboard-read-surface.json",
     "docs/research/**",
     "migrations/**",
     "pnpm-lock.yaml",
+    "site/content/docs/examples.mdx",
+    "site/content/docs/quickstart.mdx",
     "site/src/routeTree.gen.ts"
   ]
 }
