@@ -14,6 +14,11 @@
     "defaultJobValueMaxBytes": 1048576,
     "maxEnqueueBatchSize": 1000
   },
+  "fixtureCoverage": {
+    "requests": ["keyed-enqueue-request", "minimal-enqueue-request"],
+    "schedules": ["recurring-schedule-definition", "minimal-schedule-definition"],
+    "interpreter": ["matcher-semantics"]
+  },
   "coverage": [
     "enqueue",
     "claim",

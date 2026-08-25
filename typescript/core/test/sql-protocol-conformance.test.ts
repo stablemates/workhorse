@@ -12,9 +12,13 @@ import type {
 } from "../src/index.js";
 import {
   assertFixtureValue,
+  assertProtocolErrorValue,
   loadSqlProtocolFixtures,
+  normalizeFixtureValue,
   assertSqlProtocolCompatible,
   verifySqlProtocolFixtures,
+  verifyFixtureExecution,
+  readPointer,
 } from "../../../scripts/verify-sql-protocol.js";
 import type {
   BatchRuntimeFixture,
@@ -580,6 +584,32 @@ const adapterJob: ClaimedJob<Json> = {
   leaseExpiresAt: new Date("2030-01-01T00:00:30.000Z"),
 };
 
+function materializeInterpreterValue(value: JsonValue): unknown {
+  if (Array.isArray(value)) return value.map(materializeInterpreterValue);
+  if (value && typeof value === "object") {
+    if (Object.keys(value).length === 2 && "$native" in value && "value" in value) {
+      const native = String(value.$native);
+      switch (native) {
+        case "integer":
+        case "number":
+          return Number(value.value);
+        case "timestamp":
+          return new Date(String(value.value));
+        case "uuid":
+          return String(value.value);
+        case "json":
+          return value.value;
+        default:
+          throw new Error(`Unknown interpreter native value ${native}`);
+      }
+    }
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, materializeInterpreterValue(item)]),
+    );
+  }
+  return value;
+}
+
 describe("SQL protocol conformance fixtures", () => {
   it("declare the stable protocol, compatibility range, and complete lifecycle coverage", async () => {
     const fixtures = await loadSqlProtocolFixtures(repository);
@@ -825,6 +855,7 @@ describe("SQL protocol conformance fixtures", () => {
 
   it("pins TypeScript request serialization to the language-neutral contract", async () => {
     const fixtures = await loadSqlProtocolFixtures(repository);
+    const executed = new Set<string>();
     await requestDatabase.setup();
     try {
       for (const fixture of fixtures.requests) {
@@ -874,10 +905,105 @@ describe("SQL protocol conformance fixtures", () => {
             tags: fixture.postgres.tags,
           },
         ]);
+        executed.add(fixture.id);
       }
+      verifyFixtureExecution(
+        fixtures.manifest,
+        "requests",
+        fixtures.requests.map((fixture) => fixture.id),
+        executed,
+      );
     } finally {
       await requestDatabase.teardown();
     }
+  });
+
+  it("pins TypeScript schedule serialization to every language-neutral fixture", async () => {
+    const fixtures = await loadSqlProtocolFixtures(repository);
+    const executed = new Set<string>();
+    for (const fixture of fixtures.schedules) {
+      let parameters: readonly unknown[] | undefined;
+      const database: Queryable = {
+        async query() {
+          parameters = arguments[1];
+          return { rows: [] } as never;
+        },
+      };
+      const queue = new Queue(database, fixture.defaultQueue);
+      await queue.syncSchedules(fixture.namespace, fixture.application as never, {
+        prune: fixture.prune,
+      });
+      expect(parameters?.[0]).toBe(fixture.namespace);
+      assertFixtureValue(
+        fixture.postgres,
+        JSON.parse(String(parameters?.[1])) as JsonValue,
+        `${fixture.id}.postgres`,
+        new Map(),
+      );
+      expect(parameters?.[2]).toBe(fixture.prune);
+      executed.add(fixture.id);
+    }
+    verifyFixtureExecution(
+      fixtures.manifest,
+      "schedules",
+      fixtures.schedules.map((fixture) => fixture.id),
+      executed,
+    );
+  });
+
+  it("runs every shared interpreter self-test through the TypeScript matcher", async () => {
+    const fixtures = await loadSqlProtocolFixtures(repository);
+    const executed = new Set<string>();
+    for (const fixture of fixtures.interpreter) {
+      const references = new Map<string, JsonValue>();
+      for (const step of fixture.steps) {
+        const actual = normalizeFixtureValue(materializeInterpreterValue(step.actual));
+        const match = () =>
+          assertFixtureValue(step.expect, actual, `${fixture.id}/${step.id}`, references);
+        let rejection: unknown;
+        try {
+          match();
+        } catch (error) {
+          rejection = error;
+        }
+        if (step.rejects && rejection === undefined) {
+          throw new Error(`${fixture.id}/${step.id} expected matcher rejection`);
+        }
+        if (!step.rejects && rejection !== undefined) throw rejection;
+        for (const [name, pointer] of Object.entries(step.capture ?? {})) {
+          references.set(name, readPointer(actual, pointer, `${fixture.id}/${step.id}`));
+        }
+      }
+      for (const error of fixture.errors) {
+        assertProtocolErrorValue(
+          error.expect,
+          error.actual,
+          `${fixture.id}/${error.id}`,
+          references,
+        );
+      }
+      executed.add(fixture.id);
+    }
+    expect(() =>
+      verifyFixtureExecution(
+        fixtures.manifest,
+        "interpreter",
+        fixtures.interpreter.map((fixture) => fixture.id),
+        executed,
+      ),
+    ).not.toThrow();
+  });
+
+  it("rejects an unexecuted declared fixture", async () => {
+    const fixtures = await loadSqlProtocolFixtures(repository);
+    expect(() =>
+      verifyFixtureExecution(
+        fixtures.manifest,
+        "requests",
+        fixtures.requests.map((fixture) => fixture.id),
+        new Set([fixtures.requests[0]!.id]),
+      ),
+    ).toThrow("requests fixtures were not executed: minimal-enqueue-request");
   });
 
   it("binds and maps every TypeScript lifecycle adapter at the SQL boundary", async () => {

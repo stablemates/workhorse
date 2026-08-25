@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import pytest
+from protocol_fixtures import assert_fixture_execution, read_protocol_fixture
+from test_protocol_conformance import assert_value
 
 from workhorse import EnqueueOptions, EnqueueRequest, Idempotency, ProtocolCompatibilityError, Queue
-
-REPOSITORY = Path(__file__).parents[2]
 
 
 class Cursor:
@@ -43,41 +42,56 @@ class Connection:
         return cursor
 
 
-def test_serializes_the_shared_request_fixture_and_returns_the_canonical_result() -> None:
-    fixture = json.loads((REPOSITORY / "protocol/v1/requests.json").read_text())[0]
-    connection = Connection(
-        [
-            [{"version": 1}],
+def test_serializes_every_shared_request_fixture_and_returns_the_canonical_result() -> None:
+    fixtures = read_protocol_fixture("requests.json")
+    executed: set[str] = set()
+    for fixture in fixtures:
+        connection = Connection(
             [
-                {
-                    "ordinal": 1,
-                    "job_id": "00000000-0000-4000-8000-000000000001",
-                    "outcome": "accepted",
-                    "reason": None,
-                }
-            ],
-        ]
-    )
+                [{"version": 1}],
+                [
+                    {
+                        "ordinal": 1,
+                        "job_id": "00000000-0000-4000-8000-000000000001",
+                        "outcome": "accepted",
+                        "reason": None,
+                    }
+                ],
+            ]
+        )
+        application = fixture["application"]
+        options = application["options"]
+        idempotency = options.get("idempotency")
+        result = Queue(connection).enqueue_with_result(
+            application["type"],
+            application["payload"],
+            EnqueueOptions(
+                queue=options.get("queue"),
+                priority=options.get("priority", 0),
+                concurrency_key=options.get("concurrencyKey"),
+                max_attempts=options.get("maxAttempts", 25),
+                retry_policy=options.get("retryPolicy"),
+                tags=tuple(options.get("tags", [])),
+                idempotency=(
+                    Idempotency(
+                        scope=idempotency["scope"],
+                        key=idempotency["key"],
+                        ttl_ms=idempotency["ttlMs"],
+                    )
+                    if idempotency is not None
+                    else None
+                ),
+            ),
+        )
 
-    result = Queue(connection).enqueue_with_result(
-        fixture["application"]["type"],
-        fixture["application"]["payload"],
-        EnqueueOptions(
-            queue="protocol-contract",
-            priority=70,
-            concurrency_key="acct-1",
-            max_attempts=3,
-            retry_policy={"type": "fixed", "delayMs": 25},
-            tags=("conformance",),
-            idempotency=Idempotency(scope="protocol", key="serialize", ttl_ms=60_000),
-        ),
-    )
-
-    assert result.job_id == "00000000-0000-4000-8000-000000000001"
-    assert result.outcome == "accepted"
-    assert json.loads(connection.calls[1][1][0]) == [fixture["postgres"]]
-    assert connection.calls[0][0].startswith("SELECT version FROM workhorse.schema_version")
-    assert "workhorse.enqueue_many_v1" in connection.calls[1][0]
+        assert result.job_id == "00000000-0000-4000-8000-000000000001"
+        assert result.outcome == "accepted"
+        serialized = json.loads(connection.calls[1][1][0])
+        assert_value([fixture["postgres"]], serialized, {}, fixture["id"])
+        assert connection.calls[0][0].startswith("SELECT version FROM workhorse.schema_version")
+        assert "workhorse.enqueue_many_v1" in connection.calls[1][0]
+        executed.add(fixture["id"])
+    assert_fixture_execution("requests", fixtures, executed)
 
 
 def test_refuses_an_incompatible_schema_before_enqueueing() -> None:

@@ -11,6 +11,10 @@ Objects containing only `$ref` reuse a captured value. Objects containing only `
 dynamic PostgreSQL value of `uuid`, `timestamp`, `integer`, or `string` while all surrounding JSON
 remains exact.
 
+`v1/interpreter.json` tests the independent fixture interpreters without involving PostgreSQL. It
+pins matcher acceptance and rejection, normalized values, reuse of captured values, and structured
+error matching. TypeScript, Python, and Go must execute every interpreter fixture.
+
 The scenarios also pin database-owned maintenance orchestration. Every language executes
 `run_maintenance_v1` and verifies the ordered slow phase list, so a worker SDK cannot claim
 retention participation while depending on another language's process.
@@ -26,8 +30,12 @@ TypeScript suite executes these mappings through `Queue`, so serialization chang
 SQL projection, cast, argument-order, and arity changes.
 
 `v1/schedules.json` maps recurring schedule definitions to the exact desired-state JSON sent to
-PostgreSQL. Python and Go execute the same mapping through their public queue clients, so their
-defaults and field names cannot drift apart.
+PostgreSQL. TypeScript, Python, and Go execute every mapping through their public queue clients, so
+their defaults and field names cannot drift apart.
+
+`manifest.fixtureCoverage` lists every fixture identifier from `requests.json`, `schedules.json`,
+and `interpreter.json`. Each language compares that declaration with both the file contents and the
+identifiers its runner executed, so adding or skipping a fixture fails conformance.
 
 `v1/cron.md` defines the cron dialect, IANA wall-clock rules, and bounded catch-up contract.
 `v1/cron-occurrences.json` executes that contract through PostgreSQL, including sparse dates,

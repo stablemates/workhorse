@@ -82,5 +82,46 @@
         "sensitiveResultKeys": []
       }
     ]
+  },
+  {
+    "id": "minimal-schedule-definition",
+    "namespace": "maintenance",
+    "defaultQueue": "default",
+    "prune": false,
+    "application": [
+      {
+        "name": "daily-cleanup",
+        "schedule": "0 3 * * *",
+        "timezone": "UTC",
+        "enabled": true,
+        "job": {
+          "type": "maintenance.cleanup",
+          "payload": null,
+          "priority": 0,
+          "maxAttempts": 25,
+          "retryPolicy": null
+        }
+      }
+    ],
+    "postgres": [
+      {
+        "name": "daily-cleanup",
+        "schedule": "0 3 * * *",
+        "timezone": "UTC",
+        "enabled": true,
+        "queue": "default",
+        "priority": 0,
+        "concurrencyKey": null,
+        "type": "maintenance.cleanup",
+        "payload": null,
+        "maxAttempts": 25,
+        "retryPolicy": null,
+        "contractVersion": null,
+        "payloadMaxBytes": 1048576,
+        "resultMaxBytes": 1048576,
+        "sensitivePayloadKeys": [],
+        "sensitiveResultKeys": []
+      }
+    ]
   }
 ]

@@ -34,6 +34,7 @@ type protocolFixtureManifest struct {
 	SupportedClientProtocol protocolFixtureVersionRange `json:"supportedClientProtocol"`
 	Coverage                []string                    `json:"coverage"`
 	RuntimeCoverage         []string                    `json:"runtimeCoverage"`
+	FixtureCoverage         map[string][]string         `json:"fixtureCoverage"`
 }
 
 type protocolFixtureVersionRange struct {
@@ -65,6 +66,22 @@ type protocolErrorExpectation struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Detail  any    `json:"detail"`
+}
+
+type interpreterFixture struct {
+	ID    string `json:"id"`
+	Steps []struct {
+		ID      string            `json:"id"`
+		Expect  any               `json:"expect"`
+		Actual  any               `json:"actual"`
+		Rejects bool              `json:"rejects"`
+		Capture map[string]string `json:"capture"`
+	} `json:"steps"`
+	Errors []struct {
+		ID     string                   `json:"id"`
+		Expect protocolErrorExpectation `json:"expect"`
+		Actual protocolErrorExpectation `json:"actual"`
+	} `json:"errors"`
 }
 
 func matchFixtureType(kind string, actual any) error {
@@ -113,9 +130,16 @@ func isInteger(value any) bool {
 }
 
 func isNumber(value any) bool {
-	switch value.(type) {
-	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, json.Number:
+	switch value := value.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 		return true
+	case float32:
+		return !math.IsNaN(float64(value)) && !math.IsInf(float64(value), 0)
+	case float64:
+		return !math.IsNaN(value) && !math.IsInf(value, 0)
+	case json.Number:
+		number, err := value.Float64()
+		return err == nil && !math.IsNaN(number) && !math.IsInf(number, 0)
 	default:
 		return false
 	}
@@ -136,6 +160,35 @@ func verifyFixtureCoverage(manifest protocolFixtureManifest, coverage map[string
 	}
 	if len(missing) > 0 {
 		return errors.New("SQL protocol fixtures lack coverage: " + strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+func verifyNamedFixtureCoverage(
+	manifest protocolFixtureManifest,
+	kind string,
+	defined []string,
+	executed map[string]struct{},
+) error {
+	expected := make(map[string]struct{}, len(manifest.FixtureCoverage[kind]))
+	for _, id := range manifest.FixtureCoverage[kind] {
+		expected[id] = struct{}{}
+	}
+	definedSet := make(map[string]struct{}, len(defined))
+	for _, id := range defined {
+		definedSet[id] = struct{}{}
+	}
+	if !reflect.DeepEqual(definedSet, expected) {
+		return fmt.Errorf("%s fixture manifest differs: defined %v, expected %v", kind, defined, manifest.FixtureCoverage[kind])
+	}
+	missing := make([]string, 0)
+	for _, id := range manifest.FixtureCoverage[kind] {
+		if _, ok := executed[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%s fixtures were not executed: %s", kind, strings.Join(missing, ", "))
 	}
 	return nil
 }
@@ -176,6 +229,19 @@ func TestConformanceCoverageRejectsMissingCapability(t *testing.T) {
 	}
 }
 
+func TestConformanceCoverageRejectsUnexecutedDeclaredFixture(t *testing.T) {
+	manifest := readFixture[protocolFixtureManifest](t, "manifest.json")
+	err := verifyNamedFixtureCoverage(
+		manifest,
+		"requests",
+		manifest.FixtureCoverage["requests"],
+		map[string]struct{}{"keyed-enqueue-request": {}},
+	)
+	if err == nil || err.Error() != "requests fixtures were not executed: minimal-enqueue-request" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestConformanceValueMatcherRejectsUnknownReference(t *testing.T) {
 	err := matchFixtureValue(
 		map[string]any{"$ref": "missing"},
@@ -185,6 +251,109 @@ func TestConformanceValueMatcherRejectsUnknownReference(t *testing.T) {
 	)
 	if err == nil || err.Error() != `fixture references unknown capture "missing"` {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestConformanceRunsEverySharedInterpreterSelfTest(t *testing.T) {
+	fixtures := readFixture[[]interpreterFixture](t, "interpreter.json")
+	executed := make(map[string]struct{}, len(fixtures))
+	for _, fixture := range fixtures {
+		t.Run(fixture.ID, func(t *testing.T) {
+			references := make(map[string]any)
+			for _, step := range fixture.Steps {
+				materialized, err := materializeInterpreterValue(step.Actual)
+				if err != nil {
+					t.Fatalf("%s/%s materialize: %v", fixture.ID, step.ID, err)
+				}
+				actual, err := normalizeProtocolValue(materialized)
+				if err != nil {
+					t.Fatalf("%s/%s normalize: %v", fixture.ID, step.ID, err)
+				}
+				err = matchFixtureValue(step.Expect, actual, references, fixture.ID+"/"+step.ID)
+				if step.Rejects {
+					if err == nil {
+						t.Fatalf("%s/%s expected matcher rejection", fixture.ID, step.ID)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				for name, pointer := range step.Capture {
+					references[name], err = readFixturePointer(actual, pointer)
+					if err != nil {
+						t.Fatalf("%s/%s capture %s: %v", fixture.ID, step.ID, name, err)
+					}
+				}
+			}
+			for _, errorFixture := range fixture.Errors {
+				location := fixture.ID + "/" + errorFixture.ID
+				if err := matchProtocolErrorValue(errorFixture.Expect, errorFixture.Actual, references, location); err != nil {
+					t.Fatal(err)
+				}
+			}
+			executed[fixture.ID] = struct{}{}
+		})
+	}
+	defined := make([]string, len(fixtures))
+	for index, fixture := range fixtures {
+		defined[index] = fixture.ID
+	}
+	manifest := readFixture[protocolFixtureManifest](t, "manifest.json")
+	if err := verifyNamedFixtureCoverage(manifest, "interpreter", defined, executed); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func materializeInterpreterValue(value any) (any, error) {
+	switch value := value.(type) {
+	case map[string]any:
+		if len(value) == 2 {
+			if native, ok := value["$native"].(string); ok {
+				source, exists := value["value"]
+				if !exists {
+					return nil, errors.New("native interpreter value has no value")
+				}
+				switch native {
+				case "integer":
+					return json.Number(fmt.Sprint(source)), nil
+				case "number":
+					if fmt.Sprint(source) == "NaN" {
+						return math.NaN(), nil
+					}
+					number, err := strconv.ParseFloat(fmt.Sprint(source), 64)
+					return number, err
+				case "timestamp":
+					return time.Parse(time.RFC3339Nano, fmt.Sprint(source))
+				case "uuid":
+					return fmt.Sprint(source), nil
+				case "json":
+					encoded, err := json.Marshal(source)
+					return encoded, err
+				default:
+					return nil, fmt.Errorf("unknown interpreter native value %q", native)
+				}
+			}
+		}
+		result := make(map[string]any, len(value))
+		for key, item := range value {
+			materialized, err := materializeInterpreterValue(item)
+			if err != nil {
+				return nil, err
+			}
+			result[key] = materialized
+		}
+		return result, nil
+	case []any:
+		result := make([]any, len(value))
+		for index, item := range value {
+			materialized, err := materializeInterpreterValue(item)
+			if err != nil {
+				return nil, err
+			}
+			result[index] = materialized
+		}
+		return result, nil
+	default:
+		return value, nil
 	}
 }
 
@@ -553,26 +722,37 @@ func assertProtocolDatabaseError(
 	if !errors.As(err, &databaseError) {
 		t.Fatalf("%s expected PostgreSQL error, received %T: %v", location, err, err)
 	}
-	if databaseError.Code != expected.Code {
-		t.Errorf("%s SQLSTATE: expected %s, received %s", location, expected.Code, databaseError.Code)
+	actual := protocolErrorExpectation{Code: databaseError.Code, Message: databaseError.Message}
+	if databaseError.Detail != "" {
+		if err := decodeJSON([]byte(databaseError.Detail), &actual.Detail); err != nil {
+			t.Fatalf("%s detail: %v", location, err)
+		}
 	}
-	if databaseError.Message != expected.Message {
-		t.Errorf("%s message: expected %q, received %q", location, expected.Message, databaseError.Message)
-	}
-	if expected.Detail == nil {
-		return
-	}
-	var detail any
-	if err := decodeJSON([]byte(databaseError.Detail), &detail); err != nil {
-		t.Fatalf("%s detail: %v", location, err)
-	}
-	normalized, err := normalizeProtocolValue(detail)
-	if err != nil {
-		t.Fatalf("%s detail: %v", location, err)
-	}
-	if err := matchFixtureValue(expected.Detail, normalized, references, location+".detail"); err != nil {
+	if err := matchProtocolErrorValue(expected, actual, references, location); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func matchProtocolErrorValue(
+	expected protocolErrorExpectation,
+	actual protocolErrorExpectation,
+	references map[string]any,
+	location string,
+) error {
+	if actual.Code != expected.Code {
+		return fmt.Errorf("%s SQLSTATE: expected %s, received %s", location, expected.Code, actual.Code)
+	}
+	if actual.Message != expected.Message {
+		return fmt.Errorf("%s message: expected %q, received %q", location, expected.Message, actual.Message)
+	}
+	if expected.Detail == nil {
+		return nil
+	}
+	normalized, err := normalizeProtocolValue(actual.Detail)
+	if err != nil {
+		return fmt.Errorf("%s detail: %w", location, err)
+	}
+	return matchFixtureValue(expected.Detail, normalized, references, location+".detail")
 }
 
 func readFixturePointer(value any, pointer string) (any, error) {

@@ -174,7 +174,9 @@ func TestQueueSatisfiesSharedRequestFixturesWithinCurrentScope(t *testing.T) {
 		Postgres map[string]any `json:"postgres"`
 	}
 
-	for _, fixture := range readFixture[[]requestFixture](t, "requests.json") {
+	fixtures := readFixture[[]requestFixture](t, "requests.json")
+	executed := make(map[string]struct{}, len(fixtures))
+	for _, fixture := range fixtures {
 		t.Run(fixture.ID, func(t *testing.T) {
 			executor := &queueExecutor{responses: [][]workhorse.Row{
 				{{"version": int64(1)}},
@@ -211,12 +213,22 @@ func TestQueueSatisfiesSharedRequestFixturesWithinCurrentScope(t *testing.T) {
 			); err != nil {
 				t.Fatal(err)
 			}
+			executed[fixture.ID] = struct{}{}
 		})
+	}
+	defined := make([]string, len(fixtures))
+	for index, fixture := range fixtures {
+		defined[index] = fixture.ID
+	}
+	manifest := readFixture[protocolFixtureManifest](t, "manifest.json")
+	if err := verifyNamedFixtureCoverage(manifest, "requests", defined, executed); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestQueueSerializesSharedScheduleFixture(t *testing.T) {
+func TestQueueSerializesEverySharedScheduleFixture(t *testing.T) {
 	type scheduleFixture struct {
+		ID           string `json:"id"`
 		Namespace    string `json:"namespace"`
 		DefaultQueue string `json:"defaultQueue"`
 		Prune        bool   `json:"prune"`
@@ -237,46 +249,60 @@ func TestQueueSerializesSharedScheduleFixture(t *testing.T) {
 		} `json:"application"`
 		Postgres any `json:"postgres"`
 	}
-	fixture := readFixture[[]scheduleFixture](t, "schedules.json")[0]
-	executor := &queueExecutor{responses: [][]workhorse.Row{{{"version": int64(1)}}, {}}}
-	queue := workhorse.NewQueue(executor, fixture.DefaultQueue)
-	definitions := make([]workhorse.ScheduleDefinition, len(fixture.Application))
-	for index, definition := range fixture.Application {
-		enabled := definition.Enabled
-		definitions[index] = workhorse.ScheduleDefinition{
-			Name: definition.Name, Schedule: definition.Schedule, Timezone: definition.Timezone, Enabled: &enabled,
-			Job: workhorse.ScheduledJob{
-				Type: definition.Job.Type, Payload: definition.Job.Payload, Queue: definition.Job.Queue,
-				Priority: definition.Job.Priority, ConcurrencyKey: definition.Job.ConcurrencyKey,
-				MaxAttempts: definition.Job.MaxAttempts, RetryPolicy: definition.Job.RetryPolicy,
-			},
-		}
-	}
+	fixtures := readFixture[[]scheduleFixture](t, "schedules.json")
+	executed := make(map[string]struct{}, len(fixtures))
+	for _, fixture := range fixtures {
+		t.Run(fixture.ID, func(t *testing.T) {
+			executor := &queueExecutor{responses: [][]workhorse.Row{{{"version": int64(1)}}, {}}}
+			queue := workhorse.NewQueue(executor, fixture.DefaultQueue)
+			definitions := make([]workhorse.ScheduleDefinition, len(fixture.Application))
+			for index, definition := range fixture.Application {
+				enabled := definition.Enabled
+				definitions[index] = workhorse.ScheduleDefinition{
+					Name: definition.Name, Schedule: definition.Schedule, Timezone: definition.Timezone, Enabled: &enabled,
+					Job: workhorse.ScheduledJob{
+						Type: definition.Job.Type, Payload: definition.Job.Payload, Queue: definition.Job.Queue,
+						Priority: definition.Job.Priority, ConcurrencyKey: definition.Job.ConcurrencyKey,
+						MaxAttempts: definition.Job.MaxAttempts, RetryPolicy: definition.Job.RetryPolicy,
+					},
+				}
+			}
 
-	err := queue.SyncSchedules(
-		context.Background(),
-		fixture.Namespace,
-		definitions,
-		workhorse.SyncSchedulesOptions{Prune: fixture.Prune},
-	)
-	if err != nil {
-		t.Fatal(err)
+			err := queue.SyncSchedules(
+				context.Background(),
+				fixture.Namespace,
+				definitions,
+				workhorse.SyncSchedulesOptions{Prune: fixture.Prune},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(executor.calls) != 2 {
+				t.Fatalf("expected compatibility and schedule calls, received %d", len(executor.calls))
+			}
+			if executor.calls[1].arguments[0] != fixture.Namespace || executor.calls[1].arguments[2] != fixture.Prune {
+				t.Fatalf("unexpected schedule arguments: %#v", executor.calls[1].arguments)
+			}
+			var actual any
+			if err := decodeJSON(executor.calls[1].arguments[1].([]byte), &actual); err != nil {
+				t.Fatal(err)
+			}
+			actual, err = normalizeProtocolValue(actual)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := matchFixtureValue(fixture.Postgres, actual, map[string]any{}, fixture.ID); err != nil {
+				t.Fatal(err)
+			}
+			executed[fixture.ID] = struct{}{}
+		})
 	}
-	if len(executor.calls) != 2 {
-		t.Fatalf("expected compatibility and schedule calls, received %d", len(executor.calls))
+	defined := make([]string, len(fixtures))
+	for index, fixture := range fixtures {
+		defined[index] = fixture.ID
 	}
-	if executor.calls[1].arguments[0] != fixture.Namespace || executor.calls[1].arguments[2] != fixture.Prune {
-		t.Fatalf("unexpected schedule arguments: %#v", executor.calls[1].arguments)
-	}
-	var actual any
-	if err := decodeJSON(executor.calls[1].arguments[1].([]byte), &actual); err != nil {
-		t.Fatal(err)
-	}
-	actual, err = normalizeProtocolValue(actual)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := matchFixtureValue(fixture.Postgres, actual, map[string]any{}, "schedules"); err != nil {
+	manifest := readFixture[protocolFixtureManifest](t, "manifest.json")
+	if err := verifyNamedFixtureCoverage(manifest, "schedules", defined, executed); err != nil {
 		t.Fatal(err)
 	}
 }

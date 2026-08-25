@@ -10,6 +10,7 @@ export interface SqlProtocolManifest {
   protocolVersion: number;
   schema: { installedVersion: number; minimumVersion: number; maximumVersion: number };
   supportedClientProtocol: { minimumVersion: number; maximumVersion: number };
+  fixtureCoverage: Record<"requests" | "schedules" | "interpreter", string[]>;
   coverage: string[];
   runtimeCoverage: string[];
   functions: { name: string; arity: number; contract: string }[];
@@ -193,24 +194,86 @@ export interface RequestFixture {
   postgres: Record<string, JsonValue>;
 }
 
+export interface ScheduleFixture {
+  id: string;
+  namespace: string;
+  defaultQueue: string;
+  prune: boolean;
+  application: {
+    name: string;
+    schedule: string;
+    timezone: string;
+    enabled: boolean;
+    job: {
+      type: string;
+      payload: JsonValue;
+      queue?: string;
+      priority: number;
+      concurrencyKey?: string;
+      maxAttempts: number;
+      retryPolicy: JsonValue;
+    };
+  }[];
+  postgres: JsonValue[];
+}
+
+export interface InterpreterFixture {
+  id: string;
+  steps: {
+    id: string;
+    expect: JsonValue;
+    actual: JsonValue;
+    rejects?: boolean;
+    capture?: Record<string, string>;
+  }[];
+  errors: {
+    id: string;
+    expect: { code: string; message: string; detail?: JsonValue };
+    actual: { code: string; message: string; detail?: JsonValue };
+  }[];
+}
+
 export interface SqlProtocolFixtures {
   manifest: SqlProtocolManifest;
   compatibility: CompatibilityFixture[];
   scenarios: SqlScenario[];
   runtime: RuntimeFixture[];
   requests: RequestFixture[];
+  schedules: ScheduleFixture[];
+  interpreter: InterpreterFixture[];
 }
 
 export async function loadSqlProtocolFixtures(repository: string): Promise<SqlProtocolFixtures> {
   const directory = path.join(repository, "protocol", "v1");
-  const [manifest, compatibility, scenarios, runtime, requests] = await Promise.all([
-    readJson<SqlProtocolManifest>(path.join(directory, "manifest.json")),
-    readJson<CompatibilityFixture[]>(path.join(directory, "compatibility.json")),
-    readJson<SqlScenario[]>(path.join(directory, "scenarios.json")),
-    readJson<RuntimeFixture[]>(path.join(directory, "runtime.json")),
-    readJson<RequestFixture[]>(path.join(directory, "requests.json")),
-  ]);
-  return { manifest, compatibility, scenarios, runtime, requests };
+  const [manifest, compatibility, scenarios, runtime, requests, schedules, interpreter] =
+    await Promise.all([
+      readJson<SqlProtocolManifest>(path.join(directory, "manifest.json")),
+      readJson<CompatibilityFixture[]>(path.join(directory, "compatibility.json")),
+      readJson<SqlScenario[]>(path.join(directory, "scenarios.json")),
+      readJson<RuntimeFixture[]>(path.join(directory, "runtime.json")),
+      readJson<RequestFixture[]>(path.join(directory, "requests.json")),
+      readJson<ScheduleFixture[]>(path.join(directory, "schedules.json")),
+      readJson<InterpreterFixture[]>(path.join(directory, "interpreter.json")),
+    ]);
+  return { manifest, compatibility, scenarios, runtime, requests, schedules, interpreter };
+}
+
+export function verifyFixtureExecution(
+  manifest: SqlProtocolManifest,
+  kind: keyof SqlProtocolManifest["fixtureCoverage"],
+  defined: readonly string[],
+  executed: ReadonlySet<string>,
+): void {
+  const expected = new Set(manifest.fixtureCoverage[kind]);
+  const definedSet = new Set(defined);
+  if (!sameSet(definedSet, expected)) {
+    throw new Error(
+      `${kind} fixture manifest differs: defined ${[...definedSet]}, expected ${[...expected]}`,
+    );
+  }
+  const missing = [...expected].filter((id) => !executed.has(id));
+  if (missing.length > 0)
+    throw new Error(`${kind} fixtures were not executed: ${missing.join(", ")}`);
 }
 
 export async function verifySqlProtocolFixtures(
@@ -240,7 +303,7 @@ export async function verifySqlProtocolFixtures(
       try {
         const result = await database.query(step.sql, parameters);
         if (step.error) throw new Error(`${scenario.id}/${step.id} expected an error`);
-        const rows = toJson(result.rows);
+        const rows = normalizeFixtureValue(result.rows);
         assertFixtureValue(
           step.expect?.rows ?? [],
           rows,
@@ -399,13 +462,58 @@ function assertMatcher(type: string, actual: JsonValue, location: string): void 
     (type === "uuid" &&
       typeof actual === "string" &&
       /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(actual)) ||
-    (type === "timestamp" && typeof actual === "string" && !Number.isNaN(Date.parse(actual))) ||
+    (type === "timestamp" && typeof actual === "string" && isTimestamp(actual)) ||
     (type === "string" && typeof actual === "string") ||
     (type === "integer" && typeof actual === "number" && Number.isInteger(actual)) ||
-    (type === "number" && typeof actual === "number") ||
+    (type === "number" && typeof actual === "number" && Number.isFinite(actual)) ||
     (type === "boolean" && typeof actual === "boolean");
   if (!accepted)
     throw new Error(`${location} expected ${type}, received ${JSON.stringify(actual)}`);
+}
+
+function isTimestamp(value: string): boolean {
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/.exec(
+      value,
+    );
+  if (!match || Number.isNaN(Date.parse(value))) return false;
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return (
+    month >= 1 &&
+    month <= 12 &&
+    day >= 1 &&
+    day <= days[month - 1]! &&
+    Number(hourText) <= 23 &&
+    Number(minuteText) <= 59 &&
+    Number(secondText) <= 59
+  );
+}
+
+export function assertProtocolErrorValue(
+  expected: NonNullable<SqlStep["error"]>,
+  actual: { code?: unknown; message?: unknown; detail?: unknown },
+  location: string,
+  references: Map<string, JsonValue>,
+): void {
+  if (actual.code !== expected.code || actual.message !== expected.message) {
+    throw new Error(
+      `${location} expected ${expected.code} ${expected.message}, received ${String(actual.code)} ${String(actual.message)}`,
+    );
+  }
+  if (expected.detail !== undefined) {
+    const detail = typeof actual.detail === "string" ? JSON.parse(actual.detail) : actual.detail;
+    assertFixtureValue(
+      expected.detail,
+      normalizeFixtureValue(detail),
+      `${location}.detail`,
+      references,
+    );
+  }
 }
 
 function assertDatabaseError(
@@ -417,15 +525,7 @@ function assertDatabaseError(
 ): void {
   if (!error || typeof error !== "object") throw annotate(error, scenario, step);
   const value = error as { code?: unknown; message?: unknown; detail?: unknown };
-  if (value.code !== expected.code || value.message !== expected.message) {
-    throw new Error(
-      `${scenario}/${step} expected ${expected.code} ${expected.message}, received ${String(value.code)} ${String(value.message)}`,
-    );
-  }
-  if (expected.detail !== undefined) {
-    const detail = typeof value.detail === "string" ? JSON.parse(value.detail) : value.detail;
-    assertFixtureValue(expected.detail, toJson(detail), `${scenario}/${step}.detail`, references);
-  }
+  assertProtocolErrorValue(expected, value, `${scenario}/${step}`, references);
 }
 
 export function readPointer(value: JsonValue, pointer: string, context: string): JsonValue {
@@ -441,12 +541,16 @@ export function readPointer(value: JsonValue, pointer: string, context: string):
   return current;
 }
 
-function toJson<T>(value: T): JsonValue {
+export function normalizeFixtureValue<T>(value: T): JsonValue {
   return JSON.parse(JSON.stringify(value)) as JsonValue;
 }
 
 function deepEqual(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function sameSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  return left.size === right.size && [...left].every((value) => right.has(value));
 }
 
 function annotate(error: unknown, scenario: string, step: string): Error {
