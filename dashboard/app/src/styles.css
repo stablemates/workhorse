@@ -1,5 +1,6 @@
 @import "@mantine/core/styles/global.css";
 @import "@mantine/core/styles/baseline.css";
+@import "@mantine/core/styles/default-css-variables.css";
 @import "@mantine/core/styles/Accordion.css";
 @import "@mantine/core/styles/ActionIcon.css";
 @import "@mantine/core/styles/Alert.css";

@@ -22,6 +22,7 @@ describe("dashboard bundle boundaries", () => {
   it("imports only the Mantine component styles used by the shell", () => {
     expect(styles).not.toContain('@import "@mantine/core/styles.css"');
     expect(styles).not.toContain('@import "@mantine/charts/styles.css"');
+    expect(styles).toContain('@import "@mantine/core/styles/default-css-variables.css"');
     expect(styles).toContain('@import "@mantine/core/styles/baseline.css"');
     expect(styles).toContain('@import "@mantine/core/styles/AppShell.css"');
   });
