@@ -34,7 +34,7 @@ export function formatTable(
   return [renderRow(headers), ...rows.map(renderRow)].join("\n");
 }
 
-export function formatTimestamp(value: Date | null): string {
+function formatTimestamp(value: Date | null): string {
   return value === null ? "-" : value.toISOString();
 }
 

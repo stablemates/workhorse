@@ -1,4 +1,4 @@
-export interface ConfidenceInterval {
+interface ConfidenceInterval {
   confidenceLevel: 0.95;
   lower: number | null;
   upper: number | null;

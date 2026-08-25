@@ -35,7 +35,9 @@ async function availablePort(): Promise<number> {
   });
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
   return port;
 }
 
@@ -47,7 +49,9 @@ async function waitForContainer(port: number, containerId: string): Promise<Resp
     } catch {
       // The listener is not ready yet.
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
   }
   const logs = await run("docker", ["logs", containerId]);
   throw new Error(`Packed dashboard container did not start: ${logs}`);

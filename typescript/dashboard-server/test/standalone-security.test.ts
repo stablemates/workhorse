@@ -65,6 +65,7 @@ describe("standalone dashboard listener security", () => {
         request.once("error", reject);
         request.end();
       });
+      // oxlint-disable-next-line vitest/no-standalone-expect -- the assertion is inside this test's server lifecycle.
       expect(status).toBe(200);
     } finally {
       await running.close();

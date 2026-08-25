@@ -425,7 +425,7 @@ export async function readDashboardQueues(
   return expectOneRow(result, "the dashboard queues procedure").result;
 }
 
-export const activityPeriods: Record<
+const activityPeriods: Record<
   DashboardActivityPeriod,
   { windowSeconds: number; bucketSeconds: number }
 > = {

@@ -234,7 +234,7 @@ function parseDashboard(value: unknown, file: string): SigNozDashboard {
     throw new Error(`${file}.schemaVersion must be v6`);
   }
   if (!Array.isArray(dashboard.tags)) {
-    throw new Error(`${file}.tags must be an array`);
+    throw new TypeError(`${file}.tags must be an array`);
   }
   if (typeof dashboard.spec !== "object" || dashboard.spec === null) {
     throw new Error(`${file}.spec must be an object`);

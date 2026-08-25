@@ -54,7 +54,6 @@ import {
   type ConcurrencyPolicyRow,
   type RateLimitPolicyRow,
 } from "./queue/operator-reads.js";
-import { errorForTelemetry } from "./queue/claim-lease-fence.js";
 import {
   CheckpointConflictError,
   CheckpointLeaseLostError,
@@ -180,8 +179,6 @@ export type {
   ExternalWaitListOptions,
 };
 export type { ScheduleDefinition, ScheduleJobDefinition, StoredSchedule };
-
-export { errorForTelemetry };
 
 /**
  * Thin TypeScript facade over the versioned PostgreSQL protocol.

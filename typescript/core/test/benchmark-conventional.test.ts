@@ -98,7 +98,9 @@ describe("conventional benchmark SQL", () => {
       } finally {
         client.release();
       }
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
       const relevant = notifications.filter((payload) => payload === alpha || payload === beta);
       expect(relevant).toHaveLength(2);
       expect(new Set(relevant)).toEqual(new Set([alpha, beta]));

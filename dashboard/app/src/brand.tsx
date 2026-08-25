@@ -7,7 +7,7 @@ interface WorkhorseMarkProps extends BoxProps {
   label?: string;
 }
 
-export function WorkhorseMark({ label = "Workhorse", ...props }: WorkhorseMarkProps) {
+function WorkhorseMark({ label = "Workhorse", ...props }: WorkhorseMarkProps) {
   return <Box component="img" src={workhorseMarkUrl} alt={label} {...props} />;
 }
 

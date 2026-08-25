@@ -84,7 +84,7 @@ function validateDefinition(definition: WorkerProcessDefinition): void {
     throw new Error("Worker process configuration must export a definition object");
   }
   if (typeof definition.adapter !== "function") {
-    throw new Error("Worker process configuration must define adapter()");
+    throw new TypeError("Worker process configuration must define adapter()");
   }
   if (!Array.isArray(definition.workers) || definition.workers.length === 0) {
     throw new Error("Worker process configuration must define at least one worker");

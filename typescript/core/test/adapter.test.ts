@@ -97,10 +97,12 @@ describe("createWorkhorseAdapter", () => {
 
   it("uses a database contract discovered after an enqueue version mismatch", async () => {
     const database: Queryable = {
+      // oxlint-disable-next-line vitest/require-mock-type-parameters -- Queryable.query is generic and the cast supplies its contract.
       query: vi.fn(async () => ({ rows: [] })) as unknown as Queryable["query"],
     };
     let enqueueAttempts = 0;
     const transactionDatabase: Queryable = {
+      // oxlint-disable-next-line vitest/require-mock-type-parameters -- Queryable.query is generic and the cast supplies its contract.
       query: vi.fn(async (statement: string) => {
         if (statement.includes("get_contract_definition_v1")) {
           return {

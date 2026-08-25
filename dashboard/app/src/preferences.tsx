@@ -4,11 +4,11 @@ import { useEffect, useState } from "react";
  * Display timezone preference. Timestamps are stored and transported as UTC ISO
  * strings; this only affects rendering. "system" means the browser's own zone.
  */
-export const timeZoneStorageKey = "workhorse-timezone";
-export const dateTimeFormatters = new Map<string, Intl.DateTimeFormat>();
-export const createDateTimeFormatter = Intl.DateTimeFormat;
+const timeZoneStorageKey = "workhorse-timezone";
+const dateTimeFormatters = new Map<string, Intl.DateTimeFormat>();
+const createDateTimeFormatter = Intl.DateTimeFormat;
 export let displayTimeZone: string | null = readStoredTimeZone();
-export const timeZoneListeners = new Set<() => void>();
+const timeZoneListeners = new Set<() => void>();
 export function getDateTimeFormatter(options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
   const key = JSON.stringify(options);
   const cached = dateTimeFormatters.get(key);
@@ -17,7 +17,7 @@ export function getDateTimeFormatter(options: Intl.DateTimeFormatOptions): Intl.
   dateTimeFormatters.set(key, formatter);
   return formatter;
 }
-export function readStoredTimeZone(): string | null {
+function readStoredTimeZone(): string | null {
   const stored = localStorage.getItem(timeZoneStorageKey);
   if (!stored || stored === "system") return null;
   try {
@@ -185,7 +185,7 @@ export function hasStoredValue(value: unknown): boolean {
 export function formatJson(value: unknown): string {
   return JSON.stringify(value, null, 2) ?? "";
 }
-export const clipboardUnavailable =
+const clipboardUnavailable =
   "Copying is not available in this browser. Open the task to select the text instead.";
 /** Resolves to null on success, or to the sentence to show the operator when copying failed. */
 export async function copyToClipboard(text: string): Promise<string | null> {

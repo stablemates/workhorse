@@ -24,9 +24,9 @@ import {
   workersTableRows,
 } from "./admin-format.js";
 
-export const TUI_REFRESH_INTERVAL_MS = 5_000;
+const TUI_REFRESH_INTERVAL_MS = 5_000;
 /** Rows fetched per view. Small enough to render on one screen without paging. */
-export const TUI_PAGE_SIZE = 50;
+const TUI_PAGE_SIZE = 50;
 
 export type TuiViewName = "jobs" | "queues" | "schedules" | "failures" | "workers" | "health";
 
@@ -39,7 +39,7 @@ export const TUI_VIEW_ORDER: readonly TuiViewName[] = [
   "health",
 ];
 
-export interface TuiPendingAction {
+interface TuiPendingAction {
   kind: "pause" | "resume";
   queue: string;
 }
@@ -176,10 +176,7 @@ export function handleTuiKey(
   return "ignore";
 }
 
-export async function refreshTuiState(
-  client: WorkhorseAdminClient,
-  state: TuiState,
-): Promise<void> {
+async function refreshTuiState(client: WorkhorseAdminClient, state: TuiState): Promise<void> {
   switch (state.view) {
     case "jobs":
       state.jobs = (await client.listJobs({ limit: TUI_PAGE_SIZE })).items;
@@ -205,10 +202,7 @@ export async function refreshTuiState(
 }
 
 /** Run the confirmed pending action through the same guarded client methods the CLI uses. */
-export async function applyTuiPendingAction(
-  client: WorkhorseAdminClient,
-  state: TuiState,
-): Promise<void> {
+async function applyTuiPendingAction(client: WorkhorseAdminClient, state: TuiState): Promise<void> {
   const action = state.pendingAction;
   state.pendingAction = null;
   if (action === null || state.environment === null) return;

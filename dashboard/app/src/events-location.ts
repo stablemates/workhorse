@@ -5,9 +5,9 @@ import type {
   DashboardEventTypeFilter,
 } from "@workhorse-js/dashboard-server/wire";
 
-export const eventPageSizes = [25, 50, 100] as const;
-export type EventPageSize = (typeof eventPageSizes)[number];
-export type EventsKindFilter = DashboardEventKind | "all";
+const eventPageSizes = [25, 50, 100] as const;
+type EventPageSize = (typeof eventPageSizes)[number];
+type EventsKindFilter = DashboardEventKind | "all";
 
 export interface EventsLocationState {
   window: DashboardEventsWindow;

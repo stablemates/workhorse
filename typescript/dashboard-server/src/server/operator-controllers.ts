@@ -76,10 +76,6 @@ export function createDashboardOperatorControllers(
 ): DashboardOperatorControllers {
   const requestedBy = (audit: Pick<DashboardAuditContext, "actor">): string =>
     options.requestedBy ?? audit.actor;
-  const adminAudit = (audit: DashboardAuditContext): DashboardAuditContext => ({
-    ...audit,
-    actor: requestedBy(audit),
-  });
 
   return {
     operator: { mode: "writable" },

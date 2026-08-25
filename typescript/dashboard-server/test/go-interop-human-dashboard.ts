@@ -5,7 +5,6 @@ import { Pool } from "pg";
 
 import { Admin } from "../../core/src/admin.js";
 import { Queue } from "../../core/src/queue.js";
-import { Admin } from "../../core/src/admin.js";
 import { createDashboardHost } from "../src/server/host.js";
 import { createDashboardOperatorControllers } from "../src/server/operator-controllers.js";
 import type { DashboardRouter } from "../src/server/router.js";

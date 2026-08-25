@@ -58,7 +58,7 @@ const ajv = new Ajv2020({ strict: true, validateFormats: false });
 const objectValidators = new WeakMap<object, ValidateFunction<Json>>();
 const booleanValidators = new Map<boolean, ValidateFunction<Json>>();
 
-export function assertContractSchema(schema: Json): void {
+function assertContractSchema(schema: Json): void {
   visitSchema(schema, "$");
 }
 

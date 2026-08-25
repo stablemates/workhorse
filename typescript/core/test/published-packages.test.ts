@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
+/* oxlint-disable vitest/no-standalone-expect -- packageDeclarationsTest wraps a Vitest callback. */
 import { describe, expect, it } from "vitest";
 import {
   corePackage,
@@ -164,7 +165,7 @@ describe("published package manifests", () => {
         const types = target.types;
         const source = target["workhorse-source"];
         if (typeof types !== "string" || typeof source !== "string") {
-          throw new Error(`${entry.name}${subpath} needs types and workhorse-source exports`);
+          throw new TypeError(`${entry.name}${subpath} needs types and workhorse-source exports`);
         }
         expect(types, `${entry.name}${subpath} types export`).toMatch(/^\.\/dist\/.*\.d\.ts$/);
         expect(target.import, `${entry.name}${subpath} import export`).toMatch(

@@ -17,7 +17,7 @@ export interface SchemaMigrationPlan {
 }
 
 /** Advisory lock name serializing concurrent schema migrations, hashed with hashtext. */
-export const SCHEMA_MIGRATION_LOCK = "workhorse:schema-migration";
+const SCHEMA_MIGRATION_LOCK = "workhorse:schema-migration";
 
 /** Whether PostgreSQL reports a missing schema or a missing relation within that schema. */
 export function isMissingDatabaseRelationError(error: unknown): boolean {

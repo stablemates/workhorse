@@ -24,7 +24,6 @@ import {
   type TypeOrmExecutor,
 } from "@workhorse-js/typeorm";
 import {
-  Admin,
   type AdapterNotificationPool,
   EnqueueIdempotencyConflictError,
   QueryError,

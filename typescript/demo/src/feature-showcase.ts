@@ -84,7 +84,7 @@ export type DemoFeaturePayload = {
 };
 
 /** Prerequisite edges seeded ahead of one dependent showcase job. */
-export interface DemoFeatureDependencySeed {
+interface DemoFeatureDependencySeed {
   prerequisites: ReadonlyArray<{
     label: string;
     behavior: "success" | "always-fail";
@@ -96,14 +96,14 @@ export interface DemoFeatureDependencySeed {
 }
 
 /** Keyed debounce shape seeded through `enqueueWithResult` replacements. */
-export interface DemoFeatureDebounceSeed {
+interface DemoFeatureDebounceSeed {
   schedule: "reset" | "preserve";
   replacements: number;
   windowMs: number;
 }
 
 /** Keyed throttle shape seeded through repeat, burst, or per-key acceptance. */
-export interface DemoFeatureThrottleSeed {
+interface DemoFeatureThrottleSeed {
   shape: "repeat" | "burst" | "per-key";
   windowMs: number;
 }

@@ -6,7 +6,7 @@ import {
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import pg from "pg";
+import { Pool } from "pg";
 
 import { Queue } from "../src/queue.js";
 
@@ -24,7 +24,7 @@ context.setGlobalContextManager(contextManager);
 propagation.setGlobalPropagator(new W3CTraceContextPropagator());
 trace.setGlobalTracerProvider(provider);
 
-const pool = new pg.Pool({ connectionString: databaseUrl });
+const pool = new Pool({ connectionString: databaseUrl });
 try {
   const queue = new Queue(pool, queueName);
   const caller = trace.getTracer("workhorse-go-interoperability-test").startSpan("caller");

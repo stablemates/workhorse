@@ -10,7 +10,7 @@ import {
   type NumericSummary,
 } from "./statistics.js";
 
-export type DashboardReadStrategy = "direct-sql" | "views" | "functions";
+type DashboardReadStrategy = "direct-sql" | "views" | "functions";
 
 export interface DashboardReadSurfaceOptions {
   jobs?: number;
@@ -19,7 +19,7 @@ export interface DashboardReadSurfaceOptions {
   warmupRepetitions?: number;
 }
 
-export interface ResolvedDashboardReadSurfaceOptions {
+interface ResolvedDashboardReadSurfaceOptions {
   jobs: number;
   liveJobs: number;
   repetitions: number;
@@ -45,7 +45,7 @@ interface PlanSummary {
   signature: string[];
 }
 
-export interface DashboardReadVariantMeasurement {
+interface DashboardReadVariantMeasurement {
   strategy: DashboardReadStrategy;
   resultRows: number;
   resultHash: string;
@@ -54,7 +54,7 @@ export interface DashboardReadVariantMeasurement {
   rawPlan: unknown;
 }
 
-export interface DashboardReadCaseMeasurement {
+interface DashboardReadCaseMeasurement {
   name: string;
   variants: DashboardReadVariantMeasurement[];
   equivalentResults: boolean;
@@ -62,13 +62,13 @@ export interface DashboardReadCaseMeasurement {
   functionPlanMatchesDirect: boolean;
 }
 
-export interface DashboardRequestVariantMeasurement {
+interface DashboardRequestVariantMeasurement {
   name: "baseline" | "current";
   statementsPerCall: number;
   latencyMs: LatencySummary;
 }
 
-export interface DashboardRequestComparison {
+interface DashboardRequestComparison {
   name: "tasks" | "queues";
   repetitions: number;
   variants: [DashboardRequestVariantMeasurement, DashboardRequestVariantMeasurement];
@@ -106,7 +106,7 @@ export interface DashboardReadSurfaceReport {
 
 const strategies: DashboardReadStrategy[] = ["direct-sql", "views", "functions"];
 
-export function resolveDashboardReadSurfaceOptions(
+function resolveDashboardReadSurfaceOptions(
   options: DashboardReadSurfaceOptions = {},
 ): ResolvedDashboardReadSurfaceOptions {
   const resolved = {

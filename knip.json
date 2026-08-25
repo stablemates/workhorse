@@ -1,0 +1,47 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreBinaries": ["foundryctl", "go", "gofmt", "uv"],
+  "ignore": ["typescript/dashboard-server/src/server/types.ts"],
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/*.ts", "vitest*.config.ts"],
+      "ignoreDependencies": ["@vitest/coverage-v8"]
+    },
+    "dashboard/app": {
+      "entry": ["browser/react-grab.ts", "src/browser.tsx"],
+      "vite": {
+        "config": []
+      }
+    },
+    "typescript/core": {
+      "entry": ["src/cli/reset-db.ts", "src/cli/workhorse.ts"],
+      "ignoreDependencies": ["@workhorse-js/dashboard"]
+    },
+    "typescript/dashboard": {
+      "ignoreDependencies": [
+        "@mantine/charts",
+        "@mantine/core",
+        "@mantine/hooks",
+        "@mantine/notifications",
+        "@phosphor-icons/react",
+        "@stablemates/workhorse",
+        "@workhorse-js/dashboard-server",
+        "react",
+        "react-dom",
+        "recharts",
+        "vite"
+      ]
+    },
+    "typescript/prisma": {
+      "ignoreDependencies": ["@prisma/client"]
+    },
+    "typescript/typeorm": {
+      "ignoreDependencies": ["typeorm"]
+    },
+    "site": {
+      "vite": {
+        "config": []
+      }
+    }
+  }
+}

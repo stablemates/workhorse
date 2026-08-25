@@ -26,8 +26,8 @@ import { summarizeNumbers, type NumericSummary } from "./statistics.js";
 
 const INSTRUMENTATION_NAME = "@workhorse-js/benchmark.metrics-lifecycle";
 
-export type MetricsLifecycleName = "eager" | "lazy";
-export type MetricsProviderState = "off" | "on";
+type MetricsLifecycleName = "eager" | "lazy";
+type MetricsProviderState = "off" | "on";
 
 export interface MetricsLifecycleOptions {
   /** Emissions per repetition. */
@@ -44,14 +44,14 @@ export interface ResolvedMetricsLifecycleOptions {
   warmupRepetitions: number;
 }
 
-export interface MetricsLifecycleMeasurement {
+interface MetricsLifecycleMeasurement {
   lifecycle: MetricsLifecycleName;
   provider: MetricsProviderState;
   /** Per-emission cost in nanoseconds, one sample per repetition. */
   nanosecondsPerEmission: NumericSummary;
 }
 
-export interface MetricsLifecycleRegistrationCheck {
+interface MetricsLifecycleRegistrationCheck {
   lifecycle: MetricsLifecycleName;
   /** Emissions made before any provider was registered. */
   emissionsBeforeRegistration: number;

@@ -8,8 +8,8 @@ import type { QueueOptions } from "@stablemates/workhorse";
  * completion. A process that omitted them would refuse to complete contracted jobs it claimed.
  */
 export const DEMO_CONTRACT_JOB_TYPE = "demo.contract-check";
-export const DEMO_CONTRACT_VERSION = "v1";
-export const DEMO_CONTRACT_MAX_RESULT_BYTES = 2_048;
+const DEMO_CONTRACT_VERSION = "v1";
+const DEMO_CONTRACT_MAX_RESULT_BYTES = 2_048;
 
 export const DEMO_QUEUE_OPTIONS: QueueOptions = {
   contracts: {

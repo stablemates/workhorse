@@ -30,9 +30,9 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 
 function waitForAbort(signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve();
-  return new Promise((resolve) =>
-    signal.addEventListener("abort", () => resolve(), { once: true }),
-  );
+  return new Promise((resolve) => {
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
 }
 
 async function abortableSleep(durationMs: number, signal: AbortSignal): Promise<void> {

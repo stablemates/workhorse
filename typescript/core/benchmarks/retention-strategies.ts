@@ -15,7 +15,7 @@ import {
   type NumericSummary,
 } from "./statistics.js";
 
-export type RetentionStrategy = "partition-drop" | "row-delete-vacuum";
+type RetentionStrategy = "partition-drop" | "row-delete-vacuum";
 
 export interface RetentionStrategiesOptions {
   rowsPerCycle?: number[];
@@ -50,7 +50,7 @@ interface HistoryStorageSnapshot {
   lastAutovacuum: Date | null;
 }
 
-export interface RetentionCycleMeasurement {
+interface RetentionCycleMeasurement {
   cycle: number;
   insertedRows: number;
   retiredRows: number;
@@ -66,7 +66,7 @@ export interface RetentionCycleMeasurement {
   claimAfter: LatencySummary;
 }
 
-export interface TriggerCostMeasurement {
+interface TriggerCostMeasurement {
   rowsPerRepetition: number;
   repetitions: number;
   triggeredInsertMs: NumericSummary;
@@ -74,7 +74,7 @@ export interface TriggerCostMeasurement {
   triggeredToPlainRatio: number | null;
 }
 
-export interface RetentionStrategyMeasurement {
+interface RetentionStrategyMeasurement {
   strategy: RetentionStrategy;
   rowsPerCycle: number;
   triggerCost: TriggerCostMeasurement;
@@ -87,7 +87,7 @@ export interface RetentionStrategyMeasurement {
   finalStorage: HistoryStorageSnapshot;
 }
 
-export interface RetentionScaleComparison {
+interface RetentionScaleComparison {
   rowsPerCycle: number;
   partitionRetentionMs: number | null;
   rowRetentionAndVacuumMs: number | null;

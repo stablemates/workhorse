@@ -116,7 +116,7 @@ export function cancelEventDescription(event: JobEvent): { text: string; title: 
  * Everything shown here comes from the safe metadata on the single initial `enqueued` event. The
  * raw key is not stored there and is therefore never available to render.
  */
-export function idempotencyEvidenceFor(job: DashboardJobDetail) {
+function idempotencyEvidenceFor(job: DashboardJobDetail) {
   for (const event of job.events) {
     const evidence = readIdempotencyEvidence(event);
     if (evidence !== null) return evidence;
@@ -174,7 +174,7 @@ export function retryEventDescription(event: JobEvent): { text: string; title: s
   return { text, title };
 }
 /** The lifecycle states an operator may cancel. Everything else is terminal or unknown. */
-export function canCancelTask(job: DashboardJobDetail): boolean {
+function canCancelTask(job: DashboardJobDetail): boolean {
   const runtime = job.current.runtime;
   if (runtime === null) return false;
   if (isTerminalTaskState(job.identity.state)) return false;
@@ -354,7 +354,7 @@ export function RetryPolicyLine({ job }: { job: DashboardJobDetail }) {
  * Display form of a task UUID: the first eight characters, matching the task table's ID column.
  * Every renderer of a shortened id carries the full id in `title`, so hover always recovers it.
  */
-export function shortTaskId(id: string): string {
+function shortTaskId(id: string): string {
   return id.slice(0, 8);
 }
 /** One task UUID shown shortened, recoverable on hover, and copyable in full. */
@@ -430,9 +430,7 @@ export function RelatedTaskLinks({
     </Fragment>
   ));
 }
-export function batchFailureMessage(
-  batch: DashboardJobDetail["batchExecutions"][number],
-): string | null {
+function batchFailureMessage(batch: DashboardJobDetail["batchExecutions"][number]): string | null {
   if (!batch.batchWideFailure) return null;
   for (const member of batch.members) {
     const error = member.error;

@@ -82,7 +82,7 @@ export const operationalScenarioNames = [
 ] as const;
 
 export type OperationalScenarioName = (typeof operationalScenarioNames)[number];
-export type ScenarioMetric = number | string | boolean | null;
+type ScenarioMetric = number | string | boolean | null;
 
 export interface OperationalScenarioContract {
   name: OperationalScenarioName;
@@ -98,7 +98,7 @@ export interface ScenarioAssertion {
   actual: unknown;
 }
 
-export interface OperationalScenarioResult {
+interface OperationalScenarioResult {
   name: OperationalScenarioName;
   durationMs: number;
   metrics: Record<string, ScenarioMetric>;
@@ -153,7 +153,7 @@ export interface ResolvedOperationalScenarioOptions {
   scenarios: readonly OperationalScenarioName[];
 }
 
-export interface OperationalScenarioContext {
+interface OperationalScenarioContext {
   admin: Admin;
   pool: Queryable;
   options: ResolvedOperationalScenarioOptions;
@@ -1563,9 +1563,9 @@ async function cancellationLifecycle(
     observedSignal = handlerContext.signal;
     handlerStartedResolve();
     if (!handlerContext.signal.aborted) {
-      await new Promise<void>((resolve) =>
-        handlerContext.signal.addEventListener("abort", () => resolve(), { once: true }),
-      );
+      await new Promise<void>((resolve) => {
+        handlerContext.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
     }
     throw handlerContext.signal.reason;
   });
@@ -1913,9 +1913,9 @@ async function deadlineTimeoutLifecycle(
   }).handle("deadline-active", async (_payload, handlerContext) => {
     deadlineClaim = handlerContext.job;
     if (!handlerContext.signal.aborted) {
-      await new Promise<void>((resolve) =>
-        handlerContext.signal.addEventListener("abort", () => resolve(), { once: true }),
-      );
+      await new Promise<void>((resolve) => {
+        handlerContext.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
     }
     deadlineReason = handlerContext.signal.reason;
     throw handlerContext.signal.reason;
@@ -1958,9 +1958,9 @@ async function deadlineTimeoutLifecycle(
   }).handle("timeout-retry", async (_payload, handlerContext) => {
     if (handlerContext.job.attempt === 2) return { attempt: 2 };
     if (!handlerContext.signal.aborted) {
-      await new Promise<void>((resolve) =>
-        handlerContext.signal.addEventListener("abort", () => resolve(), { once: true }),
-      );
+      await new Promise<void>((resolve) => {
+        handlerContext.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
     }
     timeoutReason = handlerContext.signal.reason;
     throw handlerContext.signal.reason;
@@ -5203,7 +5203,7 @@ async function telemetryContext(
   };
 }
 
-export const operationalScenarioImplementations: Readonly<
+const operationalScenarioImplementations: Readonly<
   Record<OperationalScenarioName, OperationalScenarioRunner>
 > = {
   "scheduled-promotion-drift": scheduledPromotionDrift,

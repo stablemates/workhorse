@@ -7,7 +7,9 @@
     "perf": "warn"
   },
   "rules": {
-    "no-await-in-loop": "off"
+    "no-await-in-loop": "off",
+    "no-promise-executor-return": "error",
+    "unicorn/prefer-type-error": "error"
   },
   "env": {
     "builtin": true

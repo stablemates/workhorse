@@ -81,7 +81,9 @@ it("passes dashboard/v1 through the Go embedded backend", { timeout: 120_000 }, 
     [job.id, job.current_attempt],
   );
 
-  await new Promise((resolve) => setTimeout(resolve, 3_100));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 3_100);
+  });
   const queues = await rpc(address, fixtures.harness.origin, "queues", null);
   const queue = queues.queues.find((row: { queue: string }) => row.queue === "conformance-demo");
   expect(queue.concurrencyPolicy).toMatchObject({ maxActive: 7, maxActivePerKey: 2 });

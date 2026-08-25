@@ -26,7 +26,9 @@ async function waitForText(file: string, expected: string): Promise<void> {
     } catch {
       // The child has not created its marker file yet.
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
   }
   throw new Error(`Timed out waiting for ${expected} in ${file}`);
 }

@@ -171,7 +171,7 @@ export function JsonValue({
     </Box>
   );
 }
-export const outcomeStateColor: Record<TaskResultState, string> = {
+const outcomeStateColor: Record<TaskResultState, string> = {
   succeeded: "teal",
   failed: "red",
   canceled: "gray",
@@ -227,7 +227,7 @@ export function TaskOutcome({ job }: { job: DashboardJobDetail }) {
     </DrawerSection>
   );
 }
-export function plannedStepDescription(
+function plannedStepDescription(
   job: DashboardJobDetail,
   checkpoint: DashboardJobDetail["checkpoints"][number] | undefined,
   stepIndex: number,
@@ -267,7 +267,7 @@ export function plannedStepDescription(
   if (job.identity.state === "failed") return "The task failed before it reached this stage";
   return "Workhorse did not record a checkpoint";
 }
-export function PlannedDurability({ job }: { job: DashboardJobDetail }) {
+function PlannedDurability({ job }: { job: DashboardJobDetail }) {
   const plan = job.durability!;
   const checkpoints = new Map(job.checkpoints.map((checkpoint) => [checkpoint.name, checkpoint]));
   const planNames = new Set(plan.steps.map((step) => step.name));

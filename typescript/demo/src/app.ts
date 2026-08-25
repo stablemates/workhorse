@@ -152,14 +152,14 @@ export interface CreateDemoApplicationOptions {
   stagingDatabase?: DemoDatabase;
 }
 
-export interface AuditContext {
+interface AuditContext {
   actor: string;
   reason: string;
   requestId: string;
   occurredAt?: string;
 }
 
-export interface CancellationAuditContext extends Omit<AuditContext, "reason"> {
+interface CancellationAuditContext extends Omit<AuditContext, "reason"> {
   reason: string | null;
 }
 
@@ -192,7 +192,7 @@ export interface ScheduleController {
   ) => Promise<{ enabled: boolean }>;
 }
 
-export interface QueueController {
+interface QueueController {
   setQueuePaused?: (
     queueName: string,
     paused: boolean,
@@ -227,7 +227,7 @@ export interface SettingsController {
  * truth: a scheduled or ready task is already canceled when this resolves, while an active task
  * has only been asked to stop and continues until its handler observes the signal.
  */
-export interface DemoCancelTaskResult {
+interface DemoCancelTaskResult {
   status: CancelStatus;
   jobId: string;
   state: JobState | null;
@@ -238,7 +238,7 @@ export interface DemoCancelTaskResult {
   finishedAt: string | null;
 }
 
-export interface TaskController {
+interface TaskController {
   runTaskNow?: (
     jobId: string,
     audit: AuditContext,
@@ -251,7 +251,7 @@ export interface TaskController {
   cancelTask?: (jobId: string, audit: CancellationAuditContext) => Promise<DemoCancelTaskResult>;
 }
 
-export interface WorkerController {
+interface WorkerController {
   setWorkerPaused?: (
     workerId: string,
     paused: boolean,
@@ -708,7 +708,7 @@ export async function syncDemoRateLimitPolicies(database: Pool): Promise<void> {
   ]);
 }
 
-export function createReadOnlyOperator(): DashboardOperator {
+function createReadOnlyOperator(): DashboardOperator {
   return { mode: "read-only" };
 }
 
@@ -1090,7 +1090,7 @@ export function createLocalOperatorControllers(database: DemoDatabase) {
   });
 }
 
-export function createLocalSettingsController(database: DemoDatabase): SettingsController {
+function createLocalSettingsController(database: DemoDatabase): SettingsController {
   async function mutate(
     action: string,
     target: string,

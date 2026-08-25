@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { EnqueueIdempotencyConflictError, PurgeIdempotencyConflictError } from "../src/index.js";

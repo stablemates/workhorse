@@ -37,7 +37,7 @@ interface PatternListEvidence {
   patterns: readonly string[];
 }
 
-export type ParityEvidence = SinglePatternEvidence | PatternListEvidence;
+type ParityEvidence = SinglePatternEvidence | PatternListEvidence;
 export type ParityCell = ParityEvidence | { absent: string } | { planned: string };
 
 export interface ParityRow {

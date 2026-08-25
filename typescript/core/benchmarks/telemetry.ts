@@ -2,7 +2,7 @@ import { performance } from "node:perf_hooks";
 import type { QueryResult } from "pg";
 import type { Queryable } from "../src/types.js";
 
-export type RelationKind =
+type RelationKind =
   | "table"
   | "partitioned_table"
   | "materialized_view"
@@ -79,7 +79,7 @@ export interface VacuumAnalyzeTiming {
   finishedAt: Date;
 }
 
-export interface PgStatIoEntry {
+interface PgStatIoEntry {
   backendType: string;
   object: string;
   context: string;
@@ -105,7 +105,7 @@ export interface PgStatIoSnapshot {
   entries: PgStatIoEntry[];
 }
 
-export interface PgStatIoDeltaEntry extends Omit<PgStatIoEntry, "statsReset"> {
+interface PgStatIoDeltaEntry extends Omit<PgStatIoEntry, "statsReset"> {
   statsReset: Date | null;
 }
 

@@ -17,7 +17,9 @@ export function createDashboardClient(
   options: DashboardClientOptions = {},
 ): DashboardClient {
   let redirecting = false;
-  const navigationPending = new Promise<Response>(() => undefined);
+  const navigationPending = new Promise<Response>(() => {
+    // Navigation leaves the page, so this request deliberately remains pending.
+  });
   const link = new RPCLink({
     url: () => new URL(rpcUrl, window.location.origin),
     fetch: async (request, init) => {

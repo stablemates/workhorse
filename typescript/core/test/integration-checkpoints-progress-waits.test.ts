@@ -2,7 +2,6 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { logs, type LogRecord, type LoggerProvider } from "@opentelemetry/api-logs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  Admin,
   MAX_CHECKPOINT_VALUE_BYTES,
   MAX_PROGRESS_VALUE_BYTES,
   Queue,

@@ -1,3 +1,4 @@
+/* oxlint-disable vitest/no-standalone-expect -- dashboardBrowserTest wraps Vitest callbacks. */
 import { existsSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createORPCClient } from "@orpc/client";

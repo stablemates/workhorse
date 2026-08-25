@@ -10,7 +10,7 @@ function assertNonJsonTypeArgumentsFail(queue: Queue, admin: Admin): void {
   // @ts-expect-error Date cannot be stored in a JSON payload column.
   void queue.claim<Date>("worker");
   // @ts-expect-error Date cannot be stored in a JSON result column.
-  void (null as unknown as Admin).getJob<Date>("job");
+  void admin.getJob<Date>("job");
 }
 
 it("constrains claimed payloads and snapshot results to JSON", () => {

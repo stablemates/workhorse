@@ -127,7 +127,9 @@ try {
   );
 } finally {
   if (site.pid && site.exitCode === null) {
-    const exited = new Promise<void>((resolveExit) => site.once("exit", () => resolveExit()));
+    const exited = new Promise<void>((resolveExit) => {
+      site.once("exit", () => resolveExit());
+    });
     if (process.platform === "win32") site.kill("SIGTERM");
     else process.kill(-site.pid, "SIGTERM");
     await Promise.race([

@@ -30,8 +30,7 @@
     "@workhorse-js/drizzle": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.31",
-    "pg": "^8.16.3",
-    "zod": "^4.4.3"
+    "pg": "^8.16.3"
   },
   "devDependencies": {
     "@types/node": "^24.1.0",

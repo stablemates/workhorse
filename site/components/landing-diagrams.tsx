@@ -75,7 +75,7 @@ function LabeledWire({ label, className = "w-16" }: { label: string; className?:
 
 /* ---------- Connected stepper ---------- */
 
-export interface StepperStep {
+interface StepperStep {
   title: string;
   detail: string;
   tone: Tone;
@@ -93,7 +93,7 @@ const nodeTone: Record<Tone, string> = {
  * horizontal from `sm` up. The last step draws no trailing line, so the rail
  * visibly starts and ends with the story.
  */
-export function Stepper({ steps }: { steps: readonly StepperStep[] }) {
+function Stepper({ steps }: { steps: readonly StepperStep[] }) {
   return (
     <ol className="flex flex-col sm:flex-row">
       {steps.map((step, index) => {

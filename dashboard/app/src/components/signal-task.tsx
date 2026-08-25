@@ -1,7 +1,10 @@
 import type { DashboardClient } from "@workhorse-js/dashboard-server";
 import { parseHumanWaitResult } from "../presentation.js";
 import { notifyDashboard, notifyFailure } from "../notifications.js";
-import type { DashboardJobDetail, DashboardSignalWaitRow } from "@workhorse-js/dashboard-server/wire";
+import type {
+  DashboardJobDetail,
+  DashboardSignalWaitRow,
+} from "@workhorse-js/dashboard-server/wire";
 import { Box, Button, Code, Group, Paper, Stack, Text } from "@mantine/core";
 import { ExternalWaitDeadline, SignalPayloadEditor } from "../external-wait-controls.js";
 import { useState } from "react";
@@ -9,7 +12,7 @@ import { formatExact } from "../preferences.js";
 import { useDashboardClient } from "../core.js";
 import { DrawerSection } from "./task-detail-overview.js";
 
-export async function deliverDashboardSignal({
+async function deliverDashboardSignal({
   client,
   auditActor,
   jobId,

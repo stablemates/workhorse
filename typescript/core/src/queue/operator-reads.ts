@@ -37,7 +37,6 @@ import type {
   RetryPolicy,
 } from "../types.js";
 import {
-  DEPENDENCY_OPERATIONS_SCAN_LIMIT,
   EXTERNAL_WAIT_REJECTION_WINDOW_MS,
   MAX_JOB_QUERY_PAGE_SIZE,
   MAX_REDRIVE_BATCH_SIZE,
@@ -175,7 +174,7 @@ export type RateLimitPolicyRow = {
   updated_at: Date | string;
 };
 
-export type RateLimitStatusRow = RateLimitPolicyRow & {
+type RateLimitStatusRow = RateLimitPolicyRow & {
   available_tokens: string;
   throttled_ready: string;
   throttled_keys: string;

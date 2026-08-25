@@ -168,7 +168,7 @@ export type LoadState =
   | { status: "loading"; data: PageData | null; error: null }
   | { status: "ready"; data: PageData; error: null }
   | { status: "error"; data: PageData | null; error: string };
-export const pageRoutes = new Set<PageRoute>([
+const pageRoutes = new Set<PageRoute>([
   "/tasks",
   "/events",
   "/cron",
@@ -177,7 +177,7 @@ export const pageRoutes = new Set<PageRoute>([
   "/workers",
   "/settings",
 ]);
-export const taskFilterPresentation: Record<
+const taskFilterPresentation: Record<
   DashboardTaskFilter,
   {
     label: string;

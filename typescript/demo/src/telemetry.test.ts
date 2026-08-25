@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
 const execFileAsync = promisify(execFile);
+const demoDirectory = resolve("typescript/demo");
 
 describe("demo telemetry preload", () => {
   it("places the tsx watch subcommand before Node preload options", async () => {
@@ -85,6 +86,7 @@ describe("demo telemetry preload", () => {
         process.execPath,
         ["--require", resolve("typescript/demo/telemetry.cjs"), "-e", script],
         {
+          cwd: demoDirectory,
           env: {
             ...process.env,
             WORKHORSE_DEMO_TELEMETRY: "false",
@@ -138,6 +140,7 @@ describe("demo telemetry preload", () => {
       process.execPath,
       ["--require", resolve("typescript/demo/telemetry.cjs"), "-e", script],
       {
+        cwd: demoDirectory,
         env: {
           ...process.env,
           WORKHORSE_DEMO_TELEMETRY: "false",
@@ -199,6 +202,7 @@ describe("demo telemetry preload", () => {
         process.execPath,
         ["--require", resolve("typescript/demo/telemetry.cjs"), "-e", script],
         {
+          cwd: demoDirectory,
           env: {
             ...process.env,
             WORKHORSE_DEMO_TELEMETRY: "false",
@@ -242,9 +246,9 @@ describe("demo telemetry preload", () => {
         response.writeHead(200, { "content-type": "application/json" }).end("{}");
       });
     });
-    await new Promise<void>((resolveListening) =>
-      collector.listen(0, "127.0.0.1", resolveListening),
-    );
+    await new Promise<void>((resolveListening) => {
+      collector.listen(0, "127.0.0.1", resolveListening);
+    });
     const address = collector.address();
     if (!address || typeof address === "string")
       throw new Error("OTLP test collector did not listen");
@@ -266,6 +270,7 @@ describe("demo telemetry preload", () => {
         process.execPath,
         ["--require", resolve("typescript/demo/telemetry.cjs"), "-e", script],
         {
+          cwd: demoDirectory,
           env: {
             ...process.env,
             WORKHORSE_DEMO_TELEMETRY: "true",
@@ -293,9 +298,9 @@ describe("demo telemetry preload", () => {
       expect(local).toContain("workhorse.demo.log_smoke");
       expect(local).toMatch(/"traceId":"[0-9a-f]{32}"/);
     } finally {
-      await new Promise<void>((resolveClosed, rejectClosed) =>
-        collector.close((error) => (error ? rejectClosed(error) : resolveClosed())),
-      );
+      await new Promise<void>((resolveClosed, rejectClosed) => {
+        collector.close((error) => (error ? rejectClosed(error) : resolveClosed()));
+      });
       await rm(directory, { recursive: true, force: true });
     }
   }, 10_000);

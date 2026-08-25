@@ -8,7 +8,12 @@ const servers = new Set<ReturnType<typeof createServer>>();
 
 afterEach(async () => {
   await Promise.all(
-    [...servers].map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
+    [...servers].map(
+      (server) =>
+        new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        }),
+    ),
   );
   servers.clear();
 });

@@ -45,7 +45,7 @@ function dependencyActionPhrase(action: "release" | "cancel" | "fail"): string {
  * each one happens to, so operators could not tell who releases whom. The sentence names both
  * roles, and the caller says which of the two tasks is the one on screen.
  */
-export function dependencyPolicySentence(
+function dependencyPolicySentence(
   policy: Pick<DependencyEdge, "onSuccess" | "onFailure" | "onCancellation">,
   prerequisite: string,
   dependent: string,
@@ -57,7 +57,7 @@ export function dependencyPolicySentence(
   );
 }
 /** Past-tense verb for what a settled dependency edge did to its dependent. */
-export const dependencyResolutionVerb: Record<"release" | "cancel" | "fail", string> = {
+const dependencyResolutionVerb: Record<"release" | "cancel" | "fail", string> = {
   release: "released",
   cancel: "canceled",
   fail: "failed",
@@ -408,7 +408,7 @@ export function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
   );
 }
 /** One stored wait row rendered with its release proof and immutable provenance. */
-export function DurableWaitCard({
+function DurableWaitCard({
   job,
   wait,
   nowMs,

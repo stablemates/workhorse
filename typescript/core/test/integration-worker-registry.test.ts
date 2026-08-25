@@ -1190,7 +1190,9 @@ describe("worker registry", () => {
         return listeners.rows[0]!.pid;
       });
       await pool.query("SELECT pg_terminate_backend($1)", [listenerPid]);
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
 
       await queue.enqueue("notification-reconnect", { message: "after reconnect" });
 
@@ -1232,7 +1234,10 @@ describe("worker registry", () => {
   it("starts polling and stops while the initial LISTEN connection is still pending", async () => {
     const pendingListenerDatabase = {
       query: pool.query.bind(pool),
-      connect: () => new Promise<never>(() => undefined),
+      connect: () =>
+        new Promise<never>(() => {
+          // This connection stays pending until the worker stops.
+        }),
     };
     const pendingQueue = new Queue(pendingListenerDatabase);
     const claimTimes: number[] = [];
@@ -1263,7 +1268,12 @@ describe("worker registry", () => {
 
   it("starts polling and stops while the initial LISTEN query is still pending", async () => {
     const listener = {
-      query: vi.fn<() => Promise<never>>(() => new Promise<never>(() => undefined)),
+      query: vi.fn<() => Promise<never>>(
+        () =>
+          new Promise<never>(() => {
+            // This query stays pending until the worker stops.
+          }),
+      ),
       on: vi.fn<() => void>(),
       removeListener: vi.fn<() => void>(),
       release: vi.fn<(error?: Error) => void>(),

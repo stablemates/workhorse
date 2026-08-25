@@ -2,7 +2,7 @@ import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Pool, PoolClient } from "pg";
 import { Queue, installSchema } from "../src/index.js";
-import type { ClaimedJob, Json, Queryable } from "../src/types.js";
+import type { ClaimedJob, Json } from "../src/types.js";
 import {
   ConventionalQueue,
   conventionalSchema,
@@ -25,10 +25,10 @@ import {
   explainAnalyzeBuffersJson,
 } from "./telemetry.js";
 
-export type ComparativeDesign = "conventional" | "hybrid";
+type ComparativeDesign = "conventional" | "hybrid";
 export type JsonSafe = null | boolean | number | string | JsonSafe[] | { [key: string]: JsonSafe };
 
-export interface ChurnOptions {
+interface ChurnOptions {
   targetJobs: number;
   targetRatePerSecond: number;
   batchSize: number;
@@ -53,7 +53,7 @@ export type ComparativeBenchmarkOptionsInput = Partial<
   churn?: Partial<ChurnOptions>;
 };
 
-export const smokeSafeComparativeDefaults: Readonly<ComparativeBenchmarkOptions> = Object.freeze({
+const smokeSafeComparativeDefaults: Readonly<ComparativeBenchmarkOptions> = Object.freeze({
   seed: 1,
   jobsPerRun: 20,
   enqueueBatchSize: 10,
@@ -102,7 +102,7 @@ export interface ComparativeRunResult {
   telemetry: RunTelemetry;
 }
 
-export interface ChurnSample {
+interface ChurnSample {
   elapsedMs: number;
   sampleDurationMs: number;
   batches: number;
@@ -113,7 +113,7 @@ export interface ChurnSample {
   activity: JsonSafe;
 }
 
-export interface ChurnResult {
+interface ChurnResult {
   design: ComparativeDesign;
   workloadModel: "concurrent-producer-consumer";
   targetJobs: number;
@@ -158,7 +158,7 @@ export interface ExecutionPlanStep {
   designOrder: readonly [ComparativeDesign, ComparativeDesign];
 }
 
-export interface PairedMetricSummary {
+interface PairedMetricSummary {
   ratio: NumericSummary;
   difference: NumericSummary;
 }
@@ -452,14 +452,14 @@ async function resetSchemasInTransaction(client: PoolClient): Promise<void> {
   }
 }
 
-export async function setupComparativeSchemas(pool: Pool): Promise<void> {
+async function setupComparativeSchemas(pool: Pool): Promise<void> {
   const conventional = new ConventionalQueue(pool);
   await installSchema(pool);
   await conventional.setup();
   await resetComparativeSchemas(pool);
 }
 
-export async function resetComparativeSchemas(pool: Pool): Promise<void> {
+async function resetComparativeSchemas(pool: Pool): Promise<void> {
   const client = await pool.connect();
   try {
     await resetSchemasInTransaction(client);
@@ -895,7 +895,3 @@ export async function runComparativeBenchmark(
 export function stringifyComparativeResult(result: ComparativeBenchmarkResult, space = 2): string {
   return JSON.stringify(toJsonSafe(result), null, space);
 }
-
-// Keep Queryable referenced in the public module so structural Pool-compatible callers remain obvious
-// in generated declarations without widening the runner contract away from pg Pool.
-export type ComparativeQueryable = Queryable;

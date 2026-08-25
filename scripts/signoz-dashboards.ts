@@ -30,7 +30,9 @@ async function waitUntilReady(): Promise<void> {
       return;
     } catch (error) {
       lastError = error;
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 1_000));
+      await new Promise((resolveDelay) => {
+        setTimeout(resolveDelay, 1_000);
+      });
     }
   }
   throw lastError;

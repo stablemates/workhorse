@@ -27,7 +27,7 @@ import {
   workersTableRows,
 } from "./admin-format.js";
 
-export const ADMIN_HELP = `Usage: workhorse admin <command> [options]
+const ADMIN_HELP = `Usage: workhorse admin <command> [options]
 
 Inspection commands (safe, read-only):
   jobs         List jobs newest-first with lifecycle filters.

@@ -21,7 +21,9 @@ async function availablePort(): Promise<number> {
   });
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
   return port;
 }
 
@@ -85,7 +87,9 @@ describe.skipIf(
     let output = "";
     child.stdout?.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
     child.stderr?.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
-    const code = await new Promise<number | null>((resolve) => child.once("exit", resolve));
+    const code = await new Promise<number | null>((resolve) => {
+      child.once("exit", resolve);
+    });
 
     expect(code).toBe(1);
     expect(output).toMatch(/unauthenticated.*loopback|loopback.*unauthenticated/i);

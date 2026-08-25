@@ -21,7 +21,7 @@ interface PackageJson {
   scripts?: Record<string, string>;
 }
 
-export async function readPackageJson(directory: string): Promise<PackageJson | null> {
+async function readPackageJson(directory: string): Promise<PackageJson | null> {
   try {
     return JSON.parse(await readFile(path.join(directory, "package.json"), "utf8")) as PackageJson;
   } catch {
