@@ -137,6 +137,7 @@ describe("parity matrix", () => {
   it.each(supportedCells.map((cell) => [cell.row.capability, cell.language, cell] as const))(
     "%s / %s names evidence that exists",
     async (unusedCapability, unusedLanguage, cell) => {
+      expect.hasAssertions();
       await expectEvidence(PARITY_TEST_ROOTS[cell.language], cell.row[cell.language]);
     },
   );
@@ -164,6 +165,7 @@ describe("parity matrix", () => {
   it.each(supportedProductCells.map((cell) => [cell.row.capability, cell.target, cell] as const))(
     "%s / %s names product evidence that exists",
     async (_capability, _target, cell) => {
+      expect.hasAssertions();
       await expectEvidence(PRODUCT_PARITY_TEST_ROOTS[cell.target], cell.row[cell.target]);
     },
   );
