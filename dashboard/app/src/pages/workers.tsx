@@ -1,11 +1,11 @@
 import type { DashboardWorkersPage } from "@stablemates/workhorse-dashboard-server/wire";
 import {
-  Alert,
   Badge,
   Box,
   Code,
   Group,
   Paper,
+  Popover,
   ScrollArea,
   Stack,
   Switch,
@@ -33,15 +33,6 @@ export function WorkersPage({
         title="Workers"
         description="See each worker's capacity, current claims, and recent attempt results."
       />
-      {data.canManageWorkers ? (
-        // Pause is easy to misread as a durable setting, so the surface that offers it says plainly
-        // what it is scoped to. Operators should reach for queue pause when they mean "stop this
-        // work" rather than "quiet this process".
-        <Alert color="blue" variant="light" title="Pausing a worker affects only this process">
-          A paused worker finishes active tasks but accepts no new ones. If the process restarts, it
-          resumes automatically. If work must stay paused, pause the queue instead.
-        </Alert>
-      ) : null}
       {data.workers.length === 0 ? (
         <EmptyState>No worker has reported activity.</EmptyState>
       ) : (
@@ -107,22 +98,42 @@ export function WorkersPage({
                         </Group>
                       </Table.Td>
                       <Table.Td>
-                        <Tooltip
-                          label="Worker controls are unavailable in read-only mode"
-                          disabled={data.canManageWorkers}
+                        <Popover
+                          disabled={!data.canManageWorkers}
+                          width={300}
+                          position="bottom"
+                          withArrow
+                          shadow="md"
                         >
-                          <Box component="span" display="inline-block">
-                            <Switch
-                              size="sm"
-                              checked={!worker.paused}
-                              disabled={!data.canManageWorkers || togglingWorker === worker.id}
-                              aria-label={`${worker.paused ? "Resume" : "Pause"} ${worker.id}`}
-                              onChange={(event) =>
-                                setWorkerPaused(worker.id, !event.currentTarget.checked)
-                              }
-                            />
-                          </Box>
-                        </Tooltip>
+                          <Popover.Target>
+                            <Box component="span" display="inline-block">
+                              <Tooltip
+                                label="Worker controls are unavailable in read-only mode"
+                                disabled={data.canManageWorkers}
+                              >
+                                <Switch
+                                  size="sm"
+                                  checked={!worker.paused}
+                                  disabled={!data.canManageWorkers || togglingWorker === worker.id}
+                                  aria-label={`${worker.paused ? "Resume" : "Pause"} ${worker.id}`}
+                                  onChange={(event) =>
+                                    setWorkerPaused(worker.id, !event.currentTarget.checked)
+                                  }
+                                />
+                              </Tooltip>
+                            </Box>
+                          </Popover.Target>
+                          <Popover.Dropdown>
+                            <Text fw={600} size="sm">
+                              Pausing a worker affects only this process
+                            </Text>
+                            <Text c="dimmed" mt={4} size="xs">
+                              A paused worker finishes active tasks but accepts no new ones. If the
+                              process restarts, it resumes automatically. If work must stay paused,
+                              pause the queue instead.
+                            </Text>
+                          </Popover.Dropdown>
+                        </Popover>
                       </Table.Td>
                       <Table.Td
                         ta="right"
