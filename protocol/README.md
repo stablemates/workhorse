@@ -31,7 +31,9 @@ defaults and field names cannot drift apart.
 
 `v1/cron.md` defines the cron dialect, IANA wall-clock rules, and bounded catch-up contract.
 `v1/cron-occurrences.json` executes that contract through PostgreSQL, including sparse dates,
-macros, special day fields, hashed offsets, and daylight-saving transitions.
+macros, special day fields, hashed offsets, and daylight-saving transitions. TypeScript runs this
+fixture against `cron_occurrences_v1`. Python and Go need no separate consumers because every
+worker calls `fire_due_schedules_v1`, which delegates occurrence calculation to that same function.
 
 `v1/contracts.json` makes the restricted JSON Schema profile executable. TypeScript, Python, and
 Go compile every accepted document and reject the same remote references, dynamic applicators,
