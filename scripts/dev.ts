@@ -7,7 +7,7 @@ const publicPort = Number(process.env.PORT ?? 3000);
 const dashboardDevPort = Number(process.env.WORKHORSE_DASHBOARD_DEV_PORT ?? 4173);
 const mode = process.env.WORKHORSE_DEMO_MODE ?? "development";
 const serverScript = mode === "production" ? "start" : "dev:server";
-const workerScript = mode === "production" ? "start:worker" : "dev:worker";
+const typescriptWorkerScript = mode === "production" ? "start:worker" : "dev:worker";
 // `workhorse-source` rather than the conventional `development`: bundlers apply `development`
 // on their own, so a published package that named it would send a consumer's dev server to a
 // `src/` directory the tarball does not contain. Only this repository asks for this condition.
@@ -33,26 +33,32 @@ const commands: Array<{
     },
   },
   {
-    // Each demo worker owns a process and pool. Nothing but PostgreSQL connects it to the server.
+    // Each demo worker owns a process and database client. PostgreSQL is their only shared state.
     command: "pnpm",
-    arguments: ["--filter", "@workhorse-js/demo", workerScript],
+    arguments: ["--filter", "@workhorse-js/demo", typescriptWorkerScript],
     env: {
       ...process.env,
       WORKHORSE_DEMO_MODE: mode,
-      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-one",
-      WORKHORSE_DEMO_WORKER_PROFILE: "default",
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-typescript",
       NODE_OPTIONS: nodeOptions,
     },
   },
   {
-    command: "pnpm",
-    arguments: ["--filter", "@workhorse-js/demo", workerScript],
+    command: "uv",
+    arguments: ["run", "--project", "python", "python/examples/demo_worker.py"],
     env: {
       ...process.env,
       WORKHORSE_DEMO_MODE: mode,
-      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-partner-api",
-      WORKHORSE_DEMO_WORKER_PROFILE: "partner-api",
-      NODE_OPTIONS: nodeOptions,
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-python",
+    },
+  },
+  {
+    command: "go",
+    arguments: ["-C", "go", "run", "./examples/demo-worker"],
+    env: {
+      ...process.env,
+      WORKHORSE_DEMO_MODE: mode,
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-go",
     },
   },
 ];

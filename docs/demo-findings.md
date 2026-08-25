@@ -1,15 +1,19 @@
 # What does the demo prove?
 
-The demo proves that a normal TypeScript application can enqueue, execute, and inspect Workhorse
-jobs through the public packages. It is a product example, not the compatibility or performance
-test suite.
+The demo proves that a normal TypeScript application can enqueue and inspect jobs which TypeScript,
+Python, and Go workers execute through their public SDKs. It is a product example, not the
+compatibility or performance test suite.
 
 ## Application boundary
 
-The Hono process and two worker processes share only PostgreSQL. The web process uses Drizzle for
-an application-owned transaction that inserts an order and enqueues its job atomically. Each worker
-owns its own pool and registers itself in `workhorse.worker_registry`, so the dashboard discovers
-the fleet without process-local controller objects.
+The Hono process and three language worker processes share only PostgreSQL. The web process uses
+Drizzle for an application-owned transaction that inserts an order and enqueues its job atomically.
+Each worker owns its own database client and registers itself in `workhorse.worker_registry`, so the
+dashboard discovers the fleet without process-local controller objects.
+
+Queue-based dispatch keeps the application-specific handlers on the TypeScript worker. Python and
+Go each serve a dedicated queue and complete a recurring language job, so they exercise real claim,
+heartbeat, settlement, registration, and shutdown paths without claiming job types they don't own.
 
 The application mounts the publishable dashboard host. Development supplies the dashboard's Vite
 middleware, while production serves the built browser bundle through the same host. Passing

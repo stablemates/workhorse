@@ -49,6 +49,7 @@ import {
   DURABLE_TIMER_WAIT_NAME,
   FAILURE_JOB_TYPE,
   LONG_RUNNING_JOB_TYPE,
+  LANGUAGE_WORKER_JOB_TYPE,
   ORDER_JOB_TYPE,
   RECURRING_JOB_TYPE,
   REPORT_JOB_TYPE,
@@ -263,6 +264,12 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
   });
   worker.handle<{ source: string }>(RECURRING_JOB_TYPE, async ({ source }, { job }) => {
     return { source, recurring: true, attempt: job.attempt };
+  });
+  worker.handle<{ language: string }>(LANGUAGE_WORKER_JOB_TYPE, async ({ language }, { job }) => {
+    if (language !== "typescript") {
+      throw new Error(`TypeScript worker received language job for ${language}`);
+    }
+    return { language, runtime: "node", attempt: job.attempt };
   });
   const featureShowcaseHandler: Handler<DemoFeaturePayload> = async (payload, context) => {
     const variant =

@@ -33,32 +33,42 @@ const workerArguments = [
 const processes = [
   {
     name: "server",
+    command: process.execPath,
     arguments: ["--require", "./telemetry.cjs", "dist/index.js"],
     environment: {
       WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-server",
     },
   },
   {
-    name: "worker one",
+    name: "TypeScript worker",
+    command: process.execPath,
     arguments: workerArguments,
     environment: {
-      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-one",
-      WORKHORSE_DEMO_WORKER_PROFILE: "one",
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-typescript",
     },
   },
   {
-    name: "worker two",
-    arguments: workerArguments,
+    name: "Python worker",
+    command: "python3",
+    arguments: ["/opt/workhorse-python-worker.py"],
     environment: {
-      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-two",
-      WORKHORSE_DEMO_WORKER_PROFILE: "two",
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-python",
+      PYTHONPATH: "/opt/workhorse-python",
+    },
+  },
+  {
+    name: "Go worker",
+    command: "/usr/local/bin/workhorse-go-demo-worker",
+    arguments: [],
+    environment: {
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-go",
     },
   },
 ];
 
-const children = processes.map(({ name, arguments: arguments_, environment }) => ({
+const children = processes.map(({ name, command, arguments: arguments_, environment }) => ({
   name,
-  child: spawn(process.execPath, arguments_, {
+  child: spawn(command, arguments_, {
     env: { ...process.env, ...environment },
     stdio: "inherit",
   }),

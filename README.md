@@ -427,9 +427,10 @@ drop its databases without removing the checkout.
 
 ## Run the demo
 
-After `pnpm install`, the demo needs only PostgreSQL 15+ and the local `workhorse` role described above.
-`pnpm dev` starts the Hono server, **two dedicated worker processes**, and the dashboard from source
-through Vite. It does not reset the demo database or build workspace artifacts:
+After `pnpm install`, the demo needs PostgreSQL 15+, Go 1.25+, `uv`, and the local `workhorse` role
+described above. `pnpm dev` starts the Hono server, dedicated TypeScript, Python, and Go workers,
+and the dashboard from source through Vite. It does not reset the demo database or build workspace
+artifacts:
 
 ```bash
 pnpm dev

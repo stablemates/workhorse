@@ -16,6 +16,7 @@ export interface DemoWorkerDefinitionOptions extends Omit<
   "database" | "queue" | "batchMaxSize"
 > {
   concurrency: number;
+  workerId?: string;
   queue?: string;
   queues?: readonly string[];
   scheduleNamespaces?: readonly string[];
@@ -38,6 +39,7 @@ export function createDemoWorkerDefinition(
       scheduleNamespaces: options.scheduleNamespaces ?? [DEMO_SCHEDULE_NAMESPACE],
       pollMs: options.pollMs ?? DEMO_WORKER_POLL_MS,
       concurrency: options.concurrency,
+      workerId: options.workerId,
       maintenanceIntervalMs: options.maintenanceIntervalMs ?? DEMO_MAINTENANCE_INTERVAL_MS,
       maintenanceTaskPollMs: options.maintenanceTaskPollMs ?? DEMO_MAINTENANCE_TASK_POLL_MS,
       registryIntervalMs: options.registryIntervalMs ?? DEMO_REGISTRY_INTERVAL_MS,

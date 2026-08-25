@@ -55,8 +55,10 @@ import {
   DEMO_MAINTENANCE_INTERVAL_MS,
   DEMO_OPERATOR_IDEMPOTENCY_KEY,
   DEMO_OPERATOR_IDEMPOTENCY_SCOPE,
+  DEMO_GO_QUEUE,
   DEMO_PERSISTENT_RETRY_DELAYS_MS,
   DEMO_PERSISTENT_RETRY_POLICIES,
+  DEMO_PYTHON_QUEUE,
   DEMO_QUEUE,
   DEMO_RATE_LIMIT,
   DEMO_RATE_LIMIT_PER_KEY,
@@ -74,19 +76,23 @@ import {
   DURABLE_TIMER_JOB_TYPE,
   FAILURE_JOB_TYPE,
   HEARTBEAT_SCHEDULE_NAME,
+  GO_WORKER_SCHEDULE_NAME,
   HISTORICAL_JOB_COUNT,
   HISTORICAL_SEED_NAME,
   HISTORICAL_WORKER_IDS,
   LONG_RUNNING_JOB_TYPE,
+  LANGUAGE_WORKER_JOB_TYPE,
   LONG_RUNNING_SCHEDULE_NAME,
   LONG_RUNNING_SEED_NAME,
   ORDER_JOB_TYPE,
+  PYTHON_WORKER_SCHEDULE_NAME,
   RECURRING_JOB_TYPE,
   REPORT_JOB_TYPE,
   REPORT_SCHEDULE_NAME,
   REPRESENTATIVE_SEED_NAME,
   RETRY_JOB_TYPE,
   TIMING_JOB_TYPE,
+  TYPESCRIPT_WORKER_SCHEDULE_NAME,
 } from "./constants.js";
 import { orders } from "./schema.js";
 
@@ -475,6 +481,27 @@ function heartbeatSchedule(enabled = true) {
   } as const;
 }
 
+function languageWorkerSchedule(
+  name: string,
+  schedule: string,
+  language: "typescript" | "python" | "go",
+  queue: string,
+  enabled = true,
+) {
+  return {
+    name,
+    schedule,
+    enabled,
+    job: {
+      type: LANGUAGE_WORKER_JOB_TYPE,
+      queue,
+      payload: { language },
+      maxAttempts: 1,
+      tags: ["language-worker", language],
+    },
+  } as const;
+}
+
 function reportSchedule(enabled = true) {
   return {
     name: REPORT_SCHEDULE_NAME,
@@ -678,6 +705,27 @@ export async function syncDemoSchedules(database: Pool): Promise<void> {
   const enabledByName = new Map(existing.rows.map((schedule) => [schedule.name, schedule.enabled]));
   await queue.syncSchedules(DEMO_SCHEDULE_NAMESPACE, [
     heartbeatSchedule(enabledByName.get(HEARTBEAT_SCHEDULE_NAME) ?? true),
+    languageWorkerSchedule(
+      TYPESCRIPT_WORKER_SCHEDULE_NAME,
+      "*/3 * * * *",
+      "typescript",
+      DEMO_QUEUE,
+      enabledByName.get(TYPESCRIPT_WORKER_SCHEDULE_NAME) ?? true,
+    ),
+    languageWorkerSchedule(
+      PYTHON_WORKER_SCHEDULE_NAME,
+      "1-59/3 * * * *",
+      "python",
+      DEMO_PYTHON_QUEUE,
+      enabledByName.get(PYTHON_WORKER_SCHEDULE_NAME) ?? true,
+    ),
+    languageWorkerSchedule(
+      GO_WORKER_SCHEDULE_NAME,
+      "2-59/3 * * * *",
+      "go",
+      DEMO_GO_QUEUE,
+      enabledByName.get(GO_WORKER_SCHEDULE_NAME) ?? true,
+    ),
     reportSchedule(enabledByName.get(REPORT_SCHEDULE_NAME) ?? true),
     longRunningSchedule(enabledByName.get(LONG_RUNNING_SCHEDULE_NAME) ?? true),
     ...featureShowcaseSchedules(enabledByName),

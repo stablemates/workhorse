@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { defineWorkerProcess } from "@stablemates/workhorse";
 import { createDrizzleAdapter } from "@workhorse-js/drizzle";
 import { Pool } from "pg";
@@ -21,32 +23,15 @@ import { createDemoWorkerDefinition } from "./worker-definition.js";
  * their own connection pool, and their own lifecycle, and share nothing with the web tier except
  * PostgreSQL. Run it with `workhorse worker --config <compiled module>`.
  *
- * The launcher starts this definition once per profile, so every worker owns a separate process
- * and pool. Both profiles serve the ordinary and rate-limited queues so the fleet demonstrates
- * queue rotation and claim distribution under shared PostgreSQL policies.
+ * The launcher starts this TypeScript worker beside the Python and Go demo workers. This worker
+ * owns the application-specific handlers and serves the ordinary and rate-limited queues. The
+ * other runtimes use dedicated queues because dispatch is queue-based rather than handler-based.
  */
 const databaseUrl = resolveDemoDatabaseUrl();
 const workerPollMs = process.env.WORKHORSE_WORKER_POLL_MS
   ? Number(process.env.WORKHORSE_WORKER_POLL_MS)
   : DEMO_WORKER_POLL_MS;
-const profiles = {
-  one: {
-    queues: [DEMO_QUEUE, DEMO_RATE_LIMIT_QUEUE],
-    concurrency: DEMO_WORKER_CONCURRENCY[0],
-    scheduleNamespaces: [DEMO_SCHEDULE_NAMESPACE],
-  },
-  two: {
-    queues: [DEMO_QUEUE, DEMO_RATE_LIMIT_QUEUE],
-    concurrency: DEMO_WORKER_CONCURRENCY[1],
-    scheduleNamespaces: [DEMO_SCHEDULE_NAMESPACE],
-  },
-} as const;
-const profileName = process.env.WORKHORSE_DEMO_WORKER_PROFILE;
-const profile = profileName === "one" || profileName === "two" ? profiles[profileName] : undefined;
-if (!profile) {
-  throw new Error("WORKHORSE_DEMO_WORKER_PROFILE must select a configured worker profile");
-}
-
+const workerId = `demo-typescript-${hostname().replaceAll(/[^\w.-]/g, "-")}-${process.pid}-${randomUUID().slice(0, 8)}`;
 const pool = new Pool({ connectionString: databaseUrl, max: 10 });
 const database = createDemoDatabase(pool);
 const adapter = createDrizzleAdapter(database, {
@@ -59,9 +44,10 @@ export default defineWorkerProcess({
   adapter: () => adapter,
   workers: [
     createDemoWorkerDefinition(database, adapter.queue, {
-      queues: profile.queues,
-      concurrency: profile.concurrency,
-      scheduleNamespaces: profile.scheduleNamespaces,
+      queues: [DEMO_QUEUE, DEMO_RATE_LIMIT_QUEUE],
+      concurrency: DEMO_WORKER_CONCURRENCY[0],
+      workerId,
+      scheduleNamespaces: [DEMO_SCHEDULE_NAMESPACE],
       pollMs: workerPollMs,
       onRegistrationError: (error) =>
         demoLogger.error(

@@ -173,8 +173,8 @@ demoLogger.info("workhorse.demo.listening", "Workhorse demo server listening", {
   "server.address": process.env.PORTLESS_URL ?? `http://localhost:${address.port}`,
   "server.port": address.port,
 });
-demoLogger.info("workhorse.demo.worker_topology", "Workers run as a separate process", {
-  "workhorse.demo.worker_topology": "dedicated_process",
+demoLogger.info("workhorse.demo.worker_topology", "Workers run in dedicated language processes", {
+  "workhorse.demo.worker_topology": "typescript_python_go",
 });
 
 let shuttingDown = false;

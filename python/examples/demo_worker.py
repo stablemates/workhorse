@@ -1,0 +1,56 @@
+from __future__ import annotations
+
+import os
+import socket
+from collections.abc import Mapping
+from typing import Any
+from uuid import uuid4
+
+import psycopg
+
+from workhorse import HandlerContext, Json, Worker, run_worker_process
+
+LANGUAGE_JOB_TYPE = "demo.language-worker"
+PYTHON_QUEUE = "demo-python"
+WORKER_CONCURRENCY = 3
+DEFAULT_POLL_MS = 15_000
+
+
+def database_url(environment: Mapping[str, str] = os.environ) -> str:
+    value = environment.get("WORKHORSE_DEMO_DATABASE_URL") or environment.get("DATABASE_URL")
+    if not value:
+        raise RuntimeError("WORKHORSE_DEMO_DATABASE_URL or DATABASE_URL is required")
+    return value
+
+
+def language_job(payload: Any, context: HandlerContext) -> dict[str, Json]:
+    if not isinstance(payload, dict) or payload.get("language") != "python":
+        raise ValueError("Python worker received a job for another language")
+    return {"language": "python", "runtime": "python", "attempt": context.job.attempt}
+
+
+def worker_id() -> str:
+    hostname = "".join(
+        character if character.isalnum() or character in ".-_" else "-"
+        for character in socket.gethostname()
+    )
+    return f"demo-python-{hostname or 'unknown-host'}-{os.getpid()}-{str(uuid4())[:8]}"
+
+
+def main() -> None:
+    poll_ms = int(os.environ.get("WORKHORSE_WORKER_POLL_MS", DEFAULT_POLL_MS))
+    with psycopg.connect(database_url(), autocommit=True) as connection:
+        worker = Worker(
+            connection,
+            queue=PYTHON_QUEUE,
+            worker_id=worker_id(),
+            concurrency=WORKER_CONCURRENCY,
+            poll_ms=poll_ms,
+            maintenance_interval_ms=1_000,
+            registry_interval_ms=250,
+        ).handle(LANGUAGE_JOB_TYPE, language_job)
+        run_worker_process(worker)
+
+
+if __name__ == "__main__":
+    main()

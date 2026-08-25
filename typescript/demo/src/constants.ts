@@ -19,6 +19,7 @@ export const DURABLE_TIMER_PREPARE_CHECKPOINT = "prepare-publication";
 export const DURABLE_TIMER_WAIT_NAME = "publication-delay";
 export const DURABLE_TIMER_PUBLISH_CHECKPOINT = "publish-after-wait";
 export const RECURRING_JOB_TYPE = "demo.recurring";
+export const LANGUAGE_WORKER_JOB_TYPE = "demo.language-worker";
 export const REPORT_JOB_TYPE = "demo.report";
 export const CHILD_STEP_JOB_TYPE = "demo.child-step";
 export const SIGNAL_SENDER_JOB_TYPE = "demo.signal-sender";
@@ -39,6 +40,8 @@ export const DEMO_RECURRING_WAIT_TIMEOUT_MS = 10 * 60_000;
 export const DEMO_BATCH_MAX_SIZE = 3;
 export const DEMO_BATCH_LINGER_MS = 2_000;
 export const DEMO_QUEUE = "demo";
+export const DEMO_PYTHON_QUEUE = "demo-python";
+export const DEMO_GO_QUEUE = "demo-go";
 export const REPRESENTATIVE_SEED_NAME = "default-dashboard-v8";
 export const LONG_RUNNING_SEED_NAME = "long-running-dashboard-v2";
 export const HISTORICAL_SEED_NAME = "historical-dashboard-v1";
@@ -50,12 +53,12 @@ export const DEMO_WORKER_POLL_MS = 15_000;
  * The worker overlaps handlers so the dashboard shows active slot use. Concurrency is
  * configuration, not a runtime control, so nothing mutates it.
  *
- * The demo deliberately does **not** name its workers. Real deployments rarely do either, so
- * letting the default `<hostname>-<pid>-<random>` identity apply keeps the demo an honest picture
- * of what an operator actually sees: a fleet discovered from PostgreSQL rather than a list the web
- * tier was told about in advance.
+ * Each language gets the same capacity so the Workers page compares lifecycle state rather than
+ * presenting an accidental throughput benchmark. The production launchers name their workers by
+ * runtime so the polyglot topology is visible; the integration harness still exercises generated
+ * identities independently.
  */
-export const DEMO_WORKER_CONCURRENCY = [3, 3] as const;
+export const DEMO_WORKER_CONCURRENCY = [3, 3, 3] as const;
 /**
  * Worker identities attached to the seeded historical attempts.
  *
@@ -136,6 +139,9 @@ export const DEMO_PERSISTENT_RETRY_POLICIES: readonly RetryPolicy[] = [
 export const DEMO_RECOVERABLE_RETRY_POLICY: RetryPolicy = { type: "fixed", delayMs: 100 };
 export const DEMO_SCHEDULE_NAMESPACE = "workhorse-demo";
 export const HEARTBEAT_SCHEDULE_NAME = "heartbeat";
+export const TYPESCRIPT_WORKER_SCHEDULE_NAME = "language-worker.typescript";
+export const PYTHON_WORKER_SCHEDULE_NAME = "language-worker.python";
+export const GO_WORKER_SCHEDULE_NAME = "language-worker.go";
 export const REPORT_SCHEDULE_NAME = "demo.report";
 export const LONG_RUNNING_SCHEDULE_NAME = "demo.long-running";
 /**

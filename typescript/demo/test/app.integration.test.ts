@@ -50,13 +50,17 @@ import {
   DURABLE_TIMER_PUBLISH_CHECKPOINT,
   DURABLE_TIMER_WAIT_NAME,
   HEARTBEAT_SCHEDULE_NAME,
+  GO_WORKER_SCHEDULE_NAME,
   installDemoSchema,
   LONG_RUNNING_SCHEDULE_NAME,
+  LANGUAGE_WORKER_JOB_TYPE,
+  PYTHON_WORKER_SCHEDULE_NAME,
   REPORT_SCHEDULE_NAME,
   seedDemoData,
   syncDemoConcurrencyPolicies,
   syncDemoRateLimitPolicies,
   syncDemoSchedules,
+  TYPESCRIPT_WORKER_SCHEDULE_NAME,
 } from "../src/app.js";
 import type { CreateDemoApplicationOptions } from "../src/app.js";
 import type { DashboardRouter } from "@workhorse-js/dashboard/server";
@@ -81,7 +85,7 @@ import { createDemoWorkerDefinition } from "../src/worker-definition.js";
  * `beforeAll` drops and reinstalls the schema, `beforeEach` truncates every table, and `afterAll`
  * drops the demo's own tables. Pointed at the demo database that is destructive to a demo someone
  * is watching: its data disappears mid-session and its tables are gone when the run ends. Worse in
- * the other direction, a running demo registers two workers of its own, and any assertion about the
+ * the other direction, a running demo registers three workers of its own, and any assertion about the
  * fleet then sees extra workers beyond the demo workers the test started.
  */
 const databaseUrl = localDatabaseUrl("test");
@@ -591,6 +595,24 @@ describe("Workhorse demo", () => {
           schedule_name: HEARTBEAT_SCHEDULE_NAME,
           cron_expression: "* * * * *",
           job_type: "demo.recurring",
+          enabled: true,
+        },
+        {
+          schedule_name: GO_WORKER_SCHEDULE_NAME,
+          cron_expression: "2-59/3 * * * *",
+          job_type: LANGUAGE_WORKER_JOB_TYPE,
+          enabled: true,
+        },
+        {
+          schedule_name: PYTHON_WORKER_SCHEDULE_NAME,
+          cron_expression: "1-59/3 * * * *",
+          job_type: LANGUAGE_WORKER_JOB_TYPE,
+          enabled: true,
+        },
+        {
+          schedule_name: TYPESCRIPT_WORKER_SCHEDULE_NAME,
+          cron_expression: "*/3 * * * *",
+          job_type: LANGUAGE_WORKER_JOB_TYPE,
           enabled: true,
         },
         ...DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) => ({
@@ -2783,7 +2805,7 @@ describe("Workhorse demo", () => {
   });
 
   it("declares deterministic demo worker concurrency and projects it through RPC", async () => {
-    expect(DEMO_WORKER_CONCURRENCY).toEqual([3, 3]);
+    expect(DEMO_WORKER_CONCURRENCY).toEqual([3, 3, 3]);
 
     const { app, workhorse } = createTestApplication({ operator: createLocalOperator(database) });
     const client = dashboardClient(app);
@@ -2945,7 +2967,7 @@ describe("Workhorse demo", () => {
       const page = await client.dashboard.workers();
       expect(page.workers.map((worker) => worker.activeJobs).reduce((a, b) => a + b, 0)).toBe(1);
       expect(page.workers).toHaveLength(DEMO_WORKER_CONCURRENCY.length);
-      expect(page.workers.map((worker) => worker.concurrency)).toEqual([3, 3]);
+      expect(page.workers.map((worker) => worker.concurrency)).toEqual([3, 3, 3]);
       for (const worker of page.workers) {
         expect(worker).toMatchObject({ registered: true, draining: false });
         expect(worker.activeSlots).not.toBeNull();

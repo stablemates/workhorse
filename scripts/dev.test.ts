@@ -46,17 +46,16 @@ describe("demo development supervisor", () => {
     async () => {
       const directory = await mkdtemp(join(tmpdir(), "workhorse-dev-supervisor-"));
       const processIdLog = join(directory, "descendants.txt");
-      const fakePnpm = join(directory, "pnpm");
-      await writeFile(
-        fakePnpm,
+      const fakeCommand =
         `#!/usr/bin/env node\n` +
-          `const { appendFileSync } = require("node:fs");\n` +
-          `const { spawn } = require("node:child_process");\n` +
-          `const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });\n` +
-          `appendFileSync(process.env.PROCESS_ID_LOG, child.pid + "\\n");\n` +
-          `setInterval(() => {}, 1000);\n`,
-      );
-      await chmod(fakePnpm, 0o755);
+        `const { appendFileSync } = require("node:fs");\n` +
+        `const { spawn } = require("node:child_process");\n` +
+        `const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });\n` +
+        `appendFileSync(process.env.PROCESS_ID_LOG, child.pid + "\\n");\n` +
+        `setInterval(() => {}, 1000);\n`;
+      const fakeCommands = ["pnpm", "uv", "go"].map((name) => join(directory, name));
+      await Promise.all(fakeCommands.map((command) => writeFile(command, fakeCommand)));
+      await Promise.all(fakeCommands.map((command) => chmod(command, 0o755)));
 
       const supervisor = spawn(process.execPath, ["--import", "tsx", resolve("scripts/dev.ts")], {
         env: {
@@ -68,9 +67,9 @@ describe("demo development supervisor", () => {
       });
 
       try {
-        const processIds = await waitForProcessIds(processIdLog, 3);
+        const processIds = await waitForProcessIds(processIdLog, 4);
         await delay(100);
-        expect((await readFile(processIdLog, "utf8")).trim().split("\n")).toHaveLength(3);
+        expect((await readFile(processIdLog, "utf8")).trim().split("\n")).toHaveLength(4);
         for (const processId of processIds) spawnedProcessIds.add(processId);
 
         supervisor.kill("SIGINT");
