@@ -12220,6 +12220,360 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION workhorse.dashboard_human_waits_v1(p_input jsonb)
+RETURNS jsonb
+LANGUAGE sql
+AS $$
+  WITH parameters AS (
+    SELECT COALESCE((p_input->>'canComplete')::boolean, false) AS can_complete,
+           COALESCE((p_input->>'canSignal')::boolean, false) AS can_signal
+  ), health AS (
+    SELECT workhorse.queue_health_v1() AS value
+  ), diagnostics AS (
+    SELECT jsonb_build_object(
+      'pendingSignals', (value->>'pending_signal_waits')::integer,
+      'pendingHumanDecisions', (value->>'pending_human_waits')::integer,
+      'overdue', (value->>'overdue_external_waits')::integer,
+      'oldestPendingAgeMs', (value->>'oldest_external_wait_age_ms')::double precision,
+      'rejectedDeliveries', (value->>'rejected_wait_deliveries')::integer,
+      'capped', (value->>'external_wait_counts_capped')::boolean
+    ) AS value FROM health
+  ), waits AS (
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'jobId', job_id::text, 'queue', queue_name, 'jobType', job_type,
+      'name', token_name, 'context', context, 'attempt', attempt,
+      'createdAt', workhorse.dashboard_iso_v1(created_at),
+      'deadlineAt', workhorse.dashboard_iso_v1(deadline_at)
+    ) ORDER BY created_at, job_id, token_name), '[]'::jsonb) AS value
+      FROM (
+        SELECT * FROM workhorse.dashboard_human_wait_v1
+         ORDER BY created_at, job_id, token_name LIMIT 50
+      ) bounded
+  ), signal_waits AS (
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'jobId', job_id::text, 'queue', queue_name, 'jobType', job_type,
+      'name', signal_name, 'attempt', attempt,
+      'createdAt', workhorse.dashboard_iso_v1(created_at),
+      'deadlineAt', workhorse.dashboard_iso_v1(deadline_at)
+    ) ORDER BY created_at, job_id, signal_name), '[]'::jsonb) AS value
+      FROM (
+        SELECT * FROM workhorse.dashboard_signal_wait_v1
+         ORDER BY created_at, job_id, signal_name LIMIT 50
+      ) bounded
+  )
+  SELECT jsonb_build_object(
+    'capturedAt', workhorse.dashboard_iso_v1(clock_timestamp()),
+    'canComplete', parameters.can_complete,
+    'canSignal', parameters.can_signal,
+    'diagnostics', diagnostics.value,
+    'waits', waits.value,
+    'signalWaits', signal_waits.value
+  )
+    FROM parameters CROSS JOIN diagnostics CROSS JOIN waits CROSS JOIN signal_waits;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.dashboard_job_detail_v1(p_input jsonb)
+RETURNS jsonb
+LANGUAGE sql
+AS $$
+  WITH parameters AS (
+    SELECT (p_input->>'id')::uuid AS job_id,
+           COALESCE((p_input->>'canSignal')::boolean, false) AS can_signal
+  ), job AS (
+    SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.priority, j.payload,
+           j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms,
+           j.concurrency_key, j.created_at,
+           runtime.state AS runtime_state, runtime.current_attempt AS runtime_attempt,
+           runtime.run_at, runtime.ready_at, runtime.worker_id,
+           runtime.fence_token::text AS fence_token, runtime.acquired_at,
+           runtime.heartbeat_at, runtime.expires_at, runtime.wait_name,
+           runtime.attempt_started_at, runtime.attempt_timeout_at,
+           runtime.cancel_requested_at, runtime.cancel_requested_by, runtime.cancel_reason,
+           runtime.error AS runtime_error,
+           outcome.state AS outcome_state, outcome.current_attempt AS outcome_attempt,
+           outcome.finished_at, workhorse.dashboard_job_result_v1(j.id) AS result,
+           outcome.error AS outcome_error,
+           progress.progress_value, progress.revision::text AS progress_revision,
+           progress.attempt AS progress_attempt,
+           progress.fence_token::text AS progress_fence_token,
+           progress.worker_id AS progress_worker_id,
+           progress.created_at AS progress_created_at,
+           progress.updated_at AS progress_updated_at,
+           signal_wait.deadline_at AS signal_wait_deadline_at
+      FROM parameters
+      JOIN workhorse.dashboard_job_v1 j ON j.id = parameters.job_id
+      LEFT JOIN workhorse.dashboard_job_runtime_v1 runtime ON runtime.job_id = j.id
+      LEFT JOIN workhorse.dashboard_job_outcome_v1 outcome ON outcome.job_id = j.id
+      LEFT JOIN workhorse.dashboard_job_progress_v1 progress ON progress.job_id = j.id
+      LEFT JOIN workhorse.dashboard_signal_wait_v1 signal_wait
+        ON signal_wait.job_id = j.id AND signal_wait.signal_name = runtime.wait_name
+  ), identity AS (
+    SELECT jsonb_build_object(
+      'id', job.id::text, 'queue', job.queue, 'type', job.type, 'priority', job.priority,
+      'state', COALESCE(job.outcome_state, job.runtime_state, 'unknown'),
+      'createdAt', workhorse.dashboard_iso_v1(job.created_at),
+      'retryPolicy', job.retry_policy, 'maxAttempts', job.max_attempts,
+      'deadlineAt', workhorse.dashboard_iso_v1(job.deadline_at),
+      'executionTimeoutMs', job.execution_timeout_ms,
+      'concurrencyKey', job.concurrency_key,
+      'prerequisiteJobId', CASE WHEN count(dependency.*) = 1
+        THEN (array_agg(dependency.prerequisite_job_id))[1]::text END,
+      'prerequisiteJobIds', COALESCE(jsonb_agg(dependency.prerequisite_job_id::text
+        ORDER BY dependency.prerequisite_job_id)
+        FILTER (WHERE dependency.prerequisite_job_id IS NOT NULL), '[]'::jsonb),
+      'dependencyPolicy', CASE WHEN count(dependency.*) > 0 THEN jsonb_build_object(
+        'onSuccess', min(dependency.on_success),
+        'onFailure', min(dependency.on_failure),
+        'onCancellation', min(dependency.on_cancellation)) END,
+      'dependencyReleasedAt', CASE WHEN bool_and(dependency.released_at IS NOT NULL)
+        THEN workhorse.dashboard_iso_v1(max(dependency.released_at)) END,
+      'blockedReason', CASE WHEN job.runtime_state = 'blocked' AND count(dependency.*) > 0
+        THEN 'prerequisite_pending' END
+    ) AS value
+      FROM job
+      LEFT JOIN workhorse.dashboard_job_dependency_v1 dependency
+        ON dependency.dependent_job_id = job.id
+     GROUP BY job.id, job.queue, job.type, job.priority, job.outcome_state, job.runtime_state,
+              job.created_at, job.retry_policy, job.max_attempts, job.deadline_at,
+              job.execution_timeout_ms, job.concurrency_key
+  ), dependency_lineage AS (
+    SELECT jsonb_build_object(
+      'records', COALESCE(jsonb_agg(jsonb_build_object(
+        'dependentJobId', dependent_job_id::text,
+        'prerequisiteJobId', prerequisite_job_id::text,
+        'onSuccess', on_success, 'onFailure', on_failure,
+        'onCancellation', on_cancellation,
+        'createdAt', workhorse.dashboard_iso_v1(created_at),
+        'releasedAt', workhorse.dashboard_iso_v1(released_at), 'resolution', resolution
+      ) ORDER BY dependent_job_id, prerequisite_job_id) FILTER (WHERE ordinal <= 100),
+        '[]'::jsonb),
+      'truncated', count(*) > 100
+    ) AS value
+      FROM (
+        SELECT dependency.*, row_number() OVER (
+          ORDER BY dependent_job_id, prerequisite_job_id) AS ordinal
+          FROM parameters
+          JOIN workhorse.dashboard_job_dependency_v1 dependency
+            ON dependency.dependent_job_id = parameters.job_id
+            OR dependency.prerequisite_job_id = parameters.job_id
+         ORDER BY dependent_job_id, prerequisite_job_id LIMIT 101
+      ) bounded
+  ), child_lineage AS (
+    SELECT jsonb_build_object(
+      'records', COALESCE(jsonb_agg(jsonb_build_object(
+        'parentJobId', parent_job_id::text, 'childJobId', child_job_id::text,
+        'name', child_name, 'type', child_type,
+        'createdAt', workhorse.dashboard_iso_v1(created_at),
+        'joinedAt', workhorse.dashboard_iso_v1(joined_at),
+        'outcomeState', outcome_state, 'error', outcome_error
+      ) ORDER BY created_at, parent_job_id, child_job_id) FILTER (WHERE ordinal <= 101),
+        '[]'::jsonb),
+      'truncated', count(*) > 101
+    ) AS value
+      FROM (
+        SELECT edge.*, child.job_type AS child_type, outcome.state AS outcome_state,
+               outcome.error AS outcome_error,
+               row_number() OVER (ORDER BY edge.created_at, edge.parent_job_id,
+                                            edge.child_job_id) AS ordinal
+          FROM parameters
+          JOIN workhorse.dashboard_job_child_v1 edge
+            ON edge.parent_job_id = parameters.job_id OR edge.child_job_id = parameters.job_id
+          JOIN workhorse.dashboard_job_v1 child ON child.id = edge.child_job_id
+          LEFT JOIN workhorse.dashboard_job_outcome_v1 outcome ON outcome.job_id = edge.child_job_id
+         ORDER BY edge.created_at, edge.parent_job_id, edge.child_job_id LIMIT 102
+      ) bounded
+  ), redrive_lineage AS (
+    SELECT jsonb_build_object(
+      'records', COALESCE(jsonb_agg(jsonb_build_object(
+        'sourceJobId', source_job_id::text, 'targetJobId', target_job_id::text,
+        'requestedBy', requested_by, 'reason', reason,
+        'requestIdPreview', request_id_preview, 'requestIdDigest', request_id_digest,
+        'requestIdLength', request_id_length, 'sourceState', source_state,
+        'targetInitialState', target_initial_state,
+        'requestedAt', workhorse.dashboard_iso_v1(requested_at)
+      ) ORDER BY ordinal) FILTER (WHERE ordinal <= 100), '[]'::jsonb),
+      'truncated', count(*) > 100
+    ) AS value
+      FROM (
+        SELECT lineage.*
+          FROM parameters
+          CROSS JOIN LATERAL workhorse.redrive_lineage_v1(parameters.job_id, 101)
+            WITH ORDINALITY AS lineage(
+              source_job_id, target_job_id, requested_by, reason, request_id_preview,
+              request_id_digest, request_id_length, source_state, target_initial_state,
+              requested_at, ordinal
+            )
+      ) bounded
+  ), concurrency_policy AS (
+    SELECT CASE WHEN policy.queue_name IS NULL THEN NULL ELSE jsonb_build_object(
+      'namespace', policy.namespace, 'maxActive', policy.max_active,
+      'utilizationKnown', measured.value IS NOT NULL,
+      'active', COALESCE((measured.value->>'active')::integer, 0),
+      'available', COALESCE(GREATEST(0, policy.max_active -
+        (measured.value->>'active')::integer), 0),
+      'blockedReady', COALESCE((measured.value->>'blocked_ready')::integer, 0),
+      'maxActivePerKey', policy.max_active_per_key,
+      'saturatedKeys', COALESCE((measured.value->>'saturated_keys')::integer, 0),
+      'highestKeyActive', COALESCE((measured.value->>'highest_key_active')::integer, 0)
+    ) END AS value
+      FROM job
+      LEFT JOIN workhorse.dashboard_concurrency_policy_v1 policy
+        ON policy.queue_name = job.queue
+      LEFT JOIN LATERAL (
+        SELECT item AS value
+          FROM jsonb_array_elements(CASE WHEN job.runtime_state IS NULL THEN '[]'::jsonb
+            ELSE workhorse.queue_health_v1()->'concurrency_policies' END) item
+         WHERE item->>'queue_name' = job.queue
+      ) measured ON true
+  ), signal_wait AS (
+    SELECT CASE WHEN wait_name IS NOT NULL AND signal_wait_deadline_at IS NOT NULL
+      THEN jsonb_build_object('name', wait_name, 'deadlineAt',
+        workhorse.dashboard_iso_v1(signal_wait_deadline_at)) END AS value FROM job
+  ), progress AS (
+    SELECT CASE WHEN progress_revision IS NOT NULL THEN jsonb_build_object(
+      'value', progress_value, 'revision', progress_revision, 'attempt', progress_attempt,
+      'fenceToken', progress_fence_token, 'workerId', progress_worker_id,
+      'createdAt', workhorse.dashboard_iso_v1(progress_created_at),
+      'updatedAt', workhorse.dashboard_iso_v1(progress_updated_at)) END AS value FROM job
+  ), current_state AS (
+    SELECT jsonb_build_object(
+      'runtime', CASE WHEN runtime_state IS NOT NULL THEN jsonb_build_object(
+        'state', runtime_state, 'attempt', runtime_attempt,
+        'runAt', workhorse.dashboard_iso_v1(run_at),
+        'readyAt', workhorse.dashboard_iso_v1(ready_at), 'workerId', worker_id,
+        'fenceToken', fence_token, 'acquiredAt', workhorse.dashboard_iso_v1(acquired_at),
+        'heartbeatAt', workhorse.dashboard_iso_v1(heartbeat_at),
+        'expiresAt', workhorse.dashboard_iso_v1(expires_at), 'waitName', wait_name,
+        'attemptStartedAt', workhorse.dashboard_iso_v1(attempt_started_at),
+        'attemptTimeoutAt', workhorse.dashboard_iso_v1(attempt_timeout_at),
+        'cancellation', CASE WHEN cancel_requested_at IS NOT NULL THEN jsonb_build_object(
+          'requestedAt', workhorse.dashboard_iso_v1(cancel_requested_at),
+          'requestedBy', NULLIF(cancel_requested_by, ''),
+          'reason', NULLIF(cancel_reason, '')) END,
+        'error', runtime_error) END,
+      'outcome', CASE WHEN outcome_state IS NOT NULL THEN jsonb_build_object(
+        'state', outcome_state, 'attempt', outcome_attempt,
+        'finishedAt', workhorse.dashboard_iso_v1(finished_at),
+        'result', result, 'error', outcome_error) END,
+      'result', result, 'error', COALESCE(outcome_error, runtime_error)
+    ) AS value FROM job
+  ), batch_executions AS (
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'id', batch_id, 'attempt', selected_attempt,
+      'dispatchedAt', workhorse.dashboard_iso_v1(dispatched_at),
+      'batchWideFailure', batch_wide_failure, 'members', members
+    ) ORDER BY dispatched_at, batch_id), '[]'::jsonb) AS value
+      FROM (
+        SELECT batch_id, selected_attempt, dispatched_at, batch_wide_failure,
+               jsonb_agg(jsonb_build_object(
+                 'id', member_job_id, 'type', job_type, 'attempt', attempt,
+                 'outcome', outcome, 'error', error) ORDER BY ordinal) AS members
+          FROM (
+            SELECT dispatch.details->>'batch_id' AS batch_id,
+                   dispatch.attempt AS selected_attempt,
+                   dispatch.occurred_at AS dispatched_at,
+                   EXISTS (
+                     SELECT 1 FROM workhorse.dashboard_job_event_v1 failure
+                      WHERE failure.job_id = dispatch.job_id
+                        AND failure.attempt = dispatch.attempt
+                        AND failure.event_type = 'batch_failed'
+                        AND failure.details->>'batch_id' = dispatch.details->>'batch_id'
+                   ) AS batch_wide_failure,
+                   member.ordinal, member.value->>'job_id' AS member_job_id,
+                   COALESCE(member_job.job_type, selected_job.job_type) AS job_type,
+                   (member.value->>'attempt')::integer AS attempt,
+                   history.outcome, history.error
+              FROM parameters
+              JOIN workhorse.dashboard_job_event_v1 dispatch
+                ON dispatch.job_id = parameters.job_id AND dispatch.event_type = 'batch_dispatched'
+              CROSS JOIN LATERAL jsonb_array_elements(dispatch.details->'members')
+                WITH ORDINALITY AS member(value, ordinal)
+              JOIN workhorse.dashboard_job_v1 selected_job ON selected_job.id = dispatch.job_id
+              LEFT JOIN workhorse.dashboard_job_v1 member_job
+                ON member_job.id = (member.value->>'job_id')::uuid
+              LEFT JOIN workhorse.dashboard_attempt_history_v1 history
+                ON history.job_id = (member.value->>'job_id')::uuid
+               AND history.attempt = (member.value->>'attempt')::integer
+          ) batch_rows
+         GROUP BY batch_id, selected_attempt, dispatched_at, batch_wide_failure
+      ) executions
+  ), attempts AS (
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'attempt', attempt, 'workerId', worker_id, 'outcome', outcome,
+      'startedAt', workhorse.dashboard_iso_v1(started_at),
+      'claimedAt', workhorse.dashboard_iso_v1(claimed_at),
+      'finishedAt', workhorse.dashboard_iso_v1(finished_at),
+      'durationMs', extract(epoch FROM finished_at - claimed_at) * 1000,
+      'executionMs', extract(epoch FROM finished_at - claimed_at) * 1000,
+      'elapsedMs', extract(epoch FROM finished_at - started_at) * 1000,
+      'error', error) ORDER BY attempt, attempt_id) FILTER (WHERE attempt_id IS NOT NULL),
+      '[]'::jsonb) AS value
+      FROM parameters
+      LEFT JOIN workhorse.dashboard_attempt_history_v1 history ON history.job_id = parameters.job_id
+  ), checkpoints AS (
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'name', checkpoint_name, 'value', checkpoint_value, 'attempt', attempt,
+      'fenceToken', fence_token::text, 'workerId', worker_id,
+      'createdAt', workhorse.dashboard_iso_v1(created_at)
+    ) ORDER BY created_at, checkpoint_name) FILTER (WHERE checkpoint_name IS NOT NULL),
+      '[]'::jsonb) AS value
+      FROM parameters
+      LEFT JOIN workhorse.dashboard_job_checkpoint_v1 checkpoint
+        ON checkpoint.job_id = parameters.job_id
+  ), waits AS (
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'name', wait_name, 'mode', mode, 'durationMs', duration_ms,
+      'requestedWakeAt', workhorse.dashboard_iso_v1(requested_wake_at),
+      'wakeAt', workhorse.dashboard_iso_v1(wake_at), 'attempt', attempt,
+      'fenceToken', fence_token::text, 'workerId', worker_id,
+      'createdAt', workhorse.dashboard_iso_v1(created_at)
+    ) ORDER BY created_at, wait_name) FILTER (WHERE wait_name IS NOT NULL), '[]'::jsonb) AS value
+      FROM parameters
+      LEFT JOIN workhorse.dashboard_job_wait_v1 wait_record ON wait_record.job_id = parameters.job_id
+  ), events AS (
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'id', event_id::text, 'attempt', attempt, 'type', event_type,
+      'details', details, 'occurredAt', workhorse.dashboard_iso_v1(occurred_at)
+    ) ORDER BY occurred_at, event_id) FILTER (WHERE event_id IS NOT NULL), '[]'::jsonb) AS value
+      FROM parameters
+      LEFT JOIN workhorse.dashboard_job_event_v1 event_record
+        ON event_record.job_id = parameters.job_id
+  )
+  SELECT jsonb_build_object(
+    'identity', identity.value,
+    'dependencyLineage', dependency_lineage.value,
+    'childLineage', child_lineage.value,
+    'redriveLineage', redrive_lineage.value,
+    'concurrencyPolicy', concurrency_policy.value,
+    'signalWait', signal_wait.value,
+    'canSignal', parameters.can_signal,
+    'payload', job.payload,
+    'progress', progress.value,
+    'durability', NULL,
+    'current', current_state.value,
+    'batchExecutions', batch_executions.value,
+    'attempts', attempts.value,
+    'checkpoints', checkpoints.value,
+    'waits', waits.value,
+    'events', events.value
+  )
+    FROM parameters
+    JOIN job ON true
+    JOIN identity ON true
+    JOIN dependency_lineage ON true
+    JOIN child_lineage ON true
+    JOIN redrive_lineage ON true
+    JOIN concurrency_policy ON true
+    JOIN signal_wait ON true
+    JOIN progress ON true
+    JOIN current_state ON true
+    JOIN batch_executions ON true
+    JOIN attempts ON true
+    JOIN checkpoints ON true
+    JOIN waits ON true
+    JOIN events ON true;
+$$;
+
 INSERT INTO workhorse.schema_migration(version, description) VALUES
   (1, 'baseline')
 ON CONFLICT DO NOTHING;

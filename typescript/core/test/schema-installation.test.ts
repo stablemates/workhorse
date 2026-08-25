@@ -266,6 +266,19 @@ describe("schema installation", () => {
       "SELECT estimate::text FROM workhorse.dashboard_job_estimate_v1()",
     );
     expect(Number(estimate.rows[0]?.estimate)).toBeGreaterThanOrEqual(-1);
+
+    const procedures = await pool.query<{ name: string }>(`
+      SELECT proname AS name
+        FROM pg_proc
+        JOIN pg_namespace ON pg_namespace.oid = pg_proc.pronamespace
+       WHERE nspname = 'workhorse'
+         AND proname IN ('dashboard_human_waits_v1', 'dashboard_job_detail_v1')
+       ORDER BY proname
+    `);
+    expect(procedures.rows).toEqual([
+      { name: "dashboard_human_waits_v1" },
+      { name: "dashboard_job_detail_v1" },
+    ]);
   });
 
   it("ships a clean-install artifact without upgrade residue", async () => {
