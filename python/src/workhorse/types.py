@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -236,8 +237,6 @@ class AsyncCancellationToken:
         return self._token.reason
 
     async def wait(self, timeout: float | None = None) -> bool:
-        import asyncio
-
         loop = asyncio.get_running_loop()
         deadline = None if timeout is None else loop.time() + timeout
         while not self.cancelled:

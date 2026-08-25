@@ -191,7 +191,7 @@ def request(
     captured: dict[str, object] = {}
 
     def start_response(status: str, _headers: list[tuple[str, str]]) -> None:
-        captured["status"] = int(status.split()[0])
+        captured["status"] = int(status.split(maxsplit=1)[0])
 
     response = b"".join(cast(Iterable[bytes], host(environ, start_response)))
     return cast(int, captured["status"]), json.loads(response)

@@ -93,7 +93,7 @@ def sync_worker(connection: psycopg.Connection[Any], database_url: str) -> bool:
                 database_url,
                 autocommit=True,
             ),
-            on_notification_error=lambda error: print(error),
+            on_notification_error=print,
         )
         .handle("email.send", handle)
         .run_once()

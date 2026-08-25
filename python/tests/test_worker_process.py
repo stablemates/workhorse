@@ -6,9 +6,12 @@ import subprocess
 import sys
 from pathlib import Path
 from time import monotonic, sleep
+from typing import cast
 
 import psycopg
 import pytest
+
+from workhorse import Queue, Worker, run_worker_process
 
 PROCESS_RUNNER_FIXTURE = Path(__file__).parent / "fixtures" / "process_runner.py"
 CRASH_FIXTURE = Path(__file__).parent / "fixtures" / "crash_worker.py"
@@ -88,10 +91,6 @@ def test_missed_graceful_drain_deadline_exits_with_failure() -> None:
 
 
 def test_shutdown_deadline_rejects_values_outside_the_process_contract() -> None:
-    from typing import cast
-
-    from workhorse import Worker, run_worker_process
-
     with pytest.raises(ValueError, match="shutdown_timeout_ms"):
         run_worker_process(cast(Worker, object()), shutdown_timeout_ms=0)
 
@@ -112,8 +111,6 @@ def test_killed_worker_job_is_recovered_and_completed_once(
     database_url: str,
     tmp_path: Path,
 ) -> None:
-    from workhorse import Queue, Worker
-
     started = tmp_path / "handler-started"
     with psycopg.connect(database_url) as enqueue_connection:
         job_id = Queue(enqueue_connection).enqueue("process.crash-recovery", {})

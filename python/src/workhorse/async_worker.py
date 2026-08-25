@@ -8,7 +8,12 @@ from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, cast
 
 from ._compatibility import AsyncRowExecutor
-from ._drivers import AsyncpgConnection, AsyncPsycopgConnection
+from ._drivers import (
+    AsyncpgConnection,
+    AsyncpgExecutor,
+    AsyncPsycopgConnection,
+    AsyncPsycopgExecutor,
+)
 from ._statements import DriverStatement
 from .types import (
     AsyncBatchHandlerContext,
@@ -225,8 +230,6 @@ class AsyncWorker:
         on_notification_error: Callable[[BaseException], None] | None = None,
         on_registration_error: Callable[[BaseException], None] | None = None,
     ) -> AsyncWorker:
-        from ._drivers import AsyncPsycopgExecutor
-
         if getattr(connection, "autocommit", False) is not True:
             raise ValueError(
                 "AsyncWorker requires a dedicated Psycopg connection in autocommit mode"
@@ -271,8 +274,6 @@ class AsyncWorker:
         on_notification_error: Callable[[BaseException], None] | None = None,
         on_registration_error: Callable[[BaseException], None] | None = None,
     ) -> AsyncWorker:
-        from ._drivers import AsyncpgExecutor
-
         if connection.is_in_transaction():
             raise ValueError("AsyncWorker requires a dedicated asyncpg connection")
         return cls(

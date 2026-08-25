@@ -26,6 +26,7 @@ from ._protocol import serialize_requests, serialize_schedules
 from ._statements import STATEMENTS
 from .errors import (
     HumanWaitIdempotencyConflictError,
+    JobContractValidationError,
     SignalIdempotencyConflictError,
     translate_database_error,
 )
@@ -425,8 +426,6 @@ def _apply_contract(
         validator = compile_contract_schema(cast(Json, document["payload"]))
         cache[(job_type, version)] = validator
     if not validator.is_valid(payload):
-        from .errors import JobContractValidationError
-
         raise JobContractValidationError(job_type, version, "payload")
     request.update(
         {
