@@ -210,7 +210,7 @@ try {
 
   writeFileSync(
     resolve(temporaryRoot, "go.mod"),
-    `module workhorse-doc-example\n\ngo 1.23\n\nrequire github.com/stablemates/workhorse/go v0.0.0\n\nreplace github.com/stablemates/workhorse/go => ${resolve(repositoryRoot, "go")}\n`,
+    `module workhorse-doc-example\n\ngo 1.25\n\nrequire github.com/stablemates/workhorse/go v0.0.0\n\nreplace github.com/stablemates/workhorse/go => ${resolve(repositoryRoot, "go")}\n`,
   );
   const goExamples = [
     ...verifiedDocumentationExamples("go"),

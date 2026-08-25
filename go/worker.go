@@ -896,8 +896,9 @@ func (worker *Worker) claimNextMany(ctx context.Context, executor Executor, limi
 }
 
 type ownershipResult struct {
-	status ownershipStatus
-	err    error
+	status            ownershipStatus
+	expirationSettled bool
+	err               error
 }
 
 func (worker *Worker) execute(
@@ -971,10 +972,16 @@ func (worker *Worker) execute(
 	}
 	if ownership.status == workerOwnershipDeadline {
 		outcome = handlerOutcomeDeadlineExceeded
+		if ownership.expirationSettled {
+			return nil
+		}
 		return worker.settleExpiration(ctx, executor, job)
 	}
 	if ownership.status == workerOwnershipTimeout {
 		outcome = handlerOutcomeTimeout
+		if ownership.expirationSettled {
+			return nil
+		}
 		return worker.settleExpiration(ctx, executor, job)
 	}
 	if ownership.status == workerOwnershipStale {
@@ -1086,7 +1093,7 @@ func (worker *Worker) superviseOwnership(
 			case <-expiration:
 				cancelHandler(expirationCause)
 				status, err := worker.expireOwnership(ctx, job)
-				done <- ownershipResult{status: status, err: err}
+				done <- ownershipResult{status: status, expirationSettled: err == nil, err: err}
 				return
 			}
 		}

@@ -27,7 +27,7 @@ This boundary is about correctness only. It is not a performance claim; see
 | ---------- | -------------- | ------- | ------------------------------------------------------- |
 | Node.js    | 22, 24         | 22      | Even-numbered releases only. `engines.node` is `>=22`.  |
 | Python     | 3.10–3.14      | 3.10    | `stablemates-workhorse` ships one `py3-none-any` wheel. |
-| Go         | 1.23 and newer | 1.23    | The module pins pgx v5.7.6.                             |
+| Go         | 1.25 and newer | 1.25    | The module pins pgx v5.9.2.                             |
 | PostgreSQL | 15, 16, 17, 18 | 15      | No extension beyond the default `plpgsql` is installed. |
 
 The TypeScript suite, including PostgreSQL integration, runs against every combination of the Node
@@ -47,7 +47,7 @@ checks that the active Python and PostgreSQL versions belong to this matrix. Git
 intentionally disabled while the repository is private; when they are restored, each declared
 Python version and PostgreSQL major must run this lane before publication.
 
-The Go module declares Go 1.23 or newer and supports its pinned pgx 5.7.6 release. Its repository
+The Go module declares Go 1.25 or newer and supports its pinned pgx 5.9.2 release. Its repository
 lane exercises enqueue through pgx transactions, pgx pools, and `database/sql` with pgx stdlib. It
 also compiles and runs a separate module through a local `replace` directive. Another external
 module builds every Go example through the public import path. These tests prove the exported module
