@@ -32,11 +32,14 @@ def _start_fixture(mode: str, timeout_ms: int) -> subprocess.Popen[str]:
 
 def _finish(process: subprocess.Popen[str]) -> tuple[str, str]:
     try:
-        return process.communicate(timeout=5)
+        process.wait(timeout=5)
     except subprocess.TimeoutExpired:
         process.kill()
         process.communicate()
         raise
+    assert process.stdout is not None
+    assert process.stderr is not None
+    return process.stdout.read(), process.stderr.read()
 
 
 def _kill_and_reap(process: subprocess.Popen[str]) -> None:
