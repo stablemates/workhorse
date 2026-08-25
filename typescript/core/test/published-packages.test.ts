@@ -256,16 +256,21 @@ describe("ORM adapter entry points", () => {
 });
 
 describe("consumers of the package list", () => {
-  it("leaves the disabled release workflow unchanged until publication is restored", async () => {
+  it("packs and publishes every derived package from its TypeScript workspace location", async () => {
     const workflow = await read(".github/workflows/release.yml");
-    const loops = [...workflow.matchAll(/^\s*for package in (.+); do$/gm)].map(
-      (match) => match[1]!,
+    expect(workflow).toContain(
+      "for location in $(pnpm --silent exec tsx scripts/packages.ts --locations); do",
     );
-    expect(loops.length).toBeGreaterThan(0);
-    for (const loop of loops) expect(loop).toBe("$(pnpm --silent exec tsx scripts/packages.ts)");
-
-    expect(workflow).toContain("dist-tarballs/workhorse-js-core-$version.tgz");
-    expect(workflow).toContain("dist-tarballs/workhorse-js-$package-$version.tgz");
+    expect(workflow).toContain(
+      "for manifest in $(pnpm --silent exec tsx scripts/packages.ts --manifests); do",
+    );
+    expect(workflow).toContain('pnpm --silent --dir "$location" pack');
+    expect(workflow).toContain(
+      "for tarball in $(pnpm --silent exec tsx scripts/packages.ts --tarballs); do",
+    );
+    expect(workflow).toContain('npm publish --provenance --access public "dist-tarballs/$tarball"');
+    expect(workflow).not.toContain("packages/$package");
+    expect(workflow).not.toContain("workhorse-js-");
   });
 
   it("moves scoped dashboard tarballs to stable container artifact names", async () => {

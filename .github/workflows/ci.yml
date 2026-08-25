@@ -32,6 +32,10 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go/go.mod
+      - uses: astral-sh/setup-uv@v9
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
       - run: pnpm lint

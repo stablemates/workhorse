@@ -126,6 +126,15 @@ describe("continuous integration", () => {
     expect(workflow).toContain("npm publish --provenance");
   });
 
+  it("installs the non-Node toolchains before static and release checks", async () => {
+    for (const workflowPath of [".github/workflows/ci.yml", ".github/workflows/release.yml"]) {
+      const workflow = await read(workflowPath);
+      expect(workflow).toContain("actions/setup-go@v7");
+      expect(workflow).toContain("go-version-file: go/go.mod");
+      expect(workflow).toContain("astral-sh/setup-uv@v9");
+    }
+  });
+
   it("benchmarks main on a supported PostgreSQL major under an explicit timeout", async () => {
     const workflow = await read(".github/workflows/benchmark.yml");
 

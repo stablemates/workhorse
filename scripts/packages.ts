@@ -105,8 +105,27 @@ export async function publishedPackages(): Promise<readonly PublishedPackage[]> 
   return [await corePackage(), ...(await workspacePackages())];
 }
 
-// Run directly to print the publishable `typescript/` directory names, one per line, for shell
-// consumers such as the release workflow. Core is deliberately absent and publishes first.
+// Run directly to print one field per package for shell consumers such as the release workflow.
+// The default preserves the original non-core directory list used by older callers.
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
-  for (const entry of await workspacePackages()) process.stdout.write(`${entry.directory}\n`);
+  const output = process.argv[2];
+  const entries = output === undefined ? await workspacePackages() : await publishedPackages();
+  for (const entry of entries) {
+    switch (output) {
+      case undefined:
+        process.stdout.write(`${entry.directory}\n`);
+        break;
+      case "--locations":
+        process.stdout.write(`${entry.location}\n`);
+        break;
+      case "--manifests":
+        process.stdout.write(`${entry.manifest}\n`);
+        break;
+      case "--tarballs":
+        process.stdout.write(`${entry.tarball}\n`);
+        break;
+      default:
+        throw new Error(`Unknown package-list output ${output}`);
+    }
+  }
 }

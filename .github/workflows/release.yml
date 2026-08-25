@@ -51,6 +51,10 @@ jobs:
           node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go/go.mod
+      - uses: astral-sh/setup-uv@v9
       - run: pnpm install --frozen-lockfile
 
       # A tag that disagrees with the manifests would publish a version nobody can reproduce from
@@ -59,7 +63,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          for manifest in package.json packages/*/package.json; do
+          for manifest in $(pnpm --silent exec tsx scripts/packages.ts --manifests); do
             version="$(node -p "require('./$manifest').version")"
             if [ "$version" != "$tag" ]; then
               echo "$manifest is $version but the tag is $tag" >&2
@@ -77,23 +81,20 @@ jobs:
       - name: Pack the publishable packages
         run: |
           mkdir -p dist-tarballs
-          pnpm --silent pack --pack-destination dist-tarballs
-          for package in $(pnpm --silent exec tsx scripts/packages.ts); do
-            pnpm --silent --dir "packages/$package" pack --pack-destination "$PWD/dist-tarballs"
+          for location in $(pnpm --silent exec tsx scripts/packages.ts --locations); do
+            pnpm --silent --dir "$location" pack --pack-destination "$PWD/dist-tarballs"
           done
           ls -l dist-tarballs
 
-      # @workhorse-js/core first: the other packages declare it as a peer, so a failed core publish must
+      # @stablemates/workhorse first: the other packages declare it as a peer, so a failed core publish must
       # not leave dependents pointing at a version that does not exist.
       - name: Publish with provenance
         if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          npm publish --provenance --access public "dist-tarballs/workhorse-js-core-$version.tgz"
-          for package in $(pnpm --silent exec tsx scripts/packages.ts); do
-            npm publish --provenance --access public "dist-tarballs/workhorse-js-$package-$version.tgz"
+          for tarball in $(pnpm --silent exec tsx scripts/packages.ts --tarballs); do
+            npm publish --provenance --access public "dist-tarballs/$tarball"
           done
 
       - uses: actions/upload-artifact@v4
