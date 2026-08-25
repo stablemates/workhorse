@@ -19,12 +19,12 @@ interface LocalDatabaseDefinition {
 
 const localDatabaseDefinitions: Record<LocalDatabasePurpose, LocalDatabaseDefinition> = {
   dev_primary: {
-    environmentVariable: "DATABASE_URL_DEV_PRIMARY",
+    environmentVariable: "DATABASE_URL_PRIMARY",
     suffix: "_dev_primary",
     defaultUrl: "postgres://workhorse:workhorse@localhost:5432/workhorse_dev_primary",
   },
   dev_secondary: {
-    environmentVariable: "DATABASE_URL_DEV_SECONDARY",
+    environmentVariable: "DATABASE_URL_SECONDARY",
     suffix: "_dev_secondary",
     defaultUrl: "postgres://workhorse:workhorse@localhost:5432/workhorse_dev_secondary",
   },

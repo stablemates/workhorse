@@ -19,8 +19,8 @@ describe("local database roles", () => {
 
   it("uses only the environment override for the requested role", () => {
     const environment = {
-      DATABASE_URL_DEV_PRIMARY: "postgres://localhost/custom_dev_primary",
-      DATABASE_URL_DEV_SECONDARY: "postgres://localhost/custom_dev_secondary",
+      DATABASE_URL_PRIMARY: "postgres://localhost/custom_dev_primary",
+      DATABASE_URL_SECONDARY: "postgres://localhost/custom_dev_secondary",
       DATABASE_URL_TEST: "postgres://localhost/custom_test",
       DATABASE_URL_BENCH: "postgres://localhost/custom_bench",
       DATABASE_URL_TEST_PACKED: "postgres://localhost/custom_test_packed",

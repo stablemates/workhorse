@@ -31,8 +31,8 @@ describe("worktree resource commands", () => {
     };
 
     expect(resourceEnvironment(resources)).toEqual({
-      DATABASE_URL_DEV_PRIMARY: resources.databaseUrls.dev_primary,
-      DATABASE_URL_DEV_SECONDARY: resources.databaseUrls.dev_secondary,
+      DATABASE_URL_PRIMARY: resources.databaseUrls.dev_primary,
+      DATABASE_URL_SECONDARY: resources.databaseUrls.dev_secondary,
       DATABASE_URL_TEST: resources.databaseUrls.test,
       DATABASE_URL_BENCH: resources.databaseUrls.bench,
       DATABASE_URL_TEST_PACKED: resources.databaseUrls.test_packed,

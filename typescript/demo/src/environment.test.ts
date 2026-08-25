@@ -6,7 +6,7 @@ describe("demo environment", () => {
     expect(
       resolveDemoDatabaseUrl({
         DATABASE_URL: "postgres://localhost/workhorse_dev",
-        DATABASE_URL_DEV_PRIMARY: "postgres://localhost/workhorse_dev_primary",
+        DATABASE_URL_PRIMARY: "postgres://localhost/workhorse_dev_primary",
       }),
     ).toBe("postgres://localhost/workhorse_dev_primary");
   });

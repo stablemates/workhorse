@@ -410,7 +410,7 @@ Local tooling keeps five databases separate:
 
 `pnpm db:reset:all` recreates all five databases and installs canonical `sql/schema.sql`. Run it after every schema change. Each destructive command verifies its purpose-specific suffix, requires confirmation internally, and refuses remote hosts unless `WORKHORSE_ALLOW_REMOTE_RESET=1` is deliberately set.
 
-The defaults use the local `workhorse` role. Override them independently with `DATABASE_URL_DEV_PRIMARY`, `DATABASE_URL_DEV_SECONDARY`, `DATABASE_URL_TEST`, `DATABASE_URL_BENCH`, and `DATABASE_URL_TEST_PACKED`. Repository tooling does not own generic `DATABASE_URL`; application runtimes and the published CLI may still accept it.
+The defaults use the local `workhorse` role. Override them independently with `DATABASE_URL_PRIMARY`, `DATABASE_URL_SECONDARY`, `DATABASE_URL_TEST`, `DATABASE_URL_BENCH`, and `DATABASE_URL_TEST_PACKED`. Repository tooling does not own generic `DATABASE_URL`; application runtimes and the published CLI may still accept it.
 
 ### Worktrees
 

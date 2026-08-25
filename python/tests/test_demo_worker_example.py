@@ -28,7 +28,7 @@ def test_database_url_reads_development_primary_database() -> None:
     assert (
         demo_worker.database_url(
             {
-                "DATABASE_URL_DEV_PRIMARY": "postgresql:///dev_primary",
+                "DATABASE_URL_PRIMARY": "postgresql:///dev_primary",
                 "DATABASE_URL": "postgresql:///ambient",
             }
         )

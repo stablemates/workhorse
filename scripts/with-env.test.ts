@@ -14,7 +14,7 @@ const probePath = resolve(repositoryRoot, "scripts/with-env-probe.tmp.cjs");
 const probeSource = `require("node:fs").writeFileSync(
   process.env.PROBE_OUTPUT,
   JSON.stringify({
-    primary: process.env.DATABASE_URL_DEV_PRIMARY,
+    primary: process.env.DATABASE_URL_PRIMARY,
     generic: process.env.DATABASE_URL,
     port: process.env.WORKHORSE_API_PORT,
     cwd: process.cwd(),
@@ -53,15 +53,14 @@ describe("repository command environment", () => {
     "overrides a database URL inherited from another checkout",
     async () => {
       const expected = (await readFile(environmentPath, "utf8")).match(
-        /^DATABASE_URL_DEV_PRIMARY=(.*)$/m,
+        /^DATABASE_URL_PRIMARY=(.*)$/m,
       )?.[1];
       expect(expected).toBeDefined();
 
       const result = await runWrapper(
         {
           ...process.env,
-          DATABASE_URL_DEV_PRIMARY:
-            "postgres://workhorse:workhorse@localhost:5432/other_dev_primary",
+          DATABASE_URL_PRIMARY: "postgres://workhorse:workhorse@localhost:5432/other_dev_primary",
           DATABASE_URL: "postgres://workhorse:workhorse@localhost:5432/caller_owned",
         },
         repositoryRoot,
