@@ -70,6 +70,7 @@ import {
   DEMO_SCHEDULE_NAMESPACE,
   DEMO_SEED_IDEMPOTENCY_KEY,
   DEMO_SEED_IDEMPOTENCY_SCOPE,
+  DEMO_SHARED_QUEUE,
   DEMO_TIMING_HANDLER_MS,
   DEMO_TIMING_POLICY_TIMEOUT_MS,
   DEMO_TIMING_TIMEOUT_MS,
@@ -91,6 +92,8 @@ import {
   REPORT_SCHEDULE_NAME,
   REPRESENTATIVE_SEED_NAME,
   RETRY_JOB_TYPE,
+  SHARED_WORKER_JOB_TYPE,
+  SHARED_WORKER_SCHEDULE_NAME,
   TIMING_JOB_TYPE,
   TYPESCRIPT_WORKER_SCHEDULE_NAME,
 } from "./constants.js";
@@ -502,6 +505,20 @@ function languageWorkerSchedule(
   } as const;
 }
 
+function sharedWorkerSchedule(enabled = true) {
+  return {
+    name: SHARED_WORKER_SCHEDULE_NAME,
+    schedule: "* * * * *",
+    enabled,
+    job: {
+      type: SHARED_WORKER_JOB_TYPE,
+      queue: DEMO_SHARED_QUEUE,
+      payload: { source: "schedule" },
+      tags: ["shared-worker"],
+    },
+  } as const;
+}
+
 function reportSchedule(enabled = true) {
   return {
     name: REPORT_SCHEDULE_NAME,
@@ -726,6 +743,7 @@ export async function syncDemoSchedules(database: Pool): Promise<void> {
       DEMO_GO_QUEUE,
       enabledByName.get(GO_WORKER_SCHEDULE_NAME) ?? true,
     ),
+    sharedWorkerSchedule(enabledByName.get(SHARED_WORKER_SCHEDULE_NAME) ?? true),
     reportSchedule(enabledByName.get(REPORT_SCHEDULE_NAME) ?? true),
     longRunningSchedule(enabledByName.get(LONG_RUNNING_SCHEDULE_NAME) ?? true),
     ...featureShowcaseSchedules(enabledByName),

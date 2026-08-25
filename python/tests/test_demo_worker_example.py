@@ -17,6 +17,13 @@ demo_worker = importlib.util.module_from_spec(module_spec)
 module_spec.loader.exec_module(demo_worker)
 
 
+def test_worker_uses_dedicated_and_shared_queues() -> None:
+    assert (demo_worker.PYTHON_QUEUE, demo_worker.SHARED_QUEUE) == (
+        "demo-python",
+        "demo-shared",
+    )
+
+
 def test_database_url_prefers_demo_database() -> None:
     assert (
         demo_worker.database_url(
@@ -44,6 +51,16 @@ def test_language_job_refuses_another_runtime() -> None:
 
     with pytest.raises(ValueError, match="another language"):
         demo_worker.language_job({"language": "go"}, context)
+
+
+def test_shared_job_identifies_python_runtime() -> None:
+    context = cast(HandlerContext, SimpleNamespace(job=SimpleNamespace(attempt=3)))
+
+    assert demo_worker.shared_job({"source": "schedule"}, context) == {
+        "source": "schedule",
+        "runtime": "python",
+        "attempt": 3,
+    }
 
 
 def test_worker_identity_exposes_runtime_and_stays_process_unique() -> None:

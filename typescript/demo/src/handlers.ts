@@ -56,6 +56,7 @@ import {
   RETRY_CHECKPOINT_NAME,
   RETRY_JOB_TYPE,
   SIGNAL_SENDER_JOB_TYPE,
+  SHARED_WORKER_JOB_TYPE,
   TIMING_JOB_TYPE,
 } from "./constants.js";
 import type { DemoDatabase } from "./database.js";
@@ -93,6 +94,19 @@ export interface DemoHandlerDependencies {
     attempt: number,
     fenceToken: bigint,
   ) => void;
+}
+
+/** Execute the runtime-neutral handler shared by all three demo SDKs. */
+export function sharedWorkerJob(payload: Json, attempt: number) {
+  if (
+    typeof payload !== "object" ||
+    payload === null ||
+    Array.isArray(payload) ||
+    typeof payload.source !== "string"
+  ) {
+    throw new Error("Shared worker requires a source");
+  }
+  return { source: payload.source, runtime: "node", attempt };
 }
 
 /** Build one handler-originated showcase payload with every optional field explicitly null. */
@@ -270,6 +284,9 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
       throw new Error(`TypeScript worker received language job for ${language}`);
     }
     return { language, runtime: "node", attempt: job.attempt };
+  });
+  worker.handle(SHARED_WORKER_JOB_TYPE, async (payload, { job }) => {
+    return sharedWorkerJob(payload, job.attempt);
   });
   const featureShowcaseHandler: Handler<DemoFeaturePayload> = async (payload, context) => {
     const variant =

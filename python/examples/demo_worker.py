@@ -11,7 +11,9 @@ import psycopg
 from workhorse import HandlerContext, Json, Worker, run_worker_process
 
 LANGUAGE_JOB_TYPE = "demo.language-worker"
+SHARED_JOB_TYPE = "demo.shared-worker"
 PYTHON_QUEUE = "demo-python"
+SHARED_QUEUE = "demo-shared"
 WORKER_CONCURRENCY = 3
 DEFAULT_POLL_MS = 15_000
 
@@ -29,6 +31,12 @@ def language_job(payload: Any, context: HandlerContext) -> dict[str, Json]:
     return {"language": "python", "runtime": "python", "attempt": context.job.attempt}
 
 
+def shared_job(payload: Any, context: HandlerContext) -> dict[str, Json]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("source"), str):
+        raise ValueError("Shared worker requires a source")
+    return {"source": payload["source"], "runtime": "python", "attempt": context.job.attempt}
+
+
 def worker_id() -> str:
     hostname = "".join(
         character if character.isalnum() or character in ".-_" else "-"
@@ -40,15 +48,19 @@ def worker_id() -> str:
 def main() -> None:
     poll_ms = int(os.environ.get("WORKHORSE_WORKER_POLL_MS", DEFAULT_POLL_MS))
     with psycopg.connect(database_url(), autocommit=True) as connection:
-        worker = Worker(
-            connection,
-            queue=PYTHON_QUEUE,
-            worker_id=worker_id(),
-            concurrency=WORKER_CONCURRENCY,
-            poll_ms=poll_ms,
-            maintenance_interval_ms=1_000,
-            registry_interval_ms=250,
-        ).handle(LANGUAGE_JOB_TYPE, language_job)
+        worker = (
+            Worker(
+                connection,
+                queues=(PYTHON_QUEUE, SHARED_QUEUE),
+                worker_id=worker_id(),
+                concurrency=WORKER_CONCURRENCY,
+                poll_ms=poll_ms,
+                maintenance_interval_ms=1_000,
+                registry_interval_ms=250,
+            )
+            .handle(LANGUAGE_JOB_TYPE, language_job)
+            .handle(SHARED_JOB_TYPE, shared_job)
+        )
         run_worker_process(worker)
 
 

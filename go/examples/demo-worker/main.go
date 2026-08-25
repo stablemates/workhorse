@@ -19,7 +19,9 @@ import (
 
 const (
 	languageJobType         = "demo.language-worker"
+	sharedJobType           = "demo.shared-worker"
 	goQueue                 = "demo-go"
+	sharedQueue             = "demo-shared"
 	workerConcurrency       = 3
 	defaultPollMilliseconds = 15_000
 )
@@ -74,6 +76,23 @@ func languageJob(
 	}, nil
 }
 
+func sharedJob(
+	_ context.Context,
+	payload any,
+	handler *workhorse.HandlerContext,
+) (any, error) {
+	object, ok := payload.(map[string]any)
+	source, hasSource := object["source"].(string)
+	if !ok || !hasSource {
+		return nil, errors.New("shared worker requires a source")
+	}
+	return map[string]any{
+		"source":  source,
+		"runtime": "go",
+		"attempt": handler.Job.Attempt,
+	}, nil
+}
+
 func main() {
 	runContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -97,7 +116,7 @@ func main() {
 	defer pool.Close()
 
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-		Queue:               goQueue,
+		Queues:              []string{goQueue, sharedQueue},
 		WorkerID:            id,
 		Concurrency:         workerConcurrency,
 		PollInterval:        poll,
@@ -110,6 +129,7 @@ func main() {
 		panic(err)
 	}
 	worker.Handle(languageJobType, languageJob)
+	worker.Handle(sharedJobType, sharedJob)
 	if err := worker.Run(runContext); err != nil {
 		panic(err)
 	}

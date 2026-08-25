@@ -7,6 +7,7 @@ import {
   DEMO_QUEUE,
   DEMO_RATE_LIMIT_QUEUE,
   DEMO_SCHEDULE_NAMESPACE,
+  DEMO_SHARED_QUEUE,
   DEMO_WORKER_CONCURRENCY,
   DEMO_WORKER_POLL_MS,
 } from "./constants.js";
@@ -24,8 +25,8 @@ import { createDemoWorkerDefinition } from "./worker-definition.js";
  * PostgreSQL. Run it with `workhorse worker --config <compiled module>`.
  *
  * The launcher starts this TypeScript worker beside the Python and Go demo workers. This worker
- * owns the application-specific handlers and serves the ordinary and rate-limited queues. The
- * other runtimes use dedicated queues because dispatch is queue-based rather than handler-based.
+ * owns the application-specific handlers and serves the ordinary and rate-limited queues. All
+ * three runtimes also serve one shared queue whose handler has the same contract in every SDK.
  */
 const databaseUrl = resolveDemoDatabaseUrl();
 const workerPollMs = process.env.WORKHORSE_WORKER_POLL_MS
@@ -44,7 +45,7 @@ export default defineWorkerProcess({
   adapter: () => adapter,
   workers: [
     createDemoWorkerDefinition(database, adapter.queue, {
-      queues: [DEMO_QUEUE, DEMO_RATE_LIMIT_QUEUE],
+      queues: [DEMO_QUEUE, DEMO_RATE_LIMIT_QUEUE, DEMO_SHARED_QUEUE],
       concurrency: DEMO_WORKER_CONCURRENCY[0],
       workerId,
       scheduleNamespaces: [DEMO_SCHEDULE_NAMESPACE],

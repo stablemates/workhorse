@@ -31,6 +31,8 @@ import {
   DEMO_MAINTENANCE_TASK_POLL_MS,
   DEMO_PERSISTENT_RETRY_DELAYS_MS,
   DEMO_PERSISTENT_RETRY_POLICIES,
+  DEMO_GO_QUEUE,
+  DEMO_PYTHON_QUEUE,
   DEMO_QUEUE,
   DEMO_RATE_LIMIT,
   DEMO_RATE_LIMIT_PER_KEY,
@@ -38,6 +40,7 @@ import {
   DEMO_RATE_LIMIT_QUEUE,
   DEMO_RATE_LIMIT_SEED_JOBS,
   DEMO_SCHEDULE_NAMESPACE,
+  DEMO_SHARED_QUEUE,
   DEMO_TIMING_POLICY_TIMEOUT_MS,
   DEMO_TIMING_TIMEOUT_MS,
   DEMO_HUMAN_WAIT_NAME,
@@ -56,6 +59,8 @@ import {
   LANGUAGE_WORKER_JOB_TYPE,
   PYTHON_WORKER_SCHEDULE_NAME,
   REPORT_SCHEDULE_NAME,
+  SHARED_WORKER_JOB_TYPE,
+  SHARED_WORKER_SCHEDULE_NAME,
   seedDemoData,
   syncDemoConcurrencyPolicies,
   syncDemoRateLimitPolicies,
@@ -574,7 +579,7 @@ describe("Workhorse demo", () => {
 
     expect(
       await pool.query(
-        `SELECT schedule_name, cron_expression, job_type, enabled
+        `SELECT schedule_name, cron_expression, job_type, queue_name, enabled
            FROM workhorse.schedule_definition
           WHERE namespace = $1
           ORDER BY schedule_name`,
@@ -586,42 +591,56 @@ describe("Workhorse demo", () => {
           schedule_name: LONG_RUNNING_SCHEDULE_NAME,
           cron_expression: "* * * * *",
           job_type: "demo.long-running",
+          queue_name: DEMO_QUEUE,
           enabled: true,
         },
         {
           schedule_name: REPORT_SCHEDULE_NAME,
           cron_expression: "*/5 * * * *",
           job_type: "demo.report",
+          queue_name: DEMO_QUEUE,
           enabled: true,
         },
         {
           schedule_name: HEARTBEAT_SCHEDULE_NAME,
           cron_expression: "* * * * *",
           job_type: "demo.recurring",
+          queue_name: DEMO_QUEUE,
           enabled: true,
         },
         {
           schedule_name: GO_WORKER_SCHEDULE_NAME,
           cron_expression: "2-59/3 * * * *",
           job_type: LANGUAGE_WORKER_JOB_TYPE,
+          queue_name: DEMO_GO_QUEUE,
           enabled: true,
         },
         {
           schedule_name: PYTHON_WORKER_SCHEDULE_NAME,
           cron_expression: "1-59/3 * * * *",
           job_type: LANGUAGE_WORKER_JOB_TYPE,
+          queue_name: DEMO_PYTHON_QUEUE,
           enabled: true,
         },
         {
           schedule_name: TYPESCRIPT_WORKER_SCHEDULE_NAME,
           cron_expression: "*/3 * * * *",
           job_type: LANGUAGE_WORKER_JOB_TYPE,
+          queue_name: DEMO_QUEUE,
+          enabled: true,
+        },
+        {
+          schedule_name: SHARED_WORKER_SCHEDULE_NAME,
+          cron_expression: "* * * * *",
+          job_type: SHARED_WORKER_JOB_TYPE,
+          queue_name: DEMO_SHARED_QUEUE,
           enabled: true,
         },
         ...DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) => ({
           schedule_name: family.scheduleName,
           cron_expression: family.schedule,
           job_type: family.jobType,
+          queue_name: DEMO_QUEUE,
           enabled: true,
         })).toSorted((left, right) => left.schedule_name.localeCompare(right.schedule_name)),
       ],

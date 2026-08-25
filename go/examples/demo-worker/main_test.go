@@ -8,6 +8,30 @@ import (
 	workhorse "github.com/stablemates/workhorse/go"
 )
 
+func TestWorkerUsesDedicatedAndSharedQueues(t *testing.T) {
+	if goQueue != "demo-go" || sharedQueue != "demo-shared" {
+		t.Fatalf("unexpected queues: %q, %q", goQueue, sharedQueue)
+	}
+}
+
+func TestSharedJobIdentifiesGoRuntime(t *testing.T) {
+	result, err := sharedJob(
+		context.Background(),
+		map[string]any{"source": "schedule"},
+		&workhorse.HandlerContext{Job: workhorse.ClaimedJob{Attempt: 3}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected object result, got %T", result)
+	}
+	if object["source"] != "schedule" || object["runtime"] != "go" || object["attempt"] != 3 {
+		t.Fatalf("unexpected result: %#v", object)
+	}
+}
+
 func TestLanguageJobIdentifiesGoRuntime(t *testing.T) {
 	result, err := languageJob(
 		context.Background(),

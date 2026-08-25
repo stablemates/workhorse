@@ -11,9 +11,9 @@ Drizzle for an application-owned transaction that inserts an order and enqueues 
 Each worker owns its own database client and registers itself in `workhorse.worker_registry`, so the
 dashboard discovers the fleet without process-local controller objects.
 
-Queue-based dispatch keeps the application-specific handlers on the TypeScript worker. Python and
-Go each serve a dedicated queue and complete a recurring language job, so they exercise real claim,
-heartbeat, settlement, registration, and shutdown paths without claiming job types they don't own.
+Each runtime owns a queue for its application handlers. TypeScript, Python, and Go also compete for
+one runtime-neutral job on `demo-shared`, which exercises compatible claim and settlement through
+every public SDK. The TypeScript worker separately serves the rate-limited `partner-api` queue.
 
 The application mounts the publishable dashboard host. Development supplies the dashboard's Vite
 middleware, while production serves the built browser bundle through the same host. Passing
