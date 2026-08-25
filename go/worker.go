@@ -1271,37 +1271,6 @@ func ownershipCause(job ClaimedJob, status ownershipStatus) error {
 	}
 }
 
-func (worker *Worker) refreshOwnership(ctx context.Context, job ClaimedJob) (ownershipStatus, error) {
-	arguments := append(worker.fencedLease(job).parameters(), int(worker.leaseDuration/time.Millisecond))
-	rows, err := NewPGXExecutor(worker.pool).Query(
-		ctx,
-		protocolStatementRegistry[heartbeatStatementName],
-		arguments...,
-	)
-	if err != nil {
-		return emptyString, err
-	}
-	status, err := parseOwnershipStatus(rows)
-	if err == nil && status != workerOwnershipAccepted {
-		if worker.metrics.enabled {
-			worker.metrics.heartbeatFailures.Add(
-				ctx,
-				1,
-				metric.WithAttributes(attribute.String(heartbeatStatusAttribute, string(status))),
-			)
-		}
-		logWorkerEvent(
-			ctx,
-			worker.logger,
-			slog.LevelInfo,
-			heartbeatRejectedEvent,
-			heartbeatRejectedLogMessage,
-			append(jobLogAttributes(job, worker.workerID), slog.String(heartbeatStatusAttribute, string(status)))...,
-		)
-	}
-	return status, err
-}
-
 func (worker *Worker) expireOwnership(ctx context.Context, job ClaimedJob) (ownershipStatus, error) {
 	deadline := time.Now().Add(expirationRetryBudget)
 	for {

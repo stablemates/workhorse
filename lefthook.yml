@@ -4,6 +4,9 @@ pre-commit:
     - name: check generated SQL catalogues
       glob: "{protocol/v1/manifest.json,scripts/generate-sql-catalogues.ts,go/sql_catalogue_generated.go,typescript/core/src/queue/sql-catalogue.generated.ts,python/src/workhorse/_statements.py}"
       run: pnpm sql-catalogues:check
+    - name: check parity tables
+      glob: "{typescript/core/test/support/parity-capabilities.ts,docs/parity.md,scripts/generate-parity-tables.ts}"
+      run: pnpm parity:check
     - name: check adapter conformance types
       glob: "typescript/adapter-conformance/**"
       run: pnpm --filter @workhorse-js/adapter-conformance typecheck
@@ -19,6 +22,9 @@ pre-commit:
     - name: check generated dashboard specification
       glob: "{dashboard/v1/**,typescript/dashboard-server/spec/**,typescript/dashboard-server/src/router.ts,typescript/dashboard-server/src/wire.ts,go/dashboard/v1_generated.go,python/src/workhorse/dashboard_v1.py}"
       run: pnpm dashboard-spec:check
+    - name: check generated dashboard bundle
+      glob: "{dashboard/app/**,dashboard/v1/bundle/**,dashboard/v1/manifest.json,scripts/build-runtime.ts,scripts/generate-dashboard-bundle.ts,go/dashboard/bundle.json,go/dashboard/read-surface-*.tar.gz,python/src/workhorse/dashboard/bundle.json,python/src/workhorse/dashboard/read-surface-*.tar.gz}"
+      run: pnpm dashboard-bundle:check
     - name: check dashboard types
       glob: "typescript/dashboard/**"
       run: pnpm --filter @workhorse-js/dashboard typecheck
@@ -40,9 +46,15 @@ pre-commit:
     - name: check Python types
       glob: "python/**"
       run: pnpm python:typecheck
+    - name: lint Python
+      glob: "python/**"
+      run: pnpm python:lint
     - name: vet Go
       glob: "go/**"
       run: pnpm go:vet
+    - name: lint Go
+      glob: "go/**"
+      run: pnpm go:lint
     - name: check site types
       glob: "site/**"
       run: pnpm docs:typecheck
