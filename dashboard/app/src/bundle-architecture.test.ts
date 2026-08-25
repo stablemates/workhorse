@@ -26,4 +26,17 @@ describe("dashboard bundle boundaries", () => {
     expect(styles).toContain('@import "@mantine/core/styles/baseline.css"');
     expect(styles).toContain('@import "@mantine/core/styles/AppShell.css"');
   });
+
+  it("loads Mantine base component styles before the components that extend them", () => {
+    expect(styles).toContain('@import "@mantine/core/styles/UnstyledButton.css"');
+    const unstyledButtonImportIndex = styles.indexOf(
+      '@import "@mantine/core/styles/UnstyledButton.css"',
+    );
+
+    for (const component of ["Button", "NavLink"]) {
+      expect(unstyledButtonImportIndex).toBeLessThan(
+        styles.indexOf(`@import "@mantine/core/styles/${component}.css"`),
+      );
+    }
+  });
 });
