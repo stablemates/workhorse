@@ -12574,6 +12574,650 @@ AS $$
     JOIN events ON true;
 $$;
 
+CREATE OR REPLACE FUNCTION workhorse.dashboard_settings_v1(p_input jsonb)
+RETURNS jsonb
+LANGUAGE sql
+AS $$
+  WITH maintenance AS (
+    SELECT * FROM workhorse.get_maintenance_policy_v1()
+  ), retention AS (
+    SELECT * FROM workhorse.get_retention_policy_v1()
+  ), provenance_fields AS (
+    SELECT field.*
+      FROM maintenance CROSS JOIN retention CROSS JOIN LATERAL (VALUES
+        ('maintenance', 'timezone', 'timezone',
+          to_jsonb(maintenance.application_timezone)),
+        ('maintenance', 'partitionPreparationIntervalMs',
+          'partition_preparation_interval_ms',
+          to_jsonb(maintenance.application_partition_preparation_interval_ms)),
+        ('maintenance', 'terminalCleanupIntervalMs', 'terminal_cleanup_interval_ms',
+          to_jsonb(maintenance.application_terminal_cleanup_interval_ms)),
+        ('maintenance', 'historyRetentionLocalTime', 'history_retention_local_time',
+          to_jsonb(to_char(maintenance.application_history_retention_local_time, 'HH24:MI'))),
+        ('maintenance', 'statisticsRollupIntervalMs', 'statistics_rollup_interval_ms',
+          to_jsonb(maintenance.application_statistics_rollup_interval_ms)),
+        ('maintenance', 'statisticsGroupLimit', 'statistics_group_limit',
+          to_jsonb(maintenance.application_statistics_group_limit)),
+        ('maintenance', 'statisticsRecomputeBuckets', 'statistics_recompute_buckets',
+          to_jsonb(maintenance.application_statistics_recompute_buckets)),
+        ('retention', 'jobIdentityRetentionDays', 'job_identity_retention_days',
+          to_jsonb(retention.application_job_identity_retention_days)),
+        ('retention', 'terminalOutcomeRetentionDays', 'terminal_outcome_retention_days',
+          to_jsonb(retention.application_terminal_outcome_retention_days)),
+        ('retention', 'jobEventRetentionDays', 'job_event_retention_days',
+          to_jsonb(retention.application_job_event_retention_days)),
+        ('retention', 'attemptHistoryRetentionDays', 'attempt_history_retention_days',
+          to_jsonb(retention.application_attempt_history_retention_days)),
+        ('retention', 'scheduleOccurrenceRetentionDays', 'schedule_occurrence_retention_days',
+          to_jsonb(retention.application_schedule_occurrence_retention_days)),
+        ('retention', 'statisticsRetentionDays', 'statistics_retention_days',
+          to_jsonb(retention.application_statistics_retention_days)),
+        ('retention', 'terminalJobPruneLimit', 'terminal_job_prune_limit',
+          to_jsonb(retention.application_terminal_job_prune_limit)),
+        ('retention', 'historyPartitionsPerPass', 'history_partitions_per_pass',
+          to_jsonb(retention.application_history_partitions_per_pass)),
+        ('retention', 'defaultPartitionRowsPerPass', 'default_partition_rows_per_pass',
+          to_jsonb(retention.application_default_partition_rows_per_pass)),
+        ('retention', 'occurrenceRowsPerPass', 'occurrence_rows_per_pass',
+          to_jsonb(retention.application_occurrence_rows_per_pass)),
+        ('retention', 'statisticsRowsPerPass', 'statistics_rows_per_pass',
+          to_jsonb(retention.application_statistics_rows_per_pass))
+      ) field(policy, wire_name, column_name, application_default)
+  ), provenance AS (
+    SELECT fields.policy, jsonb_object_agg(fields.wire_name, jsonb_build_object(
+             'source', CASE
+               WHEN fields.column_name = ANY(
+                 CASE fields.policy WHEN 'maintenance' THEN maintenance.operator_overrides
+                                    ELSE retention.operator_overrides END
+               ) THEN 'operator'
+               ELSE 'application'
+             END,
+             'applicationDefault', fields.application_default
+           )) AS document
+      FROM provenance_fields fields CROSS JOIN maintenance CROSS JOIN retention
+     GROUP BY fields.policy
+  ), maintenance_provenance AS (
+    SELECT document FROM provenance WHERE policy = 'maintenance'
+  ), retention_provenance AS (
+    SELECT document FROM provenance WHERE policy = 'retention'
+  ), health AS (
+    SELECT workhorse.queue_health_v1() AS document
+  ), enqueue_rate AS (
+    SELECT COALESCE(sum(stat.enqueued), 0)::bigint AS jobs
+      FROM workhorse.stat_buckets_v1(
+        date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+          - interval '1 hour' + interval '1 minute',
+        clock_timestamp()
+      ) stat
+  ), workers AS (
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+             'id', worker_id,
+             'queue', queue_names[1],
+             'queues', to_jsonb(queue_names),
+             'concurrency', concurrency,
+             'leaseMs', lease_ms,
+             'heartbeatMs', heartbeat_ms,
+             'pollMs', poll_ms,
+             'maintenanceIntervalMs', maintenance_interval_ms,
+             'maintenanceTaskPollMs', maintenance_task_poll_ms,
+             'registryIntervalMs', registry_interval_ms,
+             'lastSeenAt', workhorse.dashboard_iso_v1(last_heartbeat_at)
+           ) ORDER BY worker_id), '[]'::jsonb) AS document
+      FROM workhorse.dashboard_worker_registry_v1
+     WHERE last_heartbeat_at >= clock_timestamp() - GREATEST(
+       interval '30 seconds', registry_interval_ms * 3 * interval '1 millisecond'
+     )
+  )
+  SELECT jsonb_build_object(
+    'capturedAt', workhorse.dashboard_iso_v1(clock_timestamp()),
+    'editable', COALESCE((p_input->>'writable')::boolean, false)
+      AND COALESCE((p_input->>'settingsController')::boolean, false),
+    'maintenance', jsonb_build_object(
+      'timezone', maintenance.timezone,
+      'partitionPreparationIntervalMs', maintenance.partition_preparation_interval_ms,
+      'terminalCleanupIntervalMs', maintenance.terminal_cleanup_interval_ms,
+      'historyRetentionLocalTime', to_char(maintenance.history_retention_local_time, 'HH24:MI'),
+      'statisticsRollupIntervalMs', maintenance.statistics_rollup_interval_ms,
+      'statisticsGroupLimit', maintenance.statistics_group_limit,
+      'statisticsRecomputeBuckets', maintenance.statistics_recompute_buckets,
+      'provenance', maintenance_provenance.document,
+      'updatedAt', workhorse.dashboard_iso_v1(maintenance.updated_at)
+    ),
+    'retention', jsonb_build_object(
+      'jobIdentityRetentionDays', retention.job_identity_retention_days,
+      'terminalOutcomeRetentionDays', retention.terminal_outcome_retention_days,
+      'jobEventRetentionDays', retention.job_event_retention_days,
+      'attemptHistoryRetentionDays', retention.attempt_history_retention_days,
+      'scheduleOccurrenceRetentionDays', retention.schedule_occurrence_retention_days,
+      'statisticsRetentionDays', retention.statistics_retention_days,
+      'terminalJobPruneLimit', retention.terminal_job_prune_limit,
+      'historyPartitionsPerPass', retention.history_partitions_per_pass,
+      'defaultPartitionRowsPerPass', retention.default_partition_rows_per_pass,
+      'occurrenceRowsPerPass', retention.occurrence_rows_per_pass,
+      'statisticsRowsPerPass', retention.statistics_rows_per_pass,
+      'provenance', retention_provenance.document,
+      'updatedAt', workhorse.dashboard_iso_v1(retention.updated_at)
+    ),
+    'recommendationInputs', jsonb_build_object(
+      'reasons', health.document->'status'->'reasons',
+      'statistics', jsonb_build_object(
+        'rolledUpThrough', workhorse.dashboard_iso_v1(
+          (health.document->>'rolled_up_through')::timestamptz),
+        'lagMs', (health.document->>'rollup_lag_ms')::numeric,
+        'lastRunAt', workhorse.dashboard_iso_v1(
+          (health.document->>'last_run_at')::timestamptz)
+      ),
+      'defaultHistoryRows', jsonb_build_object(
+        'jobEvents', (health.document->>'default_event_rows')::integer,
+        'attemptHistory', (health.document->>'default_attempt_rows')::integer
+      ),
+      'defaultHistoryRowsCapped', jsonb_build_object(
+        'jobEvents', (health.document->>'default_event_rows_capped')::boolean,
+        'attemptHistory', (health.document->>'default_attempt_rows_capped')::boolean
+      ),
+      'enqueueRate', jsonb_build_object('jobs', enqueue_rate.jobs, 'windowMs', 3600000)
+    ),
+    'workers', workers.document
+  )
+    FROM maintenance CROSS JOIN retention
+    CROSS JOIN maintenance_provenance CROSS JOIN retention_provenance
+    CROSS JOIN health CROSS JOIN enqueue_rate CROSS JOIN workers;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.dashboard_system_v1(p_input jsonb)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_window text := COALESCE(p_input->>'window', '1h');
+  v_seconds integer;
+  v_minutes double precision;
+  v_health jsonb;
+  v_outcomes jsonb;
+  v_summary record;
+  v_wait record;
+  v_runtime record;
+  v_retry_buckets jsonb;
+  v_queues jsonb;
+  v_retry_types jsonb;
+  v_failing_types jsonb;
+  v_categories jsonb;
+  v_max_lag jsonb;
+  v_oldest_retained jsonb;
+  v_retention jsonb;
+  v_relations jsonb;
+  v_storage jsonb;
+  v_total_storage_bytes bigint;
+  v_partitions jsonb;
+  v_current_error_rate double precision;
+  v_previous_error_rate double precision;
+BEGIN
+  v_seconds := CASE v_window WHEN '15m' THEN 900 WHEN '24h' THEN 86400 ELSE 3600 END;
+  v_minutes := v_seconds::double precision / 60;
+  v_health := workhorse.queue_health_v1();
+
+  WITH buckets AS (
+    SELECT generate_series(
+      date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+        - make_interval(secs => v_seconds) + interval '1 minute',
+      date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01'),
+      interval '1 minute'
+    ) AS bucket_start
+  ), rolled AS (
+    SELECT stat.bucket_start,
+           sum(stat.enqueued)::integer AS enqueued,
+           sum(stat.attempt_succeeded)::integer AS succeeded,
+           sum(stat.attempt_failed)::integer AS failed,
+           sum(stat.attempt_retry)::integer AS retry,
+           sum(stat.attempt_lease_expired)::integer AS lease_expired,
+           sum(stat.attempt_canceled)::integer AS canceled
+      FROM workhorse.stat_buckets_v1(
+        date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+          - make_interval(secs => v_seconds) + interval '1 minute',
+        clock_timestamp()
+      ) stat
+     GROUP BY stat.bucket_start
+  ), rows AS (
+    SELECT buckets.bucket_start,
+           COALESCE(rolled.enqueued, 0)::integer AS enqueued,
+           COALESCE(rolled.succeeded, 0)::integer AS succeeded,
+           COALESCE(rolled.failed, 0)::integer AS failed,
+           COALESCE(rolled.retry, 0)::integer AS retry,
+           COALESCE(rolled.lease_expired, 0)::integer AS lease_expired,
+           COALESCE(rolled.canceled, 0)::integer AS canceled
+      FROM buckets LEFT JOIN rolled USING (bucket_start)
+  )
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+           'bucketStart', workhorse.dashboard_iso_v1(bucket_start),
+           'enqueued', enqueued, 'succeeded', succeeded, 'failed', failed,
+           'retry', retry, 'leaseExpired', lease_expired, 'canceled', canceled
+         ) ORDER BY bucket_start), '[]'::jsonb)
+    INTO v_outcomes FROM rows;
+
+  WITH current_window AS (
+    SELECT COALESCE(sum(stat.enqueued), 0)::integer AS enqueued,
+           COALESCE(sum(stat.attempt_succeeded + stat.attempt_failed
+             + stat.attempt_canceled), 0)::integer AS completed,
+           COALESCE(sum(stat.attempt_succeeded + stat.attempt_failed + stat.attempt_retry
+             + stat.attempt_lease_expired + stat.attempt_canceled + stat.attempt_other),
+             0)::integer AS attempts,
+           COALESCE(sum(stat.attempt_failed + stat.attempt_retry
+             + stat.attempt_lease_expired + stat.attempt_other), 0)::integer AS errors,
+           COALESCE(sum(stat.attempt_lease_expired), 0)::integer AS recovered
+      FROM workhorse.stat_buckets_v1(
+        date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+          - make_interval(secs => v_seconds) + interval '1 minute',
+        clock_timestamp()
+      ) stat
+  ), previous_window AS (
+    SELECT COALESCE(sum(stat.attempt_succeeded + stat.attempt_failed + stat.attempt_retry
+             + stat.attempt_lease_expired + stat.attempt_canceled + stat.attempt_other),
+             0)::integer AS attempts,
+           COALESCE(sum(stat.attempt_failed + stat.attempt_retry
+             + stat.attempt_lease_expired + stat.attempt_other), 0)::integer AS errors
+      FROM workhorse.stat_buckets_v1(
+        date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+          - make_interval(secs => v_seconds * 2) + interval '1 minute',
+        date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+          - make_interval(secs => v_seconds) + interval '1 minute'
+      ) stat
+  )
+  SELECT current_window.*, previous_window.attempts AS previous_attempts,
+         previous_window.errors AS previous_errors
+    INTO v_summary FROM current_window CROSS JOIN previous_window;
+
+  WITH merged AS (
+    SELECT workhorse.stat_sketch_merge_v1(array_agg(stat.wait_sketch)) AS sketch
+      FROM workhorse.stat_buckets_v1(
+        date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+          - make_interval(secs => v_seconds) + interval '1 minute',
+        clock_timestamp()
+      ) stat
+  )
+  SELECT workhorse.stat_sketch_percentile_v1(sketch, 0.50) AS p50,
+         workhorse.stat_sketch_percentile_v1(sketch, 0.95) AS p95,
+         workhorse.stat_sketch_percentile_v1(sketch, 0.99) AS p99
+    INTO v_wait FROM merged;
+
+  SELECT count(*) FILTER (WHERE state = 'ready')::integer AS ready,
+         (extract(epoch FROM clock_timestamp()
+           - min(ready_at) FILTER (WHERE state = 'ready')) * 1000)::text AS oldest_ready_ms,
+         count(*) FILTER (WHERE state = 'scheduled' AND current_attempt > 1)::integer AS backoff,
+         count(*) FILTER (WHERE state = 'scheduled' AND current_attempt > 1
+           AND run_at <= clock_timestamp() + interval '5 minutes')::integer AS due_soon,
+         count(*) FILTER (WHERE state = 'active')::integer AS active,
+         count(*) FILTER (WHERE state = 'active'
+           AND expires_at <= clock_timestamp())::integer AS expired,
+         count(*) FILTER (WHERE state = 'active' AND expires_at > clock_timestamp()
+           AND expires_at <= clock_timestamp() + interval '30 seconds')::integer AS expiring_soon,
+         count(*) FILTER (WHERE state = 'scheduled'
+           AND run_at < clock_timestamp() - interval '10 seconds')::integer AS due_but_unpromoted
+    INTO v_runtime FROM workhorse.dashboard_job_runtime_v1;
+
+  WITH bounds(upper_bound_ms, ordering) AS (
+    VALUES (60000, 1), (300000, 2), (900000, 3), (3600000, 4), (NULL::integer, 5)
+  ), counts AS (
+    SELECT CASE
+             WHEN run_at <= clock_timestamp() + interval '1 minute' THEN 60000
+             WHEN run_at <= clock_timestamp() + interval '5 minutes' THEN 300000
+             WHEN run_at <= clock_timestamp() + interval '15 minutes' THEN 900000
+             WHEN run_at <= clock_timestamp() + interval '1 hour' THEN 3600000
+             ELSE NULL
+           END AS upper_bound_ms,
+           count(*)::integer AS count
+      FROM workhorse.dashboard_job_runtime_v1
+     WHERE state = 'scheduled' AND current_attempt > 1
+     GROUP BY 1
+  )
+  SELECT jsonb_agg(jsonb_build_object(
+           'upperBoundMs', bounds.upper_bound_ms, 'count', COALESCE(counts.count, 0)
+         ) ORDER BY bounds.ordering)
+    INTO v_retry_buckets
+    FROM bounds LEFT JOIN counts ON counts.upper_bound_ms IS NOT DISTINCT FROM bounds.upper_bound_ms;
+
+  WITH rolled AS (
+    SELECT stat.queue_name,
+           COALESCE(sum(stat.enqueued), 0)::integer AS enqueued,
+           COALESCE(sum(stat.attempt_succeeded + stat.attempt_failed
+             + stat.attempt_canceled), 0)::integer AS completed
+      FROM workhorse.stat_buckets_v1(
+        date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+          - make_interval(secs => v_seconds) + interval '1 minute',
+        clock_timestamp()
+      ) stat
+     GROUP BY stat.queue_name
+  ), queue_names AS (
+    SELECT queue_name FROM workhorse.dashboard_job_runtime_v1
+    UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1
+    UNION SELECT queue_name FROM workhorse.dashboard_concurrency_policy_v1
+    UNION SELECT queue_name FROM workhorse.dashboard_rate_limit_policy_v1
+    UNION SELECT queue_name FROM rolled
+  ), runtime AS (
+    SELECT queue_name,
+           count(*) FILTER (WHERE state = 'ready')::integer AS ready,
+           (extract(epoch FROM clock_timestamp()
+             - min(ready_at) FILTER (WHERE state = 'ready')) * 1000)::text AS oldest_ready_ms,
+           count(*) FILTER (WHERE state = 'scheduled'
+             AND run_at <= clock_timestamp() + interval '5 minutes')::integer AS due_soon,
+           count(*) FILTER (WHERE state = 'active')::integer AS active,
+           count(*) FILTER (WHERE state = 'scheduled'
+             AND current_attempt > 1)::integer AS retrying
+      FROM workhorse.dashboard_job_runtime_v1 GROUP BY queue_name
+  ), priorities AS (
+    SELECT runtime.queue_name, job.priority, count(*)::integer AS ready,
+           (extract(epoch FROM clock_timestamp() - min(runtime.ready_at)) * 1000)::text
+             AS oldest_ready_ms
+      FROM workhorse.dashboard_job_runtime_v1 runtime
+      JOIN workhorse.dashboard_job_v1 job ON job.id = runtime.job_id
+     WHERE runtime.state = 'ready'
+     GROUP BY runtime.queue_name, job.priority
+  ), rows AS (
+    SELECT queue_names.queue_name AS queue, COALESCE(control.paused, false) AS paused,
+           COALESCE(runtime.ready, 0)::integer AS ready, runtime.oldest_ready_ms,
+           COALESCE(runtime.due_soon, 0)::integer AS due_soon,
+           COALESCE(runtime.active, 0)::integer AS active,
+           COALESCE(runtime.retrying, 0)::integer AS retrying,
+           COALESCE(rolled.enqueued, 0)::integer AS enqueued,
+           COALESCE(rolled.completed, 0)::integer AS completed
+      FROM queue_names
+      LEFT JOIN workhorse.dashboard_queue_control_v1 control USING (queue_name)
+      LEFT JOIN runtime USING (queue_name)
+      LEFT JOIN rolled USING (queue_name)
+  )
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+           'queue', rows.queue,
+           'paused', rows.paused,
+           'ready', rows.ready,
+           'oldestReadyMs', rows.oldest_ready_ms,
+           'priorityBacklog', COALESCE((
+             SELECT jsonb_agg(jsonb_build_object(
+                      'priority', priority, 'ready', ready,
+                      'oldestReadyMs', oldest_ready_ms
+                    ) ORDER BY priority DESC)
+               FROM priorities WHERE priorities.queue_name = rows.queue
+           ), '[]'::jsonb),
+           'dueSoon', rows.due_soon,
+           'active', rows.active,
+           'retrying', rows.retrying,
+           'enqueuedPerMinute', rows.enqueued / v_minutes,
+           'completedPerMinute', rows.completed / v_minutes,
+           'concurrencyPolicy', (
+             SELECT jsonb_build_object(
+               'namespace', policy->>'namespace',
+               'maxActive', (policy->>'max_active')::integer,
+               'utilizationKnown', true,
+               'active', (policy->>'active')::integer,
+               'available', GREATEST(0, (policy->>'max_active')::integer
+                 - (policy->>'active')::integer),
+               'blockedReady', (policy->>'blocked_ready')::integer,
+               'maxActivePerKey', (policy->>'max_active_per_key')::integer,
+               'saturatedKeys', (policy->>'saturated_keys')::integer,
+               'highestKeyActive', (policy->>'highest_key_active')::integer
+             ) FROM jsonb_array_elements(v_health->'concurrency_policies') policy
+               WHERE policy->>'queue_name' = rows.queue
+           ),
+           'rateLimitPolicy', (
+             SELECT jsonb_build_object(
+               'namespace', policy->>'namespace',
+               'rate', jsonb_build_object(
+                 'limit', (policy->>'rate_limit')::integer,
+                 'intervalMs', (policy->>'rate_interval_ms')::integer,
+                 'burst', (policy->>'rate_burst')::integer),
+               'perKey', CASE WHEN policy->'per_key_limit' = 'null'::jsonb THEN NULL
+                 ELSE jsonb_build_object(
+                   'limit', (policy->>'per_key_limit')::integer,
+                   'intervalMs', (policy->>'per_key_interval_ms')::integer,
+                   'burst', (policy->>'per_key_burst')::integer) END,
+               'availableTokens', (policy->>'available_tokens')::numeric,
+               'throttledReady', (policy->>'throttled_ready')::integer,
+               'throttledKeys', (policy->>'throttled_keys')::integer,
+               'nextEligibleAt', workhorse.dashboard_iso_v1(
+                 (policy->>'next_eligible_at')::timestamptz)
+             ) FROM jsonb_array_elements(v_health->'rate_limit_policies') policy
+               WHERE policy->>'queue_name' = rows.queue
+           )
+         ) ORDER BY rows.queue), '[]'::jsonb)
+    INTO v_queues FROM rows;
+
+  WITH rows AS (
+    SELECT job.queue_name AS queue, job.job_type AS type, count(*)::integer AS count
+      FROM workhorse.dashboard_job_runtime_v1 runtime
+      JOIN workhorse.dashboard_job_v1 job ON job.id = runtime.job_id
+     WHERE runtime.state = 'scheduled' AND runtime.current_attempt > 1
+     GROUP BY job.queue_name, job.job_type
+     ORDER BY count DESC, job.queue_name, job.job_type
+     LIMIT 3
+  )
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+           'queue', queue, 'type', type, 'count', count
+         ) ORDER BY count DESC, queue, type), '[]'::jsonb)
+    INTO v_retry_types FROM rows;
+
+  WITH rows AS (
+    SELECT stat.queue_name AS queue, stat.job_type AS type,
+           sum(stat.attempt_succeeded + stat.attempt_failed + stat.attempt_retry
+             + stat.attempt_lease_expired + stat.attempt_canceled
+             + stat.attempt_other)::integer AS attempts,
+           sum(stat.attempt_failed + stat.attempt_retry
+             + stat.attempt_lease_expired + stat.attempt_other)::integer AS errors,
+           sum(stat.attempt_failed)::integer AS terminal_failures,
+           (array_agg(stat.last_error ORDER BY stat.last_error_at DESC NULLS LAST)
+             FILTER (WHERE stat.last_error IS NOT NULL))[1] AS last_error,
+           max(stat.last_attempt_at) AS last_seen_at
+      FROM workhorse.stat_buckets_v1(
+        date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+          - make_interval(secs => v_seconds) + interval '1 minute',
+        clock_timestamp()
+      ) stat
+     GROUP BY stat.queue_name, stat.job_type
+    HAVING sum(stat.attempt_failed + stat.attempt_retry
+      + stat.attempt_lease_expired + stat.attempt_other) > 0
+     ORDER BY errors DESC, last_seen_at DESC
+     LIMIT 8
+  )
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+           'queue', queue, 'type', type, 'attempts', attempts,
+           'errorRate', CASE WHEN attempts = 0 THEN 0 ELSE errors::double precision / attempts END,
+           'terminalFailures', terminal_failures, 'lastError', last_error,
+           'lastSeenAt', workhorse.dashboard_iso_v1(last_seen_at)
+         ) ORDER BY errors DESC, last_seen_at DESC), '[]'::jsonb)
+    INTO v_failing_types FROM rows;
+
+  v_categories := jsonb_build_array(
+    jsonb_build_object('category', 'jobIdentity',
+      'retentionDays', (v_health->>'job_identity_retention_days')::integer,
+      'lagMs', (v_health->>'job_identity_lag_ms')::numeric,
+      'oldestRetainedAt', workhorse.dashboard_iso_v1(
+        (v_health->>'oldest_job_identity_at')::timestamptz), 'prunedByPartition', false),
+    jsonb_build_object('category', 'terminalOutcome',
+      'retentionDays', (v_health->>'terminal_outcome_retention_days')::integer,
+      'lagMs', (v_health->>'terminal_outcome_lag_ms')::numeric,
+      'oldestRetainedAt', workhorse.dashboard_iso_v1(
+        (v_health->>'oldest_terminal_outcome_at')::timestamptz), 'prunedByPartition', false),
+    jsonb_build_object('category', 'jobEvents',
+      'retentionDays', (v_health->>'job_event_retention_days')::integer,
+      'lagMs', (v_health->>'job_event_lag_ms')::numeric,
+      'oldestRetainedAt', workhorse.dashboard_iso_v1(
+        (v_health->>'oldest_job_event_at')::timestamptz), 'prunedByPartition', true),
+    jsonb_build_object('category', 'attemptHistory',
+      'retentionDays', (v_health->>'attempt_history_retention_days')::integer,
+      'lagMs', (v_health->>'attempt_history_lag_ms')::numeric,
+      'oldestRetainedAt', workhorse.dashboard_iso_v1(
+        (v_health->>'oldest_attempt_history_at')::timestamptz), 'prunedByPartition', true),
+    jsonb_build_object('category', 'scheduleOccurrences',
+      'retentionDays', (v_health->>'schedule_occurrence_retention_days')::integer,
+      'lagMs', (v_health->>'schedule_occurrence_lag_ms')::numeric,
+      'oldestRetainedAt', workhorse.dashboard_iso_v1(
+        (v_health->>'oldest_schedule_occurrence_at')::timestamptz), 'prunedByPartition', false),
+    jsonb_build_object('category', 'statistics',
+      'retentionDays', (v_health->>'statistics_retention_days')::integer,
+      'lagMs', (v_health->>'statistics_lag_ms')::numeric,
+      'oldestRetainedAt', workhorse.dashboard_iso_v1(
+        (v_health->>'oldest_statistics_at')::timestamptz), 'prunedByPartition', false)
+  );
+
+  SELECT value INTO v_max_lag
+    FROM jsonb_array_elements(v_categories) value
+   WHERE (value->>'lagMs')::numeric > 0
+   ORDER BY (value->>'lagMs')::numeric DESC LIMIT 1;
+  SELECT value INTO v_oldest_retained
+    FROM jsonb_array_elements(v_categories) value
+   WHERE value->>'oldestRetainedAt' IS NOT NULL
+   ORDER BY value->>'oldestRetainedAt' LIMIT 1;
+
+  v_retention := jsonb_build_object(
+    'policyUpdatedAt', workhorse.dashboard_iso_v1((v_health->>'updated_at')::timestamptz),
+    'categories', v_categories,
+    'maxLagMs', (v_max_lag->>'lagMs')::numeric,
+    'maxLagCategory', v_max_lag->>'category',
+    'oldestRetainedAt', v_oldest_retained->>'oldestRetainedAt',
+    'oldestRetainedCategory', v_oldest_retained->>'category',
+    'eligibleHistoryPartitions', jsonb_build_object(
+      'jobEvents', (v_health->>'eligible_event_partitions')::integer,
+      'attemptHistory', (v_health->>'eligible_attempt_partitions')::integer),
+    'defaultHistoryRows', jsonb_build_object(
+      'jobEvents', (v_health->>'default_event_rows')::integer,
+      'attemptHistory', (v_health->>'default_attempt_rows')::integer),
+    'defaultHistoryRowsCapped', jsonb_build_object(
+      'jobEvents', (v_health->>'default_event_rows_capped')::boolean,
+      'attemptHistory', (v_health->>'default_attempt_rows_capped')::boolean)
+  );
+
+  WITH names(relation, ordering) AS (
+    VALUES ('job', 1), ('job_outcome', 2), ('job_runtime', 3), ('job_query', 4),
+           ('job_event', 5), ('attempt_history', 6), ('schedule_occurrence', 7),
+           ('job_stat_bucket', 8), ('job_stat_bucket_hour', 9), ('job_stat_bucket_day', 10)
+  ), observations AS (
+    SELECT value FROM jsonb_array_elements(v_health->'observations'->'relations') value
+  ), rows AS (
+    SELECT names.ordering, names.relation,
+           COALESCE((observations.value->>'total_bytes')::bigint, 0) AS total_bytes,
+           COALESCE((observations.value->>'table_bytes')::bigint, 0) AS table_bytes,
+           COALESCE((observations.value->>'index_bytes')::bigint, 0) AS index_bytes,
+           COALESCE((observations.value->>'live_tuples')::bigint, 0) AS live_tuples,
+           COALESCE((observations.value->>'dead_tuples')::bigint, 0) AS dead_tuples,
+           COALESCE((observations.value->>'partitions')::integer, 0) AS partitions,
+           COALESCE(observations.value->>'last_autovacuum',
+                    observations.value->>'last_vacuum') AS last_vacuum_at
+      FROM names LEFT JOIN observations ON observations.value->>'relation' = names.relation
+  )
+  SELECT jsonb_agg(jsonb_build_object(
+           'relation', relation, 'totalBytes', total_bytes, 'tableBytes', table_bytes,
+           'indexBytes', index_bytes, 'rows', live_tuples, 'deadRows', dead_tuples,
+           'partitions', partitions,
+           'lastVacuumAt', workhorse.dashboard_iso_v1(last_vacuum_at::timestamptz)
+         ) ORDER BY total_bytes DESC, ordering), sum(total_bytes)
+    INTO v_relations, v_total_storage_bytes FROM rows;
+
+  v_storage := jsonb_build_object(
+    'rollup', jsonb_build_object(
+      'rolledUpThrough', workhorse.dashboard_iso_v1(
+        (v_health->>'rolled_up_through')::timestamptz),
+      'lagMs', (v_health->>'rollup_lag_ms')::numeric,
+      'lastRunAt', workhorse.dashboard_iso_v1((v_health->>'last_run_at')::timestamptz),
+      'buckets', (v_health->>'buckets')::integer,
+      'oldestBucketAt', workhorse.dashboard_iso_v1(
+        (v_health->>'oldest_statistics_at')::timestamptz),
+      'newestBucketAt', workhorse.dashboard_iso_v1((v_health->>'newest_bucket_at')::timestamptz),
+      'stalled', EXISTS (
+        SELECT 1 FROM jsonb_array_elements(v_health->'status'->'reasons') reason
+         WHERE reason->>'code' = 'rollup-stalled'
+      )
+    ),
+    'relations', v_relations,
+    'totalBytes', v_total_storage_bytes
+  );
+
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+           'day', value->>'day',
+           'startsAt', workhorse.dashboard_iso_v1((value->>'starts_at')::timestamptz),
+           'eventExists', (value->>'has_job_events')::boolean,
+           'attemptExists', (value->>'has_attempt_history')::boolean
+         ) ORDER BY value->>'day'), '[]'::jsonb)
+    INTO v_partitions FROM jsonb_array_elements(v_health->'history_partition_days') value;
+
+  v_current_error_rate := CASE WHEN v_summary.attempts = 0 THEN 0
+    ELSE v_summary.errors::double precision / v_summary.attempts END;
+  v_previous_error_rate := CASE WHEN v_summary.previous_attempts = 0 THEN 0
+    ELSE v_summary.previous_errors::double precision / v_summary.previous_attempts END;
+
+  RETURN jsonb_build_object(
+    'capturedAt', workhorse.dashboard_iso_v1(clock_timestamp()),
+    'window', v_window,
+    'windowSeconds', v_seconds,
+    'status', v_health->'status',
+    'pausedQueues', COALESCE((
+      SELECT jsonb_agg(value->'queue' ORDER BY value->>'queue')
+        FROM jsonb_array_elements(v_queues) value WHERE (value->>'paused')::boolean
+    ), '[]'::jsonb),
+    'kpis', jsonb_build_object(
+      'drain', jsonb_build_object(
+        'enqueuedPerMinute', v_summary.enqueued / v_minutes,
+        'completedPerMinute', v_summary.completed / v_minutes,
+        'netPerMinute', (v_summary.completed - v_summary.enqueued) / v_minutes),
+      'backlog', jsonb_build_object(
+        'ready', v_runtime.ready, 'oldestReadyMs', v_runtime.oldest_ready_ms),
+      'errorRate', jsonb_build_object(
+        'current', v_current_error_rate, 'previous', v_previous_error_rate,
+        'delta', v_current_error_rate - v_previous_error_rate),
+      'queueWait', jsonb_build_object(
+        'p50Ms', v_wait.p50, 'p95Ms', v_wait.p95, 'p99Ms', v_wait.p99),
+      'retry', jsonb_build_object(
+        'backoff', v_runtime.backoff, 'dueSoon', v_runtime.due_soon,
+        'buckets', v_retry_buckets),
+      'lease', jsonb_build_object(
+        'active', v_runtime.active, 'expired', v_runtime.expired,
+        'expiringSoon', v_runtime.expiring_soon, 'recovered', v_summary.recovered),
+      'dependencies', jsonb_build_object(
+        'blockedJobs', (v_health->>'dependency_blocked_jobs')::integer,
+        'pendingEdges', (v_health->>'dependency_pending_edges')::integer,
+        'failedResolutions', (v_health->>'dependency_failed_resolutions')::integer,
+        'retentionPruneStarved', (v_health->>'dependency_retention_prune_starved')::boolean,
+        'capped', (v_health->>'dependency_counts_capped')::boolean),
+      'children', jsonb_build_object(
+        'waitingParents', (v_health->>'child_waiting_parents')::integer,
+        'pendingChildren', (v_health->>'child_pending_children')::integer,
+        'unjoinedResults', (v_health->>'child_unjoined_results')::integer,
+        'failedParents', (v_health->>'child_failed_parents')::integer,
+        'canceledParents', (v_health->>'child_canceled_parents')::integer,
+        'capped', (v_health->>'child_counts_capped')::boolean),
+      'externalWaits', jsonb_build_object(
+        'pendingSignals', (v_health->>'pending_signal_waits')::integer,
+        'pendingHumanDecisions', (v_health->>'pending_human_waits')::integer,
+        'overdue', (v_health->>'overdue_external_waits')::integer,
+        'oldestPendingAgeMs', (v_health->>'oldest_external_wait_age_ms')::numeric,
+        'rejectedDeliveries', (v_health->>'rejected_wait_deliveries')::integer,
+        'capped', (v_health->>'external_wait_counts_capped')::boolean),
+      'deadline', jsonb_build_object(
+        'pending', (v_health->>'pending_deadlines')::integer,
+        'overdue', (v_health->>'overdue_deadlines')::integer,
+        'dueWithinMinute', (v_health->>'deadlines_due_within_minute')::integer,
+        'earliestAt', workhorse.dashboard_iso_v1(
+          (v_health->>'earliest_deadline_at')::timestamptz),
+        'activeTimeouts', (v_health->>'active_execution_timeouts')::integer,
+        'overdueTimeouts', (v_health->>'overdue_execution_timeouts')::integer)
+    ),
+    'outcomes', v_outcomes,
+    'queues', v_queues,
+    'concurrencyPoliciesCapped', EXISTS (
+      SELECT 1 FROM jsonb_array_elements(v_health->'concurrency_policies') policy
+       WHERE (policy->>'capped')::boolean),
+    'rateLimitPoliciesCapped', EXISTS (
+      SELECT 1 FROM jsonb_array_elements(v_health->'rate_limit_policies') policy
+       WHERE (policy->>'policy_set_capped')::boolean OR (policy->>'sample_capped')::boolean),
+    'retryStorm', jsonb_build_object('buckets', v_retry_buckets, 'topTypes', v_retry_types),
+    'failingTypes', v_failing_types,
+    'integrity', jsonb_build_object(
+      'dueButUnpromoted', v_runtime.due_but_unpromoted,
+      'partitions', v_partitions,
+      'defaultEventRows', (v_health->>'default_event_rows')::integer,
+      'defaultAttemptRows', (v_health->>'default_attempt_rows')::integer,
+      'retention', v_retention,
+      'storage', v_storage)
+  );
+END;
+$$;
+
 INSERT INTO workhorse.schema_migration(version, description) VALUES
   (1, 'baseline')
 ON CONFLICT DO NOTHING;

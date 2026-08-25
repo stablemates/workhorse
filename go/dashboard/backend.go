@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	workhorse "github.com/stablemates/workhorse/go"
@@ -18,9 +17,6 @@ type backend struct {
 	configuredWorkers []string
 	readOnly          bool
 	maintenanceLoops  map[string]int
-	healthMu          sync.Mutex
-	healthExpiresAt   time.Time
-	healthValue       map[string]any
 }
 
 func (service *backend) procedures() map[string]Procedure {
@@ -122,49 +118,6 @@ func (service *backend) queues(ctx context.Context, _ any, _ string) (any, error
 		ctx,
 		"SELECT workhorse.dashboard_queues_v1('{}'::jsonb) AS result",
 	)
-}
-
-func admissionPolicies(health map[string]any) (map[string]any, map[string]any, bool, bool) {
-	concurrency, rateLimits := make(map[string]any), make(map[string]any)
-	concurrencyCapped, rateCapped := false, false
-	for _, item := range health["concurrency_policies"].([]any) {
-		row := item.(map[string]any)
-		active, maximum := integer(row["active"]), integer(row["max_active"])
-		concurrency[fmt.Sprint(row["queue_name"])] = map[string]any{
-			"namespace": row["namespace"], "maxActive": maximum, "utilizationKnown": true,
-			"active": active, "available": max(0, maximum-active),
-			"blockedReady": integer(row["blocked_ready"]), "maxActivePerKey": nullableInteger(row["max_active_per_key"]),
-			"saturatedKeys": integer(row["saturated_keys"]), "highestKeyActive": integer(row["highest_key_active"]),
-		}
-		if capped, _ := row["capped"].(bool); capped {
-			concurrencyCapped = true
-		}
-	}
-	for _, item := range health["rate_limit_policies"].([]any) {
-		row := item.(map[string]any)
-		var perKey any
-		if row["per_key_limit"] != nil {
-			perKey = map[string]any{"limit": integer(row["per_key_limit"]), "intervalMs": integer(row["per_key_interval_ms"]), "burst": integer(row["per_key_burst"])}
-		}
-		rateLimits[fmt.Sprint(row["queue_name"])] = map[string]any{
-			"namespace": row["namespace"],
-			"rate":      map[string]any{"limit": integer(row["rate_limit"]), "intervalMs": integer(row["rate_interval_ms"]), "burst": integer(row["rate_burst"])},
-			"perKey":    perKey, "availableTokens": decimal(row["available_tokens"]),
-			"throttledReady": integer(row["throttled_ready"]), "throttledKeys": integer(row["throttled_keys"]),
-			"nextEligibleAt": timestamp(row["next_eligible_at"]),
-		}
-		policyCapped, _ := row["policy_set_capped"].(bool)
-		sampleCapped, _ := row["sample_capped"].(bool)
-		rateCapped = rateCapped || policyCapped || sampleCapped
-	}
-	return concurrency, rateLimits, concurrencyCapped, rateCapped
-}
-
-func nullableInteger(value any) any {
-	if value == nil {
-		return nil
-	}
-	return integer(value)
 }
 
 func oneRow(rows []workhorse.Row, name string) (workhorse.Row, error) {

@@ -2,11 +2,6 @@ package dashboard
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"time"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func (service *backend) cron(ctx context.Context, _ any, _ string) (any, error) {
@@ -65,13 +60,6 @@ func (service *backend) eventDetail(ctx context.Context, input any, _ string) (a
 		return nil, &RPCError{Status: 404, Code: "NOT_FOUND", Message: "Event not found"}
 	}
 	return decodeJSONCell(rows[0]["result"])
-}
-
-func stringDefault(value any, fallback string) string {
-	if result, ok := value.(string); ok && result != "" {
-		return result
-	}
-	return fallback
 }
 
 func (service *backend) tasks(ctx context.Context, input any, _ string) (any, error) {
@@ -136,130 +124,12 @@ func (service *backend) jobDetail(ctx context.Context, input any, _ string) (any
 	return result, nil
 }
 
-func (service *backend) health(ctx context.Context) (map[string]any, error) {
-	service.healthMu.Lock()
-	defer service.healthMu.Unlock()
-	if service.healthValue != nil && time.Now().Before(service.healthExpiresAt) {
-		return service.healthValue, nil
-	}
-	rows, err := service.executor.Query(ctx, "SELECT workhorse.queue_health_v1() AS snapshot")
-	if err != nil {
-		return nil, err
-	}
-	var value map[string]any
-	switch encoded := rows[0]["snapshot"].(type) {
-	case []byte:
-		if err := json.Unmarshal(encoded, &value); err != nil {
-			return nil, err
-		}
-	case string:
-		if err := json.Unmarshal([]byte(encoded), &value); err != nil {
-			return nil, err
-		}
-	case map[string]any:
-		value = encoded
-	default:
-		return nil, fmt.Errorf("queue_health_v1 returned %T", encoded)
-	}
-	service.healthValue = value
-	service.healthExpiresAt = time.Now().Add(3 * time.Second)
-	return value, nil
-}
-
-func policyProjection(row map[string]any, names []string) map[string]any {
-	overrides := make(map[string]bool)
-	for _, name := range stringValues(row["operator_overrides"]) {
-		overrides[name] = true
-	}
-	result, provenance := make(map[string]any), make(map[string]any)
-	for _, name := range names {
-		column := snake(name)
-		current, application := row[column], row["application_"+column]
-		if name == "historyRetentionLocalTime" {
-			current = localTime(current)
-			application = localTime(application)
-		}
-		result[name] = current
-		source := "application"
-		if overrides[column] {
-			source = "operator"
-		}
-		provenance[name] = map[string]any{"source": source, "applicationDefault": application}
-	}
-	result["provenance"], result["updatedAt"] = provenance, timestamp(row["updated_at"])
-	return result
-}
-
-func localTime(value any) string {
-	if clock, ok := value.(pgtype.Time); ok {
-		seconds := clock.Microseconds / 1_000_000
-		return fmt.Sprintf("%02d:%02d", seconds/3600, (seconds%3600)/60)
-	}
-	text := fmt.Sprint(value)
-	if len(text) >= 5 {
-		return text[:5]
-	}
-	return text
-}
-
-func stringValues(value any) []string {
-	switch items := value.(type) {
-	case []string:
-		return items
-	case []any:
-		result := make([]string, len(items))
-		for i, item := range items {
-			result[i] = fmt.Sprint(item)
-		}
-		return result
-	case string:
-		var result []string
-		if err := pgtype.NewMap().Scan(pgtype.TextArrayOID, pgtype.TextFormatCode, []byte(items), &result); err == nil {
-			return result
-		}
-	case []byte:
-		var result []string
-		if err := pgtype.NewMap().Scan(pgtype.TextArrayOID, pgtype.TextFormatCode, items, &result); err == nil {
-			return result
-		}
-	default:
-	}
-	return nil
-}
-
 func (service *backend) settings(ctx context.Context, _ any, _ string) (any, error) {
-	maintenanceRows, err := service.executor.Query(ctx, "SELECT (policy).* FROM workhorse.get_maintenance_policy_v1() policy")
-	if err != nil {
-		return nil, err
-	}
-	retentionRows, err := service.executor.Query(ctx, "SELECT (policy).* FROM workhorse.get_retention_policy_v1() policy")
-	if err != nil {
-		return nil, err
-	}
-	health, err := service.health(ctx)
-	if err != nil {
-		return nil, err
-	}
-	enqueuedRows, err := service.executor.Query(ctx, `SELECT COALESCE(sum(enqueued),0)::integer jobs FROM workhorse.stat_buckets_v1(date_bin('1 minute',clock_timestamp(),timestamp with time zone '2000-01-01')-interval '1 hour'+interval '1 minute',clock_timestamp())`)
-	if err != nil {
-		return nil, err
-	}
-	workers, err := service.executor.Query(ctx, `SELECT worker_id,queue_names,concurrency,lease_ms,heartbeat_ms,poll_ms,maintenance_interval_ms,maintenance_task_poll_ms,registry_interval_ms,last_heartbeat_at FROM workhorse.dashboard_worker_registry_v1 WHERE last_heartbeat_at>=clock_timestamp()-GREATEST(interval '30 seconds',registry_interval_ms*3*interval '1 millisecond') ORDER BY worker_id`)
-	if err != nil {
-		return nil, err
-	}
-	projectedWorkers := make([]any, 0, len(workers))
-	for _, row := range workers {
-		queues := stringValues(row["queue_names"])
-		var queue any
-		if len(queues) > 0 {
-			queue = queues[0]
-		}
-		projectedWorkers = append(projectedWorkers, map[string]any{"id": row["worker_id"], "queue": queue, "queues": queues, "concurrency": row["concurrency"], "leaseMs": row["lease_ms"], "heartbeatMs": row["heartbeat_ms"], "pollMs": row["poll_ms"], "maintenanceIntervalMs": row["maintenance_interval_ms"], "maintenanceTaskPollMs": row["maintenance_task_poll_ms"], "registryIntervalMs": row["registry_interval_ms"], "lastSeenAt": timestamp(row["last_heartbeat_at"])})
-	}
-	status, _ := health["status"].(map[string]any)
-	return map[string]any{"capturedAt": timestamp(time.Now()), "editable": !service.readOnly,
-		"maintenance":          policyProjection(maintenanceRows[0], []string{"timezone", "partitionPreparationIntervalMs", "terminalCleanupIntervalMs", "historyRetentionLocalTime", "statisticsRollupIntervalMs", "statisticsGroupLimit", "statisticsRecomputeBuckets"}),
-		"retention":            policyProjection(retentionRows[0], []string{"jobIdentityRetentionDays", "terminalOutcomeRetentionDays", "jobEventRetentionDays", "attemptHistoryRetentionDays", "scheduleOccurrenceRetentionDays", "statisticsRetentionDays", "terminalJobPruneLimit", "historyPartitionsPerPass", "defaultPartitionRowsPerPass", "occurrenceRowsPerPass", "statisticsRowsPerPass"}),
-		"recommendationInputs": map[string]any{"reasons": status["reasons"], "statistics": map[string]any{"rolledUpThrough": health["rolled_up_through"], "lagMs": decimal(health["rollup_lag_ms"]), "lastRunAt": health["last_run_at"]}, "defaultHistoryRows": map[string]any{"jobEvents": integer(health["default_event_rows"]), "attemptHistory": integer(health["default_attempt_rows"])}, "defaultHistoryRowsCapped": map[string]any{"jobEvents": health["default_event_rows_capped"], "attemptHistory": health["default_attempt_rows_capped"]}, "enqueueRate": map[string]any{"jobs": enqueuedRows[0]["jobs"], "windowMs": 3600000}}, "workers": projectedWorkers}, nil
+	return service.jsonQuery(
+		ctx,
+		"SELECT workhorse.dashboard_settings_v1($1::jsonb) AS result",
+		string(mustJSON(map[string]any{
+			"writable": !service.readOnly, "settingsController": true,
+		})),
+	)
 }

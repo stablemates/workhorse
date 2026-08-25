@@ -372,11 +372,7 @@ export const dashboardRouter = {
     system: procedure
       .input(systemInput)
       .handler(({ context, input }) =>
-        readDashboardSystem(
-          context.database,
-          input.window as DashboardSystemWindow,
-          context.readQueueHealth,
-        ),
+        readDashboardSystem(context.database, input.window as DashboardSystemWindow),
       ),
     workers: procedure.handler(({ context }) => {
       const canManageWorkers =
@@ -386,9 +382,8 @@ export const dashboardRouter = {
     settings: procedure.handler(({ context }) =>
       readDashboardSettings(
         context.database,
-        context.admin,
-        context.operator.mode === "writable" && Boolean(context.settingsController),
-        context.readQueueHealth,
+        context.operator.mode === "writable",
+        Boolean(context.settingsController),
       ),
     ),
     previewRetentionPolicy: procedure

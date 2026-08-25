@@ -3734,106 +3734,208 @@
                     "relations": [
                       {
                         "relation": "job_event",
-                        "totalBytes": 229376,
-                        "tableBytes": 8192,
-                        "indexBytes": 180224,
-                        "rows": 0,
-                        "deadRows": 0,
+                        "totalBytes": {
+                          "$type": "integer"
+                        },
+                        "tableBytes": {
+                          "$type": "integer"
+                        },
+                        "indexBytes": {
+                          "$type": "integer"
+                        },
+                        "rows": {
+                          "$type": "integer"
+                        },
+                        "deadRows": {
+                          "$type": "integer"
+                        },
                         "partitions": 5,
                         "lastVacuumAt": null
                       },
                       {
                         "relation": "attempt_history",
-                        "totalBytes": 196608,
-                        "tableBytes": 8192,
-                        "indexBytes": 147456,
-                        "rows": 0,
-                        "deadRows": 0,
+                        "totalBytes": {
+                          "$type": "integer"
+                        },
+                        "tableBytes": {
+                          "$type": "integer"
+                        },
+                        "indexBytes": {
+                          "$type": "integer"
+                        },
+                        "rows": {
+                          "$type": "integer"
+                        },
+                        "deadRows": {
+                          "$type": "integer"
+                        },
                         "partitions": 5,
                         "lastVacuumAt": null
                       },
                       {
                         "relation": "job_runtime",
-                        "totalBytes": 163840,
-                        "tableBytes": 8192,
-                        "indexBytes": 147456,
-                        "rows": 0,
-                        "deadRows": 0,
+                        "totalBytes": {
+                          "$type": "integer"
+                        },
+                        "tableBytes": {
+                          "$type": "integer"
+                        },
+                        "indexBytes": {
+                          "$type": "integer"
+                        },
+                        "rows": {
+                          "$type": "integer"
+                        },
+                        "deadRows": {
+                          "$type": "integer"
+                        },
                         "partitions": 0,
                         "lastVacuumAt": null
                       },
                       {
                         "relation": "job_outcome",
-                        "totalBytes": 98304,
-                        "tableBytes": 8192,
-                        "indexBytes": 81920,
-                        "rows": 0,
-                        "deadRows": 0,
+                        "totalBytes": {
+                          "$type": "integer"
+                        },
+                        "tableBytes": {
+                          "$type": "integer"
+                        },
+                        "indexBytes": {
+                          "$type": "integer"
+                        },
+                        "rows": {
+                          "$type": "integer"
+                        },
+                        "deadRows": {
+                          "$type": "integer"
+                        },
                         "partitions": 0,
                         "lastVacuumAt": null
                       },
                       {
                         "relation": "job_query",
-                        "totalBytes": 81920,
-                        "tableBytes": 8192,
-                        "indexBytes": 65536,
-                        "rows": 0,
-                        "deadRows": 0,
+                        "totalBytes": {
+                          "$type": "integer"
+                        },
+                        "tableBytes": {
+                          "$type": "integer"
+                        },
+                        "indexBytes": {
+                          "$type": "integer"
+                        },
+                        "rows": {
+                          "$type": "integer"
+                        },
+                        "deadRows": {
+                          "$type": "integer"
+                        },
                         "partitions": 0,
                         "lastVacuumAt": null
                       },
                       {
                         "relation": "job",
-                        "totalBytes": 73728,
-                        "tableBytes": 8192,
-                        "indexBytes": 57344,
-                        "rows": 0,
-                        "deadRows": 0,
+                        "totalBytes": {
+                          "$type": "integer"
+                        },
+                        "tableBytes": {
+                          "$type": "integer"
+                        },
+                        "indexBytes": {
+                          "$type": "integer"
+                        },
+                        "rows": {
+                          "$type": "integer"
+                        },
+                        "deadRows": {
+                          "$type": "integer"
+                        },
                         "partitions": 0,
                         "lastVacuumAt": null
                       },
                       {
                         "relation": "schedule_occurrence",
-                        "totalBytes": 49152,
-                        "tableBytes": 0,
-                        "indexBytes": 40960,
-                        "rows": 0,
-                        "deadRows": 0,
+                        "totalBytes": {
+                          "$type": "integer"
+                        },
+                        "tableBytes": {
+                          "$type": "integer"
+                        },
+                        "indexBytes": {
+                          "$type": "integer"
+                        },
+                        "rows": {
+                          "$type": "integer"
+                        },
+                        "deadRows": {
+                          "$type": "integer"
+                        },
                         "partitions": 0,
                         "lastVacuumAt": null
                       },
                       {
                         "relation": "job_stat_bucket",
-                        "totalBytes": 16384,
-                        "tableBytes": 0,
-                        "indexBytes": 8192,
-                        "rows": 0,
-                        "deadRows": 0,
+                        "totalBytes": {
+                          "$type": "integer"
+                        },
+                        "tableBytes": {
+                          "$type": "integer"
+                        },
+                        "indexBytes": {
+                          "$type": "integer"
+                        },
+                        "rows": {
+                          "$type": "integer"
+                        },
+                        "deadRows": {
+                          "$type": "integer"
+                        },
                         "partitions": 0,
                         "lastVacuumAt": null
                       },
                       {
                         "relation": "job_stat_bucket_hour",
-                        "totalBytes": 16384,
-                        "tableBytes": 0,
-                        "indexBytes": 8192,
-                        "rows": 0,
-                        "deadRows": 0,
+                        "totalBytes": {
+                          "$type": "integer"
+                        },
+                        "tableBytes": {
+                          "$type": "integer"
+                        },
+                        "indexBytes": {
+                          "$type": "integer"
+                        },
+                        "rows": {
+                          "$type": "integer"
+                        },
+                        "deadRows": {
+                          "$type": "integer"
+                        },
                         "partitions": 0,
                         "lastVacuumAt": null
                       },
                       {
                         "relation": "job_stat_bucket_day",
-                        "totalBytes": 16384,
-                        "tableBytes": 0,
-                        "indexBytes": 8192,
-                        "rows": 0,
-                        "deadRows": 0,
+                        "totalBytes": {
+                          "$type": "integer"
+                        },
+                        "tableBytes": {
+                          "$type": "integer"
+                        },
+                        "indexBytes": {
+                          "$type": "integer"
+                        },
+                        "rows": {
+                          "$type": "integer"
+                        },
+                        "deadRows": {
+                          "$type": "integer"
+                        },
                         "partitions": 0,
                         "lastVacuumAt": null
                       }
                     ],
-                    "totalBytes": 942080
+                    "totalBytes": {
+                      "$type": "integer"
+                    }
                   }
                 }
               }
@@ -3850,7 +3952,13 @@
             "body.json.outcomes.*.canceled": "integer",
             "body.json.integrity.partitions.*.day": "string",
             "body.json.integrity.partitions.*.startsAt": "timestamp",
-            "body.json.integrity.storage.rollup.rolledUpThrough": "timestamp"
+            "body.json.integrity.storage.rollup.rolledUpThrough": "timestamp",
+            "body.json.integrity.storage.relations.*.totalBytes": "integer",
+            "body.json.integrity.storage.relations.*.tableBytes": "integer",
+            "body.json.integrity.storage.relations.*.indexBytes": "integer",
+            "body.json.integrity.storage.relations.*.rows": "integer",
+            "body.json.integrity.storage.relations.*.deadRows": "integer",
+            "body.json.integrity.storage.totalBytes": "integer"
           }
         },
         {
