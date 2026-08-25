@@ -1372,6 +1372,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
+    { name = "tomli" },
     { name = "types-jsonschema" },
 ]
 
@@ -1396,6 +1397,7 @@ dev = [
     { name = "pytest", specifier = ">=8.4,<9" },
     { name = "pytest-asyncio", specifier = ">=1.2,<2" },
     { name = "ruff", specifier = ">=0.12,<1" },
+    { name = "tomli", specifier = ">=2.2,<3" },
     { name = "types-jsonschema", specifier = ">=4.25,<5" },
 ]
 

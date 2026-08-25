@@ -2,6 +2,7 @@ package workhorse_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"go/version"
 	"os"
@@ -175,57 +176,24 @@ func TestExamplesCompileAsExternalConsumers(t *testing.T) {
 }
 
 func TestGoSupportContractMatchesRepositoryDeclarations(t *testing.T) {
-	minimumGo, pgxVersion := moduleVersions(t)
+	minimumGo, toolchainGo, _ := moduleVersions(t)
+	support := readSupportManifest(t)
+	if minimumGo != support.Support.Go.Minimum {
+		t.Fatalf("go/go.mod minimum %s does not match support.json %s", minimumGo, support.Support.Go.Minimum)
+	}
+	if toolchainGo != "go"+support.Toolchains.Go {
+		t.Fatalf("go/go.mod toolchain %s does not match support.json %s", toolchainGo, support.Toolchains.Go)
+	}
 	if version.Compare(runtime.Version(), "go"+minimumGo) < 0 {
 		t.Fatalf("test lane uses %s below the module minimum Go %s", runtime.Version(), minimumGo)
 	}
 
-	supportSource := readRepositoryFile(t, "typescript", "core", "src", "support.ts")
-	postgresMatch := regexp.MustCompile(`SUPPORTED_POSTGRES_MAJORS: readonly number\[\] = \[([^]]+)\]`).FindStringSubmatch(supportSource)
-	if len(postgresMatch) != 2 {
-		t.Fatal("TypeScript support source does not declare PostgreSQL majors")
+	postgresMajors := make([]string, len(support.Support.Postgres.Tested))
+	for index, major := range support.Support.Postgres.Tested {
+		postgresMajors[index] = strconv.Itoa(major)
 	}
-	postgresMajors := strings.Split(strings.ReplaceAll(postgresMatch[1], " ", ""), ",")
-	minimumPostgres := regexp.MustCompile(`MINIMUM_POSTGRES_MAJOR = ([0-9]+)`).FindStringSubmatch(supportSource)
-	if len(minimumPostgres) != 2 || postgresMajors[0] != minimumPostgres[1] {
-		t.Fatalf("PostgreSQL support list %q is not anchored at its declared minimum", postgresMatch[1])
-	}
-
-	readme := readRepositoryFile(t, "go", "README.md")
-	if !strings.Contains(readme, "Go "+strings.TrimSuffix(minimumGo, ".0")+" or newer") {
-		t.Fatalf("go/README.md does not name the Go %s minimum", minimumGo)
-	}
-	if !strings.Contains(readme, "PostgreSQL "+strings.Join(postgresMajors, ", ")) {
-		t.Fatalf("go/README.md does not name the tested PostgreSQL majors %v", postgresMajors)
-	}
-	if !strings.Contains(readme, "pgx "+pgxVersion) {
-		t.Fatalf("go/README.md does not name the pinned pgx release %s", pgxVersion)
-	}
-	for _, requiredReadmeFragment := range []string{
-		"## Deployment and delivery boundaries",
-		"Delivery is at least once.",
-		"## Releasing the module",
-		"go/vX.Y.Z",
-	} {
-		if !strings.Contains(readme, requiredReadmeFragment) {
-			t.Fatalf("go/README.md does not declare release boundary %q", requiredReadmeFragment)
-		}
-	}
-	packageManifest := readRepositoryFile(t, "package.json")
-	if !strings.Contains(packageManifest, `"go:test": "tsx scripts/with-env.ts go -C go test ./..."`) {
-		t.Fatal("package.json does not expose the Go support test lane through the worktree environment")
-	}
-	if !strings.Contains(packageManifest, `"go:test:race": "tsx scripts/with-env.ts go -C go test -race ./..."`) {
-		t.Fatal("package.json does not expose the Go race test lane through the worktree environment")
-	}
-	if !strings.Contains(packageManifest, `"go:vuln": "tsx scripts/with-env.ts go -C go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./..."`) {
-		t.Fatal("package.json does not expose the pinned Go vulnerability scan through the worktree environment")
-	}
-	if !strings.Contains(packageManifest, `pnpm lint && pnpm python:vuln && pnpm go:vuln && pnpm typecheck`) {
-		t.Fatal("the full check does not run the Go vulnerability scan")
-	}
-	if !strings.Contains(packageManifest, `pnpm test && pnpm go:test:race && pnpm test:packed`) {
-		t.Fatal("the full check does not run the Go race lane")
+	if len(postgresMajors) == 0 || support.Support.Postgres.Tested[0] != support.Support.Postgres.Minimum {
+		t.Fatalf("PostgreSQL support list %v is not anchored at its declared minimum", postgresMajors)
 	}
 
 	databaseURL := os.Getenv("DATABASE_URL_TEST")
@@ -249,7 +217,7 @@ func TestGoSupportContractMatchesRepositoryDeclarations(t *testing.T) {
 
 func externalModuleManifest(t *testing.T, moduleName string) (moduleRoot string, manifest string) {
 	t.Helper()
-	minimumGo, pgxVersion := moduleVersions(t)
+	minimumGo, _, pgxVersion := moduleVersions(t)
 	moduleRoot, err := filepath.Abs(".")
 	if err != nil {
 		t.Fatal(err)
@@ -268,18 +236,46 @@ replace github.com/stablemates/workhorse/go => %s
 	return moduleRoot, manifest
 }
 
-func moduleVersions(t *testing.T) (minimumGo string, pgxVersion string) {
+func moduleVersions(t *testing.T) (minimumGo string, toolchainGo string, pgxVersion string) {
 	t.Helper()
 	goMod := readRepositoryFile(t, "go", "go.mod")
 	goMatch := regexp.MustCompile(`(?m)^go ([0-9]+\.[0-9]+\.[0-9]+)$`).FindStringSubmatch(goMod)
 	if len(goMatch) != 2 {
 		t.Fatal("go/go.mod does not declare a three-part minimum Go version")
 	}
+	toolchainMatch := regexp.MustCompile(`(?m)^toolchain (go[0-9]+\.[0-9]+\.[0-9]+)$`).FindStringSubmatch(goMod)
+	if len(toolchainMatch) != 2 {
+		t.Fatal("go/go.mod does not declare a three-part Go toolchain version")
+	}
 	pgxMatch := regexp.MustCompile(`(?m)^require github\.com/jackc/pgx/v5 (v\S+)$`).FindStringSubmatch(goMod)
 	if len(pgxMatch) != 2 {
 		t.Fatal("go/go.mod does not declare a direct pgx v5 dependency")
 	}
-	return goMatch[1], pgxMatch[1]
+	return goMatch[1], toolchainMatch[1], pgxMatch[1]
+}
+
+type supportManifest struct {
+	Support struct {
+		Go struct {
+			Minimum string `json:"minimum"`
+		} `json:"go"`
+		Postgres struct {
+			Minimum int   `json:"minimum"`
+			Tested  []int `json:"tested"`
+		} `json:"postgres"`
+	} `json:"support"`
+	Toolchains struct {
+		Go string `json:"go"`
+	} `json:"toolchains"`
+}
+
+func readSupportManifest(t *testing.T) supportManifest {
+	t.Helper()
+	var manifest supportManifest
+	if err := json.Unmarshal([]byte(readRepositoryFile(t, "support.json")), &manifest); err != nil {
+		t.Fatalf("parse support.json: %v", err)
+	}
+	return manifest
 }
 
 func readRepositoryFile(t *testing.T, path ...string) string {

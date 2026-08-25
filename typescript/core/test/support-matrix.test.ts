@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse as parseToml } from "smol-toml";
 import {
   describePostgresSupport,
   MINIMUM_NODE_MAJOR,
@@ -12,7 +13,7 @@ import {
 import { publishedPackages } from "../../../scripts/packages.js";
 
 // A supported-version contract is only worth stating if the statement and the thing that tests it
-// cannot drift apart. src/support.ts is the source of truth; everything below is a consumer of it,
+// cannot drift apart. support.json is the source of truth; everything below is a consumer of it,
 // and this file is what makes adding a version in one place and forgetting the others a failure.
 
 const repository = path.resolve(import.meta.dirname, "../../..");
@@ -28,13 +29,117 @@ async function readManifest(relativePath: string): Promise<Record<string, unknow
   return JSON.parse(await read(relativePath)) as Record<string, unknown>;
 }
 
+interface SupportManifest {
+  readonly support: {
+    readonly go: { readonly minimum: string };
+    readonly node: { readonly minimum: number; readonly tested: number[] };
+    readonly postgres: { readonly minimum: number; readonly tested: number[] };
+    readonly python: { readonly minimum: string; readonly tested: string[] };
+  };
+  readonly toolchains: {
+    readonly go: string;
+    readonly node: string;
+    readonly pnpm: string;
+    readonly uv: string;
+  };
+}
+
+async function readSupportManifest(): Promise<SupportManifest> {
+  return JSON.parse(await read("support.json")) as SupportManifest;
+}
+
 /** Read a `key: [1, 2]` matrix list out of the workflow without taking a YAML dependency. */
 function workflowMatrixList(workflow: string, key: string): number[][] {
   const matches = [...workflow.matchAll(new RegExp(`^\\s*${key}: \\[([^\\]]*)\\]`, "gm"))];
   return matches.map((match) => match[1]!.split(",").map((entry) => Number(entry.trim())));
 }
 
+function markdownTable(source: string, heading: string): Record<string, Record<string, string>> {
+  const tableSource = source.slice(source.indexOf(heading) + heading.length).trimStart();
+  const lines: string[] = [];
+  for (const line of tableSource.split("\n")) {
+    if (!line.startsWith("|")) break;
+    lines.push(line);
+  }
+  const cells = lines.map((line) =>
+    line
+      .split("|")
+      .slice(1, -1)
+      .map((cell) => cell.trim()),
+  );
+  const [headers, , ...rows] = cells;
+  if (!headers) throw new Error(`${heading} has no Markdown table`);
+  return Object.fromEntries(
+    rows.map((row) => [
+      row[0]!,
+      Object.fromEntries(headers.map((header, index) => [header, row[index]!])),
+    ]),
+  );
+}
+
 describe("supported version constants", () => {
+  it("matches the repository support manifest", async () => {
+    const manifest = await readSupportManifest();
+
+    expect(manifest.support.node).toEqual({
+      minimum: MINIMUM_NODE_MAJOR,
+      tested: SUPPORTED_NODE_MAJORS,
+    });
+    expect(manifest.support.postgres).toEqual({
+      minimum: MINIMUM_POSTGRES_MAJOR,
+      tested: SUPPORTED_POSTGRES_MAJORS,
+    });
+  });
+
+  it("keeps local toolchains on the declared support floor", async () => {
+    const [manifest, miseSource] = await Promise.all([readSupportManifest(), read("mise.toml")]);
+    const mise = parseToml(miseSource) as { tools: Record<string, string> };
+
+    expect(mise.tools).toEqual({
+      go: manifest.toolchains.go,
+      node: manifest.toolchains.node,
+      pnpm: manifest.toolchains.pnpm,
+      python: manifest.support.python.minimum,
+      uv: manifest.toolchains.uv,
+    });
+    expect(
+      manifest.toolchains.go.startsWith(manifest.support.go.minimum.replace(/\.0$/, ".")),
+    ).toBe(true);
+  });
+
+  it("matches the Go and Python package manifests", async () => {
+    const [manifest, goMod, pythonSource] = await Promise.all([
+      readSupportManifest(),
+      read("go/go.mod"),
+      read("python/pyproject.toml"),
+    ]);
+    const goDirectives = Object.fromEntries(
+      goMod
+        .split("\n")
+        .map((line) => line.trim().split(/\s+/, 2))
+        .filter(([directive]) => directive === "go" || directive === "toolchain"),
+    );
+    const python = parseToml(pythonSource) as {
+      project: { classifiers: string[]; "requires-python": string };
+      tool: { mypy: { python_version: string }; ruff: { "target-version": string } };
+    };
+    const pythonClassifierPrefix = "Programming Language :: Python :: ";
+    const pythonClassifiers = python.project.classifiers
+      .filter((classifier) => /^Programming Language :: Python :: 3\.\d+$/.test(classifier))
+      .map((classifier) => classifier.slice(pythonClassifierPrefix.length));
+
+    expect(goDirectives).toEqual({
+      go: manifest.support.go.minimum,
+      toolchain: `go${manifest.toolchains.go}`,
+    });
+    expect(python.project["requires-python"]).toBe(`>=${manifest.support.python.minimum}`);
+    expect(pythonClassifiers).toEqual(manifest.support.python.tested);
+    expect(python.tool.mypy.python_version).toBe(manifest.support.python.minimum);
+    expect(python.tool.ruff["target-version"]).toBe(
+      `py${manifest.support.python.minimum.replace(".", "")}`,
+    );
+  });
+
   it("keeps each list sorted, non-empty, and anchored at its minimum", () => {
     expect(SUPPORTED_NODE_MAJORS.length).toBeGreaterThan(0);
     expect(SUPPORTED_POSTGRES_MAJORS.length).toBeGreaterThan(0);
@@ -87,6 +192,19 @@ describe("declared engines", () => {
 });
 
 describe("continuous integration", () => {
+  it("exposes each language check through structured package scripts", async () => {
+    const scripts = (await readManifest("package.json")).scripts as Record<string, string>;
+
+    expect(scripts["python:test"]).toContain("pytest python/tests");
+    expect(scripts["python:vuln"]).toContain("audit-python-dependencies.sh");
+    expect(scripts["go:test"]).toContain("go -C go test ./...");
+    expect(scripts["go:test:race"]).toContain("go -C go test -race ./...");
+    expect(scripts["go:vuln"]).toContain("govulncheck");
+    expect(scripts.check).toContain("pnpm python:vuln");
+    expect(scripts.check).toContain("pnpm go:vuln");
+    expect(scripts.check).toContain("pnpm go:test:race");
+  });
+
   it("tests exactly the supported Node.js and PostgreSQL majors", async () => {
     const workflow = await read(".github/workflows/ci.yml");
     const nodeLists = workflowMatrixList(workflow, "node");
@@ -153,17 +271,60 @@ describe("continuous integration", () => {
 
 describe("documentation", () => {
   it("keeps the exact matrix in the reference and links guides to it", async () => {
-    const [compatibility, sitePage, installation, readme] = await Promise.all([
-      read("docs/compatibility.md"),
-      read("site/content/docs/compatibility.mdx"),
-      read("site/content/docs/installation.mdx"),
-      read("README.md"),
-    ]);
+    const [compatibility, sitePage, installation, readme, goReadme, pythonReadme, goMod, manifest] =
+      await Promise.all([
+        read("docs/compatibility.md"),
+        read("site/content/docs/compatibility.mdx"),
+        read("site/content/docs/installation.mdx"),
+        read("README.md"),
+        read("go/README.md"),
+        read("python/README.md"),
+        read("go/go.mod"),
+        readSupportManifest(),
+      ]);
     const claimed = `${SUPPORTED_POSTGRES_MAJORS.join(", ")}`;
     const claimedNodeMajors = SUPPORTED_NODE_MAJORS.join(", ");
+    const supportTable = markdownTable(compatibility, "## Supported versions");
+    const goMinimum = manifest.support.go.minimum.replace(/\.0$/, "");
+    const pythonTested = manifest.support.python.tested;
+    const pgxVersion = goMod
+      .split("\n")
+      .find((line) => line.startsWith("require github.com/jackc/pgx/v5 "))
+      ?.split(" ")
+      .at(-1);
+    const normalizedPythonReadme = pythonReadme.replace(/\s+/g, " ");
 
-    expect(compatibility).toContain(claimed);
-    expect(compatibility).toContain(claimedNodeMajors);
+    expect(supportTable["Node.js"]).toMatchObject({
+      Supported: claimedNodeMajors,
+      Minimum: String(manifest.support.node.minimum),
+    });
+    expect(supportTable.Python).toMatchObject({
+      Supported: `${pythonTested[0]}–${pythonTested.at(-1)}`,
+      Minimum: manifest.support.python.minimum,
+    });
+    expect(supportTable.Go).toMatchObject({
+      Supported: `${goMinimum} and newer`,
+      Minimum: goMinimum,
+    });
+    expect(supportTable.PostgreSQL).toMatchObject({
+      Supported: claimed,
+      Minimum: String(manifest.support.postgres.minimum),
+    });
+    expect(goReadme).toContain(`Go ${goMinimum} or newer`);
+    expect(goReadme).toContain(`PostgreSQL ${claimed}`);
+    expect(goReadme).toContain(`pgx ${pgxVersion}`);
+    expect(goReadme).toContain("## Deployment and delivery boundaries");
+    expect(goReadme).toContain("Delivery is at least once.");
+    expect(goReadme).toContain("## Releasing the module");
+    expect(goReadme).toContain("go/vX.Y.Z");
+    expect(pythonReadme).toContain(
+      `Python ${pythonTested[0]} through ${pythonTested.at(-1)} and PostgreSQL ${claimed}`,
+    );
+    expect(normalizedPythonReadme).toContain("Psycopg 3.3 through the next major");
+    expect(normalizedPythonReadme).toContain("asyncpg 0.31 through the next major");
+    expect(pythonReadme).toContain("pip install stablemates-workhorse");
+    expect(pythonReadme).toContain("run_worker_process(worker)");
+    expect(pythonReadme).toContain('workhorse dashboard --database-url "$DATABASE_URL"');
     expect(sitePage).toContain(
       "https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md",
     );
@@ -181,6 +342,7 @@ describe("documentation", () => {
     expect(sitePage).toContain("smoke-tested tier, not support");
     expect(readme).toContain(`PostgreSQL **${MINIMUM_POSTGRES_MAJOR} or newer**`);
     expect(readme).toContain(`Node.js **>= ${MINIMUM_NODE_MAJOR}**`);
+    expect(readme).toContain("mise install");
   });
 
   it("documents the released version in the changelog", async () => {

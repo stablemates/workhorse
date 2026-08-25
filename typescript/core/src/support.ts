@@ -4,10 +4,9 @@ import type { Queryable } from "./types.js";
 /**
  * The supported-version contract for the published packages.
  *
- * These constants are the single source of truth behind the CI matrix, the package `engines`
- * fields, and the compatibility documentation. `test/support-matrix.test.ts` fails when any of
- * those drift away from this module, so a version can only be claimed as supported once it is
- * actually exercised.
+ * `support.json` is the repository source of truth. These constants expose its Node.js and
+ * PostgreSQL claims to the published package. `test/support-matrix.test.ts` fails when a consumer
+ * drifts, so a version can only be claimed as supported once CI exercises it.
  *
  * "Supported" here means tested in CI on every change. It is deliberately narrower than the
  * versions Workhorse is likely to run on, and narrower still than the single configuration used

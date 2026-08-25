@@ -384,6 +384,12 @@ contracts and product artifacts remain at the root: PostgreSQL under `sql/`, pro
 `protocol/`, the operator application under `dashboard/app`, and the documentation site under
 `site/`.
 
+Install the repository's pinned local toolchains before installing dependencies:
+
+```bash
+mise install
+```
+
 ```bash
 pnpm install
 pnpm db:reset:all

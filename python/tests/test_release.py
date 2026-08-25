@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import psycopg
+import tomli
 
 
 def _repository_file(*parts: str) -> str:
@@ -14,52 +16,47 @@ def _repository_file(*parts: str) -> str:
     return repository.joinpath(*parts).read_text()
 
 
-def _supported_postgres_majors() -> list[str]:
-    support_source = _repository_file("typescript", "core", "src", "support.ts")
-    match = re.search(
-        r"SUPPORTED_POSTGRES_MAJORS: readonly number\[\] = \[([^]]+)]",
-        support_source,
-    )
-    assert match is not None
-    return [major.strip() for major in match.group(1).split(",")]
+def _repository_json(*parts: str) -> dict[str, Any]:
+    return json.loads(_repository_file(*parts))
+
+
+def _repository_toml(*parts: str) -> dict[str, Any]:
+    return tomli.loads(_repository_file(*parts))
 
 
 def test_python_support_contract_matches_repository_declarations(database_url: str) -> None:
-    manifest = _repository_file("python", "pyproject.toml")
-    readme = _repository_file("python", "README.md")
-    compatibility = _repository_file("docs", "compatibility.md")
-    package_manifest = _repository_file("package.json")
+    manifest = _repository_toml("python", "pyproject.toml")
+    support = _repository_json("support.json")["support"]
+    python_support = support["python"]
+    project = manifest["project"]
+    classifier_prefix = "Programming Language :: Python :: "
+    classifiers = [
+        classifier.removeprefix(classifier_prefix)
+        for classifier in project["classifiers"]
+        if classifier.startswith(classifier_prefix)
+        and classifier != f"{classifier_prefix}3 :: Only"
+    ]
 
-    python_minimum = re.search(r'requires-python = ">=([0-9]+\.[0-9]+)"', manifest)
-    classifiers = re.findall(r'"Programming Language :: Python :: ([0-9]+\.[0-9]+)"', manifest)
-    assert python_minimum is not None
-    assert classifiers == ["3.10", "3.11", "3.12", "3.13", "3.14"]
-    assert python_minimum.group(1) == classifiers[0]
+    assert project["requires-python"] == f">={python_support['minimum']}"
+    assert classifiers == python_support["tested"]
     current_python = f"{sys.version_info.major}.{sys.version_info.minor}"
     assert current_python in classifiers
-    package_description = re.search(r'^description = "([^"]+)"$', manifest, re.MULTILINE)
-    assert package_description is not None
-    assert "worker SDK" in package_description.group(1)
-
-    postgres_majors = _supported_postgres_majors()
-    assert f"PostgreSQL {', '.join(postgres_majors)}" in readme
-    assert re.search(r"Python\s+\| 3\.10.3\.14", compatibility)
-    assert 'dependencies = ["jsonschema>=4.25,<5", "psycopg>=3.3,<4",' in manifest
-    assert "psycopg = []" in manifest
-    assert 'asyncpg = ["asyncpg>=0.31,<1"]' in manifest
-    assert "Psycopg 3.3 through the next major" in readme
-    assert re.search(r"asyncpg 0\.31 through\s+the next major", readme)
-    assert 'name = "stablemates-workhorse"' in manifest
-    assert 'version = "0.1.0a1"' in manifest
-    assert "pip install stablemates-workhorse" in readme
-    assert "run_worker_process(worker)" in readme
-    assert 'workhorse dashboard --database-url "$DATABASE_URL"' in readme
-    assert (
-        '"python:test": "tsx scripts/with-env.ts uv run --project python pytest python/tests"'
-        in package_manifest
+    assert manifest["tool"]["mypy"]["python_version"] == python_support["minimum"]
+    assert manifest["tool"]["ruff"]["target-version"] == (
+        f"py{python_support['minimum'].replace('.', '')}"
     )
-    assert '"python:vuln": "sh scripts/audit-python-dependencies.sh"' in package_manifest
-    assert "pnpm lint && pnpm python:vuln && pnpm go:vuln" in package_manifest
+    assert "worker SDK" in project["description"]
+    assert project["dependencies"] == [
+        "jsonschema>=4.25,<5",
+        "psycopg>=3.3,<4",
+        "typing-extensions>=4.12,<5",
+    ]
+    assert project["optional-dependencies"]["psycopg"] == []
+    assert project["optional-dependencies"]["asyncpg"] == ["asyncpg>=0.31,<1"]
+    assert project["name"] == "stablemates-workhorse"
+    assert project["version"] == "0.1.0a1"
+
+    postgres_majors = [str(major) for major in support["postgres"]["tested"]]
 
     with psycopg.connect(database_url) as connection:
         version_number = connection.execute(

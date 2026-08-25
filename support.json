@@ -1,0 +1,25 @@
+{
+  "support": {
+    "go": {
+      "minimum": "1.25.0"
+    },
+    "node": {
+      "minimum": 22,
+      "tested": [22, 24]
+    },
+    "postgres": {
+      "minimum": 15,
+      "tested": [15, 16, 17, 18]
+    },
+    "python": {
+      "minimum": "3.10",
+      "tested": ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    }
+  },
+  "toolchains": {
+    "go": "1.25.14",
+    "node": "24",
+    "pnpm": "10.18.3",
+    "uv": "0.8.9"
+  }
+}

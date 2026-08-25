@@ -16,6 +16,11 @@ import type { LandingSnippetId } from "../lib/landing-snippets.js";
 const siteRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(siteRoot, "..");
 const execFileAsync = promisify(execFile);
+const supportManifest = JSON.parse(
+  readFileSync(resolve(repositoryRoot, "support.json"), "utf8"),
+) as {
+  support: { go: { minimum: string } };
+};
 const quickstartSource = readFileSync(resolve(siteRoot, "content/docs/quickstart.mdx"), "utf8");
 const examplesSource = readFileSync(resolve(siteRoot, "content/docs/examples.mdx"), "utf8");
 const documentationSources = [quickstartSource, examplesSource];
@@ -210,7 +215,7 @@ try {
 
   writeFileSync(
     resolve(temporaryRoot, "go.mod"),
-    `module workhorse-doc-example\n\ngo 1.25\n\nrequire github.com/stablemates/workhorse/go v0.0.0\n\nreplace github.com/stablemates/workhorse/go => ${resolve(repositoryRoot, "go")}\n`,
+    `module workhorse-doc-example\n\ngo ${supportManifest.support.go.minimum}\n\nrequire github.com/stablemates/workhorse/go v0.0.0\n\nreplace github.com/stablemates/workhorse/go => ${resolve(repositoryRoot, "go")}\n`,
   );
   const goExamples = [
     ...verifiedDocumentationExamples("go"),
