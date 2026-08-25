@@ -99,92 +99,22 @@ func (service *backend) meta(context.Context, any, string) (any, error) {
 }
 
 func (service *backend) taskCounts(ctx context.Context, _ any, _ string) (any, error) {
-	estimateRows, err := service.executor.Query(ctx, "SELECT estimate FROM workhorse.dashboard_job_estimate_v1()")
-	if err != nil {
-		return nil, err
-	}
-	estimate := integer(estimateRows[0]["estimate"])
-	if estimate >= 50_000 {
-		liveRows, queryErr := service.executor.Query(ctx, `SELECT count(*)FILTER(WHERE state='blocked')::integer blocked,count(*)FILTER(WHERE EXISTS(SELECT 1 FROM workhorse.dashboard_signal_wait_v1 s WHERE s.job_id=runtime.job_id UNION ALL SELECT 1 FROM workhorse.dashboard_human_wait_v1 h WHERE h.job_id=runtime.job_id))::integer waiting,count(*)FILTER(WHERE state='scheduled')::integer scheduled,count(*)FILTER(WHERE state='ready')::integer queued,count(*)FILTER(WHERE state='active')::integer running,count(*)FILTER(WHERE current_attempt>1)::integer retried FROM workhorse.dashboard_job_runtime_v1 runtime`)
-		if queryErr != nil {
-			return nil, queryErr
-		}
-		live := liveRows[0]
-		completed, queryErr := service.estimateRows(ctx, "SELECT 1 FROM workhorse.dashboard_job_outcome_v1 WHERE state='succeeded'")
-		if queryErr != nil {
-			return nil, queryErr
-		}
-		discarded, queryErr := service.estimateRows(ctx, "SELECT 1 FROM workhorse.dashboard_job_outcome_v1 WHERE state='failed'")
-		if queryErr != nil {
-			return nil, queryErr
-		}
-		canceled, queryErr := service.estimateRows(ctx, "SELECT 1 FROM workhorse.dashboard_job_outcome_v1 WHERE state='canceled'")
-		if queryErr != nil {
-			return nil, queryErr
-		}
-		retried, queryErr := service.estimateRows(ctx, "SELECT 1 FROM workhorse.dashboard_job_outcome_v1 WHERE current_attempt>1")
-		if queryErr != nil {
-			return nil, queryErr
-		}
-		return map[string]any{"all": estimate, "blocked": live["blocked"], "waiting": live["waiting"], "scheduled": live["scheduled"], "retried": integer(live["retried"]) + retried, "queued": live["queued"], "running": live["running"], "completed": completed, "discarded": discarded, "canceled": canceled}, nil
-	}
-	rows, err := service.executor.Query(ctx, `
-WITH tasks AS (
-  SELECT COALESCE(r.state, o.state) AS state,
-         EXISTS (
-           SELECT 1 FROM workhorse.dashboard_signal_wait_v1 s WHERE s.job_id = j.id
-           UNION ALL
-           SELECT 1 FROM workhorse.dashboard_human_wait_v1 h WHERE h.job_id = j.id
-         ) AS external_wait,
-         COALESCE(r.current_attempt, o.current_attempt) AS attempt
-    FROM workhorse.dashboard_job_v1 j
-    LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
-    LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
-)
-SELECT count(*)::integer AS all,
-       count(*) FILTER (WHERE state = 'blocked')::integer AS blocked,
-       count(*) FILTER (WHERE external_wait)::integer AS waiting,
-       count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled,
-       count(*) FILTER (WHERE attempt > 1)::integer AS retried,
-       count(*) FILTER (WHERE state = 'ready')::integer AS queued,
-       count(*) FILTER (WHERE state = 'active')::integer AS running,
-       count(*) FILTER (WHERE state = 'succeeded')::integer AS completed,
-       count(*) FILTER (WHERE state = 'failed')::integer AS discarded,
-       count(*) FILTER (WHERE state = 'canceled')::integer AS canceled
-  FROM tasks`)
-	if err != nil {
-		return nil, err
-	}
-	return oneRow(rows, "task counts")
+	return service.jsonQuery(
+		ctx,
+		"SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb) AS result",
+	)
 }
 
 func (service *backend) taskFacets(ctx context.Context, _ any, _ string) (any, error) {
-	rows, err := service.executor.Query(ctx, `
-WITH configured_workers(worker) AS (SELECT unnest($1::text[])),
-queue_values AS (
-  SELECT queue_name AS value FROM workhorse.dashboard_job_v1
-  UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1
-), worker_values AS (
-  SELECT worker AS value FROM configured_workers
-  UNION SELECT worker_id FROM workhorse.dashboard_job_runtime_v1 WHERE worker_id IS NOT NULL
-  UNION SELECT worker_id FROM workhorse.dashboard_attempt_history_v1 WHERE worker_id IS NOT NULL
-), type_values AS (
-  SELECT DISTINCT job_type AS value FROM workhorse.dashboard_job_v1
-), tag_values AS (
-  SELECT DISTINCT unnest(tags) AS value FROM workhorse.dashboard_job_v1
-)
-SELECT ARRAY(SELECT value FROM queue_values WHERE value IS NOT NULL ORDER BY value) AS queues,
-       ARRAY(SELECT value FROM worker_values WHERE value IS NOT NULL ORDER BY value) AS workers,
-       ARRAY(SELECT value FROM type_values ORDER BY value) AS job_types,
-       ARRAY(SELECT value FROM tag_values ORDER BY value) AS tags`, service.configuredWorkers)
-	if err != nil {
-		return nil, err
+	workers := service.configuredWorkers
+	if workers == nil {
+		workers = []string{}
 	}
-	row, err := oneRow(rows, "task facets")
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{"queues": stringValues(row["queues"]), "workers": stringValues(row["workers"]), "jobTypes": stringValues(row["job_types"]), "tags": stringValues(row["tags"])}, nil
+	return service.jsonQuery(
+		ctx,
+		"SELECT workhorse.dashboard_task_facets_v1($1::jsonb) AS result",
+		string(mustJSON(map[string]any{"configuredWorkers": workers})),
+	)
 }
 
 func (service *backend) queues(ctx context.Context, _ any, _ string) (any, error) {
@@ -192,38 +122,6 @@ func (service *backend) queues(ctx context.Context, _ any, _ string) (any, error
 		ctx,
 		"SELECT workhorse.dashboard_queues_v1('{}'::jsonb) AS result",
 	)
-}
-
-func (service *backend) estimateRows(ctx context.Context, statement string, arguments ...any) (int, error) {
-	rows, err := service.executor.Query(ctx, "EXPLAIN (FORMAT JSON) "+statement, arguments...)
-	if err != nil {
-		return 0, err
-	}
-	row, err := oneRow(rows, "row estimate")
-	if err != nil {
-		return 0, err
-	}
-	var value any
-	for _, cell := range row {
-		value, err = decodeJSONCell(cell)
-		if err != nil {
-			return 0, err
-		}
-		break
-	}
-	plans, ok := value.([]any)
-	if !ok || len(plans) == 0 {
-		return 0, fmt.Errorf("row estimate returned %T", value)
-	}
-	document, ok := plans[0].(map[string]any)
-	if !ok {
-		return 0, fmt.Errorf("row estimate plan returned %T", plans[0])
-	}
-	plan, ok := document["Plan"].(map[string]any)
-	if !ok {
-		return 0, fmt.Errorf("row estimate document omitted Plan")
-	}
-	return max(0, integer(plan["Plan Rows"])), nil
 }
 
 func admissionPolicies(health map[string]any) (map[string]any, map[string]any, bool, bool) {

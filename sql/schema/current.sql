@@ -11523,6 +11523,132 @@ AS $$
   ) FROM parameters;
 $$;
 
+CREATE OR REPLACE FUNCTION workhorse.dashboard_task_counts_v1(p_input jsonb)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_estimate bigint;
+  v_live record;
+  v_state text;
+  v_plan jsonb;
+  v_completed integer;
+  v_discarded integer;
+  v_canceled integer;
+  v_retried_terminal integer;
+BEGIN
+  SELECT estimate INTO v_estimate FROM workhorse.dashboard_job_estimate_v1();
+  -- reltuples is -1 until the first vacuum/analyze; treat unknown as small.
+  IF v_estimate < 50000 THEN
+    RETURN (
+      WITH tasks AS (
+        SELECT COALESCE(r.state, o.state) AS state,
+               EXISTS (
+                 SELECT 1 FROM workhorse.dashboard_signal_wait_v1 signal_wait
+                  WHERE signal_wait.job_id = j.id
+                 UNION ALL
+                 SELECT 1 FROM workhorse.dashboard_human_wait_v1 human_wait
+                  WHERE human_wait.job_id = j.id
+               ) AS external_wait,
+               COALESCE(r.current_attempt, o.current_attempt) AS attempt
+          FROM workhorse.dashboard_job_v1 j
+          LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
+          LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
+      )
+      SELECT jsonb_build_object(
+        'all', count(*)::integer,
+        'blocked', count(*) FILTER (WHERE state = 'blocked')::integer,
+        'waiting', count(*) FILTER (WHERE external_wait)::integer,
+        'scheduled', count(*) FILTER (WHERE state = 'scheduled')::integer,
+        'retried', count(*) FILTER (WHERE attempt > 1)::integer,
+        'queued', count(*) FILTER (WHERE state = 'ready')::integer,
+        'running', count(*) FILTER (WHERE state = 'active')::integer,
+        'completed', count(*) FILTER (WHERE state = 'succeeded')::integer,
+        'discarded', count(*) FILTER (WHERE state = 'failed')::integer,
+        'canceled', count(*) FILTER (WHERE state = 'canceled')::integer)
+        FROM tasks
+    );
+  END IF;
+
+  -- job_runtime stays small by design (live jobs only), so live states are always counted
+  -- exactly; job and job_outcome grow without bound and switch to planner estimates.
+  SELECT count(*) FILTER (WHERE state = 'blocked')::integer AS blocked,
+         count(*) FILTER (WHERE EXISTS (
+           SELECT 1 FROM workhorse.dashboard_signal_wait_v1 signal_wait
+            WHERE signal_wait.job_id = runtime.job_id
+           UNION ALL
+           SELECT 1 FROM workhorse.dashboard_human_wait_v1 human_wait
+            WHERE human_wait.job_id = runtime.job_id
+         ))::integer AS waiting,
+         count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled,
+         count(*) FILTER (WHERE state = 'ready')::integer AS queued,
+         count(*) FILTER (WHERE state = 'active')::integer AS running,
+         count(*) FILTER (WHERE current_attempt > 1)::integer AS retried
+    INTO v_live
+    FROM workhorse.dashboard_job_runtime_v1 runtime;
+
+  FOREACH v_state IN ARRAY ARRAY['succeeded', 'failed', 'canceled'] LOOP
+    EXECUTE 'EXPLAIN (FORMAT JSON) SELECT 1 '
+            'FROM workhorse.dashboard_job_outcome_v1 WHERE state=$1'
+      INTO v_plan USING v_state;
+    CASE v_state
+      WHEN 'succeeded' THEN
+        v_completed := GREATEST(0, round((v_plan->0->'Plan'->>'Plan Rows')::numeric));
+      WHEN 'failed' THEN
+        v_discarded := GREATEST(0, round((v_plan->0->'Plan'->>'Plan Rows')::numeric));
+      WHEN 'canceled' THEN
+        v_canceled := GREATEST(0, round((v_plan->0->'Plan'->>'Plan Rows')::numeric));
+    END CASE;
+  END LOOP;
+  EXECUTE 'EXPLAIN (FORMAT JSON) SELECT 1 '
+          'FROM workhorse.dashboard_job_outcome_v1 WHERE current_attempt>1'
+    INTO v_plan;
+  v_retried_terminal := GREATEST(0, round((v_plan->0->'Plan'->>'Plan Rows')::numeric));
+
+  RETURN jsonb_build_object(
+    'all', v_estimate, 'blocked', v_live.blocked, 'waiting', v_live.waiting,
+    'scheduled', v_live.scheduled, 'retried', v_live.retried + v_retried_terminal,
+    'queued', v_live.queued, 'running', v_live.running, 'completed', v_completed,
+    'discarded', v_discarded, 'canceled', v_canceled);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.dashboard_task_facets_v1(p_input jsonb)
+RETURNS jsonb
+LANGUAGE sql
+AS $$
+  WITH configured_workers AS (
+    SELECT jsonb_array_elements_text(
+             CASE WHEN jsonb_typeof(p_input->'configuredWorkers') = 'array'
+                  THEN p_input->'configuredWorkers' END
+           ) AS worker
+  ), queue_values AS (
+    SELECT queue_name AS value FROM workhorse.dashboard_job_v1
+    UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1
+  ), worker_values AS (
+    SELECT worker AS value FROM configured_workers
+    UNION SELECT worker_id FROM workhorse.dashboard_job_runtime_v1 WHERE worker_id IS NOT NULL
+    UNION SELECT worker_id FROM workhorse.dashboard_attempt_history_v1 WHERE worker_id IS NOT NULL
+  ), type_values AS (
+    SELECT DISTINCT job_type AS value FROM workhorse.dashboard_job_v1
+  ), tag_values AS (
+    SELECT DISTINCT unnest(tags) AS value FROM workhorse.dashboard_job_v1
+  )
+  SELECT jsonb_build_object(
+    'queues', COALESCE((
+      SELECT jsonb_agg(value ORDER BY value) FROM queue_values WHERE value IS NOT NULL
+    ), '[]'::jsonb),
+    'workers', COALESCE((
+      SELECT jsonb_agg(value ORDER BY value) FROM worker_values WHERE value IS NOT NULL
+    ), '[]'::jsonb),
+    'jobTypes', COALESCE((
+      SELECT jsonb_agg(value ORDER BY value) FROM type_values
+    ), '[]'::jsonb),
+    'tags', COALESCE((
+      SELECT jsonb_agg(value ORDER BY value) FROM tag_values
+    ), '[]'::jsonb));
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.dashboard_queues_v1(p_input jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql

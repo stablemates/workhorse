@@ -154,84 +154,14 @@ class DashboardBackend:
             self._health_cache = (monotonic() + 3, value)
             return value
 
-    def _estimate_rows(self, sql: str, parameters: Sequence[object] = ()) -> int:
-        row = self._rows("EXPLAIN (FORMAT JSON) " + sql, parameters)[0]
-        plan = next(iter(row.values()))
-        if isinstance(plan, str | bytes):
-            plan = json.loads(plan)
-        document = cast(Sequence[Mapping[str, object]], plan)[0]
-        root = cast(Mapping[str, object], document["Plan"])
-        return max(0, round(float(cast(int | float, root["Plan Rows"]))))
-
     def meta(self, _input: object, _actor: str) -> object:
         return {"environment": self._environment}
 
     def task_counts(self, _input: object, _actor: str) -> object:
-        estimate = _integer(
-            self._rows("SELECT estimate FROM workhorse.dashboard_job_estimate_v1()")[0]["estimate"]
-        )
-        if estimate >= 50_000:
-            live = self._rows(
-                """SELECT count(*) FILTER(WHERE state='blocked')::integer AS blocked,
-                          count(*) FILTER(WHERE EXISTS(
-                            SELECT 1 FROM workhorse.dashboard_signal_wait_v1 s WHERE s.job_id=runtime.job_id
-                            UNION ALL SELECT 1 FROM workhorse.dashboard_human_wait_v1 h WHERE h.job_id=runtime.job_id
-                          ))::integer AS waiting,
-                          count(*) FILTER(WHERE state='scheduled')::integer AS scheduled,
-                          count(*) FILTER(WHERE state='ready')::integer AS queued,
-                          count(*) FILTER(WHERE state='active')::integer AS running,
-                          count(*) FILTER(WHERE current_attempt>1)::integer AS retried
-                     FROM workhorse.dashboard_job_runtime_v1 runtime"""
-            )[0]
-            outcomes = {
-                state: self._estimate_rows(
-                    f"SELECT 1 FROM workhorse.dashboard_job_outcome_v1 WHERE state='{state}'"
-                )
-                for state in ("succeeded", "failed", "canceled")
-            }
-            retried_terminal = self._estimate_rows(
-                "SELECT 1 FROM workhorse.dashboard_job_outcome_v1 WHERE current_attempt>1"
-            )
-            return {
-                "all": estimate,
-                "blocked": live["blocked"],
-                "waiting": live["waiting"],
-                "scheduled": live["scheduled"],
-                "retried": _integer(live["retried"]) + retried_terminal,
-                "queued": live["queued"],
-                "running": live["running"],
-                "completed": outcomes["succeeded"],
-                "discarded": outcomes["failed"],
-                "canceled": outcomes["canceled"],
-            }
-        row = self._rows(
-            """
-            WITH tasks AS (
-              SELECT COALESCE(r.state, o.state) AS state,
-                     EXISTS (
-                       SELECT 1 FROM workhorse.dashboard_signal_wait_v1 s WHERE s.job_id = j.id
-                       UNION ALL
-                       SELECT 1 FROM workhorse.dashboard_human_wait_v1 h WHERE h.job_id = j.id
-                     ) AS external_wait,
-                     COALESCE(r.current_attempt, o.current_attempt) AS attempt
-                FROM workhorse.dashboard_job_v1 j
-                LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
-                LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
-            )
-            SELECT count(*)::integer AS all,
-                   count(*) FILTER (WHERE state = 'blocked')::integer AS blocked,
-                   count(*) FILTER (WHERE external_wait)::integer AS waiting,
-                   count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled,
-                   count(*) FILTER (WHERE attempt > 1)::integer AS retried,
-                   count(*) FILTER (WHERE state = 'ready')::integer AS queued,
-                   count(*) FILTER (WHERE state = 'active')::integer AS running,
-                   count(*) FILTER (WHERE state = 'succeeded')::integer AS completed,
-                   count(*) FILTER (WHERE state = 'failed')::integer AS discarded,
-                   count(*) FILTER (WHERE state = 'canceled')::integer AS canceled
-              FROM tasks
-            """
-        )[0]
-        return _iso(row)
+        value = self._rows("SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb) AS result")[0][
+            "result"
+        ]
+        return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
     def tasks(self, input: object, _actor: str) -> object:
         supplied = cast(Mapping[str, object], input)
@@ -379,41 +309,11 @@ class DashboardBackend:
         }
 
     def task_facets(self, _input: object, _actor: str) -> object:
-        row = self._rows(
-            """
-            WITH configured_workers(worker) AS (
-              SELECT unnest(%s::text[])
-            ), queue_values AS (
-              SELECT queue_name AS value FROM workhorse.dashboard_job_v1
-              UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1
-            ), worker_values AS (
-              SELECT worker AS value FROM configured_workers
-              UNION SELECT worker_id FROM workhorse.dashboard_job_runtime_v1
-                WHERE worker_id IS NOT NULL
-              UNION SELECT worker_id FROM workhorse.dashboard_attempt_history_v1
-                WHERE worker_id IS NOT NULL
-            ), type_values AS (
-              SELECT DISTINCT job_type AS value FROM workhorse.dashboard_job_v1
-            ), tag_values AS (
-              SELECT DISTINCT unnest(tags) AS value FROM workhorse.dashboard_job_v1
-            )
-            SELECT ARRAY(
-                     SELECT value FROM queue_values WHERE value IS NOT NULL ORDER BY value
-                   ) AS queues,
-                   ARRAY(
-                     SELECT value FROM worker_values WHERE value IS NOT NULL ORDER BY value
-                   ) AS workers,
-                   ARRAY(SELECT value FROM type_values ORDER BY value) AS job_types,
-                   ARRAY(SELECT value FROM tag_values ORDER BY value) AS tags
-            """,
-            (list(self._configured_workers),),
-        )[0]
-        return {
-            "queues": row["queues"],
-            "workers": row["workers"],
-            "jobTypes": row["job_types"],
-            "tags": row["tags"],
-        }
+        value = self._rows(
+            "SELECT workhorse.dashboard_task_facets_v1(%s::jsonb) AS result",
+            (json.dumps({"configuredWorkers": list(self._configured_workers)}),),
+        )[0]["result"]
+        return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
     def queues(self, _input: object, _actor: str) -> object:
         value = self._rows("SELECT workhorse.dashboard_queues_v1('{}'::jsonb) AS result")[0][

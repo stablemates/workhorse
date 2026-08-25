@@ -285,134 +285,13 @@ function externalWaitExists(jobId: DashboardSql) {
   `;
 }
 
-/**
- * Above this size, sidebar counts switch from exact scans to planner estimates.
- * job_runtime stays small by design (live jobs only), so it is always counted
- * exactly; job and job_outcome grow without bound.
- */
-const approximateCountThreshold = 50_000;
-
-/** Planner row estimate for a query (PostgreSQL wiki "count estimate" technique). */
-async function estimateRows(database: DashboardDatabase, query: ReturnType<typeof sql>) {
-  const plan = await database.execute<Record<string, unknown>>(sql`EXPLAIN (FORMAT JSON) ${query}`);
-  const cell = Object.values(plan.rows[0] ?? {})[0];
-  const parsed: unknown = typeof cell === "string" ? JSON.parse(cell) : cell;
-  const rows = (parsed as Array<{ Plan?: { "Plan Rows"?: number } }>)[0]?.Plan?.["Plan Rows"];
-  return typeof rows === "number" ? Math.max(0, Math.round(rows)) : 0;
-}
-
 export async function readDashboardTaskCounts(
   database: DashboardDatabase,
 ): Promise<DashboardTaskCounts> {
-  const relRows = await database.execute<{ estimate: string | number }>(sql`
-    SELECT estimate FROM workhorse.dashboard_job_estimate_v1()
+  const rows = await database.execute<{ result: DashboardTaskCounts }>(sql`
+    SELECT workhorse.dashboard_task_counts_v1('{}'::jsonb) AS result
   `);
-  const jobEstimate = Number(relRows.rows[0]?.estimate ?? -1);
-  // reltuples is -1 until the first vacuum/analyze; treat unknown as small.
-  if (jobEstimate < approximateCountThreshold) {
-    return readDashboardTaskCountsExact(database);
-  }
-
-  const runtimeRows = await database.execute<{
-    blocked_count: number;
-    waiting_count: number;
-    scheduled_count: number;
-    queued_count: number;
-    running_count: number;
-    retried_live_count: number;
-  }>(sql`
-    SELECT count(*) FILTER (WHERE state = 'blocked')::integer AS blocked_count,
-           count(*) FILTER (WHERE ${externalWaitExists(sql`runtime.job_id`)})::integer
-             AS waiting_count,
-           count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled_count,
-           count(*) FILTER (WHERE state = 'ready')::integer AS queued_count,
-           count(*) FILTER (WHERE state = 'active')::integer AS running_count,
-           count(*) FILTER (WHERE current_attempt > 1)::integer AS retried_live_count
-      FROM workhorse.dashboard_job_runtime_v1 runtime
-  `);
-  const live = expectOneRow(runtimeRows, "the live job runtime counts");
-  const [completed, discarded, canceled, retriedTerminal] = await Promise.all([
-    estimateRows(
-      database,
-      sql`SELECT 1 FROM workhorse.dashboard_job_outcome_v1 WHERE state = 'succeeded'`,
-    ),
-    estimateRows(
-      database,
-      sql`SELECT 1 FROM workhorse.dashboard_job_outcome_v1 WHERE state = 'failed'`,
-    ),
-    estimateRows(
-      database,
-      sql`SELECT 1 FROM workhorse.dashboard_job_outcome_v1 WHERE state = 'canceled'`,
-    ),
-    estimateRows(
-      database,
-      sql`SELECT 1 FROM workhorse.dashboard_job_outcome_v1 WHERE current_attempt > 1`,
-    ),
-  ]);
-
-  return {
-    all: jobEstimate,
-    blocked: live.blocked_count,
-    waiting: live.waiting_count,
-    scheduled: live.scheduled_count,
-    retried: live.retried_live_count + retriedTerminal,
-    queued: live.queued_count,
-    running: live.running_count,
-    completed,
-    discarded,
-    canceled,
-  };
-}
-
-async function readDashboardTaskCountsExact(
-  database: DashboardDatabase,
-): Promise<DashboardTaskCounts> {
-  const countRows = await database.execute<{
-    all_count: number;
-    blocked_count: number;
-    waiting_count: number;
-    scheduled_count: number;
-    retried_count: number;
-    queued_count: number;
-    running_count: number;
-    completed_count: number;
-    discarded_count: number;
-    canceled_count: number;
-  }>(sql`
-    WITH tasks AS (
-      SELECT COALESCE(r.state, o.state) AS state,
-             ${externalWaitExists(sql`j.id`)} AS external_wait,
-             COALESCE(r.current_attempt, o.current_attempt) AS attempt
-        FROM workhorse.dashboard_job_v1 j
-        LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
-        LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
-    )
-    SELECT count(*)::integer AS all_count,
-           count(*) FILTER (WHERE state = 'blocked')::integer AS blocked_count,
-           count(*) FILTER (WHERE external_wait)::integer AS waiting_count,
-           count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled_count,
-           count(*) FILTER (WHERE attempt > 1)::integer AS retried_count,
-           count(*) FILTER (WHERE state = 'ready')::integer AS queued_count,
-           count(*) FILTER (WHERE state = 'active')::integer AS running_count,
-           count(*) FILTER (WHERE state = 'succeeded')::integer AS completed_count,
-           count(*) FILTER (WHERE state = 'failed')::integer AS discarded_count,
-           count(*) FILTER (WHERE state = 'canceled')::integer AS canceled_count
-      FROM tasks
-  `);
-  const counts = expectOneRow(countRows, "the task attempt counts");
-
-  return {
-    all: counts.all_count,
-    blocked: counts.blocked_count,
-    waiting: counts.waiting_count,
-    scheduled: counts.scheduled_count,
-    retried: counts.retried_count,
-    queued: counts.queued_count,
-    running: counts.running_count,
-    completed: counts.completed_count,
-    discarded: counts.discarded_count,
-    canceled: counts.canceled_count,
-  };
+  return expectOneRow(rows, "the dashboard task counts procedure").result;
 }
 
 /** Queue management rows keep hot live-state counts exact and estimate cold outcomes at scale. */
@@ -623,40 +502,11 @@ export async function readDashboardTaskFacets(
   database: DashboardDatabase,
   configuredWorkers: readonly string[] = [],
 ): Promise<DashboardTaskFacets> {
-  const configuredWorkerRows =
-    configuredWorkers.length === 0
-      ? sql`SELECT NULL::text AS worker WHERE false`
-      : sql`SELECT worker FROM (VALUES ${workerValues(configuredWorkers)}) configured(worker)`;
-  const rows = await database.execute<{
-    queues: string[];
-    workers: string[];
-    job_types: string[];
-    tags: string[];
-  }>(sql`
-    WITH configured_workers AS (${configuredWorkerRows}),
-    queue_values AS (
-      SELECT queue_name AS value FROM workhorse.dashboard_job_v1
-      UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1
-    ), worker_values AS (
-      SELECT worker AS value FROM configured_workers
-      UNION SELECT worker_id FROM workhorse.dashboard_job_runtime_v1 WHERE worker_id IS NOT NULL
-      UNION SELECT worker_id FROM workhorse.dashboard_attempt_history_v1 WHERE worker_id IS NOT NULL
-    ), type_values AS (
-      SELECT DISTINCT job_type AS value FROM workhorse.dashboard_job_v1
-    ), tag_values AS (
-      SELECT DISTINCT unnest(tags) AS value FROM workhorse.dashboard_job_v1
-    )
-    SELECT ARRAY(SELECT value FROM queue_values WHERE value IS NOT NULL ORDER BY value) AS queues,
-           ARRAY(SELECT value FROM worker_values WHERE value IS NOT NULL ORDER BY value) AS workers,
-           ARRAY(SELECT value FROM type_values ORDER BY value) AS job_types,
-           ARRAY(SELECT value FROM tag_values ORDER BY value) AS tags
+  const input = JSON.stringify({ configuredWorkers });
+  const rows = await database.execute<{ result: DashboardTaskFacets }>(sql`
+    SELECT workhorse.dashboard_task_facets_v1(${input}::jsonb) AS result
   `);
-  return {
-    queues: rows.rows[0]?.queues ?? [],
-    workers: rows.rows[0]?.workers ?? [],
-    jobTypes: rows.rows[0]?.job_types ?? [],
-    tags: rows.rows[0]?.tags ?? [],
-  };
+  return expectOneRow(rows, "the dashboard task facets procedure").result;
 }
 
 export async function readDashboardCron(
