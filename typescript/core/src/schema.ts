@@ -1,4 +1,13 @@
-import { SQL_STATEMENTS } from "./queue/sql-catalogue.generated.js";
+import {
+  MAXIMUM_PROTOCOL_VERSION,
+  MAXIMUM_SCHEMA_VERSION,
+  MINIMUM_PROTOCOL_VERSION,
+  MINIMUM_SCHEMA_VERSION,
+  PROTOCOL_VERSION,
+  SQL_STATEMENTS,
+  WORKHORSE_SCHEMA_BASELINE_VERSION,
+  WORKHORSE_SCHEMA_VERSION,
+} from "./queue/sql-catalogue.generated.js";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -13,11 +22,15 @@ import {
 import { assertSupportedPostgres } from "./support.js";
 import type { Queryable } from "./types.js";
 
-/** Current pre-release baseline, and later the oldest version covered by migrations. */
-export const WORKHORSE_SCHEMA_BASELINE_VERSION = 1;
-
-/** Canonical schema version for the current line. */
-export const WORKHORSE_SCHEMA_VERSION = 1;
+export {
+  MAXIMUM_PROTOCOL_VERSION,
+  MAXIMUM_SCHEMA_VERSION,
+  MINIMUM_PROTOCOL_VERSION,
+  MINIMUM_SCHEMA_VERSION,
+  PROTOCOL_VERSION,
+  WORKHORSE_SCHEMA_BASELINE_VERSION,
+  WORKHORSE_SCHEMA_VERSION,
+};
 
 // Empty until the first public release. Version 1 is the permanent baseline, installed whole
 // from sql/schema.sql; every later version arrives as one ordered, immutable step here.

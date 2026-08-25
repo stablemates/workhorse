@@ -5,6 +5,15 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import cast
 
+from ._statements import (
+    DEFAULT_VALUE_MAX_BYTES,
+    MAX_BATCH_SIZE,
+    MAXIMUM_PROTOCOL_VERSION,
+    MAXIMUM_SCHEMA_VERSION,
+    MINIMUM_PROTOCOL_VERSION,
+    MINIMUM_SCHEMA_VERSION,
+    PROTOCOL_VERSION,
+)
 from .errors import CompatibilityCode, ProtocolCompatibilityError
 from .types import (
     ClaimedJob,
@@ -17,14 +26,6 @@ from .types import (
     ScheduleDefinition,
     Throttle,
 )
-
-PROTOCOL_VERSION = 1
-MINIMUM_PROTOCOL_VERSION = 1
-MAXIMUM_PROTOCOL_VERSION = 1
-MINIMUM_SCHEMA_VERSION = 1
-MAXIMUM_SCHEMA_VERSION = 1
-DEFAULT_VALUE_MAX_BYTES = 1_048_576
-MAX_BATCH_SIZE = 1_000
 
 
 def compatibility_refusal(

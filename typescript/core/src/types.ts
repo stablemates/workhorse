@@ -291,7 +291,7 @@ export interface EnqueueRequest<TPayload extends Json = Json> {
  * Maximum supported requests per `enqueueMany` call. This bounds JSON parsing, statement memory,
  * identity allocation, and notification work inside one PostgreSQL transaction.
  */
-export const MAX_ENQUEUE_BATCH_SIZE = 1_000;
+export { MAX_ENQUEUE_BATCH_SIZE } from "./queue/sql-catalogue.generated.js";
 /** Maximum prerequisite edges accepted for one dependent job. */
 export const MAX_JOB_DEPENDENCIES = 100;
 /** Maximum dependent edges accepted for one prerequisite job. */
@@ -357,7 +357,7 @@ export const MAX_JOB_QUERY_PAYLOAD_BYTES = 1_048_576;
 /** Maximum unique top-level payload keys redacted by one list projection. */
 export const MAX_JOB_QUERY_REDACT_KEYS = 50;
 /** Default PostgreSQL-canonical JSON size accepted for a job payload or result. */
-export const DEFAULT_JOB_VALUE_MAX_BYTES = 1_048_576;
+export { DEFAULT_JOB_VALUE_MAX_BYTES } from "./queue/sql-catalogue.generated.js";
 /** Largest configurable PostgreSQL-canonical JSON size accepted for a job payload or result. */
 export const MAX_JOB_VALUE_MAX_BYTES = 16_777_216;
 /** Maximum persisted top-level sensitive keys for one payload or result contract. */

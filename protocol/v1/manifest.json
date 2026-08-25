@@ -10,6 +10,10 @@
     "minimumVersion": 1,
     "maximumVersion": 1
   },
+  "limits": {
+    "defaultJobValueMaxBytes": 1048576,
+    "maxEnqueueBatchSize": 1000
+  },
   "coverage": [
     "enqueue",
     "claim",
@@ -206,18 +210,21 @@
   "statements": [
     {
       "name": "acknowledge_cancel_v1",
+      "pythonBinding": "acknowledge_cancel",
       "arity": 3,
       "contract": "SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted",
       "catalogues": ["protocol"]
     },
     {
       "name": "cancel_v1",
+      "pythonBinding": "cancel",
       "arity": 3,
       "contract": "SELECT status, state, current_attempt, requested_at, requested_by, reason, finished_at FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)",
       "catalogues": ["protocol"]
     },
     {
       "name": "claim_many_v1",
+      "pythonBinding": "claim_many",
       "arity": 4,
       "contract": "SELECT * FROM workhorse.claim_many_v1($1::text, $2::text, $3::integer, $4::integer)",
       "catalogues": ["protocol"]
@@ -230,24 +237,28 @@
     },
     {
       "name": "complete_human_wait_v1",
+      "pythonBinding": "complete_human_wait",
       "arity": 5,
       "contract": "SELECT status, result, completed_at, completed_by FROM workhorse.complete_human_wait_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)",
       "catalogues": ["protocol"]
     },
     {
       "name": "complete_v1",
+      "pythonBinding": "complete",
       "arity": 4,
       "contract": "SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted",
       "catalogues": ["protocol"]
     },
     {
       "name": "create_child_v1",
+      "pythonBinding": "create_child",
       "arity": 5,
       "contract": "SELECT status, child_job_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
       "catalogues": ["protocol"]
     },
     {
       "name": "create_children_v1",
+      "pythonBinding": "create_children",
       "arity": 4,
       "contract": "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)",
       "catalogues": ["protocol"]
@@ -266,30 +277,35 @@
     },
     {
       "name": "deregister_worker_v1",
+      "pythonBinding": "deregister_worker",
       "arity": 1,
       "contract": "SELECT workhorse.deregister_worker_v1($1::text) AS deregistered",
       "catalogues": ["internal"]
     },
     {
       "name": "enqueue_many_v1",
+      "pythonBinding": "enqueue_many",
       "arity": 1,
       "contract": "SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
       "catalogues": ["protocol"]
     },
     {
       "name": "expire_owned_telemetry_v1",
+      "pythonBinding": "expire_owned",
       "arity": 3,
       "contract": "SELECT * FROM workhorse.expire_owned_telemetry_v1($1::uuid, $2::text, $3::bigint)",
       "catalogues": ["protocol"]
     },
     {
       "name": "fail_v1",
+      "pythonBinding": "fail",
       "arity": 5,
       "contract": "SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state",
       "catalogues": ["protocol"]
     },
     {
       "name": "fire_due_schedules_v1",
+      "pythonBinding": "fire_due_schedules",
       "arity": 3,
       "contract": "SELECT namespace, schedule_name, occurrence_at, job_id\n  FROM workhorse.fire_due_schedules_v1($1::text[], $2::timestamptz, $3::integer)",
       "catalogues": ["internal"]
@@ -302,6 +318,7 @@
     },
     {
       "name": "get_contract_definition_v1",
+      "pythonBinding": "get_contract",
       "arity": 2,
       "contract": "SELECT (definition).* FROM workhorse.get_contract_definition_v1($1::text, $2::text) definition",
       "catalogues": ["protocol"]
@@ -326,6 +343,7 @@
     },
     {
       "name": "heartbeat_many_v1",
+      "pythonBinding": "heartbeat_many",
       "arity": 2,
       "contract": "SELECT job_id::text AS job_id, status FROM workhorse.heartbeat_many_v1($1::text, $2::jsonb) ORDER BY ordinal",
       "catalogues": ["protocol"]
@@ -344,12 +362,14 @@
     },
     {
       "name": "list_checkpoints",
+      "pythonBinding": "list_checkpoints",
       "arity": 1,
       "contract": "SELECT job_id::text job_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.job_checkpoint WHERE job_id=$1::uuid ORDER BY created_at,checkpoint_name",
       "catalogues": ["admin"]
     },
     {
       "name": "list_concurrency_policies",
+      "pythonBinding": "list_concurrency_policies",
       "arity": 1,
       "contract": "SELECT namespace, queue_name, max_active, max_active_per_key, updated_at FROM workhorse.concurrency_policy, (SELECT $1::text[] AS names) AS filter WHERE cardinality(filter.names) = 0 OR queue_name = ANY(filter.names) ORDER BY queue_name",
       "catalogues": ["internal"]
@@ -380,12 +400,14 @@
     },
     {
       "name": "list_progress",
+      "pythonBinding": "list_progress",
       "arity": 1,
       "contract": "SELECT progress_value, revision::text, attempt, fence_token::text,\n       worker_id, created_at, updated_at\n  FROM workhorse.job_progress\n WHERE job_id = $1::uuid",
       "catalogues": ["internal"]
     },
     {
       "name": "list_rate_limit_policies",
+      "pythonBinding": "list_rate_limit_policies",
       "arity": 1,
       "contract": "SELECT namespace, queue_name, rate_limit, rate_interval_ms, rate_burst, per_key_limit, per_key_interval_ms, per_key_burst, updated_at FROM workhorse.rate_limit_policy, (SELECT $1::text[] AS names) AS filter WHERE cardinality(filter.names) = 0 OR queue_name = ANY(filter.names) ORDER BY queue_name",
       "catalogues": ["internal"]
@@ -398,6 +420,7 @@
     },
     {
       "name": "list_waits",
+      "pythonBinding": "list_waits",
       "arity": 1,
       "contract": "SELECT job_id::text job_id,wait_name,mode,duration_ms::text duration_ms,requested_wake_at,wake_at,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.job_wait WHERE job_id=$1::uuid ORDER BY created_at,wait_name",
       "catalogues": ["admin"]
@@ -410,6 +433,7 @@
     },
     {
       "name": "promote_v1",
+      "pythonBinding": "promote",
       "arity": 1,
       "contract": "SELECT workhorse.promote_v1($1::integer) AS promoted",
       "catalogues": ["internal"]
@@ -422,24 +446,28 @@
     },
     {
       "name": "queue_health_v1",
+      "pythonBinding": "health",
       "arity": 1,
       "contract": "SELECT workhorse.queue_health_v1($1::timestamptz) AS snapshot",
       "catalogues": ["protocol"]
     },
     {
       "name": "record_batch_dispatch_v1",
+      "pythonBinding": "record_batch_dispatch",
       "arity": 5,
       "contract": "SELECT workhorse.record_batch_dispatch_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded",
       "catalogues": ["protocol"]
     },
     {
       "name": "record_batch_failure_v1",
+      "pythonBinding": "record_batch_failure",
       "arity": 5,
       "contract": "SELECT workhorse.record_batch_failure_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded",
       "catalogues": ["protocol"]
     },
     {
       "name": "recover_expired_telemetry_v1",
+      "pythonBinding": "recover_expired",
       "arity": 2,
       "contract": "SELECT * FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)",
       "catalogues": ["protocol"]
@@ -458,36 +486,42 @@
     },
     {
       "name": "register_worker_v1",
+      "pythonBinding": "register_worker",
       "arity": 14,
       "contract": "SELECT workhorse.register_worker_v1(\n       $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::integer,\n       $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,\n       $12::integer, $13::integer, $14::boolean\n     ) AS paused",
       "catalogues": ["internal"]
     },
     {
       "name": "run_maintenance_v1",
+      "pythonBinding": "run_maintenance",
       "arity": 1,
       "contract": "SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)",
       "catalogues": ["internal", "protocol"]
     },
     {
       "name": "save_checkpoint_v1",
+      "pythonBinding": "save_checkpoint",
       "arity": 5,
       "contract": "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
       "catalogues": ["protocol"]
     },
     {
       "name": "schedule_wait_v1",
+      "pythonBinding": "schedule_wait",
       "arity": 6,
       "contract": "SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)",
       "catalogues": ["protocol"]
     },
     {
       "name": "schema_version",
+      "pythonBinding": "compatibility",
       "arity": 0,
       "contract": "SELECT version FROM workhorse.schema_version ORDER BY version",
       "catalogues": ["internal"]
     },
     {
       "name": "send_signal_v1",
+      "pythonBinding": "send_signal",
       "arity": 5,
       "contract": "SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)",
       "catalogues": ["protocol"]
@@ -506,48 +540,56 @@
     },
     {
       "name": "sync_concurrency_policies_v1",
+      "pythonBinding": "sync_concurrency_policies",
       "arity": 3,
       "contract": "SELECT * FROM workhorse.sync_concurrency_policies_v1($1::text, $2::jsonb, $3::boolean)",
       "catalogues": ["internal"]
     },
     {
       "name": "sync_contract_definitions_v1",
+      "pythonBinding": "sync_contracts",
       "arity": 1,
       "contract": "SELECT workhorse.sync_contract_definitions_v1($1::jsonb)",
       "catalogues": ["protocol"]
     },
     {
       "name": "sync_rate_limit_policies_v1",
+      "pythonBinding": "sync_rate_limit_policies",
       "arity": 3,
       "contract": "SELECT * FROM workhorse.sync_rate_limit_policies_v1($1::text, $2::jsonb, $3::boolean)",
       "catalogues": ["internal"]
     },
     {
       "name": "sync_schedule_definitions_v1",
+      "pythonBinding": "sync_schedules",
       "arity": 3,
       "contract": "SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean)",
       "catalogues": ["internal"]
     },
     {
       "name": "tick_v1",
+      "pythonBinding": "tick",
       "arity": 2,
       "contract": "SELECT * FROM workhorse.tick_v1($1::integer, $2::integer)",
       "catalogues": ["internal"]
     },
     {
       "name": "update_progress_v1",
+      "pythonBinding": "update_progress",
       "arity": 4,
       "contract": "SELECT status, progress_value, revision::text, attempt, fence_token::text, worker_id, created_at, updated_at, retry_after_ms::text FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)",
       "catalogues": ["protocol"]
     },
     {
       "name": "wait_for_human_v1",
+      "pythonBinding": "wait_for_human",
       "arity": 6,
       "contract": "SELECT status, result FROM workhorse.wait_for_human_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::bigint)",
       "catalogues": ["protocol"]
     },
     {
       "name": "wait_for_signal_v1",
+      "pythonBinding": "wait_for_signal",
       "arity": 5,
       "contract": "SELECT status, payload FROM workhorse.wait_for_signal_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint)",
       "catalogues": ["protocol"]

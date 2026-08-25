@@ -7,15 +7,6 @@ import (
 	"sync"
 )
 
-const (
-	// ProtocolVersion is the SQL protocol version implemented by this module.
-	ProtocolVersion        = 1
-	minimumProtocolVersion = 1
-	maximumProtocolVersion = 1
-	minimumSchemaVersion   = 1
-	maximumSchemaVersion   = 1
-)
-
 // CompatibilityCode identifies why a client must refuse a mutation.
 type CompatibilityCode string
 

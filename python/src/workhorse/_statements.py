@@ -6,6 +6,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+PROTOCOL_VERSION = 1
+MINIMUM_PROTOCOL_VERSION = 1
+MAXIMUM_PROTOCOL_VERSION = 1
+MINIMUM_SCHEMA_VERSION = 1
+MAXIMUM_SCHEMA_VERSION = 1
+DEFAULT_VALUE_MAX_BYTES = 1048576
+MAX_BATCH_SIZE = 1000
+
 DriverDialect = Literal["psycopg", "asyncpg"]
 
 
@@ -461,83 +469,83 @@ def _statement(name: str) -> DriverStatement:
 
 @dataclass(frozen=True)
 class StatementRegistry:
-    compatibility: DriverStatement
-    health: DriverStatement
-    cancel: DriverStatement
-    enqueue_many: DriverStatement
-    sync_concurrency_policies: DriverStatement
-    list_concurrency_policies: DriverStatement
-    sync_rate_limit_policies: DriverStatement
-    list_rate_limit_policies: DriverStatement
-    sync_schedules: DriverStatement
-    sync_contracts: DriverStatement
-    get_contract: DriverStatement
-    tick: DriverStatement
-    run_maintenance: DriverStatement
-    register_worker: DriverStatement
-    deregister_worker: DriverStatement
-    fire_due_schedules: DriverStatement
-    promote: DriverStatement
-    recover_expired: DriverStatement
-    claim_many: DriverStatement
-    record_batch_dispatch: DriverStatement
-    record_batch_failure: DriverStatement
-    heartbeat_many: DriverStatement
-    expire_owned: DriverStatement
     acknowledge_cancel: DriverStatement
-    complete: DriverStatement
-    fail: DriverStatement
-    list_checkpoints: DriverStatement
-    save_checkpoint: DriverStatement
-    list_progress: DriverStatement
-    update_progress: DriverStatement
-    list_waits: DriverStatement
-    schedule_wait: DriverStatement
-    wait_for_signal: DriverStatement
-    send_signal: DriverStatement
-    wait_for_human: DriverStatement
+    cancel: DriverStatement
+    claim_many: DriverStatement
     complete_human_wait: DriverStatement
+    complete: DriverStatement
     create_child: DriverStatement
     create_children: DriverStatement
+    deregister_worker: DriverStatement
+    enqueue_many: DriverStatement
+    expire_owned: DriverStatement
+    fail: DriverStatement
+    fire_due_schedules: DriverStatement
+    get_contract: DriverStatement
+    heartbeat_many: DriverStatement
+    list_checkpoints: DriverStatement
+    list_concurrency_policies: DriverStatement
+    list_progress: DriverStatement
+    list_rate_limit_policies: DriverStatement
+    list_waits: DriverStatement
+    promote: DriverStatement
+    health: DriverStatement
+    record_batch_dispatch: DriverStatement
+    record_batch_failure: DriverStatement
+    recover_expired: DriverStatement
+    register_worker: DriverStatement
+    run_maintenance: DriverStatement
+    save_checkpoint: DriverStatement
+    schedule_wait: DriverStatement
+    compatibility: DriverStatement
+    send_signal: DriverStatement
+    sync_concurrency_policies: DriverStatement
+    sync_contracts: DriverStatement
+    sync_rate_limit_policies: DriverStatement
+    sync_schedules: DriverStatement
+    tick: DriverStatement
+    update_progress: DriverStatement
+    wait_for_human: DriverStatement
+    wait_for_signal: DriverStatement
 
 
 STATEMENTS = StatementRegistry(
-    compatibility=_statement("schema_version"),
-    health=_statement("queue_health_v1"),
-    cancel=_statement("cancel_v1"),
-    enqueue_many=_statement("enqueue_many_v1"),
-    sync_concurrency_policies=_statement("sync_concurrency_policies_v1"),
-    list_concurrency_policies=_statement("list_concurrency_policies"),
-    sync_rate_limit_policies=_statement("sync_rate_limit_policies_v1"),
-    list_rate_limit_policies=_statement("list_rate_limit_policies"),
-    sync_schedules=_statement("sync_schedule_definitions_v1"),
-    sync_contracts=_statement("sync_contract_definitions_v1"),
-    get_contract=_statement("get_contract_definition_v1"),
-    tick=_statement("tick_v1"),
-    run_maintenance=_statement("run_maintenance_v1"),
-    register_worker=_statement("register_worker_v1"),
-    deregister_worker=_statement("deregister_worker_v1"),
-    fire_due_schedules=_statement("fire_due_schedules_v1"),
-    promote=_statement("promote_v1"),
-    recover_expired=_statement("recover_expired_telemetry_v1"),
-    claim_many=_statement("claim_many_v1"),
-    record_batch_dispatch=_statement("record_batch_dispatch_v1"),
-    record_batch_failure=_statement("record_batch_failure_v1"),
-    heartbeat_many=_statement("heartbeat_many_v1"),
-    expire_owned=_statement("expire_owned_telemetry_v1"),
     acknowledge_cancel=_statement("acknowledge_cancel_v1"),
-    complete=_statement("complete_v1"),
-    fail=_statement("fail_v1"),
-    list_checkpoints=_statement("list_checkpoints"),
-    save_checkpoint=_statement("save_checkpoint_v1"),
-    list_progress=_statement("list_progress"),
-    update_progress=_statement("update_progress_v1"),
-    list_waits=_statement("list_waits"),
-    schedule_wait=_statement("schedule_wait_v1"),
-    wait_for_signal=_statement("wait_for_signal_v1"),
-    send_signal=_statement("send_signal_v1"),
-    wait_for_human=_statement("wait_for_human_v1"),
+    cancel=_statement("cancel_v1"),
+    claim_many=_statement("claim_many_v1"),
     complete_human_wait=_statement("complete_human_wait_v1"),
+    complete=_statement("complete_v1"),
     create_child=_statement("create_child_v1"),
     create_children=_statement("create_children_v1"),
+    deregister_worker=_statement("deregister_worker_v1"),
+    enqueue_many=_statement("enqueue_many_v1"),
+    expire_owned=_statement("expire_owned_telemetry_v1"),
+    fail=_statement("fail_v1"),
+    fire_due_schedules=_statement("fire_due_schedules_v1"),
+    get_contract=_statement("get_contract_definition_v1"),
+    heartbeat_many=_statement("heartbeat_many_v1"),
+    list_checkpoints=_statement("list_checkpoints"),
+    list_concurrency_policies=_statement("list_concurrency_policies"),
+    list_progress=_statement("list_progress"),
+    list_rate_limit_policies=_statement("list_rate_limit_policies"),
+    list_waits=_statement("list_waits"),
+    promote=_statement("promote_v1"),
+    health=_statement("queue_health_v1"),
+    record_batch_dispatch=_statement("record_batch_dispatch_v1"),
+    record_batch_failure=_statement("record_batch_failure_v1"),
+    recover_expired=_statement("recover_expired_telemetry_v1"),
+    register_worker=_statement("register_worker_v1"),
+    run_maintenance=_statement("run_maintenance_v1"),
+    save_checkpoint=_statement("save_checkpoint_v1"),
+    schedule_wait=_statement("schedule_wait_v1"),
+    compatibility=_statement("schema_version"),
+    send_signal=_statement("send_signal_v1"),
+    sync_concurrency_policies=_statement("sync_concurrency_policies_v1"),
+    sync_contracts=_statement("sync_contract_definitions_v1"),
+    sync_rate_limit_policies=_statement("sync_rate_limit_policies_v1"),
+    sync_schedules=_statement("sync_schedule_definitions_v1"),
+    tick=_statement("tick_v1"),
+    update_progress=_statement("update_progress_v1"),
+    wait_for_human=_statement("wait_for_human_v1"),
+    wait_for_signal=_statement("wait_for_signal_v1"),
 )

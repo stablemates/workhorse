@@ -2,6 +2,18 @@
 
 package workhorse
 
+const (
+	// ProtocolVersion is the SQL protocol version implemented by this module.
+	ProtocolVersion        = 1
+	minimumProtocolVersion = 1
+	maximumProtocolVersion = 1
+	minimumSchemaVersion   = 1
+	maximumSchemaVersion   = 1
+	// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
+	MaxEnqueueBatchSize     = 1000
+	defaultJobValueMaxBytes = 1048576
+)
+
 var internalStatementRegistry = map[string]string{
 	"deregister_worker_v1": `SELECT workhorse.deregister_worker_v1($1::text) AS deregistered`,
 	"fire_due_schedules_v1": `SELECT namespace, schedule_name, occurrence_at, job_id

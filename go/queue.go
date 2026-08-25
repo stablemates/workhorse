@@ -12,14 +12,10 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
-const MaxEnqueueBatchSize = 1000
-
 // MaxJobDependencies is PostgreSQL's prerequisite fan-in limit for one job.
 const MaxJobDependencies = 100
 
 const (
-	defaultJobValueMaxBytes = 1_048_576
 	defaultMaxAttempts      = 25
 	defaultIdempotencyTTLMS = 86_400_000
 )
