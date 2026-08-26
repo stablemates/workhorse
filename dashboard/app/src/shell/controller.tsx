@@ -825,8 +825,8 @@ export function useDashboardController(
 
   useEffect(() => {
     void loadPage();
-    if (location.route !== "/tasks") void loadTaskCounts();
-  }, [loadPage, loadTaskCounts, location.route]);
+    void loadTaskCounts();
+  }, [loadPage, loadTaskCounts]);
 
   const refreshBlocked = refreshBlockers.blocked;
   const previousRefreshBlocked = useRef(refreshBlocked);
@@ -854,9 +854,9 @@ export function useDashboardController(
   useEffect(() => {
     pollingClock.setRefresh(() => {
       void loadPage({ background: true });
-      if (location.route !== "/tasks") void loadTaskCounts({ background: true });
+      void loadTaskCounts({ background: true });
     });
-  }, [loadPage, loadTaskCounts, location.route, pollingClock]);
+  }, [loadPage, loadTaskCounts, pollingClock]);
   useEffect(() => {
     pollingClock.reset(dashboardRefreshIntervalMs(refreshInterval), autoRefreshPausedRef.current);
   }, [location.route, pollingClock, refreshInterval, refreshScheduleResetKey]);
