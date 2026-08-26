@@ -76,4 +76,18 @@ describe("the first public beta release", () => {
   it("builds the site with the supported Go toolchain line", async () => {
     expect(await read("Dockerfile.site")).toMatch(/^FROM golang:1\.25(?:\.[0-9]+)?-alpine AS go$/m);
   });
+
+  it("records the staged release train and its stop conditions", async () => {
+    const compatibility = await read("docs/compatibility.md");
+    const pythonPosition = compatibility.indexOf("Publish Python first");
+    const npmPosition = compatibility.indexOf("Publish npm second");
+    const goPosition = compatibility.indexOf("Publish Go last");
+
+    expect(pythonPosition).toBeGreaterThan(-1);
+    expect(npmPosition).toBeGreaterThan(pythonPosition);
+    expect(goPosition).toBeGreaterThan(npmPosition);
+    expect(compatibility).toContain("Any failure stops the release train");
+    expect(compatibility).toContain("A published version is never reused");
+    expect(compatibility).toContain("Test registries are not part of the rehearsal");
+  });
 });

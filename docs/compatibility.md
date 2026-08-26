@@ -189,6 +189,30 @@ and exercise external module consumers before a release can create the module ta
 
 Every release is a tag, and every tag runs the full check suite before anything is published.
 
+### First public beta release train
+
+The first public beta publishes from one source commit during one controlled release window. It is
+a staged release rather than a concurrent one:
+
+1. Require a green public CI run for the candidate commit. Dispatch `.github/workflows/release.yml`
+   and `.github/workflows/release-python.yml` manually with `dry-run` enabled.
+2. Download and inspect every npm and Python archive. Install all eight npm tarballs, the Python
+   wheel, and the Python source distribution in clean consumers. Build the Go external consumer
+   from the same commit. Test registries are not part of the rehearsal.
+3. Publish Python first. Verify `0.1.0b1` through PyPI before continuing.
+4. Publish npm second. Publish `@stablemates/workhorse` before its seven peer dependents, and verify
+   every `0.1.0-beta.1` package before continuing.
+5. Publish Go last. Verify `go/v0.1.0-beta.1` through the public module proxy.
+
+Each verification checks registry visibility, provenance or the module checksum, and installation
+of the exact public version in a clean environment. It then runs a minimal enqueue-and-worker smoke
+test against a fresh PostgreSQL database. Any failure stops the release train.
+
+A published version is never reused. An ordinary defect stays available and receives a higher
+fix. A security, secret, privacy, or legal exposure triggers credential rotation and removal where
+the registry permits it. The response also deprecates the npm release, yanks the PyPI release, or
+retracts the Go version as appropriate. Removal does not make prior public access reversible.
+
 ### npm packages
 
 1. Update all eight package versions in lockstep and add the `CHANGELOG.md` entry for the release,
