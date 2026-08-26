@@ -7,10 +7,9 @@ Choosing infrastructure means knowing what it will not do before it is load-bear
 PostgreSQL-backed applications that accept at-least-once handlers and exact schema compatibility.
 This page lists every boundary honestly, with the workaround where one exists.
 
-Workhorse currently positions itself as an evidence-first validation release, not a
-production-support promise. Its purpose is to validate the durable-execution protocol —
-transactional enqueue, fenced ownership, checkpoint replay, cooperative cancellation, audited
-redrive — with recorded evidence, before hardening claims are made.
+Workhorse is a public beta. It is usable for evaluation and early production adoption, but any
+minor release may break compatibility, including the schema. There is no upgrade path between 0.x
+releases; ordered migrations begin at 1.0.0.
 
 ## Workflow orchestration lives in handlers
 

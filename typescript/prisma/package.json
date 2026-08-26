@@ -1,7 +1,7 @@
 {
   "name": "@stablemates/workhorse-prisma",
-  "version": "0.1.0",
-  "description": "Prisma ORM provider for Workhorse",
+  "version": "0.1.0-beta.1",
+  "description": "Public beta Prisma ORM provider for Workhorse",
   "homepage": "https://workhorse.run",
   "bugs": {
     "url": "https://github.com/stablemates/workhorse/issues"
@@ -43,7 +43,7 @@
   },
   "peerDependencies": {
     "@prisma/client": ">=6 <7",
-    "@stablemates/workhorse": ">=0.1.0 <1"
+    "@stablemates/workhorse": ">=0.1.0-beta.1 <0.2.0"
   },
   "engines": {
     "node": ">=22"

@@ -3,7 +3,10 @@
 `stablemates-workhorse` versions and release notes live here because the Python distribution
 releases independently from the TypeScript packages and the Go module.
 
-## 0.1.0a1 — unreleased
+Workhorse is a public beta. Any 0.x minor release may break compatibility, including the schema.
+There is no upgrade path between 0.x releases; ordered migrations begin at 1.0.0.
+
+## 0.1.0b1 — unreleased
 
 ### Changed
 

@@ -11,12 +11,12 @@ independently, so their notes live in [`python/CHANGELOG.md`](python/CHANGELOG.m
 The supported Node.js and PostgreSQL versions, the schema compatibility guarantees, and the release
 process are in [`docs/compatibility.md`](docs/compatibility.md).
 
-While the line is `0.x`, any minor release may break compatibility, including changing the schema.
-There is no upgrade path within `0.x`: the schema is edited in place and reinstalled, so moving
-between `0.x` releases means installing the new schema on a fresh database. Ordered, immutable
-migrations begin at 1.0.0. Breaking changes are always listed with upgrade steps.
+Workhorse is a public beta. While the line is `0.x`, any minor release may break compatibility,
+including changing the schema. There is no upgrade path between 0.x releases: moving between them
+requires a fresh database. Ordered, immutable migrations begin at 1.0.0. Breaking changes are
+always listed with upgrade steps.
 
-## 0.1.0 — unreleased
+## 0.1.0-beta.1 — unreleased
 
 First published line. Requires **schema v1**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
 

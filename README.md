@@ -1,8 +1,10 @@
-# Workhorse validation MVP
+# Workhorse
 
 Workhorse is a PostgreSQL-native durable execution protocol with deploy-synchronized recurring jobs, fenced ownership, cooperative cancellation, PostgreSQL-owned deadlines and execution timeouts, immutable dead letters with audited redrive, immutable history, and a live-only dispatch relation.
 
-The current implementation remains an evidence-first validation release rather than a production-support promise. Its purpose is to validate transactional enqueue, declarative worker-scheduled recurring jobs, fenced ownership, cooperative cancellation, immutable attempt history, durable checkpoint replay, lease-releasing timer waits, attribution-safe automated retention, failure recovery, PostgreSQL diagnostics, and long-run churn behavior.
+Workhorse is a public beta. It is usable for evaluation and early production adoption, but any
+minor release may break compatibility, including the schema. There is no upgrade path between 0.x
+releases; ordered migrations begin at 1.0.0.
 
 ## Documentation
 
@@ -29,6 +31,7 @@ The current implementation remains an evidence-first validation release rather t
 - [`docs/decisions/0032-keep-single-admin-authentication-process-local.md`](docs/decisions/0032-keep-single-admin-authentication-process-local.md): the single-process boundary for built-in dashboard sessions and login throttling.
 - [`docs/decisions/0036-database-owned-slow-maintenance-orchestration.md`](docs/decisions/0036-database-owned-slow-maintenance-orchestration.md): why PostgreSQL owns the slow maintenance sequence used by every language worker.
 - [`docs/decisions/0040-apache-2-and-contributor-agreement.md`](docs/decisions/0040-apache-2-and-contributor-agreement.md): Apache-2.0 on the published packages, the contributor agreement, and why the beta does not withhold OpenTelemetry emission.
+- [`docs/decisions/0041-publish-the-first-public-beta.md`](docs/decisions/0041-publish-the-first-public-beta.md): public-beta versions, stability language, compatibility boundaries, and required release surfaces.
 
 Run the Fumadocs site locally without PostgreSQL:
 

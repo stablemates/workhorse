@@ -119,7 +119,7 @@ Nine packages ship from this repository. `@stablemates/workhorse` is the TypeScr
 | `@stablemates/workhorse-prisma`             | Prisma ORM provider                               | `@stablemates/workhorse`, `@prisma/client` >= 6 and < 7                         |
 | `@stablemates/workhorse-typeorm`            | TypeORM provider                                  | `@stablemates/workhorse`, `typeorm` >= 0.3 and < 2                              |
 | `@stablemates/workhorse-kysely`             | Kysely provider                                   | `@stablemates/workhorse`, `kysely` >= 0.29 and < 0.30                           |
-| `@stablemates/workhorse-dashboard`          | Operator dashboard and its framework-neutral host | `@stablemates/workhorse` >= 0.1 and < 0.2, React 19                             |
+| `@stablemates/workhorse-dashboard`          | Operator dashboard and its framework-neutral host | `@stablemates/workhorse` >= 0.1.0-beta.1 and < 0.2, React 19                    |
 | `@stablemates/workhorse-dashboard-server`   | Authenticated standalone dashboard server         | `@stablemates/workhorse-dashboard-contract`                                     |
 | `@stablemates/workhorse-dashboard-contract` | Type-only dashboard server boundary               | None                                                                            |
 | `stablemates-workhorse`                     | Python clients, workers, and WSGI dashboard       | None; includes Psycopg >= 3.3 and < 4; `asyncpg` extra supports >= 0.31 and < 1 |
@@ -129,15 +129,18 @@ optional TypeScript package always declares the core version it was released wit
 The Python package version floats independently and declares compatibility through SQL protocol 1
 and schema version 1 instead of a TypeScript peer range.
 
+The first public beta is `0.1.0-beta.1` for npm and Go, and `0.1.0b1` for Python. “Public beta”
+means the release is usable for evaluation and early production adoption without a 0.x
+compatibility promise.
+
 The dashboard and core may use different patch releases within the same minor line. The dashboard
 server reads `workhorse.dashboard_*_v1` views and versioned functions, so a core patch remains
 compatible when its migration preserves those contracts.
 
 While the line is `0.x`, any minor release may make a breaking change, including changing the
-schema. There is no upgrade path within `0.x`: the schema is edited in place, so moving between
-`0.x` releases means installing the new schema on a fresh database. Ordered migrations begin at
-1.0.0. Breaking changes are listed in [`CHANGELOG.md`](../CHANGELOG.md) with the upgrade steps for
-that release.
+schema. There is no upgrade path between 0.x releases: moving between them requires a fresh
+database. Ordered migrations begin at 1.0.0. Breaking changes are listed in
+[`CHANGELOG.md`](../CHANGELOG.md) with the upgrade steps for that release.
 
 The Python package releases independently from a `python/vX.Y.Z` tag. The tag must match
 `python/pyproject.toml` and a heading in `python/CHANGELOG.md`. `.github/workflows/release-python.yml`

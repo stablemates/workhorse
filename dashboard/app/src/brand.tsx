@@ -29,17 +29,21 @@ export function WorkhorseBrand() {
 
 export function WorkhorseVersion() {
   return (
-    <Text
-      component="span"
-      size="10px"
-      c="dimmed"
-      display="block"
-      ff="monospace"
-      ta="right"
-      w="100%"
-      aria-label={`Workhorse version ${WORKHORSE_VERSION}`}
-    >
-      v{WORKHORSE_VERSION}
-    </Text>
+    <Box w="100%">
+      <Text component="span" size="10px" c="dimmed" display="block" ta="right">
+        Public beta · There is no upgrade path between 0.x releases.
+      </Text>
+      <Text
+        component="span"
+        size="10px"
+        c="dimmed"
+        display="block"
+        ff="monospace"
+        ta="right"
+        aria-label={`Workhorse version ${WORKHORSE_VERSION}`}
+      >
+        v{WORKHORSE_VERSION}
+      </Text>
+    </Box>
   );
 }
