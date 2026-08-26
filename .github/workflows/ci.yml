@@ -1,28 +1,77 @@
-# The supported-version contract for the published packages.
-#
-# The Node.js and PostgreSQL majors below are the ones `src/support.ts` declares supported, and
-# `test/support-matrix.test.ts` fails if this file and that module disagree. Adding a version here
-# without adding it there (or the reverse) is a build failure, not a silent claim.
+# Public CI policy lives in docs/decisions/0042-public-ci-and-release-policy.md. Pull requests run
+# boundary pairs for fast feedback. Pushes to main, nightly runs, and manual runs exercise every
+# language/database combination declared in support.json.
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
+  schedule:
+    - cron: "43 3 * * *"
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # A packed install resolves the published tarballs, so the store cache is the only thing worth
-  # sharing between jobs.
   PNPM_HOME: ${{ github.workspace }}/.pnpm-home
 
 jobs:
+  plan:
+    name: support matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      typescript: ${{ steps.matrix.outputs.typescript }}
+      python: ${{ steps.matrix.outputs.python }}
+      go: ${{ steps.matrix.outputs.go }}
+      packed: ${{ steps.matrix.outputs.packed }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - id: matrix
+        run: pnpm --silent exec tsx scripts/ci-matrix.ts "$GITHUB_EVENT_NAME" >> "$GITHUB_OUTPUT"
+
   static:
-    name: format, lint, types
+    name: format, generated files, lint, security, types
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go/go.mod
+      - uses: astral-sh/setup-uv@v9
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:runtime:dev
+      - run: pnpm sql-catalogues:check
+      - run: pnpm dashboard-spec:check
+      - run: pnpm dashboard-bundle:check
+      - run: pnpm parity:check
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm python:vuln
+      - run: pnpm go:vuln
+      - run: pnpm typecheck
+
+  unit:
+    name: environment-independent tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -37,35 +86,17 @@ jobs:
           go-version-file: go/go.mod
       - uses: astral-sh/setup-uv@v9
       - run: pnpm install --frozen-lockfile
-      - run: pnpm format:check
-      - run: pnpm lint
-      - run: pnpm build:runtime:dev
-      - run: pnpm typecheck
-
-  unit:
-    name: environment-independent tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
       - run: pnpm build:runtime:dev
       - run: pnpm test:unit
 
-  database:
-    name: database tests (node ${{ matrix.node }}, postgres ${{ matrix.postgres }})
+  typescript:
+    name: TypeScript (node ${{ matrix.node }}, postgres ${{ matrix.postgres }})
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      matrix:
-        node: [22, 24]
-        postgres: [15, 16, 17, 18]
+      matrix: ${{ fromJSON(needs.plan.outputs.typescript) }}
     services:
       postgres:
         image: postgres:${{ matrix.postgres }}-alpine
@@ -90,18 +121,91 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # The package test suites import built package entry points, and the demo integration suite
-      # serves packages/dashboard/dist/app. The latter requires the full build by repository rule.
-      - run: pnpm build
-      # The reset creates the database and installs sql/schema.sql, which is also the first proof
-      # that the canonical schema is accepted by this PostgreSQL major at all.
+      - run: pnpm build:runtime:dev
       - run: pnpm db:reset:test
-      - run: pnpm test:database
+      - run: pnpm test:database:typescript
 
-  # The smoke tier for JS runtimes the full suite never runs under. src/support.ts declares the
-  # runtime list, and test/support-matrix.test.ts fails if this matrix and that list disagree.
-  # Each lane proves an enqueue, claim, and complete round-trip through the built package against
-  # PostgreSQL — deliberately nothing more, so the lane never reads as full support.
+  python:
+    name: Python ${{ matrix.python }} (postgres ${{ matrix.postgres }})
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.python) }}
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}-alpine
+        env:
+          POSTGRES_USER: workhorse
+          POSTGRES_PASSWORD: workhorse
+          POSTGRES_DB: workhorse_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U workhorse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      WORKHORSE_TEST_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_test
+      UV_PYTHON: ${{ matrix.python }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@v9
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:runtime:dev
+      - run: pnpm db:reset:test
+      - run: pnpm python:test
+
+  go:
+    name: Go ${{ matrix.go }} (postgres ${{ matrix.postgres }})
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.go) }}
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}-alpine
+        env:
+          POSTGRES_USER: workhorse
+          POSTGRES_PASSWORD: workhorse
+          POSTGRES_DB: workhorse_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U workhorse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      WORKHORSE_TEST_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go }}
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:runtime:dev
+      - run: pnpm db:reset:test
+      - run: pnpm go:test
+      - run: pnpm go:test:race
+
   runtime-smoke:
     name: runtime smoke (${{ matrix.runtime }})
     runs-on: ubuntu-latest
@@ -129,8 +233,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-      # Node still drives pnpm, the build, and the database reset; only the smoke script itself
-      # runs under the matrix runtime.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -148,12 +250,12 @@ jobs:
 
   packed:
     name: packed install (node ${{ matrix.node }})
+    needs: plan
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     strategy:
       fail-fast: false
-      matrix:
-        node: [22, 24]
+      matrix: ${{ fromJSON(needs.plan.outputs.packed) }}
     services:
       postgres:
         image: postgres:18-alpine
@@ -177,16 +279,15 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
+      - uses: astral-sh/setup-uv@v9
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:reset:test
-      # Installs the packed tarballs into a throwaway consumer project and runs it, so publishing
-      # mistakes fail here rather than after a release.
       - run: pnpm test:packed
 
   demo:
-    name: demo smoke
+    name: demo and site smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     services:
       postgres:
         image: postgres:18-alpine
@@ -210,8 +311,20 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - uses: astral-sh/setup-uv@v9
       - run: pnpm install --frozen-lockfile
-      # test:demo-smoke serves packages/dashboard/dist/app, which only a full build produces.
       - run: pnpm build
       - run: pnpm test:demo-smoke
       - run: pnpm test:site-smoke
+
+  required:
+    name: required
+    if: always()
+    needs: [static, unit, typescript, python, go, runtime-smoke, packed, demo]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Require every merge-gate job
+        run: echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'

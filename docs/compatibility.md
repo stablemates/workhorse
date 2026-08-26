@@ -7,8 +7,8 @@ and `typescript/core/test/support-matrix.test.ts` fails when machine-readable co
 
 ## What "supported" means
 
-A version is supported when CI exercises it on every change to `main` and on every pull request.
-Nothing weaker counts. In particular:
+A version is supported when CI exercises every combination after each change reaches `main` and
+in the nightly run. Pull requests exercise boundary pairs before merge. In particular:
 
 - **Supported.** In the CI matrix below. A regression on one of these is a release blocker.
 - **Expected to work, untested.** A PostgreSQL major newer than the tested set. Workhorse does not
@@ -30,9 +30,10 @@ This boundary is about correctness only. It is not a performance claim; see
 | Go         | 1.25 and newer | 1.25    | The module pins pgx v5.9.2.                             |
 | PostgreSQL | 15, 16, 17, 18 | 15      | No extension beyond the default `plpgsql` is installed. |
 
-The TypeScript suite, including PostgreSQL integration, runs against every combination of the Node
-and PostgreSQL lists. The packed-package install test runs on both Node majors against the newest
-supported PostgreSQL. The demo smoke test runs on the lowest supported Node major.
+Pull requests pair the oldest Node and PostgreSQL versions, then the newest versions. Pushes to
+`main`, nightly runs, and manual runs execute every Node and PostgreSQL combination. Packed-package
+tests run on the oldest Node version before merge and both Node versions after merge. Demo and site
+smoke tests run on every trigger.
 
 Package managers: the repository is developed with pnpm, and the packed-install test installs the
 published tarballs with pnpm. npm and yarn are not exercised in CI; the packages are plain ESM with
@@ -43,16 +44,16 @@ major. Its `asyncpg` extra supports asyncpg 0.31 through the next major. Its pac
 source distribution and universal wheel, checks inline types, runs both real drivers, and executes
 every shared SQL scenario. `python/tests/test_release.py` installs the wheel and source distribution
 bare, with the compatibility `psycopg` extra, and with the `asyncpg` extra. It runs the lifecycle and async enqueue examples without repository imports, then
-checks that the active Python and PostgreSQL versions belong to this matrix. GitHub Actions remain
-intentionally disabled while the repository is private; when they are restored, each declared
-Python version and PostgreSQL major must run this lane before publication.
+checks that the active Python and PostgreSQL versions belong to this matrix. Pull requests run its
+oldest and newest boundary pairs. Pushes to `main`, nightly runs, and manual runs execute every
+Python and PostgreSQL combination.
 
 The Go module declares Go 1.25 or newer and supports its pinned pgx 5.9.2 release. Its repository
 lane exercises enqueue through pgx transactions, pgx pools, and `database/sql` with pgx stdlib. It
 also compiles and runs a separate module through a local `replace` directive. Another external
 module builds every Go example through the public import path. These tests prove the exported module
-surface without repository-only imports. The Go tests run against every PostgreSQL major supplied
-to the lane. GitHub Actions wiring waits for the CI unfreeze.
+surface without repository-only imports. Pull requests run Go against the newest PostgreSQL.
+Pushes to `main`, nightly runs, and manual runs execute Go against every PostgreSQL major.
 
 ## JS runtime smoke tier
 
@@ -196,8 +197,10 @@ Every release is a tag, and every tag runs the full check suite before anything 
    if `CHANGELOG.md` has no entry for it.
 3. `pnpm check` runs — format, lint, types, unit and integration tests, the packed-package install
    test, the site smoke test, and the demo smoke test.
-4. Each package is packed and published with `npm publish --provenance`. `@stablemates/workhorse` is
-   published first, because the other packages declare it as a peer.
+4. The build job uploads each package without publication credentials.
+5. The protected `npm` environment requires approval, then publishes each package with
+   `npm publish --provenance`. `@stablemates/workhorse` goes first because the other packages
+   declare it as a peer.
 
 **Provenance.** Every published tarball carries an npm provenance attestation linking it to this
 repository, the commit it was built from, and the workflow that built it. Verify a downloaded
@@ -219,7 +222,10 @@ pipeline.
 3. The script runs `pnpm check`, creates `go/vX.Y.Z`, and pushes the tag only after the gate passes.
 
 GitHub Actions remain disabled while the repository is private. These definitions must not be
-dispatched, and release tags must not be pushed, until that restriction is lifted.
+dispatched, and release tags must not be pushed, until that restriction is lifted. When the
+repository becomes public, its `main` ruleset must require pull requests and `CI / required`.
+Outside collaborators require workflow approval. The protected `npm` and `pypi` environments
+must prevent self-approval and administrator bypass.
 
 ## Benchmark validation is not the support boundary
 

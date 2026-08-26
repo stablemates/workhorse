@@ -11,6 +11,7 @@ import {
   SUPPORTED_POSTGRES_MAJORS,
 } from "../src/support.js";
 import { publishedPackages } from "../../../scripts/packages.js";
+import { buildCiMatrices } from "../../../scripts/ci-matrix.js";
 
 // A supported-version contract is only worth stating if the statement and the thing that tests it
 // cannot drift apart. support.json is the source of truth; everything below is a consumer of it,
@@ -46,12 +47,6 @@ interface SupportManifest {
 
 async function readSupportManifest(): Promise<SupportManifest> {
   return JSON.parse(await read("support.json")) as SupportManifest;
-}
-
-/** Read a `key: [1, 2]` matrix list out of the workflow without taking a YAML dependency. */
-function workflowMatrixList(workflow: string, key: string): number[][] {
-  const matches = [...workflow.matchAll(new RegExp(`^\\s*${key}: \\[([^\\]]*)\\]`, "gm"))];
-  return matches.map((match) => match[1]!.split(",").map((entry) => Number(entry.trim())));
 }
 
 function markdownTable(source: string, heading: string): Record<string, Record<string, string>> {
@@ -192,6 +187,58 @@ describe("declared engines", () => {
 });
 
 describe("continuous integration", () => {
+  it("uses boundary pairs on pull requests and the full support matrix elsewhere", async () => {
+    const manifest = await readSupportManifest();
+    const pullRequest = buildCiMatrices(manifest.support, "pull_request");
+    const full = buildCiMatrices(manifest.support, "push");
+
+    expect(pullRequest.typescript.include).toEqual([
+      { node: 22, postgres: 15 },
+      { node: 24, postgres: 18 },
+    ]);
+    expect(pullRequest.python.include).toEqual([
+      { python: "3.10", postgres: 15 },
+      { python: "3.14", postgres: 18 },
+    ]);
+    expect(pullRequest.go.include).toEqual([{ go: "1.25", postgres: 18 }]);
+    expect(pullRequest.packed.include).toEqual([{ node: 22 }]);
+
+    expect(full.typescript.include).toHaveLength(
+      manifest.support.node.tested.length * manifest.support.postgres.tested.length,
+    );
+    expect(full.python.include).toHaveLength(
+      manifest.support.python.tested.length * manifest.support.postgres.tested.length,
+    );
+    expect(full.go.include).toHaveLength(manifest.support.postgres.tested.length);
+    expect(full.packed.include).toEqual([{ node: 22 }, { node: 24 }]);
+    for (const node of manifest.support.node.tested) {
+      for (const postgres of manifest.support.postgres.tested) {
+        expect(full.typescript.include).toContainEqual({ node, postgres });
+      }
+    }
+    for (const python of manifest.support.python.tested) {
+      for (const postgres of manifest.support.postgres.tested) {
+        expect(full.python.include).toContainEqual({ python, postgres });
+      }
+    }
+    for (const postgres of manifest.support.postgres.tested) {
+      expect(full.go.include).toContainEqual({ go: "1.25", postgres });
+    }
+  });
+
+  it("exposes one stable required check without granting pull requests write access", async () => {
+    const workflow = await read(".github/workflows/ci.yml");
+
+    expect(workflow).toContain("permissions:\n  contents: read");
+    expect(workflow).toContain("schedule:");
+    expect(workflow).toContain("name: required");
+    expect(workflow).toContain(
+      "needs: [static, unit, typescript, python, go, runtime-smoke, packed, demo]",
+    );
+    expect(workflow).toContain("pnpm --silent exec tsx scripts/ci-matrix.ts");
+    expect(workflow).toContain("pnpm go:test:race");
+  });
+
   it("exposes each language check through structured package scripts", async () => {
     const scripts = (await readManifest("package.json")).scripts as Record<string, string>;
 
@@ -203,23 +250,6 @@ describe("continuous integration", () => {
     expect(scripts.check).toContain("pnpm python:vuln");
     expect(scripts.check).toContain("pnpm go:vuln");
     expect(scripts.check).toContain("pnpm go:test:race");
-  });
-
-  it("tests exactly the supported Node.js and PostgreSQL majors", async () => {
-    const workflow = await read(".github/workflows/ci.yml");
-    const nodeLists = workflowMatrixList(workflow, "node");
-    const postgresLists = workflowMatrixList(workflow, "postgres");
-
-    // The full suite runs the whole grid; narrower jobs may test a subset of Node majors, but no
-    // job may claim a version that is not supported.
-    expect(nodeLists).toContainEqual([...SUPPORTED_NODE_MAJORS]);
-    expect(postgresLists).toContainEqual([...SUPPORTED_POSTGRES_MAJORS]);
-    for (const list of nodeLists) {
-      for (const major of list) expect(SUPPORTED_NODE_MAJORS).toContain(major);
-    }
-    for (const list of postgresLists) {
-      for (const major of list) expect(SUPPORTED_POSTGRES_MAJORS).toContain(major);
-    }
   });
 
   it("smoke-tests exactly the declared JS runtimes without claiming them as supported", async () => {
@@ -240,6 +270,9 @@ describe("continuous integration", () => {
 
   it("publishes with provenance from a workflow that can mint an identity token", async () => {
     const workflow = await read(".github/workflows/release.yml");
+    expect(workflow).toContain("needs: build");
+    expect(workflow).toContain("environment: npm");
+    expect(workflow).toContain("actions/download-artifact");
     expect(workflow).toContain("id-token: write");
     expect(workflow).toContain("npm publish --provenance");
   });
