@@ -1,14 +1,22 @@
 # `@stablemates/workhorse-drizzle`
 
-Workhorse is a public beta. It is usable for evaluation and early production adoption, but any
-minor release may break compatibility, including the schema. There is no upgrade path between 0.x
-releases; ordered migrations begin at 1.0.0.
+The Drizzle ORM provider for enqueuing Workhorse jobs through Drizzle transactions.
 
-Drizzle ORM provider for Workhorse's PostgreSQL protocol.
+> **Public beta:** Workhorse is usable for evaluation and early production adoption, but 0.x minor
+> releases may break compatibility, including the schema. There is no upgrade path between 0.x
+> releases; ordered migrations begin at 1.0.0.
+
+## Install
+
+```bash
+npm install @stablemates/workhorse @stablemates/workhorse-drizzle drizzle-orm pg
+```
+
+## Enqueue in a transaction
 
 ```ts
-import { createDrizzleAdapter } from "@stablemates/workhorse-drizzle";
 import { Pool } from "@stablemates/workhorse";
+import { createDrizzleAdapter } from "@stablemates/workhorse-drizzle";
 import { drizzle } from "drizzle-orm/node-postgres";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -21,6 +29,19 @@ await db.transaction(async (tx) => {
 });
 ```
 
-The adapter never closes caller-owned database resources unless `close` is configured. Database
-errors are rethrown as `DrizzleQueryError` with the original error in `cause` and its PostgreSQL
-error code copied to `code` when available.
+## Package boundary
+
+The adapter never closes caller-owned database resources unless `close` is configured. Workhorse core
+owns schema installation and changes. Database errors are rethrown as `DrizzleQueryError`, with the
+original error in `cause` and its PostgreSQL code copied to `code` when available.
+
+## Next
+
+- Read the [Drizzle integration guide](https://workhorse.run/docs/drizzle) and
+  [API reference](https://workhorse.run/docs/api).
+- Browse the [repository](https://github.com/stablemates/workhorse) or report a problem in
+  [GitHub issues](https://github.com/stablemates/workhorse/issues).
+
+## License
+
+Apache-2.0. See `LICENSE` and `NOTICE` in the package.

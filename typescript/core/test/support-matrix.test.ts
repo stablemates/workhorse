@@ -404,9 +404,10 @@ describe("documentation", () => {
     }
     expect(compatibility).toContain("## JS runtime smoke tier");
     expect(sitePage).toContain("smoke-tested tier, not support");
-    expect(readme).toContain(`PostgreSQL **${MINIMUM_POSTGRES_MAJOR} or newer**`);
-    expect(readme).toContain(`Node.js **>= ${MINIMUM_NODE_MAJOR}**`);
-    expect(readme).toContain("mise install");
+    expect(readme).toContain("[Compatibility](docs/compatibility.md)");
+    expect(readme).not.toContain(`PostgreSQL **${MINIMUM_POSTGRES_MAJOR} or newer**`);
+    expect(readme).not.toContain(`Node.js **>= ${MINIMUM_NODE_MAJOR}**`);
+    expect(readme).not.toContain("mise install");
   });
 
   it("documents the released version in the changelog", async () => {

@@ -1,10 +1,18 @@
 # `@stablemates/workhorse-kysely`
 
-Workhorse is a public beta. It is usable for evaluation and early production adoption, but any
-minor release may break compatibility, including the schema. There is no upgrade path between 0.x
-releases; ordered migrations begin at 1.0.0.
+The Kysely provider for enqueuing Workhorse jobs through Kysely transactions.
 
-Kysely provider for Workhorse's PostgreSQL protocol.
+> **Public beta:** Workhorse is usable for evaluation and early production adoption, but 0.x minor
+> releases may break compatibility, including the schema. There is no upgrade path between 0.x
+> releases; ordered migrations begin at 1.0.0.
+
+## Install
+
+```bash
+npm install @stablemates/workhorse @stablemates/workhorse-kysely kysely pg
+```
+
+## Enqueue in a transaction
 
 ```ts
 import { createKyselyAdapter } from "@stablemates/workhorse-kysely";
@@ -22,7 +30,20 @@ await database.transaction().execute(async (transaction) => {
 });
 ```
 
-The adapter never destroys a caller-owned Kysely database unless `close` is configured. Pass the
-node-postgres pool used by `PostgresDialect` as `notificationPool` when workers should use
-`LISTEN/NOTIFY`; otherwise they poll. Database errors become `KyselyQueryError`, with the original
-error in `cause` and the PostgreSQL error code copied to `code` when available.
+## Package boundary
+
+The adapter never destroys a caller-owned Kysely database unless `close` is configured. Workhorse core
+owns schema installation and changes. Pass the `pg` pool used by `PostgresDialect` as
+`notificationPool` for `LISTEN/NOTIFY`; otherwise workers poll. Database errors become
+`KyselyQueryError`, with the original error in `cause` and its PostgreSQL code copied to `code`.
+
+## Next
+
+- Read the [Kysely integration guide](https://workhorse.run/docs/kysely) and
+  [API reference](https://workhorse.run/docs/api).
+- Browse the [repository](https://github.com/stablemates/workhorse) or report a problem in
+  [GitHub issues](https://github.com/stablemates/workhorse/issues).
+
+## License
+
+Apache-2.0. See `LICENSE` and `NOTICE` in the package.

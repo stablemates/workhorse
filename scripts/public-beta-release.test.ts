@@ -12,6 +12,10 @@ async function read(relativePath: string): Promise<string> {
   return readFile(path.join(repositoryRoot, relativePath), "utf8");
 }
 
+function prose(contents: string): string {
+  return contents.replace(/^>\s?/gm, "").replace(/\s+/g, " ");
+}
+
 describe("the first public beta release", () => {
   it("encodes beta status in every published version and registry description", async () => {
     for (const entry of await publishedPackages()) {
@@ -42,7 +46,7 @@ describe("the first public beta release", () => {
     for (const relativePath of readmes) {
       const contents = await read(relativePath);
       expect(contents.toLowerCase()).toContain(betaLabel);
-      expect(contents.replace(/\s+/g, " ")).toContain(compatibilityNotice);
+      expect(prose(contents)).toContain(compatibilityNotice);
     }
   });
 
@@ -63,7 +67,7 @@ describe("the first public beta release", () => {
       expect(contents.toLowerCase()).toContain(betaLabel);
     }
     for (const relativePath of surfaces.slice(0, 7)) {
-      expect((await read(relativePath)).replace(/\s+/g, " ")).toContain(compatibilityNotice);
+      expect(prose(await read(relativePath))).toContain(compatibilityNotice);
     }
   });
 

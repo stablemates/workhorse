@@ -14,7 +14,9 @@
   },
   "files": [
     "index.d.ts",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "NOTICE"
   ],
   "type": "module",
   "types": "./index.d.ts",

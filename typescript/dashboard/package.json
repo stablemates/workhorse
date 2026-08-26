@@ -15,7 +15,9 @@
   "files": [
     "dist",
     "development",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "NOTICE"
   ],
   "type": "module",
   "exports": {
