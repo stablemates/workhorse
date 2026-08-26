@@ -17,7 +17,7 @@ describe("WorkhorseBrand", () => {
 });
 
 describe("WorkhorseVersion", () => {
-  it("shows the current Workhorse version", () => {
+  it("shows the beta label and current version", () => {
     const html = renderToStaticMarkup(
       <MantineProvider>
         <WorkhorseVersion />
@@ -26,5 +26,7 @@ describe("WorkhorseVersion", () => {
 
     expect(html).toContain(`aria-label="Workhorse version ${WORKHORSE_VERSION}"`);
     expect(html).toContain(`v${WORKHORSE_VERSION}`);
+    expect(html).toContain("Public beta");
+    expect(html).not.toContain("There is no upgrade path between 0.x releases.");
   });
 });

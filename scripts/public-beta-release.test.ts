@@ -50,7 +50,7 @@ describe("the first public beta release", () => {
     }
   });
 
-  it("labels the repository, site, demo, changelogs, and Go package documentation", async () => {
+  it("labels public surfaces and keeps the compatibility boundary in durable documentation", async () => {
     const surfaces = [
       "README.md",
       "site/src/routes/index.tsx",
@@ -66,7 +66,14 @@ describe("the first public beta release", () => {
       const contents = await read(relativePath);
       expect(contents.toLowerCase()).toContain(betaLabel);
     }
-    for (const relativePath of surfaces.slice(0, 7)) {
+    const compatibilitySurfaces = [
+      "README.md",
+      "site/content/docs/index.mdx",
+      "CHANGELOG.md",
+      "python/CHANGELOG.md",
+      "go/CHANGELOG.md",
+    ];
+    for (const relativePath of compatibilitySurfaces) {
       expect(prose(await read(relativePath))).toContain(compatibilityNotice);
     }
   });

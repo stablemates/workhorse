@@ -3,12 +3,12 @@
  *
  * `scripts/gen-landing-code.ts` highlights these at build time into
  * `.source/landing-code.json`, which `components/code-sample.tsx` renders as
- * static markup — the landing page ships no client JavaScript for code.
+ * static markup. The landing page ships no client JavaScript for code.
  *
  * Every snippet is verified against the current API surface: `Queue` and
  * `Admin` in typescript/core/src, `Worker` and `HandlerContext` in
  * typescript/core/src/worker.ts, and option types in
- * typescript/core/src/types.ts. Change the source, change the snippet — never
+ * typescript/core/src/types.ts. Change the source, change the snippet. Never
  * the other way around.
  */
 export const landingSnippets = {
@@ -1201,7 +1201,7 @@ await database.transaction().execute(async (tx) => {
   });
 });`,
 
-  deploy: `// workhorse.worker.ts — run with: workhorse worker --config ./dist/worker.js
+  deploy: `// workhorse.worker.ts. Run with: workhorse worker --config ./dist/worker.js
 import { createWorkhorseAdapter, defineWorkerProcess, Pool } from "@stablemates/workhorse";
 import { generateReport, sendEmail } from "./jobs.js";
 

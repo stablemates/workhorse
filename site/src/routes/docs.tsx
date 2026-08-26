@@ -142,9 +142,9 @@ function DocsRootLayout() {
         tree={tree}
         sidebar={{
           defaultOpenLevel: 0,
-          footer: (
+          banner: (
             <p
-              className="px-2 pb-1 font-mono text-[11px] text-fd-muted-foreground"
+              className="wh-rule mx-2 mb-2 border-b pb-3 font-mono text-[11px] text-fd-muted-foreground"
               aria-label={`Workhorse version ${WORKHORSE_VERSION}`}
             >
               Workhorse v{WORKHORSE_VERSION}

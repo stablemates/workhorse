@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 /*
  * Static concept diagrams for the landing page, one per feature section. Pure
- * HTML and CSS — like the code samples, they ship no client JavaScript. Every
+ * HTML and CSS. Like the code samples, they ship no client JavaScript. Every
  * identifier a diagram names must appear in the matching snippet in
  * `lib/landing-snippets.ts`, which is itself verified against the API surface.
  */
@@ -152,7 +152,9 @@ export function EnqueueDiagram() {
           <p className="flex items-center gap-2.5 text-[13px]">
             <Pip tone="off" />
             <span className="font-mono font-medium tracking-tight">ROLLBACK</span>
-            <span className="text-fd-muted-foreground">neither exists — nothing to clean up</span>
+            <span className="text-fd-muted-foreground">
+              neither exists, so nothing needs cleanup
+            </span>
           </p>
         </div>
       </div>
@@ -166,13 +168,13 @@ const crashSteps: readonly StepperStep[] = [
   {
     title: 'checkpoint("charge")',
     tone: "run",
-    detail: "runs — the result commits with the job",
+    detail: "runs, and the result commits with the job",
   },
   { title: "process killed", tone: "off", detail: "lease expires; nothing rolls back" },
   {
     title: 'checkpoint("charge")',
     tone: "good",
-    detail: "replays the stored result — not charged again",
+    detail: "replays the stored result without another charge",
   },
   { title: "succeeded", tone: "good", detail: "result persisted, history queryable" },
 ];
@@ -201,7 +203,7 @@ export function SleepDiagram() {
             <div className="wh-rule w-full border-t-2 border-dashed" />
           </div>
           <p className={`mt-2 ${label}`}>
-            asleep — a timer row in PostgreSQL, zero worker slots held
+            asleep in a PostgreSQL timer row with zero worker slots held
           </p>
         </div>
         <div className="flex-[2]">
@@ -289,7 +291,7 @@ export function SchedulesDiagram() {
           <Pip tone="good" />
           <span className="font-mono font-medium tracking-tight">nightly-invoice-run</span>
           <span className="font-mono text-fd-muted-foreground">0 2 * * *</span>
-          <span className="text-fd-muted-foreground">in the list — synced</span>
+          <span className="text-fd-muted-foreground">in the list and synced</span>
         </p>
         <p className="flex items-center gap-2.5 text-[13px]">
           <Pip tone="off" />
@@ -297,7 +299,7 @@ export function SchedulesDiagram() {
             legacy-report
           </span>
           <span className="text-fd-muted-foreground">
-            no longer shipped — pruned and disabled atomically
+            no longer shipped, then pruned and disabled atomically
           </span>
         </p>
       </div>
@@ -351,7 +353,7 @@ export function FlowControlDiagram() {
             <Slot filled />
             <Slot filled />
             <span className="pl-1.5 text-[12.5px] text-fd-muted-foreground">
-              full — two jobs hold at the gate
+              full, so two jobs hold at the gate
             </span>
           </span>
 
@@ -430,7 +432,9 @@ export function DependenciesDiagram() {
         <div className="flex items-center">
           <div className="flex flex-col items-start gap-1.5">
             <Chip>order.fulfill</Chip>
-            <span className="text-[12.5px] text-fd-muted-foreground">suspends — holds no slot</span>
+            <span className="text-[12.5px] text-fd-muted-foreground">
+              suspends and holds no slot
+            </span>
           </div>
           <LabeledWire label='runChild("charge")' className="w-20" />
           <Chip tone="accent">payment.capture</Chip>
@@ -477,7 +481,7 @@ const waitSteps: readonly StepperStep[] = [
   {
     title: 'waitForSignal("security-scan")',
     tone: "wait",
-    detail: "lease released — the job holds nothing",
+    detail: "lease released, so the job holds nothing",
   },
   {
     title: "scan delivered once",

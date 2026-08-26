@@ -1,4 +1,4 @@
-import { Box, Group, Text, type BoxProps } from "@mantine/core";
+import { Badge, Box, Group, Text, type BoxProps } from "@mantine/core";
 import { WORKHORSE_VERSION } from "@stablemates/workhorse/version";
 const workhorseMarkUrl = new URL("./assets/workhorse-mark.svg", import.meta.url).href;
 const workhorseWordmarkUrl = new URL("./assets/workhorse-wordmark.svg", import.meta.url).href;
@@ -29,21 +29,19 @@ export function WorkhorseBrand() {
 
 export function WorkhorseVersion() {
   return (
-    <Box w="100%">
-      <Text component="span" size="10px" c="dimmed" display="block" ta="right">
-        Public beta · There is no upgrade path between 0.x releases.
-      </Text>
+    <Group w="100%" justify="space-between" gap="xs" wrap="nowrap">
+      <Badge variant="light" color="gray" size="xs">
+        Public beta
+      </Badge>
       <Text
         component="span"
         size="10px"
         c="dimmed"
-        display="block"
         ff="monospace"
-        ta="right"
         aria-label={`Workhorse version ${WORKHORSE_VERSION}`}
       >
         v{WORKHORSE_VERSION}
       </Text>
-    </Box>
+    </Group>
   );
 }
