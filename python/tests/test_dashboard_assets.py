@@ -15,4 +15,4 @@ def test_dashboard_bundle_is_available_to_importlib_resources() -> None:
         tarfile.open(archive_path, "r:gz") as archive,
     ):
         names = set(archive.getnames())
-    assert {"app/index.html", "login.html"} <= names
+    assert {"app/index.html", "app/THIRD_PARTY_NOTICES.txt", "login.html"} <= names

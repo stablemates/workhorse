@@ -2,6 +2,7 @@ import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
 import { defaultClientConditions, defineConfig } from "vite";
 import { renderDashboardHtml } from "@stablemates/workhorse-dashboard-server/server";
+import { dashboardThirdPartyNotices } from "./third-party-notices.js";
 
 /**
  * Build and development configuration for the dashboard's own browser application.
@@ -30,6 +31,7 @@ export default defineConfig({
   base: "./",
   plugins: [
     react(),
+    dashboardThirdPartyNotices(),
     {
       name: "workhorse-dashboard-development-runtime",
       enforce: "pre",

@@ -26,7 +26,9 @@ directory; this directory then only receives compatible corrections.
   [Conformance](#conformance).
 - `bundle/bundle.json` identifies the static archive for this contract's `readSurfaceVersion` and
   records its SHA-256 digest. The archive contains the compiled application under `app/` and the
-  shared single-admin page as `login.html`.
+  shared single-admin page as `login.html`. `app/THIRD_PARTY_NOTICES.txt` records each third-party
+  package included by the production module graph, its version and licence, and the package's legal
+  text.
 
 `pnpm dashboard-bindings:generate` reads `procedures.json` and writes the Go and Python request
 validators and wire types. `pnpm dashboard-bindings:check` fails when either committed binding is
@@ -37,6 +39,14 @@ updates the router artifact and both language bindings in order.
 archive, and fetches it into the Go module and Python package. `pnpm dashboard-bundle:check`
 rebuilds and compares all three copies. `pnpm dashboard-bundle:fetch` materializes the committed
 archive without rebuilding the application, which is the language release-build seam.
+
+If a dashboard dependency changes, run `pnpm dashboard-bundle:generate` and review the generated
+notice before committing the new archive. Confirm that each package has the expected version and
+licence expression, and that its licence and notice files contain the required copyright and legal
+text. If an npm archive omits its repository's legal file, keep the reviewed, version-specific copy
+under `dashboard/app/third-party-legal`. The generator fails when a bundled package has no declared
+licence or legal file, while the bundle check fails when the archive or either language copy is
+stale.
 
 ## Transport
 

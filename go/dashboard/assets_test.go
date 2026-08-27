@@ -41,11 +41,11 @@ func TestBundleContainsApplicationAndLoginTemplate(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if header.Name == "app/index.html" || header.Name == "login.html" {
+		if header.Name == "app/index.html" || header.Name == "app/THIRD_PARTY_NOTICES.txt" || header.Name == "login.html" {
 			found[header.Name] = true
 		}
 	}
-	for _, name := range []string{"app/index.html", "login.html"} {
+	for _, name := range []string{"app/index.html", "app/THIRD_PARTY_NOTICES.txt", "login.html"} {
 		if !found[name] {
 			t.Fatalf("dashboard bundle does not contain %s", name)
 		}

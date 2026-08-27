@@ -258,10 +258,38 @@ try {
     "dist/server/standalone.js",
     "dist/server/standalone.d.ts",
     "dist/app/index.html",
+    "dist/app/THIRD_PARTY_NOTICES.txt",
     "dist/app/login.html",
   ]) {
     await readFile(path.join(dashboardServerExtracted, "package", required));
   }
+  const [builtDashboardNotice, packedDashboardNotice] = await Promise.all([
+    readFile(path.join(repository, "dashboard", "app", "dist", "app", "THIRD_PARTY_NOTICES.txt")),
+    readFile(
+      path.join(dashboardServerExtracted, "package", "dist", "app", "THIRD_PARTY_NOTICES.txt"),
+    ),
+  ]);
+  if (!packedDashboardNotice.equals(builtDashboardNotice)) {
+    throw new Error("Packed dashboard server contains stale third-party notices");
+  }
+
+  const pythonVersion = /^version = "([^"]+)"$/m.exec(
+    await readFile(path.join(repository, "python", "pyproject.toml"), "utf8"),
+  )?.[1];
+  if (!pythonVersion) throw new Error("Python package declares no version");
+  const pythonDistributions = (await readdir(path.join(repository, "python", "dist")))
+    .filter((name) => name.startsWith(`stablemates_workhorse-${pythonVersion}`))
+    .filter((name) => name.endsWith(".whl") || name.endsWith(".tar.gz"));
+  if (pythonDistributions.length !== 2) {
+    throw new Error("Python build must produce one wheel and one source distribution");
+  }
+  await run("uv", [
+    "run",
+    "--project",
+    "python",
+    "python/tests/support/check_dashboard_distribution.py",
+    ...pythonDistributions.map((name) => path.join(repository, "python", "dist", name)),
+  ]);
 
   const consumer = path.join(scratch, "consumer");
   await mkdir(consumer);
