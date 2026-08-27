@@ -6,6 +6,7 @@ import type {
   DashboardSystemWindow,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import {
+  Anchor,
   Badge,
   Box,
   Center,
@@ -70,7 +71,10 @@ export function SystemPage({
   }));
   const retention = data.integrity.retention;
   const { criticalChecks, degradedChecks } = healthCheckMessages(data.status.reasons);
-  const checks = [...criticalChecks, ...degradedChecks];
+  const checks = [
+    ...criticalChecks.map((check) => ({ check, severity: "critical" as const })),
+    ...degradedChecks.map((check) => ({ check, severity: "degraded" as const })),
+  ];
   const defaultSpill =
     retention.defaultHistoryRows.jobEvents + retention.defaultHistoryRows.attemptHistory;
   const eligiblePartitions =
@@ -116,22 +120,28 @@ export function SystemPage({
               {data.status.level}
             </Badge>
           </Group>
-          <Group gap="xs">
-            {checks.slice(0, 3).map((check) => {
-              // Each check keeps its own severity so a degraded note is not painted as critical.
-              const isCritical = criticalChecks.includes(check);
-              return (
-                <Text key={check} c={isCritical ? "red.7" : "yellow.8"} size="sm">
-                  {isCritical ? "Critical" : "Degraded"}: {check}
+          <Stack gap={6}>
+            {/* Each check keeps its own severity so a degraded note is not painted as critical,
+                and each carries the operator's next step plus the page that explains it. */}
+            {checks.slice(0, 3).map(({ check, severity }) => (
+              <Box key={check.message} maw={640}>
+                <Text c={severity === "critical" ? "red.7" : "yellow.8"} size="sm">
+                  {severity === "critical" ? "Critical" : "Degraded"}: {check.message}
                 </Text>
-              );
-            })}
+                <Text c="dimmed" size="xs">
+                  {check.advice}{" "}
+                  <Anchor href={check.helpHref} target="_blank" rel="noopener noreferrer" size="xs">
+                    Learn more
+                  </Anchor>
+                </Text>
+              </Box>
+            ))}
             {checks.length === 0 ? (
               <Text c="dimmed" size="sm">
                 All checks pass.
               </Text>
             ) : null}
-          </Group>
+          </Stack>
           {data.pausedQueues.length > 0 ? (
             <Group gap={6} mt="xs">
               <Text c="dimmed" size="xs">
@@ -160,23 +170,16 @@ export function SystemPage({
 
       <ExternalWaitAlert externalWaits={data.kpis.externalWaits} navigate={navigate} />
 
-      {/* Current pressure leads the page: the queue table and the condensed measures share one
-          row, so the numbers sit next to the queues they describe. The measures come first in
-          source order to read first on a phone, where the columns stack. */}
+      {/* The measures lead the page beside the activity chart; tables get full rows below so
+          their numeric columns never fight a sibling column for width. */}
       <Grid gutter="xl">
-        <Grid.Col span={{ base: 12, lg: 4 }} order={{ base: 1, lg: 1 }}>
+        <Grid.Col span={{ base: 12, lg: 4 }}>
           <SystemKpiList data={data} navigate={navigate} />
         </Grid.Col>
-        <Grid.Col span={{ base: 12, lg: 8 }} order={{ base: 2, lg: 2 }}>
-          <QueuePressure data={data} navigate={navigate} />
-        </Grid.Col>
-      </Grid>
-
-      {/* The chart and the retry outlook answer the same question — what is arriving next — so
-          they sit side by side instead of stacking a wide chart over a narrow column. */}
-      <Grid gutter="xl">
         <Grid.Col span={{ base: 12, lg: 8 }}>
-          <Paper withBorder p="md" h="100%">
+          {/* A flex column lets the chart absorb whatever height the measures column sets,
+              so the panel never shows dead space under the plot. */}
+          <Paper withBorder p="md" h="100%" style={{ display: "flex", flexDirection: "column" }}>
             <Group justify="space-between" mb="sm">
               <Box>
                 <Group gap={4} wrap="nowrap">
@@ -194,7 +197,7 @@ export function SystemPage({
                 {data.window}
               </Badge>
             </Group>
-            <Box h={320}>
+            <Box mih={320} style={{ flex: 1 }}>
               <Suspense
                 fallback={
                   <Center h="100%">
@@ -207,82 +210,85 @@ export function SystemPage({
             </Box>
           </Paper>
         </Grid.Col>
-        <Grid.Col span={{ base: 12, lg: 4 }}>
-          <RetryStorm data={data} />
-        </Grid.Col>
       </Grid>
 
+      {/* Current queue pressure gets the full width its numeric columns need. */}
+      <QueuePressure data={data} navigate={navigate} />
+
+      <Paper withBorder>
+        <Box p="md">
+          <Group gap={4} wrap="nowrap">
+            <Text fw={650}>Task types with failures</Text>
+            <HelpButton
+              label="Task types with failures"
+              help="This table ranks task types by failed attempts in the selected window. The last columns describe the newest matching attempt."
+            />
+          </Group>
+          <Text c="dimmed" size="xs">
+            Closed attempts in the selected window
+          </Text>
+        </Box>
+        {data.failingTypes.length === 0 ? (
+          <Center mih={180}>
+            <Text c="dimmed" size="sm">
+              No failed attempts in this window.
+            </Text>
+          </Center>
+        ) : (
+          <ScrollArea>
+            <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={760}>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Queue and task type</Table.Th>
+                  <Table.Th ta="right">Attempts</Table.Th>
+                  <Table.Th ta="right">Error %</Table.Th>
+                  <Table.Th ta="right">Terminal</Table.Th>
+                  <Table.Th>Last error</Table.Th>
+                  <Table.Th>Last seen</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {data.failingTypes.map((type) => (
+                  <Table.Tr key={`${type.queue}:${type.type}`}>
+                    <Table.Td>
+                      <Text size="sm" fw={600}>
+                        {taskDisplayName(type.type, type.queue)}
+                      </Text>
+                      <Text c="dimmed" size="xs">
+                        {type.queue}
+                      </Text>
+                    </Table.Td>
+                    <Table.Td ta="right">{type.attempts}</Table.Td>
+                    <Table.Td ta="right">
+                      <Text c={type.errorRate >= 0.05 ? "red.7" : "yellow.8"} size="sm">
+                        {formatPercent(type.errorRate)}
+                      </Text>
+                    </Table.Td>
+                    <Table.Td ta="right">{type.terminalFailures}</Table.Td>
+                    <Table.Td maw={220}>
+                      <Text size="xs" lineClamp={1} title={type.lastError ?? undefined}>
+                        {type.lastError ?? "—"}
+                      </Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text c="dimmed" size="xs" title={formatExact(type.lastSeenAt)}>
+                        {formatRelative(type.lastSeenAt)}
+                      </Text>
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          </ScrollArea>
+        )}
+      </Paper>
+
+      {/* The retry outlook and the maintenance checks both answer "what happens next". */}
       <Grid gutter="xl">
-        <Grid.Col span={{ base: 12, lg: 7 }}>
-          <Paper withBorder h="100%">
-            <Box p="md">
-              <Group gap={4} wrap="nowrap">
-                <Text fw={650}>Task types with failures</Text>
-                <HelpButton
-                  label="Task types with failures"
-                  help="This table ranks task types by failed attempts in the selected window. The last columns describe the newest matching attempt."
-                />
-              </Group>
-              <Text c="dimmed" size="xs">
-                Closed attempts in the selected window
-              </Text>
-            </Box>
-            {data.failingTypes.length === 0 ? (
-              <Center mih={180}>
-                <Text c="dimmed" size="sm">
-                  No failed attempts in this window.
-                </Text>
-              </Center>
-            ) : (
-              <ScrollArea>
-                <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={760}>
-                  <Table.Thead>
-                    <Table.Tr>
-                      <Table.Th>Queue and task type</Table.Th>
-                      <Table.Th ta="right">Attempts</Table.Th>
-                      <Table.Th ta="right">Error %</Table.Th>
-                      <Table.Th ta="right">Terminal</Table.Th>
-                      <Table.Th>Last error</Table.Th>
-                      <Table.Th>Last seen</Table.Th>
-                    </Table.Tr>
-                  </Table.Thead>
-                  <Table.Tbody>
-                    {data.failingTypes.map((type) => (
-                      <Table.Tr key={`${type.queue}:${type.type}`}>
-                        <Table.Td>
-                          <Text size="sm" fw={600}>
-                            {taskDisplayName(type.type, type.queue)}
-                          </Text>
-                          <Text c="dimmed" size="xs">
-                            {type.queue}
-                          </Text>
-                        </Table.Td>
-                        <Table.Td ta="right">{type.attempts}</Table.Td>
-                        <Table.Td ta="right">
-                          <Text c={type.errorRate >= 0.05 ? "red.7" : "yellow.8"} size="sm">
-                            {formatPercent(type.errorRate)}
-                          </Text>
-                        </Table.Td>
-                        <Table.Td ta="right">{type.terminalFailures}</Table.Td>
-                        <Table.Td maw={220}>
-                          <Text size="xs" lineClamp={1} title={type.lastError ?? undefined}>
-                            {type.lastError ?? "—"}
-                          </Text>
-                        </Table.Td>
-                        <Table.Td>
-                          <Text c="dimmed" size="xs" title={formatExact(type.lastSeenAt)}>
-                            {formatRelative(type.lastSeenAt)}
-                          </Text>
-                        </Table.Td>
-                      </Table.Tr>
-                    ))}
-                  </Table.Tbody>
-                </Table>
-              </ScrollArea>
-            )}
-          </Paper>
-        </Grid.Col>
         <Grid.Col span={{ base: 12, lg: 5 }}>
+          <RetryStorm data={data} />
+        </Grid.Col>
+        <Grid.Col span={{ base: 12, lg: 7 }}>
           <Paper withBorder p="md" h="100%">
             <Group gap={4} wrap="nowrap">
               <Text fw={650}>Background maintenance</Text>
@@ -461,10 +467,9 @@ export function SystemPage({
             </Stack>
           </Paper>
         </Grid.Col>
-        <Grid.Col span={12}>
-          <StoragePanel storage={data.integrity.storage} retention={retention} />
-        </Grid.Col>
       </Grid>
+
+      <StoragePanel storage={data.integrity.storage} retention={retention} />
     </Stack>
   );
 }
@@ -506,140 +511,133 @@ export function StoragePanel({
       <Text c="dimmed" size="xs" mb="lg">
         Current table sizes and progress of the statistics rollup
       </Text>
-      <Grid gutter="lg">
-        <Grid.Col span={{ base: 12, md: 5 }}>
-          <Stack gap="md">
-            <Group justify="space-between" wrap="nowrap" align="flex-start">
-              <Box>
-                <Text size="sm" fw={600}>
-                  Statistics summary
-                </Text>
-                <Text c="dimmed" size="xs">
-                  {rollup.lastRunAt === null
-                    ? "Has not run yet"
-                    : `Last pass ${formatRelative(rollup.lastRunAt)}`}
-                </Text>
-              </Box>
-              <Badge
-                color={rollup.stalled ? "yellow" : "teal"}
-                variant="light"
-                title={`Summarized through ${formatExact(rollup.rolledUpThrough)}`}
-              >
-                {rollup.stalled ? `${formatSpan(rollup.lagMs)} behind` : "Up to date"}
-              </Badge>
-            </Group>
-            <Group justify="space-between" wrap="nowrap" align="flex-start">
-              <Box>
-                <Text size="sm" fw={600}>
-                  Minutes summarized
-                </Text>
-                <Text c="dimmed" size="xs">
-                  {coveredMs === null
-                    ? "No minutes summarized yet"
-                    : `Covering ${formatSpan(coveredMs)}`}
-                </Text>
-              </Box>
-              <Badge color="gray" variant="light">
-                {formatRows(rollup.buckets)}
-              </Badge>
-            </Group>
-            <Group justify="space-between" wrap="nowrap" align="flex-start">
-              <Box>
-                <Text size="sm" fw={600}>
-                  Keep statistics for
-                </Text>
-                <Text c="dimmed" size="xs">
-                  Independent of history retention
-                </Text>
-              </Box>
-              <Badge color="gray" variant="light">
-                {statisticsRetention?.retentionDays === null ||
-                statisticsRetention?.retentionDays === undefined
-                  ? "Forever"
-                  : `${statisticsRetention.retentionDays} days`}
-              </Badge>
-            </Group>
-            <Group justify="space-between" wrap="nowrap" align="flex-start">
-              <Box>
-                <Text size="sm" fw={600}>
-                  Total Workhorse storage
-                </Text>
-                <Text c="dimmed" size="xs">
-                  Tables and indexes together
-                </Text>
-              </Box>
-              <Badge color="gray" variant="light">
-                {formatBytes(storage.totalBytes)}
-              </Badge>
-            </Group>
-          </Stack>
-        </Grid.Col>
-        <Grid.Col span={{ base: 12, md: 7 }}>
-          <ScrollArea.Autosize mah={320} type="auto">
-            <Table verticalSpacing={6} horizontalSpacing="xs" captionSide="top" stickyHeader>
-              <Table.Caption ta="left" c="dimmed" fz="xs" mt={0} mb={4}>
-                Largest tables first. PostgreSQL estimates the row counts.
-              </Table.Caption>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th scope="col">Table</Table.Th>
-                  <Table.Th scope="col">Holds</Table.Th>
-                  <Table.Th scope="col" ta="right">
-                    Size
-                  </Table.Th>
-                  <Table.Th scope="col" ta="right">
-                    Rows
-                  </Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {storage.relations.map((rawRow) => {
-                  const row = presentStorageRelation(rawRow);
-                  return (
-                    <Table.Tr key={row.relation}>
-                      <Table.Th scope="row" fw={400}>
-                        <Text size="xs" title={row.relation}>
-                          {row.label}
-                        </Text>
-                        {row.partitions > 0 ? (
-                          <Text c="dimmed" fz={10}>
-                            {row.partitions} daily {row.partitions === 1 ? "part" : "parts"}
-                          </Text>
-                        ) : null}
-                      </Table.Th>
-                      <Table.Td>
-                        <Badge color="gray" variant="light" size="sm">
-                          {storageGroupLabels[row.group]}
-                        </Badge>
-                      </Table.Td>
-                      <Table.Td ta="right">
-                        <Text
-                          size="xs"
-                          title={`${row.tableBytes} B table, ${row.indexBytes} B index`}
-                        >
-                          {formatBytes(row.totalBytes)}
-                        </Text>
-                      </Table.Td>
-                      <Table.Td ta="right">
-                        <Text size="xs">{formatRows(row.rows)}</Text>
-                        {row.deadRows > 0 ? (
-                          <Text
-                            c="dimmed"
-                            fz={10}
-                            title="PostgreSQL has not reclaimed these deleted rows yet"
-                          >
-                            {formatRows(row.deadRows)} dead
-                          </Text>
-                        ) : null}
-                      </Table.Td>
-                    </Table.Tr>
-                  );
-                })}
-              </Table.Tbody>
-            </Table>
-          </ScrollArea.Autosize>
-        </Grid.Col>
-      </Grid>
+      {/* The rollup summary sits above the table as label-and-badge rows. The block keeps a
+          reading width instead of stretching to the panel, so a badge never drifts far from
+          the label it measures. */}
+      <Stack gap="md" maw={440} mb="lg">
+        <Group justify="space-between" wrap="nowrap" align="flex-start">
+          <Box>
+            <Text size="sm" fw={600}>
+              Statistics summary
+            </Text>
+            <Text c="dimmed" size="xs">
+              {rollup.lastRunAt === null
+                ? "Has not run yet"
+                : `Last pass ${formatRelative(rollup.lastRunAt)}`}
+            </Text>
+          </Box>
+          <Badge
+            color={rollup.stalled ? "yellow" : "teal"}
+            variant="light"
+            title={`Summarized through ${formatExact(rollup.rolledUpThrough)}`}
+          >
+            {rollup.stalled ? `${formatSpan(rollup.lagMs)} behind` : "Up to date"}
+          </Badge>
+        </Group>
+        <Group justify="space-between" wrap="nowrap" align="flex-start">
+          <Box>
+            <Text size="sm" fw={600}>
+              Minutes summarized
+            </Text>
+            <Text c="dimmed" size="xs">
+              {coveredMs === null
+                ? "No minutes summarized yet"
+                : `Covering ${formatSpan(coveredMs)}`}
+            </Text>
+          </Box>
+          <Badge color="gray" variant="light">
+            {formatRows(rollup.buckets)}
+          </Badge>
+        </Group>
+        <Group justify="space-between" wrap="nowrap" align="flex-start">
+          <Box>
+            <Text size="sm" fw={600}>
+              Keep statistics for
+            </Text>
+            <Text c="dimmed" size="xs">
+              Independent of history retention
+            </Text>
+          </Box>
+          <Badge color="gray" variant="light">
+            {statisticsRetention?.retentionDays === null ||
+            statisticsRetention?.retentionDays === undefined
+              ? "Forever"
+              : `${statisticsRetention.retentionDays} days`}
+          </Badge>
+        </Group>
+        <Group justify="space-between" wrap="nowrap" align="flex-start">
+          <Box>
+            <Text size="sm" fw={600}>
+              Total Workhorse storage
+            </Text>
+            <Text c="dimmed" size="xs">
+              Tables and indexes together
+            </Text>
+          </Box>
+          <Badge color="gray" variant="light">
+            {formatBytes(storage.totalBytes)}
+          </Badge>
+        </Group>
+      </Stack>
+      <Divider mb="md" />
+      <Table verticalSpacing={6} horizontalSpacing="xs" captionSide="top">
+        <Table.Caption ta="left" c="dimmed" fz="xs" mt={0} mb={4}>
+          Largest tables first. PostgreSQL estimates the row counts.
+        </Table.Caption>
+        <Table.Thead>
+          <Table.Tr>
+            <Table.Th scope="col">Table</Table.Th>
+            <Table.Th scope="col">Holds</Table.Th>
+            <Table.Th scope="col" ta="right">
+              Size
+            </Table.Th>
+            <Table.Th scope="col" ta="right">
+              Rows
+            </Table.Th>
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {storage.relations.map((rawRow) => {
+            const row = presentStorageRelation(rawRow);
+            return (
+              <Table.Tr key={row.relation}>
+                <Table.Th scope="row" fw={400}>
+                  <Text size="xs" title={row.relation}>
+                    {row.label}
+                  </Text>
+                  {row.partitions > 0 ? (
+                    <Text c="dimmed" fz={10}>
+                      {row.partitions} daily {row.partitions === 1 ? "part" : "parts"}
+                    </Text>
+                  ) : null}
+                </Table.Th>
+                <Table.Td>
+                  <Badge color="gray" variant="light" size="sm">
+                    {storageGroupLabels[row.group]}
+                  </Badge>
+                </Table.Td>
+                <Table.Td ta="right">
+                  <Text size="xs" title={`${row.tableBytes} B table, ${row.indexBytes} B index`}>
+                    {formatBytes(row.totalBytes)}
+                  </Text>
+                </Table.Td>
+                <Table.Td ta="right">
+                  <Text size="xs">{formatRows(row.rows)}</Text>
+                  {row.deadRows > 0 ? (
+                    <Text
+                      c="dimmed"
+                      fz={10}
+                      title="PostgreSQL has not reclaimed these deleted rows yet"
+                    >
+                      {formatRows(row.deadRows)} dead
+                    </Text>
+                  ) : null}
+                </Table.Td>
+              </Table.Tr>
+            );
+          })}
+        </Table.Tbody>
+      </Table>
     </Paper>
   );
 }

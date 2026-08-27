@@ -91,32 +91,40 @@ describe("dashboard presentation policy", () => {
     expect(recommendations.map(({ id }) => id)).toEqual(["retention-lag", "rollup-stalled"]);
   });
 
-  it("words health reason codes and folds retention categories", () => {
-    expect(
-      healthCheckMessages([
-        { code: "expired-leases", severity: "critical", observed: 1, budget: 0 },
-        {
-          code: "concurrency-blocked",
-          severity: "degraded",
-          observed: 3,
-          budget: 0,
-          queue: "payments",
-        },
-        {
-          code: "retention-lag",
-          severity: "degraded",
-          observed: 90_000_000,
-          budget: 21_600_000,
-          category: "jobEvents",
-        },
-      ]),
-    ).toEqual({
-      criticalChecks: ["Expired leases"],
-      degradedChecks: [
-        "Concurrency policy blocks ready tasks on payments",
-        "Retention cleanup is late for task events",
-      ],
-    });
+  it("words health reason codes with resolution advice and folds retention categories", () => {
+    const { criticalChecks, degradedChecks } = healthCheckMessages([
+      { code: "expired-leases", severity: "critical", observed: 1, budget: 0 },
+      { code: "missing-history-partitions", severity: "critical", observed: 2, budget: 0 },
+      {
+        code: "concurrency-blocked",
+        severity: "degraded",
+        observed: 3,
+        budget: 0,
+        queue: "payments",
+      },
+      {
+        code: "retention-lag",
+        severity: "degraded",
+        observed: 90_000_000,
+        budget: 21_600_000,
+        category: "jobEvents",
+      },
+    ]);
+    expect(criticalChecks.map(({ message }) => message)).toEqual([
+      "Expired leases",
+      "Daily history storage is missing",
+    ]);
+    expect(degradedChecks.map(({ message }) => message)).toEqual([
+      "Concurrency policy blocks ready tasks on payments",
+      "Retention cleanup is late for task events",
+    ]);
+    // Every check tells the operator what to do next and where to read more.
+    for (const check of [...criticalChecks, ...degradedChecks]) {
+      expect(check.advice.length).toBeGreaterThan(0);
+      expect(check.helpHref).toMatch(/^https:\/\/workhorse\.run\/docs\//);
+    }
+    expect(criticalChecks[1]!.advice).toContain("maintenance has not run recently");
+    expect(criticalChecks[1]!.helpHref).toBe("https://workhorse.run/docs/maintenance");
   });
 
   it("derives retry labels, worker state, and queue ordering from measurements", () => {
@@ -176,6 +184,8 @@ describe("dashboard presentation policy", () => {
       "history-retention",
       "terminal-storage",
     ]);
-    expect(schedules[0]).toMatchObject({ cron: "every 1000ms", description: expect.any(String) });
+    expect(schedules[0]).toMatchObject({ cron: "every 1s", description: expect.any(String) });
+    expect(schedules[1]).toMatchObject({ cron: "every 1m" });
+    expect(schedules[3]).toMatchObject({ cron: "every 5m" });
   });
 });

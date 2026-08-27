@@ -21,6 +21,7 @@ import type {
   DashboardWorkerController,
   DashboardSettingsController,
 } from "./types.js";
+import type { DashboardWorkspaceLink } from "../runtime-config.js";
 
 export interface DashboardHostOptions {
   /**
@@ -94,6 +95,15 @@ export interface DashboardHostOptions {
 export interface DashboardWorkspaceOptions {
   /** This workspace's connection, under the same ownership contract as `DashboardHostOptions.database`. */
   database: Queryable;
+  /**
+   * Display-only label of the backing database host, shown in the workspace switcher.
+   *
+   * The host never derives it: a `Queryable` carries no address, and deployments without one —
+   * unix sockets, IAM tokens — still deserve a truthful label the embedder controls.
+   */
+  databaseHost?: string;
+  /** Display-only name of the backing database, under the same contract as `databaseHost`. */
+  databaseName?: string;
   environment?: string;
   configuredWorkers?: readonly string[];
   maintenanceLoops?: MaintenanceLoopCadences;
@@ -136,6 +146,8 @@ interface HostWorkspace {
   admin: Admin;
   name: string | null;
   basePath: string;
+  databaseHost: string | undefined;
+  databaseName: string | undefined;
   queryable: Queryable;
   database: ReturnType<typeof dashboardDatabase>;
   queue: Queue;
@@ -260,6 +272,8 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
     return {
       name,
       basePath: name === null ? path : `${path}/${name}`,
+      databaseHost: workspace.databaseHost,
+      databaseName: workspace.databaseName,
       queryable: workspace.database,
       database,
       // Administrative policy and wait reads share the dashboard's caller-owned connection.
@@ -297,10 +311,15 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
   const single = options.database
     ? resolveWorkspace(null, { ...options, database: options.database })
     : undefined;
-  const workspaceLinks = [...workspaces.values()].map((workspace) => ({
-    name: workspace.name as string,
-    url: workspace.basePath,
-  }));
+  const workspaceLinks = [...workspaces.values()].map((workspace) => {
+    const link: DashboardWorkspaceLink = {
+      name: workspace.name as string,
+      url: workspace.basePath,
+    };
+    if (workspace.databaseHost !== undefined) link.databaseHost = workspace.databaseHost;
+    if (workspace.databaseName !== undefined) link.databaseName = workspace.databaseName;
+    return link;
+  });
   if (workspaces.size > 0) {
     logs.getLogger("@stablemates/workhorse-dashboard").emit({
       severityNumber: SeverityNumber.INFO,

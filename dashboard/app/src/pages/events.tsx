@@ -22,8 +22,10 @@ import {
   Tooltip,
 } from "@mantine/core";
 import { MultiSelect, Select } from "../dropdown-activity.js";
+import { ArrowSquareOut } from "@phosphor-icons/react";
 import { type ReactNode } from "react";
 import { JsonValue, boundaryEventPresentation } from "../components/task-detail-overview.js";
+import { shortTaskId } from "../components/task-detail-relations.js";
 import {
   EmptyState,
   PageHeader,
@@ -379,16 +381,20 @@ export function EventDetails({
 }) {
   const taskId =
     event.jobType === null ? (
-      <Code>{event.jobId}</Code>
+      <Code title={event.jobId}>{shortTaskId(event.jobId)}</Code>
     ) : (
       <Text
         component="a"
         href={taskLinkHref(event.jobId)}
         target="_blank"
         rel="noopener noreferrer"
+        title={event.jobId}
         aria-label={`Open task ${event.jobId} in a new window`}
+        style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
       >
-        <Code>{event.jobId}</Code>
+        <Code>{shortTaskId(event.jobId)}</Code>
+        {/* The icon says this identifier opens the task in a new window. */}
+        <ArrowSquareOut size={12} aria-hidden style={{ flexShrink: 0 }} />
       </Text>
     );
   const fields: Array<[string, ReactNode]> = [

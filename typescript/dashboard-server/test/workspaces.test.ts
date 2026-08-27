@@ -27,7 +27,11 @@ function createWorkspaceHost(authorized: (workspace: string | null) => void = ()
   return createDashboardHost({
     path: "/workhorse",
     workspaces: {
-      production: { database: fakeDatabase() },
+      production: {
+        database: fakeDatabase(),
+        databaseHost: "db.internal:5432",
+        databaseName: "workhorse_demo",
+      },
       staging: { database: fakeDatabase(), environment: "staging" },
     },
     authorize: (_request, workspace) => {
@@ -79,8 +83,10 @@ describe("dashboard workspaces", () => {
     expect(html).toContain('"rpcUrl":"/workhorse/staging/rpc"');
     expect(html).toContain('"workspace":"staging"');
     expect(html).toContain('"auditActor":"operator:staging"');
+    // Production carries its configured database labels; staging configured none, so its
+    // link omits the fields rather than inventing values.
     expect(html).toContain(
-      '"workspaces":[{"name":"production","url":"/workhorse/production"},{"name":"staging","url":"/workhorse/staging"}]',
+      '"workspaces":[{"name":"production","url":"/workhorse/production","databaseHost":"db.internal:5432","databaseName":"workhorse_demo"},{"name":"staging","url":"/workhorse/staging"}]',
     );
   });
 

@@ -170,35 +170,88 @@ export const retentionCategoryLabels: Record<DashboardRetentionCategory, string>
   statistics: "Rolled-up statistics",
 };
 
+export interface HealthCheckMessage {
+  message: string;
+  /** What an operator can do about the failed check, in one or two sentences. */
+  advice: string;
+  /** Documentation page that explains the failing subsystem. */
+  helpHref: string;
+}
+
+const docs = (page: string) => `https://workhorse.run/docs/${page}`;
+
 export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
-  criticalChecks: string[];
-  degradedChecks: string[];
+  criticalChecks: HealthCheckMessage[];
+  degradedChecks: HealthCheckMessage[];
 } {
-  const criticalChecks: string[] = [];
-  const degradedChecks: string[] = [];
+  const criticalChecks: HealthCheckMessage[] = [];
+  const degradedChecks: HealthCheckMessage[] = [];
   const lateRetentionLabels: string[] = [];
   for (const reason of reasons) {
     switch (reason.code) {
       case "expired-leases":
-        criticalChecks.push("Expired leases");
+        criticalChecks.push({
+          message: "Expired leases",
+          advice:
+            "A worker stopped renewing its lease, usually because its process crashed or " +
+            "stalled. The next maintenance tick recovers the task; check your worker processes.",
+          helpHref: docs("worker-processes"),
+        });
         break;
       case "overdue-deadlines":
-        criticalChecks.push("Tasks are past their deadlines");
+        criticalChecks.push({
+          message: "Tasks are past their deadlines",
+          advice:
+            "Live tasks passed their deadlines. Deadline maintenance fails them on its next " +
+            "pass; if this persists, add worker capacity or relax the deadlines.",
+          helpHref: docs("deadlines"),
+        });
         break;
       case "overdue-execution-timeouts":
-        criticalChecks.push("Attempts are past their execution limits");
+        criticalChecks.push({
+          message: "Attempts are past their execution limits",
+          advice:
+            "Attempts ran longer than their execution limits allow. Maintenance fails them on " +
+            "its next pass; check for handlers that hang instead of finishing.",
+          helpHref: docs("deadlines"),
+        });
         break;
       case "overdue-external-waits":
-        criticalChecks.push(`External waits are overdue (${reason.observed})`);
+        criticalChecks.push({
+          message: `External waits are overdue (${reason.observed})`,
+          advice:
+            "A signal or human decision passed its deadline. Review waiting tasks and complete " +
+            "the decisions an operator can resolve now.",
+          helpHref: docs("human-waits"),
+        });
         break;
       case "stalled-promotion":
-        criticalChecks.push("Scheduled tasks are overdue");
+        criticalChecks.push({
+          message: "Scheduled tasks are overdue",
+          advice:
+            "Due tasks are not being promoted to ready, which usually means no worker is " +
+            "running maintenance. Confirm at least one worker process is alive.",
+          helpHref: docs("maintenance"),
+        });
         break;
       case "missing-history-partitions":
-        criticalChecks.push("Daily history storage is missing");
+        criticalChecks.push({
+          message: "Daily history storage is missing",
+          advice:
+            "Workers prepare daily history storage during maintenance, so a missing day means " +
+            "maintenance has not run recently. Confirm a worker is running and check the " +
+            "history-partitions row on the Schedules page.",
+          helpHref: docs("maintenance"),
+        });
         break;
       case "rollup-stalled":
-        degradedChecks.push("The statistics summary is behind");
+        degradedChecks.push({
+          message: "The statistics summary is behind",
+          advice:
+            "Retention cannot delete history the rollup has not summarized, so history " +
+            "accumulates until the rollup catches up. Check the Storage panel below.",
+          helpHref: docs("maintenance"),
+        });
         break;
       case "retention-lag":
         if (reason.category) {
@@ -206,23 +259,51 @@ export function healthCheckMessages(reasons: readonly QueueHealthReason[]): {
         }
         break;
       case "eligible-history-partitions":
-        degradedChecks.push(`History days await deletion (${reason.observed})`);
+        degradedChecks.push({
+          message: `History days await deletion (${reason.observed})`,
+          advice:
+            "Each retention pass deletes a limited number of history days. If the count keeps " +
+            "growing, raise the per-pass limits shown on the Settings page.",
+          helpHref: docs("maintenance"),
+        });
         break;
       case "default-history-rows":
-        degradedChecks.push(`History rows use fallback storage (${reason.observed})`);
+        degradedChecks.push({
+          message: `History rows use fallback storage (${reason.observed})`,
+          advice:
+            "These rows arrived before their daily storage existed and must be deleted row by " +
+            "row. Prepare history storage more frequently to stop the spill.",
+          helpHref: docs("maintenance"),
+        });
         break;
       case "concurrency-blocked":
-        degradedChecks.push(`Concurrency policy blocks ready tasks on ${reason.queue}`);
+        degradedChecks.push({
+          message: `Concurrency policy blocks ready tasks on ${reason.queue}`,
+          advice:
+            "The queue's concurrency policy holds ready tasks back while active work fills the " +
+            "limit. Raise the limit if the queue should drain faster.",
+          helpHref: docs("concurrency-policies"),
+        });
         break;
       case "rate-limit-throttled":
-        degradedChecks.push(
-          `Queue ${reason.queue} has ${reason.observed}+ ready tasks waiting for rate-limit tokens`,
-        );
+        degradedChecks.push({
+          message: `Queue ${reason.queue} has ${reason.observed}+ ready tasks waiting for rate-limit tokens`,
+          advice:
+            "The queue's rate limit admits work slower than it arrives. Raise the rate if the " +
+            "downstream system can absorb more.",
+          helpHref: docs("rate-limits"),
+        });
         break;
     }
   }
   if (lateRetentionLabels.length > 0) {
-    degradedChecks.push(`Retention cleanup is late for ${lateRetentionLabels.join(", ")}`);
+    degradedChecks.push({
+      message: `Retention cleanup is late for ${lateRetentionLabels.join(", ")}`,
+      advice:
+        "Cleanup is not keeping up with its retention windows at the current cadence. Raise " +
+        "the per-pass limits or shorten the cleanup intervals shown on the Settings page.",
+      helpHref: docs("maintenance"),
+    });
   }
   return { criticalChecks, degradedChecks };
 }
@@ -352,6 +433,14 @@ export interface PresentedScheduleRow extends Omit<
   } | null;
 }
 
+/** Human units for a maintenance cadence, so an expression reads "every 6h", not "every 21600000ms". */
+function formatScheduleInterval(milliseconds: number): string {
+  if (milliseconds % 3_600_000 === 0) return `${milliseconds / 3_600_000}h`;
+  if (milliseconds % 60_000 === 0) return `${milliseconds / 60_000}m`;
+  if (milliseconds % 1_000 === 0) return `${milliseconds / 1_000}s`;
+  return `${milliseconds}ms`;
+}
+
 const scheduleDescriptions: Record<string, string> = {
   "workhorse:tick": "Makes due tasks ready and recovers tasks with expired leases.",
   "workhorse:history-partitions": "Prepares daily history storage before Workhorse needs it.",
@@ -406,14 +495,14 @@ export function presentSchedules(page: DashboardCronPage): PresentedScheduleRow[
   return [
     system(
       "tick",
-      `every ${cadences.tickIntervalMs}ms`,
+      `every ${formatScheduleInterval(cadences.tickIntervalMs)}`,
       "workhorse.tick_v1",
       state.get("tick")?.lastCompletedAt ?? state.get("tick")?.lastStartedAt ?? null,
       maintenance("tick", cadences.tickIntervalMs, ["promote", "recover"]),
     ),
     system(
       "history-partitions",
-      `every ${policy.partitionPreparationIntervalMs}ms`,
+      `every ${formatScheduleInterval(policy.partitionPreparationIntervalMs)}`,
       "workhorse.prepare_history_partitions_v1",
       state.get("history_partitions")?.lastCompletedAt ?? null,
       maintenance("history_partitions", policy.partitionPreparationIntervalMs, [
@@ -433,7 +522,7 @@ export function presentSchedules(page: DashboardCronPage): PresentedScheduleRow[
     ),
     system(
       "terminal-storage",
-      `every ${policy.terminalCleanupIntervalMs}ms`,
+      `every ${formatScheduleInterval(policy.terminalCleanupIntervalMs)}`,
       "workhorse.prune_terminal_storage_v1",
       state.get("terminal_storage")?.lastCompletedAt ?? null,
       maintenance("terminal_storage", policy.terminalCleanupIntervalMs, [

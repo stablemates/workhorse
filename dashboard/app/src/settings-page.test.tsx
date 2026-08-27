@@ -147,9 +147,13 @@ describe("settings page", () => {
       "These read-only limits cap how much work each cleanup pass can perform",
     );
     expect(html).toContain("Operator override");
-    expect(html).not.toContain("Application default");
+    // A default is stated only where an operator override makes it differ; rows still on the
+    // application default carry a label instead of repeating the effective value.
+    expect(html).toContain("Application default");
     expect(html).toContain("Default: UTC");
     expect(html).toContain("Default: 6 hours");
+    expect(html).not.toContain("Default: 5 minutes");
+    expect(html).not.toContain("Default: 200 groups");
     expect(html).toContain("Default: 14 days");
     expect(html).toContain("Effective: 7 days");
     expect(html).not.toContain('aria-label="Task events"');

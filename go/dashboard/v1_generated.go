@@ -940,8 +940,10 @@ type DashboardRuntimeConfig struct {
 	} `json:"authentication"`
 	DemoTools  bool `json:"demoTools"`
 	Workspaces []struct {
-		Name string `json:"name"`
-		URL  string `json:"url"`
+		Name         string  `json:"name"`
+		URL          string  `json:"url"`
+		DatabaseHost *string `json:"databaseHost,omitempty"`
+		DatabaseName *string `json:"databaseName,omitempty"`
 	} `json:"workspaces"`
 	Workspace *string `json:"workspace"`
 }

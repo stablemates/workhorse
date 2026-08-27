@@ -219,17 +219,23 @@ export function SettingsPage({
           <Text size="sm">Effective: {formatRetentionDefault(data.retention[key], suffix)}</Text>
         </Table.Td>
         <Table.Td w={220}>
-          <Stack gap={4} align="flex-start">
-            <Text c="dimmed" size="xs">
-              Default:{" "}
-              {formatRetentionDefault(data.retention.provenance[key].applicationDefault, suffix)}
-            </Text>
-            {data.retention.provenance[key].source === "operator" ? (
+          {/* The default is only worth stating when an override makes it differ from the
+              effective value; repeating an identical number on every row is noise. */}
+          {data.retention.provenance[key].source === "operator" ? (
+            <Stack gap={4} align="flex-start">
+              <Text c="dimmed" size="xs">
+                Default:{" "}
+                {formatRetentionDefault(data.retention.provenance[key].applicationDefault, suffix)}
+              </Text>
               <Badge color="violet" variant="light">
                 Operator override
               </Badge>
-            ) : null}
-          </Stack>
+            </Stack>
+          ) : (
+            <Text c="dimmed" size="xs">
+              Application default
+            </Text>
+          )}
         </Table.Td>
       </Table.Tr>
     ));
@@ -427,16 +433,22 @@ export function SettingsPage({
                           {setting.description}
                         </Text>
                         <Text size="sm">Effective: {setting.format(setting.effective)}</Text>
-                        <Text c="dimmed" size="xs">
-                          Default: {setting.format(setting.provenance.applicationDefault)}
-                        </Text>
                         {setting.provenance.source === "operator" ? (
-                          <Box>
-                            <Badge color="violet" variant="light">
-                              Operator override
-                            </Badge>
-                          </Box>
-                        ) : null}
+                          <>
+                            <Text c="dimmed" size="xs">
+                              Default: {setting.format(setting.provenance.applicationDefault)}
+                            </Text>
+                            <Box>
+                              <Badge color="violet" variant="light">
+                                Operator override
+                              </Badge>
+                            </Box>
+                          </>
+                        ) : (
+                          <Text c="dimmed" size="xs">
+                            Application default
+                          </Text>
+                        )}
                       </Stack>
                     </Grid.Col>
                   ))}

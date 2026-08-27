@@ -82,18 +82,24 @@ body {
   position: relative;
 }
 
+/*
+ * The bar stays inside the buttons' rounded outline: inset horizontally by the corner radius
+ * and lifted above the 1px border. A full-width bar flush with the bottom edge painted over
+ * the border and made the control read taller than its 30px neighbours.
+ */
 .dashboard-refresh-control__progress {
   animation-iteration-count: infinite;
   animation-name: dashboard-refresh-progress;
   animation-timing-function: linear;
   background: var(--mantine-primary-color-filled);
-  bottom: 0;
+  border-radius: 1px;
+  bottom: 1px;
   height: 2px;
-  left: 0;
+  left: var(--mantine-radius-sm);
   pointer-events: none;
   position: absolute;
+  right: var(--mantine-radius-sm);
   transform-origin: left;
-  width: 100%;
 }
 
 @keyframes dashboard-refresh-progress {

@@ -1148,6 +1148,8 @@ class DashboardRuntimeConfigAuthentication(TypedDict, total=False):
 class DashboardRuntimeConfigWorkspacesItem(TypedDict, total=False):
     name: Required[str]
     url: Required[str]
+    databaseHost: NotRequired[str]
+    databaseName: NotRequired[str]
 
 
 class DashboardRuntimeConfig(TypedDict, total=False):

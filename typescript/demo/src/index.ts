@@ -16,7 +16,11 @@ import {
 } from "./app.js";
 import { createDemoDatabase } from "./database.js";
 import { createDashboardDevServer } from "@stablemates/workhorse-dashboard/dev";
-import { resolveDemoDatabaseUrl } from "./environment.js";
+import {
+  demoDatabaseHostLabel,
+  demoDatabaseNameLabel,
+  resolveDemoDatabaseUrl,
+} from "./environment.js";
 import { startDemoMetricsObserver } from "./telemetry.js";
 import { demoLogger } from "./logger.js";
 import { prepareApplicationSchema } from "./schema-preparation.js";
@@ -66,6 +70,14 @@ if (stagingPool) {
 
 const database = createDemoDatabase(pool);
 const stagingDatabase = stagingPool ? createDemoDatabase(stagingPool) : undefined;
+const databaseHostLabel = demoDatabaseHostLabel(databaseUrl);
+const databaseNameLabel = demoDatabaseNameLabel(databaseUrl);
+const stagingDatabaseHostLabel = stagingDatabaseUrl
+  ? demoDatabaseHostLabel(stagingDatabaseUrl)
+  : undefined;
+const stagingDatabaseNameLabel = stagingDatabaseUrl
+  ? demoDatabaseNameLabel(stagingDatabaseUrl)
+  : undefined;
 const localOperatorControllers = createLocalOperatorControllers(database);
 
 await prepareApplicationSchema(mode, {
@@ -123,6 +135,11 @@ const { app } = createDemoApplication(database, {
     ? { singleAdmin: { username: adminUsername, passwordHash: adminPasswordHash } }
     : {}),
   stagingDatabase,
+  // Workspace switcher labels: which database host and name back each workspace.
+  ...(databaseHostLabel ? { databaseHost: databaseHostLabel } : {}),
+  ...(databaseNameLabel ? { databaseName: databaseNameLabel } : {}),
+  ...(stagingDatabaseHostLabel ? { stagingDatabaseHost: stagingDatabaseHostLabel } : {}),
+  ...(stagingDatabaseNameLabel ? { stagingDatabaseName: stagingDatabaseNameLabel } : {}),
 });
 const metricsObserver = startDemoMetricsObserver(pool);
 if (process.env.SEED_DEMO_DATA !== "false") {

@@ -26,7 +26,7 @@ import {
 import { readIdempotencyEvidence } from "@stablemates/workhorse-dashboard-server/wire";
 import type { RetryPolicy } from "@stablemates/workhorse";
 import { Fragment, useEffect, useRef } from "react";
-import { CheckCircle, Copy, Prohibit } from "@phosphor-icons/react";
+import { CheckCircle, Copy, LinkSimple, Prohibit } from "@phosphor-icons/react";
 import {
   DrawerSection,
   JobEvent,
@@ -354,7 +354,7 @@ export function RetryPolicyLine({ job }: { job: DashboardJobDetail }) {
  * Display form of a task UUID: the first eight characters, matching the task table's ID column.
  * Every renderer of a shortened id carries the full id in `title`, so hover always recovers it.
  */
-function shortTaskId(id: string): string {
+export function shortTaskId(id: string): string {
   return id.slice(0, 8);
 }
 /** One task UUID shown shortened, recoverable on hover, and copyable in full. */
@@ -399,6 +399,12 @@ export function RelatedTaskLink({
       fz="xs"
       ff="monospace"
       title={id}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3,
+        verticalAlign: "baseline",
+      }}
       onClick={(event) => {
         if (
           onOpenTask === undefined ||
@@ -415,6 +421,8 @@ export function RelatedTaskLink({
         onOpenTask(id);
       }}
     >
+      {/* The icon marks the identifier as a task link, not inert monospace text. */}
+      <LinkSimple size={11} aria-hidden style={{ flexShrink: 0 }} />
       {shortTaskId(id)}
     </Text>
   );

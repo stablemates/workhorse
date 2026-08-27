@@ -18,12 +18,14 @@ import {
   ScrollArea,
   Stack,
   Text,
+  type MenuProps,
 } from "@mantine/core";
 import {
   ArrowClockwise,
   BookOpenText,
   Buildings,
   CalendarDots,
+  CaretUpDown,
   CheckCircle,
   GearSix,
   Lightning,
@@ -61,25 +63,41 @@ import {
 import { EventDetails } from "../pages/events.js";
 import { TaskDetailDrawer } from "../pages/task-detail.js";
 
-/** Header control that switches between the host's workspaces. Renders nothing with one. */
+/**
+ * Header control that switches between the host's workspaces. Renders nothing with one.
+ * Extra props reach the menu so tests can render the dropdown statically.
+ */
 export function DashboardWorkspaceSwitcher({
   workspaces,
   workspace,
+  ...menuProps
 }: {
   workspaces: readonly DashboardWorkspaceLink[];
   workspace: string | null;
-}) {
+} & MenuProps) {
   if (workspaces.length < 2 || !workspace) return null;
   return (
-    <Menu position="bottom-end" withinPortal>
+    <Menu position="bottom-start" withinPortal {...menuProps}>
       <Menu.Target>
         <Button
           variant="default"
           size="xs"
+          w={220}
           leftSection={<Buildings size={14} />}
+          rightSection={<CaretUpDown size={12} />}
           aria-label={`Workspace ${workspace}`}
+          title={workspace}
+          styles={{
+            // A fixed width keeps the header stable across workspaces; longer names truncate.
+            label: { flex: 1, display: "flex", alignItems: "center", gap: 6, minWidth: 0 },
+          }}
         >
-          {workspace}
+          <Text component="span" size="xs" c="dimmed">
+            Workspace
+          </Text>
+          <Text component="span" size="xs" fw={500} truncate style={{ flex: 1, textAlign: "left" }}>
+            {workspace}
+          </Text>
         </Button>
       </Menu.Target>
       <Menu.Dropdown>
@@ -92,8 +110,16 @@ export function DashboardWorkspaceSwitcher({
             component="a"
             href={`${entry.url}/tasks`}
             disabled={entry.name === workspace}
+            rightSection={entry.name === workspace ? <CheckCircle size={14} /> : null}
           >
-            {entry.name}
+            <Text component="span" size="sm" display="block">
+              {entry.name}
+            </Text>
+            {entry.databaseHost || entry.databaseName ? (
+              <Text component="span" size="xs" c="dimmed" display="block">
+                {[entry.databaseHost, entry.databaseName].filter(Boolean).join(" · ")}
+              </Text>
+            ) : null}
           </Menu.Item>
         ))}
       </Menu.Dropdown>
@@ -196,7 +222,9 @@ export function DashboardContent({
       padding={{ base: "md", sm: "xl" }}
     >
       <AppShell.Header>
-        <Group h="100%" px="md" justify="space-between" wrap="nowrap">
+        {/* The right padding tracks the main-area padding so the last header item lines up with
+            the content's right edge; the left stays at the sidebar's inset. */}
+        <Group h="100%" pl="md" pr={{ base: "md", sm: "xl" }} justify="space-between" wrap="nowrap">
           <Group gap={0} wrap="nowrap">
             <Group gap="sm" wrap="nowrap" w={{ sm: 240 }}>
               <Burger
@@ -206,8 +234,22 @@ export function DashboardContent({
                 size="sm"
                 aria-label="Open or close navigation"
               />
-              <WorkhorseBrand />
+              {/* The brand is the conventional way home: it links to the host's root page. */}
+              <Box
+                component="a"
+                href={mountedHref(basePath, "/")}
+                aria-label="Workhorse home"
+                style={{ textDecoration: "none", color: "inherit", display: "flex" }}
+                onClick={(event) => handleLink(event, "/")}
+              >
+                <WorkhorseBrand />
+              </Box>
             </Group>
+            {workspaces.length >= 2 && workspace ? (
+              <Box ml={{ base: "md", sm: "xl" }} style={{ flexShrink: 0 }}>
+                <DashboardWorkspaceSwitcher workspaces={workspaces} workspace={workspace} />
+              </Box>
+            ) : null}
             <Group
               gap={0}
               wrap="nowrap"
@@ -278,7 +320,6 @@ export function DashboardContent({
             </Group>
           </Group>
           <Group gap="sm" wrap="nowrap">
-            <ThemeSchemeSwitch />
             {logoutUrl ? (
               <Menu position="bottom-end" withinPortal>
                 <Menu.Target>
@@ -301,7 +342,6 @@ export function DashboardContent({
                 </Menu.Dropdown>
               </Menu>
             ) : null}
-            <DashboardWorkspaceSwitcher workspaces={workspaces} workspace={workspace} />
             {environment ? (
               <Badge
                 color={environmentColor(environment)}
@@ -338,6 +378,7 @@ export function DashboardContent({
                   ? "Connected"
                   : "Connecting"}
             </Badge>
+            <ThemeSchemeSwitch />
           </Group>
         </Group>
       </AppShell.Header>
@@ -447,7 +488,10 @@ export function DashboardContent({
             leftSection={<BookOpenText size={18} />}
             variant="light"
           />
-          <WorkhorseVersion />
+          {/* Breathing room keeps the beta badge from reading as part of the link above. */}
+          <Box mt="md" px="sm">
+            <WorkhorseVersion />
+          </Box>
         </AppShell.Section>
       </AppShell.Navbar>
 

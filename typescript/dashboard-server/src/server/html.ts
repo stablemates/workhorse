@@ -16,7 +16,16 @@ export const dashboardRuntimeConfigSchema = z.strictObject({
   /** Enables the job-seeding menu. Only hosts that intentionally supply fixtures should set it. */
   demoTools: z.boolean(),
   /** Every named workspace the host serves, in configuration order. */
-  workspaces: z.array(z.strictObject({ name: z.string(), url: z.string() })).readonly(),
+  workspaces: z
+    .array(
+      z.strictObject({
+        name: z.string(),
+        url: z.string(),
+        databaseHost: z.string().optional(),
+        databaseName: z.string().optional(),
+      }),
+    )
+    .readonly(),
   /** Name of the workspace this document was rendered for. Null in single-workspace mode. */
   workspace: z.string().nullable(),
 });

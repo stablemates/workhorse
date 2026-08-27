@@ -159,6 +159,14 @@ export interface CreateDemoApplicationOptions {
    * familiar single-workspace dashboard at the same URLs it always had.
    */
   stagingDatabase?: DemoDatabase;
+  /** Display-only label of the production database host, shown in the workspace switcher. */
+  databaseHost?: string;
+  /** Display-only name of the production database, shown in the workspace switcher. */
+  databaseName?: string;
+  /** Display-only label of the staging database host, shown in the workspace switcher. */
+  stagingDatabaseHost?: string;
+  /** Display-only name of the staging database, shown in the workspace switcher. */
+  stagingDatabaseName?: string;
 }
 
 interface AuditContext {
@@ -1269,13 +1277,23 @@ export function createDemoApplication(
       ...(stagingAdapter
         ? {
             workspaces: {
-              production,
+              production: {
+                ...production,
+                ...(options.databaseHost ? { databaseHost: options.databaseHost } : {}),
+                ...(options.databaseName ? { databaseName: options.databaseName } : {}),
+              },
               // Staging stays read-only with no controllers: the switcher should show a visibly
               // different workspace, and a quiet seeded database is the demonstration.
               staging: {
                 database: stagingAdapter.database,
                 environment: "staging",
                 operator: createReadOnlyOperator(),
+                ...(options.stagingDatabaseHost
+                  ? { databaseHost: options.stagingDatabaseHost }
+                  : {}),
+                ...(options.stagingDatabaseName
+                  ? { databaseName: options.stagingDatabaseName }
+                  : {}),
               },
             },
             defaultWorkspace: "production",

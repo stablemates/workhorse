@@ -148,20 +148,20 @@ export function HealthKpi({
   divided?: boolean;
 }) {
   return (
-    // A compact two-line row: the measures stack into one narrow column beside the queue
-    // table, so vertical space is the scarce resource and every row keeps the same rhythm.
+    // A two-line row: the measures stack into one narrow column beside the activity chart,
+    // so every row keeps the same rhythm while staying comfortable to read.
     <Box
-      px="sm"
-      py={9}
+      px="md"
+      py={12}
       style={divided ? { borderTop: "1px solid var(--mantine-color-default-border)" } : undefined}
     >
-      <Group justify="space-between" align="center" gap="xs" wrap="nowrap">
-        <Group gap={8} wrap="nowrap" style={{ minWidth: 0, flex: 1 }}>
-          <ThemeIcon variant="light" color={color} size="sm" style={{ flexShrink: 0 }}>
+      <Group justify="space-between" align="center" gap="sm" wrap="nowrap">
+        <Group gap={10} wrap="nowrap" style={{ minWidth: 0, flex: 1 }}>
+          <ThemeIcon variant="light" color={color} size="md" style={{ flexShrink: 0 }}>
             {icon}
           </ThemeIcon>
           <Box style={{ minWidth: 0 }}>
-            <Group gap={5} wrap="nowrap">
+            <Group gap={6} wrap="nowrap">
               <Tooltip
                 label={help}
                 multiline
@@ -174,7 +174,7 @@ export function HealthKpi({
               >
                 <Text
                   fw={600}
-                  fz={13}
+                  fz={14}
                   lh={1.25}
                   tabIndex={0}
                   style={{
@@ -187,22 +187,22 @@ export function HealthKpi({
                   {title}
                 </Text>
               </Tooltip>
-              <Text c="dimmed" fz={9} fw={600} lh={1} tt="uppercase" style={{ flexShrink: 0 }}>
+              <Text c="dimmed" fz={10} fw={600} lh={1} tt="uppercase" style={{ flexShrink: 0 }}>
                 {scope}
               </Text>
             </Group>
-            <Text c="dimmed" fz={11} lh={1.3} lineClamp={1}>
+            <Text c="dimmed" fz={13} lh={1.4} mt={3} lineClamp={2}>
               {detail}
             </Text>
           </Box>
         </Group>
         {children ? (
-          <Box visibleFrom="md" w={72} style={{ flexShrink: 0 }}>
+          <Box visibleFrom="md" w={88} style={{ flexShrink: 0 }}>
             {children}
           </Box>
         ) : null}
         {typeof value === "string" || typeof value === "number" ? (
-          <Text fw={750} fz={17} lh={1.2} ta="right" style={{ flexShrink: 0 }}>
+          <Text fw={750} fz={18} lh={1.2} ta="right" style={{ flexShrink: 0 }}>
             {value}
           </Text>
         ) : (
@@ -231,7 +231,7 @@ export function QueuePressure({
 }) {
   const queues = sortQueuesByRisk(data.queues);
   return (
-    // The numeric columns need the wider two-thirds column; narrower viewports scroll the table
+    // The numeric columns need the full page width; narrower viewports scroll the table
     // horizontally rather than dropping any of them.
     <Paper withBorder h="100%">
       <Group justify="space-between" p="md">
@@ -407,7 +407,7 @@ export function SystemKpiList({
   };
 
   return (
-    // One panel of hairline-separated rows, sized to sit beside the queue table.
+    // One panel of hairline-separated rows, sized to sit beside the activity chart.
     <Paper withBorder h="100%">
       <HealthKpi
         title="Completion rate"
@@ -458,10 +458,10 @@ export function SystemKpiList({
           <Group gap={10} wrap="nowrap" style={{ flexShrink: 0 }}>
             {queueWaitPercentiles.map((percentile) => (
               <Box key={percentile.label} ta="right">
-                <Text c="dimmed" fz={9} fw={600} lh={1} tt="uppercase">
+                <Text c="dimmed" fz={10} fw={600} lh={1} tt="uppercase">
                   {percentile.label}
                 </Text>
-                <Text fw={700} fz={13} lh={1.3}>
+                <Text fw={700} fz={14} lh={1.3}>
                   {formatDuration(percentile.duration)}
                 </Text>
               </Box>
@@ -523,7 +523,7 @@ export function SystemKpiList({
             >
               View blocked tasks
             </Button>
-            <Text fw={750} fz={17} lh={1.2} ta="right">
+            <Text fw={750} fz={18} lh={1.2} ta="right">
               {data.kpis.dependencies.blockedJobs}
             </Text>
           </Group>
@@ -570,7 +570,7 @@ export function SystemKpiList({
             >
               Review waiting tasks
             </Button>
-            <Text fw={750} fz={17} lh={1.2} ta="right">
+            <Text fw={750} fz={18} lh={1.2} ta="right">
               {data.kpis.externalWaits.pendingSignals +
                 data.kpis.externalWaits.pendingHumanDecisions}
             </Text>

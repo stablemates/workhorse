@@ -9,4 +9,8 @@ export interface DashboardWorkspaceLink {
   name: string;
   /** Mount path of the workspace, e.g. `/workhorse/production`. */
   url: string;
+  /** Display-only label of the backing database host, shown in the workspace switcher. */
+  databaseHost?: string;
+  /** Display-only name of the backing database, shown in the workspace switcher. */
+  databaseName?: string;
 }
