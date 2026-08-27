@@ -55,7 +55,8 @@
             "anyOf": [
               {
                 "type": "string",
-                "minLength": 1
+                "minLength": 1,
+                "maxLength": 200
               },
               {
                 "type": "null"
@@ -66,14 +67,15 @@
             "default": 1,
             "type": "integer",
             "minimum": 1,
-            "maximum": 9007199254740991
+            "maximum": 100
           },
           "worker": {
             "default": null,
             "anyOf": [
               {
                 "type": "string",
-                "minLength": 1
+                "minLength": 1,
+                "maxLength": 200
               },
               {
                 "type": "null"
@@ -85,7 +87,8 @@
             "anyOf": [
               {
                 "type": "string",
-                "minLength": 1
+                "minLength": 1,
+                "maxLength": 200
               },
               {
                 "type": "null"
@@ -124,7 +127,8 @@
             }
           },
           "search": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 200
           },
           "pageSize": {
             "default": 50,
@@ -216,7 +220,8 @@
             "anyOf": [
               {
                 "type": "string",
-                "minLength": 1
+                "minLength": 1,
+                "maxLength": 200
               },
               {
                 "type": "null"
@@ -228,7 +233,8 @@
             "anyOf": [
               {
                 "type": "string",
-                "minLength": 1
+                "minLength": 1,
+                "maxLength": 200
               },
               {
                 "type": "null"
@@ -262,7 +268,7 @@
             "default": 1,
             "type": "integer",
             "minimum": 1,
-            "maximum": 9007199254740991
+            "maximum": 100
           },
           "pageSize": {
             "default": 50,
@@ -295,7 +301,8 @@
             "anyOf": [
               {
                 "type": "string",
-                "minLength": 1
+                "minLength": 1,
+                "maxLength": 200
               },
               {
                 "type": "null"
@@ -307,7 +314,8 @@
             "anyOf": [
               {
                 "type": "string",
-                "minLength": 1
+                "minLength": 1,
+                "maxLength": 200
               },
               {
                 "type": "null"

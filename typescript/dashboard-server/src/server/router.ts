@@ -92,18 +92,21 @@ const eventDetailInput = z.object({ id: z.string().regex(/^(event|attempt):\d+$/
 const taskFilter = z.enum(dashboardTaskFilters);
 const taskSort = z.enum(dashboardTaskSorts);
 const checkedDashboardTaskPriorityMax: typeof MAX_JOB_PRIORITY = dashboardTaskPriorityMax;
+const dashboardFilterString = z.string().trim().min(1).max(200);
+const dashboardPage = z.number().int().min(1).max(100).default(1);
 const tasksInput = z.object({
   filter: taskFilter.default("all"),
-  queue: z.string().trim().min(1).nullable().default(null),
-  page: z.number().int().min(1).default(1),
-  worker: z.string().trim().min(1).nullable().default(null),
-  jobType: z.string().trim().min(1).nullable().default(null),
+  queue: dashboardFilterString.nullable().default(null),
+  page: dashboardPage,
+  worker: dashboardFilterString.nullable().default(null),
+  jobType: dashboardFilterString.nullable().default(null),
   priority: z.number().int().min(0).max(checkedDashboardTaskPriorityMax).nullable().default(null),
   sort: taskSort.default("updated" satisfies DashboardTaskSort),
   tags: z.array(z.string().trim().min(1).max(100)).max(20).default([]),
   search: z
     .string()
     .trim()
+    .max(200)
     .optional()
     .transform((value) => value || null),
   pageSize: z.union([z.literal(25), z.literal(50), z.literal(100)]).default(50),
@@ -113,8 +116,8 @@ const activityInput = z.object({
   period: z.enum(["15m", "1h", "6h", "24h", "7d"]).default("1h"),
   groupBy: z.enum(["queue", "worker", "task", "status"]).default("task"),
   tags: z.array(z.string().trim().min(1).max(100)).max(20).default([]),
-  queue: z.string().trim().min(1).nullable().default(null),
-  worker: z.string().trim().min(1).nullable().default(null),
+  queue: dashboardFilterString.nullable().default(null),
+  worker: dashboardFilterString.nullable().default(null),
 });
 const systemInput = z.object({
   window: z.enum(["15m", "1h", "24h"]).default("1h"),
@@ -181,11 +184,11 @@ const checkedDemoFeatureValues: CompleteDashboardOptions<
  */
 const eventsInput = z.object({
   window: z.enum(["15m", "1h", "6h", "24h"]).default("1h"),
-  page: z.number().int().min(1).default(1),
+  page: dashboardPage,
   pageSize: z.union([z.literal(25), z.literal(50), z.literal(100)]).default(50),
   kind: z.enum(["all", "event", "attempt"]).default("all"),
-  queue: z.string().trim().min(1).nullable().default(null),
-  jobType: z.string().trim().min(1).nullable().default(null),
+  queue: dashboardFilterString.nullable().default(null),
+  jobType: dashboardFilterString.nullable().default(null),
   types: z.array(eventType).max(eventType.options.length).default([]),
   jobId: z.uuid().nullable().default(null),
 });
