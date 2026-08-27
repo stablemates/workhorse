@@ -32,7 +32,7 @@ export {
   readDashboardWorkers,
 } from "./read-model.js";
 export type { DashboardEventsQuery } from "./read-model.js";
-export { dashboardRouter } from "./router.js";
+export { dashboardRouter, isDashboardMutation } from "./router.js";
 export type { DashboardRouter, DashboardRpcContext } from "./router.js";
 export { dashboardDatabase, sql } from "./sql.js";
 export type { DashboardDatabase, DashboardSql } from "./sql.js";

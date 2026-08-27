@@ -705,6 +705,10 @@ export async function installDemoSchema(database: DemoDatabase): Promise<void> {
     CREATE UNIQUE INDEX IF NOT EXISTS workhorse_demo_audit_request_id_idx
     ON public.workhorse_demo_audit (request_id)
   `);
+  await database.execute(sql`
+    CREATE INDEX IF NOT EXISTS workhorse_demo_audit_occurred_at_idx
+    ON public.workhorse_demo_audit (occurred_at, id)
+  `);
   await migrateLegacyFeatureShowcaseJobTypes(database);
   await database.execute(sql`
     CREATE TABLE IF NOT EXISTS public.workhorse_demo_schema_version (

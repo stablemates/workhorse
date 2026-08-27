@@ -24,6 +24,8 @@ import {
 import { startDemoMetricsObserver } from "./telemetry.js";
 import { demoLogger } from "./logger.js";
 import { prepareApplicationSchema } from "./schema-preparation.js";
+import { DEMO_AUDIT_RETENTION_INTERVAL_MS, pruneDemoAudit } from "./audit-retention.js";
+import { DemoOperatorRateLimiter } from "./operator-rate-limit.js";
 
 /**
  * The demo's web tier.
@@ -86,6 +88,17 @@ await prepareApplicationSchema(mode, {
   install: () => installSchema(pool),
   installDemo: () => installDemoSchema(database),
 });
+await pruneDemoAudit(pool);
+const auditRetentionTimer = setInterval(() => {
+  void pruneDemoAudit(pool).catch((error: unknown) => {
+    demoLogger.error(
+      "workhorse.demo.audit_retention_failed",
+      "Demo audit retention pass failed",
+      error,
+    );
+  });
+}, DEMO_AUDIT_RETENTION_INTERVAL_MS);
+auditRetentionTimer.unref();
 if (stagingPool && stagingDatabase) {
   await prepareApplicationSchema(mode, {
     assertCompatible: () => assertSchemaCompatible(stagingPool),
@@ -165,7 +178,17 @@ if (process.env.SEED_DEMO_DATA !== "false") {
   }
 }
 const application = getRequestListener(app.fetch);
+const operatorRateLimiter = new DemoOperatorRateLimiter();
 const server = createServer((request, response) => {
+  const retryAfterSeconds = operatorRateLimiter.check(request);
+  if (retryAfterSeconds !== undefined) {
+    response.statusCode = 429;
+    response.setHeader("Cache-Control", "no-store");
+    response.setHeader("Content-Type", "application/json; charset=UTF-8");
+    response.setHeader("Retry-After", String(retryAfterSeconds));
+    response.end(JSON.stringify({ message: "Operator request rate limit exceeded" }));
+    return;
+  }
   const next = (error?: unknown) => {
     if (error) {
       response.statusCode = 500;
@@ -202,6 +225,7 @@ async function shutdown(signal: string): Promise<void> {
     "process.signal": signal,
   });
   metricsObserver?.stop();
+  clearInterval(auditRetentionTimer);
   await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });

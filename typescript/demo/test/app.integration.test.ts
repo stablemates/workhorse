@@ -72,6 +72,7 @@ import type { DashboardRouter } from "@stablemates/workhorse-dashboard/server";
 import { dashboardDatabase, readDashboardWorkers } from "@stablemates/workhorse-dashboard/server";
 import { DEMO_QUEUE_OPTIONS } from "../src/contracts.js";
 import { durableDemoScenarios } from "../src/durable-demo.js";
+import { DEMO_AUDIT_RETENTION_ROWS_PER_PASS, pruneDemoAudit } from "../src/audit-retention.js";
 import {
   DEMO_FEATURE_SHOWCASE_EXAMPLE_COUNT,
   DEMO_FEATURE_SHOWCASE_FAMILIES,
@@ -342,6 +343,37 @@ it("disallows crawler indexing across the public demo", async () => {
 
   const dashboard = await app.request("/");
   expect(dashboard.headers.get("x-robots-tag")).toBe("noindex, nofollow, noarchive");
+});
+
+it("prunes expired demo audit rows in bounded oldest-first passes", async () => {
+  await pool.query(
+    `INSERT INTO public.workhorse_demo_audit
+       (actor, reason, request_id, occurred_at, action, target, status)
+     SELECT 'retention-test', 'expired', 'expired-' || id,
+            clock_timestamp() - interval '8 days' - id * interval '1 second',
+            'enqueueTest', 'test', 'succeeded'
+       FROM generate_series(1, $1) AS id`,
+    [DEMO_AUDIT_RETENTION_ROWS_PER_PASS + 5],
+  );
+  await pool.query(
+    `INSERT INTO public.workhorse_demo_audit
+       (actor, reason, request_id, action, target, status)
+     VALUES ('retention-test', 'current', 'current', 'enqueueTest', 'test', 'succeeded')`,
+  );
+
+  await expect(pruneDemoAudit(pool)).resolves.toBe(DEMO_AUDIT_RETENTION_ROWS_PER_PASS);
+  await expect(
+    pool.query<{ expired: number }>(
+      `SELECT count(*) FILTER (WHERE request_id LIKE 'expired-%')::integer AS expired
+         FROM public.workhorse_demo_audit`,
+    ),
+  ).resolves.toMatchObject({ rows: [{ expired: 5 }] });
+  await expect(pruneDemoAudit(pool)).resolves.toBe(5);
+  await expect(
+    pool.query<{ request_id: string }>(
+      `SELECT request_id FROM public.workhorse_demo_audit ORDER BY id`,
+    ),
+  ).resolves.toMatchObject({ rows: [{ request_id: "current" }] });
 });
 
 dashboardBrowserTest(settingsDashboardTestName, async () => {
