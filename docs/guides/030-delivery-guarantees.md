@@ -34,10 +34,9 @@ performs the effect.
 
 ### Checkpoints
 
-For multi-step handlers, wrap each step in
-`HandlerContext.checkpoint(name, operation)`. The first time through, it runs your code and
-saves the result under that name. On a retry, it finds the saved value and returns it
-without running the step again.
+For multi-step handlers, wrap each step with `HandlerContext.checkpoint`. The first time
+through, it runs your code and saves the result under that name. On a retry, it finds the
+saved value and returns it without running the step again.
 
 ```ts
 const handler = async (payload, ctx) => {

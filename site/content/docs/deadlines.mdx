@@ -55,7 +55,10 @@ stuck HTTP call, a wedged subprocess.
 <Tabs items={["TypeScript", "Python", "Go"]}>
   <Tab value="TypeScript">
     ```ts
-    await queue.enqueue("report.build", { reportId }, { executionTimeoutMs: 30_000, maxAttempts: 5 });
+    await queue.enqueue("report.build", { reportId }, {
+      executionTimeoutMs: attemptTimeoutMs,
+      maxAttempts: attemptBudget,
+    });
     ```
   </Tab>
   <Tab value="Python">
@@ -63,7 +66,10 @@ stuck HTTP call, a wedged subprocess.
     queue.enqueue(
         "report.build",
         {"reportId": report_id},
-        EnqueueOptions(execution_timeout_ms=30_000, max_attempts=5),
+        EnqueueOptions(
+            execution_timeout_ms=attempt_timeout_ms,
+            max_attempts=attempt_budget,
+        ),
     )
     ```
   </Tab>
@@ -71,14 +77,17 @@ stuck HTTP call, a wedged subprocess.
     ```go
     _, err := queue.Enqueue(ctx, "report.build", map[string]any{
         "reportId": reportID,
-    }, workhorse.EnqueueOptions{ExecutionTimeoutMS: 30_000, MaxAttempts: 5})
+    }, workhorse.EnqueueOptions{
+        ExecutionTimeoutMS: attemptTimeout,
+        MaxAttempts: attemptBudget,
+    })
     ```
   </Tab>
 </Tabs>
 
 Only real execution spends the budget. If the handler suspends on a
 [durable wait](/docs/durable-execution), the job holds no worker slot and the accounting
-pauses — a job that sleeps for a day has used none of its execution budget. When the budget
+pauses — a long sleep uses none of its execution budget. When the budget
 runs out mid-execution, the heartbeat returns `timeout_exceeded` and the worker aborts with
 `ExecutionTimeoutError`.
 
@@ -86,13 +95,11 @@ If attempts remain, PostgreSQL schedules another one under the normal
 [retry rules](/docs/retries). Timeline evidence records the timeout path distinctly from an
 ordinary thrown error, so an operator can tell "slow" apart from "broken".
 
-The two compose naturally:
-
 The options compose directly: set `deadline` with `executionTimeoutMs` in TypeScript,
 `deadline` with `execution_timeout_ms` in Python, or `Deadline` with `ExecutionTimeoutMS` in Go.
 
-Read that as: retry up to five times, give each attempt thirty seconds, and abandon the whole
-thing at kickoff regardless of attempts left.
+Together they bound each attempt by its execution budget and abandon the whole job at the
+business cutoff regardless of attempts left.
 
 ## Both clocks remain cooperative
 

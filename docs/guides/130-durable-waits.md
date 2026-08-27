@@ -1,19 +1,18 @@
 # Waiting without holding a worker hostage
 
-Some jobs need to pause. Wait an hour before sending a reminder. Poll an external system
-that takes a while. Sleep until tomorrow morning.
+Some jobs need to pause before sending a reminder, polling an external system again, or
+continuing at a known time.
 
-The naive way is to sit in the handler. That's terrible: your worker has a fixed number of
-slots, and a sleeping handler occupies one for the whole hour while doing nothing.
+The naive way is to sit in the handler. That's terrible: your worker has a bounded set of
+slots, and a sleeping handler occupies one while doing nothing.
 
 ## What a durable wait does instead
 
 A named wait releases the job entirely. The lease is dropped, the job goes back to
 `scheduled` with a wake time, and the worker slot is immediately free for other work.
 
-Later, the job becomes ready again, some worker claims it, and it carries on. Nothing was
-sitting idle in between. You could wait a month this way and consume no worker capacity at
-all.
+Later, the job becomes ready again, some worker claims it, and it carries on. Nothing sits
+idle in between, however long the wait lasts.
 
 The synchronous Python worker uses `context.sleep` for a duration and `context.sleep_until` for a
 wake time. Both release the slot and replay the handler without consuming the attempt.
@@ -24,10 +23,10 @@ This is the part that surprises people, so get it clear.
 
 When the job resumes, your handler function is called **again, from the beginning**. It is
 not resumed mid-function — there is no saved call stack, because the process that was
-running it is long gone, possibly deployed over twice since.
+running it is long gone and may have been replaced by a newer deployment.
 
-So a handler with a wait in the middle runs its opening section twice: once before the wait,
-once after. Which means:
+So a handler with a wait in the middle runs its opening section again after the wait. Which
+means:
 
 > Everything before a wait must be safe to run again.
 
@@ -39,7 +38,7 @@ const handler = async (payload, ctx) => {
   // runs twice — once now, once after the wait — so it must be checkpointed
   const order = await ctx.checkpoint("place", () => placeOrder(payload));
 
-  await ctx.sleep("settle", 60 * 60 * 1000); // slot is released here
+  await ctx.sleep("settle", settlementDelayMs); // slot is released here
 
   await confirm(order.id);
 };
@@ -51,24 +50,22 @@ already elapsed and execution should continue past it.
 When execution reaches a wait that has already elapsed, it's recorded as already done and
 the handler continues straight past it. That's how the code after the wait finally runs.
 
-Don't catch the control signal thrown by `ctx.sleep()` or `ctx.sleepUntil()`. If a handler catches
+Don't catch the control signal thrown by `ctx.sleep` or `ctx.sleepUntil`. If a handler catches
 it and returns, the worker still honors the recorded wait. It also warns that the signal was
 swallowed. Any side effects after the catch have already happened and can't be undone.
 
 ## Waiting is not failing
 
-A wait does **not** consume an attempt. The attempt counter stays exactly where it was.
+A wait does **not** consume an attempt. The attempt counter stays where it was.
 
 This is deliberate: waiting is a normal part of the job doing its work, not a sign anything
-went wrong. A job that sleeps five times and then succeeds has used one attempt, not six.
-When it resumes it gets a new fence token — a new claim always does — but it's still the
-same logical attempt.
+went wrong. Repeated sleeps remain part of the same logical attempt. A resumed job gets a
+new fence token because it has a new claim.
 
 ## When it wakes up
 
-"Wake at 09:00" means "become eligible to run at 09:00". A worker still has to be free to
-pick it up, and the promotion pass runs on an interval. In practice that's seconds, not
-milliseconds.
+"Wake at the requested time" means "become eligible then". A worker still has to be free to
+pick it up, and the promotion pass runs on an interval.
 
 Don't build anything that needs precise timing on top of this. It's a durable sleep, not a
 real-time scheduler.

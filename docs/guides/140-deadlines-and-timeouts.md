@@ -5,8 +5,8 @@ Mixing them up is the usual source of confusion.
 
 ## A deadline covers the whole job
 
-`deadline` is a wall-clock moment after which the job is pointless. Not "ten minutes of
-work" — an actual instant in time, like "before the 09:00 delivery run".
+`deadline` is a wall-clock moment after which the job is pointless. It is an actual instant,
+such as the cutoff for a delivery run, rather than an execution budget.
 
 The clock never stops. It keeps running while the job is queued, while it's retrying, while
 it's asleep on a timer, and while it's executing. When that moment passes, the job is
@@ -36,25 +36,24 @@ await queue.enqueue(
   { matchId },
   {
     deadline: kickoffTime, // pointless after kickoff, whatever happens
-    executionTimeoutMs: 30_000, // any single attempt is stuck after 30s
-    maxAttempts: 5,
+    executionTimeoutMs: attemptTimeoutMs,
+    maxAttempts: attemptBudget,
   },
 );
 ```
 
-Read that as: retry up to five times, give each attempt thirty seconds, and abandon the
-whole thing at kickoff regardless of how many attempts are left.
+Read that as: bound each attempt by the configured execution budget, and abandon the whole
+job at kickoff regardless of how many attempts remain.
 
 ## How long should a handler run?
 
-Aim to finish well inside two minutes. The reason isn't a database limit — it's
-deployments. When a rolling deploy restarts a worker, it waits a bounded time for handlers to
-drain. Handlers that routinely run longer than that get killed mid-flight and recovered,
-which works but is noisy.
+Aim to finish well inside the deployment's drain period. When a rolling deploy restarts a
+worker, it waits a bounded time for handlers to drain. Handlers that routinely exceed that
+period get killed mid-flight and recovered, which works but is noisy.
 
 For genuinely long work, don't ask for a bigger timeout. Split it: idempotent stages, named
-checkpoints between them, and durable waits where you're just waiting. That turns one
-90-minute handler into many short ones, and each is individually restartable.
+checkpoints between them, and durable waits where you're just waiting. That turns one long
+handler into shorter stages, and each is individually restartable.
 
 ## What you get on timeout
 

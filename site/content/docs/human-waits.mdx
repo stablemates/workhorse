@@ -63,7 +63,7 @@ An application can put `dashboard.quickAction` in the stored context with a menu
 `result`. The task menu asks the operator to confirm that result before completion. It never invents
 a quick action for generic decisions.
 
-Applications can call `Queue.completeHumanWait(jobId, name, result, request)` after enforcing their
+Applications can call `Queue.completeHumanWait` after enforcing their
 own authorization. The request records its trusted actor as `requestedBy`. The first accepted result
 resumes the job. An equivalent retry returns the retained result, while a competing completion
 cannot overwrite the accepted audit evidence.
@@ -72,7 +72,7 @@ The queue response exposes that accepted decision as `payload`, matching signal 
 Go applications complete decisions through `Queue.CompleteHumanWait` with
 `ExternalWaitDelivery`. The result retains the accepted decision and actor.
 
-`Admin.listHumanWaits()` exposes the same paginated projection for custom operator tools. A timeout,
+`Admin.listHumanWaits` exposes the same paginated projection for custom operator tools. A timeout,
 job deadline, or cancellation closes the decision and makes late completion stale.
 
 TypeScript handlers call `ctx.waitForHuman` and can pass `timeoutMs`. Go exposes the same boundary

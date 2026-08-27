@@ -43,7 +43,7 @@ handlers pass `timeout_ms` for the same boundary.
 
 ## Deliver once, retry safely
 
-Applications call `Queue.sendSignal(jobId, name, payload, request)` with an idempotency key and a
+Applications call `Queue.sendSignal` with an idempotency key and a
 trusted actor. An equivalent network retry returns the retained delivery. Reusing a key with
 changed payload or attribution conflicts, and a competing late delivery returns the accepted
 winner without resuming the handler again.
@@ -54,7 +54,7 @@ retained outcome unchanged.
 A delivery before the wait exists is rejected rather than buffered. A timeout, job deadline, or
 cancellation closes the boundary, so replay cannot continue with an invented payload.
 
-`Admin.listSignalWaits()` provides the actionable operator projection. The dashboard uses the same
+`Admin.listSignalWaits` provides the actionable operator projection. The dashboard uses the same
 public method, but its server replaces browser-supplied attribution with the authenticated actor.
 
 Go applications deliver through `Queue.SendSignal` with `ExternalWaitDelivery`. The returned

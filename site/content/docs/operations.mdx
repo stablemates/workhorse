@@ -55,8 +55,8 @@ rows, so replicas would export duplicate gauges and add unnecessary queries.
 
 ## Fleet controls
 
-Every worker registers itself in PostgreSQL on its `registryIntervalMs` cadence — 5 seconds by
-default, `0` to opt out. That registry is how you see and steer a fleet you do not host:
+Every worker registers itself in PostgreSQL on its configured cadence. That registry is how you
+see and steer a fleet you do not host:
 
 <Tabs items={["TypeScript", "Python", "Go"]}>
   <Tab value="TypeScript">

@@ -39,7 +39,7 @@ task table. An operator can enter the JSON payload in the task drawer. The dashb
 the same queue operation, but its server replaces browser attribution with the authenticated
 principal. Application-owned callers must establish authorization before calling the core API.
 
-Operator tools can call `Admin.listSignalWaits()` to read the current actionable boundaries. Each
+Operator tools can use `Admin.listSignalWaits` to read the current actionable boundaries. Each
 row identifies the job, queue, job type, signal name, attempt, creation time, and effective
 deadline without exposing a delivered payload. If a page returns `nextCursor`, pass it back to
 continue without hiding waits beyond the page bound.

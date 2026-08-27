@@ -13,20 +13,19 @@ therefore keeps the same evidence and partition guarantees as a TypeScript fleet
 ## Windows are minimums, not deadlines
 
 You configure how long to keep each category of data — finished jobs, outcomes, events,
-attempts, schedule occurrences, statistics. Each defaults to a couple of weeks and can be
-set independently. Setting one to null disables cleanup for that category entirely.
+attempts, schedule occurrences, statistics. Each category has its own default and can be
+set independently. A category can also opt out of cleanup.
 
-The important word is _minimum_. A two-week window means "don't delete anything younger
-than two weeks". It does not mean everything older disappears promptly. Cleanup runs in
-bounded batches, works a day at a time, and skips anything still referenced. Real retention
-is always somewhat longer than configured, and that's by design — it errs toward keeping
-evidence.
+The important word is _minimum_. A window protects everything younger than its cutoff. It
+does not promise that older data disappears promptly. Cleanup runs in bounded batches,
+works through partitions, and skips anything still referenced. Real retention is always
+somewhat longer than configured, because cleanup errs toward keeping evidence.
 
 ## Deleting by the day, not by the row
 
-Events and attempts are stored in daily partitions. Cleanup mostly doesn't delete rows at
-all: it drops whole days once every row in them has expired, which is close to free
-regardless of how many rows the day held.
+Events and attempts are stored in time partitions. Cleanup mostly doesn't delete rows at
+all: it drops whole partitions once every row in them has expired, which is close to free
+regardless of how many rows the partition held.
 
 Dropping a table needs an exclusive lock, so the pass gives up after a moment rather than
 queueing behind live traffic and stalling dispatch. It'll try again next time.
@@ -50,9 +49,8 @@ gone too.
 ## Statistics are the exception
 
 Summary rows are the one category _not_ bound by "keep the job at least as long". That's
-intentional. A summary describes many jobs rather than pointing at one, so keeping a year of
-aggregates after the underlying jobs are gone is a perfectly sensible configuration — often
-the one you want.
+intentional. A summary describes many jobs rather than pointing at one, so aggregates can
+outlive the jobs they summarize.
 
 ## When it doesn't keep up
 

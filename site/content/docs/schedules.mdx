@@ -20,7 +20,7 @@ with pruning enabled — the default — definitions you dropped from the list a
     ```ts
     await queue.syncSchedules("billing-production", [{
       name: "invoice-run",
-      schedule: "0 2 * * *",
+      schedule: nightlyCron,
       timezone: "America/New_York",
       job: { type: "invoice.generate", queue: "billing", payload: { scope: "due" } },
     }]);
@@ -32,7 +32,7 @@ with pruning enabled — the default — definitions you dropped from the list a
         "billing-production",
         [ScheduleDefinition(
             name="invoice-run",
-            schedule="0 2 * * *",
+            schedule=nightly_cron,
             timezone="America/New_York",
             job=ScheduledJob(
                 type="invoice.generate", queue="billing", payload={"scope": "due"}
@@ -44,7 +44,7 @@ with pruning enabled — the default — definitions you dropped from the list a
   <Tab value="Go">
     ```go
     err := queue.SyncSchedules(ctx, "billing-production", []workhorse.ScheduleDefinition{{
-        Name: "invoice-run", Schedule: "0 2 * * *", Timezone: "America/New_York",
+        Name: "invoice-run", Schedule: nightlyCron, Timezone: "America/New_York",
         Job: workhorse.ScheduledJob{
             Type: "invoice.generate", Queue: "billing", Payload: map[string]any{"scope": "due"},
         },
@@ -111,7 +111,7 @@ sets do not depend on the same maintenance-tick winner.
 
 ## Why competing workers create one job
 
-Ten workers all notice the 02:00 occurrence is due. Each firing writes a durable key built from
+Several workers notice the same occurrence is due. Each firing writes a durable key built from
 the namespace, schedule name, and planned occurrence time. The first worker claims the key; every
 other call converges on the job that already exists. No leader election, no single scheduler — any
 number of workers can race and the outcome is one job.
@@ -137,11 +137,11 @@ future occurrences through the next synchronization.
 
 Three related calls round out the API:
 
-- `admin.schedules(namespaces)` reads stored definitions and their last occurrence, for operator
+- `Admin.schedules` reads stored definitions and their last occurrence, for operator
   tools.
-- `admin.runTaskNow(jobId, audit)` releases one scheduled job immediately with the actor, reason,
+- `Admin.runTaskNow` releases one scheduled job immediately with the actor, reason,
   and request identity used by operator controls.
-- `queue.fireSchedule(namespace, name, revision, occurrenceAt)` exposes the revision-fenced firing
+- `Queue.fireSchedule` exposes the revision-fenced firing
   operation itself, for tests and controlled integrations.
 
 ## Next

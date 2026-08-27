@@ -16,7 +16,7 @@ await queue.syncSchedules(
   [
     {
       name: "nightly-invoice-run",
-      schedule: "0 2 * * *",
+      schedule: nightlyCron,
       timezone: "America/New_York",
       job: { type: "generate-invoices", payload: {} },
     },
@@ -39,7 +39,7 @@ sharing a database don't prune each other's definitions.
 Several workers are running. They all offer the same namespace when the schedule may be due.
 
 Only one job is created. Each firing writes a durable key built from the namespace, the
-schedule name, and the occurrence second. The first worker to get there claims the key; the
+schedule name, and the planned occurrence. The first worker to get there claims the key; the
 others find it taken and receive no job id, because they didn't create the job.
 
 You don't have to elect a leader or run exactly one scheduler. Any number of workers can
@@ -69,8 +69,7 @@ becomes a no-op.
 - **Schedules only fire while a worker is running** with a matching namespace. Nothing fires
   if the whole fleet is down; when workers come back, catch-up is bounded rather than
   replaying every missed occurrence.
-- **Precision is about a second**, and firing waits for the next maintenance tick. This is
-  not a real-time scheduler.
+- **Firing waits for the next maintenance tick.** This is not a real-time scheduler.
 - **Store the intended IANA timezone** on each definition. UTC avoids clock changes. If local clocks
   skip a scheduled time, Workhorse fires after the clock advances. If clocks repeat a time,
   Workhorse fires its first occurrence only. If several fields land on one instant, Workhorse

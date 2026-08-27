@@ -4,13 +4,13 @@ description: Use named checkpoints and durable waits so a handler survives retri
 ---
 
 After a retry, a crash, or a durable wait, Workhorse calls your handler again — from the top.
-There is no saved JavaScript stack to resume; the process that held it may be gone, deployed
-over twice since. Durable execution is how a restarted handler skips the work it already
+There is no saved JavaScript stack to resume; the process that held it may be gone or replaced.
+Durable execution is how a restarted handler skips the work it already
 finished: you name the boundaries, and the new activation replays their stored results.
 
 ## Save completed stages with checkpoints
 
-`HandlerContext.checkpoint(name, operation)` looks for a stored value under the name. The
+`HandlerContext.checkpoint` looks for a stored value under the name. The
 first activation finds none, runs the operation, and persists its JSON result under the
 current fenced lease. Every later activation finds the value and returns it without running
 the operation again.
@@ -72,18 +72,17 @@ JSON value and an error. Replay returns the stored value without invoking either
 
 ## Release the worker slot with a durable wait
 
-Some jobs need to pause — an hour before a reminder, until tomorrow morning. Sleeping inside
-the handler wastes a worker slot for the whole wait. A durable wait releases the job instead:
+Some jobs need to pause before a reminder or until a known time. Sleeping inside the handler
+wastes a worker slot for the whole wait. A durable wait releases the job instead:
 
-- `HandlerContext.sleep(name, durationMs)` stores a named relative timer.
-- `HandlerContext.sleepUntil(name, wakeAt)` stores a named absolute target.
+- `HandlerContext.sleep` stores a named relative timer.
+- `HandlerContext.sleepUntil` stores a named absolute target.
 
-Python names the absolute form `context.sleep_until(name, wake_at)`; its relative form remains
-`context.sleep(name, duration_ms)`.
+Python names the absolute form `context.sleep_until`; its relative form is `context.sleep`.
 
 The wait drops the lease, frees the worker slot, and places the job in `scheduled`. It does
-**not** consume an attempt — waiting is normal work, not failure. A job that sleeps five
-times and succeeds has used one attempt.
+**not** consume an attempt — waiting is normal work, not failure. Repeated sleeps remain part
+of the same logical attempt.
 
 <Tabs items={["TypeScript", "Python", "Go"]}>
   <Tab value="TypeScript">
@@ -120,8 +119,7 @@ the follow-up send. Everything before a wait runs at least twice, so checkpoint 
 idempotent.
 
 A wake time means "eligible from then", not "runs exactly then". Promotion runs on an
-interval and a worker must be free; expect seconds of slack, and do not build precise timing
-on top of it.
+interval and a worker must be free, so do not build precise timing on top of it.
 
 ## Treat names as immutable program state
 
@@ -174,7 +172,7 @@ human waits through `Queue.completeHumanWait`. Each delivery is idempotent and r
 network retry cannot resume the job twice. Read [Signals](/docs/signals) and
 [Human waits](/docs/human-waits) for timeout and authorization rules.
 
-TypeScript handlers use `ctx.sleep()` for a relative timer and `ctx.sleepUntil()` for a fixed wake
+TypeScript handlers use `ctx.sleep` for a relative timer and `ctx.sleepUntil` for a fixed wake
 time. Both forms store the boundary before the worker releases its lease, then `settle` the wait
 when its timer or delivery wins.
 

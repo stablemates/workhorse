@@ -44,7 +44,7 @@ If one common result should be an action, add `dashboard.quickAction` to the con
 menu `label` and the exact JSON `result`. The dashboard enables the action only when the application
 opts in, so it never assumes that `{ approved: true }` is valid.
 
-Custom operator tools can call `Admin.listHumanWaits()` to read stored context and the effective
+Custom operator tools can use `Admin.listHumanWaits` to read stored context and the effective
 deadline. If `nextCursor` is present, pass it to the next call to continue through every pending
 decision. Those tools can collect results that do not fit one application-defined quick action.
 

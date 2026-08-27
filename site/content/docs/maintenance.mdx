@@ -48,12 +48,12 @@ defaults as a deploy step:
 
 ```ts
 await queue.syncRetentionPolicy({
-  jobIdentityRetentionDays: 90,
-  terminalOutcomeRetentionDays: 30,
-  jobEventRetentionDays: 14,
-  attemptHistoryRetentionDays: 14,
-  scheduleOccurrenceRetentionDays: 30,
-  statisticsRetentionDays: 365,
+  jobIdentityRetentionDays,
+  terminalOutcomeRetentionDays,
+  jobEventRetentionDays,
+  attemptHistoryRetentionDays,
+  scheduleOccurrenceRetentionDays,
+  statisticsRetentionDays,
 });
 ```
 
@@ -65,16 +65,15 @@ the settings you name. `queue.getRetentionPolicy` shows the effective policy.
 Before any destructive change, preview it:
 
 ```ts
-const impact = await queue.previewRetentionPolicy({ terminalOutcomeRetentionDays: 7 });
+const impact = await queue.previewRetentionPolicy({ terminalOutcomeRetentionDays });
 console.log(impact.eligible.terminalJobs, impact.capped.terminalJobs);
 ```
 
 The preview counts currently eligible rows per category, size-capped with an explicit `capped`
 flag. The dashboard settings page runs the same preview before applying a change.
 
-Statistics use a retention ladder inside that policy window. Minute summaries age into hour
-summaries, and hour summaries age into day summaries, so long windows keep totals and mergeable
-wait percentiles without paying minute-level storage forever.
+Statistics use progressively coarser summaries inside that policy window, so long windows keep
+totals and mergeable wait percentiles without retaining the finest detail forever.
 
 PostgreSQL guards the dependency order: it rejects any `RetentionPolicyDefinition` that could
 remove a job's identity before its retained evidence, and a retained `job_redrive` descendant

@@ -60,5 +60,5 @@ result and progress projection.
 
 ---
 
-Exact example contracts, names, and limits:
-[`architecture.md`](../architecture.md#agentic-flow-example).
+Exact child-join contracts and limits:
+[`architecture.md`](../architecture.md#job_child).

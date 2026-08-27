@@ -16,7 +16,10 @@ result that becomes the job's durable outcome.
 <Tabs items={["TypeScript", "Python", "Go"]}>
   <Tab value="TypeScript">
     ```ts
-    const worker = new Worker(queue, { queues: ["email", "billing"], concurrency: 5 });
+    const worker = new Worker(queue, {
+      queues: ["email", "billing"],
+      concurrency: workerConcurrency,
+    });
     worker.handle("email.send", async (payload: { to: string }, ctx) => {
       await mailer.send(payload.to, { signal: ctx.signal });
       return { deliveredTo: payload.to };
@@ -26,7 +29,11 @@ result that becomes the job's durable outcome.
   </Tab>
   <Tab value="Python">
     ```python
-    worker = Worker(connection, queues=["email", "billing"], concurrency=5)
+    worker = Worker(
+        connection,
+        queues=["email", "billing"],
+        concurrency=worker_concurrency,
+    )
 
     def send_email(payload: object, context: HandlerContext) -> Json:
         context.cancellation.raise_if_cancelled()
@@ -40,7 +47,7 @@ result that becomes the job's durable outcome.
   <Tab value="Go">
     ```go
     worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-        Queues: []string{"email", "billing"}, Concurrency: 5,
+        Queues: []string{"email", "billing"}, Concurrency: workerConcurrency,
     })
     if err != nil {
         return err
@@ -87,7 +94,7 @@ accidentally write as a stale owner after the job moves on.
   <Tab value="TypeScript">
     ```ts
     const worker = new Worker(queue, {
-      queues: ["email", "billing"], concurrency: 5, leaseMs: 30_000,
+      queues: ["email", "billing"], concurrency: workerConcurrency, leaseMs: workerLeaseMs,
       workerId: "email-worker-1",
     });
     ```
@@ -97,8 +104,8 @@ accidentally write as a stale owner after the job moves on.
     worker = Worker(
         connection,
         queues=["email", "billing"],
-        concurrency=5,
-        lease_ms=30_000,
+        concurrency=worker_concurrency,
+        lease_ms=worker_lease_ms,
         worker_id="email-worker-1",
     )
     ```
@@ -106,8 +113,8 @@ accidentally write as a stale owner after the job moves on.
   <Tab value="Go">
     ```go
     worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-        Queues: []string{"email", "billing"}, Concurrency: 5,
-        LeaseDuration: 30 * time.Second, WorkerID: "email-worker-1",
+        Queues: []string{"email", "billing"}, Concurrency: workerConcurrency,
+        LeaseDuration: workerLeaseDuration, WorkerID: "email-worker-1",
     })
     ```
   </Tab>
@@ -118,8 +125,8 @@ accidentally write as a stale owner after the job moves on.
   [concurrency policies](/docs/concurrency-policies); for a shared start rate, use
   [rate limits](/docs/rate-limits).
 - **`leaseMs`** is how long a claim owns a job before the database may recover it. One
-  background timer batches every active lease owned by the worker — every `heartbeatMs`,
-  defaulting to a third of `leaseMs`. A shorter lease means faster
+  background timer batches every active lease owned by the worker on its configured heartbeat
+  cadence. A shorter lease means faster
   recovery after a crash; a longer one tolerates worse network pauses.
 - **`workerId`** identifies the lease owner. Leave it generated unless a process manager
   guarantees uniqueness: two live workers sharing one identity collide over ownership. The
@@ -166,7 +173,7 @@ their own process. `defineWorkerProcess` describes the adapter and workers; the
     export default defineWorkerProcess({
       adapter: () => createWorkhorseAdapter(adapterOptions),
       workers: [{
-        options: { queues: ["email", "billing"], concurrency: 5 },
+        options: { queues: ["email", "billing"], concurrency: workerConcurrency },
         configure(worker) { worker.handle("email.send", sendEmail); },
       }],
     });
@@ -175,7 +182,11 @@ their own process. `defineWorkerProcess` describes the adapter and workers; the
   <Tab value="Python">
     ```python
     with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
-        worker = Worker(connection, queues=["email", "billing"], concurrency=5)
+        worker = Worker(
+            connection,
+            queues=["email", "billing"],
+            concurrency=worker_concurrency,
+        )
         worker.handle("email.send", send_email)
         run_worker_process(worker)
     ```
@@ -185,7 +196,7 @@ their own process. `defineWorkerProcess` describes the adapter and workers; the
     ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
     defer stop()
     worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-        Queues: []string{"email", "billing"}, Concurrency: 5,
+        Queues: []string{"email", "billing"}, Concurrency: workerConcurrency,
     })
     worker.Handle("email.send", sendEmail)
     err = worker.Run(ctx)
@@ -207,9 +218,9 @@ worker process or prevent later jobs from running.
 
 Three verbs cover controlled slowdown, and each answers a different situation:
 
-- **`worker.pause()`** stops this worker from claiming while active handlers finish.
-  `worker.resume()` lets it claim again; `worker.isPaused()` reads the effective state.
-- **`worker.stop()`** drains: no new claims, active handlers run to completion, then `run`
+- **`Worker.pause`** stops this worker from claiming while active handlers finish.
+  `Worker.resume` lets it claim again; `Worker.isPaused` reads the effective state.
+- **`Worker.stop`** drains: no new claims, active handlers run to completion, then `run`
   resolves. On `SIGTERM`, the worker process does this for you.
 - **`Admin.setWorkerPaused`** stores an operator pause in `worker_registry`. TypeScript, Python,
   and Go workers pick it up on their next registration refresh, so a dashboard can pause a process
@@ -221,7 +232,7 @@ If work must stop durably — surviving worker restarts — pause the queue with
 
 ## Read fleet state carefully
 
-`Worker.runtimeState()` reads a TypeScript worker's local process state. The dashboard and
+`Worker.runtimeState` reads a TypeScript worker's local process state. The dashboard and
 `Admin.listWorkers` read the durable registry that every runtime refreshes on an interval. Registry
 slot counts are recent observations, not synchronous views of another event loop — treat them as a
 moment-ago snapshot.
@@ -230,8 +241,8 @@ TypeScript configures the cadence with `registryIntervalMs`, Python uses `regist
 and Go uses `RegistryInterval`. A registration error does not stop dispatch, and the worker keeps
 its last remote-pause decision until a later refresh succeeds.
 
-A worker that dies stops refreshing and goes stale in the registry. Automatic maintenance makes
-that row eligible for removal after one minute. Its jobs are not lost: their leases expire and
+A worker that dies stops refreshing and goes stale in the registry. Automatic maintenance later
+removes that row. Its jobs are not lost: their leases expire and
 recovery makes them claimable again.
 
 The protocol names make this lifecycle greppable. `claim_many_v1` applies `claim_v1` to each

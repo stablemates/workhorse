@@ -35,12 +35,9 @@ error stays readable until [retention](330-retention.md) retires it.
 
 ## Why a link and not a copy
 
-Every redriven job records where it came from. This means you can ask "where did this job
-come from?" and walk back through the chain — useful when a job has been redriven three
-times and you want to see the original failure.
-
-Retention respects that chain: a failed job with a descendant won't be cleaned up while the
-descendant exists, so the trail doesn't develop holes.
+Every redriven job records where it came from. This lets you walk back through repeated
+redrives and inspect the original failure. [Retention](330-retention.md) preserves that
+lineage while a descendant remains.
 
 ## Clicking twice
 
@@ -56,8 +53,8 @@ and silently keeping one would lose an audit record.
 
 You can redrive a page of failed jobs at once, oldest first, with a cursor so you can work
 through a backlog in chunks without redoing what you've already done. There's a dry-run mode
-that tells you what _would_ happen and writes nothing — worth using before you replay a few
-thousand jobs into a service that may still be unhealthy.
+that tells you what _would_ happen and writes nothing — worth using before you replay a
+large backlog into a service that may still be unhealthy.
 
 ## Attribution is not permission
 

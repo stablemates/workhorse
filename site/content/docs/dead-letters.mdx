@@ -15,7 +15,7 @@ caller-owned pgx or `database/sql` executor.
 
 ## List terminal failures
 
-`admin.listDeadLetters(query)` reads a cold failure index that stays separate from the ready and
+`Admin.listDeadLetters` reads a cold failure index that stays separate from the ready and
 active indexes. A backlog of a million failures cannot slow workers as they claim jobs.
 
 <Tabs items={["TypeScript", "Python", "Go"]}>
@@ -56,7 +56,7 @@ cursor pages by immutable finish time and job identity, so pages stay stable whi
 
 ## Redrive one job
 
-`admin.redrive(sourceJobId, request)` requires three things: who asked, why, and a stable request
+`Admin.redrive` requires the actor, reason, and a stable request
 ID. Workhorse records attribution; your operator layer must authorize the actor before calling.
 
 <Tabs items={["TypeScript", "Python", "Go"]}>
@@ -89,7 +89,7 @@ budget, and execution timeout. It deliberately does not copy attempts, errors, c
 waits, cancellation state, or the old deadline — the new job starts clean.
 
 The source job stays exactly as it failed. `job_redrive` stores the lineage edge, and
-`admin.getRedriveLineage(jobId)` walks the connected graph in either direction, so you can trace
+`Admin.getRedriveLineage` walks the connected graph in either direction, so you can trace
 a running job back to the failure that spawned it — or forward through repeated redrives.
 
 ## Repeat safely
@@ -104,7 +104,7 @@ become durable payload — operator views still get safe diagnostics.
 
 ## Work through a backlog
 
-`admin.redriveMany(filter, request, options)` processes a bounded page of matching failures in
+`Admin.redriveMany` processes a bounded page of matching failures in
 stable order. Start with a dry run:
 
 <Tabs items={["TypeScript", "Python", "Go"]}>
@@ -112,16 +112,16 @@ stable order. Start with a dry run:
     ```ts
     const filter = { queue: "billing", errorName: "ProviderTimeout" };
     const audit = { actor: actor.email, reason: "provider incident resolved", requestId: incidentId };
-    const preview = await admin.redriveMany(filter, audit, { dryRun: true, limit: 100 });
-    const page = await admin.redriveMany(filter, audit, { limit: 100 });
+    const preview = await admin.redriveMany(filter, audit, { dryRun: true, limit: pageSize });
+    const page = await admin.redriveMany(filter, audit, { limit: pageSize });
     ```
   </Tab>
   <Tab value="Python">
     ```python
     filter = DeadLetterFilter(queue="billing", error_name="ProviderTimeout")
     audit = AdminAudit(actor.email, "provider incident resolved", incident_id)
-    preview = admin.redrive_many(filter, audit, BulkRedriveOptions(dry_run=True, limit=100))
-    page = admin.redrive_many(filter, audit, BulkRedriveOptions(limit=100))
+    preview = admin.redrive_many(filter, audit, BulkRedriveOptions(dry_run=True, limit=page_size))
+    page = admin.redrive_many(filter, audit, BulkRedriveOptions(limit=page_size))
     ```
   </Tab>
   <Tab value="Go">
@@ -131,9 +131,9 @@ stable order. Start with a dry run:
         Actor: actor.Email, Reason: "provider incident resolved", RequestID: incidentID,
     }
     preview, err := admin.RedriveMany(ctx, filter, audit, workhorse.BulkRedriveOptions{
-        DryRun: true, Limit: 100,
+        DryRun: true, Limit: pageSize,
     })
-    page, err := admin.RedriveMany(ctx, filter, audit, workhorse.BulkRedriveOptions{Limit: 100})
+    page, err := admin.RedriveMany(ctx, filter, audit, workhorse.BulkRedriveOptions{Limit: pageSize})
     ```
   </Tab>
 </Tabs>

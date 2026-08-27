@@ -98,7 +98,7 @@ through its immutable creation order, then reads each job's current state from `
 state indexes on `job_runtime`. Both history relations are partitioned by day and retired by
 retention policy, independently of live dispatch.
 
-Inside a handler, `HandlerContext.checkpoint(name, operation)` records a named completed stage.
+Inside a handler, `HandlerContext.checkpoint` records a named completed stage.
 The shorter `context.checkpoint` form in examples refers to that same durable boundary.
 
 ## Next

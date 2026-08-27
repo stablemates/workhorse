@@ -26,8 +26,8 @@ await worker.run()
 
 ## Slots and concurrency
 
-A worker has a fixed number of slots, set by `concurrency`. One slot runs one job. By
-default a worker runs one job at a time, and you can raise it.
+A worker has a fixed number of slots, set by `concurrency`. One slot runs one job. The
+default is conservative, and you can raise it.
 
 Each pass, the worker asks PostgreSQL to fill its free slots in one claim batch. PostgreSQL
 still checks every job independently, so ordering and admission policies apply to each one.
@@ -120,12 +120,12 @@ temporary database error cannot silently resume claims that an operator stopped.
 
 Two different things share the word "pause":
 
-- **Local**: TypeScript and Python code can call `pause()` on a worker object. Claims stop; running
+- **Local**: TypeScript and Python code can call `Worker.pause`. Claims stop; running
   jobs finish.
 - **Operator**: someone clicks pause in the dashboard. That's stored in the database, and
   the worker picks it up on its next refresh.
 
-The split matters. A worker cannot clear an operator pause by calling `resume()` — otherwise
+The split matters. A worker cannot clear an operator pause by calling `Worker.resume` — otherwise
 pausing a fleet from a dashboard would be undone by the fleet itself. But an operator pause
 only lasts as long as that process does: restart the worker and it starts fresh, unpaused.
 
