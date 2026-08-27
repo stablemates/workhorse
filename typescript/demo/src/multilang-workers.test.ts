@@ -38,8 +38,12 @@ describe("multilanguage demo worker topology", () => {
       ],
     );
 
-    expect(dockerfile).toContain("FROM golang:1.25-alpine AS go-build");
-    expect(dockerfile).toContain("FROM python:3.14-alpine AS python-build");
+    expect(dockerfile).toContain("FROM golang:1.25-alpine@sha256:");
+    expect(dockerfile).toContain("FROM python:3.14-alpine@sha256:");
+    expect(dockerfile).toContain("FROM ghcr.io/astral-sh/uv:0.8.9@sha256:");
+    expect(dockerfile).toContain("COPY python/pyproject.toml python/uv.lock ./python/");
+    expect(dockerfile).toContain("--locked");
+    expect(dockerfile).toContain("--require-hashes");
     expect(entrypoint).toContain("workhorse-go-demo-worker");
     expect(entrypoint).toContain("workhorse-python-worker.py");
     expect(developmentLauncher).toContain('"./examples/demo-worker"');

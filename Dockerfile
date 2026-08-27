@@ -4,11 +4,25 @@ WORKDIR /workhorse/go
 COPY go/ ./
 RUN CGO_ENABLED=0 go build -o /opt/workhorse-go-demo-worker ./examples/demo-worker
 
+FROM ghcr.io/astral-sh/uv:0.8.9@sha256:cda9608307dbbfc1769f3b6b1f9abf5f1360de0be720f544d29a7ae2863c47ef AS uv
+
 FROM python:3.14-alpine@sha256:05b2b8b732ecd268fee8727a369f936f022d1321b59befd13c30ede22769dcdc AS python-build
 
+COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /workhorse
-COPY python/ ./python/
-RUN pip install --no-cache-dir --target /opt/workhorse-python ./python
+COPY python/pyproject.toml python/uv.lock ./python/
+RUN uv export \
+      --project python \
+      --locked \
+      --no-dev \
+      --no-emit-project \
+      --quiet \
+      --output-file /tmp/requirements.txt \
+  && uv pip install \
+      --require-hashes \
+      --target /opt/workhorse-python \
+      --requirement /tmp/requirements.txt
+COPY python/src/workhorse/ /opt/workhorse-python/workhorse/
 
 FROM node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf AS build
 
