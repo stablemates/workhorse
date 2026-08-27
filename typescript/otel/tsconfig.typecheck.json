@@ -1,0 +1,13 @@
+{
+  "extends": [
+    "./tsconfig.json",
+    "../../tsconfig.source-paths.json",
+    "../../tsconfig.typecheck-base.json"
+  ],
+  "compilerOptions": {
+    "outDir": "../../.build/typecheck/otel",
+    "rootDir": "../..",
+    "tsBuildInfoFile": "../../.build/typecheck/otel.tsbuildinfo"
+  },
+  "references": [{ "path": "../core/tsconfig.source.json" }]
+}

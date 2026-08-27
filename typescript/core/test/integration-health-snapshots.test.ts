@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { metrics } from "@opentelemetry/api";
+import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
 import {
   AggregationTemporality,
   type DataPoint,
@@ -12,6 +13,8 @@ import { WorkhorseMetricsObserver } from "../src/index.js";
 import { EXTERNAL_WAIT_REJECTION_WINDOW_MS } from "../src/types.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 import { WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
+
+registerOpenTelemetry();
 
 const { defaultRetentionPolicy, pool, queue, admin, adminAudit } = createIntegrationTestContext(
   import.meta.url,

@@ -43,6 +43,12 @@ OpenTelemetry providers and exporters, while Go applications also pass an applic
 `log/slog` logger through `WorkerOptions.Logger`. Without a configured provider, telemetry stays
 inert and worker behavior is unchanged.
 
+TypeScript applications install `@stablemates/workhorse-otel` and compatible OpenTelemetry API
+peers. Configure the global SDK providers first, then call `registerOpenTelemetry()` once during
+process startup. Importing core or the adapter has no registration side effect, and a competing
+active provider is rejected. Keep the returned cleanup as `unregisterTelemetry`, then call
+`unregisterTelemetry()` after workers and observers stop.
+
 Worker metrics use queue, job type, and a closed outcome vocabulary. Job IDs remain on sampled
 spans and structured events, while payloads, results, and error messages never enter telemetry.
 

@@ -148,6 +148,14 @@ try {
     await readFile(path.join(extracted, "package", "package.json"), "utf8"),
   ) as Record<string, unknown>;
   const coreManifest = JSON.stringify(corePackage);
+  const coreRuntimeDependencies = JSON.stringify({
+    dependencies: corePackage.dependencies,
+    optionalDependencies: corePackage.optionalDependencies,
+    peerDependencies: corePackage.peerDependencies,
+  });
+  if (coreRuntimeDependencies.includes('"@opentelemetry/')) {
+    throw new Error("The packed core package must not declare an OpenTelemetry dependency");
+  }
   if (
     JSON.stringify(corePackage.bin) !== JSON.stringify({ workhorse: "./dist/src/cli/workhorse.js" })
   ) {
@@ -167,12 +175,51 @@ try {
     if (!file.endsWith(".js")) continue;
     const source = await readFile(file, "utf8");
     if (
+      file.includes(`${path.sep}dist${path.sep}src${path.sep}`) &&
+      /from\s+["']@opentelemetry\//.test(source)
+    ) {
+      throw new Error(`The packed core package contains an OpenTelemetry import in ${file}`);
+    }
+    if (
       /^\s*(?:import|export)\s.+\sfrom\s+["'](?:drizzle-orm(?:\/|["'])|@prisma\/client(?:\/|["'])|typeorm(?:\/|["'])|kysely(?:\/|["'])|hono(?:\/|["']))/m.test(
         source,
       )
     ) {
       throw new Error(`The packed core package contains an ecosystem import in ${file}`);
     }
+  }
+
+  const coreOnlyConsumer = path.join(scratch, "core-only-consumer");
+  await mkdir(coreOnlyConsumer);
+  await writeFile(
+    path.join(coreOnlyConsumer, "package.json"),
+    JSON.stringify({
+      name: "workhorse-core-only-consumer",
+      private: true,
+      type: "module",
+      dependencies: {
+        "@stablemates/workhorse": `file:${coreTarball}`,
+        "@stablemates/workhorse-dashboard-contract": `file:${tarballFor("@stablemates/workhorse-dashboard-contract")}`,
+      },
+      pnpm: {
+        autoInstallPeers: false,
+        overrides: {
+          "@stablemates/workhorse-dashboard-contract": `file:${tarballFor("@stablemates/workhorse-dashboard-contract")}`,
+        },
+      },
+    }),
+  );
+  await writeFile(
+    path.join(coreOnlyConsumer, "smoke.mjs"),
+    'import { Queue } from "@stablemates/workhorse";\nif (typeof Queue !== "function") throw new Error("core import failed");\n',
+  );
+  await run("pnpm", ["install", "--ignore-scripts", "--frozen-lockfile=false"], coreOnlyConsumer);
+  await run("node", ["smoke.mjs"], coreOnlyConsumer);
+  try {
+    await readdir(path.join(coreOnlyConsumer, "node_modules", "@opentelemetry"));
+    throw new Error("The core-only consumer installed OpenTelemetry");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 
   const dashboardExtracted = path.join(scratch, "dashboard");
@@ -242,6 +289,9 @@ try {
           "react-dom": "19.1.1",
           "@types/react": "19.1.10",
           "@types/react-dom": "19.1.7",
+          "@opentelemetry/api": "1.9.1",
+          "@opentelemetry/api-logs": "0.221.0",
+          "@opentelemetry/sdk-metrics": "2.10.0",
           vite: "7.1.7",
         },
         pnpm: {
@@ -281,6 +331,7 @@ import { createPrismaAdapter } from "@stablemates/workhorse-prisma";
 import { createTypeOrmAdapter } from "@stablemates/workhorse-typeorm";
 import { createKyselyAdapter } from "@stablemates/workhorse-kysely";
 import { defineWorkerProcess, Pool } from "@stablemates/workhorse";
+import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
 import type { DashboardClient, DashboardProps } from "@stablemates/workhorse-dashboard";
 import { createDashboardHost, dashboardNodeMiddleware } from "@stablemates/workhorse-dashboard/server";
 import type { DashboardNodeMiddleware } from "@stablemates/workhorse-dashboard/server";
@@ -294,6 +345,7 @@ import type { DataSource, EntityManager } from "typeorm";
 import type { Kysely, Transaction } from "kysely";
 
 const pool = new Pool();
+const unregisterOpenTelemetry = registerOpenTelemetry();
 void describeRetryPolicy(null);
 const db = drizzle({ client: pool });
 const adapter = createDrizzleAdapter(db);
@@ -337,6 +389,7 @@ const dashboardCountsPromise: Promise<DashboardTaskCounts> = dashboardClient.tas
 void dashboardProps;
 void dashboardCountsPromise;
 void workerProcess;
+unregisterOpenTelemetry();
 `,
   );
   const prismaDirectory = path.join(consumer, "prisma");
@@ -363,6 +416,28 @@ datasource db {
   await writeFile(
     path.join(consumer, "agentic-flow.mjs"),
     await readFile(path.join(repository, "typescript", "examples", "agentic-flow.mjs"), "utf8"),
+  );
+  await writeFile(
+    path.join(consumer, "otel-smoke.mjs"),
+    `import assert from "node:assert/strict";
+import { metrics } from "@opentelemetry/api";
+import { AggregationTemporality, InMemoryMetricExporter, MeterProvider, PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
+import { Queue } from "@stablemates/workhorse";
+import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
+
+const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60000 })] });
+metrics.setGlobalMeterProvider(provider);
+const unregister = registerOpenTelemetry();
+const queue = new Queue({ query: async () => ({ rows: [{ ordinal: 1, job_id: "job-1", outcome: "accepted" }] }) });
+await queue.enqueue("packed.telemetry", null);
+await provider.forceFlush();
+const names = exporter.getMetrics().flatMap((resource) => resource.scopeMetrics).flatMap((scope) => scope.metrics).map((metric) => metric.descriptor.name);
+assert.ok(names.includes("workhorse.jobs.enqueued"));
+unregister();
+await provider.shutdown();
+metrics.disable();
+`,
   );
   await writeFile(
     path.join(consumer, "dashboard-auth.mjs"),
@@ -563,6 +638,7 @@ try {
     throw new Error("The packed Workhorse CLI did not expose all commands");
   }
   await run("node", ["integration.mjs"], consumer);
+  await run("node", ["otel-smoke.mjs"], consumer);
   await run("node", ["dashboard-development.mjs"], consumer);
   const agenticFlow = JSON.parse(
     await run("node", ["agentic-flow.mjs"], consumer, {

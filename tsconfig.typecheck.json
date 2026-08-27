@@ -8,6 +8,7 @@
     { "path": "typescript/kysely/tsconfig.typecheck.json" },
     { "path": "typescript/prisma/tsconfig.typecheck.json" },
     { "path": "typescript/typeorm/tsconfig.typecheck.json" },
+    { "path": "typescript/otel/tsconfig.typecheck.json" },
     { "path": "typescript/dashboard-server/tsconfig.typecheck.json" },
     { "path": "dashboard/app/tsconfig.typecheck.json" },
     { "path": "typescript/dashboard/tsconfig.typecheck.json" },

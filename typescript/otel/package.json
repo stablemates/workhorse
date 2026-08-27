@@ -1,0 +1,54 @@
+{
+  "name": "@stablemates/workhorse-otel",
+  "version": "0.1.0-beta.1",
+  "description": "Public beta free OpenTelemetry adapter for Workhorse",
+  "homepage": "https://workhorse.run",
+  "bugs": {
+    "url": "https://github.com/stablemates/workhorse/issues"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stablemates/workhorse.git",
+    "directory": "typescript/otel"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "workhorse-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:dev": "pnpm build",
+    "typecheck": "tsc -p tsconfig.typecheck.json"
+  },
+  "devDependencies": {
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/api-logs": "0.221.0",
+    "@stablemates/workhorse": "workspace:*",
+    "typescript": "^5.8.3"
+  },
+  "peerDependencies": {
+    "@opentelemetry/api": ">=1.9.0 <2",
+    "@opentelemetry/api-logs": ">=0.200.0 <0.300.0",
+    "@stablemates/workhorse": ">=0.1.0-beta.1 <0.2.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

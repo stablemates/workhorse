@@ -1,4 +1,5 @@
 import { metrics } from "@opentelemetry/api";
+import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
 import {
   AggregationTemporality,
   InMemoryMetricExporter,
@@ -17,6 +18,7 @@ const reader = new PeriodicExportingMetricReader({
 });
 const provider = new MeterProvider({ readers: [reader] });
 metrics.setGlobalMeterProvider(provider);
+registerOpenTelemetry();
 
 function queryResult<R extends QueryResultRow>(rows: R[]): QueryResult<R> {
   return {

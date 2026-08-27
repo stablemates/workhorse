@@ -48,9 +48,25 @@ export {
   MAX_TRACE_CONTEXT_BYTES,
   METRIC_ATTRIBUTE_CARDINALITY_LIMIT,
   registerQueueMetrics,
+  registerTelemetryProvider,
   TRACE_ATTRIBUTE_COUNT_LIMIT,
 } from "./telemetry.js";
-export type { QueueMetricSnapshot, QueueMetricSource } from "./telemetry.js";
+export type {
+  QueueMetricSnapshot,
+  QueueMetricSource,
+  TelemetryAttributes,
+  TelemetryAttributeValue,
+  TelemetryContext,
+  TelemetryCounter,
+  TelemetryMetricOptions,
+  TelemetryObservation,
+  TelemetryObservationDefinition,
+  TelemetryRecorder,
+  TelemetrySpanKind,
+  WorkhorseLogEvent,
+  WorkhorseTelemetryProvider,
+  WorkhorseTelemetrySpan,
+} from "./telemetry.js";
 export { Admin, PurgeIdempotencyConflictError } from "./admin.js";
 export type {
   AdminAudit,

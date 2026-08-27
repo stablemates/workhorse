@@ -27,6 +27,7 @@
     "@stablemates/workhorse": "workspace:*",
     "@stablemates/workhorse-dashboard": "workspace:*",
     "@stablemates/workhorse-drizzle": "workspace:*",
+    "@stablemates/workhorse-otel": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.31",
     "pg": "^8.16.3"

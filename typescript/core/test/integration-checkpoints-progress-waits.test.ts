@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { logs, type LogRecord, type LoggerProvider } from "@opentelemetry/api-logs";
+import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   MAX_CHECKPOINT_VALUE_BYTES,
@@ -9,6 +10,8 @@ import {
   Worker,
 } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
+
+registerOpenTelemetry();
 
 const { pool, queue, admin } = createIntegrationTestContext(import.meta.url);
 const records: LogRecord[] = [];

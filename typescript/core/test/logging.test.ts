@@ -1,10 +1,12 @@
 import { logs, type LogRecord, type LoggerProvider } from "@opentelemetry/api-logs";
+import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Admin } from "../src/admin.js";
 import { Queue } from "../src/queue.js";
 import type { Queryable } from "../src/types.js";
 import { Worker } from "../src/worker.js";
 
+registerOpenTelemetry();
 const records: LogRecord[] = [];
 const provider: LoggerProvider = {
   getLogger: () => ({

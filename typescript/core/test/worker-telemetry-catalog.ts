@@ -1,4 +1,5 @@
 import { metrics } from "@opentelemetry/api";
+import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
 import {
   AggregationTemporality,
   InMemoryMetricExporter,
@@ -12,6 +13,8 @@ import {
   recordHeartbeatFailure,
   telemetryMetrics,
 } from "../src/telemetry.js";
+
+registerOpenTelemetry();
 
 const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
 const provider = new MeterProvider({

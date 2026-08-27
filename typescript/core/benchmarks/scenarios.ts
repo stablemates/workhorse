@@ -19,6 +19,7 @@ import {
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
+import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
 import type { Notification, PoolClient, QueryResult, QueryResultRow } from "pg";
 import {
   Admin,
@@ -34,6 +35,8 @@ import {
   Worker,
 } from "../src/index.js";
 import type { ClaimedJob, Failpoint, Queryable, QueueHealth, QueueOptions } from "../src/index.js";
+
+registerOpenTelemetry();
 
 type AdminApi = Pick<Admin, keyof Admin>;
 

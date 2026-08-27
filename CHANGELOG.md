@@ -1,10 +1,10 @@
 # Changelog
 
-This changelog covers eight published packages on npm. They are versioned in lockstep and released
+This changelog covers nine published packages on npm. They are versioned in lockstep and released
 from one tag:
 `@stablemates/workhorse`, `@stablemates/workhorse-drizzle`, `@stablemates/workhorse-prisma`, `@stablemates/workhorse-typeorm`,
-`@stablemates/workhorse-kysely`, `@stablemates/workhorse-dashboard`, `@stablemates/workhorse-dashboard-server`, and
-`@stablemates/workhorse-dashboard-contract`. The Python distribution and Go module release
+`@stablemates/workhorse-kysely`, `@stablemates/workhorse-otel`, `@stablemates/workhorse-dashboard`,
+`@stablemates/workhorse-dashboard-server`, and `@stablemates/workhorse-dashboard-contract`. The Python distribution and Go module release
 independently, so their notes live in [`python/CHANGELOG.md`](python/CHANGELOG.md) and
 [`go/CHANGELOG.md`](go/CHANGELOG.md). Each entry states its required schema version and upgrade steps.
 
@@ -22,7 +22,7 @@ First published line. Requires **schema v1**, Node.js **22 or 24**, PostgreSQL *
 
 ### Changed
 
-- All eight npm packages, the Python distribution, and the Go module use the Apache
+- All nine npm packages, the Python distribution, and the Go module use the Apache
   License, Version 2.0. Contributions require the agreement in `CLA.md`.
 
 ### Added
@@ -91,6 +91,8 @@ First published line. Requires **schema v1**, Node.js **22 or 24**, PostgreSQL *
   node-postgres notification connections.
 - `@stablemates/workhorse-kysely`: Kysely provider with caller-owned transactions and optional node-postgres
   notification connections.
+- `@stablemates/workhorse-otel`: explicit OpenTelemetry registration for the vendor-neutral core
+  telemetry contract, with host-owned API peers and no import side effect.
 - `@stablemates/workhorse-dashboard`: the operator dashboard, its framework-neutral `Request`/`Response` host,
   a settings page with audited policy changes, and a Connect-style Node bridge for Express,
   Connect, and Fastify.

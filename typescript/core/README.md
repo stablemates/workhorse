@@ -43,6 +43,9 @@ named checkpoints prevent completed application stages from running after a late
 This package owns the PostgreSQL schema, protocol client, worker runtime, CLI, and operator API. Run
 schema changes as a deployment step; application and worker processes should only check compatibility.
 ORM applications can add a provider package to enqueue through an existing application transaction.
+Core has no telemetry vendor dependency. Applications that use OpenTelemetry install
+`@stablemates/workhorse-otel`, configure their global SDK providers, and call
+`registerOpenTelemetry()` during process startup.
 
 ## Next
 

@@ -13,6 +13,7 @@ import {
   type TextMapGetter,
 } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
 import { W3CTraceContextPropagator } from "@opentelemetry/core";
 import {
   BasicTracerProvider,
@@ -24,6 +25,8 @@ import { Queue } from "../src/queue.js";
 import type { ClaimedJob, Queryable } from "../src/types.js";
 import { Worker } from "../src/worker.js";
 import { registerQueueMetrics, type QueueMetricSource } from "../src/telemetry.js";
+
+registerOpenTelemetry();
 
 const spanExporter = new InMemorySpanExporter();
 const contextManager = new AsyncLocalStorageContextManager();

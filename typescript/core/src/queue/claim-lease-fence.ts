@@ -1,5 +1,4 @@
 import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
-import type { Span } from "@opentelemetry/api";
 import { expectOneRow } from "../errors.js";
 import {
   jobMetricAttributes,
@@ -9,6 +8,7 @@ import {
   recordCancellation,
   recordHeartbeatFailure,
   telemetryMetrics,
+  type WorkhorseTelemetrySpan,
   withSpan,
 } from "../telemetry.js";
 import type {
@@ -98,7 +98,10 @@ function errorEnvelope(error: unknown, redactDetails = false): Json {
   return { name: "NonErrorThrown", message: String(error) };
 }
 
-export function recordRecoveryTelemetry(span: Span, recovery: RecoveryTelemetry): void {
+export function recordRecoveryTelemetry(
+  span: WorkhorseTelemetrySpan,
+  recovery: RecoveryTelemetry,
+): void {
   span.setAttributes({
     "workhorse.recovery.rows_affected": recovery.rows_affected,
     "workhorse.recovery.expired_leases": recovery.expired_leases,
@@ -160,7 +163,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
   }
 
   private recordClaims(
-    span: Span,
+    span: WorkhorseTelemetrySpan,
     jobs: ClaimedJob[],
     queueName: string,
     workerId: string,

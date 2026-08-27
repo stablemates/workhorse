@@ -4,6 +4,20 @@ Workhorse emits OpenTelemetry traces, logs, and metrics through the standard lan
 application chooses the SDK, log handler, and backend, so telemetry does not affect queue correctness.
 Python workers use the optional `telemetry` package extra. The Go worker uses `log/slog` for logs.
 
+TypeScript keeps OpenTelemetry outside core. Install `@stablemates/workhorse-otel` with compatible
+OpenTelemetry API packages. Configure your global SDK providers, then call
+`registerOpenTelemetry()` once during process startup. Importing either package has no side effect,
+and core stays silent when no provider is registered.
+
+```ts
+import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
+
+const unregisterTelemetry = registerOpenTelemetry();
+```
+
+Stop workers and metric observers before calling `unregisterTelemetry()` during shutdown. A second
+active provider is rejected, so two libraries cannot silently replace each other's telemetry.
+
 ## Follow a job from enqueue to execution
 
 When application code enqueues a job, `Queue.enqueue` creates an enqueue span and captures its W3C

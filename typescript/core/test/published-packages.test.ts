@@ -47,6 +47,7 @@ describe("the derived package list", () => {
       "@stablemates/workhorse-dashboard-server",
       "@stablemates/workhorse-drizzle",
       "@stablemates/workhorse-kysely",
+      "@stablemates/workhorse-otel",
       "@stablemates/workhorse-prisma",
       "@stablemates/workhorse-typeorm",
     ]);

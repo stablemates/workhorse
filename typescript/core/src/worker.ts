@@ -2,7 +2,6 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { isDeepStrictEqual } from "node:util";
-import { SpanKind, SpanStatusCode, type Span } from "@opentelemetry/api";
 import { WorkhorseError } from "./errors.js";
 import { Queue } from "./queue.js";
 import { errorForTelemetry, type FailureStatus } from "./queue/claim-lease-fence.js";
@@ -27,6 +26,7 @@ import {
   recordHandlerExecution,
   recordMaintenanceMetrics,
   telemetryMetrics,
+  type WorkhorseTelemetrySpan,
   withSpan,
   type JobExecutionOutcome,
 } from "./telemetry.js";
@@ -1035,13 +1035,13 @@ export class Worker {
         }
       },
       extractTraceContext(job.traceContext),
-      SpanKind.CONSUMER,
+      "consumer",
     );
   }
 
   private async executeJobWithinSpan(
     job: ClaimedJob,
-    span: Span,
+    span: WorkhorseTelemetrySpan,
     activation: { outcome: JobExecutionOutcome },
   ): Promise<void> {
     // afterClaim is outside the committed claim transaction. Throwing here leaves the lease exactly
@@ -1173,7 +1173,7 @@ export class Worker {
       if (!handler) {
         const error = new Error(`No handler registered for ${job.type}`);
         span.recordException(error);
-        span.setStatus({ code: SpanStatusCode.ERROR });
+        span.setStatus("error");
         const failed = await this.queue.fail(job, this.workerId, error);
         span.setAttribute("workhorse.handler.outcome", failed);
         if (failed === "cancel_requested") {
@@ -1548,7 +1548,7 @@ export class Worker {
         return;
       }
       span.recordException(errorForTelemetry(error, job.redactErrorDetails));
-      span.setStatus({ code: SpanStatusCode.ERROR });
+      span.setStatus("error");
       const delay =
         typeof this.options.retryDelayMs === "function"
           ? this.options.retryDelayMs(job.attempt, job)

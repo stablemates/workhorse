@@ -10,6 +10,7 @@ const {
 const { OTLPLogExporter } = require("@opentelemetry/exporter-logs-otlp-http");
 const { BatchLogRecordProcessor } = require("@opentelemetry/sdk-logs");
 const { NodeSDK } = require("@opentelemetry/sdk-node");
+const { registerOpenTelemetry } = require("@stablemates/workhorse-otel");
 const { RotatingFileLogExporter } = require("./file-log-exporter.cjs");
 
 const telemetryEnabled = process.env.WORKHORSE_DEMO_TELEMETRY === "true";
@@ -79,9 +80,11 @@ const sdk = new NodeSDK({
   logRecordProcessors,
 });
 sdk.start();
+const unregisterOpenTelemetry = registerOpenTelemetry();
 
 let shuttingDown;
 function shutdown() {
+  unregisterOpenTelemetry();
   shuttingDown ??= sdk.shutdown();
   return shuttingDown;
 }

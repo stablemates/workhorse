@@ -1,5 +1,4 @@
 import { SQL_STATEMENTS } from "./queue/sql-catalogue.generated.js";
-import { diag } from "@opentelemetry/api";
 import { lazyGauge } from "./telemetry.js";
 import { EXTERNAL_WAIT_REJECTION_WINDOW_MS, type Queryable } from "./types.js";
 
@@ -97,7 +96,7 @@ export class WorkhorseMetricsObserver {
   ) {
     this.intervalMs = options.intervalMs ?? 10_000;
     this.onError =
-      options.onError ?? ((error) => diag.error("Workhorse metrics collection failed", error));
+      options.onError ?? ((error) => console.error("Workhorse metrics collection failed", error));
     if (!Number.isSafeInteger(this.intervalMs) || this.intervalMs < 1_000) {
       throw new RangeError("metrics intervalMs must be a safe integer of at least 1000");
     }

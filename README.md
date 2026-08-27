@@ -68,6 +68,8 @@ availability must be independent from the application database.
   [`@stablemates/workhorse-kysely`](typescript/kysely) enqueue through ORM-owned transactions.
 - [`@stablemates/workhorse-dashboard`](typescript/dashboard) is the React operator dashboard and
   compatibility facade. Its server and type contract are also published for package composition.
+- [`@stablemates/workhorse-otel`](typescript/otel) connects core's vendor-neutral telemetry to the
+  host application's OpenTelemetry API providers.
 - The [Python SDK](python) and [Go SDK](go) implement the same PostgreSQL protocol.
 
 ## Learn and operate

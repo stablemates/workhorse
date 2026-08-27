@@ -7,6 +7,7 @@ import {
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { Pool } from "pg";
+import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
 
 import { Queue } from "../src/queue.js";
 
@@ -23,6 +24,7 @@ const contextManager = new AsyncLocalStorageContextManager().enable();
 context.setGlobalContextManager(contextManager);
 propagation.setGlobalPropagator(new W3CTraceContextPropagator());
 trace.setGlobalTracerProvider(provider);
+registerOpenTelemetry();
 
 const pool = new Pool({ connectionString: databaseUrl });
 try {

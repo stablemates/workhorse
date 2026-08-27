@@ -1,12 +1,15 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { context as otelContext, trace } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Queue } from "../src/queue.js";
 import { Worker } from "../src/worker.js";
 import { readDashboardJobDetail } from "../../dashboard-server/src/server/read-model.js";
 import { dashboardDatabase } from "../../dashboard-server/src/server/sql.js";
 import { createIntegrationTestContext } from "./support/integration.js";
+
+registerOpenTelemetry();
 
 const { pool, queue, admin } = createIntegrationTestContext(import.meta.url);
 const contextManager = new AsyncLocalStorageContextManager();

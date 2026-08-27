@@ -1,22 +1,3 @@
-import {
-  SpanKind,
-  SpanStatusCode,
-  context,
-  metrics,
-  propagation,
-  trace,
-  type Attributes,
-  type BatchObservableCallback,
-  type Context,
-  type Counter,
-  type Gauge,
-  type Histogram,
-  type MetricOptions,
-  type Span,
-  type TextMapGetter,
-  type TextMapSetter,
-} from "@opentelemetry/api";
-import { SeverityNumber, logs, type LogAttributes, type Logger } from "@opentelemetry/api-logs";
 import type {
   CancelStatus,
   ClaimedJob,
@@ -25,7 +6,129 @@ import type {
   TraceContext,
 } from "./types.js";
 
-const INSTRUMENTATION_NAME = "@stablemates/workhorse";
+export type TelemetryAttributeValue =
+  | string
+  | number
+  | boolean
+  | readonly string[]
+  | readonly number[]
+  | readonly boolean[];
+export type TelemetryAttributes = Readonly<Record<string, TelemetryAttributeValue>>;
+export type TelemetrySpanKind = "internal" | "consumer";
+export type TelemetryContext = unknown;
+
+export interface TelemetryMetricOptions {
+  description: string;
+  unit: string;
+}
+
+export interface TelemetryCounter {
+  add(value: number, attributes?: TelemetryAttributes): void;
+}
+
+export interface TelemetryRecorder {
+  record(value: number, attributes?: TelemetryAttributes): void;
+}
+
+export interface WorkhorseTelemetrySpan {
+  setAttribute(name: string, value: TelemetryAttributeValue): this;
+  setAttributes(attributes: TelemetryAttributes): this;
+  setStatus(status: "error"): this;
+  recordException(error: unknown): void;
+}
+
+export interface TelemetryObservationDefinition extends TelemetryMetricOptions {
+  name: string;
+}
+
+export interface TelemetryObservation {
+  name: string;
+  value: number;
+  attributes?: TelemetryAttributes;
+}
+
+export interface WorkhorseTelemetryProvider {
+  emitLog(record: {
+    severity: "debug" | "info" | "warn";
+    eventName: WorkhorseLogEvent;
+    body: string;
+    attributes: TelemetryAttributes;
+  }): void;
+  createCounter(name: string, options: TelemetryMetricOptions): TelemetryCounter;
+  createHistogram(name: string, options: TelemetryMetricOptions): TelemetryRecorder;
+  createGauge(name: string, options: TelemetryMetricOptions): TelemetryRecorder;
+  registerObservations(
+    definitions: readonly TelemetryObservationDefinition[],
+    collect: () => Promise<readonly TelemetryObservation[]>,
+  ): () => void;
+  activeContext(): TelemetryContext;
+  injectTraceContext(): TraceContext | null;
+  extractTraceContext(traceContext: TraceContext | null): TelemetryContext;
+  withSpan<T>(
+    name: string,
+    attributes: TelemetryAttributes,
+    operation: (span: WorkhorseTelemetrySpan) => Promise<T>,
+    parent: TelemetryContext,
+    kind: TelemetrySpanKind,
+  ): Promise<T>;
+}
+
+const noOpCounter: TelemetryCounter = { add() {} };
+const noOpRecorder: TelemetryRecorder = { record() {} };
+const noOpSpan: WorkhorseTelemetrySpan = {
+  setAttribute() {
+    return this;
+  },
+  setAttributes() {
+    return this;
+  },
+  setStatus() {
+    return this;
+  },
+  recordException() {},
+};
+const noOpTelemetryProvider: WorkhorseTelemetryProvider = {
+  emitLog() {},
+  createCounter: () => noOpCounter,
+  createHistogram: () => noOpRecorder,
+  createGauge: () => noOpRecorder,
+  registerObservations: () => () => {},
+  activeContext: () => undefined,
+  injectTraceContext: () => null,
+  extractTraceContext: () => undefined,
+  withSpan: async (_name, _attributes, operation) => operation(noOpSpan),
+};
+
+let telemetryProvider: WorkhorseTelemetryProvider = noOpTelemetryProvider;
+const queueMetricRegistrations = new Set<QueueMetricRegistration>();
+
+/** Register the one process-wide telemetry provider. */
+export function registerTelemetryProvider(provider: WorkhorseTelemetryProvider): () => void {
+  if (provider === noOpTelemetryProvider) {
+    throw new Error("The permanent no-op telemetry provider cannot be registered");
+  }
+  if (telemetryProvider !== noOpTelemetryProvider) {
+    throw new Error("A Workhorse telemetry provider is already registered");
+  }
+
+  telemetryProvider = provider;
+  try {
+    for (const registration of queueMetricRegistrations) registration.activate(provider);
+  } catch (error) {
+    for (const registration of queueMetricRegistrations) registration.deactivate();
+    telemetryProvider = noOpTelemetryProvider;
+    throw error;
+  }
+
+  let active = true;
+  return () => {
+    if (!active) return;
+    active = false;
+    if (telemetryProvider !== provider) return;
+    for (const registration of queueMetricRegistrations) registration.deactivate();
+    telemetryProvider = noOpTelemetryProvider;
+  };
+}
 
 export const MAX_TRACE_CONTEXT_BYTES = 1_024;
 /** Maximum span attributes Workhorse emits on any one span. */
@@ -33,26 +136,7 @@ export const TRACE_ATTRIBUTE_COUNT_LIMIT = 8;
 /** Upper bound applications should configure on each SDK metric stream. */
 export const METRIC_ATTRIBUTE_CARDINALITY_LIMIT = 2_000;
 
-const tracer = trace.getTracer(INSTRUMENTATION_NAME);
-
-function lazyLogger(): Pick<Logger, "emit"> {
-  let logger: Logger | undefined;
-  let provider = logs.getLoggerProvider();
-  return {
-    emit(record) {
-      const activeProvider = logs.getLoggerProvider();
-      if (logger === undefined || activeProvider !== provider) {
-        provider = activeProvider;
-        logger = provider.getLogger(INSTRUMENTATION_NAME);
-      }
-      logger.emit(record);
-    },
-  };
-}
-
-const telemetryLogger = lazyLogger();
-
-type WorkhorseLogEvent =
+export type WorkhorseLogEvent =
   | "workhorse.handler.batch_dispatched"
   | "workhorse.handler.batch_evidence_failed"
   | "workhorse.handler.finished"
@@ -105,69 +189,67 @@ type WorkhorseLogEvent =
   | "workhorse.worker_registry.pruned";
 
 function emitLog(
-  severityNumber: SeverityNumber,
-  severityText: "DEBUG" | "INFO" | "WARN",
+  severity: "debug" | "info" | "warn",
   eventName: WorkhorseLogEvent,
   body: string,
-  attributes: LogAttributes,
+  attributes: TelemetryAttributes,
 ): void {
-  telemetryLogger.emit({ severityNumber, severityText, eventName, body, attributes });
+  telemetryProvider.emitLog({ severity, eventName, body, attributes });
 }
 
 export function logDebug(
   eventName: WorkhorseLogEvent,
   body: string,
-  attributes: LogAttributes = {},
+  attributes: TelemetryAttributes = {},
 ): void {
-  emitLog(SeverityNumber.DEBUG, "DEBUG", eventName, body, attributes);
+  emitLog("debug", eventName, body, attributes);
 }
 
 export function logInfo(
   eventName: WorkhorseLogEvent,
   body: string,
-  attributes: LogAttributes = {},
+  attributes: TelemetryAttributes = {},
 ): void {
-  emitLog(SeverityNumber.INFO, "INFO", eventName, body, attributes);
+  emitLog("info", eventName, body, attributes);
 }
 
 export function logWarn(
   eventName: WorkhorseLogEvent,
   body: string,
-  attributes: LogAttributes = {},
+  attributes: TelemetryAttributes = {},
 ): void {
-  emitLog(SeverityNumber.WARN, "WARN", eventName, body, attributes);
+  emitLog("warn", eventName, body, attributes);
 }
 
 function lazyMetric<TInstrument, TArguments extends unknown[]>(
-  create: () => TInstrument,
+  create: (provider: WorkhorseTelemetryProvider) => TInstrument,
   invoke: (instrument: TInstrument, ...args: TArguments) => void,
 ): (...args: TArguments) => void {
   let instrument: TInstrument | undefined;
-  let provider = metrics.getMeterProvider();
+  let provider: WorkhorseTelemetryProvider | undefined;
   return (...args) => {
-    const activeProvider = metrics.getMeterProvider();
-    if (instrument === undefined || activeProvider !== provider) {
-      provider = activeProvider;
-      instrument = create();
+    if (instrument === undefined || telemetryProvider !== provider) {
+      provider = telemetryProvider;
+      instrument = create(provider);
     }
     invoke(instrument, ...args);
   };
 }
 
-function lazyCounter(name: string, options: MetricOptions): Pick<Counter, "add"> {
+function lazyCounter(name: string, options: TelemetryMetricOptions): TelemetryCounter {
   return {
     add: lazyMetric(
-      () => metrics.getMeter(INSTRUMENTATION_NAME).createCounter(name, options),
-      (instrument, ...args: Parameters<Counter["add"]>) => instrument.add(...args),
+      (provider) => provider.createCounter(name, options),
+      (instrument, ...args: Parameters<TelemetryCounter["add"]>) => instrument.add(...args),
     ),
   };
 }
 
-function lazyHistogram(name: string, options: MetricOptions): Pick<Histogram, "record"> {
+function lazyHistogram(name: string, options: TelemetryMetricOptions): TelemetryRecorder {
   return {
     record: lazyMetric(
-      () => metrics.getMeter(INSTRUMENTATION_NAME).createHistogram(name, options),
-      (instrument, ...args: Parameters<Histogram["record"]>) => instrument.record(...args),
+      (provider) => provider.createHistogram(name, options),
+      (instrument, ...args: Parameters<TelemetryRecorder["record"]>) => instrument.record(...args),
     ),
   };
 }
@@ -176,24 +258,14 @@ function lazyHistogram(name: string, options: MetricOptions): Pick<Histogram, "r
  * Synchronous gauge on the lazy lifecycle. Exported for `WorkhorseMetricsObserver`, which records
  * its own gauges rather than emitting through {@link telemetryMetrics}.
  */
-export function lazyGauge(name: string, options: MetricOptions): Pick<Gauge, "record"> {
+export function lazyGauge(name: string, options: TelemetryMetricOptions): TelemetryRecorder {
   return {
     record: lazyMetric(
-      () => metrics.getMeter(INSTRUMENTATION_NAME).createGauge(name, options),
-      (instrument, ...args: Parameters<Gauge["record"]>) => instrument.record(...args),
+      (provider) => provider.createGauge(name, options),
+      (instrument, ...args: Parameters<TelemetryRecorder["record"]>) => instrument.record(...args),
     ),
   };
 }
-
-const carrierSetter: TextMapSetter<Record<string, string>> = {
-  set(carrier, key, value) {
-    carrier[key.toLowerCase()] = value;
-  },
-};
-const carrierGetter: TextMapGetter<TraceContext> = {
-  keys: (carrier) => Object.keys(carrier),
-  get: (carrier, key) => carrier[key.toLowerCase() as keyof TraceContext],
-};
 
 export const telemetryMetrics = {
   enqueued: lazyCounter("workhorse.jobs.enqueued", {
@@ -358,7 +430,9 @@ export function recordHeartbeatFailure(status: Exclude<HeartbeatStatus, "accepte
   telemetryMetrics.heartbeatFailures.add(1, { "workhorse.heartbeat.status": status });
 }
 
-export function jobSpanAttributes(job: Pick<ClaimedJob, "id" | "type" | "attempt">): Attributes {
+export function jobSpanAttributes(
+  job: Pick<ClaimedJob, "id" | "type" | "attempt">,
+): TelemetryAttributes {
   return {
     "workhorse.job.id": job.id,
     "workhorse.job.type": job.type,
@@ -366,7 +440,7 @@ export function jobSpanAttributes(job: Pick<ClaimedJob, "id" | "type" | "attempt
   };
 }
 
-export function jobMetricAttributes(job: Pick<ClaimedJob, "queue" | "type">): Attributes {
+export function jobMetricAttributes(job: Pick<ClaimedJob, "queue" | "type">): TelemetryAttributes {
   return {
     "workhorse.queue.name": job.queue,
     "workhorse.job.type": job.type,
@@ -402,206 +476,252 @@ export interface QueueMetricSource {
   queueMetricSnapshot(): Promise<QueueMetricSnapshot[]>;
 }
 
-/** Register one database-wide asynchronous queue observation and return its cleanup function. */
-export function registerQueueMetrics(source: QueueMetricSource): () => void {
-  const activeMeter = metrics.getMeter(INSTRUMENTATION_NAME);
-  const queueDepth = activeMeter.createObservableGauge("workhorse.queue.depth", {
+const queueMetricDefinitions: readonly TelemetryObservationDefinition[] = [
+  {
+    name: "workhorse.queue.depth",
     description: "Current live work by dispatch state",
     unit: "{job}",
-  });
-  const oldestReadyAge = activeMeter.createObservableGauge("workhorse.queue.oldest_ready_age", {
+  },
+  {
+    name: "workhorse.queue.oldest_ready_age",
     description: "Age of the oldest ready job",
     unit: "ms",
-  });
-  const dependencyBlocked = activeMeter.createObservableGauge(
-    "workhorse.queue.dependencies.blocked",
-    { description: "Jobs waiting for prerequisite policy resolution", unit: "{job}" },
-  );
-  const dependencyPending = activeMeter.createObservableGauge(
-    "workhorse.queue.dependencies.pending_edges",
-    { description: "Unresolved prerequisite edges", unit: "{edge}" },
-  );
-  const dependencyFailed = activeMeter.createObservableGauge(
-    "workhorse.queue.dependencies.failed_resolutions",
-    { description: "Retained jobs failed by dependency policy", unit: "{job}" },
-  );
-  const dependencyCapped = activeMeter.createObservableGauge(
-    "workhorse.queue.dependencies.capped",
-    { description: "Whether dependency pressure values reached their scan limit", unit: "1" },
-  );
-  const childWaiting = activeMeter.createObservableGauge(
-    "workhorse.queue.children.waiting_parents",
-    {
-      description: "Parents suspended while linked children settle",
-      unit: "{job}",
-    },
-  );
-  const childPending = activeMeter.createObservableGauge("workhorse.queue.children.pending", {
+  },
+  {
+    name: "workhorse.queue.dependencies.blocked",
+    description: "Jobs waiting for prerequisite policy resolution",
+    unit: "{job}",
+  },
+  {
+    name: "workhorse.queue.dependencies.pending_edges",
+    description: "Unresolved prerequisite edges",
+    unit: "{edge}",
+  },
+  {
+    name: "workhorse.queue.dependencies.failed_resolutions",
+    description: "Retained jobs failed by dependency policy",
+    unit: "{job}",
+  },
+  {
+    name: "workhorse.queue.dependencies.capped",
+    description: "Whether dependency pressure values reached their scan limit",
+    unit: "1",
+  },
+  {
+    name: "workhorse.queue.children.waiting_parents",
+    description: "Parents suspended while linked children settle",
+    unit: "{job}",
+  },
+  {
+    name: "workhorse.queue.children.pending",
     description: "Linked children without a terminal outcome",
     unit: "{job}",
-  });
-  const childUnjoined = activeMeter.createObservableGauge(
-    "workhorse.queue.children.unjoined_results",
-    {
-      description: "Successful child results not yet consumed by their parent",
-      unit: "{result}",
-    },
-  );
-  const childFailed = activeMeter.createObservableGauge("workhorse.queue.children.failed_parents", {
+  },
+  {
+    name: "workhorse.queue.children.unjoined_results",
+    description: "Successful child results not yet consumed by their parent",
+    unit: "{result}",
+  },
+  {
+    name: "workhorse.queue.children.failed_parents",
     description: "Retained parents failed by linked child policy",
     unit: "{job}",
-  });
-  const childCanceled = activeMeter.createObservableGauge(
-    "workhorse.queue.children.canceled_parents",
-    {
-      description: "Retained parents canceled by linked child policy",
-      unit: "{job}",
-    },
-  );
-  const childCapped = activeMeter.createObservableGauge("workhorse.queue.children.capped", {
+  },
+  {
+    name: "workhorse.queue.children.canceled_parents",
+    description: "Retained parents canceled by linked child policy",
+    unit: "{job}",
+  },
+  {
+    name: "workhorse.queue.children.capped",
     description: "Whether child orchestration values reached their scan limit",
     unit: "1",
-  });
-  const concurrencyLimit = activeMeter.createObservableGauge("workhorse.queue.concurrency.limit", {
+  },
+  {
+    name: "workhorse.queue.concurrency.limit",
     description: "Configured queue concurrency limit",
     unit: "{job}",
-  });
-  const concurrencyActive = activeMeter.createObservableGauge(
-    "workhorse.queue.concurrency.active",
-    {
-      description: "Unexpired active jobs counted by queue concurrency admission",
-      unit: "{job}",
-    },
-  );
-  const concurrencyBlocked = activeMeter.createObservableGauge(
-    "workhorse.queue.concurrency.blocked_ready",
-    { description: "Bounded ready depth blocked by queue concurrency policy", unit: "{job}" },
-  );
-  const rateConfigured = activeMeter.createObservableGauge(
-    "workhorse.queue.rate_limit.configured",
-    { description: "Configured sustained queue start rate", unit: "{job}/s" },
-  );
-  const rateAvailable = activeMeter.createObservableGauge(
-    "workhorse.queue.rate_limit.available_tokens",
-    { description: "Refilled queue start tokens available now", unit: "{token}" },
-  );
-  const rateThrottled = activeMeter.createObservableGauge(
-    "workhorse.queue.rate_limit.throttled_ready",
-    { description: "Bounded ready depth waiting for rate-limit tokens", unit: "{job}" },
-  );
-  const rateNextEligibleDelay = activeMeter.createObservableGauge(
-    "workhorse.queue.rate_limit.next_eligible_delay",
-    { description: "Delay until the earliest sampled throttled job can start", unit: "ms" },
-  );
-  const instruments = [
-    queueDepth,
-    oldestReadyAge,
-    dependencyBlocked,
-    dependencyPending,
-    dependencyFailed,
-    dependencyCapped,
-    childWaiting,
-    childPending,
-    childUnjoined,
-    childFailed,
-    childCanceled,
-    childCapped,
-    concurrencyLimit,
-    concurrencyActive,
-    concurrencyBlocked,
-    rateConfigured,
-    rateAvailable,
-    rateThrottled,
-    rateNextEligibleDelay,
-  ];
-  const callback: BatchObservableCallback = async (result) => {
-    for (const snapshot of await source.queueMetricSnapshot()) {
-      const queueAttribute = { "workhorse.queue.name": snapshot.queue };
-      result.observe(queueDepth, snapshot.readyDepth, {
-        ...queueAttribute,
-        "workhorse.job.state": "ready",
-      });
-      result.observe(queueDepth, snapshot.scheduledDepth, {
-        ...queueAttribute,
-        "workhorse.job.state": "scheduled",
-      });
-      result.observe(queueDepth, snapshot.activeLeases, {
-        ...queueAttribute,
-        "workhorse.job.state": "active",
-      });
-      if (snapshot.oldestReadyAgeMs !== null) {
-        result.observe(oldestReadyAge, snapshot.oldestReadyAgeMs, queueAttribute);
-      }
-      result.observe(dependencyBlocked, snapshot.dependencyBlockedDepth, queueAttribute);
-      result.observe(dependencyPending, snapshot.dependencyPendingEdges, queueAttribute);
-      result.observe(dependencyFailed, snapshot.dependencyFailedResolutions, queueAttribute);
-      result.observe(dependencyCapped, snapshot.dependencyCountsCapped ? 1 : 0, queueAttribute);
-      result.observe(childWaiting, snapshot.childWaitingParents, queueAttribute);
-      result.observe(childPending, snapshot.childPendingChildren, queueAttribute);
-      result.observe(childUnjoined, snapshot.childUnjoinedResults, queueAttribute);
-      result.observe(childFailed, snapshot.childFailedParents, queueAttribute);
-      result.observe(childCanceled, snapshot.childCanceledParents, queueAttribute);
-      result.observe(childCapped, snapshot.childCountsCapped ? 1 : 0, queueAttribute);
-      if (snapshot.concurrencyLimit !== null) {
-        result.observe(concurrencyLimit, snapshot.concurrencyLimit, queueAttribute);
-        result.observe(concurrencyActive, snapshot.concurrencyActive, queueAttribute);
-        result.observe(concurrencyBlocked, snapshot.blockedReadyDepth, queueAttribute);
-      }
-      if (snapshot.rateLimitPerSecond !== null) {
-        result.observe(rateConfigured, snapshot.rateLimitPerSecond, queueAttribute);
-        result.observe(rateAvailable, snapshot.rateLimitAvailableTokens, queueAttribute);
-        result.observe(rateThrottled, snapshot.rateLimitThrottledReadyDepth, queueAttribute);
-        if (snapshot.rateLimitNextEligibleDelayMs !== null) {
-          result.observe(
-            rateNextEligibleDelay,
-            snapshot.rateLimitNextEligibleDelayMs,
-            queueAttribute,
-          );
-        }
-      }
-    }
+  },
+  {
+    name: "workhorse.queue.concurrency.active",
+    description: "Unexpired active jobs counted by queue concurrency admission",
+    unit: "{job}",
+  },
+  {
+    name: "workhorse.queue.concurrency.blocked_ready",
+    description: "Bounded ready depth blocked by queue concurrency policy",
+    unit: "{job}",
+  },
+  {
+    name: "workhorse.queue.rate_limit.configured",
+    description: "Configured sustained queue start rate",
+    unit: "{job}/s",
+  },
+  {
+    name: "workhorse.queue.rate_limit.available_tokens",
+    description: "Refilled queue start tokens available now",
+    unit: "{token}",
+  },
+  {
+    name: "workhorse.queue.rate_limit.throttled_ready",
+    description: "Bounded ready depth waiting for rate-limit tokens",
+    unit: "{job}",
+  },
+  {
+    name: "workhorse.queue.rate_limit.next_eligible_delay",
+    description: "Delay until the earliest sampled throttled job can start",
+    unit: "ms",
+  },
+];
+
+async function collectQueueMetrics(source: QueueMetricSource): Promise<TelemetryObservation[]> {
+  const observations: TelemetryObservation[] = [];
+  const observe = (name: string, value: number, attributes: TelemetryAttributes) => {
+    observations.push({ name, value, attributes });
   };
-  activeMeter.addBatchObservableCallback(callback, instruments);
-  return () => activeMeter.removeBatchObservableCallback(callback, instruments);
+  for (const snapshot of await source.queueMetricSnapshot()) {
+    const queueAttribute = { "workhorse.queue.name": snapshot.queue };
+    for (const [state, value] of [
+      ["ready", snapshot.readyDepth],
+      ["scheduled", snapshot.scheduledDepth],
+      ["active", snapshot.activeLeases],
+    ] as const) {
+      observe("workhorse.queue.depth", value, { ...queueAttribute, "workhorse.job.state": state });
+    }
+    if (snapshot.oldestReadyAgeMs !== null)
+      observe("workhorse.queue.oldest_ready_age", snapshot.oldestReadyAgeMs, queueAttribute);
+    observe(
+      "workhorse.queue.dependencies.blocked",
+      snapshot.dependencyBlockedDepth,
+      queueAttribute,
+    );
+    observe(
+      "workhorse.queue.dependencies.pending_edges",
+      snapshot.dependencyPendingEdges,
+      queueAttribute,
+    );
+    observe(
+      "workhorse.queue.dependencies.failed_resolutions",
+      snapshot.dependencyFailedResolutions,
+      queueAttribute,
+    );
+    observe(
+      "workhorse.queue.dependencies.capped",
+      snapshot.dependencyCountsCapped ? 1 : 0,
+      queueAttribute,
+    );
+    observe(
+      "workhorse.queue.children.waiting_parents",
+      snapshot.childWaitingParents,
+      queueAttribute,
+    );
+    observe("workhorse.queue.children.pending", snapshot.childPendingChildren, queueAttribute);
+    observe(
+      "workhorse.queue.children.unjoined_results",
+      snapshot.childUnjoinedResults,
+      queueAttribute,
+    );
+    observe("workhorse.queue.children.failed_parents", snapshot.childFailedParents, queueAttribute);
+    observe(
+      "workhorse.queue.children.canceled_parents",
+      snapshot.childCanceledParents,
+      queueAttribute,
+    );
+    observe("workhorse.queue.children.capped", snapshot.childCountsCapped ? 1 : 0, queueAttribute);
+    if (snapshot.concurrencyLimit !== null) {
+      observe("workhorse.queue.concurrency.limit", snapshot.concurrencyLimit, queueAttribute);
+      observe("workhorse.queue.concurrency.active", snapshot.concurrencyActive, queueAttribute);
+      observe(
+        "workhorse.queue.concurrency.blocked_ready",
+        snapshot.blockedReadyDepth,
+        queueAttribute,
+      );
+    }
+    if (snapshot.rateLimitPerSecond !== null) {
+      observe("workhorse.queue.rate_limit.configured", snapshot.rateLimitPerSecond, queueAttribute);
+      observe(
+        "workhorse.queue.rate_limit.available_tokens",
+        snapshot.rateLimitAvailableTokens,
+        queueAttribute,
+      );
+      observe(
+        "workhorse.queue.rate_limit.throttled_ready",
+        snapshot.rateLimitThrottledReadyDepth,
+        queueAttribute,
+      );
+      if (snapshot.rateLimitNextEligibleDelayMs !== null)
+        observe(
+          "workhorse.queue.rate_limit.next_eligible_delay",
+          snapshot.rateLimitNextEligibleDelayMs,
+          queueAttribute,
+        );
+    }
+  }
+  return observations;
+}
+
+class QueueMetricRegistration {
+  private cleanup: (() => void) | undefined;
+
+  constructor(private readonly source: QueueMetricSource) {}
+
+  activate(provider: WorkhorseTelemetryProvider): void {
+    this.deactivate();
+    this.cleanup = provider.registerObservations(queueMetricDefinitions, () =>
+      collectQueueMetrics(this.source),
+    );
+  }
+
+  deactivate(): void {
+    this.cleanup?.();
+    this.cleanup = undefined;
+  }
+}
+
+/** Register one database-wide asynchronous queue observation and return its cleanup function. */
+export function registerQueueMetrics(source: QueueMetricSource): () => void {
+  const registration = new QueueMetricRegistration(source);
+  queueMetricRegistrations.add(registration);
+  registration.activate(telemetryProvider);
+  return () => {
+    if (!queueMetricRegistrations.delete(registration)) return;
+    registration.deactivate();
+  };
 }
 
 export function injectTraceContext(): TraceContext | null {
-  const carrier: Record<string, string> = {};
-  propagation.inject(context.active(), carrier, carrierSetter);
-  const traceContext: TraceContext = {
-    ...(typeof carrier.traceparent === "string" ? { traceparent: carrier.traceparent } : {}),
-    ...(typeof carrier.tracestate === "string" ? { tracestate: carrier.tracestate } : {}),
-  };
-  if (traceContext.traceparent === undefined) return null;
+  const traceContext = telemetryProvider.injectTraceContext();
+  if (traceContext === null) return null;
   if (Buffer.byteLength(JSON.stringify(traceContext), "utf8") > MAX_TRACE_CONTEXT_BYTES) {
     return null;
   }
   return traceContext;
 }
 
-export function extractTraceContext(traceContext: TraceContext | null): Context {
-  return traceContext === null
-    ? context.active()
-    : propagation.extract(context.active(), traceContext, carrierGetter);
+export function extractTraceContext(traceContext: TraceContext | null): TelemetryContext {
+  return telemetryProvider.extractTraceContext(traceContext);
 }
 
 export async function withSpan<T>(
   name: string,
-  attributes: Attributes,
-  operation: (span: Span) => Promise<T>,
-  parent: Context = context.active(),
-  kind: SpanKind = SpanKind.INTERNAL,
+  attributes: TelemetryAttributes,
+  operation: (span: WorkhorseTelemetrySpan) => Promise<T>,
+  parent: TelemetryContext = telemetryProvider.activeContext(),
+  kind: TelemetrySpanKind = "internal",
 ): Promise<T> {
-  return tracer.startActiveSpan(name, { kind, attributes }, parent, async (span) => {
-    try {
-      return await operation(span);
-    } catch (error) {
-      span.setStatus({ code: SpanStatusCode.ERROR });
-      if (error instanceof Error) span.recordException(error);
-      else span.recordException(String(error));
-      throw error;
-    } finally {
-      span.end();
-    }
-  });
+  return telemetryProvider.withSpan(
+    name,
+    attributes,
+    async (span) => {
+      try {
+        return await operation(span);
+      } catch (error) {
+        span.setStatus("error");
+        span.recordException(error instanceof Error ? error : String(error));
+        throw error;
+      }
+    },
+    parent,
+    kind,
+  );
 }
