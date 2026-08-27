@@ -53,6 +53,7 @@ export function createDatabaseTestHarness(
 
       const templateName = await ensureSchemaTemplate(sourceUrl);
       await recreateDatabase(isolatedUrl, templateName);
+      await prepareCurrentHistoryPartitions(pool);
     },
     async reset() {
       const schemas = ["workhorse", ...(options.extraSchemas ?? [])];
@@ -95,6 +96,15 @@ export function createDatabaseTestHarness(
       await dropDatabase(isolatedUrl, isolatedName);
     },
   };
+}
+
+async function prepareCurrentHistoryPartitions(pool: Pool): Promise<void> {
+  await pool.query(
+    `SELECT workhorse.create_history_day_v1(
+              ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
+            )
+       FROM generate_series(0, 3) AS days(day_offset)`,
+  );
 }
 
 function isolatedDatabaseUrl(sourceUrl: string, fileUrl: string): string {
