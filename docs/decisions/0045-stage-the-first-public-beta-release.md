@@ -1,4 +1,4 @@
-# ADR 0044: Stage the first public beta release
+# ADR 0045: Stage the first public beta release
 
 - **Status:** Accepted
 - **Date:** 2026-08-25

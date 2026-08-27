@@ -1,4 +1,4 @@
-# ADR 0038: Payload and result contracts use a restricted JSON Schema profile
+# ADR 0039: Payload and result contracts use a restricted JSON Schema profile
 
 - **Status:** Accepted
 - **Date:** 2026-08-22

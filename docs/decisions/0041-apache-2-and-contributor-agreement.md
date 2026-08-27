@@ -1,4 +1,4 @@
-# ADR 0040: Apache-2.0 outbound licence and a contributor agreement
+# ADR 0041: Apache-2.0 outbound licence and a contributor agreement
 
 - **Status:** Accepted
 - **Date:** 2026-08-25

@@ -1,8 +1,8 @@
-# ADR 0047: Extract the TypeScript OpenTelemetry adapter
+# ADR 0048: Extract the TypeScript OpenTelemetry adapter
 
 - **Status:** Accepted
 - **Date:** 2026-08-27
-- **Related:** [WH-446](https://app.plane.so/techprogress/browse/WH-446/), [ADR 0024](0024-metrics-instrument-lifecycle.md), [ADR 0040](0040-apache-2-and-contributor-agreement.md)
+- **Related:** [WH-446](https://app.plane.so/techprogress/browse/WH-446/), [ADR 0024](0024-metrics-instrument-lifecycle.md), [ADR 0041](0041-apache-2-and-contributor-agreement.md)
 
 ## Context
 

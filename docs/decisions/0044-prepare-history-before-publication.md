@@ -1,4 +1,4 @@
-# ADR 0043: Prepare repository history before publication
+# ADR 0044: Prepare repository history before publication
 
 - **Status:** Accepted
 - **Date:** 2026-08-25

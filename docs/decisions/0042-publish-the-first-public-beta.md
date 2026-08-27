@@ -1,4 +1,4 @@
-# ADR 0041: Publish the first public beta with prerelease versions
+# ADR 0042: Publish the first public beta with prerelease versions
 
 - **Status:** Accepted
 - **Date:** 2026-08-25

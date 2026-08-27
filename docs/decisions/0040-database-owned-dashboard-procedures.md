@@ -1,4 +1,4 @@
-# ADR 0039: Put dashboard procedures in PostgreSQL
+# ADR 0040: Put dashboard procedures in PostgreSQL
 
 - **Status:** Accepted
 - **Date:** 2026-08-24

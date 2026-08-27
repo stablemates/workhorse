@@ -1,4 +1,4 @@
-# ADR 0042: Run boundary CI before merge and the full support matrix on main
+# ADR 0043: Run boundary CI before merge and the full support matrix on main
 
 - **Status:** Accepted
 - **Date:** 2026-08-25

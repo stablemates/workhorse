@@ -1,4 +1,4 @@
-# ADR 0046: Coordinate schedule evaluation per namespace
+# ADR 0047: Coordinate schedule evaluation per namespace
 
 - **Status:** Accepted
 - **Date:** 2026-08-26

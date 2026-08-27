@@ -1,4 +1,4 @@
-# ADR 0045: Make each README an entry point
+# ADR 0046: Make each README an entry point
 
 - **Status:** Accepted
 - **Date:** 2026-08-26
@@ -17,7 +17,7 @@ Published npm packages have inconsistent READMEs. The core package redirects rea
 while the provider packages include enough code to begin. A registry reader should not need to
 discover the monorepo before learning what the package does.
 
-The issue described the packages as MIT. [ADR 0040](0040-apache-2-and-contributor-agreement.md)
+The issue described the packages as MIT. [ADR 0041](0041-apache-2-and-contributor-agreement.md)
 superseded that premise before this decision. Published packages now use Apache-2.0.
 
 ## Decision
