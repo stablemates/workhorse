@@ -62,6 +62,8 @@ export interface DashboardHostOptions {
   workerController?: DashboardWorkerController;
   settingsController?: DashboardSettingsController;
   projectDurability?: DashboardDurabilityProjector;
+  /** Omit persisted worker stack traces from task-detail RPC responses. */
+  redactErrorStacks?: boolean;
   auditActor?: string;
   /** Trusted host-owned ES modules loaded before the dashboard browser entry. */
   browserModules?: readonly string[];
@@ -114,6 +116,8 @@ export interface DashboardWorkspaceOptions {
   workerController?: DashboardWorkerController;
   settingsController?: DashboardSettingsController;
   projectDurability?: DashboardDurabilityProjector;
+  /** Override task-detail stack redaction for this workspace. */
+  redactErrorStacks?: boolean;
 }
 
 /** Identity established by the embedded application's server-side authorization boundary. */
@@ -161,6 +165,7 @@ interface HostWorkspace {
   workerController?: DashboardWorkerController;
   settingsController?: DashboardSettingsController;
   projectDurability?: DashboardDurabilityProjector;
+  redactErrorStacks: boolean;
   readQueueHealth: DashboardQueueHealthReader;
   compatibility?: Promise<void>;
 }
@@ -290,6 +295,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
       workerController: workspace.workerController ?? options.workerController,
       settingsController: workspace.settingsController ?? options.settingsController,
       projectDurability: workspace.projectDurability ?? options.projectDurability,
+      redactErrorStacks: workspace.redactErrorStacks ?? options.redactErrorStacks ?? false,
       readQueueHealth: createDashboardQueueHealthReader(database),
     };
   };
@@ -467,6 +473,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
             workerController: workspace.workerController,
             settingsController: workspace.settingsController,
             projectDurability: workspace.projectDurability,
+            redactErrorStacks: workspace.redactErrorStacks,
             authenticatedActor,
             readQueueHealth: workspace.readQueueHealth,
           },

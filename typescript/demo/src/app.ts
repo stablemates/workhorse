@@ -1305,6 +1305,8 @@ export function createDemoApplication(
         : production),
       maintenanceLoops: { tickIntervalMs: maintenanceIntervalMs },
       projectDurability: durableDemoPlanForJob,
+      // Visitors can intentionally fail tasks, so task details must not reveal container paths.
+      redactErrorStacks: true,
       auditActor: "local-demo",
       dev: options.dev,
     });

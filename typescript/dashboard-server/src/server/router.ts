@@ -61,6 +61,7 @@ export interface DashboardRpcContext {
   projectDurability?: DashboardDurabilityProjector;
   authenticatedActor: string;
   readQueueHealth: DashboardQueueHealthReader;
+  redactErrorStacks?: boolean;
 }
 
 interface DashboardProcedureMeta {
@@ -406,6 +407,7 @@ export const dashboardRouter = {
         context.admin,
         context.operator.mode === "writable" && Boolean(context.taskController?.signalTask),
         context.readQueueHealth,
+        context.redactErrorStacks,
       );
       if (!detail) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
       return detail;

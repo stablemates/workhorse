@@ -235,6 +235,7 @@ export async function readDashboardJobDetail(
   _admin?: Admin,
   canSignal = false,
   _readQueueHealth: DashboardQueueHealthReader = createDashboardQueueHealthReader(database),
+  redactErrorStacks = false,
 ): Promise<DashboardJobDetail | null> {
   const input = JSON.stringify({ id, canSignal });
   const result = await database.execute<{ result: DashboardJobDetail | null }>(sql`
@@ -242,9 +243,54 @@ export async function readDashboardJobDetail(
   `);
   const detail = expectOneRow(result, "the dashboard job detail procedure").result;
   if (!detail) return null;
-  return {
+  const projected = {
     ...detail,
     durability: projectDurability(detail.identity.type, detail.payload),
+  };
+  return redactErrorStacks ? redactDashboardJobDetailErrorStacks(projected) : projected;
+}
+
+function redactErrorStack(error: unknown): unknown {
+  if (error === null || typeof error !== "object" || Array.isArray(error)) return error;
+  const redacted = { ...(error as Record<string, unknown>) };
+  delete redacted.stack;
+  return redacted;
+}
+
+/** Remove persisted worker stacks while leaving user payloads, results, and event details intact. */
+export function redactDashboardJobDetailErrorStacks(
+  detail: DashboardJobDetail,
+): DashboardJobDetail {
+  return {
+    ...detail,
+    childLineage: {
+      ...detail.childLineage,
+      records: detail.childLineage.records.map((record) => ({
+        ...record,
+        error: redactErrorStack(record.error),
+      })),
+    },
+    current: {
+      ...detail.current,
+      runtime: detail.current.runtime
+        ? { ...detail.current.runtime, error: redactErrorStack(detail.current.runtime.error) }
+        : null,
+      outcome: detail.current.outcome
+        ? { ...detail.current.outcome, error: redactErrorStack(detail.current.outcome.error) }
+        : null,
+      error: redactErrorStack(detail.current.error),
+    },
+    batchExecutions: detail.batchExecutions.map((execution) => ({
+      ...execution,
+      members: execution.members.map((member) => ({
+        ...member,
+        error: redactErrorStack(member.error),
+      })),
+    })),
+    attempts: detail.attempts.map((attempt) => ({
+      ...attempt,
+      error: redactErrorStack(attempt.error),
+    })),
   };
 }
 
