@@ -85,7 +85,9 @@ describe("the first public beta release", () => {
   });
 
   it("builds the site with the supported Go toolchain line", async () => {
-    expect(await read("Dockerfile.site")).toMatch(/^FROM golang:1\.25(?:\.[0-9]+)?-alpine AS go$/m);
+    expect(await read("Dockerfile.site")).toMatch(
+      /^FROM golang:1\.25(?:\.[0-9]+)?-alpine@sha256:[0-9a-f]{64} AS go$/m,
+    );
   });
 
   it("records the staged release train and its stop conditions", async () => {
