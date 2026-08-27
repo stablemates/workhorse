@@ -45,7 +45,7 @@ def test_python_support_contract_matches_repository_declarations(database_url: s
     assert manifest["tool"]["ruff"]["target-version"] == (
         f"py{python_support['minimum'].replace('.', '')}"
     )
-    assert "worker SDK" in project["description"]
+    assert "Public beta Python SDK" in project["description"]
     assert project["dependencies"] == [
         "jsonschema>=4.25,<5",
         "psycopg>=3.3,<4",
