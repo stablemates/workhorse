@@ -88,7 +88,13 @@ const cancellationAuditSchema = z.object({
 });
 
 const jobDetailInput = z.object({ id: z.uuid() });
-const eventDetailInput = z.object({ id: z.string().regex(/^(event|attempt):\d+$/) });
+const eventDetailInput = z.object({
+  id: z
+    .string()
+    .regex(
+      /^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    ),
+});
 const taskFilter = z.enum(dashboardTaskFilters);
 const taskSort = z.enum(dashboardTaskSorts);
 const checkedDashboardTaskPriorityMax: typeof MAX_JOB_PRIORITY = dashboardTaskPriorityMax;

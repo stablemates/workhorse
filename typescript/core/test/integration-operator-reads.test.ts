@@ -852,7 +852,7 @@ describe("operator reads", () => {
     }>(`SELECT
       to_regclass('workhorse.job_query')::text AS projection,
       to_regprocedure('workhorse.list_jobs_v1(jsonb,integer,timestamp with time zone,uuid,text,jsonb)')::text AS list_jobs,
-      to_regprocedure('workhorse.list_job_timeline_v1(uuid,integer,timestamp with time zone,text,bigint)')::text AS timeline,
+      to_regprocedure('workhorse.list_job_timeline_v1(uuid,integer,timestamp with time zone,text,uuid)')::text AS timeline,
       EXISTS (
         SELECT 1 FROM information_schema.columns
          WHERE table_schema = 'workhorse' AND table_name = 'job_query' AND column_name = 'payload'
@@ -860,7 +860,7 @@ describe("operator reads", () => {
     expect(objects.rows[0]).toEqual({
       projection: "job_query",
       list_jobs: "list_jobs_v1(jsonb,integer,timestamp with time zone,uuid,text,jsonb)",
-      timeline: "list_job_timeline_v1(uuid,integer,timestamp with time zone,text,bigint)",
+      timeline: "list_job_timeline_v1(uuid,integer,timestamp with time zone,text,uuid)",
       projection_has_payload: false,
     });
 
@@ -1294,15 +1294,17 @@ describe("operator reads", () => {
     ).toBe(4);
 
     await expect(
-      pool.query("SELECT * FROM workhorse.list_job_timeline_v1($1, 10, $2, 'unknown', 1)", [
+      pool.query("SELECT * FROM workhorse.list_job_timeline_v1($1, 10, $2, 'unknown', $3)", [
         jobId,
         sameTime,
+        first.nextCursor!.recordId,
       ]),
     ).rejects.toThrow(/event or attempt/);
     await expect(
-      pool.query("SELECT * FROM workhorse.list_job_timeline_v1($1, 10, $2, NULL, 1)", [
+      pool.query("SELECT * FROM workhorse.list_job_timeline_v1($1, 10, $2, NULL, $3)", [
         jobId,
         sameTime,
+        first.nextCursor!.recordId,
       ]),
     ).rejects.toThrow(/provided together/);
 

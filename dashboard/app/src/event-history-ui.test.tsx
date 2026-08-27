@@ -53,9 +53,9 @@ describe("dashboard event history", () => {
   it("opens the event task in a new window without replacing the Events page", async () => {
     const { EventDetails } = await import("./dashboard.js");
     const event = {
-      id: "event:42",
+      id: "event:018f0000-0000-7000-8000-000000000042",
       kind: "event",
-      recordId: "42",
+      recordId: "018f0000-0000-7000-8000-000000000042",
       jobId: "job-123",
       queue: "billing",
       jobType: "invoice.send",

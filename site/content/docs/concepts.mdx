@@ -91,7 +91,8 @@ claims.
 
 `job_event` records every lifecycle change; `attempt_history` records how each logical attempt
 closed. `Admin.getJobTimeline` merges both into one cursor stream, so you can answer "what happened
-to job X" from SQL-backed records rather than log lines.
+to job X" from SQL-backed records rather than log lines. Every history row has a UUIDv7 identity
+that remains stable in an archive or across Workhorse installations.
 
 `job_query` is a separate bounded routing projection for operator reads. `Admin.listJobs` pages
 through its immutable creation order, then reads each job's current state from `job_runtime` or

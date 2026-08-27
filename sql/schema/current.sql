@@ -108,6 +108,29 @@ AS $$
   SELECT sha256(convert_to(p_scope || chr(31) || p_key, 'UTF8'));
 $$;
 
+-- PostgreSQL 15-17 do not provide uuidv7(). Keep generation inside the schema so historical
+-- identities have the same time-sortable representation on every supported PostgreSQL version.
+CREATE OR REPLACE FUNCTION workhorse.uuid_v7_v1()
+RETURNS uuid
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+DECLARE
+  v_unix_ms bigint := floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint;
+  v_bytes bytea := uuid_send(gen_random_uuid());
+BEGIN
+  v_bytes := set_byte(v_bytes, 0, ((v_unix_ms >> 40) & 255)::integer);
+  v_bytes := set_byte(v_bytes, 1, ((v_unix_ms >> 32) & 255)::integer);
+  v_bytes := set_byte(v_bytes, 2, ((v_unix_ms >> 24) & 255)::integer);
+  v_bytes := set_byte(v_bytes, 3, ((v_unix_ms >> 16) & 255)::integer);
+  v_bytes := set_byte(v_bytes, 4, ((v_unix_ms >> 8) & 255)::integer);
+  v_bytes := set_byte(v_bytes, 5, (v_unix_ms & 255)::integer);
+  v_bytes := set_byte(v_bytes, 6, (get_byte(v_bytes, 6) & 15) | 112);
+  v_bytes := set_byte(v_bytes, 8, (get_byte(v_bytes, 8) & 63) | 128);
+  RETURN encode(v_bytes, 'hex')::uuid;
+END;
+$$;
+
 -- Safe, bounded cancellation diagnostics. requested_by is attribution only and does not assert that
 -- the caller was authorized to cancel the job.
 CREATE OR REPLACE FUNCTION workhorse.cancellation_envelope_v1(
@@ -1136,19 +1159,20 @@ $$;
 
 -- Append-only lifecycle audit.
 CREATE TABLE IF NOT EXISTS workhorse.job_event (
-  event_id bigint GENERATED ALWAYS AS IDENTITY,
+  event_id uuid NOT NULL DEFAULT workhorse.uuid_v7_v1(),
   job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE CASCADE,
   attempt integer,
   event_type text NOT NULL,
   details jsonb NOT NULL DEFAULT '{}'::jsonb,
-  occurred_at timestamptz NOT NULL DEFAULT clock_timestamp()
+  occurred_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (occurred_at, event_id)
 ) PARTITION BY RANGE (occurred_at);
 CREATE TABLE IF NOT EXISTS workhorse.job_event_default
   PARTITION OF workhorse.job_event DEFAULT;
 CREATE INDEX IF NOT EXISTS job_event_job_time_idx
   ON workhorse.job_event (job_id, occurred_at, event_id);
-CREATE INDEX IF NOT EXISTS job_event_retention_idx
-  ON workhorse.job_event (occurred_at, event_id);
+CREATE INDEX IF NOT EXISTS job_event_identity_idx
+  ON workhorse.job_event (event_id);
 CREATE INDEX IF NOT EXISTS job_event_rejected_delivery_idx
   ON workhorse.job_event (occurred_at DESC, event_id DESC)
   INCLUDE (job_id, event_type)
@@ -1159,7 +1183,7 @@ CREATE INDEX IF NOT EXISTS job_event_batch_id_idx
 
 -- One immutable row for every closed attempt.
 CREATE TABLE IF NOT EXISTS workhorse.attempt_history (
-  attempt_id bigint GENERATED ALWAYS AS IDENTITY,
+  attempt_id uuid NOT NULL DEFAULT workhorse.uuid_v7_v1(),
   job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE CASCADE,
   attempt integer NOT NULL,
   fence_token bigint NOT NULL,
@@ -1174,7 +1198,8 @@ CREATE TABLE IF NOT EXISTS workhorse.attempt_history (
   claimed_at timestamptz NOT NULL,
   finished_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   error jsonb,
-  occurred_at timestamptz NOT NULL DEFAULT clock_timestamp()
+  occurred_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (occurred_at, attempt_id)
 ) PARTITION BY RANGE (occurred_at);
 CREATE TABLE IF NOT EXISTS workhorse.attempt_history_default
   PARTITION OF workhorse.attempt_history DEFAULT;
@@ -1182,8 +1207,8 @@ CREATE INDEX IF NOT EXISTS attempt_history_job_idx
   ON workhorse.attempt_history (job_id, attempt, occurred_at);
 CREATE INDEX IF NOT EXISTS attempt_history_job_time_idx
   ON workhorse.attempt_history (job_id, occurred_at, attempt_id);
-CREATE INDEX IF NOT EXISTS attempt_history_retention_idx
-  ON workhorse.attempt_history (occurred_at, attempt_id);
+CREATE INDEX IF NOT EXISTS attempt_history_identity_idx
+  ON workhorse.attempt_history (attempt_id);
 
 -- One database-owned schedule coordinates low-frequency maintenance across every worker process.
 -- The IANA timezone and local time control the daily history-retention boundary; interval tasks remain
@@ -10332,7 +10357,7 @@ BEGIN
       'CREATE TABLE workhorse.%I PARTITION OF workhorse.job_event FOR VALUES FROM (%L) TO (%L)',
       v_event_partition, v_start, v_end);
     EXECUTE format(
-      'INSERT INTO workhorse.%I (event_id, job_id, attempt, event_type, details, occurred_at) OVERRIDING SYSTEM VALUE SELECT event_id, job_id, attempt, event_type, details, occurred_at FROM %I',
+      'INSERT INTO workhorse.%I (event_id, job_id, attempt, event_type, details, occurred_at) SELECT event_id, job_id, attempt, event_type, details, occurred_at FROM %I',
       v_event_partition, v_event_staging);
     EXECUTE format('DROP TABLE %I', v_event_staging);
   END IF;
@@ -10346,7 +10371,7 @@ BEGIN
       'CREATE TABLE workhorse.%I PARTITION OF workhorse.attempt_history FOR VALUES FROM (%L) TO (%L)',
       v_attempt_partition, v_start, v_end);
     EXECUTE format(
-      'INSERT INTO workhorse.%I (attempt_id, job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at, error, occurred_at) OVERRIDING SYSTEM VALUE SELECT attempt_id, job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at, error, occurred_at FROM %I',
+      'INSERT INTO workhorse.%I (attempt_id, job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at, error, occurred_at) SELECT attempt_id, job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at, error, occurred_at FROM %I',
       v_attempt_partition, v_attempt_staging);
     EXECUTE format('DROP TABLE %I', v_attempt_staging);
   END IF;
@@ -10651,10 +10676,10 @@ CREATE OR REPLACE FUNCTION workhorse.list_job_timeline_v1(
   p_limit integer,
   p_cursor_occurred_at timestamptz,
   p_cursor_kind text,
-  p_cursor_record_id bigint
+  p_cursor_record_id uuid
 ) RETURNS TABLE (
   kind text,
-  record_id bigint,
+  record_id uuid,
   job_id uuid,
   priority integer,
   occurred_at timestamptz,
@@ -10691,9 +10716,6 @@ BEGIN
     END IF;
     IF p_cursor_kind NOT IN ('event', 'attempt') THEN
       RAISE EXCEPTION 'timeline cursor kind must be event or attempt';
-    END IF;
-    IF p_cursor_record_id <= 0 THEN
-      RAISE EXCEPTION 'timeline cursor record id must be positive';
     END IF;
     v_cursor_rank := CASE p_cursor_kind WHEN 'event' THEN 1 ELSE 0 END;
   END IF;
@@ -11875,14 +11897,14 @@ AS $$
 DECLARE
   v_identity text := p_input->>'id';
   v_kind text;
-  v_record_id bigint;
+  v_record_id uuid;
   v_result jsonb;
 BEGIN
-  IF v_identity IS NULL OR v_identity !~ '^(event|attempt):[0-9]+$' THEN
+  IF v_identity IS NULL OR v_identity !~* '^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' THEN
     RETURN NULL;
   END IF;
   v_kind := split_part(v_identity, ':', 1);
-  v_record_id := split_part(v_identity, ':', 2)::bigint;
+  v_record_id := split_part(v_identity, ':', 2)::uuid;
 
   IF v_kind = 'event' THEN
     SELECT jsonb_build_object(

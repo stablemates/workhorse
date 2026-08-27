@@ -77,7 +77,8 @@ Two rules keep paging honest:
 ## Reconstruct what happened
 
 `admin.getJobTimeline(jobId, query)` merges retained `job_event` rows and closed
-`attempt_history` rows into one newest-first stream, with its own cursor for long histories.
+`attempt_history` rows into one newest-first stream, with its own cursor for long histories. Cursor
+record identities are UUIDv7 values and can also identify exported history rows.
 
 ```ts
 const timeline = await admin.getJobTimeline(jobId, { limit: 50 });

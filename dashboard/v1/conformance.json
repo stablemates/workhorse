@@ -1341,9 +1341,13 @@
                 },
                 "events": [
                   {
-                    "id": "event:16",
+                    "id": {
+                      "$type": "string"
+                    },
                     "kind": "event",
-                    "recordId": "16",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
                     "jobId": {
                       "$ref": "purgeTargetJob"
                     },
@@ -1369,9 +1373,13 @@
                     "errorMessage": null
                   },
                   {
-                    "id": "event:15",
+                    "id": {
+                      "$type": "string"
+                    },
                     "kind": "event",
-                    "recordId": "15",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
                     "jobId": {
                       "$ref": "cancelTargetJob"
                     },
@@ -1397,9 +1405,13 @@
                     "errorMessage": null
                   },
                   {
-                    "id": "event:14",
+                    "id": {
+                      "$type": "string"
+                    },
                     "kind": "event",
-                    "recordId": "14",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
                     "jobId": {
                       "$ref": "scheduledJob"
                     },
@@ -1425,9 +1437,13 @@
                     "errorMessage": null
                   },
                   {
-                    "id": "event:13",
+                    "id": {
+                      "$type": "string"
+                    },
                     "kind": "event",
-                    "recordId": "13",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
                     "jobId": {
                       "$ref": "readyJob"
                     },
@@ -1453,9 +1469,13 @@
                     "errorMessage": null
                   },
                   {
-                    "id": "event:12",
+                    "id": {
+                      "$type": "string"
+                    },
                     "kind": "event",
-                    "recordId": "12",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
                     "jobId": {
                       "$ref": "humanJob"
                     },
@@ -1477,9 +1497,13 @@
                     "errorMessage": null
                   },
                   {
-                    "id": "event:11",
+                    "id": {
+                      "$type": "string"
+                    },
                     "kind": "event",
-                    "recordId": "11",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
                     "jobId": {
                       "$ref": "humanJob"
                     },
@@ -1503,9 +1527,13 @@
                     "errorMessage": null
                   },
                   {
-                    "id": "event:10",
+                    "id": {
+                      "$type": "string"
+                    },
                     "kind": "event",
-                    "recordId": "10",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
                     "jobId": {
                       "$ref": "humanJob"
                     },
@@ -1531,9 +1559,13 @@
                     "errorMessage": null
                   },
                   {
-                    "id": "event:9",
+                    "id": {
+                      "$type": "string"
+                    },
                     "kind": "event",
-                    "recordId": "9",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
                     "jobId": {
                       "$ref": "signalJob"
                     },
@@ -1554,9 +1586,13 @@
                     "errorMessage": null
                   },
                   {
-                    "id": "event:8",
+                    "id": {
+                      "$type": "string"
+                    },
                     "kind": "event",
-                    "recordId": "8",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
                     "jobId": {
                       "$ref": "signalJob"
                     },
@@ -1580,9 +1616,13 @@
                     "errorMessage": null
                   },
                   {
-                    "id": "event:7",
+                    "id": {
+                      "$type": "string"
+                    },
                     "kind": "event",
-                    "recordId": "7",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
                     "jobId": {
                       "$ref": "signalJob"
                     },
@@ -1608,9 +1648,13 @@
                     "errorMessage": null
                   },
                   {
-                    "id": "event:6",
+                    "id": {
+                      "$type": "string"
+                    },
                     "kind": "event",
-                    "recordId": "6",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
                     "jobId": {
                       "$ref": "failedJob"
                     },
@@ -1633,9 +1677,13 @@
                     "errorMessage": null
                   },
                   {
-                    "id": "attempt:2",
+                    "id": {
+                      "$type": "string"
+                    },
                     "kind": "attempt",
-                    "recordId": "2",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
                     "jobId": {
                       "$ref": "failedJob"
                     },
@@ -1655,9 +1703,13 @@
                     "errorMessage": "conformance.fail failed"
                   },
                   {
-                    "id": "event:5",
+                    "id": {
+                      "$type": "string"
+                    },
                     "kind": "event",
-                    "recordId": "5",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
                     "jobId": {
                       "$ref": "failedJob"
                     },
@@ -1681,9 +1733,13 @@
                     "errorMessage": null
                   },
                   {
-                    "id": "event:4",
+                    "id": {
+                      "$type": "string"
+                    },
                     "kind": "event",
-                    "recordId": "4",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
                     "jobId": {
                       "$ref": "failedJob"
                     },
@@ -1709,9 +1765,13 @@
                     "errorMessage": null
                   },
                   {
-                    "id": "event:3",
+                    "id": {
+                      "$type": "string"
+                    },
                     "kind": "event",
-                    "recordId": "3",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
                     "jobId": {
                       "$ref": "succeededJob"
                     },
@@ -1731,9 +1791,13 @@
                     "errorMessage": null
                   },
                   {
-                    "id": "attempt:1",
+                    "id": {
+                      "$type": "string"
+                    },
                     "kind": "attempt",
-                    "recordId": "1",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
                     "jobId": {
                       "$ref": "succeededJob"
                     },
@@ -1753,9 +1817,13 @@
                     "errorMessage": null
                   },
                   {
-                    "id": "event:2",
+                    "id": {
+                      "$type": "string"
+                    },
                     "kind": "event",
-                    "recordId": "2",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
                     "jobId": {
                       "$ref": "succeededJob"
                     },
@@ -1779,9 +1847,13 @@
                     "errorMessage": null
                   },
                   {
-                    "id": "event:1",
+                    "id": {
+                      "$type": "string"
+                    },
                     "kind": "event",
-                    "recordId": "1",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
                     "jobId": {
                       "$ref": "succeededJob"
                     },
@@ -1813,6 +1885,9 @@
           "coerce": {
             "body.json.events.*.details.run_at": "timestamp",
             "body.json.events.*.durationMs": "integer"
+          },
+          "capture": {
+            "eventDetailId": "json.events.0.id"
           }
         },
         {
@@ -1820,21 +1895,27 @@
           "procedure": "eventDetail",
           "request": {
             "json": {
-              "id": "event:1"
+              "id": {
+                "$ref": "eventDetailId"
+              }
             }
           },
           "expect": {
             "status": 200,
             "body": {
               "json": {
-                "id": "event:1",
-                "kind": "event",
-                "recordId": "1",
-                "jobId": {
-                  "$ref": "succeededJob"
+                "id": {
+                  "$ref": "eventDetailId"
                 },
-                "queue": "conformance",
-                "jobType": "conformance.succeed",
+                "kind": "event",
+                "recordId": {
+                  "$type": "uuid"
+                },
+                "jobId": {
+                  "$ref": "purgeTargetJob"
+                },
+                "queue": "conformance-purge",
+                "jobType": "conformance.purge",
                 "occurredAt": {
                   "$type": "timestamp"
                 },
@@ -4333,7 +4414,9 @@
                 "waits": [],
                 "events": [
                   {
-                    "id": "1",
+                    "id": {
+                      "$type": "uuid"
+                    },
                     "attempt": null,
                     "type": "enqueued",
                     "details": {
@@ -4350,7 +4433,9 @@
                     }
                   },
                   {
-                    "id": "2",
+                    "id": {
+                      "$type": "uuid"
+                    },
                     "attempt": 1,
                     "type": "claimed",
                     "details": {
@@ -4365,7 +4450,9 @@
                     }
                   },
                   {
-                    "id": "3",
+                    "id": {
+                      "$type": "uuid"
+                    },
                     "attempt": 1,
                     "type": "succeeded",
                     "details": {
@@ -4508,7 +4595,7 @@
           "procedure": "eventDetail",
           "request": {
             "json": {
-              "id": "event:999999"
+              "id": "event:018f0000-0000-7000-8000-000000999999"
             }
           },
           "expect": {

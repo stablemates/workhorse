@@ -106,7 +106,8 @@ it("passes dashboard/v1 through the Go embedded backend", { timeout: 120_000 }, 
   expect(sqlDetail.batchExecutions[0]).toMatchObject({ id: "dashboard-semantic-batch" });
   const event = await database.pool.query<{ event_id: string }>(
     `SELECT event_id::text FROM workhorse.dashboard_job_event_v1
-      WHERE job_id=$1 AND event_type='batch_dispatched' ORDER BY event_id DESC LIMIT 1`,
+      WHERE job_id=$1 AND event_type='batch_dispatched'
+      ORDER BY occurred_at DESC, event_id DESC LIMIT 1`,
     [job.id],
   );
   const sqlEvent = await rpc(

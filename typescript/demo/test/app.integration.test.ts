@@ -1493,7 +1493,7 @@ describe("Workhorse demo", () => {
                  (SELECT (event.details->>'retry_delay_ms')::integer
                     FROM workhorse.job_event event
                    WHERE event.job_id = job.id AND event.event_type = 'retry_scheduled'
-                   ORDER BY event.event_id DESC LIMIT 1) AS selected_delay_ms,
+                   ORDER BY event.occurred_at DESC, event.event_id DESC LIMIT 1) AS selected_delay_ms,
                  runtime.state, runtime.current_attempt, job.max_attempts,
                  floor(extract(epoch FROM (runtime.run_at - clock_timestamp())) * 1000)::integer
                    AS remaining_ms,
@@ -1931,7 +1931,8 @@ describe("Workhorse demo", () => {
       expect(
         (
           await pool.query(
-            `SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY event_id`,
+            `SELECT event_type FROM workhorse.job_event
+              WHERE job_id = $1 ORDER BY occurred_at, event_id`,
             [accepted.jobId],
           )
         ).rows.map((row) => row.event_type),
@@ -2018,7 +2019,7 @@ describe("Workhorse demo", () => {
       }>(
         `SELECT details->>'fence_token' AS fence_token, occurred_at
            FROM workhorse.job_event
-          WHERE job_id = $1 AND event_type = 'claimed' ORDER BY event_id`,
+          WHERE job_id = $1 AND event_type = 'claimed' ORDER BY occurred_at, event_id`,
         [accepted.jobId],
       );
       expect(claims.rows).toHaveLength(2);

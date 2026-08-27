@@ -561,7 +561,7 @@ describe("enqueue contracts", () => {
     expect((await queue.claim("worker-b"))?.id).toBe(ids[2]);
 
     const events = await pool.query<{ job_id: string; event_type: string }>(
-      "SELECT job_id, event_type FROM workhorse.job_event WHERE event_type = 'enqueued' ORDER BY event_id",
+      "SELECT job_id, event_type FROM workhorse.job_event WHERE event_type = 'enqueued' ORDER BY occurred_at, event_id",
     );
     expect(events.rows).toEqual(ids.map((jobId) => ({ job_id: jobId, event_type: "enqueued" })));
   });
@@ -1918,7 +1918,7 @@ describe("enqueue contracts", () => {
         .rows[0],
     ).toEqual({ count: 0 });
     const events = await pool.query<{ details: Record<string, unknown> }>(
-      "SELECT details FROM workhorse.job_event ORDER BY event_id",
+      "SELECT details FROM workhorse.job_event ORDER BY occurred_at, event_id",
     );
     expect(events.rows).toHaveLength(2);
     expect(events.rows.every((row) => !("idempotency" in row.details))).toBe(true);

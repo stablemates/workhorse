@@ -67,7 +67,7 @@ describe("checkpoints progress waits", () => {
     expect(await queue.complete(job!, "worker-a", { ok: true })).toBe(true);
     await expect(admin.getCheckpoint(id, "payment-authorized")).resolves.toEqual(saved);
     const events = await pool.query<{ event_type: string }>(
-      "SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY event_id",
+      "SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY occurred_at, event_id",
       [id],
     );
     expect(events.rows.map((row) => row.event_type)).toEqual([
@@ -279,7 +279,7 @@ describe("checkpoints progress waits", () => {
     await expect(admin.getJob(id)).resolves.toMatchObject({ state: "succeeded", progress: second });
     const events = await pool.query<{ event_type: string; details: Record<string, unknown> }>(
       `SELECT event_type, details FROM workhorse.job_event
-        WHERE job_id = $1 AND event_type = 'progress_updated' ORDER BY event_id`,
+        WHERE job_id = $1 AND event_type = 'progress_updated' ORDER BY occurred_at, event_id`,
       [id],
     );
     expect(events.rows).toEqual([
@@ -785,7 +785,7 @@ describe("checkpoints progress waits", () => {
     const events = await pool.query<{ event_type: string; details: Record<string, unknown> }>(
       `SELECT event_type, details FROM workhorse.job_event
         WHERE job_id = $1 AND event_type IN ('wait_scheduled', 'wait_elapsed')
-        ORDER BY event_id`,
+        ORDER BY occurred_at, event_id`,
       [id],
     );
     expect(events.rows).toEqual([
@@ -1019,7 +1019,7 @@ describe("checkpoints progress waits", () => {
     expect(codeAfterCatch).toBe(true);
     await expect(admin.getJob(id)).resolves.toMatchObject({ state: "scheduled" });
     const events = await pool.query<{ event_type: string }>(
-      "SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY event_id",
+      "SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY occurred_at, event_id",
       [id],
     );
     expect(events.rows.map((row) => row.event_type)).toEqual([
@@ -1069,7 +1069,7 @@ describe("checkpoints progress waits", () => {
     expect(caught).toBeDefined();
     await expect(admin.getJob(id)).resolves.toMatchObject({ state: "scheduled" });
     const events = await pool.query<{ event_type: string }>(
-      "SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY event_id",
+      "SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY occurred_at, event_id",
       [id],
     );
     expect(events.rows.map((row) => row.event_type)).toEqual([

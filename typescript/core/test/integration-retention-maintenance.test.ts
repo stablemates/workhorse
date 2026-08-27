@@ -1409,6 +1409,15 @@ describe("retention maintenance", () => {
       { relation: "attempt_history_default" },
       { relation: "job_event_default" },
     ]);
+    const fallbackIdentities = (
+      await pool.query<{ event_id: string; attempt_id: string }>(
+        `SELECT event.event_id::text, history.attempt_id::text
+           FROM workhorse.job_event event
+           JOIN workhorse.attempt_history history USING (job_id)
+          WHERE event.job_id = $1`,
+        [historicalJobId],
+      )
+    ).rows[0];
 
     await pool.query("SELECT workhorse.create_history_day_v1($1)", [oldDay]);
     expect(
@@ -1431,6 +1440,17 @@ describe("retention maintenance", () => {
       { relation: "attempt_history_20200108" },
       { relation: "job_event_20200108" },
     ]);
+    expect(
+      (
+        await pool.query<{ event_id: string; attempt_id: string }>(
+          `SELECT event.event_id::text, history.attempt_id::text
+             FROM workhorse.job_event event
+             JOIN workhorse.attempt_history history USING (job_id)
+            WHERE event.job_id = $1`,
+          [historicalJobId],
+        )
+      ).rows[0],
+    ).toEqual(fallbackIdentities);
     await pool.query("SELECT workhorse.retire_history_day_v1($1)", [oldDay]);
     expect(
       (await pool.query("SELECT to_regclass('workhorse.job_event_20200108') AS relation")).rows[0]

@@ -4,7 +4,7 @@ import "testing"
 
 func TestGeneratedInputValidators(t *testing.T) {
 	t.Run("accepts valid input", func(t *testing.T) {
-		if err := ValidateEventDetailInput(map[string]any{"id": "event:42"}); err != nil {
+		if err := ValidateEventDetailInput(map[string]any{"id": "event:018f0000-0000-7000-8000-000000000042"}); err != nil {
 			t.Fatalf("ValidateEventDetailInput returned %v", err)
 		}
 	})

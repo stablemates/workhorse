@@ -35,6 +35,8 @@ export const defaultEventsLocation: EventsLocationState = {
 const windows = new Set<DashboardEventsWindow>(["15m", "1h", "6h", "24h"]);
 const kinds = new Set<EventsKindFilter>(["all", "event", "attempt"]);
 const eventTypes = new Set<string>([...dashboardJobEventTypes, ...dashboardAttemptOutcomes]);
+const historyIdentity =
+  /^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
  * True when a value names an event type or attempt outcome the feed can filter by.
@@ -78,8 +80,7 @@ export function parseEventsLocation(search: string | URLSearchParams): EventsLoc
     pageSize: eventPageSizes.includes(requestedPageSize as EventPageSize)
       ? (requestedPageSize as EventPageSize)
       : 50,
-    eventId:
-      requestedEventId && /^(event|attempt):\d+$/.test(requestedEventId) ? requestedEventId : null,
+    eventId: requestedEventId && historyIdentity.test(requestedEventId) ? requestedEventId : null,
   };
 }
 

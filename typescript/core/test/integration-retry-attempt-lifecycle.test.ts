@@ -24,7 +24,7 @@ describe("retry and attempt lifecycle", () => {
       { attempt: 2, outcome: "succeeded" },
     ]);
     const events = await pool.query(
-      "SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY event_id",
+      "SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY occurred_at, event_id",
       [id],
     );
     expect(events.rows.map((row) => row.event_type)).toEqual([

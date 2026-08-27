@@ -518,7 +518,7 @@ export interface JobTimelineCursor {
   /** Exact PostgreSQL timestamp text. Treat as opaque continuation state. */
   occurredAt: string;
   kind: "event" | "attempt";
-  /** Exact PostgreSQL bigint text. Treat as opaque continuation state. */
+  /** UUIDv7 historical record identity. Treat as opaque continuation state. */
   recordId: string;
 }
 

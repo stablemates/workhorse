@@ -11,6 +11,61 @@ const { pool, queue } = createIntegrationTestContext(import.meta.url, {
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 describe("schema installation", () => {
+  it("uses UUIDv7 identities for partitioned history", async () => {
+    const generated = await pool.query<{ id: string }>(
+      "SELECT workhorse.uuid_v7_v1()::text AS id FROM generate_series(1, 100)",
+    );
+    expect(new Set(generated.rows.map((row) => row.id)).size).toBe(100);
+    expect(
+      generated.rows.every((row) =>
+        /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(row.id),
+      ),
+    ).toBe(true);
+
+    const columns = await pool.query<{
+      table_name: string;
+      data_type: string;
+      column_default: string;
+    }>(`SELECT table_name, data_type, column_default
+          FROM information_schema.columns
+         WHERE table_schema = 'workhorse'
+           AND (table_name, column_name) IN (
+             ('job_event', 'event_id'), ('attempt_history', 'attempt_id')
+           )
+         ORDER BY table_name`);
+    expect(columns.rows).toEqual([
+      {
+        table_name: "attempt_history",
+        data_type: "uuid",
+        column_default: "uuid_v7_v1()",
+      },
+      {
+        table_name: "job_event",
+        data_type: "uuid",
+        column_default: "uuid_v7_v1()",
+      },
+    ]);
+
+    const primaryKeys = await pool.query<{ table_name: string; columns: string[] }>(`
+      SELECT relation.relname AS table_name,
+             array_agg(attribute.attname::text ORDER BY key.ordinality) AS columns
+        FROM pg_constraint constraint_row
+        JOIN pg_class relation ON relation.oid = constraint_row.conrelid
+        JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+        CROSS JOIN LATERAL unnest(constraint_row.conkey) WITH ORDINALITY key(attnum, ordinality)
+        JOIN pg_attribute attribute
+          ON attribute.attrelid = relation.oid AND attribute.attnum = key.attnum
+       WHERE namespace.nspname = 'workhorse'
+         AND relation.relname IN ('job_event', 'attempt_history')
+         AND constraint_row.contype = 'p'
+       GROUP BY relation.relname
+       ORDER BY relation.relname`);
+    expect(primaryKeys.rows).toEqual([
+      { table_name: "attempt_history", columns: ["occurred_at", "attempt_id"] },
+      { table_name: "job_event", columns: ["occurred_at", "event_id"] },
+    ]);
+  });
+
   it("uses the enqueue ownership index during terminal pruning", async () => {
     const client = await pool.connect();
     try {
@@ -288,6 +343,7 @@ describe("schema installation", () => {
     expect(schema).not.toMatch(/^ALTER TABLE /m);
     expect(schema).not.toMatch(/^ALTER FUNCTION /m);
     expect(schema).not.toMatch(/^DROP (?:FUNCTION|TRIGGER) IF EXISTS /m);
+    expect(schema).not.toMatch(/^CREATE EXTENSION /m);
     expect(schema).not.toMatch(/^DO \$migration\$/m);
   });
 

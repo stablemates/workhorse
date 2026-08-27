@@ -47,7 +47,8 @@ latency, including the current backlog, policy checks, database load, and index 
 Finished jobs don't vanish. Two append-only tables, `job_event` and `attempt_history`,
 record what happened — every state change, every attempt that closed. They're separate from
 the three tables above precisely so they can grow without slowing anything down, and they're
-cleaned up on their own schedule.
+cleaned up on their own schedule. Each history row has a UUID that stays stable when you archive
+or combine history from different Workhorse installations.
 
 ## Next
 

@@ -10,7 +10,7 @@ from workhorse.dashboard_v1 import (
 
 
 def test_generated_input_validator_accepts_valid_input() -> None:
-    validate_event_detail_input({"id": "event:42"})
+    validate_event_detail_input({"id": "event:018f0000-0000-7000-8000-000000000042"})
 
 
 def test_generated_input_validator_rejects_schema_violation() -> None:

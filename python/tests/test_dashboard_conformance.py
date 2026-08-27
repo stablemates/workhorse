@@ -9,7 +9,7 @@ from typing import Any, cast
 import psycopg
 import pytest
 from psycopg.rows import dict_row
-from test_protocol_conformance import assert_value, execute_step, read_json, resolve
+from test_protocol_conformance import assert_value, execute_step, read_json, read_pointer, resolve
 
 from workhorse.client import Queue
 from workhorse.dashboard import DashboardHost, DashboardPrincipal
@@ -72,12 +72,16 @@ def test_python_dashboard_read_procedures_match_the_shared_contract(database_url
                 status, body = request(host, harness["origin"], exchange, references)
                 assert status == exchange["expect"]["status"], (exchange["id"], body)
                 assert_value(exchange["expect"]["body"], body, references, exchange["id"])
+                for name, pointer in exchange.get("capture", {}).items():
+                    references[name] = read_pointer(body, pointer)
             for scenario in fixture["scenarios"][2:]:
                 for exchange in scenario["exchanges"]:
                     selected = read_only_host if exchange.get("mode") == "read-only" else host
                     status, body = request(selected, harness["origin"], exchange, references)
                     assert status == exchange["expect"]["status"], (exchange["id"], body)
                     assert_value(exchange["expect"]["body"], body, references, exchange["id"])
+                    for name, pointer in exchange.get("capture", {}).items():
+                        references[name] = read_pointer(body, pointer)
 
             connection.execute(
                 """INSERT INTO workhorse.concurrency_policy(

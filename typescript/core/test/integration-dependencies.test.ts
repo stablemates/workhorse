@@ -823,7 +823,7 @@ describe("job dependencies", () => {
       `SELECT event.event_type, event.details->>'prerequisite_job_id' AS prerequisite_job_id
          FROM workhorse.job_event event
         WHERE event.job_id = $1 AND event.event_type IN ('dependency_blocked', 'dependency_released')
-        ORDER BY event.event_id`,
+        ORDER BY event.occurred_at, event.event_id`,
       [dependentId],
     );
     expect(evidence.rows).toEqual([

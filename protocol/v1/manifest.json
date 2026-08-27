@@ -394,7 +394,7 @@
     {
       "name": "list_job_timeline",
       "arity": 5,
-      "contract": "SELECT kind,record_id::text record_id,priority,attempt,event_type,details,fence_token::text fence_token,worker_id,outcome,started_at,claimed_at,finished_at,error,occurred_at,has_more,cursor_occurred_at::text cursor_occurred_at FROM workhorse.list_job_timeline_v1($1::uuid,$2::integer,$3::timestamptz,$4::text,$5::bigint)",
+      "contract": "SELECT kind,record_id::text record_id,priority,attempt,event_type,details,fence_token::text fence_token,worker_id,outcome,started_at,claimed_at,finished_at,error,occurred_at,has_more,cursor_occurred_at::text cursor_occurred_at FROM workhorse.list_job_timeline_v1($1::uuid,$2::integer,$3::timestamptz,$4::text,$5::uuid)",
       "catalogues": ["admin"]
     },
     {
@@ -704,7 +704,7 @@
     {
       "name": "list_job_timeline_v1",
       "arity": 5,
-      "contract": "SELECT kind, record_id::text AS record_id, priority, attempt, event_type, details,\n              fence_token::text AS fence_token, worker_id, outcome, started_at, claimed_at,\n              finished_at, error, occurred_at, has_more,\n              cursor_occurred_at::text AS cursor_occurred_at\n         FROM workhorse.list_job_timeline_v1(\n           $1::uuid, $2::integer, $3::timestamptz, $4::text, $5::bigint\n         )",
+      "contract": "SELECT kind, record_id::text AS record_id, priority, attempt, event_type, details,\n              fence_token::text AS fence_token, worker_id, outcome, started_at, claimed_at,\n              finished_at, error, occurred_at, has_more,\n              cursor_occurred_at::text AS cursor_occurred_at\n         FROM workhorse.list_job_timeline_v1(\n           $1::uuid, $2::integer, $3::timestamptz, $4::text, $5::uuid\n         )",
       "catalogues": ["internal"]
     },
     {

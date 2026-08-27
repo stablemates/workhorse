@@ -227,7 +227,7 @@ var internalStatementRegistry = map[string]string{
               finished_at, error, occurred_at, has_more,
               cursor_occurred_at::text AS cursor_occurred_at
          FROM workhorse.list_job_timeline_v1(
-           $1::uuid, $2::integer, $3::timestamptz, $4::text, $5::bigint
+           $1::uuid, $2::integer, $3::timestamptz, $4::text, $5::uuid
          )`,
 	"list_dead_letters_v1": `SELECT * FROM workhorse.list_dead_letters_v1($1::jsonb, $2::integer, $3::timestamptz, $4::uuid)`,
 	"redrive_v1":           `SELECT * FROM workhorse.redrive_v1($1::uuid, $2::text, $3::text, $4::text)`,
@@ -705,7 +705,7 @@ var adminStatementRegistry = map[string]string{
         WHERE parameters.cursor_created_at IS NULL OR (created_at, job_id, token_name) >
               (parameters.cursor_created_at, parameters.cursor_job_id, parameters.cursor_name)
         ORDER BY created_at, job_id, token_name LIMIT (SELECT page_limit FROM parameters)`,
-	"list_job_timeline": `SELECT kind,record_id::text record_id,priority,attempt,event_type,details,fence_token::text fence_token,worker_id,outcome,started_at,claimed_at,finished_at,error,occurred_at,has_more,cursor_occurred_at::text cursor_occurred_at FROM workhorse.list_job_timeline_v1($1::uuid,$2::integer,$3::timestamptz,$4::text,$5::bigint)`,
+	"list_job_timeline": `SELECT kind,record_id::text record_id,priority,attempt,event_type,details,fence_token::text fence_token,worker_id,outcome,started_at,claimed_at,finished_at,error,occurred_at,has_more,cursor_occurred_at::text cursor_occurred_at FROM workhorse.list_job_timeline_v1($1::uuid,$2::integer,$3::timestamptz,$4::text,$5::uuid)`,
 	"list_jobs": `SELECT listed.job_id::text AS job_id, listed.queue_name, listed.job_type, listed.concurrency_key,
               listed.priority, listed.tags, listed.state, dependency.prerequisite_job_id,
               dependency.prerequisite_job_ids, dependency.on_success AS dependency_on_success,
