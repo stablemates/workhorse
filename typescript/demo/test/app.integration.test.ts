@@ -329,20 +329,23 @@ it("reports readiness outside the dashboard route space", async () => {
   await expect(response.json()).resolves.toEqual({ status: "ok" });
 });
 
-it("disallows crawler indexing across the public demo", async () => {
+it("sets security and crawler headers across the public demo", async () => {
   const { app } = createTestApplication({ workers: false });
 
   const readiness = await app.request("/up");
-  expect(readiness.headers.get("x-robots-tag")).toBe("noindex, nofollow, noarchive");
 
   const robots = await app.request("/robots.txt");
   expect(robots.status).toBe(200);
   expect(robots.headers.get("content-type")).toContain("text/plain");
-  expect(robots.headers.get("x-robots-tag")).toBe("noindex, nofollow, noarchive");
   await expect(robots.text()).resolves.toBe("User-agent: *\nDisallow: /\n");
 
   const dashboard = await app.request("/");
-  expect(dashboard.headers.get("x-robots-tag")).toBe("noindex, nofollow, noarchive");
+  for (const response of [readiness, robots, dashboard]) {
+    expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow, noarchive");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+    expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+  }
 });
 
 it("prunes expired demo audit rows in bounded oldest-first passes", async () => {

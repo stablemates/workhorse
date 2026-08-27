@@ -109,6 +109,18 @@ const GOOGLE_ANALYTICS_TAG = `<script async src="https://www.googletagmanager.co
   gtag('config', 'G-9NC8FKZPVB');
 </script>`;
 
+const DEMO_CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+  "script-src 'self' 'unsafe-inline' https://www.googletagmanager.com",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: https://*.google-analytics.com https://www.google-analytics.com",
+  "font-src 'self'",
+  "connect-src 'self' ws: wss: https://*.google-analytics.com https://www.google-analytics.com",
+].join("; ");
+
 async function addGoogleAnalytics(response: Response): Promise<Response> {
   if (!response.headers.get("content-type")?.startsWith("text/html")) return response;
 
@@ -1247,6 +1259,9 @@ export function createDemoApplication(
 
   app.use("*", async (context, next) => {
     await next();
+    context.res.headers.set("Content-Security-Policy", DEMO_CONTENT_SECURITY_POLICY);
+    context.res.headers.set("X-Content-Type-Options", "nosniff");
+    context.res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
     context.res.headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
   });
 
