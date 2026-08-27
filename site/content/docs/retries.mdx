@@ -45,8 +45,9 @@ retries.
 ## Persist the delay policy with the job
 
 Retrying instantly is usually wrong: if a provider is down, hammering it just burns attempts.
-`EnqueueOptions.retryPolicy` stores a backoff shape with the immutable job definition, and
-PostgreSQL validates it at enqueue time. Three shapes exist:
+`EnqueueOptions.retryPolicy` stores a backoff shape with the accepted job definition, and
+PostgreSQL validates it at enqueue time. Pending keyed debounce may replace that definition before
+dispatch. Three shapes exist:
 
 <Tabs items={["TypeScript", "Python", "Go"]}>
   <Tab value="TypeScript">

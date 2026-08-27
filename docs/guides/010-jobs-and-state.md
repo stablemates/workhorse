@@ -5,8 +5,10 @@ makes most of the rest of the system obvious.
 
 ## The three tables
 
-**`job`** holds the things that never change: the id, which queue it's on, its type, the
-payload, how many attempts it's allowed. Written once, when you enqueue. Never updated.
+**`job`** holds the stable id and the definition Workhorse accepted: queue, type, payload,
+attempt budget, and policy. A pending [keyed debounce](215-debounce.md) may replace that
+definition while keeping the id. Once the job starts or becomes non-replaceable, the accepted
+definition freezes.
 
 **`job_runtime`** holds the things that change while the job is alive: what state it's in
 (`scheduled`, `blocked`, `ready`, or `active`), which attempt it's on, and — if something is
@@ -36,10 +38,9 @@ When a job finishes, its row leaves that table completely. So the table only eve
 that is genuinely live — scheduled, blocked, ready, or running. The cost of finding the next job
 depends on how much work is outstanding, not on how much work the system has ever done.
 
-A queue that has processed ten million jobs dispatches exactly as fast as one that has
-processed ten. That's the whole point of the split, and it's the property most simple queue
-designs lose after a few months in production, because they keep finished jobs in the same
-table they search.
+The split keeps completed history out of the ready scan. Its objective is for dispatch cost to scale
+with live work instead of all work the queue has processed. Other factors still affect claim
+latency, including the current backlog, policy checks, database load, and index health.
 
 ## Where the history goes
 

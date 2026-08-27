@@ -13,8 +13,9 @@ When a job exhausts its retries it isn't deleted — it becomes a failed outcome
 with its error attached. Most queues call this the dead letter queue. In Workhorse it's just
 the set of failed jobs, and you can page through it oldest-first to see what's accumulated.
 
-That listing is deliberately kept off the dispatch path, so however many dead letters pile
-up, claiming jobs stays exactly as fast.
+That listing uses a cold failure index outside the ready scan. Dead-letter growth therefore does
+not enlarge the dispatch indexes, although database load and storage health can still affect both
+paths.
 
 ## A new job, not a resurrection
 

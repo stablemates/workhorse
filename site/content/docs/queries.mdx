@@ -16,7 +16,7 @@ const admin = new Admin(pool);
 
 ## Read one known job
 
-`admin.getJob(jobId)` joins the job's immutable identity to its runtime or outcome row and
+`admin.getJob(jobId)` joins the job's stable identity and accepted definition to its runtime or outcome row and
 returns a `JobSnapshot` — or `null` when the identity is unknown or retired.
 
 ```ts

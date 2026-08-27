@@ -26,7 +26,7 @@ capability is a job outcome.
 | Payload contracts        | `demo.contract-check`      | accepted under `v1`, result rejected at completion, payload rejection probe | accepted under `v1`                                     |
 
 The seventeen definitions are staggered across a seventeen-minute cycle, one family per minute. Their
-immutable job identity selects a stable variant for that occurrence, so retries preserve one scenario
+stable job identity selects a stable variant for that occurrence, so retries preserve one scenario
 while later occurrences rotate through different results. Schedule occurrence deduplication still
 guarantees one accepted job per definition and second.
 

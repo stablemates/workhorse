@@ -87,9 +87,10 @@ stuck HTTP call, a wedged subprocess.
 
 Only real execution spends the budget. If the handler suspends on a
 [durable wait](/docs/durable-execution), the job holds no worker slot and the accounting
-pauses — a long sleep uses none of its execution budget. When the budget
-runs out mid-execution, the heartbeat returns `timeout_exceeded` and the worker aborts with
-`ExecutionTimeoutError`.
+pauses — a long sleep uses none of its execution budget. At
+`attempt_timeout_at`, the worker's local timer calls `expire_owned_v1` and aborts with
+`ExecutionTimeoutError`. PostgreSQL closes the owned attempt through that call without waiting for
+lease expiry. Heartbeat and maintenance remain fallbacks when the process or timer cannot settle it.
 
 If attempts remain, PostgreSQL schedules another one under the normal
 [retry rules](/docs/retries). Timeline evidence records the timeout path distinctly from an
@@ -103,10 +104,10 @@ business cutoff regardless of attempts left.
 
 ## Both clocks remain cooperative
 
-Neither clock can interrupt JavaScript. The worker learns about an expired deadline or
-exhausted budget from that job's `heartbeat_many_v1` result, then aborts the handler's signal — the same
-[cooperative pattern as cancellation](/docs/cancellation), with a different reason class. A
-handler that ignores the signal keeps running until its lease expires and recovery cleans up.
+Neither clock can interrupt JavaScript. The local timer asks PostgreSQL to settle the deadline or
+timeout and aborts the handler's signal, using the same
+[cooperative pattern as cancellation](/docs/cancellation) with a different reason class. If the
+handler ignores the signal, its code may continue, but the committed transition fences its writes.
 
 Fencing keeps the record consistent. Completion, failure, heartbeat, checkpoint, and wait
 writes all carry the current fence, so a late write from a timed-out handler cannot replace a

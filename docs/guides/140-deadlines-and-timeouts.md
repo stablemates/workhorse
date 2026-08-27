@@ -58,8 +58,10 @@ handler into shorter stages, and each is individually restartable.
 ## What you get on timeout
 
 Your handler's `signal` aborts, the same as for cancellation, but with a different reason.
-Same rules apply: JavaScript isn't forcibly stopped, so a handler that ignores the signal
-keeps running until the lease expires and recovery cleans up.
+At `attempt_timeout_at`, the worker's local timer calls `expire_owned_v1`. PostgreSQL closes the
+owned attempt and applies its retry decision through that call. Ordinary timeout settlement does
+not wait for lease-expiry recovery. JavaScript is not forcibly stopped, but the completed
+transition fences any late write from a handler that ignores the signal.
 
 ## Next
 

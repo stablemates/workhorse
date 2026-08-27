@@ -11,8 +11,9 @@ Workhorse's behavior predictable — where a job lives, who may touch it, and wh
 
 Workhorse splits every job across three relations, one per kind of fact.
 
-`job` stores immutable identity: queue, type, payload, attempt budget, and policy. PostgreSQL
-writes this row when it accepts the job and never changes its semantic fields.
+`job` stores the stable ID and the accepted definition: queue, type, payload, attempt budget, and
+policy. A pending [keyed debounce](/docs/debounce) may replace that definition while preserving the
+ID. Dispatch or another non-replaceable state freezes the accepted definition.
 
 `job_runtime` is the live row. It exists only while the job is `scheduled`, `blocked`, `ready`,
 or `active`, and it is the only mutable lifecycle relation — workers and SQL functions change it as the job
@@ -22,8 +23,8 @@ becomes eligible, gains an owner, or returns for another attempt.
 PostgreSQL deletes the runtime row and inserts the outcome in the same transaction.
 
 A committed job therefore has one runtime row or one outcome row, never both. No reader can observe
-a job as live and terminal at the same time, and terminal jobs leave the indexes workers search —
-which is why a million finished jobs do not slow the next claim.
+a job as live and terminal at the same time. Terminal jobs leave the indexes workers search. This
+isolates the ready scan from lifetime completed work, so dispatch is designed to scale with live work.
 
 ## The seven states
 

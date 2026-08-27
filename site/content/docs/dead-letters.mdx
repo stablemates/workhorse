@@ -16,7 +16,8 @@ caller-owned pgx or `database/sql` executor.
 ## List terminal failures
 
 `Admin.listDeadLetters` reads a cold failure index that stays separate from the ready and
-active indexes. A backlog of a million failures cannot slow workers as they claim jobs.
+active indexes. Dead-letter growth does not enlarge the dispatch indexes, although database load
+and storage health can still affect both paths.
 
 <Tabs items={["TypeScript", "Python", "Go"]}>
   <Tab value="TypeScript">
