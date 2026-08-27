@@ -17,6 +17,7 @@ import { StatusBadge } from "../status-badge.js";
 import { EmptyState, PageHeader } from "../components/task-list.js";
 import { formatDuration, formatExact, formatRelative } from "../preferences.js";
 import { workerStatus } from "../presentation-policy.js";
+import { HelpButton } from "../charts/system.js";
 
 export function WorkersPage({
   data,
@@ -43,6 +44,15 @@ export function WorkersPage({
                 <Table.Tr>
                   <Table.Th>Worker</Table.Th>
                   <Table.Th>Queues</Table.Th>
+                  <Table.Th>
+                    <Group gap={4} wrap="nowrap">
+                      <span>Schedules</span>
+                      <HelpButton
+                        label="Schedules"
+                        help="These are the schedule namespaces this worker offers. Several workers can offer the same namespace safely because PostgreSQL creates each occurrence once."
+                      />
+                    </Group>
+                  </Table.Th>
                   <Table.Th>Status</Table.Th>
                   <Table.Th>Claims</Table.Th>
                   <Table.Th ta="right">Busy slots</Table.Th>
@@ -81,6 +91,11 @@ export function WorkersPage({
                       </Table.Td>
                       <Table.Td>
                         {worker.queues.length > 0 ? worker.queues.join(", ") : "—"}
+                      </Table.Td>
+                      <Table.Td>
+                        {worker.scheduleNamespaces.length > 0
+                          ? worker.scheduleNamespaces.join(", ")
+                          : "—"}
                       </Table.Td>
                       <Table.Td>
                         <Group gap={6} wrap="nowrap">

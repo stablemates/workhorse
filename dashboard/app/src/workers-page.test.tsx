@@ -42,6 +42,7 @@ describe("workers page", () => {
         {
           id: "worker-1",
           queues: ["default"],
+          scheduleNamespaces: ["billing"],
           hostname: "worker-host",
           pid: 123,
           activeJobs: 0,
@@ -72,6 +73,8 @@ describe("workers page", () => {
     );
 
     expect(html).toContain('aria-label="Pause worker-1"');
+    expect(html).toContain("billing");
+    expect(html).toContain("Several workers can offer the same namespace safely");
     expect(html).toContain('aria-haspopup="dialog"');
     expect(html).not.toContain('role="alert"');
   });

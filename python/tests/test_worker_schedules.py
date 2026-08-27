@@ -31,13 +31,13 @@ def _sync_schedule(
     return int(revision[0])
 
 
-def test_worker_fires_only_when_it_owns_the_maintenance_tick(database_url: str) -> None:
+def test_worker_fires_when_another_worker_owns_the_maintenance_tick(database_url: str) -> None:
     with (
         psycopg.connect(database_url) as definition_connection,
         psycopg.connect(database_url, autocommit=True) as worker_connection,
         psycopg.connect(database_url) as lock_connection,
     ):
-        _sync_schedule(definition_connection, "* * * * *")
+        _sync_schedule(definition_connection, "* * * * * *")
         lock_connection.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended('workhorse:tick', 0))"
         )
@@ -48,10 +48,10 @@ def test_worker_fires_only_when_it_owns_the_maintenance_tick(database_url: str) 
             schedule_namespaces=["python-worker"],
         ).handle("billing.rollup", lambda _payload, _context: {"fired": True})
 
-        assert worker.run_once() is False
+        assert worker.run_once() is True
         assert worker_connection.execute(
             "SELECT count(*) FROM workhorse.schedule_occurrence"
-        ).fetchone() == (0,)
+        ).fetchone() == (1,)
 
 
 def test_worker_fires_cron_catchup_through_the_configured_limit(database_url: str) -> None:

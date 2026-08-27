@@ -46,9 +46,16 @@ You don't have to elect a leader or run exactly one scheduler. Any number of wor
 race and the outcome is one job.
 
 TypeScript workers select definitions with `scheduleNamespaces`. Python workers use
-`schedule_namespaces`, and Go workers use `WorkerOptions.ScheduleNamespaces`. After PostgreSQL
-grants the maintenance tick, the winning worker asks `fire_due_schedules_v1` to evaluate and fire
-the namespace, so every language uses the same cron parser.
+`schedule_namespaces`, and Go workers use `WorkerOptions.ScheduleNamespaces`. Each worker asks
+`fire_due_schedules_v1` to evaluate the namespaces it offers. PostgreSQL coordinates each
+namespace, so different namespace sets can make progress independently.
+
+Workers offer namespaces, not private copies of schedule definitions. PostgreSQL stores the current
+definitions, so workers that offer the same namespace always evaluate the same desired state. The
+dashboard shows how many live workers can evaluate each namespace.
+
+The dashboard also lists Workhorse maintenance beside application schedules. Maintenance runs
+directly in PostgreSQL instead of creating a job. Its last-run value records that direct execution.
 
 ## Deploys don't cause duplicates either
 

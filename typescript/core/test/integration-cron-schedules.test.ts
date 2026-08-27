@@ -272,6 +272,42 @@ describe("cron schedules", () => {
     ).toBe(1);
   });
 
+  it("lets different schedule namespaces progress on the same cadence", async () => {
+    await queue.syncSchedules("integration-a", [
+      {
+        name: "heartbeat-a",
+        schedule: "* * * * * *",
+        job: { type: "cron-a", payload: null, queue: "schedule-a" },
+      },
+    ]);
+    await queue.syncSchedules("integration-b", [
+      {
+        name: "heartbeat-b",
+        schedule: "* * * * * *",
+        job: { type: "cron-b", payload: null, queue: "schedule-b" },
+      },
+    ]);
+    const first = new Worker(queue, {
+      workerId: "scheduler-namespace-a",
+      queue: "schedule-a",
+      scheduleNamespaces: ["integration-a"],
+    }).handle("cron-a", () => null);
+    const second = new Worker(queue, {
+      workerId: "scheduler-namespace-b",
+      queue: "schedule-b",
+      scheduleNamespaces: ["integration-b"],
+    }).handle("cron-b", () => null);
+
+    expect(await Promise.all([first.runOnce(), second.runOnce()])).toEqual([true, true]);
+    expect(
+      (
+        await pool.query<{ namespace: string }>(
+          "SELECT namespace FROM workhorse.schedule_occurrence ORDER BY namespace",
+        )
+      ).rows,
+    ).toEqual([{ namespace: "integration-a" }, { namespace: "integration-b" }]);
+  });
+
   it("uses the cross-runtime offset for hashed cron fields", async () => {
     await queue.syncSchedules("integration", [
       {

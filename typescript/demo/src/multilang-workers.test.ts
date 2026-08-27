@@ -28,11 +28,15 @@ describe("multilanguage demo worker topology", () => {
   });
 
   it("packages and supervises the Python and Go workers", async () => {
-    const [dockerfile, entrypoint, developmentLauncher] = await Promise.all([
-      readFile(resolve("Dockerfile"), "utf8"),
-      readFile(resolve("typescript/demo/container-entrypoint.mjs"), "utf8"),
-      readFile(resolve("scripts/dev.ts"), "utf8"),
-    ]);
+    const [dockerfile, entrypoint, developmentLauncher, pythonWorker, goWorker] = await Promise.all(
+      [
+        readFile(resolve("Dockerfile"), "utf8"),
+        readFile(resolve("typescript/demo/container-entrypoint.mjs"), "utf8"),
+        readFile(resolve("scripts/dev.ts"), "utf8"),
+        readFile(resolve("python/examples/demo_worker.py"), "utf8"),
+        readFile(resolve("go/examples/demo-worker/main.go"), "utf8"),
+      ],
+    );
 
     expect(dockerfile).toContain("FROM golang:1.25-alpine AS go-build");
     expect(dockerfile).toContain("FROM python:3.14-alpine AS python-build");
@@ -40,6 +44,10 @@ describe("multilanguage demo worker topology", () => {
     expect(entrypoint).toContain("workhorse-python-worker.py");
     expect(developmentLauncher).toContain('"./examples/demo-worker"');
     expect(developmentLauncher).toContain('"python/examples/demo_worker.py"');
+    expect(pythonWorker).toContain('SCHEDULE_NAMESPACE = "workhorse-demo"');
+    expect(pythonWorker).toContain("schedule_namespaces=(SCHEDULE_NAMESPACE,)");
+    expect(goWorker).toContain('scheduleNamespace       = "workhorse-demo"');
+    expect(goWorker).toContain("ScheduleNamespaces:  []string{scheduleNamespace}");
   });
 
   it("enforces the shared handler contract in TypeScript", () => {

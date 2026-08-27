@@ -1,6 +1,7 @@
 import type { DashboardCronPage } from "@stablemates/workhorse-dashboard-server/wire";
-import { Code, Paper, ScrollArea, Stack, Switch, Table, Text } from "@mantine/core";
+import { Badge, Code, Group, Paper, ScrollArea, Stack, Switch, Table, Text } from "@mantine/core";
 import { StatusBadge } from "../status-badge.js";
+import { HelpButton } from "../charts/system.js";
 import { EmptyState, PageHeader } from "../components/task-list.js";
 import { formatExact, formatRelative } from "../preferences.js";
 import { presentSchedules } from "../presentation-policy.js";
@@ -32,6 +33,15 @@ export function CronPage({
                   <Table.Th>Schedule</Table.Th>
                   <Table.Th>Expression</Table.Th>
                   <Table.Th>Destination</Table.Th>
+                  <Table.Th>
+                    <Group gap={4} wrap="nowrap">
+                      <span>Evaluators</span>
+                      <HelpButton
+                        label="Evaluators"
+                        help="Live workers that offer this schedule namespace. Several evaluators are safe; if none are live, the schedule waits until one returns."
+                      />
+                    </Group>
+                  </Table.Th>
                   <Table.Th>Status</Table.Th>
                   <Table.Th>Last run</Table.Th>
                   <Table.Th ta="right">Runs</Table.Th>
@@ -40,6 +50,10 @@ export function CronPage({
               <Table.Tbody>
                 {schedules.map((schedule) => {
                   const scheduleKey = `${schedule.namespace}:${schedule.name}`;
+                  const lastRunAt =
+                    schedule.maintenance?.lastCompletedAt ??
+                    schedule.maintenance?.lastStartedAt ??
+                    schedule.lastFiredAt;
                   return (
                     <Table.Tr key={scheduleKey}>
                       <Table.Td maw={340}>
@@ -70,10 +84,34 @@ export function CronPage({
                         </Code>
                       </Table.Td>
                       <Table.Td>
-                        <Text size="sm" c="dimmed">
-                          {schedule.queue ?? "system"}
-                          {schedule.priority === null ? "" : ` · Priority ${schedule.priority}`}
-                        </Text>
+                        <Group gap={4} wrap="nowrap">
+                          <Text size="sm" c="dimmed">
+                            {schedule.kind === "system" ? "Maintenance" : schedule.queue}
+                            {schedule.priority === null ? "" : ` · Priority ${schedule.priority}`}
+                          </Text>
+                          {schedule.kind === "system" ? (
+                            <HelpButton
+                              label="Maintenance"
+                              help="Workers offer this maintenance directly to PostgreSQL. It is not sent to a queue and does not need a handler."
+                            />
+                          ) : null}
+                        </Group>
+                      </Table.Td>
+                      <Table.Td>
+                        {schedule.kind === "system" ? (
+                          <Text c="dimmed" size="sm">
+                            All workers
+                          </Text>
+                        ) : (
+                          <Badge
+                            color={schedule.evaluatorCount === 0 ? "red" : "gray"}
+                            variant="light"
+                          >
+                            {schedule.evaluatorCount === 0
+                              ? "None"
+                              : `${schedule.evaluatorCount} ${schedule.evaluatorCount === 1 ? "worker" : "workers"}`}
+                          </Badge>
+                        )}
                       </Table.Td>
                       <Table.Td>
                         {schedule.kind === "user" ? (
@@ -101,8 +139,8 @@ export function CronPage({
                         )}
                       </Table.Td>
                       <Table.Td>
-                        <Text size="sm" c="dimmed" title={formatExact(schedule.lastFiredAt)}>
-                          {schedule.lastFiredAt ? formatRelative(schedule.lastFiredAt) : "never"}
+                        <Text size="sm" c="dimmed" title={formatExact(lastRunAt)}>
+                          {lastRunAt ? formatRelative(lastRunAt) : "never"}
                         </Text>
                       </Table.Td>
                       <Table.Td ta="right">{schedule.occurrenceCount ?? "—"}</Table.Td>

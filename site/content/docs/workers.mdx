@@ -132,6 +132,9 @@ accidentally write as a stale owner after the job moves on.
 Python uses `schedule_namespaces` and `schedule_catchup_limit` for the same boundary. Go uses
 `WorkerOptions.ScheduleNamespaces` and `WorkerOptions.ScheduleCatchupLimit`.
 
+Each worker publishes its schedule namespaces with its queue list. The Workers page shows both:
+queues control claims, while schedule namespaces control recurring evaluation.
+
 - **`queues`** lets one worker rotate across several queues under the same identity and
   concurrency budget. Use `queue` for one queue; omit both options to use the client default.
 

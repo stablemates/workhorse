@@ -1215,6 +1215,8 @@ export interface WorkerRegistration {
   queue?: string;
   /** Queues this worker claims from. Defaults to the queue's own default. */
   queues?: readonly string[];
+  /** Schedule namespaces this worker offers for evaluation. */
+  scheduleNamespaces?: readonly string[];
   concurrency: number;
   leaseMs?: number;
   heartbeatMs?: number;
@@ -1244,6 +1246,8 @@ export interface WorkerRegistryEntry extends WorkerPauseResult {
   hostname: string;
   pid: number;
   queues: string[];
+  /** Schedule namespaces this worker offers for evaluation. */
+  scheduleNamespaces: string[];
   /** First configured queue, retained for source compatibility. */
   queue: string;
   concurrency: number;

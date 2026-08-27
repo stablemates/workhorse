@@ -1,6 +1,6 @@
 # ADR 0003: Worker-owned in-process scheduling and maintenance
 
-- **Status:** Accepted, amended by [ADR 0004](0004-two-cadence-maintenance.md) and [ADR 0038](0038-evaluate-cron-occurrences-in-postgresql.md)
+- **Status:** Accepted, amended by [ADR 0004](0004-two-cadence-maintenance.md), [ADR 0038](0038-evaluate-cron-occurrences-in-postgresql.md), and [ADR 0046](0046-coordinate-schedules-per-namespace.md)
 - **Date:** 2026-07-29
 - **Supersedes:** [ADR 0002: pg_cron-backed declarative scheduling and maintenance](0002-pg-cron-scheduler.md)
 

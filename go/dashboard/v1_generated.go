@@ -572,6 +572,7 @@ type DashboardScheduleRow struct {
 	UpdatedAt       string  `json:"updatedAt"`
 	OccurrenceCount float64 `json:"occurrenceCount"`
 	LastFiredAt     *string `json:"lastFiredAt"`
+	EvaluatorCount  float64 `json:"evaluatorCount"`
 }
 
 type DashboardSettingsPage struct {
@@ -870,6 +871,7 @@ type DashboardTasksPage struct {
 type DashboardWorkerRow struct {
 	ID                 string   `json:"id"`
 	Queues             []string `json:"queues"`
+	ScheduleNamespaces []string `json:"scheduleNamespaces"`
 	Hostname           *string  `json:"hostname"`
 	Pid                *float64 `json:"pid"`
 	ActiveJobs         float64  `json:"activeJobs"`

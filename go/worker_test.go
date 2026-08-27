@@ -1579,10 +1579,11 @@ func TestWorkerRegistryDeliversRemotePauseAndDeregisters(t *testing.T) {
 	queueName := "go-registry"
 	workerID := "go-registry-worker"
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-		Queue:            queueName,
-		WorkerID:         workerID,
-		PollInterval:     10 * time.Millisecond,
-		RegistryInterval: 100 * time.Millisecond,
+		Queue:              queueName,
+		WorkerID:           workerID,
+		PollInterval:       10 * time.Millisecond,
+		RegistryInterval:   100 * time.Millisecond,
+		ScheduleNamespaces: []string{"go-schedules"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1599,14 +1600,15 @@ func TestWorkerRegistryDeliversRemotePauseAndDeregisters(t *testing.T) {
 	registered := false
 	var firstInstanceID string
 	for time.Now().Before(deadline) {
-		var queues []string
+		var queues, scheduleNamespaces []string
 		err = pool.QueryRow(
 			ctx,
-			"SELECT instance_id::text, queue_names FROM workhorse.worker_registry WHERE worker_id = $1",
+			"SELECT instance_id::text, queue_names, schedule_namespaces FROM workhorse.worker_registry WHERE worker_id = $1",
 			workerID,
-		).Scan(&firstInstanceID, &queues)
+		).Scan(&firstInstanceID, &queues, &scheduleNamespaces)
 		if err == nil {
-			registered = len(queues) == 1 && queues[0] == queueName
+			registered = len(queues) == 1 && queues[0] == queueName &&
+				len(scheduleNamespaces) == 1 && scheduleNamespaces[0] == "go-schedules"
 			break
 		}
 		time.Sleep(10 * time.Millisecond)

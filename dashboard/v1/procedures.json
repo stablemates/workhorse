@@ -2006,7 +2006,8 @@
                     "enum": [
                       "history_partitions",
                       "history_retention",
-                      "terminal_storage"
+                      "terminal_storage",
+                      "tick"
                     ]
                   },
                   "lastStartedAt": {
@@ -4739,6 +4740,9 @@
               "type": "string"
             }
           ]
+        },
+        "evaluatorCount": {
+          "type": "number"
         }
       },
       "required": [
@@ -4755,7 +4759,8 @@
         "revision",
         "updatedAt",
         "occurrenceCount",
-        "lastFiredAt"
+        "lastFiredAt",
+        "evaluatorCount"
       ]
     },
     "DashboardSettingsPage": {
@@ -6207,6 +6212,12 @@
             "type": "string"
           }
         },
+        "scheduleNamespaces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "hostname": {
           "anyOf": [
             {
@@ -6309,6 +6320,7 @@
       "required": [
         "id",
         "queues",
+        "scheduleNamespaces",
         "hostname",
         "pid",
         "activeJobs",

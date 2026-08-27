@@ -75,7 +75,7 @@ export const SQL_STATEMENTS = {
   list_waits:
     "SELECT job_id::text job_id,wait_name,mode,duration_ms::text duration_ms,requested_wake_at,wake_at,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.job_wait WHERE job_id=$1::uuid ORDER BY created_at,wait_name",
   list_workers:
-    "SELECT worker_id,instance_id,hostname,pid,queue_names,queue_name,concurrency,active_slots,draining,paused,paused_by,paused_reason,paused_at,started_at,last_heartbeat_at FROM workhorse.worker_registry ORDER BY last_heartbeat_at DESC,worker_id",
+    "SELECT worker_id,instance_id,hostname,pid,queue_names,schedule_namespaces,queue_name,concurrency,active_slots,draining,paused,paused_by,paused_reason,paused_at,started_at,last_heartbeat_at FROM workhorse.worker_registry ORDER BY last_heartbeat_at DESC,worker_id",
   promote_v1: "SELECT workhorse.promote_v1($1::integer) AS promoted",
   purge_queue:
     "SELECT deleted_count FROM workhorse.purge_queue_v1($1::text,$2::text,$3::text,$4::text)",
@@ -91,7 +91,7 @@ export const SQL_STATEMENTS = {
   redrive_many:
     "SELECT status,source_job_id::text source_job_id,target_job_id::text target_job_id,source_state,target_state,requested_at,source_finished_at_cursor,has_more FROM workhorse.redrive_many_v1($1::jsonb,$2::integer,$3::boolean,$4::text,$5::text,$6::text,$7::timestamptz,$8::uuid) ORDER BY ordinal",
   register_worker_v1:
-    "SELECT workhorse.register_worker_v1(\n       $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::integer,\n       $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,\n       $12::integer, $13::integer, $14::boolean\n     ) AS paused",
+    "SELECT workhorse.register_worker_v1(\n       $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::text[],\n       $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,\n       $12::integer, $13::integer, $14::integer, $15::boolean\n     ) AS paused",
   run_maintenance_v1: "SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)",
   save_checkpoint_v1:
     "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
@@ -195,7 +195,7 @@ export const SQL_STATEMENTS = {
   set_worker_paused_v1:
     "SELECT * FROM workhorse.set_worker_paused_v1($1::text, $2::boolean, $3::text, $4::text, $5::text)",
   worker_registry__worker_registry:
-    "SELECT worker_id, instance_id, hostname, pid, queue_names, queue_name, concurrency, active_slots, draining, paused, paused_by,\n              paused_reason, paused_at, started_at, last_heartbeat_at\n         FROM workhorse.worker_registry\n        ORDER BY last_heartbeat_at DESC, worker_id",
+    "SELECT worker_id, instance_id, hostname, pid, queue_names, schedule_namespaces, queue_name, concurrency, active_slots, draining, paused, paused_by,\n              paused_reason, paused_at, started_at, last_heartbeat_at\n         FROM workhorse.worker_registry\n        ORDER BY last_heartbeat_at DESC, worker_id",
   prune_worker_registry_v1:
     "SELECT workhorse.prune_worker_registry_v1(make_interval(secs => $1::double precision)) AS count",
   protocol_version: "SELECT version FROM workhorse.protocol_version ORDER BY version",

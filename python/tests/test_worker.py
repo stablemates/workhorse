@@ -948,6 +948,7 @@ def test_worker_registry_delivers_remote_pause_and_deregisters(database_url: str
             worker_id="python-registry-worker",
             poll_ms=10,
             registry_interval_ms=100,
+            schedule_namespaces=("python-schedules",),
         ).handle("registered", lambda _payload, _context: handled.set())
 
         def run_worker() -> None:
@@ -963,8 +964,8 @@ def test_worker_registry_delivers_remote_pause_and_deregisters(database_url: str
         deadline = monotonic() + 5
         while monotonic() < deadline:
             row = operator_connection.execute(
-                "SELECT instance_id::text, queue_names FROM workhorse.worker_registry "
-                "WHERE worker_id = 'python-registry-worker'"
+                "SELECT instance_id::text, queue_names, schedule_namespaces "
+                "FROM workhorse.worker_registry WHERE worker_id = 'python-registry-worker'"
             ).fetchone()
             if row is not None:
                 break
@@ -972,6 +973,7 @@ def test_worker_registry_delivers_remote_pause_and_deregisters(database_url: str
         assert row is not None
         first_instance_id = row[0]
         assert row[1] == ["python-registry"]
+        assert row[2] == ["python-schedules"]
 
         operator_connection.execute(
             "SELECT * FROM workhorse.set_worker_paused_v1(%s, true, %s, %s, %s)",

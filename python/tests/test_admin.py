@@ -82,7 +82,7 @@ def _prepare_admin_fixture(database_url: str) -> AdminFixture:
         )
         connection.execute(
             """SELECT workhorse.register_worker_v1(
-                 %s::text, %s::uuid, %s::text, %s::integer, %s::text[], %s::integer,
+                 %s::text, %s::uuid, %s::text, %s::integer, %s::text[], %s::text[], %s::integer,
                  %s::integer, %s::integer, %s::integer, %s::integer, %s::integer,
                  %s::integer, %s::integer, %s::boolean)""",
             (
@@ -91,6 +91,7 @@ def _prepare_admin_fixture(database_url: str) -> AdminFixture:
                 "admin-test-host",
                 42,
                 ["admin-failure"],
+                [],
                 1,
                 30_000,
                 10_000,

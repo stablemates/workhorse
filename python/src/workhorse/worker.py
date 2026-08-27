@@ -1471,8 +1471,7 @@ class Worker:
                 )
             maintenance_span.set_attribute("workhorse.maintenance.rows_affected", total_rows)
         self._last_maintenance_at = now_monotonic
-        owns_tick = bool(tick) and all(row["skipped_lock"] is not True for row in tick)
-        if not owns_tick or not self.schedule_namespaces:
+        if not self.schedule_namespaces:
             return True
         now = datetime.now(timezone.utc)
         fired_occurrences = self._executor.rows(
@@ -1526,6 +1525,7 @@ class Worker:
                         socket.gethostname() or "python-worker",
                         os.getpid(),
                         list(self.queues),
+                        list(self.schedule_namespaces),
                         self.concurrency,
                         self.lease_ms,
                         self.heartbeat_ms,

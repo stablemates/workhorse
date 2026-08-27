@@ -645,6 +645,7 @@ func (worker *Worker) refreshRegistration(ctx context.Context, executor Executor
 		hostname,
 		os.Getpid(),
 		worker.queues,
+		worker.scheduleNamespaces,
 		worker.concurrency,
 		int(worker.leaseDuration/time.Millisecond),
 		int(worker.heartbeatInterval/time.Millisecond),
@@ -723,7 +724,6 @@ func (worker *Worker) runMaintenance(ctx context.Context) error {
 	if len(rows) == 0 {
 		return errors.New(invalidMaintenanceResultMessage)
 	}
-	ownsTick := true
 	for _, row := range rows {
 		phase, phaseOK := row[rowPhaseField].(string)
 		skipped, skippedOK := row[rowSkippedLockField].(bool)
@@ -731,7 +731,6 @@ func (worker *Worker) runMaintenance(ctx context.Context) error {
 			return errors.New(invalidMaintenanceResultMessage)
 		}
 		if skipped {
-			ownsTick = false
 			continue
 		}
 		if row[rowErrorField] != nil {
@@ -741,7 +740,7 @@ func (worker *Worker) runMaintenance(ctx context.Context) error {
 			worker.recordRecovery(ctx, row)
 		}
 	}
-	if ownsTick && len(worker.scheduleNamespaces) > 0 {
+	if len(worker.scheduleNamespaces) > 0 {
 		if err := worker.fireDueSchedules(ctx, executor, time.Now()); err != nil {
 			return err
 		}

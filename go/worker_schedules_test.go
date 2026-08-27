@@ -9,7 +9,7 @@ import (
 	workhorse "github.com/stablemates/workhorse/go"
 )
 
-func TestWorkerFiresSchedulesOnlyWhenItOwnsTheMaintenanceTick(t *testing.T) {
+func TestWorkerFiresSchedulesWhenAnotherWorkerOwnsTheMaintenanceTick(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-schedule-lock")
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -43,15 +43,8 @@ func TestWorkerFiresSchedulesOnlyWhenItOwnsTheMaintenanceTick(t *testing.T) {
 		return map[string]any{"fired": true}, nil
 	})
 
-	if processed, err := worker.RunOnce(ctx); err != nil || processed {
-		t.Fatalf("locked maintenance run: processed=%t err=%v", processed, err)
-	}
-	assertScheduleOccurrenceCount(t, ctx, pool, "go-worker", "billing-rollup", 0)
-	if err := lock.Rollback(ctx); err != nil {
-		t.Fatal(err)
-	}
 	if processed, err := worker.RunOnce(ctx); err != nil || !processed {
-		t.Fatalf("owned maintenance run: processed=%t err=%v", processed, err)
+		t.Fatalf("locked maintenance run: processed=%t err=%v", processed, err)
 	}
 	assertScheduleOccurrenceCount(t, ctx, pool, "go-worker", "billing-rollup", 1)
 }

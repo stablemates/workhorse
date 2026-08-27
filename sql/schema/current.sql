@@ -375,6 +375,10 @@ CREATE TABLE IF NOT EXISTS workhorse.worker_registry (
     cardinality(queue_names) >= 1
     AND array_position(queue_names, NULL) IS NULL
     AND array_position(queue_names, '') IS NULL
+  ),
+  schedule_namespaces text[] NOT NULL DEFAULT '{}' CHECK (
+    array_position(schedule_namespaces, NULL) IS NULL
+    AND array_position(schedule_namespaces, '') IS NULL
   )
 );
 
@@ -1292,7 +1296,7 @@ ON CONFLICT (singleton) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS workhorse.maintenance_state (
   task_name text PRIMARY KEY CHECK (
-    task_name IN ('history_partitions', 'history_retention', 'terminal_storage')
+    task_name IN ('tick', 'history_partitions', 'history_retention', 'terminal_storage')
   ),
   last_started_at timestamptz,
   last_completed_at timestamptz,
@@ -1309,6 +1313,7 @@ CREATE TABLE IF NOT EXISTS workhorse.maintenance_state (
 INSERT INTO workhorse.maintenance_state(
   task_name, history_retained_before
 ) VALUES
+  ('tick', NULL),
   ('history_partitions', NULL),
   ('history_retention', date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC')
     AT TIME ZONE 'UTC' - interval '14 days'),
@@ -3900,6 +3905,8 @@ AS $$
 DECLARE
   v_definition record;
   v_occurrence timestamptz;
+  v_locked_namespaces text[] := '{}';
+  v_skipped_namespaces text[] := '{}';
 BEGIN
   IF p_namespaces IS NULL OR array_position(p_namespaces, '') IS NOT NULL THEN
     RAISE EXCEPTION 'schedule namespaces must contain non-empty names';
@@ -3923,6 +3930,18 @@ BEGIN
               definition.timezone, definition.revision
      ORDER BY definition.namespace, definition.schedule_name
   LOOP
+    IF v_definition.namespace = ANY(v_skipped_namespaces) THEN CONTINUE; END IF;
+    IF NOT v_definition.namespace = ANY(v_locked_namespaces) THEN
+      IF pg_try_advisory_xact_lock(hashtextextended(
+        'workhorse:schedule-namespace:' || v_definition.namespace,
+        0
+      )) THEN
+        v_locked_namespaces := array_append(v_locked_namespaces, v_definition.namespace);
+      ELSE
+        v_skipped_namespaces := array_append(v_skipped_namespaces, v_definition.namespace);
+        CONTINUE;
+      END IF;
+    END IF;
     FOR v_occurrence IN
       SELECT evaluated.occurrence_at
         FROM workhorse.cron_occurrences_v1(
@@ -5937,6 +5956,7 @@ CREATE OR REPLACE FUNCTION workhorse.register_worker_v1(
   p_hostname text,
   p_pid integer,
   p_queue_names text[],
+  p_schedule_namespaces text[],
   p_concurrency integer,
   p_lease_ms integer,
   p_heartbeat_ms integer,
@@ -5964,6 +5984,15 @@ BEGIN
      OR cardinality(p_queue_names) <> (SELECT count(DISTINCT queue_name) FROM unnest(p_queue_names) queue_name) THEN
     RAISE EXCEPTION 'queue_names must contain distinct non-empty names';
   END IF;
+  IF p_schedule_namespaces IS NULL
+     OR EXISTS (
+       SELECT 1 FROM unnest(p_schedule_namespaces) namespace
+        WHERE namespace IS NULL OR namespace = ''
+     )
+     OR cardinality(p_schedule_namespaces) <>
+       (SELECT count(DISTINCT namespace) FROM unnest(p_schedule_namespaces) namespace) THEN
+    RAISE EXCEPTION 'schedule_namespaces must contain distinct non-empty names';
+  END IF;
   IF p_hostname IS NULL OR p_hostname = '' THEN
     RAISE EXCEPTION 'hostname must not be empty';
   END IF;
@@ -5972,10 +6001,12 @@ BEGIN
   END IF;
 
   INSERT INTO workhorse.worker_registry AS registry
-    (worker_id, instance_id, hostname, pid, queue_names, queue_name, concurrency, lease_ms, heartbeat_ms,
+    (worker_id, instance_id, hostname, pid, queue_names, schedule_namespaces, queue_name,
+     concurrency, lease_ms, heartbeat_ms,
      poll_ms, maintenance_interval_ms, maintenance_task_poll_ms, registry_interval_ms,
      active_slots, draining)
-  VALUES (p_worker_id, p_instance_id, p_hostname, p_pid, p_queue_names, p_queue_names[1], p_concurrency,
+  VALUES (p_worker_id, p_instance_id, p_hostname, p_pid, p_queue_names, p_schedule_namespaces,
+          p_queue_names[1], p_concurrency,
           p_lease_ms, p_heartbeat_ms, p_poll_ms, p_maintenance_interval_ms,
           p_maintenance_task_poll_ms, p_registry_interval_ms,
           COALESCE(p_active_slots, 0), COALESCE(p_draining, false))
@@ -5984,6 +6015,7 @@ BEGIN
         hostname = EXCLUDED.hostname,
         pid = EXCLUDED.pid,
         queue_names = EXCLUDED.queue_names,
+        schedule_namespaces = EXCLUDED.schedule_namespaces,
         queue_name = EXCLUDED.queue_name,
         concurrency = EXCLUDED.concurrency,
         lease_ms = EXCLUDED.lease_ms,
@@ -8932,6 +8964,8 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   v_started_at timestamptz;
+  v_tick_started_at timestamptz;
+  v_had_error boolean := false;
 BEGIN
   IF NOT pg_try_advisory_xact_lock(hashtextextended('workhorse:tick', 0)) THEN
     RETURN QUERY VALUES
@@ -8939,6 +8973,11 @@ BEGIN
       ('recover'::text, 0, 0, true, NULL::jsonb, 0, 0, '[]'::jsonb);
     RETURN;
   END IF;
+
+  v_tick_started_at := clock_timestamp();
+  UPDATE workhorse.maintenance_state
+     SET last_started_at = v_tick_started_at, updated_at = v_tick_started_at
+   WHERE task_name = 'tick';
 
   phase := 'promote';
   rows_affected := 0;
@@ -8952,6 +8991,7 @@ BEGIN
     rows_affected := workhorse.promote_v1(p_promote_limit);
   EXCEPTION WHEN OTHERS THEN
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
+    v_had_error := true;
   END;
   duration_ms := GREATEST(
     0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
@@ -8969,11 +9009,18 @@ BEGIN
       FROM workhorse.recover_expired_telemetry_v1(p_recover_limit) recovery;
   EXCEPTION WHEN OTHERS THEN
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
+    v_had_error := true;
   END;
   duration_ms := GREATEST(
     0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
   );
   RETURN NEXT;
+
+  IF NOT v_had_error THEN
+    UPDATE workhorse.maintenance_state
+       SET last_completed_at = clock_timestamp(), updated_at = clock_timestamp()
+     WHERE task_name = 'tick';
+  END IF;
 END;
 $$;
 
@@ -11390,7 +11437,8 @@ CREATE OR REPLACE VIEW workhorse.dashboard_schedule_occurrence_v1 AS
 CREATE OR REPLACE VIEW workhorse.dashboard_worker_registry_v1 AS
   SELECT worker_id, hostname, pid, queue_name, concurrency, lease_ms, heartbeat_ms, poll_ms,
          maintenance_interval_ms, maintenance_task_poll_ms, registry_interval_ms, active_slots,
-         draining, paused, started_at, last_heartbeat_at, queue_names FROM workhorse.worker_registry;
+         draining, paused, started_at, last_heartbeat_at, queue_names, schedule_namespaces
+    FROM workhorse.worker_registry;
 
 CREATE OR REPLACE FUNCTION workhorse.dashboard_job_estimate_v1()
 RETURNS TABLE (estimate bigint)
@@ -12028,7 +12076,8 @@ AS $$
      GROUP BY worker_id
   ), workers AS (
     SELECT fleet.id, registry.worker_id IS NOT NULL AS registered,
-           registry.hostname, registry.pid, registry.queue_names, registry.concurrency,
+           registry.hostname, registry.pid, registry.queue_names, registry.schedule_namespaces,
+           registry.concurrency,
            registry.active_slots, registry.draining, registry.paused, registry.started_at,
            registry.last_heartbeat_at,
            COALESCE(active.active_jobs, 0)::integer AS active_jobs,
@@ -12049,6 +12098,7 @@ AS $$
     'workers', COALESCE((
       SELECT jsonb_agg(jsonb_build_object(
         'id', id, 'queues', COALESCE(to_jsonb(queue_names), '[]'::jsonb),
+        'scheduleNamespaces', COALESCE(to_jsonb(schedule_namespaces), '[]'::jsonb),
         'hostname', hostname, 'pid', pid, 'activeJobs', active_jobs,
         'concurrency', concurrency, 'activeSlots', active_slots,
         'draining', COALESCE(draining, false), 'completedAttempts', completed_attempts,
@@ -12070,7 +12120,12 @@ AS $$
            definition.queue_name, definition.job_type, definition.priority, definition.enabled,
            definition.revision, definition.updated_at,
            count(occurrence.occurrence_at)::integer AS occurrence_count,
-           max(occurrence.fired_at) AS last_fired_at
+           max(occurrence.fired_at) AS last_fired_at,
+           (SELECT count(*)::integer
+              FROM workhorse.dashboard_worker_registry_v1 registry
+             WHERE definition.namespace = ANY(registry.schedule_namespaces)
+               AND registry.last_heartbeat_at >= clock_timestamp() - interval '30 seconds')
+             AS evaluator_count
       FROM workhorse.dashboard_schedule_definition_v1 definition
       LEFT JOIN workhorse.dashboard_schedule_occurrence_v1 occurrence
         ON occurrence.namespace = definition.namespace
@@ -12090,7 +12145,8 @@ AS $$
       'active', enabled, 'revision', revision::text,
       'updatedAt', workhorse.dashboard_iso_v1(updated_at),
       'occurrenceCount', occurrence_count,
-      'lastFiredAt', workhorse.dashboard_iso_v1(last_fired_at)
+      'lastFiredAt', workhorse.dashboard_iso_v1(last_fired_at),
+      'evaluatorCount', evaluator_count
     ) ORDER BY namespace, schedule_name), '[]'::jsonb) AS value FROM schedule_rows
   ), policy AS (
     SELECT * FROM workhorse.dashboard_maintenance_policy_v1 WHERE singleton
@@ -12100,6 +12156,12 @@ AS $$
       'lastStartedAt', workhorse.dashboard_iso_v1(state.last_started_at),
       'lastCompletedAt', workhorse.dashboard_iso_v1(state.last_completed_at),
       'due', CASE state.task_name
+        WHEN 'tick' THEN state.last_completed_at IS NULL
+          OR state.last_completed_at <= clock_timestamp()
+            - make_interval(secs => COALESCE(
+                (p_input #>> '{maintenanceLoops,tickIntervalMs}')::numeric,
+                1000
+              ) / 1000.0)
         WHEN 'history_partitions' THEN state.last_completed_at IS NULL
           OR state.last_completed_at <= clock_timestamp()
             - make_interval(secs => policy.partition_preparation_interval_ms / 1000.0)
@@ -12119,7 +12181,7 @@ AS $$
     ) ORDER BY state.task_name), '[]'::jsonb) AS value
       FROM workhorse.dashboard_maintenance_state_v1 state
       CROSS JOIN policy
-     WHERE state.task_name IN ('history_partitions', 'history_retention', 'terminal_storage')
+     WHERE state.task_name IN ('tick', 'history_partitions', 'history_retention', 'terminal_storage')
   )
   SELECT jsonb_build_object(
     'capturedAt', workhorse.dashboard_iso_v1(clock_timestamp()),

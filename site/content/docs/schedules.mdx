@@ -96,10 +96,18 @@ parser and one stored IANA timezone.
 A worker with an empty list fires nothing. Point at least one worker at each namespace you
 synchronize, or its schedules sit idle.
 
+Workers offer namespaces rather than private schedule copies. PostgreSQL stores the current
+definitions, so workers that offer the same namespace evaluate the same desired state. The
+Schedules page reports how many live workers offer each namespace.
+
+The page also lists Workhorse maintenance beside application schedules. Maintenance runs directly
+in PostgreSQL instead of creating a job, and its last-run value records that direct execution.
+
 The synchronous Python `Worker` provides the same participation through `schedule_namespaces` and
 `schedule_catchup_limit`. Go uses `WorkerOptions.ScheduleNamespaces` and
-`WorkerOptions.ScheduleCatchupLimit`. Every runtime evaluates definitions only when PostgreSQL
-grants the maintenance tick, so one process offers the cron work for each pass.
+`WorkerOptions.ScheduleCatchupLimit`. Every runtime offers its configured namespaces on the
+maintenance cadence. PostgreSQL coordinates each namespace, so workers with different namespace
+sets do not depend on the same maintenance-tick winner.
 
 ## Why competing workers create one job
 

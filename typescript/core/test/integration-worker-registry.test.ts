@@ -35,6 +35,7 @@ describe("worker registry", () => {
     const worker = new Worker(queue, {
       workerId: "multi-queue-registration",
       queues: ["mail", "billing"],
+      scheduleNamespaces: ["commerce"],
       registryIntervalMs: 100,
     });
 
@@ -44,7 +45,10 @@ describe("worker registry", () => {
       admin
         .listWorkers()
         .then((workers) => workers.find((entry) => entry.workerId === "multi-queue-registration")),
-    ).resolves.toMatchObject({ queues: ["mail", "billing"] });
+    ).resolves.toMatchObject({
+      queues: ["mail", "billing"],
+      scheduleNamespaces: ["commerce"],
+    });
   });
 
   it("subscribes to notifications for every configured queue", async () => {
@@ -956,6 +960,18 @@ describe("worker registry", () => {
       "tick:promote",
       "tick:recover",
     ]);
+
+    const tickState = await pool.query<{
+      last_started_at: Date | null;
+      last_completed_at: Date | null;
+    }>(
+      `SELECT last_started_at, last_completed_at
+         FROM workhorse.maintenance_state
+        WHERE task_name = 'tick'`,
+    );
+    expect(tickState.rows).toHaveLength(1);
+    expect(tickState.rows[0]?.last_started_at).toBeInstanceOf(Date);
+    expect(tickState.rows[0]?.last_completed_at).toBeInstanceOf(Date);
   });
 
   it("keeps idle claim polling on pollMs despite more frequent maintenance wakeups", async () => {
@@ -1413,17 +1429,13 @@ describe("worker registry", () => {
     expect(listenersAfterStop.rows).toEqual([{ count: 0 }]);
   });
 
-  it("does not scan recurring schedules when the tick advisory lock is skipped", async () => {
+  it("offers schedule namespaces when another worker owns the maintenance tick", async () => {
     const skippedTick: MaintenancePhaseResult[] = [
       { phase: "promote", rowsAffected: 0, durationMs: 0, skippedLock: true, error: null },
       { phase: "recover", rowsAffected: 0, durationMs: 0, skippedLock: true, error: null },
     ];
-    const ownedTick: MaintenancePhaseResult[] = skippedTick.map((result) => ({
-      ...result,
-      skippedLock: false,
-    }));
     const now = vi.spyOn(Date, "now").mockReturnValue(0);
-    const tick = vi.spyOn(queue, "tick").mockResolvedValueOnce(skippedTick);
+    const tick = vi.spyOn(queue, "tick").mockResolvedValue(skippedTick);
     const prepareHistoryPartitions = vi
       .spyOn(queue, "prepareHistoryPartitions")
       .mockResolvedValue([]);
@@ -1441,13 +1453,12 @@ describe("worker registry", () => {
       });
 
       await worker.runOnce();
-      expect(fireDueSchedules).not.toHaveBeenCalled();
-
-      tick.mockResolvedValueOnce(ownedTick);
-      now.mockReturnValue(100);
-      await worker.runOnce();
       expect(fireDueSchedules).toHaveBeenCalledOnce();
       expect(fireDueSchedules.mock.calls[0]?.[0]).toEqual(["integration"]);
+
+      now.mockReturnValue(100);
+      await worker.runOnce();
+      expect(fireDueSchedules).toHaveBeenCalledTimes(2);
     } finally {
       now.mockRestore();
       tick.mockRestore();

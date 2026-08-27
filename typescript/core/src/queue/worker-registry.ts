@@ -15,6 +15,7 @@ export class WorkerRegistryModule extends QueueModule {
         registration.hostname,
         registration.pid,
         registration.queues ?? [registration.queue ?? this.context.defaultQueue],
+        registration.scheduleNamespaces ?? [],
         registration.concurrency,
         registration.leaseMs ?? 30_000,
         registration.heartbeatMs ?? 10_000,
@@ -86,6 +87,7 @@ export class WorkerRegistryModule extends QueueModule {
       hostname: string;
       pid: number;
       queue_names: string[];
+      schedule_namespaces: string[];
       queue_name: string;
       concurrency: number;
       active_slots: number;
@@ -103,6 +105,7 @@ export class WorkerRegistryModule extends QueueModule {
       hostname: row.hostname,
       pid: row.pid,
       queues: row.queue_names,
+      scheduleNamespaces: row.schedule_namespaces,
       queue: row.queue_name,
       concurrency: row.concurrency,
       activeSlots: row.active_slots,

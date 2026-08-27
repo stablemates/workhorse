@@ -259,6 +259,7 @@ describe("schema installation", () => {
         "started_at",
         "last_heartbeat_at",
         "queue_names",
+        "schedule_namespaces",
       ],
     });
 

@@ -1586,6 +1586,7 @@ export class Worker {
         hostname: workerHostname(),
         pid: process.pid,
         queues: this.queueNames,
+        scheduleNamespaces: this.scheduleNamespaces,
         concurrency: this.concurrency,
         leaseMs: this.leaseMs,
         heartbeatMs: this.heartbeatMs,
@@ -1671,8 +1672,7 @@ export class Worker {
       for (const result of tick) this.recordMaintenance("tick", result);
       this.lastTickAt = nowMs;
 
-      const ownsTick = tick.length > 0 && tick.every((result) => !result.skippedLock);
-      if (ownsTick && this.scheduleNamespaces.length > 0) {
+      if (this.scheduleNamespaces.length > 0) {
         await this.queue.fireDueSchedules(
           this.scheduleNamespaces,
           new Date(),
@@ -1808,10 +1808,10 @@ export class Worker {
   /**
    * Refresh this worker's registration on its own cadence.
    *
-   * This is deliberately a separate loop from maintenance. A maintenance pass runs `tick_v1` and,
-   * when it owns the tick, evaluates and fires every due schedule, so sharing a loop would let a
-   * slow or busy maintenance pass starve fleet liveness. Operator visibility and the pause signal
-   * must not degrade because schedule evaluation got expensive.
+   * This is deliberately a separate loop from maintenance. A maintenance pass runs `tick_v1` and
+   * offers this worker's schedule namespaces, so sharing a loop would let a slow or busy pass
+   * starve fleet liveness. Operator visibility and the pause signal must not degrade because
+   * schedule evaluation got expensive.
    */
   private async registrationLoop(shouldStop: () => boolean, signal?: AbortSignal): Promise<void> {
     if (this.registryIntervalMs === 0) return;

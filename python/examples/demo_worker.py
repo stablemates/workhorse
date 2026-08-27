@@ -14,6 +14,7 @@ LANGUAGE_JOB_TYPE = "demo.language-worker"
 SHARED_JOB_TYPE = "demo.shared-worker"
 PYTHON_QUEUE = "demo-python"
 SHARED_QUEUE = "demo-shared"
+SCHEDULE_NAMESPACE = "workhorse-demo"
 WORKER_CONCURRENCY = 3
 DEFAULT_POLL_MS = 15_000
 
@@ -55,6 +56,7 @@ def main() -> None:
                 worker_id=worker_id(),
                 concurrency=WORKER_CONCURRENCY,
                 poll_ms=poll_ms,
+                schedule_namespaces=(SCHEDULE_NAMESPACE,),
                 maintenance_interval_ms=1_000,
                 registry_interval_ms=250,
             )

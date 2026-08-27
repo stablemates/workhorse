@@ -85,7 +85,7 @@ class DashboardCronPageMaintenancePolicy(TypedDict, total=False):
 
 
 class DashboardCronPageMaintenanceTasksItem(TypedDict, total=False):
-    task: Required[Literal["history_partitions", "history_retention", "terminal_storage"]]
+    task: Required[Literal["history_partitions", "history_retention", "terminal_storage", "tick"]]
     lastStartedAt: Required[str | None]
     lastCompletedAt: Required[str | None]
     due: Required[bool]
@@ -720,6 +720,7 @@ class DashboardScheduleRow(TypedDict, total=False):
     updatedAt: Required[str]
     occurrenceCount: Required[float]
     lastFiredAt: Required[str | None]
+    evaluatorCount: Required[float]
 
 
 class DashboardSettingsPageRecommendationInputsStatistics(TypedDict, total=False):
@@ -1073,6 +1074,7 @@ class DashboardTasksPage(TypedDict, total=False):
 class DashboardWorkerRow(TypedDict, total=False):
     id: Required[str]
     queues: Required[list[str]]
+    scheduleNamespaces: Required[list[str]]
     hostname: Required[str | None]
     pid: Required[float | None]
     activeJobs: Required[float]

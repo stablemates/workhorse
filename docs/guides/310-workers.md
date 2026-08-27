@@ -100,9 +100,12 @@ A few consequences worth knowing:
 
 ## The worker registry
 
-Each worker periodically writes a row saying it exists: its id, queues, concurrency, and how
-many slots are busy. That's how a dashboard can show a fleet it doesn't host — process
+Each worker periodically writes a row saying it exists: its id, queues, schedule namespaces,
+concurrency, and how many slots are busy. That's how a dashboard can show a fleet it doesn't host — process
 memory can't answer "which workers are alive" once workers are deployed separately.
+
+The namespace list answers a different question from the queue list. Queues control which jobs a
+worker can claim. Schedule namespaces control which recurring definitions it can evaluate.
 
 This registry is never read when claiming jobs, so it can't slow dispatch down.
 

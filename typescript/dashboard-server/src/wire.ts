@@ -357,6 +357,8 @@ export interface DashboardScheduleRow {
   updatedAt: string;
   occurrenceCount: number;
   lastFiredAt: string | null;
+  /** Live workers that currently offer this schedule namespace. */
+  evaluatorCount: number;
 }
 
 export interface MaintenanceLoopCadences {
@@ -367,6 +369,8 @@ export interface DashboardWorkerRow {
   id: string;
   /** Queues this worker can claim from, or an empty list before it registers. */
   queues: string[];
+  /** Schedule namespaces this worker offers, or an empty list before it registers. */
+  scheduleNamespaces: string[];
   /**
    * Where the worker runs, reported independently of its name.
    *
@@ -489,7 +493,7 @@ export interface DashboardCronPage {
       updatedAt: string;
     };
     tasks: Array<{
-      task: "history_partitions" | "history_retention" | "terminal_storage";
+      task: "tick" | "history_partitions" | "history_retention" | "terminal_storage";
       lastStartedAt: string | null;
       lastCompletedAt: string | null;
       due: boolean;

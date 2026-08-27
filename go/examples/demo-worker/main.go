@@ -22,6 +22,7 @@ const (
 	sharedJobType           = "demo.shared-worker"
 	goQueue                 = "demo-go"
 	sharedQueue             = "demo-shared"
+	scheduleNamespace       = "workhorse-demo"
 	workerConcurrency       = 3
 	defaultPollMilliseconds = 15_000
 )
@@ -117,6 +118,7 @@ func main() {
 		WorkerID:            id,
 		Concurrency:         workerConcurrency,
 		PollInterval:        poll,
+		ScheduleNamespaces:  []string{scheduleNamespace},
 		MaintenanceInterval: time.Second,
 		RegistryInterval:    250 * time.Millisecond,
 		ShutdownGracePeriod: 25 * time.Second,

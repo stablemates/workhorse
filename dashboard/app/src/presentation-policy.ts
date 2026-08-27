@@ -334,7 +334,7 @@ export function capActivityGroups(page: DashboardActivityPage): DashboardActivit
 
 export interface PresentedScheduleRow extends Omit<
   DashboardScheduleRow,
-  "kind" | "identity" | "queue" | "priority" | "occurrenceCount"
+  "kind" | "identity" | "queue" | "priority" | "occurrenceCount" | "evaluatorCount"
 > {
   kind: "user" | "system";
   identity: { kind: "user" | "system"; namespace: string; name: string };
@@ -342,6 +342,7 @@ export interface PresentedScheduleRow extends Omit<
   queue: string | null;
   priority: number | null;
   occurrenceCount: number | null;
+  evaluatorCount: number | null;
   maintenance: {
     intervalMs: number;
     phases: string[];
@@ -364,7 +365,7 @@ export function presentSchedules(page: DashboardCronPage): PresentedScheduleRow[
   const { cadences, policy, tasks } = page.maintenance;
   const state = new Map(tasks.map((task) => [task.task, task]));
   const maintenance = (
-    task: "history_partitions" | "history_retention" | "terminal_storage",
+    task: "tick" | "history_partitions" | "history_retention" | "terminal_storage",
     intervalMs: number,
     phases: string[],
   ): PresentedScheduleRow["maintenance"] => {
@@ -398,17 +399,18 @@ export function presentSchedules(page: DashboardCronPage): PresentedScheduleRow[
     revision: "1",
     updatedAt: policy.updatedAt,
     occurrenceCount: null,
+    evaluatorCount: null,
     lastFiredAt,
     maintenance: details,
   });
   return [
-    system("tick", `every ${cadences.tickIntervalMs}ms`, "workhorse.tick_v1", null, {
-      intervalMs: cadences.tickIntervalMs,
-      phases: ["promote", "recover"],
-      status: "scheduled",
-      lastStartedAt: null,
-      lastCompletedAt: null,
-    }),
+    system(
+      "tick",
+      `every ${cadences.tickIntervalMs}ms`,
+      "workhorse.tick_v1",
+      state.get("tick")?.lastCompletedAt ?? state.get("tick")?.lastStartedAt ?? null,
+      maintenance("tick", cadences.tickIntervalMs, ["promote", "recover"]),
+    ),
     system(
       "history-partitions",
       `every ${policy.partitionPreparationIntervalMs}ms`,
