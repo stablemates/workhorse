@@ -1,0 +1,508 @@
+{
+  "configuration": {
+    "comparative": {
+      "churn": {
+        "batchSize": 25,
+        "sampleIntervalMs": 500,
+        "targetJobs": 500,
+        "targetRatePerSecond": 100,
+        "workerConcurrency": 4
+      },
+      "enqueueBatchSize": 25,
+      "jobsPerRun": 100,
+      "leaseMs": 30000,
+      "repetitions": 3,
+      "seed": 1,
+      "workerConcurrency": [1, 4, 8]
+    },
+    "operational": {
+      "batchSize": 8,
+      "heartbeatCount": 8,
+      "jobCount": 24,
+      "leaseMs": 150,
+      "pruneLimit": 1000,
+      "retryDelayMs": 75,
+      "scenarios": ["coalescing-ingress"],
+      "scheduleDelayMs": 75,
+      "scheduleSamples": 5
+    }
+  },
+  "environment": {
+    "database": "workhorse_bench_pickerel_e1ef74f6",
+    "postgresVersion": "PostgreSQL 18.4 (Ubuntu 18.4-1.pgdg24.04+1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+    "settings": {
+      "autovacuum": "on",
+      "autovacuum_naptime": "60s",
+      "checkpoint_timeout": "300s",
+      "maintenance_work_mem": "65536kB",
+      "max_connections": "100",
+      "max_wal_size": "1024MB",
+      "shared_buffers": "163848kB",
+      "synchronous_commit": "on",
+      "work_mem": "4096kB"
+    }
+  },
+  "generatedAt": "2026-08-15T01:44:09.219Z",
+  "lifecycle": {
+    "options": {
+      "batchSize": 8,
+      "heartbeatCount": 8,
+      "jobCount": 24,
+      "leaseMs": 150,
+      "pruneLimit": 1000,
+      "queuePrefix": "operational",
+      "retryDelayMs": 75,
+      "scenarios": ["coalescing-ingress"],
+      "scheduleDelayMs": 75,
+      "scheduleSamples": 5
+    },
+    "scenarios": [
+      {
+        "assertions": [
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "idempotent accepts one identity per key",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "idempotent returns its structured repeated outcome",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "idempotent concurrent acceptance race retains one identity",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "idempotent keeps one durable job per key",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "idempotent keeps one live runtime per key",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "idempotent keeps one retained binding per key",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "idempotent appends one acceptance event per key",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "idempotent lifecycle replacement events match outcomes",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "idempotent event digest chain matches retained state",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "idempotent retains a submitted payload",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "idempotent preserves expected FIFO effects",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "idempotent preserves expected notification effects",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "idempotent purge removes every pending job",
+            "passed": true
+          },
+          {
+            "actual": {
+              "bindings": 0,
+              "jobs": 0
+            },
+            "expected": {
+              "bindings": 0,
+              "jobs": 0
+            },
+            "name": "idempotent purge leaves no job or retained key",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "debounce-reset accepts one identity per key",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "debounce-reset returns its structured repeated outcome",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "debounce-reset concurrent acceptance race retains one identity",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "debounce-reset keeps one durable job per key",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "debounce-reset keeps one live runtime per key",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "debounce-reset keeps one retained binding per key",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "debounce-reset appends one acceptance event per key",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "debounce-reset lifecycle replacement events match outcomes",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "debounce-reset event digest chain matches retained state",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "debounce-reset retains a submitted payload",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "debounce-reset preserves expected FIFO effects",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "debounce-reset preserves expected notification effects",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "debounce-reset purge removes every pending job",
+            "passed": true
+          },
+          {
+            "actual": {
+              "bindings": 0,
+              "jobs": 0
+            },
+            "expected": {
+              "bindings": 0,
+              "jobs": 0
+            },
+            "name": "debounce-reset purge leaves no job or retained key",
+            "passed": true
+          },
+          {
+            "actual": 1786758309353,
+            "expected": 1786758309349,
+            "name": "debounce-reset resets its schedule",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "debounce-reset removes its schedule-check identity",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "debounce-preserve accepts one identity per key",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "debounce-preserve returns its structured repeated outcome",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "debounce-preserve concurrent acceptance race retains one identity",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "debounce-preserve keeps one durable job per key",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "debounce-preserve keeps one live runtime per key",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "debounce-preserve keeps one retained binding per key",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "debounce-preserve appends one acceptance event per key",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "debounce-preserve lifecycle replacement events match outcomes",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "debounce-preserve event digest chain matches retained state",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "debounce-preserve retains a submitted payload",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "debounce-preserve preserves expected FIFO effects",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "debounce-preserve preserves expected notification effects",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "debounce-preserve purge removes every pending job",
+            "passed": true
+          },
+          {
+            "actual": {
+              "bindings": 0,
+              "jobs": 0
+            },
+            "expected": {
+              "bindings": 0,
+              "jobs": 0
+            },
+            "name": "debounce-preserve purge leaves no job or retained key",
+            "passed": true
+          },
+          {
+            "actual": 1786758309401,
+            "expected": 1786758309401,
+            "name": "debounce-preserve preserves its schedule",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "debounce-preserve removes its schedule-check identity",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "throttle accepts one identity per key",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "throttle returns its structured repeated outcome",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "throttle concurrent acceptance race retains one identity",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "throttle keeps one durable job per key",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "throttle keeps one live runtime per key",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "throttle keeps one retained binding per key",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "throttle appends one acceptance event per key",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "throttle lifecycle replacement events match outcomes",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "throttle event digest chain matches retained state",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "throttle retains a submitted payload",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "throttle preserves expected FIFO effects",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "throttle preserves expected notification effects",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "throttle purge removes every pending job",
+            "passed": true
+          },
+          {
+            "actual": {
+              "bindings": 0,
+              "jobs": 0
+            },
+            "expected": {
+              "bindings": 0,
+              "jobs": 0
+            },
+            "name": "throttle purge leaves no job or retained key",
+            "passed": true
+          }
+        ],
+        "durationMs": 220.285368,
+        "metrics": {
+          "debouncePreserveCleanupMs": 4.321260999999993,
+          "debouncePreserveEnqueueP50Ms": 10.990402999999958,
+          "debouncePreserveEnqueueP95Ms": 15.659314999999992,
+          "debouncePreserveKeyIndexBytes": 32768,
+          "debouncePreserveNotifications": 0,
+          "debounceResetCleanupMs": 3.9503950000000145,
+          "debounceResetEnqueueP50Ms": 15.227878000000032,
+          "debounceResetEnqueueP95Ms": 20.785123999999996,
+          "debounceResetKeyIndexBytes": 32768,
+          "debounceResetNotifications": 0,
+          "idempotentCleanupMs": 5.582222000000002,
+          "idempotentEnqueueP50Ms": 24.36524400000002,
+          "idempotentEnqueueP95Ms": 26.939673999999997,
+          "idempotentKeyIndexBytes": 32768,
+          "idempotentNotifications": 8,
+          "keysPerCohort": 8,
+          "requestsPerCohort": 32,
+          "throttleCleanupMs": 3.2700360000000046,
+          "throttleEnqueueP50Ms": 10.090188000000012,
+          "throttleEnqueueP95Ms": 13.472802999999999,
+          "throttleKeyIndexBytes": 32768,
+          "throttleNotifications": 8
+        },
+        "name": "coalescing-ingress"
+      }
+    ],
+    "totalDurationMs": 220.300045
+  },
+  "profile": "default",
+  "provenance": {
+    "command": [
+      "node",
+      "src/cli/benchmark.ts",
+      "--",
+      "--profile",
+      "default",
+      "--suite",
+      "lifecycle",
+      "--scenario",
+      "coalescing-ingress",
+      "--output",
+      "docs/benchmarks/results/2026-08-14-coalescing-ingress-default.json"
+    ],
+    "runtime": {
+      "architecture": "x64",
+      "cpuModel": "AMD Ryzen 7 8745HS w/ Radeon 780M Graphics",
+      "logicalCpuCount": 16,
+      "nodeVersion": "v24.15.0",
+      "platform": "linux",
+      "release": "7.0.0-28-generic",
+      "totalMemoryBytes": 29187805184
+    },
+    "source": {
+      "commit": "b131fb2529a074dbcaf3c7c345a3da87a6f7aa20",
+      "dirty": true
+    }
+  },
+  "schemaVersion": 3,
+  "suite": "lifecycle"
+}

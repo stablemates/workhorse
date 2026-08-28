@@ -1,0 +1,143 @@
+{
+  "configuration": {
+    "comparative": {
+      "churn": {
+        "batchSize": 4,
+        "sampleIntervalMs": 100,
+        "targetJobs": 20,
+        "targetRatePerSecond": 40,
+        "workerConcurrency": 2
+      },
+      "enqueueBatchSize": 4,
+      "jobsPerRun": 12,
+      "leaseMs": 5000,
+      "repetitions": 2,
+      "seed": 1,
+      "workerConcurrency": [1, 2]
+    },
+    "operational": {
+      "batchSize": 3,
+      "heartbeatCount": 3,
+      "jobCount": 6,
+      "leaseMs": 100,
+      "pruneLimit": 100,
+      "retryDelayMs": 30,
+      "scenarios": ["dependency-operations"],
+      "scheduleDelayMs": 30,
+      "scheduleSamples": 3
+    }
+  },
+  "environment": {
+    "database": "workhorse_bench_catfish_78bb409d",
+    "postgresVersion": "PostgreSQL 18.4 (Ubuntu 18.4-1.pgdg24.04+1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+    "settings": {
+      "autovacuum": "on",
+      "autovacuum_naptime": "60s",
+      "checkpoint_timeout": "300s",
+      "maintenance_work_mem": "65536kB",
+      "max_connections": "100",
+      "max_wal_size": "1024MB",
+      "shared_buffers": "163848kB",
+      "synchronous_commit": "on",
+      "work_mem": "4096kB"
+    }
+  },
+  "generatedAt": "2026-08-15T03:59:11.195Z",
+  "lifecycle": {
+    "options": {
+      "batchSize": 3,
+      "heartbeatCount": 3,
+      "jobCount": 6,
+      "leaseMs": 100,
+      "pruneLimit": 100,
+      "queuePrefix": "operational",
+      "retryDelayMs": 30,
+      "scenarios": ["dependency-operations"],
+      "scheduleDelayMs": 30,
+      "scheduleSamples": 3
+    },
+    "scenarios": [
+      {
+        "assertions": [
+          {
+            "actual": "ready",
+            "expected": "ready",
+            "name": "fan-in releases once after every prerequisite resolves",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "fan-in records one release transition",
+            "passed": true
+          },
+          {
+            "actual": "canceled",
+            "expected": "canceled",
+            "name": "cancellation applies its declared terminal dependency policy",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "claim buffer work stays bounded after retained terminal history grows",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "health reports no blocked dependency after both cohorts settle",
+            "passed": true
+          }
+        ],
+        "durationMs": 2959.3639670000002,
+        "metrics": {
+          "cancellationResolutionMs": 2.005424000000005,
+          "claimPlanExecutionMsAfterHistory": 0.811,
+          "claimPlanExecutionMsBeforeHistory": 1.748,
+          "claimPlanSharedBlocksAfterHistory": 191,
+          "claimPlanSharedBlocksBeforeHistory": 154,
+          "dependencyFailedResolutions": 0,
+          "dependencyReleaseEvents": 1,
+          "fanIn": 6,
+          "fanInReleaseMs": 23.783274000000006,
+          "historyJobs": 1000,
+          "retainedJobIdentities": 1011
+        },
+        "name": "dependency-operations"
+      }
+    ],
+    "totalDurationMs": 2959.3744559999996
+  },
+  "profile": "smoke",
+  "provenance": {
+    "command": [
+      "node",
+      "src/cli/benchmark.ts",
+      "--",
+      "--suite",
+      "lifecycle",
+      "--profile",
+      "smoke",
+      "--scenario",
+      "dependency-operations",
+      "--output",
+      "docs/benchmarks/results/2026-08-14-dependency-operations-smoke.json"
+    ],
+    "runtime": {
+      "architecture": "x64",
+      "cpuModel": "AMD Ryzen 7 8745HS w/ Radeon 780M Graphics",
+      "logicalCpuCount": 16,
+      "nodeVersion": "v24.15.0",
+      "platform": "linux",
+      "release": "7.0.0-28-generic",
+      "totalMemoryBytes": 29187805184
+    },
+    "source": {
+      "commit": "1cb3c94f48466ec052ef00729a27333c81a2ceec",
+      "dirty": true
+    }
+  },
+  "schemaVersion": 3,
+  "suite": "lifecycle"
+}

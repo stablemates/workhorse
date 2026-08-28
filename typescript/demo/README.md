@@ -1,0 +1,214 @@
+# Workhorse demo
+
+This is the end-to-end product demo for Workhorse. It lets you create test jobs from the operator dashboard, request cooperative cancellation, watch workers process them, inspect retries and terminal failures, and observe recurring work, retention health, and queue health.
+
+The demo uses Hono as its web server and Drizzle through Workhorse's ORM adapter. Seed data includes
+a transactionally created order and durable job, and worker-owned scheduling drives recurring work.
+
+**The demo runs each worker in a separate process.** The Hono server and TypeScript, Python, and Go
+workers share nothing but PostgreSQL. Workers announce themselves in
+`workhorse.worker_registry`, the dashboard reads the fleet from there, and operator pause travels
+through SQL. The browser refreshes on a bounded polling interval.
+
+The demo imports the complete admin application from the publishable packages. Its Hono app mounts
+the framework-neutral `@stablemates/workhorse-dashboard` host at `/`, including its oRPC API. The demo owns no
+Vite config, no browser entry, and no React dependency: it is a plain consumer, doing nothing a real
+application could not copy. It contributes only demo-owned workers, controllers, projections, and
+seed data.
+
+Editing the dashboard UI still works out of the box. In development the demo mounts
+`@stablemates/workhorse-dashboard`'s own Vite middleware, so the single demo URL serves the live-compiled UI
+with hot reload while the page itself is assembled by the same packaged host a production consumer
+runs. There is no second server, no second port, and no separate command. Production serves the
+packaged bundle through that same host, so the two differ only in where modules come from.
+
+`pnpm dashboard:dev` remains available for working on the UI against some other backend, such as a
+`workhorse dashboard` console pointed at a different database.
+
+The implementation findings and remaining product gaps are recorded in
+[`docs/demo-findings.md`](../../docs/demo-findings.md).
+
+The demo installs the current schema, including daily retained history, split scheduled maintenance,
+a dedicated operator query projection with bounded payload controls and merged timelines,
+scoped enqueue idempotency, cooperative cancellation, absolute deadlines, and per-attempt execution
+timeouts. PostgreSQL also owns a fleet-wide demo dispatch budget with a queue cap and a per-key cap.
+One deterministic keyed seed exposes deduplication evidence without persisting or displaying the raw
+key. The operator menu also retains an explicit idempotent enqueue path.
+
+Prerequisites are Node.js 22+, pnpm 10+, Go 1.25+, `uv`, workspace dependencies installed with
+`pnpm install`, and PostgreSQL 15+ with the local `workhorse` role described in the root README. No
+PostgreSQL extensions are required; recurring work runs through the workers themselves.
+
+Every demo run writes structured OpenTelemetry logs to
+`logs/<environment>/workhorse-demo-server.ndjson` and
+`logs/<environment>/workhorse-demo-worker.ndjson`. `WORKHORSE_DEMO_ENV` supplies the dashboard and
+telemetry label and the `<environment>` directory; it defaults to `development`. Each file rotates
+at 10 MiB and retains five
+archives. Set `WORKHORSE_DEMO_LOG_MAX_BYTES`, `WORKHORSE_DEMO_LOG_ARCHIVES`, or
+`WORKHORSE_DEMO_LOG_DIRECTORY` to override those defaults.
+
+The observability demo additionally exports logs, traces, and metrics to a local SigNoz collector. Install the
+supported SigNoz Foundry CLI, then start SigNoz and the instrumented demo from the repository root:
+
+```bash
+curl -fsSL https://signoz.io/foundry.sh | bash
+pnpm demo:otel
+```
+
+Open SigNoz at `http://signoz.localhost:43155`. The server and worker appear as separate services, while HTTP,
+PostgreSQL, Node.js runtime, and Workhorse queue, execution, schedule, maintenance, and fleet telemetry share
+the same local OTLP endpoint. Structured logs retain their active trace context, so SigNoz can correlate
+handler activity with its trace. The server owns the database-wide metric observations, so queue and worker
+gauges are not duplicated by the worker process. `signoz:up` also reconciles the version-controlled
+**Workhorse Operations**, **Workhorse Reliability**, and **Workhorse jobs** dashboards. Run
+`pnpm signoz:dashboards` to apply dashboard changes without restarting SigNoz. Run
+`pnpm signoz:down` to stop the containers without deleting their volumes. Plain `pnpm demo` installs only
+the local log pipeline and does not require SigNoz. The loopback-only local stack uses SigNoz impersonation
+mode, so any process on this machine has administrator access to it.
+
+From the repository root, run the complete demo with one command:
+
+```bash
+pnpm demo
+```
+
+The command uses the purpose-guarded development primary and secondary databases, compiles the
+server-side runtime packages, then starts a watched Hono server and dedicated TypeScript, Python,
+and Go worker processes. Run `pnpm dev:reset` first when every repository database needs a clean
+schema. Everything is served from `http://workhorse.localhost:43155/`, mounted at `/`; the demo
+intentionally exposes no ad hoc public job API. Set `WORKHORSE_WORKER_POLL_MS` to override the
+workers' 15-second idle polling delay.
+Startup also creates a living feature showcase: seventeen feature families, each with three one-off
+scenarios and one staggered recurring definition, covering ingress, retries, checkpoints, relative and
+absolute durable waits, progress, timing, cancellation, dead letters and redrive, job dependencies,
+child workflows, signals, human decisions, keyed debounce and throttle, priority lanes, batch handlers,
+and payload contracts. Each recurring occurrence deterministically selects a stable variant, so the
+dashboard continues changing while it is open. The seeded operator-handoff signal and the two pending
+human decisions stay answerable from the dashboard for a day, and the operator menu can redrive the
+newest unredriven dead letter on demand. See
+[`docs/demo-feature-coverage.md`](../../docs/demo-feature-coverage.md) for the complete mapping and the
+operational features intentionally represented outside task rows.
+
+The dashboard is served without authentication by default. Set `WORKHORSE_DEMO_ADMIN_USERNAME` and
+`WORKHORSE_DEMO_ADMIN_PASSWORD_HASH` (an `scrypt-v1$<base64url-salt>$<base64url-digest>` hash, as
+accepted by the standalone `workhorse dashboard` command) to switch the demo host to the packaged
+single-administrator login and demonstrate the authentication flow.
+
+The earlier representative layer still seeds one successful transactional order, one named durable timer, fixed, exponential, and
+decorrelated-jitter retry examples, one checkpointed recoverable retry, three recoverable multi-step
+durable pipelines, three intentionally persistent durable pipelines, one terminal failure, one future
+scheduled job, three timing examples, and three long-running concurrency examples. Two long-running
+jobs share one customer key and serialize. The third uses another key and can overlap within the queue
+budget. The timing examples include a materialized expired deadline,
+an active handler that cooperatively reaches a one-second execution timeout, and a future scheduled task
+with a later absolute deadline plus a 90-second per-attempt budget. The durable pipelines cover order
+fulfillment, customer onboarding, and report publication.
+Recoverable examples crash after different checkpoints on attempt 1, then continue without repeating
+completed operations. Three representative persistent-failure seeds stop at their configured boundary on
+every attempt and never execute a later stage:
+
+- order fulfillment preserves its completed boundary evidence and schedules the next retry from its
+  configured fixed policy at about 5 minutes;
+- customer onboarding preserves its completed boundary evidence and schedules its next configured
+  exponential retry at about 7 minutes;
+- report publication preserves its completed boundary evidence and schedules its next configured
+  decorrelated-jitter retry at about 10 minutes.
+
+Their immutable checkpoint artifacts and per-attempt failure evidence remain visible between retries in the
+existing task drawer. Timing seeds expose deadline and timeout policy in the same drawer, while the
+System page shows current deadline pressure. Use the dashboard's **enqueue test job** menu to create fresh success, retry,
+durable pipeline, durable timer, failure, and 20-second long-running paths, plus one live example of every showcased
+feature family — from durable waits and signals to keyed throttles and payload contracts. The dedicated Steps column shows
+**N/M** for durable rows, and their task drawer uses a Mantine Stepper to show saved, running, and pending
+restart boundaries. Each new durable operation takes two seconds so progress remains visible. Set
+`SEED_DEMO_DATA=false` to start empty instead. The versioned seed marker makes direct application restarts
+idempotent.
+
+Open `http://workhorse.localhost:43155/tasks` for the Mantine operator dashboard. Its full-width
+application shell keeps the header and responsive sidebar in place while browser URLs switch between
+`/tasks`, `/cron`, `/system`, and `/workers`. Task filters are nested under Current Tasks and persist as
+the `filter` query parameter, with pagination persisted as `page`.
+
+The demo runs **three** named worker processes with three execution slots each. The TypeScript
+worker claims application jobs from `demo` and rate-limited work from `partner-api`. Python and Go
+claim their runtime-specific jobs from `demo-python` and `demo-go`. All three workers also compete
+for `demo-shared`, whose single handler has the same contract in every SDK.
+
+The production identities begin with `demo-typescript-`, `demo-python-`, and `demo-go-`, so the
+Workers page makes the runtime topology explicit while every overlapping deployment process keeps a
+unique lease owner. The dashboard still discovers them entirely through
+PostgreSQL; the mount passes no declared worker list. Worker status is explicit: `busy` owns an active lease,
+`idle` is a registered worker refreshing its registration with no current work, `recent` completed an
+attempt during the bounded five-minute observation window without a live registration, and `offline` is
+a declared worker that has stopped refreshing. The global header shows connection state and supports an
+explicit refresh. All workers use a 15-second idle polling delay by default; set
+`WORKHORSE_WORKER_POLL_MS` to override it. Mantine follows the browser's preferred light or dark
+color scheme.
+
+Pausing a worker from the dashboard writes to `workhorse.worker_registry` rather than calling a method
+on a local object, so it reaches the worker process. Like cancellation it is cooperative: claiming stops
+at the worker's next registration refresh and any handler already running finishes.
+
+The demo declares three slots for each worker. Each worker shares those slots between its owned
+queue or queues and `demo-shared`.
+Core workers may configure an integer from 1 through 100 and publish
+`{ concurrency, activeSlots, draining }` to the registry, but the demo's three-worker shape is for
+lifecycle and queue visibility, not a measured throughput comparison. Use the
+`worker-concurrency` lifecycle benchmark against a `_bench` database for invariant-gated concurrency
+evidence, and do not infer performance from the dashboard.
+
+The browser refreshes only the active page through its dedicated oRPC reader on a bounded polling cadence.
+The default is 15 seconds, with 5-second, 30-second, 1-minute, 5-minute, and manual-only options. It does
+not reload on every worker or PostgreSQL notification, so concurrent job volume cannot directly create a
+browser request storm. Task filtering and pagination happen in PostgreSQL, so the client never downloads
+the full task list.
+
+The System Health integrity panel shows future daily partition coverage, persisted retention lag,
+oldest retained data, fully expired days awaiting bounded cleanup, and cumulative rows in the default
+history partitions. Retention backlog is shown as degraded because it consumes storage without stopping
+dispatch; expired leases, stalled promotion, or missing future partitions remain critical. Demo seeds
+intentionally represent a healthy retention state rather than manufacturing time-dependent cleanup
+failures.
+
+The reusable `createDemoApplication` boundary remains read-only by default. The one-command local demo
+injects a deliberately narrow writable operator that can enqueue test jobs, request cancellation, and
+enable or disable its heartbeat schedule. Every action records actor, reason, request ID, timestamp,
+target, before/after state, and status in `public.workhorse_demo_audit`. Redrive and arbitrary schedule
+editing remain unavailable.
+
+Cancellation is shown as **Cancellation requested** while an active handler still owns the lease and as
+**Canceled** only after exact-fence acknowledgement or requested-lease expiry. Ready, future-scheduled,
+and durable-wait jobs cancel immediately. The handler receives `CancellationRequestedError` through its
+`AbortSignal`; this is cooperative and does not forcibly interrupt JavaScript. The operator attribution is
+not authorization, and the demo does not claim exactly-once external effects. Canceling a recurring job
+changes only that occurrence, not the schedule or its next fire.
+
+Startup synchronizes a namespaced one-minute heartbeat, a five-minute report, a one-minute lightweight
+long-running schedule, and the staggered feature-family definitions through `Queue.syncSchedules`.
+All three workers evaluate due schedules in-process with advisory-lock coordination and SQL-level
+occurrence deduplication. The Schedules view reports the live evaluator count for each namespace.
+Its maintenance rows use `Maintenance` as the destination because workers call those PostgreSQL
+functions directly; they are not jobs sent to a queue. The view distinguishes the application heartbeat from four worker-owned maintenance entries: the fast tick, partition preparation, daily history retention at the configured local time, and terminal/idempotency cleanup. PostgreSQL stores the global IANA maintenance timezone, local retention time, and task due state. The heartbeat's
+audited control updates the durable schedule definition, and Jobs and Workers show each resulting
+execution.
+
+Dashboard mounting is optional at the application boundary. Pass `{ dashboard: false }` to
+`createDemoApplication` to omit the browser application and oRPC endpoint. React Grab lives only in the demo development frontend; it is not a dependency or asset
+of `@stablemates/workhorse-dashboard` and is not included in production.
+
+For the deployable production shape, build and start the compiled demo explicitly:
+
+```bash
+pnpm demo:production
+```
+
+That path creates the optimized dashboard bundle, then starts the Hono process and all three worker
+processes without Vite, HMR, or React Grab. It does not reset the database, which makes it suitable
+as the basis for future public deployment work.
+
+Set `DATABASE_URL_PRIMARY`, `DATABASE_URL_SECONDARY`, and `PORT` to override the local
+defaults. The application installs the current Workhorse schema and its idempotent demo table at
+startup. Maintenance runs through the workers themselves, so no external scheduler or PostgreSQL
+extension is required.
+
+For a parameterized container deployment example, see [DEPLOYMENT.md](DEPLOYMENT.md).

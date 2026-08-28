@@ -1,0 +1,174 @@
+{
+  "configuration": {
+    "comparative": {
+      "churn": {
+        "batchSize": 4,
+        "sampleIntervalMs": 100,
+        "targetJobs": 20,
+        "targetRatePerSecond": 40,
+        "workerConcurrency": 2
+      },
+      "enqueueBatchSize": 4,
+      "jobsPerRun": 12,
+      "leaseMs": 5000,
+      "repetitions": 2,
+      "seed": 1,
+      "workerConcurrency": [1, 2]
+    },
+    "operational": {
+      "batchSize": 3,
+      "heartbeatCount": 3,
+      "jobCount": 6,
+      "leaseMs": 100,
+      "pruneLimit": 100,
+      "retryDelayMs": 30,
+      "scenarios": ["health-snapshot"],
+      "scheduleDelayMs": 30
+    }
+  },
+  "environment": {
+    "database": "workhorse_bench_next_feature_2_0ddf1068",
+    "postgresVersion": "PostgreSQL 18.4 (Ubuntu 18.4-1.pgdg24.04+1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+    "settings": {
+      "autovacuum": "on",
+      "autovacuum_naptime": "60s",
+      "checkpoint_timeout": "300s",
+      "maintenance_work_mem": "65536kB",
+      "max_connections": "100",
+      "max_wal_size": "1024MB",
+      "shared_buffers": "163848kB",
+      "synchronous_commit": "on",
+      "work_mem": "4096kB"
+    }
+  },
+  "generatedAt": "2026-08-11T21:01:36.511Z",
+  "lifecycle": {
+    "options": {
+      "batchSize": 3,
+      "heartbeatCount": 3,
+      "jobCount": 6,
+      "leaseMs": 100,
+      "pruneLimit": 100,
+      "queuePrefix": "operational",
+      "retryDelayMs": 30,
+      "scenarios": ["health-snapshot"],
+      "scheduleDelayMs": 30
+    },
+    "scenarios": [
+      {
+        "assertions": [
+          {
+            "actual": true,
+            "expected": true,
+            "name": "health expired seed claimed",
+            "passed": true
+          },
+          {
+            "actual": 3,
+            "expected": 3,
+            "name": "health ready depth",
+            "passed": true
+          },
+          {
+            "actual": 3,
+            "expected": 3,
+            "name": "health scheduled depth",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "health active leases",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "health expired leases",
+            "passed": true
+          },
+          {
+            "actual": "critical",
+            "expected": "critical",
+            "name": "health snapshot is critical",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "health snapshot names the expired lease",
+            "passed": true
+          },
+          {
+            "actual": false,
+            "expected": false,
+            "name": "health terminal counts uncapped",
+            "passed": true
+          },
+          {
+            "actual": false,
+            "expected": false,
+            "name": "health bucket count uncapped",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "health active state count",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "health schema version is installed",
+            "passed": true
+          }
+        ],
+        "durationMs": 52.751341,
+        "metrics": {
+          "activeLeases": 1,
+          "expiredLeases": 1,
+          "readyDepth": 3,
+          "reasonCodes": "expired-leases,rollup-stalled",
+          "scheduledDepth": 3,
+          "schemaVersion": 23,
+          "snapshotMs": 14.042825000000022,
+          "statusLevel": "critical"
+        },
+        "name": "health-snapshot"
+      }
+    ],
+    "totalDurationMs": 52.76290300000002
+  },
+  "profile": "smoke",
+  "provenance": {
+    "command": [
+      "node",
+      "src/cli/benchmark.ts",
+      "--",
+      "--suite",
+      "lifecycle",
+      "--scenario",
+      "health-snapshot",
+      "--profile",
+      "smoke",
+      "--output",
+      "docs/benchmarks/results/2026-08-11-health-snapshot-smoke.json"
+    ],
+    "runtime": {
+      "architecture": "x64",
+      "cpuModel": "AMD Ryzen 7 8745HS w/ Radeon 780M Graphics",
+      "logicalCpuCount": 16,
+      "nodeVersion": "v24.15.0",
+      "platform": "linux",
+      "release": "7.0.0-28-generic",
+      "totalMemoryBytes": 29187801088
+    },
+    "source": {
+      "commit": "d9825646ce49bede5bb37a574c613a433fb25e66",
+      "dirty": true
+    }
+  },
+  "schemaVersion": 3,
+  "suite": "lifecycle"
+}

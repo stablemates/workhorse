@@ -1,0 +1,389 @@
+{
+  "configuration": {
+    "comparative": {
+      "churn": {
+        "batchSize": 25,
+        "sampleIntervalMs": 500,
+        "targetJobs": 500,
+        "targetRatePerSecond": 100,
+        "workerConcurrency": 4
+      },
+      "enqueueBatchSize": 25,
+      "jobsPerRun": 100,
+      "leaseMs": 30000,
+      "repetitions": 3,
+      "seed": 1,
+      "workerConcurrency": [1, 4, 8]
+    },
+    "operational": {
+      "batchSize": 8,
+      "heartbeatCount": 8,
+      "jobCount": 24,
+      "leaseMs": 150,
+      "pruneLimit": 1000,
+      "retryDelayMs": 75,
+      "scenarios": ["batch-dispatch"],
+      "scheduleDelayMs": 75,
+      "scheduleSamples": 5
+    }
+  },
+  "environment": {
+    "database": "workhorse_bench_workhorse2_3e3cf9d5",
+    "postgresVersion": "PostgreSQL 18.4 (Ubuntu 18.4-1.pgdg24.04+1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+    "settings": {
+      "autovacuum": "on",
+      "autovacuum_naptime": "60s",
+      "checkpoint_timeout": "300s",
+      "maintenance_work_mem": "65536kB",
+      "max_connections": "100",
+      "max_wal_size": "1024MB",
+      "shared_buffers": "163848kB",
+      "synchronous_commit": "on",
+      "work_mem": "4096kB"
+    }
+  },
+  "generatedAt": "2026-08-15T00:13:11.204Z",
+  "lifecycle": {
+    "options": {
+      "batchSize": 8,
+      "heartbeatCount": 8,
+      "jobCount": 24,
+      "leaseMs": 150,
+      "pruneLimit": 1000,
+      "queuePrefix": "operational",
+      "retryDelayMs": 75,
+      "scenarios": ["batch-dispatch"],
+      "scheduleDelayMs": 75,
+      "scheduleSamples": 5
+    },
+    "scenarios": [
+      {
+        "assertions": [
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "serial cohort completes every member",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "serial cohort persists every outcome",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "serial cohort leaves no ready jobs",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "serial cohort leaves no active leases",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "serial cohort leaves no expired leases",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "serial cohort claim execution remains serial",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "serial cohort claim execution occurs only with free slots",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "serial cohort successful claim count matches jobs",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "serial cohort claim cost samples are finite",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "batch cohort completes every member",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "batch cohort persists every outcome",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "batch cohort leaves no ready jobs",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "batch cohort leaves no active leases",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "batch cohort leaves no expired leases",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "batch cohort claim execution remains serial",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "batch cohort claim execution occurs only with free slots",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "batch cohort successful claim count matches jobs",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "batch cohort claim cost samples are finite",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "batch cohort dispatches a full batch",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "serial and batch partial cohorts complete the same jobs",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "batch partial cohort dispatches one group",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "batch partial cohort leaves no active or expired leases",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "batch active slots remain bounded by member capacity",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "serial and batch mixed cohorts isolate one failure equally",
+            "passed": true
+          },
+          {
+            "actual": 2,
+            "expected": 2,
+            "name": "concurrency policy admits one member for each active count",
+            "passed": true
+          },
+          {
+            "actual": 2,
+            "expected": 2,
+            "name": "concurrency policy admission occupies one slot per member",
+            "passed": true
+          },
+          {
+            "actual": 7,
+            "expected": 7,
+            "name": "concurrency-limited members remain ready",
+            "passed": true
+          },
+          {
+            "actual": 2,
+            "expected": 2,
+            "name": "rate policy admits one member for each available token",
+            "passed": true
+          },
+          {
+            "actual": 7,
+            "expected": 7,
+            "name": "rate policy status exposes the throttled remainder",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "recovery advances only the lost member fence",
+            "passed": true
+          },
+          {
+            "actual": false,
+            "expected": false,
+            "name": "recovery rejects the stale member completion",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "recovery preserves the peer outcome",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "recovery leaves no active leases",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "recovery leaves no expired leases",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "batch claim plans record shared buffer work",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "batch claim buffer work stays bounded after retained history grows",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "claim-plan live runtime stays fixed",
+            "passed": true
+          },
+          {
+            "actual": 120,
+            "expected": 120,
+            "name": "claim-plan history remains outside live runtime",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "batch metric SDK installs for the scenario",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "batch size telemetry distinguishes full and partial dispatch",
+            "passed": true
+          },
+          {
+            "actual": 6,
+            "expected": 6,
+            "name": "batch linger telemetry covers every bounded size series",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "batch telemetry uses only bounded diagnostic attributes",
+            "passed": true
+          }
+        ],
+        "durationMs": 1689.9409540000001,
+        "metrics": {
+          "batchClaimCalls": 24,
+          "batchClaimP95Ms": 3.5686640000000125,
+          "batchJobsPerSecond": 279.3443434423239,
+          "batchLingerP95Ms": 21.96167200000002,
+          "batchMaxActiveSlots": 8,
+          "batchMaxSize": 8,
+          "batchMixedFailed": 1,
+          "batchMixedSucceeded": 23,
+          "batchPartialJobsPerSecond": 168.5894534676731,
+          "batchSizeP50": 8,
+          "batchTelemetryAttributeCount": 3,
+          "batchTelemetrySeries": 6,
+          "claimPlanExecutionMsAfterHistory": 1.655,
+          "claimPlanExecutionMsBeforeHistory": 3.069,
+          "claimPlanSharedBlocksAfterHistory": 156,
+          "claimPlanSharedBlocksBeforeHistory": 407,
+          "concurrencyPolicyAdmittedJobs": 2,
+          "concurrencyPolicyMaxActiveSlots": 2,
+          "concurrencyPolicyReady": 7,
+          "fullBatches": 3,
+          "jobsPerCohort": 24,
+          "liveRuntimeRows": 24,
+          "partialBatches": 1,
+          "partialJobsPerCohort": 7,
+          "ratePolicyAdmittedJobs": 2,
+          "ratePolicyThrottledReady": 7,
+          "recoveredMembers": 1,
+          "replacementFenceAdvanced": true,
+          "retainedJobIdentities": 120,
+          "serialClaimCalls": 24,
+          "serialClaimP95Ms": 4.126064999999926,
+          "serialJobsPerSecond": 248.8216944981335,
+          "serialMixedFailed": 1,
+          "serialMixedSucceeded": 23,
+          "serialPartialJobsPerSecond": 191.38669640998216
+        },
+        "name": "batch-dispatch"
+      }
+    ],
+    "totalDurationMs": 1689.954589
+  },
+  "profile": "default",
+  "provenance": {
+    "command": [
+      "node",
+      "src/cli/benchmark.ts",
+      "--",
+      "--suite",
+      "lifecycle",
+      "--profile",
+      "default",
+      "--scenario",
+      "batch-dispatch",
+      "--output",
+      "docs/benchmarks/results/2026-08-14-batch-dispatch-default.json"
+    ],
+    "runtime": {
+      "architecture": "x64",
+      "cpuModel": "AMD Ryzen 7 8745HS w/ Radeon 780M Graphics",
+      "logicalCpuCount": 16,
+      "nodeVersion": "v24.15.0",
+      "platform": "linux",
+      "release": "7.0.0-28-generic",
+      "totalMemoryBytes": 29187805184
+    },
+    "source": {
+      "commit": "4e95cb6547ca7cb4afa6a9edb77bd360ce437b41",
+      "dirty": false
+    }
+  },
+  "schemaVersion": 3,
+  "suite": "lifecycle"
+}

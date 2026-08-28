@@ -1,0 +1,914 @@
+---
+title: Examples
+description: Seven end-to-end patterns, from transactional enqueue to a durable agentic flow.
+---
+
+Documentation explains one concept at a time; real code combines several. This page shows seven
+complete patterns you can adapt directly. Every snippet uses the public API as shipped — the
+concept guides linked from each pattern explain the behavior behind it.
+
+## Transactional enqueue in an API route
+
+The problem: a request creates an order and must guarantee a fulfillment job — but only if the
+order commits. Pass your open transaction as the last argument to `enqueue`, and the job and the
+order share one commit or one rollback.
+
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    import { Admin, Pool, Queue } from "@stablemates/workhorse";
+
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const queue = new Queue(pool);
+    const admin = new Admin(pool);
+
+    export async function createOrder(orderId: string, items: string[]) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("INSERT INTO orders (id, items) VALUES ($1, $2)", [orderId, items]);
+        await queue.enqueue("order.fulfill", { orderId }, { queue: "orders" }, client);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+    ```
+
+  </Tab>
+  <Tab value="Python">
+    ```python verify
+    import os
+
+    import psycopg
+
+    from workhorse import EnqueueOptions, Queue
+
+    DATABASE_URL = os.environ["DATABASE_URL"]
+
+
+    def create_order(order_id: str, items: list[str]) -> None:
+        with psycopg.connect(DATABASE_URL) as connection:
+            with connection.transaction():
+                connection.execute(
+                    "INSERT INTO orders (id, items) VALUES (%s, %s)",
+                    (order_id, items),
+                )
+                Queue(connection).enqueue(
+                    "order.fulfill",
+                    {"orderId": order_id},
+                    EnqueueOptions(queue="orders"),
+                )
+    ```
+
+  </Tab>
+  <Tab value="Go">
+    ```go verify
+package transaction
+
+import (
+	"context"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	workhorse "github.com/stablemates/workhorse/go"
+)
+
+func createOrder(ctx context.Context, pool *pgxpool.Pool, orderID string, items []string) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx,
+		"INSERT INTO orders (id, items) VALUES ($1, $2)",
+		orderID,
+		items,
+	); err != nil {
+		return err
+	}
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(tx), "orders")
+	if _, err := queue.Enqueue(ctx, "order.fulfill", map[string]any{
+		"orderId": orderID,
+	}, workhorse.EnqueueOptions{}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+    ```
+
+  </Tab>
+</Tabs>
+
+If the insert fails, no job exists. If the enqueue fails, no order exists. There is no window where
+one is visible without the other. TypeScript applications using Drizzle, Prisma, TypeORM, or Kysely
+get the same guarantee through the adapter package's `forTransaction` boundary.
+
+## Multi-stage handler with checkpoints and a durable sleep
+
+The problem: a trial signup should send a welcome email now and a follow-up in seven days, and
+neither email may ever send twice. Checkpoints make each send a restart boundary; the durable sleep
+releases the worker slot for the whole week.
+
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    worker.handle("trial.lifecycle", async (payload: { to: string; followUpAt: string }, context) => {
+      await context.checkpoint("welcome", () => mailer.welcome(payload.to));
+
+      await context.sleepUntil("follow-up-window", new Date(payload.followUpAt));
+
+      await context.checkpoint("follow-up", () => mailer.followUp(payload.to));
+      return { deliveredTo: payload.to };
+    });
+    ```
+
+  </Tab>
+  <Tab value="Python">
+    ```python verify
+    from datetime import datetime
+
+    from workhorse import HandlerContext, Json, Worker
+
+
+    def send_welcome(to: str) -> dict[str, Json]:
+        return {"deliveredTo": to, "kind": "welcome"}
+
+
+    def send_follow_up(to: str) -> dict[str, Json]:
+        return {"deliveredTo": to, "kind": "follow-up"}
+
+
+    def register_trial_handler(worker: Worker) -> None:
+        def trial_lifecycle(payload: object, context: HandlerContext) -> dict[str, Json]:
+            assert isinstance(payload, dict)
+            to = payload["to"]
+            follow_up_at = payload["followUpAt"]
+            assert isinstance(to, str) and isinstance(follow_up_at, str)
+
+            context.checkpoint("welcome", lambda: send_welcome(to))
+            context.sleep_until("follow-up-window", datetime.fromisoformat(follow_up_at))
+            context.checkpoint("follow-up", lambda: send_follow_up(to))
+            return {"deliveredTo": to}
+
+        worker.handle("trial.lifecycle", trial_lifecycle)
+    ```
+
+  </Tab>
+  <Tab value="Go">
+    ```go verify
+package trial
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	workhorse "github.com/stablemates/workhorse/go"
+)
+
+func registerTrialHandler(worker *workhorse.Worker) {
+	worker.Handle("trial.lifecycle", func(
+		_ context.Context,
+		payload any,
+		handler *workhorse.HandlerContext,
+	) (any, error) {
+		message, ok := payload.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("trial payload must be an object")
+		}
+		to, ok := message["to"].(string)
+		if !ok {
+			return nil, fmt.Errorf("trial payload needs a string to field")
+		}
+		followUpText, ok := message["followUpAt"].(string)
+		if !ok {
+			return nil, fmt.Errorf("trial payload needs a string followUpAt field")
+		}
+		followUpAt, err := time.Parse(time.RFC3339, followUpText)
+		if err != nil {
+			return nil, err
+		}
+
+		if _, err := handler.Checkpoint("welcome", func() (any, error) {
+			return map[string]any{"deliveredTo": to, "kind": "welcome"}, nil
+		}); err != nil {
+			return nil, err
+		}
+		if err := handler.SleepUntil("follow-up-window", followUpAt); err != nil {
+			return nil, err
+		}
+		if _, err := handler.Checkpoint("follow-up", func() (any, error) {
+			return map[string]any{"deliveredTo": to, "kind": "follow-up"}, nil
+		}); err != nil {
+			return nil, err
+		}
+		return map[string]any{"deliveredTo": to}, nil
+	})
+}
+    ```
+
+  </Tab>
+</Tabs>
+
+The sleep stores a named timer, drops the lease, and parks the job in `scheduled` — no worker slot
+is held for seven days. When the timer is due, a worker runs the handler from the top; the saved
+`welcome` checkpoint returns its stored value instead of sending again. A crash at any point
+replays only the stages that never committed.
+
+## Nightly job synced on deploy
+
+The problem: an invoice run must happen every night at 03:00 with no separate scheduler service.
+Declare the schedule in code and synchronize it during deployment; any worker watching the
+namespace fires it.
+
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    // Deployment step: reconcile the namespace to exactly this set.
+    await queue.syncSchedules("billing-production", [
+      {
+        name: "nightly-invoice-run",
+        schedule: "0 3 * * *",
+        job: {
+          type: "invoice.generate",
+          queue: "billing",
+          payload: { scope: "due" },
+        },
+      },
+    ]);
+
+    // Worker process: evaluate and fire schedules for that namespace.
+    const worker = new Worker(queue, {
+      scheduleNamespaces: ["billing-production"],
+    });
+    worker.handle("invoice.generate", generateInvoices);
+    await worker.run();
+    ```
+
+  </Tab>
+  <Tab value="Python">
+    ```python verify
+    import psycopg
+
+    from workhorse import (
+        HandlerContext,
+        Json,
+        Queue,
+        ScheduleDefinition,
+        ScheduledJob,
+        Worker,
+    )
+
+
+    def generate_invoices(payload: object, _context: HandlerContext) -> dict[str, Json]:
+        assert isinstance(payload, dict)
+        return {"generated": True, "scope": payload["scope"]}
+
+
+    def run_billing_worker(database_url: str) -> None:
+        # Deployment step: reconcile the namespace to exactly this set.
+        with psycopg.connect(database_url) as connection:
+            Queue(connection).sync_schedules(
+                "billing-production",
+                (
+                    ScheduleDefinition(
+                        name="nightly-invoice-run",
+                        schedule="0 3 * * *",
+                        job=ScheduledJob(
+                            type="invoice.generate",
+                            queue="billing",
+                            payload={"scope": "due"},
+                        ),
+                    ),
+                ),
+            )
+
+        # Worker process: evaluate and fire schedules for that namespace.
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            worker = Worker(
+                connection,
+                queue="billing",
+                schedule_namespaces=("billing-production",),
+            ).handle("invoice.generate", generate_invoices)
+            worker.run()
+    ```
+
+  </Tab>
+  <Tab value="Go">
+    ```go verify
+package billing
+
+import (
+	"context"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	workhorse "github.com/stablemates/workhorse/go"
+)
+
+func runBillingWorker(ctx context.Context, pool *pgxpool.Pool) error {
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "billing")
+	if err := queue.SyncSchedules(ctx, "billing-production", []workhorse.ScheduleDefinition{
+		{
+			Name:     "nightly-invoice-run",
+			Schedule: "0 3 * * *",
+			Job: workhorse.ScheduledJob{
+				Type:    "invoice.generate",
+				Queue:   "billing",
+				Payload: map[string]any{"scope": "due"},
+			},
+		},
+	}); err != nil {
+		return err
+	}
+
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue:              "billing",
+		ScheduleNamespaces: []string{"billing-production"},
+	})
+	if err != nil {
+		return err
+	}
+	worker.Handle("invoice.generate", func(
+		_ context.Context,
+		payload any,
+		_ *workhorse.HandlerContext,
+	) (any, error) {
+		return map[string]any{"generated": true, "payload": payload}, nil
+	})
+	return worker.Run(ctx)
+}
+    ```
+
+  </Tab>
+</Tabs>
+
+Competing workers cannot double-fire: each occurrence has a durable key from its namespace, name,
+and planned time, so PostgreSQL converges every racing call on one job. Removing the definition
+from the array disables it on the next deploy — code stays the owner of intent.
+
+## Webhook idempotency
+
+The problem: payment providers redeliver webhooks, and each delivery must produce exactly one job.
+Build the idempotency key from the provider's event ID; a replayed delivery returns the original
+job instead of creating another.
+
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    export async function handleStripeWebhook(event: { id: string; type: string; data: unknown }) {
+      const jobId = await queue.enqueue(
+        "stripe.event",
+        { eventId: event.id, eventType: event.type },
+        {
+          queue: "webhooks",
+          idempotency: {
+            key: `stripe:${event.id}`,
+            scope: "stripe-webhooks",
+          },
+        },
+      );
+      return { accepted: jobId };
+    }
+    ```
+
+  </Tab>
+  <Tab value="Python">
+    ```python verify
+    from typing import TypedDict
+
+    from workhorse import EnqueueOptions, Idempotency, Queue
+
+
+    class StripeEvent(TypedDict):
+        id: str
+        type: str
+        data: object
+
+
+    def handle_stripe_webhook(queue: Queue, event: StripeEvent) -> dict[str, str]:
+        job_id = queue.enqueue(
+            "stripe.event",
+            {"eventId": event["id"], "eventType": event["type"]},
+            EnqueueOptions(
+                queue="webhooks",
+                idempotency=Idempotency(
+                    key=f"stripe:{event['id']}",
+                    scope="stripe-webhooks",
+                ),
+            ),
+        )
+        return {"accepted": job_id}
+    ```
+
+  </Tab>
+  <Tab value="Go">
+    ```go verify
+package webhook
+
+import (
+	"context"
+
+	workhorse "github.com/stablemates/workhorse/go"
+)
+
+type stripeEvent struct {
+	ID   string
+	Type string
+	Data any
+}
+
+func handleStripeWebhook(
+	ctx context.Context,
+	queue *workhorse.Queue,
+	event stripeEvent,
+) (map[string]string, error) {
+	jobID, err := queue.Enqueue(ctx, "stripe.event", map[string]any{
+		"eventId":   event.ID,
+		"eventType": event.Type,
+	}, workhorse.EnqueueOptions{
+		Queue: "webhooks",
+		Idempotency: &workhorse.Idempotency{
+			Key:   "stripe:" + event.ID,
+			Scope: "stripe-webhooks",
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{"accepted": jobID}, nil
+}
+    ```
+
+  </Tab>
+</Tabs>
+
+An equivalent replay returns the same job ID with no new job, event, or notification — the route
+stays safely retryable end to end. If a request reuses the key with a _different_ payload,
+TypeScript and Python throw `EnqueueIdempotencyConflictError`; Go returns the matching typed error.
+No SDK silently drops the difference. The handler still runs at least once, so keep its external
+effects idempotent too.
+
+## Incident redrive script
+
+The problem: a provider outage dead-lettered a batch of jobs, the provider has recovered, and an
+operator needs to replay exactly those failures — safely, and only once. Dry-run first, then reuse
+one incident request ID across pages so a crashed script can rerun without duplicating work.
+
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const filter = { queue: "billing", errorName: "ProviderTimeout" };
+    const request = {
+      actor: "reviewer@example.com",
+      reason: "provider incident INC-2041 resolved",
+      requestId: "INC-2041",
+    };
+
+    // 1. Preview what would be redriven. Creates nothing.
+    const preview = await admin.redriveMany(filter, request, { dryRun: true, limit: 100 });
+    console.log(`${preview.results.length} jobs eligible`);
+
+    // 2. Redrive for real, page by page, reusing the same request.
+    let cursor = undefined;
+    do {
+      const page = await admin.redriveMany(filter, request, { limit: 100, cursor });
+      for (const result of page.results) {
+        console.log(result.status, result.sourceJobId, "->", result.targetJobId);
+      }
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    ```
+
+  </Tab>
+  <Tab value="Python">
+    ```python verify
+    from workhorse import (
+        Admin,
+        AdminAudit,
+        BulkRedriveOptions,
+        DeadLetterCursor,
+        DeadLetterFilter,
+    )
+
+
+    def redrive_incident(admin: Admin) -> None:
+        filter = DeadLetterFilter(queue="billing", error_name="ProviderTimeout")
+        audit = AdminAudit(
+            actor="reviewer@example.com",
+            reason="provider incident INC-2041 resolved",
+            request_id="INC-2041",
+        )
+
+        preview = admin.redrive_many(
+            filter,
+            audit,
+            BulkRedriveOptions(dry_run=True, limit=100),
+        )
+        print(f"{len(preview.results)} jobs eligible")
+
+        cursor: DeadLetterCursor | None = None
+        while True:
+            page = admin.redrive_many(
+                filter,
+                audit,
+                BulkRedriveOptions(limit=100, cursor=cursor),
+            )
+            for result in page.results:
+                print(result.status, result.source_job_id, "->", result.target_job_id)
+            cursor = page.next_cursor
+            if cursor is None:
+                break
+    ```
+
+  </Tab>
+  <Tab value="Go">
+    ```go verify
+package incident
+
+import (
+	"context"
+	"fmt"
+
+	workhorse "github.com/stablemates/workhorse/go"
+)
+
+func redriveIncident(ctx context.Context, admin *workhorse.Admin) error {
+	filter := workhorse.DeadLetterFilter{
+		Queue:     "billing",
+		ErrorName: "ProviderTimeout",
+	}
+	audit := workhorse.AdminAudit{
+		Actor:     "reviewer@example.com",
+		Reason:    "provider incident INC-2041 resolved",
+		RequestID: "INC-2041",
+	}
+
+	preview, err := admin.RedriveMany(ctx, filter, audit, workhorse.BulkRedriveOptions{
+		DryRun: true,
+		Limit:  100,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%d jobs eligible\n", len(preview.Results))
+
+	var cursor *workhorse.AdminCursor
+	for {
+		page, err := admin.RedriveMany(ctx, filter, audit, workhorse.BulkRedriveOptions{
+			Limit:  100,
+			Cursor: cursor,
+		})
+		if err != nil {
+			return err
+		}
+		for _, result := range page.Results {
+			target := ""
+			if result.TargetJobID != nil {
+				target = *result.TargetJobID
+			}
+			fmt.Println(result.Status, result.SourceJobID, "->", target)
+		}
+		cursor = page.NextCursor
+		if cursor == nil {
+			return nil
+		}
+	}
+}
+    ```
+
+  </Tab>
+</Tabs>
+
+Each redrive creates a fresh job that copies the queue, type, payload, and retry policy; the failed
+source stays unchanged as evidence, and each result identifies both source and target. Repeating a
+page under the same request ID returns the existing targets, so the script is safe to rerun after a
+crash.
+
+## Cooperative cancellation
+
+The problem: a customer withdraws an order while its export job is running. Handler execution
+cannot be preempted safely, so cancellation is a durable request each SDK delivers through its
+handler cancellation primitive.
+
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    // Operator side: record who asked and why.
+    await queue.cancel(jobId, {
+      requestedBy: "support@example.com",
+      reason: "customer withdrew the order",
+    });
+
+    // Handler side: check the signal between units of work.
+    worker.handle("export.build", async (payload: { parts: string[] }, context) => {
+      for (const part of payload.parts) {
+        if (context.signal.aborted) throw context.signal.reason;
+        await uploadPart(part, { signal: context.signal });
+      }
+      return { exported: true };
+    });
+    ```
+
+  </Tab>
+  <Tab value="Python">
+    ```python verify
+    from workhorse import HandlerContext, Json, Queue, Worker
+
+
+    def upload_part(part: str) -> None:
+        print("uploading", part)
+
+
+    def configure_export(queue: Queue, worker: Worker, job_id: str) -> None:
+        queue.cancel(
+            job_id,
+            requested_by="support@example.com",
+            reason="customer withdrew the order",
+        )
+
+        def build_export(payload: object, context: HandlerContext) -> dict[str, Json]:
+            assert isinstance(payload, dict)
+            parts = payload["parts"]
+            assert isinstance(parts, list)
+            for part in parts:
+                assert isinstance(part, str)
+                context.cancellation.raise_if_cancelled()
+                upload_part(part)
+            return {"exported": True}
+
+        worker.handle("export.build", build_export)
+    ```
+
+  </Tab>
+  <Tab value="Go">
+    ```go verify
+package export
+
+import (
+	"context"
+	"fmt"
+
+	workhorse "github.com/stablemates/workhorse/go"
+)
+
+func uploadPart(ctx context.Context, part string) error {
+	fmt.Println("uploading", part)
+	return context.Cause(ctx)
+}
+
+func configureExport(
+	ctx context.Context,
+	queue *workhorse.Queue,
+	worker *workhorse.Worker,
+	jobID string,
+) error {
+	requestedBy := "support@example.com"
+	reason := "customer withdrew the order"
+	if _, err := queue.Cancel(ctx, jobID, workhorse.CancellationRequest{
+		RequestedBy: &requestedBy,
+		Reason:      &reason,
+	}); err != nil {
+		return err
+	}
+
+	worker.Handle("export.build", func(
+		handlerContext context.Context,
+		payload any,
+		_ *workhorse.HandlerContext,
+	) (any, error) {
+		message, ok := payload.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("export payload must be an object")
+		}
+		parts, ok := message["parts"].([]any)
+		if !ok {
+			return nil, fmt.Errorf("export payload needs an array parts field")
+		}
+		for _, value := range parts {
+			part, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("export part must be a string")
+			}
+			if err := uploadPart(handlerContext, part); err != nil {
+				return nil, err
+			}
+		}
+		return map[string]any{"exported": true}, nil
+	})
+	return nil
+}
+    ```
+
+  </Tab>
+</Tabs>
+
+If the job has not started, PostgreSQL cancels it immediately with no invented attempt history. If
+it is active, the worker's heartbeat delivers the request. TypeScript aborts `context.signal`,
+Python cancels `context.cancellation`, and Go cancels the handler's standard context. A handler that
+ignores that request loses its lease eventually, and recovery materializes the cancellation instead
+of retrying.
+
+## Durable agentic flow
+
+The problem: a model plans work, several tools run independently, and execution must survive a
+deploy while waiting for approval. Checkpoint the model call, join tools as child jobs, cross a
+durable timer, then wait for an idempotent signal.
+
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    worker.handle("agent.run", async ({ prompt, conversationId }, context) => {
+      const plan = await context.checkpoint("plan", () =>
+        model.plan(prompt, { idempotencyKey: `plan:${context.job.id}` }),
+      );
+
+      const tools = await context.runChildrenAll(
+        plan.tools.map((tool) => ({
+          name: tool.id,
+          type: "agent.tool",
+          payload: tool,
+          options: { queue: "tools", concurrencyKey: conversationId },
+        })),
+      );
+
+      await context.sleep("model-cooldown", cooldownMs);
+      const approval = await context.waitForSignal<{ approved: boolean }>("approval");
+      return { plan, tools, approved: approval.approved };
+    });
+    ```
+
+  </Tab>
+  <Tab value="Python">
+    ```python verify
+    from typing import Protocol
+
+    from workhorse import ChildJobRequest, EnqueueOptions, HandlerContext, Json, Worker
+
+
+    class Model(Protocol):
+        def plan(self, prompt: str, *, idempotency_key: str) -> Json: ...
+
+
+    def register_agent(worker: Worker, model: Model, cooldown_ms: int) -> None:
+        def run_agent(payload: object, context: HandlerContext) -> dict[str, Json]:
+            assert isinstance(payload, dict)
+            prompt = payload["prompt"]
+            conversation_id = payload["conversationId"]
+            assert isinstance(prompt, str) and isinstance(conversation_id, str)
+
+            plan = context.checkpoint(
+                "plan",
+                lambda: model.plan(
+                    prompt,
+                    idempotency_key=f"plan:{context.job.id}",
+                ),
+            )
+            assert isinstance(plan, dict)
+            raw_tools = plan["tools"]
+            assert isinstance(raw_tools, list)
+            children: list[ChildJobRequest] = []
+            for raw_tool in raw_tools:
+                assert isinstance(raw_tool, dict)
+                tool_id = raw_tool["id"]
+                assert isinstance(tool_id, str)
+                children.append(
+                    ChildJobRequest(
+                        name=tool_id,
+                        type="agent.tool",
+                        payload=raw_tool,
+                        options=EnqueueOptions(
+                            queue="tools",
+                            concurrency_key=conversation_id,
+                        ),
+                    )
+                )
+
+            tools = context.run_children_all(children)
+            context.sleep("model-cooldown", cooldown_ms)
+            approval = context.wait_for_signal("approval")
+            assert isinstance(approval, dict)
+            approved = approval["approved"]
+            assert isinstance(approved, bool)
+            return {"plan": plan, "tools": tools, "approved": approved}
+
+        worker.handle("agent.run", run_agent)
+    ```
+
+  </Tab>
+  <Tab value="Go">
+    ```go verify
+package agent
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	workhorse "github.com/stablemates/workhorse/go"
+)
+
+type Model interface {
+	Plan(context.Context, string, string) (map[string]any, error)
+}
+
+func registerAgent(worker *workhorse.Worker, model Model, cooldown time.Duration) {
+	worker.Handle("agent.run", func(
+		ctx context.Context,
+		payload any,
+		handler *workhorse.HandlerContext,
+	) (any, error) {
+		message, ok := payload.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("agent payload must be an object")
+		}
+		prompt, promptOK := message["prompt"].(string)
+		conversationID, conversationOK := message["conversationId"].(string)
+		if !promptOK || !conversationOK {
+			return nil, fmt.Errorf("agent payload needs string prompt and conversationId fields")
+		}
+
+		planValue, err := handler.Checkpoint("plan", func() (any, error) {
+			return model.Plan(ctx, prompt, "plan:"+handler.Job.ID)
+		})
+		if err != nil {
+			return nil, err
+		}
+		plan, ok := planValue.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("model plan must be an object")
+		}
+		rawTools, ok := plan["tools"].([]any)
+		if !ok {
+			return nil, fmt.Errorf("model plan needs an array tools field")
+		}
+		children := make([]workhorse.ChildJobRequest, 0, len(rawTools))
+		for _, value := range rawTools {
+			tool, ok := value.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("tool must be an object")
+			}
+			toolID, ok := tool["id"].(string)
+			if !ok {
+				return nil, fmt.Errorf("tool needs a string id field")
+			}
+			children = append(children, workhorse.ChildJobRequest{
+				Name:    toolID,
+				Type:    "agent.tool",
+				Payload: tool,
+				Options: workhorse.EnqueueOptions{
+					Queue:          "tools",
+					ConcurrencyKey: conversationID,
+				},
+			})
+		}
+
+		tools, err := handler.CreateChildrenAll(children)
+		if err != nil {
+			return nil, err
+		}
+		if err := handler.Sleep("model-cooldown", cooldown); err != nil {
+			return nil, err
+		}
+		approval, err := handler.WaitForSignal("approval")
+		if err != nil {
+			return nil, err
+		}
+		approvalPayload, ok := approval.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("approval must be an object")
+		}
+		approved, ok := approvalPayload["approved"].(bool)
+		if !ok {
+			return nil, fmt.Errorf("approval needs a boolean approved field")
+		}
+		return map[string]any{"plan": plan, "tools": tools, "approved": approved}, nil
+	})
+}
+    ```
+
+  </Tab>
+</Tabs>
+
+Every boundary releases the lease and restarts the handler later, so names and child requests must
+stay stable across replay. The repository's `typescript/examples/agentic-flow.mjs` demonstrates the
+whole lifecycle; run it with `pnpm example:agentic-flow` against an installed Workhorse database.
+
+Python consumers can run `python/examples/lifecycle.py` for retry, checkpoint, timer, child, signal,
+and human-decision boundaries. Go consumers can run `go/examples/orchestration/main.go` for child,
+signal, and human-decision boundaries. Both release lanes verify the public package imports.
+
+## Next
+
+- [Quickstart](/docs/quickstart) — run the crash-survival demo these patterns build on
+- [Durable execution](/docs/durable-execution) — the rules behind checkpoints and sleeps
+- [Agentic flow](/docs/agentic-flow) — child tools, timers, and approval signals together
+- [Dead letters](/docs/dead-letters) — the full redrive model behind the incident script
+
+---
+
+Exact transactional, delivery, and operator semantics:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#delivery-semantics).

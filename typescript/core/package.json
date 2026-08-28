@@ -1,0 +1,72 @@
+{
+  "name": "@stablemates/workhorse",
+  "version": "0.1.0-beta.1",
+  "private": false,
+  "description": "Public beta PostgreSQL durable job queue and execution protocol",
+  "homepage": "https://workhorse.run",
+  "bugs": {
+    "url": "https://github.com/stablemates/workhorse/issues"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stablemates/workhorse.git",
+    "directory": "typescript/core"
+  },
+  "bin": {
+    "workhorse": "./dist/src/cli/workhorse.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "workhorse-source": "./src/index.ts",
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    },
+    "./version": {
+      "workhorse-source": "./src/version.ts",
+      "types": "./dist/src/version.d.ts",
+      "import": "./dist/src/version.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "pnpm --dir ../.. schema:generate && tsc -p ../../tsconfig.build.json && rm -rf dist/sql && mkdir -p dist/sql/migrations && cp ../../sql/schema.sql dist/sql/schema.sql && find ../../sql/migrations -maxdepth 1 -name '*.sql' -exec cp {} dist/sql/migrations/ \\;",
+    "build:dev": "pnpm build",
+    "typecheck": "tsc -p tsconfig.typecheck.json"
+  },
+  "dependencies": {
+    "@stablemates/workhorse-dashboard-contract": "workspace:*",
+    "@types/pg": "^8.15.5",
+    "ajv": "8.17.1",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/api-logs": "0.221.0",
+    "@stablemates/workhorse-dashboard": "workspace:*",
+    "@stablemates/workhorse-otel": "workspace:*",
+    "@types/node": "^24.1.0",
+    "typescript": "^5.8.3"
+  },
+  "peerDependencies": {
+    "@stablemates/workhorse-dashboard": ">=0.1.0-beta.1 <0.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@stablemates/workhorse-dashboard": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

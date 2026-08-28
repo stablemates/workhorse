@@ -1,0 +1,140 @@
+{
+  "configuration": {
+    "comparative": {
+      "churn": {
+        "batchSize": 4,
+        "sampleIntervalMs": 100,
+        "targetJobs": 20,
+        "targetRatePerSecond": 40,
+        "workerConcurrency": 2
+      },
+      "enqueueBatchSize": 4,
+      "jobsPerRun": 12,
+      "leaseMs": 5000,
+      "repetitions": 2,
+      "seed": 1,
+      "workerConcurrency": [1, 2]
+    },
+    "operational": {
+      "batchSize": 3,
+      "heartbeatCount": 3,
+      "jobCount": 6,
+      "leaseMs": 100,
+      "pruneLimit": 100,
+      "retryDelayMs": 30,
+      "scenarios": ["heartbeat-fencing"],
+      "scheduleDelayMs": 30,
+      "scheduleSamples": 3
+    }
+  },
+  "environment": {
+    "database": "workhorse_bench_eelpout_a267e1cd",
+    "postgresVersion": "PostgreSQL 18.4 (Ubuntu 18.4-1.pgdg24.04+1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+    "settings": {
+      "autovacuum": "on",
+      "autovacuum_naptime": "60s",
+      "checkpoint_timeout": "300s",
+      "maintenance_work_mem": "65536kB",
+      "max_connections": "100",
+      "max_wal_size": "1024MB",
+      "shared_buffers": "163848kB",
+      "synchronous_commit": "on",
+      "work_mem": "4096kB"
+    }
+  },
+  "generatedAt": "2026-08-24T12:08:27.077Z",
+  "lifecycle": {
+    "options": {
+      "batchSize": 3,
+      "heartbeatCount": 3,
+      "jobCount": 6,
+      "leaseMs": 100,
+      "pruneLimit": 100,
+      "queuePrefix": "operational",
+      "retryDelayMs": 30,
+      "scenarios": ["heartbeat-fencing"],
+      "scheduleDelayMs": 30,
+      "scheduleSamples": 3
+    },
+    "scenarios": [
+      {
+        "assertions": [
+          {
+            "actual": 100,
+            "expected": 100,
+            "name": "claimed 100 concurrent leases",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "individual heartbeats accepted",
+            "passed": true
+          },
+          {
+            "actual": 100,
+            "expected": 100,
+            "name": "batch accepted every current lease",
+            "passed": true
+          },
+          {
+            "actual": "stale",
+            "expected": "stale",
+            "name": "stale fence rejected",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "heartbeat updates were HOT",
+            "passed": true
+          }
+        ],
+        "durationMs": 1528.914514,
+        "metrics": {
+          "afterDurationMs": 2.9244110000000774,
+          "afterStatements": 1,
+          "afterStatementsPerSecond": 0.1,
+          "beforeDurationMs": 20.742976,
+          "beforeStatements": 100,
+          "beforeStatementsPerSecond": 10,
+          "concurrency": 100,
+          "hotUpdates": 500
+        },
+        "name": "heartbeat-fencing"
+      }
+    ],
+    "totalDurationMs": 1528.9289
+  },
+  "profile": "smoke",
+  "provenance": {
+    "command": [
+      "node",
+      "typescript/core/src/cli/workhorse.ts",
+      "bench",
+      "--suite",
+      "lifecycle",
+      "--profile",
+      "smoke",
+      "--scenario",
+      "heartbeat-fencing",
+      "--output",
+      "docs/benchmarks/results/2026-08-24-wh-382-heartbeats.json"
+    ],
+    "runtime": {
+      "architecture": "x64",
+      "cpuModel": "AMD Ryzen 7 8745HS w/ Radeon 780M Graphics",
+      "logicalCpuCount": 16,
+      "nodeVersion": "v24.15.0",
+      "platform": "linux",
+      "release": "7.0.0-28-generic",
+      "totalMemoryBytes": 29187805184
+    },
+    "source": {
+      "commit": "0d231182058a6b7c10841e774608285ee1cf9f40",
+      "dirty": true
+    }
+  },
+  "schemaVersion": 3,
+  "suite": "lifecycle"
+}

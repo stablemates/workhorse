@@ -1,0 +1,325 @@
+---
+title: Quickstart
+description: Install the schema, run your first job, then kill the worker mid-job and watch it finish anyway.
+---
+
+In five minutes you will enqueue a job, run it, and then prove the interesting part: a job that
+survives its own worker being killed. Choose TypeScript, Python, or Go for the application code.
+Schema installation uses the Node.js 22+ Workhorse CLI. Every path also needs a PostgreSQL
+connection string.
+
+## 1. Install
+
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+
+    ```bash
+    npm install @stablemates/workhorse@0.1.0-beta.1
+    ```
+
+  </Tab>
+  <Tab value="Python">
+
+    ```bash
+    pip install stablemates-workhorse==0.1.0b1
+    ```
+
+  </Tab>
+  <Tab value="Go">
+
+    ```bash
+    go get github.com/stablemates/workhorse/go@v0.1.0-beta.1
+    ```
+
+  </Tab>
+</Tabs>
+
+## 2. Install the schema
+
+Workhorse lives entirely inside your database: tables for jobs and versioned SQL functions for
+every lifecycle transition. Install them once through the TypeScript package's deployment CLI,
+regardless of which application SDK you use.
+
+```bash
+npx --package @stablemates/workhorse@0.1.0-beta.1 workhorse schema install
+```
+
+TypeScript deployment code can call the same installer directly.
+
+```ts
+import { installSchema, Pool } from "@stablemates/workhorse";
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+await installSchema(pool);
+```
+
+Run this once, as a deployment step. Runtime code should call `assertSchemaCompatible` instead of
+installing anything.
+
+## 3. Enqueue a job and run it
+
+A `Queue` accepts work; a `Worker` with a matching handler runs it. This example keeps both in one
+file so you can watch the whole lifecycle.
+
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    import { Admin, Pool, Queue, Worker } from "@stablemates/workhorse";
+
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const queue = new Queue(pool);
+    const admin = new Admin(pool);
+
+    const worker = new Worker(queue).handle("email.welcome", async (payload: { to: string }) => ({
+      deliveredTo: payload.to,
+    }));
+
+    const jobId = await queue.enqueue("email.welcome", { to: "ada@example.com" });
+
+    await worker.runOnce(); // one claim-and-run pass; production uses worker.run()
+    console.log(await admin.getJob(jobId));
+    await pool.end();
+    ```
+
+  </Tab>
+  <Tab value="Python">
+    ```python verify
+    import os
+
+    import psycopg
+
+    from workhorse import Queue, Worker
+
+    database_url = os.environ["DATABASE_URL"]
+    with psycopg.connect(database_url) as connection:
+        job_id = Queue(connection).enqueue("email.welcome", {"to": "ada@example.com"})
+
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        worker = Worker(connection).handle(
+            "email.welcome",
+            lambda payload, _context: {"deliveredTo": payload["to"]},
+        )
+        worker.run_once()  # production uses run()
+        print(
+            connection.execute(
+                "SELECT state, result FROM workhorse.job_outcome WHERE job_id = %s",
+                (job_id,),
+            ).fetchone()
+        )
+    ```
+
+  </Tab>
+  <Tab value="Go">
+    ```go verify
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	workhorse "github.com/stablemates/workhorse/go"
+)
+
+func main() {
+	if err := run(); err != nil {
+		panic(err)
+	}
+}
+
+func run() error {
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "default")
+	jobID, err := queue.Enqueue(ctx, "email.welcome", map[string]any{
+		"to": "ada@example.com",
+	}, workhorse.EnqueueOptions{})
+	if err != nil {
+		return err
+	}
+
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{})
+	if err != nil {
+		return err
+	}
+	worker.Handle("email.welcome", func(
+		_ context.Context,
+		payload any,
+		_ *workhorse.HandlerContext,
+	) (any, error) {
+		message := payload.(map[string]any)
+		return map[string]any{"deliveredTo": message["to"]}, nil
+	})
+	if _, err := worker.RunOnce(ctx); err != nil { // production uses Run(ctx)
+		return err
+	}
+
+	var state string
+	var result []byte
+	if err := pool.QueryRow(ctx,
+		"SELECT state, result FROM workhorse.job_outcome WHERE job_id = $1",
+		jobID,
+	).Scan(&state, &result); err != nil {
+		return err
+	}
+	fmt.Println(state, string(result))
+	return nil
+}
+    ```
+
+  </Tab>
+</Tabs>
+
+Each example reads the durable outcome after the worker records state `succeeded`. That record is
+queryable evidence, not a log line — it stays after the process exits. The Python and Go examples
+read the shared projection directly to keep the quickstart to one dependency; both languages also
+ship `Admin` clients for the same operator reads.
+
+## 4. Kill the worker. The job finishes anyway.
+
+Now the part that makes Workhorse worth installing. This handler does two stages of work, each
+wrapped in a named `checkpoint`, with a deliberate crash between them.
+
+This crash walkthrough uses TypeScript so the two shell commands stay concrete. Python exposes the
+same boundary as `context.checkpoint`, and Go exposes it as `handler.Checkpoint`.
+Complete runnable lifecycle examples live under `python/examples/` and `go/examples/` in the
+repository.
+
+```ts title="crash-demo.ts"
+import { Pool, Queue, Worker } from "@stablemates/workhorse";
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const queue = new Queue(pool);
+
+const worker = new Worker(queue, { leaseMs: 5_000 }).handle(
+  "order.fulfill",
+  async (payload: { orderId: string }, ctx) => {
+    const charge = await ctx.checkpoint("charge", async () => {
+      console.log("charging card…"); // watch how many times this prints
+      return { chargeId: `ch_${payload.orderId}` };
+    });
+
+    if (!process.env.SURVIVED) {
+      console.log("simulating a crash");
+      process.exit(1); // the worker dies mid-job
+    }
+
+    const label = await ctx.checkpoint("label", async () => {
+      console.log("printing shipping label…");
+      return { labelId: `lb_${payload.orderId}` };
+    });
+
+    return { chargeId: charge.chargeId, labelId: label.labelId };
+  },
+);
+
+// The idempotency key makes the second run return the same job
+// instead of enqueueing a new one.
+await queue.enqueue(
+  "order.fulfill",
+  { orderId: "42" },
+  { maxAttempts: 5, idempotency: { key: "order:42" } },
+);
+await worker.run();
+```
+
+Run it twice:
+
+```bash
+node crash-demo.ts             # charges the card, then dies
+SURVIVED=1 node crash-demo.ts  # finishes the job
+```
+
+The first run prints `charging card…` and exits. Nothing is lost: the checkpoint committed, the
+lease expires, and the job becomes claimable again.
+
+The second run picks the job up once the expired lease is recovered — within a few seconds — and
+this time `charging card…` does **not** print. The completed
+checkpoint replays its stored result instead of running again — the customer was charged exactly
+once across the crash. That is the whole model: handlers restart from the top after any
+interruption, and the boundaries you name are the parts that never repeat.
+
+## 5. Enqueue with your data
+
+In a real application, enqueue rarely stands alone. Pass your open transaction as the last
+argument and the job commits — or rolls back — with your business write.
+
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("INSERT INTO orders (id) VALUES ($1)", [orderId]);
+      await queue.enqueue("order.fulfill", { orderId }, {}, client);
+      await client.query("COMMIT");
+    } finally {
+      client.release();
+    }
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```python verify
+    import psycopg
+
+    from workhorse import Queue
+
+
+    def create_order(database_url: str, order_id: str) -> None:
+        with psycopg.connect(database_url) as connection:
+            with connection.transaction():
+                connection.execute("INSERT INTO orders (id) VALUES (%s)", (order_id,))
+                Queue(connection).enqueue("order.fulfill", {"orderId": order_id})
+    ```
+
+  </Tab>
+  <Tab value="Go">
+    ```go verify
+package transaction
+
+import (
+	"context"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	workhorse "github.com/stablemates/workhorse/go"
+)
+
+func createOrder(ctx context.Context, pool *pgxpool.Pool, orderID string) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, "INSERT INTO orders (id) VALUES ($1)", orderID); err != nil {
+		return err
+	}
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(tx), "default")
+	if _, err := queue.Enqueue(ctx, "order.fulfill", map[string]any{
+		"orderId": orderID,
+	}, workhorse.EnqueueOptions{}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+    ```
+
+  </Tab>
+</Tabs>
+
+## Next
+
+- [Core concepts](/docs/concepts) — states, ownership, and why a handler can run twice
+- [Enqueue and transactions](/docs/enqueue) — everything an enqueue can carry
+- [Durable execution](/docs/durable-execution) — checkpoints, durable sleeps, and their rules
+
+---
+
+Exact enqueue, ownership, and completion semantics:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#atomic-lifecycle).
