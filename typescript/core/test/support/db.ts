@@ -8,11 +8,11 @@ import {
   databaseName,
   localDatabaseUrl,
 } from "../../src/local-database.js";
+import { schemaTemplateName } from "./schema-template.js";
 
 const databaseDropAttempts = 40;
 const databaseDropRetryMs = 25;
 const databaseObjectInUseCode = "55006";
-const schemaTemplatePrefix = "workhorse_test_template_";
 const schemaUrl = new URL("../../../../sql/schema/current.sql", import.meta.url);
 
 /**
@@ -135,7 +135,7 @@ async function recreateDatabase(databaseUrl: string, templateName?: string): Pro
 
 async function ensureSchemaTemplate(databaseUrl: string): Promise<string> {
   const schema = await readFile(schemaUrl);
-  const templateName = `${schemaTemplatePrefix}${createHash("sha256").update(schema).digest("hex").slice(0, 16)}`;
+  const templateName = schemaTemplateName(schema);
   const stagingName = `${templateName}_building`;
   const admin = adminPool(databaseUrl);
   let locked = false;
