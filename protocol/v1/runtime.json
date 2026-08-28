@@ -1,5 +1,11 @@
 [
   {
+    "id": "enqueue-trace-context-reaches-handler",
+    "kind": "trace-propagation",
+    "covers": ["enqueue-trace-propagation"],
+    "jobType": "protocol.trace-propagation"
+  },
+  {
     "id": "priority-ordered-mixed-batch",
     "kind": "batch",
     "covers": ["batch-handling"],

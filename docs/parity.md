@@ -45,6 +45,7 @@ Two boundaries keep this matrix small:
 | Payload and result contracts               | Supported  | Supported | Supported |
 | Compatibility refusal before mutation      | Supported  | Supported | Supported |
 | SQL protocol conformance fixtures executed | Supported  | Supported | Supported |
+| Enqueue trace-context propagation          | Supported  | Supported | Supported |
 
 <!-- END GENERATED PARITY CLIENT -->
 

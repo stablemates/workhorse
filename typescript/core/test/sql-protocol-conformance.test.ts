@@ -2,7 +2,16 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { context as otelContext, propagation, trace, type Context } from "@opentelemetry/api";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import { W3CTraceContextPropagator } from "@opentelemetry/core";
+import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type {
   ClaimedJob,
   EnqueueRequest,
@@ -31,6 +40,7 @@ import type {
   PollCadenceRuntimeFixture,
   RuntimeWriteOperation,
   SuspensionReplayRuntimeFixture,
+  TracePropagationRuntimeFixture,
 } from "../../../scripts/verify-sql-protocol.js";
 import { Admin, Queue, Worker, WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
 import { createDatabaseTestHarness } from "./support/db.js";
@@ -42,6 +52,24 @@ const sqlDatabase = createDatabaseTestHarness(new URL("?sql", import.meta.url).h
 const runtimeDatabase = createDatabaseTestHarness(new URL("?runtime", import.meta.url).href);
 const requestDatabase = createDatabaseTestHarness(new URL("?requests", import.meta.url).href);
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const traceExporter = new InMemorySpanExporter();
+const traceProvider = new BasicTracerProvider({
+  spanProcessors: [new SimpleSpanProcessor(traceExporter)],
+});
+const contextManager = new AsyncLocalStorageContextManager();
+
+beforeAll(() => {
+  otelContext.setGlobalContextManager(contextManager.enable());
+  propagation.setGlobalPropagator(new W3CTraceContextPropagator());
+  trace.setGlobalTracerProvider(traceProvider);
+});
+
+afterAll(async () => {
+  await traceProvider.shutdown();
+  otelContext.disable();
+  propagation.disable();
+  trace.disable();
+});
 
 type RuntimeQueue = Queue & Pick<Admin, keyof Admin>;
 
@@ -549,6 +577,46 @@ async function executeGracefulDrainRuntimeFixture(
   }
 }
 
+async function executeTracePropagationRuntimeFixture(
+  queue: Queue,
+  database: Queryable,
+  fixture: TracePropagationRuntimeFixture,
+): Promise<void> {
+  traceExporter.reset();
+  const unregisterTelemetry = registerOpenTelemetry();
+  try {
+    const queueName = `runtime-${fixture.id}`;
+    const caller = trace.getTracer("runtime-fixture").startSpan("caller");
+    const callerContext: Context = trace.setSpan(otelContext.active(), caller);
+    const jobId = await otelContext.with(callerContext, () =>
+      queue.enqueue(fixture.jobType, {}, { queue: queueName }),
+    );
+    caller.end();
+
+    const stored = await database.query<{ trace_context: { traceparent: string } }>(
+      "SELECT trace_context FROM workhorse.job WHERE id = $1::uuid",
+      [jobId],
+    );
+    const traceparent = stored.rows[0]?.trace_context.traceparent;
+    expect(traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/);
+
+    const worker = new Worker(queue, {
+      workerId: `runtime-${fixture.id}`,
+      queue: queueName,
+      registryIntervalMs: 0,
+    }).handle(fixture.jobType, () => null);
+    await expect(worker.runOnce()).resolves.toBe(true);
+
+    const handler = traceExporter
+      .getFinishedSpans()
+      .find((span) => span.name === "workhorse.handler");
+    expect(handler?.spanContext().traceId).toBe(caller.spanContext().traceId);
+    expect(handler?.parentSpanContext?.spanId).toBe(traceparent!.split("-")[2]);
+  } finally {
+    unregisterTelemetry();
+  }
+}
+
 async function exerciseQueue<TResult>(
   rows: unknown[],
   operation: (queue: RuntimeQueue) => Promise<TResult>,
@@ -631,6 +699,7 @@ describe("SQL protocol conformance fixtures", () => {
     expect(new Set(fixtures.manifest.coverage)).toEqual(
       new Set([
         "enqueue",
+        "enqueue-trace-propagation",
         "claim",
         "heartbeat",
         "completion",
@@ -760,6 +829,9 @@ describe("SQL protocol conformance fixtures", () => {
             break;
           case "graceful-drain":
             await executeGracefulDrainRuntimeFixture(queue, admin, fixture);
+            break;
+          case "trace-propagation":
+            await executeTracePropagationRuntimeFixture(queue, runtimeDatabase.pool, fixture);
         }
       }
       expect(coverage).toEqual(new Set(fixtures.manifest.runtimeCoverage));

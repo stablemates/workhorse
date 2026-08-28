@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Literal, Protocol, cast
@@ -55,6 +56,7 @@ WorkhorseLogEvent = Literal[
 INSTRUMENTATION_NAME = "workhorse"
 TRACE_ATTRIBUTE_COUNT_LIMIT = 8
 METRIC_ATTRIBUTE_CARDINALITY_LIMIT = 2_000
+MAX_TRACE_CONTEXT_BYTES = 1_024
 
 
 class Span(Protocol):
@@ -241,6 +243,17 @@ def start_span(
 
 def current_context() -> object | None:
     return otel_context.get_current() if _OTEL_AVAILABLE else None
+
+
+def inject_trace_context() -> dict[str, str] | None:
+    if not _OTEL_AVAILABLE:
+        return None
+    carrier: dict[str, str] = {}
+    TraceContextTextMapPropagator().inject(carrier)
+    if "traceparent" not in carrier:
+        return None
+    encoded = json.dumps(carrier, separators=(",", ":"), ensure_ascii=False).encode()
+    return carrier if len(encoded) <= MAX_TRACE_CONTEXT_BYTES else None
 
 
 def record_span_error(span: Span, error_type: str) -> None:

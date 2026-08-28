@@ -46,7 +46,8 @@
     "children",
     "signals",
     "human-tokens",
-    "retention-maintenance"
+    "retention-maintenance",
+    "enqueue-trace-propagation"
   ],
   "contractSchemaProfile": {
     "dialect": "https://json-schema.org/draft/2020-12/schema",
@@ -67,7 +68,8 @@
     "lease-loss-fencing",
     "non-overlapping-heartbeats",
     "empty-claim-backoff",
-    "graceful-drain"
+    "graceful-drain",
+    "enqueue-trace-propagation"
   ],
   "functions": [
     {

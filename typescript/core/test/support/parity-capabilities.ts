@@ -198,6 +198,18 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
     python: { file: "test_protocol_conformance.py", pattern: "scenarios" },
     go: { file: "conformance_test.go", pattern: "scenarios" },
   },
+  {
+    capability: "Enqueue trace-context propagation",
+    typescript: {
+      file: "sql-protocol-conformance.test.ts",
+      pattern: "trace-propagation",
+    },
+    python: {
+      file: "test_worker_runtime_conformance.py",
+      pattern: "trace-propagation",
+    },
+    go: { file: "runtime_conformance_test.go", pattern: "trace-propagation" },
+  },
 ];
 
 export const PARITY_WORKER_ROWS: readonly ParityRow[] = [

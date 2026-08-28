@@ -52,11 +52,15 @@ def assert_compatible(rows: Sequence[Mapping[str, object]]) -> None:
         raise ProtocolCompatibilityError(refusal)
 
 
-def serialize_requests(requests: Sequence[EnqueueRequest], default_queue: str) -> str:
+def serialize_requests(
+    requests: Sequence[EnqueueRequest],
+    default_queue: str,
+    trace_context: Mapping[str, str] | None = None,
+) -> str:
     if len(requests) > MAX_BATCH_SIZE:
         raise ValueError(f"enqueue_many accepts at most {MAX_BATCH_SIZE} requests")
     return json.dumps(
-        [serialize_request(request, default_queue) for request in requests],
+        [serialize_request(request, default_queue, trace_context) for request in requests],
         separators=(",", ":"),
         ensure_ascii=False,
     )
@@ -90,7 +94,11 @@ def serialize_schedules(definitions: Sequence[ScheduleDefinition], default_queue
     return json.dumps(values, separators=(",", ":"), ensure_ascii=False)
 
 
-def serialize_request(request: EnqueueRequest, default_queue: str) -> dict[str, Json]:
+def serialize_request(
+    request: EnqueueRequest,
+    default_queue: str,
+    trace_context: Mapping[str, str] | None = None,
+) -> dict[str, Json]:
     options = request.options
     _validate_options(options)
     dependencies = _dependencies(options.dependencies)
@@ -122,6 +130,8 @@ def serialize_request(request: EnqueueRequest, default_queue: str) -> dict[str, 
         value["debounce"] = _debounce(options.debounce)
     if options.throttle is not None:
         value["throttle"] = _throttle(options.throttle)
+    if trace_context is not None:
+        value["traceContext"] = dict(trace_context)
     return value
 
 

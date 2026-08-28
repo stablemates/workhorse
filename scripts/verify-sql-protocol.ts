@@ -178,6 +178,10 @@ export interface GracefulDrainRuntimeFixture extends RuntimeFixtureBase {
   expectedReady: number;
 }
 
+export interface TracePropagationRuntimeFixture extends RuntimeFixtureBase {
+  kind: "trace-propagation";
+}
+
 export type RuntimeFixture =
   | BatchRuntimeFixture
   | SuspensionReplayRuntimeFixture
@@ -186,7 +190,8 @@ export type RuntimeFixture =
   | LeaseLossRuntimeFixture
   | HeartbeatCadenceRuntimeFixture
   | PollCadenceRuntimeFixture
-  | GracefulDrainRuntimeFixture;
+  | GracefulDrainRuntimeFixture
+  | TracePropagationRuntimeFixture;
 
 export interface RequestFixture {
   id: string;
