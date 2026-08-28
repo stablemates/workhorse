@@ -56,8 +56,12 @@ try {
     ["/", ["Workhorse", "Postgres", "quickstart", "derby", "G-9NC8FKZPVB"]],
     ["/docs", ["Workhorse", "PostgreSQL"]],
     ["/docs/api", ["API overview", `Workhorse version ${WORKHORSE_VERSION}`]],
+    ["/docs/for-ai-agents", ["TypeScript", "Python", "Go"]],
+    ["/docs/for-ai-agents.md", ["TypeScript", "Python", "Go"]],
     ["/docs/quickstart", ["quickstart", "worker"]],
     ["/docs/retries", ["retry", "backoff"]],
+    ["/llms.txt", ["llms-full.txt", "/docs/quickstart.md"]],
+    ["/llms-full.txt", ["https://workhorse.run/docs/quickstart", "Queue.enqueue"]],
     ["/robots.txt", ["Sitemap"]],
     ["/sitemap.xml", ["<urlset"]],
   ] as const;

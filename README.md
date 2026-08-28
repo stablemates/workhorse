@@ -91,6 +91,10 @@ availability must be independent from the application database.
 - [Compatibility](docs/compatibility.md) defines supported runtimes, schema policy, and releases.
 - [Operations](https://workhorse.run/docs/operations) covers health, retention, and maintenance.
 - [Dashboard](https://workhorse.run/docs/dashboard) explains the operator UI and deployment boundary.
+- [Agent documentation index](https://workhorse.run/llms.txt) lists the published guides and their
+  Markdown versions.
+- [Complete agent documentation](https://workhorse.run/llms-full.txt) provides the published guides
+  in one file.
 - [Changelog](CHANGELOG.md) records releases and required schema versions.
 
 ## Contributing
