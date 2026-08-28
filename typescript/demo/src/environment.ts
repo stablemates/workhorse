@@ -5,6 +5,24 @@ export function resolveDemoDatabaseUrl(environment: NodeJS.ProcessEnv = process.
   return environment.DATABASE_URL_PRIMARY ?? defaultDemoDatabaseUrl;
 }
 
+export interface DemoSchemaTarget {
+  name: "production" | "staging";
+  url: string;
+}
+
+/** Every configured demo database that the container must prepare before application startup. */
+export function resolveDemoSchemaTargets(
+  environment: NodeJS.ProcessEnv = process.env,
+): readonly DemoSchemaTarget[] {
+  const targets: DemoSchemaTarget[] = [
+    { name: "production", url: resolveDemoDatabaseUrl(environment) },
+  ];
+  if (environment.DATABASE_URL_SECONDARY) {
+    targets.push({ name: "staging", url: environment.DATABASE_URL_SECONDARY });
+  }
+  return targets;
+}
+
 /**
  * Display-only host label for a PostgreSQL URL: `hostname[:port]`, or the socket directory from
  * the `host` query parameter when the URL names no network host (the deployed demo connects

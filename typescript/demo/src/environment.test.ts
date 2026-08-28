@@ -3,6 +3,7 @@ import {
   demoDatabaseHostLabel,
   demoDatabaseNameLabel,
   resolveDemoDatabaseUrl,
+  resolveDemoSchemaTargets,
 } from "./environment.js";
 
 describe("demo environment", () => {
@@ -13,6 +14,24 @@ describe("demo environment", () => {
         DATABASE_URL_PRIMARY: "postgres://localhost/workhorse_dev_primary",
       }),
     ).toBe("postgres://localhost/workhorse_dev_primary");
+  });
+
+  it("prepares both configured workspace databases", () => {
+    expect(
+      resolveDemoSchemaTargets({
+        DATABASE_URL_PRIMARY: "postgres://primary/demo",
+        DATABASE_URL_SECONDARY: "postgres://secondary/demo",
+      }),
+    ).toEqual([
+      { name: "production", url: "postgres://primary/demo" },
+      { name: "staging", url: "postgres://secondary/demo" },
+    ]);
+  });
+
+  it("prepares only production in single-workspace mode", () => {
+    expect(resolveDemoSchemaTargets({ DATABASE_URL_PRIMARY: "postgres://primary/demo" })).toEqual([
+      { name: "production", url: "postgres://primary/demo" },
+    ]);
   });
 
   it("labels a database URL by its network host", () => {
