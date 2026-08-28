@@ -125,15 +125,24 @@ const slugs = entries
   .map((entry) => entry.name.replace(/\.mdx$/, ""));
 
 const pages = new Map<string, PageRecord>();
+const markdownTwins = new Map<string, string>();
 await Promise.all(
   slugs.map(async (slug) => {
     const source = await readFile(new URL(`${slug}.mdx`, contentDir), "utf8");
+    const title = frontmatterValue(source, "title") ?? slug;
+    const description = frontmatterValue(source, "description");
+    if (!description) {
+      throw new Error(`The docs page "${slug}" is missing a frontmatter description`);
+    }
+
+    const body = source.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "").trimStart();
+    markdownTwins.set(slug, `# ${title}\n\n> ${description}\n\n${body}`);
     pages.set(slug, {
       slug,
       url: slug === "index" ? "/docs" : `/docs/${slug}`,
       path: `${slug}.mdx`,
-      title: frontmatterValue(source, "title") ?? slug,
-      description: frontmatterValue(source, "description") ?? siteConfig.description,
+      title,
+      description,
     });
   }),
 );
@@ -226,15 +235,12 @@ ${routes
 await mkdir(new URL("../public/docs/", import.meta.url), { recursive: true });
 await Promise.all(
   [...pages.values()].map(async (page) => {
-    const source = await readFile(new URL(page.path, contentDir), "utf8");
-    const body = source.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "").trimStart();
+    const markdown = markdownTwins.get(page.slug);
+    if (!markdown) throw new Error(`The docs page "${page.slug}" has no Markdown twin`);
     // `index` is served at `/docs`, so its twin is `/docs.md`, not
     // `/docs/index.md`. Every other page keeps its slug.
     const target = page.slug === "index" ? "../public/docs.md" : `../public/docs/${page.slug}.md`;
-    await writeFile(
-      new URL(target, import.meta.url),
-      `# ${page.title}\n\n> ${page.description}\n\n${body}`,
-    );
+    await writeFile(new URL(target, import.meta.url), markdown);
   }),
 );
 
@@ -260,8 +266,42 @@ await writeFile(
 > ${siteConfig.description}
 
 Every page below is available as Markdown by appending \`.md\` to its URL.
+For the complete documentation in one file, read [llms-full.txt](${base}/llms-full.txt).
 
-${structure.map((group) => llmsSection(group)).join("\n")}`,
+${structure.map((group) => llmsSection(group)).join("\n")}
+## Optional
+
+- [Repository](${siteConfig.github})
+- [npm](${siteConfig.npm})
+`,
+);
+
+/**
+ * `/llms-full.txt`, every Markdown twin in sidebar order. The separator and
+ * canonical URL identify each page, while the page body is the exact string
+ * written to its standalone twin.
+ */
+const llmsFullSection = (group: Group, depth = 2): string => {
+  const heading = "#".repeat(depth);
+  const documents = (group.pages ?? []).map((slug) => {
+    const page = pages.get(slug);
+    const markdown = markdownTwins.get(slug);
+    if (!page || !markdown) throw new Error(`The sidebar page "${slug}" has no Markdown twin`);
+    return `---\n\nCanonical source: ${base}${page.url}\n\n${markdown}`;
+  });
+  const nested = (group.groups ?? []).map((child) => llmsFullSection(child, depth + 1));
+  return [`${heading} ${group.title}`, "", ...documents, "", ...nested].join("\n");
+};
+
+await writeFile(
+  new URL("../public/llms-full.txt", import.meta.url),
+  `# ${siteConfig.name}
+
+> ${siteConfig.description}
+
+For the concise documentation index, read [llms.txt](${base}/llms.txt).
+
+${structure.map((group) => llmsFullSection(group)).join("\n")}`,
 );
 
 // The search index is derived data. Crawling it wastes budget. Markdown twins
