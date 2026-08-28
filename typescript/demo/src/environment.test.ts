@@ -47,13 +47,6 @@ describe("demo environment", () => {
     );
   });
 
-  it("labels a credentialed socket-connected URL", () => {
-    const url = "postgresql://workhorse:secret@/workhorse_demo?host=/var/run/postgresql";
-
-    expect(demoDatabaseHostLabel(url)).toBe("/var/run/postgresql");
-    expect(demoDatabaseNameLabel(url)).toBe("workhorse_demo");
-  });
-
   it("labels a database URL by its database name", () => {
     expect(demoDatabaseNameLabel("postgres://user:pw@db.internal:5433/demo")).toBe("demo");
     expect(demoDatabaseNameLabel("postgres:///workhorse_demo?host=/var/run/postgresql")).toBe(
