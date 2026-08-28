@@ -24,6 +24,7 @@ from ._external_waits import (
 )
 from ._protocol import serialize_requests, serialize_schedules
 from ._statements import STATEMENTS
+from ._telemetry import inject_trace_context
 from .errors import (
     HumanWaitIdempotencyConflictError,
     JobContractValidationError,
@@ -109,7 +110,8 @@ class Queue:
             return []
         assert_sync_compatible(self._executor)
         values = cast(
-            list[dict[str, Json]], json.loads(serialize_requests(requests, self.default_queue))
+            list[dict[str, Json]],
+            json.loads(serialize_requests(requests, self.default_queue, inject_trace_context())),
         )
         if self._contracts_enabled:
             for request, value in zip(requests, values, strict=True):
@@ -288,7 +290,8 @@ class AsyncQueue:
             return []
         await assert_async_compatible(self._executor)
         values = cast(
-            list[dict[str, Json]], json.loads(serialize_requests(requests, self.default_queue))
+            list[dict[str, Json]],
+            json.loads(serialize_requests(requests, self.default_queue, inject_trace_context())),
         )
         if self._contracts_enabled:
             for request, value in zip(requests, values, strict=True):

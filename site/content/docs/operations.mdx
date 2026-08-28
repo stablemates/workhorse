@@ -34,9 +34,10 @@ yet, so a stuck rollup surfaces as growing lag on the health page, not as a hole
 
 ## OpenTelemetry
 
-TypeScript, Python, and Go workers emit the same worker span and metric names, so one set of
-dashboards can cover a mixed-language fleet. A Go worker restores the W3C context stored by a
-TypeScript enqueue, which keeps the handler in the enqueue trace across processes.
+TypeScript, Python, and Go queues store the active W3C trace context when they enqueue a job. Every
+worker restores that context before creating its handler span, so one trace can cross processes and
+languages. The workers also emit the same span and metric names, so one set of dashboards can cover
+a mixed-language fleet.
 
 The Python package exposes telemetry through its optional `telemetry` extra. Applications supply
 OpenTelemetry providers and exporters, while Go applications also pass an application-owned

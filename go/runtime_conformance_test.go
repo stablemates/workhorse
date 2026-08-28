@@ -2,15 +2,21 @@ package workhorse_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	workhorse "github.com/stablemates/workhorse/go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
@@ -28,6 +34,7 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 		"heartbeat-cadence":        executeWorkerHeartbeatFixture,
 		"poll-cadence":             executeWorkerPollCadenceFixture,
 		"graceful-drain":           executeWorkerGracefulDrainFixture,
+		"trace-propagation":        executeWorkerTracePropagationFixture,
 	}
 	coverage := make(map[string]struct{}, len(manifest.RuntimeCoverage))
 	for _, fixture := range fixtures {
@@ -53,6 +60,80 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("runtime fixture coverage differs from the manifest: expected %v, received %v", expected, actual)
 	}
+}
+
+func executeWorkerTracePropagationFixture(t *testing.T, fixture workerRuntimeFixture) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	previousProvider := otel.GetTracerProvider()
+	previousPropagator := otel.GetTextMapPropagator()
+	otel.SetTracerProvider(provider)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previousProvider)
+		otel.SetTextMapPropagator(previousPropagator)
+		_ = provider.Shutdown(context.Background())
+	})
+
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-trace-propagation")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "runtime-" + fixture.ID
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	traceCtx, caller := provider.Tracer("runtime-fixture").Start(ctx, "caller")
+	jobID, err := queue.Enqueue(traceCtx, fixture.JobType, map[string]any{})
+	caller.End()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored []byte
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT trace_context FROM workhorse.job WHERE id = $1::uuid",
+		jobID,
+	).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	var carrier map[string]string
+	if err := json.Unmarshal(stored, &carrier); err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(carrier["traceparent"], "-")
+	if len(parts) != 4 {
+		t.Fatalf("stored traceparent is invalid: %q", carrier["traceparent"])
+	}
+
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-" + fixture.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.Handle(fixture.JobType, func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+		return nil, nil
+	})
+	worked, err := worker.RunOnce(ctx)
+	if err != nil || !worked {
+		t.Fatalf("RunOnce() = %v, %v", worked, err)
+	}
+	for _, span := range exporter.GetSpans() {
+		if span.Name != "workhorse.handler" {
+			continue
+		}
+		if span.SpanContext.TraceID() != caller.SpanContext().TraceID() {
+			t.Fatalf("handler trace %s does not match caller trace %s", span.SpanContext.TraceID(), caller.SpanContext().TraceID())
+		}
+		if span.Parent.SpanID().String() != parts[2] {
+			t.Fatalf("handler parent %s does not match stored span %s", span.Parent.SpanID(), parts[2])
+		}
+		return
+	}
+	t.Fatal("worker did not export a workhorse.handler span")
 }
 
 func executeWorkerPollCadenceFixture(t *testing.T, fixture workerRuntimeFixture) {

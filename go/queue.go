@@ -419,7 +419,12 @@ func (queue *Queue) EnqueueManyWithResults(
 	if len(requests) > MaxEnqueueBatchSize {
 		return nil, ErrEnqueueBatchTooLarge
 	}
-	payload, err := serializeEnqueueRequests(requests, queue.defaultQueue, time.Now().UTC())
+	payload, err := serializeEnqueueRequests(
+		requests,
+		queue.defaultQueue,
+		time.Now().UTC(),
+		injectTraceContext(ctx),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -609,30 +614,36 @@ func serializeScheduleDefinitions(definitions []ScheduleDefinition, defaultQueue
 }
 
 type enqueueInput struct {
-	Queue                string        `json:"queue"`
-	Type                 string        `json:"type"`
-	Payload              any           `json:"payload"`
-	Priority             int           `json:"priority"`
-	ContractVersion      any           `json:"contractVersion"`
-	PayloadMaxBytes      int           `json:"payloadMaxBytes"`
-	ResultMaxBytes       int           `json:"resultMaxBytes"`
-	SensitivePayloadKeys []string      `json:"sensitivePayloadKeys"`
-	SensitiveResultKeys  []string      `json:"sensitiveResultKeys"`
-	RunAt                *string       `json:"runAt,omitempty"`
-	Deadline             *string       `json:"deadline"`
-	ConcurrencyKey       any           `json:"concurrencyKey"`
-	ExecutionTimeoutMS   any           `json:"executionTimeoutMs"`
-	MaxAttempts          int           `json:"maxAttempts"`
-	RetryPolicy          any           `json:"retryPolicy"`
-	PrerequisiteJobID    any           `json:"prerequisiteJobId"`
-	Dependencies         *Dependencies `json:"dependencies"`
-	Tags                 []string      `json:"tags"`
-	Idempotency          *Idempotency  `json:"idempotency,omitempty"`
-	Debounce             *Debounce     `json:"debounce,omitempty"`
-	Throttle             *Throttle     `json:"throttle,omitempty"`
+	Queue                string            `json:"queue"`
+	Type                 string            `json:"type"`
+	Payload              any               `json:"payload"`
+	Priority             int               `json:"priority"`
+	ContractVersion      any               `json:"contractVersion"`
+	PayloadMaxBytes      int               `json:"payloadMaxBytes"`
+	ResultMaxBytes       int               `json:"resultMaxBytes"`
+	SensitivePayloadKeys []string          `json:"sensitivePayloadKeys"`
+	SensitiveResultKeys  []string          `json:"sensitiveResultKeys"`
+	RunAt                *string           `json:"runAt,omitempty"`
+	Deadline             *string           `json:"deadline"`
+	ConcurrencyKey       any               `json:"concurrencyKey"`
+	ExecutionTimeoutMS   any               `json:"executionTimeoutMs"`
+	MaxAttempts          int               `json:"maxAttempts"`
+	RetryPolicy          any               `json:"retryPolicy"`
+	PrerequisiteJobID    any               `json:"prerequisiteJobId"`
+	Dependencies         *Dependencies     `json:"dependencies"`
+	Tags                 []string          `json:"tags"`
+	Idempotency          *Idempotency      `json:"idempotency,omitempty"`
+	Debounce             *Debounce         `json:"debounce,omitempty"`
+	Throttle             *Throttle         `json:"throttle,omitempty"`
+	TraceContext         map[string]string `json:"traceContext,omitempty"`
 }
 
-func serializeEnqueueRequests(requests []EnqueueRequest, defaultQueue string, now time.Time) ([]byte, error) {
+func serializeEnqueueRequests(
+	requests []EnqueueRequest,
+	defaultQueue string,
+	now time.Time,
+	traceContext map[string]string,
+) ([]byte, error) {
 	input := make([]enqueueInput, len(requests))
 	for index, request := range requests {
 		value, err := serializeEnqueueRequest(request, defaultQueue, now)
@@ -640,6 +651,7 @@ func serializeEnqueueRequests(requests []EnqueueRequest, defaultQueue string, no
 			return nil, fmt.Errorf(enqueueRequestErrorFormat, index+1, err)
 		}
 		input[index] = value
+		input[index].TraceContext = traceContext
 	}
 	return json.Marshal(input)
 }

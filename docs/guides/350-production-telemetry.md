@@ -20,17 +20,17 @@ active provider is rejected, so two libraries cannot silently replace each other
 
 ## Follow a job from enqueue to execution
 
-When application code enqueues a job, `Queue.enqueue` creates an enqueue span and captures its W3C
-trace context. PostgreSQL stores that context beside the payload, without changing the payload your
-handler receives.
+When application code enqueues a job, each queue captures the active W3C trace context. PostgreSQL
+stores that context beside the payload, without changing the payload your handler receives.
 
 When a worker claims the job, `Worker` restores the stored parent before it creates the handler
 span. The enqueue and handler can run in different processes or at very different times while
 remaining part of one trace.
 
-The TypeScript queue creates the enqueue span and stores its context. Python and Go workers restore
-that context and use the same worker span names, so mixed-language deployments share traces. The Go
-host installs its W3C propagator and providers without adding an SDK or exporter to the library.
+The TypeScript queue creates an enqueue span and stores its context. Python and Go queues store the
+active caller context. Every worker restores either form and uses the same span names, so
+mixed-language deployments share traces. The Go host installs its providers without adding an SDK
+or exporter to the library.
 
 Workhorse does not persist baggage. Baggage often contains user-controlled or sensitive values,
 and durable storage would make those values difficult to bound and redact.

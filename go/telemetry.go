@@ -43,6 +43,21 @@ var (
 	initialTracerProvider = otel.GetTracerProvider()
 )
 
+const maxTraceContextBytes = 1_024
+
+func injectTraceContext(ctx context.Context) map[string]string {
+	carrier := propagation.MapCarrier{}
+	propagation.TraceContext{}.Inject(ctx, carrier)
+	if carrier[traceParentField] == emptyString {
+		return nil
+	}
+	encoded, err := json.Marshal(carrier)
+	if err != nil || len(encoded) > maxTraceContextBytes {
+		return nil
+	}
+	return carrier
+}
+
 func newWorkerMetrics() (*workerMetrics, error) {
 	if otel.GetMeterProvider() == initialMeterProvider {
 		return &workerMetrics{}, nil

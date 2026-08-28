@@ -9,6 +9,10 @@ from time import monotonic, sleep
 from typing import Any
 
 import psycopg
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from workhorse import (
     ChildJobRequest,
@@ -49,9 +53,47 @@ def execute_runtime_fixture(
         "heartbeat-cadence": execute_heartbeat_fixture,
         "poll-cadence": execute_poll_cadence_fixture,
         "graceful-drain": execute_graceful_drain_fixture,
+        "trace-propagation": execute_trace_propagation_fixture,
     }
     assert fixture["kind"] in executors, f"Unsupported runtime fixture kind: {fixture['kind']}"
     executors[fixture["kind"]](connection, fixture)
+
+
+def execute_trace_propagation_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> None:
+    exporter = InMemorySpanExporter()
+    provider = trace.get_tracer_provider()
+    if not isinstance(provider, TracerProvider):
+        provider = TracerProvider()
+        trace.set_tracer_provider(provider)
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    queue_name = runtime_queue(fixture)
+    queue = Queue(connection, queue_name)
+    with trace.get_tracer("runtime-fixture").start_as_current_span("caller") as caller:
+        caller_context = caller.get_span_context()
+        job_id = queue.enqueue(fixture["jobType"], {})
+
+    row = connection.execute(
+        "SELECT trace_context FROM workhorse.job WHERE id = %s::uuid", (job_id,)
+    ).fetchone()
+    assert row is not None
+    stored = row[0]
+    assert isinstance(stored, dict)
+    traceparent = stored["traceparent"]
+
+    worker = Worker(connection, queue=queue_name, worker_id=f"python-{fixture['id']}")
+    worker.handle(fixture["jobType"], lambda _payload, _context: None)
+    assert worker.run_once() is True
+
+    handler = next(
+        span for span in exporter.get_finished_spans() if span.name == "workhorse.handler"
+    )
+    assert handler.context is not None
+    assert handler.context.trace_id == caller_context.trace_id
+    assert handler.parent is not None
+    assert format(handler.parent.span_id, "016x") == traceparent.split("-")[2]
 
 
 def execute_batch_fixture(connection: psycopg.Connection[Any], fixture: Mapping[str, Any]) -> None:
