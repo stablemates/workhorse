@@ -56,6 +56,7 @@ const sidebarLabels: Readonly<Record<string, string>> = {
   "dead-letters": "Dead letters",
   maintenance: "Retention",
   "agentic-flow": "Agent workflows",
+  "for-ai-agents": "For AI agents",
   api: "API",
 };
 

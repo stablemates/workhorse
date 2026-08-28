@@ -1,0 +1,199 @@
+---
+title: Workhorse for AI coding agents
+description: Find agent-readable documentation, then integrate one transactional job from enqueue through confirmation.
+---
+
+Workhorse gives an AI coding agent a direct path from documentation discovery to verified
+application code. Start with the narrowest useful Markdown source, then follow the same integration
+sequence in TypeScript, Python, or Go.
+
+## Read the documentation without an HTML shell
+
+- Fetch `/llms.txt` for a compact map of every documentation page, grouped like the sidebar.
+- Fetch `/llms-full.txt` when the task needs the complete documentation corpus in one response.
+- Append `.md` to a page URL for its Markdown twin, such as `/docs/enqueue.md`.
+- When the agent starts from HTML, follow the response's `text/markdown` alternate link to the same
+  page's Markdown twin.
+
+Use the per-page twin for focused work because it spends less context. Use `/llms-full.txt` when a
+change crosses several contracts and the agent needs to search them together.
+
+## Integrate one job end to end
+
+Install the SDK used by the application:
+
+- TypeScript: `npm install @stablemates/workhorse`
+- Python: `pip install stablemates-workhorse`
+- Go: `go get github.com/stablemates/workhorse/go`
+
+Each complete example below opens PostgreSQL, enqueues `order.created` inside the transaction that
+inserts the order, runs a matching worker, and reads the durable result. Production processes call
+the worker's continuous run method; these bounded examples use one pass so they can finish.
+
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts verify
+    import { Admin, Pool, Queue, Worker } from "@stablemates/workhorse";
+
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const queue = new Queue(pool);
+    const client = await pool.connect();
+    let jobId: string;
+
+    try {
+      await client.query("BEGIN");
+      await client.query("INSERT INTO orders (id, status) VALUES ($1, $2)", ["order-42", "new"]);
+      jobId = await queue.enqueue("order.created", { orderId: "order-42" }, {}, client);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const worker = new Worker(queue).handle("order.created", async (payload: { orderId: string }) => ({
+      processedOrderId: payload.orderId,
+    }));
+    await worker.runOnce(); // Production worker processes call worker.run().
+
+    const job = await new Admin(pool).getJob(jobId);
+    console.log(job?.state, job?.result);
+    await pool.end();
+    ```
+
+  </Tab>
+  <Tab value="Python">
+    ```python verify
+    import os
+
+    import psycopg
+
+    from workhorse import Admin, Queue, Worker
+
+    database_url = os.environ["DATABASE_URL"]
+
+    with psycopg.connect(database_url) as application_connection:
+        with application_connection.transaction():
+            application_connection.execute(
+                "INSERT INTO orders (id, status) VALUES (%s, %s)",
+                ("order-42", "new"),
+            )
+            job_id = Queue(application_connection).enqueue(
+                "order.created",
+                {"orderId": "order-42"},
+            )
+
+    with psycopg.connect(database_url, autocommit=True) as worker_connection:
+        worker = Worker(worker_connection).handle(
+            "order.created",
+            lambda payload, _context: {"processedOrderId": payload["orderId"]},
+        )
+        worker.run_once()  # Production worker processes call worker.run().
+        job = Admin(worker_connection).get_job(job_id)
+        print(job.state if job else None, job.result if job else None)
+    ```
+
+  </Tab>
+  <Tab value="Go">
+    ```go verify
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	workhorse "github.com/stablemates/workhorse/go"
+)
+
+func main() {
+	if err := run(); err != nil {
+		panic(err)
+	}
+}
+
+func run() error {
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) // This becomes a no-op after Commit.
+
+	if _, err = tx.Exec(
+		ctx,
+		"INSERT INTO orders (id, status) VALUES ($1, $2)",
+		"order-42",
+		"new",
+	); err != nil {
+		return err
+	}
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(tx), "default")
+	jobID, err := queue.Enqueue(
+		ctx,
+		"order.created",
+		map[string]any{"orderId": "order-42"},
+	)
+	if err != nil {
+		return err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
+
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{PollingOnly: true})
+	if err != nil {
+		return err
+	}
+	worker.Handle("order.created", func(
+		_ context.Context,
+		payload any,
+		_ *workhorse.HandlerContext,
+	) (any, error) {
+		return map[string]any{
+			"processedOrderId": payload.(map[string]any)["orderId"],
+		}, nil
+	})
+	if _, err = worker.RunOnce(ctx); err != nil { // Production workers call Run.
+		return err
+	}
+
+	job, err := workhorse.NewAdmin(workhorse.NewPGXExecutor(pool)).GetJob(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	fmt.Println(job.State, job.Result)
+	return nil
+}
+    ```
+
+  </Tab>
+</Tabs>
+
+The application transaction covers acceptance, so the order and job commit or roll back together.
+The handler runs later and may run again after a retry, so protect its external effects with an
+idempotency key, outbox, inbox, or compensation path.
+
+`Queue`, `Worker`, and `Admin` are the TypeScript names, including `Admin.getJob` for confirmation.
+Python keeps the types and uses snake-case methods such as `Admin.get_job`; Go uses
+`workhorse.NewQueue`, `workhorse.NewWorker`, and `workhorse.NewAdmin`, with methods such as
+`Admin.GetJob`.
+
+## Next
+
+- [Agent workflows](/docs/agentic-flow) — compose durable model, tool, timer, and approval boundaries
+- [Enqueue a job](/docs/enqueue) — understand transaction and routing options
+- [Workers](/docs/workers) — run handlers continuously in production
+
+---
+
+Exact enqueue and transaction semantics:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#enqueue).
