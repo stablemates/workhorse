@@ -16,29 +16,6 @@ function Highlighted({ snippet }: { snippet: LandingSnippetId }) {
   return <div dangerouslySetInnerHTML={{ __html: rendered[snippet] }} />;
 }
 
-/** A statically highlighted code sample inside the standard code frame. */
-export function CodeSample({
-  snippet,
-  title,
-  meta,
-}: {
-  snippet: LandingSnippetId;
-  title?: string;
-  meta?: string;
-}) {
-  return (
-    <figure className="wh-frame not-prose">
-      {title ? (
-        <figcaption className="wh-frame-bar flex items-center justify-between gap-4 px-4 py-2.5">
-          <span className="font-mono text-[12px] text-fd-muted-foreground">{title}</span>
-          {meta ? <span className="wh-mono-label">{meta}</span> : null}
-        </figcaption>
-      ) : null}
-      <Highlighted snippet={snippet} />
-    </figure>
-  );
-}
-
 export interface CodeTab {
   /** Short switcher label. Doubles as the accessible name of the radio. */
   label: string;
