@@ -9,6 +9,13 @@ import { WORKHORSE_SCHEMA_VERSION } from "../src/schema.js";
 
 const exec = promisify(execFile);
 const repository = path.resolve(import.meta.dirname, "../../..");
+const repositoryPackage = JSON.parse(
+  await readFile(path.join(repository, "package.json"), "utf8"),
+) as { packageManager?: unknown };
+if (typeof repositoryPackage.packageManager !== "string") {
+  throw new Error("The repository package.json must pin packageManager");
+}
+const packageManager = repositoryPackage.packageManager;
 const scratchRoot = process.env.JCODE_SCRATCH_DIR ?? tmpdir();
 const scratch = await mkdtemp(path.join(scratchRoot, "workhorse-packed-"));
 
@@ -197,6 +204,7 @@ try {
       name: "workhorse-core-only-consumer",
       private: true,
       type: "module",
+      packageManager,
       dependencies: {
         "@stablemates/workhorse": `file:${coreTarball}`,
         "@stablemates/workhorse-dashboard-contract": `file:${tarballFor("@stablemates/workhorse-dashboard-contract")}`,
@@ -300,6 +308,7 @@ try {
         name: "workhorse-packed-consumer",
         private: true,
         type: "module",
+        packageManager,
         dependencies: {
           ...Object.fromEntries(
             published.map((entry) => [entry.name, `file:${path.join(tarballs, entry.tarball)}`]),
