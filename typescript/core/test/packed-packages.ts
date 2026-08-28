@@ -13,7 +13,7 @@ const repositoryPackage = JSON.parse(
   await readFile(path.join(repository, "package.json"), "utf8"),
 ) as { packageManager?: unknown };
 if (typeof repositoryPackage.packageManager !== "string") {
-  throw new Error("The repository package.json must pin packageManager");
+  throw new TypeError("The repository package.json must pin packageManager");
 }
 const packageManager = repositoryPackage.packageManager;
 const scratchRoot = process.env.JCODE_SCRATCH_DIR ?? tmpdir();
