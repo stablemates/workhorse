@@ -23,17 +23,41 @@ export function resolveDemoSchemaTargets(
   return targets;
 }
 
+interface ParsedDemoDatabaseUrl {
+  parsed: URL;
+  usesSocketAuthority: boolean;
+}
+
+function parseDemoDatabaseUrl(url: string): ParsedDemoDatabaseUrl | undefined {
+  try {
+    return { parsed: new URL(url), usesSocketAuthority: false };
+  } catch {
+    // WHATWG URL rejects PostgreSQL's credentialed empty-host form: postgres://user:pw@/database.
+    const normalized = url.replace(/^(postgres(?:ql)?:\/\/[^/?#]*@)\//, "$1localhost/");
+    if (normalized === url) {
+      return undefined;
+    }
+    try {
+      return { parsed: new URL(normalized), usesSocketAuthority: true };
+    } catch {
+      return undefined;
+    }
+  }
+}
+
 /**
  * Display-only host label for a PostgreSQL URL: `hostname[:port]`, or the socket directory from
  * the `host` query parameter when the URL names no network host (the deployed demo connects
  * through a mounted unix socket). Undefined when the URL does not parse.
  */
 export function demoDatabaseHostLabel(url: string): string | undefined {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
+  const result = parseDemoDatabaseUrl(url);
+  if (!result) {
     return undefined;
+  }
+  const { parsed, usesSocketAuthority } = result;
+  if (usesSocketAuthority) {
+    return parsed.searchParams.get("host") ?? undefined;
   }
   if (parsed.hostname) {
     return parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
@@ -43,12 +67,11 @@ export function demoDatabaseHostLabel(url: string): string | undefined {
 
 /** Display-only database name from a PostgreSQL URL's path. Undefined when absent or unparsable. */
 export function demoDatabaseNameLabel(url: string): string | undefined {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
+  const result = parseDemoDatabaseUrl(url);
+  if (!result) {
     return undefined;
   }
+  const { parsed } = result;
   const name = parsed.pathname.replace(/^\//, "");
   return name === "" ? undefined : decodeURIComponent(name);
 }
