@@ -182,23 +182,28 @@ function coverageErrors(input: {
 const fixtureCoverage: Coverage = {
   languages: ["typescript", "python", "go"],
   scenarios: {
+    quickstart: {
+      typescript: { file: "typescript/examples/quickstart.mjs" },
+      python: { file: "python/examples/quickstart.py" },
+      go: { file: "go/examples/quickstart/main.go" },
+    },
     transaction: {
-      typescript: { exclusion: { reason: "No TypeScript transaction example." } },
+      typescript: { file: "typescript/examples/transaction.mjs" },
       python: { file: "python/examples/async_enqueue.py" },
       go: { file: "go/examples/transaction/main.go" },
     },
     "dedicated-worker": {
-      typescript: { exclusion: { reason: "No TypeScript dedicated-worker example." } },
+      typescript: { file: "typescript/examples/dedicated-worker.mjs" },
       python: { file: "python/examples/dedicated_worker.py" },
       go: { file: "go/examples/dedicated-worker/main.go" },
     },
     orchestration: {
-      typescript: { exclusion: { reason: "No TypeScript orchestration example." } },
+      typescript: { file: "typescript/examples/orchestration.mjs" },
       python: { file: "python/examples/lifecycle.py" },
       go: { file: "go/examples/orchestration/main.go" },
     },
     "demo-worker": {
-      typescript: { exclusion: { reason: "No TypeScript demo-worker example." } },
+      typescript: { file: "typescript/examples/demo-worker.mjs" },
       python: { file: "python/examples/demo_worker.py" },
       go: { file: "go/examples/demo-worker/main.go" },
     },
@@ -216,18 +221,27 @@ const fixtureCoverage: Coverage = {
 };
 
 const fixtureFiles = {
-  typescript: ["typescript/examples/agentic-flow.mjs"],
+  typescript: [
+    "typescript/examples/agentic-flow.mjs",
+    "typescript/examples/dedicated-worker.mjs",
+    "typescript/examples/demo-worker.mjs",
+    "typescript/examples/orchestration.mjs",
+    "typescript/examples/quickstart.mjs",
+    "typescript/examples/transaction.mjs",
+  ],
   python: [
     "python/examples/async_enqueue.py",
     "python/examples/async_worker.py",
     "python/examples/dedicated_worker.py",
     "python/examples/demo_worker.py",
     "python/examples/lifecycle.py",
+    "python/examples/quickstart.py",
   ],
   go: [
     "go/examples/dedicated-worker/main.go",
     "go/examples/demo-worker/main.go",
     "go/examples/orchestration/main.go",
+    "go/examples/quickstart/main.go",
     "go/examples/transaction/main.go",
   ],
 };
@@ -237,7 +251,7 @@ const fixtureInput = {
   languages: ["go", "python", "typescript"],
   exampleFiles: fixtureFiles,
   existingFiles: Object.values(fixtureFiles).flat(),
-  goScenarios: ["dedicated-worker", "demo-worker", "orchestration", "transaction"],
+  goScenarios: ["dedicated-worker", "demo-worker", "orchestration", "quickstart", "transaction"],
   parityStatus,
 };
 

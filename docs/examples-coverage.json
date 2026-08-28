@@ -1,39 +1,28 @@
 {
   "languages": ["typescript", "python", "go"],
   "scenarios": {
+    "quickstart": {
+      "typescript": { "file": "typescript/examples/quickstart.mjs" },
+      "python": { "file": "python/examples/quickstart.py" },
+      "go": { "file": "go/examples/quickstart/main.go" }
+    },
     "transaction": {
-      "typescript": {
-        "exclusion": {
-          "reason": "TypeScript ships transactional enqueue, but typescript/examples has no dedicated file."
-        }
-      },
+      "typescript": { "file": "typescript/examples/transaction.mjs" },
       "python": { "file": "python/examples/async_enqueue.py" },
       "go": { "file": "go/examples/transaction/main.go" }
     },
     "dedicated-worker": {
-      "typescript": {
-        "exclusion": {
-          "reason": "TypeScript has no dedicated-worker example under typescript/examples."
-        }
-      },
+      "typescript": { "file": "typescript/examples/dedicated-worker.mjs" },
       "python": { "file": "python/examples/dedicated_worker.py" },
       "go": { "file": "go/examples/dedicated-worker/main.go" }
     },
     "orchestration": {
-      "typescript": {
-        "exclusion": {
-          "reason": "TypeScript has no orchestration example under typescript/examples."
-        }
-      },
+      "typescript": { "file": "typescript/examples/orchestration.mjs" },
       "python": { "file": "python/examples/lifecycle.py" },
       "go": { "file": "go/examples/orchestration/main.go" }
     },
     "demo-worker": {
-      "typescript": {
-        "exclusion": {
-          "reason": "The TypeScript demo worker lives under typescript/demo, outside the examples directory."
-        }
-      },
+      "typescript": { "file": "typescript/examples/demo-worker.mjs" },
       "python": { "file": "python/examples/demo_worker.py" },
       "go": { "file": "go/examples/demo-worker/main.go" }
     },

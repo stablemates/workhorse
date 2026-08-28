@@ -16,6 +16,16 @@ if (typeof repositoryPackage.packageManager !== "string") {
   throw new TypeError("The repository package.json must pin packageManager");
 }
 const packageManager = repositoryPackage.packageManager;
+const exampleCoverage = JSON.parse(
+  await readFile(path.join(repository, "docs", "examples-coverage.json"), "utf8"),
+) as {
+  scenarios: Record<string, { typescript?: { file?: string; exclusion?: { reason: string } } }>;
+};
+const typescriptExamples = Object.entries(exampleCoverage.scenarios)
+  .flatMap(([scenario, coverage]) =>
+    coverage.typescript?.file ? [{ scenario, file: coverage.typescript.file }] : [],
+  )
+  .toSorted((left, right) => left.scenario.localeCompare(right.scenario));
 const scratchRoot = process.env.JCODE_SCRATCH_DIR ?? tmpdir();
 const scratch = await mkdtemp(path.join(scratchRoot, "workhorse-packed-"));
 
@@ -450,10 +460,12 @@ datasource db {
       "utf8",
     ),
   );
-  await writeFile(
-    path.join(consumer, "agentic-flow.mjs"),
-    await readFile(path.join(repository, "typescript", "examples", "agentic-flow.mjs"), "utf8"),
-  );
+  for (const example of typescriptExamples) {
+    await writeFile(
+      path.join(consumer, path.basename(example.file)),
+      await readFile(path.join(repository, example.file), "utf8"),
+    );
+  }
   await writeFile(
     path.join(consumer, "otel-smoke.mjs"),
     `import assert from "node:assert/strict";
@@ -677,16 +689,25 @@ try {
   await run("node", ["integration.mjs"], consumer);
   await run("node", ["otel-smoke.mjs"], consumer);
   await run("node", ["dashboard-development.mjs"], consumer);
-  const agenticFlow = JSON.parse(
-    await run("node", ["agentic-flow.mjs"], consumer, {
-      DATABASE_URL_TEST_PACKED: process.env.DATABASE_URL_TEST_PACKED,
-    }),
-  ) as {
-    result?: { status?: string };
-    progress?: { stage?: string };
-  };
-  if (agenticFlow.result?.status !== "completed" || agenticFlow.progress?.stage !== "finalizing") {
-    throw new Error("The packed agentic flow did not complete its durable lifecycle");
+  for (const example of typescriptExamples) {
+    const verify = ["dedicated-worker", "demo-worker"].includes(example.scenario)
+      ? ["--verify"]
+      : [];
+    const output = await run("node", [path.basename(example.file), ...verify], consumer, {
+      DATABASE_URL: process.env.DATABASE_URL_TEST_PACKED,
+    });
+    if (example.scenario === "agentic-flow") {
+      const agenticFlow = JSON.parse(output) as {
+        result?: { status?: string };
+        progress?: { stage?: string };
+      };
+      if (
+        agenticFlow.result?.status !== "completed" ||
+        agenticFlow.progress?.stage !== "finalizing"
+      ) {
+        throw new Error("The packed agentic flow did not complete its durable lifecycle");
+      }
+    }
   }
   await run("node", ["dashboard-auth.mjs"], consumer);
   await run("node", ["dashboard-standalone.mjs"], consumer);
