@@ -37,7 +37,7 @@ export default defineConfig({
   },
   ssr: {
     resolve: {
-      // Vitest 3 reads worker conditions here with Vite 6 and later, then forwards them to Node.
+      // Vitest reads worker conditions here with Vite 6 and later, then forwards them to Node.
       // Node 24 cannot use Vite's `module` condition because OpenTelemetry's ESM entry is extensionless.
       conditions: [
         "workhorse-source",
@@ -53,6 +53,8 @@ export default defineConfig({
     // observe each other's rows, restore `fileParallelism: false` and find the leak before
     // re-enabling. Tests within one file still run serially — a file shares one pool and one
     // schema-installed database across its cases.
+    // Vitest 4 no longer excludes dist by default; compiled output must not be collected twice.
+    exclude: ["**/node_modules/**", "**/.git/**", "**/dist/**"],
     testTimeout: 20_000,
     hookTimeout: 20_000,
     sequence: { concurrent: false },

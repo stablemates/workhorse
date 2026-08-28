@@ -65,18 +65,18 @@ PostgreSQL, under the latest release of each runtime. A green lane proves the dr
 schema installs, and one job completes there. It proves nothing else: the full vitest suites run
 under Node.js only, so this tier carries no correctness claim beyond the round-trip.
 
-What the validation run on 2026-08-17 (Bun 1.2.17, Deno 2.9.5) recorded:
+What the validation runs recorded:
 
-- **Bun.** The smoke round-trip passes. The vitest suites cannot run at all: the default forks
-  pool crashes in tinypool's process entry (`ReferenceError: Cannot access 'listeners' before
-initialization`), and `--pool=threads` fails because Bun's `worker_threads` `MessagePort` lacks
-  `addListener`. Harness incompatibility, not a library failure — but it means no fuller claim is
-  possible.
-- **Deno.** The smoke round-trip passes, and vitest itself runs: 563 of 601 unit tests and 467 of
-  470 database tests pass. Every failure is a test that respawns `process.execPath` on the
-  TypeScript sources — under Deno that child needs `--unstable-sloppy-imports` to resolve the
-  repository's `.js`-suffixed imports of `.ts` files. The failures say nothing about the built
-  package, which is plain ESM.
+- **Bun (2026-08-27, Bun 1.2.17, Vitest 4.1.11).** The smoke round-trip passes. Vitest 4 starts
+  the unit suites: 894 of 942 collected tests passed. Remaining failures spawn `process.execPath`
+  (Bun) and then load TypeScript through tsx's Node-only CJS loader, or fail to collect files
+  whose Zod import is `undefined` under Bun. Harness and process-boundary issues, not a library
+  failure — Node.js remains the only runtime that runs the full suites.
+- **Deno (2026-08-17, Deno 2.9.5).** The smoke round-trip passes, and vitest itself runs: 563 of
+  601 unit tests and 467 of 470 database tests pass. Every failure is a test that respawns
+  `process.execPath` on the TypeScript sources — under Deno that child needs
+  `--unstable-sloppy-imports` to resolve the repository's `.js`-suffixed imports of `.ts` files.
+  The failures say nothing about the built package, which is plain ESM.
 
 No runtime-specific code paths or shims exist, and none are planned. If a smoke lane turns red,
 the fix is filed against the runtime story, never inlined as a conditional in the library.

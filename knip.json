@@ -32,6 +32,9 @@
         "vite"
       ]
     },
+    "typescript/adapter-conformance": {
+      "ignoreDependencies": ["magicast"]
+    },
     "typescript/prisma": {
       "ignoreDependencies": ["@prisma/client"]
     },

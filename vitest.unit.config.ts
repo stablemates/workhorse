@@ -5,7 +5,7 @@ export default mergeConfig(
   baseConfig,
   defineConfig({
     test: {
-      exclude: [...configDefaults.exclude, ...databaseTestFiles],
+      exclude: [...configDefaults.exclude, "**/dist/**", ...databaseTestFiles],
     },
   }),
 );
