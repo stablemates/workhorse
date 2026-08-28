@@ -25,6 +25,7 @@ ops/signoz/pours/
 scripts/with-env-probe.tmp.*
 .build/
 /site/public/llms.txt
+/site/public/llms-full.txt
 /site/public/docs.md
 /site/public/docs/
 /sql/schema.sql
