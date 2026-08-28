@@ -98,7 +98,10 @@ type metricCatalogEntry struct {
 
 func typeScriptWorkerMetricCatalog(t *testing.T) map[string]metricCatalogEntry {
 	t.Helper()
-	command := exec.Command("pnpm", "exec", "tsx", "typescript/core/test/worker-telemetry-catalog.ts")
+	command := exec.Command(
+		"pnpm", "exec", "tsx", "--conditions=workhorse-source",
+		"typescript/core/test/worker-telemetry-catalog.ts",
+	)
 	command.Dir = ".."
 	output, err := command.Output()
 	if err != nil {
@@ -432,6 +435,7 @@ func enqueueTracedJobFromTypeScript(t *testing.T, databaseURL, queueName string)
 		"pnpm",
 		"exec",
 		"tsx",
+		"--conditions=workhorse-source",
 		"typescript/core/test/go-interop-enqueue.ts",
 		databaseURL,
 		queueName,
