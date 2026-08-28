@@ -91,7 +91,7 @@ async function legalFiles(
   );
 }
 
-export async function createDashboardThirdPartyNotices(bundle: OutputBundleLike): Promise<string> {
+async function createDashboardThirdPartyNotices(bundle: OutputBundleLike): Promise<string> {
   const packages = (
     await Promise.all([...new Set(modulePaths(bundle))].map((id) => packageForModule(id)))
   ).filter((entry): entry is RuntimePackage => entry !== undefined);
