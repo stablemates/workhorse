@@ -400,12 +400,19 @@ describe("documentation", () => {
       expect(positions.every((position) => position >= 0)).toBe(true);
       expect(positions).toEqual(positions.toSorted((left, right) => left - right));
     }
-    expect(goReadme).not.toContain(`Go ${goMinimum} or newer`);
-    expect(goReadme).not.toContain(`PostgreSQL ${claimed}`);
-    expect(goReadme).not.toContain(`pgx ${pgxVersion}`);
+    const postgresRange = `${manifest.support.postgres.tested[0]} through ${manifest.support.postgres.tested.at(-1)}`;
+    expect(readme).toContain(
+      `Requires Node.js ${SUPPORTED_NODE_MAJORS.join(" or ")} and PostgreSQL ${postgresRange}.`,
+    );
+    expect(coreReadme).toContain(
+      `Requires Node.js ${SUPPORTED_NODE_MAJORS.join(" or ")} and PostgreSQL ${postgresRange}.`,
+    );
+    expect(goReadme).toContain(
+      `Requires Go ${goMinimum} or newer and PostgreSQL ${postgresRange}. The module pins pgx ${pgxVersion}.`,
+    );
     expect(goReadme).not.toContain("go/vX.Y.Z");
-    expect(pythonReadme).not.toContain(
-      `Python ${pythonTested[0]} through ${pythonTested.at(-1)} and PostgreSQL ${claimed}`,
+    expect(pythonReadme).toContain(
+      `Requires Python ${pythonTested[0]} through ${pythonTested.at(-1)} and PostgreSQL ${postgresRange}.`,
     );
     expect(pythonReadme).not.toContain("Psycopg 3.3 through the next major");
     expect(pythonReadme).not.toContain("asyncpg 0.31 through the next major");

@@ -33,20 +33,29 @@ npx workhorse schema install
 Install the schema during deployment. Runtime processes should verify compatibility instead of
 attempting schema changes.
 
+Requires Node.js 22 or 24 and PostgreSQL 15 through 18.
+
 ```ts
-import { assertSchemaCompatible, Pool, Queue, Worker } from "@stablemates/workhorse";
+import { Admin, Pool, Queue, Worker } from "@stablemates/workhorse";
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-await assertSchemaCompatible(pool);
-
-const queue = new Queue(pool);
-const worker = new Worker(queue).handle("email.welcome", async (payload: { to: string }, context) =>
-  context.checkpoint("deliver", () => ({ deliveredTo: payload.to })),
-);
-
-await queue.enqueue("email.welcome", { to: "ada@example.com" });
-await worker.runOnce(); // Production worker processes call `run()`.
-await pool.end();
+export async function runQuickstart(databaseUrl) {
+  const pool = new Pool({ connectionString: databaseUrl });
+  try {
+    const queue = new Queue(pool);
+    const admin = new Admin(pool);
+    const worker = new Worker(queue, { workerId: "quickstart-worker" }).handle(
+      "welcome.send",
+      async (payload) => ({ message: `Welcome, ${payload.name}!` }),
+    );
+    const jobId = await queue.enqueue("welcome.send", { name: "Ada" });
+    await worker.runOnce();
+    const job = await admin.getJob(jobId);
+    if (job?.state !== "succeeded") throw new Error(`Quickstart job finished in ${job?.state}`);
+    return { jobId, result: job.result };
+  } finally {
+    await pool.end();
+  }
+}
 ```
 
 The [quickstart](https://workhorse.run/docs/quickstart) continues through failure and recovery. See
