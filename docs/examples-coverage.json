@@ -1,0 +1,67 @@
+{
+  "languages": ["typescript", "python", "go"],
+  "scenarios": {
+    "transaction": {
+      "typescript": {
+        "exclusion": {
+          "reason": "TypeScript ships transactional enqueue, but typescript/examples has no dedicated file."
+        }
+      },
+      "python": { "file": "python/examples/async_enqueue.py" },
+      "go": { "file": "go/examples/transaction/main.go" }
+    },
+    "dedicated-worker": {
+      "typescript": {
+        "exclusion": {
+          "reason": "TypeScript has no dedicated-worker example under typescript/examples."
+        }
+      },
+      "python": { "file": "python/examples/dedicated_worker.py" },
+      "go": { "file": "go/examples/dedicated-worker/main.go" }
+    },
+    "orchestration": {
+      "typescript": {
+        "exclusion": {
+          "reason": "TypeScript has no orchestration example under typescript/examples."
+        }
+      },
+      "python": { "file": "python/examples/lifecycle.py" },
+      "go": { "file": "go/examples/orchestration/main.go" }
+    },
+    "demo-worker": {
+      "typescript": {
+        "exclusion": {
+          "reason": "The TypeScript demo worker lives under typescript/demo, outside the examples directory."
+        }
+      },
+      "python": { "file": "python/examples/demo_worker.py" },
+      "go": { "file": "go/examples/demo-worker/main.go" }
+    },
+    "agentic-flow": {
+      "typescript": { "file": "typescript/examples/agentic-flow.mjs" },
+      "python": {
+        "exclusion": {
+          "reason": "Python has no agentic-flow example; the TypeScript file is the current composition."
+        }
+      },
+      "go": {
+        "exclusion": {
+          "reason": "Go has no agentic-flow example; the TypeScript file is the current composition."
+        }
+      }
+    },
+    "async-worker": {
+      "typescript": {
+        "exclusion": {
+          "reason": "TypeScript Worker is already asynchronous, so there is no separate async-worker example."
+        }
+      },
+      "python": { "file": "python/examples/async_worker.py" },
+      "go": {
+        "exclusion": {
+          "reason": "Go Worker uses goroutines, so there is no separate async-worker example."
+        }
+      }
+    }
+  }
+}
