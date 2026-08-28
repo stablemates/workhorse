@@ -56,7 +56,13 @@ def _metric_attributes(metric: Metric) -> list[Mapping[str, Any]]:
 def _typescript_worker_metric_catalog() -> dict[str, dict[str, object]]:
     repository_root = Path(__file__).parents[2]
     result = subprocess.run(
-        ("pnpm", "exec", "tsx", "typescript/core/test/worker-telemetry-catalog.ts"),
+        (
+            "pnpm",
+            "exec",
+            "tsx",
+            "--conditions=workhorse-source",
+            "typescript/core/test/worker-telemetry-catalog.ts",
+        ),
         cwd=repository_root,
         check=True,
         capture_output=True,
