@@ -3,9 +3,10 @@ title: Dashboard
 description: Mount the operator interface behind application authorization, or run it standalone with a built-in administrator login.
 ---
 
-`@stablemates/workhorse-dashboard` gives your operators a full interface — jobs, attempts, checkpoints,
-schedules, queues, workers, failures, health — without you building a single admin page. It reads
-everything from PostgreSQL, so a dashboard mounted anywhere can observe workers running on
+Workhorse gives your operators one shared interface — jobs, attempts, checkpoints, schedules,
+queues, workers, failures, health — without you building an admin page. TypeScript, Python, and Go
+can each embed the same packaged React application in their native HTTP server. Every backend reads
+PostgreSQL through the versioned `dashboard/v1` contract, so the interface can observe workers on
 machines it has never met.
 
 ## What it shows
@@ -17,23 +18,93 @@ run schedules now, pause queues and workers, and edit maintenance and retention 
 
 ## Mount it in your server
 
-`createDashboardHost` builds a framework-neutral handler over standard `Request`/`Response`
-objects. It answers only for requests under its configured path and returns `null` for
-everything else.
+Choose the host for your application's language. Each host serves the browser bundle and the same
+dashboard procedures under `/workhorse`, checks schema compatibility after authorization, and
+never installs or migrates the schema.
 
-```ts
-import { createDashboardHost } from "@stablemates/workhorse-dashboard/server";
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    `createDashboardHost` accepts a caller-owned database pool and returns a Fetch-native handler.
 
-const host = createDashboardHost({
-  path: "/workhorse",
-  database: pool,
-  environment: "production",
-  authorize: (request) => isOperator(request),
-});
-```
+    ```ts
+    import { createDashboardHost } from "@stablemates/workhorse-dashboard/server";
 
-Fetch-native frameworks — Hono, Next.js route handlers, SvelteKit, Nitro — call
-`host.handle(request)` and fall through when it resolves to `null`:
+    const host = createDashboardHost({
+      path: "/workhorse",
+      database: pool,
+      environment: "production",
+      authorize: (request) => {
+        const session = applicationAdminSession(request);
+        return session ? { actor: session.username } : false;
+      },
+    });
+    ```
+
+  </Tab>
+  <Tab value="Python">
+    `DashboardHost` is a WSGI application over a caller-owned synchronous Psycopg connection. The
+    connection must use autocommit so a request cannot leave a transaction open.
+
+    ```python
+    import os
+
+    import psycopg
+    from workhorse.dashboard import DashboardHost, DashboardPrincipal
+
+    connection = psycopg.connect(os.environ["DATABASE_URL"], autocommit=True)
+
+    def authorize(environ):
+        username = environ.get("REMOTE_USER")
+        return DashboardPrincipal(actor=str(username)) if username else False
+
+    dashboard = DashboardHost(
+        connection,
+        path="/workhorse",
+        environment="production",
+        authorize=authorize,
+    )
+    ```
+
+    Mount `dashboard` with the WSGI router your application already uses.
+
+  </Tab>
+  <Tab value="Go">
+    `dashboard.NewHandler` returns a standard `net/http` handler over a caller-owned Workhorse
+    executor.
+
+    ```go
+    import (
+        "net/http"
+
+        workhorse "github.com/stablemates/workhorse/go"
+        "github.com/stablemates/workhorse/go/dashboard"
+    )
+
+    operator, err := dashboard.NewHandler(dashboard.HandlerOptions{
+        Executor:    workhorse.NewPGXExecutor(pool),
+        Path:        "/workhorse",
+        Environment: "production",
+        Authorize: func(request *http.Request) dashboard.Authorization {
+            username, ok := applicationAdminSession(request)
+            if !ok {
+                return dashboard.Authorization{}
+            }
+            return dashboard.Authorization{
+                Principal: &dashboard.Principal{Actor: username},
+            }
+        },
+    })
+    if err != nil {
+        return err
+    }
+    http.Handle("/workhorse/", operator)
+    ```
+
+  </Tab>
+</Tabs>
+
+In TypeScript, Fetch-native frameworks — Hono, Next.js route handlers, SvelteKit, Nitro — call
+`host.handle(request)` and fall through when it returns `null`:
 
 ```ts
 app.all("/workhorse/*", async (c) => {
@@ -42,7 +113,8 @@ app.all("/workhorse/*", async (c) => {
 });
 ```
 
-Connect-style frameworks — Express, Connect, Fastify via `@fastify/middie` — wrap the same host:
+Connect-style TypeScript frameworks — Express, Connect, Fastify via `@fastify/middie` — wrap the
+same host:
 
 ```ts
 import { dashboardNodeMiddleware } from "@stablemates/workhorse-dashboard/server";
@@ -51,15 +123,14 @@ app.use(dashboardNodeMiddleware(host));
 ```
 
 The middleware passes unowned requests to `next()` untouched, so the dashboard never captures
-unrelated routes. On every owned request, the host checks schema compatibility and refuses with a
-clear error rather than serving against a mismatched database. It never installs or migrates
-anything.
+unrelated routes.
 
 ## Serve several databases as workspaces
 
-One dashboard can serve several Workhorse databases as named workspaces, switchable from the
-header. Configure `workspaces` instead of `database`; each entry owns its connection and may
-override `environment`, `operator`, and the controllers, falling back to the host-level options:
+The TypeScript embedded host and standalone CLI can serve several Workhorse databases as named
+workspaces. Python and Go embedded hosts currently mount one database per host. In TypeScript,
+configure `workspaces` instead of `database`; each entry owns its connection and may override
+`environment`, `operator`, and the controllers:
 
 ```ts
 const host = createDashboardHost({
@@ -85,14 +156,15 @@ credentials out of the file.
 
 ## Choose the authentication boundary
 
-An embedded dashboard uses your application's authentication through `authorize`. The callback
-runs before the interface, assets, and every RPC method. Return a verified principal for an
-authenticated operator, `false` for a 403, or your own `Response` to redirect to a login flow.
+An embedded dashboard uses your application's authentication through its authorization callback.
+The callback runs before the interface, assets, compatibility check, and every RPC method. Return
+a verified principal using the language-specific type shown above. An unauthenticated result denies
+the request, while TypeScript and Go can also return a custom response.
 
-Mutations go further. The `operator`, `queueController`, `taskController`, `workerController`,
-`scheduleController`, and `settingsController` options let each mutation pass through your own
-authorization and audit services. `auditActor` and the `requestedBy` fields provide attribution
-after authorization — they record who acted, they never decide who may.
+Every backend replaces actor text from the browser with the verified principal before a mutation.
+The resulting `auditActor` and `requestedBy` fields record who acted, but never decide who may.
+TypeScript controller options and Python or Go procedure extensions can route selected mutations
+through application-owned services.
 
 The settings page edits maintenance and retention policy through `DashboardSettingsController`,
 previews destructive retention changes before applying them, and shows process-owned worker

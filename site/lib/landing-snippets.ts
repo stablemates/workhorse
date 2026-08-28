@@ -1024,6 +1024,55 @@ export async function GET(request: Request) {
   );
 }`,
 
+  operateDashboardPython: `import os
+
+import psycopg
+from workhorse.dashboard import DashboardHost, DashboardPrincipal
+
+connection = psycopg.connect(os.environ["DATABASE_URL"], autocommit=True)
+
+dashboard = DashboardHost(
+    connection,
+    path="/workhorse",
+    authorize=lambda environ: (
+        DashboardPrincipal(actor=str(environ["REMOTE_USER"]))
+        if environ.get("REMOTE_USER")
+        else False
+    ),
+)`,
+
+  operateDashboardGo: `package example
+
+import (
+	"net/http"
+
+	workhorse "github.com/stablemates/workhorse/go"
+	"github.com/stablemates/workhorse/go/dashboard"
+)
+
+type operatorContextKey struct{}
+
+func mountDashboard(mux *http.ServeMux, executor workhorse.Executor) error {
+	handler, err := dashboard.NewHandler(dashboard.HandlerOptions{
+		Executor: executor,
+		Path:     "/workhorse",
+		Authorize: func(request *http.Request) dashboard.Authorization {
+			actor, ok := request.Context().Value(operatorContextKey{}).(string)
+			if !ok || actor == "" {
+				return dashboard.Authorization{}
+			}
+			return dashboard.Authorization{
+				Principal: &dashboard.Principal{Actor: actor},
+			}
+		},
+	})
+	if err != nil {
+		return err
+	}
+	mux.Handle("/workhorse/", handler)
+	return nil
+}`,
+
   operateHealth: `const admin = new Admin(pool);
 const health = await admin.health();
 
@@ -1223,6 +1272,67 @@ export default defineWorkerProcess({
   ],
   shutdownTimeoutMs: 25_000, // bounded graceful drain on SIGTERM
 });`,
+
+  deployPython: `import os
+
+import psycopg
+
+from workhorse import HandlerContext, Json, Worker, run_worker_process
+
+
+def send_email(payload: object, _context: HandlerContext) -> dict[str, Json]:
+    assert isinstance(payload, dict)
+    return {"deliveredTo": payload["to"]}
+
+
+database_url = os.environ["DATABASE_URL"]
+with psycopg.connect(database_url, autocommit=True) as connection:
+    worker = Worker(
+        connection,
+        queues=("email",),
+        concurrency=8,
+        notification_connection_factory=lambda: psycopg.connect(
+            database_url,
+            autocommit=True,
+        ),
+    )
+    worker.handle("email.send", send_email)
+    run_worker_process(worker, shutdown_timeout_ms=25_000)`,
+
+  deployGo: `package example
+
+import (
+	"context"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	workhorse "github.com/stablemates/workhorse/go"
+)
+
+func runWorker(ctx context.Context, pool *pgxpool.Pool) error {
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue:               "email",
+		Concurrency:         8,
+		ShutdownGracePeriod: 25 * time.Second,
+	})
+	if err != nil {
+		return err
+	}
+	worker.Handle("email.send", func(
+		_ context.Context,
+		payload any,
+		_ *workhorse.HandlerContext,
+	) (any, error) {
+		return payload, nil
+	})
+
+	runContext, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return worker.Run(runContext)
+}`,
 } as const;
 
 export type LandingSnippetId = keyof typeof landingSnippets;
@@ -1293,6 +1403,11 @@ export type LandingFeatureSnippetId = keyof typeof landingFeatureSnippets;
 /** Other landing examples whose SDK behavior is supported in every language. */
 export const landingSupplementalSnippets = {
   hero: { typescript: "hero", python: "heroPython", go: "heroGo" },
+  operateDashboard: {
+    typescript: "operateDashboard",
+    python: "operateDashboardPython",
+    go: "operateDashboardGo",
+  },
   operateHealth: {
     typescript: "operateHealth",
     python: "operateHealthPython",
@@ -1303,6 +1418,7 @@ export const landingSupplementalSnippets = {
     python: "operateFleetPython",
     go: "operateFleetGo",
   },
+  deploy: { typescript: "deploy", python: "deployPython", go: "deployGo" },
 } as const satisfies Record<
   string,
   { typescript: LandingSnippetId; python: LandingSnippetId; go: LandingSnippetId }
@@ -1340,8 +1456,12 @@ export const landingSnippetLanguages: Partial<Record<LandingSnippetId, "python" 
   cancellationGo: "go",
   deadLettersPython: "python",
   deadLettersGo: "go",
+  operateDashboardPython: "python",
+  operateDashboardGo: "go",
   operateHealthPython: "python",
   operateHealthGo: "go",
   operateFleetPython: "python",
   operateFleetGo: "go",
+  deployPython: "python",
+  deployGo: "go",
 };

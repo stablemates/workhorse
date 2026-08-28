@@ -105,7 +105,7 @@ function Stepper({ steps }: { steps: readonly StepperStep[] }) {
           >
             <div className="flex flex-col items-center sm:w-full sm:flex-row">
               <span
-                className={`flex size-6 shrink-0 items-center justify-center rounded-full border-2 bg-(--wh-panel) font-mono text-[11px] font-medium ${nodeTone[step.tone]}`}
+                className={`flex size-6 shrink-0 items-center justify-center rounded-full border-2 bg-(--wh-panel) font-mono text-[11px] font-medium leading-none ${nodeTone[step.tone]}`}
               >
                 {index + 1}
               </span>
@@ -583,6 +583,58 @@ export function DeadLettersDiagram() {
           </div>
           <Wire className="w-4" arrow />
           <Chip tone="good">new job · lineage kept</Chip>
+        </div>
+      </div>
+    </Diagram>
+  );
+}
+
+/* ---------- Embedded dashboard ---------- */
+
+export function DashboardEmbeddingDiagram() {
+  return (
+    <Diagram label="three hosts, one operator surface">
+      <div className="flex min-w-[34rem] items-center gap-0">
+        <div className="flex shrink-0 flex-col gap-1.5">
+          <Chip>TypeScript · Fetch</Chip>
+          <Chip>Python · WSGI</Chip>
+          <Chip>Go · net/http</Chip>
+        </div>
+        <Wire className="mx-3 w-8" arrow />
+        <Chip tone="accent">dashboard/v1</Chip>
+        <Wire className="mx-3 w-8" arrow />
+        <div className="shrink-0">
+          <Chip tone="good">one React operator UI</Chip>
+          <p className="mt-2 text-[12.5px] text-fd-muted-foreground">
+            shared PostgreSQL reads and controls
+          </p>
+        </div>
+      </div>
+    </Diagram>
+  );
+}
+
+/* ---------- Health and fleet operations ---------- */
+
+export function FleetOperationsDiagram() {
+  return (
+    <Diagram label="read, decide, control">
+      <div className="flex min-w-[38rem] items-center gap-0">
+        <div className="shrink-0">
+          <Chip>Queue.health()</Chip>
+          <p className="mt-2 text-[12.5px] text-fd-muted-foreground">database-owned reasons</p>
+        </div>
+        <LabeledWire label="verdict" className="w-12" />
+        <div className="shrink-0">
+          <Chip tone="accent">incident script</Chip>
+          <p className="mt-2 text-[12.5px] text-fd-muted-foreground">TypeScript, Python, or Go</p>
+        </div>
+        <LabeledWire label="audited request" className="w-16" />
+        <div className="shrink-0">
+          <Chip tone="good">fleet paused</Chip>
+          <p className="mt-2 text-[12.5px] text-fd-muted-foreground">
+            workers refresh registry state
+          </p>
         </div>
       </div>
     </Diagram>

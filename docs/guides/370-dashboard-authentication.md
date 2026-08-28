@@ -29,7 +29,8 @@ Send a `POST` request to `/logout` to end the current session. If a session expi
 dashboard is open, the next private request replaces the application with the login page. Expired
 sessions cannot read dashboard HTML, browser assets, or private RPC responses.
 
-If your application embeds the dashboard, keep its authorization in the host:
+If your application embeds the dashboard, keep its authorization in the language-native host.
+TypeScript applications return a principal from `createDashboardHost`:
 
 ```ts
 const host = createDashboardHost({
@@ -42,9 +43,52 @@ const host = createDashboardHost({
 });
 ```
 
-If the host serves several workspaces, `authorize` also receives the name of the workspace the
-request resolved to. An application can therefore grant an operator one workspace without granting
-every workspace the same host serves.
+Python applications return a `DashboardPrincipal` from their WSGI host:
+
+```python
+from workhorse.dashboard import DashboardHost, DashboardPrincipal
+
+dashboard = DashboardHost(
+    connection,
+    path="/workhorse",
+    authorize=lambda environ: (
+        DashboardPrincipal(actor=str(environ["REMOTE_USER"]))
+        if environ.get("REMOTE_USER")
+        else False
+    ),
+)
+```
+
+The Psycopg connection must use autocommit. This prevents one WSGI request from leaving a
+transaction open for the next request.
+
+Go applications return a `dashboard.Principal` from a standard `net/http` handler:
+
+```go
+operator, err := dashboard.NewHandler(dashboard.HandlerOptions{
+    Executor: workhorse.NewPGXExecutor(pool),
+    Path:     "/workhorse",
+    Authorize: func(request *http.Request) dashboard.Authorization {
+        username, ok := applicationAdminSession(request)
+        if !ok {
+            return dashboard.Authorization{}
+        }
+        return dashboard.Authorization{
+            Principal: &dashboard.Principal{Actor: username},
+        }
+    },
+})
+if err != nil {
+    return err
+}
+http.Handle("/workhorse/", operator)
+```
+
+All three hosts serve the same browser bundle and versioned dashboard procedures. The language
+changes the HTTP adapter, while PostgreSQL keeps the operator behavior consistent.
+
+If the TypeScript host serves several workspaces, `authorize` also receives the resolved workspace
+name. An application can grant an operator one workspace without granting every workspace.
 
 The browser still sends actor text as part of the dashboard wire contract, but the server discards
 it for mutations. A built-in session supplies its configured username. An embedded host supplies
