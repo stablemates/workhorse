@@ -340,17 +340,27 @@ describe("continuous integration", () => {
 
 describe("documentation", () => {
   it("keeps the exact matrix in the reference and links guides to it", async () => {
-    const [compatibility, sitePage, installation, readme, goReadme, pythonReadme, goMod, manifest] =
-      await Promise.all([
-        read("docs/compatibility.md"),
-        read("site/content/docs/compatibility.mdx"),
-        read("site/content/docs/installation.mdx"),
-        read("README.md"),
-        read("go/README.md"),
-        read("python/README.md"),
-        read("go/go.mod"),
-        readSupportManifest(),
-      ]);
+    const [
+      compatibility,
+      sitePage,
+      installation,
+      readme,
+      coreReadme,
+      goReadme,
+      pythonReadme,
+      goMod,
+      manifest,
+    ] = await Promise.all([
+      read("docs/compatibility.md"),
+      read("site/content/docs/compatibility.mdx"),
+      read("site/content/docs/installation.mdx"),
+      read("README.md"),
+      read("typescript/core/README.md"),
+      read("go/README.md"),
+      read("python/README.md"),
+      read("go/go.mod"),
+      readSupportManifest(),
+    ]);
     const claimed = `${SUPPORTED_POSTGRES_MAJORS.join(", ")}`;
     const claimedNodeMajors = SUPPORTED_NODE_MAJORS.join(", ");
     const supportTable = markdownTable(compatibility, "## Supported versions");
@@ -361,8 +371,6 @@ describe("documentation", () => {
       .find((line) => line.startsWith("require github.com/jackc/pgx/v5 "))
       ?.split(" ")
       .at(-1);
-    const normalizedPythonReadme = pythonReadme.replace(/\s+/g, " ");
-
     expect(supportTable["Node.js"]).toMatchObject({
       Supported: claimedNodeMajors,
       Minimum: String(manifest.support.node.minimum),
@@ -374,26 +382,35 @@ describe("documentation", () => {
     expect(supportTable.Go).toMatchObject({
       Supported: `${goMinimum} and newer`,
       Minimum: goMinimum,
+      Notes: `The module pins pgx ${pgxVersion}.`,
     });
     expect(supportTable.PostgreSQL).toMatchObject({
       Supported: claimed,
       Minimum: String(manifest.support.postgres.minimum),
     });
-    expect(goReadme).toContain(`Go ${goMinimum} or newer`);
-    expect(goReadme).toContain(`PostgreSQL ${claimed}`);
-    expect(goReadme).toContain(`pgx ${pgxVersion}`);
-    expect(goReadme).toContain("## Deployment and delivery boundaries");
-    expect(goReadme).toContain("Delivery is at least once.");
-    expect(goReadme).toContain("## Releasing the module");
-    expect(goReadme).toContain("go/vX.Y.Z");
-    expect(pythonReadme).toContain(
+    for (const sdkReadme of [coreReadme, pythonReadme, goReadme]) {
+      const sections = [
+        "## Install",
+        "## Run one job",
+        "## Package boundary",
+        "## Next",
+        "## License",
+      ];
+      const positions = sections.map((section) => sdkReadme.indexOf(section));
+      expect(positions.every((position) => position >= 0)).toBe(true);
+      expect(positions).toEqual(positions.toSorted((left, right) => left - right));
+    }
+    expect(goReadme).not.toContain(`Go ${goMinimum} or newer`);
+    expect(goReadme).not.toContain(`PostgreSQL ${claimed}`);
+    expect(goReadme).not.toContain(`pgx ${pgxVersion}`);
+    expect(goReadme).not.toContain("go/vX.Y.Z");
+    expect(pythonReadme).not.toContain(
       `Python ${pythonTested[0]} through ${pythonTested.at(-1)} and PostgreSQL ${claimed}`,
     );
-    expect(normalizedPythonReadme).toContain("Psycopg 3.3 through the next major");
-    expect(normalizedPythonReadme).toContain("asyncpg 0.31 through the next major");
-    expect(pythonReadme).toContain("pip install stablemates-workhorse");
-    expect(pythonReadme).toContain("run_worker_process(worker)");
-    expect(pythonReadme).toContain('workhorse dashboard --database-url "$DATABASE_URL"');
+    expect(pythonReadme).not.toContain("Psycopg 3.3 through the next major");
+    expect(pythonReadme).not.toContain("asyncpg 0.31 through the next major");
+    expect(pythonReadme).toContain("pip install stablemates-workhorse\n");
+    expect(pythonReadme).not.toContain("stablemates-workhorse==");
     expect(sitePage).toContain(
       "https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md",
     );

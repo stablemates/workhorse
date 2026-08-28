@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -22,6 +23,13 @@ def _repository_json(*parts: str) -> dict[str, Any]:
 
 def _repository_toml(*parts: str) -> dict[str, Any]:
     return tomli.loads(_repository_file(*parts))
+
+
+def test_readme_example_matches_release_tested_example() -> None:
+    readme = _repository_file("python", "README.md")
+    match = re.search(r"## Run one job\n\n```python\n(.*?)\n```", readme, re.DOTALL)
+    assert match is not None
+    assert match.group(1) == _repository_file("python", "examples", "quickstart.py").strip()
 
 
 def test_python_support_contract_matches_repository_declarations(database_url: str) -> None:
@@ -75,6 +83,22 @@ def test_built_distributions_run_the_documented_examples(
     repository = Path(__file__).parents[2]
     environment = os.environ.copy()
     environment.pop("PYTHONPATH", None)
+    environment["DATABASE_URL"] = database_url
+    quickstart_result = subprocess.run(
+        [
+            str(installed_distribution_interpreters["wheel"]),
+            str(repository / "python" / "examples" / "quickstart.py"),
+        ],
+        check=False,
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert quickstart_result.returncode == 0, quickstart_result.stderr
+    assert quickstart_result.stdout.strip()
+
     result = subprocess.run(
         [
             str(installed_distribution_interpreters["wheel"]),

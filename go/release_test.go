@@ -175,6 +175,18 @@ func TestExamplesCompileAsExternalConsumers(t *testing.T) {
 	}
 }
 
+func TestReadmeExampleMatchesReleaseTestedExample(t *testing.T) {
+	readme := readRepositoryFile(t, "go", "README.md")
+	match := regexp.MustCompile(`(?s)## Run one job\n\n\x60\x60\x60go\n(.*?)\n\x60\x60\x60`).FindStringSubmatch(readme)
+	if len(match) != 2 {
+		t.Fatal("go/README.md does not contain one Go example under Run one job")
+	}
+	example := strings.TrimSpace(readRepositoryFile(t, "go", "examples", "quickstart", "main.go"))
+	if match[1] != example {
+		t.Fatal("go/README.md example does not match go/examples/quickstart/main.go")
+	}
+}
+
 func TestGoSupportContractMatchesRepositoryDeclarations(t *testing.T) {
 	minimumGo, toolchainGo, _ := moduleVersions(t)
 	support := readSupportManifest(t)
