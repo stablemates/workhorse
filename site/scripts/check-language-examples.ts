@@ -23,7 +23,11 @@ const supportManifest = JSON.parse(
 };
 const quickstartSource = readFileSync(resolve(siteRoot, "content/docs/quickstart.mdx"), "utf8");
 const examplesSource = readFileSync(resolve(siteRoot, "content/docs/examples.mdx"), "utf8");
-const documentationSources = [quickstartSource, examplesSource];
+const agentIntegrationSource = readFileSync(
+  resolve(siteRoot, "content/docs/for-ai-agents.mdx"),
+  "utf8",
+);
+const documentationSources = [quickstartSource, examplesSource, agentIntegrationSource];
 const pythonPublicSource = ["client.py", "admin.py", "worker.py", "types.py"]
   .map((path) => readFileSync(resolve(repositoryRoot, "python/src/workhorse", path), "utf8"))
   .join("\n");
@@ -188,7 +192,7 @@ for (const pattern of examplePatterns) {
   }
 }
 
-function verifiedDocumentationExamples(language: "python" | "go"): string[] {
+function verifiedDocumentationExamples(language: "ts" | "python" | "go"): string[] {
   const fence = "`".repeat(3);
   const pattern = new RegExp(`${fence}${language} verify\\n([\\s\\S]*?)\\n {0,4}${fence}`, "g");
   const examples = documentationSources.flatMap((source) =>
@@ -200,6 +204,38 @@ function verifiedDocumentationExamples(language: "python" | "go"): string[] {
 
 const temporaryRoot = mkdtempSync(resolve(tmpdir(), "workhorse-doc-examples-"));
 try {
+  const typeScriptExamples = verifiedDocumentationExamples("ts");
+  const typeScriptPaths: string[] = [];
+  for (const [index, example] of typeScriptExamples.entries()) {
+    const typeScriptPath = resolve(temporaryRoot, `example-${index}.ts`);
+    writeFileSync(typeScriptPath, `${example}\n`);
+    typeScriptPaths.push(typeScriptPath);
+  }
+  writeFileSync(resolve(temporaryRoot, "package.json"), '{"type":"module"}\n');
+  writeFileSync(
+    resolve(temporaryRoot, "tsconfig.json"),
+    `${JSON.stringify(
+      {
+        compilerOptions: {
+          target: "ES2022",
+          module: "NodeNext",
+          moduleResolution: "NodeNext",
+          strict: true,
+          noEmit: true,
+          skipLibCheck: true,
+          noUncheckedIndexedAccess: true,
+          baseUrl: repositoryRoot,
+          paths: {
+            "@stablemates/workhorse": ["typescript/core/src/index.ts"],
+          },
+        },
+        files: typeScriptPaths,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
   const pythonExamples = [
     ...verifiedDocumentationExamples("python"),
     ...Object.entries(landingSnippetLanguages)
@@ -236,6 +272,7 @@ try {
 
   await execFileAsync("go", ["mod", "tidy"], { cwd: temporaryRoot });
   await Promise.all([
+    execFileAsync("tsc", ["--project", resolve(temporaryRoot, "tsconfig.json")]),
     execFileAsync("uv", [
       "run",
       "--project",
