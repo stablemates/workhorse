@@ -10,6 +10,9 @@ import {
 import "./styles.css";
 import { WorkhorseThemeProvider } from "./theme.js";
 
+const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+if (favicon) favicon.href = new URL("./assets/workhorse-favicon.svg", import.meta.url).href;
+
 export interface WorkhorseDashboardRuntimeConfig {
   basePath: string;
   rpcUrl: string;
