@@ -241,15 +241,20 @@ describe("continuous integration", () => {
 
   it("exposes each language check through structured package scripts", async () => {
     const scripts = (await readManifest("package.json")).scripts as Record<string, string>;
+    const check = scripts.check;
+    expect(check).toBeDefined();
+    if (!check) throw new Error("package.json has no check script");
 
     expect(scripts["python:test"]).toContain("pytest python/tests");
     expect(scripts["python:vuln"]).toContain("audit-python-dependencies.sh");
     expect(scripts["go:test"]).toContain("go -C go test ./...");
     expect(scripts["go:test:race"]).toContain("go -C go test -race ./...");
     expect(scripts["go:vuln"]).toContain("govulncheck");
-    expect(scripts.check).toContain("pnpm python:vuln");
-    expect(scripts.check).toContain("pnpm go:vuln");
-    expect(scripts.check).toContain("pnpm go:test:race");
+    expect(check).toContain("pnpm python:vuln");
+    expect(check).toContain("pnpm go:vuln");
+    expect(check).toContain("pnpm go:test:race");
+    expect(check).toContain("pnpm build:runtime");
+    expect(check.indexOf("pnpm build:runtime")).toBeLessThan(check.indexOf("pnpm test"));
   });
 
   it("smoke-tests exactly the declared JS runtimes without claiming them as supported", async () => {
