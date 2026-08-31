@@ -135,6 +135,13 @@ func executeWorkerSuspensionReplayFixture(t *testing.T, fixture workerRuntimeFix
 	if processed, err := worker.RunOnce(ctx); err != nil || !processed {
 		t.Fatalf("suspension run: processed=%t err=%v", processed, err)
 	}
+	if _, err := pool.Exec(
+		ctx,
+		"UPDATE workhorse.job_runtime SET run_at = clock_timestamp() + interval '30 seconds' WHERE job_id = $1::uuid",
+		suspensionJobID,
+	); err != nil {
+		t.Fatal(err)
+	}
 	assertWorkerFixtureJobState(t, ctx, pool, suspensionJobID, fixture.ExpectedAfterSuspension["suspension"])
 	assertWorkerFixtureJobState(t, ctx, pool, followingJobID, fixture.ExpectedAfterSuspension["following"])
 	var attemptsAfterSuspension int
@@ -157,7 +164,13 @@ func executeWorkerSuspensionReplayFixture(t *testing.T, fixture workerRuntimeFix
 	}
 	assertWorkerFixtureJobState(t, ctx, pool, suspensionJobID, fixture.ExpectedAfterSlotRelease["suspension"])
 	assertWorkerFixtureJobState(t, ctx, pool, followingJobID, fixture.ExpectedAfterSlotRelease["following"])
-	time.Sleep(time.Duration(fixture.WaitMS)*time.Millisecond + 80*time.Millisecond)
+	if _, err := pool.Exec(
+		ctx,
+		"UPDATE workhorse.job_runtime SET run_at = clock_timestamp() - interval '1 millisecond' WHERE job_id = $1::uuid",
+		suspensionJobID,
+	); err != nil {
+		t.Fatal(err)
+	}
 	if processed, err := worker.RunOnce(ctx); err != nil || !processed {
 		t.Fatalf("replay run: processed=%t err=%v", processed, err)
 	}

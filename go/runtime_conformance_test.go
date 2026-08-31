@@ -8,9 +8,11 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	workhorse "github.com/stablemates/workhorse/go"
 	"go.opentelemetry.io/otel"
@@ -18,6 +20,36 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
+
+type pollCadenceQueryContextKey struct{}
+
+type pollCadenceQueryTracer struct {
+	initialDelay time.Duration
+	delayOnce    sync.Once
+	emptyPolls   chan struct{}
+}
+
+func (tracer *pollCadenceQueryTracer) TraceQueryStart(
+	ctx context.Context,
+	_ *pgx.Conn,
+	data pgx.TraceQueryStartData,
+) context.Context {
+	if !strings.Contains(data.SQL, "claim_many_v1") {
+		return ctx
+	}
+	tracer.delayOnce.Do(func() { time.Sleep(tracer.initialDelay) })
+	return context.WithValue(ctx, pollCadenceQueryContextKey{}, true)
+}
+
+func (tracer *pollCadenceQueryTracer) TraceQueryEnd(
+	ctx context.Context,
+	_ *pgx.Conn,
+	_ pgx.TraceQueryEndData,
+) {
+	if ctx.Value(pollCadenceQueryContextKey{}) == true {
+		tracer.emptyPolls <- struct{}{}
+	}
+}
 
 func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 	manifest := readFixture[protocolFixtureManifest](t, "manifest.json")
@@ -139,7 +171,16 @@ func executeWorkerTracePropagationFixture(t *testing.T, fixture workerRuntimeFix
 func executeWorkerPollCadenceFixture(t *testing.T, fixture workerRuntimeFixture) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-poll-cadence-fixture")
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, databaseURL)
+	tracer := &pollCadenceQueryTracer{
+		initialDelay: 100 * time.Millisecond,
+		emptyPolls:   make(chan struct{}, 4),
+	}
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ConnConfig.Tracer = tracer
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,12 +204,19 @@ func executeWorkerPollCadenceFixture(t *testing.T, fixture workerRuntimeFixture)
 	runContext, stop := context.WithCancel(ctx)
 	runResult := make(chan error, 1)
 	go func() { runResult <- worker.Run(runContext) }()
-	time.Sleep(time.Duration(fixture.IdleMS) * time.Millisecond)
+	for range 2 {
+		select {
+		case <-tracer.emptyPolls:
+		case <-time.After(time.Duration(fixture.ExpectedMaximumDelayMS+1000) * time.Millisecond):
+			stop()
+			t.Fatal("worker did not complete the empty polls before the backoff check")
+		}
+	}
+	enqueuedAt := time.Now()
 	if _, err := queue.Enqueue(ctx, fixture.JobType, map[string]any{}); err != nil {
 		stop()
 		t.Fatal(err)
 	}
-	enqueuedAt := time.Now()
 	select {
 	case handledAt := <-handled:
 		delay := handledAt.Sub(enqueuedAt)
