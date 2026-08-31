@@ -3,8 +3,7 @@ const siteUrl = (import.meta.env?.VITE_SITE_URL ?? "https://workhorse.run").repl
 export const siteConfig = {
   name: "Workhorse",
   tagline: "A PostgreSQL-native durable execution protocol",
-  description:
-    "Workhorse is a PostgreSQL-native durable job queue for TypeScript with transactional enqueue, crash-safe execution, durable waits, and no separate broker.",
+  description: "A durable job queue built on PostgreSQL.",
   url: siteUrl,
   socialImage: `${siteUrl}/brand/workhorse-mark.png`,
   github: "https://github.com/stablemates/workhorse",
