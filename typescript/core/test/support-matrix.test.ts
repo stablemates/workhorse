@@ -11,7 +11,7 @@ import {
   SUPPORTED_POSTGRES_MAJORS,
 } from "../src/support.js";
 import { publishedPackages } from "../../../scripts/packages.js";
-import { buildCiMatrices } from "../../../scripts/ci-matrix.js";
+import { buildCiMatrices, WEEKLY_COMPATIBILITY_SCHEDULE } from "../../../scripts/ci-matrix.js";
 
 // A supported-version contract is only worth stating if the statement and the thing that tests it
 // cannot drift apart. support.json is the source of truth; everything below is a consumer of it,
@@ -187,21 +187,19 @@ describe("declared engines", () => {
 });
 
 describe("continuous integration", () => {
-  it("uses boundary pairs on pull requests and the full support matrix elsewhere", async () => {
+  it("uses latest versions continuously and the full support matrix weekly", async () => {
     const manifest = await readSupportManifest();
     const pullRequest = buildCiMatrices(manifest.support, "pull_request");
-    const full = buildCiMatrices(manifest.support, "push");
+    const push = buildCiMatrices(manifest.support, "push");
+    const daily = buildCiMatrices(manifest.support, "schedule", "43 3 * * *");
+    const full = buildCiMatrices(manifest.support, "schedule", WEEKLY_COMPATIBILITY_SCHEDULE);
 
-    expect(pullRequest.typescript.include).toEqual([
-      { node: 22, postgres: 15 },
-      { node: 24, postgres: 18 },
-    ]);
-    expect(pullRequest.python.include).toEqual([
-      { python: "3.10", postgres: 15 },
-      { python: "3.14", postgres: 18 },
-    ]);
+    expect(pullRequest.typescript.include).toEqual([{ node: 24, postgres: 18 }]);
+    expect(pullRequest.python.include).toEqual([{ python: "3.14", postgres: 18 }]);
     expect(pullRequest.go.include).toEqual([{ go: "1.25", postgres: 18 }]);
-    expect(pullRequest.packed.include).toEqual([{ node: 22 }]);
+    expect(pullRequest.packed.include).toEqual([{ node: 24 }]);
+    expect(push).toEqual(pullRequest);
+    expect(daily).toEqual(pullRequest);
 
     expect(full.typescript.include).toHaveLength(
       manifest.support.node.tested.length * manifest.support.postgres.tested.length,
@@ -210,7 +208,7 @@ describe("continuous integration", () => {
       manifest.support.python.tested.length * manifest.support.postgres.tested.length,
     );
     expect(full.go.include).toHaveLength(manifest.support.postgres.tested.length);
-    expect(full.packed.include).toEqual([{ node: 22 }, { node: 24 }]);
+    expect(full.packed.include).toEqual([{ node: 24 }]);
     for (const node of manifest.support.node.tested) {
       for (const postgres of manifest.support.postgres.tested) {
         expect(full.typescript.include).toContainEqual({ node, postgres });
@@ -233,8 +231,19 @@ describe("continuous integration", () => {
     expect(workflow).toContain("schedule:");
     expect(workflow).toContain("name: required");
     expect(workflow).toContain(
-      "needs: [static, unit, typescript, python, go, runtime-smoke, packed]",
+      "needs: [plan, static, unit, typescript, python, go, runtime-smoke, packed]",
     );
+    expect(workflow).toContain('cron: "43 3 * * *" # Daily packed-install verification.');
+    expect(workflow).toContain('cron: "17 4 * * 0" # Weekly full compatibility matrix.');
+    expect(workflow).toContain(
+      "if: github.event_name == 'workflow_dispatch' || github.event.schedule == '43 3 * * *'",
+    );
+    expect(
+      workflow.match(
+        /if: github\.event_name != 'schedule' \|\| github\.event\.schedule == '17 4 \* \* 0'/g,
+      ),
+    ).toHaveLength(6);
+    expect(workflow).toContain('all(.[]; .result == "success" or .result == "skipped")');
     expect(workflow).toContain(
       "name: demo and site smoke\n    if: ${{ false }} # Temporarily disabled",
     );

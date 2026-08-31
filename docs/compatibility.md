@@ -7,8 +7,8 @@ and `typescript/core/test/support-matrix.test.ts` fails when machine-readable co
 
 ## What "supported" means
 
-A version is supported when CI exercises every combination after each change reaches `main` and
-in the nightly run. Pull requests exercise boundary pairs before merge. In particular:
+A version is supported when the weekly CI run exercises every declared combination. Pull requests
+and pushes exercise the newest language and PostgreSQL versions for fast feedback. In particular:
 
 - **Supported.** In the CI matrix below. A regression on one of these is a release blocker.
 - **Expected to work, untested.** A PostgreSQL major newer than the tested set. Workhorse does not
@@ -30,10 +30,10 @@ This boundary is about correctness only. It is not a performance claim; see
 | Go         | 1.25 and newer | 1.25    | The module pins pgx v5.9.2.                             |
 | PostgreSQL | 15, 16, 17, 18 | 15      | No extension beyond the default `plpgsql` is installed. |
 
-Pull requests pair the oldest Node and PostgreSQL versions, then the newest versions. Pushes to
-`main`, nightly runs, and manual runs execute every Node and PostgreSQL combination. Packed-package
-tests run on the oldest Node version before merge and both Node versions after merge. Demo and site
-smoke tests run on every trigger.
+Pull requests and pushes run the newest Node.js and PostgreSQL versions. The weekly schedule runs
+every Node.js and PostgreSQL combination. The daily schedule runs the packed-package test on the
+newest Node.js version, and manual runs combine the latest-version lanes with that packed test.
+Demo and site smoke tests are temporarily disabled.
 
 Package managers: the repository is developed with pnpm, and the packed-install test installs the
 published tarballs with pnpm. npm and yarn are not exercised in CI; the packages are plain ESM with
@@ -44,16 +44,16 @@ major. Its `asyncpg` extra supports asyncpg 0.31 through the next major. Its pac
 source distribution and universal wheel, checks inline types, runs both real drivers, and executes
 every shared SQL scenario. `python/tests/test_release.py` installs the wheel and source distribution
 bare, with the compatibility `psycopg` extra, and with the `asyncpg` extra. It runs the lifecycle and async enqueue examples without repository imports, then
-checks that the active Python and PostgreSQL versions belong to this matrix. Pull requests run its
-oldest and newest boundary pairs. Pushes to `main`, nightly runs, and manual runs execute every
-Python and PostgreSQL combination.
+checks that the active Python and PostgreSQL versions belong to this matrix. Pull requests and
+pushes run the newest Python and PostgreSQL versions. The weekly schedule runs every Python and
+PostgreSQL combination.
 
 The Go module declares Go 1.25 or newer and supports its pinned pgx 5.9.2 release. Its repository
 lane exercises enqueue through pgx transactions, pgx pools, and `database/sql` with pgx stdlib. It
 also compiles and runs a separate module through a local `replace` directive. Another external
 module builds every Go example through the public import path. These tests prove the exported module
-surface without repository-only imports. Pull requests run Go against the newest PostgreSQL.
-Pushes to `main`, nightly runs, and manual runs execute Go against every PostgreSQL major.
+surface without repository-only imports. Pull requests and pushes run Go against the newest
+PostgreSQL. The weekly schedule runs Go against every supported PostgreSQL major.
 
 ## JS runtime smoke tier
 

@@ -1,4 +1,4 @@
-# ADR 0043: Run boundary CI before merge and the full support matrix on main
+# ADR 0043: Run latest-version CI continuously and compatibility checks on schedules
 
 - **Status:** Accepted
 - **Date:** 2026-08-25
@@ -15,24 +15,24 @@ storage still use the repository quota, so free compute does not justify retaini
 
 ## Decision
 
-`.github/workflows/ci.yml` runs on pull requests to `main`, pushes to `main`, a nightly schedule,
-and manual dispatches. Pull requests test the oldest language against the oldest PostgreSQL and
-the newest language against the newest PostgreSQL. Go has one supported language line, so its pull
-request lane runs against the newest PostgreSQL. Pushes, schedules, and manual runs test every
-language and PostgreSQL combination in `support.json`.
+`.github/workflows/ci.yml` runs on pull requests to `main`, pushes to `main`, daily and weekly
+schedules, and manual dispatches. Pull requests and pushes test each language at its newest
+supported version against the newest PostgreSQL. The weekly schedule tests every language and
+PostgreSQL combination in `support.json`. The daily schedule runs only the packed-install test on
+the newest Node.js version. A manual dispatch runs the latest-version lanes and the packed test.
 
 Fork pull requests use `pull_request`, standard GitHub-hosted runners, and a read-only
 `GITHUB_TOKEN`. CI receives no secrets and never uses `pull_request_target`. GitHub must require
 maintainer approval before any outside collaborator's workflow runs.
 
 The branch ruleset for `main` requires a pull request and the single `CI / required` check. That
-aggregate job fails unless static checks, unit tests, every trigger-specific matrix lane, runtime
-smoke tests, and packed installs pass. Demo and site smoke tests are temporarily excluded because
-their full build dominates CI time. This stable name keeps matrix changes from invalidating branch
-protection.
+aggregate job fails when any job selected for that trigger fails. It accepts deliberately skipped
+jobs, so packed installs can stay out of pull requests and pushes while language lanes stay out of
+the daily packed run. Demo and site smoke tests are temporarily excluded because their full build
+dominates CI time. This stable name keeps matrix changes from invalidating branch protection.
 
-Each language matrix runs at most two lanes concurrently. The cap reduces contention between the
-database-heavy suites while preserving parallel feedback across languages and PostgreSQL versions.
+Each language matrix runs at most two lanes concurrently. The cap limits database contention during
+the weekly compatibility run without affecting the single-lane pull request and push feedback.
 
 `.github/workflows/benchmark.yml` runs smoke benchmarks after pushes to `main` and nightly. It is
 informational and is not a required check because timing on shared hardware is not comparable.
@@ -49,9 +49,9 @@ before it creates and pushes the annotated tag.
 
 ## Consequences
 
-Pull requests get bounded feedback rather than exhaustive support proof. A merge to `main` runs
-the full matrix, and the nightly run detects dependency or runner-image drift without a source
-change.
+Pull requests and pushes get fast latest-version feedback rather than exhaustive support proof. The
+weekly run checks older supported combinations, and the daily packed run detects assembly or clean
+consumer installation regressions without adding ten minutes to every change.
 
 GitHub Actions remain disabled until the repository is public. When it becomes public, maintainers
 must enable Actions, create the two protected environments, add the branch and tag rulesets, and

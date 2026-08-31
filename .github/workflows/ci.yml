@@ -1,6 +1,6 @@
-# Public CI policy lives in docs/decisions/0043-public-ci-and-release-policy.md. Pull requests run
-# boundary pairs for fast feedback. Pushes to main, nightly runs, and manual runs exercise every
-# language/database combination declared in support.json.
+# Public CI policy lives in docs/decisions/0043-public-ci-and-release-policy.md. Pull requests and
+# pushes run the newest supported combination. Daily runs verify packed installs, and weekly runs
+# exercise every language/database combination declared in support.json.
 name: CI
 
 on:
@@ -9,7 +9,8 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    - cron: "43 3 * * *"
+    - cron: "43 3 * * *" # Daily packed-install verification.
+    - cron: "17 4 * * 0" # Weekly full compatibility matrix.
   workflow_dispatch:
 
 permissions:
@@ -41,10 +42,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - id: matrix
-        run: pnpm --silent exec tsx scripts/ci-matrix.ts "$GITHUB_EVENT_NAME" >> "$GITHUB_OUTPUT"
+        run: pnpm --silent exec tsx scripts/ci-matrix.ts "$GITHUB_EVENT_NAME" "${{ github.event.schedule }}" >> "$GITHUB_OUTPUT"
 
   static:
     name: format, generated files, lint, security, types
+    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -72,6 +74,7 @@ jobs:
 
   unit:
     name: environment-independent tests
+    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -92,6 +95,7 @@ jobs:
   typescript:
     name: TypeScript (node ${{ matrix.node }}, postgres ${{ matrix.postgres }})
     needs: plan
+    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -141,6 +145,7 @@ jobs:
   python:
     name: Python ${{ matrix.python }} (postgres ${{ matrix.postgres }})
     needs: plan
+    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -183,6 +188,7 @@ jobs:
   go:
     name: Go ${{ matrix.go }} (postgres ${{ matrix.postgres }})
     needs: plan
+    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -223,6 +229,7 @@ jobs:
 
   runtime-smoke:
     name: runtime smoke (${{ matrix.runtime }})
+    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -266,6 +273,7 @@ jobs:
   packed:
     name: packed install (node ${{ matrix.node }})
     needs: plan
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '43 3 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -340,11 +348,11 @@ jobs:
   required:
     name: required
     if: always()
-    needs: [static, unit, typescript, python, go, runtime-smoke, packed]
+    needs: [plan, static, unit, typescript, python, go, runtime-smoke, packed]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
       RESULTS: ${{ toJSON(needs) }}
     steps:
       - name: Require every merge-gate job
-        run: echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
+        run: echo "$RESULTS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")'
