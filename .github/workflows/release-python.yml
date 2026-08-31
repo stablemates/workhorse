@@ -50,6 +50,13 @@ jobs:
         with:
           go-version-file: go/go.mod
       - uses: astral-sh/setup-uv@v9.0.0
+      - name: Install matching PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install --yes postgresql-client-18
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
       - run: pnpm install --frozen-lockfile
 
       - name: Check the tag against the Python version and changelog
