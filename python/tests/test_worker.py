@@ -154,7 +154,7 @@ def test_durable_sleeps_release_ownership_and_survive_a_swallowed_sentinel(
             nonlocal handler_calls
             handler_calls += 1
             with suppress(BaseException):
-                context.sleep("relative", 40)
+                context.sleep("relative", 30_000)
             if handler_calls >= 2:
                 try:
                     context.sleep_until(
@@ -180,7 +180,17 @@ def test_durable_sleeps_release_ownership_and_survive_a_swallowed_sentinel(
             "SELECT count(*) FROM workhorse.attempt_history WHERE job_id = %s", (job_id,)
         ).fetchone() == (0,)
 
-        sleep(0.06)
+        worker_connection.execute(
+            "UPDATE workhorse.job_wait SET wake_at = clock_timestamp() - interval '1 millisecond' "
+            "WHERE job_id = %s AND wait_name = 'relative'",
+            (job_id,),
+        )
+        worker_connection.execute(
+            "UPDATE workhorse.job_runtime "
+            "SET run_at = clock_timestamp() - interval '1 millisecond' "
+            "WHERE job_id = %s",
+            (job_id,),
+        )
         assert worker.run_once() is True
         outcome = worker_connection.execute(
             "SELECT state, current_attempt, result FROM workhorse.job_outcome WHERE job_id = %s",

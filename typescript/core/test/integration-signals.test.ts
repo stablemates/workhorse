@@ -457,13 +457,30 @@ describe("signals", () => {
   });
 
   it("uses the PostgreSQL job deadline as the signal timeout", async () => {
-    const id = await queue.enqueue("signal-timeout", {}, { deadline: new Date(Date.now() + 100) });
+    const deadline = new Date(Date.now() + 30_000);
+    const id = await queue.enqueue("signal-timeout", {}, { deadline });
     const worker = new Worker(queue, { workerId: "signal-timeout-worker" }).handle(
       "signal-timeout",
       async (_payload, context) => context.waitForSignal("approval"),
     );
     expect(await worker.runOnce()).toBe(true);
-    await sleep(130);
+    const stored = await pool.query<{ deadline_at: Date; timeout_at: Date }>(
+      `SELECT runtime.deadline_at, signal.timeout_at
+         FROM workhorse.job_runtime runtime
+         JOIN workhorse.job_signal_wait signal ON signal.job_id = runtime.job_id
+        WHERE runtime.job_id = $1`,
+      [id],
+    );
+    expect(stored.rows).toEqual([{ deadline_at: deadline, timeout_at: deadline }]);
+
+    // Move the durable PostgreSQL deadline rather than waiting on a narrow wall-clock window. The
+    // equality above is the contract under test; this update only makes the timeout due now.
+    await pool.query(
+      `UPDATE workhorse.job_runtime
+          SET deadline_at = clock_timestamp() - interval '1 millisecond'
+        WHERE job_id = $1`,
+      [id],
+    );
     await queue.tick();
 
     await expect(admin.getJob(id)).resolves.toMatchObject({

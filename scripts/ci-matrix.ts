@@ -12,19 +12,13 @@ interface Matrix<T> {
   readonly include: readonly T[];
 }
 
+export const WEEKLY_COMPATIBILITY_SCHEDULE = "17 4 * * 0";
+
 export interface CiMatrices {
   readonly typescript: Matrix<{ readonly node: number; readonly postgres: number }>;
   readonly python: Matrix<{ readonly python: string; readonly postgres: number }>;
   readonly go: Matrix<{ readonly go: string; readonly postgres: number }>;
   readonly packed: Matrix<{ readonly node: number }>;
-}
-
-function bounds<T>(values: readonly T[]): readonly [T, T] {
-  const first = values[0];
-  const last = values.at(-1);
-  if (first === undefined || last === undefined)
-    throw new Error("CI support lists cannot be empty");
-  return [first, last];
 }
 
 function crossProduct<AKey extends string, A, BKey extends string, B>(
@@ -40,31 +34,26 @@ function crossProduct<AKey extends string, A, BKey extends string, B>(
   );
 }
 
-export function buildCiMatrices(support: Support, eventName: string): CiMatrices {
+export function buildCiMatrices(support: Support, eventName: string, schedule = ""): CiMatrices {
   const goVersion = support.go.minimum.replace(/\.0$/, "");
+  const newestNode = support.node.tested.at(-1);
+  const newestPostgres = support.postgres.tested.at(-1);
+  const newestPython = support.python.tested.at(-1);
+  if (newestNode === undefined || newestPostgres === undefined || newestPython === undefined)
+    throw new Error("CI support lists cannot be empty");
 
-  if (eventName === "pull_request") {
-    const [oldestNode, newestNode] = bounds(support.node.tested);
-    const [oldestPostgres, newestPostgres] = bounds(support.postgres.tested);
-    const [oldestPython, newestPython] = bounds(support.python.tested);
-
+  if (eventName !== "schedule" || schedule !== WEEKLY_COMPATIBILITY_SCHEDULE) {
     return {
       typescript: {
-        include: [
-          { node: oldestNode, postgres: oldestPostgres },
-          { node: newestNode, postgres: newestPostgres },
-        ],
+        include: [{ node: newestNode, postgres: newestPostgres }],
       },
       python: {
-        include: [
-          { python: oldestPython, postgres: oldestPostgres },
-          { python: newestPython, postgres: newestPostgres },
-        ],
+        include: [{ python: newestPython, postgres: newestPostgres }],
       },
       go: {
         include: [{ go: goVersion, postgres: newestPostgres }],
       },
-      packed: { include: [{ node: oldestNode }] },
+      packed: { include: [{ node: newestNode }] },
     };
   }
 
@@ -81,7 +70,7 @@ export function buildCiMatrices(support: Support, eventName: string): CiMatrices
         postgres,
       })),
     },
-    packed: { include: support.node.tested.map((node) => ({ node })) },
+    packed: { include: [{ node: newestNode }] },
   };
 }
 
@@ -94,7 +83,7 @@ async function main(): Promise<void> {
   ) as {
     readonly support: Support;
   };
-  const matrices = buildCiMatrices(manifest.support, eventName);
+  const matrices = buildCiMatrices(manifest.support, eventName, process.argv[3]);
   for (const [name, matrix] of Object.entries(matrices)) {
     process.stdout.write(`${name}=${JSON.stringify(matrix)}\n`);
   }

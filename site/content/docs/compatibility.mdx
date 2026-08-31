@@ -78,7 +78,7 @@ compatibility.
 
 ## Bun and Deno
 
-Bun and Deno hold a smoke-tested tier, not support. On pull requests, pushes to `main`, and nightly
+Bun and Deno hold a smoke-tested tier, not support. On pull requests, pushes to `main`, and weekly
 runs, CI executes an enqueue, claim, and complete round-trip through the built package against
 PostgreSQL under the latest release of each; `SMOKE_TESTED_JS_RUNTIMES` exports the tier to tooling. A green lane proves the driver
 connects, the schema installs, and one job completes there — the full test suites run under
@@ -111,10 +111,10 @@ The Go module records independent versions in `go/CHANGELOG.md`. The repository 
 runs the full gate before it creates and pushes the matching `go/vX.Y.Z` tag.
 
 GitHub Actions remain disabled while the repository is private, so these release paths are defined
-but must not run until that restriction is lifted. Once public, pull requests run support-boundary
-pairs and `main` plus nightly runs execute the full matrix. Branch protection requires the stable
-`CI / required` check, and protected npm and PyPI environments require a second person to approve
-publication.
+but must not run until that restriction is lifted. Once public, pull requests and pushes run the
+newest supported versions, the weekly schedule runs the full compatibility matrix, and the daily
+schedule verifies packed installs. Branch protection requires the stable `CI / required` check,
+and protected npm and PyPI environments require a second person to approve publication.
 
 One honest caveat: support proves correctness under the tested matrix. It does not promise a
 throughput level for your database, payloads, handlers, or deployment topology.
