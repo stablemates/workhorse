@@ -197,7 +197,7 @@ describe("continuous integration", () => {
       { node: 24, postgres: 18 },
     ]);
     expect(pullRequest.python.include).toEqual([
-      { python: "3.10", postgres: 15 },
+      { python: "3.12", postgres: 15 },
       { python: "3.14", postgres: 18 },
     ]);
     expect(pullRequest.go.include).toEqual([{ go: "1.25", postgres: 18 }]);

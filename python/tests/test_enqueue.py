@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -112,7 +112,7 @@ def test_empty_batch_does_not_open_a_transaction_or_query_postgres() -> None:
 
 
 def test_cancel_returns_postgres_cancellation_metadata() -> None:
-    requested_at = datetime(2026, 8, 23, 2, 0, tzinfo=timezone.utc)
+    requested_at = datetime(2026, 8, 23, 2, 0, tzinfo=UTC)
     connection = Connection(
         [
             [{"version": 1}],

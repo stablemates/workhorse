@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import cast
 
 from ._statements import (
@@ -123,7 +123,7 @@ def serialize_request(
     }
     keyed = options.idempotency or options.debounce or options.throttle
     if options.run_at is not None or keyed is None:
-        value["runAt"] = _timestamp(options.run_at or datetime.now(timezone.utc))
+        value["runAt"] = _timestamp(options.run_at or datetime.now(UTC))
     if options.idempotency is not None:
         value["idempotency"] = _idempotency(options.idempotency)
     if options.debounce is not None:
@@ -195,7 +195,7 @@ def _timestamp(value: datetime | None) -> str | None:
         return None
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("timestamps must include a timezone")
-    return value.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return value.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _idempotency(value: Idempotency) -> dict[str, Json]:

@@ -5,26 +5,24 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from threading import Event, Lock
-from typing import Literal, TypeAlias, TypedDict, TypeVar, cast
+from typing import Literal, TypedDict, TypeVar, cast
 
-Json: TypeAlias = bool | int | float | str | list["Json"] | dict[str, "Json"] | None
-QueueHealth: TypeAlias = dict[str, Json]
-RetryPolicy: TypeAlias = Mapping[str, Json]
-EnqueueOutcome: TypeAlias = Literal[
-    "accepted", "replayed", "replaced", "non_replaceable", "coalesced"
-]
-NonReplaceableReason: TypeAlias = Literal[
+type Json = bool | int | float | str | list["Json"] | dict[str, "Json"] | None
+type QueueHealth = dict[str, Json]
+type RetryPolicy = Mapping[str, Json]
+type EnqueueOutcome = Literal["accepted", "replayed", "replaced", "non_replaceable", "coalesced"]
+type NonReplaceableReason = Literal[
     "incompatible_key_mode", "not_pending", "window_elapsed_pending"
 ]
-TerminalPolicy: TypeAlias = Literal["release", "cancel", "fail"]
-SignalDeliveryStatus: TypeAlias = Literal[
+type TerminalPolicy = Literal["release", "cancel", "fail"]
+type SignalDeliveryStatus = Literal[
     "delivered", "duplicate", "not_waiting", "already_delivered", "stale", "not_found"
 ]
-HumanWaitCompletionStatus: TypeAlias = Literal[
+type HumanWaitCompletionStatus = Literal[
     "completed", "duplicate", "not_waiting", "already_completed", "stale", "not_found"
 ]
-CancelStatus: TypeAlias = Literal["canceled", "cancel_requested", "already_terminal", "not_found"]
-JobState: TypeAlias = Literal[
+type CancelStatus = Literal["canceled", "cancel_requested", "already_terminal", "not_found"]
+type JobState = Literal[
     "blocked", "scheduled", "ready", "active", "succeeded", "failed", "canceled"
 ]
 TJson = TypeVar("TJson", bound=Json)
@@ -162,7 +160,7 @@ class ChildCanceled(TypedDict):
     error: Json
 
 
-ChildOutcome: TypeAlias = ChildSucceeded | ChildFailed | ChildCanceled
+type ChildOutcome = ChildSucceeded | ChildFailed | ChildCanceled
 
 
 @dataclass(frozen=True)
@@ -254,7 +252,7 @@ class AsyncCancellationToken:
     def reason(self) -> BaseException:
         return self._token.reason
 
-    async def wait(self, timeout: float | None = None) -> bool:
+    async def wait(self, timeout: float | None = None) -> bool:  # noqa: ASYNC109
         loop = asyncio.get_running_loop()
         deadline = None if timeout is None else loop.time() + timeout
         while not self.cancelled:
@@ -538,7 +536,7 @@ class BatchFailed(TypedDict):
     error: Exception
 
 
-BatchHandlerOutcome: TypeAlias = BatchSucceeded | BatchFailed
+type BatchHandlerOutcome = BatchSucceeded | BatchFailed
 
 
 @dataclass(frozen=True)

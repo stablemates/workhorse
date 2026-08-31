@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import suppress
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from threading import Event, Thread
 from time import monotonic, sleep
 from typing import Any
@@ -157,12 +157,10 @@ def test_durable_sleeps_release_ownership_and_survive_a_swallowed_sentinel(
                 context.sleep("relative", 40)
             if handler_calls >= 2:
                 try:
-                    context.sleep_until(
-                        "relative", datetime.now(timezone.utc) - timedelta(seconds=1)
-                    )
+                    context.sleep_until("relative", datetime.now(UTC) - timedelta(seconds=1))
                 except WaitConflictError as error:
                     conflicts.append(error)
-                context.sleep_until("absolute", datetime.now(timezone.utc) - timedelta(seconds=1))
+                context.sleep_until("absolute", datetime.now(UTC) - timedelta(seconds=1))
             return {"handlerCalls": handler_calls}
 
         worker = Worker(worker_connection, worker_id="python-wait-worker").handle(
@@ -1310,7 +1308,7 @@ def test_worker_classifies_an_absolute_deadline(database_url: str) -> None:
         job_id = Queue(enqueue_connection).enqueue(
             "deadline.active",
             {},
-            EnqueueOptions(deadline=datetime.now(timezone.utc) + timedelta(milliseconds=180)),
+            EnqueueOptions(deadline=datetime.now(UTC) + timedelta(milliseconds=180)),
         )
         enqueue_connection.commit()
 

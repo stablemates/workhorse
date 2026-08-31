@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import asyncpg
 import psycopg
@@ -19,7 +19,7 @@ from workhorse import (
 
 
 def test_sync_client_synchronizes_and_maps_concurrency_policies() -> None:
-    updated_at = datetime(2026, 8, 23, 20, 0, tzinfo=timezone.utc)
+    updated_at = datetime(2026, 8, 23, 20, 0, tzinfo=UTC)
     connection = Connection(
         [
             [{"version": 1}],

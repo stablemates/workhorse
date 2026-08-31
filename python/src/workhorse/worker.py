@@ -10,7 +10,7 @@ from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from threading import Event, Lock, Thread, current_thread
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -376,7 +376,7 @@ class _HandlerDurability:
             or wake_at.utcoffset() is None
         ):
             raise TypeError("Wait wake_at must be a timezone-aware datetime")
-        if (wake_at - datetime.now(timezone.utc)).total_seconds() * 1000 > _MAX_WAIT_DURATION_MS:
+        if (wake_at - datetime.now(UTC)).total_seconds() * 1000 > _MAX_WAIT_DURATION_MS:
             raise ValueError("Wait wake_at must be no more than 365 days in the future")
         self._schedule_wait(name, duration_ms=None, wake_at=wake_at)
 
@@ -1452,9 +1452,7 @@ class Worker:
                         "Maintenance phase completed",
                         attributes,
                     )
-            slow_maintenance = self._executor.rows(
-                STATEMENTS.run_maintenance, (datetime.now(timezone.utc),)
-            )
+            slow_maintenance = self._executor.rows(STATEMENTS.run_maintenance, (datetime.now(UTC),))
             for row in slow_maintenance:
                 phase = str(row["phase"])
                 rows_affected = int(cast(int, row["rows_affected"]))
@@ -1473,7 +1471,7 @@ class Worker:
         self._last_maintenance_at = now_monotonic
         if not self.schedule_namespaces:
             return True
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         fired_occurrences = self._executor.rows(
             STATEMENTS.fire_due_schedules,
             (list(self.schedule_namespaces), now, self.schedule_catchup_limit),
@@ -2119,7 +2117,7 @@ def _expiration_delay(expiration_at: datetime | None, retry_at: float | None) ->
         return retry_at - monotonic()
     if expiration_at is None:
         return None
-    return (expiration_at - datetime.now(timezone.utc)).total_seconds()
+    return (expiration_at - datetime.now(UTC)).total_seconds()
 
 
 def _error_envelope(error: Exception, redact_details: bool) -> Json:

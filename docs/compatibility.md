@@ -26,7 +26,7 @@ This boundary is about correctness only. It is not a performance claim; see
 | Runtime    | Supported      | Minimum | Notes                                                   |
 | ---------- | -------------- | ------- | ------------------------------------------------------- |
 | Node.js    | 22, 24         | 22      | Even-numbered releases only. `engines.node` is `>=22`.  |
-| Python     | 3.10–3.14      | 3.10    | `stablemates-workhorse` ships one `py3-none-any` wheel. |
+| Python     | 3.12–3.14      | 3.12    | `stablemates-workhorse` ships one `py3-none-any` wheel. |
 | Go         | 1.25 and newer | 1.25    | The module pins pgx v5.9.2.                             |
 | PostgreSQL | 15, 16, 17, 18 | 15      | No extension beyond the default `plpgsql` is installed. |
 
@@ -39,7 +39,7 @@ Package managers: the repository is developed with pnpm, and the packed-install 
 published tarballs with pnpm. npm and yarn are not exercised in CI; the packages are plain ESM with
 no install scripts, so nothing in them is package-manager specific.
 
-The Python package declares Python 3.10 through 3.14 and includes Psycopg 3.3 through the next
+The Python package declares Python 3.12 through 3.14 and includes Psycopg 3.3 through the next
 major. Its `asyncpg` extra supports asyncpg 0.31 through the next major. Its package lane builds the
 source distribution and universal wheel, checks inline types, runs both real drivers, and executes
 every shared SQL scenario. `python/tests/test_release.py` installs the wheel and source distribution

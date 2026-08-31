@@ -176,10 +176,10 @@ function goDeclaration(name: string, schema: Schema): string {
 function pythonDeclaration(name: string, schema: Schema, names: WeakMap<Schema, string>): string {
   const typeName = pythonName(name);
   if (typeName === "JSON") {
-    return 'JSON: TypeAlias = str | int | float | bool | list["JSON"] | dict[str, "JSON"] | None\n';
+    return "type JSON = str | int | float | bool | list[JSON] | dict[str, JSON] | None\n";
   }
   if (schema.type !== "object" || !schema.properties) {
-    return `${typeName}: TypeAlias = ${pythonType(schema)}\n`;
+    return `type ${typeName} = ${pythonType(schema)}\n`;
   }
   const required = new Set((schema.required as string[] | undefined) ?? []);
   const properties = schema.properties as Record<string, Schema>;
@@ -384,9 +384,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Literal, TypeAlias, TypedDict
-
-from typing_extensions import NotRequired, Required
+from typing import Literal, NotRequired, Required, TypedDict
 
 # fmt: off
 # Generated declarations stay byte-for-byte stable across formatter versions.

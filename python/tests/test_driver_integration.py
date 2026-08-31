@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import asyncpg
 import psycopg
@@ -103,7 +103,7 @@ def test_enqueue_modes_dependencies_batch_and_schedules(database_url: str) -> No
         delayed = queue.enqueue(
             "delayed",
             {},
-            EnqueueOptions(run_at=datetime.now(timezone.utc) + timedelta(minutes=5)),
+            EnqueueOptions(run_at=datetime.now(UTC) + timedelta(minutes=5)),
         )
         prioritized = queue.enqueue("priority", {}, EnqueueOptions(priority=100))
         replay_one = queue.enqueue_with_result(
