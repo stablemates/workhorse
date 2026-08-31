@@ -8,7 +8,7 @@ document never restates them.
 Statuses:
 
 - **Supported.** Shipped in that language and covered by tests in this repository.
-- **Planned.** Deliberately sequenced work with an open Plane work item. The work item owns the
+- **Planned.** Deliberately sequenced work with an open Ontrack Issue. The Issue owns the
   acceptance criteria; this matrix records the resulting language support.
 - **Absent.** Not shipped and not scheduled. An Absent cell is a fact, not a commitment.
 
@@ -79,7 +79,7 @@ telemetry, and graceful shutdown.
 
 <!-- END GENERATED PARITY WORKER -->
 
-Plane owns the SDK roadmap, sequencing, blockers, and completion state. This document changes only
+Ontrack owns the SDK roadmap, sequencing, blockers, and completion state. This document changes only
 when repository tests prove a capability has shipped or been withdrawn.
 
 ## Product operator capability
@@ -140,12 +140,12 @@ and every runtime fixture through `python/tests/test_worker_runtime_conformance.
 `typescript/core/test/support/parity-capabilities.ts`. `pnpm parity:check` fails if the checked-in
 document is stale. Every Supported cell must name an existing test file for that surface. The file
 must match every evidence pattern. Every Absent cell must record why it is absent. Every Planned
-cell must name a Plane work item, whose link the generator also writes.
+cell must name an Ontrack Issue, whose link the generator also writes.
 
 That check binds the document to declared evidence, not to a proof of behaviour — no static check
 can supply one. Naming a test file that never exercises the capability would satisfy it. The rule
 this document states still governs: a cell says Supported because tests prove it, and generation
 stops the published view from becoming another source of truth.
 
-<!-- BEGIN GENERATED PARITY PLANE LINKS -->
-<!-- END GENERATED PARITY PLANE LINKS -->
+<!-- BEGIN GENERATED PARITY ONTRACK LINKS -->
+<!-- END GENERATED PARITY ONTRACK LINKS -->

@@ -91,15 +91,17 @@ const plannedItems = [
     ].flatMap((cell) => ("planned" in cell ? [cell.planned] : [])),
   ),
 ].toSorted();
-const plannedStart = "<!-- BEGIN GENERATED PARITY PLANE LINKS -->";
-const plannedEnd = "<!-- END GENERATED PARITY PLANE LINKS -->";
+const plannedStart = "<!-- BEGIN GENERATED PARITY ONTRACK LINKS -->";
+const plannedEnd = "<!-- END GENERATED PARITY ONTRACK LINKS -->";
 const plannedPattern = new RegExp(`${plannedStart}[\\s\\S]*?${plannedEnd}`);
-if (!plannedPattern.test(generated)) throw new Error("Missing generated parity Plane link markers");
+if (!plannedPattern.test(generated)) {
+  throw new Error("Missing generated parity Ontrack link markers");
+}
 const withLinks = generated.replace(
   plannedPattern,
   [
     plannedStart,
-    ...plannedItems.map((item) => `[${item}]: https://app.plane.so/techprogress/browse/${item}/`),
+    ...plannedItems.map((item) => `[${item}]: https://ontrack.sh/projects/WH/issues/${item}`),
     plannedEnd,
   ].join("\n"),
 );
