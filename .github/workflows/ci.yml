@@ -304,7 +304,7 @@ jobs:
         env:
           POSTGRES_USER: workhorse
           POSTGRES_PASSWORD: workhorse
-          POSTGRES_DB: workhorse_dev
+          POSTGRES_DB: workhorse_dev_primary
         ports:
           - 5432:5432
         options: >-
@@ -313,7 +313,7 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     env:
-      DATABASE_URL_PRIMARY: postgres://workhorse:workhorse@localhost:5432/workhorse_dev
+      DATABASE_URL_PRIMARY: postgres://workhorse:workhorse@localhost:5432/workhorse_dev_primary
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
