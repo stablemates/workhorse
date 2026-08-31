@@ -1,17 +1,18 @@
-import { chmod, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  provisionCheckoutDatabases,
+  writeCheckoutDatabaseEnvironment,
+} from "./checkout-databases.js";
 import {
   copyIgnoredEnvironmentFiles,
   createWorktreeResources,
   dropWorktreeDatabases,
   pathExists,
-  parseEnvironment,
   readEnvironment,
   readResourceRegistry,
   resourceEnvironment,
   resourceRegistryPath,
   run,
-  updateEnvironment,
   worktreeContext,
   writeResourceRegistry,
 } from "./worktree-resources.js";
@@ -23,17 +24,9 @@ if (!context.linked) {
 }
 
 const copied = await copyIgnoredEnvironmentFiles(context.primaryWorktreeRoot, context.worktreeRoot);
-const targetEnvironmentPath = join(context.worktreeRoot, ".env");
-let targetEnvironmentContents: string;
-try {
-  targetEnvironmentContents = await readFile(targetEnvironmentPath, "utf8");
-} catch {
-  targetEnvironmentContents = await readFile(join(context.worktreeRoot, ".env.example"), "utf8");
-}
-
 const primaryEnvironment = {
   ...process.env,
-  ...parseEnvironment(targetEnvironmentContents),
+  ...(await readEnvironment(join(context.worktreeRoot, ".env"))),
   ...(await readEnvironment(join(context.primaryWorktreeRoot, ".env"))),
 };
 const resources = createWorktreeResources(
@@ -47,19 +40,15 @@ const registryPath = resourceRegistryPath(context.commonGitDirectory, context.wo
 if (await pathExists(registryPath)) {
   await dropWorktreeDatabases(await readResourceRegistry(registryPath));
 }
-await writeFile(
-  targetEnvironmentPath,
-  updateEnvironment(targetEnvironmentContents, generatedEnvironment),
-);
-await chmod(targetEnvironmentPath, 0o600);
+await writeCheckoutDatabaseEnvironment(context.worktreeRoot, {
+  databaseEnvironment: generatedEnvironment,
+  overwriteExisting: true,
+});
 
 await writeResourceRegistry(context.commonGitDirectory, resources);
 await run("uv", ["sync", "--project", "python", "--frozen"], { cwd: context.worktreeRoot });
 await run("go", ["-C", "go", "mod", "download"], { cwd: context.worktreeRoot });
-await run("pnpm", ["db:reset:all"], {
-  cwd: context.worktreeRoot,
-  env: { ...process.env, ...generatedEnvironment },
-});
+await provisionCheckoutDatabases(generatedEnvironment, { resetExisting: true });
 
 console.log(
   `Configured linked worktree ${context.worktreeId}: copied ${copied.length} env file(s), synchronized language dependencies, and provisioned five databases`,
