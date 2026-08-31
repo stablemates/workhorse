@@ -335,6 +335,18 @@ describe("continuous integration", () => {
     }
   });
 
+  it("installs a PostgreSQL client that matches the release service", async () => {
+    for (const workflowPath of [
+      ".github/workflows/release.yml",
+      ".github/workflows/release-python.yml",
+    ]) {
+      const workflow = await read(workflowPath);
+      expect(workflow).toContain("image: postgres:18-alpine");
+      expect(workflow).toContain("sudo apt-get install --yes postgresql-client-18");
+      expect(workflow).toContain('echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"');
+    }
+  });
+
   it("benchmarks weekly on a supported PostgreSQL major under an explicit timeout", async () => {
     const workflow = await read(".github/workflows/benchmark.yml");
     const manifest = await readManifest("package.json");
