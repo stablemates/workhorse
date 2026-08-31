@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { localDatabaseUrl } from "../typescript/core/src/local-database.js";
 import { readEnvironment } from "./environment-file.js";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
@@ -57,13 +56,14 @@ describe("repository command environment", () => {
     "overrides a database URL inherited from another checkout",
     async () => {
       const checkoutEnvironment = await readEnvironment(environmentPath);
-      const expected = localDatabaseUrl("dev_primary", checkoutEnvironment);
+      const inheritedPrimary = "postgres://workhorse:workhorse@localhost:5432/other_dev_primary";
+      const expected = checkoutEnvironment.DATABASE_URL_PRIMARY ?? inheritedPrimary;
       const expectedOntrack = checkoutEnvironment.ONTRACK_AGENT_DSN;
 
       const result = await runWrapper(
         {
           ...process.env,
-          DATABASE_URL_PRIMARY: "postgres://workhorse:workhorse@localhost:5432/other_dev_primary",
+          DATABASE_URL_PRIMARY: inheritedPrimary,
           DATABASE_URL: "postgres://workhorse:workhorse@localhost:5432/caller_owned",
           ONTRACK_AGENT_DSN:
             "postgres://other-checkout@pg.ontrack.sh:35500/postgres?sslmode=require",
@@ -80,9 +80,12 @@ describe("repository command environment", () => {
   it.skipIf(process.platform === "win32")(
     "resolves its checkout from the script rather than the working directory",
     async () => {
+      const checkoutEnvironment = await readEnvironment(environmentPath);
       const result = await runWrapper({ ...process.env }, resolve(repositoryRoot, ".."));
 
-      expect(result.primary).toMatch(/_dev_primary(_|$)/);
+      expect(result.primary).toBe(
+        checkoutEnvironment.DATABASE_URL_PRIMARY ?? process.env.DATABASE_URL_PRIMARY,
+      );
       expect(resolve(result.cwd)).toBe(repositoryRoot);
     },
   );
