@@ -29,7 +29,7 @@ describe("checkout Ontrack Session", () => {
     "postgres://workhorse@pg.ontrack.sh:35500/postgres",
     "postgres://pg.ontrack.sh:35500/postgres?sslmode=require",
   ])("rejects unsafe DSN %s", (dsn) => {
-    expect(() => validateOntrackAgentDsn(dsn)).toThrow();
+    expect(() => validateOntrackAgentDsn(dsn)).toThrow(/.+/);
   });
 
   it("encodes the exact linked-worktree Session without preserving credentials", () => {

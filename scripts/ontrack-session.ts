@@ -152,7 +152,9 @@ async function requiredEnvironmentFile(path: string): Promise<string> {
     return await readFile(path, "utf8");
   } catch (error) {
     if (isMissing(error)) {
-      throw new Error(`${path} is required; ambient ${ontrackAgentDsn} is not accepted`);
+      throw new Error(`${path} is required; ambient ${ontrackAgentDsn} is not accepted`, {
+        cause: error,
+      });
     }
     throw error;
   }
