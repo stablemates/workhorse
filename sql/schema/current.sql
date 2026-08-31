@@ -11793,6 +11793,7 @@ $$;
 CREATE OR REPLACE FUNCTION workhorse.dashboard_events_v1(p_input jsonb)
 RETURNS jsonb
 LANGUAGE sql
+SET jit = off
 AS $$
   WITH parameters AS (
     SELECT clock_timestamp() AS captured_at,

@@ -49,16 +49,22 @@ describe("dashboard procedure plans", () => {
 
   afterAll(async () => database.teardown());
 
-  it("disables JIT for the activity procedure's generic high-cost plan", async () => {
-    const result = await database.pool.query<{ proconfig: string[] | null }>(
-      `SELECT routine.proconfig
+  it("disables JIT for generic high-cost dashboard plans", async () => {
+    // PostgreSQL applies proconfig before planning the function body, so this covers every
+    // input-specific events branch without relying on a wall-clock assertion.
+    const result = await database.pool.query<{ proname: string; proconfig: string[] | null }>(
+      `SELECT routine.proname, routine.proconfig
          FROM pg_proc routine
          JOIN pg_namespace namespace ON namespace.oid = routine.pronamespace
         WHERE namespace.nspname = 'workhorse'
-          AND routine.proname = 'dashboard_activity_v1'`,
+          AND routine.proname IN ('dashboard_activity_v1', 'dashboard_events_v1')
+        ORDER BY routine.proname`,
     );
 
-    expect(result.rows).toEqual([{ proconfig: ["jit=off"] }]);
+    expect(result.rows).toEqual([
+      { proname: "dashboard_activity_v1", proconfig: ["jit=off"] },
+      { proname: "dashboard_events_v1", proconfig: ["jit=off"] },
+    ]);
   });
 
   it("enriches only the requested task page", async () => {

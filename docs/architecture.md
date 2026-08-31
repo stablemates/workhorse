@@ -2117,8 +2117,9 @@ each string filter to 200 characters before the backend calls the function.
 `jobId` before merging `dashboard_job_event_v1` with `dashboard_attempt_history_v1`. Each source
 reads at most `page * pageSize` rows before the merge, while separate bounded counts produce
 `total`. The wire validator limits `page` to 100 and each string filter to 200 characters before
-the backend calls the function. The function returns the complete version 1 events JSON document,
-including retention days from `dashboard_retention_policy_v1`.
+the backend calls the function. The function disables JIT because compiling its generic partitioned
+plan costs more than executing the bounded reads. It returns the complete version 1 events JSON
+document, including retention days from `dashboard_retention_policy_v1`.
 
 `dashboard_event_detail_v1(p_input jsonb)` accepts the stable `event:<UUIDv7 event_id>` or
 `attempt:<UUIDv7 attempt_id>` identity. It returns the complete version 1 event-detail JSON document.
