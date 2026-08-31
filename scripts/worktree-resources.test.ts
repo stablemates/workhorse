@@ -5,6 +5,8 @@ import { resourceEnvironment, type WorktreeResources } from "./worktree-resource
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const worktreeCommandModules = [
+  "scripts/checkout-databases.ts",
+  "scripts/setup-checkout.ts",
   "scripts/with-env.ts",
   "scripts/setup-worktree.ts",
   "scripts/cleanup-worktree.ts",
