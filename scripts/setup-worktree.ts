@@ -16,6 +16,7 @@ import {
   worktreeContext,
   writeResourceRegistry,
 } from "./worktree-resources.js";
+import { configureOntrackSession, preflightOntrackSession } from "./ontrack-session.js";
 
 const context = worktreeContext();
 if (!context.linked) {
@@ -24,6 +25,12 @@ if (!context.linked) {
 }
 
 const copied = await copyIgnoredEnvironmentFiles(context.primaryWorktreeRoot, context.worktreeRoot);
+const ontrack = await configureOntrackSession({
+  checkoutRoot: context.worktreeRoot,
+  sourceRoot: context.primaryWorktreeRoot,
+  sessionName: context.worktreeId,
+});
+const preflight = await preflightOntrackSession(ontrack);
 const primaryEnvironment = {
   ...process.env,
   ...(await readEnvironment(join(context.worktreeRoot, ".env"))),
@@ -51,5 +58,5 @@ await run("go", ["-C", "go", "mod", "download"], { cwd: context.worktreeRoot });
 await provisionCheckoutDatabases(generatedEnvironment, { resetExisting: true });
 
 console.log(
-  `Configured linked worktree ${context.worktreeId}: copied ${copied.length} env file(s), synchronized language dependencies, and provisioned five databases`,
+  `Configured linked worktree ${context.worktreeId} and Ontrack Project ${preflight.projectKey} (${preflight.projectId}): copied ${copied.length} env file(s), synchronized language dependencies, and provisioned five databases`,
 );

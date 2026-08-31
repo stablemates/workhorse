@@ -266,6 +266,10 @@ def _is_uuid(value: str) -> bool:
     return True
 
 
+def test_timestamp_matcher_accepts_postgresql_fractional_precision() -> None:
+    assert _is_timestamp("2026-08-31T02:57:30.93513+00:00")
+
+
 def _is_timestamp(value: str) -> bool:
     match = TIMESTAMP_VALUE.fullmatch(value)
     if match is None:

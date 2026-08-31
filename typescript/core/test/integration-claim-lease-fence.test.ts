@@ -581,7 +581,7 @@ describe("claim lease fence", () => {
     const aborted = deferred<unknown>();
     const release = deferred();
     const id = await queue.enqueue("ignored-deadline", null, {
-      deadline: new Date(Date.now() + 150),
+      deadline: new Date(Date.now() + 5_000),
       maxAttempts: 4,
     });
     const worker = new Worker(queue, {
@@ -600,7 +600,7 @@ describe("claim lease fence", () => {
     const execution = worker.runOnce();
     await started.promise;
     expect(await aborted.promise).toBeInstanceOf(DeadlineExceededError);
-    await sleep(25);
+    await waitForDatabaseCondition(async () => (await admin.getJob(id))?.state === "failed");
     expect(await admin.getJob(id)).toMatchObject({
       state: "failed",
       currentAttempt: 1,
@@ -620,7 +620,7 @@ describe("claim lease fence", () => {
     expect(evidence.rows).toEqual([
       { event_type: "deadline_exceeded", outcome: "deadline_exceeded" },
     ]);
-  });
+  }, 30_000);
 
   it("retries timed-out attempts with remaining budget and terminally distinguishes exhaustion", async () => {
     const reasons: unknown[] = [];
@@ -1382,7 +1382,7 @@ describe("claim lease fence", () => {
   it("consumes one queue token across competing claims and recovers by elapsed database time", async () => {
     const queueName = `rate-limit-atomic-${randomUUID()}`;
     await queue.syncRateLimitPolicies("test", [
-      { queue: queueName, rate: { limit: 1, intervalMs: 100, burst: 1 } },
+      { queue: queueName, rate: { limit: 1, intervalMs: 60_000, burst: 1 } },
     ]);
     await queue.enqueueMany([
       { type: "atomic-rate", payload: { ordinal: 1 }, options: { queue: queueName } },
@@ -1394,7 +1394,12 @@ describe("claim lease fence", () => {
       queue.claim("atomic-rate-worker-b", { queue: queueName }),
     ]);
     expect(claims.filter((claim) => claim !== null)).toHaveLength(1);
-    await sleep(110);
+    await pool.query(
+      `UPDATE workhorse.rate_limit_bucket
+          SET refilled_at = clock_timestamp() - interval '60 seconds'
+        WHERE queue_name = $1 AND bucket_scope = 'queue'`,
+      [queueName],
+    );
     await expect(queue.claim("atomic-rate-worker-c", { queue: queueName })).resolves.not.toBeNull();
   });
 

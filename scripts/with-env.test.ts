@@ -18,6 +18,7 @@ const probeSource = `require("node:fs").writeFileSync(
     primary: process.env.DATABASE_URL_PRIMARY,
     generic: process.env.DATABASE_URL,
     port: process.env.WORKHORSE_API_PORT,
+    ontrack: process.env.ONTRACK_AGENT_DSN,
     cwd: process.cwd(),
   }),
 );
@@ -45,6 +46,7 @@ async function runWrapper(environment: NodeJS.ProcessEnv, cwd: string) {
     primary?: string;
     generic?: string;
     port?: string;
+    ontrack?: string;
     cwd: string;
   };
 }
@@ -56,17 +58,21 @@ describe("repository command environment", () => {
       const checkoutEnvironment = await readEnvironment(environmentPath);
       const inheritedPrimary = "postgres://workhorse:workhorse@localhost:5432/other_dev_primary";
       const expected = checkoutEnvironment.DATABASE_URL_PRIMARY ?? inheritedPrimary;
+      const expectedOntrack = checkoutEnvironment.ONTRACK_AGENT_DSN;
 
       const result = await runWrapper(
         {
           ...process.env,
           DATABASE_URL_PRIMARY: inheritedPrimary,
           DATABASE_URL: "postgres://workhorse:workhorse@localhost:5432/caller_owned",
+          ONTRACK_AGENT_DSN:
+            "postgres://other-checkout@pg.ontrack.sh:35500/postgres?sslmode=require",
         },
         repositoryRoot,
       );
 
       expect(result.primary).toBe(expected);
+      expect(result.ontrack).toBe(expectedOntrack);
       expect(result.generic).toContain("caller_owned");
     },
   );

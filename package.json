@@ -85,6 +85,7 @@
     "go:test:race": "tsx scripts/with-env.ts go -C go test -race ./...",
     "release:check": "tsx scripts/check-release.ts",
     "hooks:install": "lefthook install",
+    "ontrack:preflight": "tsx scripts/with-env.ts tsx scripts/preflight-ontrack.ts",
     "worktree:setup": "tsx scripts/with-env.ts tsx scripts/setup-worktree.ts",
     "worktree:cleanup": "tsx scripts/with-env.ts tsx scripts/cleanup-worktree.ts",
     "worktree:remove": "tsx scripts/with-env.ts tsx scripts/remove-worktree.ts",

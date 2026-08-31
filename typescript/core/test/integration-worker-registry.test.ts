@@ -198,38 +198,43 @@ describe("worker registry", () => {
     });
 
     const running = worker.run();
-    await vi.waitFor(async () => {
-      expect((await admin.listWorkers()).map((entry) => entry.workerId)).toContain(
-        "registry-remote-pause",
-      );
-    });
+    try {
+      await vi.waitFor(async () => {
+        expect((await admin.listWorkers()).map((entry) => entry.workerId)).toContain(
+          "registry-remote-pause",
+        );
+      });
 
-    await expect(
-      admin.setWorkerPaused("registry-remote-pause", true, {
-        ...adminAudit("rolling deploy"),
-        actor: "operator",
-      }),
-    ).resolves.toMatchObject({ paused: true, pausedBy: "operator", reason: "rolling deploy" });
-    await vi.waitFor(() => expect(worker.isPaused()).toBe(true));
-    expect(worker.runtimeState()).toMatchObject({
-      paused: true,
-      remotelyPaused: true,
-      locallyPaused: false,
-    });
+      await expect(
+        admin.setWorkerPaused("registry-remote-pause", true, {
+          ...adminAudit("rolling deploy"),
+          actor: "operator",
+        }),
+      ).resolves.toMatchObject({ paused: true, pausedBy: "operator", reason: "rolling deploy" });
+      await vi.waitFor(() => expect(worker.isPaused()).toBe(true));
+      expect(worker.runtimeState()).toMatchObject({
+        paused: true,
+        remotelyPaused: true,
+        locallyPaused: false,
+      });
 
-    // A worker paused by an operator must not claim, and a local resume() must not override it.
-    await queue.enqueue("registry-remote-pause", { sequence: 1 });
-    worker.resume();
-    await sleep(300);
-    expect(handled).toEqual([]);
-    expect(worker.isPaused()).toBe(true);
+      // Let a claim already submitted before the remote pause finish against the empty queue.
+      // A local resume must then leave the remote pause latched for subsequently enqueued work.
+      worker.resume();
+      await sleep(300);
+      expect(worker.isPaused()).toBe(true);
+      await queue.enqueue("registry-remote-pause", { sequence: 1 });
+      await sleep(300);
+      expect(handled).toEqual([]);
+      expect(worker.isPaused()).toBe(true);
 
-    await admin.setWorkerPaused("registry-remote-pause", false, adminAudit("resume worker"));
-    await vi.waitFor(() => expect(handled).toEqual([1]));
-    expect(worker.runtimeState()).toMatchObject({ paused: false, remotelyPaused: false });
-
-    worker.stop();
-    await running;
+      await admin.setWorkerPaused("registry-remote-pause", false, adminAudit("resume worker"));
+      await vi.waitFor(() => expect(handled).toEqual([1]));
+      expect(worker.runtimeState()).toMatchObject({ paused: false, remotelyPaused: false });
+    } finally {
+      worker.stop();
+      await running;
+    }
   });
 
   it("returns null when pausing a worker that has never registered", async () => {

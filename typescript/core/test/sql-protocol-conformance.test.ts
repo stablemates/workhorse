@@ -11,7 +11,7 @@ import {
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type {
   ClaimedJob,
   EnqueueRequest,
@@ -299,11 +299,21 @@ async function executeExpirationRuntimeFixture(
   const queueName = `runtime-${fixture.id}`;
   const earlyTimerQueue = new Proxy(queue, {
     get(target, property, receiver) {
+      if (property === "claimMany") return undefined;
       if (property !== "claim") return Reflect.get(target, property, receiver);
       return async (...args: Parameters<Queue["claim"]>) => {
         const claimed = await target.claim(...args);
-        if (claimed && fixture.mode === "deadline" && claimed.deadlineAt) {
-          claimed.deadlineAt = new Date(claimed.deadlineAt.getTime() - fixture.localClockLeadMs);
+        if (claimed && fixture.mode === "deadline") {
+          const deadline = await database.query<{ deadlineAt: Date }>(
+            `UPDATE workhorse.job_runtime
+                SET deadline_at = clock_timestamp() + $2::integer * interval '1 millisecond'
+              WHERE job_id = $1::uuid
+              RETURNING deadline_at AS "deadlineAt"`,
+            [claimed.id, fixture.durationMs],
+          );
+          claimed.deadlineAt = new Date(
+            deadline.rows[0]!.deadlineAt.getTime() - fixture.localClockLeadMs,
+          );
         }
         if (claimed && fixture.mode === "execution-timeout" && claimed.attemptTimeoutAt) {
           claimed.attemptTimeoutAt = new Date(
@@ -314,7 +324,7 @@ async function executeExpirationRuntimeFixture(
       };
     },
   });
-  const expiration = new Date(Date.now() + fixture.durationMs);
+  const expiration = new Date(Date.now() + 3_600_000);
   const id = await queue.enqueue(
     fixture.jobType,
     {},
@@ -368,8 +378,14 @@ async function executeLeaseLossRuntimeFixture(
     },
   );
   const started = deferred();
+  const allowHeartbeat = deferred();
   let abortMessage: string | undefined;
   const rejectedWrites = new Map<string, string>();
+  const heartbeatMany = queue.heartbeatMany.bind(queue);
+  const heartbeat = vi.spyOn(queue, "heartbeatMany").mockImplementation(async (...arguments_) => {
+    await allowHeartbeat.promise;
+    return heartbeatMany(...arguments_);
+  });
   const worker = new Worker(queue, {
     workerId: `runtime-${fixture.id}`,
     queue: queueName,
@@ -402,26 +418,34 @@ async function executeLeaseLossRuntimeFixture(
     return { tooLate: true };
   });
 
-  const execution = worker.runOnce();
-  await started.promise;
-  await database.query(
-    "UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE job_id = $1",
-    [id],
-  );
-  await expect(queue.recoverExpired(100, 0)).resolves.toBe(1);
-  await expect(execution).resolves.toBe(true);
-  expect(abortMessage).toBe(fixture.expectedAbortMessage);
-  expect([...rejectedWrites.keys()]).toEqual(fixture.expectedRejectedWrites);
-  expect(fixture.expectedRejectedWrites).toEqual(
-    expect.arrayContaining(fixture.portableRejectedWrites),
-  );
-  expect(new Set(rejectedWrites.values())).toEqual(new Set([fixture.expectedRejectedWriteError]));
-  await expect(admin.getJob(id)).resolves.toMatchObject({
-    state: fixture.expectedState.state,
-    currentAttempt: fixture.expectedState.attempt,
-    result: null,
-  });
-  await expectAttemptOutcome(database, id, fixture.expectedAttemptOutcome);
+  let execution: Promise<boolean> | undefined;
+  try {
+    execution = worker.runOnce();
+    await started.promise;
+    await database.query(
+      "UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE job_id = $1",
+      [id],
+    );
+    await expect(queue.recoverExpired(100, 0)).resolves.toBe(1);
+    allowHeartbeat.resolve();
+    await expect(execution).resolves.toBe(true);
+    expect(abortMessage).toBe(fixture.expectedAbortMessage);
+    expect([...rejectedWrites.keys()]).toEqual(fixture.expectedRejectedWrites);
+    expect(fixture.expectedRejectedWrites).toEqual(
+      expect.arrayContaining(fixture.portableRejectedWrites),
+    );
+    expect(new Set(rejectedWrites.values())).toEqual(new Set([fixture.expectedRejectedWriteError]));
+    await expect(admin.getJob(id)).resolves.toMatchObject({
+      state: fixture.expectedState.state,
+      currentAttempt: fixture.expectedState.attempt,
+      result: null,
+    });
+    await expectAttemptOutcome(database, id, fixture.expectedAttemptOutcome);
+  } finally {
+    allowHeartbeat.resolve();
+    await execution?.catch(() => undefined);
+    heartbeat.mockRestore();
+  }
 }
 
 async function executeHeartbeatCadenceRuntimeFixture(

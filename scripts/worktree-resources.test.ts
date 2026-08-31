@@ -14,6 +14,8 @@ const worktreeCommandModules = [
   "scripts/prune-worktrees.ts",
   "scripts/worktree-resources.ts",
   "scripts/environment-file.ts",
+  "scripts/ontrack-session.ts",
+  "scripts/preflight-ontrack.ts",
 ];
 
 describe("worktree resource commands", () => {

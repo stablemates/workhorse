@@ -931,7 +931,7 @@ describe("job dependencies", () => {
 
   it("preserves a dependent schedule when success releases it", async () => {
     const prerequisiteId = await queue.enqueue("delayed-prerequisite", null);
-    const runAt = new Date(Date.now() + 40);
+    const runAt = new Date(Date.now() + 60_000);
     const dependentId = await queue.enqueue("delayed-dependent", null, {
       prerequisiteJobId: prerequisiteId,
       runAt,
@@ -940,7 +940,10 @@ describe("job dependencies", () => {
     expect(claimed?.id).toBe(prerequisiteId);
     expect(await queue.complete(claimed!, "delayed-dependency-worker", null)).toBe(true);
     await expect(admin.getJob(dependentId)).resolves.toMatchObject({ state: "scheduled", runAt });
-    await sleep(50);
+    await pool.query(
+      "UPDATE workhorse.job_runtime SET run_at = clock_timestamp() - interval '1 millisecond' WHERE job_id = $1",
+      [dependentId],
+    );
     expect(await queue.promote()).toBe(1);
     await expect(admin.getJob(dependentId)).resolves.toMatchObject({ state: "ready" });
   });
@@ -1201,11 +1204,10 @@ describe("job dependencies", () => {
       await locker.query("BEGIN");
       await locker.query("SELECT 1 FROM workhorse.job WHERE id = $1 FOR UPDATE", [prerequisiteId]);
       const pruning = queue.pruneTerminalStorage({ force: true });
-      await sleep(50);
-      await locker.query("COMMIT");
       expect((await pruning).find(({ phase }) => phase === "terminal_jobs")).toMatchObject({
         rowsAffected: 0,
       });
+      await locker.query("COMMIT");
     } finally {
       await locker.query("ROLLBACK").catch(() => undefined);
       locker.release();

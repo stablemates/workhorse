@@ -137,6 +137,9 @@ const GENERATED_WORKER_ID = /^\S+-\d+-[\da-f]{8}$/;
  */
 const TEST_OBSERVABLE_JOB_MS = TEST_REGISTRY_INTERVAL_MS * 10;
 
+/** Keep handlers active long enough for a loaded CI runner to observe and act on transient state. */
+const TEST_CONTROL_WINDOW_JOB_MS = TEST_REGISTRY_INTERVAL_MS * 50;
+
 /**
  * Applications created by the current test, stopped before the next one truncates.
  *
@@ -2893,7 +2896,7 @@ describe("Workhorse demo", () => {
     const { app, workhorse } = createTestApplication({
       operator: createLocalOperator(database),
       workerPollMs: 5,
-      longRunningJobMs: TEST_OBSERVABLE_JOB_MS,
+      longRunningJobMs: TEST_CONTROL_WINDOW_JOB_MS,
     });
     const client = dashboardClient(app);
     workhorse.start();
@@ -2942,6 +2945,7 @@ describe("Workhorse demo", () => {
         const detail = await waitFor(
           () => client.dashboard.jobDetail({ id: jobId }),
           (value) => value.identity.state === "succeeded",
+          2_000,
         );
         expect(detail.identity.state).toBe("succeeded");
       }
@@ -2970,7 +2974,7 @@ describe("Workhorse demo", () => {
     } finally {
       await workhorse.stop();
     }
-  });
+  }, 60_000);
 
   it("reports unknown capacity for a declared worker that has never registered", async () => {
     // The demo declares no fleet, because real deployments do not name their workers. Hosts that do
@@ -3863,7 +3867,7 @@ describe("Workhorse demo", () => {
     const { app, workhorse } = createTestApplication({
       operator: createLocalOperator(database),
       workerPollMs: 5,
-      longRunningJobMs: 800,
+      longRunningJobMs: TEST_CONTROL_WINDOW_JOB_MS,
     });
     const client = dashboardClient(app);
     workhorse.start();
@@ -4114,7 +4118,7 @@ describe("Workhorse demo", () => {
     const { app, workhorse } = createTestApplication({
       operator: createLocalOperator(database),
       workerPollMs: 5,
-      longRunningJobMs: 800,
+      longRunningJobMs: TEST_CONTROL_WINDOW_JOB_MS,
     });
     const client = dashboardClient(app);
     workhorse.start();

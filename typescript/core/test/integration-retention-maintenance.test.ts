@@ -158,7 +158,7 @@ describe("retention maintenance", () => {
     expect(
       (
         await pool.query(
-          "SELECT last_completed_local_date::text FROM workhorse.maintenance_state WHERE task_name = 'history_retention'",
+          "SELECT last_completed_local_date::text AS last_completed_local_date FROM workhorse.maintenance_state WHERE task_name = 'history_retention'",
         )
       ).rows,
     ).toEqual([{ last_completed_local_date: "2026-03-08" }]);
