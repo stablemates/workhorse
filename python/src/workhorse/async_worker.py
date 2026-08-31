@@ -52,7 +52,7 @@ _RECONNECT_MAX_SECONDS = 5.0
 T = TypeVar("T")
 
 
-async def _await_value(value: Awaitable[T]) -> T:
+async def _await_value[T](value: Awaitable[T]) -> T:
     return await value
 
 

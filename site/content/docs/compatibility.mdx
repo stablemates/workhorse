@@ -67,7 +67,7 @@ compatibility boundary. The fixtures require both clients to reject an incompati
 protocol before mutation, then verify canonical requests, results, transitions, and structured
 errors.
 
-The Python `stablemates-workhorse` package supports Python 3.10 through 3.14. It uses Psycopg synchronously
+The Python `stablemates-workhorse` package supports Python 3.12 through 3.14. It uses Psycopg synchronously
 or asynchronously and asyncpg asynchronously. Every worker runtime delegates cron evaluation to
 the versioned PostgreSQL functions and each definition's stored IANA timezone. Its release test
 installs the built wheel and source distribution bare, with the compatibility `psycopg` extra, and

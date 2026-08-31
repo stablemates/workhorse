@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 
 from ._compatibility import assert_async_compatible, assert_sync_compatible
@@ -444,7 +444,7 @@ def _apply_contract(
 
 
 def _health_window_start() -> datetime:
-    return datetime.now(timezone.utc) - timedelta(days=1)
+    return datetime.now(UTC) - timedelta(days=1)
 
 
 def _health_document(value: object) -> QueueHealth:

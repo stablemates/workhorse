@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import cast
 
@@ -18,9 +18,7 @@ def _statement(sql: str) -> DriverStatement:
 
 def _iso(value: object) -> object:
     if isinstance(value, datetime):
-        return (
-            value.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-        )
+        return value.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     if isinstance(value, Decimal):
         return int(value) if value == value.to_integral_value() else float(value)
     if isinstance(value, Mapping):

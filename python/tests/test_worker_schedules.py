@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -60,7 +60,7 @@ def test_worker_fires_cron_catchup_through_the_configured_limit(database_url: st
         psycopg.connect(database_url, autocommit=True) as worker_connection,
     ):
         revision = _sync_schedule(definition_connection, "30 */2 * * * *")
-        now = datetime.now(timezone.utc).replace(second=30, microsecond=0)
+        now = datetime.now(UTC).replace(second=30, microsecond=0)
         seed = now - timedelta(minutes=now.minute % 2 + 6)
         seeded = worker_connection.execute(
             "SELECT workhorse.fire_schedule_v1(%s, %s, %s, %s)",

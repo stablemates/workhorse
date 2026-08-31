@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from threading import Event, Thread
 from time import sleep
 
@@ -197,7 +197,7 @@ def test_signal_wait_uses_the_shorter_caller_timeout(database_url: str) -> None:
 
 
 def test_signal_wait_uses_an_earlier_job_deadline(database_url: str) -> None:
-    deadline = datetime.now(timezone.utc) + timedelta(seconds=1)
+    deadline = datetime.now(UTC) + timedelta(seconds=1)
 
     with (
         psycopg.connect(database_url) as enqueue_connection,

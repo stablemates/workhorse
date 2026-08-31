@@ -4,17 +4,15 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Literal, TypeAlias, TypedDict
-
-from typing_extensions import NotRequired, Required
+from typing import Literal, NotRequired, Required, TypedDict
 
 # fmt: off
 # Generated declarations stay byte-for-byte stable across formatter versions.
 
-CancelStatus: TypeAlias = Literal["already_terminal", "cancel_requested", "canceled", "not_found"]
+type CancelStatus = Literal["already_terminal", "cancel_requested", "canceled", "not_found"]
 
 
-CompleteHumanWaitStatus: TypeAlias = Literal["already_completed", "completed", "duplicate", "not_found", "not_waiting", "stale"]
+type CompleteHumanWaitStatus = Literal["already_completed", "completed", "duplicate", "not_found", "not_waiting", "stale"]
 
 
 class DashboardActivityBucket(TypedDict, total=False):
@@ -22,7 +20,7 @@ class DashboardActivityBucket(TypedDict, total=False):
     counts: Required[dict[str, float]]
 
 
-DashboardActivityGroupBy: TypeAlias = Literal["queue", "status", "task", "worker"]
+type DashboardActivityGroupBy = Literal["queue", "status", "task", "worker"]
 
 
 class DashboardActivityPage(TypedDict, total=False):
@@ -35,7 +33,7 @@ class DashboardActivityPage(TypedDict, total=False):
     buckets: Required[list[DashboardActivityBucket]]
 
 
-DashboardActivityPeriod: TypeAlias = Literal["15m", "1h", "24h", "6h", "7d"]
+type DashboardActivityPeriod = Literal["15m", "1h", "24h", "6h", "7d"]
 
 
 class DashboardCancelTaskResult(TypedDict, total=False):
@@ -147,7 +145,7 @@ class DashboardEventDetail(TypedDict, total=False):
     errorMessage: Required[str | None]
 
 
-DashboardEventKind: TypeAlias = Literal["attempt", "event"]
+type DashboardEventKind = Literal["attempt", "event"]
 
 
 class DashboardEventRow(TypedDict, total=False):
@@ -183,7 +181,7 @@ class DashboardEventsPage(TypedDict, total=False):
     retention: Required[DashboardEventsPageRetention]
 
 
-DashboardEventsWindow: TypeAlias = Literal["15m", "1h", "24h", "6h"]
+type DashboardEventsWindow = Literal["15m", "1h", "24h", "6h"]
 
 
 class DashboardHumanWaitPageDiagnostics(TypedDict, total=False):
@@ -593,7 +591,7 @@ class DashboardRateLimitPolicySummary(TypedDict, total=False):
     nextEligibleAt: Required[str | None]
 
 
-DashboardRetentionCategory: TypeAlias = Literal["attemptHistory", "jobEvents", "jobIdentity", "scheduleOccurrences", "statistics", "terminalOutcome"]
+type DashboardRetentionCategory = Literal["attemptHistory", "jobEvents", "jobIdentity", "scheduleOccurrences", "statistics", "terminalOutcome"]
 
 
 class DashboardRetentionCategoryRow(TypedDict, total=False):
@@ -696,7 +694,7 @@ class DashboardRunNowResult(TypedDict, total=False):
     runAt: Required[str | None]
 
 
-DashboardRunNowStatus: TypeAlias = Literal["already_ready", "not_found", "not_scheduled", "released", "waiting"]
+type DashboardRunNowStatus = Literal["already_ready", "not_found", "not_scheduled", "released", "waiting"]
 
 
 class DashboardScheduleRowIdentity(TypedDict, total=False):
@@ -1031,7 +1029,7 @@ class DashboardSystemStorage(TypedDict, total=False):
     totalBytes: Required[float]
 
 
-DashboardSystemWindow: TypeAlias = Literal["15m", "1h", "24h"]
+type DashboardSystemWindow = Literal["15m", "1h", "24h"]
 
 
 class DashboardTaskCounts(TypedDict, total=False):
@@ -1097,7 +1095,7 @@ class DashboardWorkersPage(TypedDict, total=False):
     workers: Required[list[DashboardWorkerRow]]
 
 
-JSON: TypeAlias = str | int | float | bool | list["JSON"] | dict[str, "JSON"] | None
+type JSON = str | int | float | bool | list[JSON] | dict[str, JSON] | None
 
 
 class MaintenanceLoopCadences(TypedDict, total=False):
@@ -1113,7 +1111,7 @@ class QueueHealthReason(TypedDict, total=False):
     category: NotRequired[Literal["attemptHistory", "jobEvents", "jobIdentity", "scheduleOccurrences", "statistics", "terminalOutcome"]]
 
 
-QueueHealthReasonCode: TypeAlias = Literal["concurrency-blocked", "default-history-rows", "eligible-history-partitions", "expired-leases", "missing-history-partitions", "overdue-deadlines", "overdue-execution-timeouts", "overdue-external-waits", "rate-limit-throttled", "retention-lag", "rollup-stalled", "stalled-promotion"]
+type QueueHealthReasonCode = Literal["concurrency-blocked", "default-history-rows", "eligible-history-partitions", "expired-leases", "missing-history-partitions", "overdue-deadlines", "overdue-execution-timeouts", "overdue-external-waits", "rate-limit-throttled", "retention-lag", "rollup-stalled", "stalled-promotion"]
 
 
 class RetentionPolicyImpactEligible(TypedDict, total=False):
@@ -1137,7 +1135,7 @@ class RetentionPolicyImpact(TypedDict, total=False):
     capped: Required[RetentionPolicyImpactCapped]
 
 
-SendSignalStatus: TypeAlias = Literal["already_delivered", "delivered", "duplicate", "not_found", "not_waiting", "stale"]
+type SendSignalStatus = Literal["already_delivered", "delivered", "duplicate", "not_found", "not_waiting", "stale"]
 
 
 class DashboardRuntimeConfigAuthentication(TypedDict, total=False):
@@ -1162,17 +1160,17 @@ class DashboardRuntimeConfig(TypedDict, total=False):
     workspace: Required[str | None]
 
 
-MetaInput: TypeAlias = None
+type MetaInput = None
 
 
 class MetaOutput(TypedDict, total=False):
     environment: Required[str]
 
 
-TaskCountsInput: TypeAlias = None
+type TaskCountsInput = None
 
 
-TaskCountsOutput: TypeAlias = DashboardTaskCounts
+type TaskCountsOutput = DashboardTaskCounts
 
 
 class TasksInput(TypedDict, total=False):
@@ -1188,13 +1186,13 @@ class TasksInput(TypedDict, total=False):
     pageSize: NotRequired[Literal[25] | Literal[50] | Literal[100]]
 
 
-TasksOutput: TypeAlias = DashboardTasksPage
+type TasksOutput = DashboardTasksPage
 
 
-TaskFacetsInput: TypeAlias = None
+type TaskFacetsInput = None
 
 
-TaskFacetsOutput: TypeAlias = DashboardTaskFacets
+type TaskFacetsOutput = DashboardTaskFacets
 
 
 class ActivityInput(TypedDict, total=False):
@@ -1206,7 +1204,7 @@ class ActivityInput(TypedDict, total=False):
     worker: NotRequired[str | None]
 
 
-ActivityOutput: TypeAlias = DashboardActivityPage
+type ActivityOutput = DashboardActivityPage
 
 
 class EventsInput(TypedDict, total=False):
@@ -1220,45 +1218,45 @@ class EventsInput(TypedDict, total=False):
     jobId: NotRequired[str | None]
 
 
-EventsOutput: TypeAlias = DashboardEventsPage
+type EventsOutput = DashboardEventsPage
 
 
 class EventDetailInput(TypedDict, total=False):
     id: Required[str]
 
 
-EventDetailOutput: TypeAlias = DashboardEventDetail
+type EventDetailOutput = DashboardEventDetail
 
 
-CronInput: TypeAlias = None
+type CronInput = None
 
 
-CronOutput: TypeAlias = DashboardCronPage
+type CronOutput = DashboardCronPage
 
 
-QueuesInput: TypeAlias = None
+type QueuesInput = None
 
 
-QueuesOutput: TypeAlias = DashboardQueuesPage
+type QueuesOutput = DashboardQueuesPage
 
 
 class SystemInput(TypedDict, total=False):
     window: NotRequired[Literal["15m", "1h", "24h"]]
 
 
-SystemOutput: TypeAlias = DashboardSystemPage
+type SystemOutput = DashboardSystemPage
 
 
-WorkersInput: TypeAlias = None
+type WorkersInput = None
 
 
-WorkersOutput: TypeAlias = DashboardWorkersPage
+type WorkersOutput = DashboardWorkersPage
 
 
-SettingsInput: TypeAlias = None
+type SettingsInput = None
 
 
-SettingsOutput: TypeAlias = DashboardSettingsPage
+type SettingsOutput = DashboardSettingsPage
 
 
 class PreviewRetentionPolicyInputDefinition(TypedDict, total=False):
@@ -1279,20 +1277,20 @@ class PreviewRetentionPolicyInput(TypedDict, total=False):
     definition: Required[PreviewRetentionPolicyInputDefinition]
 
 
-PreviewRetentionPolicyOutput: TypeAlias = RetentionPolicyImpact
+type PreviewRetentionPolicyOutput = RetentionPolicyImpact
 
 
 class JobDetailInput(TypedDict, total=False):
     id: Required[str]
 
 
-JobDetailOutput: TypeAlias = DashboardJobDetail
+type JobDetailOutput = DashboardJobDetail
 
 
-HumanWaitsInput: TypeAlias = None
+type HumanWaitsInput = None
 
 
-HumanWaitsOutput: TypeAlias = DashboardHumanWaitPage
+type HumanWaitsOutput = DashboardHumanWaitPage
 
 
 class EnqueueTestInputAudit(TypedDict, total=False):
@@ -1399,7 +1397,7 @@ class OverrideMaintenancePolicyInput(TypedDict, total=False):
     audit: Required[OverrideMaintenancePolicyInputAudit]
 
 
-OverrideMaintenancePolicyOutput: TypeAlias = None
+type OverrideMaintenancePolicyOutput = None
 
 
 class RevertMaintenancePolicyInputAudit(TypedDict, total=False):
@@ -1413,7 +1411,7 @@ class RevertMaintenancePolicyInput(TypedDict, total=False):
     audit: Required[RevertMaintenancePolicyInputAudit]
 
 
-RevertMaintenancePolicyOutput: TypeAlias = None
+type RevertMaintenancePolicyOutput = None
 
 
 class OverrideRetentionPolicyInputDefinition(TypedDict, total=False):
@@ -1441,7 +1439,7 @@ class OverrideRetentionPolicyInput(TypedDict, total=False):
     audit: Required[OverrideRetentionPolicyInputAudit]
 
 
-OverrideRetentionPolicyOutput: TypeAlias = None
+type OverrideRetentionPolicyOutput = None
 
 
 class RevertRetentionPolicyInputAudit(TypedDict, total=False):
@@ -1455,7 +1453,7 @@ class RevertRetentionPolicyInput(TypedDict, total=False):
     audit: Required[RevertRetentionPolicyInputAudit]
 
 
-RevertRetentionPolicyOutput: TypeAlias = None
+type RevertRetentionPolicyOutput = None
 
 
 class RunTaskNowInputAudit(TypedDict, total=False):
@@ -1469,7 +1467,7 @@ class RunTaskNowInput(TypedDict, total=False):
     audit: Required[RunTaskNowInputAudit]
 
 
-RunTaskNowOutput: TypeAlias = DashboardRunNowResult
+type RunTaskNowOutput = DashboardRunNowResult
 
 
 class CancelTaskInputAudit(TypedDict, total=False):
@@ -1483,7 +1481,7 @@ class CancelTaskInput(TypedDict, total=False):
     audit: Required[CancelTaskInputAudit]
 
 
-CancelTaskOutput: TypeAlias = DashboardCancelTaskResult
+type CancelTaskOutput = DashboardCancelTaskResult
 
 
 class SignalTaskInputAudit(TypedDict, total=False):
@@ -1500,7 +1498,7 @@ class SignalTaskInput(TypedDict, total=False):
     audit: Required[SignalTaskInputAudit]
 
 
-SignalTaskOutput: TypeAlias = DashboardSignalTaskResult
+type SignalTaskOutput = DashboardSignalTaskResult
 
 
 class CompleteHumanWaitInputAudit(TypedDict, total=False):
@@ -1517,7 +1515,7 @@ class CompleteHumanWaitInput(TypedDict, total=False):
     audit: Required[CompleteHumanWaitInputAudit]
 
 
-CompleteHumanWaitOutput: TypeAlias = DashboardCompleteHumanWaitResult
+type CompleteHumanWaitOutput = DashboardCompleteHumanWaitResult
 
 
 _INPUT_SCHEMAS: dict[str, object] = json.loads("{\"meta\":null,\"taskCounts\":null,\"tasks\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"filter\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"blocked\",\"waiting\",\"scheduled\",\"retried\",\"queued\",\"running\",\"completed\",\"discarded\",\"canceled\"]},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"page\":{\"default\":1,\"type\":\"integer\",\"minimum\":1,\"maximum\":100},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"jobType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"priority\":{\"default\":null,\"anyOf\":[{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},{\"type\":\"null\"}]},\"sort\":{\"default\":\"updated\",\"type\":\"string\",\"enum\":[\"updated\",\"priority\"]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"search\":{\"type\":\"string\",\"maxLength\":200},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]}}},\"taskFacets\":null,\"activity\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"filter\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"blocked\",\"waiting\",\"scheduled\",\"retried\",\"queued\",\"running\",\"completed\",\"discarded\",\"canceled\"]},\"period\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"6h\",\"24h\",\"7d\"]},\"groupBy\":{\"default\":\"task\",\"type\":\"string\",\"enum\":[\"queue\",\"worker\",\"task\",\"status\"]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]}}},\"events\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"window\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"6h\",\"24h\"]},\"page\":{\"default\":1,\"type\":\"integer\",\"minimum\":1,\"maximum\":100},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]},\"kind\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"event\",\"attempt\"]},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"jobType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"types\":{\"default\":[],\"maxItems\":42,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"enqueued\",\"debounced\",\"debounce_rejected\",\"throttled\",\"claimed\",\"batch_dispatched\",\"batch_failed\",\"succeeded\",\"failed\",\"retry_scheduled\",\"canceled\",\"cancel_requested\",\"promoted\",\"lease_expired\",\"deadline_exceeded\",\"execution_timed_out\",\"redriven\",\"redrive_created\",\"checkpoint_saved\",\"progress_updated\",\"wait_scheduled\",\"wait_elapsed\",\"wait_replayed\",\"signal_waiting\",\"signal_received\",\"signal_replayed\",\"signal_rejected\",\"dependency_blocked\",\"dependency_released\",\"dependency_failed\",\"dependency_canceled\",\"child_created\",\"child_joined\",\"children_created\",\"children_joined\",\"parent_linked\",\"human_wait_created\",\"human_wait_completed\",\"human_wait_replayed\",\"human_wait_rejected\",\"retry\",\"timeout\"]}},\"jobId\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},{\"type\":\"null\"}]}}},\"eventDetail\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"pattern\":\"^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$\"}},\"required\":[\"id\"]},\"cron\":null,\"queues\":null,\"system\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"window\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"24h\"]}}},\"workers\":null,\"settings\":null,\"previewRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"jobIdentityRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalOutcomeRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"jobEventRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"attemptHistoryRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"scheduleOccurrenceRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"statisticsRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalJobPruneLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100000},\"historyPartitionsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":52},\"defaultPartitionRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"occurrenceRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"statisticsRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000}}}},\"required\":[\"definition\"]},\"jobDetail\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"}},\"required\":[\"id\"]},\"humanWaits\":null,\"enqueueTest\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"success\",\"retry\",\"durable\",\"timer\",\"failure\",\"idempotent\",\"long-running\",\"redrive\",\"feature\"]},\"scenario\":{\"type\":\"string\",\"enum\":[\"order-fulfillment\",\"customer-onboarding\",\"report-publication\"]},\"feature\":{\"type\":\"string\",\"enum\":[\"ingress-routing\",\"retry-policies\",\"durable-checkpoints\",\"durable-waits\",\"progress\",\"timing-controls\",\"cancellation\",\"dead-letters-redrive\",\"job-dependencies\",\"child-workflows\",\"signals\",\"human-decisions\",\"keyed-debounce\",\"keyed-throttle\",\"priority-lanes\",\"batch-handlers\",\"payload-contracts\"]},\"priority\":{\"default\":0,\"type\":\"integer\",\"minimum\":0,\"maximum\":100},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"kind\",\"audit\"]},\"setScheduleEnabled\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"user\"},\"namespace\":{\"type\":\"string\",\"minLength\":1},\"name\":{\"type\":\"string\",\"minLength\":1},\"enabled\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"kind\",\"namespace\",\"name\",\"enabled\",\"audit\"]},\"setQueuePaused\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"queue\":{\"type\":\"string\",\"minLength\":1},\"paused\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"queue\",\"paused\",\"audit\"]},\"purgeQueue\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"queue\":{\"type\":\"string\",\"minLength\":1},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"queue\",\"audit\"]},\"setWorkerPaused\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"workerId\":{\"type\":\"string\",\"minLength\":1},\"paused\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"workerId\",\"paused\",\"audit\"]},\"overrideMaintenancePolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"timezone\":{\"type\":\"string\",\"minLength\":1},\"partitionPreparationIntervalMs\":{\"type\":\"integer\",\"minimum\":60000,\"maximum\":604800000},\"terminalCleanupIntervalMs\":{\"type\":\"integer\",\"minimum\":1000,\"maximum\":86400000},\"historyRetentionLocalTime\":{\"type\":\"string\",\"pattern\":\"^(?:[01]\\\\d|2[0-3]):[0-5]\\\\d$\"},\"statisticsRollupIntervalMs\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":86400000},\"statisticsGroupLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":10000},\"statisticsRecomputeBuckets\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":1440}}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"definition\",\"audit\"]},\"revertMaintenancePolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"settings\":{\"minItems\":1,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"timezone\",\"partitionPreparationIntervalMs\",\"terminalCleanupIntervalMs\",\"historyRetentionLocalTime\",\"statisticsRollupIntervalMs\",\"statisticsGroupLimit\",\"statisticsRecomputeBuckets\"]}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"settings\",\"audit\"]},\"overrideRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"jobIdentityRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalOutcomeRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"jobEventRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"attemptHistoryRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"scheduleOccurrenceRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"statisticsRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalJobPruneLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100000},\"historyPartitionsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":52},\"defaultPartitionRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"occurrenceRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"statisticsRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000}}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"definition\",\"audit\"]},\"revertRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"settings\":{\"minItems\":1,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"jobIdentityRetentionDays\",\"terminalOutcomeRetentionDays\",\"jobEventRetentionDays\",\"attemptHistoryRetentionDays\",\"scheduleOccurrenceRetentionDays\",\"statisticsRetentionDays\",\"terminalJobPruneLimit\",\"historyPartitionsPerPass\",\"defaultPartitionRowsPerPass\",\"occurrenceRowsPerPass\",\"statisticsRowsPerPass\"]}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"settings\",\"audit\"]},\"runTaskNow\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]},\"cancelTask\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"anyOf\":[{\"type\":\"string\",\"maxLength\":2000},{\"type\":\"null\"}]},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]},\"signalTask\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},\"payload\":{\"$ref\":\"#/$defs/__schema0\"},\"idempotencyKey\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":512},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"name\",\"payload\",\"idempotencyKey\",\"audit\"],\"$defs\":{\"__schema0\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\"},{\"type\":\"boolean\"},{\"type\":\"null\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/__schema0\"}},{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\"},\"additionalProperties\":{\"$ref\":\"#/$defs/__schema0\"}}]}}},\"completeHumanWait\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},\"result\":{\"$ref\":\"#/$defs/__schema0\"},\"idempotencyKey\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":512},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"name\",\"result\",\"idempotencyKey\",\"audit\"],\"$defs\":{\"__schema0\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\"},{\"type\":\"boolean\"},{\"type\":\"null\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/__schema0\"}},{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\"},\"additionalProperties\":{\"$ref\":\"#/$defs/__schema0\"}}]}}}}")

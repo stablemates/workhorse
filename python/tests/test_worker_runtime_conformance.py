@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event, Lock, Thread
 from time import monotonic, sleep
@@ -264,7 +264,7 @@ def execute_expiration_fixture(
     connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
 ) -> None:
     queue_name = runtime_queue(fixture)
-    expiration = datetime.now(timezone.utc) + timedelta(milliseconds=fixture["durationMs"])
+    expiration = datetime.now(UTC) + timedelta(milliseconds=fixture["durationMs"])
     options = (
         EnqueueOptions(
             queue=queue_name,
@@ -349,7 +349,7 @@ def execute_lease_loss_fixture(
             ("sleep", lambda: context.sleep("too-late", 1)),
             (
                 "sleepUntil",
-                lambda: context.sleep_until("too-late-until", datetime.now(timezone.utc)),
+                lambda: context.sleep_until("too-late-until", datetime.now(UTC)),
             ),
             ("waitForSignal", lambda: context.wait_for_signal("too-late")),
             ("waitForHuman", lambda: context.wait_for_human("too-late", {"late": True})),

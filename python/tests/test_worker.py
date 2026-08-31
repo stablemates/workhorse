@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import suppress
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from threading import Event, Thread
 from time import monotonic, sleep
 from typing import Any
@@ -9,6 +9,7 @@ from typing import Any
 import psycopg
 import pytest
 
+import workhorse.worker as worker_module
 from workhorse import (
     CancellationRequestedError,
     CheckpointConflictError,
@@ -157,12 +158,10 @@ def test_durable_sleeps_release_ownership_and_survive_a_swallowed_sentinel(
                 context.sleep("relative", 30_000)
             if handler_calls >= 2:
                 try:
-                    context.sleep_until(
-                        "relative", datetime.now(timezone.utc) - timedelta(seconds=1)
-                    )
+                    context.sleep_until("relative", datetime.now(UTC) - timedelta(seconds=1))
                 except WaitConflictError as error:
                     conflicts.append(error)
-                context.sleep_until("absolute", datetime.now(timezone.utc) - timedelta(seconds=1))
+                context.sleep_until("absolute", datetime.now(UTC) - timedelta(seconds=1))
             return {"handlerCalls": handler_calls}
 
         worker = Worker(worker_connection, worker_id="python-wait-worker").handle(
@@ -1310,21 +1309,38 @@ def test_worker_delivers_and_acknowledges_cancellation(database_url: str) -> Non
         assert attempt_count == (1,)
 
 
-def test_worker_classifies_an_absolute_deadline(database_url: str) -> None:
+def test_worker_classifies_an_absolute_deadline(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     observed_reason: list[BaseException] = []
+    expiration_due = Event()
+
+    def release_expiration(_expiration_at: datetime | None, _retry_at: float | None) -> float:
+        assert expiration_due.wait(timeout=5)
+        return 0
+
+    monkeypatch.setattr(worker_module, "_expiration_delay", release_expiration)
 
     with (
         psycopg.connect(database_url) as enqueue_connection,
         psycopg.connect(database_url, autocommit=True) as worker_connection,
+        psycopg.connect(database_url, autocommit=True) as deadline_connection,
     ):
         job_id = Queue(enqueue_connection).enqueue(
             "deadline.active",
             {},
-            EnqueueOptions(deadline=datetime.now(timezone.utc) + timedelta(milliseconds=180)),
+            EnqueueOptions(deadline=datetime.now(UTC) + timedelta(seconds=30)),
         )
         enqueue_connection.commit()
 
         def wait_for_deadline(_payload: object, context: HandlerContext) -> None:
+            deadline_connection.execute(
+                "UPDATE workhorse.job_runtime "
+                "SET deadline_at = clock_timestamp() - interval '1 millisecond' "
+                "WHERE job_id = %s",
+                (job_id,),
+            )
+            expiration_due.set()
             assert context.cancellation.wait(timeout=5)
             observed_reason.append(context.cancellation.reason)
             context.cancellation.raise_if_cancelled()
@@ -1336,9 +1352,7 @@ def test_worker_classifies_an_absolute_deadline(database_url: str) -> None:
             heartbeat_ms=400,
         ).handle("deadline.active", wait_for_deadline)
 
-        started_at = monotonic()
         assert worker.run_once() is True
-        assert monotonic() - started_at < 0.32
         assert len(observed_reason) == 1
         assert isinstance(observed_reason[0], DeadlineExceededError)
         outcome = worker_connection.execute(
