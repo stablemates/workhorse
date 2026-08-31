@@ -158,10 +158,10 @@ describe("retention maintenance", () => {
     expect(
       (
         await pool.query(
-          "SELECT last_completed_local_date FROM workhorse.maintenance_state WHERE task_name = 'history_retention'",
+          "SELECT last_completed_local_date::text AS last_completed_local_date FROM workhorse.maintenance_state WHERE task_name = 'history_retention'",
         )
       ).rows,
-    ).toEqual([{ last_completed_local_date: new Date("2026-03-08T05:00:00.000Z") }]);
+    ).toEqual([{ last_completed_local_date: "2026-03-08" }]);
   });
 
   it("continues bounded occurrence retention on the same local date until the backlog clears", async () => {

@@ -1,5 +1,6 @@
 docs/research
 node_modules/
+.pnpm-home/
 dist/
 __pycache__/
 .mypy_cache/

@@ -265,11 +265,20 @@ def _is_uuid(value: str) -> bool:
     return True
 
 
+def test_timestamp_matcher_accepts_postgresql_fractional_precision() -> None:
+    assert _is_timestamp("2026-08-31T02:57:30.93513+00:00")
+
+
 def _is_timestamp(value: str) -> bool:
     if TIMESTAMP_VALUE.fullmatch(value) is None:
         return False
+    normalized = value.replace("Z", "+00:00")
+    fraction = re.search(r"\.(\d+)(?=[+-]\d{2}:\d{2}$)", normalized)
+    if fraction is not None:
+        digits = fraction.group(1)[:6].ljust(6, "0")
+        normalized = normalized[: fraction.start(1)] + digits + normalized[fraction.end(1) :]
     try:
-        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        datetime.fromisoformat(normalized)
     except ValueError:
         return False
     return True

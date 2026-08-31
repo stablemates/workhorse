@@ -57,7 +57,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go/go.mod
-      - uses: astral-sh/setup-uv@v9
+      - uses: astral-sh/setup-uv@v9.0.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:runtime:dev
       - run: pnpm sql-catalogues:check
@@ -84,7 +84,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go/go.mod
-      - uses: astral-sh/setup-uv@v9
+      - uses: astral-sh/setup-uv@v9.0.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:runtime:dev
       - run: pnpm test:unit
@@ -112,7 +112,7 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     env:
-      WORKHORSE_TEST_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_test
+      DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -120,6 +120,16 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go/go.mod
+      - name: Install matching PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install --yes postgresql-client-${{ matrix.postgres }}
+          echo "/usr/lib/postgresql/${{ matrix.postgres }}/bin" >> "$GITHUB_PATH"
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:runtime:dev
       - run: pnpm db:reset:test
@@ -148,7 +158,7 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     env:
-      WORKHORSE_TEST_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_test
+      DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test
       UV_PYTHON: ${{ matrix.python }}
     steps:
       - uses: actions/checkout@v4
@@ -160,7 +170,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
-      - uses: astral-sh/setup-uv@v9
+      - uses: astral-sh/setup-uv@v9.0.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:runtime:dev
       - run: pnpm db:reset:test
@@ -189,7 +199,7 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     env:
-      WORKHORSE_TEST_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_test
+      DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -229,7 +239,7 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     env:
-      WORKHORSE_TEST_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_test
+      DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -271,7 +281,7 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     env:
-      WORKHORSE_TEST_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_test
+      DATABASE_URL_TEST_PACKED: postgres://workhorse:workhorse@localhost:5432/workhorse_test_packed
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -279,9 +289,9 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
-      - uses: astral-sh/setup-uv@v9
+      - uses: astral-sh/setup-uv@v9.0.0
       - run: pnpm install --frozen-lockfile
-      - run: pnpm db:reset:test
+      - run: pnpm db:reset:test-packed
       - run: pnpm test:packed
 
   demo:
@@ -294,7 +304,7 @@ jobs:
         env:
           POSTGRES_USER: workhorse
           POSTGRES_PASSWORD: workhorse
-          POSTGRES_DB: workhorse_dev
+          POSTGRES_DB: workhorse_dev_primary
         ports:
           - 5432:5432
         options: >-
@@ -303,7 +313,7 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     env:
-      WORKHORSE_DEMO_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_demo
+      DATABASE_URL_PRIMARY: postgres://workhorse:workhorse@localhost:5432/workhorse_dev_primary
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -311,8 +321,12 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: astral-sh/setup-uv@v9
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go/go.mod
+      - uses: astral-sh/setup-uv@v9.0.0
       - run: pnpm install --frozen-lockfile
+      - run: pnpm db:reset:dev-primary
       - run: pnpm build
       - run: pnpm test:demo-smoke
       - run: pnpm test:site-smoke
