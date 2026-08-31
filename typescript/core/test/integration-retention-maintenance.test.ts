@@ -158,10 +158,10 @@ describe("retention maintenance", () => {
     expect(
       (
         await pool.query(
-          "SELECT last_completed_local_date FROM workhorse.maintenance_state WHERE task_name = 'history_retention'",
+          "SELECT last_completed_local_date::text FROM workhorse.maintenance_state WHERE task_name = 'history_retention'",
         )
       ).rows,
-    ).toEqual([{ last_completed_local_date: new Date("2026-03-08T05:00:00.000Z") }]);
+    ).toEqual([{ last_completed_local_date: "2026-03-08" }]);
   });
 
   it("continues bounded occurrence retention on the same local date until the backlog clears", async () => {
@@ -1203,13 +1203,14 @@ describe("retention maintenance", () => {
         ),
       ).resolves.toMatchObject({ rows: [{ pruned: 1 }] });
 
-      const insert = inserting.query(
-        `INSERT INTO workhorse.job_event(job_id, event_type) VALUES ($1, 'concurrent')`,
-        [id],
-      );
+      const insert = inserting
+        .query(`INSERT INTO workhorse.job_event(job_id, event_type) VALUES ($1, 'concurrent')`, [
+          id,
+        ])
+        .catch((error: unknown) => error);
       await sleep(25);
       await deleting.query("COMMIT");
-      await expect(insert).rejects.toMatchObject({ code: "23503" });
+      await expect(insert).resolves.toMatchObject({ code: "23503" });
     } finally {
       await deleting.query("ROLLBACK").catch(() => undefined);
       deleting.release();

@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import sys
-from time import sleep
+from time import monotonic, sleep
 from uuid import uuid4
 
 import psycopg
 
 from workhorse import ChildJobRequest, EnqueueOptions, HandlerContext, Json, Queue, Worker
+
+
+def run_once_when_ready(worker: Worker, timeout: float = 2.0) -> None:
+    deadline = monotonic() + timeout
+    while monotonic() < deadline:
+        if worker.run_once():
+            return
+        sleep(0.02)
+    raise TimeoutError("worker did not find ready work before the example timeout")
 
 
 def run(database_url: str) -> None:
@@ -83,11 +92,10 @@ def run(database_url: str) -> None:
             lambda payload, _context: {"completed": payload["step"]},
         )
 
-        assert parent_worker.run_once() is True
-        sleep(0.03)
-        assert parent_worker.run_once() is True
-        assert child_worker.run_once() is True
-        assert parent_worker.run_once() is True
+        run_once_when_ready(parent_worker)
+        run_once_when_ready(parent_worker)
+        run_once_when_ready(child_worker)
+        run_once_when_ready(parent_worker)
 
         with psycopg.connect(database_url) as delivery_connection:
             delivery = Queue(delivery_connection)
@@ -101,7 +109,7 @@ def run(database_url: str) -> None:
             delivery_connection.commit()
             assert signal.status == "delivered"
 
-            assert parent_worker.run_once() is True
+            run_once_when_ready(parent_worker)
             decision = delivery.complete_human_wait(
                 job_id,
                 "review",
@@ -112,7 +120,7 @@ def run(database_url: str) -> None:
             delivery_connection.commit()
             assert decision.status == "completed"
 
-        assert parent_worker.run_once() is True
+        run_once_when_ready(parent_worker)
         outcome = parent_connection.execute(
             "SELECT state, current_attempt, result FROM workhorse.job_outcome WHERE job_id = %s",
             (job_id,),

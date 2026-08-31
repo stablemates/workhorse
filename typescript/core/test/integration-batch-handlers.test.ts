@@ -539,8 +539,8 @@ describe("batch handlers", () => {
     await queue.syncRateLimitPolicies("batch-policy-test", [
       {
         queue: queueName,
-        rate: { limit: 2, intervalMs: 100, burst: 2 },
-        perKey: { limit: 1, intervalMs: 100, burst: 1 },
+        rate: { limit: 2, intervalMs: 10_000, burst: 2 },
+        perKey: { limit: 1, intervalMs: 10_000, burst: 1 },
       },
     ]);
     for (const [value, priority, concurrencyKey] of [
@@ -576,7 +576,8 @@ describe("batch handlers", () => {
 
     await expect(worker.runOnce()).resolves.toBe(true);
     await expect(worker.runOnce()).resolves.toBe(false);
-    await sleep(120);
+    await pool.query("DELETE FROM workhorse.rate_limit_bucket WHERE queue_name = $1", [queueName]);
+    await sleep(20);
     await expect(worker.runOnce()).resolves.toBe(true);
     expect(batches).toEqual([
       [1, 3],

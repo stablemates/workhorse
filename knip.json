@@ -14,7 +14,7 @@
       }
     },
     "typescript/core": {
-      "entry": ["src/cli/reset-db.ts", "src/cli/workhorse.ts"],
+      "entry": ["src/cli/benchmark.ts", "src/cli/reset-db.ts", "src/cli/workhorse.ts"],
       "ignoreDependencies": ["@stablemates/workhorse-dashboard"]
     },
     "typescript/dashboard": {

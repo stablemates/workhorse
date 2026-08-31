@@ -552,14 +552,19 @@ describe("job dependencies", () => {
       await insertDependency(first, firstId, secondId);
 
       await second.query("BEGIN");
-      const oppositeInsert = insertDependency(second, secondId, firstId).finally(() => {
-        secondSettled = true;
-      });
+      const oppositeInsert = insertDependency(second, secondId, firstId)
+        .then(
+          (result) => ({ result }),
+          (error: unknown) => ({ error }),
+        )
+        .finally(() => {
+          secondSettled = true;
+        });
       await sleep(50);
       expect(secondSettled).toBe(false);
 
       await first.query("COMMIT");
-      await expect(oppositeInsert).rejects.toMatchObject({ code: "P1003" });
+      await expect(oppositeInsert).resolves.toMatchObject({ error: { code: "P1003" } });
     } finally {
       await Promise.allSettled([first.query("ROLLBACK"), second.query("ROLLBACK")]);
       first.release();

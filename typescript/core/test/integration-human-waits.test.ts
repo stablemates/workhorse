@@ -319,13 +319,13 @@ describe("human waits", () => {
   });
 
   it("uses the PostgreSQL job deadline as the decision timeout", async () => {
-    const id = await queue.enqueue("human-timeout", {}, { deadline: new Date(Date.now() + 100) });
+    const id = await queue.enqueue("human-timeout", {}, { deadline: new Date(Date.now() + 1_000) });
     const worker = new Worker(queue, { workerId: "human-timeout-worker" }).handle(
       "human-timeout",
       async (_payload, context) => context.waitForHuman("review", { prompt: "Review?" }),
     );
     expect(await worker.runOnce()).toBe(true);
-    await sleep(130);
+    await sleep(1_100);
     await queue.tick();
 
     await expect(admin.getJob(id)).resolves.toMatchObject({

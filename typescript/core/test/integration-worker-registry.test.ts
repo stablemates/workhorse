@@ -140,6 +140,11 @@ describe("worker registry", () => {
     const closeFailure = new Error("notification close failed");
     const registrationFailure = new Error("draining registration failed");
     let failRegistration = false;
+    const subscribe = vi.fn<Queue["subscribeToJobNotifications"]>(async () => ({
+      close: async () => {
+        throw closeFailure;
+      },
+    }));
     const rejectingQueue = new Proxy(queue, {
       get(target, property, receiver) {
         if (property === "registerWorker") {
@@ -149,11 +154,7 @@ describe("worker registry", () => {
           };
         }
         if (property === "subscribeToJobNotifications") {
-          return async () => ({
-            close: async () => {
-              throw closeFailure;
-            },
-          });
+          return subscribe;
         }
         return Reflect.get(target, property, receiver);
       },
@@ -173,6 +174,7 @@ describe("worker registry", () => {
 
     const running = worker.run();
     await vi.waitFor(async () => expect(await registration()).toBeDefined());
+    await vi.waitFor(() => expect(subscribe).toHaveBeenCalledOnce());
     failRegistration = true;
     worker.stop();
 

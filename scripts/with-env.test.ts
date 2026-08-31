@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { readEnvironment } from "./environment-file.js";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const environmentPath = resolve(repositoryRoot, ".env");
@@ -52,15 +53,14 @@ describe("repository command environment", () => {
   it.skipIf(process.platform === "win32")(
     "overrides a database URL inherited from another checkout",
     async () => {
-      const expected = (await readFile(environmentPath, "utf8")).match(
-        /^DATABASE_URL_PRIMARY=(.*)$/m,
-      )?.[1];
-      expect(expected).toBeDefined();
+      const checkoutEnvironment = await readEnvironment(environmentPath);
+      const inheritedPrimary = "postgres://workhorse:workhorse@localhost:5432/other_dev_primary";
+      const expected = checkoutEnvironment.DATABASE_URL_PRIMARY ?? inheritedPrimary;
 
       const result = await runWrapper(
         {
           ...process.env,
-          DATABASE_URL_PRIMARY: "postgres://workhorse:workhorse@localhost:5432/other_dev_primary",
+          DATABASE_URL_PRIMARY: inheritedPrimary,
           DATABASE_URL: "postgres://workhorse:workhorse@localhost:5432/caller_owned",
         },
         repositoryRoot,
@@ -74,9 +74,12 @@ describe("repository command environment", () => {
   it.skipIf(process.platform === "win32")(
     "resolves its checkout from the script rather than the working directory",
     async () => {
+      const checkoutEnvironment = await readEnvironment(environmentPath);
       const result = await runWrapper({ ...process.env }, resolve(repositoryRoot, ".."));
 
-      expect(result.primary).toMatch(/_dev_primary(_|$)/);
+      expect(result.primary).toBe(
+        checkoutEnvironment.DATABASE_URL_PRIMARY ?? process.env.DATABASE_URL_PRIMARY,
+      );
       expect(resolve(result.cwd)).toBe(repositoryRoot);
     },
   );

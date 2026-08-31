@@ -157,14 +157,17 @@ async function rpc(
 function firstLine(process: ChildProcessWithoutNullStreams): Promise<string> {
   return new Promise((resolve, reject) => {
     let output = "";
+    let errors = "";
     process.stdout.on("data", (chunk: Buffer) => {
       output += chunk.toString();
       const newline = output.indexOf("\n");
       if (newline >= 0) resolve(output.slice(0, newline).trim());
     });
-    process.once("exit", (code) => reject(new Error(`Go dashboard server exited with ${code}`)));
+    process.once("exit", (code) =>
+      reject(new Error(`Go dashboard server exited with ${code}: ${errors.trim()}`)),
+    );
     process.stderr.on("data", (chunk: Buffer) => {
-      output += chunk.toString();
+      errors += chunk.toString();
     });
   });
 }
