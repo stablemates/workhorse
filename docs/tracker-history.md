@@ -1,8 +1,10 @@
 # Tracker history
 
-Workhorse used Plane before production Ontrack became its authoritative task system. The commit
-that first adds this file is the public repository's tracker boundary; its commit timestamp is the
-cutover timestamp. Find it with `git log --diff-filter=A --format='%H %cI' -- docs/tracker-history.md`.
+Workhorse used Plane before production Ontrack became its authoritative task system. Plane Project
+`workhorse` was frozen at `2026-08-31T12:16:00.914028Z`; Ontrack became authoritative only after
+the WH-12 reconciliation and both repository switches reached `main`. The commit that first adds
+this file is the public repository's tracker boundary. Find it with
+`git log --diff-filter=A --format='%H %cI' -- docs/tracker-history.md`.
 
 A `WH-*` identifier in a commit subject before that boundary names a Plane work item. The same form
 after the boundary names a native Issue in the Ontrack `Workhorse` Project. Git history remains
