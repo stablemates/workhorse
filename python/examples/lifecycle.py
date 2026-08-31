@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from time import monotonic, sleep
 from uuid import uuid4
 
@@ -9,13 +10,15 @@ import psycopg
 from workhorse import ChildJobRequest, EnqueueOptions, HandlerContext, Json, Queue, Worker
 
 
-def run_once_when_ready(worker: Worker, timeout: float = 2.0) -> None:
+def run_until(condition: Callable[[], bool], *workers: Worker, timeout: float = 2.0) -> None:
     deadline = monotonic() + timeout
     while monotonic() < deadline:
-        if worker.run_once():
+        if condition():
             return
-        sleep(0.02)
-    raise TimeoutError("worker did not find ready work before the example timeout")
+        if not any(worker.run_once() for worker in workers):
+            sleep(0.02)
+    if not condition():
+        raise TimeoutError("workers did not reach the expected durable state before the timeout")
 
 
 def run(database_url: str) -> None:
@@ -92,10 +95,17 @@ def run(database_url: str) -> None:
             lambda payload, _context: {"completed": payload["step"]},
         )
 
-        run_once_when_ready(parent_worker)
-        run_once_when_ready(parent_worker)
-        run_once_when_ready(child_worker)
-        run_once_when_ready(parent_worker)
+        def signal_waiting() -> bool:
+            return (
+                parent_connection.execute(
+                    "SELECT 1 FROM workhorse.job_signal_wait "
+                    "WHERE job_id = %s AND signal_name = 'approval' AND payload IS NULL",
+                    (job_id,),
+                ).fetchone()
+                is not None
+            )
+
+        run_until(signal_waiting, parent_worker, child_worker)
 
         with psycopg.connect(database_url) as delivery_connection:
             delivery = Queue(delivery_connection)
@@ -109,7 +119,17 @@ def run(database_url: str) -> None:
             delivery_connection.commit()
             assert signal.status == "delivered"
 
-            run_once_when_ready(parent_worker)
+            def human_waiting() -> bool:
+                return (
+                    parent_connection.execute(
+                        "SELECT 1 FROM workhorse.job_human_wait "
+                        "WHERE job_id = %s AND token_name = 'review' AND completed_at IS NULL",
+                        (job_id,),
+                    ).fetchone()
+                    is not None
+                )
+
+            run_until(human_waiting, parent_worker)
             decision = delivery.complete_human_wait(
                 job_id,
                 "review",
@@ -120,7 +140,15 @@ def run(database_url: str) -> None:
             delivery_connection.commit()
             assert decision.status == "completed"
 
-        run_once_when_ready(parent_worker)
+        run_until(
+            lambda: (
+                parent_connection.execute(
+                    "SELECT 1 FROM workhorse.job_outcome WHERE job_id = %s", (job_id,)
+                ).fetchone()
+                is not None
+            ),
+            parent_worker,
+        )
         outcome = parent_connection.execute(
             "SELECT state, current_attempt, result FROM workhorse.job_outcome WHERE job_id = %s",
             (job_id,),
