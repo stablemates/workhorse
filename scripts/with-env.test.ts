@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { localDatabaseUrl } from "../typescript/core/src/local-database.js";
+import { readEnvironment } from "./environment-file.js";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const environmentPath = resolve(repositoryRoot, ".env");
@@ -17,6 +19,7 @@ const probeSource = `require("node:fs").writeFileSync(
     primary: process.env.DATABASE_URL_PRIMARY,
     generic: process.env.DATABASE_URL,
     port: process.env.WORKHORSE_API_PORT,
+    ontrack: process.env.ONTRACK_AGENT_DSN,
     cwd: process.cwd(),
   }),
 );
@@ -44,6 +47,7 @@ async function runWrapper(environment: NodeJS.ProcessEnv, cwd: string) {
     primary?: string;
     generic?: string;
     port?: string;
+    ontrack?: string;
     cwd: string;
   };
 }
@@ -52,21 +56,23 @@ describe("repository command environment", () => {
   it.skipIf(process.platform === "win32")(
     "overrides a database URL inherited from another checkout",
     async () => {
-      const expected = (await readFile(environmentPath, "utf8")).match(
-        /^DATABASE_URL_PRIMARY=(.*)$/m,
-      )?.[1];
-      expect(expected).toBeDefined();
+      const checkoutEnvironment = await readEnvironment(environmentPath);
+      const expected = localDatabaseUrl("dev_primary", checkoutEnvironment);
+      const expectedOntrack = checkoutEnvironment.ONTRACK_AGENT_DSN;
 
       const result = await runWrapper(
         {
           ...process.env,
           DATABASE_URL_PRIMARY: "postgres://workhorse:workhorse@localhost:5432/other_dev_primary",
           DATABASE_URL: "postgres://workhorse:workhorse@localhost:5432/caller_owned",
+          ONTRACK_AGENT_DSN:
+            "postgres://other-checkout@pg.ontrack.sh:35500/postgres?sslmode=require",
         },
         repositoryRoot,
       );
 
       expect(result.primary).toBe(expected);
+      expect(result.ontrack).toBe(expectedOntrack);
       expect(result.generic).toContain("caller_owned");
     },
   );
