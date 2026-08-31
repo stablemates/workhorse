@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from time import monotonic, sleep
+from time import sleep
 from uuid import uuid4
 
 import psycopg
@@ -9,9 +9,8 @@ import psycopg
 from workhorse import ChildJobRequest, EnqueueOptions, HandlerContext, Json, Queue, Worker
 
 
-def run_once_when_ready(worker: Worker, timeout: float = 2.0) -> None:
-    deadline = monotonic() + timeout
-    while monotonic() < deadline:
+def run_once_when_ready(worker: Worker, attempts: int = 100) -> None:
+    for _attempt in range(attempts):
         if worker.run_once():
             return
         sleep(0.02)

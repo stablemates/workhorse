@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -23,6 +24,21 @@ def _repository_json(*parts: str) -> dict[str, Any]:
 
 def _repository_toml(*parts: str) -> dict[str, Any]:
     return tomli.loads(_repository_file(*parts))
+
+
+def test_lifecycle_ready_polling_is_bounded_by_attempts() -> None:
+    class ReadyOnSecondPoll:
+        calls = 0
+
+        def run_once(self) -> bool:
+            self.calls += 1
+            return self.calls == 2
+
+    worker = ReadyOnSecondPoll()
+    lifecycle = runpy.run_path(str(Path(__file__).parents[1] / "examples" / "lifecycle.py"))
+    run_once_when_ready = lifecycle["run_once_when_ready"]
+    run_once_when_ready(worker, attempts=2)
+    assert worker.calls == 2
 
 
 def test_readme_example_matches_release_tested_example() -> None:

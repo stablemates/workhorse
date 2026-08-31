@@ -9,6 +9,7 @@ from typing import Any
 import psycopg
 import pytest
 
+import workhorse.worker as worker_module
 from workhorse import (
     CancellationRequestedError,
     CheckpointConflictError,
@@ -1310,21 +1311,40 @@ def test_worker_delivers_and_acknowledges_cancellation(database_url: str) -> Non
         assert attempt_count == (1,)
 
 
-def test_worker_classifies_an_absolute_deadline(database_url: str) -> None:
+def test_worker_classifies_an_absolute_deadline(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     observed_reason: list[BaseException] = []
+    deadline_advanced = Event()
+
+    def expiration_after_handler_starts(
+        _expiration_at: datetime | None, _retry_at: float | None
+    ) -> float:
+        assert deadline_advanced.wait(timeout=5)
+        return 0.0
+
+    monkeypatch.setattr(worker_module, "_expiration_delay", expiration_after_handler_starts)
 
     with (
         psycopg.connect(database_url) as enqueue_connection,
         psycopg.connect(database_url, autocommit=True) as worker_connection,
+        psycopg.connect(database_url, autocommit=True) as deadline_connection,
     ):
         job_id = Queue(enqueue_connection).enqueue(
             "deadline.active",
             {},
-            EnqueueOptions(deadline=datetime.now(timezone.utc) + timedelta(milliseconds=180)),
+            EnqueueOptions(deadline=datetime.now(timezone.utc) + timedelta(hours=1)),
         )
         enqueue_connection.commit()
 
         def wait_for_deadline(_payload: object, context: HandlerContext) -> None:
+            deadline_connection.execute(
+                "UPDATE workhorse.job_runtime "
+                "SET deadline_at = clock_timestamp() - interval '1 millisecond' "
+                "WHERE job_id = %s",
+                (job_id,),
+            )
+            deadline_advanced.set()
             assert context.cancellation.wait(timeout=5)
             observed_reason.append(context.cancellation.reason)
             context.cancellation.raise_if_cancelled()
@@ -1336,9 +1356,7 @@ def test_worker_classifies_an_absolute_deadline(database_url: str) -> None:
             heartbeat_ms=400,
         ).handle("deadline.active", wait_for_deadline)
 
-        started_at = monotonic()
         assert worker.run_once() is True
-        assert monotonic() - started_at < 0.32
         assert len(observed_reason) == 1
         assert isinstance(observed_reason[0], DeadlineExceededError)
         outcome = worker_connection.execute(
