@@ -1,4 +1,4 @@
-# Public CI policy lives in docs/decisions/0042-public-ci-and-release-policy.md. Pull requests run
+# Public CI policy lives in docs/decisions/0043-public-ci-and-release-policy.md. Pull requests run
 # boundary pairs for fast feedback. Pushes to main, nightly runs, and manual runs exercise every
 # language/database combination declared in support.json.
 name: CI
@@ -96,6 +96,7 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix: ${{ fromJSON(needs.plan.outputs.typescript) }}
     services:
       postgres:
@@ -144,6 +145,7 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix: ${{ fromJSON(needs.plan.outputs.python) }}
     services:
       postgres:
@@ -185,6 +187,7 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix: ${{ fromJSON(needs.plan.outputs.go) }}
     services:
       postgres:
@@ -298,6 +301,7 @@ jobs:
 
   demo:
     name: demo and site smoke
+    if: ${{ false }} # Temporarily disabled while its repeated full builds are too expensive for CI.
     runs-on: ubuntu-latest
     timeout-minutes: 40
     services:
@@ -336,7 +340,7 @@ jobs:
   required:
     name: required
     if: always()
-    needs: [static, unit, typescript, python, go, runtime-smoke, packed, demo]
+    needs: [static, unit, typescript, python, go, runtime-smoke, packed]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:

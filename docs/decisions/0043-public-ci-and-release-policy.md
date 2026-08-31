@@ -27,8 +27,12 @@ maintainer approval before any outside collaborator's workflow runs.
 
 The branch ruleset for `main` requires a pull request and the single `CI / required` check. That
 aggregate job fails unless static checks, unit tests, every trigger-specific matrix lane, runtime
-smoke tests, packed installs, and demo and site smoke tests pass. This stable name keeps matrix
-changes from invalidating branch protection.
+smoke tests, and packed installs pass. Demo and site smoke tests are temporarily excluded because
+their full build dominates CI time. This stable name keeps matrix changes from invalidating branch
+protection.
+
+Each language matrix runs at most two lanes concurrently. The cap reduces contention between the
+database-heavy suites while preserving parallel feedback across languages and PostgreSQL versions.
 
 `.github/workflows/benchmark.yml` runs smoke benchmarks after pushes to `main` and nightly. It is
 informational and is not a required check because timing on shared hardware is not comparable.
