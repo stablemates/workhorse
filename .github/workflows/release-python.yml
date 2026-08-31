@@ -39,6 +39,7 @@ jobs:
     env:
       WORKHORSE_TEST_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_test
       WORKHORSE_DEMO_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_demo
+      DATABASE_URL_TEST_PACKED: postgres://workhorse:workhorse@localhost:5432/workhorse_test_packed
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
