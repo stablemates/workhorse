@@ -39,10 +39,13 @@ informational and is not a required check because timing on shared hardware is n
 benchmark selects workspace source exports so the adapter and core share one telemetry provider.
 
 npm and Python publication run only from matching version tags. Separate `npm` and `pypi`
-environments require a reviewer other than the person who pushed the tag, disallow self-review and
-administrator bypass, and accept only their release tag patterns. Manual dispatches build and
-validate artifacts but never publish them. Maintainers create release tags; repository rules must
-prevent other actors from creating or updating them.
+environments require an explicit review, disallow administrator bypass, and accept only their
+release tag patterns. When two eligible maintainers exist, the reviewer must differ from the person
+who pushed the tag and the environment must disallow self-review. While only one eligible maintainer
+exists, the environment may allow that maintainer to approve their own deployment so the review
+gate remains usable. Manual dispatches build and validate artifacts but never publish them.
+Maintainers create release tags; repository rules must prevent other actors from creating or
+updating them.
 
 Go stays local through `scripts/release-go.sh`. A Go module becomes public when its tag is pushed,
 so a workflow triggered by that tag cannot gate publication. The script runs the full release gate
