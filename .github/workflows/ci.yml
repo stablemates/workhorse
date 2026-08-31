@@ -134,6 +134,8 @@ jobs:
       - run: pnpm build:runtime:dev
       - run: pnpm db:reset:test
       - run: pnpm test:database:typescript
+        env:
+          WORKHORSE_TEST_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
 
   python:
     name: Python ${{ matrix.python }} (postgres ${{ matrix.postgres }})

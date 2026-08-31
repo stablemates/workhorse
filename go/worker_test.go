@@ -489,6 +489,75 @@ func TestHandlerContextCoalescesWaitsAndCancelsOnSuspension(t *testing.T) {
 
 type heartbeatQueryContextKey struct{}
 
+type heartbeatGateTracer struct {
+	release <-chan struct{}
+}
+
+func (tracer heartbeatGateTracer) TraceQueryStart(
+	ctx context.Context,
+	_ *pgx.Conn,
+	data pgx.TraceQueryStartData,
+) context.Context {
+	if strings.Contains(data.SQL, "heartbeat_many_v1") {
+		<-tracer.release
+	}
+	return ctx
+}
+
+func (heartbeatGateTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+type notificationReconnectGateTracer struct {
+	mu               sync.Mutex
+	listenCalls      int
+	reconnectStarted chan struct{}
+	release          <-chan struct{}
+}
+
+func newNotificationReconnectGateTracer(release <-chan struct{}) *notificationReconnectGateTracer {
+	return &notificationReconnectGateTracer{
+		reconnectStarted: make(chan struct{}, 1),
+		release:          release,
+	}
+}
+
+func (tracer *notificationReconnectGateTracer) TraceQueryStart(
+	ctx context.Context,
+	_ *pgx.Conn,
+	data pgx.TraceQueryStartData,
+) context.Context {
+	if strings.TrimSpace(data.SQL) != "LISTEN workhorse_jobs" {
+		return ctx
+	}
+	tracer.mu.Lock()
+	tracer.listenCalls++
+	isReconnect := tracer.listenCalls > 1
+	tracer.mu.Unlock()
+	if isReconnect {
+		select {
+		case tracer.reconnectStarted <- struct{}{}:
+		default:
+		}
+		<-tracer.release
+	}
+	return ctx
+}
+
+func (*notificationReconnectGateTracer) TraceQueryEnd(
+	context.Context,
+	*pgx.Conn,
+	pgx.TraceQueryEndData,
+) {
+}
+
+func (tracer *notificationReconnectGateTracer) waitForReconnect(t *testing.T) {
+	t.Helper()
+	select {
+	case <-tracer.reconnectStarted:
+	case <-time.After(time.Second):
+		t.Fatal("notification listener did not enter reconnect backoff")
+	}
+}
+
 type lockedBuffer struct {
 	mu     sync.Mutex
 	buffer bytes.Buffer
@@ -1360,7 +1429,16 @@ func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) 
 func executeWorkerLeaseLossFixture(t *testing.T, fixture workerRuntimeFixture) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-lease-loss")
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, databaseURL)
+	heartbeatRelease := make(chan struct{})
+	var heartbeatReleaseOnce sync.Once
+	releaseHeartbeat := func() { heartbeatReleaseOnce.Do(func() { close(heartbeatRelease) }) }
+	defer releaseHeartbeat()
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ConnConfig.Tracer = heartbeatGateTracer{release: heartbeatRelease}
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1462,6 +1540,7 @@ func executeWorkerLeaseLossFixture(t *testing.T, fixture workerRuntimeFixture) {
 	); err != nil {
 		t.Fatal(err)
 	}
+	releaseHeartbeat()
 
 	err = <-workerResult
 	if !errors.Is(err, workhorse.ErrStaleLease) {
@@ -1887,8 +1966,8 @@ func TestWorkerOwnershipLifecycleSupportsASingleConnectionPool(t *testing.T) {
 	workerResult := make(chan error, 1)
 	go func() { workerResult <- worker.Run(runContext) }()
 
-	deadline := time.NewTimer(time.Second)
-	ticker := time.NewTicker(5 * time.Millisecond)
+	deadline := time.NewTimer(5 * time.Second)
+	ticker := time.NewTicker(20 * time.Millisecond)
 	settled := false
 	for !settled {
 		select {
@@ -2045,7 +2124,13 @@ func TestWorkerPollingContinuesDuringNotificationReconnectBackoff(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	config.MaxConns = 2
+	config.MaxConns = 3
+	reconnectRelease := make(chan struct{})
+	var reconnectReleaseOnce sync.Once
+	releaseReconnect := func() { reconnectReleaseOnce.Do(func() { close(reconnectRelease) }) }
+	defer releaseReconnect()
+	reconnectGate := newNotificationReconnectGateTracer(reconnectRelease)
+	config.ConnConfig.Tracer = reconnectGate
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		t.Fatal(err)
@@ -2080,11 +2165,12 @@ func TestWorkerPollingContinuesDuringNotificationReconnectBackoff(t *testing.T) 
 		t.Fatal(err)
 	}
 	waitForWorkerLog(t, &logs, "notification listener unavailable")
+	reconnectGate.waitForReconnect(t)
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
 	if _, err := queue.Enqueue(ctx, "polled-during-backoff", map[string]any{"value": "backoff"}); err != nil {
 		t.Fatal(err)
 	}
-	assertHandledWithin(t, handled, "backoff", 75*time.Millisecond)
+	assertHandledWithin(t, handled, "backoff", time.Second)
 	var replacementListeners int
 	if err := pool.QueryRow(
 		ctx,
@@ -2100,6 +2186,7 @@ func TestWorkerPollingContinuesDuringNotificationReconnectBackoff(t *testing.T) 
 	if replacementListeners != 0 {
 		t.Fatal("listener reconnected before polling covered the notification gap")
 	}
+	releaseReconnect()
 	waitForNotificationListener(t, ctx, pool, listenerPID)
 	stop()
 	if err := <-workerResult; err != nil {

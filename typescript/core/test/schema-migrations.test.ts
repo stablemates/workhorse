@@ -30,21 +30,23 @@ const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".
 const executeFile = promisify(execFile);
 
 async function dumpNormalizedSchema(databaseUrl: string): Promise<string> {
-  const { stdout } = await executeFile(
-    "pg_dump",
-    [
-      "--schema-only",
-      "--schema=workhorse",
-      "--no-owner",
-      "--no-privileges",
-      "--no-comments",
-      "--no-security-labels",
-      "--no-publications",
-      "--no-subscriptions",
-      databaseUrl,
-    ],
-    { maxBuffer: 10 * 1024 * 1024 },
-  );
+  const dumpArguments = [
+    "--schema-only",
+    "--schema=workhorse",
+    "--no-owner",
+    "--no-privileges",
+    "--no-comments",
+    "--no-security-labels",
+    "--no-publications",
+    "--no-subscriptions",
+    databaseUrl,
+  ];
+  const postgresContainer = process.env.WORKHORSE_TEST_POSTGRES_CONTAINER;
+  const { stdout } = postgresContainer
+    ? await executeFile("docker", ["exec", postgresContainer, "pg_dump", ...dumpArguments], {
+        maxBuffer: 10 * 1024 * 1024,
+      })
+    : await executeFile("pg_dump", dumpArguments, { maxBuffer: 10 * 1024 * 1024 });
 
   return stdout
     .split("\n")

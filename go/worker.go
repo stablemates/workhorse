@@ -522,7 +522,9 @@ func (worker *Worker) Run(ctx context.Context) error {
 			stopping = true
 		case err := <-maintenanceErrors:
 			if err != nil {
-				firstError = err
+				if ctx.Err() == nil {
+					firstError = err
+				}
 				stopping = true
 			} else {
 				maintenanceErrors = nil

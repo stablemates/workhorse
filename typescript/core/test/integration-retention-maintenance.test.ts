@@ -1203,13 +1203,14 @@ describe("retention maintenance", () => {
         ),
       ).resolves.toMatchObject({ rows: [{ pruned: 1 }] });
 
-      const insert = inserting.query(
-        `INSERT INTO workhorse.job_event(job_id, event_type) VALUES ($1, 'concurrent')`,
-        [id],
-      );
+      const insert = inserting
+        .query(`INSERT INTO workhorse.job_event(job_id, event_type) VALUES ($1, 'concurrent')`, [
+          id,
+        ])
+        .catch((error: unknown) => error);
       await sleep(25);
       await deleting.query("COMMIT");
-      await expect(insert).rejects.toMatchObject({ code: "23503" });
+      await expect(insert).resolves.toMatchObject({ code: "23503" });
     } finally {
       await deleting.query("ROLLBACK").catch(() => undefined);
       deleting.release();

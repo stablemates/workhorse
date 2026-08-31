@@ -28,6 +28,8 @@ const typescriptExamples = Object.entries(exampleCoverage.scenarios)
   .toSorted((left, right) => left.scenario.localeCompare(right.scenario));
 const scratchRoot = process.env.JCODE_SCRATCH_DIR ?? tmpdir();
 const scratch = await mkdtemp(path.join(scratchRoot, "workhorse-packed-"));
+const packedDatabaseUrl = process.env.DATABASE_URL_TEST_PACKED;
+if (!packedDatabaseUrl) throw new Error("DATABASE_URL_TEST_PACKED is required");
 
 async function run(
   command: string,
@@ -683,18 +685,27 @@ try {
     ["node_modules/@stablemates/workhorse/dist/src/cli/workhorse.js", "--help"],
     consumer,
   );
-  if (!cliHelp.includes("worker") || !cliHelp.includes("health") || !cliHelp.includes("bench")) {
-    throw new Error("The packed Workhorse CLI did not expose all commands");
+  const expectedCliCommands = ["init", "schema", "worker", "dashboard", "admin", "tui", "health"];
+  const missingCliCommands = expectedCliCommands.filter(
+    (command) => !new RegExp(`^  ${command}\\s`, "m").test(cliHelp),
+  );
+  if (missingCliCommands.length > 0) {
+    throw new Error(`The packed Workhorse CLI omitted commands: ${missingCliCommands.join(", ")}`);
   }
-  await run("node", ["integration.mjs"], consumer);
+  await run("node", ["integration.mjs"], consumer, {
+    DATABASE_URL_TEST: packedDatabaseUrl,
+  });
   await run("node", ["otel-smoke.mjs"], consumer);
   await run("node", ["dashboard-development.mjs"], consumer);
   for (const example of typescriptExamples) {
+    // Examples are independent published-consumer entry points. Reset between them so a ready job
+    // left by one example cannot be claimed by the next example's default-queue worker.
+    await run("pnpm", ["db:reset:test-packed"]);
     const verify = ["dedicated-worker", "demo-worker"].includes(example.scenario)
       ? ["--verify"]
       : [];
     const output = await run("node", [path.basename(example.file), ...verify], consumer, {
-      DATABASE_URL: process.env.DATABASE_URL_TEST_PACKED,
+      DATABASE_URL: packedDatabaseUrl,
     });
     if (example.scenario === "agentic-flow") {
       const agenticFlow = JSON.parse(output) as {

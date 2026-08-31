@@ -22,7 +22,8 @@ REPOSITORY = Path(__file__).parents[2]
 PARAMETER = re.compile(r"\$(\d+)")
 UUID_VALUE = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$", re.IGNORECASE)
 TIMESTAMP_VALUE = re.compile(
-    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$"
+    r"^(?P<date>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})"
+    r"(?:\.(?P<fraction>\d{1,9}))?(?P<offset>Z|[+-]\d{2}:\d{2})$"
 )
 pytestmark = pytest.mark.integration
 
@@ -270,18 +271,28 @@ def test_timestamp_matcher_accepts_postgresql_fractional_precision() -> None:
 
 
 def _is_timestamp(value: str) -> bool:
-    if TIMESTAMP_VALUE.fullmatch(value) is None:
+    match = TIMESTAMP_VALUE.fullmatch(value)
+    if match is None:
         return False
-    normalized = value.replace("Z", "+00:00")
-    fraction = re.search(r"\.(\d+)(?=[+-]\d{2}:\d{2}$)", normalized)
+    fraction = match.group("fraction")
+    normalized = match.group("date")
     if fraction is not None:
-        digits = fraction.group(1)[:6].ljust(6, "0")
-        normalized = normalized[: fraction.start(1)] + digits + normalized[fraction.end(1) :]
+        normalized += f".{fraction[:6].ljust(6, '0')}"
+    offset = match.group("offset")
+    normalized += "+00:00" if offset == "Z" else offset
     try:
         datetime.fromisoformat(normalized)
     except ValueError:
         return False
     return True
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["2026-08-31T03:19:19.56288+00:00", "2026-08-31T03:19:19.123456789Z"],
+)
+def test_timestamp_matcher_accepts_contract_fractional_precision(value: str) -> None:
+    assert _is_timestamp(value)
 
 
 def materialize_interpreter_value(value: Any) -> Any:

@@ -388,14 +388,17 @@ describe("batch handlers", () => {
       workerId,
       queue: queueName,
       concurrency: 2,
-      leaseMs: 100,
-      heartbeatMs: 20,
+      leaseMs: 5_000,
+      heartbeatMs: 50,
     }).handleBatch<{ outcome: string }, { source: string }>(
       "batch-isolation",
       { maxSize: 2, lingerMs: 100 },
       async (items) => {
         const stale = items.find(({ payload }) => payload.outcome === "stale")!;
-        await sleep(140);
+        await pool.query(
+          "UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE job_id = $1",
+          [staleId],
+        );
         await expect(queue.recoverExpired(100, 0)).resolves.toBe(1);
         const reclaimed = await queue.claim("batch-isolation-reclaimer", {
           queue: queueName,
@@ -539,8 +542,8 @@ describe("batch handlers", () => {
     await queue.syncRateLimitPolicies("batch-policy-test", [
       {
         queue: queueName,
-        rate: { limit: 2, intervalMs: 100, burst: 2 },
-        perKey: { limit: 1, intervalMs: 100, burst: 1 },
+        rate: { limit: 2, intervalMs: 10_000, burst: 2 },
+        perKey: { limit: 1, intervalMs: 10_000, burst: 1 },
       },
     ]);
     for (const [value, priority, concurrencyKey] of [
@@ -576,7 +579,8 @@ describe("batch handlers", () => {
 
     await expect(worker.runOnce()).resolves.toBe(true);
     await expect(worker.runOnce()).resolves.toBe(false);
-    await sleep(120);
+    await pool.query("DELETE FROM workhorse.rate_limit_bucket WHERE queue_name = $1", [queueName]);
+    await sleep(20);
     await expect(worker.runOnce()).resolves.toBe(true);
     expect(batches).toEqual([
       [1, 3],

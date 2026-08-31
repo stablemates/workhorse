@@ -11505,16 +11505,65 @@ AS $$
            COALESCE(NULLIF(p_input->>'sort', ''), 'updated') AS sort,
            COALESCE((p_input->>'canCompleteHumanWait')::boolean, false)
              AS can_complete_human_wait
-  ), tasks AS (
+  ), task_rows AS (
     SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.priority,
            COALESCE(r.state, o.state) AS state,
-           EXISTS (
-             SELECT 1 FROM workhorse.dashboard_signal_wait_v1 signal_wait
-              WHERE signal_wait.job_id = j.id
-             UNION ALL
-             SELECT 1 FROM workhorse.dashboard_human_wait_v1 human_wait
-              WHERE human_wait.job_id = j.id
-           ) AS external_wait,
+           COALESCE(r.current_attempt, o.current_attempt) AS attempt,
+           j.tags, r.worker_id AS current_worker_id, r.wait_name,
+           COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at
+      FROM workhorse.dashboard_job_v1 j
+      LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
+      LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
+  ), filtered AS MATERIALIZED (
+    SELECT task_rows.* FROM task_rows CROSS JOIN parameters
+     WHERE CASE parameters.filter
+       WHEN 'blocked' THEN task_rows.state = 'blocked'
+       WHEN 'waiting' THEN EXISTS (
+         SELECT 1 FROM workhorse.dashboard_signal_wait_v1 signal_wait
+          WHERE signal_wait.job_id = task_rows.id
+         UNION ALL
+         SELECT 1 FROM workhorse.dashboard_human_wait_v1 human_wait
+          WHERE human_wait.job_id = task_rows.id
+       )
+       WHEN 'scheduled' THEN task_rows.state = 'scheduled'
+       WHEN 'retried' THEN task_rows.attempt > 1
+       WHEN 'queued' THEN task_rows.state = 'ready'
+       WHEN 'running' THEN task_rows.state = 'active'
+       WHEN 'completed' THEN task_rows.state = 'succeeded'
+       WHEN 'discarded' THEN task_rows.state = 'failed'
+       WHEN 'canceled' THEN task_rows.state = 'canceled'
+       ELSE true
+     END
+       AND (parameters.queue_filter IS NULL OR task_rows.queue = parameters.queue_filter)
+       AND (parameters.worker_filter IS NULL OR COALESCE(
+         task_rows.current_worker_id,
+         (
+           SELECT wait.worker_id FROM workhorse.dashboard_job_wait_v1 wait
+            WHERE wait.job_id = task_rows.id AND wait.wait_name = task_rows.wait_name
+         ),
+         (
+           SELECT history.worker_id FROM workhorse.dashboard_attempt_history_v1 history
+            WHERE history.job_id = task_rows.id
+            ORDER BY history.attempt DESC LIMIT 1
+         )
+       ) = parameters.worker_filter)
+       AND (parameters.type_filter IS NULL OR task_rows.type = parameters.type_filter)
+       AND (parameters.priority_filter IS NULL OR task_rows.priority = parameters.priority_filter)
+       AND (cardinality(parameters.tag_filter) = 0 OR task_rows.tags && parameters.tag_filter)
+       AND (parameters.search_filter IS NULL
+            OR task_rows.type ILIKE parameters.search_filter ESCAPE '!'
+            OR task_rows.queue ILIKE parameters.search_filter ESCAPE '!'
+            OR task_rows.id::text ILIKE parameters.search_filter ESCAPE '!')
+  ), page_ids AS (
+    SELECT filtered.id, filtered.priority, filtered.updated_at, parameters.worker_filter
+      FROM filtered CROSS JOIN parameters
+     ORDER BY CASE WHEN parameters.sort = 'priority' THEN priority END DESC,
+              updated_at DESC, id DESC
+     LIMIT (SELECT page_size FROM parameters)
+     OFFSET (SELECT (page - 1) * page_size FROM parameters)
+  ), page AS (
+    SELECT j.id, j.queue_name AS queue, j.job_type AS type, page_ids.priority,
+           COALESCE(r.state, o.state) AS state,
            CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
            COALESCE((
              SELECT jsonb_agg(dependency.prerequisite_job_id::text
@@ -11528,7 +11577,7 @@ AS $$
            r.worker_id AS current_worker_id,
            COALESCE(r.worker_id, durable_wait.worker_id, attempt_worker.worker_id) AS worker_id,
            o.finished_at, COALESCE(o.error, r.error) AS error, j.created_at,
-           COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at,
+           page_ids.updated_at,
            r.wait_name, r.cancel_requested_at, r.cancel_requested_by, r.cancel_reason,
            durable_wait.wake_at, durable_wait.mode AS wait_mode,
            signal_wait.deadline_at AS signal_wait_deadline_at,
@@ -11536,8 +11585,8 @@ AS $$
            human_wait.context AS human_wait_context,
            human_wait.deadline_at AS human_wait_deadline_at,
            enqueued_event.details AS enqueued_details
-      FROM workhorse.dashboard_job_v1 j
-      CROSS JOIN parameters
+      FROM page_ids
+      JOIN workhorse.dashboard_job_v1 j ON j.id = page_ids.id
       LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
       LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
       LEFT JOIN workhorse.dashboard_job_wait_v1 durable_wait
@@ -11554,36 +11603,7 @@ AS $$
       LEFT JOIN LATERAL (
         SELECT history.worker_id FROM workhorse.dashboard_attempt_history_v1 history
          WHERE history.job_id = j.id ORDER BY history.attempt DESC LIMIT 1
-      ) attempt_worker ON parameters.worker_filter IS NOT NULL
-  ), filtered AS (
-    SELECT tasks.* FROM tasks CROSS JOIN parameters
-     WHERE CASE parameters.filter
-       WHEN 'blocked' THEN state = 'blocked'
-       WHEN 'waiting' THEN external_wait
-       WHEN 'scheduled' THEN state = 'scheduled'
-       WHEN 'retried' THEN attempt > 1
-       WHEN 'queued' THEN state = 'ready'
-       WHEN 'running' THEN state = 'active'
-       WHEN 'completed' THEN state = 'succeeded'
-       WHEN 'discarded' THEN state = 'failed'
-       WHEN 'canceled' THEN state = 'canceled'
-       ELSE true
-     END
-       AND (parameters.queue_filter IS NULL OR queue = parameters.queue_filter)
-       AND (parameters.worker_filter IS NULL OR worker_id = parameters.worker_filter)
-       AND (parameters.type_filter IS NULL OR type = parameters.type_filter)
-       AND (parameters.priority_filter IS NULL OR priority = parameters.priority_filter)
-       AND (cardinality(parameters.tag_filter) = 0 OR tags && parameters.tag_filter)
-       AND (parameters.search_filter IS NULL
-            OR type ILIKE parameters.search_filter ESCAPE '!'
-            OR queue ILIKE parameters.search_filter ESCAPE '!'
-            OR id::text ILIKE parameters.search_filter ESCAPE '!')
-  ), page AS (
-    SELECT filtered.* FROM filtered CROSS JOIN parameters
-     ORDER BY CASE WHEN parameters.sort = 'priority' THEN priority END DESC,
-              updated_at DESC, id DESC
-     LIMIT (SELECT page_size FROM parameters)
-    OFFSET (SELECT (page - 1) * page_size FROM parameters)
+      ) attempt_worker ON page_ids.worker_filter IS NOT NULL
   )
   SELECT jsonb_build_object(
     'capturedAt', workhorse.dashboard_iso_v1(clock_timestamp()),
@@ -11638,6 +11658,7 @@ $$;
 CREATE OR REPLACE FUNCTION workhorse.dashboard_activity_v1(p_input jsonb)
 RETURNS jsonb
 LANGUAGE sql
+SET jit = off
 AS $$
   WITH parameters AS (
     SELECT clock_timestamp() AS captured_at,
@@ -11671,25 +11692,19 @@ AS $$
     SELECT outcome.job_id FROM workhorse.dashboard_job_outcome_v1 outcome CROSS JOIN windowed
      WHERE outcome.updated_at >= windowed.captured_at
                                  - make_interval(secs => windowed.window_seconds)
-  ), tasks AS (
-    SELECT CASE windowed.group_by
-             WHEN 'queue' THEN job.queue_name
-             WHEN 'task' THEN job.job_type
-             WHEN 'status' THEN COALESCE(runtime.state, outcome.state)
-             WHEN 'worker' THEN COALESCE(runtime.worker_id, attempt_worker.worker_id, 'unassigned')
-           END AS group_key,
+  ), task_inputs AS MATERIALIZED (
+    SELECT candidate.job_id, windowed.group_by, job.queue_name, job.job_type,
            COALESCE(runtime.state, outcome.state) AS state,
-           EXISTS (
-             SELECT 1 FROM workhorse.dashboard_signal_wait_v1 signal_wait
-              WHERE signal_wait.job_id = candidate.job_id
-             UNION ALL
-             SELECT 1 FROM workhorse.dashboard_human_wait_v1 human_wait
-              WHERE human_wait.job_id = candidate.job_id
-           ) AS external_wait,
            COALESCE(runtime.current_attempt, outcome.current_attempt) AS attempt,
            COALESCE(runtime.updated_at, outcome.updated_at) AS updated_at,
-           job.tags, job.queue_name AS queue,
-           COALESCE(runtime.worker_id, attempt_worker.worker_id, 'unassigned') AS worker_id
+           job.tags,
+           CASE WHEN windowed.group_by = 'worker' OR windowed.worker_filter IS NOT NULL
+             THEN COALESCE(runtime.worker_id, (
+               SELECT history.worker_id FROM workhorse.dashboard_attempt_history_v1 history
+                WHERE history.job_id = candidate.job_id
+                ORDER BY history.attempt DESC LIMIT 1
+             ), 'unassigned')
+           END AS worker_id
       FROM candidate
       CROSS JOIN windowed
       JOIN workhorse.dashboard_job_v1 job ON job.id = candidate.job_id
@@ -11697,11 +11712,25 @@ AS $$
         ON runtime.job_id = candidate.job_id
       LEFT JOIN workhorse.dashboard_job_outcome_v1 outcome
         ON outcome.job_id = candidate.job_id
-      LEFT JOIN LATERAL (
-        SELECT history.worker_id FROM workhorse.dashboard_attempt_history_v1 history
-         WHERE history.job_id = candidate.job_id
-         ORDER BY history.attempt DESC LIMIT 1
-      ) attempt_worker ON windowed.group_by = 'worker' OR windowed.worker_filter IS NOT NULL
+  ), tasks AS (
+    SELECT CASE windowed.group_by
+             WHEN 'queue' THEN task_inputs.queue_name
+             WHEN 'task' THEN task_inputs.job_type
+             WHEN 'status' THEN task_inputs.state
+             WHEN 'worker' THEN task_inputs.worker_id
+           END AS group_key,
+           task_inputs.state,
+           EXISTS (
+             SELECT 1 FROM workhorse.dashboard_signal_wait_v1 signal_wait
+              WHERE signal_wait.job_id = task_inputs.job_id
+             UNION ALL
+             SELECT 1 FROM workhorse.dashboard_human_wait_v1 human_wait
+              WHERE human_wait.job_id = task_inputs.job_id
+           ) AS external_wait,
+           task_inputs.attempt, task_inputs.updated_at, task_inputs.tags,
+           task_inputs.queue_name AS queue, task_inputs.worker_id
+      FROM task_inputs
+      CROSS JOIN windowed
   ), buckets AS (
     SELECT generate_series(
              date_bin(make_interval(secs => windowed.bucket_seconds),

@@ -170,12 +170,24 @@ try {
     throw new Error("Dashboard TSX modules did not use the automatic JSX runtime");
   }
 
-  const tasksResponse = await fetch(`${baseUrl}/rpc/dashboard/tasks`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ json: { filter: "all", page: 1, pageSize: 100 } }),
-  });
-  const tasksText = await tasksResponse.text();
+  const representativeJobTypes = [
+    "demo.retry",
+    "demo.durable-timer",
+    "demo.failure",
+    "demo.long-running",
+  ];
+  const taskResults = await Promise.all(
+    representativeJobTypes.map(async (jobType) => {
+      const response = await fetch(`${baseUrl}/rpc/dashboard/tasks`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          json: { filter: "all", jobType, page: 1, pageSize: 100 },
+        }),
+      });
+      return { jobType, ok: response.ok, text: await response.text() };
+    }),
+  );
   const cronResponse = await fetch(`${baseUrl}/rpc/dashboard/cron`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -183,16 +195,14 @@ try {
   });
   const cronText = await cronResponse.text();
   if (
-    !tasksResponse.ok ||
-    !tasksText.includes("demo.retry") ||
-    !tasksText.includes("demo.durable-timer") ||
-    !tasksText.includes("demo.failure") ||
-    !tasksText.includes("demo.long-running") ||
+    taskResults.some(({ jobType, ok, text }) => !ok || !text.includes(jobType)) ||
     !cronResponse.ok ||
     !cronText.includes("workhorse-demo") ||
     !cronText.includes("demo.long-running")
   ) {
-    throw new Error(`Dashboard readers omitted smoke data: ${tasksText}\n${cronText}`);
+    throw new Error(
+      `Dashboard readers omitted smoke data: ${JSON.stringify(taskResults)}\n${cronText}`,
+    );
   }
 
   // The demo runs its workers as a dedicated process that shares nothing with this server but
