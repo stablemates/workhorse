@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-27
-- **Related:** [WH-446](https://app.plane.so/techprogress/browse/WH-446/), [ADR 0024](0024-metrics-instrument-lifecycle.md), [ADR 0041](0041-apache-2-and-contributor-agreement.md)
+- **Related:** [Plane WH-446](https://ontrack.sh/projects/WH/issues/WH-233), [ADR 0024](0024-metrics-instrument-lifecycle.md), [ADR 0041](0041-apache-2-and-contributor-agreement.md)
 
 ## Context
 

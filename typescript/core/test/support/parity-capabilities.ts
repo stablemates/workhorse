@@ -13,7 +13,7 @@
  * An Absent cell carries a reason instead. Recording why keeps a deliberate boundary distinguishable
  * from a gap that is merely open.
  *
- * A Planned cell carries the Plane work item that owns the gap. The generator writes its link into
+ * A Planned cell carries the Ontrack Issue that owns the gap. The generator writes its link into
  * the document, so a Planned cell cannot outlive the work it points at unnoticed.
  */
 

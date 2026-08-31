@@ -2,6 +2,53 @@
 
 Instructions for coding agents and contributors.
 
+## Work from production Ontrack
+
+All repository work lives in the production Ontrack `Workhorse` Project (`WH`). Connect over
+pgwire with `ONTRACK_AGENT_DSN` from this checkout's ignored `.env`; the Board is hosted at
+`https://ontrack.sh` and is never a local process. If the hosted Board is unreachable, stop and tell
+the Human. A local Ontrack database contains no authoritative Workhorse Issues.
+
+The machine's Private Token lives once in `~/.pgpass`, whose mode must be `0600`. The DSN carries no
+password, requires `sslmode=require`, and uses its username only as this checkout's Agent Session
+name. The secret resolves the host Agent; the Session separates simultaneous checkouts. Never put a
+secret in `.env`, a command, a Comment, or Git.
+
+This checkout's `.env` must contain `ONTRACK_AGENT_DSN` explicitly. Never inherit another
+checkout's ambient value. A linked worktree gets the host DSN from its primary checkout, strips any
+password, and rewrites the username to its worktree ID. If the key is absent, configure it in the
+primary checkout and rerun that repository's worktree setup; do not copy another worktree's DSN or
+mint another Agent.
+
+Before changing tracked files:
+
+1. Load this checkout's `.env` and connect with a PostgreSQL client. Require the DSN to be
+   passwordless, TLS-required, and named for this checkout.
+2. Read the target `WH-*` Issue, its Comments, and both ends of its Relations. Read the repository's
+   `CONTEXT.md` and relevant decision records when the work changes domain behavior.
+3. Claim that exact Issue with `app.claim_issue('WH-123')`. Work only Issues this Session holds.
+
+The host Agent may see other Ontrack Projects, so every Board read must filter
+`project_key = 'WH'`, every new Issue must pass `project_key => 'WH'`, and every mutation must name
+an exact `WH-*` key. Never use `app.claim_next()`: it is not Project-scoped and can claim another
+repository's work. To choose work, query eligible Workhorse Issues first and then claim the chosen
+key explicitly.
+
+An imported Issue's Ontrack `WH-*` key is its current working identity. Its `Plane provenance`
+section and source UUID preserve the historical Plane key. In Git history, `WH-*` subjects before
+the tracker cutover commit mean Plane keys; later subjects mean native Ontrack keys. Use
+`docs/tracker-history.md` and imported provenance to cross that boundary.
+
+Keep the Board current while working. Renew the Lease at least every two minutes with
+`app.renew_lease('WH-123')`, and add Comments for material decisions, scope changes, and verification
+evidence with `app.add_comment`. A live Lease means In Progress; do not set that Status directly.
+
+Finish only after every acceptance item is verified and the relevant repository checks pass. Add a
+Comment with the exact evidence, update the Issue checklist, and set it to Done in the same task.
+When another Agent can continue the current work as-is, Comment the handoff and move it to Todo.
+When a Human decision or action is required, Comment the boundary and move it to Backlog at that
+moment. Do not leave a live Lease behind while waiting.
+
 ## Do not run the demo server
 
 Do not start the demo. Not `pnpm demo`, not `pnpm demo:app`, and not a variant in the background.
