@@ -3,6 +3,8 @@
 Workhorse is a durable job queue built from PostgreSQL tables and versioned SQL functions. Your
 business write and its background job can commit in the same transaction, without another broker.
 
+[![Build status](https://github.com/stablemates/workhorse/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/stablemates/workhorse/actions/workflows/ci.yml?query=branch%3Amain)
+
 > **Public beta:** Workhorse is usable for evaluation and early production adoption, but 0.x minor
 > releases may break compatibility, including the schema. There is no upgrade path between 0.x
 > releases; ordered migrations begin at 1.0.0.
@@ -20,6 +22,26 @@ with fence tokens, so a worker that resumes after losing its lease cannot overwr
 
 Handlers receive at-least-once delivery. Workhorse records durable progress and outcomes, but external
 effects still need stable provider idempotency keys or compensation.
+
+## See it operate
+
+The dashboard exposes task activity, lifecycle events, system health, worker capacity, and schedules
+without making the queue's PostgreSQL tables part of your operator interface.
+
+<p>
+  <a href="site/public/screenshots/demo-tasks.png"><img src="site/public/screenshots/demo-tasks.png" width="49%" alt="Workhorse dashboard task activity chart and task table"></a>
+  <a href="site/public/screenshots/demo-events.png"><img src="site/public/screenshots/demo-events.png" width="49%" alt="Workhorse event stream with task lifecycle events and operational details"></a>
+</p>
+<p>
+  <a href="site/public/screenshots/demo-health.png"><img src="site/public/screenshots/demo-health.png" width="49%" alt="Workhorse system health dashboard with queue backlog and retry metrics"></a>
+  <a href="site/public/screenshots/demo-workers.png"><img src="site/public/screenshots/demo-workers.png" width="49%" alt="Workhorse worker fleet with queue assignments, capacity, and recent results"></a>
+</p>
+<p align="center">
+  <a href="site/public/screenshots/demo-schedules.png"><img src="site/public/screenshots/demo-schedules.png" width="49%" alt="Workhorse schedule list with expressions, destinations, and recent runs"></a>
+</p>
+
+Open the [live demo](https://demo.workhorse.run) to explore the dashboard, including recurring
+schedules and task details.
 
 ## Run one job
 
