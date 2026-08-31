@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { publishedPackages, repositoryRoot } from "./packages.js";
 
 const npmVersion = "0.1.0-beta.1";
-const pythonVersion = "0.1.0b1";
+const pythonVersion = "0.1.0b2";
 const betaLabel = "public beta";
 const compatibilityNotice = "There is no upgrade path between 0.x releases";
 

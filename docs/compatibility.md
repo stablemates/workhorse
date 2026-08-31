@@ -148,6 +148,7 @@ The Python package releases independently from a `python/vX.Y.Z` tag. The tag mu
 `python/pyproject.toml` and a heading in `python/CHANGELOG.md`. `.github/workflows/release-python.yml`
 runs `pnpm check`, then uv builds a source distribution and universal wheel. A separate `pypi`
 environment publishes those artifacts through PyPI trusted publishing with `id-token: write`.
+Before publication, the publish job generates a PEP 740 attestation beside each distribution.
 
 The Go module releases independently from a `go/vX.Y.Z` tag. `scripts/release-go.sh X.Y.Z` requires
 a clean worktree and a matching `go/CHANGELOG.md` heading. It resets the test database, runs
@@ -200,7 +201,8 @@ a staged release rather than a concurrent one:
 2. Download and inspect every npm and Python archive. Install all eight npm tarballs, the Python
    wheel, and the Python source distribution in clean consumers. Build the Go external consumer
    from the same commit. Test registries are not part of the rehearsal.
-3. Publish Python first. Verify `0.1.0b1` through PyPI before continuing.
+3. Publish Python first. `0.1.0b1` remains public without provenance. Verify the fix-forward
+   `0.1.0b2` release through PyPI before continuing.
 4. Publish npm second. Publish `@stablemates/workhorse` before its seven peer dependents, and verify
    every `0.1.0-beta.1` package before continuing.
 5. Publish Go last. Verify `go/v0.1.0-beta.1` through the public module proxy.
@@ -238,7 +240,8 @@ pipeline.
 1. Update `python/pyproject.toml` and add the same version to `python/CHANGELOG.md`.
 2. Tag `python/vX.Y.Z`. `pnpm release:check` refuses a mismatched or undocumented version.
 3. `pnpm check` runs before uv builds either distribution artifact.
-4. The `pypi` environment publishes the downloaded artifacts through trusted publishing.
+4. The `pypi` environment generates PEP 740 attestations for the downloaded artifacts, then
+   publishes both distributions and their attestations through trusted publishing.
 
 ### Go module
 

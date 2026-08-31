@@ -306,7 +306,12 @@ describe("continuous integration", () => {
     expect(workflow).toContain("needs: build");
     expect(workflow).toContain("environment: pypi");
     expect(workflow).toContain("id-token: write");
-    expect(workflow).toContain("uv publish --trusted-publishing always");
+    const attest = "astral-sh/attest-action@f589a42a7efb6fe400b4f400de60b4bc90390027 # v0.0.6";
+    const publish = "uv publish --trusted-publishing always python/dist/*.whl python/dist/*.tar.gz";
+    expect(workflow).toContain(attest);
+    expect(workflow).toContain("paths: python/dist/*");
+    expect(workflow).toContain(publish);
+    expect(workflow.indexOf(attest)).toBeLessThan(workflow.indexOf(publish));
   });
 
   it("creates Go module tags only after the release check and full repository gate", async () => {
