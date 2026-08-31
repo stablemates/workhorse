@@ -6,7 +6,14 @@ releases independently from the TypeScript packages and the Go module.
 Workhorse is a public beta. Any 0.x minor release may break compatibility, including the schema.
 There is no upgrade path between 0.x releases; ordered migrations begin at 1.0.0.
 
-## 0.1.0b1 — unreleased
+## 0.1.0b2 — unreleased
+
+### Fixed
+
+- The fix-forward release includes PEP 740 attestations for its wheel and source distribution.
+  The package behavior is unchanged from `0.1.0b1`.
+
+## 0.1.0b1 — 2026-08-31
 
 ### Changed
 

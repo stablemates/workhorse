@@ -525,7 +525,7 @@ function BetaMark() {
 function InstallCommands() {
   const commands = [
     ["npm", "npm install @stablemates/workhorse@0.1.0-beta.1"],
-    ["python", "pip install stablemates-workhorse==0.1.0b1"],
+    ["python", "pip install stablemates-workhorse==0.1.0b2"],
     ["go", "go get github.com/stablemates/workhorse/go@v0.1.0-beta.1"],
   ] as const;
 

@@ -3,12 +3,12 @@ import { checkRelease } from "./check-release.js";
 
 describe("checkRelease", () => {
   it("accepts the Python manifest version when its changelog documents the release", async () => {
-    await expect(checkRelease("python", "python/v0.1.0b1")).resolves.toBeUndefined();
+    await expect(checkRelease("python", "python/v0.1.0b2")).resolves.toBeUndefined();
   });
 
   it("rejects a Python tag that disagrees with the package manifest", async () => {
     await expect(checkRelease("python", "python/v9.9.9")).rejects.toThrow(
-      "python/pyproject.toml is 0.1.0b1 but the tag is 9.9.9",
+      "python/pyproject.toml is 0.1.0b2 but the tag is 9.9.9",
     );
   });
 
