@@ -34,8 +34,9 @@ dominates CI time. This stable name keeps matrix changes from invalidating branc
 Each language matrix runs at most two lanes concurrently. The cap limits database contention during
 the weekly compatibility run without affecting the single-lane pull request and push feedback.
 
-`.github/workflows/benchmark.yml` runs smoke benchmarks after pushes to `main` and nightly. It is
-informational and is not a required check because timing on shared hardware is not comparable.
+`.github/workflows/benchmark.yml` runs smoke benchmarks weekly and on manual dispatch. It is
+informational and is not a required check because timing on shared hardware is not comparable. The
+benchmark selects workspace source exports so the adapter and core share one telemetry provider.
 
 npm and Python publication run only from matching version tags. Separate `npm` and `pypi`
 environments require a reviewer other than the person who pushed the tag, disallow self-review and

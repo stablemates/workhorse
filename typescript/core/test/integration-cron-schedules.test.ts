@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { Queue, Worker } from "../src/index.js";
+import { Queue, Worker, type Queryable } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 import { WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
 
@@ -20,6 +20,46 @@ interface CronOccurrenceFixture {
 const cronFixtures = JSON.parse(
   await readFile(new URL("../../../protocol/v1/cron-occurrences.json", import.meta.url), "utf8"),
 ) as CronOccurrenceFixture[];
+
+class ScheduleEvaluationQueue extends Queue {
+  constructor(
+    database: Queryable,
+    private readonly evaluationAt: Date,
+    private readonly coordination: {
+      before?: () => Promise<void>;
+      after?: () => void;
+    } = {},
+  ) {
+    super(database);
+  }
+
+  override async fireDueSchedules(
+    namespaces: readonly string[],
+    _now: Date,
+    catchupLimit: number,
+  ): Promise<void> {
+    await this.coordination.before?.();
+    try {
+      await super.fireDueSchedules(namespaces, this.evaluationAt, catchupLimit);
+    } finally {
+      this.coordination.after?.();
+    }
+  }
+}
+
+function orderedScheduleEvaluationQueues(
+  firstEvaluationAt: Date,
+  secondEvaluationAt: Date,
+): readonly [Queue, Queue] {
+  let releaseSecondEvaluation!: () => void;
+  const firstEvaluation = new Promise<void>((resolve) => {
+    releaseSecondEvaluation = resolve;
+  });
+  return [
+    new ScheduleEvaluationQueue(pool, firstEvaluationAt, { after: releaseSecondEvaluation }),
+    new ScheduleEvaluationQueue(pool, secondEvaluationAt, { before: () => firstEvaluation }),
+  ];
+}
 
 describe("cron schedules", () => {
   it.each(cronFixtures)("evaluates $id through PostgreSQL", async (fixture) => {
@@ -248,11 +288,13 @@ describe("cron schedules", () => {
         job: { type: "cron-tick", payload: { source: "worker" } },
       },
     ]);
-    const first = new Worker(queue, {
+    const occurrenceAt = new Date(Math.floor(Date.now() / 1_000) * 1_000);
+    const [firstQueue, secondQueue] = orderedScheduleEvaluationQueues(occurrenceAt, occurrenceAt);
+    const first = new Worker(firstQueue, {
       workerId: "scheduler-a",
       scheduleNamespaces: ["integration"],
     }).handle("cron-tick", () => ({ worker: "a" }));
-    const second = new Worker(queue, {
+    const second = new Worker(secondQueue, {
       workerId: "scheduler-b",
       scheduleNamespaces: ["integration"],
     }).handle("cron-tick", () => ({ worker: "b" }));
@@ -270,6 +312,45 @@ describe("cron schedules", () => {
     expect(
       (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0]?.count,
     ).toBe(1);
+  });
+
+  it("treats adjacent recurring occurrences as distinct coordinated work", async () => {
+    await queue.syncSchedules("adjacent", [
+      {
+        name: "heartbeat",
+        schedule: "* * * * * *",
+        job: { type: "cron-adjacent", payload: null },
+      },
+    ]);
+    const firstOccurrenceAt = new Date(Math.floor(Date.now() / 1_000) * 1_000);
+    const secondOccurrenceAt = new Date(firstOccurrenceAt.getTime() + 1_000);
+    const [firstQueue, secondQueue] = orderedScheduleEvaluationQueues(
+      firstOccurrenceAt,
+      secondOccurrenceAt,
+    );
+    const first = new Worker(firstQueue, {
+      workerId: "scheduler-a",
+      scheduleNamespaces: ["adjacent"],
+    }).handle("cron-adjacent", () => ({ worker: "a" }));
+    const second = new Worker(secondQueue, {
+      workerId: "scheduler-b",
+      scheduleNamespaces: ["adjacent"],
+    }).handle("cron-adjacent", () => ({ worker: "b" }));
+
+    expect(await Promise.all([first.runOnce(), second.runOnce()])).toEqual([true, true]);
+    const occurrences = await pool.query<{ occurrence_at: Date }>(
+      `SELECT occurrence_at
+         FROM workhorse.schedule_occurrence
+        WHERE namespace = 'adjacent' AND schedule_name = 'heartbeat'
+        ORDER BY occurrence_at`,
+    );
+    expect(occurrences.rows.map((row) => row.occurrence_at.toISOString())).toEqual([
+      firstOccurrenceAt.toISOString(),
+      secondOccurrenceAt.toISOString(),
+    ]);
+    expect(
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0]?.count,
+    ).toBe(2);
   });
 
   it("lets different schedule namespaces progress on the same cadence", async () => {

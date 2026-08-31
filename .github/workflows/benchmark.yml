@@ -1,4 +1,4 @@
-# Smoke benchmarks on main.
+# Weekly smoke benchmarks on main.
 #
 # This workflow exists to detect *drift*, not to publish performance numbers. It runs the `smoke`
 # profile, which is small enough to finish in minutes on a shared runner and therefore far too
@@ -13,11 +13,10 @@
 name: Benchmark
 
 on:
-  push:
-    branches: [main]
   schedule:
-    # Nightly, off the hour, so a queued run does not compete with the cron spike.
-    - cron: "17 4 * * *"
+    # Weekly, after the compatibility matrix window, so the two informationally distinct runs do
+    # not start together.
+    - cron: "17 6 * * 0"
   workflow_dispatch:
 
 concurrency:
@@ -57,8 +56,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # The suite runs from source through tsx, so no build is needed. The reset installs
-      # sql/schema.sql, which is what makes every run start from the same schema state.
+      # The benchmark script selects each workspace package's source export, so the adapter and
+      # core share one telemetry singleton without requiring built package artifacts.
       - run: pnpm db:reset:bench
 
       # The canonical report goes to a file; stdout would repeat the whole document into the log.

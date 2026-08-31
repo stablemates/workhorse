@@ -569,7 +569,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "mixed outcomes settle independently without changing successful peers",
       "every admitted member consumes one slot and one policy admission per job",
       "lease recovery and stale fences isolate one lost member from its batch peers",
-      "serial and batched cohorts record claim cost through the same claim_v1 path over live ready-index work",
+      "serial and batched cohorts record claim cost through the same claim path over live ready-index work",
     ],
     metrics: [
       "jobsPerCohort",
@@ -4481,7 +4481,7 @@ async function batchDispatch(
       batchLingerMs,
       claimCalls: after.claimCalls - before.claimCalls,
       claimDurationsMs: after.claimDurationsMs.slice(before.claimDurationsMs.length),
-      successfulClaims: after.successfulClaimTimes.length - before.successfulClaimTimes.length,
+      claimedJobs: after.claimedJobs - before.claimedJobs,
       maxConcurrentClaims: after.maxConcurrentClaims,
       claimsWithoutFreeSlot: after.claimsWithoutFreeSlot - before.claimsWithoutFreeSlot,
     };
@@ -4537,14 +4537,15 @@ async function batchDispatch(
     );
     recordInvariant(
       assertions,
-      `${name} cohort successful claim count matches jobs`,
-      cohort.successfulClaims,
+      `${name} cohort claimed job count matches jobs`,
+      cohort.claimedJobs,
       jobsPerCohort,
     );
     recordInvariant(
       assertions,
       `${name} cohort claim cost samples are finite`,
-      cohort.claimDurationsMs.length >= jobsPerCohort &&
+      cohort.claimDurationsMs.length === cohort.claimCalls &&
+        cohort.claimCalls > 0 &&
         cohort.claimDurationsMs.every(Number.isFinite),
       true,
     );

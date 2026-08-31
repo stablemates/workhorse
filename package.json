@@ -54,7 +54,7 @@
     "example:agentic-flow": "pnpm build:runtime && tsx scripts/with-env.ts node typescript/examples/agentic-flow.mjs",
     "health": "tsx scripts/with-env.ts sh -c 'WORKHORSE_DATABASE_URL=\"$DATABASE_URL_PRIMARY\" exec tsx typescript/core/src/cli/workhorse.ts health --json'",
     "health:bench": "tsx scripts/with-env.ts sh -c 'WORKHORSE_DATABASE_URL=\"$DATABASE_URL_BENCH\" exec tsx typescript/core/src/cli/workhorse.ts health --json'",
-    "benchmark": "tsx scripts/with-env.ts tsx typescript/core/src/cli/benchmark.ts",
+    "benchmark": "tsx scripts/with-env.ts tsx --conditions=workhorse-source typescript/core/src/cli/benchmark.ts",
     "benchmark:metrics-lifecycle": "tsx scripts/benchmark-metrics-lifecycle.ts",
     "benchmark:retention-strategies": "tsx scripts/with-env.ts tsx scripts/benchmark-retention-strategies.ts",
     "benchmark:dashboard-read-surface": "tsx scripts/with-env.ts tsx scripts/benchmark-dashboard-read-surface.ts",
