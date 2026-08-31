@@ -51,7 +51,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go/go.mod
-      - uses: astral-sh/setup-uv@v9
+      - uses: astral-sh/setup-uv@v9.0.0
       - run: pnpm install --frozen-lockfile
 
       # A tag that disagrees with the manifests would publish a version nobody can reproduce from

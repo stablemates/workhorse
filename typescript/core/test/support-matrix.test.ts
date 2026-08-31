@@ -331,7 +331,7 @@ describe("continuous integration", () => {
       const workflow = await read(workflowPath);
       expect(workflow).toContain("actions/setup-go@v7");
       expect(workflow).toContain("go-version-file: go/go.mod");
-      expect(workflow).toContain("astral-sh/setup-uv@v9");
+      expect(workflow).toContain("astral-sh/setup-uv@v9.0.0");
     }
   });
 
