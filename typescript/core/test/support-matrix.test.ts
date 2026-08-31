@@ -343,10 +343,14 @@ describe("continuous integration", () => {
       const workflow = await read(workflowPath);
       expect(workflow).toContain("image: postgres:18-alpine");
       expect(workflow).toContain(
+        "DATABASE_URL_PRIMARY: postgres://workhorse:workhorse@localhost:5432/workhorse_dev_primary",
+      );
+      expect(workflow).toContain(
         "DATABASE_URL_TEST_PACKED: postgres://workhorse:workhorse@localhost:5432/workhorse_test_packed",
       );
       expect(workflow).toContain("sudo apt-get install --yes postgresql-client-18");
       expect(workflow).toContain('echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"');
+      expect(workflow).toContain("- run: pnpm db:reset:dev-primary");
       expect(workflow).toContain("- run: pnpm db:reset:test-packed");
     }
   });
