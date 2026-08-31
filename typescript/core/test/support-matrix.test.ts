@@ -233,8 +233,12 @@ describe("continuous integration", () => {
     expect(workflow).toContain("schedule:");
     expect(workflow).toContain("name: required");
     expect(workflow).toContain(
-      "needs: [static, unit, typescript, python, go, runtime-smoke, packed, demo]",
+      "needs: [static, unit, typescript, python, go, runtime-smoke, packed]",
     );
+    expect(workflow).toContain(
+      "name: demo and site smoke\n    if: ${{ false }} # Temporarily disabled",
+    );
+    expect(workflow.match(/max-parallel: 2/g)).toHaveLength(3);
     expect(workflow).toContain("pnpm --silent exec tsx scripts/ci-matrix.ts");
     expect(workflow).toContain("pnpm go:test:race");
   });

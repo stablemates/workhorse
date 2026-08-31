@@ -3862,28 +3862,41 @@ describe("Workhorse demo", () => {
   });
 
   it("records a cooperative request for a running task and finalizes it once the handler stops", async () => {
-    // The handler is long enough that cancellation lands mid-flight, and the short heartbeat is
-    // what actually delivers the signal to the running worker.
-    const { app, workhorse } = createTestApplication({
+    const { app } = createTestApplication({
       operator: createLocalOperator(database),
-      workerPollMs: 5,
-      longRunningJobMs: TEST_CONTROL_WINDOW_JOB_MS,
+      workers: false,
+    });
+    const adapter = createDrizzleAdapter(database, {
+      defaultQueue: DEMO_QUEUE,
+      queueOptions: DEMO_QUEUE_OPTIONS,
+    });
+    const worker = adapter.createWorker({
+      queue: DEMO_QUEUE,
+      concurrency: 1,
+      pollMs: 5,
+      registryIntervalMs: 0,
+      workerId: "cooperative-cancel-test",
+    });
+    const handlerStarted = Promise.withResolvers<void>();
+    const releaseHandler = Promise.withResolvers<void>();
+    worker.handle("demo.test-cooperative-cancel", async () => {
+      handlerStarted.resolve();
+      await releaseHandler.promise;
+      return { completed: true };
     });
     const client = dashboardClient(app);
-    workhorse.start();
+    const running = worker.run();
 
     try {
-      const enqueued = await client.dashboard.enqueueTest({
-        kind: "long-running",
-        audit: { actor: "operator", reason: "cooperative cancel", requestId: "cancel-active-seed" },
-      });
+      const jobId = await adapter.queue.enqueue("demo.test-cooperative-cancel", {}, {});
+      await handlerStarted.promise;
       await waitFor(
-        () => client.dashboard.jobDetail({ id: enqueued.jobId }),
+        () => client.dashboard.jobDetail({ id: jobId }),
         (detail) => detail.current.runtime?.state === "active",
       );
 
       const requested = await client.dashboard.cancelTask({
-        id: enqueued.jobId,
+        id: jobId,
         audit: { actor: "operator", reason: "Runaway task", requestId: "cancel-active" },
       });
       // While the handler still owns the lease, PostgreSQL can only record the request.
@@ -3898,17 +3911,18 @@ describe("Workhorse demo", () => {
 
       // The request is visible on the live task before the outcome exists, so an operator is not
       // left staring at an apparently untouched running task.
-      const pending = await client.dashboard.jobDetail({ id: enqueued.jobId });
+      const pending = await client.dashboard.jobDetail({ id: jobId });
       expect(pending.current.runtime).toMatchObject({
         state: "active",
         cancellation: { requestedBy: "local-demo", reason: "Runaway task" },
       });
 
-      // The handler owns when it stops, so the wait must outlast the whole handler duration.
+      // The handler owns when it stops. Releasing the explicit gate avoids treating elapsed time
+      // as proof that a task remains active between the read above and the cancellation request.
+      releaseHandler.resolve();
       const finished = await waitFor(
-        () => client.dashboard.jobDetail({ id: enqueued.jobId }),
+        () => client.dashboard.jobDetail({ id: jobId }),
         (detail) => detail.identity.state === "canceled",
-        600,
       );
       expect(finished.current.outcome).toMatchObject({ state: "canceled" });
       // A cooperative cancellation closes the attempt as canceled, never as a failure.
@@ -3918,7 +3932,7 @@ describe("Workhorse demo", () => {
         `SELECT event_type, details FROM workhorse.job_event
           WHERE job_id = $1 AND event_type IN ('cancel_requested', 'canceled')
           ORDER BY occurred_at, event_id`,
-        [enqueued.jobId],
+        [jobId],
       );
       expect(events.rows.map((row) => row.event_type)).toEqual(["cancel_requested", "canceled"]);
       expect(events.rows[0]?.details).toMatchObject({
@@ -3927,7 +3941,9 @@ describe("Workhorse demo", () => {
       });
       expect(events.rows[1]?.details).toMatchObject({ source: "acknowledged" });
     } finally {
-      await workhorse.stop();
+      releaseHandler.resolve();
+      worker.stop();
+      await running;
     }
   });
 

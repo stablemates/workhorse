@@ -20,6 +20,10 @@ password, and rewrites the username to its worktree ID. If the key is absent, co
 primary checkout and rerun that repository's worktree setup; do not copy another worktree's DSN or
 mint another Agent.
 
+If a request names no exact `WH-*` Issue, search open Workhorse Issues for one that owns the requested
+outcome. If none matches, file an Issue with `app.file_issue`, `project_key => 'WH'`, and checkable
+acceptance criteria. Use that Issue as the target before changing tracked files.
+
 Before changing tracked files:
 
 1. Load this checkout's `.env` and connect with a PostgreSQL client. Require the DSN to be
