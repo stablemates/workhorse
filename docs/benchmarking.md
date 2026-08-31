@@ -334,7 +334,7 @@ Raw claim samples and raw PostgreSQL plans are intentionally retained so derived
 
 ## Continuous smoke benchmarks
 
-`.github/workflows/benchmark.yml` runs the smoke profile on every push to `main`, nightly at 04:17 UTC, and on manual dispatch. It provisions PostgreSQL 18, runs `pnpm db:reset:bench`, then:
+`.github/workflows/benchmark.yml` runs the smoke profile weekly on Sunday at 06:17 UTC and on manual dispatch. It provisions PostgreSQL 18. The package script selects workspace source exports, so the workflow can run `pnpm db:reset:bench`, then:
 
 ```bash
 pnpm benchmark -- --suite all --profile smoke --output benchmark-report.json
@@ -351,8 +351,8 @@ Before uploading, the workflow asserts the report is `schemaVersion: 3`, carries
 The workflow answers one question: does the harness still run green, and has anything changed by an amount too large to be noise? It does not answer how fast Workhorse is.
 
 - **Assertions are the signal.** A lifecycle assertion that flips from passing to failing is a real regression at any profile. Investigate it directly.
-- **Timings are not a signal on their own.** The smoke profile runs 12 jobs over 2 repetitions on a shared runner. Confidence intervals at that size routinely span more than the mean, and consecutive nightly runs can differ by a factor of two with no code change between them.
-- **Only act on a sustained shift.** Treat a timing change as worth investigating when several consecutive runs move the same way and the new interval does not overlap the old one. A single slow night is runner noise.
+- **Timings are not a signal on their own.** The smoke profile runs 12 jobs over 2 repetitions on a shared runner. Confidence intervals at that size routinely span more than the mean, and consecutive runs can differ by a factor of two with no code change between them.
+- **Only act on a sustained shift.** Treat a timing change as worth investigating when several consecutive runs move the same way and the new interval does not overlap the old one. A single slow run is runner noise.
 - **Never compare across environments.** Runner hardware, PostgreSQL image, and settings all vary. Compare a workflow artifact only with other workflow artifacts, and read `environment` and `provenance` before concluding anything.
 - **Reproduce before recording.** A trend the workflow surfaces is a prompt to run `default` or `full` on stable hardware and record that artifact under `docs/benchmarks/`. The workflow artifact itself is never publication evidence.
 
