@@ -201,8 +201,8 @@ a staged release rather than a concurrent one:
 2. Download and inspect every npm and Python archive. Install all eight npm tarballs, the Python
    wheel, and the Python source distribution in clean consumers. Build the Go external consumer
    from the same commit. Test registries are not part of the rehearsal.
-3. Publish Python first. `0.1.0b1` remains public without provenance. Verify the fix-forward
-   `0.1.0b2` release through PyPI before continuing.
+3. Publish Python first. `0.1.0b1` and `0.1.0b2` remain public without provenance. Verify the
+   fix-forward `0.1.0b3` release through PyPI before continuing.
 4. Publish npm second. Publish `@stablemates/workhorse` before its seven peer dependents, and verify
    every `0.1.0-beta.1` package before continuing.
 5. Publish Go last. Verify `go/v0.1.0-beta.1` through the public module proxy.
