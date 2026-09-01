@@ -65,6 +65,7 @@
     "format": "oxfmt --write . && pnpm python:format && pnpm go:fmt",
     "format:check": "oxfmt --check . && pnpm python:format:check && pnpm go:fmt:check",
     "python:build": "pnpm dashboard-bundle:fetch && uv build --project python",
+    "python:release-check": "tsx scripts/check-python-release.ts",
     "python:format": "uv run --project python ruff format python/src python/tests python/examples",
     "python:format:check": "uv run --project python ruff format --check python/src python/tests python/examples",
     "python:lint": "uv run --project python ruff check python/src python/tests python/examples",

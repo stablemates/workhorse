@@ -1,8 +1,6 @@
 # Builds and publishes the independently-versioned Python distribution from python/vX.Y.Z tags.
-#
-# GitHub Actions remain disabled while this repository is private. This definition is ready for
-# that restriction to be lifted, but it must not be dispatched until then. The build job carries
-# no publication identity; only the separate PyPI environment can mint the trusted-publisher token.
+# The build job validates only Python and the dashboard assets embedded in its distributions. It
+# carries no publication identity; only the PyPI environment can mint the publisher token.
 name: Release Python
 
 on:
@@ -16,19 +14,20 @@ on:
         default: true
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:18-alpine
         env:
           POSTGRES_USER: workhorse
           POSTGRES_PASSWORD: workhorse
-          POSTGRES_DB: workhorse_dev
+          POSTGRES_DB: workhorse_test
         ports:
           - 5432:5432
         options: >-
@@ -37,39 +36,28 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     env:
-      DATABASE_URL_PRIMARY: postgres://workhorse:workhorse@localhost:5432/workhorse_dev_primary
-      WORKHORSE_TEST_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_test
-      WORKHORSE_DEMO_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_demo
-      DATABASE_URL_TEST_PACKED: postgres://workhorse:workhorse@localhost:5432/workhorse_test_packed
+      DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test
     steps:
+      - name: Require successful main CI for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          successful_runs="$(gh api \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&status=completed&per_page=10" \
+            --jq '[.workflow_runs[] | select(.conclusion == "success")] | length')"
+          if [ "$successful_runs" -eq 0 ]; then
+            echo "No successful main CI push run exists for $GITHUB_SHA" >&2
+            exit 1
+          fi
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go/go.mod
       - uses: astral-sh/setup-uv@v9.0.0
-      - name: Install matching PostgreSQL client
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes postgresql-common
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install --yes postgresql-client-18
-          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
       - run: pnpm install --frozen-lockfile
-
-      - name: Check the tag against the Python version and changelog
-        if: startsWith(github.ref, 'refs/tags/python/v')
-        run: pnpm release:check python $GITHUB_REF_NAME
-
-      - run: pnpm db:reset:dev-primary
-      - run: pnpm db:reset:test
-      - run: pnpm db:reset:test-packed
-      - run: pnpm check
-      - run: uv build --project python
+      - run: pnpm python:release-check
 
       - uses: actions/upload-artifact@v4
         with:

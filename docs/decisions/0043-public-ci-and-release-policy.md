@@ -47,6 +47,13 @@ gate remains usable. Manual dispatches build and validate artifacts but never pu
 Maintainers create release tags; repository rules must prevent other actors from creating or
 updating them.
 
+The Python workflow first requires a successful `main` push CI run for the tagged commit. Its
+focused release gate checks the Python version contract, embedded dashboard bundle, format, lint,
+types, dependencies, and complete test suite against PostgreSQL. It builds the wheel and source
+distribution once, tests those exact files in clean consumers, and passes the unchanged artifacts
+to the protected publication job. Go, TypeScript database, documentation, parity, site, and demo
+checks remain merge gates in CI and do not run again during Python publication.
+
 Go stays local through `scripts/release-go.sh`. A Go module becomes public when its tag is pushed,
 so a workflow triggered by that tag cannot gate publication. The script runs the full release gate
 before it creates and pushes the annotated tag.

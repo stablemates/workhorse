@@ -189,7 +189,8 @@ and exercise external module consumers before a release can create the module ta
 
 ## Release process
 
-Every release is a tag, and every tag runs the full check suite before anything is published.
+Every release is a tag that points to a green public CI commit. Each tag then runs the focused gate
+for the distribution being published.
 
 ### First public beta release train
 
@@ -238,9 +239,11 @@ pipeline.
 ### Python distribution
 
 1. Update `python/pyproject.toml` and add the same version to `python/CHANGELOG.md`.
-2. Tag `python/vX.Y.Z`. `pnpm release:check` refuses a mismatched or undocumented version.
-3. `pnpm check` runs before uv builds either distribution artifact.
-4. The `pypi` environment generates PEP 740 attestations for the downloaded artifacts, then
+2. Tag `python/vX.Y.Z`. The workflow requires a successful `main` CI push run for that commit.
+3. `pnpm python:release-check` validates the version and changelog, rebuilds the embedded dashboard
+   bundle, checks Python format, lint, types, and dependencies, then runs every Python test against
+   PostgreSQL. It builds the wheel and source distribution once and tests those exact files.
+4. The `pypi` environment generates PEP 740 attestations for the unchanged artifacts, then
    publishes both distributions and their attestations through trusted publishing.
 
 ### Go module
@@ -249,11 +252,9 @@ pipeline.
 2. Run `scripts/release-go.sh X.Y.Z` from a clean worktree.
 3. The script runs `pnpm check`, creates `go/vX.Y.Z`, and pushes the tag only after the gate passes.
 
-GitHub Actions remain disabled while the repository is private. These definitions must not be
-dispatched, and release tags must not be pushed, until that restriction is lifted. When the
-repository becomes public, its `main` ruleset must require pull requests and `CI / required`.
-Outside collaborators require workflow approval. The protected `npm` and `pypi` environments
-must prevent self-approval and administrator bypass.
+The public repository requires pull requests and `CI / required` on `main`. Outside collaborators
+require workflow approval. The protected `npm` and `pypi` environments require review and prevent
+administrator bypass.
 
 ## Benchmark validation is not the support boundary
 
