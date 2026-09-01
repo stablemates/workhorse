@@ -67,7 +67,7 @@
     "npm:lint": "oxlint --deny-warnings --import-plugin --vitest-plugin typescript dashboard scripts vitest*.config.ts && pnpm lint:dead-code",
     "npm:release-check": "tsx scripts/check-npm-release.ts",
     "npm:test:packed": "tsx scripts/with-env.ts tsx typescript/core/test/packed-packages.ts",
-    "npm:test:unit": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run --config vitest.unit.config.ts",
+    "npm:test:unit": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run --config vitest.npm.config.ts",
     "npm:typecheck": "tsc -b tsconfig.typecheck.json",
     "format": "oxfmt --write . && pnpm python:format && pnpm go:fmt",
     "format:check": "oxfmt --check . && pnpm python:format:check && pnpm go:fmt:check",
