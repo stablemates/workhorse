@@ -289,6 +289,7 @@ describe("continuous integration", () => {
   it("publishes exact npm tarballs through a focused gate with provenance", async () => {
     const workflow = await read(".github/workflows/release.yml");
     const releaseCheck = await read("scripts/check-npm-release.ts");
+    const npmTestConfig = await read("vitest.npm.config.ts");
     const scripts = (await readManifest("package.json")).scripts as Record<string, string>;
 
     expect(workflow).toContain('tags: ["v*"]');
@@ -307,6 +308,8 @@ describe("continuous integration", () => {
     expect(releaseCheck).toContain('["npm:lint"]');
     expect(releaseCheck).toContain('["npm:typecheck"]');
     expect(releaseCheck).toContain('["npm:test:unit"]');
+    expect(scripts["npm:test:unit"]).toContain("vitest.npm.config.ts");
+    expect(npmTestConfig).toContain('"scripts/sql-catalogue-python-bindings.test.ts"');
     expect(releaseCheck).toContain("WORKHORSE_NPM_TARBALLS: stagedTarballs");
     expect(releaseCheck).toContain('"pack",');
     const packedTest = await read("typescript/core/test/packed-packages.ts");
