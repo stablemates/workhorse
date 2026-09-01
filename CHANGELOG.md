@@ -16,12 +16,14 @@ including changing the schema. There is no upgrade path between 0.x releases: mo
 requires a fresh database. Ordered, immutable migrations begin at 1.0.0. Breaking changes are
 always listed with upgrade steps.
 
-## 0.1.0-beta.1 — unreleased
+## 0.1.0-beta.2 — unreleased
 
 First published line. Requires **schema v1**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
 
 ### Changed
 
+- The unpublished `0.1.0-beta.1` tag stopped before its first registry upload because npm parsed a
+  relative tarball path as GitHub shorthand. Publication now uses an explicit local path.
 - All nine npm packages, the Python distribution, and the Go module use the Apache
   License, Version 2.0. Contributions require the agreement in `CLA.md`.
 

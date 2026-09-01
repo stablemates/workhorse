@@ -272,7 +272,9 @@ describe("consumers of the package list", () => {
     expect(workflow).toContain(
       "for tarball in $(pnpm --silent exec tsx scripts/packages.ts --tarballs); do",
     );
-    expect(workflow).toContain('npm publish --provenance --access public "dist-tarballs/$tarball"');
+    expect(workflow).toContain(
+      'npm publish --provenance --access public "./dist-tarballs/$tarball"',
+    );
     expect(workflow).not.toContain("packages/$package");
     expect(workflow).not.toContain("workhorse-js-");
   });

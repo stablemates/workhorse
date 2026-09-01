@@ -93,5 +93,5 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           for tarball in $(pnpm --silent exec tsx scripts/packages.ts --tarballs); do
-            npm publish --provenance --access public "dist-tarballs/$tarball"
+            npm publish --provenance --access public "./dist-tarballs/$tarball"
           done

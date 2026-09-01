@@ -1,6 +1,6 @@
 {
   "name": "@stablemates/workhorse-otel",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-beta.2",
   "description": "Public beta free OpenTelemetry adapter for Workhorse",
   "homepage": "https://workhorse.run",
   "bugs": {
