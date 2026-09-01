@@ -28,6 +28,7 @@ type Manifest = {
 const repository = path.resolve(import.meta.dirname, "..");
 const manifestPath = path.join(repository, "protocol/v1/manifest.json");
 const check = process.argv.includes("--check");
+const typescriptOnly = process.argv.includes("--typescript-only");
 
 function arity(sql: string): number {
   return Math.max(0, ...Array.from(sql.matchAll(/\$(\d+)/g), (match) => Number(match[1])));
@@ -184,18 +185,26 @@ for (const statement of manifest.statements) {
     pythonBindings[statement.pythonBinding] = statement.name;
   }
 }
-const pythonSources = await readPythonSources();
-const pythonAccesses = findPythonStatementAccesses(pythonSources, path.join(repository, "python"));
-assertPythonStatementBindings(pythonBindings, names, pythonAccesses);
 if (check) await assertNoInlineTypeScriptSql();
-await Promise.all([
-  emit("go/sql_catalogue_generated.go", renderGo(manifest, manifest.statements)),
+const outputs = [
   emit(
     "typescript/core/src/queue/sql-catalogue.generated.ts",
     renderTypeScript(manifest, manifest.statements),
   ),
-  emit(
-    "python/src/workhorse/_statements.py",
-    renderPython(manifest, manifest.statements, pythonBindings),
-  ),
-]);
+];
+if (!typescriptOnly) {
+  const pythonSources = await readPythonSources();
+  const pythonAccesses = findPythonStatementAccesses(
+    pythonSources,
+    path.join(repository, "python"),
+  );
+  assertPythonStatementBindings(pythonBindings, names, pythonAccesses);
+  outputs.push(
+    emit("go/sql_catalogue_generated.go", renderGo(manifest, manifest.statements)),
+    emit(
+      "python/src/workhorse/_statements.py",
+      renderPython(manifest, manifest.statements, pythonBindings),
+    ),
+  );
+}
+await Promise.all(outputs);
