@@ -289,6 +289,7 @@ describe("continuous integration", () => {
   it("publishes exact npm tarballs through a focused gate with provenance", async () => {
     const workflow = await read(".github/workflows/release.yml");
     const releaseCheck = await read("scripts/check-npm-release.ts");
+    const scripts = (await readManifest("package.json")).scripts as Record<string, string>;
 
     expect(workflow).toContain('tags: ["v*"]');
     expect(workflow).toContain("actions: read");
@@ -299,7 +300,8 @@ describe("continuous integration", () => {
     expect(workflow).not.toContain("actions/setup-go");
     expect(workflow).not.toContain("astral-sh/setup-uv");
     expect(releaseCheck).toContain('checkRelease("npm", releaseTag(version))');
-    expect(releaseCheck).toContain('["sql-catalogues:check"]');
+    expect(releaseCheck).toContain('["sql-catalogues:check:typescript"]');
+    expect(scripts["sql-catalogues:check:typescript"]).toContain("--typescript-only");
     expect(releaseCheck).toContain('["dashboard-spec:check"]');
     expect(releaseCheck).toContain('["build:runtime:check-dashboard-bundle"]');
     expect(releaseCheck).toContain('["npm:lint"]');

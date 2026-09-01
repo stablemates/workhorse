@@ -44,7 +44,7 @@ export async function checkNpmRelease(): Promise<void> {
   if (!version) throw new Error("No publishable npm packages were found");
   await checkRelease("npm", releaseTag(version));
 
-  await run("pnpm", ["sql-catalogues:check"]);
+  await run("pnpm", ["sql-catalogues:check:typescript"]);
   await run("pnpm", ["dashboard-spec:check"]);
   await run("pnpm", ["npm:lint"]);
   await run("pnpm", ["npm:typecheck"]);

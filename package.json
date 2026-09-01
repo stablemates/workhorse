@@ -32,6 +32,7 @@
     "test:protocol": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run --config vitest.database.config.ts typescript/core/test/sql-protocol-conformance.test.ts typescript/core/test/schema-migrations.test.ts",
     "sql-catalogues:generate": "tsx scripts/generate-sql-catalogues.ts",
     "sql-catalogues:check": "tsx scripts/generate-sql-catalogues.ts --check",
+    "sql-catalogues:check:typescript": "tsx scripts/generate-sql-catalogues.ts --check --typescript-only",
     "schema:generate": "tsx scripts/generate-clean-schema.ts",
     "parity:generate": "tsx scripts/generate-parity-tables.ts",
     "parity:check": "tsx scripts/generate-parity-tables.ts --check",
