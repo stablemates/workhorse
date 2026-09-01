@@ -307,10 +307,11 @@ describe("continuous integration", () => {
     expect(workflow).toContain("environment: pypi");
     expect(workflow).toContain("id-token: write");
     const attest = "astral-sh/attest-action@f589a42a7efb6fe400b4f400de60b4bc90390027 # v0.0.6";
-    const publish = "uv publish --trusted-publishing always python/dist/*.whl python/dist/*.tar.gz";
+    const publish = "uv publish --trusted-publishing always python/dist/*";
     expect(workflow).toContain(attest);
     expect(workflow).toContain("paths: python/dist/*");
     expect(workflow).toContain(publish);
+    expect(workflow).not.toContain("python/dist/*.whl python/dist/*.tar.gz");
     expect(workflow.indexOf(attest)).toBeLessThan(workflow.indexOf(publish));
   });
 
