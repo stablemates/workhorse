@@ -18,7 +18,10 @@ function operations(
   };
 }
 
-function applicationOperations(calls: string[]): ApplicationSchemaOperations {
+function applicationOperations(
+  calls: string[],
+  overrides: Partial<ApplicationSchemaOperations> = {},
+): ApplicationSchemaOperations {
   return {
     assertCompatible: vi.fn<ApplicationSchemaOperations["assertCompatible"]>(async () => {
       calls.push("assert-core");
@@ -32,6 +35,7 @@ function applicationOperations(calls: string[]): ApplicationSchemaOperations {
     installDemo: vi.fn<ApplicationSchemaOperations["installDemo"]>(async () => {
       calls.push("install-demo");
     }),
+    ...overrides,
   };
 }
 
@@ -45,13 +49,44 @@ describe("demo schema preparation", () => {
     expect(calls).toEqual(["assert-core", "assert-demo"]);
   });
 
-  it("installs application schemas during development", async () => {
+  it("leaves an already-current Workhorse schema unchanged during development", async () => {
     const calls: string[] = [];
     const subject = applicationOperations(calls);
 
     await prepareApplicationSchema("development", subject);
 
-    expect(calls).toEqual(["install-core", "install-demo"]);
+    expect(calls).toEqual(["assert-core", "install-demo"]);
+  });
+
+  it.each(["3F000", "42P01"])(
+    "installs a missing Workhorse schema after PostgreSQL error %s",
+    async (code) => {
+      const calls: string[] = [];
+      const subject = applicationOperations(calls, {
+        assertCompatible: vi.fn<ApplicationSchemaOperations["assertCompatible"]>(async () => {
+          calls.push("assert-core");
+          throw Object.assign(new Error("missing schema"), { code });
+        }),
+      });
+
+      await prepareApplicationSchema("development", subject);
+
+      expect(calls).toEqual(["assert-core", "install-core", "install-demo"]);
+    },
+  );
+
+  it("does not install over an incompatible development schema", async () => {
+    const error = new Error("incompatible schema version");
+    const calls: string[] = [];
+    const subject = applicationOperations(calls, {
+      assertCompatible: vi.fn<ApplicationSchemaOperations["assertCompatible"]>(async () => {
+        calls.push("assert-core");
+        throw error;
+      }),
+    });
+
+    await expect(prepareApplicationSchema("development", subject)).rejects.toBe(error);
+    expect(calls).toEqual(["assert-core"]);
   });
 
   it.each(["3F000", "42P01"])(

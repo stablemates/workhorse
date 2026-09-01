@@ -25,7 +25,12 @@ export async function prepareApplicationSchema(
     return;
   }
 
-  await operations.install();
+  try {
+    await operations.assertCompatible();
+  } catch (error) {
+    if (!isMissingDatabaseRelationError(error)) throw error;
+    await operations.install();
+  }
   await operations.installDemo();
 }
 
