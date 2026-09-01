@@ -516,7 +516,7 @@ function BetaMark() {
         Public beta
       </span>
       <a href="/docs/compatibility" className="wh-link-underline text-fd-muted-foreground">
-        v0.1.0-beta.1 · compatibility
+        npm v0.1.0-beta.2 · compatibility
       </a>
     </div>
   );
@@ -524,7 +524,7 @@ function BetaMark() {
 
 function InstallCommands() {
   const commands = [
-    ["npm", "npm install @stablemates/workhorse@0.1.0-beta.1"],
+    ["npm", "npm install @stablemates/workhorse@0.1.0-beta.2"],
     ["python", "pip install stablemates-workhorse==0.1.0b3"],
     ["go", "go get github.com/stablemates/workhorse/go@v0.1.0-beta.1"],
   ] as const;

@@ -1,6 +1,6 @@
 {
   "name": "@stablemates/workhorse",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-beta.2",
   "private": false,
   "description": "Public beta PostgreSQL durable job queue and execution protocol",
   "homepage": "https://workhorse.run",

@@ -131,9 +131,9 @@ optional TypeScript package always declares the core version it was released wit
 The Python package version floats independently and declares compatibility through SQL protocol 1
 and schema version 1 instead of a TypeScript peer range.
 
-The first public beta is `0.1.0-beta.1` for npm and Go, and `0.1.0b1` for Python. “Public beta”
-means the release is usable for evaluation and early production adoption without a 0.x
-compatibility promise.
+The first public beta is `0.1.0-beta.2` for npm, `0.1.0-beta.1` for Go, and `0.1.0b3` for Python.
+“Public beta” means the release is usable for evaluation and early production adoption without a
+0.x compatibility promise.
 
 The dashboard and core may use different patch releases within the same minor line. The dashboard
 server reads `workhorse.dashboard_*_v1` views and versioned functions, so a core patch remains
@@ -199,13 +199,14 @@ a staged release rather than a concurrent one:
 
 1. Require a green public CI run for the candidate commit. Dispatch `.github/workflows/release.yml`
    and `.github/workflows/release-python.yml` manually with `dry-run` enabled.
-2. Download and inspect every npm and Python archive. Install all eight npm tarballs, the Python
+2. Download and inspect every npm and Python archive. Install all nine npm tarballs, the Python
    wheel, and the Python source distribution in clean consumers. Build the Go external consumer
    from the same commit. Test registries are not part of the rehearsal.
 3. Publish Python first. `0.1.0b1` and `0.1.0b2` remain public without provenance. Verify the
    fix-forward `0.1.0b3` release through PyPI before continuing.
-4. Publish npm second. Publish `@stablemates/workhorse` before its seven peer dependents, and verify
-   every `0.1.0-beta.1` package before continuing.
+4. Publish npm second. Publish `@stablemates/workhorse` before its eight dependents, and verify
+   every `0.1.0-beta.2` package before continuing. The `0.1.0-beta.1` tag stopped before its first
+   registry upload and remains unpublished.
 5. Publish Go last. Verify `go/v0.1.0-beta.1` through the public module proxy.
 
 Each verification checks registry visibility, provenance or the module checksum, and installation

@@ -3,8 +3,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { publishedPackages, repositoryRoot } from "./packages.js";
 
-const npmVersion = "0.1.0-beta.1";
+const npmVersion = "0.1.0-beta.2";
 const pythonVersion = "0.1.0b3";
+const goVersion = "0.1.0-beta.1";
 const betaLabel = "public beta";
 const compatibilityNotice = "There is no upgrade path between 0.x releases";
 
@@ -81,7 +82,7 @@ describe("the first public beta release", () => {
   it("documents the beta versions in each changelog", async () => {
     expect(await read("CHANGELOG.md")).toContain(`## ${npmVersion} — unreleased`);
     expect(await read("python/CHANGELOG.md")).toContain(`## ${pythonVersion} — unreleased`);
-    expect(await read("go/CHANGELOG.md")).toContain(`## ${npmVersion} — unreleased`);
+    expect(await read("go/CHANGELOG.md")).toContain(`## ${goVersion} — unreleased`);
   });
 
   it("builds the site with the supported Go toolchain line", async () => {
