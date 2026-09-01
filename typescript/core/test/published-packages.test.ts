@@ -261,13 +261,14 @@ describe("ORM adapter entry points", () => {
 describe("consumers of the package list", () => {
   it("packs and publishes every derived package from its TypeScript workspace location", async () => {
     const workflow = await read(".github/workflows/release.yml");
-    expect(workflow).toContain(
-      "for location in $(pnpm --silent exec tsx scripts/packages.ts --locations); do",
-    );
-    expect(workflow).toContain(
-      "for manifest in $(pnpm --silent exec tsx scripts/packages.ts --manifests); do",
-    );
-    expect(workflow).toContain('pnpm --silent --dir "$location" pack');
+    const releaseCheck = await read("scripts/check-npm-release.ts");
+    const versionCheck = await read("scripts/check-release.ts");
+    expect(releaseCheck).toContain("const packages = await publishedPackages()");
+    expect(releaseCheck).toContain("for (const entry of packages)");
+    expect(releaseCheck).toContain("entry.location");
+    expect(releaseCheck).toContain('"pack",');
+    expect(versionCheck).toContain("for (const entry of await publishedPackages())");
+    expect(versionCheck).toContain("entry.manifest");
     expect(workflow).toContain(
       "for tarball in $(pnpm --silent exec tsx scripts/packages.ts --tarballs); do",
     );

@@ -104,6 +104,12 @@ The dashboard and core may use different patch releases within the same minor li
 server reads core-owned versioned views and functions, so a core patch remains compatible when its
 migration preserves those contracts.
 
+The lockstep TypeScript packages release from `vX.Y.Z` after the tagged commit passes public CI.
+Their focused release gate checks the version contract, generated package assets, lint,
+dependencies, types, and unit behavior. It builds each tarball once, installs and exercises those
+exact files against PostgreSQL, then passes the unchanged tarballs to protected npm publication
+with provenance.
+
 `stablemates-workhorse` releases from its own `python/vX.Y.Z` tag after the tagged commit passes
 public CI. Its focused release gate checks the version, embedded dashboard bundle, Python format,
 lint, types, dependencies, and complete PostgreSQL-backed test suite. It builds and tests a source

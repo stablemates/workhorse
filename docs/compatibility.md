@@ -219,13 +219,14 @@ retracts the Go version as appropriate. Removal does not make prior public acces
 
 ### npm packages
 
-1. Update all eight package versions in lockstep and add the `CHANGELOG.md` entry for the release,
+1. Update all TypeScript package versions in lockstep and add the `CHANGELOG.md` entry for the release,
    including upgrade notes for any breaking change.
-2. Tag `vX.Y.Z`. The release workflow refuses to continue if the tag disagrees with any manifest or
-   if `CHANGELOG.md` has no entry for it.
-3. `pnpm check` runs — format, lint, types, unit and integration tests, the packed-package install
-   test, the site smoke test, and the demo smoke test.
-4. The build job uploads each package without publication credentials.
+2. Tag `vX.Y.Z`. The workflow requires a successful `main` CI push run for that commit and refuses
+   a tag that disagrees with any manifest or lacks a `CHANGELOG.md` entry.
+3. `pnpm npm:release-check` validates generated package assets, lint, dependencies, types, and unit
+   behavior. It builds every tarball once, then installs and exercises those exact files in clean
+   consumers against PostgreSQL.
+4. The build job uploads the unchanged tarballs without publication credentials.
 5. The protected `npm` environment requires approval, then publishes each package with
    `npm publish --provenance`. `@stablemates/workhorse` goes first because the other packages
    declare it as a peer.

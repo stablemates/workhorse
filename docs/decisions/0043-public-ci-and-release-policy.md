@@ -54,6 +54,14 @@ distribution once, tests those exact files in clean consumers, and passes the un
 to the protected publication job. Go, TypeScript database, documentation, parity, site, and demo
 checks remain merge gates in CI and do not run again during Python publication.
 
+The npm workflow applies the same boundary to the lockstep TypeScript packages. It requires a
+successful `main` push CI run for the tagged commit, validates generated package assets, lint,
+dependencies, types, and unit behavior, then builds every tarball once. The packed-consumer test
+installs those exact tarballs and exercises their public types and PostgreSQL behavior. The
+protected publication job receives the unchanged tarballs. Go, Python, documentation, parity,
+site, demo, and container checks remain merge gates in CI and do not run again during npm
+publication.
+
 Go stays local through `scripts/release-go.sh`. A Go module becomes public when its tag is pushed,
 so a workflow triggered by that tag cannot gate publication. The script runs the full release gate
 before it creates and pushes the annotated tag.
