@@ -2012,6 +2012,9 @@ func TestWorkerOwnershipLifecycleSupportsASingleConnectionPool(t *testing.T) {
 		t.Fatal(err)
 	}
 	config.MaxConns = 1
+	// Keep the heartbeat on the sole connection so settlement must wait for it.
+	tracer := newHeartbeatQueryTracer(150 * time.Millisecond)
+	config.ConnConfig.Tracer = tracer
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		t.Fatal(err)
@@ -2027,7 +2030,7 @@ func TestWorkerOwnershipLifecycleSupportsASingleConnectionPool(t *testing.T) {
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
 		Queue:               queueName,
 		WorkerID:            "single-connection-worker",
-		LeaseDuration:       100 * time.Millisecond,
+		LeaseDuration:       10 * time.Second,
 		HeartbeatInterval:   20 * time.Millisecond,
 		PollInterval:        5 * time.Millisecond,
 		MaintenanceInterval: 20 * time.Millisecond,
@@ -2035,8 +2038,14 @@ func TestWorkerOwnershipLifecycleSupportsASingleConnectionPool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	handlerStarted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	var releaseHandlerOnce sync.Once
+	release := func() { releaseHandlerOnce.Do(func() { close(releaseHandler) }) }
+	t.Cleanup(release)
 	worker.Handle("single-connection", func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
-		time.Sleep(250 * time.Millisecond)
+		close(handlerStarted)
+		<-releaseHandler
 		return map[string]any{"settled": true}, nil
 	})
 	workerResult := make(chan error, 1)
@@ -2047,6 +2056,13 @@ func TestWorkerOwnershipLifecycleSupportsASingleConnectionPool(t *testing.T) {
 		}
 		workerResult <- err
 	}()
+	select {
+	case <-handlerStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("single-connection worker did not start the handler")
+	}
+	tracer.waitForCalls(t, 1)
+	release()
 	select {
 	case err := <-workerResult:
 		if err != nil {
