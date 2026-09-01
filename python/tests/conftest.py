@@ -26,19 +26,25 @@ def installed_distribution_interpreters(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> dict[str, Path]:
     scratch = tmp_path_factory.mktemp("python-distributions")
-    distribution_directory = scratch / "dist"
-    subprocess.run(
-        [
-            "uv",
-            "build",
-            "--project",
-            str(REPOSITORY / "python"),
-            "--out-dir",
-            str(distribution_directory),
-        ],
-        check=True,
-        cwd=REPOSITORY,
-    )
+    configured_distributions = os.environ.get("WORKHORSE_PYTHON_DISTRIBUTIONS")
+    if configured_distributions:
+        distribution_directory = Path(configured_distributions)
+        if not distribution_directory.is_absolute():
+            distribution_directory = REPOSITORY / distribution_directory
+    else:
+        distribution_directory = scratch / "dist"
+        subprocess.run(
+            [
+                "uv",
+                "build",
+                "--project",
+                str(REPOSITORY / "python"),
+                "--out-dir",
+                str(distribution_directory),
+            ],
+            check=True,
+            cwd=REPOSITORY,
+        )
     artifacts = {
         "wheel": next(distribution_directory.glob("*.whl")),
         "sdist": next(distribution_directory.glob("*.tar.gz")),

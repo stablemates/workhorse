@@ -297,12 +297,25 @@ describe("continuous integration", () => {
 
   it("publishes Python distributions from a checked, versioned tag", async () => {
     const workflow = await read(".github/workflows/release-python.yml");
+    const releaseCheck = await read("scripts/check-python-release.ts");
 
     expect(workflow).toContain('tags: ["python/v*"]');
-    expect(workflow).toContain("pnpm release:check python $GITHUB_REF_NAME");
-    expect(workflow).toContain("pnpm db:reset:test-packed");
-    expect(workflow).toContain("pnpm check");
-    expect(workflow).toContain("uv build --project python");
+    expect(workflow).toContain("actions: read");
+    expect(workflow).toContain("actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA");
+    expect(workflow).toContain("DATABASE_URL_TEST:");
+    expect(workflow).toContain("pnpm python:release-check");
+    expect(workflow).not.toContain("pnpm check");
+    expect(workflow).not.toContain("actions/setup-go");
+    expect(workflow).not.toContain("DATABASE_URL_TEST_PACKED");
+    expect(releaseCheck).toContain('checkRelease("python", releaseTag(version))');
+    expect(releaseCheck).toContain('["dashboard-bundle:check"]');
+    expect(releaseCheck).toContain('["python:format:check"]');
+    expect(releaseCheck).toContain('["python:lint"]');
+    expect(releaseCheck).toContain('["python:vuln"]');
+    expect(releaseCheck).toContain('["python:typecheck"]');
+    expect(releaseCheck).toContain('["python:test"]');
+    expect(releaseCheck).toContain("WORKHORSE_PYTHON_DISTRIBUTIONS: stagedDistributions");
+    expect(releaseCheck).toContain('["build", "--project", "python", "--out-dir"');
     expect(workflow).toContain("needs: build");
     expect(workflow).toContain("environment: pypi");
     expect(workflow).toContain("id-token: write");
@@ -329,36 +342,38 @@ describe("continuous integration", () => {
   });
 
   it("installs the non-Node toolchains before static and release checks", async () => {
-    for (const workflowPath of [
-      ".github/workflows/ci.yml",
-      ".github/workflows/release.yml",
-      ".github/workflows/release-python.yml",
-    ]) {
+    for (const workflowPath of [".github/workflows/ci.yml", ".github/workflows/release.yml"]) {
       const workflow = await read(workflowPath);
       expect(workflow).toContain("actions/setup-go@v7");
       expect(workflow).toContain("go-version-file: go/go.mod");
       expect(workflow).toContain("astral-sh/setup-uv@v9.0.0");
     }
+
+    const pythonRelease = await read(".github/workflows/release-python.yml");
+    expect(pythonRelease).toContain("astral-sh/setup-uv@v9.0.0");
+    expect(pythonRelease).not.toContain("actions/setup-go");
   });
 
   it("installs a PostgreSQL client that matches the release service", async () => {
-    for (const workflowPath of [
-      ".github/workflows/release.yml",
-      ".github/workflows/release-python.yml",
-    ]) {
-      const workflow = await read(workflowPath);
-      expect(workflow).toContain("image: postgres:18-alpine");
-      expect(workflow).toContain(
-        "DATABASE_URL_PRIMARY: postgres://workhorse:workhorse@localhost:5432/workhorse_dev_primary",
-      );
-      expect(workflow).toContain(
-        "DATABASE_URL_TEST_PACKED: postgres://workhorse:workhorse@localhost:5432/workhorse_test_packed",
-      );
-      expect(workflow).toContain("sudo apt-get install --yes postgresql-client-18");
-      expect(workflow).toContain('echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"');
-      expect(workflow).toContain("- run: pnpm db:reset:dev-primary");
-      expect(workflow).toContain("- run: pnpm db:reset:test-packed");
-    }
+    const npmRelease = await read(".github/workflows/release.yml");
+    expect(npmRelease).toContain("image: postgres:18-alpine");
+    expect(npmRelease).toContain(
+      "DATABASE_URL_PRIMARY: postgres://workhorse:workhorse@localhost:5432/workhorse_dev_primary",
+    );
+    expect(npmRelease).toContain(
+      "DATABASE_URL_TEST_PACKED: postgres://workhorse:workhorse@localhost:5432/workhorse_test_packed",
+    );
+    expect(npmRelease).toContain("sudo apt-get install --yes postgresql-client-18");
+    expect(npmRelease).toContain('echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"');
+    expect(npmRelease).toContain("- run: pnpm db:reset:dev-primary");
+    expect(npmRelease).toContain("- run: pnpm db:reset:test-packed");
+
+    const pythonRelease = await read(".github/workflows/release-python.yml");
+    expect(pythonRelease).toContain("image: postgres:18-alpine");
+    expect(pythonRelease).toContain(
+      "DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test",
+    );
+    expect(pythonRelease).not.toContain("postgresql-client-18");
   });
 
   it("benchmarks weekly on a supported PostgreSQL major under an explicit timeout", async () => {

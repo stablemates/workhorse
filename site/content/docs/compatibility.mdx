@@ -104,10 +104,11 @@ The dashboard and core may use different patch releases within the same minor li
 server reads core-owned versioned views and functions, so a core patch remains compatible when its
 migration preserves those contracts.
 
-`stablemates-workhorse` releases from its own `python/vX.Y.Z` tag after its format, lint, type, test, packed,
-and site lanes pass. Its tag must match `python/pyproject.toml` and `python/CHANGELOG.md`. The release
-builds a source distribution and universal wheel, generates PEP 740 attestations for both, then
-PyPI trusted publishing uploads the files and attestations.
+`stablemates-workhorse` releases from its own `python/vX.Y.Z` tag after the tagged commit passes
+public CI. Its focused release gate checks the version, embedded dashboard bundle, Python format,
+lint, types, dependencies, and complete PostgreSQL-backed test suite. It builds and tests a source
+distribution and universal wheel once, generates PEP 740 attestations for those files, then PyPI
+trusted publishing uploads the unchanged files and attestations.
 
 The Go module records independent versions in `go/CHANGELOG.md`. The repository release script
 runs the full gate before it creates and pushes the matching `go/vX.Y.Z` tag.
