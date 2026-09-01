@@ -18,7 +18,7 @@ Publish the beta as one release train from the same source commit. Complete the 
 controlled release window, but publish each language line separately.
 
 Python publishes first because its single distribution provides the smallest production test of
-trusted publishing. npm follows, with `@stablemates/workhorse` before its seven peer dependents.
+trusted publishing. npm follows, with `@stablemates/workhorse` before its eight peer dependents.
 Go publishes last because public module proxies can retain a tag permanently.
 
 Rehearse only after public CI passes for the candidate commit. Manually dispatch
@@ -29,7 +29,7 @@ Do not use test registries.
 
 After each publication, verify the version through its production registry. Verify provenance or
 the module checksum, install the exact public version in a clean environment, and run a minimal
-enqueue-and-worker smoke test against a fresh PostgreSQL database. All eight npm packages must pass
+enqueue-and-worker smoke test against a fresh PostgreSQL database. All nine npm packages must pass
 before the Go stage starts. Any failure stops the train.
 
 Never reuse a published version. For an ordinary defect, leave the artifact available and publish

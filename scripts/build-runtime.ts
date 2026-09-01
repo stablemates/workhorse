@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { cp, mkdir, readFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { corePackage, repositoryRoot, workspacePackages } from "./packages.js";
 
@@ -38,6 +38,7 @@ async function buildPackage(location: string): Promise<void> {
 
 async function copyDashboardApplication(): Promise<void> {
   const target = path.join(repositoryRoot, "typescript/dashboard-server/dist/app");
+  await rm(target, { recursive: true, force: true });
   await mkdir(target, { recursive: true });
   if (!development) {
     await cp(path.join(repositoryRoot, "dashboard/app/dist/app"), target, { recursive: true });

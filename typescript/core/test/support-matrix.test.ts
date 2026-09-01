@@ -286,8 +286,29 @@ describe("continuous integration", () => {
     }
   });
 
-  it("publishes with provenance from a workflow that can mint an identity token", async () => {
+  it("publishes exact npm tarballs through a focused gate with provenance", async () => {
     const workflow = await read(".github/workflows/release.yml");
+    const releaseCheck = await read("scripts/check-npm-release.ts");
+
+    expect(workflow).toContain('tags: ["v*"]');
+    expect(workflow).toContain("actions: read");
+    expect(workflow).toContain("actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA");
+    expect(workflow).toContain("DATABASE_URL_TEST_PACKED:");
+    expect(workflow).toContain("pnpm npm:release-check");
+    expect(workflow).not.toContain("pnpm check");
+    expect(workflow).not.toContain("actions/setup-go");
+    expect(workflow).not.toContain("astral-sh/setup-uv");
+    expect(releaseCheck).toContain('checkRelease("npm", releaseTag(version))');
+    expect(releaseCheck).toContain('["sql-catalogues:check"]');
+    expect(releaseCheck).toContain('["dashboard-spec:check"]');
+    expect(releaseCheck).toContain('["build:runtime:check-dashboard-bundle"]');
+    expect(releaseCheck).toContain('["npm:lint"]');
+    expect(releaseCheck).toContain('["npm:typecheck"]');
+    expect(releaseCheck).toContain('["npm:test:unit"]');
+    expect(releaseCheck).toContain("WORKHORSE_NPM_TARBALLS: stagedTarballs");
+    expect(releaseCheck).toContain('"pack",');
+    const packedTest = await read("typescript/core/test/packed-packages.ts");
+    expect(packedTest).toContain('["audit", "--prod", "--audit-level", "high"]');
     expect(workflow).toContain("needs: build");
     expect(workflow).toContain("environment: npm");
     expect(workflow).toContain("actions/download-artifact");
@@ -342,12 +363,14 @@ describe("continuous integration", () => {
   });
 
   it("installs the non-Node toolchains before static and release checks", async () => {
-    for (const workflowPath of [".github/workflows/ci.yml", ".github/workflows/release.yml"]) {
-      const workflow = await read(workflowPath);
-      expect(workflow).toContain("actions/setup-go@v7");
-      expect(workflow).toContain("go-version-file: go/go.mod");
-      expect(workflow).toContain("astral-sh/setup-uv@v9.0.0");
-    }
+    const ci = await read(".github/workflows/ci.yml");
+    expect(ci).toContain("actions/setup-go@v7");
+    expect(ci).toContain("go-version-file: go/go.mod");
+    expect(ci).toContain("astral-sh/setup-uv@v9.0.0");
+
+    const npmRelease = await read(".github/workflows/release.yml");
+    expect(npmRelease).not.toContain("actions/setup-go");
+    expect(npmRelease).not.toContain("astral-sh/setup-uv");
 
     const pythonRelease = await read(".github/workflows/release-python.yml");
     expect(pythonRelease).toContain("astral-sh/setup-uv@v9.0.0");
@@ -358,15 +381,10 @@ describe("continuous integration", () => {
     const npmRelease = await read(".github/workflows/release.yml");
     expect(npmRelease).toContain("image: postgres:18-alpine");
     expect(npmRelease).toContain(
-      "DATABASE_URL_PRIMARY: postgres://workhorse:workhorse@localhost:5432/workhorse_dev_primary",
-    );
-    expect(npmRelease).toContain(
       "DATABASE_URL_TEST_PACKED: postgres://workhorse:workhorse@localhost:5432/workhorse_test_packed",
     );
-    expect(npmRelease).toContain("sudo apt-get install --yes postgresql-client-18");
-    expect(npmRelease).toContain('echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"');
-    expect(npmRelease).toContain("- run: pnpm db:reset:dev-primary");
-    expect(npmRelease).toContain("- run: pnpm db:reset:test-packed");
+    expect(npmRelease).not.toContain("DATABASE_URL_PRIMARY");
+    expect(npmRelease).not.toContain("postgresql-client-18");
 
     const pythonRelease = await read(".github/workflows/release-python.yml");
     expect(pythonRelease).toContain("image: postgres:18-alpine");

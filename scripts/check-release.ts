@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { publishedPackages } from "./packages.js";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const releaseVersionPattern = "[0-9]+\\.[0-9]+\\.[0-9]+(?:[ab][0-9]+|rc[0-9]+|-[-0-9A-Za-z.]+)?";
@@ -8,9 +9,12 @@ async function read(relativePath: string): Promise<string> {
   return readFile(path.join(repositoryRoot, relativePath), "utf8");
 }
 
-function releaseVersion(target: "go" | "python", tag: string): string {
-  const match = new RegExp(`^${target}/v(${releaseVersionPattern})$`).exec(tag);
-  if (!match) throw new Error(`Expected a ${target}/vX.Y.Z release tag, received ${tag}`);
+type ReleaseTarget = "go" | "npm" | "python";
+
+function releaseVersion(target: ReleaseTarget, tag: string): string {
+  const prefix = target === "npm" ? "" : `${target}/`;
+  const match = new RegExp(`^${prefix}v(${releaseVersionPattern})$`).exec(tag);
+  if (!match) throw new Error(`Expected a ${prefix}vX.Y.Z release tag, received ${tag}`);
   return match[1]!;
 }
 
@@ -25,9 +29,15 @@ async function requireChangelogVersion(relativePath: string, version: string): P
   }
 }
 
-export async function checkRelease(target: "go" | "python", tag: string): Promise<void> {
+export async function checkRelease(target: ReleaseTarget, tag: string): Promise<void> {
   const version = releaseVersion(target, tag);
-  if (target === "python") {
+  if (target === "npm") {
+    for (const entry of await publishedPackages()) {
+      if (entry.version !== version) {
+        throw new Error(`${entry.manifest} is ${entry.version} but the tag is ${version}`);
+      }
+    }
+  } else if (target === "python") {
     const manifest = await read("python/pyproject.toml");
     const declaredVersion = /^version = "([^"]+)"$/m.exec(manifest)?.[1];
     if (!declaredVersion) throw new Error("python/pyproject.toml declares no project version");
@@ -35,13 +45,18 @@ export async function checkRelease(target: "go" | "python", tag: string): Promis
       throw new Error(`python/pyproject.toml is ${declaredVersion} but the tag is ${version}`);
     }
   }
-  await requireChangelogVersion(`${target}/CHANGELOG.md`, version);
+  await requireChangelogVersion(
+    target === "npm" ? "CHANGELOG.md" : `${target}/CHANGELOG.md`,
+    version,
+  );
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
   const [target, tag] = process.argv.slice(2);
-  if ((target !== "go" && target !== "python") || !tag) {
-    process.stderr.write("Usage: pnpm release:check <go|python> <go/vX.Y.Z|python/vX.Y.Z>\n");
+  if ((target !== "go" && target !== "npm" && target !== "python") || !tag) {
+    process.stderr.write(
+      "Usage: pnpm release:check <go|npm|python> <go/vX.Y.Z|vX.Y.Z|python/vX.Y.Z>\n",
+    );
     process.exitCode = 1;
   } else {
     try {

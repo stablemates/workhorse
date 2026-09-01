@@ -30,6 +30,7 @@ const scratchRoot = process.env.JCODE_SCRATCH_DIR ?? tmpdir();
 const scratch = await mkdtemp(path.join(scratchRoot, "workhorse-packed-"));
 const packedDatabaseUrl = process.env.DATABASE_URL_TEST_PACKED;
 if (!packedDatabaseUrl) throw new Error("DATABASE_URL_TEST_PACKED is required");
+const configuredTarballs = process.env.WORKHORSE_NPM_TARBALLS;
 
 async function run(
   command: string,
@@ -88,28 +89,40 @@ async function filesBelow(directory: string): Promise<string[]> {
 }
 
 try {
-  const tarballs = path.join(scratch, "tarballs");
-  await mkdir(tarballs);
-  await run("pnpm", [
-    "--silent",
-    "--dir",
-    "typescript/core",
-    "pack",
-    "--pack-destination",
-    tarballs,
-  ]);
   // Which packages get packed, and what each tarball is called, are read from the workspace rather
   // than listed here, so a new package is covered by this check the day it is added.
   const published = await publishedPackages();
-  for (const entry of await workspacePackages()) {
+  const tarballs = configuredTarballs
+    ? path.resolve(repository, configuredTarballs)
+    : path.join(scratch, "tarballs");
+  if (configuredTarballs) {
+    const actual = (await readdir(tarballs)).toSorted();
+    const expected = published.map((entry) => entry.tarball).toSorted();
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      throw new Error(
+        `Expected exactly ${expected.join(", ")}; received ${actual.join(", ") || "no tarballs"}`,
+      );
+    }
+  } else {
+    await mkdir(tarballs);
     await run("pnpm", [
       "--silent",
       "--dir",
-      entry.location,
+      "typescript/core",
       "pack",
       "--pack-destination",
       tarballs,
     ]);
+    for (const entry of await workspacePackages()) {
+      await run("pnpm", [
+        "--silent",
+        "--dir",
+        entry.location,
+        "pack",
+        "--pack-destination",
+        tarballs,
+      ]);
+    }
   }
 
   const tarballFor = (name: string): string => {
@@ -148,6 +161,29 @@ try {
   const coreTarball = tarballFor("@stablemates/workhorse");
   const dashboardTarball = tarballFor("@stablemates/workhorse-dashboard");
   const dashboardServerTarball = tarballFor("@stablemates/workhorse-dashboard-server");
+
+  const auditConsumer = path.join(scratch, "audit-consumer");
+  await mkdir(auditConsumer);
+  await writeFile(
+    path.join(auditConsumer, "package.json"),
+    JSON.stringify({
+      name: "workhorse-packed-audit-consumer",
+      private: true,
+      packageManager,
+      dependencies: Object.fromEntries(
+        published.map((entry) => [entry.name, `file:${tarballFor(entry.name)}`]),
+      ),
+      pnpm: {
+        autoInstallPeers: false,
+        overrides: Object.fromEntries(
+          published.map((entry) => [entry.name, `file:${tarballFor(entry.name)}`]),
+        ),
+      },
+    }),
+  );
+  await run("pnpm", ["install", "--ignore-scripts", "--frozen-lockfile=false"], auditConsumer);
+  await run("pnpm", ["audit", "--prod", "--audit-level", "high"], auditConsumer);
+
   const dashboardContainer = await readFile(path.join(repository, "Dockerfile.dashboard"), "utf8");
   for (const artifact of [
     "workhorse-core.tgz",
@@ -293,23 +329,25 @@ try {
     throw new Error("Packed dashboard server contains stale third-party notices");
   }
 
-  const pythonVersion = /^version = "([^"]+)"$/m.exec(
-    await readFile(path.join(repository, "python", "pyproject.toml"), "utf8"),
-  )?.[1];
-  if (!pythonVersion) throw new Error("Python package declares no version");
-  const pythonDistributions = (await readdir(path.join(repository, "python", "dist")))
-    .filter((name) => name.startsWith(`stablemates_workhorse-${pythonVersion}`))
-    .filter((name) => name.endsWith(".whl") || name.endsWith(".tar.gz"));
-  if (pythonDistributions.length !== 2) {
-    throw new Error("Python build must produce one wheel and one source distribution");
+  if (!configuredTarballs) {
+    const pythonVersion = /^version = "([^"]+)"$/m.exec(
+      await readFile(path.join(repository, "python", "pyproject.toml"), "utf8"),
+    )?.[1];
+    if (!pythonVersion) throw new Error("Python package declares no version");
+    const pythonDistributions = (await readdir(path.join(repository, "python", "dist")))
+      .filter((name) => name.startsWith(`stablemates_workhorse-${pythonVersion}`))
+      .filter((name) => name.endsWith(".whl") || name.endsWith(".tar.gz"));
+    if (pythonDistributions.length !== 2) {
+      throw new Error("Python build must produce one wheel and one source distribution");
+    }
+    await run("uv", [
+      "run",
+      "--project",
+      "python",
+      "python/tests/support/check_dashboard_distribution.py",
+      ...pythonDistributions.map((name) => path.join(repository, "python", "dist", name)),
+    ]);
   }
-  await run("uv", [
-    "run",
-    "--project",
-    "python",
-    "python/tests/support/check_dashboard_distribution.py",
-    ...pythonDistributions.map((name) => path.join(repository, "python", "dist", name)),
-  ]);
 
   const consumer = path.join(scratch, "consumer");
   await mkdir(consumer);
@@ -723,51 +761,53 @@ try {
   await run("node", ["dashboard-auth.mjs"], consumer);
   await run("node", ["dashboard-standalone.mjs"], consumer);
 
-  const image = `workhorse-dashboard-packed-test:${process.pid}`;
-  const containerName = `workhorse-dashboard-packed-${process.pid}`;
-  let containerId: string | undefined;
-  try {
-    await run("docker", ["build", "-f", "Dockerfile.dashboard", "-t", image, "."]);
-    const port = await availablePort();
-    containerId = (
-      await run("docker", [
-        "run",
-        "--rm",
-        "-d",
-        "--name",
-        containerName,
-        "-p",
-        `127.0.0.1:${port}:3000`,
-        "-e",
-        "DATABASE_URL=postgres://unused:unused@127.0.0.1:1/unused",
-        "-e",
-        "WORKHORSE_DASHBOARD_USERNAME=operator",
-        "-e",
-        "WORKHORSE_DASHBOARD_PASSWORD_HASH=scrypt-v1$d29ya2hvcnNlLWF1dGgtc2FsdA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        "-e",
-        "WORKHORSE_DASHBOARD_PUBLIC_ORIGIN=https://dashboard.example",
-        image,
-      ])
-    ).trim();
-    const loginResponse = await waitForContainer(port, containerId);
-    if (!(await loginResponse.text()).includes("Sign in")) {
-      throw new Error("Packed dashboard container did not serve the login page");
+  if (!configuredTarballs) {
+    const image = `workhorse-dashboard-packed-test:${process.pid}`;
+    const containerName = `workhorse-dashboard-packed-${process.pid}`;
+    let containerId: string | undefined;
+    try {
+      await run("docker", ["build", "-f", "Dockerfile.dashboard", "-t", image, "."]);
+      const port = await availablePort();
+      containerId = (
+        await run("docker", [
+          "run",
+          "--rm",
+          "-d",
+          "--name",
+          containerName,
+          "-p",
+          `127.0.0.1:${port}:3000`,
+          "-e",
+          "DATABASE_URL=postgres://unused:unused@127.0.0.1:1/unused",
+          "-e",
+          "WORKHORSE_DASHBOARD_USERNAME=operator",
+          "-e",
+          "WORKHORSE_DASHBOARD_PASSWORD_HASH=scrypt-v1$d29ya2hvcnNlLWF1dGgtc2FsdA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "-e",
+          "WORKHORSE_DASHBOARD_PUBLIC_ORIGIN=https://dashboard.example",
+          image,
+        ])
+      ).trim();
+      const loginResponse = await waitForContainer(port, containerId);
+      if (!(await loginResponse.text()).includes("Sign in")) {
+        throw new Error("Packed dashboard container did not serve the login page");
+      }
+      const protectedResponse = await fetch(`http://127.0.0.1:${port}/tasks`, {
+        redirect: "manual",
+      });
+      if (
+        protectedResponse.status !== 302 ||
+        protectedResponse.headers.get("location") !== "/login"
+      ) {
+        throw new Error("Packed dashboard container did not protect the application route");
+      }
+      if ((await run("docker", ["exec", containerId, "id", "-u"])).trim() === "0") {
+        throw new Error("Packed dashboard container must not run as root");
+      }
+    } finally {
+      if (containerId) await exec("docker", ["stop", containerId]).catch(() => undefined);
+      await exec("docker", ["image", "rm", image]).catch(() => undefined);
     }
-    const protectedResponse = await fetch(`http://127.0.0.1:${port}/tasks`, {
-      redirect: "manual",
-    });
-    if (
-      protectedResponse.status !== 302 ||
-      protectedResponse.headers.get("location") !== "/login"
-    ) {
-      throw new Error("Packed dashboard container did not protect the application route");
-    }
-    if ((await run("docker", ["exec", containerId, "id", "-u"])).trim() === "0") {
-      throw new Error("Packed dashboard container must not run as root");
-    }
-  } finally {
-    if (containerId) await exec("docker", ["stop", containerId]).catch(() => undefined);
-    await exec("docker", ["image", "rm", image]).catch(() => undefined);
   }
   process.stdout.write("Packed core, ORM providers, and dashboard consumer tests passed.\n");
 } finally {
