@@ -27,5 +27,6 @@ published site; they do not own product behavior.
 - [`schema-lifecycle.md`](schema-lifecycle.md) owns the procedure for changing and releasing the
   database schema.
 
-Architectural decisions live in [`decisions/`](decisions/). Dated investigations and evidence live
-in [`audits/`](audits/), [`benchmarks/`](benchmarks/), and [`research/`](research/).
+Architectural decisions live in [`decisions/`](decisions/). Dated benchmark reports and raw results
+live in [`benchmarks/`](benchmarks/). Wayfinder research notes stay on throwaway `research/*`
+branches and never merge, because the publication boundary keeps `docs/research/` out of `main`.
