@@ -1,0 +1,88 @@
+{
+  "task": "D",
+  "language": "typescript",
+  "run": "2026-09-01-baseline",
+  "recordedAt": "2026-09-01",
+  "model": "unrecorded",
+  "provenance": "reconstructed",
+  "source": "docs/research/2026-09-01-agent-docs-baseline.md on branch research/agent-docs-baseline at 940eb913 (WH-518). URL trails, install commands and mistake reads are transcribed from that note; per-fetch content types and byte counts were not recorded and are therefore absent.",
+  "fetches": [
+    {
+      "url": "https://raw.githubusercontent.com/stablemates/workhorse/main/README.md",
+      "status": 200
+    },
+    { "url": "https://workhorse.run/docs", "status": 200 },
+    {
+      "url": "https://raw.githubusercontent.com/stablemates/workhorse/main/README.md",
+      "status": 200,
+      "note": "refetch"
+    },
+    {
+      "url": "https://workhorse.run/llms.txt",
+      "status": 200,
+      "note": "the session called this the most useful single fetch"
+    },
+    { "url": "https://workhorse.run/docs/quickstart", "status": 200 },
+    { "url": "https://workhorse.run/docs/installation.md", "status": 200 },
+    { "url": "https://workhorse.run/docs/enqueue.md", "status": 200 },
+    { "url": "https://workhorse.run/docs/workers.md", "status": 200 },
+    { "url": "https://workhorse.run/docs/quickstart.md", "status": 200 },
+    { "url": "https://workhorse.run/docs/worker-processes.md", "status": 200 },
+    { "url": "https://workhorse.run/docs/retries.md", "status": 200 },
+    { "url": "https://workhorse.run/docs/api.md", "status": 200 },
+    { "url": "https://workhorse.run/docs/examples.md", "status": 200 },
+    { "url": "https://workhorse.run/docs/concepts.md", "status": 200 },
+    { "url": "https://workhorse.run/docs/idempotency.md", "status": 200 },
+    {
+      "url": "https://raw.githubusercontent.com/stablemates/workhorse/main/typescript/core/src/index.ts",
+      "status": 200,
+      "purpose": "signature"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/stablemates/workhorse/main/typescript/core/src/queue.ts",
+      "status": 200,
+      "purpose": "signature"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/stablemates/workhorse/main/typescript/core/src/worker.ts",
+      "status": 200,
+      "purpose": "signature"
+    }
+  ],
+  "install": [
+    {
+      "command": "npm install @stablemates/workhorse@0.1.0-beta.2",
+      "registry": "npm",
+      "package": "@stablemates/workhorse",
+      "version": "0.1.0-beta.2",
+      "resolved": true
+    },
+    {
+      "command": "npx --package @stablemates/workhorse@0.1.0-beta.2 workhorse schema install",
+      "registry": "npm",
+      "package": "@stablemates/workhorse",
+      "version": "0.1.0-beta.2",
+      "resolved": true
+    },
+    {
+      "command": "npx --package @stablemates/workhorse@0.1.0-beta.2 workhorse schema status",
+      "registry": "npm",
+      "package": "@stablemates/workhorse",
+      "version": "0.1.0-beta.2",
+      "resolved": true
+    },
+    {
+      "command": "npx --package @stablemates/workhorse@0.1.0-beta.2 workhorse schema migrate",
+      "registry": "npm",
+      "package": "@stablemates/workhorse",
+      "version": "0.1.0-beta.2",
+      "resolved": true
+    }
+  ],
+  "mistakes": {
+    "enqueueOutsideTransaction": "clean",
+    "schemaOnRuntimePath": "clean",
+    "effectOutsideCheckpoint": "clean"
+  },
+  "produced": []
+}

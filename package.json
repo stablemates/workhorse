@@ -61,6 +61,8 @@
     "benchmark:retention-strategies": "tsx scripts/with-env.ts tsx scripts/benchmark-retention-strategies.ts",
     "benchmark:dashboard-read-surface": "tsx scripts/with-env.ts tsx scripts/benchmark-dashboard-read-surface.ts",
     "benchmark:statistics-tiers": "tsx scripts/with-env.ts tsx scripts/benchmark-statistics-tiers.ts",
+    "agent-eval:record": "tsx scripts/with-env.ts tsx scripts/agent-eval/record.ts",
+    "agent-eval:score": "tsx scripts/with-env.ts tsx scripts/agent-eval/score.ts",
     "lint": "oxlint --deny-warnings --import-plugin --vitest-plugin typescript dashboard site scripts vitest*.config.ts && pnpm lint:dead-code && pnpm python:lint && pnpm go:lint",
     "lint:dead-code": "knip --dependencies --exports --no-config-hints",
     "lint:fix": "oxlint --fix --import-plugin --vitest-plugin typescript dashboard site scripts vitest*.config.ts",
@@ -115,6 +117,7 @@
     "build:dashboard": "tsx scripts/build-runtime.ts --dashboard"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.123.0",
     "@opentelemetry/context-async-hooks": "2.10.0",
     "@opentelemetry/core": "2.10.0",
     "@opentelemetry/sdk-metrics": "2.10.0",

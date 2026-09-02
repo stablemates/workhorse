@@ -28,5 +28,6 @@ published site; they do not own product behavior.
   database schema.
 
 Architectural decisions live in [`decisions/`](decisions/). Dated benchmark reports and raw results
-live in [`benchmarks/`](benchmarks/). Wayfinder research notes stay on throwaway `research/*`
+live in [`benchmarks/`](benchmarks/), and dated agent documentation eval notes live in
+[`agent-evals/`](agent-evals/). Wayfinder research notes stay on throwaway `research/*`
 branches and never merge, because the publication boundary keeps `docs/research/` out of `main`.

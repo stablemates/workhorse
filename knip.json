@@ -4,7 +4,7 @@
   "ignore": ["typescript/dashboard-server/src/server/types.ts"],
   "workspaces": {
     ".": {
-      "entry": ["scripts/*.ts", "vitest*.config.ts"],
+      "entry": ["scripts/*.ts", "scripts/agent-eval/*.ts", "vitest*.config.ts"],
       "ignoreDependencies": ["@vitest/coverage-v8"]
     },
     "dashboard/app": {

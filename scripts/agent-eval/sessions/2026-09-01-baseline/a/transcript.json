@@ -1,0 +1,66 @@
+{
+  "task": "A",
+  "language": "typescript",
+  "run": "2026-09-01-baseline",
+  "recordedAt": "2026-09-01",
+  "model": "unrecorded",
+  "provenance": "reconstructed",
+  "source": "docs/research/2026-09-01-agent-docs-baseline.md on branch research/agent-docs-baseline at 940eb913 (WH-518). URL trails, install commands and mistake reads are transcribed from that note; per-fetch content types and byte counts were not recorded and are therefore absent.",
+  "fetches": [
+    { "url": "https://workhorse.run/", "status": 200 },
+    { "url": "https://workhorse.run/docs/quickstart", "status": 200 },
+    { "url": "https://workhorse.run/docs/installation", "status": 200 },
+    { "url": "https://workhorse.run/docs/api", "status": 200 },
+    { "url": "https://workhorse.run/docs/examples", "status": 200 },
+    { "url": "https://workhorse.run/docs", "status": 200 },
+    { "url": "https://workhorse.run/docs/examples", "status": 200, "note": "refetch" },
+    { "url": "https://workhorse.run/docs/concepts", "status": 200 },
+    { "url": "https://github.com/stablemates/workhorse", "status": 200 },
+    { "url": "https://workhorse.run/docs/workers", "status": 200 },
+    { "url": "https://workhorse.run/docs/retries", "status": 200 },
+    { "url": "https://workhorse.run/docs/workers", "status": 200, "note": "refetch" },
+    { "url": "https://workhorse.run/docs/operations", "status": 200 },
+    { "url": "https://workhorse.run/docs/worker-processes", "status": 200 },
+    {
+      "url": "https://www.npmjs.com/package/@stablemates/workhorse",
+      "status": 403,
+      "note": "could not confirm the published version"
+    }
+  ],
+  "install": [
+    {
+      "command": "npm install @stablemates/workhorse@0.1.0-beta.3",
+      "registry": "npm",
+      "package": "@stablemates/workhorse",
+      "version": "0.1.0-beta.3",
+      "resolved": false
+    },
+    {
+      "command": "npx --package @stablemates/workhorse@0.1.0-beta.3 workhorse schema install",
+      "registry": "npm",
+      "package": "@stablemates/workhorse",
+      "version": "0.1.0-beta.3",
+      "resolved": false
+    },
+    {
+      "command": "npx --package @stablemates/workhorse@0.1.0-beta.3 workhorse schema status --json",
+      "registry": "npm",
+      "package": "@stablemates/workhorse",
+      "version": "0.1.0-beta.3",
+      "resolved": false
+    },
+    {
+      "command": "npx --package @stablemates/workhorse@0.1.0-beta.3 workhorse schema migrate",
+      "registry": "npm",
+      "package": "@stablemates/workhorse",
+      "version": "0.1.0-beta.3",
+      "resolved": false
+    }
+  ],
+  "mistakes": {
+    "enqueueOutsideTransaction": "clean",
+    "schemaOnRuntimePath": "clean",
+    "effectOutsideCheckpoint": "clean"
+  },
+  "produced": []
+}

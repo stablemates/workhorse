@@ -1,0 +1,70 @@
+{
+  "task": "B",
+  "language": "python",
+  "run": "2026-09-01-baseline",
+  "recordedAt": "2026-09-01",
+  "model": "unrecorded",
+  "provenance": "reconstructed",
+  "source": "docs/research/2026-09-01-agent-docs-baseline.md on branch research/agent-docs-baseline at 940eb913 (WH-518). URL trails, install commands and mistake reads are transcribed from that note; per-fetch content types and byte counts were not recorded and are therefore absent.",
+  "fetches": [
+    { "url": "https://workhorse.run/", "status": 200 },
+    { "url": "https://workhorse.run/docs/quickstart", "status": 200 },
+    { "url": "https://workhorse.run/docs/installation", "status": 200 },
+    { "url": "https://workhorse.run/docs", "status": 200 },
+    { "url": "https://workhorse.run/docs/api", "status": 200 },
+    { "url": "https://workhorse.run/docs/python", "status": 404 },
+    { "url": "https://workhorse.run/docs/concepts", "status": 200 },
+    { "url": "https://workhorse.run/docs/examples", "status": 200 },
+    { "url": "https://workhorse.run/docs/workers", "status": 200 },
+    {
+      "url": "https://workhorse.run/docs/for-ai-agents",
+      "status": 200,
+      "note": "the session called this the fetch that made the task tractable"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/stablemates/workhorse/main/python/README.md",
+      "status": 200,
+      "purpose": "signature"
+    },
+    { "url": "https://workhorse.run/docs/for-ai-agents.md", "status": 200 },
+    { "url": "https://workhorse.run/docs/enqueue.md", "status": 200 },
+    { "url": "https://workhorse.run/docs/workers.md", "status": 200 },
+    { "url": "https://workhorse.run/docs/installation.md", "status": 200 },
+    { "url": "https://workhorse.run/docs/idempotency.md", "status": 200 },
+    {
+      "url": "https://pypi.org/project/stablemates-workhorse/",
+      "status": 200,
+      "note": "found the Node requirement for the schema step here, not on the site"
+    },
+    { "url": "https://workhorse.run/docs/idempotency.md", "status": 200, "note": "refetch" }
+  ],
+  "install": [
+    {
+      "command": "pip install stablemates-workhorse==0.1.0b3",
+      "registry": "pypi",
+      "package": "stablemates-workhorse",
+      "version": "0.1.0b3",
+      "resolved": true
+    },
+    {
+      "command": "npx --package @stablemates/workhorse@0.1.0-beta.2 workhorse schema install",
+      "registry": "npm",
+      "package": "@stablemates/workhorse",
+      "version": "0.1.0-beta.2",
+      "resolved": true
+    },
+    {
+      "command": "npx --package @stablemates/workhorse@0.1.0-beta.2 workhorse schema status",
+      "registry": "npm",
+      "package": "@stablemates/workhorse",
+      "version": "0.1.0-beta.2",
+      "resolved": true
+    }
+  ],
+  "mistakes": {
+    "enqueueOutsideTransaction": "clean",
+    "schemaOnRuntimePath": "clean",
+    "effectOutsideCheckpoint": "committed"
+  },
+  "produced": []
+}
