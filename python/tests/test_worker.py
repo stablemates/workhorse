@@ -8,6 +8,7 @@ from typing import Any
 
 import psycopg
 import pytest
+from eventual_conditions import eventually
 
 import workhorse.worker as worker_module
 from workhorse import (
@@ -1459,14 +1460,13 @@ def test_worker_recovers_an_expired_claim_before_dispatch(database_url: str) -> 
         ).fetchone()
         assert abandoned is not None
         assert str(abandoned[0]) == job_id
-        sleep(0.12)
 
         worker = Worker(
             worker_connection,
             worker_id="python-recovery-worker",
         ).handle("lease.recovered", lambda _payload, _context: {"recovered": True})
 
-        assert worker.run_once() is True
+        eventually(worker.run_once, "the abandoned 100 ms lease was never recovered")
         outcome = worker_connection.execute(
             "SELECT state, current_attempt, result FROM workhorse.job_outcome WHERE job_id = %s",
             (job_id,),
@@ -1525,9 +1525,12 @@ def test_handler_failure_retries_on_the_database_schedule(database_url: str) -> 
         ).fetchone()
         assert failed_attempt == ("retry", "RuntimeError", "provider unavailable")
 
-        sleep(0.55)
-        promoted = worker_connection.execute("SELECT workhorse.promote_v1(100)").fetchone()
-        assert promoted == (1,)
+        eventually(
+            lambda: (
+                worker_connection.execute("SELECT workhorse.promote_v1(100)").fetchone() == (1,)
+            ),
+            "the retry backoff never elapsed into a promotable job",
+        )
         assert worker.run_once() is True
         assert attempts == 2
 

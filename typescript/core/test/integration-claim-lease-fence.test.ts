@@ -1011,7 +1011,7 @@ describe("claim lease fence", () => {
     });
 
     const deadlineId = await queue.enqueue("wait-deadline", null, {
-      deadline: new Date(Date.now() + 120),
+      deadline: new Date(Date.now() + 60_000),
       executionTimeoutMs: 5_000,
     });
     const deadlineWorker = new Worker(queue, {
@@ -1023,7 +1023,15 @@ describe("claim lease fence", () => {
       return null;
     });
     expect(await deadlineWorker.runOnce()).toBe(true);
-    await sleep(140);
+    expect(await admin.getJob(deadlineId)).toMatchObject({ state: "scheduled" });
+    // The deadline has to expire while the job is suspended. A real 120 ms deadline raced this
+    // setup on a loaded runner: the handler saw it pass and failed the attempt itself, leaving
+    // recovery nothing to reclaim. Expiring it here keeps the assertion on recovery.
+    await pool.query(
+      `UPDATE workhorse.job_runtime SET deadline_at = clock_timestamp() - interval '1 second'
+        WHERE job_id = $1`,
+      [deadlineId],
+    );
     expect(await queue.recoverExpired()).toBe(1);
     expect(await admin.getJob(deadlineId)).toMatchObject({
       state: "failed",
@@ -1501,17 +1509,20 @@ describe("claim lease fence", () => {
 
   it("charges retries as new starts and validates deployment ownership", async () => {
     const queueName = `rate-limit-retry-${randomUUID()}`;
+    // A 100 ms interval let an ordinary CI stall refill the bucket before the assertion that the
+    // retry is still charged, and made the refill itself a fixed sleep. An interval no stall can
+    // outlast, plus an explicit refill-clock rewind, asserts the same charge deterministically.
     await queue.syncRateLimitPolicies("deployment-a", [
-      { queue: queueName, rate: { limit: 1, intervalMs: 100, burst: 1 } },
+      { queue: queueName, rate: { limit: 1, intervalMs: 60_000, burst: 1 } },
     ]);
     await expect(
       queue.syncRateLimitPolicies("deployment-b", [
-        { queue: queueName, rate: { limit: 1, intervalMs: 100, burst: 1 } },
+        { queue: queueName, rate: { limit: 1, intervalMs: 60_000, burst: 1 } },
       ]),
     ).rejects.toThrow(/owned by another namespace/);
     await expect(
       queue.syncRateLimitPolicies("deployment-a", [
-        { queue: queueName, rate: { limit: 0, intervalMs: 100, burst: 1 } },
+        { queue: queueName, rate: { limit: 0, intervalMs: 60_000, burst: 1 } },
       ]),
     ).rejects.toThrow(/bounded positive integers/);
 
@@ -1521,7 +1532,12 @@ describe("claim lease fence", () => {
       "ready",
     );
     await expect(queue.claim("rate-retry-worker", { queue: queueName })).resolves.toBeNull();
-    await sleep(110);
+    await pool.query(
+      `UPDATE workhorse.rate_limit_bucket
+          SET refilled_at = clock_timestamp() - interval '61 seconds'
+        WHERE queue_name = $1 AND bucket_scope = 'queue'`,
+      [queueName],
+    );
     await expect(queue.claim("rate-retry-worker", { queue: queueName })).resolves.toMatchObject({
       attempt: 2,
     });

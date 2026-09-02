@@ -10,6 +10,7 @@ from typing import cast
 
 import psycopg
 import pytest
+from eventual_conditions import eventually
 
 from workhorse import Queue, Worker, run_worker_process
 
@@ -134,7 +135,6 @@ def test_killed_worker_job_is_recovered_and_completed_once(
         _kill_and_reap(crashed)
         assert crashed.returncode is not None
 
-        sleep(0.25)
         completions = 0
         with psycopg.connect(database_url, autocommit=True) as recovery_connection:
 
@@ -147,7 +147,7 @@ def test_killed_worker_job_is_recovered_and_completed_once(
                 recovery_connection,
                 worker_id="python-recovery-worker",
             ).handle("process.crash-recovery", complete)
-            assert worker.run_once() is True
+            eventually(worker.run_once, "the killed worker's lease was never recovered")
             outcome = recovery_connection.execute(
                 "SELECT state, current_attempt, result FROM workhorse.job_outcome "
                 "WHERE job_id = %s",

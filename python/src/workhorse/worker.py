@@ -5,6 +5,7 @@ import os
 import random
 import socket
 import traceback
+from bisect import insort
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -104,6 +105,11 @@ class _PendingBatchMember:
     arrived_at: float
     item: BatchHandlerItem
     result: Future[Json]
+
+
+def _batch_member_order(member: _PendingBatchMember) -> tuple[int, int]:
+    """Rank one waiting member by descending job priority, then worker claim order."""
+    return (-member.item.context.job.priority, member.arrival_order)
 
 
 @dataclass(eq=False, slots=True)
@@ -833,6 +839,8 @@ class Worker:
         self._execution_lock = Lock()
         self._wake = Event()
         self._active_threads: set[Thread] = set()
+        self._dispatch_sequence = 0
+        self._dispatch_order: dict[str, int] = {}
         self._run_errors: list[BaseException] = []
         self._locally_paused = False
         self._remotely_paused = False
@@ -1018,9 +1026,10 @@ class Worker:
 
         pending_lock = Lock()
         pending_queues: dict[str, list[_PendingBatchMember]] = {}
-        next_arrival = 0
 
         def take_batch(queue_name: str) -> list[_PendingBatchMember]:
+            # Callers hold pending_lock, and every member enters through insort, so the waiting
+            # list is already in dispatch order. The prefix is both the group and its ordering.
             pending = pending_queues.get(queue_name)
             if not pending:
                 return []
@@ -1028,9 +1037,7 @@ class Worker:
             del pending[:max_size]
             if not pending:
                 del pending_queues[queue_name]
-            return sorted(
-                batch, key=lambda member: (-member.item.context.job.priority, member.arrival_order)
-            )
+            return batch
 
         def record_batch(
             statement: DriverStatement,
@@ -1118,20 +1125,19 @@ class Worker:
                     member.result.set_exception(outcome["error"])
 
         def batch_member_handler(payload: Any, context: HandlerContext) -> Json:
-            nonlocal next_arrival
             member = _PendingBatchMember(
-                arrival_order=0,
+                arrival_order=self._claim_order(context.job),
                 arrived_at=monotonic(),
                 item=BatchHandlerItem(cast(Json, payload), context._as_batch_context()),
                 result=Future(),
             )
             with pending_lock:
-                member.arrival_order = next_arrival
-                next_arrival += 1
                 pending = pending_queues.setdefault(context.job.queue, [])
-                pending.append(member)
+                insort(pending, member, key=_batch_member_order)
                 batch = take_batch(context.job.queue) if len(pending) >= max_size else []
-                first_arrived_at = pending[0].arrived_at if pending else member.arrived_at
+                first_arrived_at = (
+                    min(waiting.arrived_at for waiting in pending) if pending else member.arrived_at
+                )
             if batch:
                 dispatch(batch)
             elif linger_ms == 0:
@@ -1654,8 +1660,17 @@ class Worker:
             name=f"workhorse-handler-{job.id}",
         )
         with self._state_lock:
+            # The dispatcher assigns this on the claiming thread, in claim order. A batch
+            # coordinator cannot read arrival order off its own lock instead, because handler
+            # threads start concurrently and reach that lock in scheduler order, not claim order.
+            self._dispatch_order[job.id] = self._dispatch_sequence
+            self._dispatch_sequence += 1
             self._active_threads.add(thread)
         thread.start()
+
+    def _claim_order(self, job: ClaimedJob) -> int:
+        with self._state_lock:
+            return self._dispatch_order.get(job.id, self._dispatch_sequence)
 
     def _run_claimed_job(self, job: ClaimedJob) -> None:
         try:
@@ -1667,6 +1682,7 @@ class Worker:
         finally:
             with self._state_lock:
                 self._active_threads.discard(current_thread())
+                self._dispatch_order.pop(job.id, None)
             self._wake.set()
 
     def _drain_active_threads(self) -> None:

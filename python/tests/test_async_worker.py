@@ -7,6 +7,7 @@ from typing import Any
 import asyncpg
 import psycopg
 import pytest
+from eventual_conditions import eventually_async
 
 from workhorse import (
     AsyncBatchHandlerItem,
@@ -73,8 +74,7 @@ async def test_async_psycopg_worker_uses_async_handlers_and_durable_context(
         )
 
         assert await worker.run_once() is True
-        await asyncio.sleep(0.12)
-        assert await worker.run_once() is True
+        await eventually_async(worker.run_once, "the durable sleep did not wake the job")
         assert operations == 1
         assert outcome(database_url, job_id) == (
             "succeeded",
