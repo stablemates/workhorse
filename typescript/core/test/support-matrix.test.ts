@@ -505,15 +505,20 @@ describe("documentation", () => {
     expect(sitePage).not.toContain(claimedNodeMajors);
     expect(installation).toContain("[Compatibility](/docs/compatibility)");
     // Installation links to Compatibility rather than restating a floor, so raising one in
-    // support.json needs no edit here. The forbidden strings are derived from the manifest, so a
-    // raised floor moves what this forbids rather than leaving a stale rule behind.
-    for (const restatement of [
-      `PostgreSQL ${manifest.support.postgres.minimum}`,
-      `Node.js ${manifest.support.node.minimum}`,
-      `Python ${manifest.support.python.minimum}`,
-      `Go ${goMinimum}`,
-    ]) {
-      expect(installation).not.toContain(restatement);
+    // support.json needs no edit here. What is forbidden is the shape, not the value: the page
+    // states no supported version, so `Node.js 20` is as much a restatement as `Node.js 22`, and
+    // a rule built from the current floor would only ever catch the number that is right. The
+    // runtime names come from the manifest's own keys, so a newly supported runtime fails here
+    // until it is brought under the same rule.
+    const runtimeNames = {
+      go: "Go",
+      node: "Node.js",
+      postgres: "PostgreSQL",
+      python: "Python",
+    } satisfies Record<keyof SupportManifest["support"], string>;
+    expect(Object.keys(runtimeNames).toSorted()).toEqual(Object.keys(manifest.support).toSorted());
+    for (const name of Object.values(runtimeNames)) {
+      expect(installation).not.toMatch(new RegExp(`${name.replaceAll(".", "\\.")}\\s\\d`));
     }
     // The smoke tier is a weaker claim than support, and both layers must state it as such: the
     // reference names each runtime's tier section, and the site page describes it without pinning
