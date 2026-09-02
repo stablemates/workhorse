@@ -30,4 +30,7 @@ published site; they do not own product behavior.
 Architectural decisions live in [`decisions/`](decisions/). Dated benchmark reports and raw results
 live in [`benchmarks/`](benchmarks/), and dated agent documentation eval notes live in
 [`agent-evals/`](agent-evals/). Wayfinder research notes stay on throwaway `research/*`
-branches and never merge, because the publication boundary keeps `docs/research/` out of `main`.
+branches. They never merge and they never push. ADR 0044 removed every tracked file under
+`docs/research/` before publication, and `origin` is public, so a branch pushed there is published
+whether or not it ever merges. Keep the branch on the machine that made it, and cite a note's
+findings rather than its path, the way ADR 0049 cites the agent documentation baseline.
