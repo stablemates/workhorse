@@ -10,6 +10,11 @@ There is no upgrade path between 0.x releases; ordered migrations begin at 1.0.0
 
 ### Fixed
 
+- `Worker.handle_batch` now groups and orders members by the worker's claim order. Each job runs
+  on its own handler thread, so members previously reached the coordinator in thread scheduling
+  order. Two equal-priority jobs could therefore appear in the batch in either order.
+  `AsyncWorker.handle_batch` shares the coordinator and gains the same guarantee.
+
 - The fix-forward release uploads PEP 740 attestations with its wheel and source distribution.
   The package behavior is unchanged from `0.1.0b1`.
 

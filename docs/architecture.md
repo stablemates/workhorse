@@ -352,7 +352,9 @@ core owns replay and persistence.
 handler. `max_size` accepts integers from 1 through 100 and cannot exceed `Worker.concurrency`.
 `linger_ms` accepts integers from 0 through 60000. Each job occupies one worker slot while it waits
 for a full group or the linger deadline. The coordinator groups one type and queue, then orders the
-selected members by descending `ClaimedJob.priority` and arrival order.
+selected members by descending `ClaimedJob.priority` and worker claim order. Each job occupies its
+own handler thread, so the dispatcher stamps a claim sequence before that thread starts. The
+coordinator ranks by that sequence, not by the order threads reach it.
 
 The handler receives a sequence of `BatchHandlerItem` values. Each item contains `payload` and a
 `BatchHandlerContext` with `job`, `cancellation`, `get_checkpoint`, `checkpoint`, `get_progress`,
