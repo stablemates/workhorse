@@ -20,23 +20,30 @@ password, and rewrites the username to its worktree ID. If the key is absent, co
 primary checkout and rerun that repository's worktree setup; do not copy another worktree's DSN or
 mint another Agent.
 
-If a request names no exact `WH-*` Issue, search open Workhorse Issues for one that owns the requested
-outcome. If none matches, file an Issue with `app.file_issue`, `project_key => 'WH'`, and checkable
-acceptance criteria. Use that Issue as the target before changing tracked files.
+If a request names an exact `WH-*` Issue, that Issue is the target. If a request asks for the next
+piece of work, claim it with `app.claim_next(project_key => 'WH')`: one atomic statement that
+takes the highest-priority, oldest, unblocked Todo Issue in `WH` and skips rows other Sessions hold.
+Do not query the Board, pick a key, and then call `app.claim_issue`; on a shared Board the gap
+between the query and the claim is a race. If a request names an outcome but no key, search open
+Workhorse Issues for one that owns that outcome. If none matches, file an Issue with
+`app.file_issue`, `project_key => 'WH'`, and checkable acceptance criteria.
 
 Before changing tracked files:
 
 1. Load this checkout's `.env` and connect with a PostgreSQL client. Require the DSN to be
    passwordless, TLS-required, and named for this checkout.
-2. Read the target `WH-*` Issue, its Comments, and both ends of its Relations. Read the repository's
-   `CONTEXT.md` and relevant decision records when the work changes domain behavior.
-3. Claim that exact Issue with `app.claim_issue('WH-123')`. Work only Issues this Session holds.
+2. Claim the target: `app.claim_next(project_key => 'WH')` for the next Issue, or
+   `app.claim_issue('WH-123')` when the request names that exact Issue. Work only Issues this
+   Session holds.
+3. Read the claimed `WH-*` Issue, its Comments, and both ends of its Relations. Read the
+   repository's `CONTEXT.md` and relevant decision records when the work changes domain behavior.
+   If the Issue turns out not to be workable by this Session, Comment why and release it with
+   `app.release_issue`.
 
 The host Agent may see other Ontrack Projects, so every Board read must filter
 `project_key = 'WH'`, every new Issue must pass `project_key => 'WH'`, and every mutation must name
-an exact `WH-*` key. Never use `app.claim_next()`: it is not Project-scoped and can claim another
-repository's work. To choose work, query eligible Workhorse Issues first and then claim the chosen
-key explicitly.
+an exact `WH-*` key. Never call the bare `app.claim_next()` without `project_key`: that form spans
+every Project the Agent is a Member of and can claim another repository's work.
 
 An imported Issue's Ontrack `WH-*` key is its current working identity. Its `Plane provenance`
 section and source UUID preserve the historical Plane key. In Git history, `WH-*` subjects before
