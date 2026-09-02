@@ -504,6 +504,17 @@ describe("documentation", () => {
     expect(sitePage).not.toContain(claimed);
     expect(sitePage).not.toContain(claimedNodeMajors);
     expect(installation).toContain("[Compatibility](/docs/compatibility)");
+    // Installation links to Compatibility rather than restating a floor, so raising one in
+    // support.json needs no edit here. The forbidden strings are derived from the manifest, so a
+    // raised floor moves what this forbids rather than leaving a stale rule behind.
+    for (const restatement of [
+      `PostgreSQL ${manifest.support.postgres.minimum}`,
+      `Node.js ${manifest.support.node.minimum}`,
+      `Python ${manifest.support.python.minimum}`,
+      `Go ${goMinimum}`,
+    ]) {
+      expect(installation).not.toContain(restatement);
+    }
     // The smoke tier is a weaker claim than support, and both layers must state it as such: the
     // reference names each runtime's tier section, and the site page describes it without pinning
     // versions it does not test.
