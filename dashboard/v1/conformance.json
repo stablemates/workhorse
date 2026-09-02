@@ -6053,6 +6053,32 @@
           }
         },
         {
+          "id": "enqueue-test-feature",
+          "procedure": "enqueueTest",
+          "request": {
+            "json": {
+              "kind": "feature",
+              "feature": "signals",
+              "priority": 0,
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "jobId": {
+                  "$type": "uuid"
+                }
+              }
+            }
+          }
+        },
+        {
           "id": "set-schedule-enabled",
           "procedure": "setScheduleEnabled",
           "request": {
@@ -6252,6 +6278,165 @@
                 "runAt": {
                   "$type": "timestamp"
                 }
+              }
+            }
+          }
+        },
+        {
+          "id": "run-task-now-promoted-event",
+          "procedure": "events",
+          "request": {
+            "json": {
+              "window": "1h",
+              "pageSize": 25,
+              "types": [
+                "promoted"
+              ],
+              "jobId": {
+                "$ref": "scheduledJob"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "page": 1,
+                "total": 1,
+                "events": [
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "event",
+                    "type": "promoted",
+                    "jobId": {
+                      "$ref": "scheduledJob"
+                    },
+                    "queue": "conformance",
+                    "attempt": 1,
+                    "details": {
+                      "reason": "manual",
+                      "requested_by": "conformance",
+                      "request_reason": "conformance exchange",
+                      "request_id_digest": "d4e9bf8d68c9",
+                      "request_id_length": 19,
+                      "request_id_preview": "conforma…uest"
+                    },
+                    "jobType": "conformance.scheduled",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "workerId": null,
+                    "durationMs": null,
+                    "fenceToken": null,
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": null
+                  }
+                ],
+                "window": "1h",
+                "pageSize": 25,
+                "retention": {
+                  "jobEventDays": 14,
+                  "attemptHistoryDays": 14
+                },
+                "capturedAt": {
+                  "$type": "timestamp"
+                },
+                "windowSeconds": 3600
+              }
+            }
+          }
+        },
+        {
+          "id": "run-task-now-repeat",
+          "procedure": "runTaskNow",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "scheduledJob"
+              },
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "status": "already_ready",
+                "id": {
+                  "$ref": "scheduledJob"
+                },
+                "state": "ready",
+                "runAt": {
+                  "$type": "timestamp"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "run-task-now-already-ready",
+          "procedure": "runTaskNow",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "readyJob"
+              },
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "status": "already_ready",
+                "id": {
+                  "$ref": "readyJob"
+                },
+                "state": "ready",
+                "runAt": {
+                  "$type": "timestamp"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "run-task-now-waiting",
+          "procedure": "runTaskNow",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "signalJob"
+              },
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance exchange",
+                "requestId": "conformance-request"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "status": "waiting",
+                "id": {
+                  "$ref": "signalJob"
+                },
+                "state": "scheduled",
+                "runAt": "9999-12-31T00:00:00.000Z"
               }
             }
           }

@@ -83,7 +83,7 @@ func normalizeJSON(value any) any {
 	case string:
 		if strings.Contains(current, "T") {
 			if moment, err := time.Parse(time.RFC3339Nano, current); err == nil {
-				return moment.UTC().Format("2006-01-02T15:04:05.000Z")
+				return moment.UTC().Format(dashboardTimestampLayout)
 			}
 		}
 	}
@@ -127,12 +127,21 @@ func oneRow(rows []workhorse.Row, name string) (workhorse.Row, error) {
 	return rows[0], nil
 }
 
+// One instant must serialize to one string in every language, so this is the layout the whole
+// dashboard uses. It matches JavaScript `Date.toISOString()` and Python
+// `isoformat(timespec="milliseconds")`: UTC, always three fractional digits.
+//
+// `time.RFC3339Nano` cannot be used here. It drops trailing zeros, so a whole second becomes
+// `...T00:00:00Z` where the other two backends write `...T00:00:00.000Z`, and it keeps microsecond
+// precision PostgreSQL supplies where the other two truncate to milliseconds.
+const dashboardTimestampLayout = "2006-01-02T15:04:05.000Z"
+
 func timestamp(value any) any {
 	if value == nil {
 		return nil
 	}
 	if moment, ok := value.(time.Time); ok {
-		return moment.UTC().Format(time.RFC3339Nano)
+		return moment.UTC().Format(dashboardTimestampLayout)
 	}
 	return value
 }
