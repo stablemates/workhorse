@@ -13,7 +13,7 @@ set -eu
 
 : "${KAMAL_VERSION:?Kamal sets KAMAL_VERSION for its hooks}"
 
-repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 
 # Kamal uploads each role's secret environment file when it boots a container, and it runs this
 # hook before that, so the file is the one the previous deploy wrote. That is correct for every

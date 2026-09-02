@@ -159,7 +159,7 @@ describe("the demo's schema step runs from the pipeline", () => {
   });
 
   it("runs it from the pre-deploy hook, in the image being deployed", async () => {
-    const hook = await readFile(resolve(repositoryRoot, ".kamal/hooks/pre-deploy"), "utf8");
+    const hook = await readFile(resolve(repositoryRoot, ".kamal/hooks/demo/pre-deploy"), "utf8");
 
     expect(hook).toContain("kamal app exec");
     // Without the version, `kamal app exec` resolves an image from the deploying checkout's HEAD

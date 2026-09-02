@@ -119,13 +119,17 @@ restores either database. Database recovery belongs to the operator's private ru
 
 ## The schema step runs from the pipeline
 
-`.kamal/hooks/pre-deploy` runs the schema step. Kamal calls that hook after it builds and pushes the
+`.kamal/hooks/demo/pre-deploy` runs the schema step. Kamal calls that hook after it builds and pushes the
 image and before it boots any container from it, which is the window the step belongs in: the
 database is ready for the new release before a process from that release exists.
 
 ```sh
 bundle exec kamal app exec --version "$KAMAL_VERSION" "node dist/prepare-schema.js"
 ```
+
+Each application names its own hooks directory. Kamal's default is `.kamal/hooks` relative to the
+working directory, and both configs are deployed from the repository root, so an unqualified
+directory would run the demo's schema step during a site deploy.
 
 `kamal app exec` starts a new container from the version being deployed, with the role's
 environment and volumes, so the schema tool is the one inside the image that is about to serve
