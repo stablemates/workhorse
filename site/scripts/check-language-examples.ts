@@ -192,6 +192,108 @@ for (const pattern of examplePatterns) {
   }
 }
 
+// The agent playbook page names SDK identifiers in prose that no compiler sees. Tier 1 is the
+// compilation of its `verify` fences below. Tier 2 requires every backticked identifier the prose
+// attributes to a language to appear in that language's `verify` fence on the same page. Tier 3
+// admits the identifiers no fence exercises through a fixed allowlist, and each entry names the
+// source file that must still define it.
+type PlaybookLanguage = "ts" | "python" | "go";
+const playbookLanguageNames: Record<string, PlaybookLanguage> = {
+  TypeScript: "ts",
+  Python: "python",
+  Go: "go",
+};
+const playbookLanguagePattern = /TypeScript|Python|Go/g;
+// Identifiers named in the playbook's prose that its fences do not exercise, paired with the source
+// file that defines each one. An entry the prose no longer needs fails the check, so the list cannot
+// outlive the sentence it serves.
+const playbookProseAllowlist: Record<string, string> = {
+  // The example never asserts schema compatibility, because the schema is installed by deployment.
+  assertSchemaCompatible: "typescript/core/src/schema.ts",
+  assert_schema_compatible: "python/src/workhorse/compatibility.py",
+  AssertCompatible: "go/compatibility.go",
+  // Enqueue bounds the example does not set. Prose with no language attribution is read as the
+  // TypeScript spelling, which is the spelling the cross-SDK pages lead with.
+  deadline: "typescript/core/src/types.ts",
+  executionTimeoutMs: "typescript/core/src/types.ts",
+  // An HTTP header, not an SDK name. ADR 0049 records that the Markdown twin does not negotiate on it.
+  Accept: "docs/decisions/0049-publish-one-agent-documentation-layer.md",
+};
+const playbookFences = Object.fromEntries(
+  (["ts", "python", "go"] as const).map((language) => {
+    const fence = "`".repeat(3);
+    const matches = [
+      ...agentIntegrationSource.matchAll(
+        new RegExp(`${fence}${language} verify\\n([\\s\\S]*?)\\n {0,4}${fence}`, "g"),
+      ),
+    ];
+    if (matches.length !== 1) {
+      throw new Error(`for-ai-agents.mdx must hold exactly one ${language} verify fence`);
+    }
+    return [language, matches[0]![1]!];
+  }),
+) as Record<PlaybookLanguage, string>;
+const playbookProse = agentIntegrationSource
+  .replace(/^---\n[\s\S]*?\n---\n/, "")
+  .replace(/^ {0,4}`{3}[^\n]*\n[\s\S]*?\n {0,4}`{3}$/gm, "");
+const playbookSentences = playbookProse
+  .split(/\n\s*\n/)
+  .flatMap((paragraph) => paragraph.replace(/\s+/g, " ").split(/(?<=[.!?])\s+/));
+const consultedAllowlist = new Set<string>();
+
+function playbookProseLanguages(sentence: string, start: number, end: number): PlaybookLanguage[] {
+  // "`name` in TypeScript and Python" attributes the span to the languages that follow it. Failing
+  // that, the nearest language named earlier in the sentence owns it, as in "Go wraps ... `name`".
+  const following = sentence
+    .slice(end)
+    .match(/^ in ((?:(?:TypeScript|Python|Go)(?:,? (?:and|or) |, ))*(?:TypeScript|Python|Go))/);
+  const attributed = following
+    ? [...following[1]!.matchAll(playbookLanguagePattern)].map((match) => match[0])
+    : [...sentence.slice(0, start).matchAll(playbookLanguagePattern)].slice(-1).map((m) => m[0]);
+  return attributed.length > 0 ? attributed.map((name) => playbookLanguageNames[name]!) : ["ts"];
+}
+
+function playbookFenceUses(fence: string, identifier: string): boolean {
+  // `Admin.getJob` is satisfied by `new Admin(pool).getJob(jobId)`: the member must appear as a
+  // whole word, and each qualifier may end a longer name such as `NewAdmin`.
+  const segments = identifier.replace(/\(.*\)$/, "").split(".");
+  const member = segments.pop()!;
+  return (
+    new RegExp(`\\b${member}\\b`).test(fence) &&
+    segments.every((qualifier) => new RegExp(`${qualifier}\\b`).test(fence))
+  );
+}
+
+for (const sentence of playbookSentences) {
+  for (const match of sentence.matchAll(/`([^`]+)`/g)) {
+    const span = match[1]!;
+    if (!/^[A-Za-z_][\w.]*(?:\([^()]*\))?$/.test(span)) continue;
+    for (const language of playbookProseLanguages(
+      sentence,
+      match.index,
+      match.index + match[0].length,
+    )) {
+      if (playbookFenceUses(playbookFences[language], span)) continue;
+      const sourcePath = playbookProseAllowlist[span];
+      if (sourcePath === undefined) {
+        throw new Error(
+          `for-ai-agents.mdx names ${span} for ${language} but no ${language} verify fence uses it`,
+        );
+      }
+      consultedAllowlist.add(span);
+      const source = readFileSync(resolve(repositoryRoot, sourcePath), "utf8");
+      if (!new RegExp(`\\b${span}\\b`).test(source)) {
+        throw new Error(`for-ai-agents.mdx names ${span}, which ${sourcePath} no longer defines`);
+      }
+    }
+  }
+}
+for (const name of Object.keys(playbookProseAllowlist)) {
+  if (!consultedAllowlist.has(name)) {
+    throw new Error(`for-ai-agents.mdx no longer needs the allowlist entry for ${name}`);
+  }
+}
+
 function verifiedDocumentationExamples(language: "ts" | "python" | "go"): string[] {
   const fence = "`".repeat(3);
   const pattern = new RegExp(`${fence}${language} verify\\n([\\s\\S]*?)\\n {0,4}${fence}`, "g");
