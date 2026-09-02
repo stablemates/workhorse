@@ -10,7 +10,7 @@ const baseUrl = `http://127.0.0.1:${port}`;
 
 function assertIncludesTokens(body: string, page: string, tokens: readonly string[]): void {
   for (const token of tokens) {
-    if (!body.includes(token)) throw new Error(`${page} omitted SEO token ${token}`);
+    if (!body.includes(token)) throw new Error(`${page} omitted required token ${token}`);
   }
 }
 
@@ -118,13 +118,31 @@ try {
   // Expanding the tabs cost no size, because the twins already carried all three
   // languages and de-indenting the fences gave a little back. The bound catches a
   // generator that starts repeating content, not ordinary growth.
-  const llmsFullBytes = Buffer.byteLength(
-    await (await fetch(`${baseUrl}/llms-full.txt`)).text(),
-    "utf8",
-  );
+  const llmsFullText = await (await fetch(`${baseUrl}/llms-full.txt`)).text();
+  const llmsFullBytes = Buffer.byteLength(llmsFullText, "utf8");
   if (llmsFullBytes > 320_000) {
     throw new Error(`llms-full.txt grew to ${llmsFullBytes} bytes, well past its 256 KB shape`);
   }
+
+  // The router's lead is the prose above its first `##`. It has to name the
+  // entry point, the `.md` rule, and the Installation page, and the size it
+  // states for `llms-full.txt` has to be the size the file actually has, so a
+  // generator that types the number instead of measuring it fails here.
+  const llmsLead = (await (await fetch(`${baseUrl}/llms.txt`)).text()).split("\n## ")[0]!;
+  assertIncludesTokens(llmsLead, "The llms.txt lead", [
+    "https://workhorse.run/docs/for-ai-agents.md",
+    "Append `.md` to any page URL",
+    "https://workhorse.run/docs/installation.md",
+    `about ${Math.round(llmsFullBytes / 1000)} KB`,
+  ]);
+  // The full file carries its own lead rather than a copy of the router's: it
+  // points back at the index and states the version rule for the install
+  // commands it contains.
+  assertIncludesTokens(llmsFullText.split("\n## ")[0]!, "The llms-full.txt lead", [
+    "every documentation page in one download",
+    "https://workhorse.run/llms.txt",
+    "name no version",
+  ]);
 
   const landingHtml = await (await fetch(`${baseUrl}/`)).text();
   assertIncludesTokens(landingHtml, "The landing page", [
