@@ -102,7 +102,8 @@ availability must be independent from the application database.
   compatibility facade. Its server and type contract are also published for package composition.
 - [`@stablemates/workhorse-otel`](typescript/otel) connects core's vendor-neutral telemetry to the
   host application's OpenTelemetry API providers.
-- The [Python SDK](python) and [Go SDK](go) implement the same PostgreSQL protocol.
+- The [Python SDK](python) and [Go SDK](go) implement the same PostgreSQL protocol and embed the
+  same operator dashboard.
 
 ## Learn and operate
 

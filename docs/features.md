@@ -12,8 +12,8 @@ This is the authoritative implementation snapshot for schema version 1. “Suppo
 | Deploy-synchronized worker-owned schedules                 |                                               | Arbitrary scheduled SQL                |
 | Persisted retry policies and terminal failure              | Success-path comparative baseline             | Workflow runtime                       |
 | Queue pause/resume/purge controls and OpenTelemetry        | Operations dashboard without SSO or RBAC      | Rust SDK                               |
-| Four ORM providers and framework-neutral dashboard host    | Python and Go SDKs, short of full parity      | Online production migration guarantees |
-|                                                            |                                               | Public HTTP ingress API                |
+| Four ORM providers and framework-neutral dashboard host    |                                               | Online production migration guarantees |
+| Python and Go SDKs at full parity with TypeScript          |                                               | Public HTTP ingress API                |
 | Live runtime plus immutable outcomes                       |                                               |                                        |
 | Append-only events and attempt history                     |                                               |                                        |
 | Immutable named checkpoint replay                          |                                               |                                        |
