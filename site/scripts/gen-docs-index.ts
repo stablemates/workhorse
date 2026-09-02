@@ -482,9 +482,27 @@ await Promise.all(
 );
 
 /**
- * `/llms.txt`, the index an agent reads before fetching anything. It mirrors
- * the sidebar, so the grouping a human sees and the grouping an agent sees
- * cannot drift apart.
+ * The page an agent starts at, and the page whose install commands it copies.
+ * `llms.txt` names both above the fold, so each slug is resolved against
+ * `pages` and the build fails rather than routing an agent to a page nobody
+ * ships.
+ */
+const entryPointSlug = "for-ai-agents";
+const installationSlug = "installation";
+
+const routerPage = (slug: string): PageRecord => {
+  const page = pages.get(slug);
+  if (!page) throw new Error(`The router names "${slug}", which has no file in content/docs`);
+  return page;
+};
+const entryPoint = routerPage(entryPointSlug);
+const installation = routerPage(installationSlug);
+
+/**
+ * `/llms.txt`, the index an agent reads before fetching anything. Its lead is
+ * free-form prose above the first `##`; the `##` sections mirror the sidebar,
+ * so the grouping a human sees and the grouping an agent sees cannot drift
+ * apart.
  */
 const llmsSection = (group: Group, depth = 2): string => {
   const heading = "#".repeat(depth);
@@ -496,27 +514,14 @@ const llmsSection = (group: Group, depth = 2): string => {
   return [`${heading} ${group.title}`, "", ...lines, "", ...nested].join("\n");
 };
 
-await writeFile(
-  new URL("../public/llms.txt", import.meta.url),
-  `# ${siteConfig.name}
-
-> ${siteConfig.description}
-
-Every page below is available as Markdown by appending \`.md\` to its URL.
-For the complete documentation in one file, read [llms-full.txt](${base}/llms-full.txt).
-
-${structure.map((group) => llmsSection(group)).join("\n")}
-## Optional
-
-- [Repository](${siteConfig.github})
-- [npm](${siteConfig.npm})
-`,
-);
-
 /**
  * `/llms-full.txt`, every page in sidebar order. The separator and canonical
  * URL identify each page, and the document that follows is the same body the
  * standalone twin carries, without the twin's frontmatter.
+ *
+ * It is built before `llms.txt` is written, because the router states this
+ * file's size and reads the number from the string as written rather than
+ * from a figure someone typed.
  */
 const llmsFullSection = (group: Group, depth = 2): string => {
   const heading = "#".repeat(depth);
@@ -530,16 +535,50 @@ const llmsFullSection = (group: Group, depth = 2): string => {
   return [`${heading} ${group.title}`, "", ...documents, "", ...nested].join("\n");
 };
 
+/**
+ * The full file's lead is its own, not a copy of the router's. An agent holding
+ * this file has already fetched everything, so routing it is a no-op; what it
+ * still needs is where the index lives and how to install.
+ */
+const llmsFull = `# ${siteConfig.name}
+
+> ${siteConfig.description}
+
+This file is every documentation page in one download. For the page index and the Markdown URLs,
+read [llms.txt](${base}/llms.txt).
+
+Install with the commands under ${installation.title} below. They name no version, and the runtime
+compatibility check confirms the schema before a process starts.
+
+${structure.map((group) => llmsFullSection(group)).join("\n")}`;
+
+const llmsFullKilobytes = Math.round(Buffer.byteLength(llmsFull, "utf8") / 1000);
+
 await writeFile(
-  new URL("../public/llms-full.txt", import.meta.url),
+  new URL("../public/llms.txt", import.meta.url),
   `# ${siteConfig.name}
 
 > ${siteConfig.description}
 
-For the concise documentation index, read [llms.txt](${base}/llms.txt).
+Start at [${entryPoint.title}](${base}${entryPoint.url}.md). ${entryPoint.description}
 
-${structure.map((group) => llmsFullSection(group)).join("\n")}`,
+Append \`.md\` to any page URL for its Markdown source. A Markdown page shows all three languages
+where the HTML page shows one.
+
+Install with the commands on [${installation.title}](${base}${installation.url}.md). They name no
+version, and the runtime compatibility check confirms the schema before a process starts.
+
+[llms-full.txt](${base}/llms-full.txt) is every page below in one file, about ${llmsFullKilobytes} KB.
+
+${structure.map((group) => llmsSection(group)).join("\n")}
+## Optional
+
+- [Repository](${siteConfig.github})
+- [npm](${siteConfig.npm})
+`,
 );
+
+await writeFile(new URL("../public/llms-full.txt", import.meta.url), llmsFull);
 
 // The search index is derived data. Crawling it wastes budget. Markdown twins
 // are not derived: they are the same content in a form an agent can read, so
