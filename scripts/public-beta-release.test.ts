@@ -18,7 +18,7 @@ const pythonSourceCommit = "663c526805746786f12b3be3e151e8ce06c80057";
 const goSourceCommit = "dbd5437362930f712157ffcc72c3296e971e4f5a";
 
 const betaLabel = "public beta";
-const compatibilityNotice = "There is no upgrade path between 0.x releases";
+const compatibilityNotice = "inside a major line a migration only adds";
 
 interface SupportManifest {
   readonly support: {

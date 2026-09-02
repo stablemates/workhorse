@@ -63,9 +63,10 @@ history you can query with `Admin.getJob` and `Admin.getJobTimeline`.
 If your application already runs on PostgreSQL and needs reliable background work, Workhorse fits.
 Choose its TypeScript, Python, or Go SDK and connect it to PostgreSQL 15 or newer.
 
-Workhorse is a public beta. It is usable for evaluation and early production adoption, but any
-minor release may break compatibility, including the schema. There is no upgrade path between 0.x
-releases; ordered migrations begin at 1.0.0.
+Workhorse is a public beta. It is usable for evaluation and early production adoption. A minor
+release may change behaviour, so read the changelog before you upgrade. It will not ask you to
+recreate your database: migrations are ordered, and inside a major line a migration only adds, so a
+running deployment upgrades in place.
 
 Workhorse supports strict priority, dependency fan-in, child jobs, external signals, and human
 decisions. Orchestration remains application code rather than a separate workflow definition.

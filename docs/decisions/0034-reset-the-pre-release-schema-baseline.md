@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-22
+- **Amended by:** [ADR 0053](0053-start-migrations-at-0-1-0-and-keep-them-additive.md)
 - **Related:** [ADR 0027](0027-keep-versioned-dashboard-views.md), [ADR 0028](0028-flat-per-language-repository-layout.md)
 - **Amends:** the migration policy in `docs/schema-lifecycle.md`
 

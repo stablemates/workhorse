@@ -2752,9 +2752,10 @@ interactive stdin and stdout is refused with exit 1.
 
 ## Operational limits
 
-- The canonical artifact installs version 1, which is the whole schema. While the line is `0.x`
-  there are no migrations: a schema change is a reinstall, not an upgrade. `migrateSchema` exists,
-  validates, and has nothing to apply until the first ordered step ships at 1.0.0.
+- The canonical artifact installs version 1, which is the whole schema and is frozen as
+  `sql/releases/0001.sql`. From `0.1.0` a schema change is an upgrade rather than a reinstall:
+  `migrateSchema` applies the ordered steps under `sql/migrations/`. The plan is empty at `0.1.0`,
+  so `migrateSchema` validates and has nothing to apply until the first step ships.
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
   `uuid_v7_v1()` uses core UUID and byte functions rather than `pgcrypto` or `uuid-ossp`.
 - Schedules fire only while one worker has matching `scheduleNamespaces` or `schedule_namespaces`.
