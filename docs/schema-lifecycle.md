@@ -81,7 +81,10 @@ change first needs it, together with its resume semantics.
 
 `workhorse.schema_migration` records the installed migration history. `workhorse.protocol_version`
 independently records which SQL protocol versions the installed schema serves, so a protocol
-revision is never inferred from a schema version. Schema versions and SQL function versions remain
+revision is never inferred from a schema version. That table is also the compatibility ceiling: a
+client refuses an installed schema that no longer lists the protocol it speaks, and a major release
+narrows the list when it removes a superseded function. A client applies no ceiling of its own,
+because it cannot know at build time which later release will stop serving it. Schema versions and SQL function versions remain
 separate: a migration may add `claim_v2` while retaining `claim_v1` for the rest of the major line.
 
 ## Expand and contract across deployments
@@ -131,6 +134,10 @@ Inside a major line there is no upper bound, because the additive rule guarantee
 schema still carries every function an older release calls. At the boundary the bound closes: a
 major release removes superseded functions, so a client from the previous major refuses a schema
 that has crossed it.
+
+`workhorse.protocol_version` is where the installed schema states that bound, and
+`assertSchemaCompatible`, `AssertCompatible`, and `assert_compatible` read it in the same statement
+that reads the schema version.
 
 How long a superseded function is retained is not yet decided. `docs/compatibility.md` records the
 range each release supports.

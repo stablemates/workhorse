@@ -9,11 +9,16 @@ import {
   DASHBOARD_RUNTIME_CONFIG_PLACEHOLDER,
 } from "../src/server/html.js";
 import type { DashboardRouter } from "../src/server/router.js";
-import { WORKHORSE_SCHEMA_VERSION } from "@stablemates/workhorse";
+import { PROTOCOL_VERSION, WORKHORSE_SCHEMA_VERSION } from "@stablemates/workhorse";
 
 const fakeDatabase = (): Queryable =>
   ({
-    query: async () => ({ rows: [{ version: WORKHORSE_SCHEMA_VERSION }] }),
+    query: async () => ({
+      rows: [
+        { kind: "protocol", version: PROTOCOL_VERSION },
+        { kind: "schema", version: WORKHORSE_SCHEMA_VERSION },
+      ],
+    }),
   }) as unknown as Queryable;
 
 // Serving the application from the dev hook keeps this test independent of the packaged bundle.

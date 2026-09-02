@@ -9,13 +9,18 @@ import { describe, expect, it, vi } from "vitest";
 import { createDashboardHost } from "../src/server/host.js";
 import { isDashboardMutation, type DashboardRouter } from "../src/server/router.js";
 import type { DashboardAuditContext } from "../src/server/types.js";
-import { WORKHORSE_SCHEMA_VERSION } from "@stablemates/workhorse";
+import { PROTOCOL_VERSION, WORKHORSE_SCHEMA_VERSION } from "@stablemates/workhorse";
 
 const salt = Buffer.from("workhorse-auth-test-salt");
 const passwordHash = `scrypt-v1$${salt.toString("base64url")}$${scryptSync("correct horse", salt, 32).toString("base64url")}`;
 
 const database = {
-  query: async () => ({ rows: [{ version: WORKHORSE_SCHEMA_VERSION }] }),
+  query: async () => ({
+    rows: [
+      { kind: "protocol", version: PROTOCOL_VERSION },
+      { kind: "schema", version: WORKHORSE_SCHEMA_VERSION },
+    ],
+  }),
 } as unknown as Queryable;
 const dashboardAuthenticationSuite = existsSync(
   path.resolve(import.meta.dirname, "../dist/app/login.html"),

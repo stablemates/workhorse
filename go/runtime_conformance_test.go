@@ -262,7 +262,7 @@ func assertRuntimeManifestCompatibility(t *testing.T, manifest protocolFixtureMa
 		t.Fatalf("fixture protocol %d differs from Go protocol %d", manifest.ProtocolVersion, workhorse.ProtocolVersion)
 	}
 	installed := manifest.Schema.InstalledVersion
-	if err := workhorse.CheckCompatibility(&installed, manifest.ProtocolVersion); err != nil {
+	if err := workhorse.CheckCompatibility(&installed, manifest.ProtocolVersion, []int{manifest.ProtocolVersion}); err != nil {
 		t.Fatalf("runtime fixture manifest is incompatible: %v", err)
 	}
 	if installed < manifest.Schema.MinimumVersion || installed > manifest.Schema.MaximumVersion ||

@@ -26,6 +26,9 @@ const fixtureCleanDatabase = createDatabaseTestHarness(
 const releaseDatabase = createDatabaseTestHarness(new URL("?release", import.meta.url).href, {
   schemaProvisioning: "install",
 });
+const lockDatabase = createDatabaseTestHarness(new URL("?lock", import.meta.url).href, {
+  schemaProvisioning: "install",
+});
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const executeFile = promisify(execFile);
 
@@ -67,6 +70,7 @@ describe("schema migrations", () => {
       fixtureDatabase.setup(),
       fixtureCleanDatabase.setup(),
       releaseDatabase.setup(),
+      lockDatabase.setup(),
     ]);
     await Promise.all([
       fixtureDatabase.pool.query("DROP SCHEMA workhorse CASCADE"),
@@ -80,6 +84,7 @@ describe("schema migrations", () => {
       fixtureDatabase.teardown(),
       fixtureCleanDatabase.teardown(),
       releaseDatabase.teardown(),
+      lockDatabase.teardown(),
     ]);
   });
 
@@ -179,6 +184,77 @@ describe("schema migrations", () => {
     expect(state.rows).toEqual([{ version: 3, leaked: null }]);
   });
 
+  it("gives up a migration that waits too long for a table lock, and rolls it back", async () => {
+    // An ALTER TABLE takes ACCESS EXCLUSIVE, and PostgreSQL queues every later statement on that
+    // table behind the waiting acquisition. A worker holds long transactions by design, so an
+    // unbounded wait would stall the queue instead of failing the deployment.
+    const blocker = await lockDatabase.pool.connect();
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT version FROM workhorse.protocol_version");
+
+      await expect(
+        applySchemaMigrationPlan(
+          lockDatabase.pool,
+          {
+            baselineVersion: 1,
+            currentVersion: 2,
+            steps: [{ fromVersion: 1, toVersion: 2, file: "0002.sql", description: "blocked" }],
+            readStep: () =>
+              Promise.resolve("ALTER TABLE workhorse.protocol_version ADD COLUMN probe integer;"),
+            lockTimeoutMs: 250,
+          },
+          1,
+        ),
+      ).rejects.toThrow("waited longer than 250ms for a lock");
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+    }
+
+    const state = await lockDatabase.pool.query<{ version: number; probe: string | null }>(
+      `SELECT version,
+              (SELECT attname::text
+                 FROM pg_attribute
+                WHERE attrelid = 'workhorse.protocol_version'::regclass AND attname = 'probe') AS probe
+         FROM workhorse.schema_version`,
+    );
+    expect(state.rows).toEqual([{ version: 1, probe: null }]);
+  });
+
+  it("waits without a deadline for a peer migrator that holds the advisory lock", async () => {
+    // lock_timeout is disabled while the advisory lock is acquired: another migrator finishing its
+    // step is expected, and its result is indistinguishable from this one's success.
+    const peer = await lockDatabase.pool.connect();
+    try {
+      await peer.query("BEGIN");
+      await peer.query("SELECT pg_advisory_xact_lock(hashtext('workhorse:schema-migration'))");
+      const migration = applySchemaMigrationPlan(
+        lockDatabase.pool,
+        {
+          baselineVersion: 1,
+          currentVersion: 2,
+          steps: [{ fromVersion: 1, toVersion: 2, file: "0002.sql", description: "queued" }],
+          readStep: () => Promise.resolve("SELECT 1;"),
+          lockTimeoutMs: 250,
+        },
+        1,
+      );
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 750);
+      });
+      await peer.query("ROLLBACK");
+      await migration;
+    } finally {
+      peer.release();
+    }
+
+    const version = await lockDatabase.pool.query<{ version: number }>(
+      "SELECT version FROM workhorse.schema_version",
+    );
+    expect(version.rows).toEqual([{ version: 2 }]);
+  });
+
   it("rejects schema versions below the migration baseline", async () => {
     await fixtureDatabase.pool.query("UPDATE workhorse.schema_version SET version = 0");
     try {
@@ -190,10 +266,35 @@ describe("schema migrations", () => {
     }
   });
 
+  it("ships no migration that removes or renames a released object", async () => {
+    // ADR 0053: inside a major line a migration only adds, which is what lets a client accept a
+    // schema newer than the one it was built against. A removal belongs to a major release, so it
+    // must not reach `sql/migrations/`. The loop starts enforcing itself with the first step.
+    const migrations = (await readdir(path.join(repository, "sql", "migrations")))
+      .filter((file) => file.endsWith(".sql"))
+      // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+      .sort();
+    const subtractive =
+      /^\s*(?:DROP\s+(?:TABLE|VIEW|FUNCTION|PROCEDURE|TYPE|DOMAIN|SEQUENCE|SCHEMA)\b|ALTER\s+\w+\s+[\s\S]*?\b(?:DROP\s+(?:COLUMN|CONSTRAINT|DEFAULT|NOT\s+NULL)|RENAME)\b)/im;
+
+    const offenders: string[] = [];
+    for (const file of migrations) {
+      const body = await readFile(path.join(repository, "sql", "migrations", file), "utf8");
+      // A dollar-quoted body is data, not statements: a plpgsql function may legitimately contain
+      // DROP inside the code it defines, and only statements outside those quotes change the shape.
+      const statements = body.replaceAll(/\$([A-Za-z_]\w*)?\$[\s\S]*?\$\1\$/g, "''");
+      for (const statement of statements.split(";")) {
+        if (subtractive.test(statement))
+          offenders.push(`${file}: ${statement.trim().slice(0, 80)}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it("migrates every released schema version to a schema identical to a clean installation", async () => {
-    // `sql/releases/` is empty until the first public release: schema version 1 is a clean install
-    // with no upgrade source, so there is nothing to migrate from yet. The first frozen artifact
-    // lands there when a released version must survive an upgrade, and this loop starts running.
+    // The first frozen artifact is `0001.sql`, the 0.1.0 clean install. Each later release freezes
+    // its own, and this loop proves every one of them migrates to a schema byte-identical to a
+    // clean installation of the current artifact.
     const releases = (await readdir(path.join(repository, "sql", "releases")))
       .filter((file) => file.endsWith(".sql"))
       // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.

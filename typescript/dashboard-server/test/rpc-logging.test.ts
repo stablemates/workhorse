@@ -6,7 +6,7 @@ import type { Queryable } from "@stablemates/workhorse";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDashboardHost } from "../src/server/host.js";
 import type { DashboardRouter } from "../src/server/router.js";
-import { WORKHORSE_SCHEMA_VERSION } from "@stablemates/workhorse";
+import { PROTOCOL_VERSION, WORKHORSE_SCHEMA_VERSION } from "@stablemates/workhorse";
 
 const records: LogRecord[] = [];
 const provider: LoggerProvider = {
@@ -17,7 +17,12 @@ const provider: LoggerProvider = {
 };
 
 const database = {
-  query: async () => ({ rows: [{ version: WORKHORSE_SCHEMA_VERSION }] }),
+  query: async () => ({
+    rows: [
+      { kind: "protocol", version: PROTOCOL_VERSION },
+      { kind: "schema", version: WORKHORSE_SCHEMA_VERSION },
+    ],
+  }),
 } as unknown as Queryable;
 
 function dashboardClient(): RouterClient<DashboardRouter> {

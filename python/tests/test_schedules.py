@@ -12,7 +12,9 @@ def test_synchronizes_every_shared_schedule_fixture_through_the_versioned_sql_fu
     fixtures = read_protocol_fixture("schedules.json")
     executed: set[str] = set()
     for fixture in fixtures:
-        connection = Connection([[{"version": 1}], []])
+        connection = Connection(
+            [[{"kind": "schema", "version": 1}, {"kind": "protocol", "version": 1}], []]
+        )
 
         Queue(connection, default_queue=fixture["defaultQueue"]).sync_schedules(
             fixture["namespace"],

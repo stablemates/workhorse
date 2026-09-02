@@ -365,6 +365,10 @@ var internalStatementRegistry = map[string]string{
         ORDER BY last_heartbeat_at DESC, worker_id`,
 	"prune_worker_registry_v1": `SELECT workhorse.prune_worker_registry_v1(make_interval(secs => $1::double precision)) AS count`,
 	"protocol_version":         `SELECT version FROM workhorse.protocol_version ORDER BY version`,
+	"compatibility_state": `SELECT 'protocol' AS kind, version FROM workhorse.protocol_version
+            UNION ALL
+           SELECT 'schema' AS kind, version FROM workhorse.schema_version
+            ORDER BY kind, version`,
 	"schema_installation_probe": `SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'workhorse') AS schema_exists,
            to_regclass('workhorse.schema_version') IS NOT NULL AS version_table_exists,
            EXISTS (

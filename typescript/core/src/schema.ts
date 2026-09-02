@@ -14,9 +14,12 @@ import { fileURLToPath } from "node:url";
 import { expectOneRow } from "./errors.js";
 import {
   applySchemaMigrationPlan,
+  SCHEMA_MIGRATION_LOCK_TIMEOUT_MS,
   isMissingDatabaseRelationError,
+  readCompatibilityState,
   readProtocolVersions,
   readSchemaVersion,
+  type CompatibilityState,
   type SchemaMigrationStep,
 } from "./schema-migrations.js";
 import { assertSupportedPostgres } from "./support.js";
@@ -43,13 +46,27 @@ function sqlAsset(relativePath: string): URL {
   return new URL(`../../../sql/${repositoryPath}`, import.meta.url);
 }
 
-export { isMissingDatabaseRelationError, readProtocolVersions, readSchemaVersion };
+export {
+  isMissingDatabaseRelationError,
+  readProtocolVersions,
+  readSchemaVersion,
+  SCHEMA_MIGRATION_LOCK_TIMEOUT_MS,
+};
 
-/** Check compatibility without creating or changing database objects. */
+/**
+ * Check compatibility without creating or changing database objects.
+ *
+ * The runtime declares a floor and no ceiling. Inside a major line a migration only adds
+ * ([ADR 0053](../../../docs/decisions/0053-start-migrations-at-0-1-0-and-keep-them-additive.md)),
+ * so a schema newer than the one this build was compiled against still carries every function it
+ * calls, and refusing it would turn every rolling deployment into an outage. The ceiling comes
+ * from the database instead: `workhorse.protocol_version` lists the client protocols the installed
+ * schema still answers, and a major release drops the ones it stops serving.
+ */
 export async function assertSchemaCompatible(database: Queryable): Promise<void> {
-  let version: number | null;
+  let state: CompatibilityState;
   try {
-    version = await readSchemaVersion(database);
+    state = await readCompatibilityState(database);
   } catch (error) {
     throw new Error(
       isMissingDatabaseRelationError(error)
@@ -58,15 +75,40 @@ export async function assertSchemaCompatible(database: Queryable): Promise<void>
       { cause: error },
     );
   }
-  if (version !== WORKHORSE_SCHEMA_VERSION) {
+  if (state.schemaVersion === null) {
     throw new Error(
-      `Workhorse schema version ${String(version)} is incompatible with runtime version ${WORKHORSE_SCHEMA_VERSION}`,
+      "Workhorse schema version is missing or ambiguous. Reinstall the schema before starting.",
+    );
+  }
+  if (state.schemaVersion < MINIMUM_SCHEMA_VERSION) {
+    throw new Error(
+      `Workhorse schema version ${state.schemaVersion} is below the minimum ${MINIMUM_SCHEMA_VERSION} this runtime requires. Migrate the database before starting this release.`,
+    );
+  }
+  const served = state.servedProtocolVersions;
+  if (served.length > 0 && !served.includes(PROTOCOL_VERSION)) {
+    const oldest = Math.min(...served);
+    throw new Error(
+      PROTOCOL_VERSION < oldest
+        ? `Workhorse schema serves SQL protocol ${served.join(", ")} and no longer serves protocol ${PROTOCOL_VERSION} this runtime speaks. Upgrade this release.`
+        : `Workhorse schema serves SQL protocol ${served.join(", ")} and does not yet serve protocol ${PROTOCOL_VERSION} this runtime speaks. Migrate the database before starting this release.`,
     );
   }
 }
 
+export interface MigrateSchemaOptions {
+  /**
+   * Milliseconds a migration body waits for a table lock before it gives up. Defaults to
+   * `SCHEMA_MIGRATION_LOCK_TIMEOUT_MS`. Waiting for another migrator is separate and unbounded.
+   */
+  lockTimeoutMs?: number;
+}
+
 /** Apply the immutable forward-only steps from the supported baseline to the current schema. */
-export async function migrateSchema(database: Queryable): Promise<void> {
+export async function migrateSchema(
+  database: Queryable,
+  options: MigrateSchemaOptions = {},
+): Promise<void> {
   await assertSupportedPostgres(database);
 
   let version: number | null;
@@ -88,6 +130,7 @@ export async function migrateSchema(database: Queryable): Promise<void> {
       currentVersion: WORKHORSE_SCHEMA_VERSION,
       steps: SCHEMA_MIGRATIONS,
       readStep: async (file) => readFile(sqlAsset(`migrations/${file}`), "utf8"),
+      lockTimeoutMs: options.lockTimeoutMs,
     },
     version,
   );
