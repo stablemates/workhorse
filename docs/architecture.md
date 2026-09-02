@@ -70,7 +70,12 @@ priority order, positional outcomes, retries, terminal failures, and independent
 Its suspension fixture pins durable-timer suspension, immediate worker-slot release, replay within
 one logical attempt, and reuse of completed checkpoints. Its ownership fixtures pin cooperative
 cancellation, database-authoritative deadline and execution-timeout settlement, lease-loss fencing,
-non-overlapping worker heartbeat batches, and graceful drain without further claims. The TypeScript suite
+non-overlapping worker heartbeat batches, and graceful drain without further claims. Its poll-cadence
+fixture pins the empty-claim backoff step. `emptyPollsBeforeEnqueue` names the step under test, and
+each language holds its worker at the end of every empty claim so the enqueue lands on that step
+rather than on whichever step the runner reached. `enqueueStallMs` then delays the enqueue past one
+whole step, so an executor that only counts empty polls fails on every run instead of once under
+load. The TypeScript suite
 runs every fixture through `Worker`; Python and Go runtimes must run the same fixtures.
 
 `protocol/v1/requests.json` maps public enqueue inputs to exact PostgreSQL JSON. TypeScript

@@ -45,7 +45,8 @@ type workerRuntimeFixture struct {
 	ExpectedMinimumCallsBeforeSettlement int                              `json:"expectedMinimumCallsBeforeSettlement"`
 	ExpectedMaximumOverlap               int                              `json:"expectedMaximumOverlap"`
 	PollMS                               int                              `json:"pollMs"`
-	IdleMS                               int                              `json:"idleMs"`
+	EmptyPollsBeforeEnqueue              int                              `json:"emptyPollsBeforeEnqueue"`
+	EnqueueStallMS                       int                              `json:"enqueueStallMs"`
 	ExpectedMinimumDelayMS               int                              `json:"expectedMinimumDelayMs"`
 	ExpectedMaximumDelayMS               int                              `json:"expectedMaximumDelayMs"`
 	Mode                                 string                           `json:"mode"`
