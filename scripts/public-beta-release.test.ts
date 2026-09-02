@@ -126,4 +126,20 @@ describe("the first public beta release", () => {
       expect(trainSection).toContain(sourceCommit);
     }
   });
+
+  it("publishes a security policy that names the reporting channel and the supported line", async () => {
+    const policy = prose(await read("SECURITY.md"));
+    expect(policy).toContain("https://github.com/stablemates/workhorse/security/advisories/new");
+    expect(policy).toContain("acknowledge a report within five business days");
+    expect(policy).toContain(
+      "Only the latest `0.x` minor release of each package line receives security fixes",
+    );
+    expect(policy).toContain("A published version is never re-tagged or replaced");
+    expect(policy).toContain(
+      "deprecate the npm release, yank the PyPI release, or retract the Go version",
+    );
+
+    expect(await read("README.md")).toContain("[Security policy](SECURITY.md)");
+    expect(await read("docs/compatibility.md")).toContain("[`SECURITY.md`](../SECURITY.md)");
+  });
 });
