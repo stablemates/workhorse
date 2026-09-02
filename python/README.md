@@ -1,7 +1,7 @@
 # `stablemates-workhorse`
 
-The Python clients, worker runtimes, and dashboard host for the Workhorse PostgreSQL durable
-execution protocol.
+The Python clients, worker runtimes, and dashboard host for the Workhorse durable job queue for
+PostgreSQL.
 
 > **Public beta:** Workhorse is usable for evaluation and early production adoption, but 0.x minor
 > releases may break compatibility, including the schema. There is no upgrade path between 0.x

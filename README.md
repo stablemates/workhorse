@@ -1,13 +1,16 @@
 # Workhorse
 
-Workhorse is a durable job queue built from PostgreSQL tables and versioned SQL functions. Your
-business write and its background job can commit in the same transaction, without another broker.
+A durable job queue for PostgreSQL, with TypeScript, Python, and Go workers on one SQL protocol.
 
-[![Build status](https://github.com/stablemates/workhorse/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/stablemates/workhorse/actions/workflows/ci.yml?query=branch%3Amain)
+Workhorse is versioned SQL functions inside the database you already run. Every language gets the
+same workers, the same durable waits, and the same dashboard, with no broker or server beside
+PostgreSQL.
 
 > **Public beta:** Workhorse is usable for evaluation and early production adoption, but 0.x minor
 > releases may break compatibility, including the schema. There is no upgrade path between 0.x
 > releases; ordered migrations begin at 1.0.0.
+
+[![Build status](https://github.com/stablemates/workhorse/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/stablemates/workhorse/actions/workflows/ci.yml?query=branch%3Amain)
 
 [Documentation](https://workhorse.run/docs) · [Quickstart](https://workhorse.run/docs/quickstart) ·
 [Live demo](https://demo.workhorse.run) · [Compatibility](docs/compatibility.md) ·
