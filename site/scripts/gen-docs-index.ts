@@ -1,7 +1,9 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 
 import { type Integration, type IntegrationCategory, isPublished } from "../lib/integrations.js";
 import { siteConfig } from "../lib/site.js";
+import { loadPosts, renderFeed } from "./blog-posts.js";
+import { frontmatterValue, stripFrontmatter } from "./frontmatter.js";
 import { mdxToMarkdown } from "./mdx-to-markdown.js";
 
 /**
@@ -285,14 +287,6 @@ if (!structure.some((group) => group.title === catalogGroup)) {
   throw new Error(`meta.json has no ---${catalogGroup}--- separator for the catalog to fill`);
 }
 
-const frontmatterValue = (source: string, key: string): string | undefined => {
-  const block = /^---\r?\n([\s\S]*?)\r?\n---/.exec(source);
-  if (!block?.[1]) return undefined;
-  const line = new RegExp(`^${key}:\\s*(.+)$`, "m").exec(block[1]);
-  if (!line?.[1]) return undefined;
-  return line[1].trim().replace(/^["']|["']$/g, "");
-};
-
 const entries = await readdir(contentDir, { withFileTypes: true });
 const slugs = entries
   .filter((entry) => entry.isFile() && entry.name.endsWith(".mdx"))
@@ -339,10 +333,10 @@ await Promise.all(
 
     // The catalog tag becomes Markdown before the tab transform runs, so the
     // transform never meets a component the sidebar generator owns.
-    const body = source
-      .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "")
-      .trimStart()
-      .replace(/^<IntegrationCatalog \/>$/m, () => catalogMarkdown);
+    const body = stripFrontmatter(source).replace(
+      /^<IntegrationCatalog \/>$/m,
+      () => catalogMarkdown,
+    );
     if (body.includes("<IntegrationCatalog")) {
       throw new Error(`The Markdown twin for "${slug}" still contains the catalog tag`);
     }
@@ -416,6 +410,20 @@ await writeFile(
   )}\n`,
 );
 
+/**
+ * The blog (ADR 0052). Posts are not documentation: they join the prerender
+ * list and the sitemap, and each gets a twin, but `llms.txt` and
+ * `llms-full.txt` never list one. With zero posts the section has no routes at
+ * all, so nothing links `/blog` and no empty page reaches a reader.
+ */
+const posts = await loadPosts(new URL("../content/blog/", import.meta.url));
+const blogRoutes = posts.length > 0 ? ["/blog", ...posts.map((post) => post.url)] : [];
+
+await writeFile(
+  new URL("blog-index.json", outDir),
+  `${JSON.stringify({ posts: posts.map(({ body: _body, ...post }) => post) }, null, 2)}\n`,
+);
+
 const routes = [
   "/",
   "/docs",
@@ -423,6 +431,7 @@ const routes = [
     .map((page) => page.url)
     .filter((url) => url !== "/docs")
     .toSorted(),
+  ...blogRoutes,
 ];
 
 await writeFile(
@@ -480,6 +489,39 @@ await Promise.all(
     await writeFile(new URL(target, import.meta.url), `${frontmatter}\n${document}`);
   }),
 );
+
+/**
+ * Post twins at `/blog/<slug>.md` and the feed at `/blog/feed.xml`. The
+ * directory is rebuilt from scratch, because `public/` ships as it stands and a
+ * twin left over from a post that no longer exists would keep being served.
+ */
+const blogDir = new URL("../public/blog/", import.meta.url);
+await rm(blogDir, { recursive: true, force: true });
+if (posts.length > 0) {
+  await mkdir(blogDir, { recursive: true });
+  await Promise.all(
+    posts.map(async (post) => {
+      const frontmatter = [
+        "---",
+        `title: ${JSON.stringify(post.title)}`,
+        `description: ${JSON.stringify(post.description)}`,
+        `canonical: ${JSON.stringify(`${base}${post.url}`)}`,
+        `date: ${JSON.stringify(post.date)}`,
+        "---",
+        "",
+      ].join("\n");
+      const document = `# ${post.title}\n\n> ${post.description}\n\n${mdxToMarkdown(post.body, `blog/${post.slug}`)}`;
+      await writeFile(new URL(`${post.slug}.md`, blogDir), `${frontmatter}\n${document}`);
+    }),
+  );
+  await writeFile(
+    new URL("feed.xml", blogDir),
+    renderFeed(
+      { title: `${siteConfig.name} blog`, description: siteConfig.description, base },
+      posts,
+    ),
+  );
+}
 
 /**
  * The page an agent starts at, and the page whose install commands it copies.
@@ -600,4 +642,6 @@ Sitemap: ${base}/sitemap.xml
 `,
 );
 
-console.log(`Wrote the sidebar tree and metadata for ${pages.size} pages`);
+console.log(
+  `Wrote the sidebar tree and metadata for ${pages.size} pages and ${posts.length} posts`,
+);

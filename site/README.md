@@ -1,9 +1,10 @@
 # @stablemates/workhorse-site
 
-The documentation site: a TanStack Start app serving the landing page at `/`
-and the Fumadocs-rendered product documentation under `/docs`. Content rules
-for the documentation itself live in the repository root `CLAUDE.md`; this
-file records conventions of the site's own UI.
+The documentation site: a TanStack Start app serving the landing page at `/`,
+the Fumadocs-rendered product documentation under `/docs`, and long-form posts
+under `/blog`. Content rules for the documentation itself live in the
+repository root `CLAUDE.md`; this file records conventions of the site's own
+UI and of the blog.
 
 ## Wide-viewport density: viewport-gated zoom
 
@@ -58,6 +59,40 @@ different set than the others.
   exercises the package on every change, so the entry carries no date.
   `documented` means a person checked it, so the entry must carry `verifiedOn`.
 - `typescript/core/test/site-integrations-catalog.test.ts` enforces all of it.
+
+## The blog
+
+`content/blog/` is the home for long-form content (ADR 0052). A post is one
+MDX file, `content/blog/<slug>.mdx`, served at `/blog/<slug>` with that URL
+as its canonical. The slug is lowercase letters, digits, and single hyphens.
+The frontmatter is exactly these three keys:
+
+```yaml
+---
+title: The post title
+description: One sentence a reader sees on the index, in the feed, and in search results.
+date: 2026-09-07
+---
+```
+
+- `date` is an ISO calendar date, `YYYY-MM-DD`. It orders the index and the
+  feed, newest first, and prints on the page. There is no author field.
+- `scripts/gen-docs-index.ts` reads the collection at build time through
+  `scripts/blog-posts.ts` and fails the build on a missing or malformed field.
+  It adds `/blog` and every post to the prerender list and `sitemap.xml`,
+  writes a Markdown twin per post at `/blog/<slug>.md`, and writes the RSS
+  feed at `/blog/feed.xml`. `llms.txt` and `llms-full.txt` never list a post.
+- With zero posts the "Blog" link is absent from the header and the footer,
+  and `/blog` is absent from the sitemap and the prerender list, so the
+  section can live on `main` before the first post without an empty page
+  reaching a reader.
+- A post's code is not compiled by `scripts/check-language-examples.ts`. A
+  post either reuses a snippet from `lib/landing-snippets.ts` or verifies its
+  example against the source by hand, as the writing rules in the repository
+  root `CLAUDE.md` already require.
+- The Markdown twin transform knows `Tabs` and `Tab` and no other component.
+  A post that uses another MDX component fails the build until
+  `scripts/mdx-to-markdown.ts` learns to expand it.
 
 ## Other landing conventions
 

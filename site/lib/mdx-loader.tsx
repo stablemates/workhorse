@@ -1,6 +1,7 @@
 import { DocsBody, DocsDescription, DocsPage, DocsTitle } from "fumadocs-ui/page";
 
 import browserCollections from "@/.source/browser";
+import { formatPostDate } from "@/lib/blog";
 import { getMDXComponents } from "@/mdx-components";
 
 /**
@@ -34,6 +35,34 @@ export const clientLoader = browserCollections.docs.createClientLoader<Record<st
           <MDX components={getMDXComponents()} />
         </DocsBody>
       </DocsPage>
+    );
+  },
+});
+
+/**
+ * Renders one blog post from the browser collection. The post's date is not in
+ * the compiled frontmatter, because the default page schema keeps only the
+ * title and description, so the route passes it in from the generated index.
+ */
+export const postLoader = browserCollections.blog.createClientLoader<{ readonly date: string }>({
+  id: "blog",
+  component: (loaded, { date }) => {
+    const MDX = loaded.default;
+    const { title, description } = loaded.frontmatter;
+
+    return (
+      <article className="mx-auto w-full max-w-3xl px-5 py-12 lg:px-8">
+        <header>
+          <time dateTime={date} className="wh-mono-label">
+            {formatPostDate(date)}
+          </time>
+          <h1 className="wh-docs-title mt-3 text-3xl font-semibold sm:text-4xl">{title}</h1>
+          <p className="wh-docs-description mt-4 text-lg text-fd-muted-foreground">{description}</p>
+        </header>
+        <div className="prose wh-docs-body">
+          <MDX components={getMDXComponents()} />
+        </div>
+      </article>
     );
   },
 });
