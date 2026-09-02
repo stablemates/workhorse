@@ -1233,15 +1233,19 @@ def test_worker_renews_ownership_while_handler_runs(database_url: str) -> None:
         job_id = Queue(enqueue_connection).enqueue("lease.renewed", {})
         enqueue_connection.commit()
 
+        # The handler outlives the original lease, so only renewal keeps the completion
+        # accepted. The lease is ten heartbeats long: a loaded CI runner can stall the
+        # heartbeat thread or the database for several hundred milliseconds without the
+        # lease lapsing, which is what made the tighter 150 ms / 40 ms pairing flaky.
         def outlive_original_lease(_payload: object, _context: object) -> dict[str, bool]:
-            sleep(0.35)
+            sleep(1.5)
             return {"renewed": True}
 
         worker = Worker(
             worker_connection,
             worker_id="python-heartbeat-worker",
-            lease_ms=150,
-            heartbeat_ms=40,
+            lease_ms=1_000,
+            heartbeat_ms=100,
         ).handle("lease.renewed", outlive_original_lease)
 
         assert worker.run_once() is True

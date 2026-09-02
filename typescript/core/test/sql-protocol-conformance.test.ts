@@ -246,7 +246,15 @@ async function executeSuspensionReplayRuntimeFixture(
   await expect(worker.runOnce()).resolves.toBe(true);
   await expectJobStates(admin, ids, fixture.expectedAfterSlotRelease);
 
-  await sleep(Math.max(110, fixture.waitMs + 80));
+  // The wait is long enough that it cannot elapse between the suspension and the slot
+  // release check on a slow runner. Rewind it, as the Go fixture does, instead of
+  // sleeping through it, and promote it explicitly rather than waiting for the worker's
+  // maintenance interval.
+  await database.query(
+    "UPDATE workhorse.job_runtime SET run_at = clock_timestamp() - interval '1 millisecond' WHERE job_id = $1",
+    [ids.get("suspension")!],
+  );
+  await database.query("SELECT * FROM workhorse.tick_v1(100, 100)");
   await expect(worker.runOnce()).resolves.toBe(true);
   await expectJobStates(admin, ids, fixture.expectedAfterReplay);
   await expectAttemptCount(database, ids.get("suspension")!, fixture.expectedAttemptsAfterReplay);

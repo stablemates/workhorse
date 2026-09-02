@@ -216,7 +216,16 @@ def execute_suspension_replay_fixture(
     assert worker.run_once() is True
     assert_job_states(connection, job_ids, fixture["expectedAfterSlotRelease"])
 
-    sleep(max(0.11, fixture["waitMs"] / 1000 + 0.08))
+    # The wait is long enough that it cannot elapse between the suspension and the slot
+    # release check on a slow runner. Rewind it, as the Go fixture does, instead of
+    # sleeping through it, and promote it explicitly rather than waiting for the worker's
+    # maintenance interval.
+    connection.execute(
+        "UPDATE workhorse.job_runtime SET run_at = clock_timestamp() - interval '1 millisecond'"
+        " WHERE job_id = %s",
+        (job_ids["suspension"],),
+    )
+    connection.execute("SELECT * FROM workhorse.tick_v1(100, 100)").fetchall()
     assert worker.run_once() is True
     assert_job_states(connection, job_ids, fixture["expectedAfterReplay"])
     assert_attempt_count(connection, job_ids["suspension"], fixture["expectedAttemptsAfterReplay"])
