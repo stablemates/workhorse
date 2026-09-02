@@ -3,15 +3,31 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { publishedPackages, repositoryRoot } from "./packages.js";
 
-const npmVersion = "0.1.0-beta.2";
-const pythonVersion = "0.1.0b3";
-const goVersion = "0.1.0-beta.1";
-const publicationDate = "2026-09-01";
+/** The release this repository cuts next: one version on npm, PyPI, and Go from one commit. */
+const releaseVersion = "0.1.0";
+const releaseDate = "2026-09-14";
+const corePeerRange = ">=0.1.0 <0.2.0";
+
+/** The published beta. Its entries stay in the changelogs as history and must keep their facts. */
+const betaNpmVersion = "0.1.0-beta.2";
+const betaPythonVersion = "0.1.0b3";
+const betaGoVersion = "0.1.0-beta.1";
+const betaPublicationDate = "2026-09-01";
 const npmSourceCommit = "856cdcf354aa83a3acf8ee67043145adb9c99e09";
 const pythonSourceCommit = "663c526805746786f12b3be3e151e8ce06c80057";
 const goSourceCommit = "dbd5437362930f712157ffcc72c3296e971e4f5a";
+
 const betaLabel = "public beta";
 const compatibilityNotice = "There is no upgrade path between 0.x releases";
+
+interface SupportManifest {
+  readonly support: {
+    readonly go: { readonly minimum: string };
+    readonly node: { readonly minimum: number };
+    readonly postgres: { readonly minimum: number };
+    readonly python: { readonly minimum: string };
+  };
+}
 
 async function read(relativePath: string): Promise<string> {
   return readFile(path.join(repositoryRoot, relativePath), "utf8");
@@ -21,26 +37,91 @@ function prose(contents: string): string {
   return contents.replace(/^>\s?/gm, "").replace(/\s+/g, " ");
 }
 
-describe("the first public beta release", () => {
-  it("encodes beta status in every published version and registry description", async () => {
+/** One `## version — date` entry of a changelog, up to the next `##` heading. */
+function changelogEntry(changelog: string, version: string, date: string): string {
+  const heading = `## ${version} — ${date}`;
+  const start = changelog.indexOf(heading);
+  expect(start).toBeGreaterThan(-1);
+  const body = changelog.slice(start + heading.length);
+  const next = body.search(/^## /m);
+  return next === -1 ? body : body.slice(0, next);
+}
+
+describe("the 0.1.0 release", () => {
+  it("carries the plain version and peer range in every published manifest", async () => {
     for (const entry of await publishedPackages()) {
       const manifest = JSON.parse(await read(entry.manifest)) as {
         description?: string;
         peerDependencies?: Record<string, string>;
         version?: string;
       };
-      expect(manifest.version).toBe(npmVersion);
+      expect(manifest.version).toBe(releaseVersion);
       expect(manifest.description?.toLowerCase()).toContain(betaLabel);
       const workhorsePeer = manifest.peerDependencies?.["@stablemates/workhorse"];
-      expect([undefined, ">=0.1.0-beta.1 <0.2.0"]).toContain(workhorsePeer);
+      expect([undefined, corePeerRange]).toContain(workhorsePeer);
     }
 
+    const appManifest = JSON.parse(await read("dashboard/app/package.json")) as {
+      peerDependencies?: Record<string, string>;
+    };
+    expect(appManifest.peerDependencies?.["@stablemates/workhorse"]).toBe(corePeerRange);
+    expect(await read("typescript/core/src/version.ts")).toContain(
+      `WORKHORSE_VERSION = "${releaseVersion}"`,
+    );
+
     const pythonManifest = await read("python/pyproject.toml");
-    expect(pythonManifest).toContain(`version = "${pythonVersion}"`);
+    expect(pythonManifest).toContain(`version = "${releaseVersion}"`);
     expect(pythonManifest).toContain("Development Status :: 4 - Beta");
     expect(pythonManifest.toLowerCase()).toContain(betaLabel);
+    expect(await read("python/uv.lock")).toContain(
+      `name = "stablemates-workhorse"\nversion = "${releaseVersion}"`,
+    );
   });
 
+  it("dates the release entry in each changelog with the schema version and the upgrade step", async () => {
+    const manifest = JSON.parse(await read("support.json")) as SupportManifest;
+    const floors = [
+      [
+        "CHANGELOG.md",
+        [
+          `Node.js **${manifest.support.node.minimum}** or newer`,
+          `PostgreSQL **${manifest.support.postgres.minimum}** or newer`,
+        ],
+      ],
+      ["python/CHANGELOG.md", [`Python **${manifest.support.python.minimum}** or newer`]],
+      ["go/CHANGELOG.md", [`Go **${manifest.support.go.minimum.replace(/\.0$/, "")}** or newer`]],
+    ] as const;
+
+    for (const [relativePath, requirements] of floors) {
+      const changelog = await read(relativePath);
+      const entry = prose(changelogEntry(changelog, releaseVersion, releaseDate));
+      expect(entry).toContain("**schema v1**");
+      expect(entry).toContain("from one source commit");
+      expect(entry).toContain("recreate the database");
+      for (const requirement of requirements) {
+        expect(entry).toContain(requirement);
+      }
+      expect(changelog).not.toMatch(/^## .* — unreleased$/m);
+    }
+  });
+
+  it("names the released version on the site from the package and its commands from support.json", async () => {
+    const landing = await read("site/src/routes/index.tsx");
+    expect(landing).toContain('import { WORKHORSE_VERSION } from "@stablemates/workhorse/version"');
+    expect(landing).toContain('import support from "../../../support.json"');
+    expect(landing).toContain("npm v{WORKHORSE_VERSION}");
+    expect(landing).not.toMatch(/\d+\.\d+\.\d+/);
+
+    expect(await read("docs/compatibility.md")).toContain(
+      `The current release is \`${releaseVersion}\`.`,
+    );
+    expect(await read("site/content/docs/compatibility.mdx")).toContain(
+      `The current release is \`${releaseVersion}\`.`,
+    );
+  });
+});
+
+describe("the public beta line", () => {
   it("puts the label and compatibility boundary on every package README", async () => {
     const readmes = [
       ...(await publishedPackages()).map((entry) => `${entry.location}/README.md`),
@@ -83,18 +164,16 @@ describe("the first public beta release", () => {
     }
   });
 
-  it("dates and attributes the published beta versions in each changelog", async () => {
+  it("keeps the published beta versions dated and attributed in each changelog", async () => {
     const entries = [
-      ["CHANGELOG.md", npmVersion, npmSourceCommit],
-      ["python/CHANGELOG.md", pythonVersion, pythonSourceCommit],
-      ["go/CHANGELOG.md", goVersion, goSourceCommit],
+      ["CHANGELOG.md", betaNpmVersion, npmSourceCommit],
+      ["python/CHANGELOG.md", betaPythonVersion, pythonSourceCommit],
+      ["go/CHANGELOG.md", betaGoVersion, goSourceCommit],
     ] as const;
 
     for (const [relativePath, version, sourceCommit] of entries) {
-      const changelog = await read(relativePath);
-      expect(changelog).toContain(`## ${version} — ${publicationDate}`);
-      expect(changelog).toContain(sourceCommit);
-      expect(changelog).not.toMatch(/^## .* — unreleased$/m);
+      const entry = changelogEntry(await read(relativePath), version, betaPublicationDate);
+      expect(entry).toContain(sourceCommit);
     }
   });
 
@@ -104,7 +183,7 @@ describe("the first public beta release", () => {
     );
   });
 
-  it("records the staged release train and its stop conditions", async () => {
+  it("records the standing release train and its stop conditions", async () => {
     const compatibility = await read("docs/compatibility.md");
     const pythonPosition = compatibility.indexOf("Publish Python first");
     const npmPosition = compatibility.indexOf("Publish npm second");
@@ -117,14 +196,18 @@ describe("the first public beta release", () => {
     expect(compatibility).toContain("A published version is never reused");
     expect(compatibility).toContain("Test registries are not part of the rehearsal");
 
-    const trainSection = compatibility.slice(
-      compatibility.indexOf("### First public beta release train"),
-      compatibility.indexOf("### npm packages"),
+    // The train is the standing process, so it names no version and no commit. The beta's three
+    // source commits live in the changelog entries that date them.
+    const trainSection = prose(
+      compatibility.slice(
+        compatibility.indexOf("### Release train"),
+        compatibility.indexOf("### npm packages"),
+      ),
     );
-    expect(trainSection).toContain("three source commits");
-    for (const sourceCommit of [pythonSourceCommit, npmSourceCommit, goSourceCommit]) {
-      expect(trainSection).toContain(sourceCommit);
-    }
+    expect(trainSection).toContain("from one source commit");
+    expect(trainSection).toContain("every tag names the candidate commit");
+    expect(trainSection).not.toMatch(/\d+\.\d+\.\d+/);
+    expect(trainSection).not.toMatch(/\b[0-9a-f]{40}\b/);
   });
 
   it("publishes a security policy that names the reporting channel and the supported line", async () => {

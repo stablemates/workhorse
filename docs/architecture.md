@@ -1756,7 +1756,7 @@ this lifecycle over module-scope instrument creation.
 `@stablemates/workhorse-otel` implements the contract. `registerOpenTelemetry()` has no import side
 effect and returns `registerTelemetryProvider()`'s cleanup function. The adapter declares
 `@opentelemetry/api >=1.9.0 <2`, `@opentelemetry/api-logs >=0.200.0 <0.300.0`, and
-`@stablemates/workhorse >=0.1.0-beta.1 <0.2.0` as peer dependencies. It resolves tracer, meter,
+`@stablemates/workhorse >=0.1.0 <0.2.0` as peer dependencies. It resolves tracer, meter,
 logger, context, and propagation state from those host-owned API copies. Its synchronous metric and
 log wrappers re-read the OpenTelemetry global provider, preserving SDK registration after adapter
 registration.

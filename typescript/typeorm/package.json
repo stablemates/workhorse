@@ -1,6 +1,6 @@
 {
   "name": "@stablemates/workhorse-typeorm",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0",
   "description": "Public beta TypeORM provider for Workhorse",
   "homepage": "https://workhorse.run",
   "bugs": {
@@ -42,7 +42,7 @@
     "typeorm": "0.3.31"
   },
   "peerDependencies": {
-    "@stablemates/workhorse": ">=0.1.0-beta.1 <0.2.0",
+    "@stablemates/workhorse": ">=0.1.0 <0.2.0",
     "typeorm": ">=0.3 <2"
   },
   "engines": {

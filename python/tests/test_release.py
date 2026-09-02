@@ -63,7 +63,7 @@ def test_python_support_contract_matches_repository_declarations(database_url: s
     assert project["optional-dependencies"]["psycopg"] == []
     assert project["optional-dependencies"]["asyncpg"] == ["asyncpg>=0.31,<1"]
     assert project["name"] == "stablemates-workhorse"
-    assert project["version"] == "0.1.0b3"
+    assert project["version"] == "0.1.0"
     assert "Development Status :: 4 - Beta" in project["classifiers"]
 
     postgres_majors = [str(major) for major in support["postgres"]["tested"]]

@@ -95,11 +95,11 @@ dashboard contracts, and exported types describe the same source revision. The
 [changelog](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md) records breaking
 changes and the schema version each release requires.
 
-The first public beta is `0.1.0-beta.2` for npm, `0.1.0-beta.1` for Go, and `0.1.0b3` for Python.
-The npm `0.1.0-beta.1` tag stopped before its first registry upload. Python `0.1.0b1` and
-`0.1.0b2` remain public without provenance, while `0.1.0b3` has verifiable provenance. Any 0.x
-minor release may break compatibility, including the schema. There is no upgrade path between 0.x
-releases; ordered migrations begin at 1.0.0.
+Every release publishes one version to npm, PyPI, and the Go module proxy from one source commit.
+The current release is `0.1.0`. Earlier beta versions stay on the registries, and each changelog
+dates them and names their source commits. Any 0.x minor release may break compatibility,
+including the schema. There is no upgrade path between 0.x releases; ordered migrations begin at
+1.0.0.
 
 The dashboard and core may use different patch releases within the same minor line. The dashboard
 server reads core-owned versioned views and functions, so a core patch remains compatible when its

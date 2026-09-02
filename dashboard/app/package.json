@@ -80,7 +80,7 @@
     "vitest": "^4.1.11"
   },
   "peerDependencies": {
-    "@stablemates/workhorse": ">=0.1.0-beta.1 <0.2.0",
+    "@stablemates/workhorse": ">=0.1.0 <0.2.0",
     "react": ">=19 <20",
     "react-dom": ">=19 <20",
     "vite": ">=6 <9"

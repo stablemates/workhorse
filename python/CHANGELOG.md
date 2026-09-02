@@ -6,17 +6,49 @@ releases independently from the TypeScript packages and the Go module.
 Workhorse is a public beta. Any 0.x minor release may break compatibility, including the schema.
 There is no upgrade path between 0.x releases; ordered migrations begin at 1.0.0.
 
+## 0.1.0 — 2026-09-14
+
+Published to PyPI from one source commit shared with the npm packages and the Go module, tagged
+`python/v0.1.0`. This is the first version without a prerelease suffix
+([ADR 0050](../docs/decisions/0050-release-0-1-0-without-a-prerelease-suffix.md)). The distribution
+stays a public beta on the `0.x` line, and its classifier stays `Development Status :: 4 - Beta`.
+
+Requires **schema v1** and Python **3.12** or newer.
+
+### Added
+
+- `workhorse.compatibility` publishes the startup schema check that the installation page tells every
+  runtime to make. `assert_schema_compatible(connection)` takes a Psycopg connection, and
+  `assert_schema_compatible_psycopg` and `assert_schema_compatible_asyncpg` name their asynchronous
+  driver, mirroring `AsyncQueue.from_psycopg` and `AsyncQueue.from_asyncpg`.
+
+### Fixed
+
+- `Worker.handle_batch` groups and orders members by the worker's claim order. Each job runs on its
+  own handler thread, so members previously reached the coordinator in thread scheduling order, and
+  two equal-priority jobs could appear in a batch in either order. `AsyncWorker.handle_batch`
+  shares the coordinator and gains the same guarantee. This change landed after `0.1.0b3` published
+  and was listed under that entry in error.
+
+### Changed
+
+- The README states the unpinned install command and the schema install step, which the TypeScript
+  CLI owns.
+
+### Upgrade notes
+
+- **Schema version.** `0.1.0` requires the same schema version 1 baseline that `0.1.0b3` required,
+  so a database the beta installed passes `assert_schema_compatible` as it is. The `0.x` rule still
+  applies: there is no upgrade path between `0.x` releases, so when a release changes the schema,
+  recreate the database and install the new baseline with
+  `npx --package @stablemates/workhorse workhorse schema install`.
+
 ## 0.1.0b3 — 2026-09-01
 
 Published to PyPI from commit `663c526805746786f12b3be3e151e8ce06c80057`, tagged
 `python/v0.1.0b3`.
 
 ### Fixed
-
-- `Worker.handle_batch` now groups and orders members by the worker's claim order. Each job runs
-  on its own handler thread, so members previously reached the coordinator in thread scheduling
-  order. Two equal-priority jobs could therefore appear in the batch in either order.
-  `AsyncWorker.handle_batch` shares the coordinator and gains the same guarantee.
 
 - The fix-forward release uploads PEP 740 attestations with its wheel and source distribution.
   The package behavior is unchanged from `0.1.0b1`.
