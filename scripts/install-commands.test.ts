@@ -45,14 +45,29 @@ const governedSurfaces: readonly GovernedSurface[] = [
   { file: "typescript/otel/README.md", commands: ["node"] },
   { file: "typescript/prisma/README.md", commands: ["node"] },
   { file: "typescript/typeorm/README.md", commands: ["node"] },
-  { file: "python/README.md", commands: ["python"] },
-  { file: "go/README.md", commands: ["go"] },
+  { file: "python/README.md", commands: ["python", "schema"] },
+  { file: "go/README.md", commands: ["go", "schema"] },
   { file: "go/examples/README.md", commands: ["go"] },
   { file: "site/content/docs/installation.mdx", commands: ["go", "node", "python", "schema"] },
   { file: "site/content/docs/quickstart.mdx", commands: ["go", "node", "python", "schema"] },
   { file: "site/content/docs/for-ai-agents.mdx", commands: ["go", "node", "python"] },
   { file: "site/content/docs/api.mdx", commands: ["schema"] },
 ];
+
+/** Markdown wraps prose at will, so a sentence rule compares runs of whitespace as one space. */
+function collapse(contents: string): string {
+  return contents.replace(/\s+/g, " ");
+}
+
+/** The package that owns schema installation. Every other package points at it instead. */
+const coreLocation = "typescript/core";
+
+/**
+ * An add-on runs against a schema it does not own. Naming core, with a link, is what stops a reader
+ * from hunting for a schema step in a package that has none.
+ */
+const schemaOwnerSentence =
+  "[Workhorse core](https://workhorse.run/docs/installation) owns schema installation and changes.";
 
 /** Published packages whose README states no runtime install command, and why. */
 const exemptPackageReadmes = new Map([
@@ -147,6 +162,26 @@ describe("install commands", () => {
       .map(([file]) => file);
 
     expect(bare).toEqual([]);
+  });
+
+  it("points every add-on README at core for schema installation", async () => {
+    const manifest = await readInstallManifest();
+    const wrong: string[] = [];
+
+    for (const { location } of await publishedPackages()) {
+      if (location === coreLocation) continue;
+      const file = `${location}/README.md`;
+      if (exemptPackageReadmes.has(file)) continue;
+      const contents = await read(file);
+      // Compared with runs of whitespace collapsed, so rewrapping a paragraph cannot fail the rule.
+      if (!collapse(contents).includes(schemaOwnerSentence)) {
+        wrong.push(`${file}: does not name core as owner`);
+      }
+      if (contents.includes(manifest.install.schema))
+        wrong.push(`${file}: carries a schema command`);
+    }
+
+    expect(wrong).toEqual([]);
   });
 
   it("governs the README of every published package", async () => {

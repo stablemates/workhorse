@@ -31,9 +31,10 @@ await db.transaction(async (tx) => {
 
 ## Package boundary
 
-The adapter never closes caller-owned database resources unless `close` is configured. Workhorse core
-owns schema installation and changes. Database errors are rethrown as `DrizzleQueryError`, with the
-original error in `cause` and its PostgreSQL code copied to `code` when available.
+The adapter never closes caller-owned database resources unless `close` is configured.
+[Workhorse core](https://workhorse.run/docs/installation) owns schema installation and changes.
+Database errors are rethrown as `DrizzleQueryError`, with the original error in `cause` and its
+PostgreSQL code copied to `code` when available.
 
 ## Next
 

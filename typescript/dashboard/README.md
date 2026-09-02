@@ -30,8 +30,9 @@ const response = (await host.handle(request)) ?? new Response("Not found", { sta
 
 This facade packages the React application and preserves the public server, client, wire, presentation,
 and standalone subpaths. The server remains responsible for schema compatibility checks and never
-installs schema or owns the caller's database. The embedding application owns authentication,
-authorization, routing, and the browser-visible origin.
+installs schema or owns the caller's database. [Workhorse core](https://workhorse.run/docs/installation) owns schema
+installation and changes. The embedding application owns authentication, authorization, routing, and
+the browser-visible origin.
 
 Applications rendering the React components directly must include
 `@stablemates/workhorse-dashboard/styles.css` and wrap `Dashboard` in `WorkhorseThemeProvider` so

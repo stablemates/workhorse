@@ -29,10 +29,11 @@ await dataSource.transaction(async (manager) => {
 
 ## Package boundary
 
-The adapter never destroys a caller-owned data source unless `close` is configured. Workhorse core
-owns schema installation and changes. Pass a `pg` pool as `notificationPool` for `LISTEN/NOTIFY`;
-otherwise workers poll. Database errors become `TypeOrmQueryError`, with the original error in `cause`
-and its PostgreSQL driver code copied to `code` when available.
+The adapter never destroys a caller-owned data source unless `close` is configured.
+[Workhorse core](https://workhorse.run/docs/installation) owns schema installation and changes.
+Pass a `pg` pool as `notificationPool` for `LISTEN/NOTIFY`; otherwise workers poll. Database errors
+become `TypeOrmQueryError`, with the original error in `cause` and its PostgreSQL driver code copied
+to `code` when available.
 
 ## Next
 

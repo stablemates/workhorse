@@ -5,8 +5,8 @@ description: Install the schema, run your first job, then kill the worker mid-jo
 
 In five minutes you will enqueue a job, run it, and then prove the interesting part: a job that
 survives its own worker being killed. Choose TypeScript, Python, or Go for the application code.
-Schema installation uses the Node.js 22+ Workhorse CLI. Every path also needs a PostgreSQL
-connection string.
+Schema installation uses the Workhorse CLI, which runs on Node.js. Every path also needs a
+PostgreSQL connection string.
 
 ## 1. Install
 
@@ -24,12 +24,18 @@ connection string.
     pip install stablemates-workhorse
     ```
 
+    Your application never installs the schema. A deployment step installs it once, and that step
+    runs on Node.js.
+
   </Tab>
   <Tab value="Go">
 
     ```bash
     go get github.com/stablemates/workhorse/go
     ```
+
+    Your application never installs the schema. A deployment step installs it once, and that step
+    runs on Node.js.
 
   </Tab>
 </Tabs>
@@ -43,6 +49,9 @@ regardless of which application SDK you use.
 ```bash
 npx --package @stablemates/workhorse workhorse schema install
 ```
+
+That step runs on Node.js, even when the application is written in Python or Go.
+[Compatibility](/docs/compatibility) names the version.
 
 TypeScript deployment code can call the same installer directly.
 

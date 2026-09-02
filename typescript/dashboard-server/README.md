@@ -40,8 +40,9 @@ Standalone deployments must use `singleAdmin`, bind to loopback or a Unix socket
 and set the exact HTTPS `publicOrigin` when a proxy terminates TLS. Operator authorization remains the
 host application's responsibility.
 
-The server reads core-owned `workhorse.dashboard_*_v1` views and versioned SQL functions. Workers can
-run in other processes because PostgreSQL owns their registry and operator pause state.
+The server reads core-owned `workhorse.dashboard_*_v1` views and versioned SQL functions. [Workhorse core](https://workhorse.run/docs/installation)
+owns schema installation and changes. Workers can run in other processes because PostgreSQL owns
+their registry and operator pause state.
 
 ## Next
 

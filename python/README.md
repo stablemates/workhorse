@@ -15,10 +15,18 @@ An AI agent should read [the Workhorse documentation index](https://workhorse.ru
 pip install stablemates-workhorse
 ```
 
-Install the schema during deployment with the TypeScript CLI. Runtime processes should verify
-compatibility instead of attempting schema changes: call `assert_schema_compatible(connection)` at
-startup, or `assert_schema_compatible_psycopg` or `assert_schema_compatible_asyncpg` when the
-application is asynchronous.
+Install the schema once, as a deployment step. The application never installs or migrates it.
+
+```bash
+npx --package @stablemates/workhorse workhorse schema install
+```
+
+The machine that runs that deployment step needs Node.js 22 or newer. The application itself needs
+no Node.js.
+
+Runtime processes verify compatibility instead of changing the schema. Call
+`assert_schema_compatible(connection)` at startup. Call `assert_schema_compatible_psycopg` or
+`assert_schema_compatible_asyncpg` when the application is asynchronous.
 
 Requires Python 3.12 through 3.14 and PostgreSQL 15 through 18.
 
