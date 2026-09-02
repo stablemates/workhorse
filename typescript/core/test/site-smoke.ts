@@ -123,7 +123,9 @@ try {
   // costs the reader two of its three languages, so assert the suffix and then
   // prove each target actually resolves.
   const playbook = await (await fetch(`${baseUrl}/docs/for-ai-agents.md`)).text();
-  const playbookLinks = [...playbook.matchAll(/\]\((\/docs\/[^)\s]+)\)/g)].map((match) => match[1]!);
+  const playbookLinks = [...playbook.matchAll(/\]\((\/docs\/[^)\s]+)\)/g)].map(
+    (match) => match[1]!,
+  );
   if (playbookLinks.length === 0) {
     throw new Error("The agent playbook carried no documentation links to check");
   }
@@ -132,7 +134,8 @@ try {
       throw new Error(`The agent playbook links ${link}, which is not a Markdown twin`);
     }
     const linked = await fetch(`${baseUrl}${link}`);
-    if (!linked.ok) throw new Error(`The agent playbook links ${link}, which returned ${linked.status}`);
+    if (!linked.ok)
+      throw new Error(`The agent playbook links ${link}, which returned ${linked.status}`);
   }
 
   // Expanding the tabs cost no size, because the twins already carried all three
