@@ -147,6 +147,12 @@ before any process from the new release starts. Breaking changes are listed in
 [`CHANGELOG.md`](../CHANGELOG.md) with the upgrade steps for that release, and
 [ADR 0053](decisions/0053-start-migrations-at-0-1-0-and-keep-them-additive.md) states the rule.
 
+`.github/workflows/release.yml` publishes the nine npm packages with provenance, then creates the
+GitHub release for the tag and attaches `sql/schema.sql`. That artifact is the clean-install schema
+for the version, provided so a Python or Go developer with no Node.js toolchain can create a
+development database with `psql -f schema.sql`. It applies none of the CLI's guards, so deployments
+run `workhorse schema install` or `workhorse schema migrate` instead.
+
 The Python package releases independently from a `python/vX.Y.Z` tag. The tag must match
 `python/pyproject.toml` and a heading in `python/CHANGELOG.md`. `.github/workflows/release-python.yml`
 runs `pnpm check`, then uv builds a source distribution and universal wheel. A separate `pypi`

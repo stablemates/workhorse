@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
-import { WORKHORSE_SCHEMA_VERSION } from "../src/schema.js";
+import { MINIMUM_SCHEMA_VERSION, WORKHORSE_SCHEMA_VERSION } from "../src/schema.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const repository = path.resolve(import.meta.dirname, "../../..");
@@ -47,26 +47,49 @@ describe("database CLI output", () => {
     });
   });
 
-  it("emits schema drift independently and exits with a runtime failure", async () => {
-    await pool.query("UPDATE workhorse.schema_version SET version = $1", [
-      WORKHORSE_SCHEMA_VERSION - 1,
-    ]);
+  async function withInstalledVersion(
+    version: number,
+    assertions: (result: ReturnType<typeof runCli>) => void,
+  ): Promise<void> {
+    await pool.query("UPDATE workhorse.schema_version SET version = $1", [version]);
     try {
-      const result = runCli(["schema", "status", "--database-url", databaseUrl, "--json"]);
-      expect(result.code).toBe(1);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        schema: {
-          installedVersion: WORKHORSE_SCHEMA_VERSION - 1,
-          expectedVersion: WORKHORSE_SCHEMA_VERSION,
-          state: "drift",
-        },
-        postgres: { supported: true },
-      });
+      assertions(runCli(["schema", "status", "--database-url", databaseUrl, "--json"]));
     } finally {
       await pool.query("UPDATE workhorse.schema_version SET version = $1", [
         WORKHORSE_SCHEMA_VERSION,
       ]);
     }
+  }
+
+  it("refuses a schema below this runtime's floor and exits with a runtime failure", async () => {
+    await withInstalledVersion(MINIMUM_SCHEMA_VERSION - 1, (result) => {
+      expect(result.code).toBe(1);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        schema: {
+          installedVersion: MINIMUM_SCHEMA_VERSION - 1,
+          expectedVersion: WORKHORSE_SCHEMA_VERSION,
+          state: "behind",
+          compatible: false,
+        },
+        postgres: { supported: true },
+      });
+    });
+  });
+
+  // A deployment gate that failed here would fail every rolling upgrade: the migration runs first,
+  // so processes from the previous release meet a schema ahead of them until the rollout finishes.
+  it("accepts a schema ahead of this build and exits successfully", async () => {
+    await withInstalledVersion(WORKHORSE_SCHEMA_VERSION + 1, (result) => {
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        schema: {
+          installedVersion: WORKHORSE_SCHEMA_VERSION + 1,
+          state: "ahead",
+          compatible: true,
+          refusal: null,
+        },
+      });
+    });
   });
 
   it("emits the QueueHealth shape with --json", () => {

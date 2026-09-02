@@ -553,18 +553,25 @@ repository test suite.
 
 `support.json` also owns the install commands under its `install` key: `node` is
 `npm install @stablemates/workhorse`, `python` is `pip install stablemates-workhorse`, `go` is
-`go get github.com/stablemates/workhorse/go`, and `schema` is
-`npx --package @stablemates/workhorse workhorse schema install`. None carries a version.
+`go get github.com/stablemates/workhorse/go`, `schema` is
+`npm exec --no -- workhorse schema install`, and `schemaPinned` is
+`npx --package @stablemates/workhorse@0.1.0 workhorse schema install`. The three language commands
+carry no version. The two schema commands are the deployment tool rather than an adoption step, and
+their version must equal the SDK the application depends on: `schema` achieves that by resolving
+the binary from the project's own `node_modules`, which `--no` requires and never installs, and
+`schemaPinned` achieves it by naming the version for a project that has no `node_modules`.
 `scripts/install-commands.test.ts` requires each command verbatim on the surfaces that introduce the
 product: `README.md` and `typescript/core/README.md` state `node` and `schema`; the
 `dashboard`, `dashboard-server`, `drizzle`, `kysely`, `otel`, `prisma`, and `typeorm` READMEs under
-`typescript/` state `node`; `python/README.md` states `python`; `go/README.md` and
-`go/examples/README.md` state `go`; `site/content/docs/installation.mdx` and `quickstart.mdx` state
-all four; `site/content/docs/for-ai-agents.mdx` states the three language commands; and
-`site/content/docs/api.mdx` states `schema`. `typescript/dashboard-contract/README.md` is exempt
-because it installs a type-only development dependency, and the test fails when a published package
-gains a README that is neither governed nor exempt. Two sweeps cover every tracked Markdown and MDX
-file outside `docs/decisions/`: no install command may name a version, and no file may run the
+`typescript/` state `node`; `python/README.md` states `python` and `schemaPinned`; `go/README.md`
+states `go` and `schemaPinned`; `go/examples/README.md` states `go`;
+`site/content/docs/installation.mdx`, `quickstart.mdx`, and `for-ai-agents.mdx` state all five; and
+`site/content/docs/api.mdx` states both schema commands. `typescript/dashboard-contract/README.md`
+is exempt because it installs a type-only development dependency, and the test fails when a
+published package gains a README that is neither governed nor exempt. Three sweeps cover every
+tracked Markdown and MDX file outside `docs/decisions/`: no install command other than a
+`workhorse schema` command may name a version, `install.schemaPinned` must name exactly the version
+in `typescript/core/package.json` while `install.schema` names none, and no file may run the
 `workhorse` binary through `npx` without `--package`, a form `npx` resolves to an unrelated package
 outside a project that already depends on `@stablemates/workhorse`.
 
@@ -2385,11 +2392,17 @@ The `@stablemates/workhorse` manifest exposes only the `workhorse` binary. `pars
 Node.js `parseArgs()` with `strict: true` for each command. String options accept `--flag value` and
 `--flag=value`. `resolveDatabaseUrl()` uses `--database-url`, `WORKHORSE_DATABASE_URL`, then
 `DATABASE_URL`. `workhorse schema status
---json` returns `schema.installedVersion`, `schema.expectedVersion`, and `schema.state` separately
-from `postgres.major`, `postgres.version`, `postgres.supported`, `postgres.tested`,
-`postgres.minimumMajor`, and `postgres.level`. `workhorse health --json` returns `QueueHealth`.
-Help exits 0 before database resolution. Runtime failures exit 1, health degradation exits 2, and
-`CliUsageError` exits 64.
+--json` returns `schema.installedVersion`, `schema.expectedVersion`, `schema.minimumVersion`,
+`schema.clientProtocolVersion`, `schema.installedProtocolVersions`, `schema.state`,
+`schema.compatible`, and `schema.refusal` separately from `postgres.major`, `postgres.version`,
+`postgres.supported`, `postgres.tested`, `postgres.minimumMajor`, and `postgres.level`.
+`schema.state` is `not-installed`, `behind`, `current`, or `ahead`, and reports position only.
+`schema.compatible` reports whether this build would start against the installed schema, and
+`schema.refusal` carries the sentence `assertSchemaCompatible` would throw, from the shared
+`schemaCompatibilityRefusal`. The status command exits 1 when `schema.compatible` is false or
+`postgres.supported` is false, so `ahead` alone is not a failure. `workhorse health --json` returns
+`QueueHealth`. Help exits 0 before database resolution. Runtime failures exit 1, health degradation
+exits 2, and `CliUsageError` exits 64.
 
 ## OpenTelemetry traces, logs, and baseline metrics
 

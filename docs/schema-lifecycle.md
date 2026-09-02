@@ -111,9 +111,16 @@ PITR restore point. The migration framework has no down migrations by design; re
 is the rollback path, and it discards jobs enqueued after the backup, so stop producers first for a
 clean rollback window.
 
-Run migrations from a deployment step while application processes from the new release have not
-started. Old processes fail closed: `assertSchemaCompatible` and the SQL protocol compatibility
-checks refuse a version they do not expect rather than misreading it.
+Run migrations from a deployment step before any process from the new release starts. Processes
+from the previous release keep running against the migrated schema, because inside a major line a
+migration only adds. Only the two ends fail closed: `assertSchemaCompatible` and the SQL protocol
+compatibility checks refuse a schema below the release's minimum, and refuse one whose
+`workhorse.protocol_version` no longer lists the protocol the release speaks.
+
+Verify between the two steps. `workhorse schema status --json` exits 1 when the running build would
+refuse the installed schema, and reports `schema.compatible` and `schema.refusal` for a deployment
+gate to read. `schema.state` reporting `ahead` is not a failure; it is what a rollout in progress
+looks like.
 
 A failed migration rolls back atomically, so recovery is diagnose and rerun:
 

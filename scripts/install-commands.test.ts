@@ -12,10 +12,22 @@ import { publishedPackages, repositoryRoot } from "./packages.js";
 // Four of the governed surfaces are README files rendered by npm, PyPI, and pkg.go.dev. They are
 // plain Markdown with no build step, so no component and no site generator can reach them; a text
 // assertion can.
+//
+// The schema command is the exception to the no-version rule, and the exception is the whole point.
+// An adoption command must name no version, because a reader who copies one pins the release they
+// happened to read about. A pipeline command must name one: the schema tool has to match the SDK
+// the application depends on, or the deploy fails on a schema the application will not accept
+// ([ADR 0053](../docs/decisions/0053-start-migrations-at-0-1-0-and-keep-them-additive.md)).
+//
+// A TypeScript project needs no pin. `npm exec --no` runs the binary from `node_modules`, which is
+// the application's own dependency, so the versions match by construction and `--no` refuses to
+// fetch anything when it is absent. A Python or Go project has no `node_modules` to resolve from,
+// so its command names the version explicitly, and the rule below is what keeps that literal equal
+// to the version this repository publishes.
 
 const execFileAsync = promisify(execFile);
 
-type InstallCommand = "go" | "node" | "python" | "schema";
+type InstallCommand = "go" | "node" | "python" | "schema" | "schemaPinned";
 
 interface InstallManifest {
   readonly install: Readonly<Record<InstallCommand, string>>;
@@ -45,13 +57,22 @@ const governedSurfaces: readonly GovernedSurface[] = [
   { file: "typescript/otel/README.md", commands: ["node"] },
   { file: "typescript/prisma/README.md", commands: ["node"] },
   { file: "typescript/typeorm/README.md", commands: ["node"] },
-  { file: "python/README.md", commands: ["python", "schema"] },
-  { file: "go/README.md", commands: ["go", "schema"] },
+  { file: "python/README.md", commands: ["python", "schemaPinned"] },
+  { file: "go/README.md", commands: ["go", "schemaPinned"] },
   { file: "go/examples/README.md", commands: ["go"] },
-  { file: "site/content/docs/installation.mdx", commands: ["go", "node", "python", "schema"] },
-  { file: "site/content/docs/quickstart.mdx", commands: ["go", "node", "python", "schema"] },
-  { file: "site/content/docs/for-ai-agents.mdx", commands: ["go", "node", "python", "schema"] },
-  { file: "site/content/docs/api.mdx", commands: ["schema"] },
+  {
+    file: "site/content/docs/installation.mdx",
+    commands: ["go", "node", "python", "schema", "schemaPinned"],
+  },
+  {
+    file: "site/content/docs/quickstart.mdx",
+    commands: ["go", "node", "python", "schema", "schemaPinned"],
+  },
+  {
+    file: "site/content/docs/for-ai-agents.mdx",
+    commands: ["go", "node", "python", "schema", "schemaPinned"],
+  },
+  { file: "site/content/docs/api.mdx", commands: ["schema", "schemaPinned"] },
 ];
 
 /** Markdown wraps prose at will, so a sentence rule compares runs of whitespace as one space. */
@@ -93,6 +114,15 @@ const versionPatterns: readonly { readonly label: string; readonly pattern: RegE
 /** Install commands, extracted so a version is reported against the command that carries it. */
 const installCommandPattern =
   /(?:npm (?:install|i)|pnpm add|yarn add|bun add|pip install|pipx install|uv add|go get|npx --package)[^\n`]*/g;
+
+/**
+ * The schema tool, which is the one command that must name a version.
+ *
+ * It runs from a deployment pipeline rather than from a reader's terminal, and it has to match the
+ * SDK the application depends on, so the no-version rule below skips it and a dedicated rule pins
+ * it instead.
+ */
+const schemaCommandPattern = /workhorse schema\b/;
 
 /** `npx` resolves this to an unrelated package outside a project that already depends on ours. */
 const bareBinaryPattern = /npx workhorse\b/;
@@ -142,18 +172,42 @@ describe("install commands", () => {
 
     for (const [file, contents] of await documentedSurfaces()) {
       for (const [command] of contents.matchAll(installCommandPattern)) {
+        if (schemaCommandPattern.test(command)) continue;
         for (const { label, pattern } of versionPatterns) {
           if (pattern.test(command)) pinned.push(`${file}: ${label} in ${command.trim()}`);
         }
       }
     }
-    for (const command of Object.values(manifest.install)) {
+    for (const [name, command] of Object.entries(manifest.install)) {
+      if (schemaCommandPattern.test(command)) continue;
       for (const { label, pattern } of versionPatterns) {
-        if (pattern.test(command)) pinned.push(`support.json: ${label} in ${command}`);
+        if (pattern.test(command)) pinned.push(`support.json: ${label} in ${name}`);
       }
     }
 
     expect(pinned).toEqual([]);
+  });
+
+  // The carve-out above removes the sweep from the one command that most needs a rule. These two
+  // are what replaces it: the pinned form names the version this repository publishes, and nothing
+  // else does.
+  it("pins the schema command a project without node_modules runs to the published version", async () => {
+    const manifest = await readInstallManifest();
+    const core = JSON.parse(await read("typescript/core/package.json")) as { version: string };
+
+    expect(manifest.install.schemaPinned).toContain(`@stablemates/workhorse@${core.version}`);
+  });
+
+  it("leaves the schema command a TypeScript project runs unpinned and local", async () => {
+    const manifest = await readInstallManifest();
+
+    // A version here would be a second source of truth for what the application already declares.
+    for (const { pattern } of versionPatterns) {
+      expect(manifest.install.schema).not.toMatch(pattern);
+    }
+    // `--no` is what makes the command resolve the project's own dependency or fail, rather than
+    // fetching a stranger's package named `workhorse`.
+    expect(manifest.install.schema).toContain("npm exec --no --");
   });
 
   it("never tells a reader to run the bare `npx workhorse` form", async () => {
@@ -177,8 +231,9 @@ describe("install commands", () => {
       if (!collapse(contents).includes(schemaOwnerSentence)) {
         wrong.push(`${file}: does not name core as owner`);
       }
-      if (contents.includes(manifest.install.schema))
-        wrong.push(`${file}: carries a schema command`);
+      for (const command of [manifest.install.schema, manifest.install.schemaPinned]) {
+        if (contents.includes(command)) wrong.push(`${file}: carries a schema command`);
+      }
     }
 
     expect(wrong).toEqual([]);
