@@ -1669,8 +1669,8 @@ wait. Actor contains 1 through 200 characters, reason contains 1 through 2,000 c
 request ID contains 1 through 512 UTF-8 bytes. A successful release appends one `promoted` event.
 Its details contain `reason = 'manual'`, `requested_by`, `request_reason`,
 `request_id_preview`, the 12-character `request_id_digest`, and `request_id_length`. Calls that do
-not change the job append no event. Dashboard backends use `dashboard_run_task_now_v1(job_id)` for
-the same state transition when their mutation layer supplies the audit boundary.
+not change the job append no event. Every dashboard backend calls this function directly and
+supplies the audit arguments from its authenticated actor and the request's audit envelope.
 
 ## Atomic lifecycle
 
@@ -2778,7 +2778,7 @@ interactive stdin and stdout is refused with exit 1.
   from `notificationPool.options.max`. Without those capabilities, an adapter remains polling-only.
   A pool whose capacity is 1 also remains polling-only, which prevents its sole connection from being
   held away from claims. Queue-name payloads wake matching subscribers and `*` wakes all subscribers.
-  `promote_v1`, `run_task_now_v1`, `dashboard_run_task_now_v1`, `recover_expired_v1`,
+  `promote_v1`, `run_task_now_v1`, `recover_expired_v1`,
   `sync_concurrency_policies_v1`, and `sync_rate_limit_policies_v1` notify once per distinct affected
   queue. Job notifications abort only the dispatch loop's `dispatchWakeController`; maintenance and
   registration retain their configured sleep cadence through `wakeController`. Lifecycle changes

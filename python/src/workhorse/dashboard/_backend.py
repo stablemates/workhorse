@@ -338,11 +338,16 @@ class DashboardBackend:
             ([_camel_to_snake(name) for name in settings],),
         )
 
-    def run_task_now(self, input: object, _actor: str) -> object:
-        job_id = cast(Mapping[str, object], input)["id"]
+    def run_task_now(self, input: object, actor: str) -> object:
+        value = cast(Mapping[str, object], input)
+        audit = cast(Mapping[str, object], value["audit"])
+        job_id = value["id"]
         row = self._rows(
-            "SELECT status, state, run_at FROM workhorse.dashboard_run_task_now_v1(%s::uuid)",
-            (job_id,),
+            """
+            SELECT status, state, run_at FROM workhorse.run_task_now_v1(
+              %s::uuid, %s::text, %s::text, %s::text)
+            """,
+            (job_id, actor, audit["reason"], audit["requestId"]),
         )[0]
         if row["status"] == "not_found":
             raise DashboardRPCError(404, "NOT_FOUND", "Task not found")

@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS workhorse.protocol_version (
   recorded_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
-CREATE OR REPLACE FUNCTION workhorse.valid_tags(p_tags text[])
+CREATE OR REPLACE FUNCTION workhorse.valid_tags_v1(p_tags text[])
 RETURNS boolean
 LANGUAGE sql
 IMMUTABLE
@@ -437,7 +437,7 @@ CREATE TABLE IF NOT EXISTS workhorse.job (
   trace_context jsonb
     CONSTRAINT job_trace_context_valid CHECK (workhorse.valid_trace_context_v1(trace_context)),
   tags text[] NOT NULL DEFAULT '{}'
-    CONSTRAINT job_tags_valid CHECK (workhorse.valid_tags(tags)),
+    CONSTRAINT job_tags_valid CHECK (workhorse.valid_tags_v1(tags)),
   max_attempts integer NOT NULL CHECK (max_attempts BETWEEN 1 AND 100),
   retry_policy jsonb
     CONSTRAINT job_retry_policy_normalized CHECK (
@@ -5559,7 +5559,7 @@ BEGIN
     END IF;
     SELECT COALESCE(array_agg(value), '{}') INTO v_tags
       FROM jsonb_array_elements_text(v_filter->'tags') tag(value);
-    IF NOT workhorse.valid_tags(v_tags) THEN
+    IF NOT workhorse.valid_tags_v1(v_tags) THEN
       RAISE EXCEPTION 'dead-letter tags filter must contain at most 20 non-empty tags of at most 100 characters';
     END IF;
   END IF;
@@ -5835,7 +5835,7 @@ BEGIN
     END IF;
     SELECT COALESCE(array_agg(value), '{}') INTO v_tags
       FROM jsonb_array_elements_text(v_filter->'tags') tag(value);
-    IF NOT workhorse.valid_tags(v_tags) THEN
+    IF NOT workhorse.valid_tags_v1(v_tags) THEN
       RAISE EXCEPTION 'bulk redrive tags filter must contain at most 20 non-empty tags of at most 100 characters';
     END IF;
   END IF;
@@ -6393,74 +6393,6 @@ BEGIN
     PERFORM pg_notify('workhorse_jobs', v_notify_queue);
   END LOOP;
   RETURN v_count;
-END;
-$$;
-
--- Release one ordinary future-scheduled task without bypassing a durable wait. This operator path
--- deliberately changes only the task occurrence. It never reads or updates schedule_definition or
--- schedule_occurrence, so a recurring schedule's cadence and next evaluation remain untouched.
-CREATE OR REPLACE FUNCTION workhorse.dashboard_run_task_now_v1(p_job_id uuid)
-RETURNS TABLE(status text, state text, run_at timestamptz)
-LANGUAGE plpgsql
-AS $$
-DECLARE
-  v_runtime workhorse.job_runtime%ROWTYPE;
-  v_outcome workhorse.job_outcome%ROWTYPE;
-  v_now timestamptz := clock_timestamp();
-BEGIN
-  SELECT * INTO v_runtime
-    FROM workhorse.job_runtime runtime
-   WHERE runtime.job_id = p_job_id
-   FOR UPDATE;
-
-  IF FOUND THEN
-    IF v_runtime.state IN ('ready', 'active') THEN
-      RETURN QUERY VALUES ('already_ready'::text, v_runtime.state, v_runtime.run_at);
-      RETURN;
-    END IF;
-
-    -- A scheduled row with a retained attempt is suspended at a durable wait boundary. Releasing it
-    -- would skip the named wait and violate durable execution semantics, so refuse even if wait_name
-    -- is momentarily unavailable due to a racing reader.
-    IF v_runtime.wait_name IS NOT NULL OR v_runtime.attempt_started_at IS NOT NULL THEN
-      RETURN QUERY VALUES ('waiting'::text, v_runtime.state, v_runtime.run_at);
-      RETURN;
-    END IF;
-
-    UPDATE workhorse.job_runtime runtime
-       SET state = 'ready', run_at = v_now, ready_at = v_now,
-           sequence = nextval('workhorse.ready_sequence_seq'), updated_at = v_now
-     WHERE runtime.job_id = p_job_id AND runtime.state = 'scheduled'
-    RETURNING * INTO v_runtime;
-    IF NOT FOUND THEN
-      RAISE EXCEPTION 'locked scheduled task % changed state unexpectedly', p_job_id;
-    END IF;
-
-    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
-      VALUES (
-        p_job_id,
-        v_runtime.current_attempt,
-        'promoted',
-        jsonb_build_object('reason', 'manual')
-      );
-    PERFORM pg_notify('workhorse_jobs', v_runtime.queue_name);
-    RETURN QUERY VALUES ('released'::text, v_runtime.state, v_runtime.run_at);
-    RETURN;
-  END IF;
-
-  SELECT * INTO v_outcome
-    FROM workhorse.job_outcome outcome
-   WHERE outcome.job_id = p_job_id;
-  IF FOUND THEN
-    RETURN QUERY VALUES ('not_scheduled'::text, v_outcome.state, v_outcome.run_at);
-    RETURN;
-  END IF;
-
-  IF EXISTS (SELECT 1 FROM workhorse.job job WHERE job.id = p_job_id) THEN
-    RETURN QUERY VALUES ('not_scheduled'::text, NULL::text, NULL::timestamptz);
-  ELSE
-    RETURN QUERY VALUES ('not_found'::text, NULL::text, NULL::timestamptz);
-  END IF;
 END;
 $$;
 

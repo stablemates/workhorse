@@ -377,6 +377,24 @@ describe("schema installation", () => {
     expect(versioned.rows).toEqual([]);
   });
 
+  it("gives every function and view a version suffix", async () => {
+    // An unsuffixed name cannot be superseded without breaking its callers, because there is no
+    // second name to move to. `docs/schema-lifecycle.md` requires the suffix on every one.
+    const unsuffixed = await pool.query<{ name: string }>(
+      `SELECT proname AS name
+         FROM pg_proc
+         JOIN pg_namespace ON pg_namespace.oid = pg_proc.pronamespace
+        WHERE nspname = 'workhorse' AND proname !~ '_v[0-9]+$'
+        UNION ALL
+       SELECT relname AS name
+         FROM pg_class
+         JOIN pg_namespace ON pg_namespace.oid = pg_class.relnamespace
+        WHERE nspname = 'workhorse' AND relkind = 'v' AND relname !~ '_v[0-9]+$'
+        ORDER BY name`,
+    );
+    expect(unsuffixed.rows).toEqual([]);
+  });
+
   it("installs schema v1 with database-owned settings, job contracts, and fenced progress", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
