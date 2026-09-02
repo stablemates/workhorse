@@ -18,6 +18,9 @@ from workhorse import (
     ScheduleDefinition,
     ScheduledJob,
     Throttle,
+    assert_schema_compatible,
+    assert_schema_compatible_asyncpg,
+    assert_schema_compatible_psycopg,
 )
 
 pytestmark = pytest.mark.integration
@@ -165,3 +168,23 @@ def test_enqueue_modes_dependencies_batch_and_schedules(database_url: str) -> No
             "WHERE namespace = 'billing' AND schedule_name = 'daily'"
         ).fetchone()
     assert schedule == ("0 0 * * *",)
+
+
+def test_psycopg_asserts_schema_compatibility_at_startup(database_url: str) -> None:
+    with psycopg.connect(database_url) as connection:
+        assert_schema_compatible(connection)
+
+
+@pytest.mark.asyncio
+async def test_async_psycopg_asserts_schema_compatibility_at_startup(database_url: str) -> None:
+    async with await psycopg.AsyncConnection.connect(database_url) as connection:
+        await assert_schema_compatible_psycopg(connection)
+
+
+@pytest.mark.asyncio
+async def test_asyncpg_asserts_schema_compatibility_at_startup(database_url: str) -> None:
+    connection = await asyncpg.connect(database_url)
+    try:
+        await assert_schema_compatible_asyncpg(connection)
+    finally:
+        await connection.close()

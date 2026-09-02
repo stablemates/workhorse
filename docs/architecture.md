@@ -123,7 +123,12 @@ milliseconds.
 `python/src/workhorse/_statements.py` owns each statement in `STATEMENTS` with explicit Psycopg and
 asyncpg parameter dialects. `assert_sync_compatible` and `assert_async_compatible` query on every
 call. `CachedCompatibilityCheck` and `AsyncCachedCompatibilityCheck` cache the first query result
-for worker loops that opt into a one-shot gate.
+for worker loops that opt into a one-shot gate. `python/src/workhorse/compatibility.py` publishes
+that check to applications as `assert_schema_compatible(connection)` for synchronous Psycopg, and
+`assert_schema_compatible_psycopg(connection)` and `assert_schema_compatible_asyncpg(connection)`
+for the two asynchronous drivers. Each wraps the caller-owned connection in the matching executor,
+reads `workhorse.schema_version`, and raises `ProtocolCompatibilityError` without creating or
+changing a database object.
 
 The Go module exports `NewQueue(executor, defaultQueue)`, `Queue.Enqueue`,
 `Queue.EnqueueWithResult`, `Queue.EnqueueMany`, `Queue.EnqueueManyWithResults`, and

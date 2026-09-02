@@ -122,20 +122,66 @@ baseline still require a reset.
 ## Check before a runtime starts
 
 Application and worker processes should verify the schema, never install it. That split keeps the
-destructive authority to create database objects out of every long-lived process.
+destructive authority to create database objects out of every long-lived process. Every SDK ships
+the check.
 
-```ts
-import { assertSchemaCompatible } from "@stablemates/workhorse";
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
 
-await assertSchemaCompatible(pool);
-```
+    ```ts
+    import { assertSchemaCompatible } from "@stablemates/workhorse";
 
-`assertSchemaCompatible` reads the installed version without creating or changing anything. If the
-schema is missing, it says so and points at the installation step; if the version differs from the
-runtime's, it names both numbers.
+    await assertSchemaCompatible(pool);
+    ```
 
-When you want the raw values instead of an assertion — for a health endpoint, for example — use
-`readSchemaVersion` and compare against the exported `WORKHORSE_SCHEMA_VERSION` constant.
+  </Tab>
+  <Tab value="Python">
+
+    ```python
+    from workhorse import assert_schema_compatible
+
+    assert_schema_compatible(connection)
+    ```
+
+    Asynchronous applications name their driver, the way `AsyncQueue` does. Call the one that
+    matches the connection you hold.
+
+    ```python
+    from workhorse import assert_schema_compatible_psycopg
+
+    await assert_schema_compatible_psycopg(connection)
+    ```
+
+    ```python
+    from workhorse import assert_schema_compatible_asyncpg
+
+    await assert_schema_compatible_asyncpg(connection)
+    ```
+
+    A refusal raises `ProtocolCompatibilityError`, whose `code` names the reason.
+
+  </Tab>
+  <Tab value="Go">
+
+    ```go
+    executor := workhorse.NewPGXExecutor(pool)
+    if err := workhorse.AssertCompatible(ctx, executor); err != nil {
+        return err
+    }
+    ```
+
+    A refusal is a `*workhorse.CompatibilityError`, whose `Code` names the reason.
+
+  </Tab>
+</Tabs>
+
+The check reads the installed version without creating or changing anything. If the schema is
+missing, it says so and points at the installation step; if the version differs from the runtime's,
+it names both.
+
+When you want the raw values instead of an assertion — for a health endpoint, for example —
+TypeScript exposes `readSchemaVersion` to compare against the exported `WORKHORSE_SCHEMA_VERSION`
+constant.
 
 ```ts
 import { readSchemaVersion, WORKHORSE_SCHEMA_VERSION } from "@stablemates/workhorse";

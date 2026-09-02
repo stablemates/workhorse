@@ -193,6 +193,12 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
     go: { file: "compatibility_test.go", pattern: "Compatibility" },
   },
   {
+    capability: "Public startup schema compatibility check",
+    typescript: { file: "schema-installation.test.ts", pattern: "assertSchemaCompatible" },
+    python: { file: "test_compatibility.py", pattern: "assert_schema_compatible" },
+    go: { file: "compatibility_test.go", pattern: "AssertCompatible" },
+  },
+  {
     capability: "SQL protocol conformance fixtures executed",
     typescript: { file: "sql-protocol-conformance.test.ts", pattern: "scenarios" },
     python: { file: "test_protocol_conformance.py", pattern: "scenarios" },

@@ -27,8 +27,15 @@ from workhorse import (
     RateLimit,
     RateLimitPolicyDefinition,
     Worker,
+    assert_schema_compatible,
+    assert_schema_compatible_asyncpg,
+    assert_schema_compatible_psycopg,
     run_worker_process,
 )
+
+
+def sync_startup_check(connection: psycopg.Connection[Any]) -> None:
+    assert_schema_compatible(connection)
 
 
 def sync_enqueue(connection: psycopg.Connection[Any]) -> str:
@@ -126,6 +133,14 @@ async def async_psycopg_enqueue(connection: psycopg.AsyncConnection[Any]) -> str
         requested_by="service",
     )
     return job_id
+
+
+async def async_startup_checks(
+    psycopg_connection: psycopg.AsyncConnection[Any],
+    asyncpg_connection: asyncpg.Connection,
+) -> None:
+    await assert_schema_compatible_psycopg(psycopg_connection)
+    await assert_schema_compatible_asyncpg(asyncpg_connection)
 
 
 async def asyncpg_enqueue(connection: asyncpg.Connection) -> str:

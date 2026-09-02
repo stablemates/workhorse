@@ -44,6 +44,7 @@ Two boundaries keep this matrix small:
 | Recurring schedule definition sync         | Supported  | Supported | Supported |
 | Payload and result contracts               | Supported  | Supported | Supported |
 | Compatibility refusal before mutation      | Supported  | Supported | Supported |
+| Public startup schema compatibility check  | Supported  | Supported | Supported |
 | SQL protocol conformance fixtures executed | Supported  | Supported | Supported |
 | Enqueue trace-context propagation          | Supported  | Supported | Supported |
 

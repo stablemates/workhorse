@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
+import { assertSchemaCompatible, WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { pool, queue } = createIntegrationTestContext(import.meta.url, {
@@ -544,5 +544,9 @@ describe("schema installation", () => {
          ORDER BY column_name`);
     expect(idempotencyColumns.rows.map((row) => row.column_name)).toContain("idempotency_key_hash");
     expect(idempotencyColumns.rows.map((row) => row.column_name)).not.toContain("idempotency_key");
+  });
+
+  it("accepts the installed schema from the public startup check", async () => {
+    await expect(assertSchemaCompatible(pool)).resolves.toBeUndefined();
   });
 });

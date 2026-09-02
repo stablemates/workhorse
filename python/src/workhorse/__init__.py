@@ -31,6 +31,11 @@ from .admin import (
 )
 from .async_worker import AsyncBatchHandler, AsyncHandler, AsyncWorker
 from .client import AsyncQueue, Queue
+from .compatibility import (
+    assert_schema_compatible,
+    assert_schema_compatible_asyncpg,
+    assert_schema_compatible_psycopg,
+)
 from .errors import (
     CancellationRequestedError,
     CheckpointConflictError,
@@ -228,5 +233,8 @@ __all__ = [
     "WorkerPauseResult",
     "WorkerRegistryEntry",
     "WorkhorseError",
+    "assert_schema_compatible",
+    "assert_schema_compatible_asyncpg",
+    "assert_schema_compatible_psycopg",
     "run_worker_process",
 ]

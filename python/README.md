@@ -14,7 +14,9 @@ pip install stablemates-workhorse
 ```
 
 Install the schema during deployment with the TypeScript CLI. Runtime processes should verify
-compatibility instead of attempting schema changes.
+compatibility instead of attempting schema changes: call `assert_schema_compatible(connection)` at
+startup, or `assert_schema_compatible_psycopg` or `assert_schema_compatible_asyncpg` when the
+application is asynchronous.
 
 Requires Python 3.12 through 3.14 and PostgreSQL 15 through 18.
 

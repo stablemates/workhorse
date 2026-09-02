@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 
 import pytest
 
-from workhorse import ProtocolCompatibilityError
+from workhorse import ProtocolCompatibilityError, assert_schema_compatible
 from workhorse._compatibility import (
     AsyncCachedCompatibilityCheck,
     CachedCompatibilityCheck,
@@ -96,3 +96,40 @@ async def test_async_cached_compatibility_check_reuses_a_refusal() -> None:
         assert raised.value.code == "schema-too-old"
 
     assert executor.calls == 1
+
+
+class FakeCursor:
+    def __init__(self, version: int) -> None:
+        self.description = (("version",),)
+        self._version = version
+
+    def __enter__(self) -> FakeCursor:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(self, _sql: str, _parameters: Sequence[object] = ()) -> None:
+        return None
+
+    def fetchall(self) -> list[tuple[int]]:
+        return [(self._version,)]
+
+
+class FakeConnection:
+    def __init__(self, version: int) -> None:
+        self._version = version
+
+    def cursor(self) -> FakeCursor:
+        return FakeCursor(self._version)
+
+
+def test_public_assert_schema_compatible_accepts_the_installed_version() -> None:
+    assert_schema_compatible(FakeConnection(1))
+
+
+def test_public_assert_schema_compatible_refuses_an_older_schema() -> None:
+    with pytest.raises(ProtocolCompatibilityError) as raised:
+        assert_schema_compatible(FakeConnection(0))
+
+    assert raised.value.code == "schema-too-old"
