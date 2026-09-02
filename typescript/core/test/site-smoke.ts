@@ -58,7 +58,10 @@ try {
     ["/docs", ["Workhorse", "PostgreSQL"]],
     ["/docs/api", ["API overview", `Workhorse version ${WORKHORSE_VERSION}`]],
     ["/docs/for-ai-agents", ["TypeScript", "Python", "Go"]],
-    ["/docs/for-ai-agents.md", ["TypeScript", "Python", "Go"]],
+    // The playbook's remedy for a non-restart-safe external effect is a
+    // checkpoint. A rewrite that drops the word drops the one mistake a
+    // recorded baseline session actually made.
+    ["/docs/for-ai-agents.md", ["TypeScript", "Python", "Go", "checkpoint"]],
     ["/docs/integrations", ["Verified", "Documented", "Tested against drizzle-orm"]],
     ["/docs/integrations.md", ["ORMs and query builders", "Tested against drizzle-orm"]],
     ["/docs/quickstart", ["quickstart", "worker"]],
@@ -113,6 +116,26 @@ try {
     for (const token of tokens) {
       if (body.includes(token)) throw new Error(`${path} still carries the MDX tag ${token}`);
     }
+  }
+
+  // Every documentation link in the playbook must reach a twin, because the page
+  // is read by agents that cannot open a language tab. A link to the HTML page
+  // costs the reader two of its three languages, so assert the suffix and then
+  // prove each target actually resolves.
+  const playbook = await (await fetch(`${baseUrl}/docs/for-ai-agents.md`)).text();
+  const playbookLinks = [...playbook.matchAll(/\]\((\/docs\/[^)\s]+)\)/g)].map(
+    (match) => match[1]!,
+  );
+  if (playbookLinks.length === 0) {
+    throw new Error("The agent playbook carried no documentation links to check");
+  }
+  for (const link of playbookLinks) {
+    if (!link.endsWith(".md")) {
+      throw new Error(`The agent playbook links ${link}, which is not a Markdown twin`);
+    }
+    const linked = await fetch(`${baseUrl}${link}`);
+    if (!linked.ok)
+      throw new Error(`The agent playbook links ${link}, which returned ${linked.status}`);
   }
 
   // Expanding the tabs cost no size, because the twins already carried all three
