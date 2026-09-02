@@ -14,7 +14,7 @@ const columns = [
   {
     label: "Build",
     links: [
-      { href: "/docs/drizzle", text: "Integrations" },
+      { href: "/docs/integrations", text: "Integrations" },
       { href: "/docs/examples", text: "Examples" },
       { href: "/docs/dashboard", text: "Dashboard" },
     ],

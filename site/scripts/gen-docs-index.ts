@@ -1,5 +1,6 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 
+import type { Integration, IntegrationCategory } from "../lib/integrations.js";
 import { siteConfig } from "../lib/site.js";
 
 /**
@@ -11,7 +12,8 @@ import { siteConfig } from "../lib/site.js";
  * emits plain JSON: the sidebar tree, one metadata record per page, the
  * sitemap, the robots file, and the prerender list.
  *
- * `content/docs/meta.json` owns the sidebar order. This script turns its
+ * `content/docs/meta.json` owns the sidebar order, except under
+ * `---Integrations---`, which `integrations.json` owns. This script turns the
  * separators into collapsible folders with no URL of their own, so the page
  * files stay flat and every `/docs/<slug>` URL keeps working.
  */
@@ -25,11 +27,6 @@ interface Group {
   readonly groups?: readonly Group[];
 }
 
-/**
- * Sidebar logos, keyed by page slug. The value names a file in
- * `public/brand/integrations`. Every integration carries its own mark, so a
- * reader scanning the group recognizes the tool before reading the label.
- */
 /**
  * Sidebar labels, where the page title is too long or too internal to scan.
  *
@@ -60,13 +57,6 @@ const sidebarLabels: Readonly<Record<string, string>> = {
   api: "API",
 };
 
-const logos: Readonly<Record<string, string>> = {
-  drizzle: "drizzle",
-  prisma: "prisma",
-  typeorm: "typeorm",
-  kysely: "kysely",
-};
-
 interface PageRecord {
   readonly slug: string;
   readonly url: string;
@@ -76,6 +66,8 @@ interface PageRecord {
 }
 
 const contentDir = new URL("../content/docs/", import.meta.url);
+const siteDir = new URL("../", import.meta.url);
+const repositoryDir = new URL("../../", import.meta.url);
 
 interface DocsMeta {
   readonly title: string;
@@ -83,6 +75,125 @@ interface DocsMeta {
 }
 
 const docsMeta = JSON.parse(await readFile(new URL("meta.json", contentDir), "utf8")) as DocsMeta;
+
+/**
+ * The integration catalog. `integrations.json` names the integrations and their
+ * order; this script resolves the versions from `package.json` so no version
+ * string is ever written by hand into the catalog or into a page.
+ */
+interface Catalog {
+  readonly categories: readonly IntegrationCategory[];
+  readonly integrations: readonly Integration[];
+}
+
+const catalog = JSON.parse(
+  await readFile(new URL("integrations.json", siteDir), "utf8"),
+) as Catalog;
+
+const categoryIds = new Set(catalog.categories.map((category) => category.id));
+for (const entry of catalog.integrations) {
+  if (!categoryIds.has(entry.category)) {
+    throw new Error(
+      `The integration "${entry.slug}" names an unknown category "${entry.category}"`,
+    );
+  }
+}
+
+/**
+ * Every workspace package, keyed by its published name. A catalog entry names
+ * the package rather than its directory, so renaming a directory cannot
+ * silently detach an integration from the versions it is tested against.
+ */
+interface PackageManifest {
+  readonly name?: string;
+  readonly peerDependencies?: Readonly<Record<string, string>>;
+  readonly devDependencies?: Readonly<Record<string, string>>;
+}
+
+const workspaceDir = new URL("typescript/", repositoryDir);
+const workspaceEntries = await readdir(workspaceDir, { withFileTypes: true });
+const manifests = new Map<string, PackageManifest>();
+const manifestsByPath = new Map<string, PackageManifest>();
+await Promise.all(
+  workspaceEntries
+    .filter((entry) => entry.isDirectory())
+    .map(async (entry) => {
+      const manifestUrl = new URL(`${entry.name}/package.json`, workspaceDir);
+      const source = await readFile(manifestUrl, "utf8").catch(() => undefined);
+      if (!source) return;
+      const manifest = JSON.parse(source) as PackageManifest;
+      manifestsByPath.set(`typescript/${entry.name}`, manifest);
+      if (manifest.name) manifests.set(manifest.name, manifest);
+    }),
+);
+
+/**
+ * What a verified integration is proven against: the peer range its own package
+ * declares, and the exact version the workspace package that tests it pins.
+ */
+interface ResolvedIntegration extends Integration {
+  readonly supportedRange?: string;
+  readonly testedVersion?: string;
+}
+
+const resolveIntegration = (entry: Integration): ResolvedIntegration => {
+  if (entry.tier !== "verified") {
+    if (!entry.verifiedOn) {
+      throw new Error(`The documented integration "${entry.slug}" has no verifiedOn date`);
+    }
+    return entry;
+  }
+
+  if (entry.verifiedOn) {
+    throw new Error(
+      `The verified integration "${entry.slug}" carries a verifiedOn date. ` +
+        "Continuous integration checks it on every change, so a fixed date understates it.",
+    );
+  }
+  if (!entry.package || !entry.peer || !entry.pinnedBy) {
+    throw new Error(
+      `The verified integration "${entry.slug}" needs a package, a peer, and a pinnedBy`,
+    );
+  }
+
+  const own = manifests.get(entry.package);
+  if (!own) throw new Error(`The package "${entry.package}" is not in the TypeScript workspace`);
+  const supportedRange = own.peerDependencies?.[entry.peer];
+  if (!supportedRange) {
+    throw new Error(`The package "${entry.package}" declares no peer range for "${entry.peer}"`);
+  }
+
+  const pinning = manifestsByPath.get(entry.pinnedBy);
+  if (!pinning) throw new Error(`The integration "${entry.slug}" names an unknown pinnedBy path`);
+  const testedVersion = pinning.devDependencies?.[entry.peer];
+  if (!testedVersion) {
+    throw new Error(`"${entry.pinnedBy}" pins no version of "${entry.peer}" to test against`);
+  }
+
+  return { ...entry, supportedRange, testedVersion };
+};
+
+const resolvedIntegrations = catalog.integrations.map(resolveIntegration);
+
+/**
+ * Which catalog pages carry a brand mark. The tree records the slug and
+ * `src/routes/docs.tsx` reads the mark's two theme variants back out of the
+ * catalog, so an integration's logo is declared in one place with everything
+ * else about it.
+ */
+const logos = new Set(
+  catalog.integrations.filter((entry) => entry.logo).map((entry) => entry.slug),
+);
+
+/**
+ * Sidebar labels for catalog pages. A catalog entry's name is already the short
+ * form of its page title — "Serverless and edge" against "Can I use Workhorse
+ * from a serverless app?" — so it is the label, and an integration still needs
+ * only its one entry.
+ */
+const catalogLabels: Readonly<Record<string, string>> = Object.fromEntries(
+  catalog.integrations.map((entry) => [entry.slug, entry.name]),
+);
 const groupIcons: Readonly<Record<string, string>> = {
   "Getting started": "rocket",
   "Producing work": "inbox",
@@ -91,6 +202,23 @@ const groupIcons: Readonly<Record<string, string>> = {
   Integrations: "plug",
   Reference: "code",
 };
+
+/**
+ * The one sidebar group the catalog owns. `meta.json` may not list a page under
+ * it, because adding an integration must stay one MDX file and one catalog
+ * entry. The group stays flat and takes its order from the catalog: category
+ * order decides which pages sit together, and the index page presents the
+ * categories under their headings, where a reader browsing a catalog reads them.
+ */
+const catalogGroup = "Integrations";
+const catalogPages = [
+  "integrations",
+  ...catalog.categories.flatMap((category) =>
+    catalog.integrations
+      .filter((entry) => entry.category === category.id)
+      .map((entry) => entry.slug),
+  ),
+];
 
 const structure: Group[] = [];
 for (const entry of docsMeta.pages) {
@@ -102,14 +230,24 @@ for (const entry of docsMeta.pages) {
       title: separator[1],
       icon,
       defaultOpen: structure.length === 0,
-      pages: [],
+      pages: separator[1] === catalogGroup ? [...catalogPages] : [],
     });
     continue;
   }
 
   const group = structure.at(-1);
   if (!group?.pages) throw new Error(`The sidebar page "${entry}" appears before its group`);
+  if (group.title === catalogGroup) {
+    throw new Error(
+      `meta.json lists "${entry}" under ${catalogGroup}, which site/integrations.json owns. ` +
+        "Add the page to the catalog instead.",
+    );
+  }
   group.pages.push(entry);
+}
+
+if (!structure.some((group) => group.title === catalogGroup)) {
+  throw new Error(`meta.json has no ---${catalogGroup}--- separator for the catalog to fill`);
 }
 
 const frontmatterValue = (source: string, key: string): string | undefined => {
@@ -125,6 +263,28 @@ const slugs = entries
   .filter((entry) => entry.isFile() && entry.name.endsWith(".mdx"))
   .map((entry) => entry.name.replace(/\.mdx$/, ""));
 
+/**
+ * The catalog as Markdown, for the twin and for `llms-full.txt`.
+ *
+ * `<IntegrationCatalog />` renders the catalog in HTML. An agent reads the
+ * twin, so leaving the tag in it would hand the one page whose whole content is
+ * the catalog to an agent with the catalog removed.
+ */
+const catalogMarkdown = catalog.categories
+  .map((category) => {
+    const members = resolvedIntegrations.filter((entry) => entry.category === category.id);
+    const rows = members.map((entry) => {
+      const proof =
+        entry.tier === "verified"
+          ? `Tested against ${entry.peer} ${entry.testedVersion} on every change, supports ${entry.supportedRange}.`
+          : `Checked by hand on ${entry.verifiedOn}.`;
+      const shipped = entry.package ? ` Ships as \`${entry.package}\`.` : "";
+      return `- [${entry.name}](${siteConfig.url}/docs/${entry.slug}.md) — ${entry.tier}. ${entry.summary} ${entry.boundary}${shipped} ${proof}`;
+    });
+    return [`### ${category.title}`, "", category.question, "", ...rows].join("\n");
+  })
+  .join("\n\n");
+
 const pages = new Map<string, PageRecord>();
 const markdownTwins = new Map<string, string>();
 await Promise.all(
@@ -136,7 +296,13 @@ await Promise.all(
       throw new Error(`The docs page "${slug}" is missing a frontmatter description`);
     }
 
-    const body = source.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "").trimStart();
+    const body = source
+      .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "")
+      .trimStart()
+      .replace(/^<IntegrationCatalog \/>$/m, () => catalogMarkdown);
+    if (body.includes("<IntegrationCatalog")) {
+      throw new Error(`The Markdown twin for "${slug}" still contains the catalog tag`);
+    }
     markdownTwins.set(slug, `# ${title}\n\n> ${description}\n\n${body}`);
     pages.set(slug, {
       slug,
@@ -155,12 +321,11 @@ const pageNode = (slug: string) => {
   if (!page) throw new Error(`The sidebar lists "${slug}", which has no file in content/docs`);
   if (placed.has(slug)) throw new Error(`The sidebar lists "${slug}" more than once`);
   placed.add(slug);
-  const logo = logos[slug];
   return {
     type: "page" as const,
-    name: sidebarLabels[slug] ?? page.title,
+    name: catalogLabels[slug] ?? sidebarLabels[slug] ?? page.title,
     url: page.url,
-    ...(logo ? { icon: logo } : {}),
+    ...(logos.has(slug) ? { icon: slug } : {}),
   };
 };
 
@@ -192,6 +357,20 @@ await mkdir(new URL("../public/", import.meta.url), { recursive: true });
 await writeFile(
   new URL("docs-index.json", outDir),
   `${JSON.stringify({ tree, pages: Object.fromEntries(pages) }, null, 2)}\n`,
+);
+
+/**
+ * The catalog the index page renders, with every version resolved from a
+ * `package.json`. Emitting it here keeps `node:fs` out of the browser bundle
+ * for the same reason the sidebar tree is emitted rather than loaded.
+ */
+await writeFile(
+  new URL("integrations.json", outDir),
+  `${JSON.stringify(
+    { categories: catalog.categories, integrations: resolvedIntegrations },
+    null,
+    2,
+  )}\n`,
 );
 
 const routes = [

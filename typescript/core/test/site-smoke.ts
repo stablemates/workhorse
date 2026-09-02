@@ -58,6 +58,8 @@ try {
     ["/docs/api", ["API overview", `Workhorse version ${WORKHORSE_VERSION}`]],
     ["/docs/for-ai-agents", ["TypeScript", "Python", "Go"]],
     ["/docs/for-ai-agents.md", ["TypeScript", "Python", "Go"]],
+    ["/docs/integrations", ["Verified", "Documented", "Tested against drizzle-orm"]],
+    ["/docs/integrations.md", ["ORMs and query builders", "Tested against drizzle-orm"]],
     ["/docs/quickstart", ["quickstart", "worker"]],
     ["/docs/retries", ["retry", "backoff"]],
     ["/llms.txt", ["llms-full.txt", "/docs/quickstart.md"]],
@@ -100,6 +102,13 @@ try {
     'name="twitter:title" content="Quickstart — Workhorse"',
     '"@type":"TechArticle"',
   ]);
+
+  // The catalog reaches an agent only if the generator expanded the component
+  // into Markdown. A twin that still carries the tag serves an empty page.
+  const catalogTwin = await (await fetch(`${baseUrl}/docs/integrations.md`)).text();
+  if (catalogTwin.includes("<IntegrationCatalog")) {
+    throw new Error("The integrations twin shipped the catalog component instead of the catalog");
+  }
 
   const sitemap = await (await fetch(`${baseUrl}/sitemap.xml`)).text();
   if (!sitemap.includes("<loc>https://workhorse.run/</loc>")) {

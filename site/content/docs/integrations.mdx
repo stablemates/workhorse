@@ -1,0 +1,69 @@
+---
+title: Which integrations does Workhorse support?
+description: The two support tiers, what each one proves, and every integration Workhorse documents.
+---
+
+Every catalog of integrations makes the same silent promise: that the things it lists work. Most
+cannot keep it, because a page written once and never run again ages into fiction while still
+reading as fact. Before you adopt anything below, you need to know which claims a machine re-checks
+and which claims a person made on a particular day.
+
+Workhorse separates them into two tiers and never mixes them.
+
+## The two tiers
+
+**Verified.** Workhorse publishes a package for it, and continuous integration exercises that
+package against the real tool on every change. The four ORM adapters run through a shared
+conformance suite that opens actual transactions; the dashboard is built and typechecked against
+the React version it declares. Breaking one of these fails the build before it can ship, so the
+version listed beside a verified integration is the version something ran against, not the version
+someone remembered.
+
+**Documented.** Workhorse publishes no package, and nothing in continuous integration proves the
+claim. The page describes how the platform behaves and where its boundary is, checked by hand on
+the date it names. A documented page is still worth reading — it is how you learn that a request
+invocation cannot host a worker — but the platform can change underneath it without anything here
+turning red.
+
+The tier is the only thing that decides how much a page proves. Neither tier means Workhorse
+maintains the tool, and no page below implies that a platform's vendor tests against Workhorse.
+
+## What every page owes you
+
+The catalog is cheap because Workhorse asks so little of an integration. An ORM only has to hand
+back something that can run a parameterized query, which is the `Queryable` protocol; the adapter
+converts the database and transaction objects your application already holds, and `Queue.enqueue`
+runs inside the transaction you opened. Nothing is proxied, and Workhorse never opens a transaction
+on your behalf.
+
+So every page here answers the same four questions, and the entry below it repeats the last two so
+you can compare without opening anything:
+
+1. **What it is** — the one line that says what the integration converts or decides.
+2. **The boundary** — where it stops, stated before you depend on it.
+3. **A sample you can run** — verified against the source, not written from memory.
+4. **What proves it** — the tested version for a verified integration, or the date a person last
+   checked a documented one.
+
+## The catalog
+
+<IntegrationCatalog />
+
+## Adding an integration
+
+An integration is one MDX file under `site/content/docs` and one entry in `site/integrations.json`.
+The entry decides the sidebar order, the tier, the category, and the landing page copy; nothing
+else needs editing, and a test fails if a page and an entry disagree. Version numbers are not
+written by hand anywhere: a verified entry names the package it adapts, and the build reads the
+supported range and the tested version out of the `package.json` files that already declare them.
+
+## Next
+
+- [Compatibility](/docs/compatibility) — the runtime and database matrix, and what "supported" proves
+- [Transactional enqueue](/docs/enqueue) — the guarantee every ORM adapter exists to preserve
+- [Limitations](/docs/limitations) — the boundaries no integration removes
+
+---
+
+Exact peer requirements and package inventory:
+[compatibility reference](https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md#packages-and-versioning).
