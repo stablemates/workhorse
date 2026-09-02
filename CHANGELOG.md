@@ -11,10 +11,9 @@ independently, so their notes live in [`python/CHANGELOG.md`](python/CHANGELOG.m
 The supported Node.js and PostgreSQL versions, the schema compatibility guarantees, and the release
 process are in [`docs/compatibility.md`](docs/compatibility.md).
 
-Workhorse is a public beta. While the line is `0.x`, any minor release may break compatibility,
-including changing the schema. There is no upgrade path between 0.x releases: moving between them
-requires a fresh database. Ordered, immutable migrations begin at 1.0.0. Breaking changes are
-always listed with upgrade steps.
+Workhorse is a public beta. While the line is `0.x`, any minor release may change behaviour. From
+`0.1.0` the schema upgrades in place: every release ships ordered, immutable migrations, and inside
+a major line a migration only adds. Breaking changes are always listed with upgrade steps.
 
 ## 0.1.0 — 2026-09-14
 
@@ -41,6 +40,13 @@ and 24 and PostgreSQL 15 through 18.
   its URL plus `.md` served as `text/markdown`, and `llms-full.txt` carries the whole corpus.
 - `SECURITY.md` names the private reporting channel and states that only the latest `0.x` minor of
   each package line receives fixes.
+- **Ordered migrations start here.** The `0.1.0` clean-install artifact is frozen as
+  `sql/releases/0001.sql`, and from `0.2.0` every schema change ships as an ordered, immutable step.
+  Inside a major line a migration only adds, so a client accepts any installed schema at or above
+  the version it was built against, and a deployment upgrades in place while its running processes
+  keep working. Run `migrateSchema` from a deployment step before processes from the new release
+  start; nothing migrates automatically.
+  ([ADR 0053](docs/decisions/0053-start-migrations-at-0-1-0-and-keep-them-additive.md))
 - **Schema.** `workhorse.valid_tags` is renamed `workhorse.valid_tags_v1`, so every function in the
   schema now carries a version suffix and can be superseded without breaking its callers.
   `workhorse.dashboard_run_task_now_v1` is removed: the Python and Go dashboard backends now call

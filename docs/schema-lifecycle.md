@@ -2,21 +2,26 @@
 
 ## Current policy
 
-Schema version 1 is the whole schema. `sql/schema/current.sql` is the tracked source,
-`sql/schema.sql` is a build artifact for published packages, and `sql/migrations/` is empty.
+Schema version 1 is the whole schema. `sql/schema/current.sql` is the tracked source and
+`sql/schema.sql` is a build artifact for published packages. `sql/releases/0001.sql` freezes the
+0.1.0 clean-install artifact, and `sql/migrations/` holds every step after it.
 
-**While the published line is `0.x`, the schema changes in place.** A schema change is a reinstall,
-not an upgrade: edit `sql/schema/current.sql` and recreate the database. Package builds generate
-`sql/schema.sql` from that source. Function names may be renamed and `_vN` suffixes reused freely, because no compatibility
-window exists to protect.
+**The migration chain begins at 0.1.0** ([ADR 0053](decisions/0053-start-migrations-at-0-1-0-and-keep-them-additive.md)).
+A database this project has agreed to carry forward exists from that release, so a schema change is
+an upgrade rather than a reinstall. `sql/schema/current.sql` is no longer edited in place: a change
+adds a migration step and applies the same change to the tracked source.
 
-What licenses that is not the version number, it is the promise attached to it. `0.x` states, in
-`CHANGELOG.md` and `docs/compatibility.md`, that there is no upgrade path between releases. Nobody
-can be running a database this project has agreed to carry forward. The moment that promise
-changes, so does this policy.
+**Inside a major line, a migration only adds.** It may add a function, a view, a column, a table, or
+an index. It may not rename, drop, or change the meaning of anything a supported release reads or
+writes. A function is superseded by adding the next `_vN` beside it and retaining the old one; the
+old one is removed at the next major release, never before. Every function already carries a
+suffix, so every one of them can be superseded this way.
 
-**The migration chain begins at 1.0.0.** From the first stable major release, every schema change
-ships as an ordered, immutable step:
+That rule is what makes a rolling deployment safe. A pipeline migrates the database before any
+process from the new release starts, and every still-running process keeps working, because the
+schema only grew.
+
+Every schema change ships as an ordered, immutable step:
 
 1. Add `sql/migrations/<NNNN>-<slug>.sql` containing only the schema change body. The runtime
    supplies the transaction, the advisory lock, the starting-version validation, and the version
@@ -34,7 +39,7 @@ ships as an ordered, immutable step:
    `sql/releases/<NNNN>.sql`. Released artifacts and released migrations are never edited, and a
    released migration never renames a function or reinterprets its `_vN` suffix.
 
-`sql/releases/` is empty until then. `typescript/core/test/schema-migrations.test.ts` iterates
+`typescript/core/test/schema-migrations.test.ts` iterates
 whatever it contains, so the released-artifact check starts running by itself when the first
 artifact lands. That test installs each released artifact, migrates it with `migrateSchema`, and
 requires the `pg_dump --schema-only` result to match a clean installation of the current artifact
@@ -77,12 +82,11 @@ change first needs it, together with its resume semantics.
 `workhorse.schema_migration` records the installed migration history. `workhorse.protocol_version`
 independently records which SQL protocol versions the installed schema serves, so a protocol
 revision is never inferred from a schema version. Schema versions and SQL function versions remain
-separate: after 1.0.0 a migration may add `claim_v2` while retaining `claim_v1` for a compatibility
-window.
+separate: a migration may add `claim_v2` while retaining `claim_v1` for the rest of the major line.
 
 ## Expand and contract across deployments
 
-This applies from 1.0.0. A change that spans application deployments rolls out in three releases,
+This applies from 0.1.0. A change that spans application deployments rolls out in three releases,
 so every running process version always finds the schema shape it expects:
 
 1. **Expand.** A migration adds the new column, table, or function alongside the old one. New
@@ -122,9 +126,14 @@ versions, and PostgreSQL support at any point in this process.
 
 ## Supported upgrade window
 
-Deliberately undefined. There is nothing to upgrade from yet. The window is defined when real
-released versions make the full chain expensive to support, and it will be recorded here and in
-`docs/compatibility.md`.
+A client accepts an installed schema at or above its own minimum, up to the next major boundary.
+Inside a major line there is no upper bound, because the additive rule guarantees that a newer
+schema still carries every function an older release calls. At the boundary the bound closes: a
+major release removes superseded functions, so a client from the previous major refuses a schema
+that has crossed it.
+
+How long a superseded function is retained is not yet decided. `docs/compatibility.md` records the
+range each release supports.
 
 ## Application data
 

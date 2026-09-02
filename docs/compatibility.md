@@ -139,10 +139,13 @@ The dashboard and core may use different patch releases within the same minor li
 server reads `workhorse.dashboard_*_v1` views and versioned functions, so a core patch remains
 compatible when its migration preserves those contracts.
 
-While the line is `0.x`, any minor release may make a breaking change, including changing the
-schema. There is no upgrade path between 0.x releases: moving between them requires a fresh
-database. Ordered migrations begin at 1.0.0. Breaking changes are listed in
-[`CHANGELOG.md`](../CHANGELOG.md) with the upgrade steps for that release.
+While the line is `0.x`, any minor release may make a breaking change in behaviour. The schema is
+not one of them: from `0.1.0` every release ships ordered, immutable migrations, and inside a major
+line a migration only adds, so a client built against schema version N accepts any installed
+version at or above N below the next major boundary. `migrateSchema` runs from a deployment step
+before any process from the new release starts. Breaking changes are listed in
+[`CHANGELOG.md`](../CHANGELOG.md) with the upgrade steps for that release, and
+[ADR 0053](decisions/0053-start-migrations-at-0-1-0-and-keep-them-additive.md) states the rule.
 
 The Python package releases independently from a `python/vX.Y.Z` tag. The tag must match
 `python/pyproject.toml` and a heading in `python/CHANGELOG.md`. `.github/workflows/release-python.yml`
@@ -158,17 +161,18 @@ a clean worktree and a matching `go/CHANGELOG.md` heading. It resets the test da
 
 The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guarantees:
 
-- **The schema is versioned and exact.** `WORKHORSE_SCHEMA_VERSION` in the runtime must equal the
-  single row in `workhorse.schema_version`. `assertSchemaCompatible` refuses anything else, and it
-  refuses on both sides: an older runtime against a newer schema fails just as loudly as the
-  reverse. A mixed fleet mid-deploy is not supported.
-- **Installation is clean-database only; migration owns upgrades from 1.0.0.** `installSchema`
-  refuses to interpret an older or unversioned `workhorse` schema. While the line is `0.x` the
-  schema changes in place and the migration plan is empty, so a schema change means a fresh
-  database. `migrateSchema` applies ordered, immutable, transactional migrations forward from the
-  baseline once the first step ships. `docs/schema-lifecycle.md` records the execution contract,
-  the expand/contract rollout rules, and the backup and recovery guidance. The supported upgrade
-  window is deliberately undefined until real released versions require one.
+- **The schema is versioned and ranged.** A runtime accepts the single row in
+  `workhorse.schema_version` when it is at or above `MINIMUM_SCHEMA_VERSION` and below the next
+  major boundary. `assertSchemaCompatible` refuses a schema below that floor and one that has
+  crossed the boundary. It does not refuse a schema that is merely newer, because inside a major
+  line a migration only adds. A mixed fleet mid-deploy is therefore supported, which is what makes
+  a rolling deployment safe.
+- **Installation is clean-database only; migration owns every upgrade from 0.1.0.** `installSchema`
+  refuses to interpret an older or unversioned `workhorse` schema. `migrateSchema` applies ordered,
+  immutable, transactional migrations forward from the baseline frozen as `sql/releases/0001.sql`.
+  A deployment runs it from a pipeline step before any process from the new release starts; no
+  component migrates on start. `docs/schema-lifecycle.md` records the execution contract, the
+  expand/contract rollout rules, and the backup and recovery guidance.
 - **Correctness-sensitive transitions stay in versioned SQL functions.** Claim, completion, retry,
   cancellation, deadline, and maintenance transitions are owned by SQL. A client that speaks the
   same schema version speaks the same protocol, whatever language it is written in.

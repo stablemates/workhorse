@@ -27,6 +27,6 @@ describe("WorkhorseVersion", () => {
     expect(html).toContain(`aria-label="Workhorse version ${WORKHORSE_VERSION}"`);
     expect(html).toContain(`v${WORKHORSE_VERSION}`);
     expect(html).toContain("Public beta");
-    expect(html).not.toContain("There is no upgrade path between 0.x releases.");
+    expect(html).not.toContain("inside a major line a migration only adds");
   });
 });

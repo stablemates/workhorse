@@ -23,8 +23,8 @@ signals replayed from PostgreSQL. It is not a workflow runtime and persists no p
 _Avoid as the product category_: Durable workflows, durable functions
 
 **Public beta**:
-A usable 0.x Workhorse release for evaluation and early production adoption, without compatibility
-or schema upgrade guarantees between minor releases.
+A usable 0.x Workhorse release for evaluation and early production adoption. A minor release may
+change behaviour, but it upgrades an installed database rather than replacing it.
 _Avoid as a stability label_: Alpha, pre-release, validation MVP, validation release
 
 **Release train**:

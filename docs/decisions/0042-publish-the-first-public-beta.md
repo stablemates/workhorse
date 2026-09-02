@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-25
 - **Related:** [Plane WH-435](https://ontrack.sh/projects/WH/issues/WH-88)
-- **Amended by:** [ADR 0050](0050-release-0-1-0-without-a-prerelease-suffix.md)
+- **Amended by:** [ADR 0050](0050-release-0-1-0-without-a-prerelease-suffix.md), [ADR 0053](0053-start-migrations-at-0-1-0-and-keep-them-additive.md)
 
 ## Context
 

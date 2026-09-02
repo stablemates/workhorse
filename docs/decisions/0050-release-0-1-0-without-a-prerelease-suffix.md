@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-02
+- **Amended by:** [ADR 0053](0053-start-migrations-at-0-1-0-and-keep-them-additive.md)
 - **Amends:** [ADR 0042](0042-publish-the-first-public-beta.md)
 - **Related:** [WH-567](https://ontrack.sh/projects/WH/issues/WH-567), [WH-566](https://ontrack.sh/projects/WH/issues/WH-566), [ADR 0045](0045-stage-the-first-public-beta-release.md)
 

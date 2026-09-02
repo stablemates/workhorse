@@ -2,9 +2,10 @@
 
 The type-only contract shared by the Workhorse CLI and standalone dashboard implementation.
 
-> **Public beta:** Workhorse is usable for evaluation and early production adoption, but 0.x minor
-> releases may break compatibility, including the schema. There is no upgrade path between 0.x
-> releases; ordered migrations begin at 1.0.0.
+> **Public beta:** Workhorse is usable for evaluation and early production adoption. A 0.x minor
+> release may change behaviour, so read the changelog before you upgrade. It will not ask you to
+> recreate your database: migrations are ordered, and inside a major line a migration only adds, so
+> a running deployment upgrades in place.
 
 ## Install
 

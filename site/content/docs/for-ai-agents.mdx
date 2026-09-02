@@ -23,7 +23,8 @@ large, and one twin is usually the cheaper read.
 Stop here if any of these is disqualifying. They are properties, not defects.
 
 - Handlers run at least once. A retry can run your handler again, so its effects must tolerate that.
-- Schema compatibility is exact, and 0.x offers no upgrade path between minor releases.
+- A client accepts any installed schema at or above the version it was built against, up to the
+  next major release. Migration runs from a deployment step, never automatically.
 - PostgreSQL is the only supported database. There is no other backend.
 - There is no workflow definition language. You compose durable steps in your own code.
 - A concurrency policy is scoped to one queue, not across queues.
