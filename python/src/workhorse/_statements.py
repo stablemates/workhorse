@@ -439,6 +439,10 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
         "SELECT version FROM workhorse.protocol_version ORDER BY version",
         "SELECT version FROM workhorse.protocol_version ORDER BY version",
     ),
+    "compatibility_state": (
+        "SELECT 'protocol' AS kind, version FROM workhorse.protocol_version\n            UNION ALL\n           SELECT 'schema' AS kind, version FROM workhorse.schema_version\n            ORDER BY kind, version",
+        "SELECT 'protocol' AS kind, version FROM workhorse.protocol_version\n            UNION ALL\n           SELECT 'schema' AS kind, version FROM workhorse.schema_version\n            ORDER BY kind, version",
+    ),
     "schema_installation_probe": (
         "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'workhorse') AS schema_exists,\n           to_regclass('workhorse.schema_version') IS NOT NULL AS version_table_exists,\n           EXISTS (\n             SELECT 1\n               FROM unnest(ARRAY['job_current', 'ready_job', 'scheduled_job', 'lease'])\n                 AS legacy(relation_name)\n              WHERE to_regclass(format('workhorse.%I', relation_name)) IS NOT NULL\n           ) AS legacy_relation_exists",
         "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'workhorse') AS schema_exists,\n           to_regclass('workhorse.schema_version') IS NOT NULL AS version_table_exists,\n           EXISTS (\n             SELECT 1\n               FROM unnest(ARRAY['job_current', 'ready_job', 'scheduled_job', 'lease'])\n                 AS legacy(relation_name)\n              WHERE to_regclass(format('workhorse.%I', relation_name)) IS NOT NULL\n           ) AS legacy_relation_exists",
@@ -497,7 +501,6 @@ class StatementRegistry:
     run_maintenance: DriverStatement
     save_checkpoint: DriverStatement
     schedule_wait: DriverStatement
-    compatibility: DriverStatement
     send_signal: DriverStatement
     sync_concurrency_policies: DriverStatement
     sync_contracts: DriverStatement
@@ -507,6 +510,7 @@ class StatementRegistry:
     update_progress: DriverStatement
     wait_for_human: DriverStatement
     wait_for_signal: DriverStatement
+    compatibility: DriverStatement
 
 
 STATEMENTS = StatementRegistry(
@@ -538,7 +542,6 @@ STATEMENTS = StatementRegistry(
     run_maintenance=_statement("run_maintenance_v1"),
     save_checkpoint=_statement("save_checkpoint_v1"),
     schedule_wait=_statement("schedule_wait_v1"),
-    compatibility=_statement("schema_version"),
     send_signal=_statement("send_signal_v1"),
     sync_concurrency_policies=_statement("sync_concurrency_policies_v1"),
     sync_contracts=_statement("sync_contract_definitions_v1"),
@@ -548,4 +551,5 @@ STATEMENTS = StatementRegistry(
     update_progress=_statement("update_progress_v1"),
     wait_for_human=_statement("wait_for_human_v1"),
     wait_for_signal=_statement("wait_for_signal_v1"),
+    compatibility=_statement("compatibility_state"),
 )

@@ -2,6 +2,15 @@ package workhorse
 
 const schemaVersionStatement = "schema_version"
 
+const compatibilityStateStatement = "compatibility_state"
+
+// Column and row kinds returned by the compatibility_state statement.
+const (
+	compatibilityKindColumn   = "kind"
+	compatibilityKindSchema   = "schema"
+	compatibilityKindProtocol = "protocol"
+)
+
 const (
 	contractDialectValue                = "https://json-schema.org/draft/2020-12/schema"
 	contractValidationErrorFormat       = "%s %s does not satisfy contract version %s"

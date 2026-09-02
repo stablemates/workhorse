@@ -14,7 +14,7 @@ class AsyncpgConnection:
     async def fetch(self, sql: str, *parameters: object) -> Sequence[Mapping[str, object]]:
         self.calls.append((sql, parameters))
         if "schema_version" in sql:
-            return [{"version": 1}]
+            return [{"kind": "schema", "version": 1}, {"kind": "protocol", "version": 1}]
         if "cancel_v1" in sql:
             return [
                 {
@@ -71,13 +71,13 @@ class AsyncPsycopgCursor:
 
     async def execute(self, sql: str, parameters: Sequence[object] = ()) -> None:
         self.sql = sql
-        if "schema_version" in sql:
-            self.description = [("version",)]
+        if "compatibility" in sql or "schema_version" in sql:
+            self.description = [("kind",), ("version",)]
         self.connection.calls.append((sql, tuple(parameters)))
 
     async def fetchall(self) -> Sequence[Sequence[object]]:
-        if "schema_version" in self.sql:
-            return [(1,)]
+        if "compatibility" in self.sql or "schema_version" in self.sql:
+            return [("schema", 1), ("protocol", 1)]
         return [(1, "psycopg", "accepted", None)]
 
 

@@ -47,6 +47,33 @@ export async function readSchemaVersion(database: Queryable): Promise<number | n
   return result.rows.length === 1 ? (result.rows[0]?.version ?? null) : null;
 }
 
+export interface CompatibilityState {
+  /** The single `workhorse.schema_version` row, or null when absent or ambiguous. */
+  schemaVersion: number | null;
+  /** SQL protocol versions the installed schema declares it serves. */
+  servedProtocolVersions: readonly number[];
+}
+
+/**
+ * Read both version facts in one round trip.
+ *
+ * The schema version says how far the migration chain has run. The served protocol versions say
+ * which clients the installed schema still answers, which is the only authority on the upper
+ * bound: a client cannot know at build time which release will stop serving it.
+ */
+export async function readCompatibilityState(database: Queryable): Promise<CompatibilityState> {
+  const result = await database.query<{ kind: string; version: number }>(
+    SQL_STATEMENTS["compatibility_state"],
+  );
+  const schema = result.rows.filter((row) => row.kind === "schema");
+  return {
+    schemaVersion: schema.length === 1 ? (schema[0]?.version ?? null) : null,
+    servedProtocolVersions: result.rows
+      .filter((row) => row.kind === "protocol")
+      .map((row) => row.version),
+  };
+}
+
 /** SQL protocol versions the installed schema serves, or null when the relation is absent. */
 export async function readProtocolVersions(database: Queryable): Promise<number[] | null> {
   try {

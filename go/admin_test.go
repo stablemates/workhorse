@@ -13,7 +13,7 @@ func TestAdminRoutesEveryOperatorOperationThroughThePublicClient(t *testing.T) {
 	now := time.Now().UTC()
 	responses := make([][]workhorse.Row, 0, 40)
 	operation := func(rows ...workhorse.Row) {
-		responses = append(responses, []workhorse.Row{{"version": int64(1)}}, rows)
+		responses = append(responses, []workhorse.Row{{"kind": "schema", "version": int64(1)}, {"kind": "protocol", "version": int64(1)}}, rows)
 	}
 	operation() // ListJobs
 	operation() // GetJob
@@ -118,7 +118,7 @@ func TestAdminRejectsIncompleteAuditBeforeQuery(t *testing.T) {
 
 func TestAdminMeasuresActorAndReasonInCharacters(t *testing.T) {
 	executor := &queueExecutor{responses: [][]workhorse.Row{
-		{{"version": int64(1)}},
+		{{"kind": "schema", "version": int64(1)}, {"kind": "protocol", "version": int64(1)}},
 		{{"set_queue_paused_v1": true}},
 	}}
 	admin := workhorse.NewAdmin(executor)

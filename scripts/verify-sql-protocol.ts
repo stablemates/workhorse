@@ -28,9 +28,11 @@ interface CompatibilityFixture {
   id: string;
   installedSchemaVersion: number | null;
   clientProtocolVersion: number;
+  servedProtocolVersions: number[];
   compatible: boolean;
   refusalCode?: SqlProtocolRefusalCode;
   refusal?: string;
+  note?: string;
 }
 
 export type SqlProtocolRefusalCode =
@@ -347,6 +349,7 @@ function verifyCompatibility(fixtures: SqlProtocolFixtures): void {
       manifest,
       fixture.installedSchemaVersion,
       fixture.clientProtocolVersion,
+      fixture.servedProtocolVersions,
     );
     const compatible = refusalCode === null;
     if (compatible !== fixture.compatible) {
@@ -366,31 +369,57 @@ export async function assertSqlProtocolCompatible(
   clientProtocolVersion: number,
 ): Promise<void> {
   let installedSchemaVersion: number | null = null;
+  let servedProtocolVersions: number[] = [];
   try {
-    const result = await database.query<{ version: number }>(
-      "SELECT version FROM workhorse.schema_version ORDER BY version",
+    const result = await database.query<{ kind: string; version: number }>(
+      `SELECT 'protocol' AS kind, version FROM workhorse.protocol_version
+        UNION ALL
+       SELECT 'schema' AS kind, version FROM workhorse.schema_version
+        ORDER BY kind, version`,
     );
-    if (result.rows.length === 1) installedSchemaVersion = result.rows[0]?.version ?? null;
+    const schema = result.rows.filter((row) => row.kind === "schema");
+    if (schema.length === 1) installedSchemaVersion = schema[0]?.version ?? null;
+    servedProtocolVersions = result.rows
+      .filter((row) => row.kind === "protocol")
+      .map((row) => row.version);
   } catch {
     throw new SqlProtocolCompatibilityError("schema-not-installed");
   }
-  const refusal = compatibilityRefusal(manifest, installedSchemaVersion, clientProtocolVersion);
+  const refusal = compatibilityRefusal(
+    manifest,
+    installedSchemaVersion,
+    clientProtocolVersion,
+    servedProtocolVersions,
+  );
   if (refusal !== null) throw new SqlProtocolCompatibilityError(refusal);
 }
 
+/**
+ * The client declares a floor and no ceiling: inside a major line a migration only adds, so a
+ * newer schema still carries every function the client calls. The ceiling comes from the schema's
+ * own declaration of the protocols it serves, which a major release narrows.
+ */
 function compatibilityRefusal(
   manifest: SqlProtocolManifest,
   installedSchemaVersion: number | null,
   clientProtocolVersion: number,
+  servedProtocolVersions: readonly number[],
 ): SqlProtocolRefusalCode | null {
   if (installedSchemaVersion === null) return "schema-not-installed";
   if (installedSchemaVersion < manifest.schema.minimumVersion) return "schema-too-old";
-  if (installedSchemaVersion > manifest.schema.maximumVersion) return "schema-too-new";
   if (clientProtocolVersion < manifest.supportedClientProtocol.minimumVersion) {
     return "client-protocol-too-old";
   }
   if (clientProtocolVersion > manifest.supportedClientProtocol.maximumVersion) {
     return "client-protocol-too-new";
+  }
+  if (
+    servedProtocolVersions.length > 0 &&
+    !servedProtocolVersions.includes(clientProtocolVersion)
+  ) {
+    return clientProtocolVersion < Math.min(...servedProtocolVersions)
+      ? "schema-too-new"
+      : "schema-too-old";
   }
   return null;
 }

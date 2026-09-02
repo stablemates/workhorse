@@ -34,7 +34,7 @@ class AsyncExecutor:
 
 
 def test_sync_compatibility_check_queries_on_every_call() -> None:
-    executor = SyncExecutor([{"version": 1}])
+    executor = SyncExecutor([{"kind": "schema", "version": 1}, {"kind": "protocol", "version": 1}])
 
     assert_sync_compatible(executor)
     assert_sync_compatible(executor)
@@ -43,7 +43,7 @@ def test_sync_compatibility_check_queries_on_every_call() -> None:
 
 
 def test_sync_cached_compatibility_check_queries_once() -> None:
-    executor = SyncExecutor([{"version": 1}])
+    executor = SyncExecutor([{"kind": "schema", "version": 1}, {"kind": "protocol", "version": 1}])
     check = CachedCompatibilityCheck(executor)
 
     check.assert_compatible()
@@ -53,7 +53,7 @@ def test_sync_cached_compatibility_check_queries_once() -> None:
 
 
 def test_sync_cached_compatibility_check_reuses_a_refusal() -> None:
-    executor = SyncExecutor([{"version": 0}])
+    executor = SyncExecutor([{"kind": "schema", "version": 0}])
     check = CachedCompatibilityCheck(executor)
 
     for _ in range(2):
@@ -66,7 +66,7 @@ def test_sync_cached_compatibility_check_reuses_a_refusal() -> None:
 
 @pytest.mark.asyncio
 async def test_async_compatibility_check_queries_on_every_call() -> None:
-    executor = AsyncExecutor([{"version": 1}])
+    executor = AsyncExecutor([{"kind": "schema", "version": 1}, {"kind": "protocol", "version": 1}])
 
     await assert_async_compatible(executor)
     await assert_async_compatible(executor)
@@ -76,7 +76,7 @@ async def test_async_compatibility_check_queries_on_every_call() -> None:
 
 @pytest.mark.asyncio
 async def test_async_cached_compatibility_check_queries_once() -> None:
-    executor = AsyncExecutor([{"version": 1}])
+    executor = AsyncExecutor([{"kind": "schema", "version": 1}, {"kind": "protocol", "version": 1}])
     check = AsyncCachedCompatibilityCheck(executor)
 
     await check.assert_compatible()
@@ -87,7 +87,7 @@ async def test_async_cached_compatibility_check_queries_once() -> None:
 
 @pytest.mark.asyncio
 async def test_async_cached_compatibility_check_reuses_a_refusal() -> None:
-    executor = AsyncExecutor([{"version": 0}])
+    executor = AsyncExecutor([{"kind": "schema", "version": 0}])
     check = AsyncCachedCompatibilityCheck(executor)
 
     for _ in range(2):
@@ -100,7 +100,7 @@ async def test_async_cached_compatibility_check_reuses_a_refusal() -> None:
 
 class FakeCursor:
     def __init__(self, version: int) -> None:
-        self.description = (("version",),)
+        self.description = (("kind",), ("version",))
         self._version = version
 
     def __enter__(self) -> FakeCursor:
@@ -112,8 +112,8 @@ class FakeCursor:
     def execute(self, _sql: str, _parameters: Sequence[object] = ()) -> None:
         return None
 
-    def fetchall(self) -> list[tuple[int]]:
-        return [(self._version,)]
+    def fetchall(self) -> list[tuple[str, int]]:
+        return [("schema", self._version), ("protocol", 1)]
 
 
 class FakeConnection:

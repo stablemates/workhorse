@@ -31,7 +31,7 @@ class Cursor:
         self.error = error
         self.fail_compatibility = fail_compatibility
         self.sql = ""
-        self.description = [("version",)]
+        self.description = [("kind",), ("version",)]
 
     def __enter__(self) -> Cursor:
         return self
@@ -44,8 +44,8 @@ class Cursor:
         if self.fail_compatibility or "enqueue_many_v1" in sql:
             raise self.error
 
-    def fetchall(self) -> list[tuple[int]]:
-        return [(1,)]
+    def fetchall(self) -> list[tuple[str, int]]:
+        return [("schema", 1), ("protocol", 1)]
 
 
 class Connection:

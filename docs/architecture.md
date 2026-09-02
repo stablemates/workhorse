@@ -568,12 +568,17 @@ file outside `docs/decisions/`: no install command may name a version, and no fi
 `workhorse` binary through `npx` without `--package`, a form `npx` resolves to an unrelated package
 outside a project that already depends on `@stablemates/workhorse`.
 
-Go `ProtocolVersion` is 1. `CheckCompatibility` compares an installed schema version with a client
-protocol version and returns `*CompatibilityError`. Its `Code` is `schema-not-installed`,
-`schema-too-old`, `schema-too-new`, `client-protocol-too-old`, or `client-protocol-too-new`.
-`AssertCompatible` executes `SELECT version FROM workhorse.schema_version ORDER BY version` on every
-call and translates SQLSTATE `42P01` or `3F000` to `schema-not-installed`. It accepts exactly one
-integer `version` row. `NewCachedCompatibilityCheck` returns a `CachedCompatibilityCheck` whose
+Go `ProtocolVersion` is 1. `CheckCompatibility` takes an installed schema version, a client
+protocol version, and the protocol versions the installed schema declares it serves, and returns
+`*CompatibilityError`. Its `Code` is `schema-not-installed`, `schema-too-old`, `schema-too-new`,
+`client-protocol-too-old`, or `client-protocol-too-new`. It refuses a schema below
+`minimumSchemaVersion` and applies no upper bound to the schema version, because inside a major
+line a migration only adds. The upper bound comes from the served set instead: a client protocol
+below the oldest served version is `schema-too-new`, and one above the newest served version is
+`schema-too-old`. An empty served declaration enforces nothing.
+`AssertCompatible` executes the `compatibility_state` statement on every call, which returns both
+facts in one round trip as `kind`/`version` rows, and translates SQLSTATE `42P01` or `3F000` to
+`schema-not-installed`. It accepts exactly one `schema` row. `NewCachedCompatibilityCheck` returns a `CachedCompatibilityCheck` whose
 `Assert` uses `sync.Once` to cache the first result, including a compatibility or database error.
 `go/compatibility_test.go` executes every case in `protocol/v1/compatibility.json`.
 

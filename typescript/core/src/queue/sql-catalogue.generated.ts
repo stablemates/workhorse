@@ -199,6 +199,8 @@ export const SQL_STATEMENTS = {
   prune_worker_registry_v1:
     "SELECT workhorse.prune_worker_registry_v1(make_interval(secs => $1::double precision)) AS count",
   protocol_version: "SELECT version FROM workhorse.protocol_version ORDER BY version",
+  compatibility_state:
+    "SELECT 'protocol' AS kind, version FROM workhorse.protocol_version\n            UNION ALL\n           SELECT 'schema' AS kind, version FROM workhorse.schema_version\n            ORDER BY kind, version",
   schema_installation_probe:
     "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'workhorse') AS schema_exists,\n           to_regclass('workhorse.schema_version') IS NOT NULL AS version_table_exists,\n           EXISTS (\n             SELECT 1\n               FROM unnest(ARRAY['job_current', 'ready_job', 'scheduled_job', 'lease'])\n                 AS legacy(relation_name)\n              WHERE to_regclass(format('workhorse.%I', relation_name)) IS NOT NULL\n           ) AS legacy_relation_exists",
   metrics_observer:

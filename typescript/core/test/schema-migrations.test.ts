@@ -264,10 +264,35 @@ describe("schema migrations", () => {
     }
   });
 
+  it("ships no migration that removes or renames a released object", async () => {
+    // ADR 0053: inside a major line a migration only adds, which is what lets a client accept a
+    // schema newer than the one it was built against. A removal belongs to a major release, so it
+    // must not reach `sql/migrations/`. The loop starts enforcing itself with the first step.
+    const migrations = (await readdir(path.join(repository, "sql", "migrations")))
+      .filter((file) => file.endsWith(".sql"))
+      // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+      .sort();
+    const subtractive =
+      /^\s*(?:DROP\s+(?:TABLE|VIEW|FUNCTION|PROCEDURE|TYPE|DOMAIN|SEQUENCE|SCHEMA)\b|ALTER\s+\w+\s+[\s\S]*?\b(?:DROP\s+(?:COLUMN|CONSTRAINT|DEFAULT|NOT\s+NULL)|RENAME)\b)/im;
+
+    const offenders: string[] = [];
+    for (const file of migrations) {
+      const body = await readFile(path.join(repository, "sql", "migrations", file), "utf8");
+      // A dollar-quoted body is data, not statements: a plpgsql function may legitimately contain
+      // DROP inside the code it defines, and only statements outside those quotes change the shape.
+      const statements = body.replaceAll(/\$([A-Za-z_]\w*)?\$[\s\S]*?\$\1\$/g, "''");
+      for (const statement of statements.split(";")) {
+        if (subtractive.test(statement))
+          offenders.push(`${file}: ${statement.trim().slice(0, 80)}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it("migrates every released schema version to a schema identical to a clean installation", async () => {
-    // `sql/releases/` is empty until the first public release: schema version 1 is a clean install
-    // with no upgrade source, so there is nothing to migrate from yet. The first frozen artifact
-    // lands there when a released version must survive an upgrade, and this loop starts running.
+    // The first frozen artifact is `0001.sql`, the 0.1.0 clean install. Each later release freezes
+    // its own, and this loop proves every one of them migrates to a schema byte-identical to a
+    // clean installation of the current artifact.
     const releases = (await readdir(path.join(repository, "sql", "releases")))
       .filter((file) => file.endsWith(".sql"))
       // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.

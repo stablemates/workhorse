@@ -521,7 +521,6 @@
     },
     {
       "name": "schema_version",
-      "pythonBinding": "compatibility",
       "arity": 0,
       "contract": "SELECT version FROM workhorse.schema_version ORDER BY version",
       "catalogues": ["internal"]
@@ -869,6 +868,13 @@
       "name": "protocol_version",
       "arity": 0,
       "contract": "SELECT version FROM workhorse.protocol_version ORDER BY version",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "compatibility_state",
+      "pythonBinding": "compatibility",
+      "arity": 0,
+      "contract": "SELECT 'protocol' AS kind, version FROM workhorse.protocol_version\n            UNION ALL\n           SELECT 'schema' AS kind, version FROM workhorse.schema_version\n            ORDER BY kind, version",
       "catalogues": ["internal"]
     },
     {

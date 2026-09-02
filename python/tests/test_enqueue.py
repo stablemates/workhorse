@@ -48,7 +48,7 @@ def test_serializes_every_shared_request_fixture_and_returns_the_canonical_resul
     for fixture in fixtures:
         connection = Connection(
             [
-                [{"version": 1}],
+                [{"kind": "schema", "version": 1}, {"kind": "protocol", "version": 1}],
                 [
                     {
                         "ordinal": 1,
@@ -88,14 +88,14 @@ def test_serializes_every_shared_request_fixture_and_returns_the_canonical_resul
         assert result.outcome == "accepted"
         serialized = json.loads(connection.calls[1][1][0])
         assert_value([fixture["postgres"]], serialized, {}, fixture["id"])
-        assert connection.calls[0][0].startswith("SELECT version FROM workhorse.schema_version")
+        assert connection.calls[0][0].startswith("SELECT 'protocol' AS kind, version")
         assert "workhorse.enqueue_many_v1" in connection.calls[1][0]
         executed.add(fixture["id"])
     assert_fixture_execution("requests", fixtures, executed)
 
 
 def test_refuses_an_incompatible_schema_before_enqueueing() -> None:
-    connection = Connection([[{"version": 0}]])
+    connection = Connection([[{"kind": "schema", "version": 0}]])
 
     with pytest.raises(ProtocolCompatibilityError) as raised:
         Queue(connection).enqueue("email.send", {"message": "hello"})
@@ -115,7 +115,7 @@ def test_cancel_returns_postgres_cancellation_metadata() -> None:
     requested_at = datetime(2026, 8, 23, 2, 0, tzinfo=UTC)
     connection = Connection(
         [
-            [{"version": 1}],
+            [{"kind": "schema", "version": 1}, {"kind": "protocol", "version": 1}],
             [
                 {
                     "status": "cancel_requested",
@@ -153,7 +153,7 @@ def test_cancel_returns_postgres_cancellation_metadata() -> None:
 def test_batch_preserves_result_order() -> None:
     connection = Connection(
         [
-            [{"version": 1}],
+            [{"kind": "schema", "version": 1}, {"kind": "protocol", "version": 1}],
             [
                 {"ordinal": 1, "job_id": "one", "outcome": "accepted", "reason": None},
                 {"ordinal": 2, "job_id": "two", "outcome": "replayed", "reason": None},

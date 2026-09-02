@@ -9,7 +9,6 @@ from ._statements import (
     DEFAULT_VALUE_MAX_BYTES,
     MAX_BATCH_SIZE,
     MAXIMUM_PROTOCOL_VERSION,
-    MAXIMUM_SCHEMA_VERSION,
     MINIMUM_PROTOCOL_VERSION,
     MINIMUM_SCHEMA_VERSION,
     PROTOCOL_VERSION,
@@ -31,23 +30,48 @@ from .types import (
 def compatibility_refusal(
     installed_schema_version: int | None,
     client_protocol_version: int = PROTOCOL_VERSION,
+    served_protocol_versions: Sequence[int] | None = None,
 ) -> CompatibilityCode | None:
+    """Decide whether a client may talk to an installed schema.
+
+    The client declares a floor and no ceiling. Inside a major line a migration only adds, so a
+    schema newer than the one this build was compiled against still carries every function the
+    client calls. The ceiling comes from ``served_protocol_versions``, which the installed schema
+    declares in ``workhorse.protocol_version``; a major release drops the protocols it stops
+    serving. An empty declaration enforces nothing, because the schema made no statement.
+    """
     if installed_schema_version is None:
         return "schema-not-installed"
     if installed_schema_version < MINIMUM_SCHEMA_VERSION:
         return "schema-too-old"
-    if installed_schema_version > MAXIMUM_SCHEMA_VERSION:
-        return "schema-too-new"
     if client_protocol_version < MINIMUM_PROTOCOL_VERSION:
         return "client-protocol-too-old"
     if client_protocol_version > MAXIMUM_PROTOCOL_VERSION:
         return "client-protocol-too-new"
+    if served_protocol_versions and client_protocol_version not in served_protocol_versions:
+        if client_protocol_version < min(served_protocol_versions):
+            return "schema-too-new"
+        return "schema-too-old"
     return None
 
 
 def assert_compatible(rows: Sequence[Mapping[str, object]]) -> None:
-    installed = rows[0].get("version") if len(rows) == 1 else None
-    refusal = compatibility_refusal(installed if isinstance(installed, int) else None)
+    schema_versions = [
+        row["version"]
+        for row in rows
+        if row.get("kind") == "schema" and isinstance(row.get("version"), int)
+    ]
+    served = [
+        row["version"]
+        for row in rows
+        if row.get("kind") == "protocol" and isinstance(row.get("version"), int)
+    ]
+    installed = schema_versions[0] if len(schema_versions) == 1 else None
+    refusal = compatibility_refusal(
+        cast(int | None, installed),
+        PROTOCOL_VERSION,
+        cast(Sequence[int], served),
+    )
     if refusal is not None:
         raise ProtocolCompatibilityError(refusal)
 

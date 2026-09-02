@@ -161,12 +161,14 @@ a clean worktree and a matching `go/CHANGELOG.md` heading. It resets the test da
 
 The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guarantees:
 
-- **The schema is versioned and ranged.** A runtime accepts the single row in
-  `workhorse.schema_version` when it is at or above `MINIMUM_SCHEMA_VERSION` and below the next
-  major boundary. `assertSchemaCompatible` refuses a schema below that floor and one that has
-  crossed the boundary. It does not refuse a schema that is merely newer, because inside a major
-  line a migration only adds. A mixed fleet mid-deploy is therefore supported, which is what makes
-  a rolling deployment safe.
+- **The runtime declares a floor; the database declares the ceiling.** A runtime accepts the single
+  row in `workhorse.schema_version` when it is at or above `MINIMUM_SCHEMA_VERSION`, and applies no
+  upper bound of its own. A schema that is merely newer still carries every function the runtime
+  calls, because inside a major line a migration only adds, so refusing it would make every rolling
+  deployment an outage. The ceiling is `workhorse.protocol_version`, where the installed schema
+  lists the client protocols it still answers; a major release drops the ones it stops serving, and
+  every older runtime then refuses at once. A mixed fleet mid-deploy is therefore supported, which
+  is what makes a rolling deployment safe.
 - **Installation is clean-database only; migration owns every upgrade from 0.1.0.** `installSchema`
   refuses to interpret an older or unversioned `workhorse` schema. `migrateSchema` applies ordered,
   immutable, transactional migrations forward from the baseline frozen as `sql/releases/0001.sql`.

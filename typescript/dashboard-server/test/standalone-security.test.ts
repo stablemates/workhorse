@@ -6,10 +6,15 @@ import path from "node:path";
 import type { Queryable } from "@stablemates/workhorse";
 import { afterEach, describe, expect, it } from "vitest";
 import { startDashboardServer } from "../src/server/standalone.js";
-import { WORKHORSE_SCHEMA_VERSION } from "@stablemates/workhorse";
+import { PROTOCOL_VERSION, WORKHORSE_SCHEMA_VERSION } from "@stablemates/workhorse";
 
 const database = {
-  query: async () => ({ rows: [{ version: WORKHORSE_SCHEMA_VERSION }] }),
+  query: async () => ({
+    rows: [
+      { kind: "protocol", version: PROTOCOL_VERSION },
+      { kind: "schema", version: WORKHORSE_SCHEMA_VERSION },
+    ],
+  }),
 } as Queryable;
 const scratchRoots: string[] = [];
 const dashboardBrowserTest = existsSync(path.resolve(import.meta.dirname, "../dist/app/index.html"))

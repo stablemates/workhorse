@@ -33,7 +33,9 @@ def test_python_compatibility_matches_the_shared_fixtures() -> None:
 
     for fixture in fixtures:
         refusal = compatibility_refusal(
-            fixture["installedSchemaVersion"], fixture["clientProtocolVersion"]
+            fixture["installedSchemaVersion"],
+            fixture["clientProtocolVersion"],
+            fixture["servedProtocolVersions"],
         )
         assert (refusal is None) is fixture["compatible"], fixture["id"]
         assert refusal == fixture.get("refusalCode"), fixture["id"]

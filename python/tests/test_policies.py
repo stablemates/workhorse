@@ -22,7 +22,7 @@ def test_sync_client_synchronizes_and_maps_concurrency_policies() -> None:
     updated_at = datetime(2026, 8, 23, 20, 0, tzinfo=UTC)
     connection = Connection(
         [
-            [{"version": 1}],
+            [{"kind": "schema", "version": 1}, {"kind": "protocol", "version": 1}],
             [
                 {
                     "namespace": "python-deployment",
@@ -52,7 +52,7 @@ def test_sync_client_synchronizes_and_maps_concurrency_policies() -> None:
 
 
 def test_sync_client_refuses_an_incompatible_schema_before_policy_mutation() -> None:
-    connection = Connection([[{"version": 0}]])
+    connection = Connection([[{"kind": "schema", "version": 0}]])
 
     with pytest.raises(ProtocolCompatibilityError, match="schema"):
         Queue(connection).sync_rate_limit_policies("python-deployment", [])

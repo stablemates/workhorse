@@ -540,7 +540,7 @@ const { Dashboard } = await import("@stablemates/workhorse-dashboard");
 assert.equal(typeof Dashboard, "function");
 const salt = Buffer.from("packed-dashboard-auth-salt");
 const passwordHash = \`scrypt-v1$\${salt.toString("base64url")}$\${scryptSync("correct horse", salt, 32).toString("base64url")}\`;
-const database = { query: async () => ({ rows: [{ version: ${WORKHORSE_SCHEMA_VERSION} }] }) };
+const database = { query: async () => ({ rows: [\n  { kind: "protocol", version: 1 },\n  { kind: "schema", version: ${WORKHORSE_SCHEMA_VERSION} },\n] }) };
 const audits = [];
 const host = createDashboardHost({
   database,

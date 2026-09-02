@@ -34,28 +34,61 @@ func (err *CompatibilityError) Is(target error) bool {
 }
 
 // CheckCompatibility compares an installed schema and client protocol version.
-func CheckCompatibility(installedSchemaVersion *int, clientProtocolVersion int) error {
+//
+// The client declares a floor and no ceiling. Inside a major line a migration only adds, so a
+// schema newer than the one this build was compiled against still carries every function it calls.
+// The ceiling comes from servedProtocolVersions, which the installed schema declares in
+// workhorse.protocol_version: a major release drops the client protocols it stops serving.
+func CheckCompatibility(installedSchemaVersion *int, clientProtocolVersion int, servedProtocolVersions []int) error {
 	var code CompatibilityCode
 	switch {
 	case installedSchemaVersion == nil:
 		code = SchemaNotInstalled
 	case *installedSchemaVersion < minimumSchemaVersion:
 		code = SchemaTooOld
-	case *installedSchemaVersion > maximumSchemaVersion:
-		code = SchemaTooNew
 	case clientProtocolVersion < minimumProtocolVersion:
 		code = ClientProtocolTooOld
 	case clientProtocolVersion > maximumProtocolVersion:
 		code = ClientProtocolTooNew
 	default:
-		return nil
+		served, oldest := servedProtocol(servedProtocolVersions, clientProtocolVersion)
+		switch {
+		case served:
+			return nil
+		case clientProtocolVersion < oldest:
+			// The database crossed a major boundary and stopped answering this client.
+			code = SchemaTooNew
+		default:
+			// The database has not been migrated far enough to answer this client yet.
+			code = SchemaTooOld
+		}
 	}
 	return &CompatibilityError{Code: code}
 }
 
-// AssertCompatible reads the installed schema on every call.
+// servedProtocol reports whether the installed schema answers this client, and the oldest protocol
+// it still answers. An empty declaration is treated as serving every client, because a schema that
+// records nothing has made no statement to enforce.
+func servedProtocol(servedProtocolVersions []int, clientProtocolVersion int) (bool, int) {
+	if len(servedProtocolVersions) == 0 {
+		return true, clientProtocolVersion
+	}
+	oldest := servedProtocolVersions[0]
+	for _, version := range servedProtocolVersions {
+		if version < oldest {
+			oldest = version
+		}
+		if version == clientProtocolVersion {
+			return true, oldest
+		}
+	}
+	return false, oldest
+}
+
+// AssertCompatible reads the installed schema on every call. One statement returns both the schema
+// version and the client protocols the schema declares it serves, so the check stays one round trip.
 func AssertCompatible(ctx context.Context, executor Executor) error {
-	rows, err := executor.Query(ctx, internalStatementRegistry[schemaVersionStatement])
+	rows, err := executor.Query(ctx, internalStatementRegistry[compatibilityStateStatement])
 	if err != nil {
 		if hasSQLState(err, "42P01", "3F000") {
 			return &CompatibilityError{Code: SchemaNotInstalled}
@@ -63,13 +96,26 @@ func AssertCompatible(ctx context.Context, executor Executor) error {
 		return err
 	}
 
-	var installed *int
-	if len(rows) == 1 {
-		if version, ok := integer(rows[0]["version"]); ok {
-			installed = &version
+	var schemaVersions []int
+	var served []int
+	for _, row := range rows {
+		version, ok := integer(row["version"])
+		if !ok {
+			continue
+		}
+		switch row[compatibilityKindColumn] {
+		case compatibilityKindSchema:
+			schemaVersions = append(schemaVersions, version)
+		case compatibilityKindProtocol:
+			served = append(served, version)
 		}
 	}
-	return CheckCompatibility(installed, ProtocolVersion)
+
+	var installed *int
+	if len(schemaVersions) == 1 {
+		installed = &schemaVersions[0]
+	}
+	return CheckCompatibility(installed, ProtocolVersion, served)
 }
 
 // CachedCompatibilityCheck runs one compatibility query and reuses its result.

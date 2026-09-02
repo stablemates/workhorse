@@ -14,6 +14,7 @@ type compatibilityFixture struct {
 	ID                     string  `json:"id"`
 	InstalledSchemaVersion *int    `json:"installedSchemaVersion"`
 	ClientProtocolVersion  int     `json:"clientProtocolVersion"`
+	ServedProtocolVersions []int   `json:"servedProtocolVersions"`
 	Compatible             bool    `json:"compatible"`
 	RefusalCode            *string `json:"refusalCode"`
 }
@@ -34,6 +35,7 @@ func TestCompatibilityFixtures(t *testing.T) {
 			err := workhorse.CheckCompatibility(
 				fixture.InstalledSchemaVersion,
 				fixture.ClientProtocolVersion,
+				fixture.ServedProtocolVersions,
 			)
 			if fixture.Compatible {
 				if err != nil {
@@ -57,7 +59,7 @@ func TestCompatibilityFixtures(t *testing.T) {
 }
 
 func TestAssertCompatibleChecksEveryCall(t *testing.T) {
-	executor := &recordingExecutor{rows: []workhorse.Row{{"version": int32(1)}}}
+	executor := &recordingExecutor{rows: []workhorse.Row{{"kind": "schema", "version": int32(1)}, {"kind": "protocol", "version": int32(1)}}}
 
 	for range 2 {
 		if err := workhorse.AssertCompatible(context.Background(), executor); err != nil {
@@ -71,7 +73,7 @@ func TestAssertCompatibleChecksEveryCall(t *testing.T) {
 }
 
 func TestCachedCompatibilityCheckQueriesOnce(t *testing.T) {
-	executor := &recordingExecutor{rows: []workhorse.Row{{"version": int64(1)}}}
+	executor := &recordingExecutor{rows: []workhorse.Row{{"kind": "schema", "version": int64(1)}, {"kind": "protocol", "version": int64(1)}}}
 	check := workhorse.NewCachedCompatibilityCheck(executor)
 
 	for range 2 {
