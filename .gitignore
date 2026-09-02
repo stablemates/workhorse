@@ -29,4 +29,5 @@ scripts/with-env-probe.tmp.*
 /site/public/llms-full.txt
 /site/public/docs.md
 /site/public/docs/
+/site/public/blog/
 /sql/schema.sql

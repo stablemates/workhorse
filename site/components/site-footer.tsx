@@ -1,4 +1,5 @@
 import { WorkhorseMark } from "@/components/logo";
+import { hasPosts } from "@/lib/blog";
 import { demoUrl, siteConfig } from "@/lib/site";
 
 const columns = [
@@ -23,6 +24,9 @@ const columns = [
   {
     label: "Project",
     links: [
+      // The blog is linked only once it has a post, so an empty index never
+      // reaches a reader (ADR 0052).
+      ...(hasPosts ? [{ href: "/blog", text: "Blog" }] : []),
       { href: siteConfig.github, text: "GitHub", external: true },
       { href: siteConfig.npm, text: "npm", external: true },
       { href: demoUrl, text: "Hosted demo", external: true },

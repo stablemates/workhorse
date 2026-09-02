@@ -205,6 +205,94 @@ try {
     throw new Error("The sitemap claims a modification date that the source does not track");
   }
 
+  // The blog (ADR 0052) ships with zero posts and grows one file at a time.
+  // With a post, the index, the post, its twin, and the feed all resolve and
+  // the section is linked; with none, nothing links `/blog` and the sitemap
+  // does not list it, so an empty page never reaches a reader.
+  const blogIndex = JSON.parse(
+    await readFile(resolve(repositoryRoot, "site/.source/blog-index.json"), "utf8"),
+  ) as { posts: { slug: string; url: string; title: string; date: string }[] };
+  if (blogIndex.posts.length > 0) {
+    const newest = blogIndex.posts[0]!;
+    const index = await fetch(`${baseUrl}/blog`);
+    const indexHtml = await index.text();
+    if (!index.ok) throw new Error(`/blog returned ${index.status}`);
+    assertIncludesTokens(indexHtml, "The blog index", [
+      '<link rel="canonical" href="https://workhorse.run/blog"',
+      '<link rel="alternate" type="application/rss+xml" href="https://workhorse.run/blog/feed.xml"',
+      `href="${newest.url}"`,
+      newest.title,
+    ]);
+    if (!landingHtml.includes('href="/blog"')) {
+      throw new Error("The landing page does not link the blog although it has a post");
+    }
+
+    const postResponse = await fetch(`${baseUrl}${newest.url}`);
+    const postHtml = await postResponse.text();
+    if (!postResponse.ok) throw new Error(`${newest.url} returned ${postResponse.status}`);
+    assertIncludesTokens(postHtml, `The post ${newest.url}`, [
+      `<link rel="canonical" href="https://workhorse.run${newest.url}"`,
+      `<link rel="alternate" type="text/markdown" href="https://workhorse.run${newest.url}.md"`,
+      'property="og:type" content="article"',
+      '"@type":"BlogPosting"',
+      `dateTime="${newest.date}"`,
+    ]);
+
+    const twin = await fetch(`${baseUrl}${newest.url}.md`);
+    const twinText = await twin.text();
+    if (!twin.ok) throw new Error(`${newest.url}.md returned ${twin.status}`);
+    if (!twinText.startsWith(`---\ntitle: ${JSON.stringify(newest.title)}\n`)) {
+      throw new Error(`${newest.url}.md does not start with the twin frontmatter`);
+    }
+    assertIncludesTokens(twinText, `The twin ${newest.url}.md`, [
+      `canonical: "https://workhorse.run${newest.url}"`,
+      `# ${newest.title}`,
+    ]);
+
+    const feed = await fetch(`${baseUrl}/blog/feed.xml`);
+    const feedText = await feed.text();
+    if (!feed.ok) throw new Error(`/blog/feed.xml returned ${feed.status}`);
+    const feedType = feed.headers.get("content-type") ?? "";
+    if (!/xml/.test(feedType)) {
+      throw new Error(`/blog/feed.xml was served as ${feedType || "no content type"}`);
+    }
+    if (!feedText.startsWith('<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0"')) {
+      throw new Error("/blog/feed.xml is not an RSS 2.0 document");
+    }
+    const feedLinks = [...feedText.matchAll(/<item>[\s\S]*?<link>([^<]+)<\/link>/g)].map(
+      (match) => match[1]!,
+    );
+    if (feedLinks.length !== blogIndex.posts.length) {
+      throw new Error(
+        `/blog/feed.xml lists ${feedLinks.length} of ${blogIndex.posts.length} posts`,
+      );
+    }
+    for (const [position, link] of feedLinks.entries()) {
+      const expected = `https://workhorse.run${blogIndex.posts[position]!.url}`;
+      if (link !== expected) {
+        throw new Error(`/blog/feed.xml item ${position} links ${link}, expected ${expected}`);
+      }
+    }
+    for (const url of blogIndex.posts.map((post) => post.url)) {
+      if (!sitemap.includes(`<loc>https://workhorse.run${url}</loc>`)) {
+        throw new Error(`The sitemap omitted the post ${url}`);
+      }
+    }
+    if (!sitemap.includes("<loc>https://workhorse.run/blog</loc>")) {
+      throw new Error("The sitemap omitted the blog index although it has a post");
+    }
+  } else {
+    if (landingHtml.includes('href="/blog"')) {
+      throw new Error("The landing page links the blog although it has no post");
+    }
+    if (quickstartHtml.includes('href="/blog"')) {
+      throw new Error("The quickstart page links the blog although it has no post");
+    }
+    if (sitemap.includes("https://workhorse.run/blog")) {
+      throw new Error("The sitemap lists the blog although it has no post");
+    }
+  }
+
   // Static search ships one prerendered index that the browser downloads and
   // queries locally, so the smoke test checks the index rather than a query.
   const search = await fetch(`${baseUrl}/api/search`);
