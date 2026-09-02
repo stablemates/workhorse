@@ -156,16 +156,24 @@ Exported constants such as `MAX_ENQUEUE_BATCH_SIZE`, `MAX_CHECKPOINT_VALUE_BYTES
 The `workhorse` CLI covers setup and operations without writing code:
 
 ```bash title="Terminal"
-npx workhorse init                              # scaffold config and wiring
-npx workhorse schema install                    # install the schema
-npx workhorse schema status --json              # report schema and PostgreSQL status
-npx workhorse worker --config workhorse.config.js  # run a supervised worker process
-npx workhorse dashboard --port 3000             # serve the operator dashboard
-npx workhorse health --json                     # emit machine-readable queue health
+npx --package @stablemates/workhorse workhorse init
+npx --package @stablemates/workhorse workhorse schema install
+npx --package @stablemates/workhorse workhorse schema status --json
+npx --package @stablemates/workhorse workhorse worker --config workhorse.config.js
+npx --package @stablemates/workhorse workhorse dashboard --port 3000
+npx --package @stablemates/workhorse workhorse health --json
 ```
 
-The package exposes only the `workhorse` binary. Each command rejects unknown options and accepts
-both `--flag value` and `--flag=value`. Run `workhorse <command> --help` for its options.
+- `init` scaffolds config and wiring.
+- `schema install` installs the schema.
+- `schema status --json` reports schema and PostgreSQL status.
+- `worker --config` runs a supervised worker process.
+- `dashboard --port` serves the operator dashboard.
+- `health --json` emits machine-readable queue health.
+
+The package exposes only the `workhorse` binary, named through `--package` for the reason
+[Installation](/docs/installation) gives. Each command rejects unknown options and accepts both
+`--flag value` and `--flag=value`. Run `workhorse <command> --help` for its options.
 
 ## Next
 

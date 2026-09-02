@@ -11,7 +11,7 @@ durable execution protocol.
 
 ```bash
 npm install @stablemates/workhorse
-npx workhorse schema install
+npx --package @stablemates/workhorse workhorse schema install
 ```
 
 Install the schema during deployment. Runtime processes should verify compatibility instead of

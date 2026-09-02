@@ -13,13 +13,10 @@ interface SupportManifest {
 }
 
 interface ReadmeContract {
-  readonly changelog: string;
   readonly example: string;
   readonly exampleLanguage: string;
-  readonly installPin: RegExp;
   readonly languageSupport: (support: SupportManifest["support"]) => string;
   readonly readme: string;
-  readonly releasePin: (version: string) => string;
 }
 
 async function read(relativePath: string): Promise<string> {
@@ -49,12 +46,6 @@ function versionRange(values: readonly (number | string)[]): string {
     : naturalList(values);
 }
 
-function newestChangelogVersion(contents: string): string {
-  const version = /^## ([^\s]+) — (?:unreleased|\d{4}-\d{2}-\d{2})$/m.exec(contents)?.[1];
-  if (!version) throw new Error("changelog has no release entry");
-  return version;
-}
-
 function fencedExamples(contents: string, language: string): string[] {
   return [
     ...contents.matchAll(
@@ -66,39 +57,26 @@ function fencedExamples(contents: string, language: string): string[] {
 const contracts: readonly ReadmeContract[] = [
   {
     readme: "README.md",
-    changelog: "CHANGELOG.md",
     example: "typescript/examples/quickstart.mjs",
     exampleLanguage: "ts",
-    installPin: /(?:npm install|pnpm add|yarn add|bun add) @stablemates\/workhorse(?:@([^\s]+))?/g,
-    releasePin: (version) => version,
     languageSupport: (support) => `Node.js ${naturalList(support.node.tested)}`,
   },
   {
     readme: "typescript/core/README.md",
-    changelog: "CHANGELOG.md",
     example: "typescript/examples/quickstart.mjs",
     exampleLanguage: "ts",
-    installPin: /(?:npm install|pnpm add|yarn add|bun add) @stablemates\/workhorse(?:@([^\s]+))?/g,
-    releasePin: (version) => version,
     languageSupport: (support) => `Node.js ${naturalList(support.node.tested)}`,
   },
   {
     readme: "python/README.md",
-    changelog: "python/CHANGELOG.md",
     example: "python/examples/quickstart.py",
     exampleLanguage: "python",
-    installPin:
-      /(?:pip install stablemates-workhorse(?:==([^\s]+))?|uv add stablemates-workhorse(?:==([^\s]+))?)/g,
-    releasePin: (version) => version,
     languageSupport: (support) => `Python ${versionRange(support.python.tested)}`,
   },
   {
     readme: "go/README.md",
-    changelog: "go/CHANGELOG.md",
     example: "go/examples/quickstart/main.go",
     exampleLanguage: "go",
-    installPin: /go get github\.com\/stablemates\/workhorse\/go(?:@([^\s]+))?/g,
-    releasePin: (version) => `v${version}`,
     languageSupport: (support) => `Go ${support.go.minimum.replace(/\.0$/, "")} or newer`,
   },
 ];
@@ -119,27 +97,6 @@ describe("SDK README alignment", () => {
     const pgxVersion = /^require github\.com\/jackc\/pgx\/v5 (v[^\s]+)$/m.exec(goMod)?.[1];
     expect(pgxVersion).toBeDefined();
     expect(prose(await read("go/README.md"))).toContain(`The module pins pgx ${pgxVersion}.`);
-  });
-
-  it("keeps any pinned install command on the newest changelog release", async () => {
-    const missingCommands: string[] = [];
-    const stalePins: string[] = [];
-    for (const contract of contracts) {
-      const readme = await read(contract.readme);
-      const newestVersion = contract.releasePin(
-        newestChangelogVersion(await read(contract.changelog)),
-      );
-      const commands = [...readme.matchAll(contract.installPin)];
-      if (commands.length === 0) missingCommands.push(contract.readme);
-      for (const command of commands) {
-        const pin = command.slice(1).find((value) => value !== undefined);
-        if (pin !== undefined && pin !== newestVersion) {
-          stalePins.push(`${contract.readme}: expected ${newestVersion}, found ${pin}`);
-        }
-      }
-    }
-    expect(missingCommands).toEqual([]);
-    expect(stalePins).toEqual([]);
   });
 
   it("uses release-tested files for every SDK example block", async () => {

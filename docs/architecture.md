@@ -546,10 +546,27 @@ example through an external module. Its consumer test writes a separate module w
 `RunOnce`. The queue integration tests also enqueue through `*pgxpool.Pool` and `*sql.Tx` with the
 pgx stdlib driver.
 
-`scripts/readme-alignment.test.ts` derives SDK support sentences from `support.json`, the Go pgx
-claim from `go/go.mod`, and optional install pins from each SDK changelog's newest entry. It requires
-the TypeScript, Python, and Go README code blocks to be verbatim excerpts of their release-tested
-quickstart files. `pnpm check` runs this focused test before the repository test suite.
+`scripts/readme-alignment.test.ts` derives SDK support sentences from `support.json` and the Go pgx
+claim from `go/go.mod`. It requires the TypeScript, Python, and Go README code blocks to be verbatim
+excerpts of their release-tested quickstart files. `pnpm check` runs this focused test before the
+repository test suite.
+
+`support.json` also owns the install commands under its `install` key: `node` is
+`npm install @stablemates/workhorse`, `python` is `pip install stablemates-workhorse`, `go` is
+`go get github.com/stablemates/workhorse/go`, and `schema` is
+`npx --package @stablemates/workhorse workhorse schema install`. None carries a version.
+`scripts/install-commands.test.ts` requires each command verbatim on the surfaces that introduce the
+product: `README.md` and `typescript/core/README.md` state `node` and `schema`; the
+`dashboard`, `dashboard-server`, `drizzle`, `kysely`, `otel`, `prisma`, and `typeorm` READMEs under
+`typescript/` state `node`; `python/README.md` states `python`; `go/README.md` and
+`go/examples/README.md` state `go`; `site/content/docs/installation.mdx` and `quickstart.mdx` state
+all four; `site/content/docs/for-ai-agents.mdx` states the three language commands; and
+`site/content/docs/api.mdx` states `schema`. `typescript/dashboard-contract/README.md` is exempt
+because it installs a type-only development dependency, and the test fails when a published package
+gains a README that is neither governed nor exempt. Two sweeps cover every tracked Markdown and MDX
+file outside `docs/decisions/`: no install command may name a version, and no file may run the
+`workhorse` binary through `npx` without `--package`, a form `npx` resolves to an unrelated package
+outside a project that already depends on `@stablemates/workhorse`.
 
 Go `ProtocolVersion` is 1. `CheckCompatibility` compares an installed schema version with a client
 protocol version and returns `*CompatibilityError`. Its `Code` is `schema-not-installed`,

@@ -29,14 +29,14 @@ Install the SDK. Each package includes its default PostgreSQL driver.
   <Tab value="TypeScript">
 
     ```bash
-    npm install @stablemates/workhorse@0.1.0-beta.2
+    npm install @stablemates/workhorse
     ```
 
   </Tab>
   <Tab value="Python">
 
     ```bash
-    pip install stablemates-workhorse==0.1.0b3
+    pip install stablemates-workhorse
     ```
 
     Use the `asyncpg` extra when that is your application's driver instead of Psycopg.
@@ -45,7 +45,7 @@ Install the SDK. Each package includes its default PostgreSQL driver.
   <Tab value="Go">
 
     ```bash
-    go get github.com/stablemates/workhorse/go@v0.1.0-beta.1
+    go get github.com/stablemates/workhorse/go
     ```
 
   </Tab>
@@ -60,7 +60,7 @@ writes a worker configuration, and prints a dashboard mount — but it leaves yo
 manifest alone.
 
 ```bash
-npx workhorse init
+npx --package @stablemates/workhorse workhorse init
 ```
 
 ## Give Workhorse a database
@@ -83,6 +83,10 @@ npx --package @stablemates/workhorse workhorse schema migrate
 npx --package @stablemates/workhorse workhorse schema status
 npx --package @stablemates/workhorse workhorse schema status --json
 ```
+
+`--package` names the package the binary comes from. Without it `npx` looks for a `workhorse`
+package by that bare name, which belongs to someone else, and a Python or Go project has no
+`node_modules` to correct the guess from.
 
 Every command rejects unknown options and accepts both `--flag value` and `--flag=value`.
 Command-specific help exits before the CLI connects to PostgreSQL.

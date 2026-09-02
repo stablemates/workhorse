@@ -498,8 +498,6 @@ describe("documentation", () => {
     );
     expect(pythonReadme).not.toContain("Psycopg 3.3 through the next major");
     expect(pythonReadme).not.toContain("asyncpg 0.31 through the next major");
-    expect(pythonReadme).toContain("pip install stablemates-workhorse\n");
-    expect(pythonReadme).not.toContain("stablemates-workhorse==");
     expect(sitePage).toContain(
       "https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md",
     );
