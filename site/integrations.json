@@ -11,6 +11,11 @@
       "question": "Can my platform enqueue, and where does the worker run?"
     },
     {
+      "id": "frameworks",
+      "title": "Application frameworks",
+      "question": "I already have a web framework. What changes?"
+    },
+    {
       "id": "operator-surfaces",
       "title": "Operator surfaces",
       "question": "How do I give my operators a view of the queue?"
@@ -77,6 +82,15 @@
       "summary": "Decides where a serverless platform can enqueue and where its worker must run.",
       "boundary": "No platform hosts a worker from a request invocation, and an edge runtime may not connect at all.",
       "verifiedOn": "2026-08-18"
+    },
+    {
+      "slug": "frameworks",
+      "name": "Web frameworks",
+      "category": "frameworks",
+      "tier": "documented",
+      "summary": "Wires Workhorse into an application that already has a web framework.",
+      "boundary": "Workhorse publishes no framework package, and a web process never owns a worker.",
+      "verifiedOn": "2026-09-02"
     },
     {
       "slug": "dashboard",

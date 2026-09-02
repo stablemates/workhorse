@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 
-import type { Integration, IntegrationCategory } from "../lib/integrations.js";
+import { type Integration, type IntegrationCategory, isPublished } from "../lib/integrations.js";
 import { siteConfig } from "../lib/site.js";
 
 /**
@@ -97,7 +97,38 @@ for (const entry of catalog.integrations) {
       `The integration "${entry.slug}" names an unknown category "${entry.category}"`,
     );
   }
+  if (!isPublished(entry) && !entry.issue) {
+    throw new Error(`The planned integration "${entry.slug}" names no Issue that will write it`);
+  }
+  if (isPublished(entry) && entry.issue) {
+    throw new Error(
+      `The published integration "${entry.slug}" still names an Issue. ` +
+        "An entry names one only while it is planned.",
+    );
+  }
 }
+
+/**
+ * A planned entry reserves a slug for a page that does not exist yet, so the
+ * page must not exist. Writing it without flipping the status would leave it
+ * out of the sidebar and out of the index, which is a page that ships invisible.
+ */
+const publishedIntegrations = catalog.integrations.filter(isPublished);
+await Promise.all(
+  catalog.integrations
+    .filter((entry) => !isPublished(entry))
+    .map(async (entry) => {
+      const exists = await readFile(new URL(`${entry.slug}.mdx`, contentDir), "utf8")
+        .then(() => true)
+        .catch(() => false);
+      if (exists) {
+        throw new Error(
+          `The planned integration "${entry.slug}" already has a page. ` +
+            'Set its status to "published" so the sidebar and the index list it.',
+        );
+      }
+    }),
+);
 
 /**
  * Every workspace package, keyed by its published name. A catalog entry names
@@ -137,6 +168,9 @@ interface ResolvedIntegration extends Integration {
 }
 
 const resolveIntegration = (entry: Integration): ResolvedIntegration => {
+  // A planned page has been checked by nobody and tested against nothing, so
+  // demanding either proof of it would only invite an invented one.
+  if (!isPublished(entry)) return entry;
   if (entry.tier !== "verified") {
     if (!entry.verifiedOn) {
       throw new Error(`The documented integration "${entry.slug}" has no verifiedOn date`);
@@ -173,7 +207,7 @@ const resolveIntegration = (entry: Integration): ResolvedIntegration => {
   return { ...entry, supportedRange, testedVersion };
 };
 
-const resolvedIntegrations = catalog.integrations.map(resolveIntegration);
+const resolvedIntegrations = publishedIntegrations.map(resolveIntegration);
 
 /**
  * Which catalog pages carry a brand mark. The tree records the slug and
@@ -182,7 +216,7 @@ const resolvedIntegrations = catalog.integrations.map(resolveIntegration);
  * else about it.
  */
 const logos = new Set(
-  catalog.integrations.filter((entry) => entry.logo).map((entry) => entry.slug),
+  publishedIntegrations.filter((entry) => entry.logo).map((entry) => entry.slug),
 );
 
 /**
@@ -192,7 +226,7 @@ const logos = new Set(
  * only its one entry.
  */
 const catalogLabels: Readonly<Record<string, string>> = Object.fromEntries(
-  catalog.integrations.map((entry) => [entry.slug, entry.name]),
+  publishedIntegrations.map((entry) => [entry.slug, entry.name]),
 );
 const groupIcons: Readonly<Record<string, string>> = {
   "Getting started": "rocket",
@@ -214,7 +248,7 @@ const catalogGroup = "Integrations";
 const catalogPages = [
   "integrations",
   ...catalog.categories.flatMap((category) =>
-    catalog.integrations
+    publishedIntegrations
       .filter((entry) => entry.category === category.id)
       .map((entry) => entry.slug),
   ),

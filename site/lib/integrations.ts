@@ -14,6 +14,17 @@ import catalog from "../integrations.json" with { type: "json" };
 /** A verified integration ships a package this repository tests on every change. */
 type IntegrationTier = "verified" | "documented";
 
+/**
+ * Whether the page behind an entry exists yet.
+ *
+ * A planned entry reserves a slug and appears nowhere a reader can see it: not
+ * the sidebar, not the index, not the landing page. It exists so an Issue that
+ * will write the page can be staged in the catalog first, and so the generator
+ * can catch the trap that staging creates — a page written without its status
+ * flipped, which would otherwise ship invisible.
+ */
+type IntegrationStatus = "published" | "planned";
+
 export interface IntegrationCategory {
   readonly id: string;
   readonly title: string;
@@ -35,6 +46,10 @@ export interface IntegrationLogo {
 export interface Integration {
   /** The page under `content/docs`, and therefore the `/docs/<slug>` URL. */
   readonly slug: string;
+  /** Absent means published, so an entry states its status only while staged. */
+  readonly status?: IntegrationStatus;
+  /** The Issue that will write a planned entry's page. Planned entries only. */
+  readonly issue?: string;
   readonly name: string;
   readonly category: string;
   readonly tier: IntegrationTier;
@@ -62,3 +77,6 @@ export interface Integration {
 }
 
 export const integrations = catalog.integrations as readonly Integration[];
+
+/** A planned entry has no page, so every reader-facing surface skips it. */
+export const isPublished = (entry: Integration): boolean => entry.status !== "planned";

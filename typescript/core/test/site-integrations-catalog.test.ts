@@ -10,6 +10,8 @@ interface Integration {
   name: string;
   category: string;
   tier: "verified" | "documented";
+  status?: "published" | "planned";
+  issue?: string;
   summary: string;
   boundary: string;
   package?: string;
@@ -28,6 +30,10 @@ interface Catalog {
 const readCatalog = async () =>
   JSON.parse(await readFile(path.join(root, "site/integrations.json"), "utf8")) as Catalog;
 
+/** A planned entry reserves a slug for a page nobody has written, so it is not a reader surface. */
+const published = (catalog: Catalog) =>
+  catalog.integrations.filter((entry) => entry.status !== "planned");
+
 interface PackageManifest {
   name?: string;
   peerDependencies?: Record<string, string>;
@@ -45,7 +51,7 @@ describe("documentation site integration catalog", () => {
     ) as { pages: string[] };
 
     await Promise.all(
-      catalog.integrations.map((entry) =>
+      published(catalog).map((entry) =>
         expect(
           readFile(path.join(root, "site/content/docs", `${entry.slug}.mdx`), "utf8"),
         ).resolves.toEqual(expect.any(String)),
@@ -67,9 +73,7 @@ describe("documentation site integration catalog", () => {
     for (const category of catalog.categories) {
       expect(category.title.trim()).not.toBe("");
       expect(category.question).toMatch(/\?$/);
-      expect(catalog.integrations.filter((entry) => entry.category === category.id)).not.toEqual(
-        [],
-      );
+      expect(published(catalog).filter((entry) => entry.category === category.id)).not.toEqual([]);
     }
     for (const entry of catalog.integrations) {
       expect(ids).toContain(entry.category);
@@ -97,7 +101,7 @@ describe("documentation site integration catalog", () => {
       [...manifests].flatMap(([, manifest]) => (manifest?.name ? [[manifest.name, manifest]] : [])),
     );
 
-    for (const entry of catalog.integrations.filter((one) => one.tier === "verified")) {
+    for (const entry of published(catalog).filter((one) => one.tier === "verified")) {
       const own = byName.get(entry.package ?? "");
       expect(own, `${entry.slug} names an unknown package`).toBeDefined();
       expect(own?.peerDependencies?.[entry.peer ?? ""]).toEqual(expect.any(String));
@@ -115,7 +119,7 @@ describe("documentation site integration catalog", () => {
   it("dates every documented entry and gives it no package", async () => {
     const catalog = await readCatalog();
 
-    for (const entry of catalog.integrations.filter((one) => one.tier === "documented")) {
+    for (const entry of published(catalog).filter((one) => one.tier === "documented")) {
       expect(entry.package).toBeUndefined();
       expect(entry.peer).toBeUndefined();
       expect(entry.pinnedBy).toBeUndefined();
@@ -124,18 +128,35 @@ describe("documentation site integration catalog", () => {
     }
   });
 
+  it("stages a planned entry without a page and without a proof", async () => {
+    const catalog = await readCatalog();
+    const planned = catalog.integrations.filter((entry) => entry.status === "planned");
+
+    for (const entry of planned) {
+      // A planned entry names the Issue that will write it, so the catalog says
+      // who owns the gap rather than leaving a slug nobody can account for.
+      expect(entry.issue, `${entry.slug} is planned and names no Issue`).toMatch(/^WH-\d+$/);
+      await expect(
+        readFile(path.join(root, "site/content/docs", `${entry.slug}.mdx`), "utf8"),
+      ).rejects.toThrow(/ENOENT/);
+    }
+    for (const entry of published(catalog)) {
+      expect(entry.issue, `${entry.slug} is published and still names an Issue`).toBeUndefined();
+    }
+  });
+
   it("points every logo and landing snippet at something that exists", async () => {
     const catalog = await readCatalog();
     const marks = new Set(await readdir(path.join(root, "site/public/brand/integrations")));
     const snippets = await readFile(path.join(root, "site/lib/landing-snippets.ts"), "utf8");
 
-    const missingMarks = catalog.integrations.flatMap((entry) =>
+    const missingMarks = published(catalog).flatMap((entry) =>
       [entry.logo?.light, entry.logo?.dark]
         .filter((variant) => variant !== undefined)
         .filter((variant) => !marks.has(`${variant}.svg`))
         .map((variant) => `${entry.slug} -> ${variant}.svg`),
     );
-    const missingSnippets = catalog.integrations
+    const missingSnippets = published(catalog)
       .filter((entry) => entry.landingSnippet !== undefined)
       .filter((entry) => !snippets.includes(`${entry.landingSnippet}:`))
       .map((entry) => `${entry.slug} -> ${entry.landingSnippet}`);
@@ -148,7 +169,7 @@ describe("documentation site integration catalog", () => {
     const catalog = await readCatalog();
     const page = await readFile(path.join(root, "site/content/docs/integrations.mdx"), "utf8");
 
-    for (const tier of new Set(catalog.integrations.map((entry) => entry.tier))) {
+    for (const tier of new Set(published(catalog).map((entry) => entry.tier))) {
       const heading = `${tier[0]?.toUpperCase()}${tier.slice(1)}`;
       expect(page, `the index page never defines the ${tier} tier`).toContain(`**${heading}.**`);
     }
