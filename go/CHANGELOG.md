@@ -19,14 +19,20 @@ Requires **schema v1** and Go **1.25** or newer.
 
 - No exported API changed since `0.1.0-beta.1`. The README states the unpinned install command and
   the schema install step, which the TypeScript CLI owns.
+- The dashboard backend's run-now action calls the audited `workhorse.run_task_now_v1` instead of
+  `workhorse.dashboard_run_task_now_v1`, which is removed from the schema. The action now records
+  the authenticated actor, the reason, and the request identity in its `promoted` event, matching
+  the TypeScript dashboard server.
 
 ### Upgrade notes
 
-- **Schema version.** `0.1.0` requires the same schema version 1 baseline that `0.1.0-beta.1`
-  required, so a database the beta installed passes `AssertCompatible` as it is. The `0.x` rule
-  still applies: there is no upgrade path between `0.x` releases, so when a release changes the
-  schema, recreate the database and install the new baseline with
-  `npx --package @stablemates/workhorse workhorse schema install`.
+- **Schema version.** `0.1.0` stays at schema version 1, but its baseline is not the one the last
+  beta installed: `workhorse.valid_tags` was renamed `workhorse.valid_tags_v1` and
+  `workhorse.dashboard_run_task_now_v1` was removed. A database installed by any beta reports
+  version 1 and passes the compatibility check, yet holds the old function names. You must recreate the database and
+  install the new baseline with `npx --package @stablemates/workhorse workhorse schema install`.
+  This is the last release that asks for a recreation: from `0.1.0` the schema is frozen as the
+  migration baseline, and later releases upgrade a database in place.
 
 ## 0.1.0-beta.1 — 2026-09-01
 

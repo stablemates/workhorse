@@ -41,6 +41,12 @@ and 24 and PostgreSQL 15 through 18.
   its URL plus `.md` served as `text/markdown`, and `llms-full.txt` carries the whole corpus.
 - `SECURITY.md` names the private reporting channel and states that only the latest `0.x` minor of
   each package line receives fixes.
+- **Schema.** `workhorse.valid_tags` is renamed `workhorse.valid_tags_v1`, so every function in the
+  schema now carries a version suffix and can be superseded without breaking its callers.
+  `workhorse.dashboard_run_task_now_v1` is removed: the Python and Go dashboard backends now call
+  the audited four-argument `workhorse.run_task_now_v1`, which the TypeScript dashboard server
+  already used. A dashboard run-now action is therefore audited in all three languages, and its
+  `promoted` event records the actor, the reason, and the request identity.
 
 ### Fixed
 
@@ -50,11 +56,13 @@ and 24 and PostgreSQL 15 through 18.
 
 ### Upgrade notes
 
-- **Schema version.** `0.1.0` installs the same schema version 1 baseline that `0.1.0-beta.2`
-  installed; `sql/schema/current.sql` did not change between them, so a database the beta installed
-  passes `assertSchemaCompatible` as it is. The `0.x` rule still applies: there is no upgrade path
-  between `0.x` releases, so when a release changes the schema, recreate the database and install
-  the new baseline with `npx --package @stablemates/workhorse workhorse schema install`.
+- **Schema version.** `0.1.0` stays at schema version 1, but its baseline is not the one
+  `0.1.0-beta.2` installed: `workhorse.valid_tags` was renamed and
+  `workhorse.dashboard_run_task_now_v1` was removed. A database installed by any beta reports
+  version 1 and passes `assertSchemaCompatible`, yet holds the old function names. You must recreate the database and
+  install the new baseline with `npx --package @stablemates/workhorse workhorse schema install`.
+  This is the last release that asks for a recreation: from `0.1.0` the schema is frozen as the
+  migration baseline, and later releases upgrade a database in place.
 
 ## 0.1.0-beta.2 — 2026-09-01
 
