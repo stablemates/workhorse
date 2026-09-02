@@ -19,6 +19,7 @@ import type { ReactNode } from "react";
 
 import docsIndex from "@/.source/docs-index.json";
 import { baseOptions } from "@/app/layout.config";
+import { integrations, type IntegrationLogo } from "@/lib/integrations";
 
 /**
  * Built by `scripts/gen-docs-index.ts`. Reading it as plain JSON keeps the
@@ -63,27 +64,21 @@ function isGroupIcon(name: string): name is keyof typeof groupIcons {
 }
 
 /**
- * Brand marks, one pair per integration. Most are drawn for a single
- * background: Drizzle's is near-black ink and disappears on a dark page, and
- * Kysely's sits on a white plate that glares on one. Each theme gets the
- * variant drawn for it, and the pair is swapped with CSS so the switch costs no
- * JavaScript and cannot flash.
+ * Brand marks, one pair per integration, keyed by the slug the generator writes
+ * into the tree and read from `site/integrations.json` so a mark is declared
+ * with the rest of its integration.
  *
- * TypeORM publishes one full-colour mark, so both slots point at it.
+ * Each theme gets the variant drawn for it, and the pair is swapped with CSS so
+ * the switch costs no JavaScript and cannot flash.
  */
-const logos = {
-  drizzle: { light: "drizzle", dark: "drizzle-dark" },
-  prisma: { light: "prisma", dark: "prisma-dark" },
-  typeorm: { light: "typeorm", dark: "typeorm" },
-  kysely: { light: "kysely", dark: "kysely-dark" },
-} as const;
+const logos = new Map(
+  integrations
+    .filter((entry) => entry.logo)
+    .map((entry) => [entry.slug, entry.logo as IntegrationLogo]),
+);
 
-function isLogo(name: string): name is keyof typeof logos {
-  return name in logos;
-}
-
-function logo(name: keyof typeof logos, label: string): ReactNode {
-  const { light, dark } = logos[name];
+function logo(pair: IntegrationLogo, label: string): ReactNode {
+  const { light, dark } = pair;
 
   return (
     <span className="contents" title={label}>
@@ -112,7 +107,8 @@ function icon(name: string, label: string): ReactNode {
     return <HugeiconsIcon icon={groupIcons[name]} size={16} strokeWidth={1.8} aria-hidden />;
   }
 
-  return isLogo(name) ? logo(name, label) : null;
+  const pair = logos.get(name);
+  return pair ? logo(pair, label) : null;
 }
 
 function hydrate(node: SerializedNode): Node {

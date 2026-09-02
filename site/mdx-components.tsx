@@ -5,6 +5,8 @@ import { TypeTable } from "fumadocs-ui/components/type-table";
 import defaultMdxComponents from "fumadocs-ui/mdx";
 import type { MDXComponents } from "mdx/types";
 
+import { IntegrationCatalog } from "@/components/integration-catalog";
+
 /**
  * MDX component map shared by every MDX surface on the site.
  * Keep additions server-safe: anything interactive must opt into "use client"
@@ -15,6 +17,7 @@ export function getMDXComponents(components?: MDXComponents): MDXComponents {
     ...defaultMdxComponents,
     Card,
     Cards,
+    IntegrationCatalog,
     Step,
     Steps,
     Tab,

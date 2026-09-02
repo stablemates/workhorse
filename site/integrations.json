@@ -1,0 +1,93 @@
+{
+  "categories": [
+    {
+      "id": "orms",
+      "title": "ORMs and query builders",
+      "question": "How do I enqueue inside the transaction my ORM already opened?"
+    },
+    {
+      "id": "runtimes",
+      "title": "Runtimes",
+      "question": "Can my platform enqueue, and where does the worker run?"
+    },
+    {
+      "id": "operator-surfaces",
+      "title": "Operator surfaces",
+      "question": "How do I give my operators a view of the queue?"
+    }
+  ],
+  "integrations": [
+    {
+      "slug": "drizzle",
+      "name": "Drizzle",
+      "category": "orms",
+      "tier": "verified",
+      "summary": "Adapts Drizzle databases and caller-owned transactions.",
+      "boundary": "Workhorse stays outside your Drizzle migration graph and keeps its own schema lifecycle.",
+      "package": "@stablemates/workhorse-drizzle",
+      "peer": "drizzle-orm",
+      "pinnedBy": "typescript/adapter-conformance",
+      "logo": { "light": "drizzle", "dark": "drizzle-dark" },
+      "landingSnippet": "ormDrizzle"
+    },
+    {
+      "slug": "prisma",
+      "name": "Prisma",
+      "category": "orms",
+      "tier": "verified",
+      "summary": "Adapts Prisma clients and interactive transactions.",
+      "boundary": "Workhorse keeps its schema lifecycle outside Prisma migrations.",
+      "package": "@stablemates/workhorse-prisma",
+      "peer": "@prisma/client",
+      "pinnedBy": "typescript/adapter-conformance",
+      "logo": { "light": "prisma", "dark": "prisma-dark" },
+      "landingSnippet": "ormPrisma"
+    },
+    {
+      "slug": "typeorm",
+      "name": "TypeORM",
+      "category": "orms",
+      "tier": "verified",
+      "summary": "Adapts TypeORM data sources and transactional entity managers.",
+      "boundary": "Workhorse keeps its schema lifecycle outside TypeORM migrations.",
+      "package": "@stablemates/workhorse-typeorm",
+      "peer": "typeorm",
+      "pinnedBy": "typescript/adapter-conformance",
+      "logo": { "light": "typeorm", "dark": "typeorm" },
+      "landingSnippet": "ormTypeorm"
+    },
+    {
+      "slug": "kysely",
+      "name": "Kysely",
+      "category": "orms",
+      "tier": "verified",
+      "summary": "Adapts Kysely databases and transaction executors.",
+      "boundary": "Workhorse keeps its schema lifecycle outside Kysely migrations.",
+      "package": "@stablemates/workhorse-kysely",
+      "peer": "kysely",
+      "pinnedBy": "typescript/adapter-conformance",
+      "logo": { "light": "kysely", "dark": "kysely-dark" },
+      "landingSnippet": "ormKysely"
+    },
+    {
+      "slug": "serverless",
+      "name": "Serverless and edge",
+      "category": "runtimes",
+      "tier": "documented",
+      "summary": "Decides where a serverless platform can enqueue and where its worker must run.",
+      "boundary": "No platform hosts a worker from a request invocation, and an edge runtime may not connect at all.",
+      "verifiedOn": "2026-08-18"
+    },
+    {
+      "slug": "dashboard",
+      "name": "Dashboard",
+      "category": "operator-surfaces",
+      "tier": "verified",
+      "summary": "Embeds the operator interface in a TypeScript, Python, or Go HTTP server.",
+      "boundary": "The dashboard reads PostgreSQL through the versioned dashboard contract and owns no authorization of its own.",
+      "package": "@stablemates/workhorse-dashboard",
+      "peer": "react",
+      "pinnedBy": "typescript/dashboard"
+    }
+  ]
+}

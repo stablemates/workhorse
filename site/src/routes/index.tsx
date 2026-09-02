@@ -24,10 +24,12 @@ import {
 import { Rule } from "@/components/primitives";
 import { SiteFooter } from "@/components/site-footer";
 import { TheDerby } from "@/components/the-derby";
+import { integrations } from "@/lib/integrations";
 import {
   landingFeatureSnippets,
   landingSupplementalSnippets,
   type LandingFeatureSnippetId,
+  type LandingSnippetId,
 } from "@/lib/landing-snippets";
 import { demoUrl, siteConfig } from "@/lib/site";
 
@@ -396,13 +398,19 @@ const healthFleetTabs: readonly CodeTab[] = [
   },
 ];
 
-/** One tab per ORM adapter with the same transactional guarantee everywhere. */
-const ormTabs: readonly CodeTab[] = [
-  { label: "drizzle", file: "signup.ts", snippet: "ormDrizzle" },
-  { label: "prisma", file: "signup.ts", snippet: "ormPrisma" },
-  { label: "typeorm", file: "signup.ts", snippet: "ormTypeorm" },
-  { label: "kysely", file: "signup.ts", snippet: "ormKysely" },
-];
+/**
+ * One tab per ORM adapter with the same transactional guarantee everywhere,
+ * in the order `site/integrations.json` gives them. The catalog is the one
+ * place an integration is added, so this page cannot list a different set from
+ * the docs sidebar or the `/docs/integrations` index.
+ */
+const ormTabs: readonly CodeTab[] = integrations
+  .filter((entry) => entry.landingSnippet)
+  .map((entry) => ({
+    label: entry.slug,
+    file: "signup.ts",
+    snippet: entry.landingSnippet as LandingSnippetId,
+  }));
 
 /** Equivalent enqueue calls through every supported language client. */
 const languageTabs: readonly CodeTab[] = [
@@ -429,6 +437,11 @@ const deployTabs: readonly CodeTab[] = [
   },
 ];
 
+/**
+ * The core and the telemetry adapter are not integrations and have no catalog
+ * entry. Everything else comes from `site/integrations.json`, in its order, so
+ * this list cannot name a different set of packages from the docs.
+ */
 const packages = [
   {
     name: "@stablemates/workhorse",
@@ -436,35 +449,17 @@ const packages = [
     href: "/docs/api",
   },
   {
-    name: "@stablemates/workhorse-dashboard",
-    body: "The embeddable React operator UI and its framework-neutral server host.",
-    href: "/docs/dashboard",
-  },
-  {
     name: "@stablemates/workhorse-otel",
     body: "Connects core telemetry to host-owned OpenTelemetry providers.",
     href: "/docs/operations",
   },
-  {
-    name: "@stablemates/workhorse-drizzle",
-    body: "Adapts Drizzle databases and caller-owned transactions.",
-    href: "/docs/drizzle",
-  },
-  {
-    name: "@stablemates/workhorse-prisma",
-    body: "Adapts Prisma clients and interactive transactions.",
-    href: "/docs/prisma",
-  },
-  {
-    name: "@stablemates/workhorse-typeorm",
-    body: "Adapts TypeORM data sources and transactional entity managers.",
-    href: "/docs/typeorm",
-  },
-  {
-    name: "@stablemates/workhorse-kysely",
-    body: "Adapts Kysely databases and transaction executors.",
-    href: "/docs/kysely",
-  },
+  ...integrations
+    .filter((entry) => entry.package)
+    .map((entry) => ({
+      name: entry.package as string,
+      body: entry.summary,
+      href: `/docs/${entry.slug}`,
+    })),
 ];
 
 function FeatureSection({ feature, index }: { feature: Feature; index: number }) {
@@ -937,7 +932,7 @@ function HomePage() {
                 roll back together.
               </p>
               <p className="mt-4">
-                <a href="/docs/drizzle" className="wh-link-underline text-[15px] font-medium">
+                <a href="/docs/integrations" className="wh-link-underline text-[15px] font-medium">
                   Integration guides →
                 </a>
               </p>

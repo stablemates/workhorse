@@ -39,6 +39,26 @@ Points that keep this safe, and that any change must preserve:
 - Firefox supports `zoom` from version 126; older browsers simply render the
   unscaled layout.
 
+## The integration catalog
+
+`integrations.json` is the one place an integration is declared. Three surfaces
+read it — the docs sidebar, the `/docs/integrations` index, and the landing
+page's package list and ORM tabs — so adding an integration is one MDX file
+under `content/docs` and one entry in the catalog, and nothing can list a
+different set than the others.
+
+- `content/docs/meta.json` keeps the `---Integrations---` separator but may not
+  list a page under it. `scripts/gen-docs-index.ts` fills that group from the
+  catalog and throws if the separator has pages of its own.
+- No version string belongs in the catalog. A verified entry names the package
+  it adapts (`peer`) and the workspace package that pins the tested version
+  (`pinnedBy`), and the generator reads both ranges out of the `package.json`
+  files that already declare them.
+- The tier decides what a page proves. `verified` means continuous integration
+  exercises the package on every change, so the entry carries no date.
+  `documented` means a person checked it, so the entry must carry `verifiedOn`.
+- `typescript/core/test/site-integrations-catalog.test.ts` enforces all of it.
+
 ## Other landing conventions
 
 - Snippet sources live in `lib/landing-snippets.ts`, are highlighted at build
