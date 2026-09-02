@@ -2,6 +2,7 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 
 import type { Integration, IntegrationCategory } from "../lib/integrations.js";
 import { siteConfig } from "../lib/site.js";
+import { mdxToMarkdown } from "./mdx-to-markdown.js";
 
 /**
  * Builds everything the docs routes need without loading Fumadocs at runtime.
@@ -286,7 +287,13 @@ const catalogMarkdown = catalog.categories
   .join("\n\n");
 
 const pages = new Map<string, PageRecord>();
-const markdownTwins = new Map<string, string>();
+/**
+ * One Markdown document per page: the `# title` and `> description` lead
+ * followed by the expanded body. The standalone twin adds frontmatter to this
+ * string and `llms-full.txt` embeds it as it stands, so the two stop being
+ * identical while the body they share is built once.
+ */
+const markdownDocuments = new Map<string, string>();
 await Promise.all(
   slugs.map(async (slug) => {
     const source = await readFile(new URL(`${slug}.mdx`, contentDir), "utf8");
@@ -296,6 +303,8 @@ await Promise.all(
       throw new Error(`The docs page "${slug}" is missing a frontmatter description`);
     }
 
+    // The catalog tag becomes Markdown before the tab transform runs, so the
+    // transform never meets a component the sidebar generator owns.
     const body = source
       .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "")
       .trimStart()
@@ -303,7 +312,7 @@ await Promise.all(
     if (body.includes("<IntegrationCatalog")) {
       throw new Error(`The Markdown twin for "${slug}" still contains the catalog tag`);
     }
-    markdownTwins.set(slug, `# ${title}\n\n> ${description}\n\n${body}`);
+    markdownDocuments.set(slug, `# ${title}\n\n> ${description}\n\n${mdxToMarkdown(body, slug)}`);
     pages.set(slug, {
       slug,
       url: slug === "index" ? "/docs" : `/docs/${slug}`,
@@ -409,18 +418,32 @@ ${routes
  * Markdown twins, one per page, at `/docs/<slug>.md`.
  *
  * An agent that fetches a docs URL gets an HTML shell it has to strip. These
- * files hand it the source instead. The frontmatter goes, the title becomes an
- * H1, and the body is left alone so identifiers and code survive exactly.
+ * files hand it the source instead. The title becomes an H1, every language tab
+ * is expanded inline, and the code survives exactly.
+ *
+ * The twin restates its title and description as frontmatter and names the HTML
+ * page it stands for, so an agent that keeps the file can still say where it
+ * came from. A client that does not parse YAML loses nothing, because the
+ * `# title` and `> description` lead repeats both. There is no version key: the
+ * runtime compatibility check answers that question.
  */
 await mkdir(new URL("../public/docs/", import.meta.url), { recursive: true });
 await Promise.all(
   [...pages.values()].map(async (page) => {
-    const markdown = markdownTwins.get(page.slug);
-    if (!markdown) throw new Error(`The docs page "${page.slug}" has no Markdown twin`);
+    const document = markdownDocuments.get(page.slug);
+    if (!document) throw new Error(`The docs page "${page.slug}" has no Markdown twin`);
+    const frontmatter = [
+      "---",
+      `title: ${JSON.stringify(page.title)}`,
+      `description: ${JSON.stringify(page.description)}`,
+      `canonical: ${JSON.stringify(`${base}${page.url}`)}`,
+      "---",
+      "",
+    ].join("\n");
     // `index` is served at `/docs`, so its twin is `/docs.md`, not
     // `/docs/index.md`. Every other page keeps its slug.
     const target = page.slug === "index" ? "../public/docs.md" : `../public/docs/${page.slug}.md`;
-    await writeFile(new URL(target, import.meta.url), markdown);
+    await writeFile(new URL(target, import.meta.url), `${frontmatter}\n${document}`);
   }),
 );
 
@@ -457,17 +480,17 @@ ${structure.map((group) => llmsSection(group)).join("\n")}
 );
 
 /**
- * `/llms-full.txt`, every Markdown twin in sidebar order. The separator and
- * canonical URL identify each page, while the page body is the exact string
- * written to its standalone twin.
+ * `/llms-full.txt`, every page in sidebar order. The separator and canonical
+ * URL identify each page, and the document that follows is the same body the
+ * standalone twin carries, without the twin's frontmatter.
  */
 const llmsFullSection = (group: Group, depth = 2): string => {
   const heading = "#".repeat(depth);
   const documents = (group.pages ?? []).map((slug) => {
     const page = pages.get(slug);
-    const markdown = markdownTwins.get(slug);
-    if (!page || !markdown) throw new Error(`The sidebar page "${slug}" has no Markdown twin`);
-    return `---\n\nCanonical source: ${base}${page.url}\n\n${markdown}`;
+    const document = markdownDocuments.get(slug);
+    if (!page || !document) throw new Error(`The sidebar page "${slug}" has no Markdown twin`);
+    return `---\n\nCanonical source: ${base}${page.url}\n\n${document}`;
   });
   const nested = (group.groups ?? []).map((child) => llmsFullSection(child, depth + 1));
   return [`${heading} ${group.title}`, "", ...documents, "", ...nested].join("\n");

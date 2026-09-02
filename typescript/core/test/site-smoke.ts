@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { resolve } from "node:path";
 import { WORKHORSE_VERSION } from "../src/version.js";
@@ -61,6 +62,9 @@ try {
     ["/docs/integrations", ["Verified", "Documented", "Tested against drizzle-orm"]],
     ["/docs/integrations.md", ["ORMs and query builders", "Tested against drizzle-orm"]],
     ["/docs/quickstart", ["quickstart", "worker"]],
+    // The twin expands every language tab inline, so an agent that fetches it
+    // sees the Python install the HTML hides behind a tab control.
+    ["/docs/quickstart.md", ["**TypeScript**", "**Python**", "**Go**", "pip install"]],
     ["/docs/retries", ["retry", "backoff"]],
     ["/llms.txt", ["llms-full.txt", "/docs/quickstart.md"]],
     ["/llms-full.txt", ["https://workhorse.run/docs/quickstart", "Queue.enqueue"]],
@@ -82,6 +86,44 @@ try {
         throw new Error(`${path} omitted required token ${token}`);
       }
     }
+  }
+
+  // `expectations` proves a page contains something. A twin has to prove the
+  // opposite: that no MDX tag survived the transform. Sweep every page the
+  // generator wrote rather than a sample, because one unexpanded page is one
+  // agent reading markup where it expected code.
+  const docsIndex = JSON.parse(
+    await readFile(resolve(repositoryRoot, "site/.source/docs-index.json"), "utf8"),
+  ) as { pages: Record<string, { url: string }> };
+  const twinPaths = Object.values(docsIndex.pages).map((page) =>
+    // `index` is served at `/docs`, so its twin is `/docs.md`.
+    page.url === "/docs" ? "/docs.md" : `${page.url}.md`,
+  );
+  if (twinPaths.length === 0) throw new Error("The docs index listed no pages to sweep");
+
+  const forbidden = [
+    ...twinPaths.map((path) => [path, ["<Tab"]] as const),
+    ["/llms-full.txt", ["<Tab"]] as const,
+  ] as const;
+
+  for (const [path, tokens] of forbidden) {
+    const response = await fetch(`${baseUrl}${path}`);
+    const body = await response.text();
+    if (!response.ok) throw new Error(`${path} returned ${response.status}`);
+    for (const token of tokens) {
+      if (body.includes(token)) throw new Error(`${path} still carries the MDX tag ${token}`);
+    }
+  }
+
+  // Expanding the tabs cost no size, because the twins already carried all three
+  // languages and de-indenting the fences gave a little back. The bound catches a
+  // generator that starts repeating content, not ordinary growth.
+  const llmsFullBytes = Buffer.byteLength(
+    await (await fetch(`${baseUrl}/llms-full.txt`)).text(),
+    "utf8",
+  );
+  if (llmsFullBytes > 320_000) {
+    throw new Error(`llms-full.txt grew to ${llmsFullBytes} bytes, well past its 256 KB shape`);
   }
 
   const landingHtml = await (await fetch(`${baseUrl}/`)).text();
