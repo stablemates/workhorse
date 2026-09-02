@@ -32,5 +32,7 @@ live in [`benchmarks/`](benchmarks/), and dated agent documentation eval notes l
 [`agent-evals/`](agent-evals/). Wayfinder research notes stay on throwaway `research/*`
 branches. They never merge and they never push. ADR 0044 removed every tracked file under
 `docs/research/` before publication, and `origin` is public, so a branch pushed there is published
-whether or not it ever merges. Keep the branch on the machine that made it, and cite a note's
-findings rather than its path, the way ADR 0049 cites the agent documentation baseline.
+whether or not it ever merges. Cite a note's findings rather than its path, the
+way ADR 0049 cites the agent documentation baseline. When a note becomes evidence a decision
+record rests on, copy it into the private operations repository's `docs/`, which is the durable
+home ADR 0044 established for material this repository excludes.
