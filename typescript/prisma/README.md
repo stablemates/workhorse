@@ -29,10 +29,11 @@ await prisma.$transaction(async (tx) => {
 
 ## Package boundary
 
-The adapter never disconnects a caller-owned Prisma client unless `close` is configured. Workhorse
-core owns schema installation and changes. Pass a `pg` pool as `notificationPool` for
-`LISTEN/NOTIFY`; otherwise workers poll. Database errors become `PrismaQueryError`, with the original
-error in `cause` and a nested PostgreSQL code copied to `code` when Prisma exposes one.
+The adapter never disconnects a caller-owned Prisma client unless `close` is configured.
+[Workhorse core](https://workhorse.run/docs/installation) owns schema installation and changes.
+Pass a `pg` pool as `notificationPool` for `LISTEN/NOTIFY`; otherwise workers poll. Database errors
+become `PrismaQueryError`, with the original error in `cause` and a nested PostgreSQL code copied to
+`code` when Prisma exposes one.
 
 ## Next
 

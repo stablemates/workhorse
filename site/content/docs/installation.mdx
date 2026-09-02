@@ -42,12 +42,18 @@ Install the SDK. Each package includes its default PostgreSQL driver.
 
     Use the `asyncpg` extra when that is your application's driver instead of Psycopg.
 
+    Your application never installs the schema. A deployment step installs it once, and that step
+    runs on Node.js.
+
   </Tab>
   <Tab value="Go">
 
     ```bash
     go get github.com/stablemates/workhorse/go
     ```
+
+    Your application never installs the schema. A deployment step installs it once, and that step
+    runs on Node.js.
 
   </Tab>
 </Tabs>

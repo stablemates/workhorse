@@ -32,10 +32,11 @@ await database.transaction().execute(async (transaction) => {
 
 ## Package boundary
 
-The adapter never destroys a caller-owned Kysely database unless `close` is configured. Workhorse core
-owns schema installation and changes. Pass the `pg` pool used by `PostgresDialect` as
-`notificationPool` for `LISTEN/NOTIFY`; otherwise workers poll. Database errors become
-`KyselyQueryError`, with the original error in `cause` and its PostgreSQL code copied to `code`.
+The adapter never destroys a caller-owned Kysely database unless `close` is configured.
+[Workhorse core](https://workhorse.run/docs/installation) owns schema installation and changes.
+Pass the `pg` pool used by `PostgresDialect` as `notificationPool` for `LISTEN/NOTIFY`; otherwise
+workers poll. Database errors become `KyselyQueryError`, with the original error in `cause` and its
+PostgreSQL code copied to `code`.
 
 ## Next
 

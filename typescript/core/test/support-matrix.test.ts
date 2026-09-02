@@ -498,6 +498,12 @@ describe("documentation", () => {
     );
     expect(pythonReadme).not.toContain("Psycopg 3.3 through the next major");
     expect(pythonReadme).not.toContain("asyncpg 0.31 through the next major");
+    // A Python or Go application installs the schema with the Node.js CLI, so its README is the one
+    // place outside Compatibility that states the deployment machine's Node floor. Deriving the
+    // sentence here keeps that number from drifting when support.json raises the floor.
+    const deploymentNodeFloor = `The machine that runs that deployment step needs Node.js ${MINIMUM_NODE_MAJOR} or newer.`;
+    expect(pythonReadme).toContain(deploymentNodeFloor);
+    expect(goReadme).toContain(deploymentNodeFloor);
     expect(sitePage).toContain(
       "https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md",
     );

@@ -30,6 +30,11 @@ Workhorse uses the host application's global tracer, meter, logger, context, and
 providers. A second active Workhorse telemetry provider is rejected instead of silently replacing
 the first one.
 
+## Package boundary
+
+The adapter reads telemetry providers and installs no database object. [Workhorse core](https://workhorse.run/docs/installation)
+owns schema installation and changes.
+
 ## License
 
 Apache-2.0. See `LICENSE` and `NOTICE` in the package.

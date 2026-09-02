@@ -15,8 +15,17 @@ An AI agent should read [the Workhorse documentation index](https://workhorse.ru
 go get github.com/stablemates/workhorse/go
 ```
 
-Install the schema during deployment with the TypeScript CLI. Runtime processes should verify
-compatibility instead of attempting schema changes.
+Install the schema once, as a deployment step. The application never installs or migrates it.
+
+```bash
+npx --package @stablemates/workhorse workhorse schema install
+```
+
+The machine that runs that deployment step needs Node.js 22 or newer. The application itself needs
+no Node.js.
+
+Runtime processes verify compatibility instead of changing the schema. Call `AssertCompatible` at
+startup.
 
 Requires Go 1.25 or newer and PostgreSQL 15 through 18. The module pins pgx v5.9.2.
 
