@@ -1,4 +1,10 @@
 {
+  "install": {
+    "go": "go get github.com/stablemates/workhorse/go",
+    "node": "npm install @stablemates/workhorse",
+    "python": "pip install stablemates-workhorse",
+    "schema": "npx --package @stablemates/workhorse workhorse schema install"
+  },
   "support": {
     "go": {
       "minimum": "1.25.0"
