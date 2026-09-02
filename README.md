@@ -11,7 +11,7 @@ business write and its background job can commit in the same transaction, withou
 
 [Documentation](https://workhorse.run/docs) · [Quickstart](https://workhorse.run/docs/quickstart) ·
 [Live demo](https://demo.workhorse.run) · [Compatibility](docs/compatibility.md) ·
-[For AI agents](https://workhorse.run/llms.txt)
+[Security policy](SECURITY.md) · [For AI agents](https://workhorse.run/llms.txt)
 
 ## Why Workhorse
 

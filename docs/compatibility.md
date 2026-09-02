@@ -217,6 +217,8 @@ A published version is never reused. An ordinary defect stays available and rece
 fix. A security, secret, privacy, or legal exposure triggers credential rotation and removal where
 the registry permits it. The response also deprecates the npm release, yanks the PyPI release, or
 retracts the Go version as appropriate. Removal does not make prior public access reversible.
+[`SECURITY.md`](../SECURITY.md) states how to report a vulnerability privately and which versions
+receive fixes.
 
 ### npm packages
 
