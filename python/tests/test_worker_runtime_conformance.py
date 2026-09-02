@@ -277,11 +277,13 @@ def execute_expiration_fixture(
     connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
 ) -> None:
     queue_name = runtime_queue(fixture)
-    expiration = datetime.now(UTC) + timedelta(milliseconds=fixture["durationMs"])
+    # The deadline budget starts after the claim, inside early_claim. This value only has to be
+    # far enough away that the claim never skips the job.
+    placeholder = datetime.now(UTC) + timedelta(hours=1)
     options = (
         EnqueueOptions(
             queue=queue_name,
-            deadline=expiration,
+            deadline=placeholder,
             max_attempts=fixture["maxAttempts"],
             retry_policy={"type": "fixed", "delayMs": 0},
         )
@@ -317,8 +319,19 @@ def execute_expiration_fixture(
         rows = original_rows(statement, parameters)
         if statement is STATEMENTS.claim_many and rows:
             claimed = dict(rows[0])
-            field = "deadline_at" if fixture["mode"] == "deadline" else "attempt_timeout_at"
-            value = claimed[field]
+            if fixture["mode"] == "deadline":
+                field = "deadline_at"
+                anchored = connection.execute(
+                    "UPDATE workhorse.job_runtime "
+                    "SET deadline_at = clock_timestamp() + (%s * interval '1 millisecond') "
+                    "WHERE job_id = %s RETURNING deadline_at",
+                    (fixture["durationMs"], job_id),
+                ).fetchone()
+                assert anchored is not None
+                value = anchored[0]
+            else:
+                field = "attempt_timeout_at"
+                value = claimed[field]
             assert isinstance(value, datetime)
             claimed[field] = value - timedelta(milliseconds=fixture["localClockLeadMs"])
             return [claimed]

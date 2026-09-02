@@ -520,29 +520,6 @@ func (tracer heartbeatGateTracer) TraceQueryStart(
 
 func (heartbeatGateTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
-type claimGateTracer struct {
-	started chan struct{}
-	release <-chan struct{}
-	once    sync.Once
-}
-
-func (tracer *claimGateTracer) TraceQueryStart(
-	ctx context.Context,
-	_ *pgx.Conn,
-	data pgx.TraceQueryStartData,
-) context.Context {
-	if !strings.Contains(data.SQL, "claim_many_v1") {
-		return ctx
-	}
-	tracer.once.Do(func() {
-		close(tracer.started)
-		<-tracer.release
-	})
-	return ctx
-}
-
-func (*claimGateTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
-
 type notificationReconnectGateTracer struct {
 	mu               sync.Mutex
 	listenCalls      int
@@ -1396,21 +1373,34 @@ func executeWorkerCancellationFixture(t *testing.T, fixture workerRuntimeFixture
 	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, jobID, []string{fixture.ExpectedAttemptOutcome})
 }
 
+// anchorDeadlineAtClaim starts a deadline fixture's budget inside the claim itself. claim_v1
+// filters ready jobs on job_runtime.deadline_at and returns job.deadline_at, so the trigger
+// rewrites both when the claim moves the row from ready to active. The worker then arms its local
+// timer durationMs after the claim's own clock, and no stall between the test and the claim can
+// spend the budget before the claim runs. The database is a throwaway conformance copy.
+func anchorDeadlineAtClaim(t *testing.T, ctx context.Context, pool *pgxpool.Pool, durationMS int) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, fmt.Sprintf(`
+CREATE FUNCTION workhorse.test_anchor_deadline_at_claim() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF OLD.state = 'ready' AND NEW.state = 'active' THEN
+    NEW.deadline_at := clock_timestamp() + (%d * interval '1 millisecond');
+    UPDATE workhorse.job SET deadline_at = NEW.deadline_at WHERE id = NEW.job_id;
+  END IF;
+  RETURN NEW;
+END
+$$;
+CREATE TRIGGER test_anchor_deadline_at_claim BEFORE UPDATE ON workhorse.job_runtime
+  FOR EACH ROW EXECUTE FUNCTION workhorse.test_anchor_deadline_at_claim()`, durationMS)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-"+fixture.Mode)
 	ctx := context.Background()
-	config, err := pgxpool.ParseConfig(databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var claimStarted chan struct{}
-	var releaseClaim chan struct{}
-	if fixture.Mode == "deadline" {
-		claimStarted = make(chan struct{})
-		releaseClaim = make(chan struct{})
-		config.ConnConfig.Tracer = &claimGateTracer{started: claimStarted, release: releaseClaim}
-	}
-	pool, err := pgxpool.NewWithConfig(ctx, config)
+	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1422,8 +1412,9 @@ func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) 
 		RetryPolicy: map[string]any{"type": "fixed", "delayMs": 0},
 	}
 	if fixture.Mode == "deadline" {
-		deadline := time.Now().UTC().Add(30 * time.Second)
-		options.Deadline = &deadline
+		anchorDeadlineAtClaim(t, ctx, pool, fixture.DurationMS)
+		placeholder := time.Now().UTC().Add(time.Hour)
+		options.Deadline = &placeholder
 	} else {
 		options.ExecutionTimeoutMS = fixture.DurationMS
 	}
@@ -1469,24 +1460,6 @@ func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) 
 				err       error
 			}{processed: processed, err: err}
 		}()
-		if fixture.Mode == "deadline" {
-			select {
-			case <-claimStarted:
-			case <-time.After(5 * time.Second):
-				close(releaseClaim)
-				t.Fatal("deadline worker did not reach its claim boundary")
-			}
-			if _, err := pool.Exec(
-				ctx,
-				"UPDATE workhorse.job_runtime SET deadline_at = clock_timestamp() + ($2 * interval '1 millisecond') WHERE job_id = $1::uuid",
-				jobID,
-				fixture.DurationMS,
-			); err != nil {
-				close(releaseClaim)
-				t.Fatal(err)
-			}
-			close(releaseClaim)
-		}
 		run := <-result
 		processed, err := run.processed, run.err
 		if err != nil || !processed {
