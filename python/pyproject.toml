@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "stablemates-workhorse"
 version = "0.1.0b3"
-description = "Public beta Python SDK for the Workhorse PostgreSQL durable execution protocol"
+description = "Python SDK for the Workhorse durable job queue for PostgreSQL. Public beta."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]

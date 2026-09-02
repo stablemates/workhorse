@@ -573,8 +573,9 @@ function Hero() {
             <span className="wh-accent-text">Harness</span> the Postgres you already run.
           </h1>
           <p className="mt-6 max-w-xl text-pretty text-lg leading-relaxed text-fd-muted-foreground">
-            Durable background tasks with crash recovery, efficient long waits, and fleet-wide
-            concurrency controls.
+            Workhorse is versioned SQL functions inside the database you already run. Every language
+            gets the same workers, the same durable waits, and the same dashboard, with no broker or
+            server beside PostgreSQL.
           </p>
           <div className="mt-8">
             <HeroActions />
