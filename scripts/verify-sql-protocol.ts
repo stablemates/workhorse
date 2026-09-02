@@ -163,7 +163,8 @@ export interface HeartbeatCadenceRuntimeFixture extends RuntimeFixtureBase {
 export interface PollCadenceRuntimeFixture extends RuntimeFixtureBase {
   kind: "poll-cadence";
   pollMs: number;
-  idleMs: number;
+  emptyPollsBeforeEnqueue: number;
+  enqueueStallMs: number;
   expectedMinimumDelayMs: number;
   expectedMaximumDelayMs: number;
 }

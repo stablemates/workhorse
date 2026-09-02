@@ -520,8 +520,21 @@ async function executePollCadenceRuntimeFixture(
   fixture: PollCadenceRuntimeFixture,
 ): Promise<void> {
   const queueName = `runtime-${fixture.id}`;
+  // The worker is held at the end of every empty claim until the test releases it. Counting
+  // empty polls is not enough: an uncounted poll between the count and the enqueue advances
+  // the backoff step, and the delay is then measured against the wrong one.
+  let holding = true;
+  let pollReached = deferred<void>();
+  let pollReleased = deferred<void>();
   const pollingDatabase = {
-    query: database.query.bind(database),
+    async query(text: string, values?: readonly unknown[]) {
+      const result = await database.query(text, values);
+      if (holding && text.includes("claim_many_v1")) {
+        pollReached.resolve();
+        await pollReleased.promise;
+      }
+      return result;
+    },
   } as Queryable;
   const queue = new Queue(pollingDatabase);
   const handled = deferred<number>();
@@ -536,13 +549,28 @@ async function executePollCadenceRuntimeFixture(
   });
   const running = worker.run();
   try {
-    await sleep(fixture.idleMs);
-    const enqueuedAt = performance.now();
-    await queue.enqueue(fixture.jobType, {}, { queue: queueName });
+    let enqueuedAt = 0;
+    for (let poll = 1; poll <= fixture.emptyPollsBeforeEnqueue; poll += 1) {
+      await pollReached.promise;
+      const release = pollReleased;
+      if (poll === fixture.emptyPollsBeforeEnqueue) {
+        // A stall longer than one backoff step. A held worker cannot advance past the
+        // pinned step, so this changes nothing; an unheld one fails on every run.
+        await sleep(fixture.enqueueStallMs);
+        await queue.enqueue(fixture.jobType, {}, { queue: queueName });
+        enqueuedAt = performance.now();
+        holding = false;
+      }
+      pollReached = deferred<void>();
+      pollReleased = deferred<void>();
+      release.resolve();
+    }
     const delayMs = (await handled.promise) - enqueuedAt;
     expect(delayMs).toBeGreaterThanOrEqual(fixture.expectedMinimumDelayMs);
     expect(delayMs).toBeLessThanOrEqual(fixture.expectedMaximumDelayMs);
   } finally {
+    holding = false;
+    pollReleased.resolve();
     worker.stop();
     await running;
   }

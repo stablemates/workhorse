@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from queue import Empty, SimpleQueue
 from threading import Event, Lock, Thread
 from time import monotonic, sleep
 from typing import Any
@@ -35,14 +36,14 @@ def test_python_worker_satisfies_every_shared_runtime_fixture(database_url: str)
 
     with psycopg.connect(database_url, autocommit=True) as connection:
         for fixture in fixtures:
-            execute_runtime_fixture(connection, fixture)
+            execute_runtime_fixture(connection, fixture, database_url)
             coverage.update(fixture["covers"])
 
     assert coverage == set(manifest["runtimeCoverage"])
 
 
 def execute_runtime_fixture(
-    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any], database_url: str
 ) -> None:
     executors: dict[str, Callable[[psycopg.Connection[Any], Mapping[str, Any]], None]] = {
         "batch": execute_batch_fixture,
@@ -51,7 +52,10 @@ def execute_runtime_fixture(
         "expiration": execute_expiration_fixture,
         "lease-loss": execute_lease_loss_fixture,
         "heartbeat-cadence": execute_heartbeat_fixture,
-        "poll-cadence": execute_poll_cadence_fixture,
+        # The held poll owns the worker's connection, so the enqueue needs its own.
+        "poll-cadence": lambda enqueue_connection, poll_fixture: execute_poll_cadence_fixture(
+            enqueue_connection, poll_fixture, database_url
+        ),
         "graceful-drain": execute_graceful_drain_fixture,
         "trace-propagation": execute_trace_propagation_fixture,
     }
@@ -464,40 +468,112 @@ def execute_heartbeat_fixture(
     assert heartbeat_calls == calls_at_settlement
 
 
+class HeldPollConnection:
+    """Holds the worker at the end of each empty claim until the test releases it.
+
+    Counting empty polls is not enough: an uncounted poll between the count and the enqueue
+    advances the backoff step, and the delay is then measured against the wrong one.
+    """
+
+    def __init__(self, connection: psycopg.Connection[Any]) -> None:
+        self._connection = connection
+        self.holding = True
+        self.reached: SimpleQueue[None] = SimpleQueue()
+        self.released: SimpleQueue[None] = SimpleQueue()
+
+    @property
+    def autocommit(self) -> bool:
+        return self._connection.autocommit
+
+    def cursor(self) -> Any:
+        return HeldPollCursor(self, self._connection.cursor())
+
+    def release(self) -> None:
+        self.released.put(None)
+
+
+class HeldPollCursor:
+    def __init__(self, gate: HeldPollConnection, cursor: Any) -> None:
+        self._gate = gate
+        self._cursor = cursor
+        self._holds = False
+
+    def __enter__(self) -> HeldPollCursor:
+        self._cursor.__enter__()
+        return self
+
+    def __exit__(self, *args: object) -> object:
+        return self._cursor.__exit__(*args)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._cursor, name)
+
+    def execute(self, sql: str, parameters: Any = ()) -> object:
+        self._holds = self._gate.holding and "claim_many_v1" in sql
+        return self._cursor.execute(sql, parameters)
+
+    def fetchall(self) -> Any:
+        rows = self._cursor.fetchall()
+        if self._holds:
+            self._holds = False
+            self._gate.reached.put(None)
+            self._gate.released.get(timeout=5)
+        return rows
+
+
 def execute_poll_cadence_fixture(
-    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any], database_url: str
 ) -> None:
     queue_name = runtime_queue(fixture)
     handled = Event()
     handled_at = 0.0
-    worker = Worker(
-        connection,
-        queue=queue_name,
-        worker_id=f"python-{fixture['id']}",
-        poll_ms=fixture["pollMs"],
-        registry_interval_ms=0,
-    )
+    with psycopg.connect(database_url, autocommit=True) as worker_connection:
+        gate = HeldPollConnection(worker_connection)
+        worker = Worker(
+            gate,
+            queue=queue_name,
+            worker_id=f"python-{fixture['id']}",
+            poll_ms=fixture["pollMs"],
+            registry_interval_ms=0,
+        )
 
-    def handle(_payload: object, _context: HandlerContext) -> None:
-        nonlocal handled_at
-        handled_at = monotonic()
-        handled.set()
+        def handle(_payload: object, _context: HandlerContext) -> None:
+            nonlocal handled_at
+            handled_at = monotonic()
+            handled.set()
 
-    worker.handle(fixture["jobType"], handle)
-    running = Thread(target=worker.run)
-    running.start()
-    try:
-        sleep(fixture["idleMs"] / 1_000)
-        Queue(connection).enqueue(fixture["jobType"], {}, EnqueueOptions(queue=queue_name))
-        enqueued_at = monotonic()
-        assert handled.wait(fixture["expectedMaximumDelayMs"] / 1_000 + 1)
-        delay_ms = (handled_at - enqueued_at) * 1_000
-        assert delay_ms >= fixture["expectedMinimumDelayMs"]
-        assert delay_ms <= fixture["expectedMaximumDelayMs"]
-    finally:
-        worker.stop()
-        running.join(timeout=2)
-        assert not running.is_alive()
+        worker.handle(fixture["jobType"], handle)
+        running = Thread(target=worker.run)
+        running.start()
+        try:
+            enqueued_at = 0.0
+            for poll in range(1, fixture["emptyPollsBeforeEnqueue"] + 1):
+                try:
+                    gate.reached.get(timeout=fixture["expectedMaximumDelayMs"] / 1_000 + 1)
+                except Empty:
+                    raise AssertionError(
+                        f"worker did not complete empty poll {poll} before the backoff check"
+                    ) from None
+                if poll == fixture["emptyPollsBeforeEnqueue"]:
+                    # A stall longer than one backoff step. A held worker cannot advance past
+                    # the pinned step, so this changes nothing; an unheld one fails every run.
+                    sleep(fixture["enqueueStallMs"] / 1_000)
+                    Queue(connection).enqueue(
+                        fixture["jobType"], {}, EnqueueOptions(queue=queue_name)
+                    )
+                    enqueued_at = monotonic()
+                    gate.holding = False
+                gate.release()
+            assert handled.wait(fixture["expectedMaximumDelayMs"] / 1_000 + 1)
+            delay_ms = (handled_at - enqueued_at) * 1_000
+            assert delay_ms >= fixture["expectedMinimumDelayMs"]
+            assert delay_ms <= fixture["expectedMaximumDelayMs"]
+        finally:
+            gate.holding = False
+            gate.release()
+            worker.stop()
+            running.join(timeout=2)
+            assert not running.is_alive()
 
 
 def execute_graceful_drain_fixture(

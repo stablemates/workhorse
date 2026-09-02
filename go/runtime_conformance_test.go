@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,10 +23,13 @@ import (
 
 type pollCadenceQueryContextKey struct{}
 
+// pollCadenceQueryTracer holds the worker at the end of each empty claim until the test
+// releases it. Counting empty polls is not enough: an uncounted poll between the count and
+// the enqueue advances the backoff step, and the delay is then measured against the wrong one.
 type pollCadenceQueryTracer struct {
-	initialDelay time.Duration
-	delayOnce    sync.Once
-	emptyPolls   chan struct{}
+	holding  atomic.Bool
+	reached  chan struct{}
+	released chan struct{}
 }
 
 func (tracer *pollCadenceQueryTracer) TraceQueryStart(
@@ -37,7 +40,6 @@ func (tracer *pollCadenceQueryTracer) TraceQueryStart(
 	if !strings.Contains(data.SQL, "claim_many_v1") {
 		return ctx
 	}
-	tracer.delayOnce.Do(func() { time.Sleep(tracer.initialDelay) })
 	return context.WithValue(ctx, pollCadenceQueryContextKey{}, true)
 }
 
@@ -46,9 +48,11 @@ func (tracer *pollCadenceQueryTracer) TraceQueryEnd(
 	_ *pgx.Conn,
 	_ pgx.TraceQueryEndData,
 ) {
-	if ctx.Value(pollCadenceQueryContextKey{}) == true {
-		tracer.emptyPolls <- struct{}{}
+	if ctx.Value(pollCadenceQueryContextKey{}) != true || !tracer.holding.Load() {
+		return
 	}
+	tracer.reached <- struct{}{}
+	<-tracer.released
 }
 
 func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
@@ -172,14 +176,17 @@ func executeWorkerPollCadenceFixture(t *testing.T, fixture workerRuntimeFixture)
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-poll-cadence-fixture")
 	ctx := context.Background()
 	tracer := &pollCadenceQueryTracer{
-		initialDelay: 100 * time.Millisecond,
-		emptyPolls:   make(chan struct{}, 4),
+		reached:  make(chan struct{}),
+		released: make(chan struct{}),
 	}
+	tracer.holding.Store(true)
 	config, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	config.ConnConfig.Tracer = tracer
+	// The enqueue runs while a held poll still owns its connection.
+	config.MaxConns = 8
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		t.Fatal(err)
@@ -204,18 +211,30 @@ func executeWorkerPollCadenceFixture(t *testing.T, fixture workerRuntimeFixture)
 	runContext, stop := context.WithCancel(ctx)
 	runResult := make(chan error, 1)
 	go func() { runResult <- worker.Run(runContext) }()
-	for range 2 {
+	// The worker is held at the end of every empty poll, so the enqueue happens against a
+	// known backoff step and no further poll can advance it. The job is committed before the
+	// last poll is released, and the delay is measured from that commit.
+	pollTimeout := time.Duration(fixture.ExpectedMaximumDelayMS+1000) * time.Millisecond
+	var enqueuedAt time.Time
+	for poll := 1; poll <= fixture.EmptyPollsBeforeEnqueue; poll++ {
 		select {
-		case <-tracer.emptyPolls:
-		case <-time.After(time.Duration(fixture.ExpectedMaximumDelayMS+1000) * time.Millisecond):
+		case <-tracer.reached:
+		case <-time.After(pollTimeout):
 			stop()
-			t.Fatal("worker did not complete the empty polls before the backoff check")
+			t.Fatalf("worker did not complete empty poll %d before the backoff check", poll)
 		}
-	}
-	enqueuedAt := time.Now()
-	if _, err := queue.Enqueue(ctx, fixture.JobType, map[string]any{}); err != nil {
-		stop()
-		t.Fatal(err)
+		if poll == fixture.EmptyPollsBeforeEnqueue {
+			// A stall longer than one backoff step. A held worker cannot advance past the
+			// pinned step, so this changes nothing; an unheld one fails on every run.
+			time.Sleep(time.Duration(fixture.EnqueueStallMS) * time.Millisecond)
+			if _, err := queue.Enqueue(ctx, fixture.JobType, map[string]any{}); err != nil {
+				stop()
+				t.Fatal(err)
+			}
+			enqueuedAt = time.Now()
+			tracer.holding.Store(false)
+		}
+		tracer.released <- struct{}{}
 	}
 	select {
 	case handledAt := <-handled:

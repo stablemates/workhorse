@@ -170,7 +170,8 @@
     "covers": ["empty-claim-backoff"],
     "jobType": "protocol.poll-cadence",
     "pollMs": 100,
-    "idleMs": 150,
+    "emptyPollsBeforeEnqueue": 2,
+    "enqueueStallMs": 250,
     "expectedMinimumDelayMs": 100,
     "expectedMaximumDelayMs": 300
   },
