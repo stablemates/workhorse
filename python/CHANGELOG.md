@@ -6,7 +6,10 @@ releases independently from the TypeScript packages and the Go module.
 Workhorse is a public beta. Any 0.x minor release may break compatibility, including the schema.
 There is no upgrade path between 0.x releases; ordered migrations begin at 1.0.0.
 
-## 0.1.0b3 — unreleased
+## 0.1.0b3 — 2026-09-01
+
+Published to PyPI from commit `663c526805746786f12b3be3e151e8ce06c80057`, tagged
+`python/v0.1.0b3`.
 
 ### Fixed
 
@@ -20,12 +23,18 @@ There is no upgrade path between 0.x releases; ordered migrations begin at 1.0.0
 
 ## 0.1.0b2 — 2026-08-31
 
+Published to PyPI from commit `0c15212cc5510501bbc9b74bd372fa480e77a1ff`, tagged
+`python/v0.1.0b2`.
+
 ### Fixed
 
 - The release workflow generated PEP 740 attestations but omitted them from the PyPI upload.
   The package behavior is unchanged from `0.1.0b1`.
 
 ## 0.1.0b1 — 2026-08-31
+
+Published to PyPI from commit `6769c768d19861fb8c5c7ea3764e8d5abc62fcf4`, tagged
+`python/v0.1.0b1`.
 
 ### Changed
 

@@ -194,23 +194,34 @@ for the distribution being published.
 
 ### First public beta release train
 
-The first public beta publishes from one source commit during one controlled release window. It is
-a staged release rather than a concurrent one:
+The first public beta was planned to publish from one source commit during one controlled release
+window. It was a staged release rather than a concurrent one, and fix-forwards moved it across three
+source commits. This is how it ran:
 
-1. Require a green public CI run for the candidate commit. Dispatch `.github/workflows/release.yml`
-   and `.github/workflows/release-python.yml` manually with `dry-run` enabled.
-2. Download and inspect every npm and Python archive. Install all nine npm tarballs, the Python
-   wheel, and the Python source distribution in clean consumers. Build the Go external consumer
-   from the same commit. Test registries are not part of the rehearsal.
-3. Publish Python first. `0.1.0b1` and `0.1.0b2` remain public without provenance. Verify the
-   fix-forward `0.1.0b3` release through PyPI before continuing.
-4. Publish npm second. Publish `@stablemates/workhorse` before its eight dependents, and verify
-   every `0.1.0-beta.2` package before continuing. The `0.1.0-beta.1` tag stopped before its first
-   registry upload and remains unpublished.
-5. Publish Go last. Verify `go/v0.1.0-beta.1` through the public module proxy.
+1. Rehearsal required a green public CI run for the candidate commit. `.github/workflows/release.yml`
+   and `.github/workflows/release-python.yml` were dispatched manually with `dry-run` enabled. Every
+   npm and Python archive was downloaded and inspected. All nine npm tarballs, the Python wheel, and
+   the Python source distribution were installed in clean consumers, and the Go external consumer
+   was built from the same commit. Test registries are not part of the rehearsal.
+2. Publish Python first. `0.1.0b1` published from `6769c768d19861fb8c5c7ea3764e8d5abc62fcf4` and
+   `0.1.0b2` from `0c15212cc5510501bbc9b74bd372fa480e77a1ff` on 2026-08-31. The workflow generated
+   PEP 740 attestations for both but omitted them from the upload, so both remain public without
+   provenance. The fix-forward `0.1.0b3` published from `663c526805746786f12b3be3e151e8ce06c80057`
+   on 2026-09-01 with attestations and was verified through PyPI before the train continued.
+3. Publish npm second. The `v0.1.0-beta.1` tag on `756c3ae1f73e7481ba065fefd35c051107ee614a`
+   stopped before its first registry upload because npm parsed a relative tarball path as GitHub
+   shorthand; it remains unpublished. The fix-forward `0.1.0-beta.2` published all nine packages
+   from `856cdcf354aa83a3acf8ee67043145adb9c99e09` on 2026-09-01, `@stablemates/workhorse` before
+   its eight dependents, and every package was verified before the train continued.
+4. Publish Go last. `go/v0.1.0-beta.1` published from `dbd5437362930f712157ffcc72c3296e971e4f5a` on
+   2026-09-01 and was verified through the public module proxy.
 
-Each verification checks registry visibility, provenance or the module checksum, and installation
-of the exact public version in a clean environment. It then runs a minimal enqueue-and-worker smoke
+The three published versions therefore come from three source commits rather than one. Each source
+commit is on `main` and had a green public CI run. The dated entries in `CHANGELOG.md`,
+`python/CHANGELOG.md`, and `go/CHANGELOG.md` name the same commits.
+
+Each verification checked registry visibility, provenance or the module checksum, and installation
+of the exact public version in a clean environment. It then ran a minimal enqueue-and-worker smoke
 test against a fresh PostgreSQL database. Any failure stops the release train.
 
 A published version is never reused. An ordinary defect stays available and receives a higher
