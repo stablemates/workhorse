@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   prepareApplicationSchema,
@@ -135,5 +137,34 @@ describe("demo schema preparation", () => {
     expect(subject.install).not.toHaveBeenCalled();
     expect(subject.migrate).not.toHaveBeenCalled();
     expect(subject.installDemo).not.toHaveBeenCalled();
+  });
+});
+
+// ADR 0053 makes migration a pipeline step and forbids a component from migrating on start,
+// because no component is a singleton. The demo is the product's own showcase, so a container that
+// prepared its own schema would be the documentation contradicting itself in the one place a
+// reader can watch it run.
+describe("the demo's schema step runs from the pipeline", () => {
+  const repositoryRoot = resolve(import.meta.dirname, "../../..");
+
+  it("keeps schema preparation out of the container entry point", async () => {
+    const entrypoint = await readFile(
+      resolve(repositoryRoot, "typescript/demo/container-entrypoint.mjs"),
+      "utf8",
+    );
+    // The comment there names the file to say where the step went, so only code counts.
+    const code = entrypoint.replace(/^\s*\/\/.*$/gm, "");
+
+    expect(code).not.toContain("prepare-schema.js");
+  });
+
+  it("runs it from the pre-deploy hook, in the image being deployed", async () => {
+    const hook = await readFile(resolve(repositoryRoot, ".kamal/hooks/demo/pre-deploy"), "utf8");
+
+    expect(hook).toContain("kamal app exec");
+    // Without the version, `kamal app exec` resolves an image from the deploying checkout's HEAD
+    // rather than the one this deploy built.
+    expect(hook).toContain('--version "$KAMAL_VERSION"');
+    expect(hook).toContain("node dist/prepare-schema.js");
   });
 });

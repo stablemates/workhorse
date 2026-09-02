@@ -1,25 +1,16 @@
 import { spawn } from "node:child_process";
 
-async function prepareSchema() {
-  const child = spawn(process.execPath, ["dist/prepare-schema.js"], {
-    env: process.env,
-    stdio: "inherit",
-  });
-  const code = await new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("exit", (exitCode, signal) => resolve(exitCode ?? (signal ? 1 : 0)));
-  });
-  if (code !== 0) throw new Error(`Demo schema preparation exited with code ${code}`);
-}
-
-try {
-  await prepareSchema();
-} catch (error) {
-  console.error("Could not prepare the demo schema", error);
-  process.exitCode = 1;
-}
-
-if (process.exitCode) process.exit();
+// This entry point starts processes and installs nothing.
+//
+// It used to run `dist/prepare-schema.js` first, which made every container its own migrator. That
+// is the one thing ADR 0053 rules out: no component migrates on start, because no component is a
+// singleton. The demo runs on one node today, so the old shape was harmless — and it was the
+// product's own showcase doing the opposite of what the product documents.
+//
+// The schema step now runs once from the deployment pipeline, in this same image, before any
+// container boots. `.kamal/hooks/pre-deploy` runs it. A deployment that skips it leaves the server
+// refusing to start with the message `assertSchemaCompatible` throws, which is the designed
+// failure rather than a surprise.
 
 const workerArguments = [
   "--require",

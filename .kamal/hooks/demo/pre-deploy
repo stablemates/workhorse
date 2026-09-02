@@ -1,0 +1,29 @@
+#!/bin/sh
+# Parameterized example. Kamal runs this after it builds and pushes the image and before it boots
+# any container from it, so it is where the demo's schema step belongs.
+#
+# ADR 0053 states the rule this implements: a deployment runs the migration once, from the pipeline,
+# before any process from the new release starts, and no component migrates on start. A component
+# that migrated itself would be as many concurrent migrators as it has nodes.
+#
+# `kamal app exec` runs the command in a new container from the version being deployed, with the
+# role's environment and volumes. The schema tool is therefore the one inside the image that is
+# about to serve traffic, which is what makes its version match the application by construction.
+set -eu
+
+: "${KAMAL_VERSION:?Kamal sets KAMAL_VERSION for its hooks}"
+
+repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+
+# Kamal uploads each role's secret environment file when it boots a container, and it runs this
+# hook before that, so the file is the one the previous deploy wrote. That is correct for every
+# deploy after the first. A first installation has no file yet and must run the schema step once
+# from the host; DEPLOYMENT.md says so.
+#
+# dist/prepare-schema.js installs or migrates the Workhorse schema and the demo's own tables in
+# every configured workspace, then verifies each one with the checks the server makes at startup.
+# A refusal exits non-zero, which fails the deploy before the container swap.
+exec bundle exec kamal app exec \
+  --version "$KAMAL_VERSION" \
+  --config-file "$repository_root/config/deploy.yml" \
+  "node dist/prepare-schema.js"

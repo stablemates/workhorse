@@ -115,8 +115,51 @@ scripts/deploy-demo.sh
 
 The demo receives `DATABASE_URL_PRIMARY` and `DATABASE_URL_SECONDARY` as runtime secrets. This
 enables the production and staging workspace switcher. A routine deploy never creates, drops, or
-restores either database, but it installs or migrates the Workhorse and demo schemas in both before
-the application becomes healthy. Database recovery belongs to the operator's private runbook.
+restores either database. Database recovery belongs to the operator's private runbook.
+
+## The schema step runs from the pipeline
+
+`.kamal/hooks/demo/pre-deploy` runs the schema step. Kamal calls that hook after it builds and pushes the
+image and before it boots any container from it, which is the window the step belongs in: the
+database is ready for the new release before a process from that release exists.
+
+```sh
+bundle exec kamal app exec --version "$KAMAL_VERSION" "node dist/prepare-schema.js"
+```
+
+Each application names its own hooks directory. Kamal's default is `.kamal/hooks` relative to the
+working directory, and both configs are deployed from the repository root, so an unqualified
+directory would run the demo's schema step during a site deploy.
+
+`kamal app exec` starts a new container from the version being deployed, with the role's
+environment and volumes, so the schema tool is the one inside the image that is about to serve
+traffic. Its version matches the application because it is the same image. That is the container
+form of the local-binary rule on the [installation page](https://workhorse.run/docs/installation).
+
+`dist/prepare-schema.js` installs or migrates the Workhorse schema and the demo's own tables in
+every configured workspace, then verifies each one with the checks the server makes at startup. It
+stands in for the documented `workhorse schema status --json` verification, because the demo has
+two databases and a second schema the CLI does not know about. A refusal exits non-zero, which
+fails the deploy before the container swap.
+
+Nothing prepares a schema at startup. The container entry point starts processes only, and the
+server asserts compatibility and refuses to open `/up` when the step did not run. That is
+deliberate: a component that migrated itself would be as many concurrent migrators as the
+deployment has nodes, which is why
+[ADR 0053](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0053-start-migrations-at-0-1-0-and-keep-them-additive.md)
+makes migration a pipeline step. An installation that recreates a demo database must let this hook
+run before the new container starts, which a normal `kamal deploy` does.
+
+### The first installation needs one manual schema step
+
+Kamal writes each role's secret environment file to the host when it boots a container, and it runs
+`pre-deploy` before that. On every later deploy the file is already there, so the hook's container
+receives the database URLs. On the very first deploy the file does not exist yet, the hook's
+container cannot start, and the deploy stops before it boots anything.
+
+Install the schema once from the host before the first `scripts/setup-kamal.sh`, using the same
+image and the same command the hook runs, with the database URLs supplied however your installation
+supplies secrets to a one-off container. Every deploy after that is the hook alone.
 
 ## Adapting the examples
 
