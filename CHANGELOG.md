@@ -83,7 +83,7 @@ and 24 and PostgreSQL 15 through 18.
   `0.1.0-beta.2` installed: `workhorse.valid_tags` was renamed and
   `workhorse.dashboard_run_task_now_v1` was removed. A database installed by any beta reports
   version 1 and passes `assertSchemaCompatible`, yet holds the old function names. You must recreate the database and
-  install the new baseline with `npx --package @stablemates/workhorse workhorse schema install`.
+  install the new baseline with `npm exec --no -- workhorse schema install`.
   This is the last release that asks for a recreation: from `0.1.0` the schema is frozen as the
   migration baseline, and later releases upgrade a database in place.
 

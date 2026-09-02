@@ -24,6 +24,12 @@ Requires **schema v1** and Go **1.25** or newer.
   `workhorse.dashboard_run_task_now_v1`, which is removed from the schema. The action now records
   the authenticated actor, the reason, and the request identity in its `promoted` event, matching
   the TypeScript dashboard server.
+- **Dashboard timestamps.** Every timestamp a dashboard mutation returns is now UTC with exactly
+  three fractional digits, matching the TypeScript and Python backends. It was `time.RFC3339Nano`,
+  which dropped a trailing zero and passed through PostgreSQL's microseconds, so this module
+  answered `2026-09-02T14:30:00Z` and `...:00.123456Z` where the other two answer
+  `2026-09-02T14:30:00.000Z` and `...:00.123Z`. A client that compares or displays the string sees
+  a different value; one that parses it does not.
 
 ### Upgrade notes
 
@@ -31,7 +37,8 @@ Requires **schema v1** and Go **1.25** or newer.
   beta installed: `workhorse.valid_tags` was renamed `workhorse.valid_tags_v1` and
   `workhorse.dashboard_run_task_now_v1` was removed. A database installed by any beta reports
   version 1 and passes the compatibility check, yet holds the old function names. You must recreate the database and
-  install the new baseline with `npx --package @stablemates/workhorse workhorse schema install`.
+  install the new baseline with
+  `npx --package @stablemates/workhorse@0.1.0 workhorse schema install`.
   This is the last release that asks for a recreation: from `0.1.0` the schema is frozen as the
   migration baseline, and later releases upgrade a database in place.
 
