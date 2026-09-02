@@ -42,7 +42,7 @@
     "followingJobType": "protocol.after-suspension",
     "checkpointName": "prepare",
     "waitName": "after-prepare",
-    "waitMs": 30,
+    "waitMs": 30000,
     "expectedHandlerOrder": ["suspension:1", "following:1", "suspension:1"],
     "expectedAfterSuspension": {
       "suspension": { "state": "scheduled", "attempt": 1 },
