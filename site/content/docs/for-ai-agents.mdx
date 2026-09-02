@@ -1,34 +1,92 @@
 ---
 title: Workhorse for AI coding agents
-description: Find agent-readable documentation, then integrate one transactional job from enqueue through confirmation.
+description: Read the agent-facing documentation, decide whether Workhorse fits, then integrate one transactional job from enqueue through confirmation.
 ---
 
-Workhorse gives an AI coding agent a direct path from documentation discovery to verified
-application code. Start with the narrowest useful Markdown source, then follow the same integration
-sequence in TypeScript, Python, or Go.
+You are integrating Workhorse into someone else's application. This page is the whole integration:
+what to read, whether to stop, the four things you write, the three mistakes that survive review,
+and how to confirm the job settled.
 
-## Read the documentation without an HTML shell
+## How to read this documentation
 
-- Fetch `/llms.txt` for a compact map of every documentation page, grouped like the sidebar.
-- Fetch `/llms-full.txt` when the task needs the complete documentation corpus in one response.
-- Append `.md` to a page URL for its Markdown twin, such as `/docs/enqueue.md`.
-- When the agent starts from HTML, follow the response's `text/markdown` alternate link to the same
-  page's Markdown twin.
+Append `.md` to any documentation URL for its Markdown twin, such as `/docs/enqueue.md`. Read the
+twin, not the HTML page. A Markdown twin shows every language; the HTML page shows one, because its
+language tabs collapse to whichever tab is selected. The suffix is the only route to the twin — a
+canonical HTML URL does not negotiate on `Accept`.
 
-Use the per-page twin for focused work because it spends less context. Use `/llms-full.txt` when a
-change crosses several contracts and the agent needs to search them together.
+Fetch `/llms.txt` for a compact map of every page, grouped like the sidebar. Fetch `/llms-full.txt`
+only when a change crosses several contracts at once and you need to search them together; it is
+large, and one twin is usually the cheaper read.
 
-## Integrate one job end to end
+## Whether Workhorse fits
 
-Install the SDK used by the application:
+Stop here if any of these is disqualifying. They are properties, not defects.
 
-- TypeScript: `npm install @stablemates/workhorse`
-- Python: `pip install stablemates-workhorse`
-- Go: `go get github.com/stablemates/workhorse/go`
+- Handlers run at least once. A retry can run your handler again, so its effects must tolerate that.
+- Schema compatibility is exact, and 0.x offers no upgrade path between minor releases.
+- PostgreSQL is the only supported database. There is no other backend.
+- There is no workflow definition language. You compose durable steps in your own code.
+- A concurrency policy is scoped to one queue, not across queues.
 
-Each complete example below opens PostgreSQL, enqueues `order.created` inside the transaction that
-inserts the order, runs a matching worker, and reads the durable result. Production processes call
-the worker's continuous run method; these bounded examples use one pass so they can finish.
+[Limitations](/docs/limitations.md) owns this subject, including the workarounds this page does not
+restate.
+
+## The four things you write
+
+**Install the schema from your deployment, never at application startup.** The schema is a
+deployment step:
+
+```bash
+npx --package @stablemates/workhorse workhorse schema install
+```
+
+That command needs Node.js on the machine that runs your deployment, and
+[Compatibility](/docs/compatibility.md) names the version. The application itself does not need
+Node: a Python or Go service installs the schema this way and then runs without it. Assert compatibility when the application starts, with `assertSchemaCompatible` in TypeScript,
+`assert_schema_compatible` in Python, or `AssertCompatible` in Go.
+
+Install the SDK your application uses:
+
+```bash
+npm install @stablemates/workhorse
+pip install stablemates-workhorse
+go get github.com/stablemates/workhorse/go
+```
+
+**Enqueue inside the transaction that writes your application data.** This is what replaces an
+outbox. Each language hands the transaction over differently: TypeScript passes the transaction
+client as the fourth argument to `enqueue`, Python constructs the `Queue` over the connection whose
+transaction is open, and Go wraps the transaction with `workhorse.NewPGXExecutor(tx)`.
+
+**Register a handler.** The example below calls the bounded run method so it can finish. A
+production worker process calls the continuous one instead: `worker.run()` in TypeScript,
+`worker.run()` in Python, and `worker.Run(ctx)` in Go.
+
+**Choose the failure policy at enqueue.** `maxAttempts` and `retryPolicy` set the retry budget.
+`deadline` and `executionTimeoutMs` are separate bounds, and each is terminal on its own even when
+retry budget remains.
+
+## The three mistakes
+
+**Enqueuing outside the caller's transaction.** The job commits even though the row rolled back, and
+a worker then processes an order that does not exist. The remedy is to pass the transaction, as the
+example does.
+
+**Installing the schema on the runtime path.** Every application instance races to install, and a
+version skew becomes a startup failure under load rather than a deployment failure. The remedy is
+the deployment command above, plus a compatibility assertion at startup.
+
+**An external effect that is not restart-safe.** A handler that sends before it finishes sends again
+on every retry. The remedy is `context.checkpoint(name, operation)` in TypeScript and Python, and
+`handler.Checkpoint(name, operation)` in Go: the operation runs once, and a replay reuses the
+recorded value instead of running it again. An idempotency key on the remote call, an outbox, an
+inbox, or a compensation path are the alternatives when a checkpoint does not fit.
+
+## One job, end to end
+
+Each example opens PostgreSQL, enqueues `order.created` inside the transaction that inserts the
+order, sets a failure policy, runs a worker whose handler wraps its external send in a checkpoint,
+and reads the durable result.
 
 <Tabs items={["TypeScript", "Python", "Go"]}>
   <Tab value="TypeScript">
@@ -40,10 +98,19 @@ the worker's continuous run method; these bounded examples use one pass so they 
     const client = await pool.connect();
     let jobId: string;
 
+    async function sendConfirmationEmail(orderId: string): Promise<string> {
+      return `receipt-for-${orderId}`;
+    }
+
     try {
       await client.query("BEGIN");
       await client.query("INSERT INTO orders (id, status) VALUES ($1, $2)", ["order-42", "new"]);
-      jobId = await queue.enqueue("order.created", { orderId: "order-42" }, {}, client);
+      jobId = await queue.enqueue(
+        "order.created",
+        { orderId: "order-42" },
+        { maxAttempts: 5, retryPolicy: { type: "fixed", delayMs: 1_000 } },
+        client,
+      );
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -52,9 +119,16 @@ the worker's continuous run method; these bounded examples use one pass so they 
       client.release();
     }
 
-    const worker = new Worker(queue).handle("order.created", async (payload: { orderId: string }) => ({
-      processedOrderId: payload.orderId,
-    }));
+    const worker = new Worker(queue).handle(
+      "order.created",
+      async (payload: { orderId: string }, context) => {
+        // The send runs once. A replay reuses the recorded receipt.
+        const receipt = await context.checkpoint("confirmation-email", () =>
+          sendConfirmationEmail(payload.orderId),
+        );
+        return { processedOrderId: payload.orderId, receipt };
+      },
+    );
     await worker.runOnce(); // Production worker processes call worker.run().
 
     const job = await new Admin(pool).getJob(jobId);
@@ -66,12 +140,27 @@ the worker's continuous run method; these bounded examples use one pass so they 
   <Tab value="Python">
     ```python verify
     import os
+    from typing import Any
 
     import psycopg
 
-    from workhorse import Admin, Queue, Worker
+    from workhorse import Admin, EnqueueOptions, HandlerContext, Json, Queue, Worker
 
     database_url = os.environ["DATABASE_URL"]
+
+
+    def send_confirmation_email(order_id: str) -> str:
+        return f"receipt-for-{order_id}"
+
+
+    def handle_order_created(payload: Any, context: HandlerContext) -> Json:
+        # The send runs once. A replay reuses the recorded receipt.
+        receipt = context.checkpoint(
+            "confirmation-email",
+            lambda: send_confirmation_email(payload["orderId"]),
+        )
+        return {"processedOrderId": payload["orderId"], "receipt": receipt}
+
 
     with psycopg.connect(database_url) as application_connection:
         with application_connection.transaction():
@@ -82,13 +171,14 @@ the worker's continuous run method; these bounded examples use one pass so they 
             job_id = Queue(application_connection).enqueue(
                 "order.created",
                 {"orderId": "order-42"},
+                EnqueueOptions(
+                    max_attempts=5,
+                    retry_policy={"type": "fixed", "delayMs": 1_000},
+                ),
             )
 
     with psycopg.connect(database_url, autocommit=True) as worker_connection:
-        worker = Worker(worker_connection).handle(
-            "order.created",
-            lambda payload, _context: {"processedOrderId": payload["orderId"]},
-        )
+        worker = Worker(worker_connection).handle("order.created", handle_order_created)
         worker.run_once()  # Production worker processes call worker.run().
         job = Admin(worker_connection).get_job(job_id)
         print(job.state if job else None, job.result if job else None)
@@ -112,6 +202,10 @@ func main() {
 	if err := run(); err != nil {
 		panic(err)
 	}
+}
+
+func sendConfirmationEmail(orderID string) (any, error) {
+	return "receipt-for-" + orderID, nil
 }
 
 func run() error {
@@ -141,6 +235,10 @@ func run() error {
 		ctx,
 		"order.created",
 		map[string]any{"orderId": "order-42"},
+		workhorse.EnqueueOptions{
+			MaxAttempts: 5,
+			RetryPolicy: map[string]any{"type": "fixed", "delayMs": 1000},
+		},
 	)
 	if err != nil {
 		return err
@@ -156,11 +254,17 @@ func run() error {
 	worker.Handle("order.created", func(
 		_ context.Context,
 		payload any,
-		_ *workhorse.HandlerContext,
+		handler *workhorse.HandlerContext,
 	) (any, error) {
-		return map[string]any{
-			"processedOrderId": payload.(map[string]any)["orderId"],
-		}, nil
+		orderID := payload.(map[string]any)["orderId"].(string)
+		// The send runs once. A replay reuses the recorded receipt.
+		receipt, err := handler.Checkpoint("confirmation-email", func() (any, error) {
+			return sendConfirmationEmail(orderID)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"processedOrderId": orderID, "receipt": receipt}, nil
 	})
 	if _, err = worker.RunOnce(ctx); err != nil { // Production workers call Run.
 		return err
@@ -178,20 +282,21 @@ func run() error {
   </Tab>
 </Tabs>
 
-The application transaction covers acceptance, so the order and job commit or roll back together.
-The handler runs later and may run again after a retry, so protect its external effects with an
-idempotency key, outbox, inbox, or compensation path.
+Two asymmetries to expect. Go's `RetryPolicy` is a `map[string]any` where TypeScript has a typed
+union, and Python's is a mapping, so only TypeScript rejects a malformed policy at compile time.
+Every language does have a schema compatibility assertion, named above.
 
-`Queue`, `Worker`, and `Admin` are the TypeScript names, including `Admin.getJob` for confirmation.
-Python keeps the types and uses snake-case methods such as `Admin.get_job`; Go uses
-`workhorse.NewQueue`, `workhorse.NewWorker`, and `workhorse.NewAdmin`, with methods such as
-`Admin.GetJob`.
+## Confirm the job settled
+
+Read the job back by its identifier: `Admin.getJob` in TypeScript, `Admin.get_job` in Python, and
+`Admin.GetJob` in Go, as each example does. A settled job reports its state and its result. Until
+then it reports the state it is in, which is how you tell a slow worker from a missing one.
 
 ## Next
 
-- [Agent workflows](/docs/agentic-flow) — compose durable model, tool, timer, and approval boundaries
-- [Enqueue a job](/docs/enqueue) — understand transaction and routing options
-- [Workers](/docs/workers) — run handlers continuously in production
+- [Enqueue a job](/docs/enqueue.md) — every transaction and routing option
+- [Workers](/docs/workers.md) — run handlers continuously in production
+- [Agent workflows](/docs/agentic-flow.md) — compose durable model, tool, timer, and approval boundaries
 
 ---
 
