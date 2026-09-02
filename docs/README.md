@@ -29,10 +29,10 @@ published site; they do not own product behavior.
 
 Architectural decisions live in [`decisions/`](decisions/). Dated benchmark reports and raw results
 live in [`benchmarks/`](benchmarks/), and dated agent documentation eval notes live in
-[`agent-evals/`](agent-evals/). Wayfinder research notes stay on throwaway `research/*`
-branches. They never merge and they never push. ADR 0044 removed every tracked file under
-`docs/research/` before publication, and `origin` is public, so a branch pushed there is published
-whether or not it ever merges. Cite a note's findings rather than its path, the
-way ADR 0049 cites the agent documentation baseline. When a note becomes evidence a decision
-record rests on, copy it into the private operations repository's `docs/`, which is the durable
-home ADR 0044 established for material this repository excludes.
+[`agent-evals/`](agent-evals/). Wayfinder research notes are written directly into `docs/research/`
+in the private operations repository, `stablemates/workhorse-operations`. ADR 0044 established that
+repository as the durable home for material this repository excludes, and it removed every tracked
+file under `docs/research/` before publication. `origin` is public, so a `research/*` branch pushed
+here is published whether or not it ever merges. No research note is committed to this repository on
+any branch. Cite a note by its operations-repository path, or by its findings the way ADR 0049 cites
+the agent documentation baseline.
