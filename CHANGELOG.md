@@ -16,7 +16,10 @@ including changing the schema. There is no upgrade path between 0.x releases: mo
 requires a fresh database. Ordered, immutable migrations begin at 1.0.0. Breaking changes are
 always listed with upgrade steps.
 
-## 0.1.0-beta.2 — unreleased
+## 0.1.0-beta.2 — 2026-09-01
+
+Published to npm from commit `856cdcf354aa83a3acf8ee67043145adb9c99e09`, tagged
+`v0.1.0-beta.2`.
 
 First published line. Requires **schema v1**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
 
@@ -128,9 +131,9 @@ First published line. Requires **schema v1**, Node.js **22 or 24**, PostgreSQL *
 
 ### Changed
 
-The line is unreleased, so these changes precede first publication and no deployment upgrades
-through them. They are recorded because the pre-release dashboards and ADRs in this repository
-name the retired instruments.
+These changes precede the first publication, so no deployment upgrades through them. They are
+recorded because the pre-release dashboards and ADRs in this repository name the retired
+instruments.
 
 - **Breaking:** `@stablemates/workhorse` now publishes only the `workhorse` binary. Replace
   `workhorse-health`, `workhorse-bench`, and `workhorse-bench-competitors` with `workhorse health`,

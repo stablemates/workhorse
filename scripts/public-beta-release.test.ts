@@ -6,6 +6,10 @@ import { publishedPackages, repositoryRoot } from "./packages.js";
 const npmVersion = "0.1.0-beta.2";
 const pythonVersion = "0.1.0b3";
 const goVersion = "0.1.0-beta.1";
+const publicationDate = "2026-09-01";
+const npmSourceCommit = "856cdcf354aa83a3acf8ee67043145adb9c99e09";
+const pythonSourceCommit = "663c526805746786f12b3be3e151e8ce06c80057";
+const goSourceCommit = "dbd5437362930f712157ffcc72c3296e971e4f5a";
 const betaLabel = "public beta";
 const compatibilityNotice = "There is no upgrade path between 0.x releases";
 
@@ -79,10 +83,19 @@ describe("the first public beta release", () => {
     }
   });
 
-  it("documents the beta versions in each changelog", async () => {
-    expect(await read("CHANGELOG.md")).toContain(`## ${npmVersion} — unreleased`);
-    expect(await read("python/CHANGELOG.md")).toContain(`## ${pythonVersion} — unreleased`);
-    expect(await read("go/CHANGELOG.md")).toContain(`## ${goVersion} — unreleased`);
+  it("dates and attributes the published beta versions in each changelog", async () => {
+    const entries = [
+      ["CHANGELOG.md", npmVersion, npmSourceCommit],
+      ["python/CHANGELOG.md", pythonVersion, pythonSourceCommit],
+      ["go/CHANGELOG.md", goVersion, goSourceCommit],
+    ] as const;
+
+    for (const [relativePath, version, sourceCommit] of entries) {
+      const changelog = await read(relativePath);
+      expect(changelog).toContain(`## ${version} — ${publicationDate}`);
+      expect(changelog).toContain(sourceCommit);
+      expect(changelog).not.toMatch(/^## .* — unreleased$/m);
+    }
   });
 
   it("builds the site with the supported Go toolchain line", async () => {
@@ -103,5 +116,14 @@ describe("the first public beta release", () => {
     expect(compatibility).toContain("Any failure stops the release train");
     expect(compatibility).toContain("A published version is never reused");
     expect(compatibility).toContain("Test registries are not part of the rehearsal");
+
+    const trainSection = compatibility.slice(
+      compatibility.indexOf("### First public beta release train"),
+      compatibility.indexOf("### npm packages"),
+    );
+    expect(trainSection).toContain("three source commits");
+    for (const sourceCommit of [pythonSourceCommit, npmSourceCommit, goSourceCommit]) {
+      expect(trainSection).toContain(sourceCommit);
+    }
   });
 });
