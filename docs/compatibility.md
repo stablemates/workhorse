@@ -121,7 +121,7 @@ Ten packages ship from this repository. `@stablemates/workhorse` is the TypeScri
 | `@stablemates/workhorse-typeorm`            | TypeORM provider                                  | `@stablemates/workhorse`, `typeorm` >= 0.3 and < 2                                                            |
 | `@stablemates/workhorse-kysely`             | Kysely provider                                   | `@stablemates/workhorse`, `kysely` >= 0.29 and < 0.30                                                         |
 | `@stablemates/workhorse-otel`               | OpenTelemetry adapter                             | `@stablemates/workhorse`, `@opentelemetry/api` >= 1.9 and < 2, `@opentelemetry/api-logs` >= 0.200 and < 0.300 |
-| `@stablemates/workhorse-dashboard`          | Operator dashboard and its framework-neutral host | `@stablemates/workhorse` >= 0.1.0-beta.1 and < 0.2, React 19                                                  |
+| `@stablemates/workhorse-dashboard`          | Operator dashboard and its framework-neutral host | `@stablemates/workhorse` >= 0.1.0 and < 0.2, React 19                                                         |
 | `@stablemates/workhorse-dashboard-server`   | Authenticated standalone dashboard server         | `@stablemates/workhorse-dashboard-contract`                                                                   |
 | `@stablemates/workhorse-dashboard-contract` | Type-only dashboard server boundary               | None                                                                                                          |
 | `stablemates-workhorse`                     | Python clients, workers, and WSGI dashboard       | None; includes Psycopg >= 3.3 and < 4; `asyncpg` extra supports >= 0.31 and < 1                               |
@@ -131,8 +131,8 @@ optional TypeScript package always declares the core version it was released wit
 The Python package version floats independently and declares compatibility through SQL protocol 1
 and schema version 1 instead of a TypeScript peer range.
 
-The first public beta is `0.1.0-beta.2` for npm, `0.1.0-beta.1` for Go, and `0.1.0b3` for Python.
-“Public beta” means the release is usable for evaluation and early production adoption without a
+Every release publishes one version to npm, PyPI, and the Go module proxy from one source commit.
+The current release is `0.1.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
 0.x compatibility promise.
 
 The dashboard and core may use different patch releases within the same minor line. The dashboard
@@ -192,37 +192,30 @@ and exercise external module consumers before a release can create the module ta
 Every release is a tag that points to a green public CI commit. Each tag then runs the focused gate
 for the distribution being published.
 
-### First public beta release train
+### Release train
 
-The first public beta was planned to publish from one source commit during one controlled release
-window. It was a staged release rather than a concurrent one, and fix-forwards moved it across three
-source commits. This is how it ran:
+Every release publishes the same version to npm, PyPI, and the Go module proxy from one source
+commit, in one controlled window, in a fixed order. Dates go into the changelogs before the
+candidate is cut, and a slipped date means a new candidate. No commit lands on `main` between the
+first tag and the last, so every tag names the candidate commit.
 
-1. Rehearsal required a green public CI run for the candidate commit. `.github/workflows/release.yml`
-   and `.github/workflows/release-python.yml` were dispatched manually with `dry-run` enabled. Every
-   npm and Python archive was downloaded and inspected. All nine npm tarballs, the Python wheel, and
-   the Python source distribution were installed in clean consumers, and the Go external consumer
-   was built from the same commit. Test registries are not part of the rehearsal.
-2. Publish Python first. `0.1.0b1` published from `6769c768d19861fb8c5c7ea3764e8d5abc62fcf4` and
-   `0.1.0b2` from `0c15212cc5510501bbc9b74bd372fa480e77a1ff` on 2026-08-31. The workflow generated
-   PEP 740 attestations for both but omitted them from the upload, so both remain public without
-   provenance. The fix-forward `0.1.0b3` published from `663c526805746786f12b3be3e151e8ce06c80057`
-   on 2026-09-01 with attestations and was verified through PyPI before the train continued.
-3. Publish npm second. The `v0.1.0-beta.1` tag on `756c3ae1f73e7481ba065fefd35c051107ee614a`
-   stopped before its first registry upload because npm parsed a relative tarball path as GitHub
-   shorthand; it remains unpublished. The fix-forward `0.1.0-beta.2` published all nine packages
-   from `856cdcf354aa83a3acf8ee67043145adb9c99e09` on 2026-09-01, `@stablemates/workhorse` before
-   its eight dependents, and every package was verified before the train continued.
-4. Publish Go last. `go/v0.1.0-beta.1` published from `dbd5437362930f712157ffcc72c3296e971e4f5a` on
-   2026-09-01 and was verified through the public module proxy.
+1. Rehearse. The candidate commit's `main` push run must show a green `CI / required`.
+   `.github/workflows/release.yml` and `.github/workflows/release-python.yml` are dispatched
+   manually with `dry-run` enabled, and every npm and Python archive is downloaded and inspected.
+   All nine npm tarballs, the Python wheel, and the Python source distribution are installed in
+   clean consumers, and the Go external consumer is built from the same commit.
+   Test registries are not part of the rehearsal.
+2. Publish Python first. One distribution is the smallest production test of trusted publishing.
+   Its PEP 740 attestations are verified on PyPI before the train continues.
+3. Publish npm second. `@stablemates/workhorse` goes before its eight dependents, and every
+   package's provenance is verified before the train continues.
+4. Publish Go last. The `go/vX.Y.Z` tag is pushed after the gate passes, and the version is
+   verified through the public module proxy.
 
-The three published versions therefore come from three source commits rather than one. Each source
-commit is on `main` and had a green public CI run. The dated entries in `CHANGELOG.md`,
-`python/CHANGELOG.md`, and `go/CHANGELOG.md` name the same commits.
-
-Each verification checked registry visibility, provenance or the module checksum, and installation
-of the exact public version in a clean environment. It then ran a minimal enqueue-and-worker smoke
-test against a fresh PostgreSQL database. Any failure stops the release train.
+Each verification checks registry visibility, provenance or the module checksum, and installation
+of the exact public version in a clean environment. It then runs a minimal enqueue-and-worker smoke
+test against a fresh PostgreSQL database. Any failure stops the release train: the defect is filed,
+the remaining stages stay blocked, and the fix ships as a new candidate.
 
 A published version is never reused. An ordinary defect stays available and receives a higher
 fix. A security, secret, privacy, or legal exposure triggers credential rotation and removal where
@@ -230,6 +223,11 @@ the registry permits it. The response also deprecates the npm release, yanks the
 retracts the Go version as appropriate. Removal does not make prior public access reversible.
 [`SECURITY.md`](../SECURITY.md) states how to report a vulnerability privately and which versions
 receive fixes.
+
+The first public beta did not run this way: fix-forwards spread it across three source commits.
+The dated entries in [`CHANGELOG.md`](../CHANGELOG.md),
+[`python/CHANGELOG.md`](../python/CHANGELOG.md), and [`go/CHANGELOG.md`](../go/CHANGELOG.md) name
+those commits.
 
 ### npm packages
 

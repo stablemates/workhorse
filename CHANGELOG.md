@@ -16,6 +16,46 @@ including changing the schema. There is no upgrade path between 0.x releases: mo
 requires a fresh database. Ordered, immutable migrations begin at 1.0.0. Breaking changes are
 always listed with upgrade steps.
 
+## 0.1.0 — 2026-09-14
+
+Published to npm from one source commit shared with the Python distribution and the Go module,
+tagged `v0.1.0`. This is the first version without a prerelease suffix
+([ADR 0050](docs/decisions/0050-release-0-1-0-without-a-prerelease-suffix.md)). Workhorse stays a
+public beta on the `0.x` line.
+
+Requires **schema v1**, Node.js **22** or newer, PostgreSQL **15** or newer. CI exercises Node.js 22
+and 24 and PostgreSQL 15 through 18.
+
+### Changed
+
+- All nine packages move from `0.1.0-beta.2` to `0.1.0`, and every peer range on
+  `@stablemates/workhorse` becomes `>=0.1.0 <0.2.0`. A later prerelease of this line is a
+  `0.2.0-beta.N`; a published version is never reissued.
+- Install commands name no version. `support.json` states each command once, every README and
+  documentation page copies it, and a test fails any surface that disagrees.
+- Every install surface states the schema step,
+  `npx --package @stablemates/workhorse workhorse schema install`, and the installation page links
+  to the compatibility matrix instead of restating the supported floors.
+- The documentation site publishes one agent-facing layer. `/docs/for-ai-agents` is the entry point
+  that every landing surface and `llms.txt` name, every documentation page has a Markdown twin at
+  its URL plus `.md` served as `text/markdown`, and `llms-full.txt` carries the whole corpus.
+- `SECURITY.md` names the private reporting channel and states that only the latest `0.x` minor of
+  each package line receives fixes.
+
+### Fixed
+
+- The demo no longer replays the schema on startup against a database that already holds it.
+- The poll-cadence conformance fixture in `protocol/v1/runtime.json` holds the worker at each empty
+  poll, so every language runtime's cadence test observes the same schedule.
+
+### Upgrade notes
+
+- **Schema version.** `0.1.0` installs the same schema version 1 baseline that `0.1.0-beta.2`
+  installed; `sql/schema/current.sql` did not change between them, so a database the beta installed
+  passes `assertSchemaCompatible` as it is. The `0.x` rule still applies: there is no upgrade path
+  between `0.x` releases, so when a release changes the schema, recreate the database and install
+  the new baseline with `npx --package @stablemates/workhorse workhorse schema install`.
+
 ## 0.1.0-beta.2 — 2026-09-01
 
 Published to npm from commit `856cdcf354aa83a3acf8ee67043145adb9c99e09`, tagged

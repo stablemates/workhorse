@@ -1,6 +1,6 @@
 {
   "name": "@stablemates/workhorse-dashboard-contract",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0",
   "description": "Public beta compile-time contract between the Workhorse CLI and dashboard package",
   "homepage": "https://workhorse.run",
   "bugs": {

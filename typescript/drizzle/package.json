@@ -1,6 +1,6 @@
 {
   "name": "@stablemates/workhorse-drizzle",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0",
   "description": "Public beta Drizzle ORM provider for Workhorse",
   "homepage": "https://workhorse.run",
   "bugs": {
@@ -42,7 +42,7 @@
     "pg": "^8.16.3"
   },
   "peerDependencies": {
-    "@stablemates/workhorse": ">=0.1.0-beta.1 <0.2.0",
+    "@stablemates/workhorse": ">=0.1.0 <0.2.0",
     "drizzle-orm": ">=0.45.0 <1",
     "pg": ">=8.13 <9"
   },

@@ -1,6 +1,9 @@
+import { WORKHORSE_VERSION } from "@stablemates/workhorse/version";
 import { createFileRoute } from "@tanstack/react-router";
 import { HomeLayout } from "fumadocs-ui/layouts/home";
 import { useState, type ReactNode } from "react";
+
+import support from "../../../support.json";
 
 import { baseOptions } from "@/app/layout.config";
 import { type CodeTab, CodeTabs } from "@/components/code-sample";
@@ -511,7 +514,7 @@ function BetaMark() {
         Public beta
       </span>
       <a href="/docs/compatibility" className="wh-link-underline text-fd-muted-foreground">
-        npm v0.1.0-beta.2 · compatibility
+        npm v{WORKHORSE_VERSION} · compatibility
       </a>
     </div>
   );
@@ -519,9 +522,9 @@ function BetaMark() {
 
 function InstallCommands() {
   const commands = [
-    ["npm", "npm install @stablemates/workhorse@0.1.0-beta.2"],
-    ["python", "pip install stablemates-workhorse==0.1.0b3"],
-    ["go", "go get github.com/stablemates/workhorse/go@v0.1.0-beta.1"],
+    ["npm", support.install.node],
+    ["python", support.install.python],
+    ["go", support.install.go],
   ] as const;
 
   return (
