@@ -46,7 +46,8 @@ Requires **schema v1** and Python **3.12** or newer.
   beta installed: `workhorse.valid_tags` was renamed `workhorse.valid_tags_v1` and
   `workhorse.dashboard_run_task_now_v1` was removed. A database installed by any beta reports
   version 1 and passes the compatibility check, yet holds the old function names. You must recreate the database and
-  install the new baseline with `npx --package @stablemates/workhorse workhorse schema install`.
+  install the new baseline with
+  `npx --package @stablemates/workhorse@0.1.0 workhorse schema install`.
   This is the last release that asks for a recreation: from `0.1.0` the schema is frozen as the
   migration baseline, and later releases upgrade a database in place.
 
