@@ -129,6 +129,26 @@ synchronous `Admin` over Psycopg and `AsyncAdmin` over Psycopg or asyncpg. Their
 call the same clients for shared operator reads and controls. Cancellation remains
 application-shaped, so every queue client exposes it with audit attribution.
 
+## Schema tooling is TypeScript-only, deliberately
+
+Schema installation and migration ship in `@stablemates/workhorse` and nowhere else. That is a
+decision, not a gap in the matrix, so no row above records it as Absent for Python and Go.
+
+Two reasons hold it there. No component can own an automatic migration, because no component is a
+singleton: the dashboard and every worker deploy on many nodes as part of an ordinary application
+deploy, so a component that migrated itself would be many concurrent migrators rather than one
+deliberate step. And `applySchemaMigrationPlan` is the most safety-critical code in this
+repository — an advisory lock, a post-lock version guard, gap rejection, transaction-control
+rejection, per-step atomic rollback, and a concurrent-migrator race that must be read as success.
+One implementation of that is worth more than three filled cells
+([ADR 0053](decisions/0053-start-migrations-at-0-1-0-and-keep-them-additive.md)).
+
+A Python or Go deployment therefore runs the TypeScript CLI as a pipeline step, at the version its
+own SDK declares, and verifies with `workhorse schema status --json` before starting. What every
+language does ship is the startup check that reads the result: the "Public startup schema
+compatibility check" row above is Supported everywhere, and it is what turns a missed migration
+into a refused start rather than a corrupted write.
+
 ## Keeping this document honest
 
 If a cell says Supported, tests in this repository must exercise that capability in that language.

@@ -19,11 +19,15 @@ pip install stablemates-workhorse
 Install the schema once, as a deployment step. The application never installs or migrates it.
 
 ```bash
-npx --package @stablemates/workhorse workhorse schema install
+npx --package @stablemates/workhorse@0.1.0 workhorse schema install
 ```
 
 The machine that runs that deployment step needs Node.js 22 or newer. The application itself needs
 no Node.js.
+
+Pin that version to the `stablemates-workhorse` version the application depends on. The two are
+released together from one commit, so the numbers match. A schema tool older than the application
+leaves a schema the application refuses to start against.
 
 Runtime processes verify compatibility instead of changing the schema. Call
 `assert_schema_compatible(connection)` at startup. Call `assert_schema_compatible_psycopg` or

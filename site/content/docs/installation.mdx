@@ -79,26 +79,41 @@ Your process supplies the connection through its normal configuration — typica
 built from `DATABASE_URL`. The CLI reads `--database-url`, then `WORKHORSE_DATABASE_URL`, then
 `DATABASE_URL`.
 
-## Install the schema deliberately
+## Run the schema tool at the application's version
 
-When the target database is new, install from a deployment step. `schema status` then reports the
-installed version against what the runtime expects.
+The schema tool ships only in the TypeScript package, and it changes the database your application
+reads. Those two facts make its version part of the deployment: a tool older than the application
+leaves a schema the application refuses to start against, and the deploy fails.
+
+A TypeScript project needs no pin, because the binary is its own dependency:
 
 ```bash
-npx --package @stablemates/workhorse workhorse schema install
-npx --package @stablemates/workhorse workhorse schema migrate
-npx --package @stablemates/workhorse workhorse schema status
-npx --package @stablemates/workhorse workhorse schema status --json
+npm exec --no -- workhorse schema install
 ```
 
-`--package` names the package the binary comes from. Without it `npx` looks for a `workhorse`
-package by that bare name, which belongs to someone else, and a Python or Go project has no
-`node_modules` to correct the guess from.
+`--no` is what makes that safe. It runs the `workhorse` in `node_modules` or fails; it never
+fetches anything. Use `pnpm exec workhorse …` or `yarn workhorse …` if that is your package
+manager. The version cannot drift, because there is only one.
+
+A Python or Go project has no `node_modules` to resolve the binary from, so it names both the
+package and the version:
+
+```bash
+npx --package @stablemates/workhorse@0.1.0 workhorse schema install
+```
+
+Pin that to the version of `stablemates-workhorse` or `github.com/stablemates/workhorse/go` the
+application depends on. All three release together from one commit, so the numbers are the same.
+`--package` also names where the binary comes from: without it `npx` looks for a `workhorse`
+package by that bare name, which belongs to someone else.
 
 Every command rejects unknown options and accepts both `--flag value` and `--flag=value`.
 Command-specific help exits before the CLI connects to PostgreSQL.
 
-TypeScript deployment code can call the same step as `installSchema`.
+## Install the schema deliberately
+
+When the target database is new, install from a deployment step. TypeScript deployment code can
+call the same step as `installSchema`.
 
 ```ts
 import { installSchema, Pool } from "@stablemates/workhorse";
@@ -123,12 +138,60 @@ import { migrateSchema } from "@stablemates/workhorse";
 await migrateSchema(pool);
 ```
 
-The migration refuses a missing schema, a version below its supported baseline, a newer version,
-or a gap in the ordered plan. Each step commits one version in its own transaction behind an
+The migration refuses a missing schema, a version below its supported baseline, a version beyond
+the last step this release carries, or a gap in the ordered plan. Each step commits one version in its own transaction behind an
 advisory lock, and a failed step rolls back atomically, so a rerun resumes from the recorded
 version. The same step is available from the CLI as `workhorse schema migrate`, and an
 already-current schema is left unchanged. Development schemas at retired versions below the
 baseline still require a reset.
+
+## Verify before the new release starts
+
+Migrating and starting are two steps, and a deploy should not cross between them on hope. Run
+`schema status --json` after the migration and before the first process from the new release
+starts, and fail the deploy on a non-zero exit.
+
+```bash
+npm exec --no -- workhorse schema migrate
+npm exec --no -- workhorse schema status --json
+```
+
+The command exits 0 when this build accepts the installed schema, and 1 when it would refuse it or
+when PostgreSQL is below the required major. The JSON separates the two questions:
+
+```json
+{
+  "schema": {
+    "installedVersion": 1,
+    "expectedVersion": 1,
+    "minimumVersion": 1,
+    "state": "current",
+    "compatible": true,
+    "refusal": null
+  },
+  "postgres": { "supported": true, "level": "supported-tested" }
+}
+```
+
+Read `schema.compatible` for the gate and `schema.refusal` for the sentence to log. `schema.state`
+says where the installed version sits, and `ahead` is not a failure: a rolling deployment migrates
+first, so processes from the previous release meet a schema ahead of them until the rollout
+finishes, and they keep working because inside a major line a migration only adds.
+
+## Create a development database without Node.js
+
+Every release attaches `schema.sql` to its
+[GitHub release](https://github.com/stablemates/workhorse/releases). A Python or Go developer with
+no Node.js toolchain can create a database from it directly:
+
+```bash
+psql "$DATABASE_URL" -f schema.sql
+```
+
+Use this for development only. The file is the same clean-install artifact the CLI applies, but
+`psql` applies none of the CLI's guards: it does not check the PostgreSQL major, and it does not
+refuse a database that already holds a mixed, unversioned, or older `workhorse` schema. It also
+records no migration history beyond what the file itself writes. Deployments run the CLI.
 
 ## Check before a runtime starts
 

@@ -3,7 +3,8 @@
     "go": "go get github.com/stablemates/workhorse/go",
     "node": "npm install @stablemates/workhorse",
     "python": "pip install stablemates-workhorse",
-    "schema": "npx --package @stablemates/workhorse workhorse schema install"
+    "schema": "npm exec --no -- workhorse schema install",
+    "schemaPinned": "npx --package @stablemates/workhorse@0.1.0 workhorse schema install"
   },
   "support": {
     "go": {

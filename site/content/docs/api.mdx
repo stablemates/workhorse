@@ -153,18 +153,26 @@ Exported constants such as `MAX_ENQUEUE_BATCH_SIZE`, `MAX_CHECKPOINT_VALUE_BYTES
 
 ## CLI
 
-The `workhorse` CLI covers setup and operations without writing code. Every subcommand runs through
-the same invocation, shown here with `schema install`:
+The `workhorse` CLI covers setup and operations without writing code. In a project that depends on
+the package, every subcommand runs through the same invocation, shown here with `schema install`:
 
 ```bash title="Terminal"
-npx --package @stablemates/workhorse workhorse schema install
+npm exec --no -- workhorse schema install
+```
+
+From a deployment step outside such a project — a Python or Go pipeline — name the package and the
+version instead:
+
+```bash title="Terminal"
+npx --package @stablemates/workhorse@0.1.0 workhorse schema install
 ```
 
 Substitute any of these subcommands:
 
 - `init` scaffolds config and wiring.
-- `schema install` installs the schema.
-- `schema status --json` reports schema and PostgreSQL status.
+- `schema install` installs the schema into a clean database.
+- `schema migrate` applies ordered migrations to an installed schema.
+- `schema status --json` reports where the installed schema sits and whether this build accepts it.
 - `worker --config workhorse.config.js` runs a supervised worker process.
 - `dashboard --port 3000` serves the operator dashboard.
 - `health --json` emits machine-readable queue health.

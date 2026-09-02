@@ -14,11 +14,12 @@ An AI agent should read [the Workhorse documentation index](https://workhorse.ru
 
 ```bash
 npm install @stablemates/workhorse
-npx --package @stablemates/workhorse workhorse schema install
+npm exec --no -- workhorse schema install
 ```
 
 Install the schema during deployment. Runtime processes should verify compatibility instead of
-attempting schema changes.
+attempting schema changes. `npm exec --no` runs the binary this project already depends on, so the
+schema tool and the application always agree on a version.
 
 Requires Node.js 22 or 24 and PostgreSQL 15 through 18.
 

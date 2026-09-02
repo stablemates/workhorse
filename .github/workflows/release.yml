@@ -95,3 +95,47 @@ jobs:
           for tarball in $(pnpm --silent exec tsx scripts/packages.ts --tarballs); do
             npm publish --provenance --access public "./dist-tarballs/$tarball"
           done
+
+  # The schema tool ships only on npm, so a Python or Go developer without a Node.js toolchain has
+  # no way to create a development database from a published artifact. Attaching the clean-install
+  # SQL to the release gives them one. It is a development path: `psql -f` applies none of the CLI's
+  # guards, so the documentation points deployments at the CLI.
+  github-release:
+    if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Generate the clean-install schema artifact
+        run: pnpm schema:generate
+      - name: Create or update the release with schema.sql
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          notes="Release notes for this version are in [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/$tag/CHANGELOG.md).
+
+          \`schema.sql\` below is the clean-install artifact for this version. It creates a development
+          database without a Node.js toolchain:
+
+          \`\`\`bash
+          psql \"\$DATABASE_URL\" -f schema.sql
+          \`\`\`
+
+          It carries none of the CLI's guards. Deployments run \`workhorse schema install\` or
+          \`workhorse schema migrate\` instead."
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" sql/schema.sql --clobber
+          else
+            gh release create "$tag" sql/schema.sql --title "$tag" --notes "$notes"
+          fi

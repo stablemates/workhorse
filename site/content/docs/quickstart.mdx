@@ -46,11 +46,21 @@ Workhorse lives entirely inside your database: tables for jobs and versioned SQL
 every lifecycle transition. Install them once through the TypeScript package's deployment CLI,
 regardless of which application SDK you use.
 
+A TypeScript project runs the binary it already depends on:
+
 ```bash
-npx --package @stablemates/workhorse workhorse schema install
+npm exec --no -- workhorse schema install
+```
+
+A Python or Go project has no `node_modules` to resolve that binary from, so it names the version
+instead — the same version as the SDK it installed above:
+
+```bash
+npx --package @stablemates/workhorse@0.1.0 workhorse schema install
 ```
 
 That step runs on Node.js, even when the application is written in Python or Go.
+[Installation](/docs/installation) explains why the two forms differ, and
 [Compatibility](/docs/compatibility) names the version.
 
 TypeScript deployment code can call the same installer directly.

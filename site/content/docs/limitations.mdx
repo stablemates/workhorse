@@ -4,7 +4,8 @@ description: What Workhorse does not do today — with the workaround for each b
 ---
 
 Choosing infrastructure means knowing what it will not do before it is load-bearing. Workhorse fits
-PostgreSQL-backed applications that accept at-least-once handlers and exact schema compatibility.
+PostgreSQL-backed applications that accept at-least-once handlers and a schema that upgrades on a
+deployment step rather than on its own.
 This page lists every boundary honestly, with the workaround where one exists.
 
 Workhorse is a public beta. It is usable for evaluation and early production adoption. A minor
@@ -53,9 +54,19 @@ ID — to close the final gap between effect and checkpoint commit.
 ## Schema and terminal tooling ship in TypeScript
 
 Python and Go ship transactional queue clients, complete worker runtimes, and `Admin` operator
-clients over the shared SQL protocol. Schema installation and migration (`migrateSchema`) and the
-`workhorse` admin CLI and TUI ship only in the TypeScript package, so a polyglot deployment keeps
-that package available for those operations.
+clients over the shared SQL protocol. Schema installation and migration, and the `workhorse` admin
+CLI and TUI, ship only in the TypeScript package, so a polyglot deployment keeps that package
+available for those operations.
+
+This one is a decision rather than a missing feature. No component can migrate on its own start,
+because no component is a singleton: the dashboard and every worker deploy on many nodes, so a
+component that migrated itself would be many concurrent migrators instead of one deliberate step.
+And the migration runner is the most safety-critical code in the project, so it exists once.
+
+Workaround: run the CLI as a deployment step, pinned to the version of the SDK your application
+depends on, and verify with `workhorse schema status --json` before the first new process starts.
+See [Installation](/docs/installation) for both command forms. For a development database with no
+Node.js toolchain, every release attaches `schema.sql` for `psql -f`.
 
 ## No public HTTP ingress
 

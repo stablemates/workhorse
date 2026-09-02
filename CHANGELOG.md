@@ -32,9 +32,20 @@ and 24 and PostgreSQL 15 through 18.
   `0.2.0-beta.N`; a published version is never reissued.
 - Install commands name no version. `support.json` states each command once, every README and
   documentation page copies it, and a test fails any surface that disagrees.
-- Every install surface states the schema step,
-  `npx --package @stablemates/workhorse workhorse schema install`, and the installation page links
-  to the compatibility matrix instead of restating the supported floors.
+- **The schema command is the one exception, and it now has two forms.** A TypeScript project runs
+  `npm exec --no -- workhorse schema install`, which resolves the binary from its own
+  `node_modules` and never installs anything, so the schema tool and the application match by
+  construction. A Python or Go project has no `node_modules` and pins instead:
+  `npx --package @stablemates/workhorse@0.1.0 workhorse schema install`, at the version of the SDK
+  it depends on. A schema tool behind the application leaves a schema the application refuses to
+  start against, so the pin is a deployment requirement rather than a preference. A test keeps the
+  pinned literal equal to the published version.
+- The installation page links to the compatibility matrix instead of restating the supported
+  floors, and documents the verification step: run `workhorse schema status --json` after migrating
+  and before the first process from the new release starts, and fail the deploy on a non-zero exit.
+- Every GitHub release attaches `schema.sql`, so a Python or Go developer with no Node.js toolchain
+  can create a development database with `psql -f schema.sql`. That path carries none of the CLI's
+  guards and is documented for development only.
 - The documentation site publishes one agent-facing layer. `/docs/for-ai-agents` is the entry point
   that every landing surface and `llms.txt` name, every documentation page has a Markdown twin at
   its URL plus `.md` served as `text/markdown`, and `llms-full.txt` carries the whole corpus.
@@ -47,6 +58,12 @@ and 24 and PostgreSQL 15 through 18.
   keep working. Run `migrateSchema` from a deployment step before processes from the new release
   start; nothing migrates automatically.
   ([ADR 0053](docs/decisions/0053-start-migrations-at-0-1-0-and-keep-them-additive.md))
+- `workhorse schema status` reports where the installed schema sits and whether this build accepts
+  it as two separate fields. `schema.state` is now `not-installed`, `behind`, `current`, or `ahead`
+  in place of `drift`; `schema.compatible` and `schema.refusal` carry the verdict, and the exit code
+  follows `compatible`. A schema ahead of the running build is accepted, so a deployment gate no
+  longer fails the normal middle of a rolling upgrade. The report prints the same sentence
+  `assertSchemaCompatible` throws.
 - **Schema.** `workhorse.valid_tags` is renamed `workhorse.valid_tags_v1`, so every function in the
   schema now carries a version suffix and can be superseded without breaking its callers.
   `workhorse.dashboard_run_task_now_v1` is removed: the Python and Go dashboard backends now call

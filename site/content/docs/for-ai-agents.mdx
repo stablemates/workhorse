@@ -35,10 +35,17 @@ restate.
 ## The four things you write
 
 **Install the schema from your deployment, never at application startup.** The schema is a
-deployment step:
+deployment step. A TypeScript project runs the binary it depends on:
 
 ```bash
-npx --package @stablemates/workhorse workhorse schema install
+npm exec --no -- workhorse schema install
+```
+
+A Python or Go project has no Node.js dependency tree to resolve that binary from, so it names the
+version instead, which must equal the SDK version the application depends on:
+
+```bash
+npx --package @stablemates/workhorse@0.1.0 workhorse schema install
 ```
 
 That command needs Node.js on the machine that runs your deployment, and
