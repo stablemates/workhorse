@@ -87,7 +87,7 @@ every mapping. `manifest.fixtureCoverage` declares the complete identifier set f
 and with the identifiers executed by its runner.
 
 The Python distribution is `stablemates-workhorse`, and its import package is `workhorse`. It requires
-Python 3.10 or newer. The distribution depends on Psycopg 3.3 or newer and below 4. The `asyncpg`
+Python 3.12 or newer. The distribution depends on Psycopg 3.3 or newer and below 4. The `asyncpg`
 extra adds asyncpg 0.31 or newer and below 1. `python/src/workhorse/client.py` exports synchronous `Queue` for Psycopg and
 asynchronous `AsyncQueue.from_psycopg` and `AsyncQueue.from_asyncpg` constructors. Both clients
 expose `enqueue`, `enqueue_with_result`, `enqueue_many`, `enqueue_many_with_results`, and
