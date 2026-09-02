@@ -10,7 +10,8 @@ business write and its background job can commit in the same transaction, withou
 > releases; ordered migrations begin at 1.0.0.
 
 [Documentation](https://workhorse.run/docs) · [Quickstart](https://workhorse.run/docs/quickstart) ·
-[Live demo](https://demo.workhorse.run) · [Compatibility](docs/compatibility.md)
+[Live demo](https://demo.workhorse.run) · [Compatibility](docs/compatibility.md) ·
+[For AI agents](https://workhorse.run/llms.txt)
 
 ## Why Workhorse
 
@@ -113,10 +114,6 @@ availability must be independent from the application database.
 - [Compatibility](docs/compatibility.md) defines supported runtimes, schema policy, and releases.
 - [Operations](https://workhorse.run/docs/operations) covers health, retention, and maintenance.
 - [Dashboard](https://workhorse.run/docs/dashboard) explains the operator UI and deployment boundary.
-- [Agent documentation index](https://workhorse.run/llms.txt) lists the published guides and their
-  Markdown versions.
-- [Complete agent documentation](https://workhorse.run/llms-full.txt) provides the published guides
-  in one file.
 - [Changelog](CHANGELOG.md) records releases and required schema versions.
 
 ## Contributing

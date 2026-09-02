@@ -81,6 +81,13 @@ const contracts: readonly ReadmeContract[] = [
   },
 ];
 
+/**
+ * The one URL every README points an agent at. An agent that lands on a package
+ * page has no sidebar and no search, so the README is where it either finds the
+ * documentation or gives up and reads the source.
+ */
+const agentRouter = "https://workhorse.run/llms.txt";
+
 describe("SDK README alignment", () => {
   it("derives every language and PostgreSQL support sentence from support.json", async () => {
     const manifest = JSON.parse(await read("support.json")) as SupportManifest;
@@ -90,6 +97,15 @@ describe("SDK README alignment", () => {
       const expected = `Requires ${contract.languageSupport(manifest.support)} and ${postgresSupport}.`;
       expect(prose(await read(contract.readme))).toContain(expected);
     }
+  });
+
+  it("points every README at the agent documentation router exactly once", async () => {
+    const wrongCount: string[] = [];
+    for (const contract of contracts) {
+      const pointers = (await read(contract.readme)).split(agentRouter).length - 1;
+      if (pointers !== 1) wrongCount.push(`${contract.readme}: found ${pointers}, expected 1`);
+    }
+    expect(wrongCount).toEqual([]);
   });
 
   it("derives the Go pgx compatibility claim from go/go.mod", async () => {

@@ -487,9 +487,16 @@ ${structure.map((group) => llmsFullSection(group)).join("\n")}`,
 // The search index is derived data. Crawling it wastes budget. Markdown twins
 // are not derived: they are the same content in a form an agent can read, so
 // they stay crawlable.
+//
+// A crawler that reads this file may be an agent rather than a search engine,
+// and `robots.txt` is the one file it is guaranteed to fetch. The comment names
+// the documentation router so that agent can stop crawling and read instead.
 await writeFile(
   new URL("../public/robots.txt", import.meta.url),
-  `User-agent: *
+  `# Documentation for AI agents: ${base}/llms.txt
+# Every page in one file: ${base}/llms-full.txt
+
+User-agent: *
 Allow: /
 Disallow: /api/
 Host: ${base}

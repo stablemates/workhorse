@@ -7,6 +7,8 @@ durable execution protocol.
 > releases may break compatibility, including the schema. There is no upgrade path between 0.x
 > releases; ordered migrations begin at 1.0.0.
 
+An AI agent should read [the Workhorse documentation index](https://workhorse.run/llms.txt) first.
+
 ## Install
 
 ```bash

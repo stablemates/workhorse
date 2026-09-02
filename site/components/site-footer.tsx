@@ -9,6 +9,7 @@ const columns = [
       { href: "/docs/quickstart", text: "Quickstart" },
       { href: "/docs/installation", text: "Installation" },
       { href: "/docs/api", text: "API reference" },
+      { href: "/llms.txt", text: "For AI agents" },
     ],
   },
   {

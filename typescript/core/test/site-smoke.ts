@@ -86,6 +86,10 @@ try {
 
   const landingHtml = await (await fetch(`${baseUrl}/`)).text();
   assertIncludesTokens(landingHtml, "The landing page", [
+    // The footer link is the only agent entry point on the landing page, so a
+    // refactor of `site-footer.tsx` that drops it leaves an agent with nothing
+    // to follow.
+    'href="/llms.txt"',
     '<link rel="canonical" href="https://workhorse.run"',
     'property="og:image" content="https://workhorse.run/brand/workhorse-mark.png"',
     'type="application/ld+json"',
