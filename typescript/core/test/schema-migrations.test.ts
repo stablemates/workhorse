@@ -240,7 +240,9 @@ describe("schema migrations", () => {
         },
         1,
       );
-      await new Promise((resolve) => setTimeout(resolve, 750));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 750);
+      });
       await peer.query("ROLLBACK");
       await migration;
     } finally {
