@@ -50,7 +50,7 @@ const governedSurfaces: readonly GovernedSurface[] = [
   { file: "go/examples/README.md", commands: ["go"] },
   { file: "site/content/docs/installation.mdx", commands: ["go", "node", "python", "schema"] },
   { file: "site/content/docs/quickstart.mdx", commands: ["go", "node", "python", "schema"] },
-  { file: "site/content/docs/for-ai-agents.mdx", commands: ["go", "node", "python"] },
+  { file: "site/content/docs/for-ai-agents.mdx", commands: ["go", "node", "python", "schema"] },
   { file: "site/content/docs/api.mdx", commands: ["schema"] },
 ];
 
