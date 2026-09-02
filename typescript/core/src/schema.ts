@@ -75,25 +75,31 @@ export async function assertSchemaCompatible(database: Queryable): Promise<void>
       { cause: error },
     );
   }
+  const refusal = schemaCompatibilityRefusal(state);
+  if (refusal !== null) throw new Error(refusal);
+}
+
+/**
+ * Say why this runtime refuses an installed schema, or `null` when it accepts one.
+ *
+ * `assertSchemaCompatible` throws this sentence and `workhorse schema status` prints it, so the
+ * deployment gate and the process that starts after it cannot reach opposite verdicts.
+ */
+export function schemaCompatibilityRefusal(state: CompatibilityState): string | null {
   if (state.schemaVersion === null) {
-    throw new Error(
-      "Workhorse schema version is missing or ambiguous. Reinstall the schema before starting.",
-    );
+    return "Workhorse schema version is missing or ambiguous. Reinstall the schema before starting.";
   }
   if (state.schemaVersion < MINIMUM_SCHEMA_VERSION) {
-    throw new Error(
-      `Workhorse schema version ${state.schemaVersion} is below the minimum ${MINIMUM_SCHEMA_VERSION} this runtime requires. Migrate the database before starting this release.`,
-    );
+    return `Workhorse schema version ${state.schemaVersion} is below the minimum ${MINIMUM_SCHEMA_VERSION} this runtime requires. Migrate the database before starting this release.`;
   }
   const served = state.servedProtocolVersions;
   if (served.length > 0 && !served.includes(PROTOCOL_VERSION)) {
     const oldest = Math.min(...served);
-    throw new Error(
-      PROTOCOL_VERSION < oldest
-        ? `Workhorse schema serves SQL protocol ${served.join(", ")} and no longer serves protocol ${PROTOCOL_VERSION} this runtime speaks. Upgrade this release.`
-        : `Workhorse schema serves SQL protocol ${served.join(", ")} and does not yet serve protocol ${PROTOCOL_VERSION} this runtime speaks. Migrate the database before starting this release.`,
-    );
+    return PROTOCOL_VERSION < oldest
+      ? `Workhorse schema serves SQL protocol ${served.join(", ")} and no longer serves protocol ${PROTOCOL_VERSION} this runtime speaks. Upgrade this release.`
+      : `Workhorse schema serves SQL protocol ${served.join(", ")} and does not yet serve protocol ${PROTOCOL_VERSION} this runtime speaks. Migrate the database before starting this release.`;
   }
+  return null;
 }
 
 export interface MigrateSchemaOptions {

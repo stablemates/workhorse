@@ -45,7 +45,7 @@ Global options:
 
 Exit codes:
   0   Success.
-  1   Runtime failure, and the state "schema status" reports as drift or unsupported.
+  1   Runtime failure, and a schema or PostgreSQL "schema status" reports as unusable.
   2   Queue degradation reported by health.
   64  Usage error, including an unknown command, flag, or missing value.
 `;
@@ -98,9 +98,13 @@ Options:
 ${DATABASE_HELP}  --json                  Emit a machine-readable status object.
   --help, -h              Show this help.
 
-The default output is human-readable. Schema drift and PostgreSQL support are separate fields in
-JSON output. This command exits 1 when the installed version differs from the expected version, or
-when the server is below the required major. Read the JSON fields to tell the two apart.
+The default output is human-readable. Schema acceptance and PostgreSQL support are separate fields
+in JSON output. This command exits 1 when this runtime would refuse the installed schema, or when
+the server is below the required major. Read the JSON fields to tell the two apart.
+
+Run this after "schema migrate" and before starting the application. A schema ahead of this build
+is accepted: inside a major line a migration only adds, so "schema.state" reporting "ahead" is the
+normal middle of a rolling upgrade. The field a deployment gate reads is "schema.compatible".
 `;
 
 const WORKER_HELP = `Usage: workhorse worker --config <compiled-module> [options]
@@ -329,6 +333,11 @@ async function runSchemaCommand(args: readonly string[]): Promise<void> {
           );
         }
         process.stdout.write(
+          report.schema.refusal === null
+            ? "This runtime accepts the installed schema.\n"
+            : `${report.schema.refusal}\n`,
+        );
+        process.stdout.write(
           `PostgreSQL ${support.version}: ${
             !support.supported
               ? `unsupported, below the required major ${MINIMUM_POSTGRES_MAJOR}`
@@ -338,7 +347,9 @@ async function runSchemaCommand(args: readonly string[]): Promise<void> {
           }.\n`,
         );
       }
-      if (report.schema.state === "drift" || !support.supported) process.exitCode = 1;
+      // The gate is acceptance, not equality. A schema ahead of this build is the normal middle of
+      // a rolling upgrade, and failing a deploy on it would defeat the additive rule that allows it.
+      if (!report.schema.compatible || !support.supported) process.exitCode = 1;
       return;
     }
     if (action === "migrate") {

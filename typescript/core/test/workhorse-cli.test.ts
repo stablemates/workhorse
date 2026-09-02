@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { afterAll, describe, expect, it } from "vitest";
-import { WORKHORSE_SCHEMA_VERSION } from "../src/schema.js";
+import {
+  MINIMUM_SCHEMA_VERSION,
+  PROTOCOL_VERSION,
+  schemaCompatibilityRefusal,
+  WORKHORSE_SCHEMA_VERSION,
+} from "../src/schema.js";
 import { createSchemaStatusReport } from "../src/cli/schema-status.js";
 
 const repository = path.resolve(import.meta.dirname, "../../..");
@@ -127,21 +132,27 @@ describe("workhorse CLI parser", () => {
   });
 });
 
+const supportedPostgres = {
+  major: 17,
+  version: "17.2",
+  supported: true,
+  tested: true,
+} as const;
+
 describe("schema status JSON", () => {
-  it("represents schema drift separately from supported PostgreSQL", () => {
+  it("reports a schema below the runtime's floor as incompatible", () => {
     expect(
-      createSchemaStatusReport(WORKHORSE_SCHEMA_VERSION - 1, null, {
-        major: 17,
-        version: "17.2",
-        supported: true,
-        tested: true,
-      }),
+      createSchemaStatusReport(MINIMUM_SCHEMA_VERSION - 1, [PROTOCOL_VERSION], supportedPostgres),
     ).toEqual({
       schema: {
-        installedVersion: WORKHORSE_SCHEMA_VERSION - 1,
+        installedVersion: MINIMUM_SCHEMA_VERSION - 1,
         expectedVersion: WORKHORSE_SCHEMA_VERSION,
-        state: "drift",
-        installedProtocolVersions: null,
+        minimumVersion: MINIMUM_SCHEMA_VERSION,
+        clientProtocolVersion: PROTOCOL_VERSION,
+        installedProtocolVersions: [PROTOCOL_VERSION],
+        state: "behind",
+        compatible: false,
+        refusal: expect.stringContaining("below the minimum"),
       },
       postgres: {
         major: 17,
@@ -154,17 +165,71 @@ describe("schema status JSON", () => {
     });
   });
 
+  // The whole point of the additive rule: a node still running the old release meets a schema the
+  // new release migrated past, and keeps working.
+  it("accepts a schema ahead of this build inside the same major line", () => {
+    expect(
+      createSchemaStatusReport(WORKHORSE_SCHEMA_VERSION + 1, [PROTOCOL_VERSION], supportedPostgres),
+    ).toMatchObject({
+      schema: { state: "ahead", compatible: true, refusal: null },
+    });
+  });
+
+  it("refuses a schema that no longer serves this runtime's protocol", () => {
+    expect(
+      createSchemaStatusReport(
+        WORKHORSE_SCHEMA_VERSION + 4,
+        [PROTOCOL_VERSION + 1],
+        supportedPostgres,
+      ),
+    ).toMatchObject({
+      schema: {
+        state: "ahead",
+        compatible: false,
+        refusal: expect.stringContaining("no longer serves protocol"),
+      },
+    });
+  });
+
+  it("reports a missing schema without calling it drift", () => {
+    expect(createSchemaStatusReport(null, null, supportedPostgres)).toMatchObject({
+      schema: {
+        installedVersion: null,
+        state: "not-installed",
+        compatible: false,
+        refusal: expect.stringContaining("No Workhorse schema is installed"),
+      },
+    });
+  });
+
   it("represents unsupported PostgreSQL separately from a current schema", () => {
     expect(
-      createSchemaStatusReport(WORKHORSE_SCHEMA_VERSION, [1], {
+      createSchemaStatusReport(WORKHORSE_SCHEMA_VERSION, [PROTOCOL_VERSION], {
         major: 14,
         version: "14.12",
         supported: false,
         tested: false,
       }),
     ).toMatchObject({
-      schema: { state: "current", installedProtocolVersions: [1] },
+      schema: { state: "current", compatible: true, installedProtocolVersions: [PROTOCOL_VERSION] },
       postgres: { supported: false, level: "unsupported" },
     });
+  });
+
+  // One sentence, two readers: the deployment gate that runs "schema status" and the process that
+  // starts after it must not disagree about the same database.
+  it("prints the sentence the runtime itself would throw", () => {
+    const report = createSchemaStatusReport(
+      MINIMUM_SCHEMA_VERSION - 1,
+      [PROTOCOL_VERSION],
+      supportedPostgres,
+    );
+
+    expect(report.schema.refusal).toBe(
+      schemaCompatibilityRefusal({
+        schemaVersion: MINIMUM_SCHEMA_VERSION - 1,
+        servedProtocolVersions: [PROTOCOL_VERSION],
+      }),
+    );
   });
 });
