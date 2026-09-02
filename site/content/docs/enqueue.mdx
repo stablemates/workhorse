@@ -84,9 +84,13 @@ Each option is owned by its own page — [retries](/docs/retries), [deadlines](/
 
 ## Join an application transaction
 
-This is the option that replaces an outbox. Pass your open transaction client as the fourth
-argument and PostgreSQL commits the job and your business write together — or rolls both back
-together. There is no window where one exists without the other.
+This is the option that replaces an outbox. Hand the queue the transaction you already opened and
+PostgreSQL commits the job and your business write together — or rolls both back together. There is
+no window where one exists without the other.
+
+Each language hands it over differently. TypeScript passes the transaction client as the fourth
+argument to `enqueue`. Python builds a `Queue` on the connection whose transaction is open. Go wraps
+the transaction in an executor and builds a `Queue` around that.
 
 <Tabs items={["TypeScript", "Python", "Go"]}>
   <Tab value="TypeScript">
@@ -115,8 +119,11 @@ together. There is no window where one exists without the other.
   </Tab>
 </Tabs>
 
-The fourth argument accepts anything with a pg-compatible `query` method, so the ORM adapters
-pass their own transaction handles the same way.
+TypeScript's fourth argument accepts anything with a pg-compatible `query` method, so the ORM
+adapters pass their own transaction handles the same way. Go's `NewPGXExecutor` accepts a `pgx.Tx`
+and `NewSQLExecutor` accepts a `*sql.Tx`. Python's `Worker` needs its own connection in autocommit
+mode and raises `ValueError` otherwise, so keep the connection you enqueue on separate from the one
+a worker runs on.
 
 One boundary to keep in mind: the transaction covers durable acceptance only. Handlers run later,
 outside your transaction, so their external effects still need their own idempotency.

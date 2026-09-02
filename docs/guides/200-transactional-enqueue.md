@@ -32,10 +32,50 @@ try {
 `Queue.enqueueMany` takes the same transaction argument, so a fan-out created by one request
 commits or rolls back as a unit with the row that caused it.
 
+## With Psycopg
+
+Python has no transaction argument. `Queue` binds the connection you give it, and the transaction
+belongs to that connection. Open a transaction on the connection, enqueue through a `Queue` built
+on the same connection, and the two writes share it:
+
+```python
+with connection.transaction():
+    connection.execute("INSERT INTO account (id, email) VALUES (%s, %s)", (id, email))
+    Queue(connection).enqueue("account.created", {"accountId": id})
+```
+
+If the block raises, Psycopg rolls back, and the job goes with your row.
+
+A worker needs a connection of its own, in autocommit mode. `Worker` raises `ValueError` if you
+hand it anything else, so that mistake is loud. The quiet mistake is sharing one connection between
+a worker and the code that enqueues: a Psycopg connection serializes its work, so the two take
+turns instead of running together, and nothing reports it. Give each its own connection.
+
+Autocommit and an explicit transaction are not in conflict. `connection.transaction()` opens a real
+transaction block on an autocommit connection, which is why the example above is correct on the same
+connection style a worker requires.
+
+## With pgx
+
+Go has no transaction argument either. An executor wraps whatever you already hold, and
+`NewPGXExecutor` accepts a `pgx.Tx` as readily as a pool:
+
+```go
+tx, err := pool.Begin(ctx)
+_, err = tx.Exec(ctx, "INSERT INTO account (id, email) VALUES ($1, $2)", id, email)
+queue := workhorse.NewQueue(workhorse.NewPGXExecutor(tx), "default")
+_, err = queue.Enqueue(ctx, "account.created", map[string]any{"accountId": id})
+err = tx.Commit(ctx)
+```
+
+`NewSQLExecutor` does the same for the standard library, and accepts a `*sql.Tx`. Either way the
+queue reads and writes through the handle you passed, so your commit covers the job.
+
 ## With an ORM provider
 
-If your application talks to PostgreSQL through an ORM, use that ORM's Workhorse package
-instead of managing a raw client next to it. Each provider wraps the database object you
+If your TypeScript application talks to PostgreSQL through an ORM, use that ORM's Workhorse
+package instead of managing a raw client next to it. Python and Go have no equivalent package, so
+they pass their own connection or transaction as the sections above show. Each provider wraps the database object you
 already own and exposes `forTransaction`, which returns a `Queue` bound to your open
 transaction. The provider never commits, rolls back, or closes that transaction — your ORM
 stays in charge, and Workhorse rides along on the transaction's own connection.
