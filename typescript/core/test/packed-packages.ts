@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { publishedPackages, workspacePackages } from "../../../scripts/packages.js";
+import { hasPublicBetaNotice } from "../../../scripts/public-beta-notice.js";
 import { WORKHORSE_SCHEMA_VERSION } from "../src/schema.js";
 
 const exec = promisify(execFile);
@@ -130,14 +131,6 @@ try {
     if (!entry) throw new Error(`${name} is not a published package`);
     return path.join(tarballs, entry.tarball);
   };
-  const betaNotice =
-    "> **Public beta:** Workhorse is usable for evaluation and early production adoption, but 0.x minor\n" +
-    "> releases may break compatibility, including the schema. There is no upgrade path between 0.x\n" +
-    "> releases; ordered migrations begin at 1.0.0.";
-  const repositoryReadme = await readFile(path.join(repository, "README.md"), "utf8");
-  if (!repositoryReadme.includes(betaNotice)) {
-    throw new Error("The repository README does not contain the canonical public beta notice");
-  }
   const repositoryLicense = await readFile(path.join(repository, "LICENSE"));
   const repositoryNotice = await readFile(path.join(repository, "NOTICE"));
   for (const entry of published) {
@@ -146,8 +139,8 @@ try {
     await run("tar", ["-xzf", tarballFor(entry.name), "-C", releaseExtracted]);
     const packageRoot = path.join(releaseExtracted, "package");
     const readme = await readFile(path.join(packageRoot, "README.md"), "utf8");
-    if (!readme.includes(betaNotice)) {
-      throw new Error(`${entry.name} README does not contain the canonical public beta notice`);
+    if (!hasPublicBetaNotice(readme)) {
+      throw new Error(`${entry.name} README does not carry the public beta notice`);
     }
     const packageLicense = await readFile(path.join(packageRoot, "LICENSE"));
     if (!packageLicense.equals(repositoryLicense)) {

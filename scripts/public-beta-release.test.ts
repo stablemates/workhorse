@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { publishedPackages, repositoryRoot } from "./packages.js";
+import { compatibilityNotice, prose, publicBetaLabel } from "./public-beta-notice.js";
 
 /** The release this repository cuts next: one version on npm, PyPI, and Go from one commit. */
 const releaseVersion = "0.1.0";
@@ -17,9 +18,6 @@ const npmSourceCommit = "856cdcf354aa83a3acf8ee67043145adb9c99e09";
 const pythonSourceCommit = "663c526805746786f12b3be3e151e8ce06c80057";
 const goSourceCommit = "dbd5437362930f712157ffcc72c3296e971e4f5a";
 
-const betaLabel = "public beta";
-const compatibilityNotice = "inside a major line a migration only adds";
-
 interface SupportManifest {
   readonly support: {
     readonly go: { readonly minimum: string };
@@ -31,10 +29,6 @@ interface SupportManifest {
 
 async function read(relativePath: string): Promise<string> {
   return readFile(path.join(repositoryRoot, relativePath), "utf8");
-}
-
-function prose(contents: string): string {
-  return contents.replace(/^>\s?/gm, "").replace(/\s+/g, " ");
 }
 
 /** One `## version — date` entry of a changelog, up to the next `##` heading. */
@@ -56,7 +50,7 @@ describe("the 0.1.0 release", () => {
         version?: string;
       };
       expect(manifest.version).toBe(releaseVersion);
-      expect(manifest.description?.toLowerCase()).toContain(betaLabel);
+      expect(manifest.description?.toLowerCase()).toContain(publicBetaLabel);
       const workhorsePeer = manifest.peerDependencies?.["@stablemates/workhorse"];
       expect([undefined, corePeerRange]).toContain(workhorsePeer);
     }
@@ -72,7 +66,7 @@ describe("the 0.1.0 release", () => {
     const pythonManifest = await read("python/pyproject.toml");
     expect(pythonManifest).toContain(`version = "${releaseVersion}"`);
     expect(pythonManifest).toContain("Development Status :: 4 - Beta");
-    expect(pythonManifest.toLowerCase()).toContain(betaLabel);
+    expect(pythonManifest.toLowerCase()).toContain(publicBetaLabel);
     expect(await read("python/uv.lock")).toContain(
       `name = "stablemates-workhorse"\nversion = "${releaseVersion}"`,
     );
@@ -131,9 +125,22 @@ describe("the public beta line", () => {
 
     for (const relativePath of readmes) {
       const contents = await read(relativePath);
-      expect(contents.toLowerCase()).toContain(betaLabel);
+      expect(contents.toLowerCase()).toContain(publicBetaLabel);
       expect(prose(contents)).toContain(compatibilityNotice);
     }
+  });
+
+  /**
+   * The packed smoke checks the notice inside each tarball, so it needs the same definition these
+   * tests use. It used to restate the sentence, and the two drifted the moment the wording changed:
+   * the packed job runs on the daily cron rather than on a pull request, so five green pull requests
+   * shipped a notice it still rejected. This keeps it a reader of the notice, not a second author.
+   */
+  it("keeps the packed smoke a reader of the notice rather than a second author of it", async () => {
+    const packedSmoke = await read("typescript/core/test/packed-packages.ts");
+    expect(packedSmoke).toContain('from "../../../scripts/public-beta-notice.js"');
+    expect(packedSmoke).not.toContain("**Public beta:**");
+    expect(prose(packedSmoke)).not.toContain(compatibilityNotice);
   });
 
   it("labels public surfaces and keeps the compatibility boundary in durable documentation", async () => {
@@ -150,7 +157,7 @@ describe("the public beta line", () => {
 
     for (const relativePath of surfaces) {
       const contents = await read(relativePath);
-      expect(contents.toLowerCase()).toContain(betaLabel);
+      expect(contents.toLowerCase()).toContain(publicBetaLabel);
     }
     const compatibilitySurfaces = [
       "README.md",
