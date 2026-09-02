@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { expectOneRow } from "./errors.js";
 import {
   applySchemaMigrationPlan,
+  SCHEMA_MIGRATION_LOCK_TIMEOUT_MS,
   isMissingDatabaseRelationError,
   readProtocolVersions,
   readSchemaVersion,
@@ -43,7 +44,12 @@ function sqlAsset(relativePath: string): URL {
   return new URL(`../../../sql/${repositoryPath}`, import.meta.url);
 }
 
-export { isMissingDatabaseRelationError, readProtocolVersions, readSchemaVersion };
+export {
+  isMissingDatabaseRelationError,
+  readProtocolVersions,
+  readSchemaVersion,
+  SCHEMA_MIGRATION_LOCK_TIMEOUT_MS,
+};
 
 /** Check compatibility without creating or changing database objects. */
 export async function assertSchemaCompatible(database: Queryable): Promise<void> {
@@ -65,8 +71,19 @@ export async function assertSchemaCompatible(database: Queryable): Promise<void>
   }
 }
 
+export interface MigrateSchemaOptions {
+  /**
+   * Milliseconds a migration body waits for a table lock before it gives up. Defaults to
+   * `SCHEMA_MIGRATION_LOCK_TIMEOUT_MS`. Waiting for another migrator is separate and unbounded.
+   */
+  lockTimeoutMs?: number;
+}
+
 /** Apply the immutable forward-only steps from the supported baseline to the current schema. */
-export async function migrateSchema(database: Queryable): Promise<void> {
+export async function migrateSchema(
+  database: Queryable,
+  options: MigrateSchemaOptions = {},
+): Promise<void> {
   await assertSupportedPostgres(database);
 
   let version: number | null;
@@ -88,6 +105,7 @@ export async function migrateSchema(database: Queryable): Promise<void> {
       currentVersion: WORKHORSE_SCHEMA_VERSION,
       steps: SCHEMA_MIGRATIONS,
       readStep: async (file) => readFile(sqlAsset(`migrations/${file}`), "utf8"),
+      lockTimeoutMs: options.lockTimeoutMs,
     },
     version,
   );

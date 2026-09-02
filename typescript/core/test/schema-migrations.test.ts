@@ -26,6 +26,9 @@ const fixtureCleanDatabase = createDatabaseTestHarness(
 const releaseDatabase = createDatabaseTestHarness(new URL("?release", import.meta.url).href, {
   schemaProvisioning: "install",
 });
+const lockDatabase = createDatabaseTestHarness(new URL("?lock", import.meta.url).href, {
+  schemaProvisioning: "install",
+});
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const executeFile = promisify(execFile);
 
@@ -67,6 +70,7 @@ describe("schema migrations", () => {
       fixtureDatabase.setup(),
       fixtureCleanDatabase.setup(),
       releaseDatabase.setup(),
+      lockDatabase.setup(),
     ]);
     await Promise.all([
       fixtureDatabase.pool.query("DROP SCHEMA workhorse CASCADE"),
@@ -80,6 +84,7 @@ describe("schema migrations", () => {
       fixtureDatabase.teardown(),
       fixtureCleanDatabase.teardown(),
       releaseDatabase.teardown(),
+      lockDatabase.teardown(),
     ]);
   });
 
@@ -177,6 +182,75 @@ describe("schema migrations", () => {
          FROM workhorse.schema_version`,
     );
     expect(state.rows).toEqual([{ version: 3, leaked: null }]);
+  });
+
+  it("gives up a migration that waits too long for a table lock, and rolls it back", async () => {
+    // An ALTER TABLE takes ACCESS EXCLUSIVE, and PostgreSQL queues every later statement on that
+    // table behind the waiting acquisition. A worker holds long transactions by design, so an
+    // unbounded wait would stall the queue instead of failing the deployment.
+    const blocker = await lockDatabase.pool.connect();
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT version FROM workhorse.protocol_version");
+
+      await expect(
+        applySchemaMigrationPlan(
+          lockDatabase.pool,
+          {
+            baselineVersion: 1,
+            currentVersion: 2,
+            steps: [{ fromVersion: 1, toVersion: 2, file: "0002.sql", description: "blocked" }],
+            readStep: () =>
+              Promise.resolve("ALTER TABLE workhorse.protocol_version ADD COLUMN probe integer;"),
+            lockTimeoutMs: 250,
+          },
+          1,
+        ),
+      ).rejects.toThrow("waited longer than 250ms for a lock");
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+    }
+
+    const state = await lockDatabase.pool.query<{ version: number; probe: string | null }>(
+      `SELECT version,
+              (SELECT attname::text
+                 FROM pg_attribute
+                WHERE attrelid = 'workhorse.protocol_version'::regclass AND attname = 'probe') AS probe
+         FROM workhorse.schema_version`,
+    );
+    expect(state.rows).toEqual([{ version: 1, probe: null }]);
+  });
+
+  it("waits without a deadline for a peer migrator that holds the advisory lock", async () => {
+    // lock_timeout is disabled while the advisory lock is acquired: another migrator finishing its
+    // step is expected, and its result is indistinguishable from this one's success.
+    const peer = await lockDatabase.pool.connect();
+    try {
+      await peer.query("BEGIN");
+      await peer.query("SELECT pg_advisory_xact_lock(hashtext('workhorse:schema-migration'))");
+      const migration = applySchemaMigrationPlan(
+        lockDatabase.pool,
+        {
+          baselineVersion: 1,
+          currentVersion: 2,
+          steps: [{ fromVersion: 1, toVersion: 2, file: "0002.sql", description: "queued" }],
+          readStep: () => Promise.resolve("SELECT 1;"),
+          lockTimeoutMs: 250,
+        },
+        1,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 750));
+      await peer.query("ROLLBACK");
+      await migration;
+    } finally {
+      peer.release();
+    }
+
+    const version = await lockDatabase.pool.query<{ version: number }>(
+      "SELECT version FROM workhorse.schema_version",
+    );
+    expect(version.rows).toEqual([{ version: 2 }]);
   });
 
   it("rejects schema versions below the migration baseline", async () => {

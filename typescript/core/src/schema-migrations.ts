@@ -14,10 +14,25 @@ export interface SchemaMigrationPlan {
   currentVersion: number;
   steps: readonly SchemaMigrationStep[];
   readStep(file: string): Promise<string>;
+  /** Milliseconds a migration body waits for a table lock. Defaults to SCHEMA_MIGRATION_LOCK_TIMEOUT_MS. */
+  lockTimeoutMs?: number;
 }
 
 /** Advisory lock name serializing concurrent schema migrations, hashed with hashtext. */
 const SCHEMA_MIGRATION_LOCK = "workhorse:schema-migration";
+
+/**
+ * How long a migration body waits for a table lock before it gives up.
+ *
+ * An `ALTER TABLE` takes `ACCESS EXCLUSIVE`, and PostgreSQL queues every later statement on that
+ * table behind the waiting acquisition. A worker holds long transactions by design, so an
+ * unbounded wait turns one slow transaction into a stalled queue. Failing is recoverable: the step
+ * rolls back atomically and the deployment reruns it.
+ */
+export const SCHEMA_MIGRATION_LOCK_TIMEOUT_MS = 5_000;
+
+/** PostgreSQL raises this when lock_timeout expires. */
+const LOCK_NOT_AVAILABLE = "55P03";
 
 /** Whether PostgreSQL reports a missing schema or a missing relation within that schema. */
 export function isMissingDatabaseRelationError(error: unknown): boolean {
@@ -52,7 +67,7 @@ function quoteLiteral(value: string): string {
  * behind it, run the migration body, and record the version step, atomically. The body itself
  * must not manage transactions.
  */
-function migrationScript(step: SchemaMigrationStep, body: string): string {
+function migrationScript(step: SchemaMigrationStep, body: string, lockTimeoutMs: number): string {
   // Dollar-quoted bodies are data, not statements: a migration that redefines a plpgsql
   // function legitimately contains BEGIN lines inside $$…$$, and only statements outside
   // those quotes can manage the transaction.
@@ -63,6 +78,8 @@ function migrationScript(step: SchemaMigrationStep, body: string): string {
     );
   }
   return `BEGIN;
+-- Waiting for a peer migrator is expected and unbounded; waiting for a table is not.
+SET LOCAL lock_timeout = 0;
 SELECT pg_advisory_xact_lock(hashtext(${quoteLiteral(SCHEMA_MIGRATION_LOCK)}));
 DO $workhorse_migration$
 BEGIN
@@ -72,7 +89,9 @@ BEGIN
   END IF;
 END
 $workhorse_migration$;
+SET LOCAL lock_timeout = ${String(lockTimeoutMs)};
 ${body}
+SET LOCAL lock_timeout = 0;
 UPDATE workhorse.schema_version SET version = ${step.toVersion}, installed_at = clock_timestamp() WHERE version = ${step.fromVersion};
 INSERT INTO workhorse.schema_migration(version, description) VALUES (${step.toVersion}, ${quoteLiteral(step.description)});
 COMMIT;`;
@@ -106,7 +125,11 @@ export async function applySchemaMigrationPlan(
     if (!migration) {
       throw new Error(`No Workhorse schema migration starts at version ${version}`);
     }
-    const script = migrationScript(migration, await plan.readStep(migration.file));
+    const script = migrationScript(
+      migration,
+      await plan.readStep(migration.file),
+      plan.lockTimeoutMs ?? SCHEMA_MIGRATION_LOCK_TIMEOUT_MS,
+    );
     try {
       await database.query(script);
     } catch (error) {
@@ -114,9 +137,15 @@ export async function applySchemaMigrationPlan(
       // step; its result is indistinguishable from ours, so only that outcome is accepted.
       const concurrent = await readSchemaVersion(database).catch(() => null);
       if (concurrent === null || concurrent < migration.toVersion) {
-        throw new Error(`Workhorse migration ${migration.file} failed and was rolled back`, {
-          cause: error,
-        });
+        // A lock timeout is the one failure an operator can act on directly, so it says so.
+        const reason =
+          databaseErrorCode(error) === LOCK_NOT_AVAILABLE
+            ? ` because it waited longer than ${String(plan.lockTimeoutMs ?? SCHEMA_MIGRATION_LOCK_TIMEOUT_MS)}ms for a lock. Another transaction holds the table; end it and rerun the migration`
+            : "";
+        throw new Error(
+          `Workhorse migration ${migration.file} failed and was rolled back${reason}`,
+          { cause: error },
+        );
       }
     }
     const migratedVersion = await readSchemaVersion(database);
