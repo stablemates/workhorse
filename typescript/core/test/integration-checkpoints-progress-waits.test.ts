@@ -257,6 +257,15 @@ describe("checkpoints progress waits", () => {
       phase: "reading",
     });
     expect(unchanged).toEqual(first);
+
+    // The rate limit is measured from the stored row's updated_at, so asserting it means the next
+    // call has to arrive inside that window. Restamping the row starts the window here instead of
+    // four round trips ago, which is what let a loaded runner spend the whole window before the
+    // call under test and see the update accepted.
+    await pool.query(
+      `UPDATE workhorse.job_progress SET updated_at = clock_timestamp() WHERE job_id = $1`,
+      [id],
+    );
     await expect(
       queue.updateProgress(job!, "progress-worker", { completed: 3, total: 10 }),
     ).rejects.toMatchObject({
