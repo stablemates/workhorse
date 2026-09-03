@@ -2553,6 +2553,16 @@ shared `schemaCompatibilityRefusal`. Both are null when compatible. The status c
 `QueueHealth`. Help exits 0 before database resolution. Runtime failures exit 1, health degradation
 exits 2, and `CliUsageError` exits 64.
 
+A database the command could not use is reported as one sentence rather than a stack.
+`describeDatabaseFailure()` in `typescript/core/src/cli/database-failure.ts` recognises the socket
+and DNS codes `ECONNREFUSED`, `ECONNRESET`, `EHOSTUNREACH`, `ENETUNREACH`, `ENOTFOUND`, `EPIPE`,
+`ETIMEDOUT`, and `EAI_AGAIN`, and the PostgreSQL SQLSTATE classes `08` and `28` plus `3D000`. It
+searches the error, every member of an `AggregateError`, and each `cause`, because Node.js reports
+one dial across several addresses as an aggregate. The sentence names the failing code, the host and
+port when the failure carries them, and which of `--database-url`, `WORKHORSE_DATABASE_URL`, or
+`DATABASE_URL` supplied the value, read from `resolvedDatabaseUrlSource()`. It never prints the URL,
+which may carry a password. Anything unrecognised keeps its stack, and both exit 1.
+
 ## OpenTelemetry traces, logs, and baseline metrics
 
 The TypeScript host installs `@stablemates/workhorse-otel` and compatible API peers, configures the

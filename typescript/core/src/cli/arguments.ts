@@ -11,6 +11,24 @@ export interface DatabaseOptions {
   readonly "database-url"?: string;
 }
 
+/** Which of the three inputs a database URL came from, named as the reader would set it again. */
+export type DatabaseUrlSource = "--database-url" | "WORKHORSE_DATABASE_URL" | "DATABASE_URL";
+
+/**
+ * The source the running command resolved its database URL from.
+ *
+ * A failed connection is reported by the top-level handler, which is far from the resolution and
+ * holds no options. One CLI process runs one command, so the last resolution is that command's,
+ * and recording it here is what lets the failure name the input the reader would edit rather than
+ * leaving them to guess which of the three won.
+ */
+let lastResolvedSource: DatabaseUrlSource | undefined;
+
+/** The source {@link resolveDatabaseUrl} chose, or `undefined` before any command resolved one. */
+export function resolvedDatabaseUrlSource(): DatabaseUrlSource | undefined {
+  return lastResolvedSource;
+}
+
 /** Parse one command's declared options and replace Node's parser text with stable CLI messages. */
 export function parseCommandArgs<const T extends ParseArgsConfig>(
   command: string,
@@ -43,13 +61,19 @@ export function resolveDatabaseUrl(options: DatabaseOptions): string {
     if (options["database-url"].length === 0) {
       throw new CliUsageError("--database-url requires a value");
     }
+    lastResolvedSource = "--database-url";
     return options["database-url"];
   }
-  const url = process.env.WORKHORSE_DATABASE_URL ?? process.env.DATABASE_URL;
+  // `??` rather than a truthiness chain: WORKHORSE_DATABASE_URL set to an empty string is a
+  // deliberate value that wins and then fails the check below, rather than falling through to
+  // DATABASE_URL and connecting somewhere the operator did not name.
+  const preferred = process.env.WORKHORSE_DATABASE_URL;
+  const url = preferred ?? process.env.DATABASE_URL;
   if (!url) {
     throw new CliUsageError(
       "No database URL. Pass --database-url, or set WORKHORSE_DATABASE_URL or DATABASE_URL.",
     );
   }
+  lastResolvedSource = preferred === undefined ? "DATABASE_URL" : "WORKHORSE_DATABASE_URL";
   return url;
 }

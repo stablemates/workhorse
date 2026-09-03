@@ -11,6 +11,7 @@ import {
   WORKHORSE_SCHEMA_VERSION,
 } from "../src/schema.js";
 import { createSchemaStatusReport, FLEET_EVIDENCE_NOTE } from "../src/cli/schema-status.js";
+import { describeDatabaseFailure } from "../src/cli/database-failure.js";
 
 const repository = path.resolve(import.meta.dirname, "../../..");
 const cli = path.join(repository, "typescript/core/src/cli/workhorse.ts");
@@ -129,6 +130,100 @@ describe("workhorse CLI parser", () => {
     const result = runCli(["schema", "status", "--database-url="]);
     expect(result.code).toBe(64);
     expect(result.stderr).toContain("--database-url requires a value");
+  });
+
+  // The first mistake on a new host is a wrong database URL, and the answer used to be six frames
+  // of `node_modules` internals that named neither the fault nor which of the three sources won.
+  it("answers an unreachable database with a sentence rather than a stack", () => {
+    const result = runCli(["schema", "status"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Could not reach PostgreSQL");
+    expect(result.stderr).toContain("$DATABASE_URL");
+    expect(result.stderr).not.toMatch(/^\s*at /m);
+    expect(result.stderr).not.toContain("node_modules");
+  });
+
+  it("names the option rather than the environment when the URL was passed explicitly", () => {
+    const result = runCli([
+      "schema",
+      "status",
+      "--database-url",
+      "postgres://someone:hunter2@127.0.0.1:1/nowhere",
+    ]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("the --database-url option");
+    // The URL routinely carries a password, so a CLI that echoes one has put it into shell history.
+    expect(result.stderr).not.toContain("hunter2");
+    expect(result.stderr).not.toContain("someone");
+  });
+
+  it("prefers WORKHORSE_DATABASE_URL and says so", () => {
+    const result = spawnSync(process.execPath, [tsxCli, cli, "schema", "status"], {
+      cwd: repository,
+      env: {
+        ...process.env,
+        WORKHORSE_DATABASE_URL: "postgres://unused:unused@127.0.0.1:1/unused",
+        DATABASE_URL: "postgres://other:other@127.0.0.1:2/other",
+      },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("$WORKHORSE_DATABASE_URL");
+  });
+});
+
+describe("database failure messages", () => {
+  const unreachable = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:5432"), {
+    code: "ECONNREFUSED",
+    address: "127.0.0.1",
+    port: 5432,
+  });
+
+  it("names the address and the source", () => {
+    expect(describeDatabaseFailure(unreachable, "DATABASE_URL")).toBe(
+      "Could not reach PostgreSQL at 127.0.0.1:5432 (ECONNREFUSED). " +
+        "The database URL came from $DATABASE_URL.",
+    );
+  });
+
+  // Node dials every resolved address at once and reports the set as one AggregateError, so the
+  // socket error is never the outermost one. A driver may wrap either shape in a `cause`.
+  it("finds the failure inside an AggregateError and inside a cause", () => {
+    const aggregate = new AggregateError([new Error("first"), unreachable], "all attempts failed");
+    expect(describeDatabaseFailure(aggregate, undefined)).toContain("ECONNREFUSED");
+
+    const wrapped = new Error("connection terminated", { cause: unreachable });
+    expect(describeDatabaseFailure(wrapped, undefined)).toContain("ECONNREFUSED");
+  });
+
+  it("reports a server that answered and refused, with its SQLSTATE", () => {
+    const refused = Object.assign(new Error('password authentication failed for user "app"'), {
+      code: "28P01",
+    });
+    expect(describeDatabaseFailure(refused, "--database-url")).toBe(
+      'PostgreSQL refused the connection: password authentication failed for user "app" (28P01). ' +
+        "The database URL came from the --database-url option.",
+    );
+  });
+
+  // The point of the classifier is that it declines. A defect in this project is worth a stack, and
+  // rewriting one into a sentence would hide the only evidence of it.
+  it("declines anything that is not a connection failure", () => {
+    expect(describeDatabaseFailure(new Error("boom"), "DATABASE_URL")).toBeUndefined();
+    expect(
+      describeDatabaseFailure(Object.assign(new Error("bad"), { code: "42P01" }), "DATABASE_URL"),
+    ).toBeUndefined();
+    expect(describeDatabaseFailure("not an error", "DATABASE_URL")).toBeUndefined();
+    expect(describeDatabaseFailure(undefined, undefined)).toBeUndefined();
+  });
+
+  it("omits the source clause when no command resolved a URL", () => {
+    expect(describeDatabaseFailure(unreachable, undefined)).toBe(
+      "Could not reach PostgreSQL at 127.0.0.1:5432 (ECONNREFUSED).",
+    );
   });
 });
 

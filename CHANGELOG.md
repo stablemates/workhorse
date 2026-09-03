@@ -181,6 +181,14 @@ and 24 and PostgreSQL 15 through 18.
   version, counting the workers that heartbeated inside their own lease, with a `note` stating that
   producers never register so the counts are worker evidence and not an inventory. A client that
   calls the SQL protocol directly without reporting the three is counted under a null version.
+- **A wrong database URL gets a sentence, not a stack.** Every `workhorse` command that reaches
+  PostgreSQL used to answer an unreachable or refused database with six frames of `node_modules`
+  internals, and none of them said which of `--database-url`, `WORKHORSE_DATABASE_URL`, or
+  `DATABASE_URL` supplied the value. It now prints one line naming the failure, the host and port
+  when the driver reports them, and the source it resolved, and it never prints the URL itself
+  because that routinely carries a password. Socket and DNS failures, PostgreSQL's `08` and `28`
+  SQLSTATE classes, and `3D000` are recognised; anything else keeps its stack, and both still
+  exit 1.
 - The `workhorse init` options `--dir` and `--force` are documented in
   [`docs/architecture.md`](docs/architecture.md), which also lists the commands the published
   `workhorse` binary owns. Neither flag changed; they were previously visible only in

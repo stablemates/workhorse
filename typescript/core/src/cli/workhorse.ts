@@ -16,7 +16,13 @@ import {
 import { MINIMUM_POSTGRES_MAJOR, readPostgresSupport } from "../support.js";
 import { runWorkerProcess } from "../worker-process.js";
 import type { WorkerProcessDefinition } from "../worker-process.js";
-import { CliUsageError, parseCommandArgs, resolveDatabaseUrl } from "./arguments.js";
+import {
+  CliUsageError,
+  parseCommandArgs,
+  resolveDatabaseUrl,
+  resolvedDatabaseUrlSource,
+} from "./arguments.js";
+import { describeDatabaseFailure } from "./database-failure.js";
 import { startDashboardServer } from "./dashboard.js";
 import { runHealthCommand } from "./health.js";
 import { initializeProject } from "./init.js";
@@ -747,7 +753,11 @@ try {
     process.stderr.write(`Refused: ${error.message}\n`);
     process.exitCode = 1;
   } else {
-    console.error(error instanceof Error ? (error.stack ?? error.message) : error);
+    // A database this command could not use is a fault in the URL, so it earns a sentence naming
+    // the input to edit. Everything else keeps its stack, which is the right answer for a defect.
+    const failure = describeDatabaseFailure(error, resolvedDatabaseUrlSource());
+    if (failure) process.stderr.write(`Error: ${failure}\n`);
+    else console.error(error instanceof Error ? (error.stack ?? error.message) : error);
     process.exitCode = 1;
   }
 }
