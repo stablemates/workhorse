@@ -147,17 +147,62 @@ refuse the installed schema, and reports `schema.compatible`, `schema.refusal`, 
 the same refusal. `schema.state` reporting `ahead` is not a failure; it is what a rollout in progress
 looks like.
 
-A failed migration rolls back atomically, so recovery is diagnose and rerun:
+A migration fails in two shapes, and they recover differently. Tell them apart before acting: ask
+whether the migrating command reported an error, or whether the process running it died.
+
+**The command reported an error.** The step rolled back atomically, so recovery is diagnose and
+rerun:
 
 1. Read the error. The schema is still at the step's starting version; nothing partial persists.
 2. Fix the environmental cause — privileges, disk, locks held by long transactions.
 3. Rerun `migrateSchema` or `workhorse schema migrate`. The plan revalidates and reapplies the
    failed step from its recorded starting version.
 
+**The process running the migration died.** A killed client does not cancel its migration. The
+PostgreSQL backend runs the step's script to `COMMIT` on its own, and only reports the outcome to a
+client still there to read it. So the schema may have advanced, and no error was printed to anyone.
+Never infer from a dead process that the step did not commit.
+
+That backend also keeps the advisory lock until its current statement finishes and it next writes to
+the closed connection. Until then it is a migrator holding the lock with nobody driving it, and a
+rerun waits behind it without a deadline, printing nothing. The wait is unbounded by design: the
+runner disables `lock_timeout` around the advisory lock so a genuine peer migrator is never cut off,
+and the lock timeout in the migration contract above bounds table locks inside the body instead.
+
+Recover by ending the abandoned backends, then reading the version:
+
+1. List the backends holding or waiting on the lock. An interrupted rerun is itself a migrator, so
+   expect more than one:
+
+   ```sql
+   SELECT a.pid, a.state, l.granted, now() - a.xact_start AS age
+   FROM pg_stat_activity a
+   JOIN pg_locks l ON l.pid = a.pid
+   WHERE l.locktype = 'advisory' AND a.datname = current_database();
+   ```
+
+2. End every one whose client is gone, with `pg_terminate_backend(pid)`. Terminating only the holder
+   hands the lock to a queued backend, which then commits its own step unattended.
+3. Read `workhorse.schema_version`. It says whether any of those backends committed.
+4. Rerun `workhorse schema migrate` from that version. An already-current schema is left unchanged,
+   so the rerun is safe whichever answer step 3 gave.
+
+`workhorse schema status` answers whether this build accepts the installed schema. It does not
+answer whether a migration finished. While a step is uncommitted, the command reads the
+pre-migration version, reports it as current and compatible, and exits 0, because an uncommitted
+transaction is invisible to it. Do not gate on it to decide that a migration which lost its process
+completed; read `workhorse.schema_version` once the lock is free.
+
+An uncommitted `ALTER TABLE` also holds `ACCESS EXCLUSIVE` on its table, so reads of that table
+block for as long as the abandoned backend lives. `workhorse.schema_version` and
+`workhorse.protocol_version` stay readable throughout, which is why they are what to read during an
+incident.
+
 If a migration cannot succeed because the released step itself is defective, do not edit it. Ship a
 new release whose next migration corrects the result, or restore the backup and hold the old
-release. `workhorse schema status` reports the installed schema version, the installed protocol
-versions, and PostgreSQL support at any point in this process.
+release. Rerunning an unchanged defective step fails the same way and changes nothing, so the rerun
+in the first procedure above is safe but not a fix. `workhorse schema status` reports the installed
+schema version, the installed protocol versions, and PostgreSQL support at any point in this process.
 
 ## Supported upgrade window
 
