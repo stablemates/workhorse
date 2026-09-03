@@ -1,7 +1,14 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { type Acceptance, collectFindings, findProblems } from "./audit-npm-dependencies.js";
+import {
+  type Acceptance,
+  type AuditReport,
+  acceptanceFileName,
+  collectFindings,
+  findProblems,
+  requireReadableReport,
+} from "./audit-npm-dependencies.js";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 
@@ -100,5 +107,55 @@ describe("the committed acceptance list", () => {
         `advisory ${String(entry.advisory)} is past its review date ${entry.reviewBy}`,
       ).toBe(true);
     }
+  });
+});
+
+// A security gate that cannot read its input must not report a clean tree. `pnpm audit` answers a
+// failed request with a parseable body carrying `error` and no `advisories`, which read as a tree
+// is indistinguishable from a healthy one — and with acceptances on file it read as four
+// instructions to delete a reviewed decision.
+describe("an audit report that never reached the service", () => {
+  const timedOut = {
+    error: {
+      code: "ERR_SOCKET_TIMEOUT",
+      message:
+        "request to https://registry.npmjs.org/-/npm/v1/security/audits failed, reason: Socket timeout",
+    },
+  } satisfies AuditReport;
+
+  it("is refused rather than read as a clean tree", () => {
+    expect(() => requireReadableReport(timedOut)).toThrowError(/could not read the npm advisory/);
+    expect(() => requireReadableReport(timedOut)).toThrowError(/ERR_SOCKET_TIMEOUT/);
+    expect(() => requireReadableReport(timedOut)).toThrowError(/Socket timeout/);
+  });
+
+  it("does not send the reader to the acceptance list", () => {
+    let message = "";
+    try {
+      requireReadableReport(timedOut);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    // The file is named, but as the thing that is *not* stale. The old failure said "Delete the
+    // entry from …", which is what deleted a security decision during an outage.
+    expect(message).toContain(`no acceptance in ${acceptanceFileName} is stale`);
+    expect(message).not.toContain("Delete the entry");
+  });
+
+  it("refuses a report carrying neither advisories nor an error", () => {
+    expect(() => requireReadableReport({} as AuditReport, "  pnpm exploded  ")).toThrowError(
+      /pnpm exploded/,
+    );
+  });
+
+  it("passes a genuinely clean tree, whose advisories key is present and empty", () => {
+    const clean = { advisories: {} } satisfies AuditReport;
+    expect(requireReadableReport(clean)).toBe(clean);
+    expect(collectFindings(clean)).toEqual([]);
+  });
+
+  it("passes a report that carries findings", () => {
+    expect(requireReadableReport(report as AuditReport)).toBe(report);
+    expect(collectFindings(report as AuditReport).length).toBeGreaterThan(0);
   });
 });

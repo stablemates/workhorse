@@ -91,8 +91,13 @@ interface AuditAdvisory {
   readonly findings?: readonly AuditFinding[];
 }
 
-interface AuditReport {
+export interface AuditReport {
   readonly advisories?: Readonly<Record<string, AuditAdvisory>>;
+  /**
+   * What `pnpm audit` writes instead of a tree when it could not reach the advisory service, for
+   * example `{"code":"ERR_SOCKET_TIMEOUT","message":"request to …/security/audits failed"}`.
+   */
+  readonly error?: { readonly code?: string; readonly message?: string };
 }
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
@@ -103,8 +108,16 @@ export const acceptanceFileName = "scripts/npm-advisory-acceptances.json";
 
 /**
  * `pnpm audit` exits non-zero when it reports an advisory, so the exit code cannot separate
- * "found advisories" from "could not run". The report on stdout does, and an unparseable stdout is
- * the only real failure.
+ * "found advisories" from "could not run". The report on stdout does, and it fails in two ways: it
+ * can be unparseable, and it can parse into an `error` object naming a request that never
+ * completed.
+ *
+ * The second is the one that matters. An error report carries no `advisories` key, so reading it as
+ * a tree flattens to zero findings — a clean bill of health for a query that never ran. With
+ * acceptances on file that surfaces as four instructions to delete a reviewed decision; with none,
+ * it passes a real advisory straight through the gate ADR 0043 built to stop it. So an unusable
+ * report is refused rather than interpreted, and the refusal names the service instead of the
+ * acceptance file.
  */
 interface AuditRun {
   readonly report: string;
@@ -125,14 +138,36 @@ async function runAudit(): Promise<AuditReport> {
     child.once("error", reject);
     child.once("exit", (exitCode) => resolve({ report, diagnostics, exitCode }));
   });
+  let parsed: AuditReport;
   try {
-    return JSON.parse(run.report) as AuditReport;
+    parsed = JSON.parse(run.report) as AuditReport;
   } catch {
     const detail = run.diagnostics.trim() || run.report.trim() || "no output";
     throw new Error(
       `pnpm audit --prod --json exited with ${String(run.exitCode)} and no report: ${detail}`,
     );
   }
+  return requireReadableReport(parsed, run.diagnostics);
+}
+
+/**
+ * The report, or a refusal when it describes a query that never ran.
+ *
+ * `advisories` is `{}` for a genuinely clean tree and absent when no tree was read at all, so the
+ * missing key is the signal rather than an empty one. The message names the service rather than
+ * {@link acceptanceFileName}, because nothing about the acceptance list is known when the audit did
+ * not answer, and the failure this replaces told the reader to delete four reviewed decisions.
+ */
+export function requireReadableReport(report: AuditReport, diagnostics = ""): AuditReport {
+  if (!report.error && report.advisories !== undefined) return report;
+  const reason =
+    report.error?.message || diagnostics.trim() || "the report carried no advisories and no error";
+  const code = report.error?.code;
+  throw new Error(
+    `pnpm audit --prod --json could not read the npm advisory service: ${reason}` +
+      `${code ? ` (${code})` : ""}. No decision was made about any dependency, and no acceptance ` +
+      `in ${acceptanceFileName} is stale. Re-run when the service answers.`,
+  );
 }
 
 /** Flatten the report's advisory-keyed findings into one entry per dependency path. */
