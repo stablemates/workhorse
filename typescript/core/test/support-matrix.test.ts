@@ -474,7 +474,9 @@ describe("documentation", () => {
       expect(supportTable[runtime]).toMatchObject(cells);
       expect(siteTable[runtime]).toMatchObject(cells);
     }
-    expect(supportTable.Go).toMatchObject({ Notes: `The module pins pgx ${pgxVersion}.` });
+    expect(supportTable.Go).toMatchObject({
+      Notes: `pgx ${pgxVersion} is the minimum and the tested version.`,
+    });
     for (const sdkReadme of [coreReadme, pythonReadme, goReadme]) {
       const sections = [
         "## Install",
@@ -495,7 +497,7 @@ describe("documentation", () => {
       `Requires Node.js ${SUPPORTED_NODE_MAJORS.join(" or ")} and PostgreSQL ${postgresRange}.`,
     );
     expect(goReadme).toContain(
-      `Requires Go ${goMinimum} or newer and PostgreSQL ${postgresRange}. The module pins pgx ${pgxVersion}.`,
+      `Requires Go ${goMinimum} or newer and PostgreSQL ${postgresRange}. pgx ${pgxVersion} is the minimum and the tested version.`,
     );
     expect(goReadme).not.toContain("go/vX.Y.Z");
     expect(pythonReadme).toContain(

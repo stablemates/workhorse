@@ -442,7 +442,9 @@ Psycopg `AsyncConnection` and asyncpg `Connection`.
 `python/tests/test_worker_process.py` runs `python/examples/dedicated_worker.py` from the same wheel
 and delivers `SIGTERM` through `run_worker_process`.
 
-The Go module is `github.com/stablemates/workhorse/go`, requires Go 1.25 or newer, and pins pgx v5.9.2.
+The Go module is `github.com/stablemates/workhorse/go`, requires Go 1.25 or newer, and requires pgx v5.9.2
+as a minimum rather than a pin: minimal version selection lets a consumer choose a higher pgx v5, which
+is expected to work and is not tested.
 `Executor.Query(context.Context, string, ...any) ([]Row, error)` returns rows keyed by PostgreSQL
 column name. `PGXQueryer` accepts `pgx.Tx`, `*pgx.Conn`, and `*pgxpool.Pool` through
 `NewPGXExecutor`. `SQLQueryer` accepts `*sql.Tx`, `*sql.Conn`, and `*sql.DB` through

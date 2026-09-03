@@ -15,7 +15,7 @@ correctness evidence.
 | ---------- | -------------- | ------- | ------------------------------------------------------- |
 | Node.js    | 22, 24         | 22      | Even-numbered releases only. `engines.node` is `>=22`.  |
 | Python     | 3.12–3.14      | 3.12    | `stablemates-workhorse` ships one `py3-none-any` wheel. |
-| Go         | 1.25 and newer | 1.25    | The module pins pgx v5.9.2.                             |
+| Go         | 1.25 and newer | 1.25    | pgx v5.9.2 is the minimum and the tested version.       |
 | PostgreSQL | 15, 16, 17, 18 | 15      | No extension beyond the default `plpgsql` is installed. |
 
 Your application needs one of those language runtimes and a PostgreSQL server at or above its
@@ -45,6 +45,23 @@ console.log(support); // { major: 17, version: "17.2 …", supported: true, test
 A server newer than the tested majors is reported as supported but untested rather than rejected —
 refusing to run on a release that did not exist at publish time would strand you on every
 PostgreSQL upgrade.
+
+## A minimum rises only when its upstream retires
+
+The other half of that question is when a version leaves the table. A minimum rises in a minor
+release, and only after the version being dropped has reached its own end of life upstream — the
+Node.js, Python, Go, and PostgreSQL projects decide that, not this one. A version still supported
+upstream keeps its place even when dropping it would shorten the matrix.
+
+The table names a version as scheduled for removal, with its upstream date, before the release that
+drops it, and PostgreSQL gets longer notice than the language runtimes because a PostgreSQL major
+upgrade is a database migration you schedule rather than a package bump. Nothing about this reaches
+a release you have already installed: it keeps running against the database you built it for, and
+what a dropped runtime loses is future releases.
+
+Dependency ranges — `pg`, Psycopg, asyncpg, pgx — move under the same rule and in the same kind of
+release, whether the range is widening to admit a new upstream major or narrowing to drop a retired
+one.
 
 ## Plain PostgreSQL, no extensions
 

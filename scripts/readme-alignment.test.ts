@@ -112,7 +112,9 @@ describe("SDK README alignment", () => {
     const goMod = await read("go/go.mod");
     const pgxVersion = /^require github\.com\/jackc\/pgx\/v5 (v[^\s]+)$/m.exec(goMod)?.[1];
     expect(pgxVersion).toBeDefined();
-    expect(prose(await read("go/README.md"))).toContain(`The module pins pgx ${pgxVersion}.`);
+    expect(prose(await read("go/README.md"))).toContain(
+      `pgx ${pgxVersion} is the minimum and the tested version.`,
+    );
   });
 
   it("uses release-tested files for every SDK example block", async () => {

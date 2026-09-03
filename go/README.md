@@ -32,7 +32,7 @@ application leaves a schema the application refuses to start against.
 Runtime processes verify compatibility instead of changing the schema. Call `AssertCompatible` at
 startup.
 
-Requires Go 1.25 or newer and PostgreSQL 15 through 18. The module pins pgx v5.9.2.
+Requires Go 1.25 or newer and PostgreSQL 15 through 18. pgx v5.9.2 is the minimum and the tested version.
 
 ## Run one job
 

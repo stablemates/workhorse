@@ -27,7 +27,7 @@ This boundary is about correctness only. It is not a performance claim; see
 | ---------- | -------------- | ------- | ------------------------------------------------------- |
 | Node.js    | 22, 24         | 22      | Even-numbered releases only. `engines.node` is `>=22`.  |
 | Python     | 3.12–3.14      | 3.12    | `stablemates-workhorse` ships one `py3-none-any` wheel. |
-| Go         | 1.25 and newer | 1.25    | The module pins pgx v5.9.2.                             |
+| Go         | 1.25 and newer | 1.25    | pgx v5.9.2 is the minimum and the tested version.       |
 | PostgreSQL | 15, 16, 17, 18 | 15      | No extension beyond the default `plpgsql` is installed. |
 
 Pull requests and pushes run the newest Node.js and PostgreSQL versions. The weekly schedule runs
@@ -48,12 +48,66 @@ checks that the active Python and PostgreSQL versions belong to this matrix. Pul
 pushes run the newest Python and PostgreSQL versions. The weekly schedule runs every Python and
 PostgreSQL combination.
 
-The Go module declares Go 1.25 or newer and supports its pinned pgx 5.9.2 release. Its repository
+The Go module declares Go 1.25 or newer and requires pgx v5.9.2. That is a minimum rather than a
+pin: minimal version selection lets a consumer's own module graph choose a higher pgx v5, which is
+expected to work and is not tested. Its repository
 lane exercises enqueue through pgx transactions, pgx pools, and `database/sql` with pgx stdlib. It
 also compiles and runs a separate module through a local `replace` directive. Another external
 module builds every Go example through the public import path. These tests prove the exported module
 surface without repository-only imports. Pull requests and pushes run Go against the newest
 PostgreSQL. The weekly schedule runs Go against every supported PostgreSQL major.
+
+### Raising a floor
+
+Raising the Node.js, Python, Go, or PostgreSQL minimum is a **minor** release. It is never a major
+and never a patch, and it is the only way a version leaves the table above.
+[ADR 0058](decisions/0058-fix-the-current-line-and-gate-floors-on-upstream-end-of-life.md) records
+the decision. The support matrix is deliberately not one of the governed surfaces in
+[What SemVer governs](#what-semver-governs); this rule governs it instead.
+
+A floor rises only when the version being dropped has reached its **upstream end of life**. The
+upstream project's own schedule is the authority and this repository keeps no competing one:
+
+| Runtime    | End of life is                                      | Published at                                                            |
+| ---------- | --------------------------------------------------- | ----------------------------------------------------------------------- |
+| Node.js    | Past the release's published end-of-life date       | [nodejs/Release](https://github.com/nodejs/Release)                     |
+| Python     | Past the version's published end-of-life date       | [Python developer guide](https://devguide.python.org/versions/)         |
+| Go         | Older than the two releases the Go project supports | [Go release policy](https://go.dev/doc/devel/release#policy)            |
+| PostgreSQL | Past the major's community end-of-life date         | [PostgreSQL versioning](https://www.postgresql.org/support/versioning/) |
+
+Convenience is not a reason. A runtime still supported upstream keeps its place in the table even
+when dropping it would simplify the code or shorten the matrix.
+
+Notice is what makes the minor honest. Before the minor that drops a version, the table above names
+it as scheduled for removal with its upstream date, and at least one published minor's changelog
+says so. PostgreSQL takes two published minors of notice rather than one, because a PostgreSQL major
+upgrade is a database migration the operator schedules rather than a package bump.
+
+A floor raise is a minor because it cannot reach code that already runs. The release you installed
+keeps working against the database you built it for; what a dropped runtime loses is future
+releases, and every package manager in the three ecosystems reports that as a resolution result.
+
+### Moving a dependency range
+
+`pg`, Psycopg, asyncpg, and pgx move under the same rule, in either direction, and every move is a
+minor:
+
+- **Raising a floor inside the declared major range** — a minor.
+- **Widening the range to admit a new upstream major** — a minor, once CI exercises it.
+- **Narrowing the range to drop an upstream major** — a minor, allowed only when that major is
+  end-of-life upstream or unusable, such as an unfixed advisory with no release that carries the
+  fix. It takes the same one-minor notice a runtime floor takes.
+
+Narrowing a **peer** range is the same event as a floor raise and takes the same treatment. The
+consumer who cannot move keeps the version they installed; only the next release stops resolving.
+
+One dependency move is a major, for an ordinary governed-surface reason rather than a new one.
+`NewWorker(pool *pgxpool.Pool, options WorkerOptions)` puts a pgx type in the Go module's exported
+signature, so moving to pgx v6 changes an exported identifier and requires
+`github.com/stablemates/workhorse/go/v2`. The general rule: a dependency whose types appear in a
+governed surface moves that surface when it changes incompatibly, and that surface's own definition
+of breaking decides the release. `pg` and Psycopg are bundled dependencies that a caller never
+names, so no equivalent exists on the TypeScript or Python lines.
 
 ## JS runtime smoke tier
 
@@ -196,6 +250,9 @@ whole major line it shipped in.
 
 The three language lines float independently, and each is governed on its own surfaces: a Go `/v2`
 does not move the TypeScript or Python major. Only a protocol break moves all three at once.
+
+The runtime support matrix and the declared dependency ranges are not on this list. They move by
+their own rule, in a minor and only on upstream end of life; see [Raising a floor](#raising-a-floor).
 
 ### Experimental surface
 
