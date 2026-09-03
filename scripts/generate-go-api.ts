@@ -24,7 +24,12 @@ import { repositoryRoot } from "./packages.js";
  */
 
 // Pinned the way `go:lint` pins staticcheck, so a comparison does not change under the check.
-const apidiffVersion = "v0.0.0-20260824195058-e88cd73687aa";
+//
+// `go run` builds the tool with the toolchain already installed, because `actions/setup-go` sets
+// GOTOOLCHAIN=local. So the pin has to name an `x/exp` commit whose own `go` directive is no newer
+// than `go/go.mod`. Newer commits ask for go 1.26, and under GOTOOLCHAIN=local the check fails
+// before it compares anything. Re-pin only alongside a `go/go.mod` bump.
+const apidiffVersion = "v0.0.0-20260820122028-d6e0b57b1a69";
 const goModule = "github.com/stablemates/workhorse/go";
 const snapshotPath = "api/go.txt";
 const check = process.argv.includes("--check");
