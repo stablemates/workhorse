@@ -32,7 +32,7 @@ cron definitions during deployment. `fireSchedule` exposes the revision-fenced f
 
 **Deployment-synchronized policies.** `syncConcurrencyPolicies`, `syncRateLimitPolicies`,
 `syncRetentionPolicy`, and `syncMaintenancePolicy` write desired state; each has a matching read —
-`concurrencyPolicies`, `rateLimitPolicies` and `rateLimitStatuses`, `getRetentionPolicy`, and
+`listConcurrencyPolicies`, `listRateLimitPolicies` and `rateLimitStatuses`, `getRetentionPolicy`, and
 `getMaintenancePolicy`. Retention adds `overrideRetentionPolicy`, `revertRetentionPolicy`, and
 `previewRetentionPolicy` for operator changes with provenance.
 

@@ -1497,7 +1497,7 @@ One row per queue stores a deployment-owned dispatch budget. `queue_name` is the
 
 `sync_concurrency_policies_v1(namespace, definitions, prune)` and TypeScript `Queue.syncConcurrencyPolicies(namespace, definitions, { prune })` reconcile one namespace atomically. Python `Queue.sync_concurrency_policies(namespace, definitions, prune=True)` and `AsyncQueue.sync_concurrency_policies(namespace, definitions, prune=True)` expose the same transition through caller-owned Psycopg or asyncpg connections. Go `Queue.SyncConcurrencyPolicies(ctx, namespace, definitions, options...)` exposes it through a caller-owned `Executor`. One call accepts at most 10,000 unique queue definitions. Each definition permits only `queue`, `maxActive`, and optional `maxActivePerKey`. The function takes an exclusive global transaction advisory lock to serialize reconcilers. It also takes an exclusive queue advisory lock before changing each row. `claim_v1` takes the matching shared queue lock before reading policy, so first creation and pruning cannot race an ungoverned claim. The reconciler rejects queues owned by another namespace, upserts desired rows, and prunes omitted rows by default. TypeScript `{ prune: false }`, Python `prune=False`, and Go `SyncPolicyOptions{Prune: false}` retain omitted rows. An empty desired set removes every policy owned by that namespace when pruning is enabled.
 
-TypeScript `Queue.concurrencyPolicies(queueNames)`, Python `Queue.list_concurrency_policies(queue_names)` and `AsyncQueue.list_concurrency_policies(queue_names)`, and Go `Queue.ListConcurrencyPolicies(ctx, queueNames)` return persisted rows ordered by `queue_name`. An omitted, nil, or empty array returns every policy. A non-empty array filters by exact queue name. This read has no implicit result cap.
+TypeScript `Queue.listConcurrencyPolicies(queueNames)`, Python `Queue.list_concurrency_policies(queue_names)` and `AsyncQueue.list_concurrency_policies(queue_names)`, and Go `Queue.ListConcurrencyPolicies(ctx, queueNames)` return persisted rows ordered by `queue_name`. An omitted, nil, or empty array returns every policy. A non-empty array filters by exact queue name. This read has no implicit result cap. `Queue.concurrencyPolicies(queueNames)` remains as a deprecated TypeScript alias for the rest of the `0.x` line and is removed in `1.0.0`.
 
 Policy capacity counts only active rows whose lease has not expired. The policy is therefore a dispatch budget, not mutual exclusion. A handler can still overlap a replacement after its stale lease expires. Fence validation prevents the stale generation from committing a lifecycle result.
 
@@ -1519,10 +1519,12 @@ TypeScript `Queue.syncRateLimitPolicies(namespace, definitions, { prune })`, Pyt
 state. Each definition contains only `queue`, `rate`, and optional `perKey`; each bucket contains
 `limit`, `intervalMs`, and `burst`. Synchronization accepts at most 10,000 unique queues, rejects
 cross-namespace ownership, and prunes omitted rows by default. TypeScript
-`Queue.rateLimitPolicies(queueNames)`, Python `Queue.list_rate_limit_policies(queue_names)` and
+`Queue.listRateLimitPolicies(queueNames)`, Python `Queue.list_rate_limit_policies(queue_names)` and
 `AsyncQueue.list_rate_limit_policies(queue_names)`, and Go
 `Queue.ListRateLimitPolicies(ctx, queueNames)` return persisted definitions without an implicit
 result cap. An omitted or empty Python sequence and a nil or empty Go slice read every policy.
+`Queue.rateLimitPolicies(queueNames)` remains as a deprecated TypeScript alias for the rest of the
+`0.x` line and is removed in `1.0.0`.
 
 `rate_limit_bucket` stores mutable queue and key token balances separately from policy provenance.
 `rate_limit_bucket_v1` computes elapsed time from `clock_timestamp()`, clamps negative elapsed time

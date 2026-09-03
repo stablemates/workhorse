@@ -302,12 +302,17 @@ export class Admin {
     return this.modules.operatorReads.health();
   }
 
-  async concurrencyPolicies(queueNames: readonly string[] = []): Promise<ConcurrencyPolicy[]> {
+  async listConcurrencyPolicies(queueNames: readonly string[] = []): Promise<ConcurrencyPolicy[]> {
     const result = await this.database.query<ConcurrencyPolicyRow>(
       SQL_STATEMENTS["concurrency_policy"],
       [queueNames],
     );
     return result.rows.map(concurrencyPolicy);
+  }
+
+  /** @deprecated Use `listConcurrencyPolicies`. Removed in 1.0.0. */
+  concurrencyPolicies(queueNames: readonly string[] = []): Promise<ConcurrencyPolicy[]> {
+    return this.listConcurrencyPolicies(queueNames);
   }
 
   getRetentionPolicy(): Promise<RetentionPolicy> {

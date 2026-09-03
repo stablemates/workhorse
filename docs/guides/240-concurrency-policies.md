@@ -6,7 +6,7 @@ Use a policy when downstream capacity belongs to the application rather than one
 
 ## A durable dispatch budget
 
-`Queue.syncConcurrencyPolicies` stores desired policies in PostgreSQL. Workers do not need matching in-memory configuration because `claim_v1` reads the policy during admission.
+`Queue.syncConcurrencyPolicies` stores desired policies in PostgreSQL. Workers do not need matching in-memory configuration because `claim_v1` reads the policy during admission. `Queue.listConcurrencyPolicies` returns the persisted policy rows.
 
 Go applications use `Queue.SyncConcurrencyPolicies` through their caller-owned executor. `Queue.ListConcurrencyPolicies` returns the same persisted policy rows.
 

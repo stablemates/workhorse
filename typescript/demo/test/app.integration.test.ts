@@ -1233,7 +1233,7 @@ describe("Workhorse demo", () => {
     await syncDemoConcurrencyPolicies(pool);
     await seedDemoData(database);
 
-    await expect(new Queue(pool).concurrencyPolicies(["demo"])).resolves.toEqual([
+    await expect(new Queue(pool).listConcurrencyPolicies(["demo"])).resolves.toEqual([
       expect.objectContaining({
         namespace: DEMO_CONCURRENCY_POLICY_NAMESPACE,
         queue: "demo",
@@ -1323,7 +1323,7 @@ describe("Workhorse demo", () => {
     await syncDemoRateLimitPolicies(pool);
     await seedDemoData(database);
 
-    await expect(new Queue(pool).rateLimitPolicies([DEMO_RATE_LIMIT_QUEUE])).resolves.toEqual([
+    await expect(new Queue(pool).listRateLimitPolicies([DEMO_RATE_LIMIT_QUEUE])).resolves.toEqual([
       expect.objectContaining({
         namespace: DEMO_RATE_LIMIT_POLICY_NAMESPACE,
         queue: DEMO_RATE_LIMIT_QUEUE,

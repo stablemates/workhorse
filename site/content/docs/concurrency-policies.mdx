@@ -13,6 +13,7 @@ claim — scale the fleet and the limit holds.
 
 `queue.syncConcurrencyPolicies` is a desired-state call, like schedules: declare the policies a
 namespace owns and PostgreSQL reconciles stored state to match.
+`Queue.listConcurrencyPolicies` returns the persisted typed rows.
 
 Go applications call `Queue.SyncConcurrencyPolicies` through the same caller-owned executor used
 for enqueue. `Queue.ListConcurrencyPolicies` returns the persisted typed rows.
@@ -100,9 +101,10 @@ counts, all bounded. OpenTelemetry publishes the same queue-level gauges without
 If ready work sits behind a full policy, it shows up as `blockedReady` rather than as a mystery
 latency.
 
-TypeScript synchronizes desired state with `Queue.syncConcurrencyPolicies`; Python uses
-`Queue.sync_concurrency_policies` or `AsyncQueue.sync_concurrency_policies`. Python reads policy
-state through `Queue.list_concurrency_policies` or `AsyncQueue.list_concurrency_policies`.
+TypeScript synchronizes desired state with `Queue.syncConcurrencyPolicies` and reads it back with
+`Queue.listConcurrencyPolicies`; Python uses `Queue.sync_concurrency_policies` or
+`AsyncQueue.sync_concurrency_policies`. Python reads policy state through
+`Queue.list_concurrency_policies` or `AsyncQueue.list_concurrency_policies`.
 PostgreSQL applies the policy in `claim_v1`, and `Queue.health()` exposes the resulting pressure.
 
 ## Next

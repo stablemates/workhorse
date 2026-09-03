@@ -148,7 +148,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
     capability: "Concurrency policy management",
     typescript: {
       file: "integration-retention-maintenance.test.ts",
-      patterns: ["syncConcurrencyPolicies", "concurrencyPolicies"],
+      patterns: ["syncConcurrencyPolicies", "listConcurrencyPolicies"],
     },
     python: {
       file: "test_policies.py",
@@ -163,7 +163,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
     capability: "Rate-limit policy management",
     typescript: {
       file: "integration-claim-lease-fence.test.ts",
-      patterns: ["syncRateLimitPolicies", "rateLimitPolicies"],
+      patterns: ["syncRateLimitPolicies", "listRateLimitPolicies"],
     },
     python: {
       file: "test_policies.py",

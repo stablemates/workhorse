@@ -14,6 +14,9 @@ matter how many you run.
 Like concurrency policies, rate limits are desired state, declared per namespace and reconciled
 on deploy.
 
+TypeScript applications call `Queue.syncRateLimitPolicies`. `Queue.listRateLimitPolicies` returns
+the persisted typed definitions.
+
 Go applications call `Queue.SyncRateLimitPolicies` through their caller-owned executor.
 `Queue.ListRateLimitPolicies` returns the persisted typed definitions.
 

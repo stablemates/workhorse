@@ -723,9 +723,13 @@ describe("retention maintenance", () => {
     ).rejects.toThrow(/owned by another namespace/);
 
     await queue.syncConcurrencyPolicies("deployment-a", [{ queue: "mail", maxActive: 5 }]);
-    await expect(queue.concurrencyPolicies()).resolves.toMatchObject([
+    await expect(queue.listConcurrencyPolicies()).resolves.toMatchObject([
       { queue: "mail", maxActive: 5, maxActivePerKey: null },
     ]);
+    // The deprecated alias stays for the rest of 0.x and reads through the new method.
+    await expect(queue.concurrencyPolicies()).resolves.toEqual(
+      await queue.listConcurrencyPolicies(),
+    );
   });
 
   it("reports bounded concurrency utilization and blocked-ready depth through health", async () => {

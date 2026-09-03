@@ -27,6 +27,13 @@ and 24 and PostgreSQL 15 through 18.
 
 ### Changed
 
+- **The TypeScript policy reads are renamed to match Python and Go.** `Queue.concurrencyPolicies`
+  becomes `Queue.listConcurrencyPolicies`, `Queue.rateLimitPolicies` becomes
+  `Queue.listRateLimitPolicies`, and `Admin.concurrencyPolicies` becomes
+  `Admin.listConcurrencyPolicies`. Every language now names the read the same way as
+  `list_concurrency_policies` and `ListConcurrencyPolicies` already did. The old names remain as
+  `@deprecated` aliases that call the new methods for the rest of the `0.x` line, so no call site
+  breaks now; they are removed in `1.0.0`.
 - All nine packages move from `0.1.0-beta.2` to `0.1.0`, and every peer range on
   `@stablemates/workhorse` becomes `>=0.1.0 <0.2.0`. A later prerelease of this line is a
   `0.2.0-beta.N`; a published version is never reissued.

@@ -1357,12 +1357,16 @@ describe("claim lease fence", () => {
     await expect(queue.claim("rate-worker-b", { queue: queueName })).resolves.toMatchObject({
       id: secondId,
     });
-    await expect(queue.rateLimitPolicies([queueName])).resolves.toMatchObject([
+    await expect(queue.listRateLimitPolicies([queueName])).resolves.toMatchObject([
       {
         queue: queueName,
         rate: { limit: 1, intervalMs: 100, burst: 1 },
       },
     ]);
+    // The deprecated alias stays for the rest of 0.x and reads through the new method.
+    await expect(queue.rateLimitPolicies([queueName])).resolves.toEqual(
+      await queue.listRateLimitPolicies([queueName]),
+    );
   });
 
   it("admits another key while the FIFO head key is throttled", async () => {

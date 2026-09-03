@@ -362,12 +362,17 @@ export class Queue {
     return result.rows.map(concurrencyPolicy);
   }
 
-  async concurrencyPolicies(queueNames: readonly string[] = []): Promise<ConcurrencyPolicy[]> {
+  async listConcurrencyPolicies(queueNames: readonly string[] = []): Promise<ConcurrencyPolicy[]> {
     const result = await this.database.query<ConcurrencyPolicyRow>(
       SQL_STATEMENTS["concurrency_policy"],
       [queueNames],
     );
     return result.rows.map(concurrencyPolicy);
+  }
+
+  /** @deprecated Use `listConcurrencyPolicies`. Removed in 1.0.0. */
+  concurrencyPolicies(queueNames: readonly string[] = []): Promise<ConcurrencyPolicy[]> {
+    return this.listConcurrencyPolicies(queueNames);
   }
 
   async syncRateLimitPolicies(
@@ -387,12 +392,17 @@ export class Queue {
     return result.rows.map(rateLimitPolicy);
   }
 
-  async rateLimitPolicies(queueNames: readonly string[] = []): Promise<RateLimitPolicy[]> {
+  async listRateLimitPolicies(queueNames: readonly string[] = []): Promise<RateLimitPolicy[]> {
     const result = await this.database.query<RateLimitPolicyRow>(
       SQL_STATEMENTS["rate_limit_policy"],
       [queueNames],
     );
     return result.rows.map(rateLimitPolicy);
+  }
+
+  /** @deprecated Use `listRateLimitPolicies`. Removed in 1.0.0. */
+  rateLimitPolicies(queueNames: readonly string[] = []): Promise<RateLimitPolicy[]> {
+    return this.listRateLimitPolicies(queueNames);
   }
 
   async rateLimitStatuses(queueNames: readonly string[] = []): Promise<RateLimitStatus[]> {
