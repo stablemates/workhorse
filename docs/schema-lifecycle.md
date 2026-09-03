@@ -41,14 +41,24 @@ Every schema change ships as an ordered, immutable step:
 
 `typescript/core/test/schema-migrations.test.ts` iterates
 whatever it contains, so the released-artifact check starts running by itself when the first
-artifact lands. That test installs each released artifact, migrates it with `migrateSchema`, and
-requires the `pg_dump --schema-only` result to match a clean installation of the current artifact
-exactly. It also verifies the framework contract on a small synthetic fixture chain: bookkeeping
-rows, gap rejection, transaction-control rejection, and atomic rollback of a failing step.
+artifact lands. That test installs each released artifact, populates it, migrates it with
+`migrateSchema`, and requires the `pg_dump --schema-only` result to match a clean installation of
+the current artifact exactly. It also verifies the framework contract on a small synthetic fixture
+chain: bookkeeping rows, gap rejection, transaction-control rejection, and atomic rollback of a
+failing step.
 
-A schema dump speaks for shape, not for rows. The rehearsal that shows a populated database
-surviving a migration is the demo deployment, which migrates from its pipeline against a database it
-writes to continuously (`typescript/demo/DEPLOYMENT.md`).
+A schema dump speaks for shape, not for rows, so the suite proves data survival separately.
+`typescript/core/test/support/populated-schema.ts` seeds each artifact before it is migrated,
+through the released schema's own SQL functions wherever one exists. The seed holds a job in every
+state the schema can carry, a job set whose history spans more than one partition, a schedule with
+its fired occurrence, a checkpoint and a wait, audit records, and a concurrency and a rate limit
+policy. The test reads every seeded row back after the migration and compares whole rows by value,
+because a count would pass a migration that rewrote a column. Rows are projected to the columns the
+released artifact had, so an additive migration leaves the comparison alone.
+
+The demo deployment remains the recurring rehearsal on real data, migrating from its pipeline
+against a database it writes to continuously (`typescript/demo/DEPLOYMENT.md`). The suite is the
+cheap, reproducible counterpart to it.
 
 `installSchema(database)` is explicit. It installs a clean database and accepts an already-installed
 schema only when it exactly matches the current canonical version. It is not an upgrade mechanism.

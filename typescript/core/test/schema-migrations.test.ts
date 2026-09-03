@@ -12,6 +12,11 @@ import {
 } from "../src/index.js";
 import { applySchemaMigrationPlan } from "../src/schema-migrations.js";
 import { createDatabaseTestHarness } from "./support/db.js";
+import {
+  createHistoryFixtureDay,
+  readSeededRows,
+  seedReleasedSchema,
+} from "./support/populated-schema.js";
 
 const cleanDatabase = createDatabaseTestHarness(new URL("?clean-install", import.meta.url).href, {
   schemaProvisioning: "install",
@@ -76,6 +81,10 @@ describe("schema migrations", () => {
       fixtureDatabase.pool.query("DROP SCHEMA workhorse CASCADE"),
       fixtureCleanDatabase.pool.query("DROP SCHEMA workhorse CASCADE"),
     ]);
+    // The released-artifact loop seeds history rows into a fixed history day, and a partition is a
+    // schema object. The clean installation the loop compares dumps against creates the same day so
+    // the comparison stays byte-for-byte on everything else.
+    await createHistoryFixtureDay(cleanDatabase.pool);
   });
 
   afterAll(async () => {
@@ -291,10 +300,10 @@ describe("schema migrations", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("migrates every released schema version to a schema identical to a clean installation", async () => {
+  it("migrates every released schema version to a clean-installation schema and keeps its rows", async () => {
     // The first frozen artifact is `0001.sql`, the 0.1.0 clean install. Each later release freezes
     // its own, and this loop proves every one of them migrates to a schema byte-identical to a
-    // clean installation of the current artifact.
+    // clean installation of the current artifact, on a database populated first.
     const releases = (await readdir(path.join(repository, "sql", "releases")))
       .filter((file) => file.endsWith(".sql"))
       // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
@@ -311,7 +320,56 @@ describe("schema migrations", () => {
       );
       expect(installed.rows).toEqual([{ version: releasedVersion }]);
 
+      // A dump speaks for shape, so the artifact is populated first and every seeded row is
+      // compared by value afterwards. A count would pass a migration that rewrote a column.
+      await seedReleasedSchema(releaseDatabase.pool);
+      const states = await releaseDatabase.pool.query<{ state: string }>(
+        `SELECT state FROM workhorse.job_runtime
+         UNION SELECT state FROM workhorse.job_outcome ORDER BY state`,
+      );
+      expect(states.rows.map((row) => row.state)).toEqual([
+        "active",
+        "blocked",
+        "canceled",
+        "failed",
+        "ready",
+        "scheduled",
+        "succeeded",
+      ]);
+      const partitions = await releaseDatabase.pool.query<{ partitions: string }>(
+        "SELECT count(DISTINCT tableoid)::text AS partitions FROM workhorse.job_event",
+      );
+      expect(Number(partitions.rows[0]?.partitions)).toBeGreaterThan(1);
+      const seeded = await readSeededRows(releaseDatabase.pool);
+      const populated = new Set(
+        seeded.filter((table) => table.rows.length > 0).map((table) => table.table),
+      );
+      // Naming the tables keeps an empty snapshot from passing the comparison below by holding
+      // nothing to compare.
+      for (const table of [
+        "attempt_history",
+        "concurrency_policy",
+        "job",
+        "job_checkpoint",
+        "job_child",
+        "job_dependency",
+        "job_event",
+        "job_outcome",
+        "job_progress",
+        "job_runtime",
+        "job_wait",
+        "queue_control",
+        "queue_purge_request",
+        "rate_limit_policy",
+        "schedule_definition",
+        "schedule_occurrence",
+        "worker_registry",
+      ])
+        expect(populated).toContain(table);
+
       await migrateSchema(releaseDatabase.pool);
+
+      expect(await readSeededRows(releaseDatabase.pool, seeded)).toEqual(seeded);
 
       expect(await dumpNormalizedSchema(releaseDatabase.databaseUrl)).toBe(
         await dumpNormalizedSchema(cleanDatabase.databaseUrl),
