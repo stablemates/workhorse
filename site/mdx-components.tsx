@@ -6,6 +6,7 @@ import defaultMdxComponents from "fumadocs-ui/mdx";
 import type { MDXComponents } from "mdx/types";
 
 import { IntegrationCatalog } from "@/components/integration-catalog";
+import { ReleaseTable } from "@/components/release-table";
 
 /**
  * MDX component map shared by every MDX surface on the site.
@@ -18,6 +19,7 @@ export function getMDXComponents(components?: MDXComponents): MDXComponents {
     Card,
     Cards,
     IntegrationCatalog,
+    ReleaseTable,
     Step,
     Steps,
     Tab,

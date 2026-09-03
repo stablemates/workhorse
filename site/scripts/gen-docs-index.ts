@@ -5,6 +5,7 @@ import { siteConfig } from "../lib/site.js";
 import { loadPosts, renderFeed } from "./blog-posts.js";
 import { frontmatterValue, stripFrontmatter } from "./frontmatter.js";
 import { mdxToMarkdown } from "./mdx-to-markdown.js";
+import { readReleaseLines } from "./release-changelogs.js";
 
 /**
  * Builds everything the docs routes need without loading Fumadocs at runtime.
@@ -314,6 +315,46 @@ const catalogMarkdown = catalog.categories
   })
   .join("\n\n");
 
+/**
+ * The published versions of the three lines, read out of the three changelogs
+ * (ADR 0058). `/docs/releases` prints them so a reader can apply the support
+ * policy in `SECURITY.md`, which names the current line and no version.
+ */
+const releaseLineRecords = await readReleaseLines(repositoryDir);
+
+const supersededRows = releaseLineRecords.flatMap((line) =>
+  line.earlier.map((release) => `| ${line.name} | \`${release.version}\` | ${release.date} | No |`),
+);
+
+/**
+ * The same versions as Markdown, for the twin and for `llms-full.txt`.
+ *
+ * `<ReleaseTable />` renders them in HTML. An agent reads the twin, and the
+ * versions are the only content on the page it cannot get anywhere else, so the
+ * tag may not survive into it.
+ */
+const releaseMarkdown = [
+  "| Line | Install | Current version | Released | Receives fixes |",
+  "| ---- | ------- | --------------- | -------- | -------------- |",
+  ...releaseLineRecords.map(
+    (line) =>
+      `| ${line.name} | [\`${line.artifact}\`](${line.registryUrl}) on ${line.registry} | ` +
+      `\`${line.current.version}\` | ${line.current.date} | Yes |`,
+  ),
+  // A line whose first release is its only one has nothing superseded, so the
+  // heading and the empty table below it would say the opposite of the truth.
+  ...(supersededRows.length === 0
+    ? []
+    : [
+        "",
+        "Every earlier published version is superseded and receives no fix.",
+        "",
+        "| Line | Version | Released | Receives fixes |",
+        "| ---- | ------- | -------- | -------------- |",
+        ...supersededRows,
+      ]),
+].join("\n");
+
 const pages = new Map<string, PageRecord>();
 /**
  * One Markdown document per page: the `# title` and `> description` lead
@@ -333,12 +374,14 @@ await Promise.all(
 
     // The catalog tag becomes Markdown before the tab transform runs, so the
     // transform never meets a component the sidebar generator owns.
-    const body = stripFrontmatter(source).replace(
-      /^<IntegrationCatalog \/>$/m,
-      () => catalogMarkdown,
-    );
+    const body = stripFrontmatter(source)
+      .replace(/^<IntegrationCatalog \/>$/m, () => catalogMarkdown)
+      .replace(/^<ReleaseTable \/>$/m, () => releaseMarkdown);
     if (body.includes("<IntegrationCatalog")) {
       throw new Error(`The Markdown twin for "${slug}" still contains the catalog tag`);
+    }
+    if (body.includes("<ReleaseTable")) {
+      throw new Error(`The Markdown twin for "${slug}" still contains the release table tag`);
     }
     markdownDocuments.set(slug, `# ${title}\n\n> ${description}\n\n${mdxToMarkdown(body, slug)}`);
     pages.set(slug, {
@@ -408,6 +451,16 @@ await writeFile(
     null,
     2,
   )}\n`,
+);
+
+/**
+ * The three release lines with their published versions, for the releases page.
+ * Emitted here for the reason the catalog is: the page reads JSON so the
+ * changelog reading stays in the build and out of the browser bundle.
+ */
+await writeFile(
+  new URL("releases.json", outDir),
+  `${JSON.stringify(releaseLineRecords, null, 2)}\n`,
 );
 
 /**

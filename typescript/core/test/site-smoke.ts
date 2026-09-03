@@ -65,6 +65,7 @@ try {
     ["/docs/integrations", ["Verified", "Documented", "Tested against drizzle-orm"]],
     ["/docs/integrations.md", ["ORMs and query builders", "Tested against drizzle-orm"]],
     ["/docs/quickstart", ["quickstart", "worker"]],
+    ["/docs/releases", ["TypeScript", "Python", "Go", "current line"]],
     // The twin expands every language tab inline, so an agent that fetches it
     // sees the Python install the HTML hides behind a tab control.
     ["/docs/quickstart.md", ["**TypeScript**", "**Python**", "**Go**", "pip install"]],
@@ -195,6 +196,37 @@ try {
   const catalogTwin = await (await fetch(`${baseUrl}/docs/integrations.md`)).text();
   if (catalogTwin.includes("<IntegrationCatalog")) {
     throw new Error("The integrations twin shipped the catalog component instead of the catalog");
+  }
+
+  // The releases page states which versions receive fixes, so a stale table on
+  // it publishes a false security policy. Read the newest heading of each
+  // changelog here rather than through the site's own parser: a check that
+  // shares the generator's reading of the file cannot catch the generator
+  // misreading it.
+  const releasesHtml = await (await fetch(`${baseUrl}/docs/releases`)).text();
+  const releasesTwin = await (await fetch(`${baseUrl}/docs/releases.md`)).text();
+  if (releasesTwin.includes("<ReleaseTable")) {
+    throw new Error("The releases twin shipped the table component instead of the versions");
+  }
+  for (const changelog of ["CHANGELOG.md", "python/CHANGELOG.md", "go/CHANGELOG.md"]) {
+    const source = await readFile(resolve(repositoryRoot, changelog), "utf8");
+    const newest = /^## (\S+) — (\d{4}-\d{2}-\d{2})$/m.exec(source);
+    const version = newest?.[1];
+    const date = newest?.[2];
+    if (!version || !date) {
+      throw new Error(`${changelog} has no "## <version> — <date>" heading to check`);
+    }
+    for (const [surface, body] of [
+      ["/docs/releases", releasesHtml],
+      ["/docs/releases.md", releasesTwin],
+      ["/llms-full.txt", llmsFullText],
+    ] as const) {
+      if (!body.includes(version) || !body.includes(date)) {
+        throw new Error(
+          `${surface} does not carry ${version} (${date}), the newest release in ${changelog}`,
+        );
+      }
+    }
   }
 
   const sitemap = await (await fetch(`${baseUrl}/sitemap.xml`)).text();

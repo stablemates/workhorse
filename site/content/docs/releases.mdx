@@ -1,0 +1,50 @@
+---
+title: Releases
+description: The current published version of the TypeScript, Python, and Go lines, when each shipped, and which versions receive fixes.
+---
+
+Workhorse publishes three lines from one source commit: nine npm packages released in lockstep, one
+Python distribution, and one Go module. Each line carries its own version, so "the current version"
+is three numbers rather than one. This page prints all three, because you cannot apply the support
+policy below without them.
+
+Every version here is read at build time from the changelog that owns its line. Nobody types a
+version into this page, so it cannot disagree with the release it describes.
+
+<ReleaseTable />
+
+## Only the current line receives fixes
+
+A fix ships on the highest published minor of the current major of each affected line, and nowhere
+else. There are no maintenance branches, no backports, and no long-term-support designation. An
+older version keeps working, and it keeps the defect: upgrade to the current line to receive the
+fix.
+
+Which lines move depends on where the defect lives. A defect in the SQL schema or in the protocol
+the three SDKs share is fixed on all three lines as one release train. A defect in one SDK ships on
+that line alone, and the other two do not move.
+
+That single-line policy is affordable because every upgrade is an ordinary rolling deployment. A
+minor adds, a major adds, and the one destructive act is a contract step you run on your own
+schedule. Taking a fix therefore costs a package bump and a `workhorse schema migrate` that only
+adds, which is the same procedure every other release uses.
+
+## Report a vulnerability privately
+
+Report a vulnerability through GitHub's private advisory form rather than an issue, a pull request,
+or a discussion.
+[`SECURITY.md`](https://github.com/stablemates/workhorse/blob/main/SECURITY.md) is the whole policy:
+where to report, what the maintainers do after a report, the fix target for each severity, the
+embargo, and what a reporter may safely test. It renders on GitHub beside the reporting button, and
+this page does not restate it, because a second copy would be the one that goes stale.
+
+## Next
+
+- [Compatibility](/docs/compatibility) — the tested runtimes, and how a client and a schema agree
+- [Installation](/docs/installation) — install a line and check the schema deliberately
+- [Deployment and operations](/docs/operations) — upgrade a running deployment
+
+---
+
+The release gates each line passes before it is published, and the schema compatibility boundary:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#operational-limits).
