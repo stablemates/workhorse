@@ -103,6 +103,9 @@ describe("the 0.1.0 release", () => {
     const landing = await read("site/src/routes/index.tsx");
     expect(landing).toContain('import { WORKHORSE_VERSION } from "@stablemates/workhorse/version"');
     expect(landing).toContain('import support from "../../../support.json"');
+    // `site/src/routes/index.tsx` owns this mark, and its `BetaMark` renders the imported constant.
+    // The check pins that interpolation, not the words beside it. The mark has been reworded once
+    // already, and the `not.toMatch` below is what forbids a hand-typed version.
     expect(landing).toContain("v{WORKHORSE_VERSION}");
     expect(landing).not.toMatch(/\d+\.\d+\.\d+/);
 
@@ -219,9 +222,9 @@ describe("the public beta line", () => {
 
   it("publishes a security policy that names the reporting channel and the supported line", async () => {
     const policy = prose(await read("SECURITY.md"));
-    // Each check below pins a commitment the policy makes, not the sentence that makes it. Both
-    // sentences this case used to quote were reworded by a deliberate editorial pass that kept
-    // every commitment intact, and the case failed for wording alone.
+    // `SECURITY.md` owns every phrase below. Each check pins a commitment the policy makes, not the
+    // sentence that makes it. Both sentences this case used to quote were reworded by a deliberate
+    // editorial pass that kept every commitment intact, and the case failed for wording alone.
     expect(policy).toContain("https://github.com/stablemates/workhorse/security/advisories/new");
     expect(policy).toMatch(/[Aa]cknowledge(?:ment)?[^.]*within five business days/);
     expect(policy).toContain("highest published minor of the current major of each affected line");
