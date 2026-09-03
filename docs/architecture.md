@@ -677,9 +677,10 @@ request and response types and `DashboardRuntimeConfig`. Go exposes `ValidateInp
 `validate_<procedure>_input` wrapper per procedure and raises `DashboardInputValidationError`; its
 internal interpreter is `_validate_schema`.
 
-`dashboardRuntimeConfigSchema` in `typescript/dashboard-server/src/server/html.ts` is the source
-of `DashboardRuntimeConfig` through `z.infer`. `z.toJSONSchema` writes the same schema to
-`procedures.json.html.runtimeConfig`, so the server type and versioned schema cannot drift.
+The internal `dashboardRuntimeConfigSchema` in `typescript/dashboard-server/src/server/html.ts`
+is the source of the exported `DashboardRuntimeConfig` through `z.infer`. `z.toJSONSchema` writes
+the same schema to `procedures.json.html.runtimeConfig`, so the server type and versioned schema
+cannot drift.
 
 `dashboard/v1/conformance.json` adds executable HTTP-level conformance fixtures analogous to
 `protocol/v1/scenarios.json`: SQL seed steps bring a freshly installed schema to a known state,
@@ -1194,9 +1195,10 @@ The recursive cycle check starts from the inserted prerequisite identities and f
 `Admin.getJob` and `Admin.listJobs` expose sorted `prerequisiteJobIds`, `dependencyPolicy`, the compatible singular `prerequisiteJobId` when exactly one edge exists, and `blockedReason`. `Admin.getDependencyLineage(jobId, limit)` returns at most 1,000 edges where the identity is either the prerequisite or dependent. Each identity can own at most 100 edges in either direction, so the default read returns its complete one-hop lineage and needs no continuation cursor. A caller-selected lower limit can still set `truncated`. Each `DependencyLineageRecord` contains both identities, all three terminal policies, `createdAt`, nullable `releasedAt`, and nullable `resolution`. `dashboard_job_dependency_v1` exposes the same retained edge evidence to the bounded dashboard task-detail read.
 
 `DashboardTaskFilter` contains `all`, `blocked`, `waiting`, `scheduled`, `retried`, `queued`,
-`running`, `completed`, `discarded`, and `canceled`. `readDashboardTasks` maps `blocked` to runtime
-state `blocked`. It maps `waiting` to jobs present in `dashboard_signal_wait_v1` or
-`dashboard_human_wait_v1`.
+`running`, `completed`, `discarded`, and `canceled`. The internal `readDashboardTasks` in
+`typescript/dashboard-server/src/server/read-model.ts`, which the `tasks` procedure calls, maps
+`blocked` to runtime state `blocked`. It maps `waiting` to jobs present in
+`dashboard_signal_wait_v1` or `dashboard_human_wait_v1`.
 Each `DashboardJobRow` exposes `blockedReason` as `prerequisite_pending` for a blocked state. Its
 `prerequisiteJobIds` contains the sorted unresolved prerequisite identities.
 `readDashboardTaskCounts` reports both live populations exactly below its planner threshold. Above
@@ -1204,9 +1206,9 @@ that threshold, it reads their exact counts from the live runtime and external-w
 `readDashboardTasks` returns filtered page totals but does not call `readDashboardTaskCounts` or
 embed `DashboardTaskCounts`. The SPA reads those navigation counts through the separate
 `taskCounts` procedure. `DashboardJobRow` omits `payload`; `readDashboardJobDetail` is the only
-task procedure that returns it. The task page adds the latest-attempt lateral join only when
-`DashboardTasksQuery.worker` is non-null. Without that filter, a terminal row reports a null
-`lastWorkerId`. If the host configures `DashboardDurabilityProjector`, the TypeScript backend reads
+task procedure that returns it. The task page adds the latest-attempt lateral join only when the
+internal `DashboardTasksQuery.worker` is non-null. Without that filter, a terminal row reports a
+null `lastWorkerId`. If the host configures `DashboardDurabilityProjector`, the TypeScript backend reads
 payload and checkpoint names only for that server-side projection. It still omits payload from
 `DashboardJobRow`. Without a projector, task-page durability is null and those columns are absent
 from the database result. Task detail still projects the complete durability plan.
@@ -2324,6 +2326,26 @@ proves a local option array covers its union. A consumer builds no fragment, bec
 `dashboardDatabase(database)` returns the `DashboardDatabase` that `createDashboardHost` accepts.
 The dashboard application's `.` subpath drops `TaskActivityGroup` and `TaskActivityPeriod`, which
 restated `DashboardActivityGroupBy` and `DashboardActivityPeriod` member for member.
+
+A host implements the five controllers, so `./server` exports every type their methods name.
+`DashboardTaskController` returns `DashboardRunNowResult`, `DashboardSignalTaskResult`, and
+`DashboardCompleteHumanWaitResult` beside `DashboardCancelTaskResult`, and `cancelTask` receives
+`DashboardCancellationAuditContext`, whose `reason` is nullable because an operator may cancel
+without stating one. Python and Go already generate the first three. Each result field resolves
+from a subpath too: `DashboardRunNowStatus` from `./wire`, and `CancelStatus`,
+`SignalDeliveryStatus`, `HumanWaitCompletionStatus`, and `Json` from `@stablemates/workhorse`.
+
+Nothing `typescript/dashboard-server/src/server/read-model.ts` declares reaches a subpath. That
+covers its thirteen `readDashboard*` functions, `createDashboardQueueHealthReader`, and the
+`DashboardTasksQuery` and `DashboardEventsQuery` argument types. The read model is the
+implementation of `dashboardRouter`, not a second way in: the router is where the read-only mode,
+the `canManageWorkers` decision, and the error-stack redaction live. Calling
+`readDashboardJobDetail` directly defaults `redactErrorStacks` to false and returns persisted
+worker stacks that the mounted dashboard never shows. A host reads through the procedure it
+already mounts. `readDashboardEvents`, `readDashboardEventDetail`, `readDashboardWorkers`, and
+`DashboardEventsQuery` therefore leave `./server`, which had exposed three of those readers for no
+stated reason. This repository's own suites import the module by relative path, as they already do
+for `readDashboardJobDetail`.
 
 The idempotency wire family carries the `Dashboard` prefix every other wire name has:
 `DashboardIdempotencyEvidence`, `readDashboardIdempotencyEvidence`,

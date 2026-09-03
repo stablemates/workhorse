@@ -26,23 +26,21 @@ export type {
   DashboardOperatorControllerOptions,
   DashboardOperatorControllers,
 } from "./operator-controllers.js";
-export {
-  readDashboardEventDetail,
-  readDashboardEvents,
-  readDashboardWorkers,
-} from "./read-model.js";
-export type { DashboardEventsQuery } from "./read-model.js";
 export { dashboardRouter, isDashboardMutation } from "./router.js";
 export type { DashboardRouter, DashboardRpcContext } from "./router.js";
 export { dashboardDatabase } from "./sql.js";
 export type { DashboardDatabase } from "./sql.js";
 export type {
   DashboardAuditContext,
+  DashboardCancellationAuditContext,
   DashboardCancelTaskResult,
+  DashboardCompleteHumanWaitResult,
   DashboardDurabilityProjector,
   DashboardOperator,
   DashboardQueueController,
+  DashboardRunNowResult,
   DashboardScheduleController,
+  DashboardSignalTaskResult,
   DashboardTaskController,
   DashboardWorkerController,
   DashboardSettingsController,

@@ -1,14 +1,14 @@
 import type {
   CancelStatus,
+  HumanWaitCompletionStatus,
   Json,
   JobState,
   MaintenancePolicyDefinition,
   MaintenancePolicySetting,
   RetentionPolicyDefinition,
   RetentionPolicySetting,
+  SignalDeliveryStatus,
 } from "@stablemates/workhorse";
-import type { SendSignalStatus } from "@stablemates/workhorse";
-import type { CompleteHumanWaitStatus } from "@stablemates/workhorse";
 import type {
   DashboardDemoFeature,
   DashboardDemoJobKind,
@@ -79,7 +79,7 @@ export interface DashboardRunNowResult {
 }
 
 export interface DashboardSignalTaskResult {
-  status: SendSignalStatus;
+  status: SignalDeliveryStatus;
   jobId: string;
   name: string;
   payload: Json | null;
@@ -88,7 +88,7 @@ export interface DashboardSignalTaskResult {
 }
 
 export interface DashboardCompleteHumanWaitResult {
-  status: CompleteHumanWaitStatus;
+  status: HumanWaitCompletionStatus;
   jobId: string;
   name: string;
   result: Json | null;

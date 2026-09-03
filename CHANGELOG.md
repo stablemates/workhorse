@@ -117,6 +117,18 @@ and 24 and PostgreSQL 15 through 18.
   `./client`. The three were internal: the bare `sql` collided with the `drizzle` and `kysely`
   template tags in a consumer namespace, and `dashboardDatabase(database)` already returns the
   `DashboardDatabase` that `createDashboardHost` accepts, so no consumer builds a fragment.
+- **`@stablemates/workhorse-dashboard-server/server` names every controller type and stops
+  exporting its read model.** A host that implements `DashboardTaskController` can now name the
+  types its methods return: `DashboardRunNowResult`, `DashboardSignalTaskResult`, and
+  `DashboardCompleteHumanWaitResult` join the already-exported `DashboardCancelTaskResult`, and
+  `DashboardCancellationAuditContext`, which `cancelTask` receives, is exported beside
+  `DashboardAuditContext`. Python and Go already generated the first three. In the other direction,
+  `readDashboardEvents`, `readDashboardEventDetail`, `readDashboardWorkers`, and
+  `DashboardEventsQuery` are removed from the subpath. They were three of the read model's thirteen
+  readers, exported for no stated reason; the read model is the implementation of `dashboardRouter`,
+  which is where read-only mode, the worker-management decision, and error-stack redaction are
+  applied. Read through the procedures the dashboard already mounts instead. The same subpath is
+  re-exported by `@stablemates/workhorse-dashboard/server`, so both packages change together.
 - **The idempotency wire family takes the `Dashboard` prefix every other wire name has.**
   `IdempotencyEvidence` becomes `DashboardIdempotencyEvidence`, `readIdempotencyEvidence` becomes
   `readDashboardIdempotencyEvidence`, `hasIdempotencyEvidence` becomes

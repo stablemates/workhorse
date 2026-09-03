@@ -294,6 +294,10 @@ export function redactDashboardJobDetailErrorStacks(
   };
 }
 
+/**
+ * @internal Package-internal. `readDashboardEvents` names it in its signature, so declaration emit
+ * needs the export; no subpath re-exports it.
+ */
 export interface DashboardEventsQuery {
   window?: DashboardEventsWindow;
   /** 1-based page index. */

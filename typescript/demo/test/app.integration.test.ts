@@ -69,7 +69,8 @@ import {
 } from "../src/app.js";
 import type { CreateDemoApplicationOptions } from "../src/app.js";
 import type { DashboardRouter } from "@stablemates/workhorse-dashboard/server";
-import { dashboardDatabase, readDashboardWorkers } from "@stablemates/workhorse-dashboard/server";
+import { dashboardDatabase } from "@stablemates/workhorse-dashboard/server";
+import { readDashboardWorkers } from "../../dashboard-server/src/server/read-model.js";
 import { DEMO_QUEUE_OPTIONS } from "../src/contracts.js";
 import { durableDemoScenarios } from "../src/durable-demo.js";
 import { DEMO_AUDIT_RETENTION_ROWS_PER_PASS, pruneDemoAudit } from "../src/audit-retention.js";
