@@ -47,6 +47,11 @@ is a maintainer review. The dashboard server is the one component that serves HT
 [`docs/dashboard-security-review.md`](docs/dashboard-security-review.md) is the checklist its review
 walks. That file also states when a pull request has to re-walk a row.
 
+Every dependency tree is scanned on each run of CI: `pnpm npm:vuln` for npm, `pnpm python:vuln` for
+PyPI, and `pnpm go:vuln` for the Go module. An advisory the scan reports fails the build until it is
+fixed or accepted in writing with a review date.
+[`docs/compatibility.md`](docs/compatibility.md) states that policy.
+
 ## Supported versions
 
 **A fix ships on the highest published minor of the current major of each affected line, and

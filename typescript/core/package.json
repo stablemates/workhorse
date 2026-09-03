@@ -47,7 +47,7 @@
   "dependencies": {
     "@stablemates/workhorse-dashboard-contract": "workspace:*",
     "@types/pg": "^8.15.5",
-    "ajv": "8.17.1",
+    "ajv": "8.18.0",
     "pg": "^8.16.3"
   },
   "devDependencies": {

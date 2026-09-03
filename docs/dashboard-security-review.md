@@ -152,19 +152,23 @@ why this mode is process-local.
 
 ## Row 7: dependency advisories
 
-Confirm the published npm closure carries no unresolved High advisory, and that every remaining
-advisory is either outside the closure or accepted with a reason.
+Confirm the published npm closure carries no unresolved advisory, and that every remaining
+advisory is either outside the closure or accepted with a reason and a review date.
 
-- Run `pnpm audit --prod` and read every High and Critical.
-- For each one, resolve its path to a package. A path through `site`, the root `vite`, or an
-  example's dev dependency is outside the published closure; say so and move on.
-- For a path inside the closure, prefer a lockfile bump. When the advisory is unreachable through
-  Workhorse's own code, say why in the review record rather than leaving the row silent.
+- Run `pnpm npm:vuln`, which runs `pnpm audit --prod` and fails on any advisory
+  `scripts/npm-advisory-acceptances.json` does not accept. A green run means every advisory in the
+  tree already carries a written reason.
+- Read that file rather than the raw audit. The reviewer's job is to judge the reasons, not to
+  rediscover the advisories: confirm each entry still describes the tree, and that no entry accepts
+  a path inside the published closure on grounds that have expired.
+- For a path inside the closure, prefer a lockfile bump, then a declared-range bump. When the
+  advisory is unreachable through Workhorse's own code, say why in the entry rather than leaving
+  the row silent.
 
 `python:vuln` and `go:vuln` cover the other two lines. This row covers npm.
+[`docs/compatibility.md`](compatibility.md) owns the policy the three commands share.
 
-**Re-walk when** a published package gains a dependency, or when `pnpm audit --prod` reports a new
-High inside the closure.
+**Re-walk when** a published package gains a dependency, or when `pnpm npm:vuln` fails.
 
 ## Row 8: static asset serving
 

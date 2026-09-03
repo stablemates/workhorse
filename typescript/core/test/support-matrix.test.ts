@@ -395,6 +395,11 @@ describe("continuous integration", () => {
     expect(workflow.match(/max-parallel: 2/g)).toHaveLength(3);
     expect(workflow).toContain("pnpm --silent exec tsx scripts/ci-matrix.ts");
     expect(workflow).toContain("pnpm go:test:race");
+    // All three language lines are scanned for advisories in the same job, or one line's tree
+    // silently stops being checked.
+    expect(workflow).toContain(
+      "- run: pnpm npm:vuln\n      - run: pnpm python:vuln\n      - run: pnpm go:vuln",
+    );
   });
 
   it("exposes each language check through structured package scripts", async () => {
@@ -408,6 +413,8 @@ describe("continuous integration", () => {
     expect(scripts["go:test"]).toContain("go -C go test ./...");
     expect(scripts["go:test:race"]).toContain("go -C go test -race ./...");
     expect(scripts["go:vuln"]).toContain("govulncheck");
+    expect(scripts["npm:vuln"]).toContain("audit-npm-dependencies.ts");
+    expect(check).toContain("pnpm npm:vuln");
     expect(check).toContain("pnpm python:vuln");
     expect(check).toContain("pnpm go:vuln");
     expect(check).toContain("pnpm go:test:race");

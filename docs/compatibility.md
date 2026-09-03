@@ -119,6 +119,25 @@ governed surface moves that surface when it changes incompatibly, and that surfa
 of breaking decides the release. `pg` and Psycopg are bundled dependencies that a caller never
 names, so no equivalent exists on the TypeScript or Python lines.
 
+### Dependency advisories
+
+Each language line fails its build on an advisory in its own dependency tree. `pnpm npm:vuln`
+covers npm, `pnpm python:vuln` covers PyPI, and `pnpm go:vuln` covers the Go module. `pnpm check`
+runs all three, and so does the `static` job in `.github/workflows/ci.yml`.
+
+`pnpm npm:vuln` runs `pnpm audit --prod` and fails on every advisory it reports, whatever the
+severity. Severity describes the advisory rather than this repository's exposure to it, so a
+severity threshold would both hide advisories that matter here and fail on ones that cannot. An
+advisory passes only with an entry in `scripts/npm-advisory-acceptances.json` stating why it does
+not block a release and the date the decision expires. The check fails once that date passes, when
+an entry stops matching anything, and when an accepted advisory starts reaching a workspace package
+the entry does not name — which is how an advisory outside the published closure gets caught the
+day it enters it.
+
+Fixing beats accepting. Prefer a lockfile bump, then a declared-range bump; write an entry only when
+no released version carries the fix, or when the path is provably outside what this repository
+publishes. [`SECURITY.md`](../SECURITY.md) states the triage window and fix target per severity.
+
 ## JS runtime smoke tier
 
 Node.js is the only supported runtime. Bun and Deno sit in a deliberately weaker tier declared by

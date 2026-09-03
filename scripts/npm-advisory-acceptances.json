@@ -1,0 +1,36 @@
+{
+  "acceptances": [
+    {
+      "advisory": 1130709,
+      "githubAdvisoryId": "GHSA-fxqj-rqcc-2cmp",
+      "module": "postcss",
+      "workspacePackages": ["site"],
+      "reason": "Outside the published closure. No published package depends on postcss; it is reached only through the private `site` package's build-time Vite. The advisory reads a `.map` file named by a `sourceMappingURL` comment in the stylesheet being compiled, and `site` compiles only stylesheets this repository writes.",
+      "reviewBy": "2027-03-01"
+    },
+    {
+      "advisory": 1138115,
+      "githubAdvisoryId": "GHSA-5p4m-2wfm-xmqj",
+      "module": "js-yaml",
+      "workspacePackages": ["site"],
+      "reason": "Outside the published closure. No published package depends on js-yaml; it is reached only through the private `site` package, under `@tanstack/start-plugin-core`'s `xmlbuilder2`. The quadratic resolution needs attacker-supplied YAML containing `!!omap`, and the site build parses none.",
+      "reviewBy": "2027-03-01"
+    },
+    {
+      "advisory": 1139427,
+      "githubAdvisoryId": "GHSA-2v37-7h3g-55p8",
+      "module": "nanoid",
+      "workspacePackages": ["site"],
+      "reason": "Outside the published closure. No published package depends on nanoid; it is reached only through the private `site` package's build-time Vite, under postcss. The loop needs a caller asking a custom generator for a zero-length identifier, and postcss asks for a fixed non-zero length.",
+      "reviewBy": "2027-03-01"
+    },
+    {
+      "advisory": 1145093,
+      "githubAdvisoryId": "GHSA-ggr8-5vv4-36mx",
+      "module": "deepmerge-ts",
+      "workspacePackages": ["typescript__demo"],
+      "reason": "Outside the published closure, and no fix exists to take. `prisma` is a devDependency of the private `typescript/prisma` adapter tests; it enters this path only because `drizzle-orm` declares it as an optional peer, which pnpm resolves against that development copy. `@prisma/config` still pins deepmerge-ts 7.1.5 as of its 7.10.0 release, so there is no upstream version to move to.",
+      "reviewBy": "2027-03-01"
+    }
+  ]
+}

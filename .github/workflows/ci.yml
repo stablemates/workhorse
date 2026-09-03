@@ -73,6 +73,7 @@ jobs:
       - run: pnpm telemetry-surface:check
       - run: pnpm format:check
       - run: pnpm lint
+      - run: pnpm npm:vuln
       - run: pnpm python:vuln
       - run: pnpm go:vuln
       - run: pnpm typecheck
