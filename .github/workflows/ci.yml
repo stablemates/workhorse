@@ -66,6 +66,9 @@ jobs:
       - run: pnpm dashboard-spec:check
       - run: pnpm dashboard-bundle:check
       - run: pnpm parity:check
+      - run: pnpm typescript-api:check
+      - run: pnpm python-api:check
+      - run: pnpm go-api:check
       - run: pnpm format:check
       - run: pnpm lint
       - run: pnpm python:vuln

@@ -7,6 +7,15 @@ pre-commit:
     - name: check parity tables
       glob: "{typescript/core/test/support/parity-capabilities.ts,docs/parity.md,scripts/generate-parity-tables.ts}"
       run: pnpm parity:check
+    - name: check the TypeScript public API snapshot
+      glob: "{typescript/*/src/**,typescript/*/package.json,typescript/dashboard-contract/index.d.ts,scripts/typescript-api.ts,scripts/generate-typescript-api.ts,scripts/api-snapshot.ts,api/typescript.txt}"
+      run: pnpm typescript-api:check
+    - name: check the Python public API snapshot
+      glob: "{python/src/**,python/tools/api_snapshot.py,scripts/generate-python-api.ts,scripts/api-snapshot.ts,api/python.txt}"
+      run: pnpm python-api:check
+    - name: check the Go public API for unaccepted breaks
+      glob: "{go/**,scripts/generate-go-api.ts,scripts/api-snapshot.ts,api/go.txt}"
+      run: pnpm go-api:check
     - name: check adapter conformance types
       glob: "typescript/adapter-conformance/**"
       run: pnpm --filter @stablemates/workhorse-adapter-conformance typecheck
