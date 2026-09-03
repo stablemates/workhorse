@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-03
+- **Assembled by:** [ADR 0059](0059-assemble-the-1-0-0-specification.md)
 - **Related:** [ADR 0054](0054-define-what-1-0-0-promises.md),
   [ADR 0055](0055-the-1-0-0-schema-boundary-adds-no-migration.md),
   [ADR 0053](0053-start-migrations-at-0-1-0-and-keep-them-additive.md),

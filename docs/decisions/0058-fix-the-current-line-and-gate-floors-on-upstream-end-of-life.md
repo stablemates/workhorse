@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-02
+- **Assembled by:** [ADR 0059](0059-assemble-the-1-0-0-specification.md)
 - **Related:** [ADR 0054](0054-define-what-1-0-0-promises.md),
   [ADR 0056](0056-set-the-1-0-0-exit-criteria.md),
   [ADR 0057](0057-retain-superseded-functions-and-contract-on-the-operators-schedule.md),
