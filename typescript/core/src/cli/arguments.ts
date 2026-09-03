@@ -1,6 +1,5 @@
 import { parseArgs, type ParseArgsConfig } from "node:util";
 
-
 export class CliUsageError extends Error {
   constructor(message: string) {
     super(message);
