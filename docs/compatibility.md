@@ -218,6 +218,11 @@ Accumulated removals wait for 2.0.0. The upgrade from the last 0.x to 1.0.0 is t
 rolling deployment — `workhorse schema migrate` from the pipeline, then a package bump — and not a
 release that requires stopping every process.
 
+1.0.0 adds no migration step of its own, so that migrate command reports an already-current schema
+and changes nothing. The last 0.x minor carries the final schema change before the boundary. Running
+the command anyway is the point: the procedure is the same one every other release uses. See
+`docs/schema-lifecycle.md`.
+
 The nine npm packages, the Python distribution, and the Go module publish 1.0.0 from one source
 commit as one release train. A line that cannot clear the parity bar slips the train rather than
 being left behind. That synchronisation happens once; afterwards the three version lines float again
