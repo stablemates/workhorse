@@ -161,8 +161,8 @@ avoid at 1.0.0.
 
 ### Prune the migration chain to the last two majors
 
-pg-boss did this and then shipped two majors with an empty migration array, telling users below v10
-that automatic migration is not supported (WH-576). Pruning creates a version at which a database is
+pg-boss did this and then shipped two majors with an empty migration array, telling users at or
+below v10 that automatic migration is not supported (WH-576). Pruning creates a version at which a database is
 stranded and must be recreated. Stranding is the failure the whole 0.1.0 migration decision exists to
 remove, so buying a shorter chain with it is a bad trade.
 
