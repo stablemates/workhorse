@@ -24,8 +24,20 @@ _Avoid as the product category_: Durable workflows, durable functions
 
 **Public beta**:
 A usable 0.x Workhorse release for evaluation and early production adoption. A minor release may
-change behaviour, but it upgrades an installed database rather than replacing it.
+change behaviour, but it upgrades an installed database rather than replacing it. The label retires
+at 1.0.0, where **stable** replaces it.
 _Avoid as a stability label_: Alpha, pre-release, validation MVP, validation release
+
+**Stable**:
+A Workhorse release at 1.0.0 or above, whose governed surfaces change only as SemVer allows.
+It is the absence of a qualifier, not a tier above one.
+_Avoid as a stability label_: GA, general availability, production-ready, battle-tested
+
+**Governed surface**:
+One of the seven artifacts SemVer covers: the SQL protocol and schema, the TypeScript, Python, and
+Go APIs, the `workhorse` CLI, the `dashboard/v1` wire contract, and the OpenTelemetry instrument,
+span, and attribute names. Everything else is internal and may change in any release.
+_Avoid_: Public API, public interface, stable API
 
 **Release train**:
 The staged publication of Python, npm, and Go artifacts from one source commit within one

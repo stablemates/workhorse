@@ -133,7 +133,8 @@ and schema version 1 instead of a TypeScript peer range.
 
 Every release publishes one version to npm, PyPI, and the Go module proxy from one source commit.
 The current release is `0.1.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
-0.x compatibility promise.
+0.x compatibility promise. The label is retired at 1.0.0 and replaced by “stable”; see
+[What SemVer governs](#what-semver-governs).
 
 The dashboard and core may use different patch releases within the same minor line. The dashboard
 server reads `workhorse.dashboard_*_v1` views and versioned functions, so a core patch remains
@@ -162,6 +163,67 @@ Before publication, the publish job generates a PEP 740 attestation beside each 
 The Go module releases independently from a `go/vX.Y.Z` tag. `scripts/release-go.sh X.Y.Z` requires
 a clean worktree and a matching `go/CHANGELOG.md` heading. It resets the test database, runs
 `pnpm check`, creates an annotated tag, and pushes that tag to `origin`.
+
+## What SemVer governs
+
+SemVer says a major release may break the public API. It does not say which artifact is the public
+API, and Workhorse ships seven of them. Each surface below is governed, and each states in one
+sentence what a breaking change is for it. Anything not on this list is internal and may change in
+any release. [ADR 0054](decisions/0054-define-what-1-0-0-promises.md) records the decision.
+
+| Governed surface                                    | A breaking change is                                                                                                                                                                   |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SQL protocol and schema                             | A narrowing of `workhorse.protocol_version`, which is how a superseded `_vN` function is removed. A schema-version bump is not one, because inside a major line a migration only adds. |
+| TypeScript API                                      | A change that makes caller code stop compiling or behave differently, across the names and types reachable through a package's `exports` map and shipped `.d.ts`.                      |
+| Python API                                          | The same, across the names in a public module's `__all__`. Underscore-prefixed modules such as `workhorse._protocol` are private.                                                      |
+| Go API                                              | The same, across the exported identifiers of the module's non-`internal` packages; `apidiff` reporting an incompatible change is the test.                                             |
+| `workhorse` CLI                                     | Removing or renaming a command or flag, changing what an exit code means, or removing or retyping a field in `--json` output.                                                          |
+| `dashboard/v1` wire contract                        | Removing a procedure, removing or retyping a response field, or tightening request validation.                                                                                         |
+| OpenTelemetry instrument, span, and attribute names | Renaming or removing an instrument, span, or attribute, or changing an instrument's unit or kind.                                                                                      |
+
+A type-level break counts even when no runtime behaviour moved: a narrowed parameter or a widened
+return that an existing caller cannot hold is a break.
+
+Adding is not breaking. A new `--json` field, a new instrument, and a new export are all minor
+changes, so a `--json` consumer must ignore fields it does not know. The CLI's human-readable stdout
+prose is not governed; scripts read `--json`.
+
+`dashboard/v1` carries its own version in its path, so a break there creates `dashboard/v2` rather
+than moving any package major. The obligation runs the other way: `dashboard/v1` is served for the
+whole major line it shipped in.
+
+The three language lines float independently, and each is governed on its own surfaces: a Go `/v2`
+does not move the TypeScript or Python major. Only a protocol break moves all three at once.
+
+### Experimental surface
+
+Nothing is experimental by default. An API is stable unless it appears in the table below, and this
+table is the authority — a doc comment marking something experimental without an entry here is a
+defect in this table, not an exclusion. An entry is outside every promise above and may change or
+disappear in any release.
+
+| Experimental API | Line | Since |
+| ---------------- | ---- | ----- |
+| _None._          |      |       |
+
+Doc comments mirror this table so a reader sees the exclusion at the call site: an `@experimental`
+JSDoc tag in TypeScript, `@experimental` on the first line of a Python docstring, and an
+`Experimental:` prefix on a Go doc comment.
+
+### What 1.0.0 changes
+
+1.0.0 is a promise change, not a shape change. It removes nothing: no superseded `_vN` function, no
+narrowing of `workhorse.protocol_version`, no export, name, identifier, flag, or telemetry name.
+Accumulated removals wait for 2.0.0. The upgrade from the last 0.x to 1.0.0 is therefore an ordinary
+rolling deployment — `workhorse schema migrate` from the pipeline, then a package bump — and not a
+release that requires stopping every process.
+
+The nine npm packages, the Python distribution, and the Go module publish 1.0.0 from one source
+commit as one release train. A line that cannot clear the parity bar slips the train rather than
+being left behind. That synchronisation happens once; afterwards the three version lines float again
+as they do today.
+
+At 1.0.0 the “public beta” label retires and “stable” replaces it.
 
 ## Protocol and schema compatibility
 
