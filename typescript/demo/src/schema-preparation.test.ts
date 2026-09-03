@@ -158,13 +158,21 @@ describe("the demo's schema step runs from the pipeline", () => {
     expect(code).not.toContain("prepare-schema.js");
   });
 
-  it("runs it from the pre-deploy hook, in the image being deployed", async () => {
-    const hook = await readFile(resolve(repositoryRoot, ".kamal/hooks/demo/pre-deploy"), "utf8");
+  // The hook that runs the step lives in the private operations repository, where its own suite
+  // asserts this same contract against the file that actually executes (ADR 0060). What this
+  // repository owns is the requirement: a deployment reading DEPLOYMENT.md must be told to run the
+  // step from the pipeline, in the version being deployed, and to fail the deploy when it refuses.
+  it("requires it of a deployment, in the contract this repository publishes", async () => {
+    const source = await readFile(resolve(repositoryRoot, "typescript/demo/DEPLOYMENT.md"), "utf8");
+    // The document is wrapped prose, so a sentence is matched against its collapsed whitespace
+    // rather than against wherever the lines happen to break today.
+    const contract = source.replaceAll(/\s+/g, " ");
 
-    expect(hook).toContain("kamal app exec");
-    // Without the version, `kamal app exec` resolves an image from the deploying checkout's HEAD
-    // rather than the one this deploy built.
-    expect(hook).toContain('--version "$KAMAL_VERSION"');
-    expect(hook).toContain("node dist/prepare-schema.js");
+    expect(contract).toContain("node dist/prepare-schema.js");
+    expect(contract).toContain("before any container from it starts");
+    // Reusing the deployed version is the whole guarantee: a step run from any other image is a
+    // different version of the schema tool than the one about to serve traffic.
+    expect(contract).toContain("started from the exact version being deployed");
+    expect(contract).toContain("must fail the deploy before the container swap");
   });
 });

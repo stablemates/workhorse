@@ -85,11 +85,4 @@ describe("public repository hygiene", () => {
 
     expect(findings).toEqual([]);
   });
-
-  it("does not expose the host PostgreSQL socket directory to the demo", async () => {
-    const deployment = await readFile("config/deploy.yml", "utf8");
-
-    expect(deployment).not.toMatch(/^volumes:/m);
-    expect(deployment).not.toContain("/var/run/postgresql");
-  });
 });

@@ -77,8 +77,15 @@ their data so one checkout cannot change another checkout's test state.
 ## Maintainers own public deployment
 
 Do not run a production setup, deploy, rollback, or container lifecycle command unless a maintainer
-explicitly asks for that operation. The files under `config/` are parameterized examples; they are
-not the source of truth for any live installation.
+explicitly asks for that operation.
+
+Nothing in this repository deploys anything. The live deployment runs from a private operations
+repository, and it consumes only `Dockerfile`, `Dockerfile.site`, and what they copy. This
+repository once carried parameterized copies of the deployment orchestration, which read as the real
+thing and sent work to files that could not affect any deployment; [ADR
+0060](docs/decisions/0060-describe-the-deployment-contract-instead-of-shipping-an-example.md)
+deleted them. Do not reintroduce a deploy script, a Kamal configuration, or a `.kamal/` directory
+here.
 
 If a change affects the public deployment contract, runtime configuration, image publishing, host
 prerequisites, or deployment procedure, update `typescript/demo/DEPLOYMENT.md` in the same commit.

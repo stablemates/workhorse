@@ -211,4 +211,4 @@ defaults. The application installs the current Workhorse schema and its idempote
 startup. Maintenance runs through the workers themselves, so no external scheduler or PostgreSQL
 extension is required.
 
-For a parameterized container deployment example, see [DEPLOYMENT.md](DEPLOYMENT.md).
+For what a deployment of the site and demo must do, see [DEPLOYMENT.md](DEPLOYMENT.md).

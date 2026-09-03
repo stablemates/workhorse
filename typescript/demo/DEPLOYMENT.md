@@ -1,173 +1,143 @@
 # Deploying the site and demo
 
-This repository includes parameterized Kamal examples for operators who want to run the
-documentation site and demo on one Docker host. They describe the application contract, but they
-are not the source of truth for the Workhorse project's live installation.
+This document states what a deployment of the documentation site and demo must do. It ships no
+deployment configuration.
 
-Maintainers operate the public installation from the private `../workhorse-operations` sibling
-repository, including its credentials and concrete infrastructure configuration. Do not create
-`deployment/kamal/secrets.env` in this repository.
+That is deliberate. This repository used to carry parameterized Kamal files alongside the real ones,
+which lived in a private operations repository. The copies were complete, executable, and sitting
+under the ordinary names, so a reader looking for the deploy found them first and could not tell
+they deployed nothing. They also drifted from the files they described.
+[ADR 0060](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0060-describe-the-deployment-contract-instead-of-shipping-an-example.md)
+removed them and made this page the contract instead. Requirements you have to satisfy yourself are
+more work than a file to copy, and they are honest: the copy was never exercised by any deployment.
 
-The demo host omits persisted worker stack traces from task-detail RPC responses. It keeps the
-error name and message so visitors can understand intentional failures without learning container
-paths or package internals.
+Maintainers operate the public installation from a private operations repository that holds its
+credentials and concrete infrastructure. Nothing in this repository deploys anything.
 
-Kamal builds each image locally, pushes it to an OCI registry, and starts it on the host over SSH.
-`kamal-proxy` terminates TLS and moves each hostname between healthy container versions.
+## What this repository supplies
+
+A deployment builds two images from this repository and nothing else:
+
+- `Dockerfile` builds the demo.
+- `Dockerfile.site` builds the documentation site, whose runtime serves the static bundle through
+  the nginx configuration in `deployment/site.conf`.
 
 Both Dockerfiles pin every base image by its multi-platform manifest digest. When updating a base
 image, resolve the new tag to a digest and commit both values together. The tag documents the
-intended release, while the digest prevents a registry-side tag change from altering a build.
+intended release; the digest prevents a registry-side tag change from altering a build.
 
-## Prerequisites
+The demo image installs Python runtime dependencies from the committed `python/uv.lock`. Update that
+lock with uv whenever `python/pyproject.toml` changes; the image build rejects a stale lock.
 
-Provide these services before using the examples:
+## What the deployment must provide
 
 - A Linux host with Docker, SSH access, and public ports 80 and 443.
 - DNS records for the site and demo hostnames pointing to that host.
-- An OCI registry that both the build machine and deployment host can reach.
-- Two PostgreSQL databases that the demo container can reach over the network.
-- Ruby, Bundler, Docker, and an SSH client on the build machine.
+- An OCI registry both the build machine and the host can reach.
+- Two PostgreSQL databases the demo container can reach, each with a dedicated role.
+- TLS termination that moves each hostname between healthy container versions.
 
-The example does not provision a registry, database, edge gateway, or host filesystem layout.
-Those choices belong to the operator because their credentials, recovery procedures, and network
-topology differ between installations.
+Provisioning the registry, the databases, the edge gateway, and the host filesystem layout belongs
+to the operator, because credentials, recovery procedures, and network topology differ between
+installations.
 
-## Configuration
+## Configuration the demo reads
 
-`config/deploy.site.yml` builds `Dockerfile.site` and publishes the documentation site.
-`config/deploy.yml` builds `Dockerfile` and publishes the demo. Both files read their installation
-details from the environment:
-
-The demo image installs Python runtime dependencies from the committed `python/uv.lock`. Update
-that lock with uv whenever `python/pyproject.toml` changes; the image build rejects a stale lock.
+The demo server reads its configuration from the environment. These are the values a deployment must
+supply:
 
 | Variable                       | Purpose                                                       |
 | ------------------------------ | ------------------------------------------------------------- |
-| `WORKHORSE_DEPLOY_HOST`        | SSH hostname or address of the Docker host                    |
-| `WORKHORSE_DEPLOY_USER`        | SSH user allowed to manage Docker                             |
-| `WORKHORSE_REGISTRY_SERVER`    | OCI registry hostname                                         |
-| `WORKHORSE_REGISTRY_USER`      | Registry account used by Kamal                                |
-| `WORKHORSE_REGISTRY_TOKEN`     | Registry token or password                                    |
-| `WORKHORSE_SITE_HOST`          | Primary documentation hostname                                |
-| `WORKHORSE_SITE_WWW_HOST`      | Additional documentation hostname                             |
-| `WORKHORSE_DEMO_HOST`          | Demo hostname                                                 |
-| `WORKHORSE_DEMO_PUBLIC_ORIGIN` | Complete HTTPS origin for browser links and origin validation |
 | `DATABASE_URL_PRIMARY`         | Demo PostgreSQL URL, including credentials and TLS parameters |
 | `DATABASE_URL_SECONDARY`       | Quiet staging workspace PostgreSQL URL, including credentials |
+| `WORKHORSE_DEMO_PUBLIC_ORIGIN` | Complete HTTPS origin for browser links and origin validation |
 
-Export the values in the operator's secret manager or shell. `.kamal/secrets` passes only the
-registry token and database URLs to Kamal, while the non-secret values render the two example
-configs.
+`typescript/demo/src/index.ts` reads the remaining variables, which carry defaults: the port, the
+demo mode and environment labels, the single-admin credentials, telemetry, seeding, and the shutdown
+grace period.
 
 Each demo workspace should have a dedicated role and database. The primary workspace runs the live
 workers. The secondary workspace is seeded at startup but stays quiet and read-only in the
-dashboard. The checked-in example reaches both over the network and does not mount a PostgreSQL
-socket directory from the host. Each URL must resolve from inside the deployed container, so a
-loopback address on the build machine is not usable.
+dashboard. Each URL must resolve from inside the deployed container, so a loopback address on the
+build machine is not usable.
 
-## First deployment
+If the demo reaches PostgreSQL over a Unix socket, give that instance a dedicated socket directory
+and mount only that directory. Do not mount a host-wide socket directory such as
+`/var/run/postgresql`, because it may contain sockets for unrelated databases.
 
-The repository pins Kamal in `deployment/kamal/Gemfile`. Install that bundle from the repository
-root:
+Keep credentials out of this repository. A deployment supplies them from its own secret store.
 
-```sh
-BUNDLE_GEMFILE=deployment/kamal/Gemfile bundle install
-```
-
-After exporting the configuration, prepare both applications:
-
-```sh
-scripts/setup-kamal.sh
-```
-
-Kamal installs its proxy and starts the site and demo. Confirm that both `/up` endpoints return
-success over HTTPS before sending users to the installation.
+## Resource and traffic requirements
 
 The demo container is limited to one CPU, 1 GiB of memory, and 256 processes. The shared proxy is
-limited to half a CPU, 256 MiB of memory, and 128 processes. Keep equivalent limits when adapting
-the examples so traffic or a runaway process cannot consume the host's full capacity.
+limited to half a CPU, 256 MiB of memory, and 128 processes. Keep equivalent limits so traffic or a
+runaway process cannot consume the host's full capacity.
 
-The demo keeps anonymous operator controls available, but the server limits each client to a burst
-of five mutations and then twelve mutations per minute. `kamal-proxy` must append the address it
-observes to `X-Forwarded-For`; the server uses the right-most address so a caller cannot choose the
-rate-limit key. If another proxy sits in front of Kamal, preserve that append-only chain.
+The demo keeps anonymous operator controls available, and the server limits each client to a burst
+of five mutations and then twelve mutations per minute. The proxy in front of it must append the
+address it observes to `X-Forwarded-For`; the server uses the right-most address so a caller cannot
+choose the rate-limit key. Any replacement proxy must preserve that append-only chain.
 
 The server retains successful and failed operator audit rows for seven days. It removes at most
 1,000 expired rows at startup and during each one-minute pass, so cleanup stays bounded while its
 capacity remains above the accepted mutation rate. The database role needs `DELETE` access to
-`public.workhorse_demo_audit` in addition to the access required by the writable demo.
+`public.workhorse_demo_audit` in addition to the access the writable demo requires.
 
-## Routine deployment
+The demo host omits persisted worker stack traces from task-detail RPC responses. It keeps the error
+name and message so visitors can understand intentional failures without learning container paths or
+package internals.
 
-Deploy both applications from a clean revision:
-
-```sh
-scripts/deploy.sh
-```
-
-Deploy only one application when its source changed independently:
-
-```sh
-scripts/deploy-site.sh
-scripts/deploy-demo.sh
-```
-
-The demo receives `DATABASE_URL_PRIMARY` and `DATABASE_URL_SECONDARY` as runtime secrets. This
-enables the production and staging workspace switcher. A routine deploy never creates, drops, or
-restores either database. Database recovery belongs to the operator's private runbook.
+A routine deploy never creates, drops, or restores either database. Database recovery belongs to the
+operator's runbook.
 
 ## The schema step runs from the pipeline
 
-`.kamal/hooks/demo/pre-deploy` runs the schema step. Kamal calls that hook after it builds and pushes the
-image and before it boots any container from it, which is the window the step belongs in: the
-database is ready for the new release before a process from that release exists.
+**This is the part of the contract a deployment must not get wrong.**
+
+The schema step runs from the pipeline, after the image is built and pushed and before any container
+from it starts:
 
 ```sh
-bundle exec kamal app exec --version "$KAMAL_VERSION" "node dist/prepare-schema.js"
+node dist/prepare-schema.js
 ```
 
-Each application names its own hooks directory. Kamal's default is `.kamal/hooks` relative to the
-working directory, and both configs are deployed from the repository root, so an unqualified
-directory would run the demo's schema step during a site deploy.
-
-`kamal app exec` starts a new container from the version being deployed, with the role's
-environment and volumes, so the schema tool is the one inside the image that is about to serve
-traffic. Its version matches the application because it is the same image. That is the container
-form of the local-binary rule on the [installation page](https://workhorse.run/docs/installation).
+Run it in a container started from the exact version being deployed, with the same environment and
+volumes the application role receives. The schema tool is then the one inside the image about to
+serve traffic, and its version matches the application because it is the same image. That is the
+container form of the local-binary rule on the
+[installation page](https://workhorse.run/docs/installation).
 
 `dist/prepare-schema.js` installs or migrates the Workhorse schema and the demo's own tables in
 every configured workspace, then verifies each one with the checks the server makes at startup. It
-stands in for the documented `workhorse schema status --json` verification, because the demo has
-two databases and a second schema the CLI does not know about. A refusal exits non-zero, which
-fails the deploy before the container swap.
+stands in for the documented `workhorse schema status --json` verification, because the demo has two
+databases and a second schema the CLI does not know about. A refusal exits non-zero, which must fail
+the deploy before the container swap.
 
 Nothing prepares a schema at startup. The container entry point starts processes only, and the
 server asserts compatibility and refuses to open `/up` when the step did not run. That is
-deliberate: a component that migrated itself would be as many concurrent migrators as the
-deployment has nodes, which is why
+deliberate: a component that migrated itself would be as many concurrent migrators as the deployment
+has nodes, which is why
 [ADR 0053](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0053-start-migrations-at-0-1-0-and-keep-them-additive.md)
-makes migration a pipeline step. An installation that recreates a demo database must let this hook
-run before the new container starts, which a normal `kamal deploy` does.
+makes migration a pipeline step. A deployment that recreates a demo database must let the step run
+before the new container starts.
+
+If the deployment tool runs one hooks directory per application, name it explicitly. A directory
+shared between the site and the demo runs the demo's schema step during a site deploy.
 
 ### The first installation needs one manual schema step
 
-Kamal writes each role's secret environment file to the host when it boots a container, and it runs
-`pre-deploy` before that. On every later deploy the file is already there, so the hook's container
-receives the database URLs. On the very first deploy the file does not exist yet, the hook's
-container cannot start, and the deploy stops before it boots anything.
+A deployment tool that writes the role's secret environment file to the host when it boots a
+container, and runs pre-deploy hooks before that, cannot run this step on the very first deploy: the
+file does not exist yet, so the hook's container cannot start.
 
-Install the schema once from the host before the first `scripts/setup-kamal.sh`, using the same
-image and the same command the hook runs, with the database URLs supplied however your installation
-supplies secrets to a one-off container. Every deploy after that is the hook alone.
+Install the schema once from the host before the first deploy, using the same image and the same
+command, with the database URLs supplied however your installation supplies secrets to a one-off
+container. Every deploy after that is the pipeline step alone.
 
-## Adapting the examples
+## Deploying a revision that is on `main`
 
-The checked-in configs assume one host, an external registry, an externally managed database, and
-direct TLS through `kamal-proxy`. Copy and adapt them when an installation needs multiple hosts,
-private networking, a reverse proxy, a host socket, or another registry authentication scheme. If
-the demo uses a Unix socket, give its PostgreSQL instance a dedicated socket directory and mount
-only that directory. Do not mount the host-wide `/var/run/postgresql` directory because it may
-contain sockets for unrelated databases. Any replacement proxy must append its observed client
-address to `X-Forwarded-For`. Keep credentials and concrete infrastructure values out of the copied
-repository.
+A deployment publishes whatever revision its source checkout holds. A checkout behind the branch
+republishes the previous build and reports success, which is indistinguishable from a deploy that
+did nothing. Verify the revision before deploying, and prefer a deployment path that refuses a
+source checkout that is stale or has uncommitted changes rather than one that trusts the operator to
+remember.

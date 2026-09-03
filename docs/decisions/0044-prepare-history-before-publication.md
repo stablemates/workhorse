@@ -1,8 +1,13 @@
 # ADR 0044: Prepare repository history before publication
 
-- **Status:** Accepted
+- **Status:** Accepted; superseded in part by [ADR 0060](0060-describe-the-deployment-contract-instead-of-shipping-an-example.md)
 - **Date:** 2026-08-25
 - **Related:** [Plane WH-437](https://ontrack.sh/projects/WH/issues/WH-272)
+
+> ADR 0060 supersedes the clause "Keep parameterized examples and generic deployment guidance in
+> this repository": the deployment orchestration is deleted here and the contract is documented
+> instead, because an example indistinguishable from the live path sends readers to a file that
+> deploys nothing. The extraction into a private operations repository decided here stands.
 
 ## Context
 
