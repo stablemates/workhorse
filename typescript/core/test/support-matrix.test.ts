@@ -30,12 +30,27 @@ async function readManifest(relativePath: string): Promise<Record<string, unknow
   return JSON.parse(await read(relativePath)) as Record<string, unknown>;
 }
 
+/** Upstream end-of-life dates, keyed by the version string as the matrix lists it. */
+type EndOfLifeDates = Record<string, string>;
+
 interface SupportManifest {
   readonly support: {
     readonly go: { readonly minimum: string };
-    readonly node: { readonly minimum: number; readonly tested: number[] };
-    readonly postgres: { readonly minimum: number; readonly tested: number[] };
-    readonly python: { readonly minimum: string; readonly tested: string[] };
+    readonly node: {
+      readonly endOfLife: EndOfLifeDates;
+      readonly minimum: number;
+      readonly tested: number[];
+    };
+    readonly postgres: {
+      readonly endOfLife: EndOfLifeDates;
+      readonly minimum: number;
+      readonly tested: number[];
+    };
+    readonly python: {
+      readonly endOfLife: EndOfLifeDates;
+      readonly minimum: string;
+      readonly tested: string[];
+    };
   };
   readonly toolchains: {
     readonly go: string;
@@ -47,6 +62,77 @@ interface SupportManifest {
 
 async function readSupportManifest(): Promise<SupportManifest> {
   return JSON.parse(await read("support.json")) as SupportManifest;
+}
+
+/** Display names for the manifest's runtime keys, as both documentation tables spell them. */
+const RUNTIME_NAMES = {
+  go: "Go",
+  node: "Node.js",
+  postgres: "PostgreSQL",
+  python: "Python",
+} satisfies Record<keyof SupportManifest["support"], string>;
+
+// Go is deliberately absent: its policy is relative to whichever two releases are current, so the
+// Go project publishes no date to transcribe, and recording one would make this repository the
+// authority on a schedule it does not own. See "Raising a floor" in docs/compatibility.md.
+const DATED_RUNTIMES = ["node", "postgres", "python"] as const;
+
+interface DatedVersion {
+  /** The runtime as the documentation names it, for example `Node.js`. */
+  readonly runtime: string;
+  /** The version as `support.json` lists it, for example `22` or `3.12`. */
+  readonly version: string;
+  /** The recorded date, either `YYYY-MM-DD` or `YYYY-MM`. */
+  readonly date: string;
+  /** The first instant at which the date has passed. */
+  readonly passedAt: number;
+}
+
+/**
+ * The instant a recorded end-of-life date has passed.
+ *
+ * Node.js and PostgreSQL publish a day. The Python developer guide publishes only a month for a
+ * version that has not retired yet, so a month-precision entry stands for the whole month and this
+ * returns the start of the following one. Either way the answer is the moment after the last
+ * instant upstream could still mean, so the check never fires early.
+ */
+function endOfLifePassedAt(date: string): number {
+  const parts = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(date);
+  if (!parts) throw new Error(`end-of-life date ${date} is neither YYYY-MM-DD nor YYYY-MM`);
+  const [, year, month, day] = parts;
+  return day === undefined
+    ? Date.UTC(Number(year), Number(month), 1)
+    : Date.UTC(Number(year), Number(month) - 1, Number(day) + 1);
+}
+
+function datedVersions(manifest: SupportManifest): DatedVersion[] {
+  return DATED_RUNTIMES.flatMap((runtime) =>
+    Object.entries(manifest.support[runtime].endOfLife).map(([version, date]) => ({
+      runtime: RUNTIME_NAMES[runtime],
+      version,
+      date,
+      passedAt: endOfLifePassedAt(date),
+    })),
+  );
+}
+
+/**
+ * The versions still in the matrix whose upstream end of life has passed at `now`, as sentences
+ * that name the version and the date, so a failure reads as the notice ADR 0058 requires.
+ */
+function retiredVersions(manifest: SupportManifest, now: number): string[] {
+  return datedVersions(manifest)
+    .filter((entry) => now >= entry.passedAt)
+    .map(
+      (entry) => `${entry.runtime} ${entry.version} reached upstream end of life on ${entry.date}`,
+    );
+}
+
+/** The `End of life` cell both documentation tables carry for one runtime. */
+function endOfLifeCell(dates: EndOfLifeDates): string {
+  return Object.entries(dates)
+    .map(([version, date]) => `${version}: ${date}`)
+    .join(", ");
 }
 
 function markdownTable(source: string, heading: string): Record<string, Record<string, string>> {
@@ -76,11 +162,13 @@ describe("supported version constants", () => {
   it("matches the repository support manifest", async () => {
     const manifest = await readSupportManifest();
 
-    expect(manifest.support.node).toEqual({
+    // Each entry also carries `endOfLife`, whose contents and exact key set are asserted by the
+    // `upstream end of life` block below, so this one matches the two fields it owns.
+    expect(manifest.support.node).toMatchObject({
       minimum: MINIMUM_NODE_MAJOR,
       tested: SUPPORTED_NODE_MAJORS,
     });
-    expect(manifest.support.postgres).toEqual({
+    expect(manifest.support.postgres).toMatchObject({
       minimum: MINIMUM_POSTGRES_MAJOR,
       tested: SUPPORTED_POSTGRES_MAJORS,
     });
@@ -151,6 +239,63 @@ describe("supported version constants", () => {
 
   it("only claims even-numbered Node.js releases, which are the ones with long-term support", () => {
     for (const major of SUPPORTED_NODE_MAJORS) expect(major % 2).toBe(0);
+  });
+});
+
+// ADR 0058 lets a floor rise only when the version being dropped has reached its upstream end of
+// life. That rule had no data behind it: the matrix was correct, but nothing in the repository knew
+// when a listed version retires, so a removal could not be justified from the repository alone and
+// nobody was told before it happened. These tests make the dates the fact the rule stands on.
+describe("upstream end of life", () => {
+  it("records a date for exactly the versions in the matrix", async () => {
+    const manifest = await readSupportManifest();
+
+    for (const runtime of DATED_RUNTIMES) {
+      const entry = manifest.support[runtime];
+      // Recording the same version list twice is what lets a date go missing when a version is
+      // added, so the keys are held to `tested` in order rather than as a set.
+      expect(Object.keys(entry.endOfLife)).toEqual(entry.tested.map(String));
+      // An unexpected key would slip past the manifest-match test's toMatchObject above.
+      expect(Object.keys(entry).toSorted()).toEqual(["endOfLife", "minimum", "tested"]);
+    }
+    expect(Object.keys(manifest.support.go)).toEqual(["minimum"]);
+  });
+
+  it("transcribes each date at the precision its upstream schedule publishes", async () => {
+    const manifest = await readSupportManifest();
+
+    // nodejs/Release and the PostgreSQL versioning policy both name a day. The Python developer
+    // guide names only a month until a version actually retires, and rounding that to a day would
+    // invent a date the schedule does not state.
+    for (const entry of datedVersions(manifest)) {
+      const precision = entry.runtime === "Python" ? /^\d{4}-\d{2}$/ : /^\d{4}-\d{2}-\d{2}$/;
+      expect(entry.date).toMatch(precision);
+    }
+  });
+
+  it("keeps no version in the matrix past its upstream end of life", async () => {
+    // Dropping the version is the fix, in a minor with the notice ADR 0058 requires. Editing the
+    // date to quiet this is not: the upstream schedule is the authority.
+    expect(retiredVersions(await readSupportManifest(), Date.now())).toEqual([]);
+  });
+
+  it("fails from the first instant a date has passed, naming the version and the date", async () => {
+    const manifest = await readSupportManifest();
+    const soonest = datedVersions(manifest).reduce((earliest, entry) =>
+      entry.passedAt < earliest.passedAt ? entry : earliest,
+    );
+
+    expect(retiredVersions(manifest, soonest.passedAt - 1)).toEqual([]);
+    expect(retiredVersions(manifest, soonest.passedAt)).toContain(
+      `${soonest.runtime} ${soonest.version} reached upstream end of life on ${soonest.date}`,
+    );
+  });
+
+  it("treats a month-precision date as the whole month", () => {
+    expect(endOfLifePassedAt("2028-10")).toBe(Date.UTC(2028, 10, 1));
+    expect(endOfLifePassedAt("2030-12")).toBe(Date.UTC(2031, 0, 1));
+    expect(endOfLifePassedAt("2027-04-30")).toBe(Date.UTC(2027, 4, 1));
+    expect(() => endOfLifePassedAt("2027")).toThrow(/neither YYYY-MM-DD nor YYYY-MM/);
   });
 });
 
@@ -458,18 +603,31 @@ describe("documentation", () => {
     // to learn whether their Python version is supported. Both tables are asserted from the same
     // expectation, so the two layers cannot state different numbers.
     const siteTable = markdownTable(sitePage, "## The tested matrix");
+    // The End of life column is what gives ADR 0058's notice somewhere to appear before the minor
+    // that drops a version, rather than in the changelog that already dropped it. Deriving each
+    // cell from support.json is what stops a published date from outliving the recorded one.
     const expectedSupport = {
-      Go: { Supported: `${goMinimum} and newer`, Minimum: goMinimum },
+      Go: {
+        Supported: `${goMinimum} and newer`,
+        Minimum: goMinimum,
+        "End of life": "No date; Go supports its two most recent releases",
+      },
       "Node.js": {
         Supported: claimedNodeMajors,
         Minimum: String(manifest.support.node.minimum),
+        "End of life": endOfLifeCell(manifest.support.node.endOfLife),
       },
-      PostgreSQL: { Supported: claimed, Minimum: String(manifest.support.postgres.minimum) },
+      PostgreSQL: {
+        Supported: claimed,
+        Minimum: String(manifest.support.postgres.minimum),
+        "End of life": endOfLifeCell(manifest.support.postgres.endOfLife),
+      },
       Python: {
         Supported: `${pythonTested[0]}–${pythonTested.at(-1)}`,
         Minimum: manifest.support.python.minimum,
+        "End of life": endOfLifeCell(manifest.support.python.endOfLife),
       },
-    } satisfies Record<string, { Supported: string; Minimum: string }>;
+    } satisfies Record<string, { Supported: string; Minimum: string; "End of life": string }>;
     for (const [runtime, cells] of Object.entries(expectedSupport)) {
       expect(supportTable[runtime]).toMatchObject(cells);
       expect(siteTable[runtime]).toMatchObject(cells);
@@ -517,14 +675,10 @@ describe("documentation", () => {
     expect(installation).toContain("[Compatibility](/docs/compatibility)");
     // The runtime names come from the manifest's own keys, so a newly supported runtime fails here
     // until it is given a row on both tables and brought under the restatement rule below.
-    const runtimeNames = {
-      go: "Go",
-      node: "Node.js",
-      postgres: "PostgreSQL",
-      python: "Python",
-    } satisfies Record<keyof SupportManifest["support"], string>;
-    expect(Object.keys(runtimeNames).toSorted()).toEqual(Object.keys(manifest.support).toSorted());
-    expect(Object.keys(expectedSupport).toSorted()).toEqual(Object.values(runtimeNames).toSorted());
+    expect(Object.keys(RUNTIME_NAMES).toSorted()).toEqual(Object.keys(manifest.support).toSorted());
+    expect(Object.keys(expectedSupport).toSorted()).toEqual(
+      Object.values(RUNTIME_NAMES).toSorted(),
+    );
     // Every version on Compatibility belongs to its table, where the assertions above hold it to
     // support.json. Prose on that page evades those assertions, which is how "Node.js 22 and 24
     // with PostgreSQL 15, 16, 17, and 18" outlived the matrix it restated, so the shape is
@@ -534,7 +688,7 @@ describe("documentation", () => {
       .split("\n")
       .filter((line) => !line.startsWith("|"))
       .join("\n");
-    for (const name of Object.values(runtimeNames)) {
+    for (const name of Object.values(RUNTIME_NAMES)) {
       const restatement = new RegExp(`${name.replaceAll(".", "\\.")}\\s\\d`);
       expect(installation).not.toMatch(restatement);
       expect(sitePageProse).not.toMatch(restatement);

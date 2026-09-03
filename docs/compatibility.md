@@ -1,9 +1,11 @@
 # Compatibility and support boundary
 
 This is the supported-version contract for the published Workhorse packages. `support.json` owns
-the repository matrix and local toolchain versions. `typescript/core/src/support.ts` exposes the
-Node.js and PostgreSQL claims to published packages. `.github/workflows/ci.yml` runs the matrix,
-and `typescript/core/test/support-matrix.test.ts` fails when machine-readable consumers drift.
+the repository matrix, each listed version's upstream end-of-life date, and local toolchain
+versions. `typescript/core/src/support.ts` exposes the Node.js and PostgreSQL claims to published
+packages. `.github/workflows/ci.yml` runs the matrix, and
+`typescript/core/test/support-matrix.test.ts` fails when machine-readable consumers drift or a
+listed version outlives its recorded date.
 
 ## What "supported" means
 
@@ -23,12 +25,12 @@ This boundary is about correctness only. It is not a performance claim; see
 
 ## Supported versions
 
-| Runtime    | Supported      | Minimum | Notes                                                   |
-| ---------- | -------------- | ------- | ------------------------------------------------------- |
-| Node.js    | 22, 24         | 22      | Even-numbered releases only. `engines.node` is `>=22`.  |
-| Python     | 3.12–3.14      | 3.12    | `stablemates-workhorse` ships one `py3-none-any` wheel. |
-| Go         | 1.25 and newer | 1.25    | pgx v5.9.2 is the minimum and the tested version.       |
-| PostgreSQL | 15, 16, 17, 18 | 15      | No extension beyond the default `plpgsql` is installed. |
+| Runtime    | Supported      | Minimum | End of life                                                    | Notes                                                   |
+| ---------- | -------------- | ------- | -------------------------------------------------------------- | ------------------------------------------------------- |
+| Node.js    | 22, 24         | 22      | 22: 2027-04-30, 24: 2028-04-30                                 | Even-numbered releases only. `engines.node` is `>=22`.  |
+| Python     | 3.12–3.14      | 3.12    | 3.12: 2028-10, 3.13: 2029-10, 3.14: 2030-10                    | `stablemates-workhorse` ships one `py3-none-any` wheel. |
+| Go         | 1.25 and newer | 1.25    | No date; Go supports its two most recent releases              | pgx v5.9.2 is the minimum and the tested version.       |
+| PostgreSQL | 15, 16, 17, 18 | 15      | 15: 2027-11-11, 16: 2028-11-09, 17: 2029-11-08, 18: 2030-11-14 | No extension beyond the default `plpgsql` is installed. |
 
 Pull requests and pushes run the newest Node.js and PostgreSQL versions. The weekly schedule runs
 every Node.js and PostgreSQL combination. The daily schedule runs the packed-package test on the
@@ -75,12 +77,20 @@ upstream project's own schedule is the authority and this repository keeps no co
 | Go         | Older than the two releases the Go project supports | [Go release policy](https://go.dev/doc/devel/release#policy)            |
 | PostgreSQL | Past the major's community end-of-life date         | [PostgreSQL versioning](https://www.postgresql.org/support/versioning/) |
 
+`support.json` records that date for every listed Node.js, Python, and PostgreSQL version, and the
+`End of life` column above publishes it. Go is the exception: its policy is relative to whatever
+the current release is, so there is no published date to transcribe and none is recorded. Node.js
+and PostgreSQL publish a day; the Python developer guide publishes only a month until a version
+retires, and a month-precision entry stands for that whole month.
+
 Convenience is not a reason. A runtime still supported upstream keeps its place in the table even
 when dropping it would simplify the code or shorten the matrix.
 
-Notice is what makes the minor honest. Before the minor that drops a version, the table above names
-it as scheduled for removal with its upstream date, and at least one published minor's changelog
-says so. PostgreSQL takes two published minors of notice rather than one, because a PostgreSQL major
+Notice is what makes the minor honest. The table above carries every version's upstream date from
+the day that version is first supported, and `typescript/core/test/support-matrix.test.ts` fails
+once a listed version is past it, so the repository notices the retirement rather than the reader.
+Before the minor that drops a version, at least one published minor's changelog says so.
+PostgreSQL takes two published minors of notice rather than one, because a PostgreSQL major
 upgrade is a database migration the operator schedules rather than a package bump.
 
 A floor raise is a minor because it cannot reach code that already runs. The release you installed

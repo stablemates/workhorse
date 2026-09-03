@@ -11,17 +11,23 @@ correctness evidence.
 
 ## The tested matrix
 
-| Runtime    | Supported      | Minimum | Notes                                                   |
-| ---------- | -------------- | ------- | ------------------------------------------------------- |
-| Node.js    | 22, 24         | 22      | Even-numbered releases only. `engines.node` is `>=22`.  |
-| Python     | 3.12–3.14      | 3.12    | `stablemates-workhorse` ships one `py3-none-any` wheel. |
-| Go         | 1.25 and newer | 1.25    | pgx v5.9.2 is the minimum and the tested version.       |
-| PostgreSQL | 15, 16, 17, 18 | 15      | No extension beyond the default `plpgsql` is installed. |
+| Runtime    | Supported      | Minimum | End of life                                                    | Notes                                                   |
+| ---------- | -------------- | ------- | -------------------------------------------------------------- | ------------------------------------------------------- |
+| Node.js    | 22, 24         | 22      | 22: 2027-04-30, 24: 2028-04-30                                 | Even-numbered releases only. `engines.node` is `>=22`.  |
+| Python     | 3.12–3.14      | 3.12    | 3.12: 2028-10, 3.13: 2029-10, 3.14: 2030-10                    | `stablemates-workhorse` ships one `py3-none-any` wheel. |
+| Go         | 1.25 and newer | 1.25    | No date; Go supports its two most recent releases              | pgx v5.9.2 is the minimum and the tested version.       |
+| PostgreSQL | 15, 16, 17, 18 | 15      | 15: 2027-11-11, 16: 2028-11-09, 17: 2029-11-08, 18: 2030-11-14 | No extension beyond the default `plpgsql` is installed. |
 
 Your application needs one of those language runtimes and a PostgreSQL server at or above its
 minimum. It does not need all three: a Python or Go service runs on Python or Go alone. Node.js
 appears in one other place, and only one — the machine that runs your deployment's schema step,
 because schema tooling ships in the TypeScript package.
+
+The End of life column is the upstream project's own retirement date for each version, transcribed
+from the project that publishes it rather than decided here. A version keeps its place in the table
+until that date passes, so the column tells you when to plan an upgrade instead of learning it from
+a release that already dropped the version. Go carries no date because its policy is relative to
+the current release rather than to a calendar.
 
 Pull requests and pushes exercise the newest version of each language against the newest PostgreSQL
 for fast feedback. The weekly schedule runs every combination in the table. A regression on any of
