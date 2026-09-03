@@ -69,6 +69,8 @@ jobs:
       - run: pnpm typescript-api:check
       - run: pnpm python-api:check
       - run: pnpm go-api:check
+      - run: pnpm cli-surface:check
+      - run: pnpm telemetry-surface:check
       - run: pnpm format:check
       - run: pnpm lint
       - run: pnpm python:vuln

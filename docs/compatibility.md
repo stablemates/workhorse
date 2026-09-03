@@ -233,18 +233,23 @@ any release. [ADR 0054](decisions/0054-define-what-1-0-0-promises.md) records th
 | TypeScript API                                      | A change that makes caller code stop compiling or behave differently, across the names and types reachable through a package's `exports` map and shipped `.d.ts`.                      | `typescript-api:check`, against `api/typescript.txt`        |
 | Python API                                          | The same, across the names in a public module's `__all__`. Underscore-prefixed modules such as `workhorse._protocol` are private.                                                      | `python-api:check`, against `api/python.txt`                |
 | Go API                                              | The same, across the exported identifiers of the module's non-`internal` packages. Go's own standard applies: what `apidiff` calls an incompatible change.                             | `go-api:check`, `apidiff` against the tag `api/go.txt` pins |
-| `workhorse` CLI                                     | Removing or renaming a command or flag, changing what an exit code means, or removing or retyping a field in `--json` output.                                                          | Review only; the check is Gate 1 work                       |
+| `workhorse` CLI                                     | Removing or renaming a command or flag, changing what an exit code means, or removing or retyping a field in `--json` output.                                                          | `cli-surface:check`, against `api/cli.txt`                  |
 | `dashboard/v1` wire contract                        | Removing a procedure, removing or retyping a response field, or tightening request validation.                                                                                         | `dashboard-spec:check`, which classifies the change         |
-| OpenTelemetry instrument, span, and attribute names | Renaming or removing an instrument, span, or attribute, or changing an instrument's unit or kind.                                                                                      | Review only; the check is Gate 1 work                       |
+| OpenTelemetry instrument, span, and attribute names | Renaming or removing an instrument, span, or attribute, or changing an instrument's unit or kind.                                                                                      | `telemetry-surface:check`, against `api/telemetry.txt`      |
 
 The right-hand column is Gate 1 of
 [ADR 0056](decisions/0056-set-the-1-0-0-exit-criteria.md): every governed surface holds a mechanical
-check in the CI `required` job, so no promise rests on review alone. The three language checks read
-the committed snapshots in [`api/`](../api/README.md), which that directory's own README explains.
-Each has a generator, so a legitimate addition costs one command: `pnpm typescript-api:generate`,
-`pnpm python-api:generate`, or `pnpm go-api:generate`. A row still reading "review only" has no
-check yet, and saying so here is the point — an unenforced promise that reads as enforced is worse
-than one that admits it.
+check in the CI `required` job, so no promise rests on review alone. Five of them read the committed
+snapshots in [`api/`](../api/README.md), which that directory's own README explains. Each has a
+generator, so a legitimate addition costs one command: `pnpm typescript-api:generate`,
+`pnpm python-api:generate`, `pnpm go-api:generate`, `pnpm cli-surface:generate`, or
+`pnpm telemetry-surface:generate`.
+
+A snapshot is only as good as where it reads from, so neither of the two newest reads a table kept
+beside the code. `api/cli.txt` reads `typescript/core/src/cli/surface.ts`, which the CLI itself
+dispatches, parses, and serializes through, so renaming a command or dropping a flag stops the CLI
+from accepting it. `api/telemetry.txt` reads the emitting source directly, so renaming an instrument
+or an attribute changes the snapshot on the same commit.
 
 A type-level break counts even when no runtime behaviour moved: a narrowed parameter or a widened
 return that an existing caller cannot hold is a break.

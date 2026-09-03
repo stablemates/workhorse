@@ -9,7 +9,8 @@ import type {
 } from "../../benchmarks/run.js";
 import type { OperationalScenarioName } from "../../benchmarks/scenarios.js";
 import { assertLocalDatabasePurpose, databaseName, localDatabaseUrl } from "../local-database.js";
-import { CliUsageError, parseCommandArgs, USAGE_EXIT_CODE } from "./arguments.js";
+import { CliUsageError, parseCommandArgs } from "./arguments.js";
+import { USAGE_EXIT_CODE } from "./surface.js";
 
 const HELP = `Workhorse benchmark suite v3
 

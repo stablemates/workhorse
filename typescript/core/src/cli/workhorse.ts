@@ -15,17 +15,25 @@ import {
 import { MINIMUM_POSTGRES_MAJOR, readPostgresSupport } from "../support.js";
 import { runWorkerProcess } from "../worker-process.js";
 import type { WorkerProcessDefinition } from "../worker-process.js";
-import {
-  CliUsageError,
-  databaseOptionDefinitions,
-  parseCommandArgs,
-  resolveDatabaseUrl,
-  USAGE_EXIT_CODE,
-} from "./arguments.js";
+import { CliUsageError, parseCommandArgs, resolveDatabaseUrl } from "./arguments.js";
 import { startDashboardServer } from "./dashboard.js";
 import { runHealthCommand } from "./health.js";
 import { initializeProject } from "./init.js";
 import { createSchemaStatusReport } from "./schema-status.js";
+import {
+  CLI_COMMANDS,
+  CLI_EXIT_CODES,
+  CLI_OPTIONS,
+  SCHEMA_ACTIONS,
+  USAGE_EXIT_CODE,
+  type CliJsonPayloads,
+  type SchemaAction,
+} from "./surface.js";
+
+/** The exit-code block of the root help, so the prose cannot drift from the declaration. */
+const EXIT_CODE_HELP = CLI_EXIT_CODES.map(
+  ({ code, meaning }) => `  ${String(code).padEnd(3)} ${meaning}`,
+).join("\n");
 
 const ROOT_HELP = `Usage: workhorse <command> [options]
 
@@ -45,10 +53,7 @@ Global options:
   --version   Show the @stablemates/workhorse version.
 
 Exit codes:
-  0   Success.
-  1   Runtime failure, and a schema or PostgreSQL "schema status" reports as unusable.
-  2   Queue degradation reported by health.
-  64  Usage error, including an unknown command, flag, or missing value.
+${EXIT_CODE_HELP}
 `;
 
 const INIT_HELP = `Usage: workhorse init [options]
@@ -166,6 +171,14 @@ ${DATABASE_HELP}  --json                  Emit the full machine-readable QueueHe
 The default output is human-readable. Exit 2 means queue degradation; malformed usage exits 64.
 `;
 
+/**
+ * The first word of every declared command, which is what root dispatch accepts.
+ *
+ * Deriving the set here rather than restating it means removing or renaming a command in
+ * `surface.ts` stops the CLI from accepting it, which is what keeps the snapshot honest.
+ */
+const ROOT_COMMANDS = new Set<string>(CLI_COMMANDS.map((command) => command.name.split(" ")[0]!));
+
 interface WorkerCommandOptions {
   config: string;
   shutdownTimeoutMs?: number;
@@ -182,11 +195,7 @@ function parsePositiveInteger(value: string, flag: string): number {
 function parseWorkerOptions(args: readonly string[]): WorkerCommandOptions | null {
   const { values } = parseCommandArgs("worker", {
     args,
-    options: {
-      config: { type: "string" },
-      "shutdown-timeout-ms": { type: "string" },
-      help: { type: "boolean", short: "h" },
-    },
+    options: CLI_OPTIONS.worker,
     strict: true,
     allowPositionals: false,
   });
@@ -268,12 +277,54 @@ async function resolveDashboardAuthentication(): Promise<DashboardSingleAdminOpt
   };
 }
 
+function isSchemaAction(value: string | undefined): value is SchemaAction {
+  return SCHEMA_ACTIONS.includes(value as SchemaAction);
+}
+
+/** What the three `schema` actions share once their own option sets have been parsed. */
+interface SchemaCommandOptions {
+  readonly help?: boolean;
+  readonly "database-url"?: string;
+  readonly json?: boolean;
+}
+
+/**
+ * Parse one `schema` action against its own declared options.
+ *
+ * The three are parsed apart rather than together because only `status` accepts `--json`, and a
+ * shared option set would quietly accept it everywhere.
+ */
+function parseSchemaOptions(action: SchemaAction, args: readonly string[]): SchemaCommandOptions {
+  if (action === "install") {
+    return parseCommandArgs("schema install", {
+      args,
+      options: CLI_OPTIONS["schema install"],
+      strict: true,
+      allowPositionals: false,
+    }).values;
+  }
+  if (action === "migrate") {
+    return parseCommandArgs("schema migrate", {
+      args,
+      options: CLI_OPTIONS["schema migrate"],
+      strict: true,
+      allowPositionals: false,
+    }).values;
+  }
+  return parseCommandArgs("schema status", {
+    args,
+    options: CLI_OPTIONS["schema status"],
+    strict: true,
+    allowPositionals: false,
+  }).values;
+}
+
 async function runSchemaCommand(args: readonly string[]): Promise<void> {
   const action = args[0];
   if (!action || action === "--help" || action === "-h") {
     const { values } = parseCommandArgs("schema", {
       args,
-      options: { help: { type: "boolean", short: "h" } },
+      options: CLI_OPTIONS.schema,
       strict: true,
       allowPositionals: false,
     });
@@ -282,19 +333,10 @@ async function runSchemaCommand(args: readonly string[]): Promise<void> {
       return;
     }
   }
-  if (action !== "install" && action !== "migrate" && action !== "status") {
+  if (!isSchemaAction(action)) {
     throw new CliUsageError(`Unknown schema command: ${String(action)}`);
   }
-  const { values } = parseCommandArgs(`schema ${action}`, {
-    args: args.slice(1),
-    options: {
-      ...databaseOptionDefinitions,
-      ...(action === "status" ? { json: { type: "boolean" as const } } : {}),
-      help: { type: "boolean", short: "h" },
-    },
-    strict: true,
-    allowPositionals: false,
-  });
+  const values = parseSchemaOptions(action, args.slice(1));
   if (values.help) {
     process.stdout.write(
       action === "install"
@@ -319,7 +361,11 @@ async function runSchemaCommand(args: readonly string[]): Promise<void> {
       // matrix, which no schema version can express.
       const support = await readPostgresSupport(pool);
       const protocolVersions = version === null ? null : await readProtocolVersions(pool);
-      const report = createSchemaStatusReport(version, protocolVersions, support);
+      const report: CliJsonPayloads["schema status"] = createSchemaStatusReport(
+        version,
+        protocolVersions,
+        support,
+      );
       if (values.json) {
         process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
       } else {
@@ -435,18 +481,7 @@ async function readWorkspaceConfigFile(file: string): Promise<DashboardWorkspace
 async function runDashboardCommand(args: readonly string[]): Promise<void> {
   const { values } = parseCommandArgs("dashboard", {
     args,
-    options: {
-      ...databaseOptionDefinitions,
-      port: { type: "string" },
-      host: { type: "string" },
-      socket: { type: "string" },
-      "public-origin": { type: "string" },
-      "allow-mutations": { type: "boolean" },
-      actor: { type: "string" },
-      workspace: { type: "string", multiple: true },
-      config: { type: "string" },
-      help: { type: "boolean", short: "h" },
-    },
+    options: CLI_OPTIONS.dashboard,
     strict: true,
     allowPositionals: false,
   });
@@ -524,11 +559,7 @@ async function runDashboardCommand(args: readonly string[]): Promise<void> {
 async function runInitCommand(args: readonly string[]): Promise<void> {
   const { values } = parseCommandArgs("init", {
     args,
-    options: {
-      dir: { type: "string" },
-      force: { type: "boolean" },
-      help: { type: "boolean", short: "h" },
-    },
+    options: CLI_OPTIONS.init,
     strict: true,
     allowPositionals: false,
   });
@@ -552,11 +583,7 @@ async function runInitCommand(args: readonly string[]): Promise<void> {
 async function runTui(args: readonly string[]): Promise<void> {
   const { values } = parseCommandArgs("tui", {
     args,
-    options: {
-      ...databaseOptionDefinitions,
-      env: { type: "string" },
-      help: { type: "boolean", short: "h" },
-    },
+    options: CLI_OPTIONS.tui,
     strict: true,
     allowPositionals: false,
   });
@@ -571,11 +598,7 @@ async function runTui(args: readonly string[]): Promise<void> {
 async function runHealth(args: readonly string[]): Promise<void> {
   const { values } = parseCommandArgs("health", {
     args,
-    options: {
-      ...databaseOptionDefinitions,
-      json: { type: "boolean" },
-      help: { type: "boolean", short: "h" },
-    },
+    options: CLI_OPTIONS.health,
     strict: true,
     allowPositionals: false,
   });
@@ -624,7 +647,7 @@ async function main(args: readonly string[]): Promise<void> {
   if (command === "--help" || command === "-h") {
     parseCommandArgs("workhorse", {
       args,
-      options: { help: { type: "boolean", short: "h" } },
+      options: CLI_OPTIONS.workhorse,
       strict: true,
       allowPositionals: false,
     });
@@ -634,7 +657,7 @@ async function main(args: readonly string[]): Promise<void> {
   if (command === "--version") {
     parseCommandArgs("workhorse", {
       args,
-      options: { version: { type: "boolean" } },
+      options: CLI_OPTIONS.workhorse,
       strict: true,
       allowPositionals: false,
     });
@@ -644,14 +667,12 @@ async function main(args: readonly string[]): Promise<void> {
   if (command.startsWith("-")) {
     parseCommandArgs("workhorse", {
       args,
-      options: {
-        help: { type: "boolean", short: "h" },
-        version: { type: "boolean" },
-      },
+      options: CLI_OPTIONS.workhorse,
       strict: true,
       allowPositionals: false,
     });
   }
+  if (!ROOT_COMMANDS.has(command)) throw new CliUsageError(`Unknown command: ${command}`);
   if (command === "dashboard") {
     await runDashboardCommand(args.slice(1));
     return;
@@ -677,14 +698,19 @@ async function main(args: readonly string[]): Promise<void> {
     await runHealth(args.slice(1));
     return;
   }
-  if (command !== "worker") throw new CliUsageError(`Unknown command: ${command}`);
-  const options = parseWorkerOptions(args.slice(1));
-  if (!options) {
-    process.stdout.write(WORKER_HELP);
+  if (command === "worker") {
+    const options = parseWorkerOptions(args.slice(1));
+    if (!options) {
+      process.stdout.write(WORKER_HELP);
+      return;
+    }
+    const definition = await loadDefinition(options.config);
+    await runWorkerProcess(definition, { shutdownTimeoutMs: options.shutdownTimeoutMs });
     return;
   }
-  const definition = await loadDefinition(options.config);
-  await runWorkerProcess(definition, { shutdownTimeoutMs: options.shutdownTimeoutMs });
+  // Unreachable: the guard above admits only declared commands, and every one is dispatched here.
+  // A command added to `surface.ts` and to no branch lands on this line rather than on `worker`.
+  throw new Error(`No handler for the declared command: ${command}`);
 }
 
 try {

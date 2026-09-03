@@ -37,6 +37,7 @@ import {
   waitsTableRows,
   workersTableRows,
 } from "./admin-format.js";
+import { ADMIN_COMMANDS, CLI_OPTIONS } from "./surface.js";
 
 const ADMIN_HELP = `Usage: workhorse admin <command> [options]
 
@@ -108,28 +109,14 @@ const JOB_STATES: readonly JobState[] = [
   "canceled",
 ];
 
-const READ_COMMANDS = new Set([
-  "jobs",
-  "job",
-  "timeline",
-  "checkpoints",
-  "waits",
-  "external-waits",
-  "failures",
-  "queues",
-  "schedules",
-  "workers",
-  "maintenance",
-]);
-const MUTATION_COMMANDS = new Set([
-  "cancel",
-  "redrive",
-  "pause",
-  "resume",
-  "purge",
-  "pause-worker",
-  "resume-worker",
-]);
+// Derived rather than restated, so removing or renaming a subcommand in `surface.ts` stops this
+// dispatch from accepting it and `api/cli.txt` cannot describe a command that no longer runs.
+const READ_COMMANDS = new Set<string>(
+  ADMIN_COMMANDS.filter((entry) => !entry.mutates).map((entry) => entry.name),
+);
+const MUTATION_COMMANDS = new Set<string>(
+  ADMIN_COMMANDS.filter((entry) => entry.mutates).map((entry) => entry.name),
+);
 
 interface AdminIo {
   out(text: string): void;
@@ -267,24 +254,7 @@ export async function runAdminCommand(
   }
   const { values, positionals } = parseCommandArgs(`admin ${command}`, {
     args: args.slice(1),
-    options: {
-      "database-url": { type: "string" },
-      json: { type: "boolean" },
-      queue: { type: "string" },
-      type: { type: "string" },
-      state: { type: "string", multiple: true },
-      limit: { type: "string" },
-      namespace: { type: "string", multiple: true },
-      name: { type: "string" },
-      "human-cursor": { type: "string" },
-      "signal-cursor": { type: "string" },
-      env: { type: "string" },
-      yes: { type: "boolean" },
-      actor: { type: "string" },
-      reason: { type: "string" },
-      "request-id": { type: "string" },
-      help: { type: "boolean", short: "h" },
-    },
+    options: CLI_OPTIONS.admin,
     strict: true,
     allowPositionals: true,
   });
@@ -308,7 +278,7 @@ export async function runAdminCommand(
       const page = await client.listJobs(query);
       io.out(
         json
-          ? toAdminJson(page)
+          ? toAdminJson("admin jobs", page)
           : `${formatTable(JOBS_TABLE_HEADERS, jobsTableRows(page.items))}\n`,
       );
       return;
@@ -321,7 +291,9 @@ export async function runAdminCommand(
         process.exitCode = 1;
         return;
       }
-      io.out(json ? toAdminJson(snapshot) : `${jobDetailLines(snapshot).join("\n")}\n`);
+      io.out(
+        json ? toAdminJson("admin job", snapshot) : `${jobDetailLines(snapshot).join("\n")}\n`,
+      );
       return;
     }
     if (command === "timeline") {
@@ -329,7 +301,7 @@ export async function runAdminCommand(
       const page = await client.getJobTimeline(jobId, { limit });
       io.out(
         json
-          ? toAdminJson(page)
+          ? toAdminJson("admin timeline", page)
           : `${formatTable(TIMELINE_TABLE_HEADERS, timelineTableRows(page.items))}\n`,
       );
       return;
@@ -344,14 +316,16 @@ export async function runAdminCommand(
           return;
         }
         io.out(
-          json ? toAdminJson(checkpoint) : `${checkpointDetailLines(checkpoint).join("\n")}\n`,
+          json
+            ? toAdminJson("admin checkpoints", checkpoint)
+            : `${checkpointDetailLines(checkpoint).join("\n")}\n`,
         );
         return;
       }
       const checkpoints = await client.listCheckpoints(jobId);
       io.out(
         json
-          ? toAdminJson(checkpoints)
+          ? toAdminJson("admin checkpoints", checkpoints)
           : `${formatTable(CHECKPOINTS_TABLE_HEADERS, checkpointsTableRows(checkpoints))}\n`,
       );
       return;
@@ -365,12 +339,14 @@ export async function runAdminCommand(
           process.exitCode = 1;
           return;
         }
-        io.out(json ? toAdminJson(wait) : `${waitDetailLines(wait).join("\n")}\n`);
+        io.out(json ? toAdminJson("admin waits", wait) : `${waitDetailLines(wait).join("\n")}\n`);
         return;
       }
       const waits = await client.listWaits(jobId);
       io.out(
-        json ? toAdminJson(waits) : `${formatTable(WAITS_TABLE_HEADERS, waitsTableRows(waits))}\n`,
+        json
+          ? toAdminJson("admin waits", waits)
+          : `${formatTable(WAITS_TABLE_HEADERS, waitsTableRows(waits))}\n`,
       );
       return;
     }
@@ -390,7 +366,7 @@ export async function runAdminCommand(
       });
       io.out(
         json
-          ? toAdminJson(waits)
+          ? toAdminJson("admin external-waits", waits)
           : `${formatTable(EXTERNAL_WAITS_TABLE_HEADERS, externalWaitsTableRows(waits))}\n`,
       );
       return;
@@ -403,7 +379,7 @@ export async function runAdminCommand(
       });
       io.out(
         json
-          ? toAdminJson(page)
+          ? toAdminJson("admin failures", page)
           : `${formatTable(FAILURES_TABLE_HEADERS, failuresTableRows(page.items))}\n`,
       );
       return;
@@ -412,7 +388,7 @@ export async function runAdminCommand(
       const queues = await client.queues();
       io.out(
         json
-          ? toAdminJson(queues)
+          ? toAdminJson("admin queues", queues)
           : `${formatTable(QUEUES_TABLE_HEADERS, queuesTableRows(queues))}\n`,
       );
       return;
@@ -422,7 +398,7 @@ export async function runAdminCommand(
       const schedules = await client.schedules(namespaces.length === 0 ? undefined : namespaces);
       io.out(
         json
-          ? toAdminJson(schedules)
+          ? toAdminJson("admin schedules", schedules)
           : `${formatTable(SCHEDULES_TABLE_HEADERS, schedulesTableRows(schedules))}\n`,
       );
       return;
@@ -431,14 +407,16 @@ export async function runAdminCommand(
       const workers = await client.workers();
       io.out(
         json
-          ? toAdminJson(workers)
+          ? toAdminJson("admin workers", workers)
           : `${formatTable(WORKERS_TABLE_HEADERS, workersTableRows(workers))}\n`,
       );
       return;
     }
     if (command === "maintenance") {
       const state = await client.maintenance();
-      io.out(json ? toAdminJson(state) : `${maintenanceLines(state).join("\n")}\n`);
+      io.out(
+        json ? toAdminJson("admin maintenance", state) : `${maintenanceLines(state).join("\n")}\n`,
+      );
       return;
     }
 
@@ -453,7 +431,7 @@ export async function runAdminCommand(
         requestedBy: actor,
         reason: values.reason,
       });
-      if (json) io.out(toAdminJson(result));
+      if (json) io.out(toAdminJson("admin cancel", result));
       else if (result.status === "canceled") io.out(`Canceled job ${jobId}.\n`);
       else if (result.status === "cancel_requested") {
         io.out(`Requested cooperative cancellation of active job ${jobId}.\n`);
@@ -475,7 +453,7 @@ export async function runAdminCommand(
         reason: values.reason,
         requestId: values["request-id"] ?? randomUUID(),
       });
-      if (json) io.out(toAdminJson(result));
+      if (json) io.out(toAdminJson("admin redrive", result));
       else if (result.status === "redriven" || result.status === "replayed") {
         io.out(`Redrove job ${jobId} as ${result.targetJobId ?? "unknown"} (${result.status}).\n`);
       } else if (result.status === "not_failed") {
@@ -504,8 +482,9 @@ export async function runAdminCommand(
         process.exitCode = 1;
         return;
       }
-      if (json) io.out(toAdminJson(result));
-      else io.out(`${paused ? "Paused" : "Resumed"} worker ${workerId}.\n`);
+      if (json) {
+        io.out(toAdminJson(paused ? "admin pause-worker" : "admin resume-worker", result));
+      } else io.out(`${paused ? "Paused" : "Resumed"} worker ${workerId}.\n`);
       return;
     }
     const queueName = requirePositional(positionals, command, "queue");
@@ -519,14 +498,16 @@ export async function runAdminCommand(
     };
     if (command === "purge") {
       const deletedCount = await client.purgeQueue(environment, queueName, request);
-      if (json) io.out(toAdminJson({ queue: queueName, deletedCount }));
+      if (json) io.out(toAdminJson("admin purge", { queue: queueName, deletedCount }));
       else io.out(`Purged ${deletedCount} job(s) from queue ${queueName}.\n`);
       return;
     }
     if (command === "pause") await client.pauseQueue(environment, queueName, request);
     else await client.resumeQueue(environment, queueName, request);
-    if (json) io.out(toAdminJson({ queue: queueName, paused: command === "pause" }));
-    else io.out(`${command === "pause" ? "Paused" : "Resumed"} queue ${queueName}.\n`);
+    const paused = command === "pause";
+    if (json) {
+      io.out(toAdminJson(paused ? "admin pause" : "admin resume", { queue: queueName, paused }));
+    } else io.out(`${paused ? "Paused" : "Resumed"} queue ${queueName}.\n`);
   } catch (error) {
     if (error instanceof AdminSafetyError || error instanceof PurgeIdempotencyConflictError) {
       io.error(`Refused: ${error.message}\n`);

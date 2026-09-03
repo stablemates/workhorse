@@ -1,5 +1,5 @@
 import { parseArgs, type ParseArgsConfig } from "node:util";
-export const USAGE_EXIT_CODE = 64;
+
 
 export class CliUsageError extends Error {
   constructor(message: string) {
@@ -7,10 +7,6 @@ export class CliUsageError extends Error {
     this.name = "CliUsageError";
   }
 }
-
-export const databaseOptionDefinitions = {
-  "database-url": { type: "string" },
-} as const;
 
 export interface DatabaseOptions {
   readonly "database-url"?: string;

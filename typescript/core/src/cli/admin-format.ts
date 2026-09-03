@@ -15,14 +15,26 @@ import type {
   AdminMaintenanceState,
   AdminQueueStatus,
 } from "./admin-client.js";
+import type { CliJsonPayloads } from "./surface.js";
 
 /** Serialize administrative payloads that contain bigint fence tokens and schedule revisions. */
 export function adminJsonReplacer(_key: string, value: unknown): unknown {
   return typeof value === "bigint" ? value.toString() : value;
 }
 
-export function toAdminJson(value: unknown): string {
-  return `${JSON.stringify(value, adminJsonReplacer, 2)}\n`;
+/**
+ * Serialize one command's `--json` payload.
+ *
+ * The command names its own entry in {@link CliJsonPayloads}, so the compiler refuses a payload
+ * that is not the declared type and `api/cli.txt` cannot describe a shape no command emits.
+ */
+export function toAdminJson<K extends keyof CliJsonPayloads>(
+  command: K,
+  payload: CliJsonPayloads[K],
+): string {
+  // The command is a type-level argument. It binds the payload to its declaration and is not read.
+  void command;
+  return `${JSON.stringify(payload, adminJsonReplacer, 2)}\n`;
 }
 
 /** Render one left-aligned text table with a header row. Rows own their own truncation. */
