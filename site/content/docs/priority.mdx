@@ -22,7 +22,7 @@ PostgreSQL claims higher values first, then keeps FIFO order among jobs with the
   <Tab value="Go">
     ```go
     _, err := queue.Enqueue(ctx, "invoice.remind", map[string]any{
-        "invoiceId": invoiceID,
+    	"invoiceId": invoiceID,
     }, workhorse.EnqueueOptions{Queue: "billing", Priority: 10})
     ```
   </Tab>

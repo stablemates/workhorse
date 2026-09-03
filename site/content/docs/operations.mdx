@@ -98,7 +98,7 @@ see and steer a fleet you do not host:
     admin := workhorse.NewAdmin(workhorse.NewPGXExecutor(pool))
     workers, err := admin.ListWorkers(ctx)
     result, err := admin.SetWorkerPaused(ctx, "billing-worker-1", true, workhorse.AdminAudit{
-        Actor: actor.Email, Reason: "investigating slow provider", RequestID: incidentID,
+    	Actor: actor.Email, Reason: "investigating slow provider", RequestID: incidentID,
     })
     ```
   </Tab>

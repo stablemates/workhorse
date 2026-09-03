@@ -41,9 +41,9 @@ mechanism.
   <Tab value="Go">
     ```go
     jobID, err := queue.Enqueue(ctx, "invoice.capture", map[string]any{
-        "invoiceId": invoiceID,
+    	"invoiceId": invoiceID,
     }, workhorse.EnqueueOptions{Queue: "billing", Idempotency: &workhorse.Idempotency{
-        Key: "capture:" + invoiceID, Scope: "invoice-capture",
+    	Key: "capture:" + invoiceID, Scope: "invoice-capture",
     }})
     ```
   </Tab>
@@ -81,9 +81,9 @@ Use `enqueueWithResult` when application behavior or diagnostics need more than 
   <Tab value="Go">
     ```go
     result, err := queue.EnqueueWithResult(ctx, "invoice.capture", map[string]any{
-        "invoiceId": invoiceID,
+    	"invoiceId": invoiceID,
     }, workhorse.EnqueueOptions{Idempotency: &workhorse.Idempotency{
-        Key: key, Scope: "invoice-capture",
+    	Key: key, Scope: "invoice-capture",
     }})
     ```
   </Tab>

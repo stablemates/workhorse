@@ -44,10 +44,10 @@ with pruning enabled — the default — definitions you dropped from the list a
   <Tab value="Go">
     ```go
     err := queue.SyncSchedules(ctx, "billing-production", []workhorse.ScheduleDefinition{{
-        Name: "invoice-run", Schedule: nightlyCron, Timezone: "America/New_York",
-        Job: workhorse.ScheduledJob{
-            Type: "invoice.generate", Queue: "billing", Payload: map[string]any{"scope": "due"},
-        },
+    	Name: "invoice-run", Schedule: nightlyCron, Timezone: "America/New_York",
+    	Job: workhorse.ScheduledJob{
+    		Type: "invoice.generate", Queue: "billing", Payload: map[string]any{"scope": "due"},
+    	},
     }}, workhorse.SyncSchedulesOptions{Prune: true})
     ```
   </Tab>
@@ -87,7 +87,7 @@ parser and one stored IANA timezone.
   <Tab value="Go">
     ```go
     worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-        ScheduleNamespaces: []string{"billing-production"},
+    	ScheduleNamespaces: []string{"billing-production"},
     })
     ```
   </Tab>

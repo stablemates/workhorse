@@ -242,7 +242,7 @@ the check.
     ```go
     executor := workhorse.NewPGXExecutor(pool)
     if err := workhorse.AssertSchemaCompatible(ctx, executor); err != nil {
-        return err
+    	return err
     }
     ```
 

@@ -42,9 +42,9 @@ and storage health can still affect both paths.
     ```go
     finishedAfter := time.Date(2026, time.August, 12, 9, 0, 0, 0, time.UTC)
     page, err := admin.ListDeadLetters(ctx, workhorse.DeadLetterQuery{
-        DeadLetterFilter: workhorse.DeadLetterFilter{
-            Queue: "billing", ErrorName: "ProviderTimeout", FinishedAfter: &finishedAfter,
-        },
+    	DeadLetterFilter: workhorse.DeadLetterFilter{
+    		Queue: "billing", ErrorName: "ProviderTimeout", FinishedAfter: &finishedAfter,
+    	},
     })
     ```
   </Tab>
@@ -79,7 +79,7 @@ ID. Workhorse records attribution; your operator layer must authorize the actor 
   <Tab value="Go">
     ```go
     result, err := admin.Redrive(ctx, sourceJobID, workhorse.AdminAudit{
-        Actor: actor.Email, Reason: "provider incident resolved", RequestID: incidentID,
+    	Actor: actor.Email, Reason: "provider incident resolved", RequestID: incidentID,
     })
     ```
   </Tab>
@@ -129,10 +129,10 @@ stable order. Start with a dry run:
     ```go
     filter := workhorse.DeadLetterFilter{Queue: "billing", ErrorName: "ProviderTimeout"}
     audit := workhorse.AdminAudit{
-        Actor: actor.Email, Reason: "provider incident resolved", RequestID: incidentID,
+    	Actor: actor.Email, Reason: "provider incident resolved", RequestID: incidentID,
     }
     preview, err := admin.RedriveMany(ctx, filter, audit, workhorse.BulkRedriveOptions{
-        DryRun: true, Limit: pageSize,
+    	DryRun: true, Limit: pageSize,
     })
     page, err := admin.RedriveMany(ctx, filter, audit, workhorse.BulkRedriveOptions{Limit: pageSize})
     ```

@@ -66,20 +66,20 @@ Go applications return a `dashboard.Principal` from a standard `net/http` handle
 
 ```go
 operator, err := dashboard.NewHandler(dashboard.HandlerOptions{
-    Executor: workhorse.NewPGXExecutor(pool),
-    Path:     "/workhorse",
-    Authorize: func(request *http.Request) dashboard.Authorization {
-        username, ok := applicationAdminSession(request)
-        if !ok {
-            return dashboard.Authorization{}
-        }
-        return dashboard.Authorization{
-            Principal: &dashboard.Principal{Actor: username},
-        }
-    },
+	Executor: workhorse.NewPGXExecutor(pool),
+	Path:     "/workhorse",
+	Authorize: func(request *http.Request) dashboard.Authorization {
+		username, ok := applicationAdminSession(request)
+		if !ok {
+			return dashboard.Authorization{}
+		}
+		return dashboard.Authorization{
+			Principal: &dashboard.Principal{Actor: username},
+		}
+	},
 })
 if err != nil {
-    return err
+	return err
 }
 http.Handle("/workhorse/", operator)
 ```

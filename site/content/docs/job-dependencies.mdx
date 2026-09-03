@@ -32,10 +32,10 @@ the job and its dependency edges in the enqueue transaction, so a rollback remov
     ```go
     importID, err := queue.Enqueue(ctx, "contacts.import", map[string]any{"source": "upload"}, workhorse.EnqueueOptions{})
     _, err = queue.Enqueue(ctx, "contacts.notify", map[string]any{"importId": importID}, workhorse.EnqueueOptions{
-        Dependencies: &workhorse.Dependencies{
-            PrerequisiteJobIDs: []string{importID}, OnSuccess: workhorse.DependencyRelease,
-            OnFailure: workhorse.DependencyFail, OnCancellation: workhorse.DependencyCancel,
-        },
+    	Dependencies: &workhorse.Dependencies{
+    		PrerequisiteJobIDs: []string{importID}, OnSuccess: workhorse.DependencyRelease,
+    		OnFailure: workhorse.DependencyFail, OnCancellation: workhorse.DependencyCancel,
+    	},
     })
     ```
   </Tab>

@@ -35,11 +35,11 @@ immediately. A future `runAt` places it in `scheduled` until promotion moves it 
   <Tab value="Go">
     ```go
     _, err := queue.Enqueue(ctx, "email.send", map[string]any{
-        "to": "person@example.com",
+    	"to": "person@example.com",
     }, workhorse.EnqueueOptions{})
 
     _, err = queue.Enqueue(ctx, "invoice.remind", map[string]any{
-        "invoiceId": invoiceID,
+    	"invoiceId": invoiceID,
     }, workhorse.EnqueueOptions{Queue: "billing", RunAt: &reminderDate})
     ```
 
@@ -71,10 +71,10 @@ become unavailable, a worker claims the job later than the boundary — never ea
   <Tab value="Go">
     ```go
     _, err := queue.Enqueue(ctx, "report.generate", map[string]any{"month": "2026-08"},
-        workhorse.EnqueueOptions{
-            Queue: "reports", Tags: []string{"tenant:acme"}, ConcurrencyKey: "acme", Priority: 10,
-            MaxAttempts: 5, Deadline: &endOfMonth, ExecutionTimeoutMS: 120_000,
-        })
+    	workhorse.EnqueueOptions{
+    		Queue: "reports", Tags: []string{"tenant:acme"}, ConcurrencyKey: "acme", Priority: 10,
+    		MaxAttempts: 5, Deadline: &endOfMonth, ExecutionTimeoutMS: 120_000,
+    	})
     ```
   </Tab>
 </Tabs>
@@ -154,10 +154,10 @@ a transaction as its second argument.
     ```go
     requests := make([]workhorse.EnqueueRequest, len(recipients))
     for index, recipient := range recipients {
-        requests[index] = workhorse.EnqueueRequest{
-            Type: "email.digest", Payload: map[string]any{"to": recipient.Email},
-            Options: workhorse.EnqueueOptions{Queue: "mail"},
-        }
+    	requests[index] = workhorse.EnqueueRequest{
+    		Type: "email.digest", Payload: map[string]any{"to": recipient.Email},
+    		Options: workhorse.EnqueueOptions{Queue: "mail"},
+    	}
     }
     jobIDs, err := queue.EnqueueMany(ctx, requests)
     ```
@@ -200,10 +200,10 @@ Whole-queue controls belong to `Admin`, and every mutation carries audit identit
   <Tab value="Go">
     ```go
     err := admin.PauseQueue(ctx, "billing", workhorse.AdminAudit{
-        Actor: actor, Reason: reason, RequestID: requestID,
+    	Actor: actor, Reason: reason, RequestID: requestID,
     })
     err = admin.ResumeQueue(ctx, "billing", workhorse.AdminAudit{
-        Actor: actor, Reason: reason, RequestID: resumeRequestID,
+    	Actor: actor, Reason: reason, RequestID: resumeRequestID,
     })
     ```
   </Tab>

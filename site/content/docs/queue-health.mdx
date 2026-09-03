@@ -30,7 +30,7 @@ and retention progress with a `healthy`, `degraded`, or `critical` verdict.
     health, err := queue.Health(ctx)
     status := health["status"].(map[string]any)
     if status["level"] != "healthy" {
-        log.Print(status["reasons"])
+    	log.Print(status["reasons"])
     }
     ```
 

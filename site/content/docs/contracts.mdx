@@ -47,12 +47,12 @@ version that live or redrivable jobs may still carry.
   <Tab value="Go">
     ```go
     contracts := map[string]workhorse.JobTypeContracts{"mail.send": {
-        CurrentVersion: "mail-current",
-        Versions: map[string]workhorse.JobContractVersion{"mail-current": {
-            PayloadSchema: map[string]any{"type": "object", "required": []string{"recipient"}},
-            ResultSchema: map[string]any{"type": "object"},
-            SensitivePayloadKeys: []string{"accessToken"},
-        }},
+    	CurrentVersion: "mail-current",
+    	Versions: map[string]workhorse.JobContractVersion{"mail-current": {
+    		PayloadSchema:        map[string]any{"type": "object", "required": []string{"recipient"}},
+    		ResultSchema:         map[string]any{"type": "object"},
+    		SensitivePayloadKeys: []string{"accessToken"},
+    	}},
     }}
     err := queue.SyncContracts(ctx, contracts)
     ```

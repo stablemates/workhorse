@@ -47,15 +47,15 @@ result that becomes the job's durable outcome.
   <Tab value="Go">
     ```go
     worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-        Queues: []string{"email", "billing"}, Concurrency: workerConcurrency,
+    	Queues: []string{"email", "billing"}, Concurrency: workerConcurrency,
     })
     if err != nil {
-        return err
+    	return err
     }
     worker.Handle("email.send", func(
-        ctx context.Context, payload any, handler *workhorse.HandlerContext,
+    	ctx context.Context, payload any, handler *workhorse.HandlerContext,
     ) (any, error) {
-        return mailer.Send(ctx, payload)
+    	return mailer.Send(ctx, payload)
     })
     err = worker.Run(ctx)
     ```
@@ -113,8 +113,8 @@ accidentally write as a stale owner after the job moves on.
   <Tab value="Go">
     ```go
     worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-        Queues: []string{"email", "billing"}, Concurrency: workerConcurrency,
-        LeaseDuration: workerLeaseDuration, WorkerID: "email-worker-1",
+    	Queues: []string{"email", "billing"}, Concurrency: workerConcurrency,
+    	LeaseDuration: workerLeaseDuration, WorkerID: "email-worker-1",
     })
     ```
   </Tab>
@@ -196,7 +196,7 @@ their own process. `defineWorkerProcess` describes the adapter and workers; the
     ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
     defer stop()
     worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-        Queues: []string{"email", "billing"}, Concurrency: workerConcurrency,
+    	Queues: []string{"email", "billing"}, Concurrency: workerConcurrency,
     })
     worker.Handle("email.send", sendEmail)
     err = worker.Run(ctx)

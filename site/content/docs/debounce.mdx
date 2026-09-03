@@ -28,9 +28,9 @@ replacements, so every caller observes one stable job identity.
   <Tab value="Go">
     ```go
     result, err := queue.EnqueueWithResult(ctx, "search.reindex", map[string]any{
-        "documentId": documentID, "revision": revision,
+    	"documentId": documentID, "revision": revision,
     }, workhorse.EnqueueOptions{Debounce: &workhorse.Debounce{
-        Key: documentID, Scope: "search-index", WindowMS: quietPeriodMS, Schedule: workhorse.DebounceReset,
+    	Key: documentID, Scope: "search-index", WindowMS: quietPeriodMS, Schedule: workhorse.DebounceReset,
     }})
     ```
   </Tab>

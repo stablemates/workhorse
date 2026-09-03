@@ -1,5 +1,5 @@
-import { execFile, execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,6 +44,123 @@ const goPublicSource = [
 ]
   .map((path) => readFileSync(resolve(repositoryRoot, "go", path), "utf8"))
   .join("\n");
+// Readers copy Go out of the documentation and into an editor, where gofmt rewrites anything it did
+// not already agree with. Every `go` fence therefore has to be gofmt output already. Most fences are
+// fragments rather than whole files, so each one is offered to gofmt inside the smallest wrapper that
+// makes it a program, and the wrapper is stripped back off before the comparison.
+const goPackageClause = "package guide";
+
+function runGofmt(source: string): string | undefined {
+  const result = spawnSync("gofmt", { input: source, encoding: "utf8" });
+  return result.status === 0 ? result.stdout : undefined;
+}
+
+function withoutPackageClause(formatted: string): string {
+  return formatted.replace(/\n+$/, "").split("\n").slice(1).join("\n").replace(/^\n+/, "");
+}
+
+function withoutFunctionWrapper(formatted: string): string {
+  // Drops the package clause, the blank line after it, `func example() {`, and the closing brace,
+  // then removes the one tab of indentation the wrapper added to every line it held.
+  return formatted
+    .replace(/\n+$/, "")
+    .split("\n")
+    .slice(3, -1)
+    .map((line) => (line.startsWith("\t") ? line.slice(1) : line))
+    .join("\n");
+}
+
+function formattedGoSnippet(label: string, snippet: string): string {
+  const body = `${snippet.replace(/\n+$/, "")}\n`;
+  if (/^package\s+\w/.test(body)) {
+    const wholeFile = runGofmt(body);
+    if (wholeFile !== undefined) return wholeFile.replace(/\n+$/, "");
+  }
+  const statements = runGofmt(`${goPackageClause}\n\nfunc example() {\n${body}}\n`);
+  if (statements !== undefined) return withoutFunctionWrapper(statements);
+  const declarations = runGofmt(`${goPackageClause}\n\n${body}`);
+  if (declarations !== undefined) return withoutPackageClause(declarations);
+  // An import block ahead of statements is neither a declaration list nor a function body, so the
+  // two halves are formatted separately and rejoined across the blank line that already parts them.
+  const halves = body.match(/^(import\s+(?:\([\s\S]*?\n\)|"[^"]*"))\n+([\s\S]*)$/);
+  if (halves) {
+    const imports = runGofmt(`${goPackageClause}\n\n${halves[1]!}\n`);
+    const rest = runGofmt(
+      `${goPackageClause}\n\nfunc example() {\n${halves[2]!.replace(/\n+$/, "")}\n}\n`,
+    );
+    if (imports !== undefined && rest !== undefined) {
+      return `${withoutPackageClause(imports)}\n\n${withoutFunctionWrapper(rest)}`;
+    }
+  }
+  throw new Error(`${label} does not parse as Go, so gofmt cannot format it`);
+}
+
+function firstDifferingLine(expected: string, actual: string): string {
+  const expectedLines = expected.split("\n");
+  const actualLines = actual.split("\n");
+  for (let index = 0; index < Math.max(expectedLines.length, actualLines.length); index += 1) {
+    if (expectedLines[index] !== actualLines[index]) {
+      return `line ${index + 1}\n  documentation: ${JSON.stringify(actualLines[index] ?? null)}\n  gofmt:         ${JSON.stringify(expectedLines[index] ?? null)}`;
+    }
+  }
+  return "no differing line";
+}
+
+const goFencePaths = [
+  ...readdirSync(resolve(siteRoot, "content/docs"))
+    .filter((name) => name.endsWith(".mdx"))
+    .map((name) => `site/content/docs/${name}`),
+  ...readdirSync(resolve(repositoryRoot, "docs/guides"))
+    .filter((name) => name.endsWith(".md"))
+    .map((name) => `docs/guides/${name}`),
+].toSorted();
+
+let inspectedGoFences = 0;
+for (const fencePath of goFencePaths) {
+  const source = readFileSync(resolve(repositoryRoot, fencePath), "utf8");
+  const backticks = "`".repeat(3);
+  const declared = [...source.matchAll(new RegExp(`^[ \\t]*${backticks}go\\b`, "gm"))].length;
+  const fences = [
+    ...source.matchAll(
+      new RegExp(
+        `^([ \\t]*)${backticks}go\\b[^\\n]*\\n([\\s\\S]*?)\\n[ \\t]*${backticks}[ \\t]*$`,
+        "gm",
+      ),
+    ),
+  ];
+  if (fences.length !== declared) {
+    throw new Error(`${fencePath} has a Go fence this check could not read`);
+  }
+  for (const [index, fence] of fences.entries()) {
+    const fenceIndent = fence[1]!;
+    const code = fence[2]!;
+    const label = `${fencePath} Go example ${index + 1}`;
+    // A fence may be indented inside an MDX tab while its body still starts at column 0. Whichever
+    // base indent the block already uses is the one the reformatted block keeps.
+    const populated = code.split("\n").filter((line) => line.trim() !== "");
+    const baseIndent =
+      fenceIndent !== "" && populated.every((line) => line.startsWith(fenceIndent))
+        ? fenceIndent
+        : "";
+    const snippet = code
+      .split("\n")
+      .map((line) =>
+        line.startsWith(baseIndent) ? line.slice(baseIndent.length) : line.trimStart(),
+      )
+      .join("\n");
+    const expected = formattedGoSnippet(label, snippet)
+      .split("\n")
+      .map((line) => (line.trim() === "" ? "" : baseIndent + line))
+      .join("\n");
+    if (expected !== code) {
+      throw new Error(`${label} is not gofmt-formatted: ${firstDifferingLine(expected, code)}`);
+    }
+    inspectedGoFences += 1;
+  }
+}
+if (inspectedGoFences === 0)
+  throw new Error("the documentation has no Go examples to format-check");
+
 const crossSdkGuidePaths = [
   "agentic-flow.mdx",
   "batch-handlers.mdx",
@@ -124,10 +241,7 @@ for (const guidePath of crossSdkGuidePaths) {
           }
         }
       } else if (language === "go") {
-        execFileSync("gofmt", [], {
-          input: `package guide\n\nfunc example() {\n${unindented}\n}\n`,
-          stdio: ["pipe", "ignore", "inherit"],
-        });
+        // The fence sweep above already proved this snippet parses and is gofmt output.
         for (const match of unindented.matchAll(/\b(?:queue|admin|worker|handler)\.([A-Z]\w*)/g)) {
           const name = match[1]!;
           if (name === "Job") continue;

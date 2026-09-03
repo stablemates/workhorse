@@ -25,11 +25,11 @@ handler from its entry point.
     ```go
     value, err := handler.WaitForSignal("approval")
     if err != nil {
-        return nil, err
+    	return nil, err
     }
     approval, ok := value.(map[string]any)
     if ok && approval["approved"] == true {
-        publishOrder()
+    	publishOrder()
     }
     ```
   </Tab>

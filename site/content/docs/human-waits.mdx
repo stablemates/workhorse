@@ -32,15 +32,15 @@ handler restarts.
   <Tab value="Go">
     ```go
     value, err := handler.WaitForHuman("account-review", map[string]any{
-        "accountId": accountID,
-        "prompt":    "Approve this account?",
+    	"accountId": accountID,
+    	"prompt":    "Approve this account?",
     })
     if err != nil {
-        return nil, err
+    	return nil, err
     }
     review, ok := value.(map[string]any)
     if ok && review["approved"] == true {
-        activateAccount(accountID)
+    	activateAccount(accountID)
     }
     ```
   </Tab>

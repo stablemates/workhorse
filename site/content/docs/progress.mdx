@@ -37,11 +37,11 @@ Each accepted update replaces the previous one.
     ```go
     progress, err := handler.SetProgress(map[string]any{"phase": "reading", "processed": 0})
     for batch := range readBatches(payload.Source) {
-        if err := importBatch(batch); err != nil {
-            return nil, err
-        }
-        processed += len(batch)
-        progress, err = handler.SetProgress(map[string]any{"phase": "importing", "processed": processed})
+    	if err := importBatch(batch); err != nil {
+    		return nil, err
+    	}
+    	processed += len(batch)
+    	progress, err = handler.SetProgress(map[string]any{"phase": "importing", "processed": processed})
     }
     ```
   </Tab>

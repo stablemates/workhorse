@@ -41,7 +41,7 @@ caller-owned connection. `list_concurrency_policies` returns the persisted typed
     ```go
     maxActivePerKey := 3
     policies, err := queue.SyncConcurrencyPolicies(ctx, "workers", []workhorse.ConcurrencyPolicyDefinition{{
-        Queue: "mail", MaxActive: 20, MaxActivePerKey: &maxActivePerKey,
+    	Queue: "mail", MaxActive: 20, MaxActivePerKey: &maxActivePerKey,
     }})
     ```
   </Tab>
@@ -75,7 +75,7 @@ The key names the group a job competes in — a tenant, a destination host, an a
   <Tab value="Go">
     ```go
     _, err := queue.Enqueue(ctx, "mail.send", map[string]any{
-        "messageId": messageID,
+    	"messageId": messageID,
     }, workhorse.EnqueueOptions{Queue: "mail", ConcurrencyKey: tenantID})
     ```
   </Tab>

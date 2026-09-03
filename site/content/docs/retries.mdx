@@ -32,7 +32,7 @@ the database deletes the runtime row and writes an immutable failed outcome.
   <Tab value="Go">
     ```go
     _, err := queue.Enqueue(ctx, "provider.sync", map[string]any{
-        "accountId": accountID,
+    	"accountId": accountID,
     }, workhorse.EnqueueOptions{MaxAttempts: 5})
     ```
   </Tab>
@@ -69,7 +69,7 @@ dispatch. Three shapes exist:
     ```go
     jitter := map[string]any{"type": "decorrelated-jitter", "baseDelayMs": 1_000, "maxDelayMs": 60_000}
     _, err := queue.Enqueue(ctx, "provider.sync", map[string]any{
-        "accountId": accountID,
+    	"accountId": accountID,
     }, workhorse.EnqueueOptions{RetryPolicy: jitter, MaxAttempts: 5})
     ```
   </Tab>

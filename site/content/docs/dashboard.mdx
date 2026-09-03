@@ -74,28 +74,28 @@ never installs or migrates the schema.
 
     ```go
     import (
-        "net/http"
+    	"net/http"
 
-        workhorse "github.com/stablemates/workhorse/go"
-        "github.com/stablemates/workhorse/go/dashboard"
+    	workhorse "github.com/stablemates/workhorse/go"
+    	"github.com/stablemates/workhorse/go/dashboard"
     )
 
     operator, err := dashboard.NewHandler(dashboard.HandlerOptions{
-        Executor:    workhorse.NewPGXExecutor(pool),
-        Path:        "/workhorse",
-        Environment: "production",
-        Authorize: func(request *http.Request) dashboard.Authorization {
-            username, ok := applicationAdminSession(request)
-            if !ok {
-                return dashboard.Authorization{}
-            }
-            return dashboard.Authorization{
-                Principal: &dashboard.Principal{Actor: username},
-            }
-        },
+    	Executor:    workhorse.NewPGXExecutor(pool),
+    	Path:        "/workhorse",
+    	Environment: "production",
+    	Authorize: func(request *http.Request) dashboard.Authorization {
+    		username, ok := applicationAdminSession(request)
+    		if !ok {
+    			return dashboard.Authorization{}
+    		}
+    		return dashboard.Authorization{
+    			Principal: &dashboard.Principal{Actor: username},
+    		}
+    	},
     })
     if err != nil {
-        return err
+    	return err
     }
     http.Handle("/workhorse/", operator)
     ```

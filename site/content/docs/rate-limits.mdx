@@ -45,9 +45,9 @@ caller-owned connection. `list_rate_limit_policies` returns the persisted typed 
   <Tab value="Go">
     ```go
     policies, err := queue.SyncRateLimitPolicies(ctx, "workers", []workhorse.RateLimitPolicyDefinition{{
-        Queue: "provider-api",
-        Rate: workhorse.RateLimit{Limit: 60, IntervalMS: 60_000, Burst: 10},
-        PerKey: &workhorse.RateLimit{Limit: 5, IntervalMS: 60_000, Burst: 2},
+    	Queue:  "provider-api",
+    	Rate:   workhorse.RateLimit{Limit: 60, IntervalMS: 60_000, Burst: 10},
+    	PerKey: &workhorse.RateLimit{Limit: 5, IntervalMS: 60_000, Burst: 2},
     }})
     ```
   </Tab>

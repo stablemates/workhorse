@@ -39,14 +39,14 @@ cancellation.
   <Tab value="Go">
     ```go
     worker.HandleBatch("email.send", workhorse.BatchHandlerOptions{
-        MaxSize: 20,
-        Linger:  50 * time.Millisecond,
+    	MaxSize: 20,
+    	Linger:  50 * time.Millisecond,
     }, func(items []workhorse.BatchHandlerItem) []workhorse.BatchHandlerOutcome {
-        outcomes := make([]workhorse.BatchHandlerOutcome, len(items))
-        for index := range items {
-            outcomes[index] = workhorse.BatchSucceeded{Result: map[string]any{"sent": true}}
-        }
-        return outcomes
+    	outcomes := make([]workhorse.BatchHandlerOutcome, len(items))
+    	for index := range items {
+    		outcomes[index] = workhorse.BatchSucceeded{Result: map[string]any{"sent": true}}
+    	}
+    	return outcomes
     })
     ```
   </Tab>

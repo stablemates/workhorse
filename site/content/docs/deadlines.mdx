@@ -32,7 +32,7 @@ the result becomes useless at a known time, even if attempts remain.
   <Tab value="Go">
     ```go
     _, err := queue.Enqueue(ctx, "price.quote", map[string]any{
-        "quoteId": quoteID,
+    	"quoteId": quoteID,
     }, workhorse.EnqueueOptions{Deadline: &quoteExpiresAt})
     ```
   </Tab>
@@ -76,10 +76,10 @@ stuck HTTP call, a wedged subprocess.
   <Tab value="Go">
     ```go
     _, err := queue.Enqueue(ctx, "report.build", map[string]any{
-        "reportId": reportID,
+    	"reportId": reportID,
     }, workhorse.EnqueueOptions{
-        ExecutionTimeoutMS: attemptTimeout,
-        MaxAttempts: attemptBudget,
+    	ExecutionTimeoutMS: attemptTimeout,
+    	MaxAttempts:        attemptBudget,
     })
     ```
   </Tab>

@@ -30,10 +30,10 @@ parent releases its lease while the child runs, then restarts from the top when 
   <Tab value="Go">
     ```go
     charge, err := handler.RunChild(
-        "charge",
-        "payments.charge",
-        map[string]any{"orderId": order.ID},
-        workhorse.EnqueueOptions{Queue: "payments"},
+    	"charge",
+    	"payments.charge",
+    	map[string]any{"orderId": order.ID},
+    	workhorse.EnqueueOptions{Queue: "payments"},
     )
     ```
   </Tab>

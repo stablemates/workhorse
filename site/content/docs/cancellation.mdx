@@ -35,8 +35,8 @@ Call `Queue.cancel` after your application authorizes the actor.
     requestedBy := actor.Email
     reason := "customer withdrew the order"
     result, err := queue.Cancel(ctx, jobID, workhorse.CancellationRequest{
-        RequestedBy: &requestedBy,
-        Reason:      &reason,
+    	RequestedBy: &requestedBy,
+    	Reason:      &reason,
     })
     ```
   </Tab>
@@ -79,12 +79,12 @@ work before starting another external effect.
   <Tab value="Go">
     ```go
     for _, part := range payload.Parts {
-        if err := context.Cause(ctx); err != nil {
-            return nil, err
-        }
-        if err := uploadPart(ctx, part); err != nil {
-            return nil, err
-        }
+    	if err := context.Cause(ctx); err != nil {
+    		return nil, err
+    	}
+    	if err := uploadPart(ctx, part); err != nil {
+    		return nil, err
+    	}
     }
     ```
   </Tab>

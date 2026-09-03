@@ -43,13 +43,13 @@ the operation again.
   <Tab value="Go">
     ```go
     charge, err := handler.Checkpoint("charge", func() (any, error) {
-        return payments.Charge(payload.OrderID, "charge:"+payload.OrderID)
+    	return payments.Charge(payload.OrderID, "charge:"+payload.OrderID)
     })
     if err != nil {
-        return nil, err
+    	return nil, err
     }
     shipment, err := handler.Checkpoint("shipment", func() (any, error) {
-        return logistics.CreateShipment(payload.OrderID, charge)
+    	return logistics.CreateShipment(payload.OrderID, charge)
     })
     ```
   </Tab>
@@ -102,11 +102,11 @@ of the same logical attempt.
   <Tab value="Go">
     ```go
     welcome, err := handler.Checkpoint("welcome", func() (any, error) {
-        return mailer.Welcome(payload.To)
+    	return mailer.Welcome(payload.To)
     })
     err = handler.SleepUntil("follow-up-window", payload.FollowUpAt)
     followUp, err := handler.Checkpoint("follow-up", func() (any, error) {
-        return mailer.FollowUp(payload.To)
+    	return mailer.FollowUp(payload.To)
     })
     ```
   </Tab>
@@ -160,7 +160,7 @@ JSON value:
     ```go
     event, err := handler.WaitForSignal("provider-event")
     review, err := handler.WaitForHuman("operator-review", map[string]any{
-        "eventId": event.(map[string]any)["id"],
+    	"eventId": event.(map[string]any)["id"],
     })
     ```
   </Tab>

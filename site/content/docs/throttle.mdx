@@ -28,9 +28,9 @@ request before the window closes returns the same identity with a `coalesced` ou
   <Tab value="Go">
     ```go
     result, err := queue.EnqueueWithResult(ctx, "email.digest", map[string]any{
-        "accountId": accountID,
+    	"accountId": accountID,
     }, workhorse.EnqueueOptions{Throttle: &workhorse.Throttle{
-        Key: accountID, Scope: "digest", WindowMS: digestWindowMS,
+    	Key: accountID, Scope: "digest", WindowMS: digestWindowMS,
     }})
     ```
   </Tab>
