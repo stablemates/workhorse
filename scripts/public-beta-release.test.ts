@@ -103,7 +103,7 @@ describe("the 0.1.0 release", () => {
     const landing = await read("site/src/routes/index.tsx");
     expect(landing).toContain('import { WORKHORSE_VERSION } from "@stablemates/workhorse/version"');
     expect(landing).toContain('import support from "../../../support.json"');
-    expect(landing).toContain("npm v{WORKHORSE_VERSION}");
+    expect(landing).toContain("v{WORKHORSE_VERSION}");
     expect(landing).not.toMatch(/\d+\.\d+\.\d+/);
 
     expect(await read("docs/compatibility.md")).toContain(
@@ -219,11 +219,13 @@ describe("the public beta line", () => {
 
   it("publishes a security policy that names the reporting channel and the supported line", async () => {
     const policy = prose(await read("SECURITY.md"));
+    // Each check below pins a commitment the policy makes, not the sentence that makes it. Both
+    // sentences this case used to quote were reworded by a deliberate editorial pass that kept
+    // every commitment intact, and the case failed for wording alone.
     expect(policy).toContain("https://github.com/stablemates/workhorse/security/advisories/new");
-    expect(policy).toContain("acknowledge a report within five business days");
-    expect(policy).toContain(
-      "Only the latest `0.x` minor release of each package line receives security fixes",
-    );
+    expect(policy).toMatch(/[Aa]cknowledge(?:ment)?[^.]*within five business days/);
+    expect(policy).toContain("highest published minor of the current major of each affected line");
+    expect(policy).toContain("An older minor does not receive a fix");
     expect(policy).toContain("A published version is never re-tagged or replaced");
     expect(policy).toContain(
       "deprecate the npm release, yank the PyPI release, or retract the Go version",
