@@ -4,6 +4,7 @@
 - **Date:** 2026-09-02
 - **Amends:** [ADR 0042](0042-publish-the-first-public-beta.md)
 - **Related:** [ADR 0053](0053-start-migrations-at-0-1-0-and-keep-them-additive.md),
+  [ADR 0056](0056-set-the-1-0-0-exit-criteria.md),
   [WH-578](https://ontrack.sh/projects/WH/issues/WH-578),
   [WH-576](https://ontrack.sh/projects/WH/issues/WH-576),
   [WH-580](https://ontrack.sh/projects/WH/issues/WH-580),

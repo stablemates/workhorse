@@ -262,6 +262,30 @@ keeps the retained functions until it contracts.
 shipped view and may not remove, retype, or reinterpret one, so a core upgrade never requires a
 dashboard release inside a major line.
 
+### What must be true before 1.0.0
+
+Six gates hold the tag, and each is met with evidence rather than with an assertion
+([ADR 0056](decisions/0056-set-the-1-0-0-exit-criteria.md)):
+
+1. Every governed surface above has a mechanical check in the CI `required` job. Seven checks, one
+   per surface. None of them exists yet.
+2. Six weeks and two published 0.x minors separate the last non-additive change to a governed
+   surface from the tag, and no outside-filed defect against a governed surface is open and
+   unaccepted.
+3. The migration rehearsals ADR 0055 placed have run, the recovery procedure has been executed
+   against a deliberate mid-migration failure, and a fresh host has installed the candidate from the
+   registries in all three languages.
+4. One database has run 30 consecutive days under continuous work without being reinstalled, across
+   daily partition rollover, a retention pass that dropped a partition, and an ungraceful worker
+   kill with clean recovery.
+5. `@stablemates/workhorse-dashboard-server` has a written security review with every High finding
+   resolved. No third-party audit has taken place, and `SECURITY.md` says so.
+6. `pnpm parity:check` passes and the product operator table carries no Planned cell (WH-581
+   named four), and any Absent cell records why it is absent.
+
+The tag date is derived from those gates rather than announced. Adoption counts, documentation
+coverage, and benchmark numbers are recorded at the tag and gate nothing.
+
 ## Protocol and schema compatibility
 
 The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guarantees:
