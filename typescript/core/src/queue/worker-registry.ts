@@ -20,7 +20,7 @@ export class WorkerRegistryModule extends QueueModule {
    */
   async registerWorker(registration: WorkerRegistration): Promise<{ paused: boolean }> {
     const result = await this.context.database.query<{ paused: boolean }>(
-      SQL_STATEMENTS["register_worker_v2"],
+      SQL_STATEMENTS["register_worker_v1"],
       [
         registration.workerId,
         registration.instanceId,
@@ -42,7 +42,7 @@ export class WorkerRegistryModule extends QueueModule {
         WORKHORSE_VERSION,
       ],
     );
-    const paused = expectOneRow(result, "workhorse.register_worker_v2").paused;
+    const paused = expectOneRow(result, "workhorse.register_worker_v1").paused;
     return { paused };
   }
 

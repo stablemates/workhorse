@@ -3045,7 +3045,7 @@ class KyselyQueryError extends QueryError {
 
 const MAXIMUM_PROTOCOL_VERSION = 1;
 
-const MAXIMUM_SCHEMA_VERSION = 2;
+const MAXIMUM_SCHEMA_VERSION = 1;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -4157,7 +4157,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 1;
 
-const WORKHORSE_SCHEMA_VERSION = 2;
+const WORKHORSE_SCHEMA_VERSION = 1;
 
 const WORKHORSE_VERSION = "0.1.0";
 

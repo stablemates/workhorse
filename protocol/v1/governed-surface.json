@@ -428,26 +428,6 @@
         "integer",
         "integer",
         "integer",
-        "boolean"
-      ],
-      "returns": "boolean"
-    },
-    "register_worker_v2": {
-      "arguments": [
-        "text",
-        "uuid",
-        "text",
-        "integer",
-        "text[]",
-        "text[]",
-        "integer",
-        "integer",
-        "integer",
-        "integer",
-        "integer",
-        "integer",
-        "integer",
-        "integer",
         "boolean",
         "integer",
         "text",

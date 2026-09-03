@@ -33,6 +33,13 @@ must be recreated to move forward.
 artifact. From 0.2.0, a schema change ships as an ordered, immutable step under `sql/migrations/`.
 `sql/schema/current.sql` stops being editable in place.
 
+The freeze binds at publication, not at the moment the file is first written. Until 0.1.0 is tagged,
+editing `sql/schema/current.sql` and regenerating `sql/releases/0001.sql` is cutting the baseline
+rather than rewriting a released one, because no database exists that this project has agreed to
+carry forward. That is the same reasoning
+[ADR 0034](0034-reset-the-pre-release-schema-baseline.md) used, and it stops applying the moment a
+registry serves 0.1.0.
+
 **Inside a major line, every migration only adds.** A migration may add a function, a view, a
 column, a table, or an index. It may not rename, drop, or change the meaning of anything a
 supported release reads or writes. A removal waits for the next major release. The `_vN` suffix is

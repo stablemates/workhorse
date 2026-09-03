@@ -22,7 +22,7 @@ tagged `v0.1.0`. This is the first version without a prerelease suffix
 ([ADR 0050](docs/decisions/0050-release-0-1-0-without-a-prerelease-suffix.md)). Workhorse stays a
 public beta on the `0.x` line.
 
-Requires **schema v2**, Node.js **22** or newer, PostgreSQL **15** or newer. CI exercises Node.js 22
+Requires **schema v1**, Node.js **22** or newer, PostgreSQL **15** or newer. CI exercises Node.js 22
 and 24 and PostgreSQL 15 through 18.
 
 ### Changed
@@ -169,8 +169,8 @@ and 24 and PostgreSQL 15 through 18.
   unreachable database is not a verdict about versions.
 - `workhorse schema status --json` adds `schema.refusalCode` beside `schema.refusal`, so a
   deployment gate can branch on the same code the process that starts after it would throw.
-- **Every worker records what it is, not only where it runs.** Schema version 2 adds three nullable
-  columns to `workhorse.worker_registry` — `client_protocol_version`, `sdk_language`, and
+- **Every worker records what it is, not only where it runs.** The baseline carries three nullable
+  columns on `workhorse.worker_registry` — `client_protocol_version`, `sdk_language`, and
   `sdk_version` — and the TypeScript, Python, and Go workers all report them at registration and on
   every heartbeat that refreshes the row. They answer two questions the registry could not. A
   rolling deploy runs more than one build at once, so the dashboard worker view now shows which SDK
@@ -179,8 +179,8 @@ and 24 and PostgreSQL 15 through 18.
   ([ADR 0057](docs/decisions/0057-retain-superseded-functions-and-contract-on-the-operators-schedule.md)).
 - `workhorse schema status --json` adds a `fleet` block: one entry per distinct client protocol
   version, counting the workers that heartbeated inside their own lease, with a `note` stating that
-  producers never register so the counts are worker evidence and not an inventory. Workers running
-  an SDK older than the columns are counted under a null version.
+  producers never register so the counts are worker evidence and not an inventory. A client that
+  calls the SQL protocol directly without reporting the three is counted under a null version.
 - The `workhorse init` options `--dir` and `--force` are documented in
   [`docs/architecture.md`](docs/architecture.md), which also lists the commands the published
   `workhorse` binary owns. Neither flag changed; they were previously visible only in
@@ -247,11 +247,10 @@ and 24 and PostgreSQL 15 through 18.
 
 ### Upgrade notes
 
-- **Schema version.** `0.1.0` installs schema version 2. Version 1 remains the permanent migration
-  baseline, and `sql/migrations/0002-record-worker-client-identity.sql` is the first step on top of
-  it: it adds three nullable `workhorse.worker_registry` columns and `register_worker_v2`, and
-  retains `register_worker_v1` for workers that have not been redeployed yet. Nothing is removed, so
-  a fleet part-way through a rollout keeps registering.
+- **Schema version.** `0.1.0` installs schema version 1, which is the permanent migration baseline.
+  It ships no migration step: the worker client identity columns are part of the baseline rather
+  than an upgrade on top of it, so `register_worker_v1` carries them and no `_v2` exists. The first
+  entry in `sql/migrations/` arrives with the first schema change after this release.
 - **Schema baseline.** `0.1.0`'s baseline is not the one
   `0.1.0-beta.2` installed: `workhorse.valid_tags` was renamed and
   `workhorse.dashboard_run_task_now_v1` was removed. A database installed by any beta reports

@@ -89,14 +89,17 @@ describe("worker registry", () => {
     ]);
   });
 
-  // A rolling deploy runs old and new SDK builds at once, so the call an older build makes has to
-  // keep working and has to say plainly that it reported nothing.
+  // The SQL protocol is a governed surface a caller may use without one of the three SDKs, and the
+  // three identity arguments are nullable for exactly that caller. Reporting nothing has to be
+  // recorded as nothing rather than rejected, because that row is the population
+  // `workhorse schema contract` must not assume away.
   it("registers a worker that reports no client identity at all", async () => {
-    const workerId = `legacy-registration-${randomUUID()}`;
+    const workerId = `unreported-registration-${randomUUID()}`;
     await pool.query(
       `SELECT workhorse.register_worker_v1(
          $1::text, $2::uuid, 'legacy-host', 4242, ARRAY['legacy']::text[], ARRAY[]::text[],
-         2, 30000, 10000, 250, 1000, 60000, 5000, 0, false)`,
+         2, 30000, 10000, 250, 1000, 60000, 5000, 0, false,
+         NULL::integer, NULL::text, NULL::text)`,
       [workerId, randomUUID()],
     );
 
@@ -127,13 +130,13 @@ describe("worker registry", () => {
     const live = `protocol-live-${randomUUID()}`;
     const lapsed = `protocol-lapsed-${randomUUID()}`;
     await pool.query(
-      `SELECT workhorse.register_worker_v2(
+      `SELECT workhorse.register_worker_v1(
          $1::text, $2::uuid, 'evidence-host', 4243, ARRAY['evidence']::text[], ARRAY[]::text[],
          1, 30000, 10000, 250, 1000, 60000, 5000, 0, false, 7, 'fixture', '9.9.9')`,
       [live, randomUUID()],
     );
     await pool.query(
-      `SELECT workhorse.register_worker_v2(
+      `SELECT workhorse.register_worker_v1(
          $1::text, $2::uuid, 'evidence-host', 4244, ARRAY['evidence']::text[], ARRAY[]::text[],
          1, 1000, 500, 250, 1000, 60000, 5000, 0, false, 8, 'fixture', '9.9.9')`,
       [lapsed, randomUUID()],

@@ -385,7 +385,7 @@ describe("schema installation", () => {
           AND relname ~ '_v[0-9]+$' AND relname !~ '_v1$'
         ORDER BY name`,
     );
-    expect(versioned.rows.map((row) => row.name)).toEqual(["register_worker_v2"]);
+    expect(versioned.rows.map((row) => row.name)).toEqual([]);
 
     const orphaned = await pool.query<{ name: string }>(
       `WITH successors AS (
@@ -438,10 +438,7 @@ describe("schema installation", () => {
     );
     // A clean install records the whole lineage, so it agrees with a migrated database about the
     // baseline..current range rather than claiming to have started where the runtime now is.
-    expect(migrations.rows).toEqual([
-      { version: 1, description: "baseline" },
-      { version: 2, description: "record worker client protocol and SDK identity" },
-    ]);
+    expect(migrations.rows).toEqual([{ version: 1, description: "baseline" }]);
 
     const protocols = await pool.query<{ version: number }>(
       "SELECT version FROM workhorse.protocol_version ORDER BY version",

@@ -93,7 +93,7 @@ describe("structured logging", () => {
     let registrations = 0;
     const database = {
       async query(sql: string) {
-        if (sql.includes("register_worker_v2")) {
+        if (sql.includes("register_worker_v1")) {
           registrations += 1;
           return { rows: [{ paused: false }] };
         }

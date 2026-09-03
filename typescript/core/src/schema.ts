@@ -37,15 +37,9 @@ export {
 };
 
 // Version 1 is the permanent baseline, installed whole from sql/schema.sql; every later version
-// arrives as one ordered, immutable step here.
-const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
-  {
-    fromVersion: 1,
-    toVersion: 2,
-    file: "0002-record-worker-client-identity.sql",
-    description: "record worker client protocol and SDK identity",
-  },
-];
+// arrives as one ordered, immutable step here. 0.1.0 publishes the baseline and no step, so the
+// first entry lands with the first schema change after it.
+const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [];
 
 function sqlAsset(relativePath: string): URL {
   const packaged = new URL(`../sql/${relativePath}`, import.meta.url);

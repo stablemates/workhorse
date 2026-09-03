@@ -3,9 +3,9 @@ export const PROTOCOL_VERSION = 1;
 export const MINIMUM_PROTOCOL_VERSION = 1;
 export const MAXIMUM_PROTOCOL_VERSION = 1;
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 1;
-export const WORKHORSE_SCHEMA_VERSION = 2;
+export const WORKHORSE_SCHEMA_VERSION = 1;
 export const MINIMUM_SCHEMA_VERSION = 1;
-export const MAXIMUM_SCHEMA_VERSION = 2;
+export const MAXIMUM_SCHEMA_VERSION = 1;
 export const DEFAULT_JOB_VALUE_MAX_BYTES = 1048576;
 export const MAX_ENQUEUE_BATCH_SIZE = 1000;
 
@@ -91,9 +91,7 @@ export const SQL_STATEMENTS = {
   redrive_many:
     "SELECT status,source_job_id::text source_job_id,target_job_id::text target_job_id,source_state,target_state,requested_at,source_finished_at_cursor,has_more FROM workhorse.redrive_many_v1($1::jsonb,$2::integer,$3::boolean,$4::text,$5::text,$6::text,$7::timestamptz,$8::uuid) ORDER BY ordinal",
   register_worker_v1:
-    "SELECT workhorse.register_worker_v1(\n       $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::text[],\n       $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,\n       $12::integer, $13::integer, $14::integer, $15::boolean\n     ) AS paused",
-  register_worker_v2:
-    "SELECT workhorse.register_worker_v2(\n       $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::text[],\n       $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,\n       $12::integer, $13::integer, $14::integer, $15::boolean,\n       $16::integer, $17::text, $18::text\n     ) AS paused",
+    "SELECT workhorse.register_worker_v1(\n       $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::text[],\n       $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,\n       $12::integer, $13::integer, $14::integer, $15::boolean,\n       $16::integer, $17::text, $18::text\n     ) AS paused",
   run_maintenance_v1: "SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)",
   save_checkpoint_v1:
     "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",

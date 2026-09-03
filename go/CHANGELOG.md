@@ -15,7 +15,7 @@ Python distribution, tagged `go/v0.1.0`. This is the first version without a pre
 ([ADR 0050](../docs/decisions/0050-release-0-1-0-without-a-prerelease-suffix.md)). The module stays
 a public beta on the `0.x` line.
 
-Requires **schema v2** and Go **1.25** or newer.
+Requires **schema v1** and Go **1.25** or newer.
 
 ### Removed
 
@@ -113,7 +113,7 @@ tagged `go/v0.1.0-beta.1`.
 
 ### Added
 
-- **The Go worker records what it is.** Schema version 2 adds `client_protocol_version`,
+- **The Go worker records what it is.** The schema baseline carries `client_protocol_version`,
   `sdk_language`, and `sdk_version` to `workhorse.worker_registry`, and every registration refresh
   reports `go` with the new exported `workhorse.Version` and the SQL protocol version it speaks.
   The dashboard shows them per worker, and `workhorse schema status --json` counts the live workers

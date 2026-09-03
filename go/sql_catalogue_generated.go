@@ -8,7 +8,7 @@ const (
 	minimumProtocolVersion = 1
 	maximumProtocolVersion = 1
 	minimumSchemaVersion   = 1
-	maximumSchemaVersion   = 2
+	maximumSchemaVersion   = 1
 	// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
 	MaxEnqueueBatchSize     = 1000
 	defaultJobValueMaxBytes = 1048576
@@ -27,11 +27,6 @@ var internalStatementRegistry = map[string]string{
 	"list_rate_limit_policies": `SELECT namespace, queue_name, rate_limit, rate_interval_ms, rate_burst, per_key_limit, per_key_interval_ms, per_key_burst, updated_at FROM workhorse.rate_limit_policy, (SELECT $1::text[] AS names) AS filter WHERE cardinality(filter.names) = 0 OR queue_name = ANY(filter.names) ORDER BY queue_name`,
 	"promote_v1":               `SELECT workhorse.promote_v1($1::integer) AS promoted`,
 	"register_worker_v1": `SELECT workhorse.register_worker_v1(
-       $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::text[],
-       $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,
-       $12::integer, $13::integer, $14::integer, $15::boolean
-     ) AS paused`,
-	"register_worker_v2": `SELECT workhorse.register_worker_v2(
        $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::text[],
        $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,
        $12::integer, $13::integer, $14::integer, $15::boolean,

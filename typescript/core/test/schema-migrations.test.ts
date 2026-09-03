@@ -411,16 +411,17 @@ describe("schema migrations", () => {
     }
   });
 
-  // `workhorse schema status` is the command an operator runs to discover that a database is
-  // behind, and it is meant to run against exactly that database. A read a later migration
-  // introduced must therefore report "cannot answer" rather than fail the whole command.
-  it("reports no fleet evidence from a schema older than the columns that hold it", async () => {
+  // The fleet read is the evidence `workhorse schema contract` gates on, and the columns behind it
+  // belong to the frozen baseline rather than to a step on top of it. Reintroducing them as a
+  // migration would put a schema the minimum accepts back into the "cannot answer" branch, so the
+  // baseline is asserted to answer directly.
+  it("answers the fleet read on the frozen baseline, with no migration applied", async () => {
     await releaseDatabase.pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
     await releaseDatabase.pool.query(
       await readFile(path.join(repository, "sql", "releases", "0001.sql"), "utf8"),
     );
 
-    await expect(readWorkerClientProtocols(releaseDatabase.pool)).resolves.toBeNull();
+    await expect(readWorkerClientProtocols(releaseDatabase.pool)).resolves.toEqual([]);
 
     await migrateSchema(releaseDatabase.pool);
 

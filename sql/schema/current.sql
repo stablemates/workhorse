@@ -5996,9 +5996,11 @@ $$;
 -- which is keyed by queue name and unaffected by worker lifecycles. Keeping the two distinct means
 -- a pause can never become a forgotten flag that silently idles a worker after a later deployment.
 --
--- The last three arguments are what the process is rather than what it is doing, and every one of
--- them may be NULL: a worker built before they existed keeps registering, and its row says so.
-CREATE OR REPLACE FUNCTION workhorse.register_worker_v2(
+-- The last three arguments are what the process is rather than what it is doing. Every one of them
+-- may be NULL, because the SQL protocol is callable directly and a client that reports nothing is
+-- a fact to record rather than a caller to reject. `worker_client_protocols_v1` keeps those rows
+-- in their own group for exactly that reason.
+CREATE OR REPLACE FUNCTION workhorse.register_worker_v1(
   p_worker_id text,
   p_instance_id uuid,
   p_hostname text,
@@ -6135,36 +6137,6 @@ BEGIN
 END;
 $$;
 
--- Version 1 of the same call, retained for workers built before the client identity columns
--- existed ([ADR 0053](../../docs/decisions/0053-start-migrations-at-0-1-0-and-keep-them-additive.md)).
--- It reports no protocol or SDK, which is a fact about the caller and is stored as such: a worker
--- that has been downgraded stops claiming the build it no longer runs.
-CREATE OR REPLACE FUNCTION workhorse.register_worker_v1(
-  p_worker_id text,
-  p_instance_id uuid,
-  p_hostname text,
-  p_pid integer,
-  p_queue_names text[],
-  p_schedule_namespaces text[],
-  p_concurrency integer,
-  p_lease_ms integer,
-  p_heartbeat_ms integer,
-  p_poll_ms integer,
-  p_maintenance_interval_ms integer,
-  p_maintenance_task_poll_ms integer,
-  p_registry_interval_ms integer,
-  p_active_slots integer,
-  p_draining boolean
-)
-RETURNS boolean
-LANGUAGE sql
-AS $$
-  SELECT workhorse.register_worker_v2(
-    p_worker_id, p_instance_id, p_hostname, p_pid, p_queue_names, p_schedule_namespaces,
-    p_concurrency, p_lease_ms, p_heartbeat_ms, p_poll_ms, p_maintenance_interval_ms,
-    p_maintenance_task_poll_ms, p_registry_interval_ms, p_active_slots, p_draining,
-    NULL::integer, NULL::text, NULL::text);
-$$;
 
 -- Remove one worker registration during graceful shutdown. A worker that is killed instead simply
 -- stops heartbeating and ages out of the fleet view.
@@ -13409,10 +13381,9 @@ END;
 $$;
 
 INSERT INTO workhorse.schema_migration(version, description) VALUES
-  (1, 'baseline'),
-  (2, 'record worker client protocol and SDK identity')
+  (1, 'baseline')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (2) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (1) ON CONFLICT DO NOTHING;
 INSERT INTO workhorse.protocol_version(version) VALUES (1) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date

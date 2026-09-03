@@ -84,7 +84,8 @@ def _prepare_admin_fixture(database_url: str) -> AdminFixture:
             """SELECT workhorse.register_worker_v1(
                  %s::text, %s::uuid, %s::text, %s::integer, %s::text[], %s::text[], %s::integer,
                  %s::integer, %s::integer, %s::integer, %s::integer, %s::integer,
-                 %s::integer, %s::integer, %s::boolean)""",
+                 %s::integer, %s::integer, %s::boolean,
+                 NULL::integer, NULL::text, NULL::text)""",
             (
                 worker_id,
                 uuid4(),

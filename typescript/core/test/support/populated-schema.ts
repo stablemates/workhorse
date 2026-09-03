@@ -65,7 +65,8 @@ export async function seedReleasedSchema(pool: Pool): Promise<void> {
 
   await pool.query(
     `SELECT workhorse.register_worker_v1(
-       $1, $2::uuid, $3, $4, $5::text[], $6::text[], 4, 30000, 5000, 100, 1000, 250, 1000, 0, false
+       $1, $2::uuid, $3, $4, $5::text[], $6::text[], 4, 30000, 5000, 100, 1000, 250, 1000, 0, false,
+       NULL::integer, NULL::text, NULL::text
      )`,
     [
       fixtureWorker,

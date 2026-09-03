@@ -10,7 +10,7 @@ PROTOCOL_VERSION = 1
 MINIMUM_PROTOCOL_VERSION = 1
 MAXIMUM_PROTOCOL_VERSION = 1
 MINIMUM_SCHEMA_VERSION = 1
-MAXIMUM_SCHEMA_VERSION = 2
+MAXIMUM_SCHEMA_VERSION = 1
 DEFAULT_VALUE_MAX_BYTES = 1048576
 MAX_BATCH_SIZE = 1000
 
@@ -196,12 +196,8 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
         "SELECT status,source_job_id::text source_job_id,target_job_id::text target_job_id,source_state,target_state,requested_at,source_finished_at_cursor,has_more FROM workhorse.redrive_many_v1($1::jsonb,$2::integer,$3::boolean,$4::text,$5::text,$6::text,$7::timestamptz,$8::uuid) ORDER BY ordinal",
     ),
     "register_worker_v1": (
-        "SELECT workhorse.register_worker_v1(\n       %s::text, %s::uuid, %s::text, %s::integer, %s::text[], %s::text[],\n       %s::integer, %s::integer, %s::integer, %s::integer, %s::integer,\n       %s::integer, %s::integer, %s::integer, %s::boolean\n     ) AS paused",
-        "SELECT workhorse.register_worker_v1(\n       $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::text[],\n       $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,\n       $12::integer, $13::integer, $14::integer, $15::boolean\n     ) AS paused",
-    ),
-    "register_worker_v2": (
-        "SELECT workhorse.register_worker_v2(\n       %s::text, %s::uuid, %s::text, %s::integer, %s::text[], %s::text[],\n       %s::integer, %s::integer, %s::integer, %s::integer, %s::integer,\n       %s::integer, %s::integer, %s::integer, %s::boolean,\n       %s::integer, %s::text, %s::text\n     ) AS paused",
-        "SELECT workhorse.register_worker_v2(\n       $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::text[],\n       $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,\n       $12::integer, $13::integer, $14::integer, $15::boolean,\n       $16::integer, $17::text, $18::text\n     ) AS paused",
+        "SELECT workhorse.register_worker_v1(\n       %s::text, %s::uuid, %s::text, %s::integer, %s::text[], %s::text[],\n       %s::integer, %s::integer, %s::integer, %s::integer, %s::integer,\n       %s::integer, %s::integer, %s::integer, %s::boolean,\n       %s::integer, %s::text, %s::text\n     ) AS paused",
+        "SELECT workhorse.register_worker_v1(\n       $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::text[],\n       $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,\n       $12::integer, $13::integer, $14::integer, $15::boolean,\n       $16::integer, $17::text, $18::text\n     ) AS paused",
     ),
     "run_maintenance_v1": (
         "SELECT * FROM workhorse.run_maintenance_v1(%s::timestamptz)",
@@ -546,7 +542,7 @@ STATEMENTS = StatementRegistry(
     record_batch_dispatch=_statement("record_batch_dispatch_v1"),
     record_batch_failure=_statement("record_batch_failure_v1"),
     recover_expired=_statement("recover_expired_telemetry_v1"),
-    register_worker=_statement("register_worker_v2"),
+    register_worker=_statement("register_worker_v1"),
     run_maintenance=_statement("run_maintenance_v1"),
     save_checkpoint=_statement("save_checkpoint_v1"),
     schedule_wait=_statement("schedule_wait_v1"),
