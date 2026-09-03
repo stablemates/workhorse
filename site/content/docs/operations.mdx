@@ -13,6 +13,13 @@ page is the map, plus the fleet controls that belong to no single sibling.
 readiness and liveness probes, and database pool ownership. Deploy workers there first; every
 other concern assumes a supervised process already exists.
 
+## Schema installation and migration
+
+[Installation](/docs/installation) owns the schema step. It is a deployment step, run once from your
+pipeline before any process from the new release starts, never from an application or worker on
+startup. [Compatibility](/docs/compatibility) explains why a migrated database keeps the previous
+release running while the new one rolls out.
+
 ## Database maintenance
 
 [Maintenance and retention](/docs/maintenance) owns promotion, expired-lease recovery, history
