@@ -8,7 +8,14 @@ from typing import cast
 
 from .._drivers import SyncExecutor
 from .._statements import DriverStatement
-from ..admin import Admin, AdminAudit
+from ..admin import (
+    Admin,
+    AdminAudit,
+    BulkRedriveOptions,
+    DeadLetterCursor,
+    DeadLetterFilter,
+    RedriveResult,
+)
 from ._errors import DashboardRPCError
 
 
@@ -73,6 +80,8 @@ class DashboardBackend:
             "cancelTask": self.cancel_task,
             "signalTask": self.signal_task,
             "completeHumanWait": self.complete_human_wait,
+            "redriveTask": self.redrive_task,
+            "redriveDeadLetters": self.redrive_dead_letters,
         }
 
     def _rows(self, sql: str, parameters: Sequence[object] = ()) -> list[Mapping[str, object]]:
@@ -434,11 +443,60 @@ class DashboardBackend:
             "completedBy": row["completed_by"],
         }
 
+    def redrive_task(self, input: object, actor: str) -> object:
+        value = cast(Mapping[str, object], input)
+        result = self._admin.redrive(cast(str, value["id"]), _admin_audit(value, actor))
+        if result.status == "not_found":
+            raise DashboardRPCError(404, "NOT_FOUND", "Task not found")
+        return _redrive_result(result)
+
+    def redrive_dead_letters(self, input: object, actor: str) -> object:
+        value = cast(Mapping[str, object], input)
+        cursor = cast(Mapping[str, object] | None, value.get("cursor"))
+        page = self._admin.redrive_many(
+            DeadLetterFilter(
+                queue=cast(str | None, value.get("queue")),
+                type=cast(str | None, value.get("jobType")),
+                tags=tuple(cast(Sequence[str], value.get("tags") or ())),
+            ),
+            _admin_audit(value, actor),
+            BulkRedriveOptions(
+                limit=cast(int, value.get("limit", BulkRedriveOptions.limit)),
+                cursor=(
+                    None
+                    if cursor is None
+                    else DeadLetterCursor(
+                        cast(str, cursor["finishedAt"]), cast(str, cursor["jobId"])
+                    )
+                ),
+            ),
+        )
+        next_cursor = page.next_cursor
+        return {
+            "results": [_redrive_result(result) for result in page.results],
+            "nextCursor": (
+                None
+                if next_cursor is None
+                else {"finishedAt": next_cursor.finished_at, "jobId": next_cursor.job_id}
+            ),
+        }
+
 
 def _camel_to_snake(value: str) -> str:
     return "".join(
         ("_" + character.lower()) if character.isupper() else character for character in value
     )
+
+
+def _redrive_result(result: RedriveResult) -> dict[str, object]:
+    return {
+        "status": result.status,
+        "sourceJobId": result.source_job_id,
+        "targetJobId": result.target_job_id,
+        "sourceState": result.source_state,
+        "targetState": result.target_state,
+        "requestedAt": _iso(result.requested_at),
+    }
 
 
 def _admin_audit(input: Mapping[str, object], actor: str) -> AdminAudit:

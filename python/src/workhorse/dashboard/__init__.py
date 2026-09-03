@@ -36,6 +36,8 @@ _MUTATIONS = frozenset(
         "cancelTask",
         "signalTask",
         "completeHumanWait",
+        "redriveTask",
+        "redriveDeadLetters",
     }
 )
 _OPTIONAL_MUTATIONS = frozenset({"enqueueTest", "setScheduleEnabled"})

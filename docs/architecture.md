@@ -726,7 +726,7 @@ database-owned contract procedure through
 versioned dashboard views and lifecycle functions. The host supplies `enqueueTest` and
 `setScheduleEnabled`, whose behavior belongs to the embedding runtime.
 `python/tests/test_dashboard_conformance.py` executes all six
-scenarios and all 66 exchanges against both writable and read-only hosts.
+scenarios and all 78 exchanges against both writable and read-only hosts.
 
 `workhorse.dashboard_tasks_v1(p_input jsonb)`,
 `workhorse.dashboard_queues_v1(p_input jsonb)`,
