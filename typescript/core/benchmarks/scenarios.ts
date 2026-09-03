@@ -27,14 +27,15 @@ import {
   DeadlineExceededError,
   EnqueueIdempotencyConflictError,
   ExecutionTimeoutError,
-  InjectedCrashError,
   MAX_JOB_DEPENDENTS,
   ProgressLeaseLostError,
   ProgressRateLimitError,
   Queue,
   Worker,
 } from "../src/index.js";
-import type { ClaimedJob, Failpoint, Queryable, QueueHealth, QueueOptions } from "../src/index.js";
+import type { ClaimedJob, Queryable, QueueHealth, QueueOptions } from "../src/index.js";
+// The crash harness is worker test support, not published API, so it comes from the source module.
+import { InjectedCrashError, type Failpoint } from "../src/worker.js";
 
 registerOpenTelemetry();
 

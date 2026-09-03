@@ -64,6 +64,36 @@ describe("the derived package list", () => {
 });
 
 describe("published package manifests", () => {
+  // Two exports existed only so the dashboard server could convert a raw health row, and three
+  // only so the worker tests could inject a crash. WH-592 removed all five from the index; this
+  // keeps a convenience re-export from putting a raw row shape or a test hook back on the surface.
+  it("exports no dashboard-only or test-only identifier from the index", async () => {
+    const index = await read("typescript/core/src/index.ts");
+    for (const identifier of [
+      "queueHealthFromDocument",
+      "QueueHealthDocument",
+      "Failpoint",
+      "InjectedCrashError",
+    ]) {
+      expect(index, `index.ts exports ${identifier}`).not.toContain(identifier);
+    }
+  });
+
+  packageDeclarationsTest(
+    "strips the crash-injection hook from the published declarations (requires built package declarations)",
+    async () => {
+      const workerDeclaration = await read("typescript/core/dist/src/worker.d.ts");
+      const indexDeclaration = await read("typescript/core/dist/src/index.d.ts");
+      // `stripInternal` is what removes them, so a dropped `@internal` marker fails here.
+      for (const identifier of ["Failpoint", "InjectedCrashError", "failpoint"]) {
+        expect(workerDeclaration, `worker.d.ts declares ${identifier}`).not.toContain(identifier);
+      }
+      for (const identifier of ["queueHealthFromDocument", "QueueHealthDocument"]) {
+        expect(indexDeclaration, `index.d.ts declares ${identifier}`).not.toContain(identifier);
+      }
+    },
+  );
+
   packageDeclarationsTest(packageDeclarationsTestName, async () => {
     const queueDeclaration = await read("typescript/core/dist/src/queue.d.ts");
     const adminDeclaration = await read("typescript/core/dist/src/admin.d.ts");

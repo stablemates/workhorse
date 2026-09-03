@@ -6,14 +6,15 @@ import type { DashboardSettingsController } from "./server/types.js";
 
 function context(overrides: Partial<DashboardRpcContext> = {}): DashboardRpcContext {
   const database = {} as DashboardRpcContext["database"];
+  const admin = {} as DashboardRpcContext["admin"];
   return {
     database,
     queue: {} as DashboardRpcContext["queue"],
-    admin: {} as DashboardRpcContext["admin"],
+    admin,
     configuredWorkers: [],
     environment: "test",
     authenticatedActor: "operator",
-    readQueueHealth: createDashboardQueueHealthReader(database),
+    readQueueHealth: createDashboardQueueHealthReader(admin),
     maintenanceLoops: { tickIntervalMs: 1_000 },
     operator: { mode: "read-only" },
     ...overrides,

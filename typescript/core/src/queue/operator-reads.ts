@@ -195,7 +195,8 @@ function nullableHealthTimestamp(value: Date | string | null): Date | null {
   return value === null ? null : healthTimestamp(value);
 }
 
-export type QueueHealthDocument = RetentionPolicyRow & {
+/** The raw `queue_health_v1` row. Module-private: callers read the converted `QueueHealth`. */
+type QueueHealthDocument = RetentionPolicyRow & {
   captured_at: Date | string;
   schema_version: number | null;
   blocked: string;
@@ -597,7 +598,7 @@ export class RedriveIdempotencyConflictError extends WorkhorseError {
 }
 
 /** Convert the versioned PostgreSQL health document into the public TypeScript shape. */
-export function queueHealthFromDocument(row: QueueHealthDocument): QueueHealth {
+function queueHealthFromDocument(row: QueueHealthDocument): QueueHealth {
   const rateLimits = row.rate_limit_policies.map(rateLimitStatus);
   const base: Omit<QueueHealth, "status" | "budgets"> = {
     capturedAt: healthTimestamp(row.captured_at),

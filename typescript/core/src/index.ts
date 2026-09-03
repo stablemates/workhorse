@@ -15,8 +15,6 @@ export {
   WorkhorseError,
 } from "./errors.js";
 export type { SchemaCompatibilityCode, SchemaCompatibilityVersions } from "./errors.js";
-export { queueHealthFromDocument } from "./queue/operator-reads.js";
-export type { QueueHealthDocument } from "./queue/operator-reads.js";
 export { WorkhorseMetricsObserver } from "./metrics-observer.js";
 export type {
   AdapterNotificationPool,
@@ -146,7 +144,6 @@ export {
   CancellationRequestedError,
   DeadlineExceededError,
   ExecutionTimeoutError,
-  InjectedCrashError,
   Worker,
 } from "./worker.js";
 export type {
@@ -155,7 +152,6 @@ export type {
   BatchHandlerItem,
   BatchHandlerOutcome,
   BatchHandlerOptions,
-  Failpoint,
   Handler,
   HandlerContext,
   WorkerMaintenanceLoop,

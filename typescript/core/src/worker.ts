@@ -87,6 +87,11 @@ class AttemptOutcomeArbiter {
   }
 }
 
+/**
+ * @internal Crash boundary a test or benchmark asks a worker to model process loss at. This is
+ * test support, not application API: `stripInternal` keeps it out of the published declarations,
+ * and the repository's own suites import it from `src/worker.ts`.
+ */
 export type Failpoint =
   | "afterClaim"
   | "beforeHandler"
@@ -310,6 +315,7 @@ export interface WorkerQueueApi {
   pruneWorkerRegistry(maxAgeMs?: number): Promise<number>;
 }
 
+/** @internal Raised by an injected {@link Failpoint}, so it never reaches an application. */
 export class InjectedCrashError extends WorkhorseError {
   constructor(readonly failpoint: Failpoint) {
     super(`Injected crash at ${failpoint}`);
@@ -404,7 +410,7 @@ export interface WorkerOptions {
   /** Override SQL-owned retry backoff, either fixed or derived from the attempt and claimed job. */
   /** Return undefined to defer to the job's persisted policy or SQL compatibility default. */
   retryDelayMs?: number | ((attempt: number, job: ClaimedJob) => number | undefined);
-  /** Test-only crash hook. Injected crashes deliberately bypass normal fail/retry handling. */
+  /** @internal Test-only crash hook. Injected crashes deliberately bypass normal fail/retry handling. */
   failpoint?: Failpoint | ((point: Failpoint, job: ClaimedJob) => boolean | Promise<boolean>);
 }
 

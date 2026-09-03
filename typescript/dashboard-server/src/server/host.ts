@@ -274,6 +274,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
     workspace: DashboardWorkspaceOptions,
   ): HostWorkspace => {
     const database = dashboardDatabase(workspace.database);
+    const admin = new Admin(workspace.database);
     return {
       name,
       basePath: name === null ? path : `${path}/${name}`,
@@ -282,7 +283,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
       queryable: workspace.database,
       database,
       // Administrative policy and wait reads share the dashboard's caller-owned connection.
-      admin: new Admin(workspace.database),
+      admin,
       queue: new Queue(workspace.database),
       environment: workspace.environment ?? options.environment ?? "unknown",
       configuredWorkers: workspace.configuredWorkers ?? options.configuredWorkers ?? [],
@@ -296,7 +297,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
       settingsController: workspace.settingsController ?? options.settingsController,
       projectDurability: workspace.projectDurability ?? options.projectDurability,
       redactErrorStacks: workspace.redactErrorStacks ?? options.redactErrorStacks ?? false,
-      readQueueHealth: createDashboardQueueHealthReader(database),
+      readQueueHealth: createDashboardQueueHealthReader(admin),
     };
   };
 

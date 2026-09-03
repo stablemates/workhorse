@@ -91,6 +91,14 @@ and 24 and PostgreSQL 15 through 18.
   the audited four-argument `workhorse.run_task_now_v1`, which the TypeScript dashboard server
   already used. A dashboard run-now action is therefore audited in all three languages, and its
   `promoted` event records the actor, the reason, and the request identity.
+- **Removed from `@stablemates/workhorse`.** Five identifiers left the package index because no
+  application called them. `queueHealthFromDocument` and `QueueHealthDocument` existed so the
+  dashboard server could convert a raw `queue_health_v1` row; the dashboard now calls
+  `Admin.health()`, and the raw row shape, which leaked SQL column names and string-typed counts,
+  is private to core. `Failpoint`, `InjectedCrashError`, and `WorkerOptions.failpoint` were a
+  crash-injection hook for this repository's own worker tests and benchmarks; they are marked
+  internal and no longer appear in the published type declarations. Nothing about worker behaviour
+  changes.
 
 ### Added
 
@@ -124,6 +132,10 @@ and 24 and PostgreSQL 15 through 18.
   `dashboard.CompleteHumanWaitStatus` from the generated dashboard bindings renames those
   references to `SignalDeliveryStatus` and `HumanWaitCompletionStatus`. Generated code carries no
   deprecated alias. The TypeScript names all keep one, so a TypeScript project needs no edit.
+- **Removed exports.** Code that imported `queueHealthFromDocument` or `QueueHealthDocument` should
+  read the snapshot through `Admin.health()`, which returns the same `QueueHealth`. Code that
+  imported `Failpoint` or `InjectedCrashError`, or that set `WorkerOptions.failpoint`, was using a
+  test hook that was never part of the supported surface; there is no replacement.
 
 ## 0.1.0-beta.2 — 2026-09-01
 

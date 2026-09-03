@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import { InjectedCrashError, type MaintenancePhaseResult, Queue, Worker } from "../src/index.js";
+import { type MaintenancePhaseResult, Queue, Worker } from "../src/index.js";
+// `InjectedCrashError` is worker test support, not published API, so it comes from the source module.
+import { InjectedCrashError } from "../src/worker.js";
 import { Pool } from "pg";
 import { createIntegrationTestContext } from "./support/integration.js";
 

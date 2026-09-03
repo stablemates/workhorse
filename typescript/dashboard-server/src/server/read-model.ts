@@ -1,5 +1,5 @@
-import { expectOneRow, queueHealthFromDocument } from "@stablemates/workhorse";
-import type { Admin, QueueHealth, QueueHealthDocument } from "@stablemates/workhorse";
+import { expectOneRow } from "@stablemates/workhorse";
+import type { Admin, QueueHealth } from "@stablemates/workhorse";
 import {
   DashboardActivityGroupBy,
   DashboardActivityPage,
@@ -28,9 +28,14 @@ import type { DashboardDurabilityProjector } from "./types.js";
 
 export type DashboardQueueHealthReader = () => Promise<QueueHealth>;
 
-/** Share the expensive canonical health snapshot across nearby reads for one dashboard context. */
+/**
+ * Share the expensive canonical health snapshot across nearby reads for one dashboard context.
+ *
+ * The snapshot comes from `Admin.health()` rather than a private conversion of the raw health
+ * document. The dashboard is a guest in the caller's process and reads what any operator reads.
+ */
 export function createDashboardQueueHealthReader(
-  database: DashboardDatabase,
+  admin: Admin,
   ttlMs = 3_000,
 ): DashboardQueueHealthReader {
   let cached: { expiresAt: number; value: QueueHealth } | null = null;
@@ -39,14 +44,9 @@ export function createDashboardQueueHealthReader(
     const now = Date.now();
     if (cached && cached.expiresAt > now) return cached.value;
     if (pending) return pending;
-    pending = database
-      .execute<{ snapshot: QueueHealthDocument }>(sql`
-        SELECT workhorse.queue_health_v1() AS snapshot
-      `)
-      .then((result) => {
-        const value = queueHealthFromDocument(
-          expectOneRow(result, "the queue health snapshot").snapshot,
-        );
+    pending = admin
+      .health()
+      .then((value) => {
         cached = { expiresAt: Date.now() + ttlMs, value };
         return value;
       })
@@ -62,7 +62,7 @@ export async function readDashboardHumanWaits(
   _admin: Admin,
   canComplete: boolean,
   canSignal: boolean,
-  _readQueueHealth: DashboardQueueHealthReader = createDashboardQueueHealthReader(database),
+  _readQueueHealth?: DashboardQueueHealthReader,
 ): Promise<DashboardHumanWaitPage> {
   const input = JSON.stringify({ canComplete, canSignal });
   const result = await database.execute<{ result: DashboardHumanWaitPage }>(sql`
@@ -234,7 +234,7 @@ export async function readDashboardJobDetail(
   projectDurability: DashboardDurabilityProjector = () => null,
   _admin?: Admin,
   canSignal = false,
-  _readQueueHealth: DashboardQueueHealthReader = createDashboardQueueHealthReader(database),
+  _readQueueHealth?: DashboardQueueHealthReader,
   redactErrorStacks = false,
 ): Promise<DashboardJobDetail | null> {
   const input = JSON.stringify({ id, canSignal });
