@@ -5,6 +5,11 @@
     "stripInternal": true,
     "tsBuildInfoFile": ".build/core.tsbuildinfo"
   },
-  "include": ["typescript/core/src/**/*.ts", "typescript/core/benchmarks/**/*.ts"],
-  "exclude": ["typescript/core/test", "vitest.config.ts", "typescript/core/src/cli/reset-db.ts"]
+  "include": ["typescript/core/src/**/*.ts"],
+  "exclude": [
+    "typescript/core/test",
+    "vitest.config.ts",
+    "typescript/core/src/cli/benchmark.ts",
+    "typescript/core/src/cli/reset-db.ts"
+  ]
 }

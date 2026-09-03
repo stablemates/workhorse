@@ -149,9 +149,21 @@ and 24 and PostgreSQL 15 through 18.
   unreachable database is not a verdict about versions.
 - `workhorse schema status --json` adds `schema.refusalCode` beside `schema.refusal`, so a
   deployment gate can branch on the same code the process that starts after it would throw.
+- The `workhorse init` options `--dir` and `--force` are documented in
+  [`docs/architecture.md`](docs/architecture.md), which also lists the commands the published
+  `workhorse` binary owns. Neither flag changed; they were previously visible only in
+  `workhorse init --help`.
 
 ### Fixed
 
+- The published `@stablemates/workhorse` tarball no longer ships the benchmark suite.
+  `dist/src/cli/benchmark.*` and the whole `dist/benchmarks/` tree were built and packed even
+  though `benchmark` is not a `bin` entry and not a command of the `workhorse` dispatcher, adding
+  roughly 620 kB of unreachable modules to every install. `tsconfig.build.json` now
+  excludes the benchmark CLI the way it already excluded `reset-db`, and drops the benchmark
+  harness from the build. Both stay repository scripts, run from source through `pnpm benchmark`
+  and `pnpm db:reset:*`; no importable API is removed, because neither module was reachable from
+  the package `exports`.
 - The demo no longer replays the schema on startup against a database that already holds it.
 - The poll-cadence conformance fixture in `protocol/v1/runtime.json` holds the worker at each empty
   poll, so every language runtime's cadence test observes the same schedule.

@@ -2815,6 +2815,41 @@ external supervisor can restart it.
 The optional probe-only listener reports liveness while running or draining and readiness only while
 accepting claims. It does not expose application HTTP ingress, queue data, or mutations.
 
+## Command-line entry points
+
+The published `@stablemates/workhorse` package declares one `bin`, `workhorse`, which resolves to
+`dist/src/cli/workhorse.js`. That dispatcher owns every documented command: `init`, `schema`,
+`worker`, `dashboard`, `admin`, `tui`, and `health`. `workhorse --help` lists them and
+`workhorse --version` prints the package version. Exit codes are shared across commands: 0 success,
+1 runtime failure or an unusable schema verdict, 2 queue degradation reported by `health`, and 64 a
+usage error, including an unknown command, an unknown flag, or a missing value.
+
+`typescript/core/src/cli/benchmark.ts` and `typescript/core/src/cli/reset-db.ts` are repository
+scripts rather than commands of that dispatcher. `tsconfig.build.json` excludes both, so neither
+module reaches `dist` or the npm tarball. That exclusion also drops
+`typescript/core/benchmarks/`, which the benchmark script is the only importer of. A contributor
+runs the two from source through the root package scripts `pnpm benchmark` and `pnpm db:reset:*`,
+which is why `docs/benchmarking.md` spells the benchmark invocation `pnpm benchmark -- --help` and
+never `workhorse benchmark`. Both files stay under `typescript/core/src/cli/` and stay typechecked
+by `typescript/core/tsconfig.source.json`.
+
+`workhorse init` scaffolds a worker configuration for an existing project. It reads the target
+directory's `package.json`, and `detectProject` in `typescript/core/src/cli/init.ts` derives three
+facts from its dependencies: the ORM (`drizzle`, `prisma`, `typeorm`, `kysely`, or plain `pg`), the
+web framework (`hono`, `express`, `fastify`, `next`, or `none`), and the package manager from the
+`packageManager` field (`pnpm`, `npm`, `yarn`, or `bun`). It writes `workhorse.config.ts`, or
+`workhorse.config.js` when the project declares no TypeScript dependency, then prints the schema
+install command, the worker command, and a framework-shaped dashboard mount snippet. The snippet is
+printed only; `init` writes no route file and edits no existing file.
+
+`workhorse init` takes two options besides `--help`:
+
+- `--dir <path>` names the project directory, resolved against the current working directory. The
+  default is the current directory.
+- `--force` rewrites the generated configuration when one already exists. Without it, an existing
+  `workhorse.config.ts` or `workhorse.config.js` is left untouched and the command says so while
+  still printing the detection result and the next steps.
+
 ## Administrative CLI and TUI
 
 `workhorse admin` and `workhorse tui` are thin fronts over one shared client,
