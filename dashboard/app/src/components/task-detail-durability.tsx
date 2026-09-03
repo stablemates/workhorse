@@ -1,7 +1,7 @@
 import type { DashboardJobDetail } from "@stablemates/workhorse-dashboard-server/wire";
 import { Badge, Box, Code, Divider, Group, Paper, Stack, Text } from "@mantine/core";
 import { describeTaskConcurrency } from "../concurrency-policy.js";
-import { readIdempotencyEvidence } from "@stablemates/workhorse-dashboard-server/wire";
+import { readDashboardIdempotencyEvidence } from "@stablemates/workhorse-dashboard-server/wire";
 import {
   DependencyEdge,
   LineageNavigationProps,
@@ -322,7 +322,7 @@ export function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
   // Acceptance is a boundary worth showing only when it deduplicated something. An unkeyed task
   // keeps exactly the timeline it had before this feature existed.
   const events = job.events.filter(
-    (event) => event.type !== "enqueued" || readIdempotencyEvidence(event) !== null,
+    (event) => event.type !== "enqueued" || readDashboardIdempotencyEvidence(event) !== null,
   );
   if (events.length === 0) return null;
   const claimsPerAttempt = new Map<number | null, number>();

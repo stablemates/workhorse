@@ -1,4 +1,7 @@
-import { dashboardAttemptOutcomes, dashboardJobEventTypes } from "./presentation.js";
+import {
+  dashboardAttemptOutcomes,
+  dashboardJobEventTypes,
+} from "@stablemates/workhorse-dashboard-server/wire";
 import type {
   DashboardEventKind,
   DashboardEventsWindow,

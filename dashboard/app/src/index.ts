@@ -22,8 +22,6 @@ export {
   taskListingKey,
   taskLocationHref,
   taskPageSizes,
-  type TaskActivityGroup,
-  type TaskActivityPeriod,
   type TaskDetailNavigation,
   type TaskLocationState,
   type TaskPageSize,

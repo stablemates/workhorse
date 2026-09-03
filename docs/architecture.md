@@ -2259,7 +2259,7 @@ smaller response a prefix of a larger response. It returns:
 versioned core surfaces used by the dashboard server. A core migration may change private tables
 without a dashboard release when it preserves these view and function contracts.
 
-`DashboardJobEventType`, the router's `eventTypeValues`, and the application's
+`DashboardJobEventType`, the router's `eventTypeValues`, and the wire package's
 `dashboardJobEventTypes` enumerate every lifecycle event written by `schema.sql`, including
 coalescing, dependency, child, signal, human-wait, progress, and cancellation events. The Events
 feed exposes that vocabulary as filter values. The task drawer renders every returned event and
@@ -2292,6 +2292,23 @@ controllers, request host, Node middleware, and standalone server. The full buil
 `dashboard/app/dist/app` to `typescript/dashboard-server/dist/app`, and
 `dashboardAssetsDirectory()` serves that copied artifact. No React application source lives in
 the backend package.
+
+Each public name reaches a consumer from exactly one subpath. `./wire` owns the wire vocabulary,
+including `dashboardJobEventTypes` and `dashboardAttemptOutcomes`; `./server` owns
+`DashboardWorkspaceLink`, which `.` and `./client` no longer re-export; `./client` owns
+`createDashboardClient` and `DashboardAuthenticationRoutes`. `sql`, `DashboardSql`, and
+`CompleteDashboardOptions` are internal and reach no subpath: the bare `sql` collides with the
+`drizzle` and `kysely` template tags in a consumer namespace, and `CompleteDashboardOptions` only
+proves a local option array covers its union. A consumer builds no fragment, because
+`dashboardDatabase(database)` returns the `DashboardDatabase` that `createDashboardHost` accepts.
+The dashboard application's `.` subpath drops `TaskActivityGroup` and `TaskActivityPeriod`, which
+restated `DashboardActivityGroupBy` and `DashboardActivityPeriod` member for member.
+
+The idempotency wire family carries the `Dashboard` prefix every other wire name has:
+`DashboardIdempotencyEvidence`, `readDashboardIdempotencyEvidence`,
+`hasDashboardIdempotencyEvidence`, and `dashboardIdempotencyEventDetailKeys`. Each unprefixed name
+remains an exported `@deprecated` alias for the rest of the `0.x` line and is removed in `1.0.0`.
+`MaintenanceLoopCadences` keeps its name, because Python and Go share it.
 
 `scripts/generate-dashboard-bundle.ts` packages `dashboard/app/dist/app` and
 `dashboard/app/browser/login.html` into the deterministic

@@ -4,8 +4,11 @@ import type {
   DashboardEventsPage,
   DashboardEventsWindow,
 } from "@stablemates/workhorse-dashboard-server/wire";
+import {
+  dashboardAttemptOutcomes,
+  dashboardJobEventTypes,
+} from "@stablemates/workhorse-dashboard-server/wire";
 import { isEventTypeFilter, type EventsLocationState } from "../events-location.js";
-import { dashboardAttemptOutcomes, dashboardJobEventTypes } from "../presentation.js";
 import {
   Badge,
   Box,

@@ -1,8 +1,5 @@
-import type {
-  DashboardClient,
-  DashboardDemoTools,
-  DashboardWorkspaceLink,
-} from "@stablemates/workhorse-dashboard-server";
+import type { DashboardClient, DashboardDemoTools } from "@stablemates/workhorse-dashboard-server";
+import type { DashboardWorkspaceLink } from "@stablemates/workhorse-dashboard-server/server";
 import { RefreshBlockerProvider } from "./refresh-blockers.js";
 import { DropdownActivityProvider } from "./dropdown-activity.js";
 import { DashboardClientContext, normalizeBasePath } from "./core.js";

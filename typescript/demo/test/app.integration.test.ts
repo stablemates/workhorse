@@ -83,7 +83,7 @@ import {
   type DemoFeaturePayload,
 } from "../src/feature-showcase.js";
 import {
-  readIdempotencyEvidence,
+  readDashboardIdempotencyEvidence,
   type DashboardWorkerRow,
 } from "@stablemates/workhorse-dashboard/wire";
 import { createDemoWorkerDefinition } from "../src/worker-definition.js";
@@ -3657,7 +3657,7 @@ describe("Workhorse demo", () => {
     const detail = await client.dashboard.jobDetail({ id: first.jobId });
     const enqueued = detail.events.find((event) => event.type === "enqueued");
     expect(
-      readIdempotencyEvidence({ type: enqueued!.type, details: enqueued!.details }),
+      readDashboardIdempotencyEvidence({ type: enqueued!.type, details: enqueued!.details }),
     ).toMatchObject({ scope: DEMO_OPERATOR_IDEMPOTENCY_SCOPE });
     expect(JSON.stringify(detail)).not.toContain(DEMO_OPERATOR_IDEMPOTENCY_KEY);
 

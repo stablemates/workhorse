@@ -6,7 +6,7 @@ import type {
   DashboardEventRow,
   DashboardJobDetail,
 } from "@stablemates/workhorse-dashboard-server/wire";
-import { dashboardJobEventTypes } from "./presentation.js";
+import { dashboardJobEventTypes } from "@stablemates/workhorse-dashboard-server/wire";
 
 Object.defineProperty(globalThis, "localStorage", {
   value: { getItem: () => null, setItem: () => undefined },

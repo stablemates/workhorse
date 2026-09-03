@@ -5,10 +5,10 @@ import {
   idempotencyEvidenceLine,
 } from "./presentation.js";
 import {
-  hasIdempotencyEvidence,
-  idempotencyEventDetailKeys,
-  readIdempotencyEvidence,
-  type IdempotencyEvidence,
+  dashboardIdempotencyEventDetailKeys,
+  hasDashboardIdempotencyEvidence,
+  readDashboardIdempotencyEvidence,
+  type DashboardIdempotencyEvidence,
 } from "@stablemates/workhorse-dashboard-server/wire";
 
 const rawKey = "order-9f3a-super-secret-caller-key";
@@ -27,7 +27,7 @@ const safeDetails = {
   },
 };
 
-const evidence: IdempotencyEvidence = {
+const evidence: DashboardIdempotencyEvidence = {
   scope: "workhorse-demo:orders",
   keyDigest: "1f0c7f6d1a2b3c4d5e6f708192a3b4c5",
   keyLength: rawKey.length,
@@ -38,23 +38,25 @@ const evidence: IdempotencyEvidence = {
 
 describe("idempotency evidence", () => {
   it("reads only the safe metadata recorded on the initial enqueued event", () => {
-    expect(readIdempotencyEvidence({ type: "enqueued", details: safeDetails })).toEqual(evidence);
+    expect(readDashboardIdempotencyEvidence({ type: "enqueued", details: safeDetails })).toEqual(
+      evidence,
+    );
   });
 
   it("treats an unkeyed enqueue as carrying no deduplication surface at all", () => {
     expect(
-      readIdempotencyEvidence({
+      readDashboardIdempotencyEvidence({
         type: "enqueued",
         details: { state: "ready", run_at: "2026-08-01T00:00:00.000Z" },
       }),
     ).toBeNull();
-    expect(readIdempotencyEvidence({ type: "enqueued", details: null })).toBeNull();
-    expect(readIdempotencyEvidence({ type: "enqueued", details: "ready" })).toBeNull();
+    expect(readDashboardIdempotencyEvidence({ type: "enqueued", details: null })).toBeNull();
+    expect(readDashboardIdempotencyEvidence({ type: "enqueued", details: "ready" })).toBeNull();
   });
 
   it("never derives evidence from any event other than the initial enqueued event", () => {
     for (const type of ["claimed", "checkpoint_saved", "retry_scheduled", "succeeded"]) {
-      expect(readIdempotencyEvidence({ type, details: safeDetails })).toBeNull();
+      expect(readDashboardIdempotencyEvidence({ type, details: safeDetails })).toBeNull();
     }
   });
 
@@ -63,7 +65,7 @@ describe("idempotency evidence", () => {
       const partial: Record<string, unknown> = { ...safeDetails.idempotency };
       delete partial[missing];
       expect(
-        readIdempotencyEvidence({ type: "enqueued", details: { idempotency: partial } }),
+        readDashboardIdempotencyEvidence({ type: "enqueued", details: { idempotency: partial } }),
       ).toBeNull();
     }
   });
@@ -72,27 +74,30 @@ describe("idempotency evidence", () => {
     const withoutExpiry: Record<string, unknown> = { ...safeDetails.idempotency };
     delete withoutExpiry.expires_at;
     expect(
-      readIdempotencyEvidence({ type: "enqueued", details: { idempotency: withoutExpiry } }),
+      readDashboardIdempotencyEvidence({
+        type: "enqueued",
+        details: { idempotency: withoutExpiry },
+      }),
     ).toMatchObject({ expiresAt: null, scope: "workhorse-demo:orders" });
   });
 
   it("rejects a non-object idempotency record instead of guessing", () => {
     for (const record of [null, "keyed", 7, ["scope"]]) {
       expect(
-        readIdempotencyEvidence({ type: "enqueued", details: { idempotency: record } }),
+        readDashboardIdempotencyEvidence({ type: "enqueued", details: { idempotency: record } }),
       ).toBeNull();
     }
   });
 
   it("summarises a task's events without scanning anything but enqueued", () => {
     expect(
-      hasIdempotencyEvidence([
+      hasDashboardIdempotencyEvidence([
         { type: "enqueued", details: { state: "ready" } },
         { type: "claimed", details: safeDetails },
       ]),
     ).toBe(false);
     expect(
-      hasIdempotencyEvidence([
+      hasDashboardIdempotencyEvidence([
         { type: "enqueued", details: safeDetails },
         { type: "claimed", details: { worker_id: "demo-worker-1" } },
       ]),
@@ -146,7 +151,7 @@ describe("idempotency evidence", () => {
   });
 
   it("pins the safe detail keys the dashboard is allowed to read", () => {
-    expect([...idempotencyEventDetailKeys]).toEqual([
+    expect([...dashboardIdempotencyEventDetailKeys]).toEqual([
       "scope",
       "key_digest",
       "key_length",
@@ -154,8 +159,8 @@ describe("idempotency evidence", () => {
       "expires_at",
       "request_digest",
     ]);
-    expect(idempotencyEventDetailKeys).not.toContain("key");
+    expect(dashboardIdempotencyEventDetailKeys).not.toContain("key");
     // A prefix preview reproduces a short key whole, so it is not a safe surface either.
-    expect(idempotencyEventDetailKeys).not.toContain("key_preview");
+    expect(dashboardIdempotencyEventDetailKeys).not.toContain("key_preview");
   });
 });

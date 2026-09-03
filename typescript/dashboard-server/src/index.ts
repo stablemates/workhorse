@@ -6,4 +6,3 @@ export type {
   DashboardDemoScenario,
   DashboardDemoTools,
 } from "./client.js";
-export type { DashboardWorkspaceLink } from "./runtime-config.js";

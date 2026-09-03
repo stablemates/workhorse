@@ -99,6 +99,24 @@ and 24 and PostgreSQL 15 through 18.
   crash-injection hook for this repository's own worker tests and benchmarks; they are marked
   internal and no longer appear in the published type declarations. Nothing about worker behaviour
   changes.
+- **`@stablemates/workhorse-dashboard` and `@stablemates/workhorse-dashboard-server` export each
+  public name from one subpath.** Six names are removed. `TaskActivityGroup` and
+  `TaskActivityPeriod` leave the dashboard's `.` subpath: they restated `DashboardActivityGroupBy`
+  and `DashboardActivityPeriod` member for member, and those are the names Python and Go already
+  carry. `./presentation` no longer re-exports `dashboardJobEventTypes` or
+  `dashboardAttemptOutcomes`; import them from `./wire`, which owns them. `CompleteDashboardOptions`
+  leaves `./wire`, `sql` and `DashboardSql` leave the dashboard-server `./server` subpath, and
+  `DashboardWorkspaceLink` is now exported from `./server` alone rather than also from `.` and
+  `./client`. The three were internal: the bare `sql` collided with the `drizzle` and `kysely`
+  template tags in a consumer namespace, and `dashboardDatabase(database)` already returns the
+  `DashboardDatabase` that `createDashboardHost` accepts, so no consumer builds a fragment.
+- **The idempotency wire family takes the `Dashboard` prefix every other wire name has.**
+  `IdempotencyEvidence` becomes `DashboardIdempotencyEvidence`, `readIdempotencyEvidence` becomes
+  `readDashboardIdempotencyEvidence`, `hasIdempotencyEvidence` becomes
+  `hasDashboardIdempotencyEvidence`, and `idempotencyEventDetailKeys` becomes
+  `dashboardIdempotencyEventDetailKeys`. Every old name stays as a `@deprecated` alias for the rest
+  of the `0.x` line and is removed in `1.0.0`. `MaintenanceLoopCadences` is unchanged, because
+  Python and Go share that name.
 
 ### Added
 
@@ -136,6 +154,14 @@ and 24 and PostgreSQL 15 through 18.
   read the snapshot through `Admin.health()`, which returns the same `QueueHealth`. Code that
   imported `Failpoint` or `InjectedCrashError`, or that set `WorkerOptions.failpoint`, was using a
   test hook that was never part of the supported surface; there is no replacement.
+- **Dashboard imports.** If a build breaks on a missing dashboard name, move the import to the
+  subpath that now owns it: `dashboardJobEventTypes` and `dashboardAttemptOutcomes` to `./wire`,
+  `DashboardWorkspaceLink` to `@stablemates/workhorse-dashboard-server/server`, and
+  `TaskActivityGroup` and `TaskActivityPeriod` to `DashboardActivityGroupBy` and
+  `DashboardActivityPeriod` on `./wire`. Nothing replaces `sql`, `DashboardSql`, or
+  `CompleteDashboardOptions`, which were never meant to leave their package. The renamed
+  idempotency names still resolve under their old spellings until `1.0.0`, so that rename needs no
+  action in `0.x`.
 
 ## 0.1.0-beta.2 — 2026-09-01
 

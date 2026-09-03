@@ -1,7 +1,6 @@
 import { isProcedure, ORPCError, os } from "@orpc/server";
 import { MAX_JOB_PRIORITY, type Admin, type Queue } from "@stablemates/workhorse";
 import type {
-  CompleteDashboardOptions,
   DashboardDemoFeature,
   DashboardDemoJobKind,
   DashboardDemoScenario,
@@ -129,6 +128,10 @@ const activityInput = z.object({
 const systemInput = z.object({
   window: z.enum(["15m", "1h", "24h"]).default("1h"),
 });
+/** Proves a runtime option list contains every member of its wire union. */
+type CompleteDashboardOptions<Union, Options extends readonly Union[]> =
+  Exclude<Union, Options[number]> extends never ? Options : never;
+
 const eventTypeValues = [...dashboardJobEventTypes, ...dashboardAttemptOutcomes] as const;
 const checkedEventTypeValues: CompleteDashboardOptions<
   DashboardEventTypeFilter,

@@ -74,7 +74,7 @@ export interface DashboardDurabilityPlan {
  * secret to every dashboard reader. The event's own `key_preview` is deliberately not read: for a
  * short key that preview is the entire key, so surfacing it would leak the secret it truncates.
  */
-export interface IdempotencyEvidence {
+export interface DashboardIdempotencyEvidence {
   scope: string;
   keyDigest: string;
   keyLength: number;
@@ -82,6 +82,9 @@ export interface IdempotencyEvidence {
   expiresAt: string | null;
   requestDigest: string;
 }
+
+/** @deprecated Renamed to `DashboardIdempotencyEvidence`. Removed in 1.0.0. */
+export type IdempotencyEvidence = DashboardIdempotencyEvidence;
 
 /**
  * Detail keys this dashboard reads from `enqueued` `details.idempotency`. A raw key is deliberately
@@ -114,10 +117,10 @@ function numberDetail(details: Record<string, unknown>, key: string): number | n
  * all. A structurally incomplete record is also treated as absent rather than partially rendered,
  * because a half-populated claim about deduplication would be worse than saying nothing.
  */
-export function readIdempotencyEvidence(event: {
+export function readDashboardIdempotencyEvidence(event: {
   type: string;
   details: unknown;
-}): IdempotencyEvidence | null {
+}): DashboardIdempotencyEvidence | null {
   if (event.type !== "enqueued") return null;
   const details = event.details;
   if (!details || typeof details !== "object") return null;
@@ -149,13 +152,31 @@ export function readIdempotencyEvidence(event: {
 }
 
 /** True when any of a task's recorded events carries safe deduplication evidence. */
+export function hasDashboardIdempotencyEvidence(
+  events: ReadonlyArray<{ type: string; details: unknown }>,
+): boolean {
+  return events.some((event) => readDashboardIdempotencyEvidence(event) !== null);
+}
+
+/** @deprecated Renamed to `readDashboardIdempotencyEvidence`. Removed in 1.0.0. */
+export function readIdempotencyEvidence(event: {
+  type: string;
+  details: unknown;
+}): DashboardIdempotencyEvidence | null {
+  return readDashboardIdempotencyEvidence(event);
+}
+
+/** @deprecated Renamed to `hasDashboardIdempotencyEvidence`. Removed in 1.0.0. */
 export function hasIdempotencyEvidence(
   events: ReadonlyArray<{ type: string; details: unknown }>,
 ): boolean {
-  return events.some((event) => readIdempotencyEvidence(event) !== null);
+  return hasDashboardIdempotencyEvidence(events);
 }
 
 /** Detail keys the dashboard is allowed to read. Exported so tests can pin the safe surface. */
+export const dashboardIdempotencyEventDetailKeys: readonly string[] = idempotencyDetailKeys;
+
+/** @deprecated Renamed to `dashboardIdempotencyEventDetailKeys`. Removed in 1.0.0. */
 export const idempotencyEventDetailKeys: readonly string[] = idempotencyDetailKeys;
 
 /**
@@ -761,10 +782,6 @@ export type DashboardAttemptOutcome = (typeof dashboardAttemptOutcomes)[number];
  * re-checked before it is sent.
  */
 export type DashboardEventTypeFilter = DashboardJobEventType | DashboardAttemptOutcome;
-
-/** Proves a runtime option list contains every member of its wire union. */
-export type CompleteDashboardOptions<Union, Options extends readonly Union[]> =
-  Exclude<Union, Options[number]> extends never ? Options : never;
 
 /** The demonstration jobs a demo host can enqueue from the dashboard. */
 export type DashboardDemoJobKind =

@@ -1,5 +1,12 @@
 import type { Queryable } from "@stablemates/workhorse";
 
+/**
+ * One parameterized SQL fragment.
+ *
+ * @internal This package builds every dashboard query itself, so no consumer constructs a
+ * fragment: `dashboardDatabase` returns the `DashboardDatabase` that `createDashboardHost` takes.
+ * The type stays exported only so this package's own modules can name a fragment they return.
+ */
 export interface DashboardSql {
   readonly text: string;
   readonly values: readonly unknown[];

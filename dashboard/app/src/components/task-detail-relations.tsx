@@ -23,7 +23,7 @@ import {
   idempotencyEvidenceLine,
   isTerminalTaskState,
 } from "../presentation.js";
-import { readIdempotencyEvidence } from "@stablemates/workhorse-dashboard-server/wire";
+import { readDashboardIdempotencyEvidence } from "@stablemates/workhorse-dashboard-server/wire";
 import type { RetryPolicy } from "@stablemates/workhorse";
 import { Fragment, useEffect, useRef } from "react";
 import { CheckCircle, Copy, LinkSimple, Prohibit } from "@phosphor-icons/react";
@@ -118,7 +118,7 @@ export function cancelEventDescription(event: JobEvent): { text: string; title: 
  */
 function idempotencyEvidenceFor(job: DashboardJobDetail) {
   for (const event of job.events) {
-    const evidence = readIdempotencyEvidence(event);
+    const evidence = readDashboardIdempotencyEvidence(event);
     if (evidence !== null) return evidence;
   }
   return null;

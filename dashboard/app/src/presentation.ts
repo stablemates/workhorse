@@ -8,16 +8,12 @@ import type {
   DashboardJobRow,
   DashboardHumanWaitRow,
   DashboardRunNowStatus,
-  CompleteDashboardOptions,
-  IdempotencyEvidence,
-} from "@stablemates/workhorse-dashboard-server/wire";
-import {
-  dashboardAttemptOutcomes as wireAttemptOutcomes,
-  dashboardJobEventTypes as wireJobEventTypes,
+  DashboardIdempotencyEvidence,
 } from "@stablemates/workhorse-dashboard-server/wire";
 
-export const dashboardJobEventTypes = wireJobEventTypes;
-export const dashboardAttemptOutcomes = wireAttemptOutcomes;
+/** Proves a runtime option list contains every member of its wire union. */
+type CompleteDashboardOptions<Union, Options extends readonly Union[]> =
+  Exclude<Union, Options[number]> extends never ? Options : never;
 
 export function isHumanWaitOverdue(wait: DashboardHumanWaitRow, nowMs: number): boolean {
   return Date.parse(wait.deadlineAt) <= nowMs;
@@ -285,7 +281,9 @@ export interface IdempotencyDescription {
  * submission within the retained window returns this same task identity instead of creating a new
  * one, and a changed request under the same key is refused rather than silently accepted.
  */
-export function describeIdempotency(evidence: IdempotencyEvidence): IdempotencyDescription {
+export function describeIdempotency(
+  evidence: DashboardIdempotencyEvidence,
+): IdempotencyDescription {
   const window = formatIdempotencyWindow(evidence.ttlMs);
   return {
     label: "Keyed",
@@ -300,7 +298,7 @@ export function describeIdempotency(evidence: IdempotencyEvidence): IdempotencyD
 }
 
 /** Compact one-line evidence used beside the drawer heading. */
-export function idempotencyEvidenceLine(evidence: IdempotencyEvidence): string {
+export function idempotencyEvidenceLine(evidence: DashboardIdempotencyEvidence): string {
   const parts = [
     `scope ${evidence.scope}`,
     `key length ${evidence.keyLength}`,
