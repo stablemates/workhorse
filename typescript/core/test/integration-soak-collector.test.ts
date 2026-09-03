@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { collectSoakObservation, observationFileName } from "../../../scripts/soak/observe.js";
 import { buildSoakReport } from "../../../scripts/soak/report.js";
+import { WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { pool, queue } = createIntegrationTestContext(import.meta.url);
@@ -19,7 +20,7 @@ describe("soak observation collector", () => {
     expect(observation.format).toBe(1);
     expect(observation.database.name).toMatch(/workhorse/);
     expect(Date.parse(observation.observedAt)).toBeGreaterThan(0);
-    expect(observation.installation.schemaVersion).toBe(1);
+    expect(observation.installation.schemaVersion).toBe(WORKHORSE_SCHEMA_VERSION);
     expect(observation.installation.protocolVersions).toContain(1);
     expect(observation.installation.migrations[0]).toMatchObject({
       version: 1,

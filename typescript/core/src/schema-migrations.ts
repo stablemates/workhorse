@@ -40,6 +40,17 @@ export function isMissingDatabaseRelationError(error: unknown): boolean {
   return code === "3F000" || code === "42P01";
 }
 
+/**
+ * Whether PostgreSQL reports that the called function does not exist.
+ *
+ * A schema behind this build is the normal first half of a rolling upgrade, so a read that a later
+ * migration introduced has to be able to say "this database cannot answer yet" instead of failing
+ * the command that an operator runs to find that out.
+ */
+export function isMissingDatabaseFunctionError(error: unknown): boolean {
+  return databaseErrorCode(error) === "42883";
+}
+
 const transactionControl = /^\s*(?:BEGIN|COMMIT|ROLLBACK|START\s+TRANSACTION)\b/im;
 
 export async function readSchemaVersion(database: Queryable): Promise<number | null> {

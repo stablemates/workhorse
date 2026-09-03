@@ -10,7 +10,7 @@ import {
   schemaCompatibilityRefusal,
   WORKHORSE_SCHEMA_VERSION,
 } from "../src/schema.js";
-import { createSchemaStatusReport } from "../src/cli/schema-status.js";
+import { createSchemaStatusReport, FLEET_EVIDENCE_NOTE } from "../src/cli/schema-status.js";
 
 const repository = path.resolve(import.meta.dirname, "../../..");
 const cli = path.join(repository, "typescript/core/src/cli/workhorse.ts");
@@ -142,7 +142,12 @@ const supportedPostgres = {
 describe("schema status JSON", () => {
   it("reports a schema below the runtime's floor as incompatible", () => {
     expect(
-      createSchemaStatusReport(MINIMUM_SCHEMA_VERSION - 1, [PROTOCOL_VERSION], supportedPostgres),
+      createSchemaStatusReport(
+        MINIMUM_SCHEMA_VERSION - 1,
+        [PROTOCOL_VERSION],
+        supportedPostgres,
+        [],
+      ),
     ).toEqual({
       schema: {
         installedVersion: MINIMUM_SCHEMA_VERSION - 1,
@@ -155,6 +160,7 @@ describe("schema status JSON", () => {
         refusal: expect.stringContaining("below the minimum"),
         refusalCode: "schema-too-old",
       },
+      fleet: { clientProtocolVersions: [], note: FLEET_EVIDENCE_NOTE },
       postgres: {
         major: 17,
         version: "17.2",
@@ -170,7 +176,12 @@ describe("schema status JSON", () => {
   // new release migrated past, and keeps working.
   it("accepts a schema ahead of this build inside the same major line", () => {
     expect(
-      createSchemaStatusReport(WORKHORSE_SCHEMA_VERSION + 1, [PROTOCOL_VERSION], supportedPostgres),
+      createSchemaStatusReport(
+        WORKHORSE_SCHEMA_VERSION + 1,
+        [PROTOCOL_VERSION],
+        supportedPostgres,
+        [],
+      ),
     ).toMatchObject({
       schema: { state: "ahead", compatible: true, refusal: null, refusalCode: null },
     });
@@ -182,6 +193,7 @@ describe("schema status JSON", () => {
         WORKHORSE_SCHEMA_VERSION + 4,
         [PROTOCOL_VERSION + 1],
         supportedPostgres,
+        [],
       ),
     ).toMatchObject({
       schema: {
@@ -194,7 +206,7 @@ describe("schema status JSON", () => {
   });
 
   it("reports a missing schema without calling it drift", () => {
-    expect(createSchemaStatusReport(null, null, supportedPostgres)).toMatchObject({
+    expect(createSchemaStatusReport(null, null, supportedPostgres, null)).toMatchObject({
       schema: {
         installedVersion: null,
         state: "not-installed",
@@ -202,17 +214,44 @@ describe("schema status JSON", () => {
         refusal: expect.stringContaining("No Workhorse schema is installed"),
         refusalCode: "schema-not-installed",
       },
+      // A database with no registry cannot be asked what its fleet speaks, and reporting an empty
+      // fleet would read as "nothing is running" rather than "nothing was asked". A schema too old
+      // to hold the columns reaches the same field the same way.
+      fleet: null,
     });
+  });
+
+  // The counts gate a step that stops every process speaking the removed protocol, so the caveat
+  // travels in the payload instead of relying on the operator having read the manual.
+  it("carries the reason the worker counts are not an inventory", () => {
+    const report = createSchemaStatusReport(
+      WORKHORSE_SCHEMA_VERSION,
+      [PROTOCOL_VERSION],
+      supportedPostgres,
+      [
+        { version: PROTOCOL_VERSION, workers: 3 },
+        { version: null, workers: 1 },
+      ],
+    );
+
+    expect(report.fleet).toEqual({
+      clientProtocolVersions: [
+        { version: PROTOCOL_VERSION, workers: 3 },
+        { version: null, workers: 1 },
+      ],
+      note: FLEET_EVIDENCE_NOTE,
+    });
+    expect(report.fleet?.note).toContain("Producers do not");
   });
 
   it("represents unsupported PostgreSQL separately from a current schema", () => {
     expect(
-      createSchemaStatusReport(WORKHORSE_SCHEMA_VERSION, [PROTOCOL_VERSION], {
-        major: 14,
-        version: "14.12",
-        supported: false,
-        tested: false,
-      }),
+      createSchemaStatusReport(
+        WORKHORSE_SCHEMA_VERSION,
+        [PROTOCOL_VERSION],
+        { major: 14, version: "14.12", supported: false, tested: false },
+        [],
+      ),
     ).toMatchObject({
       schema: { state: "current", compatible: true, installedProtocolVersions: [PROTOCOL_VERSION] },
       postgres: { supported: false, level: "unsupported" },
@@ -226,6 +265,7 @@ describe("schema status JSON", () => {
       MINIMUM_SCHEMA_VERSION - 1,
       [PROTOCOL_VERSION],
       supportedPostgres,
+      [],
     );
 
     const refusal = schemaCompatibilityRefusal({

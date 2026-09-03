@@ -411,7 +411,9 @@ predecessor served, so a major upgrade is an ordinary rolling deployment. Remova
 once their fleet is entirely on the new major. `workhorse schema migrate` never applies it. The
 command refuses while `workhorse.worker_registry` shows a worker on the retiring protocol
 heartbeating inside its lease; producers do not register, so it names what it can see and requires
-explicit confirmation.
+explicit confirmation. Every worker reports its client protocol version, SDK language, and SDK
+version at registration, and `workhorse schema status --json` shows the resulting counts under
+`fleet`.
 
 Two consequences are worth stating plainly. `workhorse.protocol_version` is operator state rather
 than release state, so two databases at the same schema version may serve different protocol sets.

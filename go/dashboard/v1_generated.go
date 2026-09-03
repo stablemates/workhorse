@@ -941,6 +941,8 @@ type DashboardWorkerRow struct {
 	Registered         bool     `json:"registered"`
 	LastHeartbeatAt    *string  `json:"lastHeartbeatAt"`
 	Paused             bool     `json:"paused"`
+	SdkLanguage        *string  `json:"sdkLanguage"`
+	SdkVersion         *string  `json:"sdkVersion"`
 }
 
 type DashboardWorkersPage struct {

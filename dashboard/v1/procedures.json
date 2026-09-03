@@ -6791,6 +6791,26 @@
         },
         "paused": {
           "type": "boolean"
+        },
+        "sdkLanguage": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "sdkVersion": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
         }
       },
       "required": [
@@ -6810,7 +6830,9 @@
         "startedAt",
         "registered",
         "lastHeartbeatAt",
-        "paused"
+        "paused",
+        "sdkLanguage",
+        "sdkVersion"
       ]
     },
     "DashboardWorkersPage": {

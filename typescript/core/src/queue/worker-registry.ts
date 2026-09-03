@@ -1,14 +1,26 @@
-import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
+import { PROTOCOL_VERSION, SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { expectOneRow } from "../errors.js";
 import { logDebug, logInfo } from "../telemetry.js";
+import { WORKHORSE_VERSION } from "../version.js";
 import type { WorkerPauseResult, WorkerRegistration, WorkerRegistryEntry } from "../types.js";
 import { QueueModule } from "./module-context.js";
 
+/** What this client library is, reported to the registry on every registration refresh. */
+const SDK_LANGUAGE = "typescript";
+
 /** Owns worker registration, operator pause, fleet reads, and pruning behind the Queue facade. */
 export class WorkerRegistryModule extends QueueModule {
+  /**
+   * Announce this worker and read back the operator pause flag.
+   *
+   * The client protocol version and SDK identity are this library's own facts rather than
+   * registration input, so they are stamped here and no caller can misreport them. An operator
+   * reads them to decide whether any worker still speaks a protocol they are about to retire, and
+   * a wrong answer there stops a fleet.
+   */
   async registerWorker(registration: WorkerRegistration): Promise<{ paused: boolean }> {
     const result = await this.context.database.query<{ paused: boolean }>(
-      SQL_STATEMENTS["register_worker_v1"],
+      SQL_STATEMENTS["register_worker_v2"],
       [
         registration.workerId,
         registration.instanceId,
@@ -25,9 +37,12 @@ export class WorkerRegistryModule extends QueueModule {
         registration.registryIntervalMs ?? 5_000,
         registration.activeSlots,
         registration.draining,
+        PROTOCOL_VERSION,
+        SDK_LANGUAGE,
+        WORKHORSE_VERSION,
       ],
     );
-    const paused = expectOneRow(result, "workhorse.register_worker_v1").paused;
+    const paused = expectOneRow(result, "workhorse.register_worker_v2").paused;
     return { paused };
   }
 

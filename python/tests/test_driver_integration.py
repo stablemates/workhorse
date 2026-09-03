@@ -22,6 +22,7 @@ from workhorse import (
     assert_schema_compatible_asyncpg,
     assert_schema_compatible_psycopg,
 )
+from workhorse._statements import MAXIMUM_SCHEMA_VERSION
 
 pytestmark = pytest.mark.integration
 
@@ -55,7 +56,7 @@ def test_psycopg_reads_the_database_health_document(database_url: str) -> None:
     with psycopg.connect(database_url) as connection:
         health = Queue(connection).health()
 
-    assert health["schema_version"] == 1
+    assert health["schema_version"] == MAXIMUM_SCHEMA_VERSION
     assert health["status"] == {"level": "healthy", "reasons": []}
     assert health["budgets"]["promotionLagMs"] > 0  # type: ignore[index,operator]
 
@@ -82,7 +83,7 @@ async def test_asyncpg_reads_the_same_database_health_document(database_url: str
     finally:
         await connection.close()
 
-    assert health["schema_version"] == 1
+    assert health["schema_version"] == MAXIMUM_SCHEMA_VERSION
     assert health["status"] == {"level": "healthy", "reasons": []}
 
 

@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { publishedPackages, repositoryRoot } from "./packages.js";
 import { compatibilityNotice, prose, publicBetaLabel } from "./public-beta-notice.js";
+import { WORKHORSE_SCHEMA_VERSION } from "../typescript/core/src/index.js";
 
 /** The release this repository cuts next: one version on npm, PyPI, and Go from one commit. */
 const releaseVersion = "0.1.0";
@@ -89,7 +90,9 @@ describe("the 0.1.0 release", () => {
     for (const [relativePath, requirements] of floors) {
       const changelog = await read(relativePath);
       const entry = prose(changelogEntry(changelog, releaseVersion, releaseDate));
-      expect(entry).toContain("**schema v1**");
+      // The literal follows the runtime rather than the release, so a migration that lands before
+      // the release date cannot leave three changelogs naming a version nothing installs.
+      expect(entry).toContain(`**schema v${WORKHORSE_SCHEMA_VERSION}**`);
       expect(entry).toContain("from one source commit");
       expect(entry).toContain("recreate the database");
       for (const requirement of requirements) {

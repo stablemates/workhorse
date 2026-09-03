@@ -3,9 +3,20 @@ import {
   PROTOCOL_VERSION,
   schemaCompatibilityRefusal,
   WORKHORSE_SCHEMA_VERSION,
+  type WorkerClientProtocol,
 } from "../schema.js";
 import { MINIMUM_POSTGRES_MAJOR, type PostgresSupport } from "../support.js";
 import type { SchemaCompatibilityCode } from "../errors.js";
+
+/**
+ * Why the worker protocol counts are evidence and not an inventory.
+ *
+ * Reported verbatim in the payload so a script that gates on `workers` carries the caveat with it
+ * rather than depending on someone having read the documentation.
+ */
+export const FLEET_EVIDENCE_NOTE =
+  "Only workers register. Producers do not, so these counts show the workers this database can " +
+  "see and are not an inventory of every process using it.";
 
 export interface SchemaStatusReport {
   readonly schema: {
@@ -27,6 +38,20 @@ export interface SchemaStatusReport {
     readonly minimumMajor: number;
     readonly level: "unsupported" | "supported-untested" | "supported-tested";
   };
+  /**
+   * Worker evidence for a protocol retirement.
+   *
+   * `null` when this database cannot answer at all: no schema is installed, or the installed
+   * schema predates the columns. `schema.installedVersion` says which.
+   */
+  readonly fleet: {
+    /**
+     * Distinct client protocol versions whose workers heartbeated inside their own lease, with
+     * `null` covering workers whose SDK is old enough not to report one.
+     */
+    readonly clientProtocolVersions: readonly WorkerClientProtocol[];
+    readonly note: string;
+  } | null;
 }
 
 /**
@@ -43,6 +68,7 @@ export function createSchemaStatusReport(
   installedVersion: number | null,
   installedProtocolVersions: readonly number[] | null,
   support: PostgresSupport,
+  workerClientProtocols: readonly WorkerClientProtocol[] | null,
 ): SchemaStatusReport {
   // A missing schema reaches the CLI as a missing relation rather than an ambiguous row, so it
   // gets the sentence that names the step an operator has not run yet.
@@ -76,6 +102,10 @@ export function createSchemaStatusReport(
       refusal: refusal === null ? null : refusal.message,
       refusalCode: refusal === null ? null : refusal.code,
     },
+    fleet:
+      workerClientProtocols === null
+        ? null
+        : { clientProtocolVersions: workerClientProtocols, note: FLEET_EVIDENCE_NOTE },
     postgres: {
       ...support,
       minimumMajor: MINIMUM_POSTGRES_MAJOR,

@@ -1729,13 +1729,15 @@ func TestWorkerRegistryDeliversRemotePauseAndDeregisters(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	registered := false
 	var firstInstanceID string
+	var clientProtocolVersion *int
+	var sdkLanguage, sdkVersion *string
 	for time.Now().Before(deadline) {
 		var queues, scheduleNamespaces []string
 		err = pool.QueryRow(
 			ctx,
-			"SELECT instance_id::text, queue_names, schedule_namespaces FROM workhorse.worker_registry WHERE worker_id = $1",
+			"SELECT instance_id::text, queue_names, schedule_namespaces, client_protocol_version, sdk_language, sdk_version FROM workhorse.worker_registry WHERE worker_id = $1",
 			workerID,
-		).Scan(&firstInstanceID, &queues, &scheduleNamespaces)
+		).Scan(&firstInstanceID, &queues, &scheduleNamespaces, &clientProtocolVersion, &sdkLanguage, &sdkVersion)
 		if err == nil {
 			registered = len(queues) == 1 && queues[0] == queueName &&
 				len(scheduleNamespaces) == 1 && scheduleNamespaces[0] == "go-schedules"
@@ -1745,6 +1747,17 @@ func TestWorkerRegistryDeliversRemotePauseAndDeregisters(t *testing.T) {
 	}
 	if !registered {
 		t.Fatal("worker did not register")
+	}
+	// An operator retiring a protocol reads these columns to decide whether anything still speaks
+	// it, so a registration that leaves them empty is evidence they must not have.
+	if clientProtocolVersion == nil || *clientProtocolVersion != workhorse.ProtocolVersion {
+		t.Fatalf("client protocol version = %v, want %d", clientProtocolVersion, workhorse.ProtocolVersion)
+	}
+	if sdkLanguage == nil || *sdkLanguage != "go" {
+		t.Fatalf("sdk language = %v, want go", sdkLanguage)
+	}
+	if sdkVersion == nil || *sdkVersion != workhorse.Version {
+		t.Fatalf("sdk version = %v, want %s", sdkVersion, workhorse.Version)
 	}
 	if _, err := pool.Exec(
 		ctx,

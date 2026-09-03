@@ -1,7 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import { type MaintenancePhaseResult, Queue, Worker } from "../src/index.js";
+import {
+  PROTOCOL_VERSION,
+  readWorkerClientProtocols,
+  type MaintenancePhaseResult,
+  Queue,
+  Worker,
+} from "../src/index.js";
+import { WORKHORSE_VERSION } from "../src/version.js";
 // `InjectedCrashError` is worker test support, not published API, so it comes from the source module.
 import { InjectedCrashError } from "../src/worker.js";
 import { Pool } from "pg";
@@ -51,6 +58,100 @@ describe("worker registry", () => {
       queues: ["mail", "billing"],
       scheduleNamespaces: ["commerce"],
     });
+  });
+
+  it("records the client protocol and SDK identity of the process that registered", async () => {
+    const workerId = `sdk-identity-${randomUUID()}`;
+    const worker = new Worker(queue, {
+      workerId,
+      queues: ["sdk-identity"],
+      registryIntervalMs: 100,
+    });
+
+    await worker.runOnce();
+
+    const row = await pool.query<{
+      client_protocol_version: number | null;
+      sdk_language: string | null;
+      sdk_version: string | null;
+    }>(
+      `SELECT client_protocol_version, sdk_language, sdk_version
+         FROM workhorse.worker_registry WHERE worker_id = $1`,
+      [workerId],
+    );
+
+    expect(row.rows).toEqual([
+      {
+        client_protocol_version: PROTOCOL_VERSION,
+        sdk_language: "typescript",
+        sdk_version: WORKHORSE_VERSION,
+      },
+    ]);
+  });
+
+  // A rolling deploy runs old and new SDK builds at once, so the call an older build makes has to
+  // keep working and has to say plainly that it reported nothing.
+  it("registers a worker that reports no client identity at all", async () => {
+    const workerId = `legacy-registration-${randomUUID()}`;
+    await pool.query(
+      `SELECT workhorse.register_worker_v1(
+         $1::text, $2::uuid, 'legacy-host', 4242, ARRAY['legacy']::text[], ARRAY[]::text[],
+         2, 30000, 10000, 250, 1000, 60000, 5000, 0, false)`,
+      [workerId, randomUUID()],
+    );
+
+    const row = await pool.query<{
+      hostname: string;
+      client_protocol_version: number | null;
+      sdk_language: string | null;
+      sdk_version: string | null;
+    }>(
+      `SELECT hostname, client_protocol_version, sdk_language, sdk_version
+         FROM workhorse.worker_registry WHERE worker_id = $1`,
+      [workerId],
+    );
+
+    expect(row.rows).toEqual([
+      {
+        hostname: "legacy-host",
+        client_protocol_version: null,
+        sdk_language: null,
+        sdk_version: null,
+      },
+    ]);
+  });
+
+  // The evidence `workhorse schema contract` gates on: a worker outside its own lease is not
+  // proof of anything, so it must not be counted as still speaking a protocol.
+  it("counts only the protocols of workers heartbeating inside their lease", async () => {
+    const live = `protocol-live-${randomUUID()}`;
+    const lapsed = `protocol-lapsed-${randomUUID()}`;
+    await pool.query(
+      `SELECT workhorse.register_worker_v2(
+         $1::text, $2::uuid, 'evidence-host', 4243, ARRAY['evidence']::text[], ARRAY[]::text[],
+         1, 30000, 10000, 250, 1000, 60000, 5000, 0, false, 7, 'fixture', '9.9.9')`,
+      [live, randomUUID()],
+    );
+    await pool.query(
+      `SELECT workhorse.register_worker_v2(
+         $1::text, $2::uuid, 'evidence-host', 4244, ARRAY['evidence']::text[], ARRAY[]::text[],
+         1, 1000, 500, 250, 1000, 60000, 5000, 0, false, 8, 'fixture', '9.9.9')`,
+      [lapsed, randomUUID()],
+    );
+    await pool.query(
+      `UPDATE workhorse.worker_registry
+          SET last_heartbeat_at = clock_timestamp() - interval '1 hour'
+        WHERE worker_id = $1`,
+      [lapsed],
+    );
+
+    const counted = await readWorkerClientProtocols(pool);
+    const versions = (counted ?? []).map((entry) => entry.version);
+
+    expect(counted).not.toBeNull();
+
+    expect(versions).toContain(7);
+    expect(versions).not.toContain(8);
   });
 
   it("subscribes to notifications for every configured queue", async () => {

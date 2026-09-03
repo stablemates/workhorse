@@ -278,6 +278,15 @@ entirely on the new major. That command refuses while `workhorse.worker_registry
 the retiring protocol heartbeating inside its lease, names the workers it can see, states that it
 cannot see producers, and requires explicit confirmation.
 
+The evidence is three nullable `workhorse.worker_registry` columns added by schema version 2:
+`client_protocol_version`, `sdk_language`, and `sdk_version`. Each SDK stamps its own values at
+registration and on every heartbeat that refreshes the row. `worker_client_protocols_v1()` groups
+the workers whose last heartbeat falls inside their own `lease_ms` by the protocol version they
+reported, and `workhorse schema status --json` reports it under `fleet`. Workers whose SDK predates
+the columns are counted under a null protocol version, which is the population a contract step must
+not assume away. Producers never register, so this is evidence about workers and never an inventory
+of every process using the database.
+
 Two consequences follow. `workhorse.protocol_version` is operator state rather than release state,
 so two databases at the same schema version may serve different protocol sets; the compatibility
 check is unaffected because it reads that table instead of inferring a bound from the schema

@@ -8,7 +8,7 @@ const (
 	minimumProtocolVersion = 1
 	maximumProtocolVersion = 1
 	minimumSchemaVersion   = 1
-	maximumSchemaVersion   = 1
+	maximumSchemaVersion   = 2
 	// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
 	MaxEnqueueBatchSize     = 1000
 	defaultJobValueMaxBytes = 1048576
@@ -30,6 +30,12 @@ var internalStatementRegistry = map[string]string{
        $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::text[],
        $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,
        $12::integer, $13::integer, $14::integer, $15::boolean
+     ) AS paused`,
+	"register_worker_v2": `SELECT workhorse.register_worker_v2(
+       $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::text[],
+       $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,
+       $12::integer, $13::integer, $14::integer, $15::boolean,
+       $16::integer, $17::text, $18::text
      ) AS paused`,
 	"run_maintenance_v1":           `SELECT * FROM workhorse.run_maintenance_v1($1::timestamptz)`,
 	"schema_version":               `SELECT version FROM workhorse.schema_version ORDER BY version`,
@@ -363,8 +369,9 @@ var internalStatementRegistry = map[string]string{
               paused_reason, paused_at, started_at, last_heartbeat_at
          FROM workhorse.worker_registry
         ORDER BY last_heartbeat_at DESC, worker_id`,
-	"prune_worker_registry_v1": `SELECT workhorse.prune_worker_registry_v1(make_interval(secs => $1::double precision)) AS count`,
-	"protocol_version":         `SELECT version FROM workhorse.protocol_version ORDER BY version`,
+	"prune_worker_registry_v1":   `SELECT workhorse.prune_worker_registry_v1(make_interval(secs => $1::double precision)) AS count`,
+	"worker_client_protocols_v1": `SELECT client_protocol_version, workers FROM workhorse.worker_client_protocols_v1()`,
+	"protocol_version":           `SELECT version FROM workhorse.protocol_version ORDER BY version`,
 	"compatibility_state": `SELECT 'protocol' AS kind, version FROM workhorse.protocol_version
             UNION ALL
            SELECT 'schema' AS kind, version FROM workhorse.schema_version

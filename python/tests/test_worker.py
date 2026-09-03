@@ -29,6 +29,8 @@ from workhorse import (
     WaitConflictError,
     Worker,
 )
+from workhorse._statements import PROTOCOL_VERSION
+from workhorse._version import WORKHORSE_VERSION
 
 
 def test_contract_sync_validates_payload_and_worker_result(database_url: str) -> None:
@@ -974,7 +976,8 @@ def test_worker_registry_delivers_remote_pause_and_deregisters(database_url: str
         deadline = monotonic() + 5
         while monotonic() < deadline:
             row = operator_connection.execute(
-                "SELECT instance_id::text, queue_names, schedule_namespaces "
+                "SELECT instance_id::text, queue_names, schedule_namespaces, "
+                "client_protocol_version, sdk_language, sdk_version "
                 "FROM workhorse.worker_registry WHERE worker_id = 'python-registry-worker'"
             ).fetchone()
             if row is not None:
@@ -984,6 +987,9 @@ def test_worker_registry_delivers_remote_pause_and_deregisters(database_url: str
         first_instance_id = row[0]
         assert row[1] == ["python-registry"]
         assert row[2] == ["python-schedules"]
+        # An operator deciding whether a protocol can be retired reads these, so the Python worker
+        # has to name itself rather than leave the row anonymous.
+        assert row[3:] == (PROTOCOL_VERSION, "python", WORKHORSE_VERSION)
 
         operator_connection.execute(
             "SELECT * FROM workhorse.set_worker_paused_v1(%s, true, %s, %s, %s)",

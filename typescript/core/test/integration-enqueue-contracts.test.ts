@@ -16,6 +16,7 @@ import {
   Queue,
   type Queryable,
   Worker,
+  WORKHORSE_SCHEMA_VERSION,
 } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
@@ -531,7 +532,9 @@ describe("enqueue contracts", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v1 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(
+        new RegExp(`non-v${WORKHORSE_SCHEMA_VERSION} or mixed workhorse schema`),
+      );
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );

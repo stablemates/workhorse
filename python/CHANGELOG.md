@@ -15,7 +15,7 @@ Published to PyPI from one source commit shared with the npm packages and the Go
 ([ADR 0050](../docs/decisions/0050-release-0-1-0-without-a-prerelease-suffix.md)). The distribution
 stays a public beta on the `0.x` line, and its classifier stays `Development Status :: 4 - Beta`.
 
-Requires **schema v1** and Python **3.12** or newer.
+Requires **schema v2** and Python **3.12** or newer.
 
 ### Added
 
@@ -25,6 +25,13 @@ Requires **schema v1** and Python **3.12** or newer.
   result plus the continuation cursor the next page resumes from. The host lists both as mutations,
   so a cross-origin or read-only request is refused before dispatch. `workhorse.dashboard_v1` gains
   their generated input and output types.
+- **The Python worker records what it is.** Schema version 2 adds `client_protocol_version`,
+  `sdk_language`, and `sdk_version` to `workhorse.worker_registry`, and every registration refresh
+  reports `python` with this distribution's version and the SQL protocol version it speaks. The
+  dashboard shows them per worker, and `workhorse schema status --json` counts the live workers by
+  protocol so an operator can see whether a protocol is still in use before retiring it. The
+  columns are nullable and the older call is retained, so a worker running an earlier release keeps
+  registering during a rolling deploy.
 - `workhorse.compatibility` publishes the startup schema check that the installation page tells every
   runtime to make. `assert_schema_compatible(connection)` takes a Psycopg connection, and
   `assert_schema_compatible_psycopg` and `assert_schema_compatible_asyncpg` name their asynchronous

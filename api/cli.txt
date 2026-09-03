@@ -820,6 +820,20 @@ interface SchemaStatusReport {
     readonly minimumMajor: number;
     readonly level: "unsupported" | "supported-untested" | "supported-tested";
   };
+  /**
+  * Worker evidence for a protocol retirement.
+  *
+  * `null` when this database cannot answer at all: no schema is installed, or the installed
+  * schema predates the columns. `schema.installedVersion` says which.
+  */
+  readonly fleet: {
+    /**
+    * Distinct client protocol versions whose workers heartbeated inside their own lease, with
+    * `null` covering workers whose SDK is old enough not to report one.
+    */
+    readonly clientProtocolVersions: readonly WorkerClientProtocol[];
+    readonly note: string;
+  } | null;
 }
 
 type SignalWait = ExternalWaitRecord;
@@ -836,6 +850,12 @@ interface StoredSchedule {
   timezone: string;
   revision: bigint;
   lastOccurrenceAt: Date | null;
+}
+
+interface WorkerClientProtocol {
+  /** The protocol version, or `null` for workers whose SDK predates the column. */
+  readonly version: number | null;
+  readonly workers: number;
 }
 
 interface WorkerPauseResult {

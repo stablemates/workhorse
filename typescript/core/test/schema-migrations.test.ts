@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { verifySqlProtocolFixtures } from "../../../scripts/verify-sql-protocol.js";
 import {
   migrateSchema,
+  readWorkerClientProtocols,
   WORKHORSE_SCHEMA_BASELINE_VERSION,
   WORKHORSE_SCHEMA_VERSION,
 } from "../src/index.js";
@@ -206,14 +207,21 @@ describe("schema migrations", () => {
         applySchemaMigrationPlan(
           lockDatabase.pool,
           {
-            baselineVersion: 1,
-            currentVersion: 2,
-            steps: [{ fromVersion: 1, toVersion: 2, file: "0002.sql", description: "blocked" }],
+            baselineVersion: WORKHORSE_SCHEMA_BASELINE_VERSION,
+            currentVersion: WORKHORSE_SCHEMA_VERSION + 1,
+            steps: [
+              {
+                fromVersion: WORKHORSE_SCHEMA_VERSION,
+                toVersion: WORKHORSE_SCHEMA_VERSION + 1,
+                file: "blocked.sql",
+                description: "blocked",
+              },
+            ],
             readStep: () =>
               Promise.resolve("ALTER TABLE workhorse.protocol_version ADD COLUMN probe integer;"),
             lockTimeoutMs: 250,
           },
-          1,
+          WORKHORSE_SCHEMA_VERSION,
         ),
       ).rejects.toThrow("waited longer than 250ms for a lock");
     } finally {
@@ -228,7 +236,7 @@ describe("schema migrations", () => {
                 WHERE attrelid = 'workhorse.protocol_version'::regclass AND attname = 'probe') AS probe
          FROM workhorse.schema_version`,
     );
-    expect(state.rows).toEqual([{ version: 1, probe: null }]);
+    expect(state.rows).toEqual([{ version: WORKHORSE_SCHEMA_VERSION, probe: null }]);
   });
 
   it("waits without a deadline for a peer migrator that holds the advisory lock", async () => {
@@ -241,13 +249,20 @@ describe("schema migrations", () => {
       const migration = applySchemaMigrationPlan(
         lockDatabase.pool,
         {
-          baselineVersion: 1,
-          currentVersion: 2,
-          steps: [{ fromVersion: 1, toVersion: 2, file: "0002.sql", description: "queued" }],
+          baselineVersion: WORKHORSE_SCHEMA_BASELINE_VERSION,
+          currentVersion: WORKHORSE_SCHEMA_VERSION + 1,
+          steps: [
+            {
+              fromVersion: WORKHORSE_SCHEMA_VERSION,
+              toVersion: WORKHORSE_SCHEMA_VERSION + 1,
+              file: "queued.sql",
+              description: "queued",
+            },
+          ],
           readStep: () => Promise.resolve("SELECT 1;"),
           lockTimeoutMs: 250,
         },
-        1,
+        WORKHORSE_SCHEMA_VERSION,
       );
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 750);
@@ -261,7 +276,7 @@ describe("schema migrations", () => {
     const version = await lockDatabase.pool.query<{ version: number }>(
       "SELECT version FROM workhorse.schema_version",
     );
-    expect(version.rows).toEqual([{ version: 2 }]);
+    expect(version.rows).toEqual([{ version: WORKHORSE_SCHEMA_VERSION + 1 }]);
   });
 
   it("rejects schema versions below the migration baseline", async () => {
@@ -394,6 +409,22 @@ describe("schema migrations", () => {
         ),
       );
     }
+  });
+
+  // `workhorse schema status` is the command an operator runs to discover that a database is
+  // behind, and it is meant to run against exactly that database. A read a later migration
+  // introduced must therefore report "cannot answer" rather than fail the whole command.
+  it("reports no fleet evidence from a schema older than the columns that hold it", async () => {
+    await releaseDatabase.pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
+    await releaseDatabase.pool.query(
+      await readFile(path.join(repository, "sql", "releases", "0001.sql"), "utf8"),
+    );
+
+    await expect(readWorkerClientProtocols(releaseDatabase.pool)).resolves.toBeNull();
+
+    await migrateSchema(releaseDatabase.pool);
+
+    await expect(readWorkerClientProtocols(releaseDatabase.pool)).resolves.toEqual([]);
   });
 
   it("satisfies the SQL protocol fixtures on the pre-release baseline", async () => {

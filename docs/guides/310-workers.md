@@ -104,6 +104,12 @@ Each worker periodically writes a row saying it exists: its id, queues, schedule
 concurrency, and how many slots are busy. That's how a dashboard can show a fleet it doesn't host — process
 memory can't answer "which workers are alive" once workers are deployed separately.
 
+The row also says what the worker is: which client library it runs, at which version, speaking which
+protocol. A deploy that replaces workers one at a time runs two builds at once on purpose, so "why
+is that one worker behaving differently" is a normal question, and this is where you answer it. An
+older worker may report none of the three, and that is recorded as reporting nothing rather than
+guessed at.
+
 The namespace list answers a different question from the queue list. Queues control which jobs a
 worker can claim. Schedule namespaces control which recurring definitions it can evaluate.
 

@@ -449,6 +449,15 @@ export interface DashboardWorkerRow {
   /** Latest registry refresh, or null when the worker has never registered. */
   lastHeartbeatAt: string | null;
   paused: boolean;
+  /**
+   * Which client library this worker runs, as the worker itself reported it.
+   *
+   * A rolling deploy is a mixed fleet by design, so "which build is that one worker on" is a
+   * first question rather than an unusual one. Null when the worker has never registered, or when
+   * it runs an SDK built before it could say.
+   */
+  sdkLanguage: string | null;
+  sdkVersion: string | null;
 }
 
 export interface DashboardFailureRow {

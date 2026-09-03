@@ -2,9 +2,9 @@
   "formatVersion": 1,
   "protocolVersion": 1,
   "schema": {
-    "installedVersion": 1,
+    "installedVersion": 2,
     "minimumVersion": 1,
-    "maximumVersion": 1
+    "maximumVersion": 2
   },
   "supportedClientProtocol": {
     "minimumVersion": 1,
@@ -493,9 +493,15 @@
     },
     {
       "name": "register_worker_v1",
-      "pythonBinding": "register_worker",
       "arity": 15,
       "contract": "SELECT workhorse.register_worker_v1(\n       $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::text[],\n       $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,\n       $12::integer, $13::integer, $14::integer, $15::boolean\n     ) AS paused",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "register_worker_v2",
+      "pythonBinding": "register_worker",
+      "arity": 18,
+      "contract": "SELECT workhorse.register_worker_v2(\n       $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::text[],\n       $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,\n       $12::integer, $13::integer, $14::integer, $15::boolean,\n       $16::integer, $17::text, $18::text\n     ) AS paused",
       "catalogues": ["internal"]
     },
     {
@@ -862,6 +868,12 @@
       "name": "prune_worker_registry_v1",
       "arity": 1,
       "contract": "SELECT workhorse.prune_worker_registry_v1(make_interval(secs => $1::double precision)) AS count",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "worker_client_protocols_v1",
+      "arity": 0,
+      "contract": "SELECT client_protocol_version, workers FROM workhorse.worker_client_protocols_v1()",
       "catalogues": ["internal"]
     },
     {

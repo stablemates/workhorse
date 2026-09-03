@@ -97,7 +97,10 @@ describe("documentation site guide coverage", () => {
     const combined = files.join("\n");
 
     expect(files[0]).toContain("Schema version 1 stores");
-    expect(combined).not.toMatch(/schema version 2|exactly as fast/i);
+    // The claim guarded here is the storage shape, not the number. Schema version 2 exists as a
+    // migration and these pages may name it; what must not come back is a second lifecycle design
+    // presented as what a later schema version stores.
+    expect(combined).not.toMatch(/schema version (?!1\b)\d+ stores|exactly as fast/i);
     expect(combined).not.toContain("Before a mutation, the client reads");
     expect(combined).not.toContain("Insert-only identity, routing, payload");
     expect(files[1]).toContain("pending [keyed debounce]");

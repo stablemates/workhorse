@@ -1152,6 +1152,8 @@ class DashboardWorkerRow(TypedDict, total=False):
     registered: Required[bool]
     lastHeartbeatAt: Required[str | None]
     paused: Required[bool]
+    sdkLanguage: Required[str | None]
+    sdkVersion: Required[str | None]
 
 
 class DashboardWorkersPage(TypedDict, total=False):

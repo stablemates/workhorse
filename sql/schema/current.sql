@@ -402,6 +402,26 @@ CREATE TABLE IF NOT EXISTS workhorse.worker_registry (
   schedule_namespaces text[] NOT NULL DEFAULT '{}' CHECK (
     array_position(schedule_namespaces, NULL) IS NULL
     AND array_position(schedule_namespaces, '') IS NULL
+  ),
+  -- What the registering process is, recorded beside where it is.
+  --
+  -- These three answer two questions the registry could not. `workhorse schema contract` removes
+  -- superseded functions and narrows `workhorse.protocol_version`, so it must first see whether any
+  -- worker still speaks the retiring protocol; `client_protocol_version` is that evidence. The
+  -- other everyday question is which build one worker is running, which a rolling deploy makes
+  -- normal to ask and nothing else could answer.
+  --
+  -- All three are nullable because a worker from an older SDK build supplies none of them and must
+  -- keep registering. A mixed fleet is the point of the additive rule, not a failure.
+  client_protocol_version integer CHECK (
+    client_protocol_version IS NULL OR client_protocol_version >= 1
+  ),
+  -- Free text rather than an enumeration, so a later SDK needs no migration to name itself.
+  sdk_language text CHECK (
+    sdk_language IS NULL OR (sdk_language <> '' AND char_length(sdk_language) <= 40)
+  ),
+  sdk_version text CHECK (
+    sdk_version IS NULL OR (sdk_version <> '' AND char_length(sdk_version) <= 64)
   )
 );
 
@@ -5975,7 +5995,10 @@ $$;
 -- always comes back running. The durable lever for "stop processing this work" is queue pause,
 -- which is keyed by queue name and unaffected by worker lifecycles. Keeping the two distinct means
 -- a pause can never become a forgotten flag that silently idles a worker after a later deployment.
-CREATE OR REPLACE FUNCTION workhorse.register_worker_v1(
+--
+-- The last three arguments are what the process is rather than what it is doing, and every one of
+-- them may be NULL: a worker built before they existed keeps registering, and its row says so.
+CREATE OR REPLACE FUNCTION workhorse.register_worker_v2(
   p_worker_id text,
   p_instance_id uuid,
   p_hostname text,
@@ -5990,7 +6013,10 @@ CREATE OR REPLACE FUNCTION workhorse.register_worker_v1(
   p_maintenance_task_poll_ms integer,
   p_registry_interval_ms integer,
   p_active_slots integer,
-  p_draining boolean
+  p_draining boolean,
+  p_client_protocol_version integer,
+  p_sdk_language text,
+  p_sdk_version text
 )
 RETURNS boolean
 LANGUAGE plpgsql
@@ -6024,17 +6050,29 @@ BEGIN
   IF p_pid IS NULL OR p_pid <= 0 THEN
     RAISE EXCEPTION 'pid must be positive';
   END IF;
+  -- A worker that reports nothing is expected and registers unchanged. A worker that reports a
+  -- value has to mean it, because an operator reads these to decide whether to drop a protocol.
+  IF p_client_protocol_version IS NOT NULL AND p_client_protocol_version < 1 THEN
+    RAISE EXCEPTION 'client_protocol_version must be positive when supplied';
+  END IF;
+  IF p_sdk_language IS NOT NULL AND (p_sdk_language = '' OR char_length(p_sdk_language) > 40) THEN
+    RAISE EXCEPTION 'sdk_language must be 1 to 40 characters when supplied';
+  END IF;
+  IF p_sdk_version IS NOT NULL AND (p_sdk_version = '' OR char_length(p_sdk_version) > 64) THEN
+    RAISE EXCEPTION 'sdk_version must be 1 to 64 characters when supplied';
+  END IF;
 
   INSERT INTO workhorse.worker_registry AS registry
     (worker_id, instance_id, hostname, pid, queue_names, schedule_namespaces, queue_name,
      concurrency, lease_ms, heartbeat_ms,
      poll_ms, maintenance_interval_ms, maintenance_task_poll_ms, registry_interval_ms,
-     active_slots, draining)
+     active_slots, draining, client_protocol_version, sdk_language, sdk_version)
   VALUES (p_worker_id, p_instance_id, p_hostname, p_pid, p_queue_names, p_schedule_namespaces,
           p_queue_names[1], p_concurrency,
           p_lease_ms, p_heartbeat_ms, p_poll_ms, p_maintenance_interval_ms,
           p_maintenance_task_poll_ms, p_registry_interval_ms,
-          COALESCE(p_active_slots, 0), COALESCE(p_draining, false))
+          COALESCE(p_active_slots, 0), COALESCE(p_draining, false),
+          p_client_protocol_version, p_sdk_language, p_sdk_version)
   ON CONFLICT (worker_id) DO UPDATE
     SET instance_id = EXCLUDED.instance_id,
         hostname = EXCLUDED.hostname,
@@ -6051,6 +6089,11 @@ BEGIN
         registry_interval_ms = EXCLUDED.registry_interval_ms,
         active_slots = EXCLUDED.active_slots,
         draining = EXCLUDED.draining,
+        -- Overwritten rather than merged, so a downgraded worker stops claiming the build it no
+        -- longer runs. What this refresh reported is the whole truth about this process.
+        client_protocol_version = EXCLUDED.client_protocol_version,
+        sdk_language = EXCLUDED.sdk_language,
+        sdk_version = EXCLUDED.sdk_version,
         last_heartbeat_at = clock_timestamp(),
         -- A new incarnation of this worker id is a different process, so it starts running and
         -- inherits no operator decision made about the process it replaced.
@@ -6090,6 +6133,37 @@ BEGIN
 
   RETURN v_paused;
 END;
+$$;
+
+-- Version 1 of the same call, retained for workers built before the client identity columns
+-- existed ([ADR 0053](../../docs/decisions/0053-start-migrations-at-0-1-0-and-keep-them-additive.md)).
+-- It reports no protocol or SDK, which is a fact about the caller and is stored as such: a worker
+-- that has been downgraded stops claiming the build it no longer runs.
+CREATE OR REPLACE FUNCTION workhorse.register_worker_v1(
+  p_worker_id text,
+  p_instance_id uuid,
+  p_hostname text,
+  p_pid integer,
+  p_queue_names text[],
+  p_schedule_namespaces text[],
+  p_concurrency integer,
+  p_lease_ms integer,
+  p_heartbeat_ms integer,
+  p_poll_ms integer,
+  p_maintenance_interval_ms integer,
+  p_maintenance_task_poll_ms integer,
+  p_registry_interval_ms integer,
+  p_active_slots integer,
+  p_draining boolean
+)
+RETURNS boolean
+LANGUAGE sql
+AS $$
+  SELECT workhorse.register_worker_v2(
+    p_worker_id, p_instance_id, p_hostname, p_pid, p_queue_names, p_schedule_namespaces,
+    p_concurrency, p_lease_ms, p_heartbeat_ms, p_poll_ms, p_maintenance_interval_ms,
+    p_maintenance_task_poll_ms, p_registry_interval_ms, p_active_slots, p_draining,
+    NULL::integer, NULL::text, NULL::text);
 $$;
 
 -- Remove one worker registration during graceful shutdown. A worker that is killed instead simply
@@ -6205,6 +6279,32 @@ BEGIN
     FROM workhorse.worker_registry registry
    WHERE registry.worker_id = p_worker_id;
 END;
+$$;
+
+-- Which client protocol versions the visible fleet is still speaking.
+--
+-- `workhorse schema contract` removes superseded functions and narrows
+-- `workhorse.protocol_version`, which stops every process that speaks a removed protocol. Before an
+-- operator does that, they need to know whether anything still speaks the one being retired.
+--
+-- Liveness is each worker's own lease rather than a fixed window, because a worker configured with
+-- a long lease is not late until that lease says so. A worker that reported no protocol version is
+-- counted under NULL: it is a build old enough to predate the column, so it is exactly the
+-- population an operator must not assume away.
+--
+-- This is evidence, not an inventory. Producers never register, so the absence of a protocol here
+-- does not prove the absence of a caller speaking it.
+CREATE OR REPLACE FUNCTION workhorse.worker_client_protocols_v1()
+RETURNS TABLE (client_protocol_version integer, workers integer)
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT registry.client_protocol_version, count(*)::integer AS workers
+    FROM workhorse.worker_registry registry
+   WHERE registry.last_heartbeat_at
+         >= clock_timestamp() - make_interval(secs => registry.lease_ms / 1000.0)
+   GROUP BY registry.client_protocol_version
+   ORDER BY registry.client_protocol_version NULLS LAST;
 $$;
 
 -- Drop registrations whose process stopped heartbeating long ago. The relation holds one row per
@@ -11391,7 +11491,8 @@ CREATE OR REPLACE VIEW workhorse.dashboard_schedule_occurrence_v1 AS
 CREATE OR REPLACE VIEW workhorse.dashboard_worker_registry_v1 AS
   SELECT worker_id, hostname, pid, queue_name, concurrency, lease_ms, heartbeat_ms, poll_ms,
          maintenance_interval_ms, maintenance_task_poll_ms, registry_interval_ms, active_slots,
-         draining, paused, started_at, last_heartbeat_at, queue_names, schedule_namespaces
+         draining, paused, started_at, last_heartbeat_at, queue_names, schedule_namespaces,
+         client_protocol_version, sdk_language, sdk_version
     FROM workhorse.worker_registry;
 
 CREATE OR REPLACE FUNCTION workhorse.dashboard_job_estimate_v1()
@@ -12063,7 +12164,7 @@ AS $$
            registry.hostname, registry.pid, registry.queue_names, registry.schedule_namespaces,
            registry.concurrency,
            registry.active_slots, registry.draining, registry.paused, registry.started_at,
-           registry.last_heartbeat_at,
+           registry.last_heartbeat_at, registry.sdk_language, registry.sdk_version,
            COALESCE(active.active_jobs, 0)::integer AS active_jobs,
            COALESCE(recent_history.completed_attempts, 0)::integer AS completed_attempts,
            COALESCE(recent_history.failed_attempts, 0)::integer AS failed_attempts,
@@ -12090,7 +12191,8 @@ AS $$
         'lastSeenAt', workhorse.dashboard_iso_v1(last_seen_at),
         'startedAt', workhorse.dashboard_iso_v1(started_at), 'registered', registered,
         'lastHeartbeatAt', workhorse.dashboard_iso_v1(last_heartbeat_at),
-        'paused', COALESCE(paused, false)
+        'paused', COALESCE(paused, false),
+        'sdkLanguage', sdk_language, 'sdkVersion', sdk_version
       ) ORDER BY id) FROM workers
     ), '[]'::jsonb));
 $$;
@@ -13307,9 +13409,10 @@ END;
 $$;
 
 INSERT INTO workhorse.schema_migration(version, description) VALUES
-  (1, 'baseline')
+  (1, 'baseline'),
+  (2, 'record worker client protocol and SDK identity')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (1) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (2) ON CONFLICT DO NOTHING;
 INSERT INTO workhorse.protocol_version(version) VALUES (1) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date

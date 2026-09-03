@@ -68,7 +68,7 @@ const (
 	getContractDefinitionStatementName   = "get_contract_definition_v1"
 	tickStatementName                    = "tick_v1"
 	runMaintenanceStatementName          = "run_maintenance_v1"
-	registerWorkerStatementName          = "register_worker_v1"
+	registerWorkerStatementName          = "register_worker_v2"
 	deregisterWorkerStatementName        = "deregister_worker_v1"
 	fireDueSchedulesStatementName        = "fire_due_schedules_v1"
 	defaultScheduleTimezone              = "UTC"

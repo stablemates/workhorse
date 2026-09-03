@@ -322,6 +322,9 @@ describe("schema installation", () => {
         "last_heartbeat_at",
         "queue_names",
         "schedule_namespaces",
+        "client_protocol_version",
+        "sdk_language",
+        "sdk_version",
       ],
     });
 
@@ -364,10 +367,11 @@ describe("schema installation", () => {
     expect(duplicates).toEqual([]);
   });
 
-  it("carries no function or view version above v1", async () => {
-    // The baseline reset left one version of everything. A `_v2` in a clean install would mean a
-    // compatibility window nobody can be inside, because version 1 is the only version there has
-    // ever been.
+  it("retains the predecessor of every superseded function", async () => {
+    // A `_vN` above 1 is how supersession works, so its presence is expected. What must never be
+    // true is a successor without its predecessor: `docs/schema-lifecycle.md` retains the old one
+    // until an operator runs the contract step, and a clean install that shipped only the
+    // successor would refuse a client the release promised to keep serving.
     const versioned = await pool.query<{ name: string }>(
       `SELECT proname AS name
          FROM pg_proc
@@ -381,7 +385,28 @@ describe("schema installation", () => {
           AND relname ~ '_v[0-9]+$' AND relname !~ '_v1$'
         ORDER BY name`,
     );
-    expect(versioned.rows).toEqual([]);
+    expect(versioned.rows.map((row) => row.name)).toEqual(["register_worker_v2"]);
+
+    const orphaned = await pool.query<{ name: string }>(
+      `WITH successors AS (
+         SELECT proname AS name,
+                regexp_replace(proname, '_v[0-9]+$', '') AS stem,
+                (regexp_match(proname, '_v([0-9]+)$'))[1]::integer AS version
+           FROM pg_proc
+           JOIN pg_namespace ON pg_namespace.oid = pg_proc.pronamespace
+          WHERE nspname = 'workhorse' AND proname ~ '_v[0-9]+$'
+       )
+       SELECT successor.name
+         FROM successors successor
+        WHERE successor.version > 1
+          AND NOT EXISTS (
+            SELECT 1 FROM successors predecessor
+             WHERE predecessor.stem = successor.stem
+               AND predecessor.version = successor.version - 1
+          )
+        ORDER BY successor.name`,
+    );
+    expect(orphaned.rows).toEqual([]);
   });
 
   it("gives every function and view a version suffix", async () => {
@@ -402,7 +427,7 @@ describe("schema installation", () => {
     expect(unsuffixed.rows).toEqual([]);
   });
 
-  it("installs schema v1 with database-owned settings, job contracts, and fenced progress", async () => {
+  it("installs the current schema with database-owned settings, job contracts, and fenced progress", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
@@ -411,7 +436,12 @@ describe("schema installation", () => {
     const migrations = await pool.query<{ version: number; description: string }>(
       "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
     );
-    expect(migrations.rows).toEqual([{ version: 1, description: "baseline" }]);
+    // A clean install records the whole lineage, so it agrees with a migrated database about the
+    // baseline..current range rather than claiming to have started where the runtime now is.
+    expect(migrations.rows).toEqual([
+      { version: 1, description: "baseline" },
+      { version: 2, description: "record worker client protocol and SDK identity" },
+    ]);
 
     const protocols = await pool.query<{ version: number }>(
       "SELECT version FROM workhorse.protocol_version ORDER BY version",

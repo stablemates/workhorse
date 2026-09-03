@@ -36,7 +36,11 @@ from ._notifications import (
     NotificationConnectionFactory as _NotificationConnectionFactory,
 )
 from ._protocol import serialize_child_request as _serialize_child_request
-from ._statements import STATEMENTS as _STATEMENTS, DriverStatement as _DriverStatement
+from ._statements import (
+    PROTOCOL_VERSION as _PROTOCOL_VERSION,
+    STATEMENTS as _STATEMENTS,
+    DriverStatement as _DriverStatement,
+)
 from ._telemetry import (
     JobExecutionOutcome as _JobExecutionOutcome,
     current_context as _current_context,
@@ -55,6 +59,7 @@ from ._telemetry import (
     record_span_error as _record_span_error,
     start_span as _start_span,
 )
+from ._version import WORKHORSE_VERSION as _WORKHORSE_VERSION
 from .errors import (
     CancellationRequestedError,
     CheckpointConflictError,
@@ -128,6 +133,10 @@ class _HeartbeatMember:
     errors: list[BaseException]
     parent_context: object
 
+
+# What this client library is, reported to the registry on every registration refresh. An operator
+# reads it to decide whether any worker still speaks a protocol they are about to retire.
+_SDK_LANGUAGE = "python"
 
 _REDACTED_ERROR_NAME = "RedactedJobError"
 _REDACTED_ERROR_MESSAGE = "Job handler failed; details redacted"
@@ -1549,6 +1558,9 @@ class Worker:
                         self.registry_interval_ms,
                         active_slots,
                         draining,
+                        _PROTOCOL_VERSION,
+                        _SDK_LANGUAGE,
+                        _WORKHORSE_VERSION,
                     ),
                 )
             )

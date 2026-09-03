@@ -15,6 +15,7 @@ import { expectOneRow, SchemaCompatibilityError, type SchemaCompatibilityCode } 
 import {
   applySchemaMigrationPlan,
   SCHEMA_MIGRATION_LOCK_TIMEOUT_MS,
+  isMissingDatabaseFunctionError,
   isMissingDatabaseRelationError,
   readCompatibilityState,
   readProtocolVersions,
@@ -35,15 +36,61 @@ export {
   WORKHORSE_SCHEMA_VERSION,
 };
 
-// Empty until the first public release. Version 1 is the permanent baseline, installed whole
-// from sql/schema.sql; every later version arrives as one ordered, immutable step here.
-const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [];
+// Version 1 is the permanent baseline, installed whole from sql/schema.sql; every later version
+// arrives as one ordered, immutable step here.
+const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
+  {
+    fromVersion: 1,
+    toVersion: 2,
+    file: "0002-record-worker-client-identity.sql",
+    description: "record worker client protocol and SDK identity",
+  },
+];
 
 function sqlAsset(relativePath: string): URL {
   const packaged = new URL(`../sql/${relativePath}`, import.meta.url);
   if (existsSync(fileURLToPath(packaged))) return packaged;
   const repositoryPath = relativePath === "schema.sql" ? "schema/current.sql" : relativePath;
   return new URL(`../../../sql/${repositoryPath}`, import.meta.url);
+}
+
+/** One client protocol version and how many live workers reported it. */
+export interface WorkerClientProtocol {
+  /** The protocol version, or `null` for workers whose SDK predates the column. */
+  readonly version: number | null;
+  readonly workers: number;
+}
+
+/**
+ * Which client protocol versions the visible fleet is still speaking, or `null` when the installed
+ * schema is too old to record them.
+ *
+ * `workhorse schema contract` removes superseded functions and narrows
+ * `workhorse.protocol_version`, which stops every process that speaks a removed protocol
+ * ([ADR 0057](../../../docs/decisions/0057-retain-superseded-functions-and-contract-on-the-operators-schedule.md)).
+ * This is the evidence that step is gated on. It is evidence and not proof: producers never
+ * register, so a protocol absent here may still have callers.
+ *
+ * A schema below version 2 has no such function, which is the normal first half of a rolling
+ * upgrade. That returns `null` rather than throwing, because the command an operator runs to
+ * discover the schema is behind must not fail on the schema being behind.
+ */
+export async function readWorkerClientProtocols(
+  database: Queryable,
+): Promise<WorkerClientProtocol[] | null> {
+  try {
+    const result = await database.query<{
+      client_protocol_version: number | null;
+      workers: number;
+    }>(SQL_STATEMENTS["worker_client_protocols_v1"]);
+    return result.rows.map((row) => ({
+      version: row.client_protocol_version,
+      workers: row.workers,
+    }));
+  } catch (error) {
+    if (isMissingDatabaseFunctionError(error) || isMissingDatabaseRelationError(error)) return null;
+    throw error;
+  }
 }
 
 export {

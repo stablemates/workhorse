@@ -24,7 +24,7 @@ export type {
   WorkhorseAdapter,
   WorkhorseAdapterOptions,
 } from "./adapter.js";
-export type { MigrateSchemaOptions } from "./schema.js";
+export type { MigrateSchemaOptions, WorkerClientProtocol } from "./schema.js";
 export {
   assertSchemaCompatible,
   installSchema,
@@ -37,6 +37,7 @@ export {
   PROTOCOL_VERSION,
   readProtocolVersions,
   readSchemaVersion,
+  readWorkerClientProtocols,
   SCHEMA_MIGRATION_LOCK_TIMEOUT_MS,
   WORKHORSE_SCHEMA_BASELINE_VERSION,
   WORKHORSE_SCHEMA_VERSION,

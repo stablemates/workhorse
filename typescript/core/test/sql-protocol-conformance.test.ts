@@ -42,7 +42,13 @@ import type {
   SuspensionReplayRuntimeFixture,
   TracePropagationRuntimeFixture,
 } from "../../../scripts/verify-sql-protocol.js";
-import { Admin, Queue, Worker, WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
+import {
+  Admin,
+  Queue,
+  Worker,
+  WORKHORSE_SCHEMA_BASELINE_VERSION,
+  WORKHORSE_SCHEMA_VERSION,
+} from "../src/index.js";
 import { createDatabaseTestHarness } from "./support/db.js";
 
 const compatibilityDatabase = createDatabaseTestHarness(
@@ -747,7 +753,7 @@ describe("SQL protocol conformance fixtures", () => {
       protocolVersion: 1,
       schema: {
         installedVersion: WORKHORSE_SCHEMA_VERSION,
-        minimumVersion: WORKHORSE_SCHEMA_VERSION,
+        minimumVersion: WORKHORSE_SCHEMA_BASELINE_VERSION,
         maximumVersion: WORKHORSE_SCHEMA_VERSION,
       },
       supportedClientProtocol: { minimumVersion: 1, maximumVersion: 1 },

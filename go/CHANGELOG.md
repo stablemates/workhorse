@@ -15,7 +15,7 @@ Python distribution, tagged `go/v0.1.0`. This is the first version without a pre
 ([ADR 0050](../docs/decisions/0050-release-0-1-0-without-a-prerelease-suffix.md)). The module stays
 a public beta on the `0.x` line.
 
-Requires **schema v1** and Go **1.25** or newer.
+Requires **schema v2** and Go **1.25** or newer.
 
 ### Removed
 
@@ -113,6 +113,15 @@ tagged `go/v0.1.0-beta.1`.
 
 ### Added
 
+- **The Go worker records what it is.** Schema version 2 adds `client_protocol_version`,
+  `sdk_language`, and `sdk_version` to `workhorse.worker_registry`, and every registration refresh
+  reports `go` with the new exported `workhorse.Version` and the SQL protocol version it speaks.
+  The dashboard shows them per worker, and `workhorse schema status --json` counts the live workers
+  by protocol so an operator can see whether a protocol is still in use before retiring it. The
+  columns are nullable and the older call is retained, so a worker running an earlier release keeps
+  registering during a rolling deploy.
+- `workhorse.Version` names this module's published version, which the module could not report
+  before because it carries no manifest of its own.
 - Queue, worker, and administrative APIs implement the Workhorse SQL protocol through pgx,
   `database/sql`, caller-owned transactions, and connection pools.
 - The worker supports durable batches, timers, signals, human decisions, child jobs, progress,

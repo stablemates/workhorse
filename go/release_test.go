@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	workhorse "github.com/stablemates/workhorse/go"
 )
 
 func TestExternalModuleCanImportAndEnqueue(t *testing.T) {
@@ -184,6 +185,22 @@ func TestReadmeExampleMatchesReleaseTestedExample(t *testing.T) {
 	example := strings.TrimSpace(readRepositoryFile(t, "go", "examples", "quickstart", "main.go"))
 	if match[1] != example {
 		t.Fatal("go/README.md example does not match go/examples/quickstart/main.go")
+	}
+}
+
+// The worker reports workhorse.Version to workhorse.worker_registry, where an operator reads it to
+// decide which build a worker is running. The Go module carries no manifest of its own, so the
+// constant is checked against the manifest the release tags.
+func TestSDKVersionConstantMatchesTheReleaseManifest(t *testing.T) {
+	manifest := readRepositoryFile(t, "typescript", "core", "package.json")
+	var declared struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal([]byte(manifest), &declared); err != nil {
+		t.Fatal(err)
+	}
+	if workhorse.Version != declared.Version {
+		t.Fatalf("workhorse.Version %s does not match typescript/core/package.json %s", workhorse.Version, declared.Version)
 	}
 }
 

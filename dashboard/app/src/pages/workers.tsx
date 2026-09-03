@@ -39,10 +39,19 @@ export function WorkersPage({
       ) : (
         <Paper withBorder>
           <ScrollArea>
-            <Table highlightOnHover verticalSpacing={6} horizontalSpacing="md" miw={1080}>
+            <Table highlightOnHover verticalSpacing={6} horizontalSpacing="md" miw={1180}>
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Worker</Table.Th>
+                  <Table.Th>
+                    <Group gap={4} wrap="nowrap">
+                      <span>SDK</span>
+                      <HelpButton
+                        label="SDK"
+                        help="The client library each worker reported at its last registration. A rolling deploy runs more than one build at once, so this is where a worker behaving differently from its peers first shows up."
+                      />
+                    </Group>
+                  </Table.Th>
                   <Table.Th>Queues</Table.Th>
                   <Table.Th>
                     <Group gap={4} wrap="nowrap">
@@ -88,6 +97,22 @@ export function WorkersPage({
                             </Text>
                           ) : null}
                         </Stack>
+                      </Table.Td>
+                      <Table.Td>
+                        {/* A worker running an SDK older than these columns reports neither, which
+                          is itself the answer to "which build is that". */}
+                        {worker.sdkLanguage === null && worker.sdkVersion === null ? (
+                          <Text c="dimmed" size="sm" title="This worker reported no SDK identity">
+                            —
+                          </Text>
+                        ) : (
+                          <Stack gap={2}>
+                            <Text size="sm">{worker.sdkLanguage ?? "unknown"}</Text>
+                            <Text c="dimmed" fz="xs">
+                              {worker.sdkVersion ?? "unknown version"}
+                            </Text>
+                          </Stack>
+                        )}
                       </Table.Td>
                       <Table.Td>
                         {worker.queues.length > 0 ? worker.queues.join(", ") : "—"}

@@ -10,6 +10,7 @@ import {
   migrateSchema,
   readProtocolVersions,
   readSchemaVersion,
+  readWorkerClientProtocols,
   WORKHORSE_SCHEMA_VERSION,
 } from "../schema.js";
 import { MINIMUM_POSTGRES_MAJOR, readPostgresSupport } from "../support.js";
@@ -111,6 +112,11 @@ the server is below the required major. Read the JSON fields to tell the two apa
 Run this after "schema migrate" and before starting the application. A schema ahead of this build
 is accepted: inside a major line a migration only adds, so "schema.state" reporting "ahead" is the
 normal middle of a rolling upgrade. The field a deployment gate reads is "schema.compatible".
+
+"fleet" counts the workers that heartbeated inside their own lease, by the client protocol version
+each one reported. Producers never register, so it is evidence about workers and not an inventory
+of every process using the database. It is null when the database cannot answer at all: no schema,
+or a schema older than the columns.
 `;
 
 const WORKER_HELP = `Usage: workhorse worker --config <compiled-module> [options]
@@ -361,10 +367,14 @@ async function runSchemaCommand(args: readonly string[]): Promise<void> {
       // matrix, which no schema version can express.
       const support = await readPostgresSupport(pool);
       const protocolVersions = version === null ? null : await readProtocolVersions(pool);
+      // Worker evidence for a protocol retirement, which only exists once the schema does. A
+      // schema too old to record it also reports null rather than failing this command.
+      const workerClientProtocols = version === null ? null : await readWorkerClientProtocols(pool);
       const report: CliJsonPayloads["schema status"] = createSchemaStatusReport(
         version,
         protocolVersions,
         support,
+        workerClientProtocols,
       );
       if (values.json) {
         process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
@@ -384,6 +394,20 @@ async function runSchemaCommand(args: readonly string[]): Promise<void> {
             ? "This runtime accepts the installed schema.\n"
             : `${report.schema.refusal}\n`,
         );
+        if (report.fleet !== null) {
+          const counted = report.fleet.clientProtocolVersions;
+          process.stdout.write(
+            counted.length === 0
+              ? "No worker has heartbeated inside its lease.\n"
+              : `Workers heartbeating inside their lease: ${counted
+                  .map(
+                    (entry) =>
+                      `${entry.version === null ? "no reported protocol" : `protocol v${entry.version}`} (${entry.workers})`,
+                  )
+                  .join(", ")}.\n`,
+          );
+          process.stdout.write(`${report.fleet.note}\n`);
+        }
         process.stdout.write(
           `PostgreSQL ${support.version}: ${
             !support.supported

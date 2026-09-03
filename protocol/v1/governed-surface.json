@@ -432,6 +432,29 @@
       ],
       "returns": "boolean"
     },
+    "register_worker_v2": {
+      "arguments": [
+        "text",
+        "uuid",
+        "text",
+        "integer",
+        "text[]",
+        "text[]",
+        "integer",
+        "integer",
+        "integer",
+        "integer",
+        "integer",
+        "integer",
+        "integer",
+        "integer",
+        "boolean",
+        "integer",
+        "text",
+        "text"
+      ],
+      "returns": "boolean"
+    },
     "retain_history_v1": {
       "arguments": ["boolean?", "timestamptz?"],
       "returns": "table",
@@ -667,6 +690,14 @@
       "returnsColumns": {
         "payload": "jsonb",
         "status": "text"
+      }
+    },
+    "worker_client_protocols_v1": {
+      "arguments": [],
+      "returns": "table",
+      "returnsColumns": {
+        "client_protocol_version": "integer",
+        "workers": "integer"
       }
     }
   },
@@ -965,6 +996,7 @@
       "kind": "view",
       "columns": {
         "active_slots": "integer",
+        "client_protocol_version": "integer",
         "concurrency": "integer",
         "draining": "boolean",
         "heartbeat_ms": "integer",
@@ -980,6 +1012,8 @@
         "queue_names": "text[]",
         "registry_interval_ms": "integer",
         "schedule_namespaces": "text[]",
+        "sdk_language": "text",
+        "sdk_version": "text",
         "started_at": "timestamptz",
         "worker_id": "text"
       }
@@ -1261,6 +1295,7 @@
       "kind": "table",
       "columns": {
         "active_slots": "integer",
+        "client_protocol_version": "integer",
         "concurrency": "integer",
         "draining": "boolean",
         "hostname": "text",

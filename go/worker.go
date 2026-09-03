@@ -657,6 +657,9 @@ func (worker *Worker) refreshRegistration(ctx context.Context, executor Executor
 		int(worker.registryInterval/time.Millisecond),
 		int(worker.activeSlots.Load()),
 		draining,
+		ProtocolVersion,
+		sdkLanguage,
+		Version,
 	)
 	if err == nil && len(rows) != 1 {
 		err = errors.New(invalidWorkerRegistrationResultMessage)

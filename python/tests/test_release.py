@@ -11,6 +11,8 @@ from typing import Any
 import psycopg
 import tomli
 
+from workhorse._version import WORKHORSE_VERSION
+
 
 def _repository_file(*parts: str) -> str:
     repository = Path(__file__).parents[2]
@@ -30,6 +32,15 @@ def test_readme_example_matches_release_tested_example() -> None:
     match = re.search(r"## Run one job\n\n```python\n(.*?)\n```", readme, re.DOTALL)
     assert match is not None
     assert match.group(1) == _repository_file("python", "examples", "quickstart.py").strip()
+
+
+def test_sdk_version_constant_matches_the_release_manifest() -> None:
+    # The worker reports this version to `workhorse.worker_registry`, where an operator reads it to
+    # decide which build a worker is running. A constant that drifts from the published package
+    # turns that answer into a wrong one.
+    manifest = _repository_toml("python", "pyproject.toml")
+
+    assert manifest["project"]["version"] == WORKHORSE_VERSION
 
 
 def test_python_support_contract_matches_repository_declarations(database_url: str) -> None:

@@ -25,8 +25,10 @@ own process.
 
 The worker registry removes that constraint. TypeScript, Python, and Go workers upsert
 `workhorse.worker_registry` on their configured cadence with declared concurrency, busy slots, and
-drain state. Each refresh reads the operator-requested pause flag in the same round trip. A
-dashboard mounted anywhere reads the fleet from that relation.
+drain state, together with the client protocol version and the SDK they run. Each refresh reads the
+operator-requested pause flag in the same round trip. A dashboard mounted anywhere reads the fleet
+from that relation, which is also how an operator sees that a rolling deploy is running two builds
+at once.
 
 This makes worker control cooperative and durable rather than a process-local method call:
 

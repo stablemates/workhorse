@@ -800,7 +800,7 @@ flowchart LR
   Operator[Authorized application or operator layer] -->|cancel_v1 with attribution| PG
   Operator -->|list_dead_letters_v1 / redrive_v1 / redrive_many_v1| PG
   Worker -->|fire_due_schedules_v1 / tick_v1 / split maintenance tasks| PG
-  Worker -->|register_worker_v1| PG
+  Worker -->|register_worker_v2| PG
   PG -->|payload + attempt + fence| Worker
   PG -->|operator pause flag| Worker
   Worker -->|handler outside SQL transaction| Effects[External effects]
@@ -1680,17 +1680,31 @@ One row per live worker process, keyed by the durable `worker_id` used for lease
 `queue_names` stores the ordered, non-empty set of queues the worker claims. `queue_name` mirrors
 the first member for readers that show one queue.
 `schedule_namespaces` stores the ordered set that the worker offers to `fire_due_schedules_v1`.
-`register_worker_v1` is a single round trip that publishes `queue_names`, `schedule_namespaces`, `concurrency`, `lease_ms`,
+`register_worker_v2` is a single round trip that publishes `queue_names`, `schedule_namespaces`, `concurrency`, `lease_ms`,
 `heartbeat_ms`, `poll_ms`, `maintenance_interval_ms`, `maintenance_task_poll_ms`,
-`registry_interval_ms`, `active_slots`, and `draining`, then returns the PostgreSQL-owned `paused`
+`registry_interval_ms`, `active_slots`, `draining`, `client_protocol_version`, `sdk_language`, and
+`sdk_version`, then returns the PostgreSQL-owned `paused`
 flag. TypeScript uses `WorkerOptions.registryIntervalMs`, Python uses `registry_interval_ms`, and Go
 uses `WorkerOptions.RegistryInterval`; each defaults to five seconds. TypeScript and Python accept
 zero to opt out, while Go uses `WorkerOptions.DisableRegistry`. The dashboard shows the reported
 process values read-only because changing them requires a deployment.
 
+`client_protocol_version`, `sdk_language`, and `sdk_version` record what the registering process is,
+and all three are nullable. `register_worker_v1` is retained and writes NULL into all three, so a
+worker built before schema version 2 keeps registering during a rolling deploy. Each SDK stamps its
+own values and no caller supplies them: TypeScript reports `typescript`, Python reports `python`,
+and Go reports `go`, each with its published package version. `sdk_language` holds 1 through 40
+characters and `sdk_version` holds 1 through 64; `client_protocol_version` is 1 or greater. A
+refresh overwrites all three rather than merging, so a downgraded worker stops claiming a build it
+no longer runs. `worker_client_protocols_v1()` returns one row per distinct
+`client_protocol_version`, counting only workers whose `last_heartbeat_at` falls within their own
+`lease_ms`, with the NULL group last. `workhorse schema status --json` reports it as `fleet`, and
+`workhorse schema contract` gates on it ([ADR 0057](decisions/0057-retain-superseded-functions-and-contract-on-the-operators-schedule.md)).
+Producers never register, so it is worker evidence and not a process inventory.
+
 The relation exists because process-local memory cannot answer "which workers exist" once workers are deployed independently of the web tier. It is what allows an operator surface to report and control a fleet it does not host. It is never read by the claim path and holds one row per worker, so it cannot affect dispatch cost.
 
-Ownership is deliberately split. A worker may not write `paused`, and an operator may not write the runtime columns. The five-argument `set_worker_paused_v1` records `paused_by` of 1 through 200 characters and `paused_reason` of 1 through 2,000 characters. Its request ID contains 1 through 512 UTF-8 bytes. It delegates the registry update to `set_worker_paused_internal_v1`, then stores `paused_request_id_preview`, `paused_request_id_digest`, and `paused_request_id_length`. It returns no rows for an unregistered worker. The flag is scoped to a process incarnation. Each worker lifecycle start announces a fresh `instance_id`, and `register_worker_v1` keeps the pause and request evidence only while that instance keeps refreshing; a new instance of the same worker id clears them. Without that column PostgreSQL could not tell a routine heartbeat from a restart, and the flag would be either indefinitely sticky or cleared by the worker's own next heartbeat. Durable "stop this work" belongs to queue pause.
+Ownership is deliberately split. A worker may not write `paused`, and an operator may not write the runtime columns. The five-argument `set_worker_paused_v1` records `paused_by` of 1 through 200 characters and `paused_reason` of 1 through 2,000 characters. Its request ID contains 1 through 512 UTF-8 bytes. It delegates the registry update to `set_worker_paused_internal_v1`, then stores `paused_request_id_preview`, `paused_request_id_digest`, and `paused_request_id_length`. It returns no rows for an unregistered worker. The flag is scoped to a process incarnation. Each worker lifecycle start announces a fresh `instance_id`, and `register_worker_v2` keeps the pause and request evidence only while that instance keeps refreshing; a new instance of the same worker id clears them. Without that column PostgreSQL could not tell a routine heartbeat from a restart, and the flag would be either indefinitely sticky or cleared by the worker's own next heartbeat. Durable "stop this work" belongs to queue pause.
 
 Pause is cooperative in exactly the sense cancellation is: the worker stops claiming at its next
 refresh, and a handler already executing runs to completion. TypeScript and Python keep local pause
@@ -2958,7 +2972,7 @@ Queue and worker pause retain a safe request preview, digest, and length with th
 `Admin.setWorkerPaused` and emit the stored `WorkerPauseResult` — `workerId`, `paused`, `pausedBy`,
 `reason`, `pausedAt`, and `lastHeartbeatAt` — under `--json`. A worker id carrying no registration
 row exits 1 with `is not registered`. The pause is the registry row rather than a message to a live
-process, so a worker reads it on its next `register_worker_v1` call. That same function clears the
+process, so a worker reads it on its next `register_worker_v2` call. That same function clears the
 pause when a different `instance_id` claims the worker id, so a restarted worker starts unpaused.
 
 Outcome statuses that did not mutate — `not_found`, `already_terminal`, `not_failed` — exit 1;
