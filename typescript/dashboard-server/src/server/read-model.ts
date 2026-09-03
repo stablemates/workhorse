@@ -338,14 +338,23 @@ export async function readDashboardEvents(
   return expectOneRow(rows, "the dashboard events procedure").result;
 }
 
-/** Read one history record by the stable identity used in Events URLs. */
+/**
+ * Read one history record by the stable identity used in Events URLs.
+ *
+ * An attempt record carries the whole persisted error, so this honours `redactErrorStacks` exactly
+ * as task detail does. Both surfaces project the same `attempt_history.error`, and a host that
+ * withholds container paths from one door has to withhold them from the other.
+ */
 export async function readDashboardEventDetail(
   database: DashboardDatabase,
   id: string,
+  redactErrorStacks = false,
 ): Promise<DashboardEventDetail | null> {
   const input = JSON.stringify({ id });
   const rows = await database.execute<{ result: DashboardEventDetail | null }>(sql`
     SELECT workhorse.dashboard_event_detail_v1(${input}::jsonb) AS result
   `);
-  return expectOneRow(rows, "the dashboard event detail procedure").result;
+  const detail = expectOneRow(rows, "the dashboard event detail procedure").result;
+  if (!detail || !redactErrorStacks) return detail;
+  return { ...detail, error: redactErrorStack(detail.error) };
 }

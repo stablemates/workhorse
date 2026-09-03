@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
-import type { DashboardJobDetail } from "../wire.js";
-import { redactDashboardJobDetailErrorStacks } from "./read-model.js";
+import { describe, expect, it, vi } from "vitest";
+import type { DashboardEventDetail, DashboardJobDetail } from "../wire.js";
+import { readDashboardEventDetail, redactDashboardJobDetailErrorStacks } from "./read-model.js";
+import type { DashboardDatabase } from "./sql.js";
 
 describe("dashboard job-detail error redaction", () => {
   it("removes stacks from every worker error surface without changing user data", () => {
@@ -33,5 +34,37 @@ describe("dashboard job-detail error redaction", () => {
     expect(redacted.payload).toEqual({ stack: "user payload" });
     expect(redacted.current.result).toEqual({ stack: "user result" });
     expect(redacted.events).toEqual([{ details: { error } }]);
+  });
+});
+
+describe("dashboard event-detail error redaction", () => {
+  const attemptError = { name: "Error", message: "failed", stack: "/app/dist/worker.js:42" };
+
+  function database(): DashboardDatabase {
+    return {
+      execute: vi.fn<() => Promise<{ rows: { result: DashboardEventDetail }[] }>>(async () => ({
+        rows: [
+          {
+            result: {
+              kind: "attempt",
+              error: attemptError,
+              details: null,
+            } as unknown as DashboardEventDetail,
+          },
+        ],
+      })),
+    } as unknown as DashboardDatabase;
+  }
+
+  it("withholds the persisted attempt stack a redacting host withholds from task detail", async () => {
+    const detail = await readDashboardEventDetail(database(), "attempt:id", true);
+
+    expect(detail?.error).toEqual({ name: "Error", message: "failed" });
+  });
+
+  it("returns the whole persisted error when the host does not redact", async () => {
+    const detail = await readDashboardEventDetail(database(), "attempt:id");
+
+    expect(detail?.error).toEqual(attemptError);
   });
 });

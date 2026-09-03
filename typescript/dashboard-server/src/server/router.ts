@@ -406,7 +406,11 @@ export const dashboardRouter = {
       .input(eventsInput)
       .handler(({ context, input }) => readDashboardEvents(context.database, input)),
     eventDetail: procedure.input(eventDetailInput).handler(async ({ context, input }) => {
-      const detail = await readDashboardEventDetail(context.database, input.id);
+      const detail = await readDashboardEventDetail(
+        context.database,
+        input.id,
+        context.redactErrorStacks,
+      );
       if (!detail) throw new ORPCError("NOT_FOUND", { message: "Event not found" });
       return detail;
     }),
