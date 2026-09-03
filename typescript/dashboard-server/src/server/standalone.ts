@@ -12,6 +12,39 @@ import { createDashboardOperatorControllers } from "./operator-controllers.js";
  * The caller owns the database connection and its shutdown. This module owns the HTTP listener and
  * the dashboard implementation, so core only depends on the small standalone contract.
  */
+/**
+ * Browser protections for a listener that owns its whole origin.
+ *
+ * The standalone process serves nothing but the dashboard, so it can state one policy for every
+ * response. An embedded host cannot: its own pages share the origin, and a second policy on the
+ * dashboard's responses would intersect with the application's own. An embedder therefore owns
+ * these headers, and `typescript/dashboard-server/README.md` states the policy to copy.
+ *
+ * `unsafe-inline` covers the two inline boot scripts in the packaged document, the runtime
+ * configuration this host writes into it, and the style elements the application injects while it
+ * renders. No response references a remote origin.
+ */
+const STANDALONE_CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "font-src 'self'",
+  "connect-src 'self'",
+].join("; ");
+
+const STANDALONE_SECURITY_HEADERS: Readonly<Record<string, string>> = {
+  "content-security-policy": STANDALONE_CONTENT_SECURITY_POLICY,
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "strict-origin-when-cross-origin",
+  "x-frame-options": "DENY",
+  "x-robots-tag": "noindex, nofollow, noarchive",
+};
+
 function isLoopbackHostname(hostname: string): boolean {
   const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   const family = isIP(normalized);
@@ -91,6 +124,11 @@ export const startDashboardServer: DashboardStandaloneModule<Queryable>["startDa
 
     const middleware = dashboardNodeMiddleware(host, { publicOrigin });
     const server = createServer((request, response) => {
+      // Set before the middleware writes, so every response the listener produces carries them and
+      // a dashboard response that names one of these headers itself still wins.
+      for (const [name, value] of Object.entries(STANDALONE_SECURITY_HEADERS)) {
+        response.setHeader(name, value);
+      }
       middleware(request, response, () => {
         response.statusCode = 404;
         response.end("Not found");

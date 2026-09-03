@@ -77,6 +77,41 @@ describe("standalone dashboard listener security", () => {
     }
   });
 
+  it("states one browser policy on every response, including a miss it does not serve", async () => {
+    const scratch = await mkdtemp(path.join(tmpdir(), "workhorse-dashboard-headers-"));
+    scratchRoots.push(scratch);
+    const socketPath = path.join(scratch, "dashboard.sock");
+    const running = await startDashboardServer(database, {
+      hostname: "127.0.0.1",
+      port: 3000,
+      socketPath,
+      allowMutations: false,
+      actor: "test",
+    });
+    try {
+      // An asset the bundle does not contain reaches the listener's own fallback, so the assertion
+      // does not need the built browser bundle to observe the headers.
+      const headers = await new Promise<NodeJS.Dict<string | string[]>>((resolve, reject) => {
+        const missing = httpRequest({ socketPath, path: "/assets/absent.js" }, (response) => {
+          response.resume();
+          response.once("end", () => resolve(response.headers));
+        });
+        missing.once("error", reject);
+        missing.end();
+      });
+
+      expect(headers["content-security-policy"]).toContain("frame-ancestors 'none'");
+      expect(headers["content-security-policy"]).toContain("default-src 'self'");
+      expect(headers["content-security-policy"]).not.toContain("http:");
+      expect(headers["x-content-type-options"]).toBe("nosniff");
+      expect(headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
+      expect(headers["x-frame-options"]).toBe("DENY");
+      expect(headers["x-robots-tag"]).toContain("noindex");
+    } finally {
+      await running.close();
+    }
+  });
+
   it("requires an HTTPS public origin for an authenticated remote listener", async () => {
     const authentication = {
       username: "operator",

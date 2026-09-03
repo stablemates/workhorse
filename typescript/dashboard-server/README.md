@@ -41,6 +41,24 @@ Standalone deployments must use `singleAdmin`, bind to loopback or a Unix socket
 and set the exact HTTPS `publicOrigin` when a proxy terminates TLS. Operator authorization remains the
 host application's responsibility.
 
+## Response headers an embedder owns
+
+`workhorse dashboard` owns its whole origin, so it sends a Content Security Policy,
+`X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`, and `X-Robots-Tag` on every
+response. An embedded host shares its origin with its own pages, and a second policy on the
+dashboard's responses would intersect with the application's own, so this package sends none and
+the embedder decides. Copy this policy if the application has no stricter one:
+
+```
+default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';
+object-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';
+img-src 'self' data:; font-src 'self'; connect-src 'self'
+```
+
+`unsafe-inline` covers the packaged document's boot scripts, the runtime configuration the host
+writes into it, and the style elements the application injects as it renders. Widen `connect-src`
+and `img-src` only for origins the application itself adds.
+
 The server reads core-owned `workhorse.dashboard_*_v1` views and versioned SQL functions. [Workhorse core](https://workhorse.run/docs/installation)
 owns schema installation and changes. Workers can run in other processes because PostgreSQL owns
 their registry and operator pause state.

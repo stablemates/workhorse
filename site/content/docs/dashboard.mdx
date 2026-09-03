@@ -192,6 +192,11 @@ checks, and login throttling. A remote listener also requires an HTTPS public or
 that need multiple users, roles, SSO, or tenant isolation should use an embedded host and its
 `authorize` callback.
 
+Because the standalone listener owns its whole origin, it also sends a content security policy and
+the other browser protections on every response. An embedded host shares the origin with the
+application's own pages, so the application owns those headers instead; the
+`@stablemates/workhorse-dashboard-server` README states the policy to copy.
+
 The login page follows the browser's color scheme. The dashboard header shows the authenticated
 administrator and provides sign-out; if the session expires while the page is open, the next
 private request returns the browser to login.

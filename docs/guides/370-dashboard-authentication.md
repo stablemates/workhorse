@@ -103,6 +103,11 @@ protocol headers, so a proxy cannot silently change cookie or same-origin decisi
 Without credentials, the standalone development bypass binds only to loopback or a Unix socket.
 Remote listeners require authentication and a secure public origin.
 
+The standalone listener owns its whole origin, so it also states a content security policy and the
+other browser protections on every response. An embedded host shares its origin with the
+application's own pages, and two policies on one response narrow each other. The application
+therefore owns those headers, and the dashboard server package states the policy to copy.
+
 Do not configure built-in credentials beside `authorize`. The dashboard rejects that ambiguous
 boundary instead of guessing which identity system owns the request.
 
