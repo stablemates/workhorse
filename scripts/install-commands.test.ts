@@ -27,7 +27,7 @@ import { publishedPackages, repositoryRoot } from "./packages.js";
 
 const execFileAsync = promisify(execFile);
 
-type InstallCommand = "go" | "node" | "python" | "schema" | "schemaPinned";
+type InstallCommand = "go" | "node" | "python" | "schema" | "schemaDownload" | "schemaPinned";
 
 interface InstallManifest {
   readonly install: Readonly<Record<InstallCommand, string>>;
@@ -62,7 +62,7 @@ const governedSurfaces: readonly GovernedSurface[] = [
   { file: "go/examples/README.md", commands: ["go"] },
   {
     file: "site/content/docs/installation.mdx",
-    commands: ["go", "node", "python", "schema", "schemaPinned"],
+    commands: ["go", "node", "python", "schema", "schemaDownload", "schemaPinned"],
   },
   {
     file: "site/content/docs/quickstart.mdx",
@@ -196,6 +196,33 @@ describe("install commands", () => {
     const core = JSON.parse(await read("typescript/core/package.json")) as { version: string };
 
     expect(manifest.install.schemaPinned).toContain(`@stablemates/workhorse@${core.version}`);
+  });
+
+  // A reader with no Node.js toolchain cannot run the schema tool at all, so the only artifact they
+  // can apply is the one the release attaches. That makes the download URL a second pinned literal
+  // with the same failure mode: a URL naming a version this repository does not release sends them
+  // to a release page that does not exist, and the release workflow is the only thing that puts the
+  // file there. These two rules keep the URL, the release step, and the published version equal.
+  it("pins the schema download to the release this repository publishes", async () => {
+    const manifest = await readInstallManifest();
+    const core = JSON.parse(await read("typescript/core/package.json")) as { version: string };
+
+    expect(manifest.install.schemaDownload).toContain(
+      `https://github.com/stablemates/workhorse/releases/download/v${core.version}/`,
+    );
+    expect(await read("site/content/docs/installation.mdx")).toContain(
+      `https://github.com/stablemates/workhorse/releases/tag/v${core.version}`,
+    );
+  });
+
+  it("names an asset the release workflow actually attaches", async () => {
+    const manifest = await readInstallManifest();
+    const asset = manifest.install.schemaDownload.split("/").at(-1);
+    const workflow = await read(".github/workflows/release.yml");
+
+    expect(asset).toBe("schema.sql");
+    expect(workflow).toContain(`gh release create "$tag" sql/${asset}`);
+    expect(workflow).toContain(`gh release upload "$tag" sql/${asset} --clobber`);
   });
 
   it("leaves the schema command a TypeScript project runs unpinned and local", async () => {

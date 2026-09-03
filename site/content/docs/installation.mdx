@@ -182,13 +182,19 @@ finishes, and they keep working because inside a major line a migration only add
 
 ## Create a development database without Node.js
 
-Every release attaches `schema.sql` to its
-[GitHub release](https://github.com/stablemates/workhorse/releases). A Python or Go developer with
-no Node.js toolchain can create a database from it directly:
+The schema tool ships only on npm, so a Python or Go developer has no local command that creates
+the database. Every `vX.Y.Z` tag attaches the clean-install `schema.sql` to its GitHub release
+instead. Download that asset from the release for the version your application depends on, then
+apply it:
 
 ```bash
+curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.1.0/schema.sql
 psql "$DATABASE_URL" -f schema.sql
 ```
+
+The [`v0.1.0` release](https://github.com/stablemates/workhorse/releases/tag/v0.1.0) is the page
+that carries the file. Change both version numbers together when you pin a different one: the
+schema the file creates is the schema that release's SDK expects.
 
 Use this for development only. The file is the same clean-install artifact the CLI applies, but
 `psql` applies none of the CLI's guards: it does not check the PostgreSQL major, and it does not

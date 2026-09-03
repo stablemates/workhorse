@@ -240,6 +240,13 @@ for the version, provided so a Python or Go developer with no Node.js toolchain 
 development database with `psql -f schema.sql`. It applies none of the CLI's guards, so deployments
 run `workhorse schema install` or `workhorse schema migrate` instead.
 
+The asset is reachable at
+`https://github.com/stablemates/workhorse/releases/download/vX.Y.Z/schema.sql`. `support.json`
+states that URL once as `install.schemaDownload`, pinned to the version this repository publishes,
+and `scripts/install-commands.test.ts` fails a URL that names a different version or an asset the
+release step does not attach. A tag pushed before that step existed has no release and no asset;
+the first release that carries one is `v0.1.0`.
+
 Each line carries its own tag on that one commit, because the three registries have separate build
 and publication identities and the Go module proxy resolves a subdirectory module only from a
 `go/`-prefixed tag. [ADR 0050](decisions/0050-release-0-1-0-without-a-prerelease-suffix.md) records

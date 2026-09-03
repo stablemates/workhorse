@@ -72,8 +72,10 @@ and 24 and PostgreSQL 15 through 18.
   floors, and documents the verification step: run `workhorse schema status --json` after migrating
   and before the first process from the new release starts, and fail the deploy on a non-zero exit.
 - Every GitHub release attaches `schema.sql`, so a Python or Go developer with no Node.js toolchain
-  can create a development database with `psql -f schema.sql`. That path carries none of the CLI's
-  guards and is documented for development only.
+  can create a development database with `psql -f schema.sql`. The installation page names the
+  release that carries the file and the command that downloads it, pinned to the same version as
+  the schema tool, because a reader on a host with no checkout has no `schema.sql` to apply
+  otherwise. That path carries none of the CLI's guards and is documented for development only.
 - The documentation site publishes one agent-facing layer. `/docs/for-ai-agents` is the entry point
   that every landing surface and `llms.txt` name, every documentation page has a Markdown twin at
   its URL plus `.md` served as `text/markdown`, and `llms-full.txt` carries the whole corpus.
