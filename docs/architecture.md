@@ -2857,11 +2857,13 @@ printed only; `init` writes no route file and edits no existing file.
 `workhorse admin` and `workhorse tui` are thin fronts over one shared client,
 `WorkhorseAdminClient` in `typescript/core/src/cli/admin-client.ts`. The client uses `Admin` for
 `listJobs`, `getJob`, `getJobTimeline`, `listDeadLetters`, `queueMetricSnapshot`, `schedules`,
-`listWorkers`, policy reads, `redrive`, `pauseQueue`, `resumeQueue`, and `purgeQueue`. It uses `Queue` for the
+`listWorkers`, `listCheckpoints`, `getCheckpoint`, `listWaits`, `getWait`, `listHumanWaits`,
+`listSignalWaits`, policy reads, `redrive`, `pauseQueue`, `resumeQueue`, and `purgeQueue`. It uses `Queue` for the
 application-shaped `health` and `cancel` operations. Queue status still merges metric snapshots
 with `workhorse.queue_control`, while namespace discovery reads `workhorse.schedule_definition`.
 
-Inspection commands are `admin jobs`, `admin job <id>`, `admin timeline <id>`, `admin failures`,
+Inspection commands are `admin jobs`, `admin job <id>`, `admin timeline <id>`,
+`admin checkpoints <job-id>`, `admin waits <job-id>`, `admin external-waits`, `admin failures`,
 `admin queues`, `admin schedules`, `admin workers`, and `admin maintenance`. Each renders an
 aligned text table or key/value listing by default and emits JSON with `--json`; the JSON is the
 underlying API result serialized with bigint fence tokens and schedule revisions as strings
@@ -2869,6 +2871,22 @@ underlying API result serialized with bigint fence tokens and schedule revisions
 shared by the CLI and the TUI). Listing filters are `--queue`, `--type`, `--state`
 (repeatable or comma-separated, validated against the `JobState` union), `--limit`, and
 `--namespace` for schedules.
+
+`admin checkpoints <job-id>` renders `Admin.listCheckpoints`, and `admin waits <job-id>` renders
+`Admin.listWaits` over `workhorse.job_wait`. Both accept `--name <name>` to render the single
+`Admin.getCheckpoint` or `Admin.getWait` read instead of the list; a name the job never recorded
+prints to stderr and exits 1, matching `admin job`.
+
+`admin external-waits` is the fleet-wide read: it runs `Admin.listHumanWaits` and
+`Admin.listSignalWaits` concurrently through `WorkhorseAdminClient.externalWaits` and emits
+`{"human": {"items", "nextCursor"}, "signal": {"items", "nextCursor"}}` under `--json`. The table
+merges both lists oldest-first with a `KIND` column, and only a human decision carries `CONTEXT`.
+`--limit` applies to both lists and is capped at `MAX_EXTERNAL_WAIT_LIST_SIZE` (1,000). Each list
+pages independently, because `ExternalWaitCursor` is scoped to one list: `--human-cursor` and
+`--signal-cursor` each take back the exact JSON `nextCursor` object the previous page printed, and
+a value that is not an object with string `createdAt`, `jobId`, and `name` fields is a usage error
+exiting 64. This command lists boundaries only. Completing a human decision stays in
+`Queue.completeHumanWait`; the CLI exposes no external-wait mutation.
 
 Guarded commands are `admin cancel <job-id>`, `admin redrive <job-id>`, `admin pause <queue>`,
 `admin resume <queue>`, and `admin purge <queue>`. Two independent checks gate every mutation:

@@ -117,6 +117,152 @@ describe("admin CLI inspection", () => {
   });
 });
 
+describe("admin CLI durable-handler reads", () => {
+  it("lists one job's checkpoints, and one of them by name", async () => {
+    const jobId = await queue.enqueue("checkpointed.import", {});
+    const job = await queue.claim("cli-checkpoint-worker");
+    await queue.saveCheckpoint(job!, "cli-checkpoint-worker", "extracted", { rows: 120 });
+    await queue.saveCheckpoint(job!, "cli-checkpoint-worker", "transformed", { rows: 118 });
+
+    const list = runAdmin(["checkpoints", jobId, "--json"]);
+    expect(list.code).toBe(0);
+    expect(JSON.parse(list.stdout)).toEqual([
+      expect.objectContaining({ jobId, name: "extracted", value: { rows: 120 } }),
+      expect.objectContaining({ jobId, name: "transformed", value: { rows: 118 } }),
+    ]);
+
+    const one = runAdmin(["checkpoints", jobId, "--name", "transformed", "--json"]);
+    expect(one.code).toBe(0);
+    expect(JSON.parse(one.stdout)).toMatchObject({
+      jobId,
+      name: "transformed",
+      value: { rows: 118 },
+      attempt: 1,
+      workerId: "cli-checkpoint-worker",
+    });
+
+    const table = runAdmin(["checkpoints", jobId]);
+    expect(table.code).toBe(0);
+    expect(table.stdout).toContain("extracted");
+    expect(table.stdout).toContain("transformed");
+  });
+
+  it("lists one job's durable timer waits, and one of them by name", async () => {
+    const jobId = await queue.enqueue("cooling.off", {});
+    const job = await queue.claim("cli-wait-worker", { leaseMs: 10_000 });
+    await queue.scheduleWait(job!, "cli-wait-worker", "provider-cooldown", { durationMs: 5_000 });
+
+    const list = runAdmin(["waits", jobId, "--json"]);
+    expect(list.code).toBe(0);
+    expect(JSON.parse(list.stdout)).toEqual([
+      expect.objectContaining({ jobId, name: "provider-cooldown", mode: "relative" }),
+    ]);
+
+    const one = runAdmin(["waits", jobId, "--name", "provider-cooldown", "--json"]);
+    expect(one.code).toBe(0);
+    expect(JSON.parse(one.stdout)).toMatchObject({
+      jobId,
+      name: "provider-cooldown",
+      durationMs: 5_000,
+      workerId: "cli-wait-worker",
+    });
+
+    const table = runAdmin(["waits", jobId]);
+    expect(table.code).toBe(0);
+    expect(table.stdout).toContain("provider-cooldown");
+  });
+
+  it("exits 1 for a checkpoint or wait name the job never recorded", async () => {
+    const jobId = await queue.enqueue("nothing.saved", {});
+    const checkpoint = runAdmin(["checkpoints", jobId, "--name", "missing"]);
+    expect(checkpoint.code).toBe(1);
+    expect(checkpoint.stderr).toContain("no checkpoint named missing");
+
+    const wait = runAdmin(["waits", jobId, "--name", "missing"]);
+    expect(wait.code).toBe(1);
+    expect(wait.stderr).toContain("no wait named missing");
+  });
+
+  it("lists pending human decisions and signal waits across the fleet", async () => {
+    const humanId = await queue.enqueue("account.review", {});
+    const humanJob = await queue.claim("cli-human-worker", { leaseMs: 10_000 });
+    await queue.waitForHuman(humanJob!, "cli-human-worker", "approval", {
+      prompt: "Approve this account?",
+    });
+    const signalId = await queue.enqueue("webhook.await", {});
+    const signalJob = await queue.claim("cli-signal-worker", { leaseMs: 10_000 });
+    await queue.waitForSignal(signalJob!, "cli-signal-worker", "provider-callback");
+
+    const result = runAdmin(["external-waits", "--json"]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      human: {
+        items: [
+          expect.objectContaining({
+            jobId: humanId,
+            name: "approval",
+            jobType: "account.review",
+            context: { prompt: "Approve this account?" },
+          }),
+        ],
+        nextCursor: null,
+      },
+      signal: {
+        items: [
+          expect.objectContaining({
+            jobId: signalId,
+            name: "provider-callback",
+            jobType: "webhook.await",
+          }),
+        ],
+        nextCursor: null,
+      },
+    });
+
+    const table = runAdmin(["external-waits"]);
+    expect(table.code).toBe(0);
+    expect(table.stdout).toContain("human");
+    expect(table.stdout).toContain("approval");
+    expect(table.stdout).toContain("signal");
+    expect(table.stdout).toContain("provider-callback");
+  });
+
+  it("pages external waits with the cursor the dashboard uses", async () => {
+    const first = await queue.enqueue("account.review", { order: 1 });
+    const firstJob = await queue.claim("cli-page-worker-1", { leaseMs: 10_000 });
+    await queue.waitForHuman(firstJob!, "cli-page-worker-1", "approval", { order: 1 });
+    const second = await queue.enqueue("account.review", { order: 2 });
+    const secondJob = await queue.claim("cli-page-worker-2", { leaseMs: 10_000 });
+    await queue.waitForHuman(secondJob!, "cli-page-worker-2", "approval", { order: 2 });
+
+    const page = runAdmin(["external-waits", "--limit", "1", "--json"]);
+    expect(page.code).toBe(0);
+    const parsed = JSON.parse(page.stdout) as {
+      human: { items: Array<{ jobId: string }>; nextCursor: Record<string, string> };
+    };
+    expect(parsed.human.items.map((item) => item.jobId)).toEqual([first]);
+    expect(parsed.human.nextCursor).toMatchObject({ jobId: first, name: "approval" });
+
+    const next = runAdmin([
+      "external-waits",
+      "--limit",
+      "1",
+      "--human-cursor",
+      JSON.stringify(parsed.human.nextCursor),
+      "--json",
+    ]);
+    expect(next.code).toBe(0);
+    const following = JSON.parse(next.stdout) as { human: { items: Array<{ jobId: string }> } };
+    expect(following.human.items.map((item) => item.jobId)).toEqual([second]);
+  });
+
+  it("rejects a cursor that is not the printed continuation object", () => {
+    const result = runAdmin(["external-waits", "--human-cursor", '{"jobId":"only"}']);
+    expect(result.code).toBe(64);
+    expect(result.stderr).toContain("--human-cursor must be a JSON");
+  });
+});
+
 describe("admin CLI guarded operations", () => {
   it("requires an explicit --env for every mutation", async () => {
     const jobId = await queue.enqueue("cancel.me", {});

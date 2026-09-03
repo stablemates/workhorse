@@ -6,11 +6,13 @@ import type {
   CancelResult,
   DeadLetterPage,
   DeadLetterQuery,
+  JobCheckpoint,
   JobListPage,
   JobListQuery,
   JobSnapshot,
   JobTimelinePage,
   JobTimelineQuery,
+  JobWait,
   MaintenancePolicy,
   QueueHealth,
   RedriveResult,
@@ -18,6 +20,9 @@ import type {
   WorkerRegistryEntry,
 } from "../types.js";
 import type { StoredSchedule } from "../queue/cron-schedules.js";
+import type { ExternalWaitCursor } from "../queue/external-waits.js";
+import type { HumanWaitPage } from "../queue/human-waits.js";
+import type { SignalWaitPage } from "../queue/signals.js";
 
 /**
  * A refused administrative operation. The refusal is a safety outcome, not malformed usage, so
@@ -53,6 +58,24 @@ export interface AdminQueueStatus {
   concurrencyActive: number;
   rateLimitPerSecond: number | null;
   rateLimitThrottledReadyDepth: number;
+}
+
+/**
+ * One page of every boundary the fleet is waiting on an outside party to answer.
+ *
+ * The two kinds page independently because each carries the dashboard's own
+ * {@link ExternalWaitCursor}, which is scoped to one list.
+ */
+export interface AdminExternalWaits {
+  human: HumanWaitPage;
+  signal: SignalWaitPage;
+}
+
+/** Continuation state for one {@link WorkhorseAdminClient.externalWaits} call. */
+export interface AdminExternalWaitQuery {
+  limit?: number;
+  humanCursor?: ExternalWaitCursor;
+  signalCursor?: ExternalWaitCursor;
 }
 
 export interface AdminMaintenanceState {
@@ -128,6 +151,36 @@ export class WorkhorseAdminClient {
 
   listDeadLetters(query: DeadLetterQuery = {}): Promise<DeadLetterPage> {
     return this.admin.listDeadLetters(query);
+  }
+
+  listCheckpoints(jobId: string): Promise<JobCheckpoint[]> {
+    return this.admin.listCheckpoints(jobId);
+  }
+
+  getCheckpoint(jobId: string, name: string): Promise<JobCheckpoint | null> {
+    return this.admin.getCheckpoint(jobId, name);
+  }
+
+  listWaits(jobId: string): Promise<JobWait[]> {
+    return this.admin.listWaits(jobId);
+  }
+
+  getWait(jobId: string, name: string): Promise<JobWait | null> {
+    return this.admin.getWait(jobId, name);
+  }
+
+  /**
+   * Both external-wait lists, fleet-wide, in one round trip.
+   *
+   * A stalled durable handler is waiting either on a person or on a signal, and an operator
+   * asking "what is the fleet waiting on" wants both answers at once.
+   */
+  async externalWaits(query: AdminExternalWaitQuery = {}): Promise<AdminExternalWaits> {
+    const [human, signal] = await Promise.all([
+      this.admin.listHumanWaits({ limit: query.limit, cursor: query.humanCursor }),
+      this.admin.listSignalWaits({ limit: query.limit, cursor: query.signalCursor }),
+    ]);
+    return { human, signal };
   }
 
   /**

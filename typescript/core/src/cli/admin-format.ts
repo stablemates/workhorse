@@ -1,13 +1,20 @@
 import type {
   DeadLetter,
+  JobCheckpoint,
   JobListItem,
   JobSnapshot,
   JobTimelineEntry,
+  JobWait,
   QueueHealth,
   WorkerRegistryEntry,
 } from "../types.js";
 import type { StoredSchedule } from "../queue/cron-schedules.js";
-import type { AdminMaintenanceState, AdminQueueStatus } from "./admin-client.js";
+import type { ExternalWaitRecord } from "../queue/external-waits.js";
+import type {
+  AdminExternalWaits,
+  AdminMaintenanceState,
+  AdminQueueStatus,
+} from "./admin-client.js";
 
 /** Serialize administrative payloads that contain bigint fence tokens and schedule revisions. */
 export function adminJsonReplacer(_key: string, value: unknown): unknown {
@@ -49,6 +56,12 @@ export function formatDurationMs(value: number | null): string {
   const hours = minutes / 60;
   if (hours < 48) return `${Math.round(hours)}h`;
   return `${Math.round(hours / 24)}d`;
+}
+
+/** Render labelled values as aligned lines, the single-entity counterpart to a table. */
+function keyValueLines(entries: readonly (readonly [string, string])[]): string[] {
+  const width = Math.max(...entries.map(([label]) => label.length));
+  return entries.map(([label, value]) => `${label.padEnd(width)}  ${value}`);
 }
 
 function truncate(value: string, maxLength: number): string {
@@ -177,6 +190,111 @@ export function timelineTableRows(entries: readonly JobTimelineEntry[]): string[
   ]);
 }
 
+export const CHECKPOINTS_TABLE_HEADERS = ["NAME", "ATTEMPT", "WORKER", "CREATED", "VALUE"];
+
+export function checkpointsTableRows(checkpoints: readonly JobCheckpoint[]): string[][] {
+  return checkpoints.map((checkpoint) => [
+    checkpoint.name,
+    String(checkpoint.attempt),
+    truncate(checkpoint.workerId, 24),
+    formatTimestamp(checkpoint.createdAt),
+    truncate(JSON.stringify(checkpoint.value), 40),
+  ]);
+}
+
+/** One checkpoint in full. The value stays JSON, as a job snapshot's payload does. */
+export function checkpointDetailLines(checkpoint: JobCheckpoint): string[] {
+  return keyValueLines([
+    ["job", checkpoint.jobId],
+    ["name", checkpoint.name],
+    ["attempt", String(checkpoint.attempt)],
+    ["fence token", checkpoint.fenceToken.toString()],
+    ["worker", checkpoint.workerId],
+    ["created at", formatTimestamp(checkpoint.createdAt)],
+    ["value", JSON.stringify(checkpoint.value)],
+  ]);
+}
+
+export const WAITS_TABLE_HEADERS = [
+  "NAME",
+  "MODE",
+  "DURATION",
+  "WAKE AT",
+  "ATTEMPT",
+  "WORKER",
+  "CREATED",
+];
+
+export function waitsTableRows(waits: readonly JobWait[]): string[][] {
+  return waits.map((wait) => [
+    wait.name,
+    wait.mode,
+    formatDurationMs(wait.durationMs),
+    formatTimestamp(wait.wakeAt),
+    String(wait.attempt),
+    truncate(wait.workerId, 24),
+    formatTimestamp(wait.createdAt),
+  ]);
+}
+
+/** One durable timer wait in full, including the caller target an absolute wait asked for. */
+export function waitDetailLines(wait: JobWait): string[] {
+  return keyValueLines([
+    ["job", wait.jobId],
+    ["name", wait.name],
+    ["mode", wait.mode],
+    ["duration", formatDurationMs(wait.durationMs)],
+    ["requested wake at", formatTimestamp(wait.requestedWakeAt)],
+    ["wake at", formatTimestamp(wait.wakeAt)],
+    ["attempt", String(wait.attempt)],
+    ["fence token", wait.fenceToken.toString()],
+    ["worker", wait.workerId],
+    ["created at", formatTimestamp(wait.createdAt)],
+  ]);
+}
+
+export const EXTERNAL_WAITS_TABLE_HEADERS = [
+  "KIND",
+  "JOB",
+  "QUEUE",
+  "TYPE",
+  "NAME",
+  "ATTEMPT",
+  "CREATED",
+  "DEADLINE",
+  "CONTEXT",
+];
+
+/**
+ * Both external-wait kinds as one chronological list.
+ *
+ * An operator reads this to answer "what is the fleet waiting on", so oldest first puts the
+ * boundary closest to its deadline at the top. Only a human decision carries context.
+ */
+export function externalWaitsTableRows(waits: AdminExternalWaits): string[][] {
+  const merged: Array<{ kind: string; record: ExternalWaitRecord; context: string }> = [
+    ...waits.human.items.map((item) => ({
+      kind: "human",
+      record: item,
+      context: truncate(JSON.stringify(item.context), 40),
+    })),
+    ...waits.signal.items.map((item) => ({ kind: "signal", record: item, context: "-" })),
+  ];
+  return merged
+    .toSorted((left, right) => left.record.createdAt.getTime() - right.record.createdAt.getTime())
+    .map(({ kind, record, context }) => [
+      kind,
+      record.jobId,
+      record.queue,
+      truncate(record.jobType, 32),
+      record.name,
+      String(record.attempt),
+      formatTimestamp(record.createdAt),
+      formatTimestamp(record.deadlineAt),
+      context,
+    ]);
+}
+
 /** Health rendered as one status line plus one line per exceeded budget. */
 export function healthLines(health: QueueHealth): string[] {
   const lines = [`Workhorse queue is ${health.status.level}.`];
@@ -219,8 +337,7 @@ export function jobDetailLines(snapshot: JobSnapshot): string[] {
         `${snapshot.cancelReason ? `: ${snapshot.cancelReason}` : ""}`,
     ]);
   }
-  const width = Math.max(...entries.map(([label]) => label.length));
-  return entries.map(([label, value]) => `${label.padEnd(width)}  ${value}`);
+  return keyValueLines(entries);
 }
 
 /** Maintenance and retention policies as aligned setting lines with provenance. */

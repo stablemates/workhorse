@@ -34,8 +34,9 @@ Commands:
   schema     Install the schema or report schema and PostgreSQL compatibility.
   worker     Run workers from a compiled configuration module.
   dashboard  Serve the operator dashboard against a Workhorse database.
-  admin      Inspect jobs, queues, schedules, failures, workers, and maintenance state, and run
-             guarded cancel, redrive, pause, resume, and purge operations.
+  admin      Inspect jobs, queues, schedules, failures, workers, checkpoints, waits, and
+             maintenance state, and run guarded cancel, redrive, pause, resume, and purge
+             operations.
   tui        Interactive terminal views over the same administrative client.
   health     Report queue health.
 

@@ -107,7 +107,7 @@ terminal.
 | Queue purge                                | Supported  | Supported         | Supported         |
 | Dead-letter listing                        | Supported  | Supported         | Supported         |
 | Redrive                                    | Supported  | [Planned][WH-616] | Supported         |
-| Checkpoint, wait, and human-decision reads | Supported  | Supported         | [Planned][WH-617] |
+| Checkpoint, wait, and human-decision reads | Supported  | Supported         | Supported         |
 | Durable operator worker pause              | Supported  | Supported         | [Planned][WH-618] |
 
 <!-- END GENERATED PARITY PRODUCT -->
@@ -183,7 +183,6 @@ stops the published view from becoming another source of truth.
 <!-- BEGIN GENERATED PARITY ONTRACK LINKS -->
 
 [WH-616]: https://ontrack.sh/projects/WH/issues/WH-616
-[WH-617]: https://ontrack.sh/projects/WH/issues/WH-617
 [WH-618]: https://ontrack.sh/projects/WH/issues/WH-618
 
 <!-- END GENERATED PARITY ONTRACK LINKS -->

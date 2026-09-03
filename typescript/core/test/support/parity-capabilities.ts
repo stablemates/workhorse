@@ -428,7 +428,7 @@ export const PRODUCT_PARITY_ROWS: readonly ProductParityRow[] = [
       patterns: ["listHumanWaits", "human wait"],
     },
     dashboard: { file: "test/human-wait-integration.test.ts", pattern: "humanWaits" },
-    cli: { planned: "WH-617" },
+    cli: { file: "integration-admin-cli.test.ts", patterns: ["checkpoints", "external-waits"] },
   },
   {
     capability: "Durable operator worker pause",

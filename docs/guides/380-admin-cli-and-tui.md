@@ -9,8 +9,9 @@ checks, so nothing you learn in one is wrong in the other.
 
 ## Looking around is always safe
 
-The inspection commands — `admin jobs`, `admin job`, `admin timeline`, `admin failures`,
-`admin queues`, `admin schedules`, `admin workers`, `admin maintenance` — only read. You can run
+The inspection commands — `admin jobs`, `admin job`, `admin timeline`, `admin checkpoints`,
+`admin waits`, `admin external-waits`, `admin failures`, `admin queues`, `admin schedules`,
+`admin workers`, `admin maintenance` — only read. You can run
 them against production without ceremony, the same way you would run `queue.health` from code.
 
 Each command answers in two registers. By default you get an aligned table meant for a human
@@ -21,6 +22,35 @@ shape, not a private CLI format.
 ```sh
 workhorse admin failures --queue billing --json | jq '.items[].jobId'
 ```
+
+## Finding out what a stalled job is waiting on
+
+A durable handler can stop for a good reason. It saved a checkpoint and is between steps, or it
+is sleeping on a timer, or it is waiting for a person or an outside system to answer. From the
+outside all four look the same: a job that is not finishing.
+
+Three reads separate them. `admin checkpoints <job-id>` shows the restart boundaries a handler
+already got past, so you can see how far it got before it stopped. `admin waits <job-id>` shows
+its durable timer waits and when each one wakes. Both take `--name` when you already know which
+one you want.
+
+`admin external-waits` asks the fleet-wide version of the question: which jobs are waiting on
+someone. It lists the pending human decisions and the pending signal waits together, oldest
+first, because the oldest boundary is usually the one closest to running out of time. A human
+decision carries the context its handler recorded, which is what the person deciding was meant
+to read.
+
+```sh
+workhorse admin external-waits --json | jq '.human.items[] | {jobId, name, context}'
+```
+
+Long lists page. Each `--json` answer carries the continuation for its own list, and you hand
+that object back on the next call. This is the same paging the dashboard does, so both surfaces
+walk a busy queue's waits the same way.
+
+Answering a decision is not here. These commands only read; [human
+decisions](145-human-decisions.md) explains where a completion comes from and why it is
+attributed.
 
 ## Changing things requires naming the target twice
 
@@ -76,8 +106,8 @@ teeth, that is the [dashboard](370-dashboard-authentication.md)'s territory.
 ## Next
 
 - [340-redrive.md](340-redrive.md) — what a redrive actually creates
+- [145-human-decisions.md](145-human-decisions.md) — how a decision boundary is answered
 - [360-queue-health.md](360-queue-health.md) — the health view's underlying snapshot
-- [310-workers.md](310-workers.md) — worker pause versus queue pause
 
 ---
 

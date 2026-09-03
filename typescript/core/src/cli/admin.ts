@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import readline from "node:readline/promises";
 import { Pool } from "pg";
 import { PurgeIdempotencyConflictError } from "../admin.js";
+import { MAX_EXTERNAL_WAIT_LIST_SIZE } from "../types.js";
 import type { JobListQuery, JobState } from "../types.js";
+import type { ExternalWaitCursor } from "../queue/external-waits.js";
 import { CliUsageError, parseCommandArgs, resolveDatabaseUrl } from "./arguments.js";
 import {
   AdminSafetyError,
@@ -10,12 +12,18 @@ import {
   type ConfirmedEnvironment,
 } from "./admin-client.js";
 import {
+  CHECKPOINTS_TABLE_HEADERS,
+  EXTERNAL_WAITS_TABLE_HEADERS,
   FAILURES_TABLE_HEADERS,
   JOBS_TABLE_HEADERS,
   QUEUES_TABLE_HEADERS,
   SCHEDULES_TABLE_HEADERS,
   TIMELINE_TABLE_HEADERS,
+  WAITS_TABLE_HEADERS,
   WORKERS_TABLE_HEADERS,
+  checkpointDetailLines,
+  checkpointsTableRows,
+  externalWaitsTableRows,
   failuresTableRows,
   formatTable,
   jobDetailLines,
@@ -25,6 +33,8 @@ import {
   schedulesTableRows,
   timelineTableRows,
   toAdminJson,
+  waitDetailLines,
+  waitsTableRows,
   workersTableRows,
 } from "./admin-format.js";
 
@@ -35,6 +45,12 @@ Inspection commands (safe, read-only):
   job <id>     Show one job snapshot.
   timeline <id>
                Show one job's merged event and attempt timeline.
+  checkpoints <job-id>
+               List one job's restart-boundary checkpoints, or one of them with --name.
+  waits <job-id>
+               List one job's durable timer waits, or one of them with --name.
+  external-waits
+               List every pending human decision and signal wait across the fleet.
   failures     List terminal failures (dead letters).
   queues       List per-queue dispatch pressure and pause state.
   schedules    List enabled recurring schedules.
@@ -67,6 +83,11 @@ Listing options:
   --state <state>    Filter jobs by lifecycle state; repeatable or comma-separated.
   --limit <count>    Page size.
   --namespace <ns>   Filter schedules by namespace; repeatable or comma-separated.
+  --name <name>      Show one named checkpoint or wait instead of the list.
+  --human-cursor <json>
+                     Continue external-waits from a printed human "nextCursor" object.
+  --signal-cursor <json>
+                     Continue external-waits from a printed signal "nextCursor" object.
 
 The fallback database URL order is WORKHORSE_DATABASE_URL, then DATABASE_URL. Guarded commands
 exit 1 when they refuse or when the target does not exist; malformed usage exits 64.
@@ -86,6 +107,9 @@ const READ_COMMANDS = new Set([
   "jobs",
   "job",
   "timeline",
+  "checkpoints",
+  "waits",
+  "external-waits",
   "failures",
   "queues",
   "schedules",
@@ -140,6 +164,36 @@ function parseStates(values: readonly string[] | undefined): JobState[] | undefi
     }
   }
   return states as JobState[];
+}
+
+/**
+ * Read back the opaque continuation an earlier `--json` page printed.
+ *
+ * The cursor is the dashboard's own {@link ExternalWaitCursor}, so it round-trips as the exact
+ * JSON object the previous page emitted rather than a CLI-private encoding.
+ */
+function parseExternalWaitCursor(
+  value: string | undefined,
+  flag: string,
+): ExternalWaitCursor | undefined {
+  if (value === undefined) return undefined;
+  const malformed = new CliUsageError(
+    `${flag} must be a JSON "nextCursor" object with string createdAt, jobId, and name fields`,
+  );
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw malformed;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw malformed;
+  const cursor = parsed as Record<string, unknown>;
+  const fields = ["createdAt", "jobId", "name"] as const;
+  if (Object.keys(cursor).length !== fields.length) throw malformed;
+  for (const field of fields) {
+    if (typeof cursor[field] !== "string" || cursor[field] === "") throw malformed;
+  }
+  return cursor as unknown as ExternalWaitCursor;
 }
 
 function requirePositional(positionals: readonly string[], command: string, name: string): string {
@@ -208,6 +262,9 @@ export async function runAdminCommand(
       state: { type: "string", multiple: true },
       limit: { type: "string" },
       namespace: { type: "string", multiple: true },
+      name: { type: "string" },
+      "human-cursor": { type: "string" },
+      "signal-cursor": { type: "string" },
       env: { type: "string" },
       yes: { type: "boolean" },
       actor: { type: "string" },
@@ -261,6 +318,67 @@ export async function runAdminCommand(
         json
           ? toAdminJson(page)
           : `${formatTable(TIMELINE_TABLE_HEADERS, timelineTableRows(page.items))}\n`,
+      );
+      return;
+    }
+    if (command === "checkpoints") {
+      const jobId = requirePositional(positionals, command, "job-id");
+      if (values.name !== undefined) {
+        const checkpoint = await client.getCheckpoint(jobId, values.name);
+        if (checkpoint === null) {
+          io.error(`Job ${jobId} has no checkpoint named ${values.name}.\n`);
+          process.exitCode = 1;
+          return;
+        }
+        io.out(
+          json ? toAdminJson(checkpoint) : `${checkpointDetailLines(checkpoint).join("\n")}\n`,
+        );
+        return;
+      }
+      const checkpoints = await client.listCheckpoints(jobId);
+      io.out(
+        json
+          ? toAdminJson(checkpoints)
+          : `${formatTable(CHECKPOINTS_TABLE_HEADERS, checkpointsTableRows(checkpoints))}\n`,
+      );
+      return;
+    }
+    if (command === "waits") {
+      const jobId = requirePositional(positionals, command, "job-id");
+      if (values.name !== undefined) {
+        const wait = await client.getWait(jobId, values.name);
+        if (wait === null) {
+          io.error(`Job ${jobId} has no wait named ${values.name}.\n`);
+          process.exitCode = 1;
+          return;
+        }
+        io.out(json ? toAdminJson(wait) : `${waitDetailLines(wait).join("\n")}\n`);
+        return;
+      }
+      const waits = await client.listWaits(jobId);
+      io.out(
+        json ? toAdminJson(waits) : `${formatTable(WAITS_TABLE_HEADERS, waitsTableRows(waits))}\n`,
+      );
+      return;
+    }
+    if (command === "external-waits") {
+      if (positionals.length > 0) {
+        throw new CliUsageError(`Unexpected admin external-waits argument: ${positionals[0]}`);
+      }
+      if (limit !== undefined && limit > MAX_EXTERNAL_WAIT_LIST_SIZE) {
+        throw new CliUsageError(
+          `admin external-waits --limit must be at most ${MAX_EXTERNAL_WAIT_LIST_SIZE}`,
+        );
+      }
+      const waits = await client.externalWaits({
+        limit,
+        humanCursor: parseExternalWaitCursor(values["human-cursor"], "--human-cursor"),
+        signalCursor: parseExternalWaitCursor(values["signal-cursor"], "--signal-cursor"),
+      });
+      io.out(
+        json
+          ? toAdminJson(waits)
+          : `${formatTable(EXTERNAL_WAITS_TABLE_HEADERS, externalWaitsTableRows(waits))}\n`,
       );
       return;
     }

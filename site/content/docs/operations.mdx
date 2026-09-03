@@ -135,6 +135,13 @@ workhorse admin queues
 workhorse admin failures --queue billing --json | jq '.items[].jobId'
 ```
 
+A stalled durable handler is inspectable from the terminal too. `admin checkpoints <job-id>` and
+`admin waits <job-id>` list one job's restart boundaries and durable timer waits, and `--name`
+narrows either to one record. `admin external-waits` is the fleet-wide read: it lists every
+pending human decision and signal wait, oldest first, and pages each list with the same
+`nextCursor` object the dashboard uses through `--human-cursor` and `--signal-cursor`. These
+commands only read; completing a human decision stays with `queue.completeHumanWait`.
+
 Guarded commands — `admin cancel`, `admin redrive`, `admin pause`, `admin resume`,
 `admin purge` — refuse to run until the target database is named explicitly with `--env`,
 verified against `current_database()` on the live connection, and the operation is confirmed
