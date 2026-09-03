@@ -7,6 +7,10 @@
 > [ADR 0034](0034-reset-the-pre-release-schema-baseline.md). The name `enqueue_many_v1` now
 > belongs to the client-facing wrapper above it.
 
+> The TypeScript type `EnqueueIdempotency` in this record was renamed to `Idempotency` for parity
+> with the Python and Go SDKs. The old name remains a deprecated alias through 0.x and is removed
+> in 1.0.0.
+
 ## Context
 
 Applications can lose an enqueue response after PostgreSQL commits, retry an HTTP request, or submit duplicate entries inside one batch. Before schema version 10, every accepted retry created a new stable job identity, runtime row, enqueue event, FIFO placement, and possible wake notification. Caller transactions made one attempt atomic, but they did not let a later attempt discover whether the same durable request had already committed.

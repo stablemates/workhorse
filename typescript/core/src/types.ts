@@ -72,7 +72,7 @@ export type RetryPolicy =
   | { type: "decorrelated-jitter"; baseDelayMs: number; maxDelayMs: number };
 
 /** PostgreSQL-owned enqueue deduplication identity and retention window. */
-export interface EnqueueIdempotency {
+export interface Idempotency {
   /** Caller-chosen key, unique within `scope` while its retention window remains active. */
   key: string;
   /** Caller namespace. Omitted values use {@link DEFAULT_IDEMPOTENCY_SCOPE}. */
@@ -81,8 +81,11 @@ export interface EnqueueIdempotency {
   ttlMs?: number;
 }
 
+/** @deprecated Renamed to {@link Idempotency}. Removed in 1.0.0. */
+export type EnqueueIdempotency = Idempotency;
+
 /** PostgreSQL-owned keyed debounce window for one pending job. */
-export interface EnqueueDebounce {
+export interface Debounce {
   /** Caller-chosen key, unique within `scope` while the debounce window remains active. */
   key: string;
   /** Caller namespace. Omitted values use {@link DEFAULT_IDEMPOTENCY_SCOPE}. */
@@ -93,8 +96,11 @@ export interface EnqueueDebounce {
   schedule: "reset" | "preserve";
 }
 
+/** @deprecated Renamed to {@link Debounce}. Removed in 1.0.0. */
+export type EnqueueDebounce = Debounce;
+
 /** PostgreSQL-owned keyed throttle window for one accepted job. */
-export interface EnqueueThrottle {
+export interface Throttle {
   /** Caller-chosen key, unique within `scope` while the throttle window remains active. */
   key: string;
   /** Caller namespace. Omitted values use {@link DEFAULT_IDEMPOTENCY_SCOPE}. */
@@ -102,6 +108,9 @@ export interface EnqueueThrottle {
   /** Acceptance window measured from PostgreSQL's clock. */
   windowMs: number;
 }
+
+/** @deprecated Renamed to {@link Throttle}. Removed in 1.0.0. */
+export type EnqueueThrottle = Throttle;
 
 /** PostgreSQL's durable disposition for one enqueue request. */
 export type EnqueueOutcome = "accepted" | "replayed" | "replaced" | "non_replaceable" | "coalesced";
@@ -186,21 +195,21 @@ type EnqueueDependencyOptions =
   | {
       prerequisiteJobId?: never;
       /** Bounded fan-in and the terminal outcomes accepted from each prerequisite. */
-      dependencies?: JobDependencies;
+      dependencies?: Dependencies;
     };
 
 /** Options persisted as part of the accepted job definition or initial dispatch projection. */
 export type EnqueueOptions = EnqueueBaseOptions &
   (
     | (EnqueueDependencyOptions & {
-        idempotency?: EnqueueIdempotency;
+        idempotency?: Idempotency;
         debounce?: never;
         throttle?: never;
       })
     | {
         idempotency?: never;
         /** Replace one still-pending keyed job during a PostgreSQL-owned window. */
-        debounce: EnqueueDebounce;
+        debounce: Debounce;
         throttle?: never;
         prerequisiteJobId?: never;
         dependencies?: never;
@@ -209,7 +218,7 @@ export type EnqueueOptions = EnqueueBaseOptions &
         idempotency?: never;
         debounce?: never;
         /** Accept at most one equivalent job per PostgreSQL-owned window. */
-        throttle: EnqueueThrottle;
+        throttle: Throttle;
         prerequisiteJobId?: never;
         dependencies?: never;
       }
@@ -219,12 +228,15 @@ export type EnqueueOptions = EnqueueBaseOptions &
 export type DependencyTerminalPolicy = "release" | "cancel" | "fail";
 
 /** A bounded set of prerequisites which must all satisfy their declared terminal policy. */
-export interface JobDependencies {
+export interface Dependencies {
   prerequisiteJobIds: readonly string[];
   onSuccess: DependencyTerminalPolicy;
   onFailure: DependencyTerminalPolicy;
   onCancellation: DependencyTerminalPolicy;
 }
+
+/** @deprecated Renamed to {@link Dependencies}. Removed in 1.0.0. */
+export type JobDependencies = Dependencies;
 
 /** One queue's deployment-synchronized concurrency budget. */
 export interface ConcurrencyPolicyDefinition {
@@ -486,7 +498,7 @@ export interface JobListItem {
   state: JobState;
   prerequisiteJobId: string | null;
   prerequisiteJobIds: string[];
-  dependencyPolicy: Omit<JobDependencies, "prerequisiteJobIds"> | null;
+  dependencyPolicy: Omit<Dependencies, "prerequisiteJobIds"> | null;
   blockedReason: "prerequisite_pending" | null;
   parentJobId: string | null;
   childJobIds: string[];
@@ -816,7 +828,7 @@ export interface JobSnapshot<TResult extends Json = Json> {
   state: JobState;
   prerequisiteJobId: string | null;
   prerequisiteJobIds: string[];
-  dependencyPolicy: Omit<JobDependencies, "prerequisiteJobIds"> | null;
+  dependencyPolicy: Omit<Dependencies, "prerequisiteJobIds"> | null;
   blockedReason: "prerequisite_pending" | null;
   parentJobId: string | null;
   childJobIds: string[];

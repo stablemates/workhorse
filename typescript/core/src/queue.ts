@@ -77,11 +77,7 @@ import {
   JobValueSizeLimitError,
   validateQueueOptions,
 } from "./queue/enqueue-contracts.js";
-import type {
-  ScheduleDefinition,
-  ScheduleJobDefinition,
-  StoredSchedule,
-} from "./queue/cron-schedules.js";
+import type { ScheduleDefinition, ScheduledJob, StoredSchedule } from "./queue/cron-schedules.js";
 import type { MaintenancePhaseResult } from "./queue/retention-maintenance.js";
 import {
   ChildConflictError,
@@ -95,8 +91,8 @@ import {
   SignalWaitLeaseLostError,
   SignalWaitLimitExceededError,
   type SendSignalRequest,
-  type SendSignalResult,
-  type SendSignalStatus,
+  type SignalDeliveryResult,
+  type SignalDeliveryStatus,
   type SignalWait,
   type SignalWaitPage,
   type WaitForSignalResult,
@@ -109,8 +105,8 @@ import {
   HumanWaitLeaseLostError,
   HumanWaitLimitExceededError,
   type CompleteHumanWaitRequest,
-  type CompleteHumanWaitResult,
-  type CompleteHumanWaitStatus,
+  type HumanWaitCompletionResult,
+  type HumanWaitCompletionStatus,
   type HumanWait,
   type HumanWaitPage,
   type WaitForHumanResult,
@@ -119,7 +115,7 @@ import {
 import type {
   ExternalWaitDeliveryRequest,
   ExternalWaitCursor,
-  ExternalWaitListOptions,
+  ExternalWaitQuery,
   ExternalWaitOptions,
 } from "./queue/external-waits.js";
 import { workerCheckpointsRead, workerProgressRead, workerWaitsRead } from "./worker-internal.js";
@@ -161,15 +157,15 @@ export type {
   ScheduleWaitRequest,
   ScheduleWaitResult,
   SendSignalRequest,
-  SendSignalResult,
-  SendSignalStatus,
+  SignalDeliveryResult,
+  SignalDeliveryStatus,
   SignalWait,
   SignalWaitPage,
   WaitForSignalResult,
   WaitForSignalStatus,
   CompleteHumanWaitRequest,
-  CompleteHumanWaitResult,
-  CompleteHumanWaitStatus,
+  HumanWaitCompletionResult,
+  HumanWaitCompletionStatus,
   HumanWait,
   HumanWaitPage,
   WaitForHumanResult,
@@ -177,9 +173,15 @@ export type {
   ExternalWaitOptions,
   ExternalWaitDeliveryRequest,
   ExternalWaitCursor,
-  ExternalWaitListOptions,
+  ExternalWaitQuery,
 };
-export type { ScheduleDefinition, ScheduleJobDefinition, StoredSchedule };
+export type { ScheduleDefinition, ScheduledJob, StoredSchedule };
+
+// Deprecated 0.x aliases for the names Python and Go already shared. Removed in 1.0.0.
+export type { SendSignalResult, SendSignalStatus } from "./queue/signals.js";
+export type { CompleteHumanWaitResult, CompleteHumanWaitStatus } from "./queue/human-waits.js";
+export type { ExternalWaitListOptions } from "./queue/external-waits.js";
+export type { ScheduleJobDefinition } from "./queue/cron-schedules.js";
 
 /**
  * Thin TypeScript facade over the versioned PostgreSQL protocol.
@@ -597,7 +599,7 @@ export class Queue {
     name: string,
     payload: TPayload,
     request: SendSignalRequest,
-  ): Promise<SendSignalResult<TPayload>> {
+  ): Promise<SignalDeliveryResult<TPayload>> {
     return this.modules.signals.sendSignal(jobId, name, payload, request);
   }
 
@@ -622,7 +624,7 @@ export class Queue {
     name: string,
     result: TResult,
     request: CompleteHumanWaitRequest,
-  ): Promise<CompleteHumanWaitResult<TResult>> {
+  ): Promise<HumanWaitCompletionResult<TResult>> {
     return this.modules.humanWaits.completeHumanWait(jobId, name, result, request);
   }
 

@@ -9,8 +9,6 @@ import (
 
 type CancelStatus string
 
-type CompleteHumanWaitStatus string
-
 type DashboardActivityBucket struct {
 	BucketStart string             `json:"bucketStart"`
 	Counts      map[string]float64 `json:"counts"`
@@ -48,12 +46,12 @@ type DashboardCancellationRequest struct {
 }
 
 type DashboardCompleteHumanWaitResult struct {
-	Status      CompleteHumanWaitStatus `json:"status"`
-	JobID       string                  `json:"jobId"`
-	Name        string                  `json:"name"`
-	Result      JSON                    `json:"result"`
-	CompletedAt *string                 `json:"completedAt"`
-	CompletedBy *string                 `json:"completedBy"`
+	Status      HumanWaitCompletionStatus `json:"status"`
+	JobID       string                    `json:"jobId"`
+	Name        string                    `json:"name"`
+	Result      JSON                      `json:"result"`
+	CompletedAt *string                   `json:"completedAt"`
+	CompletedBy *string                   `json:"completedBy"`
 }
 
 type DashboardConcurrencyPolicySummary struct {
@@ -616,12 +614,12 @@ type DashboardSettingsPage struct {
 }
 
 type DashboardSignalTaskResult struct {
-	Status      SendSignalStatus `json:"status"`
-	JobID       string           `json:"jobId"`
-	Name        string           `json:"name"`
-	Payload     JSON             `json:"payload"`
-	DeliveredAt *string          `json:"deliveredAt"`
-	DeliveredBy *string          `json:"deliveredBy"`
+	Status      SignalDeliveryStatus `json:"status"`
+	JobID       string               `json:"jobId"`
+	Name        string               `json:"name"`
+	Payload     JSON                 `json:"payload"`
+	DeliveredAt *string              `json:"deliveredAt"`
+	DeliveredBy *string              `json:"deliveredBy"`
 }
 
 type DashboardSignalWaitRow struct {
@@ -894,6 +892,8 @@ type DashboardWorkersPage struct {
 	Workers          []DashboardWorkerRow `json:"workers"`
 }
 
+type HumanWaitCompletionStatus string
+
 type JSON any
 
 type MaintenanceLoopCadences struct {
@@ -928,7 +928,7 @@ type RetentionPolicyImpact struct {
 	} `json:"capped"`
 }
 
-type SendSignalStatus string
+type SignalDeliveryStatus string
 
 type DashboardRuntimeConfig struct {
 	BasePath       string `json:"basePath"`

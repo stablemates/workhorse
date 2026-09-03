@@ -8,7 +8,7 @@ import {
   externalWaitRecord,
   type ExternalWaitDeliveryRequest,
   type ExternalWaitCursor,
-  type ExternalWaitListOptions,
+  type ExternalWaitQuery,
   type ExternalWaitOptions,
   type ExternalWaitRecord,
   type ExternalWaitRow,
@@ -25,21 +25,28 @@ export interface WaitForHumanResult<TResult extends Json = Json> {
   payload: TResult | null;
 }
 export type CompleteHumanWaitRequest = ExternalWaitDeliveryRequest;
-export type CompleteHumanWaitStatus =
+export type HumanWaitCompletionStatus =
   | "completed"
   | "duplicate"
   | "not_waiting"
   | "already_completed"
   | "stale"
   | "not_found";
-export interface CompleteHumanWaitResult<TResult extends Json = Json> {
-  status: CompleteHumanWaitStatus;
+export interface HumanWaitCompletionResult<TResult extends Json = Json> {
+  status: HumanWaitCompletionStatus;
   jobId: string;
   name: string;
   payload: TResult | null;
   completedAt: Date | null;
   completedBy: string | null;
 }
+
+/** @deprecated Renamed to {@link HumanWaitCompletionStatus}. Removed in 1.0.0. */
+export type CompleteHumanWaitStatus = HumanWaitCompletionStatus;
+
+/** @deprecated Renamed to {@link HumanWaitCompletionResult}. Removed in 1.0.0. */
+export type CompleteHumanWaitResult<TResult extends Json = Json> =
+  HumanWaitCompletionResult<TResult>;
 
 export interface HumanWait<TContext extends Json = Json> extends ExternalWaitRecord {
   context: TContext;
@@ -59,7 +66,7 @@ type WaitRow = {
   result: Json | null;
 };
 type CompleteRow = {
-  status: CompleteHumanWaitStatus | "conflict";
+  status: HumanWaitCompletionStatus | "conflict";
   result: Json | null;
   completed_at: Date | string | null;
   completed_by: string | null;
@@ -115,7 +122,7 @@ export class HumanWaitIdempotencyConflictError extends WorkhorseError {
 /** Owns named human decisions that suspend a handler until an attributed completion. */
 export class HumanWaitsModule extends QueueModule {
   async listHumanWaits<TContext extends Json = Json>(
-    options: ExternalWaitListOptions = {},
+    options: ExternalWaitQuery = {},
   ): Promise<HumanWaitPage<TContext>> {
     const { limit, cursor } = validateExternalWaitListOptions(options);
     const result = await this.context.database.query<HumanWaitRow>(
@@ -168,7 +175,7 @@ export class HumanWaitsModule extends QueueModule {
     name: string,
     result: TResult,
     request: CompleteHumanWaitRequest,
-  ): Promise<CompleteHumanWaitResult<TResult>> {
+  ): Promise<HumanWaitCompletionResult<TResult>> {
     validateExternalWaitName(name, "Human wait");
     validateExternalWaitDeliveryRequest(request, "Human wait");
     const query = await this.context.database.query<CompleteRow>(

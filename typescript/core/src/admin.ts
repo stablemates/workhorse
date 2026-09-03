@@ -36,7 +36,7 @@ import { logInfo } from "./telemetry.js";
 import { createQueueModuleContext } from "./queue/module-context.js";
 import { createQueueModules, type QueueModules } from "./queue/modules.js";
 import { validateQueueOptions } from "./queue/enqueue-contracts.js";
-import type { ExternalWaitListOptions } from "./queue/external-waits.js";
+import type { ExternalWaitQuery } from "./queue/external-waits.js";
 import type { HumanWaitPage } from "./queue/human-waits.js";
 import type { SignalWaitPage } from "./queue/signals.js";
 import type { StoredSchedule } from "./queue/cron-schedules.js";
@@ -221,12 +221,12 @@ export class Admin {
     return this.modules.checkpointsProgressWaits.listWaits(jobId);
   }
 
-  listSignalWaits(options: ExternalWaitListOptions = {}): Promise<SignalWaitPage> {
+  listSignalWaits(options: ExternalWaitQuery = {}): Promise<SignalWaitPage> {
     return this.modules.signals.listSignalWaits(options);
   }
 
   listHumanWaits<TContext extends Json = Json>(
-    options: ExternalWaitListOptions = {},
+    options: ExternalWaitQuery = {},
   ): Promise<HumanWaitPage<TContext>> {
     return this.modules.humanWaits.listHumanWaits<TContext>(options);
   }

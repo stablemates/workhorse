@@ -8,7 +8,7 @@ import {
   externalWaitRecord,
   type ExternalWaitDeliveryRequest,
   type ExternalWaitCursor,
-  type ExternalWaitListOptions,
+  type ExternalWaitQuery,
   type ExternalWaitOptions,
   type ExternalWaitRecord,
   type ExternalWaitRow,
@@ -28,7 +28,7 @@ export interface WaitForSignalResult<TPayload extends Json = Json> {
 
 export type SendSignalRequest = ExternalWaitDeliveryRequest;
 
-export type SendSignalStatus =
+export type SignalDeliveryStatus =
   | "delivered"
   | "duplicate"
   | "not_waiting"
@@ -36,14 +36,20 @@ export type SendSignalStatus =
   | "stale"
   | "not_found";
 
-export interface SendSignalResult<TPayload extends Json = Json> {
-  status: SendSignalStatus;
+export interface SignalDeliveryResult<TPayload extends Json = Json> {
+  status: SignalDeliveryStatus;
   jobId: string;
   name: string;
   payload: TPayload | null;
   deliveredAt: Date | null;
   deliveredBy: string | null;
 }
+
+/** @deprecated Renamed to {@link SignalDeliveryStatus}. Removed in 1.0.0. */
+export type SendSignalStatus = SignalDeliveryStatus;
+
+/** @deprecated Renamed to {@link SignalDeliveryResult}. Removed in 1.0.0. */
+export type SendSignalResult<TPayload extends Json = Json> = SignalDeliveryResult<TPayload>;
 
 export type SignalWait = ExternalWaitRecord;
 
@@ -58,7 +64,7 @@ type WaitForSignalRow = {
 };
 
 type SendSignalRow = {
-  status: SendSignalStatus | "conflict";
+  status: SignalDeliveryStatus | "conflict";
   payload: Json | null;
   delivered_at: Date | string | null;
   delivered_by: string | null;
@@ -107,7 +113,7 @@ export class SignalIdempotencyConflictError extends WorkhorseError {
 
 /** Owns durable named signal waits and idempotent external delivery. */
 export class SignalsModule extends QueueModule {
-  async listSignalWaits(options: ExternalWaitListOptions = {}): Promise<SignalWaitPage> {
+  async listSignalWaits(options: ExternalWaitQuery = {}): Promise<SignalWaitPage> {
     const { limit, cursor } = validateExternalWaitListOptions(options);
     const result = await this.context.database.query<ExternalWaitRow>(
       SQL_STATEMENTS["dashboard_signal_wait_v1"],
@@ -150,7 +156,7 @@ export class SignalsModule extends QueueModule {
     name: string,
     payload: TPayload,
     request: SendSignalRequest,
-  ): Promise<SendSignalResult<TPayload>> {
+  ): Promise<SignalDeliveryResult<TPayload>> {
     validateExternalWaitName(name, "Signal");
     validateExternalWaitDeliveryRequest(request, "Signal");
     const encodedPayload = encodeExternalWaitValue(payload, "Signal payload");

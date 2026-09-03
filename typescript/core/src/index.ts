@@ -114,15 +114,15 @@ export type {
   ScheduleWaitRequest,
   ScheduleWaitResult,
   SendSignalRequest,
-  SendSignalResult,
-  SendSignalStatus,
+  SignalDeliveryResult,
+  SignalDeliveryStatus,
   SignalWait,
   SignalWaitPage,
   WaitForSignalResult,
   WaitForSignalStatus,
   CompleteHumanWaitRequest,
-  CompleteHumanWaitResult,
-  CompleteHumanWaitStatus,
+  HumanWaitCompletionResult,
+  HumanWaitCompletionStatus,
   HumanWait,
   HumanWaitPage,
   WaitForHumanResult,
@@ -130,9 +130,9 @@ export type {
   ExternalWaitOptions,
   ExternalWaitDeliveryRequest,
   ExternalWaitCursor,
-  ExternalWaitListOptions,
+  ExternalWaitQuery,
   ScheduleDefinition,
-  ScheduleJobDefinition,
+  ScheduledJob,
   StoredSchedule,
 } from "./queue.js";
 export {
@@ -197,9 +197,10 @@ export type {
   DependencyLineage,
   DependencyLineageRecord,
   DependencyTerminalPolicy,
-  EnqueueIdempotency,
-  EnqueueDebounce,
-  EnqueueThrottle,
+  Dependencies,
+  Idempotency,
+  Debounce,
+  Throttle,
   EnqueueIdempotencyConflictDetails,
   EnqueueIdempotencyConflictField,
   EnqueueNonReplaceableReason,
@@ -209,7 +210,6 @@ export type {
   EnqueueResult,
   ExpireOwnedStatus,
   JobCheckpoint,
-  JobDependencies,
   JobContractVersion,
   JobTypeContracts,
   JobProgress,
@@ -300,3 +300,20 @@ export {
   MAX_REDRIVE_REQUEST_ID_BYTES,
   MAX_WAIT_DURATION_MS,
 } from "./types.js";
+
+// Deprecated 0.x names for the ten types Python and Go already agreed on (WH-590).
+// Each is a type alias of its replacement and is removed in 1.0.0.
+export type {
+  EnqueueIdempotency,
+  EnqueueDebounce,
+  EnqueueThrottle,
+  JobDependencies,
+} from "./types.js";
+export type {
+  SendSignalResult,
+  SendSignalStatus,
+  CompleteHumanWaitResult,
+  CompleteHumanWaitStatus,
+  ExternalWaitListOptions,
+  ScheduleJobDefinition,
+} from "./queue.js";

@@ -18,12 +18,15 @@ export interface ExternalWaitOptions {
   timeoutMs?: number;
 }
 
-export interface ExternalWaitListOptions {
+export interface ExternalWaitQuery {
   /** Maximum actionable waits returned in creation order. */
   limit?: number;
   /** Exact continuation returned by a previous external-wait page. */
   cursor?: ExternalWaitCursor;
 }
+
+/** @deprecated Renamed to {@link ExternalWaitQuery}. Removed in 1.0.0. */
+export type ExternalWaitListOptions = ExternalWaitQuery;
 
 export interface ExternalWaitCursor {
   /** Exact PostgreSQL UTC timestamp text. Treat as opaque continuation state. */
@@ -53,7 +56,7 @@ export type ExternalWaitRow = {
   cursor_created_at: string;
 };
 
-export function validateExternalWaitListOptions(options: ExternalWaitListOptions): {
+export function validateExternalWaitListOptions(options: ExternalWaitQuery): {
   limit: number;
   cursor: ExternalWaitCursor | undefined;
 } {

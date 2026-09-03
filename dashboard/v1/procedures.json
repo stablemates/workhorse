@@ -1642,16 +1642,6 @@
         "not_found"
       ]
     },
-    "CompleteHumanWaitStatus": {
-      "enum": [
-        "already_completed",
-        "completed",
-        "duplicate",
-        "not_found",
-        "not_waiting",
-        "stale"
-      ]
-    },
     "DashboardActivityBucket": {
       "type": "object",
       "properties": {
@@ -1875,7 +1865,7 @@
       "type": "object",
       "properties": {
         "status": {
-          "$ref": "#/$defs/CompleteHumanWaitStatus"
+          "$ref": "#/$defs/HumanWaitCompletionStatus"
         },
         "jobId": {
           "type": "string"
@@ -4994,7 +4984,7 @@
       "type": "object",
       "properties": {
         "status": {
-          "$ref": "#/$defs/SendSignalStatus"
+          "$ref": "#/$defs/SignalDeliveryStatus"
         },
         "jobId": {
           "type": "string"
@@ -6373,6 +6363,16 @@
         "workers"
       ]
     },
+    "HumanWaitCompletionStatus": {
+      "enum": [
+        "already_completed",
+        "completed",
+        "duplicate",
+        "not_found",
+        "not_waiting",
+        "stale"
+      ]
+    },
     "Json": {
       "anyOf": [
         {
@@ -6530,7 +6530,7 @@
         "capped"
       ]
     },
-    "SendSignalStatus": {
+    "SignalDeliveryStatus": {
       "enum": [
         "already_delivered",
         "delivered",

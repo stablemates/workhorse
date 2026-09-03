@@ -49,7 +49,7 @@ await queue.syncSchedules("billing", [
 ]);
 ```
 
-Recurring definitions accept the same field on `ScheduleJobDefinition`. Every occurrence receives
+Recurring definitions accept the same field on `ScheduledJob`. Every occurrence receives
 the stored priority when `fireSchedule` creates its job.
 
 The dashboard can sort tasks with the highest priority first. It also shows non-default priority

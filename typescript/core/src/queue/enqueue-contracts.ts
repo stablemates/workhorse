@@ -3,7 +3,7 @@ import { databaseErrorCode, databaseErrorDetails, WorkhorseError } from "../erro
 import { injectTraceContext, logDebug, telemetryMetrics, withSpan } from "../telemetry.js";
 import type {
   ClaimedJob,
-  EnqueueIdempotency,
+  Idempotency,
   EnqueueIdempotencyConflictDetails,
   EnqueueIdempotencyConflictField,
   EnqueueOptions,
@@ -672,7 +672,7 @@ export class EnqueueContractsModule extends QueueModule {
         const traceContext = injectTraceContext();
         const input = await Promise.all(
           requests.map(async ({ type, payload, options = {}, tags }) => {
-            const idempotency: EnqueueIdempotency | undefined = options.idempotency;
+            const idempotency: Idempotency | undefined = options.idempotency;
             const coalescingModes = [idempotency, options.debounce, options.throttle].filter(
               (mode) => mode !== undefined,
             );

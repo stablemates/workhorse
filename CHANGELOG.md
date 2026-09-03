@@ -34,6 +34,20 @@ and 24 and PostgreSQL 15 through 18.
   `list_concurrency_policies` and `ListConcurrencyPolicies` already did. The old names remain as
   `@deprecated` aliases that call the new methods for the rest of the `0.x` line, so no call site
   breaks now; they are removed in `1.0.0`.
+- **TypeScript type names.** Ten exported types take the names the Python and Go SDKs already
+  share: `EnqueueIdempotency` becomes `Idempotency`, `EnqueueDebounce` becomes `Debounce`,
+  `EnqueueThrottle` becomes `Throttle`, `JobDependencies` becomes `Dependencies`,
+  `ScheduleJobDefinition` becomes `ScheduledJob`, `SendSignalResult` becomes
+  `SignalDeliveryResult`, `SendSignalStatus` becomes `SignalDeliveryStatus`,
+  `CompleteHumanWaitResult` becomes `HumanWaitCompletionResult`, `CompleteHumanWaitStatus` becomes
+  `HumanWaitCompletionStatus`, and `ExternalWaitListOptions` becomes `ExternalWaitQuery`. Every old
+  name is still exported as a deprecated alias of its replacement, so no code has to change on this
+  release. The aliases are removed in `1.0.0`.
+- **Dashboard contract.** Two shared wire types in `dashboard/v1/procedures.json` follow that
+  rename: the `$defs` entries `SendSignalStatus` and `CompleteHumanWaitStatus` become
+  `SignalDeliveryStatus` and `HumanWaitCompletionStatus`, and the generated Go and Python bindings
+  rename their types to match. No request or response payload changes, so an HTTP client of the
+  dashboard is unaffected and `dashboard/v1/conformance.json` is unchanged.
 - All nine packages move from `0.1.0-beta.2` to `0.1.0`, and every peer range on
   `@stablemates/workhorse` becomes `>=0.1.0 <0.2.0`. A later prerelease of this line is a
   `0.2.0-beta.N`; a published version is never reissued.
@@ -93,6 +107,10 @@ and 24 and PostgreSQL 15 through 18.
   install the new baseline with `npm exec --no -- workhorse schema install`.
   This is the last release that asks for a recreation: from `0.1.0` the schema is frozen as the
   migration baseline, and later releases upgrade a database in place.
+- **Dashboard bindings.** A Go or Python backend that names `dashboard.SendSignalStatus` or
+  `dashboard.CompleteHumanWaitStatus` from the generated dashboard bindings renames those
+  references to `SignalDeliveryStatus` and `HumanWaitCompletionStatus`. Generated code carries no
+  deprecated alias. The TypeScript names all keep one, so a TypeScript project needs no edit.
 
 ## 0.1.0-beta.2 — 2026-09-01
 

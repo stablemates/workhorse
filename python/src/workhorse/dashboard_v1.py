@@ -12,9 +12,6 @@ from typing import Literal, NotRequired, Required, TypedDict
 type CancelStatus = Literal["already_terminal", "cancel_requested", "canceled", "not_found"]
 
 
-type CompleteHumanWaitStatus = Literal["already_completed", "completed", "duplicate", "not_found", "not_waiting", "stale"]
-
-
 class DashboardActivityBucket(TypedDict, total=False):
     bucketStart: Required[str]
     counts: Required[dict[str, float]]
@@ -54,7 +51,7 @@ class DashboardCancellationRequest(TypedDict, total=False):
 
 
 class DashboardCompleteHumanWaitResult(TypedDict, total=False):
-    status: Required[CompleteHumanWaitStatus]
+    status: Required[HumanWaitCompletionStatus]
     jobId: Required[str]
     name: Required[str]
     result: Required[JSON]
@@ -774,7 +771,7 @@ class DashboardSettingsPage(TypedDict, total=False):
 
 
 class DashboardSignalTaskResult(TypedDict, total=False):
-    status: Required[SendSignalStatus]
+    status: Required[SignalDeliveryStatus]
     jobId: Required[str]
     name: Required[str]
     payload: Required[JSON]
@@ -1095,6 +1092,9 @@ class DashboardWorkersPage(TypedDict, total=False):
     workers: Required[list[DashboardWorkerRow]]
 
 
+type HumanWaitCompletionStatus = Literal["already_completed", "completed", "duplicate", "not_found", "not_waiting", "stale"]
+
+
 type JSON = str | int | float | bool | list[JSON] | dict[str, JSON] | None
 
 
@@ -1135,7 +1135,7 @@ class RetentionPolicyImpact(TypedDict, total=False):
     capped: Required[RetentionPolicyImpactCapped]
 
 
-type SendSignalStatus = Literal["already_delivered", "delivered", "duplicate", "not_found", "not_waiting", "stale"]
+type SignalDeliveryStatus = Literal["already_delivered", "delivered", "duplicate", "not_found", "not_waiting", "stale"]
 
 
 class DashboardRuntimeConfigAuthentication(TypedDict, total=False):

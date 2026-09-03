@@ -1443,7 +1443,7 @@ dispatch state.
 `HandlerContext.waitForHuman(name, context, { timeoutMs })` suspends and returns the retained result
 after replay. `timeoutMs` has the same optional range and terminal failure outcome as a signal wait.
 `Queue.completeHumanWait` is the application completion surface. `CompleteHumanWaitRequest` uses
-`requestedBy` for caller attribution. `CompleteHumanWaitResult.payload` contains the accepted
+`requestedBy` for caller attribution. `HumanWaitCompletionResult.payload` contains the accepted
 decision, matching signal delivery vocabulary. Its `completedBy` reports the actor whose completion
 PostgreSQL retained.
 

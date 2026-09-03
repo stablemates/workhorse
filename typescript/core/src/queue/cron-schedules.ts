@@ -5,7 +5,7 @@ import type { Json, RetryPolicy } from "../types.js";
 import { validateJobPriority, type EnqueueContractsModule } from "./enqueue-contracts.js";
 import { QueueModule, type QueueModuleContext } from "./module-context.js";
 
-export interface ScheduleJobDefinition {
+export interface ScheduledJob {
   type: string;
   payload: Json;
   queue?: string;
@@ -16,13 +16,16 @@ export interface ScheduleJobDefinition {
   retryPolicy?: RetryPolicy;
 }
 
+/** @deprecated Renamed to {@link ScheduledJob}. Removed in 1.0.0. */
+export type ScheduleJobDefinition = ScheduledJob;
+
 export interface ScheduleDefinition {
   name: string;
   schedule: string;
   /** IANA timezone used to interpret cron wall-clock fields. */
   timezone?: string;
   enabled?: boolean;
-  job: ScheduleJobDefinition;
+  job: ScheduledJob;
 }
 
 export interface StoredSchedule {
