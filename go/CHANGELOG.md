@@ -1,7 +1,8 @@
 # Go changelog
 
 `github.com/stablemates/workhorse/go` versions and release notes live here because the Go module
-releases independently from the TypeScript packages and the Python distribution.
+builds and publishes from its own tag. It carries the version the TypeScript packages and the Python
+distribution carry, because all three tags name one commit.
 
 Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.1.0` the schema
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only

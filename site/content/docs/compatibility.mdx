@@ -131,8 +131,9 @@ asynchronously. Every worker runtime delegates cron evaluation to the versioned 
 and each definition's stored IANA timezone. Its release test installs the built wheel and source
 distribution bare, with the compatibility `psycopg` extra, and with the `asyncpg` extra. It runs the
 public examples and checks the active Python and PostgreSQL versions against the declared matrix.
-The package version floats independently from the TypeScript packages because schema and SQL
-protocol versions define their compatibility.
+The package declares no peer range on the TypeScript packages, because schema and SQL protocol
+versions define its compatibility. Its version number still matches theirs, because every line
+releases from one commit.
 
 ## Bun and Deno
 

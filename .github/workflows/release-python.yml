@@ -1,4 +1,5 @@
-# Builds and publishes the independently-versioned Python distribution from python/vX.Y.Z tags.
+# Builds and publishes the Python distribution from python/vX.Y.Z tags. The tag names the same commit
+# as the matching v* and go/v* tags, so all three registries carry one version (ADR 0050).
 # The build job validates only Python and the dashboard assets embedded in its distributions. It
 # carries no publication identity; only the PyPI environment can mint the publisher token.
 name: Release Python

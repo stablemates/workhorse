@@ -5,7 +5,7 @@ from one tag:
 `@stablemates/workhorse`, `@stablemates/workhorse-drizzle`, `@stablemates/workhorse-prisma`, `@stablemates/workhorse-typeorm`,
 `@stablemates/workhorse-kysely`, `@stablemates/workhorse-otel`, `@stablemates/workhorse-dashboard`,
 `@stablemates/workhorse-dashboard-server`, and `@stablemates/workhorse-dashboard-contract`. The Python distribution and Go module release
-independently, so their notes live in [`python/CHANGELOG.md`](python/CHANGELOG.md) and
+from that same commit under their own tags, so their notes live in [`python/CHANGELOG.md`](python/CHANGELOG.md) and
 [`go/CHANGELOG.md`](go/CHANGELOG.md). Each entry states its required schema version and upgrade steps.
 
 The supported Node.js and PostgreSQL versions, the schema compatibility guarantees, and the release

@@ -211,8 +211,9 @@ Ten packages ship from this repository. `@stablemates/workhorse` is the TypeScri
 
 The nine TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.
-The Python package version floats independently and declares compatibility through SQL protocol 1
-and schema version 1 instead of a TypeScript peer range.
+The Python package and the Go module declare no TypeScript peer range; SQL protocol 1 and schema
+version 1 are their compatibility boundary instead. Their version numbers still match the npm
+packages, because every line releases from one commit.
 
 Every release publishes one version to npm, PyPI, and the Go module proxy from one source commit.
 The current release is `0.1.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
@@ -239,13 +240,18 @@ for the version, provided so a Python or Go developer with no Node.js toolchain 
 development database with `psql -f schema.sql`. It applies none of the CLI's guards, so deployments
 run `workhorse schema install` or `workhorse schema migrate` instead.
 
-The Python package releases independently from a `python/vX.Y.Z` tag. The tag must match
+Each line carries its own tag on that one commit, because the three registries have separate build
+and publication identities and the Go module proxy resolves a subdirectory module only from a
+`go/`-prefixed tag. [ADR 0050](decisions/0050-release-0-1-0-without-a-prerelease-suffix.md) records
+that the three tags name one commit and one version number.
+
+The Python package releases from its own `python/vX.Y.Z` tag. The tag must match
 `python/pyproject.toml` and a heading in `python/CHANGELOG.md`. `.github/workflows/release-python.yml`
 runs `pnpm check`, then uv builds a source distribution and universal wheel. A separate `pypi`
 environment publishes those artifacts through PyPI trusted publishing with `id-token: write`.
 Before publication, the publish job generates a PEP 740 attestation beside each distribution.
 
-The Go module releases independently from a `go/vX.Y.Z` tag. `scripts/release-go.sh X.Y.Z` requires
+The Go module releases from its own `go/vX.Y.Z` tag. `scripts/release-go.sh X.Y.Z` requires
 a clean worktree and a matching `go/CHANGELOG.md` heading. It resets the test database, runs
 `pnpm check`, creates an annotated tag, and pushes that tag to `origin`.
 
