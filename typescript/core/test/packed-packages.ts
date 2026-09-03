@@ -271,6 +271,49 @@ try {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 
+  // Every TypeScript surface tells a reader to install the schema with
+  // `npm exec --no -- workhorse schema install`, on the strength of one property: the binary
+  // resolves from the project's own node_modules, so its version matches the application by
+  // construction. Declaring the binary in the manifest is a different thing from having it. The
+  // package manager builds the shim at install time and skips it when the target file is missing,
+  // so run the resolution the documented command performs and read back the version it prints.
+  const packedVersion = corePackage.version;
+  if (typeof packedVersion !== "string") {
+    throw new TypeError("The packed core package declares no version");
+  }
+  const resolvedVersion = (
+    await run("npm", ["exec", "--no", "--", "workhorse", "--version"], coreOnlyConsumer)
+  ).trim();
+  if (resolvedVersion !== packedVersion) {
+    throw new Error(
+      `The documented command printed ${resolvedVersion}; the packed core package is ${packedVersion}`,
+    );
+  }
+
+  // `--no` is what keeps that resolution honest. Outside a project that depends on Workhorse there
+  // is no such binary, and npm must refuse rather than install and run whatever the public registry
+  // happens to publish under the name `workhorse`.
+  const outsideConsumer = path.join(scratch, "outside-consumer");
+  await mkdir(outsideConsumer);
+  let unguarded: string | undefined;
+  try {
+    unguarded = await run("npm", ["exec", "--no", "--", "workhorse", "--version"], outsideConsumer);
+  } catch (error) {
+    // A numeric code is a non-zero exit, which is the refusal. A string code is npm itself failing
+    // to start, which is not.
+    if (typeof (error as NodeJS.ErrnoException).code !== "number") throw error;
+  }
+  if (unguarded !== undefined) {
+    throw new Error(
+      `"npm exec --no" ran a workhorse binary outside a consumer project and printed ${unguarded.trim()}`,
+    );
+  }
+  // The pinned form a Python or Go pipeline runs,
+  // `npx --package @stablemates/workhorse@<version> workhorse schema install`, is not covered here.
+  // npx resolves the whole dependency tree from the registry and offers no override for a nested
+  // edge, so it cannot be pointed at the tarballs under test. Verify that form against the registry
+  // after publishing.
+
   const dashboardExtracted = path.join(scratch, "dashboard");
   await mkdir(dashboardExtracted);
   await run("tar", ["-xzf", dashboardTarball, "-C", dashboardExtracted]);
