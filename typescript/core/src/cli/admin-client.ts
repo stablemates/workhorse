@@ -17,6 +17,7 @@ import type {
   QueueHealth,
   RedriveResult,
   RetentionPolicy,
+  WorkerPauseResult,
   WorkerRegistryEntry,
 } from "../types.js";
 import type { StoredSchedule } from "../queue/cron-schedules.js";
@@ -317,6 +318,26 @@ export class WorkhorseAdminClient {
   ): Promise<number> {
     void environment;
     return this.admin.purgeQueue(queueName, {
+      actor: request.requestedBy,
+      reason: request.reason,
+      requestId: request.requestId,
+    });
+  }
+
+  /**
+   * Writes one worker's durable registry pause and answers the stored row.
+   *
+   * A worker id with no registration answers null rather than throwing, because an operator
+   * naming a worker that already aged out of the fleet is a wrong target, not a refusal.
+   */
+  setWorkerPaused(
+    environment: ConfirmedEnvironment,
+    workerId: string,
+    paused: boolean,
+    request: AdminControlRequest,
+  ): Promise<WorkerPauseResult | null> {
+    void environment;
+    return this.admin.setWorkerPaused(workerId, paused, {
       actor: request.requestedBy,
       reason: request.reason,
       requestId: request.requestId,

@@ -2870,9 +2870,10 @@ printed only; `init` writes no route file and edits no existing file.
 `WorkhorseAdminClient` in `typescript/core/src/cli/admin-client.ts`. The client uses `Admin` for
 `listJobs`, `getJob`, `getJobTimeline`, `listDeadLetters`, `queueMetricSnapshot`, `schedules`,
 `listWorkers`, `listCheckpoints`, `getCheckpoint`, `listWaits`, `getWait`, `listHumanWaits`,
-`listSignalWaits`, policy reads, `redrive`, `pauseQueue`, `resumeQueue`, and `purgeQueue`. It uses `Queue` for the
-application-shaped `health` and `cancel` operations. Queue status still merges metric snapshots
-with `workhorse.queue_control`, while namespace discovery reads `workhorse.schedule_definition`.
+`listSignalWaits`, policy reads, `redrive`, `pauseQueue`, `resumeQueue`, `purgeQueue`, and
+`setWorkerPaused`. It uses `Queue` for the application-shaped `health` and `cancel` operations.
+Queue status still merges metric snapshots with `workhorse.queue_control`, while namespace
+discovery reads `workhorse.schedule_definition`.
 
 Inspection commands are `admin jobs`, `admin job <id>`, `admin timeline <id>`,
 `admin checkpoints <job-id>`, `admin waits <job-id>`, `admin external-waits`, `admin failures`,
@@ -2901,7 +2902,8 @@ exiting 64. This command lists boundaries only. Completing a human decision stay
 `Queue.completeHumanWait`; the CLI exposes no external-wait mutation.
 
 Guarded commands are `admin cancel <job-id>`, `admin redrive <job-id>`, `admin pause <queue>`,
-`admin resume <queue>`, and `admin purge <queue>`. Two independent checks gate every mutation:
+`admin resume <queue>`, `admin purge <queue>`, `admin pause-worker <worker-id>`, and
+`admin resume-worker <worker-id>`. Two independent checks gate every mutation:
 
 1. **Explicit target environment.** The command requires `--env <database>`, and
    `WorkhorseAdminClient.confirmEnvironment` compares it against `current_database()` on the live
@@ -2910,19 +2912,28 @@ Guarded commands are `admin cancel <job-id>`, `admin redrive <job-id>`, `admin p
    at a database the operator did not intend. Success returns a `ConfirmedEnvironment` token, and
    every mutation method on the client requires that token as its first parameter, so no front end
    can reach a destructive operation around the check.
-2. **Confirmation.** Without `--yes`, an interactive session must retype the exact target (job id
-   or queue name) at a prompt written to stderr; a mismatched answer changes nothing and exits 1.
-   A non-interactive session without `--yes` is a usage error.
+2. **Confirmation.** Without `--yes`, an interactive session must retype the exact target — job id,
+   queue name, or worker id — at a prompt written to stderr; a mismatched answer changes nothing
+   and exits 1. A non-interactive session without `--yes` is a usage error.
 
-`admin redrive`, `admin pause`, `admin resume`, and `admin purge` require `--reason`. They record
-`--actor` (default `workhorse-admin`) and use `--request-id` (default: a random UUID). Redrive and
-purge use the request identity for idempotency. `admin purge` prints the deleted row count and
-emits it as `deletedCount` beside `queue` under `--json`; a reused request identity carrying
-different audit fields raises `PurgeIdempotencyConflictError`, which the CLI reports as `Refused:`
-and exits 1. Queue and worker pause retain a safe request preview, digest,
-and length with the actor and reason. `admin cancel` records attribution optionally. Outcome statuses that did not
-mutate — `not_found`, `already_terminal`, `not_failed` — exit 1; malformed usage exits 64, matching
-the CLI-wide convention in `typescript/core/src/cli/arguments.ts`.
+Every guarded command except `admin cancel` requires `--reason`. They record `--actor` (default
+`workhorse-admin`) and use `--request-id` (default: a random UUID). Redrive and purge use the
+request identity for idempotency. `admin purge` prints the deleted row count and emits it as
+`deletedCount` beside `queue` under `--json`; a reused request identity carrying different audit
+fields raises `PurgeIdempotencyConflictError`, which the CLI reports as `Refused:` and exits 1.
+Queue and worker pause retain a safe request preview, digest, and length with the actor and reason.
+`admin cancel` records attribution optionally.
+
+`admin pause-worker` and `admin resume-worker` write `workhorse.worker_registry.paused` through
+`Admin.setWorkerPaused` and emit the stored `WorkerPauseResult` — `workerId`, `paused`, `pausedBy`,
+`reason`, `pausedAt`, and `lastHeartbeatAt` — under `--json`. A worker id carrying no registration
+row exits 1 with `is not registered`. The pause is the registry row rather than a message to a live
+process, so a worker reads it on its next `register_worker_v1` call. That same function clears the
+pause when a different `instance_id` claims the worker id, so a restarted worker starts unpaused.
+
+Outcome statuses that did not mutate — `not_found`, `already_terminal`, `not_failed` — exit 1;
+malformed usage exits 64, matching the CLI-wide convention in
+`typescript/core/src/cli/arguments.ts`.
 
 `workhorse tui` renders six views — jobs, queues, schedules, failures, workers, and health — over
 the same client. Keys `1`–`6` switch views, `r` refreshes, `q` quits, and the current view

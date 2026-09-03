@@ -122,8 +122,9 @@ Two different things share the word "pause":
 
 - **Local**: TypeScript and Python code can call `Worker.pause`. Claims stop; running
   jobs finish.
-- **Operator**: someone clicks pause in the dashboard. That's stored in the database, and
-  the worker picks it up on its next refresh.
+- **Operator**: someone pauses the worker from the dashboard, or runs `admin pause-worker` in
+  the [terminal](380-admin-cli-and-tui.md). That's stored in the database, and the worker picks
+  it up on its next refresh.
 
 The split matters. A worker cannot clear an operator pause by calling `Worker.resume` — otherwise
 pausing a fleet from a dashboard would be undone by the fleet itself. But an operator pause

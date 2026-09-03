@@ -63,6 +63,10 @@ Guarded commands (mutate; require --env and confirmation):
   pause <queue>       Pause claiming for one queue.
   resume <queue>      Resume claiming for one queue.
   purge <queue>       Delete one queue's non-active jobs.
+  pause-worker <worker-id>
+                      Stop one registered worker from claiming.
+  resume-worker <worker-id>
+                      Let one registered worker claim again.
 
 Common options:
   --database-url <url>  Database URL. This takes precedence over all other sources.
@@ -73,9 +77,10 @@ Guarded-command options:
   --env <database>   Required. Must equal the connected database's own name.
   --yes              Skip the interactive confirmation prompt.
   --actor <name>     Attribution recorded for the mutation (default: workhorse-admin).
-  --reason <text>    Reason recorded for the mutation. Required for redrive, pause, resume, and
-                     purge.
-  --request-id <id>  Redrive and purge idempotency identity (default: a random UUID).
+  --reason <text>    Reason recorded for the mutation. Required for every guarded command except
+                     cancel.
+  --request-id <id>  Request identity recorded with the mutation (default: a random UUID).
+                     Redrive and purge additionally use it for idempotency.
 
 Listing options:
   --queue <name>     Filter by queue.
@@ -116,7 +121,15 @@ const READ_COMMANDS = new Set([
   "workers",
   "maintenance",
 ]);
-const MUTATION_COMMANDS = new Set(["cancel", "redrive", "pause", "resume", "purge"]);
+const MUTATION_COMMANDS = new Set([
+  "cancel",
+  "redrive",
+  "pause",
+  "resume",
+  "purge",
+  "pause-worker",
+  "resume-worker",
+]);
 
 interface AdminIo {
   out(text: string): void;
@@ -471,6 +484,28 @@ export async function runAdminCommand(
         );
       } else io.error(`Job ${jobId} was not found.\n`);
       if (result.status === "not_found" || result.status === "not_failed") process.exitCode = 1;
+      return;
+    }
+    if (command === "pause-worker" || command === "resume-worker") {
+      const workerId = requirePositional(positionals, command, "worker-id");
+      if (!values.reason) throw new CliUsageError(`admin ${command} requires --reason <text>`);
+      const environment = await confirmMutation(client, io, values, command, workerId);
+      if (environment === null) return;
+      const paused = command === "pause-worker";
+      // The registry row is the pause, so the command reports the row the database now holds
+      // rather than the intent it sent. A worker that already aged out has no row to report.
+      const result = await client.setWorkerPaused(environment, workerId, paused, {
+        requestedBy: actor,
+        reason: values.reason,
+        requestId: values["request-id"] ?? randomUUID(),
+      });
+      if (result === null) {
+        io.error(`Worker ${workerId} is not registered.\n`);
+        process.exitCode = 1;
+        return;
+      }
+      if (json) io.out(toAdminJson(result));
+      else io.out(`${paused ? "Paused" : "Resumed"} worker ${workerId}.\n`);
       return;
     }
     const queueName = requirePositional(positionals, command, "queue");

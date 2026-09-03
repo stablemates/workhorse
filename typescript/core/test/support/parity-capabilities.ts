@@ -434,7 +434,10 @@ export const PRODUCT_PARITY_ROWS: readonly ProductParityRow[] = [
     capability: "Durable operator worker pause",
     postgresql: { file: "integration-worker-registry.test.ts", pattern: "setWorkerPaused" },
     dashboard: { file: "src/server/operator-controllers.test.ts", pattern: "setWorkerPaused" },
-    cli: { planned: "WH-618" },
+    cli: {
+      file: "integration-admin-cli.test.ts",
+      patterns: ["pause-worker", "resume-worker"],
+    },
   },
 ];
 

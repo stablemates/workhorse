@@ -440,6 +440,114 @@ describe("admin CLI guarded operations", () => {
     expect(noConfirmation.stderr).toContain("requires --yes");
     expect((await admin.getJob(jobId))?.state).toBe("ready");
   });
+
+  it("pauses and resumes one registered worker through the durable registry", async () => {
+    const workerId = "cli-pause-worker";
+    const instanceId = "0f4c2b18-3f57-4a52-9f0d-2b0b7f2f1a11";
+    const register = () =>
+      queue.registerWorker({
+        workerId,
+        instanceId,
+        hostname: "host-cli",
+        pid: 5150,
+        concurrency: 2,
+        activeSlots: 0,
+        draining: false,
+      });
+    await register();
+
+    const paused = runAdmin([
+      "pause-worker",
+      workerId,
+      "--env",
+      databaseName,
+      "--reason",
+      "worker is thrashing",
+      "--yes",
+      "--json",
+    ]);
+    expect(paused.code).toBe(0);
+    expect(JSON.parse(paused.stdout)).toMatchObject({
+      workerId,
+      paused: true,
+      pausedBy: "workhorse-admin",
+      reason: "worker is thrashing",
+    });
+
+    // The pause is a registry row, not a signal to a connected process: the same worker learns
+    // about it on its next registration heartbeat, and the fleet view reports it meanwhile.
+    expect(await register()).toEqual({ paused: true });
+    const listed = JSON.parse(runAdmin(["workers", "--json"]).stdout) as Array<{
+      workerId: string;
+      paused: boolean;
+    }>;
+    expect(listed).toEqual(
+      expect.arrayContaining([expect.objectContaining({ workerId, paused: true })]),
+    );
+
+    const resumed = runAdmin([
+      "resume-worker",
+      workerId,
+      "--env",
+      databaseName,
+      "--reason",
+      "worker settled",
+      "--yes",
+    ]);
+    expect(resumed.code).toBe(0);
+    expect(resumed.stdout).toContain(`Resumed worker ${workerId}`);
+    expect(await register()).toEqual({ paused: false });
+  });
+
+  it("exits 1 when pausing a worker that is not registered", () => {
+    const result = runAdmin([
+      "pause-worker",
+      "worker-that-aged-out",
+      "--env",
+      databaseName,
+      "--reason",
+      "wrong worker id",
+      "--yes",
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("is not registered");
+  });
+
+  it("requires --reason, --env, and confirmation before pausing a worker", async () => {
+    const workerId = "cli-guarded-worker";
+    const instanceId = "6a1de0c4-9b25-4f18-8c74-b6a0d5f31c27";
+    const registration = {
+      workerId,
+      instanceId,
+      hostname: "host-cli",
+      pid: 5151,
+      concurrency: 1,
+      activeSlots: 0,
+      draining: false,
+    };
+    await queue.registerWorker(registration);
+
+    const noReason = runAdmin(["pause-worker", workerId, "--env", databaseName, "--yes"]);
+    expect(noReason.code).toBe(64);
+    expect(noReason.stderr).toContain("requires --reason");
+
+    const noEnvironment = runAdmin(["pause-worker", workerId, "--reason", "no target", "--yes"]);
+    expect(noEnvironment.code).toBe(64);
+    expect(noEnvironment.stderr).toContain("requires --env");
+
+    const noConfirmation = runAdmin([
+      "pause-worker",
+      workerId,
+      "--env",
+      databaseName,
+      "--reason",
+      "no confirmation",
+    ]);
+    expect(noConfirmation.code).toBe(64);
+    expect(noConfirmation.stderr).toContain("requires --yes");
+
+    expect(await queue.registerWorker(registration)).toEqual({ paused: false });
+  });
 });
 
 describe("tui command", () => {

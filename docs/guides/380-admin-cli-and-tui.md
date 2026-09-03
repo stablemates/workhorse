@@ -55,18 +55,19 @@ attributed.
 ## Changing things requires naming the target twice
 
 The guarded commands — `admin cancel`, `admin redrive`, `admin pause`, `admin resume`,
-`admin purge` — mutate a live system, and the most common way to hurt yourself with an operator CLI is not a typo in the
-command. It is running the right command against the wrong database, because a shell still
-carried the environment of whatever you were doing an hour ago.
+`admin purge`, `admin pause-worker`, `admin resume-worker` — mutate a live system. The most common
+way to hurt yourself with an operator CLI is not a typo in the command. It is running the right
+command against the wrong database, because a shell still carried the environment of whatever you
+were doing an hour ago.
 
 So a guarded command demands that you name the target explicitly. `--env` must state the
 database's own name, and the client checks that claim against the database it actually reached.
 If they disagree, nothing happens and the command tells you what it refused and why. There is no
 flag that skips this check.
 
-Confirmation is the second, separate gate. Interactively, you retype the job id or queue name you
-are about to affect. In a script, you pass `--yes` — the script author, not a default, decides
-the command may proceed unattended.
+Confirmation is the second, separate gate. Interactively, you retype the job id, queue name, or
+worker id you are about to affect. In a script, you pass `--yes` — the script author, not a
+default, decides the command may proceed unattended.
 
 ```sh
 workhorse admin redrive 7d9f… --env workhorse_production --reason "upstream fixed" --yes
@@ -83,6 +84,18 @@ backlog is poison and draining it by hand is not worth the incident. It carries 
 idempotency identity as a redrive, so a retried runbook step re-reports the first purge instead of
 taking a second bite; reusing that identity with different audit fields is refused. The command
 answers with how many jobs it removed.
+
+## Taking one worker out of rotation
+
+Sometimes the queue is fine and one worker is not — a bad host, a leaking process, a deploy that
+went out to one box first. `admin pause-worker` stops that worker claiming, and
+`admin resume-worker` lets it claim again. Both need a reason, and both name a worker id you can
+read out of `admin workers`, which also shows who paused each one.
+
+The pause lives in the fleet registry, so it is not a message shouted at a process that happens to
+be listening. A worker finds out on its next registration, and until then anyone reading
+`admin workers` can already see the decision. That also sets the limit of what the command can do:
+[workers](310-workers.md) explains what an operator pause survives and what it does not.
 
 ## The TUI is the same client with a refresh loop
 

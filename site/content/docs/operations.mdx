@@ -142,12 +142,15 @@ pending human decision and signal wait, oldest first, and pages each list with t
 `nextCursor` object the dashboard uses through `--human-cursor` and `--signal-cursor`. These
 commands only read; completing a human decision stays with `queue.completeHumanWait`.
 
-Guarded commands — `admin cancel`, `admin redrive`, `admin pause`, `admin resume`,
-`admin purge` — refuse to run until the target database is named explicitly with `--env`,
-verified against `current_database()` on the live connection, and the operation is confirmed
-interactively or with `--yes`. Attribution, redrive idempotency, and purge idempotency follow the
-same contracts as the programmatic APIs. `admin purge` deletes one queue's waiting jobs, leaves
-running ones alone, and reports the deleted count as `deletedCount` under `--json`.
+Guarded commands — `admin cancel`, `admin redrive`, `admin pause`, `admin resume`, `admin purge`,
+`admin pause-worker`, `admin resume-worker` — refuse to run until the target database is named
+explicitly with `--env`, verified against `current_database()` on the live connection, and the
+operation is confirmed interactively or with `--yes`. Attribution, redrive idempotency, and purge
+idempotency follow the same contracts as the programmatic APIs. `admin purge` deletes one queue's
+waiting jobs, leaves running ones alone, and reports the deleted count as `deletedCount` under
+`--json`. `admin pause-worker` and `admin resume-worker` write the durable `worker_registry` pause
+through `Admin.setWorkerPaused`, take a worker id from `admin workers`, and emit the stored row
+under `--json`.
 
 `workhorse tui` renders the same views as a live, self-refreshing terminal application. It is
 read-only unless launched with a verified `--env`, which enables pausing and resuming the

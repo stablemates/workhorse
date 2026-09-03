@@ -223,9 +223,9 @@ Three verbs cover controlled slowdown, and each answers a different situation:
 - **`Worker.stop`** drains: no new claims, active handlers run to completion, then `run`
   resolves. On `SIGTERM`, the worker process does this for you.
 - **`Admin.setWorkerPaused`** stores an operator pause in `worker_registry`. TypeScript, Python,
-  and Go workers pick it up on their next registration refresh, so a dashboard can pause a process
-  it does not host. A local resume cannot clear an operator pause, and an operator pause dies with
-  the process incarnation it named.
+  and Go workers pick it up on their next registration refresh, so a dashboard — or
+  `workhorse admin pause-worker` — can pause a process it does not host. A local resume cannot
+  clear an operator pause, and an operator pause dies with the process incarnation it named.
 
 If work must stop durably — surviving worker restarts — pause the queue with
 `Admin.pauseQueue`, not the worker.
