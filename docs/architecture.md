@@ -2374,7 +2374,11 @@ covers its thirteen `readDashboard*` functions, `createDashboardQueueHealthReade
 implementation of `dashboardRouter`, not a second way in: the router is where the read-only mode,
 the `canManageWorkers` decision, and the error-stack redaction live. Calling
 `readDashboardJobDetail` directly defaults `redactErrorStacks` to false and returns persisted
-worker stacks that the mounted dashboard never shows. A host reads through the procedure it
+worker stacks that the mounted dashboard never shows. `readDashboardEventDetail` takes the same
+argument and defaults it the same way, because `dashboard_event_detail_v1` projects the whole
+`attempt_history.error` for an attempt record and the Events drawer renders it. Both procedures
+pass `DashboardRpcContext.redactErrorStacks`, so a host that withholds a stack from task detail
+withholds it from the event record that carries the same column. A host reads through the procedure it
 already mounts. `readDashboardEvents`, `readDashboardEventDetail`, `readDashboardWorkers`, and
 `DashboardEventsQuery` therefore leave `./server`, which had exposed three of those readers for no
 stated reason. This repository's own suites import the module by relative path, as they already do
@@ -2489,6 +2493,19 @@ request URL. If `publicOrigin` is configured, that canonical HTTP or HTTPS origi
 scheme and authority instead. This keeps Secure-cookie and same-origin mutation policy independent
 of untrusted proxy headers. The CLI maps `--socket`, `--public-origin`, and
 `WORKHORSE_DASHBOARD_PUBLIC_ORIGIN` to those options.
+
+`startDashboardServer` sets five browser headers on every response, before the middleware writes,
+so a dashboard response that names one of them still wins: `content-security-policy`,
+`x-content-type-options: nosniff`, `referrer-policy: strict-origin-when-cross-origin`,
+`x-frame-options: DENY`, and `x-robots-tag: noindex, nofollow, noarchive`. The policy is
+`default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src
+'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;
+font-src 'self'; connect-src 'self'`. `unsafe-inline` covers the packaged document's two boot
+scripts, the runtime configuration `renderDashboardHtml` writes into it, and the style elements
+Mantine injects while the application renders. `createDashboardHost` sets none of these, because an
+embedded application shares the origin with its own pages and a second policy on the dashboard's
+responses would intersect with the application's own; `typescript/dashboard-server/README.md`
+states the policy an embedder copies.
 
 `Dockerfile.dashboard` builds the core, dashboard contract, dashboard server, and shared dashboard
 application tarballs, then installs those release-shaped artifacts with production dependencies

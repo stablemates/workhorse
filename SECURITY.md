@@ -43,7 +43,9 @@ asks otherwise.
    PyPI, and the Go module proxy. Each fix is also recorded in the affected changelog.
 
 No third-party security audit of Workhorse has taken place. Every review referenced by this project
-is a maintainer review.
+is a maintainer review. The dashboard server is the one component that serves HTTP to a browser, and
+[`docs/dashboard-security-review.md`](docs/dashboard-security-review.md) is the checklist its review
+walks. That file also states when a pull request has to re-walk a row.
 
 ## Supported versions
 

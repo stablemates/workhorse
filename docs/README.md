@@ -26,6 +26,8 @@ published site; they do not own product behavior.
   while [`demo-findings.md`](demo-findings.md) records what the demo proves.
 - [`schema-lifecycle.md`](schema-lifecycle.md) owns the procedure for changing and releasing the
   database schema.
+- [`dashboard-security-review.md`](dashboard-security-review.md) owns the security review checklist
+  for the dashboard server, and states when a pull request has to re-walk it.
 
 Architectural decisions live in [`decisions/`](decisions/). Dated benchmark reports and raw results
 live in [`benchmarks/`](benchmarks/), and dated agent documentation eval notes live in
