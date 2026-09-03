@@ -89,19 +89,25 @@ PostgreSQL implements every operator read and control. The standalone or embedde
 the `workhorse` CLI expose the subsets shown below against any database, whatever language
 enqueued the work. That product capability does not vary by worker language.
 
+Every Planned cell below must be Supported before 1.0.0
+([WH-581](https://ontrack.sh/projects/WH/issues/WH-581)). Adding a command or a procedure later
+would not break anything, so this is not a compatibility requirement; it is the point at which an
+operator surface stops being excused as beta-incomplete. An operator should not have to change
+tools mid-incident because purge is only in the browser and redrive is only in the terminal.
+
 <!-- BEGIN GENERATED PARITY PRODUCT -->
 
-| Capability                                 | PostgreSQL | Dashboard | CLI       |
-| ------------------------------------------ | ---------- | --------- | --------- |
-| Job lookup, listing, and timeline          | Supported  | Supported | Supported |
-| Queue health snapshot                      | Supported  | Supported | Supported |
-| Cancellation requests                      | Supported  | Supported | Supported |
-| Queue pause and resume                     | Supported  | Supported | Supported |
-| Queue purge                                | Supported  | Supported | Absent    |
-| Dead-letter listing                        | Supported  | Supported | Supported |
-| Redrive                                    | Supported  | Absent    | Supported |
-| Checkpoint, wait, and human-decision reads | Supported  | Supported | Absent    |
-| Durable operator worker pause              | Supported  | Supported | Absent    |
+| Capability                                 | PostgreSQL | Dashboard         | CLI               |
+| ------------------------------------------ | ---------- | ----------------- | ----------------- |
+| Job lookup, listing, and timeline          | Supported  | Supported         | Supported         |
+| Queue health snapshot                      | Supported  | Supported         | Supported         |
+| Cancellation requests                      | Supported  | Supported         | Supported         |
+| Queue pause and resume                     | Supported  | Supported         | Supported         |
+| Queue purge                                | Supported  | Supported         | [Planned][WH-615] |
+| Dead-letter listing                        | Supported  | Supported         | Supported         |
+| Redrive                                    | Supported  | [Planned][WH-616] | Supported         |
+| Checkpoint, wait, and human-decision reads | Supported  | Supported         | [Planned][WH-617] |
+| Durable operator worker pause              | Supported  | Supported         | [Planned][WH-618] |
 
 <!-- END GENERATED PARITY PRODUCT -->
 
@@ -149,6 +155,11 @@ language does ship is the startup check that reads the result: the "Public start
 compatibility check" row above is Supported everywhere, and it is what turns a missed migration
 into a refused start rather than a corrupted write.
 
+This boundary holds at 1.0.0, and the CLI and TUI hold it with the schema tooling
+([WH-581](https://ontrack.sh/projects/WH/issues/WH-581)). What 1.0.0 promises is that every
+language reaches the same operator capability through its own `Admin` client and refuses to start
+against a schema it cannot speak, not that every language grows a second migration runner.
+
 ## Keeping this document honest
 
 If a cell says Supported, tests in this repository must exercise that capability in that language.
@@ -169,4 +180,10 @@ this document states still governs: a cell says Supported because tests prove it
 stops the published view from becoming another source of truth.
 
 <!-- BEGIN GENERATED PARITY ONTRACK LINKS -->
+
+[WH-615]: https://ontrack.sh/projects/WH/issues/WH-615
+[WH-616]: https://ontrack.sh/projects/WH/issues/WH-616
+[WH-617]: https://ontrack.sh/projects/WH/issues/WH-617
+[WH-618]: https://ontrack.sh/projects/WH/issues/WH-618
+
 <!-- END GENERATED PARITY ONTRACK LINKS -->

@@ -24,7 +24,8 @@ const productColumns = ["PostgreSQL", "Dashboard", "CLI"] as const;
 
 function status(cell: ParityCell): string {
   if ("absent" in cell) return "Absent";
-  if ("planned" in cell) return "Planned";
+  // Reference-style so the reader reaches the Issue; the definitions are generated below.
+  if ("planned" in cell) return `[Planned][${cell.planned}]`;
   return "Supported";
 }
 
@@ -97,13 +98,16 @@ const plannedPattern = new RegExp(`${plannedStart}[\\s\\S]*?${plannedEnd}`);
 if (!plannedPattern.test(generated)) {
   throw new Error("Missing generated parity Ontrack link markers");
 }
+// Prettier surrounds link definitions with blank lines, so emit them the same way or the two
+// rewrite each other forever. With no Planned cell there is nothing to separate.
+const linkDefinitions = plannedItems.map(
+  (item) => `[${item}]: https://ontrack.sh/projects/WH/issues/${item}`,
+);
 const withLinks = generated.replace(
   plannedPattern,
-  [
-    plannedStart,
-    ...plannedItems.map((item) => `[${item}]: https://ontrack.sh/projects/WH/issues/${item}`),
-    plannedEnd,
-  ].join("\n"),
+  linkDefinitions.length === 0
+    ? `${plannedStart}\n${plannedEnd}`
+    : `${plannedStart}\n\n${linkDefinitions.join("\n")}\n\n${plannedEnd}`,
 );
 
 if (check) {

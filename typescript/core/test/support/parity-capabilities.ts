@@ -407,7 +407,7 @@ export const PRODUCT_PARITY_ROWS: readonly ProductParityRow[] = [
     capability: "Queue purge",
     postgresql: { file: "integration-queue-administration.test.ts", pattern: "purgeQueue" },
     dashboard: { file: "src/server/operator-controllers.test.ts", pattern: "purgeQueue" },
-    cli: { absent: "The CLI does not expose queue purge." },
+    cli: { planned: "WH-615" },
   },
   {
     capability: "Dead-letter listing",
@@ -418,7 +418,7 @@ export const PRODUCT_PARITY_ROWS: readonly ProductParityRow[] = [
   {
     capability: "Redrive",
     postgresql: { file: "integration-operator-reads.test.ts", pattern: "redrive_v1" },
-    dashboard: { absent: "The dashboard does not expose redrive." },
+    dashboard: { planned: "WH-616" },
     cli: { file: "integration-admin-cli.test.ts", pattern: "redrive" },
   },
   {
@@ -428,13 +428,13 @@ export const PRODUCT_PARITY_ROWS: readonly ProductParityRow[] = [
       patterns: ["listHumanWaits", "human wait"],
     },
     dashboard: { file: "test/human-wait-integration.test.ts", pattern: "humanWaits" },
-    cli: { absent: "The CLI does not expose checkpoint, wait, or human-decision reads." },
+    cli: { planned: "WH-617" },
   },
   {
     capability: "Durable operator worker pause",
     postgresql: { file: "integration-worker-registry.test.ts", pattern: "setWorkerPaused" },
     dashboard: { file: "src/server/operator-controllers.test.ts", pattern: "setWorkerPaused" },
-    cli: { absent: "The CLI does not expose durable worker pause." },
+    cli: { planned: "WH-618" },
   },
 ];
 

@@ -63,6 +63,12 @@ because no component is a singleton: the dashboard and every worker deploy on ma
 component that migrated itself would be many concurrent migrators instead of one deliberate step.
 And the migration runner is the most safety-critical code in the project, so it exists once.
 
+The boundary holds at 1.0.0. Schema installation, migration, the `workhorse` CLI, and the TUI stay
+TypeScript-only in the stable line, so a polyglot deployment keeps that package for those
+operations at 1.0 exactly as it does today. The promise 1.0.0 makes is that every language reaches
+the same operator capability through its own `Admin` client and refuses to start against a schema
+it cannot speak — not that every language grows a second migration runner.
+
 Workaround: run the CLI as a deployment step, pinned to the version of the SDK your application
 depends on, and verify with `workhorse schema status --json` before the first new process starts.
 See [Installation](/docs/installation) for both command forms. For a development database with no
