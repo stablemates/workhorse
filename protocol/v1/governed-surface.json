@@ -1,0 +1,1360 @@
+{
+  "formatVersion": 1,
+  "functions": {
+    "acknowledge_cancel_v1": {
+      "arguments": ["uuid", "text", "bigint"],
+      "returns": "boolean"
+    },
+    "cancel_v1": {
+      "arguments": ["uuid", "text?", "text?"],
+      "returns": "table",
+      "returnsColumns": {
+        "current_attempt": "integer",
+        "finished_at": "timestamptz",
+        "reason": "text",
+        "requested_at": "timestamptz",
+        "requested_by": "text",
+        "state": "text",
+        "status": "text"
+      }
+    },
+    "claim_many_v1": {
+      "arguments": ["text", "text", "integer", "integer?"],
+      "returns": "table",
+      "returnsColumns": {
+        "attempt": "integer",
+        "attempt_timeout_at": "timestamptz",
+        "contract_version": "text",
+        "deadline_at": "timestamptz",
+        "execution_timeout_ms": "bigint",
+        "fence_token": "bigint",
+        "job_id": "uuid",
+        "job_type": "text",
+        "lease_expires_at": "timestamptz",
+        "max_attempts": "integer",
+        "payload": "jsonb",
+        "priority": "integer",
+        "redact_error_details": "boolean",
+        "result_max_bytes": "integer",
+        "retry_policy": "jsonb",
+        "trace_context": "jsonb"
+      }
+    },
+    "claim_v1": {
+      "arguments": ["text", "text", "integer?"],
+      "returns": "table",
+      "returnsColumns": {
+        "attempt": "integer",
+        "attempt_timeout_at": "timestamptz",
+        "contract_version": "text",
+        "deadline_at": "timestamptz",
+        "execution_timeout_ms": "bigint",
+        "fence_token": "bigint",
+        "job_id": "uuid",
+        "job_type": "text",
+        "lease_expires_at": "timestamptz",
+        "max_attempts": "integer",
+        "payload": "jsonb",
+        "priority": "integer",
+        "redact_error_details": "boolean",
+        "result_max_bytes": "integer",
+        "retry_policy": "jsonb",
+        "trace_context": "jsonb"
+      }
+    },
+    "complete_human_wait_v1": {
+      "arguments": ["uuid", "text", "jsonb", "text", "text"],
+      "returns": "table",
+      "returnsColumns": {
+        "completed_at": "timestamptz",
+        "completed_by": "text",
+        "result": "jsonb",
+        "status": "text"
+      }
+    },
+    "complete_v1": {
+      "arguments": ["uuid", "text", "bigint", "jsonb?"],
+      "returns": "boolean"
+    },
+    "create_child_v1": {
+      "arguments": ["uuid", "text", "bigint", "text", "jsonb"],
+      "returns": "table",
+      "returnsColumns": {
+        "child_job_id": "uuid",
+        "child_type": "text",
+        "created_at": "timestamptz",
+        "joined_at": "timestamptz",
+        "result": "jsonb",
+        "status": "text"
+      }
+    },
+    "create_children_v1": {
+      "arguments": ["uuid", "text", "bigint", "jsonb", "text"],
+      "returns": "table",
+      "returnsColumns": {
+        "children": "jsonb",
+        "result_bytes": "integer",
+        "result_limit_bytes": "integer",
+        "results": "jsonb",
+        "status": "text"
+      }
+    },
+    "dashboard_activity_v1": {
+      "arguments": ["jsonb"],
+      "returns": "jsonb"
+    },
+    "dashboard_cron_v1": {
+      "arguments": ["jsonb"],
+      "returns": "jsonb"
+    },
+    "dashboard_event_detail_v1": {
+      "arguments": ["jsonb"],
+      "returns": "jsonb"
+    },
+    "dashboard_events_v1": {
+      "arguments": ["jsonb"],
+      "returns": "jsonb"
+    },
+    "dashboard_human_waits_v1": {
+      "arguments": ["jsonb"],
+      "returns": "jsonb"
+    },
+    "dashboard_job_detail_v1": {
+      "arguments": ["jsonb"],
+      "returns": "jsonb"
+    },
+    "dashboard_job_result_v1": {
+      "arguments": ["uuid"],
+      "returns": "jsonb"
+    },
+    "dashboard_queues_v1": {
+      "arguments": ["jsonb"],
+      "returns": "jsonb"
+    },
+    "dashboard_settings_v1": {
+      "arguments": ["jsonb"],
+      "returns": "jsonb"
+    },
+    "dashboard_system_v1": {
+      "arguments": ["jsonb"],
+      "returns": "jsonb"
+    },
+    "dashboard_task_counts_v1": {
+      "arguments": ["jsonb"],
+      "returns": "jsonb"
+    },
+    "dashboard_task_facets_v1": {
+      "arguments": ["jsonb"],
+      "returns": "jsonb"
+    },
+    "dashboard_tasks_v1": {
+      "arguments": ["jsonb"],
+      "returns": "jsonb"
+    },
+    "dashboard_workers_v1": {
+      "arguments": ["jsonb"],
+      "returns": "jsonb"
+    },
+    "deregister_worker_v1": {
+      "arguments": ["text"],
+      "returns": "boolean"
+    },
+    "enqueue_many_v1": {
+      "arguments": ["jsonb"],
+      "returns": "table",
+      "returnsColumns": {
+        "job_id": "uuid",
+        "ordinal": "integer",
+        "outcome": "text",
+        "reason": "text"
+      }
+    },
+    "expire_owned_telemetry_v1": {
+      "arguments": ["uuid", "text", "bigint"],
+      "returns": "table",
+      "returnsColumns": {
+        "retry_state": "text",
+        "status": "text"
+      }
+    },
+    "fail_v1": {
+      "arguments": ["uuid", "text", "bigint", "jsonb", "integer?"],
+      "returns": "text"
+    },
+    "fire_due_schedules_v1": {
+      "arguments": ["text[]", "timestamptz", "integer"],
+      "returns": "table",
+      "returnsColumns": {
+        "job_id": "uuid",
+        "namespace": "text",
+        "occurrence_at": "timestamptz",
+        "schedule_name": "text"
+      }
+    },
+    "fire_schedule_v1": {
+      "arguments": ["text", "text", "bigint", "timestamptz?"],
+      "returns": "uuid"
+    },
+    "get_contract_definition_v1": {
+      "arguments": ["text", "text?"],
+      "returns": "setof workhorse.contract_definition"
+    },
+    "get_maintenance_policy_v1": {
+      "arguments": [],
+      "returns": "workhorse.maintenance_policy"
+    },
+    "get_retention_policy_v1": {
+      "arguments": [],
+      "returns": "workhorse.retention_policy"
+    },
+    "heartbeat_many_v1": {
+      "arguments": ["text", "jsonb"],
+      "returns": "table",
+      "returnsColumns": {
+        "job_id": "uuid",
+        "ordinal": "bigint",
+        "status": "text"
+      }
+    },
+    "heartbeat_v1": {
+      "arguments": ["uuid", "text", "bigint", "integer?"],
+      "returns": "text"
+    },
+    "list_dead_letters_v1": {
+      "arguments": ["jsonb?", "integer?", "timestamptz?", "uuid?"],
+      "returns": "table",
+      "returnsColumns": {
+        "concurrency_key": "text",
+        "current_attempt": "integer",
+        "cursor_finished_at": "text",
+        "deadline_at": "timestamptz",
+        "error": "jsonb",
+        "execution_timeout_ms": "bigint",
+        "finished_at": "timestamptz",
+        "has_more": "boolean",
+        "job_id": "uuid",
+        "job_type": "text",
+        "max_attempts": "integer",
+        "payload": "jsonb",
+        "priority": "integer",
+        "queue_name": "text",
+        "redrive_count": "integer",
+        "retry_policy": "jsonb",
+        "tags": "text[]"
+      }
+    },
+    "list_job_timeline_v1": {
+      "arguments": ["uuid", "integer", "timestamptz", "text", "uuid"],
+      "returns": "table",
+      "returnsColumns": {
+        "attempt": "integer",
+        "claimed_at": "timestamptz",
+        "cursor_occurred_at": "timestamptz",
+        "details": "jsonb",
+        "error": "jsonb",
+        "event_type": "text",
+        "fence_token": "bigint",
+        "finished_at": "timestamptz",
+        "has_more": "boolean",
+        "job_id": "uuid",
+        "kind": "text",
+        "occurred_at": "timestamptz",
+        "outcome": "text",
+        "priority": "integer",
+        "record_id": "uuid",
+        "started_at": "timestamptz",
+        "worker_id": "text"
+      }
+    },
+    "list_jobs_v1": {
+      "arguments": ["jsonb", "integer", "timestamptz", "uuid", "text", "jsonb"],
+      "returns": "table",
+      "returnsColumns": {
+        "cancel_reason": "text",
+        "cancel_requested_at": "timestamptz",
+        "cancel_requested_by": "text",
+        "concurrency_key": "text",
+        "created_at": "timestamptz",
+        "current_attempt": "integer",
+        "cursor_created_at": "timestamptz",
+        "cursor_signature": "text",
+        "deadline_at": "timestamptz",
+        "execution_timeout_ms": "bigint",
+        "has_more": "boolean",
+        "job_id": "uuid",
+        "job_type": "text",
+        "max_attempts": "integer",
+        "payload": "jsonb",
+        "payload_bytes": "integer",
+        "payload_status": "text",
+        "priority": "integer",
+        "queue_name": "text",
+        "retry_policy": "jsonb",
+        "run_at": "timestamptz",
+        "state": "text",
+        "tags": "text[]",
+        "updated_at": "timestamptz"
+      }
+    },
+    "override_maintenance_policy_v1": {
+      "arguments": ["text?", "integer?", "integer?", "time?", "integer?", "integer?", "integer?"],
+      "returns": "workhorse.maintenance_policy"
+    },
+    "override_retention_policy_v1": {
+      "arguments": ["jsonb"],
+      "returns": "workhorse.retention_policy"
+    },
+    "prepare_history_partitions_v1": {
+      "arguments": ["boolean?", "timestamptz?"],
+      "returns": "table",
+      "returnsColumns": {
+        "duration_ms": "integer",
+        "error": "jsonb",
+        "phase": "text",
+        "rows_affected": "integer",
+        "skipped_lock": "boolean"
+      }
+    },
+    "promote_v1": {
+      "arguments": ["integer?"],
+      "returns": "integer"
+    },
+    "prune_terminal_storage_v1": {
+      "arguments": ["boolean?", "timestamptz?"],
+      "returns": "table",
+      "returnsColumns": {
+        "duration_ms": "integer",
+        "error": "jsonb",
+        "phase": "text",
+        "rows_affected": "integer",
+        "skipped_lock": "boolean"
+      }
+    },
+    "prune_worker_registry_v1": {
+      "arguments": ["interval?"],
+      "returns": "integer"
+    },
+    "purge_queue_v1": {
+      "arguments": ["text", "text", "text", "text"],
+      "returns": "table",
+      "returnsColumns": {
+        "deleted_count": "integer",
+        "replayed": "boolean",
+        "requested_at": "timestamptz"
+      }
+    },
+    "queue_health_v1": {
+      "arguments": ["timestamptz?"],
+      "returns": "jsonb"
+    },
+    "record_batch_dispatch_v1": {
+      "arguments": ["uuid", "uuid[]", "integer[]", "bigint[]", "text"],
+      "returns": "integer"
+    },
+    "record_batch_failure_v1": {
+      "arguments": ["uuid", "uuid[]", "integer[]", "bigint[]", "text"],
+      "returns": "integer"
+    },
+    "recover_expired_telemetry_v1": {
+      "arguments": ["integer?", "integer?"],
+      "returns": "table",
+      "returnsColumns": {
+        "expired_leases": "integer",
+        "retried": "integer",
+        "retry_dimensions": "jsonb",
+        "rows_affected": "integer"
+      }
+    },
+    "redact_top_level_keys_v1": {
+      "arguments": ["jsonb", "text[]"],
+      "returns": "jsonb"
+    },
+    "redrive_lineage_v1": {
+      "arguments": ["uuid", "integer"],
+      "returns": "table",
+      "returnsColumns": {
+        "reason": "text",
+        "request_id_digest": "text",
+        "request_id_length": "integer",
+        "request_id_preview": "text",
+        "requested_at": "timestamptz",
+        "requested_by": "text",
+        "source_job_id": "uuid",
+        "source_state": "text",
+        "target_initial_state": "text",
+        "target_job_id": "uuid"
+      }
+    },
+    "redrive_many_v1": {
+      "arguments": ["jsonb", "integer", "boolean", "text", "text", "text", "timestamptz?", "uuid?"],
+      "returns": "table",
+      "returnsColumns": {
+        "has_more": "boolean",
+        "ordinal": "integer",
+        "requested_at": "timestamptz",
+        "source_finished_at_cursor": "text",
+        "source_job_id": "uuid",
+        "source_state": "text",
+        "status": "text",
+        "target_job_id": "uuid",
+        "target_state": "text"
+      }
+    },
+    "redrive_v1": {
+      "arguments": ["uuid", "text", "text", "text"],
+      "returns": "table",
+      "returnsColumns": {
+        "requested_at": "timestamptz",
+        "source_job_id": "uuid",
+        "source_state": "text",
+        "status": "text",
+        "target_job_id": "uuid",
+        "target_state": "text"
+      }
+    },
+    "register_worker_v1": {
+      "arguments": [
+        "text",
+        "uuid",
+        "text",
+        "integer",
+        "text[]",
+        "text[]",
+        "integer",
+        "integer",
+        "integer",
+        "integer",
+        "integer",
+        "integer",
+        "integer",
+        "integer",
+        "boolean"
+      ],
+      "returns": "boolean"
+    },
+    "retain_history_v1": {
+      "arguments": ["boolean?", "timestamptz?"],
+      "returns": "table",
+      "returnsColumns": {
+        "duration_ms": "integer",
+        "error": "jsonb",
+        "phase": "text",
+        "rows_affected": "integer",
+        "skipped_lock": "boolean"
+      }
+    },
+    "revert_maintenance_policy_v1": {
+      "arguments": ["text[]"],
+      "returns": "workhorse.maintenance_policy"
+    },
+    "revert_retention_policy_v1": {
+      "arguments": ["text[]"],
+      "returns": "workhorse.retention_policy"
+    },
+    "rollup_stats_v1": {
+      "arguments": ["boolean?", "timestamptz?", "integer?"],
+      "returns": "table",
+      "returnsColumns": {
+        "duration_ms": "integer",
+        "error": "jsonb",
+        "phase": "text",
+        "rows_affected": "integer",
+        "skipped_lock": "boolean"
+      }
+    },
+    "run_maintenance_v1": {
+      "arguments": ["timestamptz?"],
+      "returns": "table",
+      "returnsColumns": {
+        "duration_ms": "integer",
+        "error": "jsonb",
+        "phase": "text",
+        "rows_affected": "integer",
+        "skipped_lock": "boolean"
+      }
+    },
+    "run_task_now_v1": {
+      "arguments": ["uuid", "text", "text", "text"],
+      "returns": "table",
+      "returnsColumns": {
+        "run_at": "timestamptz",
+        "state": "text",
+        "status": "text"
+      }
+    },
+    "save_checkpoint_v1": {
+      "arguments": ["uuid", "text", "bigint", "text", "jsonb"],
+      "returns": "table",
+      "returnsColumns": {
+        "attempt": "integer",
+        "checkpoint_value": "jsonb",
+        "created_at": "timestamptz",
+        "fence_token": "bigint",
+        "status": "text",
+        "worker_id": "text"
+      }
+    },
+    "schedule_wait_v1": {
+      "arguments": ["uuid", "text", "bigint", "text", "bigint", "timestamptz"],
+      "returns": "table",
+      "returnsColumns": {
+        "attempt": "integer",
+        "created_at": "timestamptz",
+        "duration_ms": "bigint",
+        "fence_token": "bigint",
+        "mode": "text",
+        "requested_wake_at": "timestamptz",
+        "status": "text",
+        "wait_name": "text",
+        "wake_at": "timestamptz",
+        "worker_id": "text"
+      }
+    },
+    "send_signal_v1": {
+      "arguments": ["uuid", "text", "jsonb", "text", "text"],
+      "returns": "table",
+      "returnsColumns": {
+        "delivered_at": "timestamptz",
+        "delivered_by": "text",
+        "payload": "jsonb",
+        "status": "text"
+      }
+    },
+    "set_queue_paused_v1": {
+      "arguments": ["text", "boolean", "text", "text", "text"],
+      "returns": "boolean"
+    },
+    "set_worker_paused_v1": {
+      "arguments": ["text", "boolean", "text", "text", "text"],
+      "returns": "table",
+      "returnsColumns": {
+        "last_heartbeat_at": "timestamptz",
+        "paused": "boolean",
+        "paused_at": "timestamptz",
+        "paused_by": "text",
+        "paused_reason": "text",
+        "worker_id": "text"
+      }
+    },
+    "stat_buckets_v1": {
+      "arguments": ["timestamptz", "timestamptz"],
+      "returns": "table",
+      "returnsColumns": {
+        "attempt_canceled": "bigint",
+        "attempt_duration_ms": "numeric",
+        "attempt_failed": "bigint",
+        "attempt_lease_expired": "bigint",
+        "attempt_other": "bigint",
+        "attempt_retry": "bigint",
+        "attempt_succeeded": "bigint",
+        "bucket_start": "timestamptz",
+        "enqueued": "bigint",
+        "job_canceled": "bigint",
+        "job_failed": "bigint",
+        "job_succeeded": "bigint",
+        "job_type": "text",
+        "last_attempt_at": "timestamptz",
+        "last_error": "text",
+        "last_error_at": "timestamptz",
+        "queue_name": "text",
+        "wait_sketch": "jsonb"
+      }
+    },
+    "sync_concurrency_policies_v1": {
+      "arguments": ["text", "jsonb", "boolean?"],
+      "returns": "table",
+      "returnsColumns": {
+        "max_active": "integer",
+        "max_active_per_key": "integer",
+        "namespace": "text",
+        "queue_name": "text",
+        "updated_at": "timestamptz"
+      }
+    },
+    "sync_contract_definitions_v1": {
+      "arguments": ["jsonb"],
+      "returns": "void"
+    },
+    "sync_maintenance_policy_v1": {
+      "arguments": [
+        "text",
+        "integer?",
+        "integer?",
+        "time?",
+        "integer?",
+        "integer?",
+        "integer?",
+        "boolean?"
+      ],
+      "returns": "workhorse.maintenance_policy"
+    },
+    "sync_rate_limit_policies_v1": {
+      "arguments": ["text", "jsonb", "boolean?"],
+      "returns": "table",
+      "returnsColumns": {
+        "namespace": "text",
+        "per_key_burst": "integer",
+        "per_key_interval_ms": "integer",
+        "per_key_limit": "integer",
+        "queue_name": "text",
+        "rate_burst": "integer",
+        "rate_interval_ms": "integer",
+        "rate_limit": "integer",
+        "updated_at": "timestamptz"
+      }
+    },
+    "sync_retention_policy_v1": {
+      "arguments": [
+        "integer",
+        "integer",
+        "integer",
+        "integer",
+        "integer",
+        "integer?",
+        "integer?",
+        "integer?",
+        "integer?",
+        "integer?",
+        "integer?",
+        "boolean?"
+      ],
+      "returns": "workhorse.retention_policy"
+    },
+    "sync_schedule_definitions_v1": {
+      "arguments": ["text", "jsonb", "boolean?"],
+      "returns": "void"
+    },
+    "tick_v1": {
+      "arguments": ["integer?", "integer?"],
+      "returns": "table",
+      "returnsColumns": {
+        "duration_ms": "integer",
+        "error": "jsonb",
+        "expired_leases": "integer",
+        "phase": "text",
+        "retried": "integer",
+        "retry_dimensions": "jsonb",
+        "rows_affected": "integer",
+        "skipped_lock": "boolean"
+      }
+    },
+    "update_progress_v1": {
+      "arguments": ["uuid", "text", "bigint", "jsonb"],
+      "returns": "table",
+      "returnsColumns": {
+        "attempt": "integer",
+        "created_at": "timestamptz",
+        "fence_token": "bigint",
+        "progress_value": "jsonb",
+        "retry_after_ms": "bigint",
+        "revision": "bigint",
+        "status": "text",
+        "updated_at": "timestamptz",
+        "worker_id": "text"
+      }
+    },
+    "wait_for_human_v1": {
+      "arguments": ["uuid", "text", "bigint", "text", "jsonb", "bigint?"],
+      "returns": "table",
+      "returnsColumns": {
+        "result": "jsonb",
+        "status": "text"
+      }
+    },
+    "wait_for_signal_v1": {
+      "arguments": ["uuid", "text", "bigint", "text", "bigint?"],
+      "returns": "table",
+      "returnsColumns": {
+        "payload": "jsonb",
+        "status": "text"
+      }
+    }
+  },
+  "relations": {
+    "attempt_history": {
+      "kind": "table",
+      "columns": {
+        "attempt": "integer",
+        "claimed_at": "timestamptz",
+        "error": "jsonb",
+        "fence_token": "bigint",
+        "finished_at": "timestamptz",
+        "job_id": "uuid",
+        "occurred_at": "timestamptz",
+        "outcome": "text",
+        "started_at": "timestamptz",
+        "worker_id": "text"
+      }
+    },
+    "concurrency_policy": {
+      "kind": "table",
+      "columns": {
+        "max_active": "integer",
+        "max_active_per_key": "integer",
+        "namespace": "text",
+        "queue_name": "text",
+        "updated_at": "timestamptz"
+      }
+    },
+    "dashboard_attempt_history_v1": {
+      "kind": "view",
+      "columns": {
+        "attempt": "integer",
+        "attempt_id": "uuid",
+        "claimed_at": "timestamptz",
+        "error": "jsonb",
+        "fence_token": "bigint",
+        "finished_at": "timestamptz",
+        "job_id": "uuid",
+        "occurred_at": "timestamptz",
+        "outcome": "text",
+        "started_at": "timestamptz",
+        "worker_id": "text"
+      }
+    },
+    "dashboard_concurrency_policy_v1": {
+      "kind": "view",
+      "columns": {
+        "max_active": "integer",
+        "max_active_per_key": "integer",
+        "namespace": "text",
+        "queue_name": "text",
+        "updated_at": "timestamptz"
+      }
+    },
+    "dashboard_human_wait_v1": {
+      "kind": "view",
+      "columns": {
+        "attempt": "integer",
+        "completed_at": "timestamptz",
+        "completed_by": "text",
+        "context": "jsonb",
+        "created_at": "timestamptz",
+        "deadline_at": "timestamptz",
+        "job_id": "uuid",
+        "job_type": "text",
+        "queue_name": "text",
+        "token_name": "text"
+      }
+    },
+    "dashboard_job_checkpoint_v1": {
+      "kind": "view",
+      "columns": {
+        "attempt": "integer",
+        "checkpoint_name": "text",
+        "checkpoint_value": "jsonb",
+        "created_at": "timestamptz",
+        "fence_token": "bigint",
+        "job_id": "uuid",
+        "worker_id": "text"
+      }
+    },
+    "dashboard_job_child_v1": {
+      "kind": "view",
+      "columns": {
+        "child_job_id": "uuid",
+        "child_name": "text",
+        "created_at": "timestamptz",
+        "joined_at": "timestamptz",
+        "parent_job_id": "uuid"
+      }
+    },
+    "dashboard_job_dependency_v1": {
+      "kind": "view",
+      "columns": {
+        "created_at": "timestamptz",
+        "dependent_job_id": "uuid",
+        "on_cancellation": "text",
+        "on_failure": "text",
+        "on_success": "text",
+        "prerequisite_job_id": "uuid",
+        "released_at": "timestamptz",
+        "resolution": "text"
+      }
+    },
+    "dashboard_job_event_v1": {
+      "kind": "view",
+      "columns": {
+        "attempt": "integer",
+        "details": "jsonb",
+        "event_id": "uuid",
+        "event_type": "text",
+        "job_id": "uuid",
+        "occurred_at": "timestamptz"
+      }
+    },
+    "dashboard_job_outcome_v1": {
+      "kind": "view",
+      "columns": {
+        "current_attempt": "integer",
+        "error": "jsonb",
+        "finished_at": "timestamptz",
+        "job_id": "uuid",
+        "run_at": "timestamptz",
+        "state": "text",
+        "updated_at": "timestamptz"
+      }
+    },
+    "dashboard_job_progress_v1": {
+      "kind": "view",
+      "columns": {
+        "attempt": "integer",
+        "created_at": "timestamptz",
+        "fence_token": "bigint",
+        "job_id": "uuid",
+        "progress_value": "jsonb",
+        "revision": "bigint",
+        "updated_at": "timestamptz",
+        "worker_id": "text"
+      }
+    },
+    "dashboard_job_redrive_v1": {
+      "kind": "view",
+      "columns": {
+        "reason": "text",
+        "request_id_digest": "text",
+        "request_id_length": "integer",
+        "request_id_preview": "text",
+        "requested_at": "timestamptz",
+        "requested_by": "text",
+        "source_job_id": "uuid",
+        "source_state": "text",
+        "target_initial_state": "text",
+        "target_job_id": "uuid"
+      }
+    },
+    "dashboard_job_runtime_v1": {
+      "kind": "view",
+      "columns": {
+        "acquired_at": "timestamptz",
+        "attempt_started_at": "timestamptz",
+        "attempt_timeout_at": "timestamptz",
+        "cancel_reason": "text",
+        "cancel_requested_at": "timestamptz",
+        "cancel_requested_by": "text",
+        "current_attempt": "integer",
+        "error": "jsonb",
+        "expires_at": "timestamptz",
+        "fence_token": "bigint",
+        "heartbeat_at": "timestamptz",
+        "job_id": "uuid",
+        "queue_name": "text",
+        "ready_at": "timestamptz",
+        "run_at": "timestamptz",
+        "state": "text",
+        "updated_at": "timestamptz",
+        "wait_name": "text",
+        "worker_id": "text"
+      }
+    },
+    "dashboard_job_v1": {
+      "kind": "view",
+      "columns": {
+        "concurrency_key": "text",
+        "created_at": "timestamptz",
+        "deadline_at": "timestamptz",
+        "execution_timeout_ms": "bigint",
+        "id": "uuid",
+        "job_type": "text",
+        "max_attempts": "integer",
+        "payload": "jsonb",
+        "payload_redact_keys": "text[]",
+        "priority": "integer",
+        "queue_name": "text",
+        "result_redact_keys": "text[]",
+        "retry_policy": "jsonb",
+        "tags": "text[]"
+      }
+    },
+    "dashboard_job_wait_v1": {
+      "kind": "view",
+      "columns": {
+        "attempt": "integer",
+        "created_at": "timestamptz",
+        "duration_ms": "bigint",
+        "fence_token": "bigint",
+        "job_id": "uuid",
+        "mode": "text",
+        "requested_wake_at": "timestamptz",
+        "wait_name": "text",
+        "wake_at": "timestamptz",
+        "worker_id": "text"
+      }
+    },
+    "dashboard_maintenance_policy_v1": {
+      "kind": "view",
+      "columns": {
+        "history_retention_local_time": "time(0)",
+        "partition_preparation_interval_ms": "integer",
+        "singleton": "boolean",
+        "statistics_group_limit": "integer",
+        "statistics_recompute_buckets": "integer",
+        "statistics_rollup_interval_ms": "integer",
+        "terminal_cleanup_interval_ms": "integer",
+        "timezone": "text",
+        "updated_at": "timestamptz"
+      }
+    },
+    "dashboard_maintenance_state_v1": {
+      "kind": "view",
+      "columns": {
+        "last_completed_at": "timestamptz",
+        "last_completed_local_date": "date",
+        "last_started_at": "timestamptz",
+        "task_name": "text"
+      }
+    },
+    "dashboard_queue_control_v1": {
+      "kind": "view",
+      "columns": {
+        "paused": "boolean",
+        "queue_name": "text"
+      }
+    },
+    "dashboard_rate_limit_policy_v1": {
+      "kind": "view",
+      "columns": {
+        "queue_name": "text"
+      }
+    },
+    "dashboard_retention_policy_v1": {
+      "kind": "view",
+      "columns": {
+        "attempt_history_retention_days": "integer",
+        "job_event_retention_days": "integer",
+        "singleton": "boolean"
+      }
+    },
+    "dashboard_schedule_definition_v1": {
+      "kind": "view",
+      "columns": {
+        "cron_expression": "text",
+        "enabled": "boolean",
+        "job_type": "text",
+        "namespace": "text",
+        "priority": "integer",
+        "queue_name": "text",
+        "revision": "bigint",
+        "schedule_name": "text",
+        "timezone": "text",
+        "updated_at": "timestamptz"
+      }
+    },
+    "dashboard_schedule_occurrence_v1": {
+      "kind": "view",
+      "columns": {
+        "fired_at": "timestamptz",
+        "namespace": "text",
+        "occurrence_at": "timestamptz",
+        "schedule_name": "text"
+      }
+    },
+    "dashboard_signal_wait_v1": {
+      "kind": "view",
+      "columns": {
+        "attempt": "integer",
+        "created_at": "timestamptz",
+        "deadline_at": "timestamptz",
+        "job_id": "uuid",
+        "job_type": "text",
+        "queue_name": "text",
+        "signal_name": "text"
+      }
+    },
+    "dashboard_worker_registry_v1": {
+      "kind": "view",
+      "columns": {
+        "active_slots": "integer",
+        "concurrency": "integer",
+        "draining": "boolean",
+        "heartbeat_ms": "integer",
+        "hostname": "text",
+        "last_heartbeat_at": "timestamptz",
+        "lease_ms": "integer",
+        "maintenance_interval_ms": "integer",
+        "maintenance_task_poll_ms": "integer",
+        "paused": "boolean",
+        "pid": "integer",
+        "poll_ms": "integer",
+        "queue_name": "text",
+        "queue_names": "text[]",
+        "registry_interval_ms": "integer",
+        "schedule_namespaces": "text[]",
+        "started_at": "timestamptz",
+        "worker_id": "text"
+      }
+    },
+    "job": {
+      "kind": "table",
+      "columns": {
+        "concurrency_key": "text",
+        "contract_version": "text",
+        "created_at": "timestamptz",
+        "deadline_at": "timestamptz",
+        "execution_timeout_ms": "bigint",
+        "id": "uuid",
+        "job_type": "text",
+        "max_attempts": "integer",
+        "payload": "jsonb",
+        "payload_redact_keys": "text[]",
+        "priority": "integer",
+        "queue_name": "text",
+        "result_redact_keys": "text[]",
+        "retry_policy": "jsonb",
+        "tags": "text[]"
+      }
+    },
+    "job_checkpoint": {
+      "kind": "table",
+      "columns": {
+        "attempt": "integer",
+        "checkpoint_name": "text",
+        "checkpoint_value": "jsonb",
+        "created_at": "timestamptz",
+        "fence_token": "bigint",
+        "job_id": "uuid",
+        "worker_id": "text"
+      }
+    },
+    "job_child": {
+      "kind": "table",
+      "columns": {
+        "child_job_id": "uuid",
+        "child_name": "text",
+        "created_at": "timestamptz",
+        "joined_at": "timestamptz",
+        "parent_job_id": "uuid"
+      }
+    },
+    "job_dependency": {
+      "kind": "table",
+      "columns": {
+        "created_at": "timestamptz",
+        "dependent_job_id": "uuid",
+        "on_cancellation": "text",
+        "on_failure": "text",
+        "on_success": "text",
+        "prerequisite_job_id": "uuid",
+        "released_at": "timestamptz",
+        "resolution": "text"
+      }
+    },
+    "job_event": {
+      "kind": "table",
+      "columns": {
+        "attempt": "integer",
+        "details": "jsonb",
+        "event_type": "text",
+        "job_id": "uuid",
+        "occurred_at": "timestamptz"
+      }
+    },
+    "job_human_wait": {
+      "kind": "table",
+      "columns": {
+        "attempt": "integer",
+        "claimed_at": "timestamptz",
+        "completed_at": "timestamptz",
+        "completed_by": "text",
+        "context": "jsonb",
+        "created_at": "timestamptz",
+        "fence_token": "bigint",
+        "job_id": "uuid",
+        "result": "jsonb",
+        "token_name": "text",
+        "worker_id": "text"
+      }
+    },
+    "job_outcome": {
+      "kind": "table",
+      "columns": {
+        "current_attempt": "integer",
+        "error": "jsonb",
+        "fence_token": "bigint",
+        "finished_at": "timestamptz",
+        "job_id": "uuid",
+        "result": "jsonb",
+        "run_at": "timestamptz",
+        "state": "text",
+        "updated_at": "timestamptz"
+      }
+    },
+    "job_progress": {
+      "kind": "table",
+      "columns": {
+        "attempt": "integer",
+        "created_at": "timestamptz",
+        "fence_token": "bigint",
+        "job_id": "uuid",
+        "progress_value": "jsonb",
+        "revision": "bigint",
+        "updated_at": "timestamptz",
+        "worker_id": "text"
+      }
+    },
+    "job_query": {
+      "kind": "table",
+      "columns": {
+        "created_at": "timestamptz",
+        "job_id": "uuid",
+        "job_type": "text",
+        "queue_name": "text"
+      }
+    },
+    "job_runtime": {
+      "kind": "table",
+      "columns": {
+        "attempt_timeout_at": "timestamptz",
+        "cancel_reason": "text",
+        "cancel_requested_at": "timestamptz",
+        "cancel_requested_by": "text",
+        "concurrency_key": "text",
+        "current_attempt": "integer",
+        "deadline_at": "timestamptz",
+        "error": "jsonb",
+        "expires_at": "timestamptz",
+        "fence_token": "bigint",
+        "job_id": "uuid",
+        "priority": "integer",
+        "queue_name": "text",
+        "ready_at": "timestamptz",
+        "run_at": "timestamptz",
+        "sequence": "bigint",
+        "state": "text",
+        "updated_at": "timestamptz",
+        "wait_name": "text",
+        "worker_id": "text"
+      }
+    },
+    "job_signal_wait": {
+      "kind": "table",
+      "columns": {
+        "attempt": "integer",
+        "claimed_at": "timestamptz",
+        "created_at": "timestamptz",
+        "delivered_at": "timestamptz",
+        "delivered_by": "text",
+        "fence_token": "bigint",
+        "job_id": "uuid",
+        "payload": "jsonb",
+        "signal_name": "text",
+        "worker_id": "text"
+      }
+    },
+    "job_stat_bucket": {
+      "kind": "table",
+      "columns": {
+        "bucket_start": "timestamptz",
+        "job_type": "text",
+        "queue_name": "text"
+      }
+    },
+    "job_stat_bucket_day": {
+      "kind": "table",
+      "columns": {
+        "bucket_start": "timestamptz",
+        "job_type": "text",
+        "queue_name": "text"
+      }
+    },
+    "job_stat_bucket_hour": {
+      "kind": "table",
+      "columns": {
+        "bucket_start": "timestamptz",
+        "job_type": "text",
+        "queue_name": "text"
+      }
+    },
+    "job_wait": {
+      "kind": "table",
+      "columns": {
+        "attempt": "integer",
+        "claimed_at": "timestamptz",
+        "created_at": "timestamptz",
+        "duration_ms": "bigint",
+        "fence_token": "bigint",
+        "job_id": "uuid",
+        "mode": "text",
+        "requested_wake_at": "timestamptz",
+        "wait_name": "text",
+        "wake_at": "timestamptz",
+        "worker_id": "text"
+      }
+    },
+    "protocol_version": {
+      "kind": "table",
+      "columns": {
+        "version": "integer"
+      }
+    },
+    "queue_control": {
+      "kind": "table",
+      "columns": {
+        "paused": "boolean",
+        "queue_name": "text",
+        "reason": "text",
+        "updated_at": "timestamptz"
+      }
+    },
+    "rate_limit_bucket": {
+      "kind": "table",
+      "columns": {
+        "bucket_key": "text",
+        "bucket_scope": "text",
+        "queue_name": "text",
+        "refilled_at": "timestamptz",
+        "tokens": "numeric"
+      }
+    },
+    "rate_limit_policy": {
+      "kind": "table",
+      "columns": {
+        "namespace": "text",
+        "per_key_burst": "integer",
+        "per_key_interval_ms": "integer",
+        "per_key_limit": "integer",
+        "queue_name": "text",
+        "rate_burst": "integer",
+        "rate_interval_ms": "integer",
+        "rate_limit": "integer",
+        "updated_at": "timestamptz"
+      }
+    },
+    "schedule_definition": {
+      "kind": "table",
+      "columns": {
+        "concurrency_key": "text",
+        "contract_version": "text",
+        "cron_expression": "text",
+        "enabled": "boolean",
+        "job_type": "text",
+        "max_attempts": "integer",
+        "namespace": "text",
+        "payload": "jsonb",
+        "payload_redact_keys": "text[]",
+        "priority": "integer",
+        "queue_name": "text",
+        "result_redact_keys": "text[]",
+        "retry_policy": "jsonb",
+        "revision": "bigint",
+        "schedule_name": "text",
+        "timezone": "text",
+        "updated_at": "timestamptz"
+      }
+    },
+    "schedule_occurrence": {
+      "kind": "table",
+      "columns": {
+        "job_id": "uuid",
+        "namespace": "text",
+        "occurrence_at": "timestamptz",
+        "schedule_name": "text"
+      }
+    },
+    "schema_version": {
+      "kind": "table",
+      "columns": {
+        "version": "integer"
+      }
+    },
+    "worker_registry": {
+      "kind": "table",
+      "columns": {
+        "active_slots": "integer",
+        "concurrency": "integer",
+        "draining": "boolean",
+        "hostname": "text",
+        "instance_id": "uuid",
+        "last_heartbeat_at": "timestamptz",
+        "paused": "boolean",
+        "paused_at": "timestamptz",
+        "paused_by": "text",
+        "paused_reason": "text",
+        "pid": "integer",
+        "queue_name": "text",
+        "queue_names": "text[]",
+        "schedule_namespaces": "text[]",
+        "started_at": "timestamptz",
+        "worker_id": "text"
+      }
+    }
+  },
+  "internalHelpers": {
+    "functions": [
+      "aggregate_stats_v1",
+      "cancellation_envelope_v1",
+      "create_history_day_v1",
+      "create_single_child_v1",
+      "cron_field_values_v1",
+      "cron_occurrences_v1",
+      "dashboard_iso_v1",
+      "dashboard_job_estimate_v1",
+      "deadline_envelope_v1",
+      "enqueue_batch_v1",
+      "enqueue_debounce_v1",
+      "enqueue_throttle_v1",
+      "enqueue_v1",
+      "evaluate_queue_health_v1",
+      "expand_cron_macro_v1",
+      "expand_hashed_cron_field_v1",
+      "expire_owned_v1",
+      "get_queue_health_policy_v1",
+      "history_retention_complete_v1",
+      "idempotency_key_hash_v1",
+      "normalize_retry_policy_v1",
+      "notify_concurrency_capacity_v1",
+      "override_contract_version_v1",
+      "override_queue_health_policy_v1",
+      "project_job_query_v1",
+      "prune_default_history_v1",
+      "prune_enqueue_idempotency_v1",
+      "prune_released_dependencies_v1",
+      "prune_schedule_occurrences_v1",
+      "prune_terminal_jobs_v1",
+      "purge_queue_internal_v1",
+      "rate_limit_bucket_v1",
+      "record_batch_event_v1",
+      "recover_expired_v1",
+      "redact_error_details_v1",
+      "reject_contract_definition_mutation_v1",
+      "reject_self_job_dependency_v1",
+      "release_dependents_v1",
+      "resolve_cron_wall_clock_v1",
+      "resolve_dependents_v1",
+      "resolve_job_outcome_dependencies_v1",
+      "retire_history_day_v1",
+      "retire_history_partitions_v1",
+      "retry_delay_v1",
+      "revert_queue_health_policy_v1",
+      "set_worker_paused_internal_v1",
+      "sha256_hex_v1",
+      "stat_overflow_type_v1",
+      "stat_sketch_index_v1",
+      "stat_sketch_merge_v1",
+      "stat_sketch_percentile_v1",
+      "stat_window_tier_v1",
+      "sync_queue_health_policy_v1",
+      "terminalize_deadline_v1",
+      "timeout_envelope_v1",
+      "timeout_owned_v1",
+      "uuid_v7_v1",
+      "valid_contract_redact_keys_v1",
+      "valid_tags_v1",
+      "valid_trace_context_v1",
+      "validate_job_dependencies_v1"
+    ],
+    "relations": [
+      "contract_definition",
+      "contract_policy",
+      "enqueue_idempotency",
+      "job_redrive",
+      "job_stat_state",
+      "maintenance_policy",
+      "maintenance_state",
+      "queue_health_policy",
+      "queue_purge_request",
+      "retention_policy",
+      "schema_migration"
+    ]
+  }
+}

@@ -5,6 +5,14 @@ range, required capabilities, and TypeScript contract sources. A client must rea
 metadata and refuse mutations before it executes a fixture when either version is outside the
 declared range.
 
+`v1/governed-surface.json` records the SQL surface a supported release reads: every governed
+function with its argument and result types, every governed view and table with its governed
+columns, and the internal helpers listed beside them. `scripts/generate-sql-catalogues.ts` derives
+it from `v1/manifest.json`, the three dashboard backends, and the published `dashboard_*_v1` views,
+then classifies a change against it. The generator adds to the file and never drops from it, so
+`pnpm sql-catalogues:check` fails a removed or retyped entry by name and passes an addition. See
+[Compatibility](../docs/compatibility.md#the-governed-sql-surface) for the membership rule.
+
 `v1/scenarios.json` is an ordered list of raw PostgreSQL calls. Each step supplies SQL, positional
 parameters, canonical result rows, optional captured values, and optional structured error fields.
 Objects containing only `$ref` reuse a captured value. Objects containing only `$type` accept a

@@ -49,6 +49,7 @@ describe("Python statement bindings", () => {
           {
             filename: "client.py",
             source: `
+from ._statements import STATEMENTS
 # STATEMENTS.comment
 example = "STATEMENTS.string"
 executor.rows(STATEMENTS.health)
@@ -58,5 +59,23 @@ executor.rows(STATEMENTS.health)
         pythonProject,
       ),
     ).toEqual([{ filename: "client.py", field: "health" }]);
+  });
+
+  it("follows the private alias a module binds the registry to", () => {
+    expect(
+      findPythonStatementAccesses(
+        [
+          {
+            filename: "worker.py",
+            source: `
+from ._statements import STATEMENTS as _STATEMENTS, DriverStatement as _DriverStatement
+executor.rows(_STATEMENTS.acknowledge_cancel)
+other.rows(STATEMENTS.health)
+`,
+          },
+        ],
+        pythonProject,
+      ),
+    ).toEqual([{ filename: "worker.py", field: "acknowledge_cancel" }]);
   });
 });

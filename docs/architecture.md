@@ -51,6 +51,14 @@ case requires refusal before a mutating function runs.
 The manifest also pins `dashboard_signal_wait_v1` and `dashboard_human_wait_v1` as read contracts.
 Their projections support public external-wait lists without exposing private tables.
 
+`protocol/v1/governed-surface.json` records the wider set: every `workhorse.` function, view, and
+column a supported release reads, with the internal helpers listed beside them.
+`scripts/generate-sql-catalogues.ts` derives it from the manifest's statement catalogue, the three
+dashboard backends, and the published `dashboard_*_v1` views, then classifies a change against it.
+`pnpm sql-catalogues:check` fails a removed or retyped entry by name and passes an addition. The
+generator may add to that file and may never drop from it, so a migration that drops a function
+fails even though `sql/schema/current.sql` drops it too.
+
 `protocol/v1/scenarios.json` executes raw versioned PostgreSQL functions and versioned dashboard
 views. It covers enqueue, claim, heartbeat, completion, failure, cancellation, retry, checkpoint,
 timer boundaries, coalescing, dependencies, child jobs, signals, and human decisions. Exact JSON

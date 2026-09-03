@@ -7,6 +7,15 @@ import {
   findPythonStatementAccesses,
   type PythonSource,
 } from "./sql-catalogue-python-bindings.js";
+import { parseSqlSchema } from "./sql-surface.js";
+import {
+  classifyGovernedSurface,
+  deriveGovernedSurface,
+  formatFindings,
+  mergeGovernedSurface,
+  readSurfaceSources,
+  type GovernedSurface,
+} from "./sql-governed-surface.js";
 
 type Catalogue = "internal" | "protocol" | "admin";
 type Statement = {
@@ -29,6 +38,14 @@ const repository = path.resolve(import.meta.dirname, "..");
 const manifestPath = path.join(repository, "protocol/v1/manifest.json");
 const check = process.argv.includes("--check");
 const typescriptOnly = process.argv.includes("--typescript-only");
+const acceptBreaking = process.argv.includes("--accept-breaking");
+
+const governedSurfacePath = path.join(repository, "protocol/v1/governed-surface.json");
+
+const breakingGuidance =
+  "A supported release reads these, so removing or retyping one narrows workhorse.protocol_version " +
+  "(ADR 0053, ADR 0054). Add a _vN beside the predecessor instead, or take the break deliberately " +
+  "with --accept-breaking.";
 
 function arity(sql: string): number {
   return Math.max(0, ...Array.from(sql.matchAll(/\$(\d+)/g), (match) => Number(match[1])));
@@ -116,6 +133,56 @@ async function readPythonSources(): Promise<PythonSource[]> {
   return sources;
 }
 
+/**
+ * Classify the governed SQL surface against the promise, then emit the widened promise.
+ *
+ * `--check` never writes: a breaking change fails by name, and an addition reports that the
+ * artifact is stale so `pnpm sql-catalogues:generate` can record it.
+ */
+async function governSqlSurface(): Promise<void> {
+  const schema = parseSqlSchema(
+    await readFile(path.join(repository, "sql/schema/current.sql"), "utf8"),
+  );
+  const current = deriveGovernedSurface(schema, await readSurfaceSources(repository));
+  const committed = await readFile(governedSurfacePath, "utf8").catch(() => null);
+  const promised: GovernedSurface =
+    committed === null
+      ? {
+          formatVersion: 1,
+          functions: {},
+          relations: {},
+          internalHelpers: { functions: [], relations: [] },
+        }
+      : (JSON.parse(committed) as GovernedSurface);
+
+  const findings = classifyGovernedSurface(promised, current);
+  if (findings.length > 0 && !acceptBreaking) {
+    throw new Error(
+      `The governed SQL surface has breaking changes:\n${formatFindings(findings)}\n\n${breakingGuidance}`,
+    );
+  }
+  // `protocol/v1/*.json` is inside the formatted set, so the artifact is written the way
+  // `pnpm format:check` expects rather than the way JSON.stringify indents.
+  const contents = execFileSync(
+    "pnpm",
+    ["exec", "oxfmt", "--stdin-filepath=governed-surface.json"],
+    {
+      cwd: repository,
+      input: `${JSON.stringify(acceptBreaking ? current : mergeGovernedSurface(promised, current), null, 2)}\n`,
+      encoding: "utf8",
+    },
+  );
+  if (check) {
+    if (committed !== contents) {
+      throw new Error(
+        "protocol/v1/governed-surface.json is stale; the change is additive. Run pnpm sql-catalogues:generate",
+      );
+    }
+    return;
+  }
+  await writeFile(governedSurfacePath, contents);
+}
+
 async function emit(relative: string, contents: string): Promise<void> {
   const filename = path.join(repository, relative);
   if (check) {
@@ -186,6 +253,7 @@ for (const statement of manifest.statements) {
   }
 }
 if (check) await assertNoInlineTypeScriptSql();
+await governSqlSurface();
 const outputs = [
   emit(
     "typescript/core/src/queue/sql-catalogue.generated.ts",

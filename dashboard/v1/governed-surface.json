@@ -1,0 +1,3750 @@
+{
+  "formatVersion": 1,
+  "procedures": {
+    "activity": {
+      "mutation": false,
+      "request": {
+        "filter": {
+          "type": "enum",
+          "enum": [
+            "all",
+            "blocked",
+            "canceled",
+            "completed",
+            "discarded",
+            "queued",
+            "retried",
+            "running",
+            "scheduled",
+            "waiting"
+          ],
+          "required": false
+        },
+        "groupBy": {
+          "type": "enum",
+          "enum": [
+            "queue",
+            "status",
+            "task",
+            "worker"
+          ],
+          "required": false
+        },
+        "period": {
+          "type": "enum",
+          "enum": [
+            "15m",
+            "1h",
+            "24h",
+            "6h",
+            "7d"
+          ],
+          "required": false
+        },
+        "queue": {
+          "type": "null|string",
+          "required": false
+        },
+        "tags": {
+          "type": "array",
+          "required": false
+        },
+        "tags[]": {
+          "type": "string",
+          "required": false
+        },
+        "worker": {
+          "type": "null|string",
+          "required": false
+        }
+      },
+      "response": {
+        "bucketSeconds": {
+          "type": "number"
+        },
+        "buckets": {
+          "type": "array"
+        },
+        "buckets[]": {
+          "type": "object"
+        },
+        "buckets[].bucketStart": {
+          "type": "string"
+        },
+        "buckets[].counts": {
+          "type": "object"
+        },
+        "capturedAt": {
+          "type": "string"
+        },
+        "filter": {
+          "type": "enum",
+          "enum": [
+            "all",
+            "blocked",
+            "canceled",
+            "completed",
+            "discarded",
+            "queued",
+            "retried",
+            "running",
+            "scheduled",
+            "waiting"
+          ]
+        },
+        "groupBy": {
+          "type": "enum",
+          "enum": [
+            "queue",
+            "status",
+            "task",
+            "worker"
+          ]
+        },
+        "groups": {
+          "type": "array"
+        },
+        "groups[]": {
+          "type": "string"
+        },
+        "period": {
+          "type": "enum",
+          "enum": [
+            "15m",
+            "1h",
+            "24h",
+            "6h",
+            "7d"
+          ]
+        }
+      }
+    },
+    "cancelTask": {
+      "mutation": true,
+      "request": {
+        "audit": {
+          "type": "object",
+          "required": true
+        },
+        "audit.actor": {
+          "type": "string",
+          "required": true
+        },
+        "audit.reason": {
+          "type": "null|string",
+          "required": false
+        },
+        "audit.requestId": {
+          "type": "string",
+          "required": true
+        },
+        "id": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "response": {
+        "currentAttempt": {
+          "type": "null|number"
+        },
+        "finishedAt": {
+          "type": "null|string"
+        },
+        "jobId": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "null|string"
+        },
+        "requestedAt": {
+          "type": "null|string"
+        },
+        "requestedBy": {
+          "type": "null|string"
+        },
+        "state": {
+          "type": "null|unknown"
+        },
+        "status": {
+          "type": "enum",
+          "enum": [
+            "already_terminal",
+            "cancel_requested",
+            "canceled",
+            "not_found"
+          ]
+        }
+      }
+    },
+    "completeHumanWait": {
+      "mutation": true,
+      "request": {
+        "audit": {
+          "type": "object",
+          "required": true
+        },
+        "audit.actor": {
+          "type": "string",
+          "required": true
+        },
+        "audit.reason": {
+          "type": "string",
+          "required": true
+        },
+        "audit.requestId": {
+          "type": "string",
+          "required": true
+        },
+        "id": {
+          "type": "string",
+          "required": true
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "required": true
+        },
+        "name": {
+          "type": "string",
+          "required": true
+        },
+        "result": {
+          "type": "recursive",
+          "required": true
+        }
+      },
+      "response": {
+        "completedAt": {
+          "type": "null|string"
+        },
+        "completedBy": {
+          "type": "null|string"
+        },
+        "jobId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "result": {
+          "type": "array|boolean|null|number|object|string"
+        },
+        "result[]": {
+          "type": "recursive"
+        },
+        "status": {
+          "type": "enum",
+          "enum": [
+            "already_completed",
+            "completed",
+            "duplicate",
+            "not_found",
+            "not_waiting",
+            "stale"
+          ]
+        }
+      }
+    },
+    "cron": {
+      "mutation": false,
+      "request": {},
+      "response": {
+        "capturedAt": {
+          "type": "string"
+        },
+        "maintenance": {
+          "type": "object"
+        },
+        "maintenance.cadences": {
+          "type": "object"
+        },
+        "maintenance.cadences.tickIntervalMs": {
+          "type": "number"
+        },
+        "maintenance.policy": {
+          "type": "object"
+        },
+        "maintenance.policy.historyRetentionLocalTime": {
+          "type": "string"
+        },
+        "maintenance.policy.partitionPreparationIntervalMs": {
+          "type": "number"
+        },
+        "maintenance.policy.terminalCleanupIntervalMs": {
+          "type": "number"
+        },
+        "maintenance.policy.timezone": {
+          "type": "string"
+        },
+        "maintenance.policy.updatedAt": {
+          "type": "string"
+        },
+        "maintenance.tasks": {
+          "type": "array"
+        },
+        "maintenance.tasks[]": {
+          "type": "object"
+        },
+        "maintenance.tasks[].due": {
+          "type": "boolean"
+        },
+        "maintenance.tasks[].incomplete": {
+          "type": "boolean"
+        },
+        "maintenance.tasks[].lastCompletedAt": {
+          "type": "null|string"
+        },
+        "maintenance.tasks[].lastStartedAt": {
+          "type": "null|string"
+        },
+        "maintenance.tasks[].task": {
+          "type": "enum",
+          "enum": [
+            "history_partitions",
+            "history_retention",
+            "terminal_storage",
+            "tick"
+          ]
+        },
+        "schedules": {
+          "type": "array"
+        },
+        "schedules[]": {
+          "type": "object"
+        },
+        "schedules[].active": {
+          "type": "boolean"
+        },
+        "schedules[].cron": {
+          "type": "string"
+        },
+        "schedules[].enabled": {
+          "type": "boolean"
+        },
+        "schedules[].evaluatorCount": {
+          "type": "number"
+        },
+        "schedules[].identity": {
+          "type": "object"
+        },
+        "schedules[].identity.kind": {
+          "type": "enum",
+          "enum": [
+            "user"
+          ]
+        },
+        "schedules[].identity.name": {
+          "type": "string"
+        },
+        "schedules[].identity.namespace": {
+          "type": "string"
+        },
+        "schedules[].kind": {
+          "type": "enum",
+          "enum": [
+            "user"
+          ]
+        },
+        "schedules[].lastFiredAt": {
+          "type": "null|string"
+        },
+        "schedules[].name": {
+          "type": "string"
+        },
+        "schedules[].namespace": {
+          "type": "string"
+        },
+        "schedules[].occurrenceCount": {
+          "type": "number"
+        },
+        "schedules[].priority": {
+          "type": "number"
+        },
+        "schedules[].queue": {
+          "type": "string"
+        },
+        "schedules[].revision": {
+          "type": "string"
+        },
+        "schedules[].type": {
+          "type": "string"
+        },
+        "schedules[].updatedAt": {
+          "type": "string"
+        }
+      }
+    },
+    "enqueueTest": {
+      "mutation": true,
+      "request": {
+        "audit": {
+          "type": "object",
+          "required": true
+        },
+        "audit.actor": {
+          "type": "string",
+          "required": true
+        },
+        "audit.reason": {
+          "type": "string",
+          "required": true
+        },
+        "audit.requestId": {
+          "type": "string",
+          "required": true
+        },
+        "feature": {
+          "type": "enum",
+          "enum": [
+            "batch-handlers",
+            "cancellation",
+            "child-workflows",
+            "dead-letters-redrive",
+            "durable-checkpoints",
+            "durable-waits",
+            "human-decisions",
+            "ingress-routing",
+            "job-dependencies",
+            "keyed-debounce",
+            "keyed-throttle",
+            "payload-contracts",
+            "priority-lanes",
+            "progress",
+            "retry-policies",
+            "signals",
+            "timing-controls"
+          ],
+          "required": false
+        },
+        "kind": {
+          "type": "enum",
+          "enum": [
+            "durable",
+            "failure",
+            "feature",
+            "idempotent",
+            "long-running",
+            "redrive",
+            "retry",
+            "success",
+            "timer"
+          ],
+          "required": true
+        },
+        "priority": {
+          "type": "integer",
+          "required": false
+        },
+        "scenario": {
+          "type": "enum",
+          "enum": [
+            "customer-onboarding",
+            "order-fulfillment",
+            "report-publication"
+          ],
+          "required": false
+        }
+      },
+      "response": {
+        "jobId": {
+          "type": "string"
+        }
+      }
+    },
+    "eventDetail": {
+      "mutation": false,
+      "request": {
+        "id": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "response": {
+        "attempt": {
+          "type": "null|number"
+        },
+        "claimedAt": {
+          "type": "null|string"
+        },
+        "details": {
+          "type": "unknown"
+        },
+        "durationMs": {
+          "type": "null|number"
+        },
+        "error": {
+          "type": "unknown"
+        },
+        "errorMessage": {
+          "type": "null|string"
+        },
+        "fenceToken": {
+          "type": "null|string"
+        },
+        "finishedAt": {
+          "type": "null|string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "jobId": {
+          "type": "string"
+        },
+        "jobType": {
+          "type": "null|string"
+        },
+        "kind": {
+          "type": "enum",
+          "enum": [
+            "attempt",
+            "event"
+          ]
+        },
+        "occurredAt": {
+          "type": "string"
+        },
+        "queue": {
+          "type": "null|string"
+        },
+        "recordId": {
+          "type": "string"
+        },
+        "startedAt": {
+          "type": "null|string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "workerId": {
+          "type": "null|string"
+        }
+      }
+    },
+    "events": {
+      "mutation": false,
+      "request": {
+        "jobId": {
+          "type": "null|string",
+          "required": false
+        },
+        "jobType": {
+          "type": "null|string",
+          "required": false
+        },
+        "kind": {
+          "type": "enum",
+          "enum": [
+            "all",
+            "attempt",
+            "event"
+          ],
+          "required": false
+        },
+        "page": {
+          "type": "integer",
+          "required": false
+        },
+        "pageSize": {
+          "type": "number",
+          "enum": [
+            "100",
+            "25",
+            "50"
+          ],
+          "required": false
+        },
+        "queue": {
+          "type": "null|string",
+          "required": false
+        },
+        "types": {
+          "type": "array",
+          "required": false
+        },
+        "types[]": {
+          "type": "enum",
+          "enum": [
+            "batch_dispatched",
+            "batch_failed",
+            "cancel_requested",
+            "canceled",
+            "checkpoint_saved",
+            "child_created",
+            "child_joined",
+            "children_created",
+            "children_joined",
+            "claimed",
+            "deadline_exceeded",
+            "debounce_rejected",
+            "debounced",
+            "dependency_blocked",
+            "dependency_canceled",
+            "dependency_failed",
+            "dependency_released",
+            "enqueued",
+            "execution_timed_out",
+            "failed",
+            "human_wait_completed",
+            "human_wait_created",
+            "human_wait_rejected",
+            "human_wait_replayed",
+            "lease_expired",
+            "parent_linked",
+            "progress_updated",
+            "promoted",
+            "redrive_created",
+            "redriven",
+            "retry",
+            "retry_scheduled",
+            "signal_received",
+            "signal_rejected",
+            "signal_replayed",
+            "signal_waiting",
+            "succeeded",
+            "throttled",
+            "timeout",
+            "wait_elapsed",
+            "wait_replayed",
+            "wait_scheduled"
+          ],
+          "required": false
+        },
+        "window": {
+          "type": "enum",
+          "enum": [
+            "15m",
+            "1h",
+            "24h",
+            "6h"
+          ],
+          "required": false
+        }
+      },
+      "response": {
+        "capturedAt": {
+          "type": "string"
+        },
+        "events": {
+          "type": "array"
+        },
+        "events[]": {
+          "type": "object"
+        },
+        "events[].attempt": {
+          "type": "null|number"
+        },
+        "events[].details": {
+          "type": "unknown"
+        },
+        "events[].durationMs": {
+          "type": "null|number"
+        },
+        "events[].errorMessage": {
+          "type": "null|string"
+        },
+        "events[].fenceToken": {
+          "type": "null|string"
+        },
+        "events[].id": {
+          "type": "string"
+        },
+        "events[].jobId": {
+          "type": "string"
+        },
+        "events[].jobType": {
+          "type": "null|string"
+        },
+        "events[].kind": {
+          "type": "enum",
+          "enum": [
+            "attempt",
+            "event"
+          ]
+        },
+        "events[].occurredAt": {
+          "type": "string"
+        },
+        "events[].queue": {
+          "type": "null|string"
+        },
+        "events[].recordId": {
+          "type": "string"
+        },
+        "events[].type": {
+          "type": "string"
+        },
+        "events[].workerId": {
+          "type": "null|string"
+        },
+        "page": {
+          "type": "number"
+        },
+        "pageSize": {
+          "type": "number"
+        },
+        "retention": {
+          "type": "object"
+        },
+        "retention.attemptHistoryDays": {
+          "type": "null|number"
+        },
+        "retention.jobEventDays": {
+          "type": "null|number"
+        },
+        "total": {
+          "type": "number"
+        },
+        "window": {
+          "type": "enum",
+          "enum": [
+            "15m",
+            "1h",
+            "24h",
+            "6h"
+          ]
+        },
+        "windowSeconds": {
+          "type": "number"
+        }
+      }
+    },
+    "humanWaits": {
+      "mutation": false,
+      "request": {},
+      "response": {
+        "canComplete": {
+          "type": "boolean"
+        },
+        "canSignal": {
+          "type": "boolean"
+        },
+        "capturedAt": {
+          "type": "string"
+        },
+        "diagnostics": {
+          "type": "object"
+        },
+        "diagnostics.capped": {
+          "type": "boolean"
+        },
+        "diagnostics.oldestPendingAgeMs": {
+          "type": "null|number"
+        },
+        "diagnostics.overdue": {
+          "type": "number"
+        },
+        "diagnostics.pendingHumanDecisions": {
+          "type": "number"
+        },
+        "diagnostics.pendingSignals": {
+          "type": "number"
+        },
+        "diagnostics.rejectedDeliveries": {
+          "type": "number"
+        },
+        "signalWaits": {
+          "type": "array"
+        },
+        "signalWaits[]": {
+          "type": "object"
+        },
+        "signalWaits[].attempt": {
+          "type": "number"
+        },
+        "signalWaits[].createdAt": {
+          "type": "string"
+        },
+        "signalWaits[].deadlineAt": {
+          "type": "string"
+        },
+        "signalWaits[].jobId": {
+          "type": "string"
+        },
+        "signalWaits[].jobType": {
+          "type": "string"
+        },
+        "signalWaits[].name": {
+          "type": "string"
+        },
+        "signalWaits[].queue": {
+          "type": "string"
+        },
+        "waits": {
+          "type": "array"
+        },
+        "waits[]": {
+          "type": "object"
+        },
+        "waits[].attempt": {
+          "type": "number"
+        },
+        "waits[].context": {
+          "type": "unknown"
+        },
+        "waits[].createdAt": {
+          "type": "string"
+        },
+        "waits[].deadlineAt": {
+          "type": "string"
+        },
+        "waits[].jobId": {
+          "type": "string"
+        },
+        "waits[].jobType": {
+          "type": "string"
+        },
+        "waits[].name": {
+          "type": "string"
+        },
+        "waits[].queue": {
+          "type": "string"
+        }
+      }
+    },
+    "jobDetail": {
+      "mutation": false,
+      "request": {
+        "id": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "response": {
+        "attempts": {
+          "type": "array"
+        },
+        "attempts[]": {
+          "type": "object"
+        },
+        "attempts[].attempt": {
+          "type": "number"
+        },
+        "attempts[].claimedAt": {
+          "type": "string"
+        },
+        "attempts[].durationMs": {
+          "type": "number"
+        },
+        "attempts[].elapsedMs": {
+          "type": "number"
+        },
+        "attempts[].error": {
+          "type": "unknown"
+        },
+        "attempts[].executionMs": {
+          "type": "number"
+        },
+        "attempts[].finishedAt": {
+          "type": "string"
+        },
+        "attempts[].outcome": {
+          "type": "string"
+        },
+        "attempts[].startedAt": {
+          "type": "string"
+        },
+        "attempts[].workerId": {
+          "type": "string"
+        },
+        "batchExecutions": {
+          "type": "array"
+        },
+        "batchExecutions[]": {
+          "type": "object"
+        },
+        "batchExecutions[].attempt": {
+          "type": "number"
+        },
+        "batchExecutions[].batchWideFailure": {
+          "type": "boolean"
+        },
+        "batchExecutions[].dispatchedAt": {
+          "type": "string"
+        },
+        "batchExecutions[].id": {
+          "type": "string"
+        },
+        "batchExecutions[].members": {
+          "type": "array"
+        },
+        "batchExecutions[].members[]": {
+          "type": "object"
+        },
+        "batchExecutions[].members[].attempt": {
+          "type": "number"
+        },
+        "batchExecutions[].members[].error": {
+          "type": "unknown"
+        },
+        "batchExecutions[].members[].id": {
+          "type": "string"
+        },
+        "batchExecutions[].members[].outcome": {
+          "type": "null|string"
+        },
+        "batchExecutions[].members[].type": {
+          "type": "string"
+        },
+        "canSignal": {
+          "type": "boolean"
+        },
+        "checkpoints": {
+          "type": "array"
+        },
+        "checkpoints[]": {
+          "type": "object"
+        },
+        "checkpoints[].attempt": {
+          "type": "number"
+        },
+        "checkpoints[].createdAt": {
+          "type": "string"
+        },
+        "checkpoints[].fenceToken": {
+          "type": "string"
+        },
+        "checkpoints[].name": {
+          "type": "string"
+        },
+        "checkpoints[].value": {
+          "type": "unknown"
+        },
+        "checkpoints[].workerId": {
+          "type": "string"
+        },
+        "childLineage": {
+          "type": "object"
+        },
+        "childLineage.records": {
+          "type": "array"
+        },
+        "childLineage.records[]": {
+          "type": "object"
+        },
+        "childLineage.records[].childJobId": {
+          "type": "string"
+        },
+        "childLineage.records[].createdAt": {
+          "type": "string"
+        },
+        "childLineage.records[].error": {
+          "type": "unknown"
+        },
+        "childLineage.records[].joinedAt": {
+          "type": "null|string"
+        },
+        "childLineage.records[].name": {
+          "type": "string"
+        },
+        "childLineage.records[].outcomeState": {
+          "type": "null|unknown"
+        },
+        "childLineage.records[].parentJobId": {
+          "type": "string"
+        },
+        "childLineage.records[].type": {
+          "type": "string"
+        },
+        "childLineage.truncated": {
+          "type": "boolean"
+        },
+        "concurrencyPolicy": {
+          "type": "null|object"
+        },
+        "concurrencyPolicy.active": {
+          "type": "number"
+        },
+        "concurrencyPolicy.available": {
+          "type": "number"
+        },
+        "concurrencyPolicy.blockedReady": {
+          "type": "number"
+        },
+        "concurrencyPolicy.highestKeyActive": {
+          "type": "number"
+        },
+        "concurrencyPolicy.maxActive": {
+          "type": "number"
+        },
+        "concurrencyPolicy.maxActivePerKey": {
+          "type": "null|number"
+        },
+        "concurrencyPolicy.namespace": {
+          "type": "string"
+        },
+        "concurrencyPolicy.saturatedKeys": {
+          "type": "number"
+        },
+        "concurrencyPolicy.utilizationKnown": {
+          "type": "boolean"
+        },
+        "current": {
+          "type": "object"
+        },
+        "current.error": {
+          "type": "unknown"
+        },
+        "current.outcome": {
+          "type": "null|object"
+        },
+        "current.outcome.attempt": {
+          "type": "number"
+        },
+        "current.outcome.error": {
+          "type": "unknown"
+        },
+        "current.outcome.finishedAt": {
+          "type": "string"
+        },
+        "current.outcome.result": {
+          "type": "unknown"
+        },
+        "current.outcome.state": {
+          "type": "string"
+        },
+        "current.result": {
+          "type": "unknown"
+        },
+        "current.runtime": {
+          "type": "null|object"
+        },
+        "current.runtime.acquiredAt": {
+          "type": "null|string"
+        },
+        "current.runtime.attempt": {
+          "type": "number"
+        },
+        "current.runtime.attemptStartedAt": {
+          "type": "null|string"
+        },
+        "current.runtime.attemptTimeoutAt": {
+          "type": "null|string"
+        },
+        "current.runtime.cancellation": {
+          "type": "null|object"
+        },
+        "current.runtime.cancellation.reason": {
+          "type": "null|string"
+        },
+        "current.runtime.cancellation.requestedAt": {
+          "type": "string"
+        },
+        "current.runtime.cancellation.requestedBy": {
+          "type": "null|string"
+        },
+        "current.runtime.error": {
+          "type": "unknown"
+        },
+        "current.runtime.expiresAt": {
+          "type": "null|string"
+        },
+        "current.runtime.fenceToken": {
+          "type": "string"
+        },
+        "current.runtime.heartbeatAt": {
+          "type": "null|string"
+        },
+        "current.runtime.readyAt": {
+          "type": "null|string"
+        },
+        "current.runtime.runAt": {
+          "type": "string"
+        },
+        "current.runtime.state": {
+          "type": "string"
+        },
+        "current.runtime.waitName": {
+          "type": "null|string"
+        },
+        "current.runtime.workerId": {
+          "type": "null|string"
+        },
+        "dependencyLineage": {
+          "type": "object"
+        },
+        "dependencyLineage.records": {
+          "type": "array"
+        },
+        "dependencyLineage.records[]": {
+          "type": "object"
+        },
+        "dependencyLineage.records[].createdAt": {
+          "type": "string"
+        },
+        "dependencyLineage.records[].dependentJobId": {
+          "type": "string"
+        },
+        "dependencyLineage.records[].onCancellation": {
+          "type": "enum",
+          "enum": [
+            "cancel",
+            "fail",
+            "release"
+          ]
+        },
+        "dependencyLineage.records[].onFailure": {
+          "type": "enum",
+          "enum": [
+            "cancel",
+            "fail",
+            "release"
+          ]
+        },
+        "dependencyLineage.records[].onSuccess": {
+          "type": "enum",
+          "enum": [
+            "cancel",
+            "fail",
+            "release"
+          ]
+        },
+        "dependencyLineage.records[].prerequisiteJobId": {
+          "type": "string"
+        },
+        "dependencyLineage.records[].releasedAt": {
+          "type": "null|string"
+        },
+        "dependencyLineage.records[].resolution": {
+          "type": "null|unknown"
+        },
+        "dependencyLineage.truncated": {
+          "type": "boolean"
+        },
+        "durability": {
+          "type": "null|object"
+        },
+        "durability.description": {
+          "type": "string"
+        },
+        "durability.label": {
+          "type": "string"
+        },
+        "durability.persistentFailure": {
+          "type": "null|object"
+        },
+        "durability.persistentFailure.afterStepIndex": {
+          "type": "number"
+        },
+        "durability.persistentFailure.afterStepName": {
+          "type": "string"
+        },
+        "durability.persistentFailure.beforeStepName": {
+          "type": "string"
+        },
+        "durability.persistentFailure.reason": {
+          "type": "string"
+        },
+        "durability.scenario": {
+          "type": "string"
+        },
+        "durability.source": {
+          "type": "string"
+        },
+        "durability.steps": {
+          "type": "array"
+        },
+        "durability.steps[]": {
+          "type": "object"
+        },
+        "durability.steps[].description": {
+          "type": "string"
+        },
+        "durability.steps[].label": {
+          "type": "string"
+        },
+        "durability.steps[].name": {
+          "type": "string"
+        },
+        "events": {
+          "type": "array"
+        },
+        "events[]": {
+          "type": "object"
+        },
+        "events[].attempt": {
+          "type": "null|number"
+        },
+        "events[].details": {
+          "type": "unknown"
+        },
+        "events[].id": {
+          "type": "string"
+        },
+        "events[].occurredAt": {
+          "type": "string"
+        },
+        "events[].type": {
+          "type": "string"
+        },
+        "identity": {
+          "type": "object"
+        },
+        "identity.blockedReason": {
+          "type": "null|unknown"
+        },
+        "identity.concurrencyKey": {
+          "type": "null|string"
+        },
+        "identity.createdAt": {
+          "type": "string"
+        },
+        "identity.deadlineAt": {
+          "type": "null|string"
+        },
+        "identity.dependencyPolicy": {
+          "type": "null|object"
+        },
+        "identity.dependencyPolicy.onCancellation": {
+          "type": "enum",
+          "enum": [
+            "cancel",
+            "fail",
+            "release"
+          ]
+        },
+        "identity.dependencyPolicy.onFailure": {
+          "type": "enum",
+          "enum": [
+            "cancel",
+            "fail",
+            "release"
+          ]
+        },
+        "identity.dependencyPolicy.onSuccess": {
+          "type": "enum",
+          "enum": [
+            "cancel",
+            "fail",
+            "release"
+          ]
+        },
+        "identity.dependencyReleasedAt": {
+          "type": "null|string"
+        },
+        "identity.executionTimeoutMs": {
+          "type": "null|number"
+        },
+        "identity.id": {
+          "type": "string"
+        },
+        "identity.maxAttempts": {
+          "type": "number"
+        },
+        "identity.prerequisiteJobId": {
+          "type": "null|string"
+        },
+        "identity.prerequisiteJobIds": {
+          "type": "array"
+        },
+        "identity.prerequisiteJobIds[]": {
+          "type": "string"
+        },
+        "identity.priority": {
+          "type": "number"
+        },
+        "identity.queue": {
+          "type": "string"
+        },
+        "identity.retryPolicy": {
+          "type": "null|object"
+        },
+        "identity.retryPolicy.baseDelayMs": {
+          "type": "number"
+        },
+        "identity.retryPolicy.delayMs": {
+          "type": "number"
+        },
+        "identity.retryPolicy.initialDelayMs": {
+          "type": "number"
+        },
+        "identity.retryPolicy.maxDelayMs": {
+          "type": "number"
+        },
+        "identity.retryPolicy.multiplier": {
+          "type": "number"
+        },
+        "identity.retryPolicy.type": {
+          "type": "enum",
+          "enum": [
+            "fixed"
+          ]
+        },
+        "identity.state": {
+          "type": "string"
+        },
+        "identity.type": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "unknown"
+        },
+        "progress": {
+          "type": "null|object"
+        },
+        "progress.attempt": {
+          "type": "number"
+        },
+        "progress.createdAt": {
+          "type": "string"
+        },
+        "progress.fenceToken": {
+          "type": "string"
+        },
+        "progress.revision": {
+          "type": "string"
+        },
+        "progress.updatedAt": {
+          "type": "string"
+        },
+        "progress.value": {
+          "type": "unknown"
+        },
+        "progress.workerId": {
+          "type": "string"
+        },
+        "redriveLineage": {
+          "type": "object"
+        },
+        "redriveLineage.records": {
+          "type": "array"
+        },
+        "redriveLineage.records[]": {
+          "type": "object"
+        },
+        "redriveLineage.records[].reason": {
+          "type": "string"
+        },
+        "redriveLineage.records[].requestIdDigest": {
+          "type": "string"
+        },
+        "redriveLineage.records[].requestIdLength": {
+          "type": "number"
+        },
+        "redriveLineage.records[].requestIdPreview": {
+          "type": "string"
+        },
+        "redriveLineage.records[].requestedAt": {
+          "type": "string"
+        },
+        "redriveLineage.records[].requestedBy": {
+          "type": "string"
+        },
+        "redriveLineage.records[].sourceJobId": {
+          "type": "string"
+        },
+        "redriveLineage.records[].sourceState": {
+          "type": "enum",
+          "enum": [
+            "failed"
+          ]
+        },
+        "redriveLineage.records[].targetInitialState": {
+          "type": "enum",
+          "enum": [
+            "ready"
+          ]
+        },
+        "redriveLineage.records[].targetJobId": {
+          "type": "string"
+        },
+        "redriveLineage.truncated": {
+          "type": "boolean"
+        },
+        "signalWait": {
+          "type": "null|object"
+        },
+        "signalWait.deadlineAt": {
+          "type": "string"
+        },
+        "signalWait.name": {
+          "type": "string"
+        },
+        "waits": {
+          "type": "array"
+        },
+        "waits[]": {
+          "type": "object"
+        },
+        "waits[].attempt": {
+          "type": "number"
+        },
+        "waits[].createdAt": {
+          "type": "string"
+        },
+        "waits[].durationMs": {
+          "type": "null|number"
+        },
+        "waits[].fenceToken": {
+          "type": "string"
+        },
+        "waits[].mode": {
+          "type": "enum",
+          "enum": [
+            "absolute",
+            "relative"
+          ]
+        },
+        "waits[].name": {
+          "type": "string"
+        },
+        "waits[].requestedWakeAt": {
+          "type": "null|string"
+        },
+        "waits[].wakeAt": {
+          "type": "string"
+        },
+        "waits[].workerId": {
+          "type": "string"
+        }
+      }
+    },
+    "meta": {
+      "mutation": false,
+      "request": {},
+      "response": {
+        "environment": {
+          "type": "string"
+        }
+      }
+    },
+    "overrideMaintenancePolicy": {
+      "mutation": true,
+      "request": {
+        "audit": {
+          "type": "object",
+          "required": true
+        },
+        "audit.actor": {
+          "type": "string",
+          "required": true
+        },
+        "audit.reason": {
+          "type": "string",
+          "required": true
+        },
+        "audit.requestId": {
+          "type": "string",
+          "required": true
+        },
+        "definition": {
+          "type": "object",
+          "required": true
+        },
+        "definition.historyRetentionLocalTime": {
+          "type": "string",
+          "required": false
+        },
+        "definition.partitionPreparationIntervalMs": {
+          "type": "integer",
+          "required": false
+        },
+        "definition.statisticsGroupLimit": {
+          "type": "integer",
+          "required": false
+        },
+        "definition.statisticsRecomputeBuckets": {
+          "type": "integer",
+          "required": false
+        },
+        "definition.statisticsRollupIntervalMs": {
+          "type": "integer",
+          "required": false
+        },
+        "definition.terminalCleanupIntervalMs": {
+          "type": "integer",
+          "required": false
+        },
+        "definition.timezone": {
+          "type": "string",
+          "required": false
+        }
+      },
+      "response": {}
+    },
+    "overrideRetentionPolicy": {
+      "mutation": true,
+      "request": {
+        "audit": {
+          "type": "object",
+          "required": true
+        },
+        "audit.actor": {
+          "type": "string",
+          "required": true
+        },
+        "audit.reason": {
+          "type": "string",
+          "required": true
+        },
+        "audit.requestId": {
+          "type": "string",
+          "required": true
+        },
+        "definition": {
+          "type": "object",
+          "required": true
+        },
+        "definition.attemptHistoryRetentionDays": {
+          "type": "integer|null",
+          "required": false
+        },
+        "definition.defaultPartitionRowsPerPass": {
+          "type": "integer",
+          "required": false
+        },
+        "definition.historyPartitionsPerPass": {
+          "type": "integer",
+          "required": false
+        },
+        "definition.jobEventRetentionDays": {
+          "type": "integer|null",
+          "required": false
+        },
+        "definition.jobIdentityRetentionDays": {
+          "type": "integer|null",
+          "required": false
+        },
+        "definition.occurrenceRowsPerPass": {
+          "type": "integer",
+          "required": false
+        },
+        "definition.scheduleOccurrenceRetentionDays": {
+          "type": "integer|null",
+          "required": false
+        },
+        "definition.statisticsRetentionDays": {
+          "type": "integer|null",
+          "required": false
+        },
+        "definition.statisticsRowsPerPass": {
+          "type": "integer",
+          "required": false
+        },
+        "definition.terminalJobPruneLimit": {
+          "type": "integer",
+          "required": false
+        },
+        "definition.terminalOutcomeRetentionDays": {
+          "type": "integer|null",
+          "required": false
+        }
+      },
+      "response": {}
+    },
+    "previewRetentionPolicy": {
+      "mutation": false,
+      "request": {
+        "definition": {
+          "type": "object",
+          "required": true
+        },
+        "definition.attemptHistoryRetentionDays": {
+          "type": "integer|null",
+          "required": false
+        },
+        "definition.defaultPartitionRowsPerPass": {
+          "type": "integer",
+          "required": false
+        },
+        "definition.historyPartitionsPerPass": {
+          "type": "integer",
+          "required": false
+        },
+        "definition.jobEventRetentionDays": {
+          "type": "integer|null",
+          "required": false
+        },
+        "definition.jobIdentityRetentionDays": {
+          "type": "integer|null",
+          "required": false
+        },
+        "definition.occurrenceRowsPerPass": {
+          "type": "integer",
+          "required": false
+        },
+        "definition.scheduleOccurrenceRetentionDays": {
+          "type": "integer|null",
+          "required": false
+        },
+        "definition.statisticsRetentionDays": {
+          "type": "integer|null",
+          "required": false
+        },
+        "definition.statisticsRowsPerPass": {
+          "type": "integer",
+          "required": false
+        },
+        "definition.terminalJobPruneLimit": {
+          "type": "integer",
+          "required": false
+        },
+        "definition.terminalOutcomeRetentionDays": {
+          "type": "integer|null",
+          "required": false
+        }
+      },
+      "response": {
+        "capped": {
+          "type": "object"
+        },
+        "capped.attemptHistory": {
+          "type": "boolean"
+        },
+        "capped.jobEvents": {
+          "type": "boolean"
+        },
+        "capped.scheduleOccurrences": {
+          "type": "boolean"
+        },
+        "capped.statistics": {
+          "type": "boolean"
+        },
+        "capped.terminalJobs": {
+          "type": "boolean"
+        },
+        "eligible": {
+          "type": "object"
+        },
+        "eligible.attemptHistory": {
+          "type": "number"
+        },
+        "eligible.jobEvents": {
+          "type": "number"
+        },
+        "eligible.scheduleOccurrences": {
+          "type": "number"
+        },
+        "eligible.statistics": {
+          "type": "number"
+        },
+        "eligible.terminalJobs": {
+          "type": "number"
+        }
+      }
+    },
+    "purgeQueue": {
+      "mutation": true,
+      "request": {
+        "audit": {
+          "type": "object",
+          "required": true
+        },
+        "audit.actor": {
+          "type": "string",
+          "required": true
+        },
+        "audit.reason": {
+          "type": "string",
+          "required": true
+        },
+        "audit.requestId": {
+          "type": "string",
+          "required": true
+        },
+        "queue": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "response": {
+        "deletedCount": {
+          "type": "number"
+        }
+      }
+    },
+    "queues": {
+      "mutation": false,
+      "request": {},
+      "response": {
+        "capturedAt": {
+          "type": "string"
+        },
+        "concurrencyPoliciesCapped": {
+          "type": "boolean"
+        },
+        "queues": {
+          "type": "array"
+        },
+        "queues[]": {
+          "type": "object"
+        },
+        "queues[].active": {
+          "type": "number"
+        },
+        "queues[].canceled": {
+          "type": "number"
+        },
+        "queues[].concurrencyPolicy": {
+          "type": "null|object"
+        },
+        "queues[].concurrencyPolicy.active": {
+          "type": "number"
+        },
+        "queues[].concurrencyPolicy.available": {
+          "type": "number"
+        },
+        "queues[].concurrencyPolicy.blockedReady": {
+          "type": "number"
+        },
+        "queues[].concurrencyPolicy.highestKeyActive": {
+          "type": "number"
+        },
+        "queues[].concurrencyPolicy.maxActive": {
+          "type": "number"
+        },
+        "queues[].concurrencyPolicy.maxActivePerKey": {
+          "type": "null|number"
+        },
+        "queues[].concurrencyPolicy.namespace": {
+          "type": "string"
+        },
+        "queues[].concurrencyPolicy.saturatedKeys": {
+          "type": "number"
+        },
+        "queues[].concurrencyPolicy.utilizationKnown": {
+          "type": "boolean"
+        },
+        "queues[].failed": {
+          "type": "number"
+        },
+        "queues[].paused": {
+          "type": "boolean"
+        },
+        "queues[].queue": {
+          "type": "string"
+        },
+        "queues[].rateLimitPolicy": {
+          "type": "null|object"
+        },
+        "queues[].rateLimitPolicy.availableTokens": {
+          "type": "number"
+        },
+        "queues[].rateLimitPolicy.namespace": {
+          "type": "string"
+        },
+        "queues[].rateLimitPolicy.nextEligibleAt": {
+          "type": "null|string"
+        },
+        "queues[].rateLimitPolicy.perKey": {
+          "type": "null|object"
+        },
+        "queues[].rateLimitPolicy.perKey.burst": {
+          "type": "number"
+        },
+        "queues[].rateLimitPolicy.perKey.intervalMs": {
+          "type": "number"
+        },
+        "queues[].rateLimitPolicy.perKey.limit": {
+          "type": "number"
+        },
+        "queues[].rateLimitPolicy.rate": {
+          "type": "object"
+        },
+        "queues[].rateLimitPolicy.rate.burst": {
+          "type": "number"
+        },
+        "queues[].rateLimitPolicy.rate.intervalMs": {
+          "type": "number"
+        },
+        "queues[].rateLimitPolicy.rate.limit": {
+          "type": "number"
+        },
+        "queues[].rateLimitPolicy.throttledKeys": {
+          "type": "number"
+        },
+        "queues[].rateLimitPolicy.throttledReady": {
+          "type": "number"
+        },
+        "queues[].ready": {
+          "type": "number"
+        },
+        "queues[].scheduled": {
+          "type": "number"
+        },
+        "queues[].succeeded": {
+          "type": "number"
+        },
+        "queues[].terminalCountsApproximate": {
+          "type": "boolean"
+        },
+        "rateLimitPoliciesCapped": {
+          "type": "boolean"
+        }
+      }
+    },
+    "redriveDeadLetters": {
+      "mutation": true,
+      "request": {
+        "audit": {
+          "type": "object",
+          "required": true
+        },
+        "audit.actor": {
+          "type": "string",
+          "required": true
+        },
+        "audit.reason": {
+          "type": "string",
+          "required": true
+        },
+        "audit.requestId": {
+          "type": "string",
+          "required": true
+        },
+        "cursor": {
+          "type": "null|object",
+          "required": false
+        },
+        "cursor.finishedAt": {
+          "type": "string",
+          "required": false
+        },
+        "cursor.jobId": {
+          "type": "string",
+          "required": false
+        },
+        "jobType": {
+          "type": "null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer",
+          "required": false
+        },
+        "queue": {
+          "type": "null|string",
+          "required": false
+        },
+        "tags": {
+          "type": "array",
+          "required": false
+        },
+        "tags[]": {
+          "type": "string",
+          "required": false
+        }
+      },
+      "response": {
+        "nextCursor": {
+          "type": "null|object"
+        },
+        "nextCursor.finishedAt": {
+          "type": "string"
+        },
+        "nextCursor.jobId": {
+          "type": "string"
+        },
+        "results": {
+          "type": "array"
+        },
+        "results[]": {
+          "type": "object"
+        },
+        "results[].requestedAt": {
+          "type": "null|string"
+        },
+        "results[].sourceJobId": {
+          "type": "string"
+        },
+        "results[].sourceState": {
+          "type": "null|unknown"
+        },
+        "results[].status": {
+          "type": "enum",
+          "enum": [
+            "eligible",
+            "not_failed",
+            "not_found",
+            "redriven",
+            "replayed"
+          ]
+        },
+        "results[].targetJobId": {
+          "type": "null|string"
+        },
+        "results[].targetState": {
+          "type": "null|unknown"
+        }
+      }
+    },
+    "redriveTask": {
+      "mutation": true,
+      "request": {
+        "audit": {
+          "type": "object",
+          "required": true
+        },
+        "audit.actor": {
+          "type": "string",
+          "required": true
+        },
+        "audit.reason": {
+          "type": "string",
+          "required": true
+        },
+        "audit.requestId": {
+          "type": "string",
+          "required": true
+        },
+        "id": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "response": {
+        "requestedAt": {
+          "type": "null|string"
+        },
+        "sourceJobId": {
+          "type": "string"
+        },
+        "sourceState": {
+          "type": "null|unknown"
+        },
+        "status": {
+          "type": "enum",
+          "enum": [
+            "eligible",
+            "not_failed",
+            "not_found",
+            "redriven",
+            "replayed"
+          ]
+        },
+        "targetJobId": {
+          "type": "null|string"
+        },
+        "targetState": {
+          "type": "null|unknown"
+        }
+      }
+    },
+    "revertMaintenancePolicy": {
+      "mutation": true,
+      "request": {
+        "audit": {
+          "type": "object",
+          "required": true
+        },
+        "audit.actor": {
+          "type": "string",
+          "required": true
+        },
+        "audit.reason": {
+          "type": "string",
+          "required": true
+        },
+        "audit.requestId": {
+          "type": "string",
+          "required": true
+        },
+        "settings": {
+          "type": "array",
+          "required": true
+        },
+        "settings[]": {
+          "type": "enum",
+          "enum": [
+            "historyRetentionLocalTime",
+            "partitionPreparationIntervalMs",
+            "statisticsGroupLimit",
+            "statisticsRecomputeBuckets",
+            "statisticsRollupIntervalMs",
+            "terminalCleanupIntervalMs",
+            "timezone"
+          ],
+          "required": true
+        }
+      },
+      "response": {}
+    },
+    "revertRetentionPolicy": {
+      "mutation": true,
+      "request": {
+        "audit": {
+          "type": "object",
+          "required": true
+        },
+        "audit.actor": {
+          "type": "string",
+          "required": true
+        },
+        "audit.reason": {
+          "type": "string",
+          "required": true
+        },
+        "audit.requestId": {
+          "type": "string",
+          "required": true
+        },
+        "settings": {
+          "type": "array",
+          "required": true
+        },
+        "settings[]": {
+          "type": "enum",
+          "enum": [
+            "attemptHistoryRetentionDays",
+            "defaultPartitionRowsPerPass",
+            "historyPartitionsPerPass",
+            "jobEventRetentionDays",
+            "jobIdentityRetentionDays",
+            "occurrenceRowsPerPass",
+            "scheduleOccurrenceRetentionDays",
+            "statisticsRetentionDays",
+            "statisticsRowsPerPass",
+            "terminalJobPruneLimit",
+            "terminalOutcomeRetentionDays"
+          ],
+          "required": true
+        }
+      },
+      "response": {}
+    },
+    "runTaskNow": {
+      "mutation": true,
+      "request": {
+        "audit": {
+          "type": "object",
+          "required": true
+        },
+        "audit.actor": {
+          "type": "string",
+          "required": true
+        },
+        "audit.reason": {
+          "type": "string",
+          "required": true
+        },
+        "audit.requestId": {
+          "type": "string",
+          "required": true
+        },
+        "id": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "response": {
+        "id": {
+          "type": "string"
+        },
+        "runAt": {
+          "type": "null|string"
+        },
+        "state": {
+          "type": "null|string"
+        },
+        "status": {
+          "type": "enum",
+          "enum": [
+            "already_ready",
+            "not_found",
+            "not_scheduled",
+            "released",
+            "waiting"
+          ]
+        }
+      }
+    },
+    "setQueuePaused": {
+      "mutation": true,
+      "request": {
+        "audit": {
+          "type": "object",
+          "required": true
+        },
+        "audit.actor": {
+          "type": "string",
+          "required": true
+        },
+        "audit.reason": {
+          "type": "string",
+          "required": true
+        },
+        "audit.requestId": {
+          "type": "string",
+          "required": true
+        },
+        "paused": {
+          "type": "boolean",
+          "required": true
+        },
+        "queue": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "response": {
+        "paused": {
+          "type": "boolean"
+        }
+      }
+    },
+    "setScheduleEnabled": {
+      "mutation": true,
+      "request": {
+        "audit": {
+          "type": "object",
+          "required": true
+        },
+        "audit.actor": {
+          "type": "string",
+          "required": true
+        },
+        "audit.reason": {
+          "type": "string",
+          "required": true
+        },
+        "audit.requestId": {
+          "type": "string",
+          "required": true
+        },
+        "enabled": {
+          "type": "boolean",
+          "required": true
+        },
+        "kind": {
+          "type": "enum",
+          "enum": [
+            "user"
+          ],
+          "required": true
+        },
+        "name": {
+          "type": "string",
+          "required": true
+        },
+        "namespace": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "response": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "setWorkerPaused": {
+      "mutation": true,
+      "request": {
+        "audit": {
+          "type": "object",
+          "required": true
+        },
+        "audit.actor": {
+          "type": "string",
+          "required": true
+        },
+        "audit.reason": {
+          "type": "string",
+          "required": true
+        },
+        "audit.requestId": {
+          "type": "string",
+          "required": true
+        },
+        "paused": {
+          "type": "boolean",
+          "required": true
+        },
+        "workerId": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "response": {
+        "paused": {
+          "type": "boolean"
+        }
+      }
+    },
+    "settings": {
+      "mutation": false,
+      "request": {},
+      "response": {
+        "capturedAt": {
+          "type": "string"
+        },
+        "editable": {
+          "type": "boolean"
+        },
+        "maintenance": {
+          "type": "object"
+        },
+        "maintenance.historyRetentionLocalTime": {
+          "type": "string"
+        },
+        "maintenance.partitionPreparationIntervalMs": {
+          "type": "number"
+        },
+        "maintenance.provenance": {
+          "type": "object"
+        },
+        "maintenance.provenance.historyRetentionLocalTime": {
+          "type": "object"
+        },
+        "maintenance.provenance.historyRetentionLocalTime.applicationDefault": {
+          "type": "string"
+        },
+        "maintenance.provenance.historyRetentionLocalTime.source": {
+          "type": "enum",
+          "enum": [
+            "application",
+            "operator"
+          ]
+        },
+        "maintenance.provenance.partitionPreparationIntervalMs": {
+          "type": "object"
+        },
+        "maintenance.provenance.partitionPreparationIntervalMs.applicationDefault": {
+          "type": "number"
+        },
+        "maintenance.provenance.partitionPreparationIntervalMs.source": {
+          "type": "enum",
+          "enum": [
+            "application",
+            "operator"
+          ]
+        },
+        "maintenance.provenance.statisticsGroupLimit": {
+          "type": "object"
+        },
+        "maintenance.provenance.statisticsGroupLimit.applicationDefault": {
+          "type": "number"
+        },
+        "maintenance.provenance.statisticsGroupLimit.source": {
+          "type": "enum",
+          "enum": [
+            "application",
+            "operator"
+          ]
+        },
+        "maintenance.provenance.statisticsRecomputeBuckets": {
+          "type": "object"
+        },
+        "maintenance.provenance.statisticsRecomputeBuckets.applicationDefault": {
+          "type": "number"
+        },
+        "maintenance.provenance.statisticsRecomputeBuckets.source": {
+          "type": "enum",
+          "enum": [
+            "application",
+            "operator"
+          ]
+        },
+        "maintenance.provenance.statisticsRollupIntervalMs": {
+          "type": "object"
+        },
+        "maintenance.provenance.statisticsRollupIntervalMs.applicationDefault": {
+          "type": "number"
+        },
+        "maintenance.provenance.statisticsRollupIntervalMs.source": {
+          "type": "enum",
+          "enum": [
+            "application",
+            "operator"
+          ]
+        },
+        "maintenance.provenance.terminalCleanupIntervalMs": {
+          "type": "object"
+        },
+        "maintenance.provenance.terminalCleanupIntervalMs.applicationDefault": {
+          "type": "number"
+        },
+        "maintenance.provenance.terminalCleanupIntervalMs.source": {
+          "type": "enum",
+          "enum": [
+            "application",
+            "operator"
+          ]
+        },
+        "maintenance.provenance.timezone": {
+          "type": "object"
+        },
+        "maintenance.provenance.timezone.applicationDefault": {
+          "type": "string"
+        },
+        "maintenance.provenance.timezone.source": {
+          "type": "enum",
+          "enum": [
+            "application",
+            "operator"
+          ]
+        },
+        "maintenance.statisticsGroupLimit": {
+          "type": "number"
+        },
+        "maintenance.statisticsRecomputeBuckets": {
+          "type": "number"
+        },
+        "maintenance.statisticsRollupIntervalMs": {
+          "type": "number"
+        },
+        "maintenance.terminalCleanupIntervalMs": {
+          "type": "number"
+        },
+        "maintenance.timezone": {
+          "type": "string"
+        },
+        "maintenance.updatedAt": {
+          "type": "string"
+        },
+        "recommendationInputs": {
+          "type": "object"
+        },
+        "recommendationInputs.defaultHistoryRows": {
+          "type": "object"
+        },
+        "recommendationInputs.defaultHistoryRows.attemptHistory": {
+          "type": "number"
+        },
+        "recommendationInputs.defaultHistoryRows.jobEvents": {
+          "type": "number"
+        },
+        "recommendationInputs.defaultHistoryRowsCapped": {
+          "type": "object"
+        },
+        "recommendationInputs.defaultHistoryRowsCapped.attemptHistory": {
+          "type": "boolean"
+        },
+        "recommendationInputs.defaultHistoryRowsCapped.jobEvents": {
+          "type": "boolean"
+        },
+        "recommendationInputs.enqueueRate": {
+          "type": "object"
+        },
+        "recommendationInputs.enqueueRate.jobs": {
+          "type": "number"
+        },
+        "recommendationInputs.enqueueRate.windowMs": {
+          "type": "number"
+        },
+        "recommendationInputs.reasons": {
+          "type": "array"
+        },
+        "recommendationInputs.reasons[]": {
+          "type": "object"
+        },
+        "recommendationInputs.reasons[].budget": {
+          "type": "number"
+        },
+        "recommendationInputs.reasons[].category": {
+          "type": "enum",
+          "enum": [
+            "attemptHistory",
+            "jobEvents",
+            "jobIdentity",
+            "scheduleOccurrences",
+            "statistics",
+            "terminalOutcome"
+          ]
+        },
+        "recommendationInputs.reasons[].code": {
+          "type": "enum",
+          "enum": [
+            "concurrency-blocked",
+            "default-history-rows",
+            "eligible-history-partitions",
+            "expired-leases",
+            "missing-history-partitions",
+            "overdue-deadlines",
+            "overdue-execution-timeouts",
+            "overdue-external-waits",
+            "rate-limit-throttled",
+            "retention-lag",
+            "rollup-stalled",
+            "stalled-promotion"
+          ]
+        },
+        "recommendationInputs.reasons[].observed": {
+          "type": "number"
+        },
+        "recommendationInputs.reasons[].queue": {
+          "type": "string"
+        },
+        "recommendationInputs.reasons[].severity": {
+          "type": "enum",
+          "enum": [
+            "critical",
+            "degraded"
+          ]
+        },
+        "recommendationInputs.statistics": {
+          "type": "object"
+        },
+        "recommendationInputs.statistics.lagMs": {
+          "type": "number"
+        },
+        "recommendationInputs.statistics.lastRunAt": {
+          "type": "null|string"
+        },
+        "recommendationInputs.statistics.rolledUpThrough": {
+          "type": "string"
+        },
+        "retention": {
+          "type": "object"
+        },
+        "retention.attemptHistoryRetentionDays": {
+          "type": "null|number"
+        },
+        "retention.defaultPartitionRowsPerPass": {
+          "type": "number"
+        },
+        "retention.historyPartitionsPerPass": {
+          "type": "number"
+        },
+        "retention.jobEventRetentionDays": {
+          "type": "null|number"
+        },
+        "retention.jobIdentityRetentionDays": {
+          "type": "null|number"
+        },
+        "retention.occurrenceRowsPerPass": {
+          "type": "number"
+        },
+        "retention.provenance": {
+          "type": "object"
+        },
+        "retention.provenance.attemptHistoryRetentionDays": {
+          "type": "object"
+        },
+        "retention.provenance.attemptHistoryRetentionDays.applicationDefault": {
+          "type": "null|number"
+        },
+        "retention.provenance.attemptHistoryRetentionDays.source": {
+          "type": "enum",
+          "enum": [
+            "application",
+            "operator"
+          ]
+        },
+        "retention.provenance.defaultPartitionRowsPerPass": {
+          "type": "object"
+        },
+        "retention.provenance.defaultPartitionRowsPerPass.applicationDefault": {
+          "type": "number"
+        },
+        "retention.provenance.defaultPartitionRowsPerPass.source": {
+          "type": "enum",
+          "enum": [
+            "application",
+            "operator"
+          ]
+        },
+        "retention.provenance.historyPartitionsPerPass": {
+          "type": "object"
+        },
+        "retention.provenance.historyPartitionsPerPass.applicationDefault": {
+          "type": "number"
+        },
+        "retention.provenance.historyPartitionsPerPass.source": {
+          "type": "enum",
+          "enum": [
+            "application",
+            "operator"
+          ]
+        },
+        "retention.provenance.jobEventRetentionDays": {
+          "type": "object"
+        },
+        "retention.provenance.jobEventRetentionDays.applicationDefault": {
+          "type": "null|number"
+        },
+        "retention.provenance.jobEventRetentionDays.source": {
+          "type": "enum",
+          "enum": [
+            "application",
+            "operator"
+          ]
+        },
+        "retention.provenance.jobIdentityRetentionDays": {
+          "type": "object"
+        },
+        "retention.provenance.jobIdentityRetentionDays.applicationDefault": {
+          "type": "null|number"
+        },
+        "retention.provenance.jobIdentityRetentionDays.source": {
+          "type": "enum",
+          "enum": [
+            "application",
+            "operator"
+          ]
+        },
+        "retention.provenance.occurrenceRowsPerPass": {
+          "type": "object"
+        },
+        "retention.provenance.occurrenceRowsPerPass.applicationDefault": {
+          "type": "number"
+        },
+        "retention.provenance.occurrenceRowsPerPass.source": {
+          "type": "enum",
+          "enum": [
+            "application",
+            "operator"
+          ]
+        },
+        "retention.provenance.scheduleOccurrenceRetentionDays": {
+          "type": "object"
+        },
+        "retention.provenance.scheduleOccurrenceRetentionDays.applicationDefault": {
+          "type": "null|number"
+        },
+        "retention.provenance.scheduleOccurrenceRetentionDays.source": {
+          "type": "enum",
+          "enum": [
+            "application",
+            "operator"
+          ]
+        },
+        "retention.provenance.statisticsRetentionDays": {
+          "type": "object"
+        },
+        "retention.provenance.statisticsRetentionDays.applicationDefault": {
+          "type": "null|number"
+        },
+        "retention.provenance.statisticsRetentionDays.source": {
+          "type": "enum",
+          "enum": [
+            "application",
+            "operator"
+          ]
+        },
+        "retention.provenance.statisticsRowsPerPass": {
+          "type": "object"
+        },
+        "retention.provenance.statisticsRowsPerPass.applicationDefault": {
+          "type": "number"
+        },
+        "retention.provenance.statisticsRowsPerPass.source": {
+          "type": "enum",
+          "enum": [
+            "application",
+            "operator"
+          ]
+        },
+        "retention.provenance.terminalJobPruneLimit": {
+          "type": "object"
+        },
+        "retention.provenance.terminalJobPruneLimit.applicationDefault": {
+          "type": "number"
+        },
+        "retention.provenance.terminalJobPruneLimit.source": {
+          "type": "enum",
+          "enum": [
+            "application",
+            "operator"
+          ]
+        },
+        "retention.provenance.terminalOutcomeRetentionDays": {
+          "type": "object"
+        },
+        "retention.provenance.terminalOutcomeRetentionDays.applicationDefault": {
+          "type": "null|number"
+        },
+        "retention.provenance.terminalOutcomeRetentionDays.source": {
+          "type": "enum",
+          "enum": [
+            "application",
+            "operator"
+          ]
+        },
+        "retention.scheduleOccurrenceRetentionDays": {
+          "type": "null|number"
+        },
+        "retention.statisticsRetentionDays": {
+          "type": "null|number"
+        },
+        "retention.statisticsRowsPerPass": {
+          "type": "number"
+        },
+        "retention.terminalJobPruneLimit": {
+          "type": "number"
+        },
+        "retention.terminalOutcomeRetentionDays": {
+          "type": "null|number"
+        },
+        "retention.updatedAt": {
+          "type": "string"
+        },
+        "workers": {
+          "type": "array"
+        },
+        "workers[]": {
+          "type": "object"
+        },
+        "workers[].concurrency": {
+          "type": "number"
+        },
+        "workers[].heartbeatMs": {
+          "type": "null|number"
+        },
+        "workers[].id": {
+          "type": "string"
+        },
+        "workers[].lastSeenAt": {
+          "type": "string"
+        },
+        "workers[].leaseMs": {
+          "type": "null|number"
+        },
+        "workers[].maintenanceIntervalMs": {
+          "type": "null|number"
+        },
+        "workers[].maintenanceTaskPollMs": {
+          "type": "null|number"
+        },
+        "workers[].pollMs": {
+          "type": "null|number"
+        },
+        "workers[].queue": {
+          "type": "string"
+        },
+        "workers[].queues": {
+          "type": "array"
+        },
+        "workers[].queues[]": {
+          "type": "string"
+        },
+        "workers[].registryIntervalMs": {
+          "type": "null|number"
+        }
+      }
+    },
+    "signalTask": {
+      "mutation": true,
+      "request": {
+        "audit": {
+          "type": "object",
+          "required": true
+        },
+        "audit.actor": {
+          "type": "string",
+          "required": true
+        },
+        "audit.reason": {
+          "type": "string",
+          "required": true
+        },
+        "audit.requestId": {
+          "type": "string",
+          "required": true
+        },
+        "id": {
+          "type": "string",
+          "required": true
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "required": true
+        },
+        "name": {
+          "type": "string",
+          "required": true
+        },
+        "payload": {
+          "type": "recursive",
+          "required": true
+        }
+      },
+      "response": {
+        "deliveredAt": {
+          "type": "null|string"
+        },
+        "deliveredBy": {
+          "type": "null|string"
+        },
+        "jobId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "array|boolean|null|number|object|string"
+        },
+        "payload[]": {
+          "type": "recursive"
+        },
+        "status": {
+          "type": "enum",
+          "enum": [
+            "already_delivered",
+            "delivered",
+            "duplicate",
+            "not_found",
+            "not_waiting",
+            "stale"
+          ]
+        }
+      }
+    },
+    "system": {
+      "mutation": false,
+      "request": {
+        "window": {
+          "type": "enum",
+          "enum": [
+            "15m",
+            "1h",
+            "24h"
+          ],
+          "required": false
+        }
+      },
+      "response": {
+        "capturedAt": {
+          "type": "string"
+        },
+        "concurrencyPoliciesCapped": {
+          "type": "boolean"
+        },
+        "failingTypes": {
+          "type": "array"
+        },
+        "failingTypes[]": {
+          "type": "object"
+        },
+        "failingTypes[].attempts": {
+          "type": "number"
+        },
+        "failingTypes[].errorRate": {
+          "type": "number"
+        },
+        "failingTypes[].lastError": {
+          "type": "null|string"
+        },
+        "failingTypes[].lastSeenAt": {
+          "type": "string"
+        },
+        "failingTypes[].queue": {
+          "type": "string"
+        },
+        "failingTypes[].terminalFailures": {
+          "type": "number"
+        },
+        "failingTypes[].type": {
+          "type": "string"
+        },
+        "integrity": {
+          "type": "object"
+        },
+        "integrity.defaultAttemptRows": {
+          "type": "number"
+        },
+        "integrity.defaultEventRows": {
+          "type": "number"
+        },
+        "integrity.dueButUnpromoted": {
+          "type": "number"
+        },
+        "integrity.partitions": {
+          "type": "array"
+        },
+        "integrity.partitions[]": {
+          "type": "object"
+        },
+        "integrity.partitions[].attemptExists": {
+          "type": "boolean"
+        },
+        "integrity.partitions[].day": {
+          "type": "string"
+        },
+        "integrity.partitions[].eventExists": {
+          "type": "boolean"
+        },
+        "integrity.partitions[].startsAt": {
+          "type": "string"
+        },
+        "integrity.retention": {
+          "type": "object"
+        },
+        "integrity.retention.categories": {
+          "type": "array"
+        },
+        "integrity.retention.categories[]": {
+          "type": "object"
+        },
+        "integrity.retention.categories[].category": {
+          "type": "enum",
+          "enum": [
+            "attemptHistory",
+            "jobEvents",
+            "jobIdentity",
+            "scheduleOccurrences",
+            "statistics",
+            "terminalOutcome"
+          ]
+        },
+        "integrity.retention.categories[].lagMs": {
+          "type": "null|number"
+        },
+        "integrity.retention.categories[].oldestRetainedAt": {
+          "type": "null|string"
+        },
+        "integrity.retention.categories[].prunedByPartition": {
+          "type": "boolean"
+        },
+        "integrity.retention.categories[].retentionDays": {
+          "type": "null|number"
+        },
+        "integrity.retention.defaultHistoryRows": {
+          "type": "object"
+        },
+        "integrity.retention.defaultHistoryRows.attemptHistory": {
+          "type": "number"
+        },
+        "integrity.retention.defaultHistoryRows.jobEvents": {
+          "type": "number"
+        },
+        "integrity.retention.defaultHistoryRowsCapped": {
+          "type": "object"
+        },
+        "integrity.retention.defaultHistoryRowsCapped.attemptHistory": {
+          "type": "boolean"
+        },
+        "integrity.retention.defaultHistoryRowsCapped.jobEvents": {
+          "type": "boolean"
+        },
+        "integrity.retention.eligibleHistoryPartitions": {
+          "type": "object"
+        },
+        "integrity.retention.eligibleHistoryPartitions.attemptHistory": {
+          "type": "number"
+        },
+        "integrity.retention.eligibleHistoryPartitions.jobEvents": {
+          "type": "number"
+        },
+        "integrity.retention.maxLagCategory": {
+          "type": "null|unknown"
+        },
+        "integrity.retention.maxLagMs": {
+          "type": "null|number"
+        },
+        "integrity.retention.oldestRetainedAt": {
+          "type": "null|string"
+        },
+        "integrity.retention.oldestRetainedCategory": {
+          "type": "null|unknown"
+        },
+        "integrity.retention.policyUpdatedAt": {
+          "type": "string"
+        },
+        "integrity.storage": {
+          "type": "object"
+        },
+        "integrity.storage.relations": {
+          "type": "array"
+        },
+        "integrity.storage.relations[]": {
+          "type": "object"
+        },
+        "integrity.storage.relations[].deadRows": {
+          "type": "number"
+        },
+        "integrity.storage.relations[].indexBytes": {
+          "type": "number"
+        },
+        "integrity.storage.relations[].lastVacuumAt": {
+          "type": "null|string"
+        },
+        "integrity.storage.relations[].partitions": {
+          "type": "number"
+        },
+        "integrity.storage.relations[].relation": {
+          "type": "string"
+        },
+        "integrity.storage.relations[].rows": {
+          "type": "number"
+        },
+        "integrity.storage.relations[].tableBytes": {
+          "type": "number"
+        },
+        "integrity.storage.relations[].totalBytes": {
+          "type": "number"
+        },
+        "integrity.storage.rollup": {
+          "type": "object"
+        },
+        "integrity.storage.rollup.buckets": {
+          "type": "number"
+        },
+        "integrity.storage.rollup.lagMs": {
+          "type": "number"
+        },
+        "integrity.storage.rollup.lastRunAt": {
+          "type": "null|string"
+        },
+        "integrity.storage.rollup.newestBucketAt": {
+          "type": "null|string"
+        },
+        "integrity.storage.rollup.oldestBucketAt": {
+          "type": "null|string"
+        },
+        "integrity.storage.rollup.rolledUpThrough": {
+          "type": "string"
+        },
+        "integrity.storage.rollup.stalled": {
+          "type": "boolean"
+        },
+        "integrity.storage.totalBytes": {
+          "type": "number"
+        },
+        "kpis": {
+          "type": "object"
+        },
+        "kpis.backlog": {
+          "type": "object"
+        },
+        "kpis.backlog.oldestReadyMs": {
+          "type": "null|number"
+        },
+        "kpis.backlog.ready": {
+          "type": "number"
+        },
+        "kpis.children": {
+          "type": "object"
+        },
+        "kpis.children.canceledParents": {
+          "type": "number"
+        },
+        "kpis.children.capped": {
+          "type": "boolean"
+        },
+        "kpis.children.failedParents": {
+          "type": "number"
+        },
+        "kpis.children.pendingChildren": {
+          "type": "number"
+        },
+        "kpis.children.unjoinedResults": {
+          "type": "number"
+        },
+        "kpis.children.waitingParents": {
+          "type": "number"
+        },
+        "kpis.deadline": {
+          "type": "object"
+        },
+        "kpis.deadline.activeTimeouts": {
+          "type": "number"
+        },
+        "kpis.deadline.dueWithinMinute": {
+          "type": "number"
+        },
+        "kpis.deadline.earliestAt": {
+          "type": "null|string"
+        },
+        "kpis.deadline.overdue": {
+          "type": "number"
+        },
+        "kpis.deadline.overdueTimeouts": {
+          "type": "number"
+        },
+        "kpis.deadline.pending": {
+          "type": "number"
+        },
+        "kpis.dependencies": {
+          "type": "object"
+        },
+        "kpis.dependencies.blockedJobs": {
+          "type": "number"
+        },
+        "kpis.dependencies.capped": {
+          "type": "boolean"
+        },
+        "kpis.dependencies.failedResolutions": {
+          "type": "number"
+        },
+        "kpis.dependencies.pendingEdges": {
+          "type": "number"
+        },
+        "kpis.dependencies.retentionPruneStarved": {
+          "type": "boolean"
+        },
+        "kpis.drain": {
+          "type": "object"
+        },
+        "kpis.drain.completedPerMinute": {
+          "type": "number"
+        },
+        "kpis.drain.enqueuedPerMinute": {
+          "type": "number"
+        },
+        "kpis.drain.netPerMinute": {
+          "type": "number"
+        },
+        "kpis.errorRate": {
+          "type": "object"
+        },
+        "kpis.errorRate.current": {
+          "type": "number"
+        },
+        "kpis.errorRate.delta": {
+          "type": "number"
+        },
+        "kpis.errorRate.previous": {
+          "type": "number"
+        },
+        "kpis.externalWaits": {
+          "type": "object"
+        },
+        "kpis.externalWaits.capped": {
+          "type": "boolean"
+        },
+        "kpis.externalWaits.oldestPendingAgeMs": {
+          "type": "null|number"
+        },
+        "kpis.externalWaits.overdue": {
+          "type": "number"
+        },
+        "kpis.externalWaits.pendingHumanDecisions": {
+          "type": "number"
+        },
+        "kpis.externalWaits.pendingSignals": {
+          "type": "number"
+        },
+        "kpis.externalWaits.rejectedDeliveries": {
+          "type": "number"
+        },
+        "kpis.lease": {
+          "type": "object"
+        },
+        "kpis.lease.active": {
+          "type": "number"
+        },
+        "kpis.lease.expired": {
+          "type": "number"
+        },
+        "kpis.lease.expiringSoon": {
+          "type": "number"
+        },
+        "kpis.lease.recovered": {
+          "type": "number"
+        },
+        "kpis.queueWait": {
+          "type": "object"
+        },
+        "kpis.queueWait.p50Ms": {
+          "type": "null|number"
+        },
+        "kpis.queueWait.p95Ms": {
+          "type": "null|number"
+        },
+        "kpis.queueWait.p99Ms": {
+          "type": "null|number"
+        },
+        "kpis.retry": {
+          "type": "object"
+        },
+        "kpis.retry.backoff": {
+          "type": "number"
+        },
+        "kpis.retry.buckets": {
+          "type": "array"
+        },
+        "kpis.retry.buckets[]": {
+          "type": "object"
+        },
+        "kpis.retry.buckets[].count": {
+          "type": "number"
+        },
+        "kpis.retry.buckets[].upperBoundMs": {
+          "type": "null|number"
+        },
+        "kpis.retry.dueSoon": {
+          "type": "number"
+        },
+        "outcomes": {
+          "type": "array"
+        },
+        "outcomes[]": {
+          "type": "object"
+        },
+        "outcomes[].bucketStart": {
+          "type": "string"
+        },
+        "outcomes[].canceled": {
+          "type": "number"
+        },
+        "outcomes[].enqueued": {
+          "type": "number"
+        },
+        "outcomes[].failed": {
+          "type": "number"
+        },
+        "outcomes[].leaseExpired": {
+          "type": "number"
+        },
+        "outcomes[].retry": {
+          "type": "number"
+        },
+        "outcomes[].succeeded": {
+          "type": "number"
+        },
+        "pausedQueues": {
+          "type": "array"
+        },
+        "pausedQueues[]": {
+          "type": "string"
+        },
+        "queues": {
+          "type": "array"
+        },
+        "queues[]": {
+          "type": "object"
+        },
+        "queues[].active": {
+          "type": "number"
+        },
+        "queues[].completedPerMinute": {
+          "type": "number"
+        },
+        "queues[].concurrencyPolicy": {
+          "type": "null|object"
+        },
+        "queues[].concurrencyPolicy.active": {
+          "type": "number"
+        },
+        "queues[].concurrencyPolicy.available": {
+          "type": "number"
+        },
+        "queues[].concurrencyPolicy.blockedReady": {
+          "type": "number"
+        },
+        "queues[].concurrencyPolicy.highestKeyActive": {
+          "type": "number"
+        },
+        "queues[].concurrencyPolicy.maxActive": {
+          "type": "number"
+        },
+        "queues[].concurrencyPolicy.maxActivePerKey": {
+          "type": "null|number"
+        },
+        "queues[].concurrencyPolicy.namespace": {
+          "type": "string"
+        },
+        "queues[].concurrencyPolicy.saturatedKeys": {
+          "type": "number"
+        },
+        "queues[].concurrencyPolicy.utilizationKnown": {
+          "type": "boolean"
+        },
+        "queues[].dueSoon": {
+          "type": "number"
+        },
+        "queues[].enqueuedPerMinute": {
+          "type": "number"
+        },
+        "queues[].oldestReadyMs": {
+          "type": "null|number"
+        },
+        "queues[].paused": {
+          "type": "boolean"
+        },
+        "queues[].priorityBacklog": {
+          "type": "array"
+        },
+        "queues[].priorityBacklog[]": {
+          "type": "object"
+        },
+        "queues[].priorityBacklog[].oldestReadyMs": {
+          "type": "number"
+        },
+        "queues[].priorityBacklog[].priority": {
+          "type": "number"
+        },
+        "queues[].priorityBacklog[].ready": {
+          "type": "number"
+        },
+        "queues[].queue": {
+          "type": "string"
+        },
+        "queues[].rateLimitPolicy": {
+          "type": "null|object"
+        },
+        "queues[].rateLimitPolicy.availableTokens": {
+          "type": "number"
+        },
+        "queues[].rateLimitPolicy.namespace": {
+          "type": "string"
+        },
+        "queues[].rateLimitPolicy.nextEligibleAt": {
+          "type": "null|string"
+        },
+        "queues[].rateLimitPolicy.perKey": {
+          "type": "null|object"
+        },
+        "queues[].rateLimitPolicy.perKey.burst": {
+          "type": "number"
+        },
+        "queues[].rateLimitPolicy.perKey.intervalMs": {
+          "type": "number"
+        },
+        "queues[].rateLimitPolicy.perKey.limit": {
+          "type": "number"
+        },
+        "queues[].rateLimitPolicy.rate": {
+          "type": "object"
+        },
+        "queues[].rateLimitPolicy.rate.burst": {
+          "type": "number"
+        },
+        "queues[].rateLimitPolicy.rate.intervalMs": {
+          "type": "number"
+        },
+        "queues[].rateLimitPolicy.rate.limit": {
+          "type": "number"
+        },
+        "queues[].rateLimitPolicy.throttledKeys": {
+          "type": "number"
+        },
+        "queues[].rateLimitPolicy.throttledReady": {
+          "type": "number"
+        },
+        "queues[].ready": {
+          "type": "number"
+        },
+        "queues[].retrying": {
+          "type": "number"
+        },
+        "rateLimitPoliciesCapped": {
+          "type": "boolean"
+        },
+        "retryStorm": {
+          "type": "object"
+        },
+        "retryStorm.buckets": {
+          "type": "array"
+        },
+        "retryStorm.buckets[]": {
+          "type": "object"
+        },
+        "retryStorm.buckets[].count": {
+          "type": "number"
+        },
+        "retryStorm.buckets[].upperBoundMs": {
+          "type": "null|number"
+        },
+        "retryStorm.topTypes": {
+          "type": "array"
+        },
+        "retryStorm.topTypes[]": {
+          "type": "object"
+        },
+        "retryStorm.topTypes[].count": {
+          "type": "number"
+        },
+        "retryStorm.topTypes[].queue": {
+          "type": "string"
+        },
+        "retryStorm.topTypes[].type": {
+          "type": "string"
+        },
+        "status": {
+          "type": "object"
+        },
+        "status.level": {
+          "type": "enum",
+          "enum": [
+            "critical",
+            "degraded",
+            "healthy"
+          ]
+        },
+        "status.reasons": {
+          "type": "array"
+        },
+        "status.reasons[]": {
+          "type": "object"
+        },
+        "status.reasons[].budget": {
+          "type": "number"
+        },
+        "status.reasons[].category": {
+          "type": "enum",
+          "enum": [
+            "attemptHistory",
+            "jobEvents",
+            "jobIdentity",
+            "scheduleOccurrences",
+            "statistics",
+            "terminalOutcome"
+          ]
+        },
+        "status.reasons[].code": {
+          "type": "enum",
+          "enum": [
+            "concurrency-blocked",
+            "default-history-rows",
+            "eligible-history-partitions",
+            "expired-leases",
+            "missing-history-partitions",
+            "overdue-deadlines",
+            "overdue-execution-timeouts",
+            "overdue-external-waits",
+            "rate-limit-throttled",
+            "retention-lag",
+            "rollup-stalled",
+            "stalled-promotion"
+          ]
+        },
+        "status.reasons[].observed": {
+          "type": "number"
+        },
+        "status.reasons[].queue": {
+          "type": "string"
+        },
+        "status.reasons[].severity": {
+          "type": "enum",
+          "enum": [
+            "critical",
+            "degraded"
+          ]
+        },
+        "window": {
+          "type": "enum",
+          "enum": [
+            "15m",
+            "1h",
+            "24h"
+          ]
+        },
+        "windowSeconds": {
+          "type": "number"
+        }
+      }
+    },
+    "taskCounts": {
+      "mutation": false,
+      "request": {},
+      "response": {
+        "all": {
+          "type": "number"
+        },
+        "blocked": {
+          "type": "number"
+        },
+        "canceled": {
+          "type": "number"
+        },
+        "completed": {
+          "type": "number"
+        },
+        "discarded": {
+          "type": "number"
+        },
+        "queued": {
+          "type": "number"
+        },
+        "retried": {
+          "type": "number"
+        },
+        "running": {
+          "type": "number"
+        },
+        "scheduled": {
+          "type": "number"
+        },
+        "waiting": {
+          "type": "number"
+        }
+      }
+    },
+    "taskFacets": {
+      "mutation": false,
+      "request": {},
+      "response": {
+        "jobTypes": {
+          "type": "array"
+        },
+        "jobTypes[]": {
+          "type": "string"
+        },
+        "queues": {
+          "type": "array"
+        },
+        "queues[]": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array"
+        },
+        "tags[]": {
+          "type": "string"
+        },
+        "workers": {
+          "type": "array"
+        },
+        "workers[]": {
+          "type": "string"
+        }
+      }
+    },
+    "tasks": {
+      "mutation": false,
+      "request": {
+        "filter": {
+          "type": "enum",
+          "enum": [
+            "all",
+            "blocked",
+            "canceled",
+            "completed",
+            "discarded",
+            "queued",
+            "retried",
+            "running",
+            "scheduled",
+            "waiting"
+          ],
+          "required": false
+        },
+        "jobType": {
+          "type": "null|string",
+          "required": false
+        },
+        "page": {
+          "type": "integer",
+          "required": false
+        },
+        "pageSize": {
+          "type": "number",
+          "enum": [
+            "100",
+            "25",
+            "50"
+          ],
+          "required": false
+        },
+        "priority": {
+          "type": "integer|null",
+          "required": false
+        },
+        "queue": {
+          "type": "null|string",
+          "required": false
+        },
+        "search": {
+          "type": "string",
+          "required": false
+        },
+        "sort": {
+          "type": "enum",
+          "enum": [
+            "priority",
+            "updated"
+          ],
+          "required": false
+        },
+        "tags": {
+          "type": "array",
+          "required": false
+        },
+        "tags[]": {
+          "type": "string",
+          "required": false
+        },
+        "worker": {
+          "type": "null|string",
+          "required": false
+        }
+      },
+      "response": {
+        "canCompleteHumanWait": {
+          "type": "boolean"
+        },
+        "capturedAt": {
+          "type": "string"
+        },
+        "filter": {
+          "type": "enum",
+          "enum": [
+            "all",
+            "blocked",
+            "canceled",
+            "completed",
+            "discarded",
+            "queued",
+            "retried",
+            "running",
+            "scheduled",
+            "waiting"
+          ]
+        },
+        "jobType": {
+          "type": "null|string"
+        },
+        "jobs": {
+          "type": "array"
+        },
+        "jobs[]": {
+          "type": "object"
+        },
+        "jobs[].attempt": {
+          "type": "number"
+        },
+        "jobs[].blockedReason": {
+          "type": "null|unknown"
+        },
+        "jobs[].cancellation": {
+          "type": "null|object"
+        },
+        "jobs[].cancellation.reason": {
+          "type": "null|string"
+        },
+        "jobs[].cancellation.requestedAt": {
+          "type": "string"
+        },
+        "jobs[].cancellation.requestedBy": {
+          "type": "null|string"
+        },
+        "jobs[].createdAt": {
+          "type": "string"
+        },
+        "jobs[].deadlineAt": {
+          "type": "null|string"
+        },
+        "jobs[].durability": {
+          "type": "null|object"
+        },
+        "jobs[].durability.completedSteps": {
+          "type": "number"
+        },
+        "jobs[].durability.totalSteps": {
+          "type": "number"
+        },
+        "jobs[].errorMessage": {
+          "type": "null|string"
+        },
+        "jobs[].executionTimeoutMs": {
+          "type": "null|number"
+        },
+        "jobs[].finishedAt": {
+          "type": "null|string"
+        },
+        "jobs[].humanWait": {
+          "type": "null|object"
+        },
+        "jobs[].humanWait.context": {
+          "type": "unknown"
+        },
+        "jobs[].humanWait.deadlineAt": {
+          "type": "string"
+        },
+        "jobs[].humanWait.name": {
+          "type": "string"
+        },
+        "jobs[].id": {
+          "type": "string"
+        },
+        "jobs[].keyed": {
+          "type": "boolean"
+        },
+        "jobs[].lastWorkerId": {
+          "type": "null|string"
+        },
+        "jobs[].maxAttempts": {
+          "type": "number"
+        },
+        "jobs[].prerequisiteJobIds": {
+          "type": "array"
+        },
+        "jobs[].prerequisiteJobIds[]": {
+          "type": "string"
+        },
+        "jobs[].priority": {
+          "type": "number"
+        },
+        "jobs[].queue": {
+          "type": "string"
+        },
+        "jobs[].retryPolicy": {
+          "type": "null|object"
+        },
+        "jobs[].retryPolicy.baseDelayMs": {
+          "type": "number"
+        },
+        "jobs[].retryPolicy.delayMs": {
+          "type": "number"
+        },
+        "jobs[].retryPolicy.initialDelayMs": {
+          "type": "number"
+        },
+        "jobs[].retryPolicy.maxDelayMs": {
+          "type": "number"
+        },
+        "jobs[].retryPolicy.multiplier": {
+          "type": "number"
+        },
+        "jobs[].retryPolicy.type": {
+          "type": "enum",
+          "enum": [
+            "fixed"
+          ]
+        },
+        "jobs[].runAt": {
+          "type": "null|string"
+        },
+        "jobs[].signalWait": {
+          "type": "null|object"
+        },
+        "jobs[].signalWait.deadlineAt": {
+          "type": "string"
+        },
+        "jobs[].signalWait.name": {
+          "type": "string"
+        },
+        "jobs[].state": {
+          "type": "string"
+        },
+        "jobs[].tags": {
+          "type": "array"
+        },
+        "jobs[].tags[]": {
+          "type": "string"
+        },
+        "jobs[].type": {
+          "type": "string"
+        },
+        "jobs[].updatedAt": {
+          "type": "string"
+        },
+        "jobs[].wait": {
+          "type": "null|object"
+        },
+        "jobs[].wait.mode": {
+          "type": "enum",
+          "enum": [
+            "absolute",
+            "relative"
+          ]
+        },
+        "jobs[].wait.name": {
+          "type": "string"
+        },
+        "jobs[].wait.wakeAt": {
+          "type": "string"
+        },
+        "jobs[].waitName": {
+          "type": "null|string"
+        },
+        "jobs[].wakeAt": {
+          "type": "null|string"
+        },
+        "jobs[].workerId": {
+          "type": "null|string"
+        },
+        "page": {
+          "type": "number"
+        },
+        "pageSize": {
+          "type": "number"
+        },
+        "priority": {
+          "type": "null|number"
+        },
+        "queue": {
+          "type": "null|string"
+        },
+        "search": {
+          "type": "null|string"
+        },
+        "sort": {
+          "type": "enum",
+          "enum": [
+            "priority",
+            "updated"
+          ]
+        },
+        "tags": {
+          "type": "array"
+        },
+        "tags[]": {
+          "type": "string"
+        },
+        "total": {
+          "type": "number"
+        },
+        "worker": {
+          "type": "null|string"
+        }
+      }
+    },
+    "workers": {
+      "mutation": false,
+      "request": {},
+      "response": {
+        "canManageWorkers": {
+          "type": "boolean"
+        },
+        "capturedAt": {
+          "type": "string"
+        },
+        "workers": {
+          "type": "array"
+        },
+        "workers[]": {
+          "type": "object"
+        },
+        "workers[].activeJobs": {
+          "type": "number"
+        },
+        "workers[].activeSlots": {
+          "type": "null|number"
+        },
+        "workers[].averageExecutionMs": {
+          "type": "null|number"
+        },
+        "workers[].completedAttempts": {
+          "type": "number"
+        },
+        "workers[].concurrency": {
+          "type": "null|number"
+        },
+        "workers[].draining": {
+          "type": "boolean"
+        },
+        "workers[].failedAttempts": {
+          "type": "number"
+        },
+        "workers[].hostname": {
+          "type": "null|string"
+        },
+        "workers[].id": {
+          "type": "string"
+        },
+        "workers[].lastHeartbeatAt": {
+          "type": "null|string"
+        },
+        "workers[].lastSeenAt": {
+          "type": "null|string"
+        },
+        "workers[].paused": {
+          "type": "boolean"
+        },
+        "workers[].pid": {
+          "type": "null|number"
+        },
+        "workers[].queues": {
+          "type": "array"
+        },
+        "workers[].queues[]": {
+          "type": "string"
+        },
+        "workers[].registered": {
+          "type": "boolean"
+        },
+        "workers[].scheduleNamespaces": {
+          "type": "array"
+        },
+        "workers[].scheduleNamespaces[]": {
+          "type": "string"
+        },
+        "workers[].startedAt": {
+          "type": "null|string"
+        }
+      }
+    }
+  }
+}

@@ -10,6 +10,13 @@ import {
   dashboardRuntimeConfigSchema,
 } from "../src/server/html.js";
 import { generateResponseSchemas } from "./response-schemas.js";
+import {
+  classifyDashboardSurface,
+  describeDashboardSurface,
+  mergeDashboardSurface,
+  type DashboardSurface,
+  type SurfaceFinding,
+} from "./compatibility.js";
 
 /**
  * Generate the committed `dashboard/v1` wire-contract artifacts from the dashboard router.
@@ -18,6 +25,12 @@ import { generateResponseSchemas } from "./response-schemas.js";
  * `sql/schema/current.sql` has to the migrations. `pnpm dashboard-spec:check` and the
  * `dashboard-spec.test.ts` parity test regenerate and diff, so a router change that alters the
  * wire contract must land with regenerated artifacts — a conscious, reviewed contract change.
+ *
+ * A diff alone cannot say whether the change added or removed, because regenerating rewrites the
+ * artifact either way. `governed-surface.json` answers that: it accumulates every procedure,
+ * request field, and response field `dashboard/v1` has served, and neither `--check` nor the
+ * generator may drop from it. Removing a procedure therefore fails by name rather than passing as a
+ * faithfully regenerated diff.
  */
 
 const specDirectory = dirname(fileURLToPath(import.meta.url));
@@ -138,34 +151,105 @@ export function composeDashboardSpec(): Record<string, string> {
   };
 }
 
-export async function checkDashboardSpec(): Promise<string[]> {
+const surfaceFile = "governed-surface.json";
+
+const emptySurface: DashboardSurface = { formatVersion: 1, procedures: {} };
+
+async function readPromisedSurface(): Promise<DashboardSurface> {
+  const committed = await readFile(join(artifactDirectory, surfaceFile), "utf8").catch(() => null);
+  return committed === null ? emptySurface : (JSON.parse(committed) as DashboardSurface);
+}
+
+/** The wire surface the composed artifacts serve right now. */
+function currentSurface(artifacts: Record<string, string>): DashboardSurface {
+  const document = JSON.parse(artifacts["procedures.json"] ?? "{}") as Parameters<
+    typeof describeDashboardSurface
+  >[0];
+  return describeDashboardSurface(document);
+}
+
+function renderSurface(surface: DashboardSurface): string {
+  return `${JSON.stringify(surface, null, 2)}\n`;
+}
+
+export function formatFindings(findings: readonly SurfaceFinding[]): string {
+  return findings.map((finding) => `  breaking: ${finding.subject} ${finding.change}`).join("\n");
+}
+
+export interface DashboardSpecReport {
+  stale: string[];
+  findings: SurfaceFinding[];
+}
+
+export async function checkDashboardSpec(): Promise<DashboardSpecReport> {
   const artifacts = composeDashboardSpec();
   const stale: string[] = [];
   for (const [name, content] of Object.entries(artifacts)) {
     const committed = await readFile(join(artifactDirectory, name), "utf8").catch(() => null);
     if (committed !== content) stale.push(name);
   }
-  return stale;
+  const committedSurface = await readFile(join(artifactDirectory, surfaceFile), "utf8").catch(
+    () => null,
+  );
+  const promised =
+    committedSurface === null ? emptySurface : (JSON.parse(committedSurface) as DashboardSurface);
+  const current = currentSurface(artifacts);
+  const findings = classifyDashboardSurface(promised, current);
+  // A break is reported on its own. Naming the promise file stale as well would tell the author to
+  // regenerate, which is exactly the move the generator refuses.
+  if (
+    findings.length === 0 &&
+    committedSurface !== renderSurface(mergeDashboardSurface(promised, current))
+  )
+    stale.push(surfaceFile);
+  return { stale, findings };
 }
 
 const invokedDirectly =
   process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 
+const breakingGuidance =
+  "dashboard/v1 is served for the whole major line it shipped in, so a break here creates " +
+  "dashboard/v2 rather than moving a package major (ADR 0054). Restore the surface, or take the " +
+  "break deliberately with --accept-breaking.";
+
 if (invokedDirectly) {
+  const acceptBreaking = process.argv.includes("--accept-breaking");
   if (process.argv.includes("--check")) {
-    const stale = await checkDashboardSpec();
-    if (stale.length > 0) {
+    const { stale, findings } = await checkDashboardSpec();
+    if (findings.length > 0) {
       console.error(
-        `dashboard/v1 is stale: ${stale.join(", ")}. Run pnpm dashboard-spec:generate and commit the result.`,
+        `dashboard/v1 has breaking changes:\n${formatFindings(findings)}\n\n${breakingGuidance}`,
       );
       process.exit(1);
     }
-    console.log("dashboard/v1 matches the router.");
+    if (stale.length > 0) {
+      console.error(
+        `dashboard/v1 is stale: ${stale.join(", ")}. The change is additive. Run pnpm dashboard-spec:generate and commit the result.`,
+      );
+      process.exit(1);
+    }
+    console.log(
+      "dashboard/v1 matches the router, and every promised procedure and field is served.",
+    );
   } else {
     const artifacts = composeDashboardSpec();
+    const promised = await readPromisedSurface();
+    const current = currentSurface(artifacts);
+    const findings = classifyDashboardSurface(promised, current);
+    if (findings.length > 0 && !acceptBreaking) {
+      console.error(
+        `dashboard/v1 has breaking changes:\n${formatFindings(findings)}\n\n${breakingGuidance}`,
+      );
+      process.exit(1);
+    }
+    const surface = acceptBreaking ? current : mergeDashboardSurface(promised, current);
     for (const [name, content] of Object.entries(artifacts)) {
       await writeFile(join(artifactDirectory, name), content);
     }
-    console.log(`Wrote ${Object.keys(artifacts).join(", ")} to ${artifactDirectory}`);
+    await writeFile(join(artifactDirectory, surfaceFile), renderSurface(surface));
+    console.log(
+      `Wrote ${[...Object.keys(artifacts), surfaceFile].join(", ")} to ${artifactDirectory}`,
+    );
   }
 }

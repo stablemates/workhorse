@@ -11,12 +11,17 @@ import sys
 accesses = []
 for item in json.load(sys.stdin):
     tree = ast.parse(item["source"], filename=item["filename"])
+    # A module may bind the registry under a private alias, as
+    # \`from ._statements import STATEMENTS as _STATEMENTS\` does, so the local name is resolved
+    # from the import rather than assumed to be STATEMENTS.
+    names = set()
     for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Attribute)
-            and isinstance(node.value, ast.Name)
-            and node.value.id == "STATEMENTS"
-        ):
+        if isinstance(node, ast.ImportFrom) and node.module is not None and node.module.endswith("_statements"):
+            for alias in node.names:
+                if alias.name == "STATEMENTS":
+                    names.add(alias.asname or alias.name)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id in names:
             accesses.append({"filename": item["filename"], "field": node.attr})
 print(json.dumps(accesses))
 `;

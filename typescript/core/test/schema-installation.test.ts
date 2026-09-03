@@ -10,6 +10,7 @@ import {
   WORKHORSE_SCHEMA_VERSION,
 } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
+import { parseSqlSchema } from "../../../scripts/sql-surface.js";
 
 const { pool, queue } = createIntegrationTestContext(import.meta.url, {
   schemaProvisioning: "install",
@@ -613,6 +614,77 @@ describe("schema installation", () => {
         });
       },
     );
+  });
+
+  // `pnpm sql-catalogues:check` runs in a CI job with no database, so it reads the governed SQL
+  // surface out of the schema text rather than introspecting it. This case is what keeps that
+  // reading honest: a parser that silently missed a function or a column would under-govern the
+  // surface and let a removal through.
+  it("parses the same functions and columns PostgreSQL installed", async () => {
+    const parsed = parseSqlSchema(
+      await readFile(path.join(repository, "sql/schema/current.sql"), "utf8"),
+    );
+    const alias: Record<string, string> = {
+      "timestamp with time zone": "timestamptz",
+      "timestamp without time zone": "timestamp",
+      "time(0) without time zone": "time(0)",
+      "double precision": "double",
+    };
+    const normalize = (type: string): string => {
+      const collapsed = type
+        .trim()
+        .toLowerCase()
+        .replaceAll(/\s+/g, " ")
+        .replaceAll(" []", "[]")
+        .replace(/^(setof )?workhorse\./, "$1");
+      return Object.entries(alias).reduce(
+        (value, [from, to]) => value.replaceAll(from, to),
+        collapsed,
+      );
+    };
+
+    const installed = await pool.query<{ name: string; result: string }>(`
+      SELECT proname AS name, pg_get_function_result(pg_proc.oid) AS result
+        FROM pg_proc
+        JOIN pg_namespace ON pg_namespace.oid = pg_proc.pronamespace
+       WHERE pg_namespace.nspname = 'workhorse'
+       ORDER BY proname
+    `);
+    const missingFunctions = installed.rows
+      .filter((row) => parsed.functions.get(row.name)?.[0] === undefined)
+      .map((row) => row.name);
+    expect(missingFunctions).toEqual([]);
+    const wrongResults = installed.rows
+      .filter((row) => {
+        const definition = parsed.functions.get(row.name)?.[0];
+        return definition !== undefined && normalize(row.result) !== normalize(definition.returns);
+      })
+      .map((row) => row.name);
+    expect(wrongResults).toEqual([]);
+
+    // Partitions of `job_event` and `attempt_history` are created at runtime, so the schema text
+    // declares them only inside a function body and the parser never sees one.
+    const partition = /_(default|\d{8})$/;
+    const columns = await pool.query<{ relation: string; column: string; type: string }>(`
+      SELECT pg_class.relname AS relation,
+             pg_attribute.attname AS column,
+             format_type(pg_attribute.atttypid, pg_attribute.atttypmod) AS type
+        FROM pg_class
+        JOIN pg_namespace ON pg_namespace.oid = pg_class.relnamespace
+        JOIN pg_attribute ON pg_attribute.attrelid = pg_class.oid
+       WHERE pg_namespace.nspname = 'workhorse'
+         AND pg_class.relkind IN ('r', 'p', 'v')
+         AND pg_attribute.attnum > 0
+         AND NOT pg_attribute.attisdropped
+    `);
+    const wrongColumns = columns.rows
+      .filter((row) => !partition.test(row.relation))
+      .filter((row) => {
+        const declared = parsed.relations.get(row.relation)?.columns.get(row.column);
+        return declared === undefined || normalize(declared) !== normalize(row.type);
+      })
+      .map((row) => `${row.relation}.${row.column}`);
+    expect(wrongColumns).toEqual([]);
   });
 });
 

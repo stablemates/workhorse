@@ -227,15 +227,15 @@ API, and Workhorse ships seven of them. Each surface below is governed, and each
 sentence what a breaking change is for it. Anything not on this list is internal and may change in
 any release. [ADR 0054](decisions/0054-define-what-1-0-0-promises.md) records the decision.
 
-| Governed surface                                    | A breaking change is                                                                                                                                                                   | Enforced by                                                            |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| SQL protocol and schema                             | A narrowing of `workhorse.protocol_version`, which is how a superseded `_vN` function is removed. A schema-version bump is not one, because inside a major line a migration only adds. | `sql-catalogues:check`, which detects drift and classifies nothing yet |
-| TypeScript API                                      | A change that makes caller code stop compiling or behave differently, across the names and types reachable through a package's `exports` map and shipped `.d.ts`.                      | `typescript-api:check`, against `api/typescript.txt`                   |
-| Python API                                          | The same, across the names in a public module's `__all__`. Underscore-prefixed modules such as `workhorse._protocol` are private.                                                      | `python-api:check`, against `api/python.txt`                           |
-| Go API                                              | The same, across the exported identifiers of the module's non-`internal` packages. Go's own standard applies: what `apidiff` calls an incompatible change.                             | `go-api:check`, `apidiff` against the tag `api/go.txt` pins            |
-| `workhorse` CLI                                     | Removing or renaming a command or flag, changing what an exit code means, or removing or retyping a field in `--json` output.                                                          | Review only; the check is Gate 1 work                                  |
-| `dashboard/v1` wire contract                        | Removing a procedure, removing or retyping a response field, or tightening request validation.                                                                                         | `dashboard-spec:check`, which detects drift and classifies nothing yet |
-| OpenTelemetry instrument, span, and attribute names | Renaming or removing an instrument, span, or attribute, or changing an instrument's unit or kind.                                                                                      | Review only; the check is Gate 1 work                                  |
+| Governed surface                                    | A breaking change is                                                                                                                                                                   | Enforced by                                                 |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| SQL protocol and schema                             | A narrowing of `workhorse.protocol_version`, which is how a superseded `_vN` function is removed. A schema-version bump is not one, because inside a major line a migration only adds. | `sql-catalogues:check`, which classifies the change         |
+| TypeScript API                                      | A change that makes caller code stop compiling or behave differently, across the names and types reachable through a package's `exports` map and shipped `.d.ts`.                      | `typescript-api:check`, against `api/typescript.txt`        |
+| Python API                                          | The same, across the names in a public module's `__all__`. Underscore-prefixed modules such as `workhorse._protocol` are private.                                                      | `python-api:check`, against `api/python.txt`                |
+| Go API                                              | The same, across the exported identifiers of the module's non-`internal` packages. Go's own standard applies: what `apidiff` calls an incompatible change.                             | `go-api:check`, `apidiff` against the tag `api/go.txt` pins |
+| `workhorse` CLI                                     | Removing or renaming a command or flag, changing what an exit code means, or removing or retyping a field in `--json` output.                                                          | Review only; the check is Gate 1 work                       |
+| `dashboard/v1` wire contract                        | Removing a procedure, removing or retyping a response field, or tightening request validation.                                                                                         | `dashboard-spec:check`, which classifies the change         |
+| OpenTelemetry instrument, span, and attribute names | Renaming or removing an instrument, span, or attribute, or changing an instrument's unit or kind.                                                                                      | Review only; the check is Gate 1 work                       |
 
 The right-hand column is Gate 1 of
 [ADR 0056](decisions/0056-set-the-1-0-0-exit-criteria.md): every governed surface holds a mechanical
@@ -262,6 +262,53 @@ does not move the TypeScript or Python major. Only a protocol break moves all th
 
 The runtime support matrix and the declared dependency ranges are not on this list. They move by
 their own rule, in a minor and only on upstream end of life; see [Raising a floor](#raising-a-floor).
+
+### Two surfaces classify their own changes
+
+`sql-catalogues:check` and `dashboard-spec:check` regenerate an artifact and diff it. A diff alone
+says only that something moved, because regenerating rewrites the artifact whether a procedure was
+added or removed. Each check therefore compares against a separate promise file that accumulates:
+the generator may add an entry and may never drop one. The three language checks need no such file,
+because their snapshots in [`api/`](../api/README.md) are not regenerated from the surface they
+describe.
+
+- `dashboard/v1/governed-surface.json` holds every procedure, request field, and response field
+  `dashboard/v1` has served, each with its type and whether validation requires it.
+- `protocol/v1/governed-surface.json` holds the governed SQL functions, views, and columns, each
+  with its signature or type, and lists the internal helpers beside them.
+
+A removal or a retype fails by name and says what changed about it. An addition passes once the
+generator has recorded it, which needs no hand edit. Taking a break deliberately needs
+`--accept-breaking`, which rewrites the promise from the current surface; for `dashboard/v1` that
+means creating `dashboard/v2` instead, and for SQL it means narrowing
+`workhorse.protocol_version`.
+
+### The governed SQL surface
+
+The governed set is what a supported release reads, which is not what `protocol/v1/manifest.json`
+declares. The manifest names the 26 protocol functions the SQL protocol pins; the audit behind
+[ADR 0056](decisions/0056-set-the-1-0-0-exit-criteria.md) found the SDKs and dashboards reach 33
+more functions and 25 tables beyond them. The two differ on purpose and are not reconciled into one
+list: the manifest is the protocol's own contract, and the governed set is every relation and
+function a release actually touches.
+
+`scripts/generate-sql-catalogues.ts` derives the set from the readers rather than from a hand list,
+so a new read governs its target on the next generate:
+
+- The manifest's statement catalogue, which is the SQL all three SDKs send. `assertNoInlineTypeScriptSql`
+  and the Python binding check keep it the only source of SDK statements.
+- The three dashboard backends, `typescript/dashboard-server/src/server`, `go/dashboard`, and
+  `python/src/workhorse/dashboard`, each of which builds its own SQL.
+- Every `dashboard_*_v1` view, plus `dashboard_job_result_v1`, whose exact columns
+  [`architecture.md`](architecture.md) publishes as core's relational read contract. They are
+  governed whether or not this repository's own backends still read them.
+
+A view is governed whole, because its projection is the contract. A table is governed one column at
+a time, by the names the reader that touches it mentions; that over-approximates when two relations
+in one statement share a column name, which over-governs an internal column rather than
+under-governing a read one. Everything else the schema installs is an internal helper and may change
+in any release. `protocol/v1/governed-surface.json` lists both sides, so which is which is a file
+rather than a judgement.
 
 ### Experimental surface
 

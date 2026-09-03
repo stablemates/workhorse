@@ -24,6 +24,11 @@ directory; this directory then only receives compatible corrections.
   runtime-configuration schema that every backend inserts into `index.html`.
 - `conformance.json` carries the executable HTTP conformance fixtures described under
   [Conformance](#conformance).
+- `governed-surface.json` is the promise the other two are checked against: every procedure,
+  request field, and response field this contract has served, with its type and whether validation
+  requires it. `pnpm dashboard-spec:generate` adds to it and never drops from it, so removing a
+  procedure fails `pnpm dashboard-spec:check` by name instead of passing as a faithfully
+  regenerated diff. That is the distinction a regenerate-and-diff check cannot draw on its own.
 - `bundle/bundle.json` identifies the static archive for this contract's `readSurfaceVersion` and
   records its SHA-256 digest. The archive contains the compiled application under `app/` and the
   shared single-admin page as `login.html`. `app/THIRD_PARTY_NOTICES.txt` records each third-party
