@@ -35,6 +35,15 @@ Requires **schema v1** and Go **1.25** or newer.
 
 ### Changed
 
+- **`CheckCompatibility` takes the protocol versions the schema declares it serves.** Its signature
+  is now `func(*int, int, []int) error`. The check refused any schema newer than the version this
+  build was compiled against, which would have turned the first in-place migration into an outage
+  for the length of a rolling deployment. A build cannot know which later release stops serving it,
+  so the ceiling comes from the database: `workhorse.protocol_version` records the SQL protocol
+  versions the installed schema still serves, and a client whose protocol is absent from that list
+  refuses with `SchemaTooNew` below the oldest served version and `SchemaTooOld` above the newest.
+  An empty declaration enforces nothing. `AssertSchemaCompatible` reads both facts in one statement,
+  so its per-call check stays one round trip.
 - **Shared names for three parts of the public API.** Go was the odd language out on each one, so
   each moved to the spelling TypeScript and Python already share. `AssertCompatible` is now
   `AssertSchemaCompatible`. `HandlerContext.CreateChild`, `CreateChildren`, and `CreateChildrenAll`
@@ -55,7 +64,7 @@ Requires **schema v1** and Go **1.25** or newer.
   `DashboardQueueHealthReasonCode`, `DashboardRetentionPolicyImpact`, and
   `DashboardMaintenanceLoopCadences`. The file is generated, so it carries no aliases: a caller
   that names one of the eight updates the name. No request or response payload changes.
-- Those two entries and the removals above are the exported API changes since `0.1.0-beta.1`. The
+- The three entries above and the removals are the exported API changes since `0.1.0-beta.1`. The
   README states the unpinned install command and the schema install step, which the TypeScript CLI
   owns.
 - The dashboard backend's run-now action calls the audited `workhorse.run_task_now_v1` instead of
@@ -69,8 +78,20 @@ Requires **schema v1** and Go **1.25** or newer.
   `2026-09-02T14:30:00.000Z` and `...:00.123Z`. A client that compares or displays the string sees
   a different value; one that parses it does not.
 
+### Added
+
+- The `dashboard` package serves `redriveTask` and `redriveDeadLetters`, which the shared
+  `dashboard/v1` contract added this release. Both reach `Admin.Redrive` and `Admin.RedriveMany`: a
+  source the queue does not hold answers 404, and a bulk page reports every result plus the
+  continuation cursor the next page resumes from. The host lists both as mutations, so a
+  cross-origin or read-only request is refused before dispatch.
+
 ### Upgrade notes
 
+- **`CheckCompatibility` callers.** The function takes a third argument, the protocol versions the
+  installed schema declares it serves. `AssertSchemaCompatible` reads them for you; a caller that
+  invokes `CheckCompatibility` directly passes the list it read, or `nil` to enforce no ceiling,
+  which is what an empty declaration means.
 - **Schema version.** `0.1.0` stays at schema version 1, but its baseline is not the one the last
   beta installed: `workhorse.valid_tags` was renamed `workhorse.valid_tags_v1` and
   `workhorse.dashboard_run_task_now_v1` was removed. A database installed by any beta reports

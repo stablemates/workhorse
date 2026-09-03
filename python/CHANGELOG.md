@@ -19,6 +19,12 @@ Requires **schema v1** and Python **3.12** or newer.
 
 ### Added
 
+- The dashboard backend serves `redriveTask` and `redriveDeadLetters`, which the shared
+  `dashboard/v1` contract added this release. Both map onto `Admin.redrive` and
+  `Admin.redrive_many`: a source the queue does not hold answers 404, and a bulk page reports every
+  result plus the continuation cursor the next page resumes from. The host lists both as mutations,
+  so a cross-origin or read-only request is refused before dispatch. `workhorse.dashboard_v1` gains
+  their generated input and output types.
 - `workhorse.compatibility` publishes the startup schema check that the installation page tells every
   runtime to make. `assert_schema_compatible(connection)` takes a Psycopg connection, and
   `assert_schema_compatible_psycopg` and `assert_schema_compatible_asyncpg` name their asynchronous
@@ -43,6 +49,15 @@ Requires **schema v1** and Python **3.12** or newer.
 
 ### Changed
 
+- **The compatibility check declares a floor and no ceiling, and reads the ceiling from the
+  database.** It refused any schema newer than the version this build was compiled against, which
+  would have turned the first in-place migration into an outage for the length of a rolling
+  deployment. A build cannot know which later release stops serving it, so the installed schema
+  declares that instead: `workhorse.protocol_version` records the SQL protocol versions it still
+  serves, and a client whose protocol is absent from that list raises
+  `ProtocolCompatibilityError`. Below the oldest served version is `schema-too-new`; above the
+  newest is `schema-too-old`. A schema that records nothing enforces nothing. One statement returns
+  the schema version and the served list together, so the check stays one round trip.
 - The README states the unpinned install command and the schema install step, which the TypeScript
   CLI owns.
 
