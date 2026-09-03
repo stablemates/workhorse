@@ -59,8 +59,10 @@ Install the SDK. Each package includes its default PostgreSQL driver.
 </Tabs>
 
 Add a database adapter (`@stablemates/workhorse-drizzle`, `@stablemates/workhorse-prisma`, `@stablemates/workhorse-typeorm`,
-`@stablemates/workhorse-kysely`) or `@stablemates/workhorse-dashboard` only when that integration belongs in the same
-process.
+`@stablemates/workhorse-kysely`) only when that integration belongs in the same process. Add
+`@stablemates/workhorse-dashboard` to embed the operator interface in your own server, and also to
+run [the standalone console](/docs/dashboard): both serve the same packaged application, and the
+core package treats it as an optional peer so a worker-only installation carries no browser bundle.
 
 For TypeScript applications, `workhorse init` can scaffold the wiring. It inspects the project,
 writes a worker configuration, and prints a dashboard mount — but it leaves your routes and package

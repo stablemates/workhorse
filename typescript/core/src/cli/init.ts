@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 /**
@@ -11,8 +11,11 @@ export interface DetectedProject {
   orm: "drizzle" | "prisma" | "typeorm" | "kysely" | "pg";
   framework: "hono" | "express" | "fastify" | "next" | "none";
   typescript: boolean;
-  packageManager: "pnpm" | "npm" | "yarn" | "bun";
+  packageManager: PackageManager;
 }
+
+/** A package manager whose `workhorse` invocation the next steps can print. */
+export type PackageManager = "pnpm" | "npm" | "yarn" | "bun";
 
 interface PackageJson {
   dependencies?: Record<string, string>;
@@ -29,18 +32,58 @@ async function readPackageJson(directory: string): Promise<PackageJson | null> {
   }
 }
 
-export function detectProject(packageJson: PackageJson | null): DetectedProject {
+/**
+ * Every lockfile that identifies its installer, most specific first. Bun and Yarn share
+ * `yarn.lock`, so Bun's own lockfile is checked before it.
+ */
+const LOCKFILES: readonly (readonly [string, PackageManager])[] = [
+  ["pnpm-lock.yaml", "pnpm"],
+  ["bun.lock", "bun"],
+  ["bun.lockb", "bun"],
+  ["yarn.lock", "yarn"],
+  ["package-lock.json", "npm"],
+  ["npm-shrinkwrap.json", "npm"],
+];
+
+/** The installer that wrote this directory's lockfile, or `null` when it holds none. */
+async function readLockfileManager(directory: string): Promise<PackageManager | null> {
+  for (const [fileName, packageManager] of LOCKFILES) {
+    const present = await stat(path.join(directory, fileName)).then(
+      () => true,
+      () => false,
+    );
+    if (present) return packageManager;
+  }
+  return null;
+}
+
+/**
+ * Name the package manager a project already uses.
+ *
+ * The `packageManager` field is a declaration, so it decides on its own. Most projects omit it,
+ * and for those the lockfile the installer wrote is the next-best evidence: printing `pnpm` next
+ * steps to a reader who ran `npm install` hands them a command that does not exist.
+ */
+export function detectPackageManager(
+  declared: string | undefined,
+  lockfile: PackageManager | null,
+): PackageManager {
+  const field = declared ?? "";
+  if (field.startsWith("yarn")) return "yarn";
+  if (field.startsWith("bun")) return "bun";
+  if (field.startsWith("npm")) return "npm";
+  if (field.startsWith("pnpm")) return "pnpm";
+  return lockfile ?? "pnpm";
+}
+
+export function detectProject(
+  packageJson: PackageJson | null,
+  lockfile: PackageManager | null = null,
+): DetectedProject {
   const dependencies = { ...packageJson?.dependencies, ...packageJson?.devDependencies };
   const has = (name: string): boolean => name in dependencies;
 
-  const packageManagerField = packageJson?.packageManager ?? "";
-  const packageManager = packageManagerField.startsWith("yarn")
-    ? "yarn"
-    : packageManagerField.startsWith("bun")
-      ? "bun"
-      : packageManagerField.startsWith("npm")
-        ? "npm"
-        : "pnpm";
+  const packageManager = detectPackageManager(packageJson?.packageManager, lockfile);
 
   return {
     orm: has("drizzle-orm")
@@ -255,7 +298,7 @@ export async function initializeProject(
   options: { force?: boolean; fileName?: string } = {},
 ): Promise<InitResult> {
   const packageJson = await readPackageJson(directory);
-  const project = detectProject(packageJson);
+  const project = detectProject(packageJson, await readLockfileManager(directory));
   const fileName =
     options.fileName ?? (project.typescript ? "workhorse.config.ts" : "workhorse.config.js");
   const configPath = path.join(directory, fileName);
@@ -270,7 +313,9 @@ export async function initializeProject(
     written = true;
   }
 
-  const run = project.packageManager === "npm" ? "npx" : project.packageManager;
+  // `npm exec --no --` runs the binary in `node_modules` or fails. Bare `npx workhorse` would
+  // fetch an unrelated package of that name from the registry when the local one is missing.
+  const run = project.packageManager === "npm" ? "npm exec --no --" : project.packageManager;
   return {
     configPath,
     written,

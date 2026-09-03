@@ -2858,11 +2858,16 @@ by `typescript/core/tsconfig.source.json`.
 `workhorse init` scaffolds a worker configuration for an existing project. It reads the target
 directory's `package.json`, and `detectProject` in `typescript/core/src/cli/init.ts` derives three
 facts from its dependencies: the ORM (`drizzle`, `prisma`, `typeorm`, `kysely`, or plain `pg`), the
-web framework (`hono`, `express`, `fastify`, `next`, or `none`), and the package manager from the
-`packageManager` field (`pnpm`, `npm`, `yarn`, or `bun`). It writes `workhorse.config.ts`, or
-`workhorse.config.js` when the project declares no TypeScript dependency, then prints the schema
-install command, the worker command, and a framework-shaped dashboard mount snippet. The snippet is
-printed only; `init` writes no route file and edits no existing file.
+web framework (`hono`, `express`, `fastify`, `next`, or `none`), and the package manager (`pnpm`,
+`npm`, `yarn`, or `bun`). `detectPackageManager` reads the `packageManager` field first, then the
+directory's lockfile — `pnpm-lock.yaml`, `bun.lock`, `bun.lockb`, `yarn.lock`,
+`package-lock.json`, `npm-shrinkwrap.json`, in that order, so Bun's own lockfile decides before the
+`yarn.lock` it may also write — and falls back to `pnpm` only when the project declares neither. It
+writes `workhorse.config.ts`, or `workhorse.config.js` when the project declares no TypeScript
+dependency, then prints the schema install command, the worker command, and a framework-shaped
+dashboard mount snippet. An `npm` project's commands are printed as `npm exec --no --`, which runs
+the local binary or fails, rather than bare `npx`, which would fetch an unrelated registry package
+of that name. The snippet is printed only; `init` writes no route file and edits no existing file.
 
 `workhorse init` takes two options besides `--help`:
 

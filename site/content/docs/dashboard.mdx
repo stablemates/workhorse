@@ -172,11 +172,16 @@ values read-only, because changing those requires a deployment.
 
 ## The standalone CLI
 
-For a quick local console, skip the mounting entirely:
+For a quick local console, skip the mounting entirely. The command serves the same packaged
+application, so it needs the dashboard package installed next to the core package — a worker-only
+installation deliberately carries neither React nor the browser bundle:
 
 ```bash
-workhorse dashboard --port 3000
+npm install @stablemates/workhorse-dashboard
+npm exec --no -- workhorse dashboard --port 3000
 ```
+
+Without that package the command names it and exits before it opens a listener.
 
 It binds `127.0.0.1` and serves read-only by default. Without credentials, that loopback listener
 is an explicit development bypass and cannot bind to a remotely reachable address.

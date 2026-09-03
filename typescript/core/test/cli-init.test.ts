@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  detectPackageManager,
   detectProject,
   initializeProject,
   renderMountSnippet,
@@ -52,6 +53,38 @@ describe("workhorse init", () => {
       typescript: false,
       packageManager: "pnpm",
     });
+  });
+
+  it("prefers the declared package manager, then the lockfile", () => {
+    expect(detectPackageManager("npm@11.0.0", "pnpm")).toBe("npm");
+    expect(detectPackageManager(undefined, "npm")).toBe("npm");
+    expect(detectPackageManager(undefined, "yarn")).toBe("yarn");
+    expect(detectPackageManager(undefined, "bun")).toBe("bun");
+    expect(detectPackageManager(undefined, null)).toBe("pnpm");
+  });
+
+  it("names npm in the next steps of a project installed with npm", async () => {
+    const directory = await project({ dependencies: { express: "^4.0.0" } });
+    await writeFile(path.join(directory, "package-lock.json"), "{}", "utf8");
+
+    const result = await initializeProject(directory);
+
+    expect(result.project.packageManager).toBe("npm");
+    expect(result.nextSteps).toContain(
+      "Install the schema:  npm exec --no -- workhorse schema install",
+    );
+  });
+
+  it("reads the lockfile only when package.json declares no package manager", async () => {
+    const directory = await project({
+      dependencies: { express: "^4.0.0" },
+      packageManager: "pnpm@9.0.0",
+    });
+    await writeFile(path.join(directory, "package-lock.json"), "{}", "utf8");
+
+    const result = await initializeProject(directory);
+
+    expect(result.project.packageManager).toBe("pnpm");
   });
 
   it("writes exactly one file and leaves package.json untouched", async () => {
