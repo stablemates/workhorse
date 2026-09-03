@@ -46,6 +46,10 @@ requires the `pg_dump --schema-only` result to match a clean installation of the
 exactly. It also verifies the framework contract on a small synthetic fixture chain: bookkeeping
 rows, gap rejection, transaction-control rejection, and atomic rollback of a failing step.
 
+A schema dump speaks for shape, not for rows. The rehearsal that shows a populated database
+surviving a migration is the demo deployment, which migrates from its pipeline against a database it
+writes to continuously (`typescript/demo/DEPLOYMENT.md`).
+
 `installSchema(database)` is explicit. It installs a clean database and accepts an already-installed
 schema only when it exactly matches the current canonical version. It is not an upgrade mechanism.
 Framework mounts call `assertSchemaCompatible(database)` and never create, seed, or alter database
@@ -154,6 +158,36 @@ accumulated during 0.x wait for 2.0.0. A breaking change to this surface is a na
 
 How long a superseded function is retained beyond that is not yet decided.
 `docs/compatibility.md` records the range each release supports.
+
+## The 1.0.0 boundary
+
+There is no schema freeze ([ADR 0055](decisions/0055-the-1-0-0-schema-boundary-adds-no-migration.md)).
+The schema grows additively through 0.x, across 1.0.0, and through 1.x. In-place editing of
+`sql/schema/current.sql` already stopped, at 0.1.0.
+
+**1.0.0 adds no migration step.** Its `WORKHORSE_SCHEMA_VERSION` equals the last 0.x minor's,
+`sql/migrations/` gains no file, and no new artifact is frozen under `sql/releases/`. The last 0.x
+minor carries the final schema change before the boundary, and the release train for 1.0.0 opens
+once that release ships. A schema change proposed after the train opens belongs to 1.1.0. A defect
+found during the train is fixed by publishing another 0.x minor, never by adding a migration inside
+1.0.0.
+
+So the upgrade from the last 0.x to 1.0.0 is the ordinary one:
+
+1. Run `workhorse schema migrate` from the deployment pipeline. It is a no-op at this boundary and
+   is still run, because a procedure that special-cases one release teaches the wrong procedure for
+   the releases after it. `migrateSchema` leaves an already-current schema unchanged.
+2. Roll the fleet onto the 1.0.0 packages.
+
+There is no swap-only upgrade path and no separate migration guide. The three statements a 0.x
+reader is given at the boundary are in the 1.0.0 changelog entry and on the site's compatibility
+page ([ADR 0054](decisions/0054-define-what-1-0-0-promises.md)).
+
+Two mechanisms hold the rule. The release checklist compares the 1.0.0 candidate against the last
+0.x minor and requires an unchanged schema version, no added migration, and no added released
+artifact. `typescript/core/test/schema-migrations.test.ts` requires every frozen artifact to migrate
+to a schema byte-identical to a clean installation, which is what catches drift in any release, not
+only this one. No baseline digest is pinned.
 
 ## Application data
 
