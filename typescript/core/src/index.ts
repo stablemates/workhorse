@@ -7,7 +7,14 @@ export {
   QueryError,
   rowsToQueryResult,
 } from "./adapter.js";
-export { databaseErrorCode, expectOneRow, MissingRowError, WorkhorseError } from "./errors.js";
+export {
+  databaseErrorCode,
+  expectOneRow,
+  MissingRowError,
+  SchemaCompatibilityError,
+  WorkhorseError,
+} from "./errors.js";
+export type { SchemaCompatibilityCode, SchemaCompatibilityVersions } from "./errors.js";
 export { queueHealthFromDocument } from "./queue/operator-reads.js";
 export type { QueueHealthDocument } from "./queue/operator-reads.js";
 export { WorkhorseMetricsObserver } from "./metrics-observer.js";

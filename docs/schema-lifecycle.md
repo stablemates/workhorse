@@ -53,7 +53,11 @@ writes to continuously (`typescript/demo/DEPLOYMENT.md`).
 `installSchema(database)` is explicit. It installs a clean database and accepts an already-installed
 schema only when it exactly matches the current canonical version. It is not an upgrade mechanism.
 Framework mounts call `assertSchemaCompatible(database)` and never create, seed, or alter database
-objects.
+objects. A refusal throws `SchemaCompatibilityError`. Catch that type when a caller must act on the
+verdict rather than log it: its `code` names the refusal in the vocabulary Python's
+`ProtocolCompatibilityError` and Go's `CompatibilityError` share, and `installedVersion` and
+`expectedVersion` name the two versions that disagree. A database the check cannot read at all
+throws a plain error instead, because an unreachable database says nothing about versions.
 
 `migrateSchema(database)` is the explicit upgrade API. It rejects an uninstalled schema, versions
 below the baseline, versions newer than the runtime, mixed version rows, and gaps in the ordered
@@ -127,8 +131,10 @@ compatibility checks refuse a schema below the release's minimum, and refuse one
 `workhorse.protocol_version` no longer lists the protocol the release speaks.
 
 Verify between the two steps. `workhorse schema status --json` exits 1 when the running build would
-refuse the installed schema, and reports `schema.compatible` and `schema.refusal` for a deployment
-gate to read. `schema.state` reporting `ahead` is not a failure; it is what a rollout in progress
+refuse the installed schema, and reports `schema.compatible`, `schema.refusal`, and
+`schema.refusalCode` for a deployment gate to read. The code is the one
+`SchemaCompatibilityError.code` would carry, so a gate and the process that starts after it name
+the same refusal. `schema.state` reporting `ahead` is not a failure; it is what a rollout in progress
 looks like.
 
 A failed migration rolls back atomically, so recovery is diagnose and rerun:

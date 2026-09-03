@@ -577,6 +577,23 @@ in `typescript/core/package.json` while `install.schema` names none, and no file
 `workhorse` binary through `npx` without `--package`, a form `npx` resolves to an unrelated package
 outside a project that already depends on `@stablemates/workhorse`.
 
+TypeScript `PROTOCOL_VERSION` is 1. `schemaCompatibilityRefusal(state, clientProtocolVersion)` in
+`typescript/core/src/schema.ts` applies the tests in the order `protocol/v1/compatibility.json`
+fixes, and returns a `SchemaCompatibilityRefusal` carrying a `code` and a `message`, or null.
+`clientProtocolVersion` defaults to `PROTOCOL_VERSION`; a caller passes another version only to ask
+what a different client would meet. The `code` is `schema-not-installed`, `schema-too-old`,
+`schema-too-new`, `client-protocol-too-old`, or `client-protocol-too-new`, which are the same five
+strings as Go's `CompatibilityCode` and Python's `CompatibilityCode`. `assertSchemaCompatible` reads
+the state with `readCompatibilityState` and throws `SchemaCompatibilityError` (exported from
+`typescript/core/src/errors.ts`) carrying that `code`, the `installedVersion` it read, and the
+`expectedVersion` this build was compiled against. A missing relation becomes
+`schema-not-installed`; any other query failure stays a plain `Error`, because an unreadable
+database is not a verdict about versions.
+`typescript/core/test/schema-compatibility.test.ts` executes every case in
+`protocol/v1/compatibility.json`, and
+`typescript/core/test/schema-installation.test.ts` asserts the thrown type and code against a real
+database in both directions.
+
 Go `ProtocolVersion` is 1. `CheckCompatibility` takes an installed schema version, a client
 protocol version, and the protocol versions the installed schema declares it serves, and returns
 `*CompatibilityError`. Its `Code` is `schema-not-installed`, `schema-too-old`, `schema-too-new`,
@@ -2398,12 +2415,13 @@ Node.js `parseArgs()` with `strict: true` for each command. String options accep
 `DATABASE_URL`. `workhorse schema status
 --json` returns `schema.installedVersion`, `schema.expectedVersion`, `schema.minimumVersion`,
 `schema.clientProtocolVersion`, `schema.installedProtocolVersions`, `schema.state`,
-`schema.compatible`, and `schema.refusal` separately from `postgres.major`, `postgres.version`,
+`schema.compatible`, `schema.refusal`, and `schema.refusalCode` separately from `postgres.major`, `postgres.version`,
 `postgres.supported`, `postgres.tested`, `postgres.minimumMajor`, and `postgres.level`.
 `schema.state` is `not-installed`, `behind`, `current`, or `ahead`, and reports position only.
-`schema.compatible` reports whether this build would start against the installed schema, and
-`schema.refusal` carries the sentence `assertSchemaCompatible` would throw, from the shared
-`schemaCompatibilityRefusal`. The status command exits 1 when `schema.compatible` is false or
+`schema.compatible` reports whether this build would start against the installed schema,
+`schema.refusal` carries the sentence `assertSchemaCompatible` would throw, and
+`schema.refusalCode` carries the `SchemaCompatibilityCode` that error would carry, both from the
+shared `schemaCompatibilityRefusal`. Both are null when compatible. The status command exits 1 when `schema.compatible` is false or
 `postgres.supported` is false, so `ahead` alone is not a failure. `workhorse health --json` returns
 `QueueHealth`. Help exits 0 before database resolution. Runtime failures exit 1, health degradation
 exits 2, and `CliUsageError` exits 64.
@@ -2662,7 +2680,7 @@ dispatch index. Its stable order makes the timings diagnostic rather than a perf
 
 ## Errors
 
-Every error Workhorse raises deliberately extends `WorkhorseError` (`typescript/core/src/errors.ts`), which extends `Error` and sets `name` in each subclass. `instanceof WorkhorseError` therefore means "Workhorse rejected this call", not "this call failed": a PostgreSQL error, a handler's own throw, and a driver connection failure propagate unchanged and do not carry the base. The exported subclasses include `DependencyCycleError` and `DependencyLimitExceededError` for dependency graph rejection. `typescript/core/src/index.ts` is the complete export inventory.
+Every error Workhorse raises deliberately extends `WorkhorseError` (`typescript/core/src/errors.ts`), which extends `Error` and sets `name` in each subclass. `instanceof WorkhorseError` therefore means "Workhorse rejected this call", not "this call failed": a PostgreSQL error, a handler's own throw, and a driver connection failure propagate unchanged and do not carry the base. The exported subclasses include `DependencyCycleError` and `DependencyLimitExceededError` for dependency graph rejection, and `SchemaCompatibilityError` for a startup refusal, whose `code` is a `SchemaCompatibilityCode` and whose `installedVersion` and `expectedVersion` name the two versions that disagree. `typescript/core/src/index.ts` is the complete export inventory.
 
 Recognizing a PostgreSQL failure means reading through whatever an ORM wrapped it in. `databaseErrorCode(error)` returns the SQLSTATE and `databaseErrorDetails(error)` returns every `DETAIL` string along the chain. Both walk breadth-first over `cause`, `driverError`, and `meta`, visit at most 16 objects, and track visited objects so a cyclic `cause` terminates. A candidate SQLSTATE must match `/^[0-9A-Z]{5}$/`; a Prisma code matching `/^P\d{4}$/` on an object that also carries `meta` is held back and returned only when nothing nested supplies a real SQLSTATE, because Prisma reports `P2010` on the same field and retains the true SQLSTATE under `meta`.
 

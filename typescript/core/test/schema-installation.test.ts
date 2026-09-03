@@ -1,8 +1,14 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { PoolClient } from "pg";
 import { describe, expect, it } from "vitest";
-import { assertSchemaCompatible, WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
+import {
+  assertSchemaCompatible,
+  PROTOCOL_VERSION,
+  SchemaCompatibilityError,
+  WORKHORSE_SCHEMA_VERSION,
+} from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { pool, queue } = createIntegrationTestContext(import.meta.url, {
@@ -567,4 +573,61 @@ describe("schema installation", () => {
   it("accepts the installed schema from the public startup check", async () => {
     await expect(assertSchemaCompatible(pool)).resolves.toBeUndefined();
   });
+
+  // A caller that must branch on the refusal — retry the rollout, or stop the deployment — needs a
+  // type and a code, not a sentence to match. Both directions are asserted because they ask the
+  // operator for opposite actions: migrate the database, or upgrade the release.
+  it("refuses a schema below the minimum with a typed too-old error", async () => {
+    await withRolledBackSchema(
+      "UPDATE workhorse.schema_version SET version = 0",
+      async (client) => {
+        const thrown = await assertSchemaCompatible(client).then(
+          () => null,
+          (error: unknown) => error,
+        );
+        expect(thrown).toBeInstanceOf(SchemaCompatibilityError);
+        expect(thrown).toMatchObject({
+          name: "SchemaCompatibilityError",
+          code: "schema-too-old",
+          installedVersion: 0,
+          expectedVersion: WORKHORSE_SCHEMA_VERSION,
+        });
+      },
+    );
+  });
+
+  it("refuses a schema that stopped serving this protocol with a typed too-new error", async () => {
+    await withRolledBackSchema(
+      `UPDATE workhorse.protocol_version SET version = ${String(PROTOCOL_VERSION + 1)}`,
+      async (client) => {
+        const thrown = await assertSchemaCompatible(client).then(
+          () => null,
+          (error: unknown) => error,
+        );
+        expect(thrown).toBeInstanceOf(SchemaCompatibilityError);
+        expect(thrown).toMatchObject({
+          name: "SchemaCompatibilityError",
+          code: "schema-too-new",
+          installedVersion: WORKHORSE_SCHEMA_VERSION,
+          expectedVersion: WORKHORSE_SCHEMA_VERSION,
+        });
+      },
+    );
+  });
 });
+
+/** Damage the installed version rows inside a transaction the case always rolls back. */
+async function withRolledBackSchema(
+  damage: string,
+  assertions: (client: PoolClient) => Promise<void>,
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(damage);
+    await assertions(client);
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+  }
+}

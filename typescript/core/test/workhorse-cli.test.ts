@@ -153,6 +153,7 @@ describe("schema status JSON", () => {
         state: "behind",
         compatible: false,
         refusal: expect.stringContaining("below the minimum"),
+        refusalCode: "schema-too-old",
       },
       postgres: {
         major: 17,
@@ -171,7 +172,7 @@ describe("schema status JSON", () => {
     expect(
       createSchemaStatusReport(WORKHORSE_SCHEMA_VERSION + 1, [PROTOCOL_VERSION], supportedPostgres),
     ).toMatchObject({
-      schema: { state: "ahead", compatible: true, refusal: null },
+      schema: { state: "ahead", compatible: true, refusal: null, refusalCode: null },
     });
   });
 
@@ -187,6 +188,7 @@ describe("schema status JSON", () => {
         state: "ahead",
         compatible: false,
         refusal: expect.stringContaining("no longer serves protocol"),
+        refusalCode: "schema-too-new",
       },
     });
   });
@@ -198,6 +200,7 @@ describe("schema status JSON", () => {
         state: "not-installed",
         compatible: false,
         refusal: expect.stringContaining("No Workhorse schema is installed"),
+        refusalCode: "schema-not-installed",
       },
     });
   });
@@ -225,11 +228,12 @@ describe("schema status JSON", () => {
       supportedPostgres,
     );
 
-    expect(report.schema.refusal).toBe(
-      schemaCompatibilityRefusal({
-        schemaVersion: MINIMUM_SCHEMA_VERSION - 1,
-        servedProtocolVersions: [PROTOCOL_VERSION],
-      }),
-    );
+    const refusal = schemaCompatibilityRefusal({
+      schemaVersion: MINIMUM_SCHEMA_VERSION - 1,
+      servedProtocolVersions: [PROTOCOL_VERSION],
+    });
+
+    expect(report.schema.refusal).toBe(refusal?.message);
+    expect(report.schema.refusalCode).toBe(refusal?.code);
   });
 });

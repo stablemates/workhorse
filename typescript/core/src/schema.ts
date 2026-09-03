@@ -11,7 +11,7 @@ import {
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { expectOneRow } from "./errors.js";
+import { expectOneRow, SchemaCompatibilityError, type SchemaCompatibilityCode } from "./errors.js";
 import {
   applySchemaMigrationPlan,
   SCHEMA_MIGRATION_LOCK_TIMEOUT_MS,
@@ -62,42 +62,101 @@ export {
  * calls, and refusing it would turn every rolling deployment into an outage. The ceiling comes
  * from the database instead: `workhorse.protocol_version` lists the client protocols the installed
  * schema still answers, and a major release drops the ones it stops serving.
+ *
+ * A refusal throws {@link SchemaCompatibilityError}, whose `code` names it in the vocabulary
+ * Python and Go share. A database this cannot read at all throws a plain `Error`, because an
+ * unreachable database is not a verdict about versions.
  */
 export async function assertSchemaCompatible(database: Queryable): Promise<void> {
   let state: CompatibilityState;
   try {
     state = await readCompatibilityState(database);
   } catch (error) {
+    // A missing relation is a version disagreement an operator can act on, so it carries a code.
+    // Any other query failure is the database being unreachable or unreadable, which is not a
+    // compatibility verdict and must not be catchable as one.
+    if (isMissingDatabaseRelationError(error)) {
+      throw new SchemaCompatibilityError(
+        "schema-not-installed",
+        "Workhorse schema is not installed. Run the application's explicit Workhorse schema installation step before mounting the dashboard.",
+        { installedVersion: null, expectedVersion: WORKHORSE_SCHEMA_VERSION },
+        { cause: error },
+      );
+    }
     throw new Error(
-      isMissingDatabaseRelationError(error)
-        ? "Workhorse schema is not installed. Run the application's explicit Workhorse schema installation step before mounting the dashboard."
-        : "Unable to verify Workhorse schema compatibility because the database query failed.",
+      "Unable to verify Workhorse schema compatibility because the database query failed.",
       { cause: error },
     );
   }
   const refusal = schemaCompatibilityRefusal(state);
-  if (refusal !== null) throw new Error(refusal);
+  if (refusal !== null) {
+    throw new SchemaCompatibilityError(refusal.code, refusal.message, {
+      installedVersion: state.schemaVersion,
+      expectedVersion: WORKHORSE_SCHEMA_VERSION,
+    });
+  }
+}
+
+/** A refusal in both vocabularies: the code a caller branches on, the sentence a person reads. */
+export interface SchemaCompatibilityRefusal {
+  /** The code Python and Go spell identically. See {@link SchemaCompatibilityCode}. */
+  readonly code: SchemaCompatibilityCode;
+  /** The sentence `assertSchemaCompatible` throws and `workhorse schema status` prints. */
+  readonly message: string;
 }
 
 /**
  * Say why this runtime refuses an installed schema, or `null` when it accepts one.
  *
- * `assertSchemaCompatible` throws this sentence and `workhorse schema status` prints it, so the
- * deployment gate and the process that starts after it cannot reach opposite verdicts.
+ * `assertSchemaCompatible` throws this refusal and `workhorse schema status` reports it, so the
+ * deployment gate and the process that starts after it cannot reach opposite verdicts. The order
+ * of the tests is the order in `protocol/v1/compatibility.json`, which Python's
+ * `compatibility_refusal` and Go's `CheckCompatibility` also follow.
+ *
+ * `clientProtocolVersion` defaults to the protocol this build speaks. A caller passes another
+ * version only to ask what a different client would meet.
  */
-export function schemaCompatibilityRefusal(state: CompatibilityState): string | null {
+export function schemaCompatibilityRefusal(
+  state: CompatibilityState,
+  clientProtocolVersion: number = PROTOCOL_VERSION,
+): SchemaCompatibilityRefusal | null {
   if (state.schemaVersion === null) {
-    return "Workhorse schema version is missing or ambiguous. Reinstall the schema before starting.";
+    return {
+      code: "schema-not-installed",
+      message:
+        "Workhorse schema version is missing or ambiguous. Reinstall the schema before starting.",
+    };
   }
   if (state.schemaVersion < MINIMUM_SCHEMA_VERSION) {
-    return `Workhorse schema version ${state.schemaVersion} is below the minimum ${MINIMUM_SCHEMA_VERSION} this runtime requires. Migrate the database before starting this release.`;
+    return {
+      code: "schema-too-old",
+      message: `Workhorse schema version ${state.schemaVersion} is below the minimum ${MINIMUM_SCHEMA_VERSION} this runtime requires. Migrate the database before starting this release.`,
+    };
+  }
+  if (clientProtocolVersion < MINIMUM_PROTOCOL_VERSION) {
+    return {
+      code: "client-protocol-too-old",
+      message: `SQL protocol ${clientProtocolVersion} is below the minimum ${MINIMUM_PROTOCOL_VERSION} this runtime supports. Use a client build that speaks a supported protocol.`,
+    };
+  }
+  if (clientProtocolVersion > MAXIMUM_PROTOCOL_VERSION) {
+    return {
+      code: "client-protocol-too-new",
+      message: `SQL protocol ${clientProtocolVersion} is above the maximum ${MAXIMUM_PROTOCOL_VERSION} this runtime supports. Use a client build that speaks a supported protocol.`,
+    };
   }
   const served = state.servedProtocolVersions;
-  if (served.length > 0 && !served.includes(PROTOCOL_VERSION)) {
+  if (served.length > 0 && !served.includes(clientProtocolVersion)) {
     const oldest = Math.min(...served);
-    return PROTOCOL_VERSION < oldest
-      ? `Workhorse schema serves SQL protocol ${served.join(", ")} and no longer serves protocol ${PROTOCOL_VERSION} this runtime speaks. Upgrade this release.`
-      : `Workhorse schema serves SQL protocol ${served.join(", ")} and does not yet serve protocol ${PROTOCOL_VERSION} this runtime speaks. Migrate the database before starting this release.`;
+    return clientProtocolVersion < oldest
+      ? {
+          code: "schema-too-new",
+          message: `Workhorse schema serves SQL protocol ${served.join(", ")} and no longer serves protocol ${clientProtocolVersion} this runtime speaks. Upgrade this release.`,
+        }
+      : {
+          code: "schema-too-old",
+          message: `Workhorse schema serves SQL protocol ${served.join(", ")} and does not yet serve protocol ${clientProtocolVersion} this runtime speaks. Migrate the database before starting this release.`,
+        };
   }
   return null;
 }

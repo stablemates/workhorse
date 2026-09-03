@@ -5,6 +5,7 @@ import {
   WORKHORSE_SCHEMA_VERSION,
 } from "../schema.js";
 import { MINIMUM_POSTGRES_MAJOR, type PostgresSupport } from "../support.js";
+import type { SchemaCompatibilityCode } from "../errors.js";
 
 export interface SchemaStatusReport {
   readonly schema: {
@@ -19,6 +20,8 @@ export interface SchemaStatusReport {
     readonly compatible: boolean;
     /** Why it would refuse, in the words the runtime itself uses. `null` when compatible. */
     readonly refusal: string | null;
+    /** The same refusal as the code `SchemaCompatibilityError` carries. `null` when compatible. */
+    readonly refusalCode: SchemaCompatibilityCode | null;
   };
   readonly postgres: PostgresSupport & {
     readonly minimumMajor: number;
@@ -45,7 +48,11 @@ export function createSchemaStatusReport(
   // gets the sentence that names the step an operator has not run yet.
   const refusal =
     installedVersion === null
-      ? "No Workhorse schema is installed. Run the schema installation step before starting this release."
+      ? {
+          code: "schema-not-installed" as const,
+          message:
+            "No Workhorse schema is installed. Run the schema installation step before starting this release.",
+        }
       : schemaCompatibilityRefusal({
           schemaVersion: installedVersion,
           servedProtocolVersions: installedProtocolVersions ?? [],
@@ -66,7 +73,8 @@ export function createSchemaStatusReport(
               ? "ahead"
               : "current",
       compatible: refusal === null,
-      refusal,
+      refusal: refusal === null ? null : refusal.message,
+      refusalCode: refusal === null ? null : refusal.code,
     },
     postgres: {
       ...support,

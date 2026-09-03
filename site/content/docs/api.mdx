@@ -134,7 +134,8 @@ Exported constants such as `MAX_ENQUEUE_BATCH_SIZE`, `MAX_CHECKPOINT_VALUE_BYTES
 ## Schema and support
 
 - `installSchema(database)` installs the full schema; run it as a deployment step.
-- `assertSchemaCompatible(database)` fails startup on a runtime/schema mismatch;
+- `assertSchemaCompatible(database)` fails startup on a runtime/schema mismatch, throwing
+  `SchemaCompatibilityError` with the `code` Python and Go also report;
   `readSchemaVersion` and `WORKHORSE_SCHEMA_VERSION` expose both sides of that check.
 - `protocol/v1/` publishes language-neutral fixtures for canonical enqueue requests, worker
   transitions, result shapes, and SQLSTATE-backed structured errors.

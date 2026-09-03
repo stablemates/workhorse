@@ -87,6 +87,7 @@ describe("database CLI output", () => {
           state: "ahead",
           compatible: true,
           refusal: null,
+          refusalCode: null,
         },
       });
     });

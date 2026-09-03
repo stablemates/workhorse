@@ -92,6 +92,19 @@ and 24 and PostgreSQL 15 through 18.
   already used. A dashboard run-now action is therefore audited in all three languages, and its
   `promoted` event records the actor, the reason, and the request identity.
 
+### Added
+
+- `SchemaCompatibilityError` is exported from `@stablemates/workhorse`. `assertSchemaCompatible`
+  throws it instead of a bare `Error`, so a TypeScript caller can catch a schema or protocol
+  mismatch by type the way a Python caller catches `ProtocolCompatibilityError` and a Go caller
+  matches `*CompatibilityError`. Its `code` is one of `schema-not-installed`, `schema-too-old`,
+  `schema-too-new`, `client-protocol-too-old`, or `client-protocol-too-new` — the same five strings
+  the other two SDKs use — and `installedVersion` and `expectedVersion` name the two versions that
+  disagree. A database the check cannot read at all still throws a plain `Error`, because an
+  unreachable database is not a verdict about versions.
+- `workhorse schema status --json` adds `schema.refusalCode` beside `schema.refusal`, so a
+  deployment gate can branch on the same code the process that starts after it would throw.
+
 ### Fixed
 
 - The demo no longer replays the schema on startup against a database that already holds it.

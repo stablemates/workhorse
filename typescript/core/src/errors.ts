@@ -99,6 +99,56 @@ export function databaseErrorDetails(error: unknown): string[] {
   return details;
 }
 
+/**
+ * Why a runtime refuses to talk to an installed schema.
+ *
+ * The five codes are the SQL protocol's own vocabulary. `protocol/v1/compatibility.json` is the
+ * language-neutral list, and Python's `CompatibilityCode` (`python/src/workhorse/errors.py`) and
+ * Go's `CompatibilityCode` (`go/compatibility.go`) spell the same five strings, so a caller that
+ * branches on `code` branches the same way in all three languages.
+ */
+export type SchemaCompatibilityCode =
+  | "schema-not-installed"
+  | "schema-too-old"
+  | "schema-too-new"
+  | "client-protocol-too-old"
+  | "client-protocol-too-new";
+
+/** The installed schema version a refusal was decided against, and the one this build expects. */
+export interface SchemaCompatibilityVersions {
+  /** The single `workhorse.schema_version` row, or null when it is absent or ambiguous. */
+  readonly installedVersion: number | null;
+  /** The schema version this build was compiled against. */
+  readonly expectedVersion: number;
+}
+
+/**
+ * This runtime refuses the installed schema or the client protocol it speaks.
+ *
+ * The message is the sentence an operator reads; `code` is the same value a Python caller reads
+ * from `ProtocolCompatibilityError.code` and a Go caller from `CompatibilityError.Code`. Catch the
+ * type to distinguish "Workhorse and this database disagree about versions" from every other
+ * startup failure, which stays whatever it was.
+ */
+export class SchemaCompatibilityError extends WorkhorseError {
+  readonly code: SchemaCompatibilityCode;
+  readonly installedVersion: number | null;
+  readonly expectedVersion: number;
+
+  constructor(
+    code: SchemaCompatibilityCode,
+    message: string,
+    versions: SchemaCompatibilityVersions,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "SchemaCompatibilityError";
+    this.code = code;
+    this.installedVersion = versions.installedVersion;
+    this.expectedVersion = versions.expectedVersion;
+  }
+}
+
 /** A query that must return exactly one row returned none. */
 export class MissingRowError extends WorkhorseError {
   constructor(readonly source: string) {
