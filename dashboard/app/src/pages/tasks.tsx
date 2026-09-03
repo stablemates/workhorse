@@ -1,14 +1,27 @@
-import type {
-  DashboardDemoFeature,
-  DashboardJobRow,
-  DashboardTasksPage,
+import {
+  dashboardRedriveBatchDefault,
+  type DashboardDemoFeature,
+  type DashboardJobRow,
+  type DashboardRedriveCursor,
+  type DashboardTasksPage,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import { taskPageSizes, type TaskLocationState, type TaskPageSize } from "../task-location.js";
 import { type RunNowFeedback } from "../run-now.js";
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
-import { dashboardDemoFeatureExamples, humanWaitQuickAction } from "../presentation.js";
+import {
+  dashboardDemoFeatureExamples,
+  describeRedriveSelection,
+  humanWaitQuickAction,
+  redriveAtLeastOnceWarning,
+} from "../presentation.js";
 import type { TaskRowActionId } from "../presentation.js";
-import { notifyDashboard, notifyFailure, notifyRunNow } from "../notifications.js";
+import {
+  notifyDashboard,
+  notifyFailure,
+  notifyRedrive,
+  notifyRedriveBatch,
+  notifyRunNow,
+} from "../notifications.js";
 import {
   Badge,
   Button,
@@ -98,6 +111,15 @@ export function TasksPage({
     waitName: string;
     quickAction: NonNullable<ReturnType<typeof humanWaitQuickAction>>;
   } | null>(null);
+  const [confirmingRedrive, setConfirmingRedrive] = useState<DashboardJobRow | null>(null);
+  const [redrivingJobId, setRedrivingJobId] = useState<string | null>(null);
+  // A filtered redrive walks a backlog one page at a time. The cursor is what the previous page
+  // reported, so confirming again continues rather than redriving the same page a second time.
+  const [redrivingSelection, setRedrivingSelection] = useState<{
+    cursor: DashboardRedriveCursor | null;
+    redriven: number;
+    running: boolean;
+  } | null>(null);
   const searchInput = searchDraft ?? taskLocation.search ?? "";
   const taskFacets = useTaskFacets(data);
   const locationState: TaskLocationState = taskLocation;
@@ -145,6 +167,11 @@ export function TasksPage({
           .finally(() => setRunningNowJobId(null));
         return;
       }
+      if (id === "redrive") {
+        if (job.state !== "failed" || redrivingJobId !== null) return;
+        setConfirmingRedrive(job);
+        return;
+      }
       if (id === "filter-type") return updateLocation({ jobType: job.type });
       if (id === "filter-queue") return updateLocation({ queue: job.queue });
       if (id === "filter-worker") {
@@ -167,6 +194,7 @@ export function TasksPage({
       completingHumanWaitJobId,
       data.canCompleteHumanWait,
       inspectJob,
+      redrivingJobId,
       runTaskNow,
       runningNowJobId,
       updateLocation,
@@ -199,6 +227,73 @@ export function TasksPage({
       notifyFailure("Decision not completed", cause, "Workhorse rejected the human decision");
     } finally {
       setCompletingHumanWaitJobId(null);
+    }
+  };
+  const redriveSelection = describeRedriveSelection(data);
+  /**
+   * Redrive one dead letter, then refresh the listing.
+   *
+   * The result is reported from what the server said rather than guessed, because whether a failure
+   * produced a fresh copy or replayed one it had already produced is a durable fact this dashboard
+   * does not get to decide.
+   */
+  const redriveTask = async (job: DashboardJobRow) => {
+    if (!client.redriveTask) return;
+    setRedrivingJobId(job.id);
+    try {
+      const result = await client.redriveTask({
+        id: job.id,
+        audit: {
+          actor: auditActor,
+          reason: `Redrive dead letter ${job.id} from the task list`,
+          requestId: crypto.randomUUID(),
+        },
+      });
+      notifyRedrive(result, { openTask: inspectJob });
+      setConfirmingRedrive(null);
+      await reload();
+    } catch (cause) {
+      notifyFailure("Task not redriven", cause, "Workhorse could not redrive the task");
+    } finally {
+      setRedrivingJobId(null);
+    }
+  };
+  /**
+   * Redrive one bounded page of the dead letters this listing selects.
+   *
+   * The page the server reports carries where the next one starts, so confirming again continues
+   * through the backlog. A request that failed keeps the cursor it started from, because whatever
+   * it did or did not redrive, the page it was asked for is still the page to ask for next.
+   */
+  const redriveSelected = async () => {
+    if (!client.redriveDeadLetters || redrivingSelection === null) return;
+    const { cursor, redriven } = redrivingSelection;
+    setRedrivingSelection({ cursor, redriven, running: true });
+    try {
+      const batch = await client.redriveDeadLetters({
+        queue: redriveSelection.queue,
+        jobType: redriveSelection.jobType,
+        tags: redriveSelection.tags,
+        limit: dashboardRedriveBatchDefault,
+        cursor,
+        audit: {
+          actor: auditActor,
+          reason: `Redrive ${redriveSelection.selected} from the task list`,
+          requestId: crypto.randomUUID(),
+        },
+      });
+      notifyRedriveBatch({ results: batch.results, moreRemain: batch.nextCursor !== null });
+      const total = redriven + batch.results.filter((one) => one.status === "redriven").length;
+      if (batch.nextCursor === null) setRedrivingSelection(null);
+      else setRedrivingSelection({ cursor: batch.nextCursor, redriven: total, running: false });
+      await reload();
+    } catch (cause) {
+      notifyFailure(
+        "Dead letters not redriven",
+        cause,
+        "Workhorse could not redrive the selection",
+      );
+      setRedrivingSelection({ cursor, redriven, running: false });
     }
   };
   const totalPages = Math.max(1, Math.ceil(data.total / data.pageSize));
@@ -249,6 +344,70 @@ export function TasksPage({
           </Button>
         </Group>
       </Modal>
+      <Modal
+        opened={confirmingRedrive !== null}
+        onClose={() => setConfirmingRedrive(null)}
+        title="Redrive this dead letter"
+        centered
+      >
+        <Text size="sm" mb="sm">
+          {redriveAtLeastOnceWarning}
+        </Text>
+        {confirmingRedrive ? (
+          <Code
+            block
+          >{`${confirmingRedrive.type} in ${confirmingRedrive.queue}\n${confirmingRedrive.id}`}</Code>
+        ) : null}
+        <Group justify="flex-end" mt="lg">
+          <Button
+            variant="default"
+            disabled={redrivingJobId !== null}
+            onClick={() => setConfirmingRedrive(null)}
+          >
+            Cancel
+          </Button>
+          <Button
+            loading={redrivingJobId !== null}
+            onClick={() => void (confirmingRedrive && redriveTask(confirmingRedrive))}
+          >
+            Redrive as a new task
+          </Button>
+        </Group>
+      </Modal>
+      <Modal
+        opened={redrivingSelection !== null}
+        onClose={() => setRedrivingSelection(null)}
+        title="Redrive these dead letters"
+        centered
+      >
+        <Text size="sm" mb="sm">
+          Workhorse redrives at most {dashboardRedriveBatchDefault} dead letters at a time, oldest
+          failure first, and reports where the next batch starts. {redriveAtLeastOnceWarning}
+        </Text>
+        <Code block>{redriveSelection.selected}</Code>
+        {redrivingSelection && redrivingSelection.redriven > 0 ? (
+          <Text size="sm" mt="sm">
+            {redrivingSelection.redriven} redriven so far, and more still match this filter.
+          </Text>
+        ) : null}
+        <Group justify="flex-end" mt="lg">
+          <Button
+            variant="default"
+            disabled={redrivingSelection?.running === true}
+            onClick={() => setRedrivingSelection(null)}
+          >
+            {redrivingSelection && redrivingSelection.redriven > 0 ? "Stop here" : "Cancel"}
+          </Button>
+          <Button
+            loading={redrivingSelection?.running === true}
+            onClick={() => void redriveSelected()}
+          >
+            {redrivingSelection && redrivingSelection.redriven > 0
+              ? "Redrive the next batch"
+              : `Redrive up to ${dashboardRedriveBatchDefault}`}
+          </Button>
+        </Group>
+      </Modal>
       <Suspense
         fallback={
           <Paper withBorder p="md">
@@ -280,6 +439,26 @@ export function TasksPage({
           />
           <Group justify="flex-end" wrap="wrap">
             <Group gap="xs" wrap="wrap">
+              {data.filter === "discarded" ? (
+                <Button
+                  variant="default"
+                  size="xs"
+                  radius="xl"
+                  leftSection={<ArrowCounterClockwise size={16} />}
+                  disabled={redriveSelection.unavailable !== null || data.jobs.length === 0}
+                  title={
+                    redriveSelection.unavailable ??
+                    (data.jobs.length === 0
+                      ? "This listing shows no dead letter, so there is nothing to redrive."
+                      : `Redrive ${redriveSelection.selected}`)
+                  }
+                  onClick={() =>
+                    setRedrivingSelection({ cursor: null, redriven: 0, running: false })
+                  }
+                >
+                  Redrive these dead letters
+                </Button>
+              ) : null}
               {runDemoJob ? (
                 <Menu position="bottom-start" withinPortal>
                   <Menu.Target>
@@ -556,9 +735,11 @@ export function TasksPage({
                         pendingAction={
                           completingHumanWaitJobId === job.id
                             ? "complete-human-wait"
-                            : runningNowJobId === job.id
-                              ? "run-now"
-                              : null
+                            : redrivingJobId === job.id
+                              ? "redrive"
+                              : runningNowJobId === job.id
+                                ? "run-now"
+                                : null
                         }
                       />
                     </Table.Td>

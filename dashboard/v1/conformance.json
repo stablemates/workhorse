@@ -551,6 +551,164 @@
           }
         },
         {
+          "id": "enqueue-redrive-one",
+          "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+          "parameters": [
+            [
+              {
+                "queue": "conformance-redrive",
+                "type": "conformance.redrive.one",
+                "payload": {},
+                "maxAttempts": 1
+              }
+            ]
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "jobId": {
+                    "$type": "uuid"
+                  },
+                  "outcome": "accepted"
+                }
+              }
+            ]
+          },
+          "capture": {
+            "redriveOneJob": "0.value.jobId"
+          }
+        },
+        {
+          "id": "claim-redrive-one",
+          "sql": "SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
+          "parameters": [
+            "conformance-redrive",
+            "conformance-worker",
+            30000
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "jobId": {
+                    "$ref": "redriveOneJob"
+                  },
+                  "fenceToken": {
+                    "$type": "integer"
+                  }
+                }
+              }
+            ]
+          },
+          "capture": {
+            "redriveOneFence": "0.value.fenceToken"
+          }
+        },
+        {
+          "id": "fail-redrive-one",
+          "sql": "SELECT workhorse.fail_v1($1::uuid, $2, $3::bigint, $4::jsonb, 0) AS state",
+          "parameters": [
+            {
+              "$ref": "redriveOneJob"
+            },
+            "conformance-worker",
+            {
+              "$ref": "redriveOneFence"
+            },
+            {
+              "name": "Error",
+              "message": "conformance.redrive.one failed"
+            }
+          ],
+          "expect": {
+            "rows": [
+              {
+                "state": "failed"
+              }
+            ]
+          }
+        },
+        {
+          "id": "enqueue-redrive-batch",
+          "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+          "parameters": [
+            [
+              {
+                "queue": "conformance-redrive",
+                "type": "conformance.redrive.batch",
+                "payload": {},
+                "maxAttempts": 1
+              }
+            ]
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "jobId": {
+                    "$type": "uuid"
+                  },
+                  "outcome": "accepted"
+                }
+              }
+            ]
+          },
+          "capture": {
+            "redriveBatchJob": "0.value.jobId"
+          }
+        },
+        {
+          "id": "claim-redrive-batch",
+          "sql": "SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
+          "parameters": [
+            "conformance-redrive",
+            "conformance-worker",
+            30000
+          ],
+          "expect": {
+            "rows": [
+              {
+                "value": {
+                  "jobId": {
+                    "$ref": "redriveBatchJob"
+                  },
+                  "fenceToken": {
+                    "$type": "integer"
+                  }
+                }
+              }
+            ]
+          },
+          "capture": {
+            "redriveBatchFence": "0.value.fenceToken"
+          }
+        },
+        {
+          "id": "fail-redrive-batch",
+          "sql": "SELECT workhorse.fail_v1($1::uuid, $2, $3::bigint, $4::jsonb, 0) AS state",
+          "parameters": [
+            {
+              "$ref": "redriveBatchJob"
+            },
+            "conformance-worker",
+            {
+              "$ref": "redriveBatchFence"
+            },
+            {
+              "name": "Error",
+              "message": "conformance.redrive.batch failed"
+            }
+          ],
+          "expect": {
+            "rows": [
+              {
+                "state": "failed"
+              }
+            ]
+          }
+        },
+        {
           "id": "sync-schedule",
           "sql": "SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean) AS synced",
           "parameters": [
@@ -600,7 +758,7 @@
             "status": 200,
             "body": {
               "json": {
-                "all": 8,
+                "all": 10,
                 "queued": 3,
                 "blocked": 0,
                 "retried": 0,
@@ -608,7 +766,7 @@
                 "waiting": 2,
                 "canceled": 0,
                 "completed": 1,
-                "discarded": 1,
+                "discarded": 3,
                 "scheduled": 3
               }
             }
@@ -625,6 +783,86 @@
             "body": {
               "json": {
                 "jobs": [
+                  {
+                    "id": {
+                      "$ref": "redriveBatchJob"
+                    },
+                    "tags": [],
+                    "type": "conformance.redrive.batch",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-redrive",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "failed",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "maxAttempts": 1,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": "conformance.redrive.batch failed",
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "redriveOneJob"
+                    },
+                    "tags": [],
+                    "type": "conformance.redrive.one",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-redrive",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "failed",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "maxAttempts": 1,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": "conformance.redrive.one failed",
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
                   {
                     "id": {
                       "$ref": "purgeTargetJob"
@@ -949,7 +1187,7 @@
                 "sort": "updated",
                 "tags": [],
                 "queue": null,
-                "total": 8,
+                "total": 10,
                 "filter": "all",
                 "search": null,
                 "worker": null,
@@ -1015,7 +1253,8 @@
                 ],
                 "queues": [
                   "conformance",
-                  "conformance-purge"
+                  "conformance-purge",
+                  "conformance-redrive"
                 ],
                 "workers": [
                   "conformance-worker"
@@ -1026,6 +1265,8 @@
                   "conformance.human",
                   "conformance.purge",
                   "conformance.ready",
+                  "conformance.redrive.batch",
+                  "conformance.redrive.one",
                   "conformance.scheduled",
                   "conformance.signal",
                   "conformance.succeed"
@@ -1054,6 +1295,8 @@
                   "conformance.human",
                   "conformance.purge",
                   "conformance.ready",
+                  "conformance.redrive.batch",
+                  "conformance.redrive.one",
                   "conformance.scheduled",
                   "conformance.signal",
                   "conformance.succeed"
@@ -1328,8 +1571,242 @@
             "body": {
               "json": {
                 "page": 1,
-                "total": 18,
+                "total": 26,
                 "events": [
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "event",
+                    "type": "failed",
+                    "jobId": {
+                      "$ref": "redriveBatchJob"
+                    },
+                    "queue": "conformance-redrive",
+                    "attempt": 1,
+                    "details": {
+                      "error": {
+                        "name": "Error",
+                        "message": "conformance.redrive.batch failed"
+                      }
+                    },
+                    "jobType": "conformance.redrive.batch",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "workerId": null,
+                    "durationMs": null,
+                    "fenceToken": null,
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": null
+                  },
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "attempt",
+                    "type": "failed",
+                    "jobId": {
+                      "$ref": "redriveBatchJob"
+                    },
+                    "queue": "conformance-redrive",
+                    "attempt": 1,
+                    "details": null,
+                    "jobType": "conformance.redrive.batch",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "workerId": "conformance-worker",
+                    "durationMs": {
+                      "$type": "integer"
+                    },
+                    "fenceToken": "6",
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": "conformance.redrive.batch failed"
+                  },
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "event",
+                    "type": "claimed",
+                    "jobId": {
+                      "$ref": "redriveBatchJob"
+                    },
+                    "queue": "conformance-redrive",
+                    "attempt": 1,
+                    "details": {
+                      "worker_id": "conformance-worker",
+                      "expires_at": {
+                        "$type": "timestamp"
+                      },
+                      "fence_token": "6"
+                    },
+                    "jobType": "conformance.redrive.batch",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "workerId": null,
+                    "durationMs": null,
+                    "fenceToken": null,
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": null
+                  },
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "event",
+                    "type": "enqueued",
+                    "jobId": {
+                      "$ref": "redriveBatchJob"
+                    },
+                    "queue": "conformance-redrive",
+                    "attempt": null,
+                    "details": {
+                      "state": "ready",
+                      "run_at": {
+                        "$type": "timestamp"
+                      },
+                      "priority": 0,
+                      "deadline_at": null,
+                      "execution_timeout_ms": null
+                    },
+                    "jobType": "conformance.redrive.batch",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "workerId": null,
+                    "durationMs": null,
+                    "fenceToken": null,
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": null
+                  },
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "event",
+                    "type": "failed",
+                    "jobId": {
+                      "$ref": "redriveOneJob"
+                    },
+                    "queue": "conformance-redrive",
+                    "attempt": 1,
+                    "details": {
+                      "error": {
+                        "name": "Error",
+                        "message": "conformance.redrive.one failed"
+                      }
+                    },
+                    "jobType": "conformance.redrive.one",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "workerId": null,
+                    "durationMs": null,
+                    "fenceToken": null,
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": null
+                  },
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "attempt",
+                    "type": "failed",
+                    "jobId": {
+                      "$ref": "redriveOneJob"
+                    },
+                    "queue": "conformance-redrive",
+                    "attempt": 1,
+                    "details": null,
+                    "jobType": "conformance.redrive.one",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "workerId": "conformance-worker",
+                    "durationMs": {
+                      "$type": "integer"
+                    },
+                    "fenceToken": "5",
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": "conformance.redrive.one failed"
+                  },
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "event",
+                    "type": "claimed",
+                    "jobId": {
+                      "$ref": "redriveOneJob"
+                    },
+                    "queue": "conformance-redrive",
+                    "attempt": 1,
+                    "details": {
+                      "worker_id": "conformance-worker",
+                      "expires_at": {
+                        "$type": "timestamp"
+                      },
+                      "fence_token": "5"
+                    },
+                    "jobType": "conformance.redrive.one",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "workerId": null,
+                    "durationMs": null,
+                    "fenceToken": null,
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": null
+                  },
+                  {
+                    "id": {
+                      "$type": "string"
+                    },
+                    "kind": "event",
+                    "type": "enqueued",
+                    "jobId": {
+                      "$ref": "redriveOneJob"
+                    },
+                    "queue": "conformance-redrive",
+                    "attempt": null,
+                    "details": {
+                      "state": "ready",
+                      "run_at": {
+                        "$type": "timestamp"
+                      },
+                      "priority": 0,
+                      "deadline_at": null,
+                      "execution_timeout_ms": null
+                    },
+                    "jobType": "conformance.redrive.one",
+                    "recordId": {
+                      "$type": "uuid"
+                    },
+                    "workerId": null,
+                    "durationMs": null,
+                    "fenceToken": null,
+                    "occurredAt": {
+                      "$type": "timestamp"
+                    },
+                    "errorMessage": null
+                  },
                   {
                     "id": {
                       "$type": "string"
@@ -1835,38 +2312,6 @@
                       "$type": "timestamp"
                     },
                     "errorMessage": null
-                  },
-                  {
-                    "id": {
-                      "$type": "string"
-                    },
-                    "kind": "event",
-                    "type": "enqueued",
-                    "jobId": {
-                      "$ref": "succeededJob"
-                    },
-                    "queue": "conformance",
-                    "attempt": null,
-                    "details": {
-                      "state": "ready",
-                      "run_at": {
-                        "$type": "timestamp"
-                      },
-                      "priority": 0,
-                      "deadline_at": null,
-                      "execution_timeout_ms": null
-                    },
-                    "jobType": "conformance.succeed",
-                    "recordId": {
-                      "$type": "uuid"
-                    },
-                    "workerId": null,
-                    "durationMs": null,
-                    "fenceToken": null,
-                    "occurredAt": {
-                      "$type": "timestamp"
-                    },
-                    "errorMessage": null
                   }
                 ],
                 "window": "1h",
@@ -1908,23 +2353,20 @@
                   "$ref": "eventDetailId"
                 },
                 "kind": "event",
-                "type": "enqueued",
+                "type": "failed",
                 "error": null,
                 "jobId": {
-                  "$ref": "purgeTargetJob"
+                  "$ref": "redriveBatchJob"
                 },
-                "queue": "conformance-purge",
-                "attempt": null,
+                "queue": "conformance-redrive",
+                "attempt": 1,
                 "details": {
-                  "state": "ready",
-                  "run_at": {
-                    "$type": "timestamp"
-                  },
-                  "priority": 0,
-                  "deadline_at": null,
-                  "execution_timeout_ms": null
+                  "error": {
+                    "name": "Error",
+                    "message": "conformance.redrive.batch failed"
+                  }
                 },
-                "jobType": "conformance.purge",
+                "jobType": "conformance.redrive.batch",
                 "recordId": {
                   "$type": "uuid"
                 },
@@ -2071,6 +2513,19 @@
                     "rateLimitPolicy": null,
                     "concurrencyPolicy": null,
                     "terminalCountsApproximate": false
+                  },
+                  {
+                    "queue": "conformance-redrive",
+                    "ready": 0,
+                    "active": 0,
+                    "failed": 2,
+                    "paused": false,
+                    "canceled": 0,
+                    "scheduled": 0,
+                    "succeeded": 0,
+                    "rateLimitPolicy": null,
+                    "concurrencyPolicy": null,
+                    "terminalCountsApproximate": false
                   }
                 ],
                 "capturedAt": {
@@ -2097,8 +2552,8 @@
                 "kpis": {
                   "drain": {
                     "netPerMinute": -0.1,
-                    "enqueuedPerMinute": 0.13333333333333333,
-                    "completedPerMinute": 0.03333333333333333
+                    "enqueuedPerMinute": 0.16666666666666666,
+                    "completedPerMinute": 0.06666666666666667
                   },
                   "lease": {
                     "active": 0,
@@ -2157,8 +2612,8 @@
                     "overdueTimeouts": 0
                   },
                   "errorRate": {
-                    "delta": 0.5,
-                    "current": 0.5,
+                    "delta": 0.75,
+                    "current": 0.75,
                     "previous": 0
                   },
                   "queueWait": {
@@ -2245,6 +2700,20 @@
                     "concurrencyPolicy": null,
                     "enqueuedPerMinute": 0.016666666666666666,
                     "completedPerMinute": 0
+                  },
+                  {
+                    "queue": "conformance-redrive",
+                    "ready": 0,
+                    "active": 0,
+                    "paused": false,
+                    "dueSoon": 0,
+                    "retrying": 0,
+                    "oldestReadyMs": null,
+                    "priorityBacklog": [],
+                    "rateLimitPolicy": null,
+                    "concurrencyPolicy": null,
+                    "enqueuedPerMinute": 0.03333333333333333,
+                    "completedPerMinute": 0.03333333333333333
                   }
                 ],
                 "status": {
@@ -4015,6 +4484,28 @@
                 },
                 "failingTypes": [
                   {
+                    "type": "conformance.redrive.batch",
+                    "queue": "conformance-redrive",
+                    "attempts": 1,
+                    "errorRate": 1,
+                    "lastError": "conformance.redrive.batch failed",
+                    "lastSeenAt": {
+                      "$type": "timestamp"
+                    },
+                    "terminalFailures": 1
+                  },
+                  {
+                    "type": "conformance.redrive.one",
+                    "queue": "conformance-redrive",
+                    "attempts": 1,
+                    "errorRate": 1,
+                    "lastError": "conformance.redrive.one failed",
+                    "lastSeenAt": {
+                      "$type": "timestamp"
+                    },
+                    "terminalFailures": 1
+                  },
+                  {
                     "type": "conformance.fail",
                     "queue": "conformance",
                     "attempts": 1,
@@ -4081,11 +4572,11 @@
                     "registered": true,
                     "activeSlots": 0,
                     "concurrency": 2,
-                    "failedAttempts": 1,
+                    "failedAttempts": 3,
                     "lastHeartbeatAt": {
                       "$type": "timestamp"
                     },
-                    "completedAttempts": 2,
+                    "completedAttempts": 4,
                     "averageExecutionMs": {
                       "$type": "number"
                     },
@@ -4258,7 +4749,7 @@
                     }
                   },
                   "enqueueRate": {
-                    "jobs": 8,
+                    "jobs": 10,
                     "windowMs": 3600000
                   },
                   "defaultHistoryRows": {
@@ -5012,6 +5503,52 @@
               "error": "A same-origin mutation request is required"
             }
           }
+        },
+        {
+          "id": "redrive-task-cross-origin",
+          "procedure": "redriveTask",
+          "request": {
+            "json": {
+              "id": "00000000-0000-4000-8000-000000000001",
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance redrive",
+                "requestId": "conformance-redrive-one"
+              }
+            }
+          },
+          "origin": "cross",
+          "expect": {
+            "status": 403,
+            "body": {
+              "error": "A same-origin mutation request is required"
+            }
+          }
+        },
+        {
+          "id": "redrive-dead-letters-cross-origin",
+          "procedure": "redriveDeadLetters",
+          "request": {
+            "json": {
+              "queue": "conformance-redrive",
+              "jobType": null,
+              "tags": [],
+              "limit": 10,
+              "cursor": null,
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance redrive",
+                "requestId": "conformance-redrive-batch"
+              }
+            }
+          },
+          "origin": "cross",
+          "expect": {
+            "status": 403,
+            "body": {
+              "error": "A same-origin mutation request is required"
+            }
+          }
         }
       ]
     },
@@ -5394,6 +5931,86 @@
                 "jobs": [
                   {
                     "id": {
+                      "$ref": "redriveBatchJob"
+                    },
+                    "tags": [],
+                    "type": "conformance.redrive.batch",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-redrive",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "failed",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "maxAttempts": 1,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": "conformance.redrive.batch failed",
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "redriveOneJob"
+                    },
+                    "tags": [],
+                    "type": "conformance.redrive.one",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-redrive",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "failed",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "maxAttempts": 1,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": "conformance.redrive.one failed",
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
                       "$ref": "purgeTargetJob"
                     },
                     "tags": [],
@@ -5716,7 +6333,7 @@
                 "sort": "updated",
                 "tags": [],
                 "queue": null,
-                "total": 8,
+                "total": 10,
                 "filter": "all",
                 "search": null,
                 "worker": null,
@@ -5760,11 +6377,11 @@
                     "registered": true,
                     "activeSlots": 0,
                     "concurrency": 2,
-                    "failedAttempts": 1,
+                    "failedAttempts": 3,
                     "lastHeartbeatAt": {
                       "$type": "timestamp"
                     },
-                    "completedAttempts": 2,
+                    "completedAttempts": 4,
                     "averageExecutionMs": {
                       "$type": "number"
                     },
@@ -5938,7 +6555,7 @@
                     }
                   },
                   "enqueueRate": {
-                    "jobs": 8,
+                    "jobs": 10,
                     "windowMs": 3600000
                   },
                   "defaultHistoryRows": {
@@ -6018,6 +6635,62 @@
                     }
                   }
                 ]
+              }
+            }
+          }
+        },
+        {
+          "id": "redrive-task-read-only",
+          "procedure": "redriveTask",
+          "request": {
+            "json": {
+              "id": "00000000-0000-4000-8000-000000000001",
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance redrive",
+                "requestId": "conformance-redrive-one"
+              }
+            }
+          },
+          "mode": "read-only",
+          "expect": {
+            "status": 403,
+            "body": {
+              "json": {
+                "defined": false,
+                "code": "FORBIDDEN",
+                "status": 403,
+                "message": "This dashboard is read-only"
+              }
+            }
+          }
+        },
+        {
+          "id": "redrive-dead-letters-read-only",
+          "procedure": "redriveDeadLetters",
+          "request": {
+            "json": {
+              "queue": "conformance-redrive",
+              "jobType": null,
+              "tags": [],
+              "limit": 10,
+              "cursor": null,
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance redrive",
+                "requestId": "conformance-redrive-batch"
+              }
+            }
+          },
+          "mode": "read-only",
+          "expect": {
+            "status": 403,
+            "body": {
+              "json": {
+                "defined": false,
+                "code": "FORBIDDEN",
+                "status": 403,
+                "message": "This dashboard is read-only"
               }
             }
           }
@@ -6554,6 +7227,118 @@
                 "result": {
                   "approved": true
                 }
+              }
+            }
+          }
+        },
+        {
+          "id": "redrive-task",
+          "procedure": "redriveTask",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "redriveOneJob"
+              },
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance redrive",
+                "requestId": "conformance-redrive-one"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "status": "redriven",
+                "sourceJobId": {
+                  "$ref": "redriveOneJob"
+                },
+                "targetJobId": {
+                  "$type": "uuid"
+                },
+                "sourceState": "failed",
+                "targetState": "ready",
+                "requestedAt": {
+                  "$type": "timestamp"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "redrive-task-repeat",
+          "procedure": "redriveTask",
+          "request": {
+            "json": {
+              "id": {
+                "$ref": "redriveOneJob"
+              },
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance redrive",
+                "requestId": "conformance-redrive-one"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "status": "replayed",
+                "sourceJobId": {
+                  "$ref": "redriveOneJob"
+                },
+                "targetJobId": {
+                  "$type": "uuid"
+                },
+                "sourceState": "failed",
+                "targetState": "ready",
+                "requestedAt": {
+                  "$type": "timestamp"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "redrive-dead-letters",
+          "procedure": "redriveDeadLetters",
+          "request": {
+            "json": {
+              "queue": "conformance-redrive",
+              "jobType": "conformance.redrive.batch",
+              "tags": [],
+              "limit": 10,
+              "cursor": null,
+              "audit": {
+                "actor": "browser-operator",
+                "reason": "conformance redrive",
+                "requestId": "conformance-redrive-batch"
+              }
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "results": [
+                  {
+                    "status": "redriven",
+                    "sourceJobId": {
+                      "$ref": "redriveBatchJob"
+                    },
+                    "targetJobId": {
+                      "$type": "uuid"
+                    },
+                    "sourceState": "failed",
+                    "targetState": "ready",
+                    "requestedAt": {
+                      "$type": "timestamp"
+                    }
+                  }
+                ],
+                "nextCursor": null
               }
             }
           }

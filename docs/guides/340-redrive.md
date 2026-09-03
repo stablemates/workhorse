@@ -6,6 +6,8 @@ been down for an hour. The job would work fine now.
 Redriving is an operator saying: make me a fresh copy of this job and run it.
 TypeScript and Go application code make that request through `Admin`. Python uses `Admin` or
 `AsyncAdmin`. Each operator client stays separate from the application-shaped `Queue` client.
+An operator without a terminal asks for the same thing from the dashboard, in the listing that
+shows the failed jobs, one job or one filtered batch at a time.
 
 ## Dead letters
 

@@ -1,6 +1,7 @@
 import type {
   CancelStatus,
   MaintenancePolicy,
+  RedriveStatus,
   Queue,
   QueueHealth,
   QueueHealthReason,
@@ -224,6 +225,25 @@ export type DashboardRunNowStatus =
   | "not_scheduled"
   | "waiting"
   | "not_found";
+
+/**
+ * Statuses the redrive mutations report. `RedriveStatus` itself rather than a hand-copied union, so
+ * the dashboard vocabulary and the one `Admin.redrive` reports cannot drift, exactly as
+ * `DashboardCancelStatus` is `CancelStatus`.
+ */
+export type DashboardRedriveStatus = RedriveStatus;
+
+/**
+ * Opaque continuation state for a filtered redrive, as PostgreSQL returned it.
+ *
+ * It crosses to the browser because only a caller that sends the previous page's cursor back
+ * advances through a backlog: redriving a dead letter leaves its source failed, so the same filter
+ * selects the same page again.
+ */
+export interface DashboardRedriveCursor {
+  finishedAt: string;
+  jobId: string;
+}
 
 export interface DashboardQueueRow {
   queue: string;
@@ -461,6 +481,17 @@ export type DashboardTaskSort = (typeof dashboardTaskSorts)[number];
 
 /** Highest priority accepted by dashboard filters and operator enqueue controls. */
 export const dashboardTaskPriorityMax = 100;
+
+/**
+ * Largest and default number of dead letters one filtered redrive request may act on.
+ *
+ * The maximum is the batch bound PostgreSQL itself enforces. The default is the smaller number the
+ * dashboard sends, so an operator who confirms a filtered redrive commits to a page of work rather
+ * than to the whole backlog, and repeats it while the result reports that more remain.
+ */
+export const dashboardRedriveBatchMax = 1_000;
+
+export const dashboardRedriveBatchDefault = 100;
 
 export type DashboardTaskCounts = Record<DashboardTaskFilter, number>;
 

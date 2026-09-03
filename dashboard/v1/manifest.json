@@ -144,6 +144,12 @@
     },
     "completeHumanWait": {
       "mutation": true
+    },
+    "redriveTask": {
+      "mutation": true
+    },
+    "redriveDeadLetters": {
+      "mutation": true
     }
   }
 }

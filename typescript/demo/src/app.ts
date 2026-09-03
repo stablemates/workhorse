@@ -1062,6 +1062,9 @@ function operatorAuditStatus(
     return "failed";
   }
   if (action.kind === "cancelTask" && status === "not_found") return "failed";
+  if (action.kind === "redriveTask" && (status === "not_found" || status === "not_failed")) {
+    return "failed";
+  }
   return "succeeded";
 }
 
@@ -1144,6 +1147,41 @@ export function createLocalOperatorControllers(database: DemoDatabase) {
             `);
             before = { state: rows.rows[0]?.state ?? null, name: action.name };
             target = `job:${action.jobId}`;
+            break;
+          }
+          case "redriveTask": {
+            const rows = await transaction.execute<{ state: string | null }>(sql`
+              SELECT COALESCE(r.state, o.state) AS state
+                FROM workhorse.job j
+                LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
+                LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
+               WHERE j.id = ${action.jobId}
+            `);
+            before = { state: rows.rows[0]?.state ?? null };
+            target = `job:${action.jobId}`;
+            break;
+          }
+          case "redriveDeadLetters": {
+            const { queue, jobType, tags } = action.filter;
+            const selectedTags = [...tags];
+            const rows = await transaction.execute<{ dead_letters: number }>(sql`
+              SELECT count(*)::integer AS dead_letters
+                FROM workhorse.job_outcome o
+                JOIN workhorse.job j ON j.id = o.job_id
+               WHERE o.state = 'failed'
+                 AND (${queue}::text IS NULL OR j.queue_name = ${queue})
+                 AND (${jobType}::text IS NULL OR j.job_type = ${jobType})
+                 AND (cardinality(${selectedTags}::text[]) = 0
+                      OR j.tags @> ${selectedTags}::text[])
+            `);
+            // The whole selection, not the page: the audit row then shows how much of the backlog
+            // this bounded request could reach.
+            before = {
+              deadLetters: rows.rows[0]?.dead_letters ?? 0,
+              limit: action.limit,
+              continued: action.cursor !== null,
+            };
+            target = `dead-letters:${queue ?? "*"}/${jobType ?? "*"}`;
             break;
           }
           case "setWorkerPaused": {

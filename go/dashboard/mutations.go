@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	workhorse "github.com/stablemates/workhorse/go"
 )
@@ -136,6 +137,115 @@ func (service *backend) cancelTask(ctx context.Context, input any, actor string)
 		return nil, &RPCError{Status: 404, Code: "NOT_FOUND", Message: "Task not found"}
 	}
 	return map[string]any{"status": row["status"], "jobId": value["id"], "state": row["state"], "currentAttempt": row["current_attempt"], "requestedAt": timestamp(row["requested_at"]), "requestedBy": row["requested_by"], "reason": row["reason"], "finishedAt": timestamp(row["finished_at"])}, nil
+}
+
+// PostgreSQL returns a bulk redrive cursor as exact microsecond text, and every backend has to
+// hand back the same characters: a cursor rounded to the millisecond every other dashboard
+// timestamp uses would point just before the page it already redrove, and the next page would
+// redrive that row a second time.
+const redriveCursorLayout = "2006-01-02T15:04:05.000000Z"
+
+// The listing sends tags exactly as an operator selected them, so unlike a policy setting name
+// they cross the boundary unchanged.
+func tagSlice(value any) []string {
+	items, _ := value.([]any)
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		if tag, ok := item.(string); ok {
+			result = append(result, tag)
+		}
+	}
+	return result
+}
+
+// The contract bounds the batch and supplies its default, so a decoded number only has to survive
+// the JSON round trip that made it a json.Number.
+func redriveLimit(value any) int {
+	number, ok := value.(json.Number)
+	if !ok {
+		return 100
+	}
+	limit, err := number.Int64()
+	if err != nil {
+		return 100
+	}
+	return int(limit)
+}
+
+func redriveResult(result workhorse.RedriveResult) map[string]any {
+	value := map[string]any{
+		"status":      result.Status,
+		"sourceJobId": result.SourceJobID,
+		"targetJobId": nil,
+		"sourceState": nil,
+		"targetState": nil,
+		"requestedAt": nil,
+	}
+	if result.TargetJobID != nil {
+		value["targetJobId"] = *result.TargetJobID
+	}
+	if result.SourceState != nil {
+		value["sourceState"] = string(*result.SourceState)
+	}
+	if result.TargetState != nil {
+		value["targetState"] = string(*result.TargetState)
+	}
+	if result.RequestedAt != nil {
+		value["requestedAt"] = timestamp(*result.RequestedAt)
+	}
+	return value
+}
+
+func (service *backend) redriveTask(ctx context.Context, input any, actor string) (any, error) {
+	value, _ := document(input)
+	result, err := service.admin.Redrive(ctx, fmt.Sprint(value["id"]), adminAudit(value, actor))
+	if err != nil {
+		return nil, err
+	}
+	if result.Status == "not_found" {
+		return nil, &RPCError{Status: 404, Code: "NOT_FOUND", Message: "Task not found"}
+	}
+	return redriveResult(result), nil
+}
+
+func (service *backend) redriveDeadLetters(ctx context.Context, input any, actor string) (any, error) {
+	value, _ := document(input)
+	filter := workhorse.DeadLetterFilter{Tags: tagSlice(value["tags"])}
+	if queue, ok := value["queue"].(string); ok {
+		filter.Queue = queue
+	}
+	if jobType, ok := value["jobType"].(string); ok {
+		filter.Type = jobType
+	}
+	options := workhorse.BulkRedriveOptions{Limit: redriveLimit(value["limit"])}
+	if cursor, ok := value["cursor"].(map[string]any); ok {
+		finished, err := time.Parse(time.RFC3339Nano, fmt.Sprint(cursor["finishedAt"]))
+		if err != nil {
+			return nil, &RPCError{
+				Status: 400, Code: "BAD_REQUEST", Message: "Redrive cursor is not a timestamp",
+			}
+		}
+		options.Cursor = &workhorse.AdminCursor{
+			OccurredAt: finished,
+			JobID:      fmt.Sprint(cursor["jobId"]),
+		}
+	}
+	page, err := service.admin.RedriveMany(ctx, filter, adminAudit(value, actor), options)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]any, 0, len(page.Results))
+	for _, result := range page.Results {
+		results = append(results, redriveResult(result))
+	}
+	response := map[string]any{"results": results, "nextCursor": nil}
+	if page.NextCursor != nil {
+		response["nextCursor"] = map[string]any{
+			"finishedAt": page.NextCursor.OccurredAt.UTC().Format(redriveCursorLayout),
+			"jobId":      page.NextCursor.JobID,
+		}
+	}
+	return response, nil
 }
 
 func (service *backend) signalTask(ctx context.Context, input any, actor string) (any, error) {

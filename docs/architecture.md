@@ -2348,6 +2348,18 @@ without stating one. Python and Go already generate the first three. Each result
 from a subpath too: `DashboardRunNowStatus` from `./wire`, and `CancelStatus`,
 `SignalDeliveryStatus`, `HumanWaitCompletionStatus`, and `Json` from `@stablemates/workhorse`.
 
+`redriveTask` returns `DashboardRedriveResult` and `redriveDeadLetters` returns
+`DashboardRedriveBatch`, both from `./server`, and `redriveDeadLetters` receives a
+`DashboardRedriveFilter` of `queue`, `jobType`, and `tags`, a `limit`, and a
+`DashboardRedriveCursor` or null. `DashboardRedriveStatus` and `DashboardRedriveCursor` resolve
+from `./wire`; the status is `RedriveStatus` itself rather than a hand-copied union. The
+`redriveDeadLetters` procedure accepts a `limit` from 1 through `dashboardRedriveBatchMax`, 1,000,
+which is `MAX_REDRIVE_BATCH_SIZE`, and defaults it to `dashboardRedriveBatchDefault`, 100. Its
+`cursor` is the `nextCursor` a previous page returned, because `redrive_v1` leaves the source
+failed and an uncursored repeat would select the same page again. The controllers apply
+`options.requestedBy` to both, so a host with a configured trusted actor owns the `job_redrive`
+attribution rather than the browser.
+
 Nothing `typescript/dashboard-server/src/server/read-model.ts` declares reaches a subpath. That
 covers its thirteen `readDashboard*` functions, `createDashboardQueueHealthReader`, and the
 `DashboardTasksQuery` and `DashboardEventsQuery` argument types. The read model is the

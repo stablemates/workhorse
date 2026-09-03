@@ -36,6 +36,7 @@ func (service *backend) procedures() map[string]Procedure {
 		"revertRetentionPolicy":     service.revertRetentionPolicy,
 		"runTaskNow":                service.runTaskNow, "cancelTask": service.cancelTask,
 		"signalTask": service.signalTask, "completeHumanWait": service.completeHumanWait,
+		"redriveTask": service.redriveTask, "redriveDeadLetters": service.redriveDeadLetters,
 	}
 }
 

@@ -26,6 +26,7 @@ import {
   taskRowActionGroups,
 } from "../presentation.js";
 import {
+  ArrowCounterClockwise,
   CheckCircle,
   Clock,
   Copy,
@@ -475,6 +476,7 @@ export function taskRowActionIcon(id: TaskRowActionId): ReactNode {
   if (id === "copy-id" || id === "copy-args") return <Copy size={16} />;
   if (id === "cancel") return <Prohibit size={16} />;
   if (id === "run-now") return <PlayCircle size={16} />;
+  if (id === "redrive") return <ArrowCounterClockwise size={16} />;
   if (id === "complete-human-wait") return <CheckCircle size={16} />;
   return <FunnelSimple size={16} />;
 }

@@ -150,6 +150,18 @@ One honest caveat: a redriven job is another at-least-once execution. Payment, e
 handlers still need provider-side idempotency before an operator replays them — redrive makes the
 operation auditable, not magically exactly-once.
 
+## Redrive from the dashboard
+
+The dashboard's discarded listing is the same set of failed jobs. Its row menu redrives one job,
+and a control above the table redrives a bounded batch of everything the listing selects, oldest
+failure first, reporting where the next batch starts so an operator can walk a backlog. The
+listing filters that a batch cannot express — worker, priority, and search — disable the batch
+control and say so, rather than acting on a wider selection than the screen shows.
+
+Both confirm first, and both state the same caveat as above: a redriven job is another
+at-least-once execution. The dashboard attributes each request to the operator the server
+authenticated, not to a name the browser supplied.
+
 ## Next
 
 - [Retries](/docs/retries) — the automatic attempts that precede a terminal failure

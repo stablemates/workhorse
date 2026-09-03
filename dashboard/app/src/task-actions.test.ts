@@ -218,6 +218,19 @@ describe("task row actions", () => {
     expect(destructive).toEqual(["cancel"]);
   });
 
+  it("offers redrive only for a task that finished as failed", () => {
+    expect(action(row({ state: "failed" }), "redrive")).toEqual({
+      id: "redrive",
+      label: "Redrive as a new task…",
+      unavailable: null,
+      destructive: false,
+    });
+    expect(action(row({ state: "succeeded" }), "redrive").unavailable).toContain(
+      "this one is succeeded",
+    );
+    expect(action(row({ state: "active" }), "redrive").unavailable).toContain("has not finished");
+  });
+
   it("offers an application-defined human decision from the stable row menu", () => {
     expect(
       action(

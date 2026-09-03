@@ -1540,6 +1540,157 @@
       "output": {
         "$ref": "#/$defs/DashboardCompleteHumanWaitResult"
       }
+    },
+    "redriveTask": {
+      "path": "/rpc/dashboard/redriveTask",
+      "mutation": true,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "audit": {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "actor",
+              "reason",
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "audit"
+        ]
+      },
+      "output": {
+        "$ref": "#/$defs/DashboardRedriveResult"
+      }
+    },
+    "redriveDeadLetters": {
+      "path": "/rpc/dashboard/redriveDeadLetters",
+      "mutation": true,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "queue": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "jobType": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tags": {
+            "default": [],
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          },
+          "limit": {
+            "default": 100,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          },
+          "cursor": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "finishedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                  },
+                  "jobId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  }
+                },
+                "required": [
+                  "finishedAt",
+                  "jobId"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "audit": {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "actor",
+              "reason",
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "audit"
+        ]
+      },
+      "output": {
+        "$ref": "#/$defs/DashboardRedriveBatch"
+      }
     }
   },
   "html": {
@@ -4319,6 +4470,150 @@
         "throttledReady",
         "throttledKeys",
         "nextEligibleAt"
+      ]
+    },
+    "DashboardRedriveBatch": {
+      "type": "object",
+      "properties": {
+        "results": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardRedriveResult"
+          }
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DashboardRedriveCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "results",
+        "nextCursor"
+      ]
+    },
+    "DashboardRedriveCursor": {
+      "type": "object",
+      "properties": {
+        "finishedAt": {
+          "type": "string"
+        },
+        "jobId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "finishedAt",
+        "jobId"
+      ]
+    },
+    "DashboardRedriveResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/DashboardRedriveStatus"
+        },
+        "sourceJobId": {
+          "type": "string"
+        },
+        "targetJobId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "sourceState": {
+          "anyOf": [
+            {
+              "const": "active"
+            },
+            {
+              "const": "blocked"
+            },
+            {
+              "const": "canceled"
+            },
+            {
+              "const": "failed"
+            },
+            {
+              "const": "ready"
+            },
+            {
+              "const": "scheduled"
+            },
+            {
+              "const": "succeeded"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "targetState": {
+          "anyOf": [
+            {
+              "const": "active"
+            },
+            {
+              "const": "blocked"
+            },
+            {
+              "const": "canceled"
+            },
+            {
+              "const": "failed"
+            },
+            {
+              "const": "ready"
+            },
+            {
+              "const": "scheduled"
+            },
+            {
+              "const": "succeeded"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestedAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "sourceJobId",
+        "targetJobId",
+        "sourceState",
+        "targetState",
+        "requestedAt"
+      ]
+    },
+    "DashboardRedriveStatus": {
+      "enum": [
+        "eligible",
+        "not_failed",
+        "not_found",
+        "redriven",
+        "replayed"
       ]
     },
     "DashboardRetentionCategory": {

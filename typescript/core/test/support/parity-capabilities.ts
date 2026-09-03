@@ -418,7 +418,7 @@ export const PRODUCT_PARITY_ROWS: readonly ProductParityRow[] = [
   {
     capability: "Redrive",
     postgresql: { file: "integration-operator-reads.test.ts", pattern: "redrive_v1" },
-    dashboard: { planned: "WH-616" },
+    dashboard: { file: "src/server/operator-controllers.test.ts", pattern: "redriveDeadLetters" },
     cli: { file: "integration-admin-cli.test.ts", pattern: "redrive" },
   },
   {

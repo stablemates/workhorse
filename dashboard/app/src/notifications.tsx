@@ -5,10 +5,16 @@ import type { ReactNode } from "react";
 import {
   cancelOutcomeTone,
   describeCancelOutcome,
+  describeRedriveBatch,
+  describeRedriveOutcome,
+  redriveOutcomeTone,
   runNowOutcomeTone,
   type DashboardResultTone,
 } from "./presentation.js";
-import type { DashboardCancelStatus } from "@stablemates/workhorse-dashboard-server/wire";
+import type {
+  DashboardCancelStatus,
+  DashboardRedriveStatus,
+} from "@stablemates/workhorse-dashboard-server/wire";
 import type { RunNowFeedback } from "./run-now.js";
 
 /**
@@ -174,6 +180,50 @@ export function notifyCancel(
     exact: described.exact,
     tone: cancelOutcomeTone(outcome.status),
     action: { label: "Open task", onClick: () => options.openTask(outcome.jobId) },
+  });
+}
+
+/**
+ * Report what one redrive did.
+ *
+ * The copy is what the operator now wants to watch, so it is offered directly. A status that
+ * enqueued nothing offers no link, because the only identity it names is the failure the operator
+ * is already looking at.
+ */
+export function notifyRedrive(
+  outcome: {
+    status: DashboardRedriveStatus;
+    targetJobId: string | null;
+    sourceState: string | null;
+  },
+  options: { openTask: (id: string) => void },
+): string {
+  const described = describeRedriveOutcome(outcome.status, { state: outcome.sourceState });
+  const target = outcome.targetJobId;
+  return notifyDashboard({
+    title: described.label,
+    message: `${described.summary}.`,
+    exact: described.exact,
+    tone: redriveOutcomeTone(outcome.status),
+    ...(target === null
+      ? {}
+      : { action: { label: "Open new task", onClick: () => options.openTask(target) } }),
+  });
+}
+
+/** Report what one filtered redrive did, as a whole rather than one notification per task. */
+export function notifyRedriveBatch(batch: {
+  results: readonly { status: DashboardRedriveStatus }[];
+  moreRemain: boolean;
+}): string {
+  const described = describeRedriveBatch(batch.results, batch.moreRemain);
+  return notifyDashboard({
+    // One id, so repeating a bounded redrive through a backlog reads as one running answer.
+    id: "workhorse-redrive-batch",
+    title: described.label,
+    message: `${described.summary}.`,
+    exact: described.exact,
+    tone: described.tone,
   });
 }
 

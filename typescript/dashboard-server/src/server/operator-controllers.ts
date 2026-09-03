@@ -1,9 +1,12 @@
 import type { Admin, Queue } from "@stablemates/workhorse";
-import type { Json } from "@stablemates/workhorse";
+import type { DeadLetterFilter, Json, RedriveResult } from "@stablemates/workhorse";
+import type { DashboardRedriveCursor } from "../wire.js";
 import type {
   DashboardAuditContext,
   DashboardCancellationAuditContext,
   DashboardQueueController,
+  DashboardRedriveFilter,
+  DashboardRedriveResult,
   DashboardTaskController,
   DashboardWorkerController,
 } from "./types.js";
@@ -34,6 +37,14 @@ export type DashboardOperatorAction =
       idempotencyKey: string;
       audit: DashboardAuditContext;
     }
+  | { kind: "redriveTask"; jobId: string; audit: DashboardAuditContext }
+  | {
+      kind: "redriveDeadLetters";
+      filter: DashboardRedriveFilter;
+      limit: number;
+      cursor: DashboardRedriveCursor | null;
+      audit: DashboardAuditContext;
+    }
   | {
       kind: "setWorkerPaused";
       workerId: string;
@@ -62,6 +73,24 @@ export interface DashboardOperatorControllers {
 
 function isoTimestamp(value: Date | string | null): string | null {
   return value === null ? null : new Date(value).toISOString();
+}
+
+function redriveResult(result: RedriveResult): DashboardRedriveResult {
+  return { ...result, requestedAt: isoTimestamp(result.requestedAt) };
+}
+
+/**
+ * Drop the fields a dead-letter selection did not constrain.
+ *
+ * `Admin.redriveMany` treats an absent key as "no filter" and rejects an empty one, so a view that
+ * is filtering by nothing has to send nothing rather than a null or an empty list.
+ */
+function deadLetterFilter(filter: DashboardRedriveFilter): DeadLetterFilter {
+  return {
+    ...(filter.queue === null ? {} : { queue: filter.queue }),
+    ...(filter.jobType === null ? {} : { type: filter.jobType }),
+    ...(filter.tags.length === 0 ? {} : { tags: [...filter.tags] }),
+  };
 }
 
 /**
@@ -147,6 +176,22 @@ export function createDashboardOperatorControllers(
               result: payload,
               completedAt: isoTimestamp(completed.completedAt),
             };
+          },
+        ),
+      redriveTask: (jobId, audit) =>
+        options.run({ kind: "redriveTask", jobId, audit }, async ({ admin }) =>
+          redriveResult(await admin.redrive(jobId, { ...audit, actor: requestedBy(audit) })),
+        ),
+      redriveDeadLetters: (filter, limit, cursor, audit) =>
+        options.run(
+          { kind: "redriveDeadLetters", filter, limit, cursor, audit },
+          async ({ admin }) => {
+            const page = await admin.redriveMany(
+              deadLetterFilter(filter),
+              { ...audit, actor: requestedBy(audit) },
+              { limit, ...(cursor === null ? {} : { cursor }) },
+            );
+            return { results: page.results.map(redriveResult), nextCursor: page.nextCursor };
           },
         ),
     },

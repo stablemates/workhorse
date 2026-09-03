@@ -14,6 +14,8 @@ import type {
   DashboardDemoJobKind,
   DashboardDemoScenario,
   DashboardDurabilityPlan,
+  DashboardRedriveCursor,
+  DashboardRedriveStatus,
   DashboardRunNowStatus,
 } from "../wire.js";
 
@@ -96,6 +98,42 @@ export interface DashboardCompleteHumanWaitResult {
   completedBy: string | null;
 }
 
+/** What PostgreSQL did with one dead letter, projected for the wire. */
+export interface DashboardRedriveResult {
+  status: DashboardRedriveStatus;
+  sourceJobId: string;
+  targetJobId: string | null;
+  sourceState: JobState | null;
+  targetState: JobState | null;
+  requestedAt: string | null;
+}
+
+/**
+ * Which dead letters a filtered redrive selects.
+ *
+ * The fields are the dead-letter view's own filters, so an operator redrives exactly the selection
+ * they are looking at. A null or empty field is not a filter, and every supplied tag must be
+ * present on a task for it to be selected.
+ */
+export interface DashboardRedriveFilter {
+  queue: string | null;
+  jobType: string | null;
+  tags: readonly string[];
+}
+
+/** One bounded page of a filtered redrive, oldest failure first. */
+export interface DashboardRedriveBatch {
+  results: DashboardRedriveResult[];
+  /**
+   * Where the next page of the same filter starts, or null when the selection is exhausted.
+   *
+   * Redriving a dead letter leaves the source failed, so the same filter selects it again. Only
+   * continuing from this cursor advances through a backlog; repeating the request without one
+   * would redrive the same page a second time.
+   */
+  nextCursor: DashboardRedriveCursor | null;
+}
+
 export interface DashboardTaskController {
   runTaskNow?: (jobId: string, audit: DashboardAuditContext) => Promise<DashboardRunNowResult>;
   cancelTask?: (
@@ -116,6 +154,20 @@ export interface DashboardTaskController {
     idempotencyKey: string,
     audit: DashboardAuditContext,
   ) => Promise<DashboardCompleteHumanWaitResult>;
+  /**
+   * Enqueue one retained terminal failure again as a fresh task.
+   *
+   * The source failure is never edited, so the result names both identities and the operator can
+   * follow the audited lineage edge PostgreSQL wrote between them.
+   */
+  redriveTask?: (jobId: string, audit: DashboardAuditContext) => Promise<DashboardRedriveResult>;
+  /** Redrive a bounded page of the dead letters one filter selects. */
+  redriveDeadLetters?: (
+    filter: DashboardRedriveFilter,
+    limit: number,
+    cursor: DashboardRedriveCursor | null,
+    audit: DashboardAuditContext,
+  ) => Promise<DashboardRedriveBatch>;
 }
 
 /**

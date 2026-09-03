@@ -74,6 +74,7 @@ var mutations = map[string]bool{
 	"revertMaintenancePolicy": true, "overrideRetentionPolicy": true,
 	"revertRetentionPolicy": true, "runTaskNow": true, "cancelTask": true,
 	"signalTask": true, "completeHumanWait": true,
+	"redriveTask": true, "redriveDeadLetters": true,
 }
 
 var optionalMutations = map[string]bool{

@@ -93,22 +93,21 @@ Every Planned cell below must be Supported before 1.0.0
 ([WH-581](https://ontrack.sh/projects/WH/issues/WH-581)). Adding a command or a procedure later
 would not break anything, so this is not a compatibility requirement; it is the point at which an
 operator surface stops being excused as beta-incomplete. An operator should not have to change
-tools mid-incident because worker pause is only in the browser and redrive is only in the
-terminal.
+tools mid-incident because a worker pause is only in the browser.
 
 <!-- BEGIN GENERATED PARITY PRODUCT -->
 
-| Capability                                 | PostgreSQL | Dashboard         | CLI               |
-| ------------------------------------------ | ---------- | ----------------- | ----------------- |
-| Job lookup, listing, and timeline          | Supported  | Supported         | Supported         |
-| Queue health snapshot                      | Supported  | Supported         | Supported         |
-| Cancellation requests                      | Supported  | Supported         | Supported         |
-| Queue pause and resume                     | Supported  | Supported         | Supported         |
-| Queue purge                                | Supported  | Supported         | Supported         |
-| Dead-letter listing                        | Supported  | Supported         | Supported         |
-| Redrive                                    | Supported  | [Planned][WH-616] | Supported         |
-| Checkpoint, wait, and human-decision reads | Supported  | Supported         | Supported         |
-| Durable operator worker pause              | Supported  | Supported         | [Planned][WH-618] |
+| Capability                                 | PostgreSQL | Dashboard | CLI               |
+| ------------------------------------------ | ---------- | --------- | ----------------- |
+| Job lookup, listing, and timeline          | Supported  | Supported | Supported         |
+| Queue health snapshot                      | Supported  | Supported | Supported         |
+| Cancellation requests                      | Supported  | Supported | Supported         |
+| Queue pause and resume                     | Supported  | Supported | Supported         |
+| Queue purge                                | Supported  | Supported | Supported         |
+| Dead-letter listing                        | Supported  | Supported | Supported         |
+| Redrive                                    | Supported  | Supported | Supported         |
+| Checkpoint, wait, and human-decision reads | Supported  | Supported | Supported         |
+| Durable operator worker pause              | Supported  | Supported | [Planned][WH-618] |
 
 <!-- END GENERATED PARITY PRODUCT -->
 
@@ -182,7 +181,6 @@ stops the published view from becoming another source of truth.
 
 <!-- BEGIN GENERATED PARITY ONTRACK LINKS -->
 
-[WH-616]: https://ontrack.sh/projects/WH/issues/WH-616
 [WH-618]: https://ontrack.sh/projects/WH/issues/WH-618
 
 <!-- END GENERATED PARITY ONTRACK LINKS -->

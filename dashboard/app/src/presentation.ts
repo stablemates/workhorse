@@ -7,7 +7,9 @@ import type {
   DashboardDemoScenario,
   DashboardJobRow,
   DashboardHumanWaitRow,
+  DashboardRedriveStatus,
   DashboardRunNowStatus,
+  DashboardTaskFilter,
   DashboardIdempotencyEvidence,
 } from "@stablemates/workhorse-dashboard-server/wire";
 
@@ -481,6 +483,211 @@ export function describeRunNowOutcome(
     exact: "No task matched this ID. Retention may have deleted it after it finished.",
   };
 }
+/**
+ * What an operator is told before any redrive runs.
+ *
+ * One sentence pair, shared by the single and the filtered confirmation, so the two cannot come to
+ * describe the same durable behavior differently. It states the fact an operator has to weigh:
+ * redrive does not resume a failure where it stopped, it enqueues a fresh execution, and every
+ * side effect the failed attempts already produced can be produced again.
+ */
+export const redriveAtLeastOnceWarning =
+  "Workhorse leaves each failure exactly as it is and enqueues a copy of it as a new task. The " +
+  "copy starts from its first attempt, so this is another at-least-once execution: anything the " +
+  "failed attempts already did to the outside world happens again.";
+
+/** Which dead letters a filtered redrive would act on, and whether this view can ask for one. */
+export interface RedriveSelection {
+  queue: string | null;
+  jobType: string | null;
+  tags: string[];
+  /** What the request would select, as one phrase naming every filter it applies. */
+  selected: string;
+  /** Why this view cannot redrive a selection, or null when it can. */
+  unavailable: string | null;
+}
+
+/**
+ * Read one task listing as a dead-letter selection.
+ *
+ * Workhorse selects dead letters for a filtered redrive by queue, task type, and tags. The listing
+ * offers three filters beyond those, and a request that silently dropped them would redrive tasks
+ * the operator is not looking at. So a view narrowed by one of them states that limit and offers no
+ * batch, rather than acting on a wider selection than the screen shows.
+ */
+export function describeRedriveSelection(view: {
+  filter: DashboardTaskFilter;
+  queue: string | null;
+  jobType: string | null;
+  worker: string | null;
+  priority: number | null;
+  search: string | null;
+  tags: readonly string[];
+}): RedriveSelection {
+  const narrowed = [
+    view.worker === null ? null : "worker",
+    view.priority === null ? null : "priority",
+    view.search === null ? null : "search",
+  ].filter((name) => name !== null);
+  const clauses = [
+    view.queue === null ? null : `in queue ${view.queue}`,
+    view.jobType === null ? null : `of type ${view.jobType}`,
+    view.tags.length === 0 ? null : `tagged ${view.tags.join(", ")}`,
+  ].filter((clause) => clause !== null);
+  return {
+    queue: view.queue,
+    jobType: view.jobType,
+    tags: [...view.tags],
+    selected: clauses.length === 0 ? "every dead letter" : `every dead letter ${clauses.join(" ")}`,
+    unavailable:
+      view.filter !== "discarded"
+        ? "Only the discarded listing shows dead letters, so only it can redrive a selection."
+        : narrowed.length === 0
+          ? null
+          : `Workhorse selects dead letters by queue, task type, and tags. Clear the ${narrowed.join(
+              " and ",
+            )} filter to redrive this listing.`,
+  };
+}
+
+export interface RedriveOutcomeDescription {
+  /** Short badge text. Never the raw status string. */
+  label: string;
+  /** One sentence an operator can act on, complete without colour or icon. */
+  summary: string;
+  /** Precise wording, including what redrive does and does not change. */
+  exact: string;
+}
+
+/**
+ * Redrive wording that matches what the server actually did.
+ *
+ * Redrive never restarts the failure an operator is looking at. The failed task keeps its outcome,
+ * its attempts, and its history, and Workhorse enqueues a copy beside it. That copy is another
+ * at-least-once execution, so whatever the failed attempts already did to the outside world can
+ * happen again. Every sentence below is limited to those claims, because an operator who believes
+ * a retry resumed where the failure stopped will reconcile the wrong thing.
+ */
+export function describeRedriveOutcome(
+  status: DashboardRedriveStatus,
+  context: { state?: string | null } = {},
+): RedriveOutcomeDescription {
+  if (status === "redriven") {
+    return {
+      label: "Redriven as a new task",
+      summary: "Workhorse enqueued a copy of this failure as a new task",
+      exact:
+        "The failed task keeps its outcome and its history. Workhorse copied its queue, type, " +
+        "input, tags, attempt budget, and retry policy into a new ready task, cleared the old " +
+        "deadline, and recorded an audited link between the two. The copy starts from its first " +
+        "attempt, so anything the failed attempts already did runs again.",
+    };
+  }
+  if (status === "replayed") {
+    return {
+      label: "Already redriven",
+      summary: "This request was already applied, so Workhorse returned the task it created then",
+      exact:
+        "A redrive is idempotent under the identity its request carries. This request had already " +
+        "been applied, so no second copy was enqueued and the existing one is reported instead.",
+    };
+  }
+  if (status === "eligible") {
+    return {
+      label: "Selected, not redriven",
+      summary: "Workhorse named this task as a candidate without redriving it",
+      exact:
+        "The request only listed what it would act on, so nothing was enqueued and the failure " +
+        "was left exactly as it was.",
+    };
+  }
+  if (status === "not_failed") {
+    return {
+      label: "Not a dead letter",
+      summary: `Workhorse redrove nothing because this task is ${
+        context.state ?? "not a retained failure"
+      }`,
+      exact:
+        "Only a retained task whose outcome is failed can be redriven. This one was left exactly " +
+        "as it was.",
+    };
+  }
+  return {
+    label: "Task not found",
+    summary: "Workhorse could not find this task, so it redrove nothing",
+    exact: "No task matched this ID. Retention may have deleted it after it finished.",
+  };
+}
+
+/** Only a fresh copy changed anything; every other status left its source exactly as it was. */
+export function redriveOutcomeTone(status: DashboardRedriveStatus): DashboardResultTone {
+  return status === "redriven" ? "success" : "neutral";
+}
+
+export interface RedriveBatchDescription extends RedriveOutcomeDescription {
+  tone: DashboardResultTone;
+}
+
+function countedTasks(count: number): string {
+  return count === 1 ? "1 task" : `${count} tasks`;
+}
+
+function enqueuedCopies(count: number): string {
+  return count === 1
+    ? "Workhorse enqueued 1 task as a copy of its failure"
+    : `Workhorse enqueued ${count} tasks as copies of their failures`;
+}
+
+/**
+ * What one filtered redrive did, read as a whole rather than as a list of statuses.
+ *
+ * Every refusal inside the page is counted and stated, because a bare success count would hide a
+ * selection that mostly did nothing. Whether the filter still selects more is stated too: a
+ * redriven source stays failed, so an operator who cannot tell a finished backlog from a bounded
+ * page would either stop early or redrive the same page again.
+ */
+export function describeRedriveBatch(
+  results: readonly { status: DashboardRedriveStatus }[],
+  moreRemain: boolean,
+): RedriveBatchDescription {
+  const count = (status: DashboardRedriveStatus): number =>
+    results.filter((result) => result.status === status).length;
+  const redriven = count("redriven");
+  const replayed = count("replayed");
+  const refused = results.length - redriven - replayed;
+  const remainder = [
+    replayed === 0 ? null : `${countedTasks(replayed)} had already been redriven`,
+    refused === 0
+      ? null
+      : refused === 1
+        ? "1 task was no longer a dead letter"
+        : `${refused} tasks were no longer dead letters`,
+  ].filter((clause) => clause !== null);
+  const more = moreRemain
+    ? "More dead letters match this filter, so redrive again to continue"
+    : "No dead letter matching this filter is left";
+  if (results.length === 0) {
+    return {
+      label: "Nothing to redrive",
+      summary: "No dead letter matched this filter, so Workhorse enqueued nothing",
+      exact:
+        "The filter selected no retained failure. Nothing was enqueued and no task was changed.",
+      tone: "neutral",
+    };
+  }
+  return {
+    label: redriven === 0 ? "Redrove nothing" : `Redrove ${countedTasks(redriven)}`,
+    summary:
+      remainder.length === 0
+        ? enqueuedCopies(redriven)
+        : `${enqueuedCopies(redriven)}; ${remainder.join(" and ")}`,
+    exact:
+      `${more}. Each copy starts from its first attempt, so anything the failed attempts already ` +
+      "did runs again. Every failure this request read keeps its own outcome and history.",
+    tone: redriven === 0 ? "neutral" : "success",
+  };
+}
+
 /** Every action a task row can offer. Ids are stable so the menu and its tests never drift. */
 export type TaskRowActionId =
   | "inspect"
@@ -491,6 +698,7 @@ export type TaskRowActionId =
   | "filter-worker"
   | "complete-human-wait"
   | "run-now"
+  | "redrive"
   | "cancel";
 
 export interface TaskRowAction {
@@ -632,6 +840,34 @@ function runNowRowAction(job: DashboardJobRow, supported: boolean): TaskRowActio
   };
 }
 
+/**
+ * Redrive wording for one list row, resolved against that row's own state.
+ *
+ * Only a task that finished as failed is a dead letter, so only such a row can be redriven. The
+ * label says "as a new task" everywhere it appears, because redrive never restarts the failure an
+ * operator is looking at: the original stays failed and a copy is enqueued beside it.
+ */
+function redriveRowAction(job: DashboardJobRow): TaskRowAction {
+  const destructive = false;
+  if (job.state === "failed") {
+    return { id: "redrive", label: "Redrive as a new task…", unavailable: null, destructive };
+  }
+  if (isTerminalTaskState(job.state)) {
+    return {
+      id: "redrive",
+      label: "Redrive as a new task",
+      unavailable: `Only a task that finished as failed is a dead letter, and this one is ${job.state}.`,
+      destructive,
+    };
+  }
+  return {
+    id: "redrive",
+    label: "Redrive as a new task",
+    unavailable: "This task has not finished, so Workhorse has no failure to redrive.",
+    destructive,
+  };
+}
+
 function completeHumanWaitRowAction(job: DashboardJobRow, supported: boolean): TaskRowAction {
   const quickAction = job.humanWait ? humanWaitQuickAction(job.humanWait.context) : null;
   if (!job.humanWait) {
@@ -728,6 +964,7 @@ export function taskRowActionGroups(
       actions: [
         completeHumanWaitRowAction(job, capabilities.completeHumanWait !== false),
         runNowRowAction(job, capabilities.runNow),
+        redriveRowAction(job),
         cancelRowAction(job),
       ],
     },

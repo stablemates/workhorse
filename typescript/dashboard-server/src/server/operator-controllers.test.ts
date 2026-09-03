@@ -45,6 +45,35 @@ describe("shared dashboard operator controllers", () => {
       setWorkerPaused: vi.fn<() => Promise<{ paused: boolean }>>().mockResolvedValue({
         paused: true,
       }),
+      redrive: vi.fn<() => Promise<unknown>>().mockResolvedValue({
+        status: "redriven",
+        sourceJobId: "job-1",
+        targetJobId: "job-2",
+        sourceState: "failed",
+        targetState: "ready",
+        requestedAt: new Date("2026-08-12T12:04:00.000Z"),
+      }),
+      redriveMany: vi.fn<() => Promise<unknown>>().mockResolvedValue({
+        results: [
+          {
+            status: "redriven",
+            sourceJobId: "job-3",
+            targetJobId: "job-4",
+            sourceState: "failed",
+            targetState: "ready",
+            requestedAt: new Date("2026-08-12T12:05:00.000Z"),
+          },
+          {
+            status: "not_failed",
+            sourceJobId: "job-5",
+            targetJobId: null,
+            sourceState: "succeeded",
+            targetState: null,
+            requestedAt: null,
+          },
+        ],
+        nextCursor: { finishedAt: "2026-08-12T12:05:00.000000Z", jobId: "job-5" },
+      }),
     } as unknown as Admin;
     const actions: string[] = [];
     const controllers = createDashboardOperatorControllers({
@@ -100,6 +129,42 @@ describe("shared dashboard operator controllers", () => {
       status: "completed",
       completedAt: "2026-08-12T12:03:00.000Z",
     });
+    await expect(controllers.taskController.redriveTask?.("job-1", audit)).resolves.toEqual({
+      status: "redriven",
+      sourceJobId: "job-1",
+      targetJobId: "job-2",
+      sourceState: "failed",
+      targetState: "ready",
+      requestedAt: "2026-08-12T12:04:00.000Z",
+    });
+    await expect(
+      controllers.taskController.redriveDeadLetters?.(
+        { queue: "critical", jobType: "charge", tags: ["billing"] },
+        25,
+        null,
+        audit,
+      ),
+    ).resolves.toEqual({
+      results: [
+        {
+          status: "redriven",
+          sourceJobId: "job-3",
+          targetJobId: "job-4",
+          sourceState: "failed",
+          targetState: "ready",
+          requestedAt: "2026-08-12T12:05:00.000Z",
+        },
+        {
+          status: "not_failed",
+          sourceJobId: "job-5",
+          targetJobId: null,
+          sourceState: "succeeded",
+          targetState: null,
+          requestedAt: null,
+        },
+      ],
+      nextCursor: { finishedAt: "2026-08-12T12:05:00.000000Z", jobId: "job-5" },
+    });
     await expect(
       controllers.workerController.setWorkerPaused?.("worker-1", true, audit),
     ).resolves.toEqual({ paused: true });
@@ -112,6 +177,8 @@ describe("shared dashboard operator controllers", () => {
       "cancelTask",
       "signalTask",
       "completeHumanWait",
+      "redriveTask",
+      "redriveDeadLetters",
       "setWorkerPaused",
     ]);
     expect(admin.pauseQueue).toHaveBeenCalledWith("critical", audit);
@@ -137,10 +204,48 @@ describe("shared dashboard operator controllers", () => {
       { approved: true },
       { idempotencyKey: "request-2", requestedBy: "configured-operator" },
     );
+    // Redrive writes a permanent lineage row, so the configured actor is what it is attributed to.
+    expect(admin.redrive).toHaveBeenCalledWith("job-1", {
+      actor: "configured-operator",
+      reason: "deploy",
+      requestId: "request-1",
+    });
+    expect(admin.redriveMany).toHaveBeenCalledWith(
+      { queue: "critical", type: "charge", tags: ["billing"] },
+      { actor: "configured-operator", reason: "deploy", requestId: "request-1" },
+      { limit: 25 },
+    );
     expect(admin.setWorkerPaused).toHaveBeenCalledWith("worker-1", true, {
       actor: "configured-operator",
       reason: "deploy",
       requestId: "request-1",
+    });
+  });
+
+  it("sends only the dead-letter filters a selection actually set, and continues from a cursor", async () => {
+    const redriveMany = vi
+      .fn<() => Promise<unknown>>()
+      .mockResolvedValue({ results: [], nextCursor: null });
+    const controllers = createDashboardOperatorControllers({
+      run: (_action, operation) =>
+        operation({ queue: {} as Queue, admin: { redriveMany } as unknown as Admin }),
+    });
+    const audit = { actor: "operator", reason: "backlog", requestId: "request-3" };
+
+    await expect(
+      controllers.taskController.redriveDeadLetters?.(
+        { queue: null, jobType: null, tags: [] },
+        100,
+        { finishedAt: "2026-08-12T12:05:00.000000Z", jobId: "job-5" },
+        audit,
+      ),
+    ).resolves.toEqual({ results: [], nextCursor: null });
+
+    // An empty queue, type, or tag list is not a filter: Admin.redriveMany rejects an empty one,
+    // and sending it would narrow a selection the operator never narrowed.
+    expect(redriveMany).toHaveBeenCalledWith({}, audit, {
+      limit: 100,
+      cursor: { finishedAt: "2026-08-12T12:05:00.000000Z", jobId: "job-5" },
     });
   });
 

@@ -1,5 +1,10 @@
 import { isProcedure, ORPCError, os } from "@orpc/server";
-import { MAX_JOB_PRIORITY, type Admin, type Queue } from "@stablemates/workhorse";
+import {
+  MAX_JOB_PRIORITY,
+  MAX_REDRIVE_BATCH_SIZE,
+  type Admin,
+  type Queue,
+} from "@stablemates/workhorse";
 import type {
   DashboardDemoFeature,
   DashboardDemoJobKind,
@@ -12,6 +17,8 @@ import type {
 import {
   dashboardAttemptOutcomes,
   dashboardJobEventTypes,
+  dashboardRedriveBatchDefault,
+  dashboardRedriveBatchMax,
   dashboardTaskFilters,
   dashboardTaskPriorityMax,
   dashboardTaskSorts,
@@ -228,6 +235,31 @@ const setQueuePausedInput = z.object({
 });
 const purgeQueueInput = z.object({
   queue: z.string().trim().min(1),
+  audit: auditSchema,
+});
+const checkedDashboardRedriveBatchMax: typeof MAX_REDRIVE_BATCH_SIZE = dashboardRedriveBatchMax;
+const redriveTaskInput = z.object({
+  id: z.uuid(),
+  audit: auditSchema,
+});
+/**
+ * Which dead letters one filtered redrive acts on, and where it resumes.
+ *
+ * The three filters are the dead-letter view's own, so a confirmed request redrives the selection
+ * the operator is looking at. The cursor is the previous page's continuation state: a redriven
+ * source stays failed, so only a cursor moves a repeat forward instead of over the same page.
+ */
+const redriveDeadLettersInput = z.object({
+  queue: dashboardFilterString.nullable().default(null),
+  jobType: dashboardFilterString.nullable().default(null),
+  tags: z.array(z.string().trim().min(1).max(100)).max(20).default([]),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(checkedDashboardRedriveBatchMax)
+    .default(dashboardRedriveBatchDefault),
+  cursor: z.object({ finishedAt: z.iso.datetime(), jobId: z.uuid() }).nullable().default(null),
   audit: auditSchema,
 });
 const setWorkerPausedInput = z.object({
@@ -593,6 +625,45 @@ export const dashboardRouter = {
           throw new ORPCError("NOT_FOUND", { message: "Task not found" });
         }
         return result;
+      }),
+    /**
+     * Redrive one retained terminal failure as a fresh task.
+     *
+     * The source failure is immutable, so this enqueues a copy rather than restarting the original,
+     * and the reported status distinguishes a new task from the replay of a request that was
+     * already applied under the same identity.
+     */
+    redriveTask: mutationProcedure.input(redriveTaskInput).handler(async ({ context, input }) => {
+      if (context.operator.mode !== "writable" || !context.taskController?.redriveTask) {
+        throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+      }
+      const result = await context.taskController.redriveTask(
+        input.id,
+        auditWithOccurredAt(input.audit, context.authenticatedActor),
+      );
+      if (result.status === "not_found") {
+        throw new ORPCError("NOT_FOUND", { message: "Task not found" });
+      }
+      return result;
+    }),
+    /**
+     * Redrive a bounded page of the dead letters one filter selects.
+     *
+     * Every result is reported, including a source PostgreSQL refused, so an operator reads what
+     * the batch actually did rather than a count that hides the refusals inside it.
+     */
+    redriveDeadLetters: mutationProcedure
+      .input(redriveDeadLettersInput)
+      .handler(async ({ context, input }) => {
+        if (context.operator.mode !== "writable" || !context.taskController?.redriveDeadLetters) {
+          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+        }
+        return context.taskController.redriveDeadLetters(
+          { queue: input.queue, jobType: input.jobType, tags: input.tags },
+          input.limit,
+          input.cursor,
+          auditWithOccurredAt(input.audit, context.authenticatedActor),
+        );
       }),
   },
 };
