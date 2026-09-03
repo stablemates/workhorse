@@ -47,6 +47,16 @@ gets one clause that says why a reader should care:
 > same workers, the same durable waits, and the same dashboard, with no broker or server beside
 > PostgreSQL.
 
+The site hero is the one surface where the second line is not that clause. A hero is read in one
+glance, so it gets one job per element rather than two paragraphs of definition. The `h1` carries
+the position, "Harness the Postgres you already run." The right panel heading carries the protocol,
+"One database protocol, three clients." The paragraph under the `h1` carries what the reader gets:
+
+> Durable background tasks with crash recovery, efficient long waits, and fleet-wide concurrency
+> controls.
+
+Every other surface keeps the clause as written above. WH-628 owns the hero wording.
+
 Three supporting claims follow, in this order. Each is true of the code today and absent or weaker in
 the incumbents the reader will compare against.
 
@@ -90,4 +100,7 @@ Comparison copy contrasts "at-least-once, with checkpoints and fences" against p
 execution" out of the title and puts PostgreSQL in it. The README first sentence loses "built from
 PostgreSQL tables and versioned SQL functions" to the line, and the second line carries that fact.
 The unit noun is unsettled: the SDKs and guides say "job" while the dashboard says "task"; WH-588
-owns that glossary decision.
+owns that glossary decision. The hero exemption (WH-629) narrows where the protocol clause appears
+and nothing else. The category noun, the positioning line, the surfaces that carry it, the three
+supporting claims, and the "Public beta" placement are unchanged, and `site/lib/site.ts` still
+carries the line as the site tagline and meta description.
