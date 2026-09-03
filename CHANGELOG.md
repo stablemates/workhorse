@@ -139,6 +139,24 @@ and 24 and PostgreSQL 15 through 18.
   of the `0.x` line and is removed in `1.0.0`. `MaintenanceLoopCadences` is unchanged, because
   Python and Go share that name.
 
+- **A client declares a schema floor and no ceiling, and the database declares which clients it
+  still serves.** The startup check refused any schema newer than the version the build was
+  compiled against, which would have turned the first in-place migration into an outage for the
+  length of a rolling deployment. A build cannot know which later release stops serving it, so the
+  ceiling comes from the database instead: `workhorse.protocol_version` records the SQL protocol
+  versions the installed schema still serves, and a client whose protocol is absent from that list
+  refuses. Below the oldest served version is `schema-too-new`; above the newest is
+  `schema-too-old`. A schema that records nothing enforces nothing. `readProtocolVersions` reports
+  the list, and the Python and Go checks read the same rows.
+- **The standalone dashboard server sets browser protections, because it owns its whole origin.**
+  Every response from `startDashboardServer` now carries `Content-Security-Policy`,
+  `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`, and `X-Robots-Tag`, and no
+  response references a remote origin. `createDashboardHost` still sets none: an embedded host
+  shares the application's origin, and two `Content-Security-Policy` headers on one response
+  intersect rather than override, so a policy set here could quietly narrow an application that
+  already has a stricter one. The dashboard-server README, the authentication guide, and the
+  dashboard page on the site print the policy an embedder copies.
+
 ### Added
 
 - `SchemaCompatibilityError` is exported from `@stablemates/workhorse`. `assertSchemaCompatible`
@@ -156,6 +174,36 @@ and 24 and PostgreSQL 15 through 18.
   `workhorse` binary owns. Neither flag changed; they were previously visible only in
   `workhorse init --help`.
 
+- **The `workhorse admin` CLI covers every operator action that previously needed a browser.**
+  `admin purge <queue>` joins cancel, redrive, pause, and resume as a guarded command, and
+  `admin pause-worker <worker-id>` and `admin resume-worker <worker-id>` take one worker out of
+  rotation and put it back. All three demand `--env` naming the connected database, then `--yes` or
+  an interactive retype of the target, and all three require `--reason`. `purge` prints the deleted
+  row count and emits it as `deletedCount` under `--json`; the two worker commands emit the stored
+  `WorkerPauseResult`.
+- **Three read-only `admin` commands answer what a stalled durable handler is waiting on.**
+  `admin checkpoints <job-id>` renders the restart boundaries a handler passed and
+  `admin waits <job-id>` its durable timer waits, both narrowing to one record with `--name`.
+  `admin external-waits` is the fleet-wide question: every pending human decision and signal wait,
+  merged oldest first with a `KIND` column. Under `--json` it emits a `human` and a `signal` page
+  that advance independently through `--human-cursor` and `--signal-cursor`.
+- **The dashboard redrives a dead letter from the listing that shows it.** `dashboard/v1` gains
+  `redriveTask` and `redriveDeadLetters` additively; no existing procedure or field changes. The
+  discarded listing redrives one task from its row menu and a bounded page of the failures its
+  filters select from a control above the table. Both reach `Admin.redrive` and `Admin.redriveMany`
+  through `createDashboardOperatorControllers`, so the embedded, standalone, and demo hosts serve
+  them from one factory, and both are attributed to the operator the server authenticated rather
+  than to a name the browser supplied. `DashboardTaskController` gains `redriveTask` and
+  `redriveDeadLetters`, and `DashboardRedriveResult`, `DashboardRedriveFilter`, and
+  `DashboardRedriveBatch` are exported from `@stablemates/workhorse-dashboard-server/server` beside
+  the other controller result types.
+- `migrateSchema` accepts `lockTimeoutMs`, and `SCHEMA_MIGRATION_LOCK_TIMEOUT_MS` is its 5s
+  default. An `ALTER TABLE` takes `ACCESS EXCLUSIVE`, and PostgreSQL queues every later statement on
+  that table behind the waiting acquisition, so an unbounded wait turned one long worker
+  transaction into a stalled queue. The timeout bounds the migration body alone: waiting for a peer
+  migrator on the advisory lock stays unbounded, because that wait is expected. A step that gives
+  up rolls back atomically, so the recovery is to end the blocking transaction and rerun.
+
 ### Fixed
 
 - The published `@stablemates/workhorse` tarball no longer ships the benchmark suite.
@@ -169,6 +217,21 @@ and 24 and PostgreSQL 15 through 18.
 - The demo no longer replays the schema on startup against a database that already holds it.
 - The poll-cadence conformance fixture in `protocol/v1/runtime.json` holds the worker at each empty
   poll, so every language runtime's cadence test observes the same schedule.
+
+- The dashboard withholds a persisted attempt stack from the Events drawer too. `redactErrorStacks`
+  was applied in `jobDetail` and nowhere else, so a host that withheld a stack from task detail
+  handed the same stack to the same browser through `dashboard_event_detail_v1`, one click away.
+  `readDashboardEventDetail` now takes the flag and defaults it to false, exactly as
+  `readDashboardJobDetail` does.
+- `workhorse init` reads the lockfile the installer actually wrote when a project declares no
+  `packageManager`, instead of defaulting to pnpm, and the npm branch prints `npm exec --no --`
+  rather than the unqualified `npx` form the installation page warns about, which resolves whatever
+  package on the registry carries that name. It also states that `workhorse dashboard` needs
+  `@stablemates/workhorse-dashboard`, which nothing said before.
+- `ajv`'s `fast-uri` dependency moves off five High advisories inside the published closure. None is
+  reachable through Workhorse, which constructs `ajv` with `validateFormats: false` and requires
+  every `$ref` to be a local fragment, and which issues no request from a parsed URI at all. The
+  bump costs a lockfile line and is taken anyway.
 
 ### Upgrade notes
 
