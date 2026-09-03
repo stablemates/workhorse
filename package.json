@@ -67,6 +67,8 @@
     "benchmark:retention-strategies": "tsx scripts/with-env.ts tsx scripts/benchmark-retention-strategies.ts",
     "benchmark:dashboard-read-surface": "tsx scripts/with-env.ts tsx scripts/benchmark-dashboard-read-surface.ts",
     "benchmark:statistics-tiers": "tsx scripts/with-env.ts tsx scripts/benchmark-statistics-tiers.ts",
+    "soak:observe": "tsx scripts/soak/observe.ts",
+    "soak:report": "tsx scripts/soak/report.ts",
     "agent-eval:record": "tsx scripts/with-env.ts tsx scripts/agent-eval/record.ts",
     "agent-eval:score": "tsx scripts/with-env.ts tsx scripts/agent-eval/score.ts",
     "lint": "oxlint --deny-warnings --import-plugin --vitest-plugin typescript dashboard site scripts vitest*.config.ts && pnpm lint:dead-code && pnpm python:lint && pnpm go:lint",

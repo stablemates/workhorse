@@ -134,6 +134,56 @@ Install the schema once from the host before the first deploy, using the same im
 command, with the database URLs supplied however your installation supplies secrets to a one-off
 container. Every deploy after that is the pipeline step alone.
 
+## The soak window forbids a database reinstall
+
+The demo host is the soak site for
+[ADR 0056](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0056-set-the-1-0-0-exit-criteria.md)
+Gate 4, which holds the 1.0.0 tag on one database running 30 consecutive days under continuous
+work. It already runs TypeScript, Python, and Go workers against one PostgreSQL database, so the
+evidence is a matter of leaving it alone rather than building anything.
+
+While a soak window is open:
+
+- **Containers may be redeployed.** A deploy replaces processes, not data, and the clock is a
+  property of the database. Redeploy as often as the work requires.
+- **Neither database may be reinstalled.** Dropping, recreating, or restoring the primary demo
+  database starts a new 30-day clock on the day it happens, and the days already served are gone.
+  That includes a restore from backup, because the evidence is the migration ledger the restored
+  copy no longer carries forward.
+- **A migration is the only way the schema changes.** Carrying the database across releases by
+  migration is one of the bars, so a release that would be easier to install fresh must still
+  migrate.
+
+If the database has to be reinstalled — a recovery, a host move, an unrecoverable corruption — do
+it, and record the date. A soak window that ended is a fact to report, not a failure to hide.
+
+### Collect an observation at least once a day
+
+The evidence is a series of snapshots rather than one read at the end. PostgreSQL keeps no history
+of a partition rollover or of a retention pass, and both raw history and the daily statistics tier
+are pruned on the retention clock, so nothing older than the retention window is readable
+afterwards. Run the collector from a checkout of this repository against the primary demo
+database, at least once a day for the whole window, and keep every file:
+
+```sh
+pnpm soak:observe -- --database-url "$DATABASE_URL_PRIMARY" --output <observations>
+```
+
+It opens one read-only transaction and writes nothing to the installation it reads.
+
+One of the bars is an ungraceful kill. Stop a worker container with `SIGKILL` while the demo is
+under its usual load, so the worker acknowledges nothing and its held jobs are recovered through
+lease expiry. Then run the collector again, naming that worker and the moment it was killed, while
+the attempts behind it are still inside the history retention window:
+
+```sh
+pnpm soak:observe -- --database-url "$DATABASE_URL_PRIMARY" --output <observations> \
+  --kill-worker <worker-id> --kill-at <iso-8601-instant>
+```
+
+`pnpm soak:report -- --observations <observations>` derives the report from the series and exits
+non-zero while any Gate 4 bar is unmet. The report belongs in the private operations repository.
+
 ## Deploying a revision that is on `main`
 
 A deployment publishes whatever revision its source checkout holds. A checkout behind the branch

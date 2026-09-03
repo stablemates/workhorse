@@ -5,7 +5,12 @@
   "tags": ["-internal"],
   "workspaces": {
     ".": {
-      "entry": ["scripts/*.ts", "scripts/agent-eval/*.ts", "vitest*.config.ts"],
+      "entry": [
+        "scripts/*.ts",
+        "scripts/agent-eval/*.ts",
+        "scripts/soak/*.ts",
+        "vitest*.config.ts"
+      ],
       "ignoreDependencies": ["@vitest/coverage-v8"]
     },
     "dashboard/app": {
