@@ -5,31 +5,40 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 
-from ._compatibility import assert_async_compatible, assert_sync_compatible
-from ._contracts import compile_contract_schema, serialize_contracts
+from ._compatibility import (
+    assert_async_compatible as _assert_async_compatible,
+    assert_sync_compatible as _assert_sync_compatible,
+)
+from ._contracts import (
+    compile_contract_schema as _compile_contract_schema,
+    serialize_contracts as _serialize_contracts,
+)
 from ._drivers import (
-    AsyncpgConnection,
-    AsyncpgExecutor,
-    AsyncPsycopgConnection,
-    AsyncPsycopgExecutor,
-    PsycopgConnection,
-    Row,
-    SyncExecutor,
+    AsyncpgConnection as _AsyncpgConnection,
+    AsyncpgExecutor as _AsyncpgExecutor,
+    AsyncPsycopgConnection as _AsyncPsycopgConnection,
+    AsyncPsycopgExecutor as _AsyncPsycopgExecutor,
+    PsycopgConnection as _PsycopgConnection,
+    Row as _Row,
+    SyncExecutor as _SyncExecutor,
 )
 from ._external_waits import (
-    encode_wait_value,
-    validate_idempotency_key,
-    validate_requested_by,
-    validate_wait_name,
+    encode_wait_value as _encode_wait_value,
+    validate_idempotency_key as _validate_idempotency_key,
+    validate_requested_by as _validate_requested_by,
+    validate_wait_name as _validate_wait_name,
 )
-from ._protocol import serialize_requests, serialize_schedules
-from ._statements import STATEMENTS
-from ._telemetry import inject_trace_context
+from ._protocol import (
+    serialize_requests as _serialize_requests,
+    serialize_schedules as _serialize_schedules,
+)
+from ._statements import STATEMENTS as _STATEMENTS
+from ._telemetry import inject_trace_context as _inject_trace_context
 from .errors import (
     HumanWaitIdempotencyConflictError,
     JobContractValidationError,
     SignalIdempotencyConflictError,
-    translate_database_error,
+    _translate_database_error,
 )
 from .types import (
     CancelResult,
@@ -52,18 +61,18 @@ from .types import (
 if TYPE_CHECKING:
     import psycopg
 
-    SyncConnection = psycopg.Connection[Any]
-    AsyncPsycopgConnectionInput = psycopg.AsyncConnection[Any]
+    _SyncConnection = psycopg.Connection[Any]
+    _AsyncPsycopgConnectionInput = psycopg.AsyncConnection[Any]
 else:
-    SyncConnection = PsycopgConnection
-    AsyncPsycopgConnectionInput = AsyncPsycopgConnection
+    _SyncConnection = _PsycopgConnection
+    _AsyncPsycopgConnectionInput = _AsyncPsycopgConnection
 
 
 class Queue:
     """Synchronous enqueue client over a caller-owned Psycopg connection."""
 
-    def __init__(self, connection: SyncConnection, default_queue: str = "default") -> None:
-        self._executor = SyncExecutor(cast(PsycopgConnection, connection))
+    def __init__(self, connection: _SyncConnection, default_queue: str = "default") -> None:
+        self._executor = _SyncExecutor(cast(_PsycopgConnection, connection))
         self.default_queue = default_queue
         self._contract_validators: dict[tuple[str, str], Any] = {}
         self._contracts_enabled = False
@@ -73,9 +82,9 @@ class Queue:
 
     def health(self) -> QueueHealth:
         """Read PostgreSQL's database-authoritative queue health snapshot."""
-        assert_sync_compatible(self._executor)
+        _assert_sync_compatible(self._executor)
         row = _one_row(
-            self._executor.rows(STATEMENTS.health, (_health_window_start(),)),
+            self._executor.rows(_STATEMENTS.health, (_health_window_start(),)),
             "workhorse.queue_health_v1",
         )
         return _health_document(row.get("snapshot"))
@@ -88,9 +97,9 @@ class Queue:
         reason: str | None = None,
     ) -> CancelResult:
         """Request cooperative cancellation with optional audit attribution."""
-        assert_sync_compatible(self._executor)
+        _assert_sync_compatible(self._executor)
         row = _one_row(
-            self._executor.rows(STATEMENTS.cancel, (job_id, requested_by, reason)),
+            self._executor.rows(_STATEMENTS.cancel, (job_id, requested_by, reason)),
             "workhorse.cancel_v1",
         )
         return _cancel_result(row, job_id)
@@ -108,21 +117,21 @@ class Queue:
     def enqueue_many_with_results(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]:
         if not requests:
             return []
-        assert_sync_compatible(self._executor)
+        _assert_sync_compatible(self._executor)
         values = cast(
             list[dict[str, Json]],
-            json.loads(serialize_requests(requests, self.default_queue, inject_trace_context())),
+            json.loads(_serialize_requests(requests, self.default_queue, _inject_trace_context())),
         )
         if self._contracts_enabled:
             for request, value in zip(requests, values, strict=True):
-                rows = self._executor.rows(STATEMENTS.get_contract, (request.type, None))
+                rows = self._executor.rows(_STATEMENTS.get_contract, (request.type, None))
                 if rows:
                     _apply_contract(
                         rows[0], request.type, request.payload, value, self._contract_validators
                     )
         payload = json.dumps(values, separators=(",", ":"), ensure_ascii=False)
         try:
-            return _results(self._executor.rows(STATEMENTS.enqueue_many, (payload,)))
+            return _results(self._executor.rows(_STATEMENTS.enqueue_many, (payload,)))
         except Exception as error:
             _raise_translated(error)
 
@@ -133,9 +142,9 @@ class Queue:
         *,
         prune: bool = True,
     ) -> None:
-        assert_sync_compatible(self._executor)
-        payload = serialize_schedules(definitions, self.default_queue)
-        self._executor.rows(STATEMENTS.sync_schedules, (namespace, payload, prune))
+        _assert_sync_compatible(self._executor)
+        payload = _serialize_schedules(definitions, self.default_queue)
+        self._executor.rows(_STATEMENTS.sync_schedules, (namespace, payload, prune))
 
     def sync_concurrency_policies(
         self,
@@ -144,15 +153,15 @@ class Queue:
         *,
         prune: bool = True,
     ) -> list[ConcurrencyPolicy]:
-        assert_sync_compatible(self._executor)
+        _assert_sync_compatible(self._executor)
         rows = self._executor.rows(
-            STATEMENTS.sync_concurrency_policies,
+            _STATEMENTS.sync_concurrency_policies,
             (namespace, _concurrency_policy_payload(definitions), prune),
         )
         return [_concurrency_policy(row) for row in rows]
 
     def list_concurrency_policies(self, queue_names: Sequence[str] = ()) -> list[ConcurrencyPolicy]:
-        rows = self._executor.rows(STATEMENTS.list_concurrency_policies, (list(queue_names),))
+        rows = self._executor.rows(_STATEMENTS.list_concurrency_policies, (list(queue_names),))
         return [_concurrency_policy(row) for row in rows]
 
     def sync_rate_limit_policies(
@@ -162,22 +171,22 @@ class Queue:
         *,
         prune: bool = True,
     ) -> list[RateLimitPolicy]:
-        assert_sync_compatible(self._executor)
+        _assert_sync_compatible(self._executor)
         rows = self._executor.rows(
-            STATEMENTS.sync_rate_limit_policies,
+            _STATEMENTS.sync_rate_limit_policies,
             (namespace, _rate_limit_policy_payload(definitions), prune),
         )
         return [_rate_limit_policy(row) for row in rows]
 
     def list_rate_limit_policies(self, queue_names: Sequence[str] = ()) -> list[RateLimitPolicy]:
         names = list(queue_names)
-        rows = self._executor.rows(STATEMENTS.list_rate_limit_policies, (names,))
+        rows = self._executor.rows(_STATEMENTS.list_rate_limit_policies, (names,))
         return [_rate_limit_policy(row) for row in rows]
 
     def sync_contracts(self, contracts: Mapping[str, JobTypeContracts]) -> None:
-        assert_sync_compatible(self._executor)
-        payload = json.dumps(serialize_contracts(contracts), separators=(",", ":"))
-        self._executor.rows(STATEMENTS.sync_contracts, (payload,))
+        _assert_sync_compatible(self._executor)
+        payload = json.dumps(_serialize_contracts(contracts), separators=(",", ":"))
+        self._executor.rows(_STATEMENTS.sync_contracts, (payload,))
         self._contracts_enabled = True
 
     def send_signal(
@@ -189,10 +198,10 @@ class Queue:
         idempotency_key: str,
         requested_by: str,
     ) -> SignalDeliveryResult:
-        assert_sync_compatible(self._executor)
+        _assert_sync_compatible(self._executor)
         row = _one_row(
             self._executor.rows(
-                STATEMENTS.send_signal,
+                _STATEMENTS.send_signal,
                 _signal_parameters(job_id, name, payload, idempotency_key, requested_by),
             ),
             "workhorse.send_signal_v1",
@@ -208,10 +217,10 @@ class Queue:
         idempotency_key: str,
         requested_by: str,
     ) -> HumanWaitCompletionResult:
-        assert_sync_compatible(self._executor)
+        _assert_sync_compatible(self._executor)
         row = _one_row(
             self._executor.rows(
-                STATEMENTS.complete_human_wait,
+                _STATEMENTS.complete_human_wait,
                 _human_parameters(job_id, name, result, idempotency_key, requested_by),
             ),
             "workhorse.complete_human_wait_v1",
@@ -224,7 +233,7 @@ class AsyncQueue:
 
     def __init__(
         self,
-        executor: AsyncPsycopgExecutor | AsyncpgExecutor,
+        executor: _AsyncPsycopgExecutor | _AsyncpgExecutor,
         default_queue: str = "default",
     ) -> None:
         self._executor = executor
@@ -234,24 +243,24 @@ class AsyncQueue:
 
     @classmethod
     def from_psycopg(
-        cls, connection: AsyncPsycopgConnectionInput, default_queue: str = "default"
+        cls, connection: _AsyncPsycopgConnectionInput, default_queue: str = "default"
     ) -> AsyncQueue:
-        return cls(AsyncPsycopgExecutor(cast(AsyncPsycopgConnection, connection)), default_queue)
+        return cls(_AsyncPsycopgExecutor(cast(_AsyncPsycopgConnection, connection)), default_queue)
 
     @classmethod
     def from_asyncpg(
-        cls, connection: AsyncpgConnection, default_queue: str = "default"
+        cls, connection: _AsyncpgConnection, default_queue: str = "default"
     ) -> AsyncQueue:
-        return cls(AsyncpgExecutor(connection), default_queue)
+        return cls(_AsyncpgExecutor(connection), default_queue)
 
     async def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str:
         return (await self.enqueue_with_result(type, payload, options)).job_id
 
     async def health(self) -> QueueHealth:
         """Read PostgreSQL's database-authoritative queue health snapshot."""
-        await assert_async_compatible(self._executor)
+        await _assert_async_compatible(self._executor)
         row = _one_row(
-            await self._executor.rows(STATEMENTS.health, (_health_window_start(),)),
+            await self._executor.rows(_STATEMENTS.health, (_health_window_start(),)),
             "workhorse.queue_health_v1",
         )
         return _health_document(row.get("snapshot"))
@@ -264,9 +273,9 @@ class AsyncQueue:
         reason: str | None = None,
     ) -> CancelResult:
         """Request cooperative cancellation with optional audit attribution."""
-        await assert_async_compatible(self._executor)
+        await _assert_async_compatible(self._executor)
         row = _one_row(
-            await self._executor.rows(STATEMENTS.cancel, (job_id, requested_by, reason)),
+            await self._executor.rows(_STATEMENTS.cancel, (job_id, requested_by, reason)),
             "workhorse.cancel_v1",
         )
         return _cancel_result(row, job_id)
@@ -288,21 +297,21 @@ class AsyncQueue:
     ) -> list[EnqueueResult]:
         if not requests:
             return []
-        await assert_async_compatible(self._executor)
+        await _assert_async_compatible(self._executor)
         values = cast(
             list[dict[str, Json]],
-            json.loads(serialize_requests(requests, self.default_queue, inject_trace_context())),
+            json.loads(_serialize_requests(requests, self.default_queue, _inject_trace_context())),
         )
         if self._contracts_enabled:
             for request, value in zip(requests, values, strict=True):
-                rows = await self._executor.rows(STATEMENTS.get_contract, (request.type, None))
+                rows = await self._executor.rows(_STATEMENTS.get_contract, (request.type, None))
                 if rows:
                     _apply_contract(
                         rows[0], request.type, request.payload, value, self._contract_validators
                     )
         payload = json.dumps(values, separators=(",", ":"), ensure_ascii=False)
         try:
-            return _results(await self._executor.rows(STATEMENTS.enqueue_many, (payload,)))
+            return _results(await self._executor.rows(_STATEMENTS.enqueue_many, (payload,)))
         except Exception as error:
             _raise_translated(error)
 
@@ -313,9 +322,9 @@ class AsyncQueue:
         *,
         prune: bool = True,
     ) -> None:
-        await assert_async_compatible(self._executor)
-        payload = serialize_schedules(definitions, self.default_queue)
-        await self._executor.rows(STATEMENTS.sync_schedules, (namespace, payload, prune))
+        await _assert_async_compatible(self._executor)
+        payload = _serialize_schedules(definitions, self.default_queue)
+        await self._executor.rows(_STATEMENTS.sync_schedules, (namespace, payload, prune))
 
     async def sync_concurrency_policies(
         self,
@@ -324,9 +333,9 @@ class AsyncQueue:
         *,
         prune: bool = True,
     ) -> list[ConcurrencyPolicy]:
-        await assert_async_compatible(self._executor)
+        await _assert_async_compatible(self._executor)
         rows = await self._executor.rows(
-            STATEMENTS.sync_concurrency_policies,
+            _STATEMENTS.sync_concurrency_policies,
             (namespace, _concurrency_policy_payload(definitions), prune),
         )
         return [_concurrency_policy(row) for row in rows]
@@ -335,7 +344,7 @@ class AsyncQueue:
         self, queue_names: Sequence[str] = ()
     ) -> list[ConcurrencyPolicy]:
         names = list(queue_names)
-        rows = await self._executor.rows(STATEMENTS.list_concurrency_policies, (names,))
+        rows = await self._executor.rows(_STATEMENTS.list_concurrency_policies, (names,))
         return [_concurrency_policy(row) for row in rows]
 
     async def sync_rate_limit_policies(
@@ -345,9 +354,9 @@ class AsyncQueue:
         *,
         prune: bool = True,
     ) -> list[RateLimitPolicy]:
-        await assert_async_compatible(self._executor)
+        await _assert_async_compatible(self._executor)
         rows = await self._executor.rows(
-            STATEMENTS.sync_rate_limit_policies,
+            _STATEMENTS.sync_rate_limit_policies,
             (namespace, _rate_limit_policy_payload(definitions), prune),
         )
         return [_rate_limit_policy(row) for row in rows]
@@ -356,13 +365,13 @@ class AsyncQueue:
         self, queue_names: Sequence[str] = ()
     ) -> list[RateLimitPolicy]:
         names = list(queue_names)
-        rows = await self._executor.rows(STATEMENTS.list_rate_limit_policies, (names,))
+        rows = await self._executor.rows(_STATEMENTS.list_rate_limit_policies, (names,))
         return [_rate_limit_policy(row) for row in rows]
 
     async def sync_contracts(self, contracts: Mapping[str, JobTypeContracts]) -> None:
-        await assert_async_compatible(self._executor)
-        payload = json.dumps(serialize_contracts(contracts), separators=(",", ":"))
-        await self._executor.rows(STATEMENTS.sync_contracts, (payload,))
+        await _assert_async_compatible(self._executor)
+        payload = json.dumps(_serialize_contracts(contracts), separators=(",", ":"))
+        await self._executor.rows(_STATEMENTS.sync_contracts, (payload,))
         self._contracts_enabled = True
 
     async def send_signal(
@@ -374,10 +383,10 @@ class AsyncQueue:
         idempotency_key: str,
         requested_by: str,
     ) -> SignalDeliveryResult:
-        await assert_async_compatible(self._executor)
+        await _assert_async_compatible(self._executor)
         row = _one_row(
             await self._executor.rows(
-                STATEMENTS.send_signal,
+                _STATEMENTS.send_signal,
                 _signal_parameters(job_id, name, payload, idempotency_key, requested_by),
             ),
             "workhorse.send_signal_v1",
@@ -393,10 +402,10 @@ class AsyncQueue:
         idempotency_key: str,
         requested_by: str,
     ) -> HumanWaitCompletionResult:
-        await assert_async_compatible(self._executor)
+        await _assert_async_compatible(self._executor)
         row = _one_row(
             await self._executor.rows(
-                STATEMENTS.complete_human_wait,
+                _STATEMENTS.complete_human_wait,
                 _human_parameters(job_id, name, result, idempotency_key, requested_by),
             ),
             "workhorse.complete_human_wait_v1",
@@ -405,14 +414,14 @@ class AsyncQueue:
 
 
 def _raise_translated(error: Exception) -> NoReturn:
-    translated = translate_database_error(error)
+    translated = _translate_database_error(error)
     if translated is not None:
         raise translated from error
     raise error
 
 
 def _apply_contract(
-    row: Row,
+    row: _Row,
     job_type: str,
     payload: Json,
     request: dict[str, Json],
@@ -426,7 +435,7 @@ def _apply_contract(
         raise RuntimeError("workhorse.get_contract_definition_v1 returned an invalid schema")
     validator = cache.get((job_type, version))
     if validator is None:
-        validator = compile_contract_schema(cast(Json, document["payload"]))
+        validator = _compile_contract_schema(cast(Json, document["payload"]))
         cache[(job_type, version)] = validator
     if not validator.is_valid(payload):
         raise JobContractValidationError(job_type, version, "payload")
@@ -457,7 +466,7 @@ def _health_document(value: object) -> QueueHealth:
     return cast(QueueHealth, dict(value))
 
 
-def _cancel_result(row: Row, job_id: str) -> CancelResult:
+def _cancel_result(row: _Row, job_id: str) -> CancelResult:
     return CancelResult(
         status=cast(Any, row["status"]),
         job_id=job_id,
@@ -470,7 +479,7 @@ def _cancel_result(row: Row, job_id: str) -> CancelResult:
     )
 
 
-def _results(rows: Sequence[Row]) -> list[EnqueueResult]:
+def _results(rows: Sequence[_Row]) -> list[EnqueueResult]:
     results: list[EnqueueResult] = []
     for row in rows:
         outcome = cast(
@@ -498,13 +507,13 @@ def _results(rows: Sequence[Row]) -> list[EnqueueResult]:
     return results
 
 
-def _one_row(rows: Sequence[Row], operation: str) -> Row:
+def _one_row(rows: Sequence[_Row], operation: str) -> _Row:
     if len(rows) != 1:
         raise RuntimeError(f"{operation} returned {len(rows)} rows; expected one")
     return rows[0]
 
 
-def _concurrency_policy(row: Row) -> ConcurrencyPolicy:
+def _concurrency_policy(row: _Row) -> ConcurrencyPolicy:
     return ConcurrencyPolicy(
         namespace=str(row["namespace"]),
         queue=str(row["queue_name"]),
@@ -550,7 +559,7 @@ def _rate_limit_document(rate: RateLimit) -> dict[str, int]:
     return {"limit": rate.limit, "intervalMs": rate.interval_ms, "burst": rate.burst}
 
 
-def _rate_limit_policy(row: Row) -> RateLimitPolicy:
+def _rate_limit_policy(row: _Row) -> RateLimitPolicy:
     per_key = (
         None
         if row["per_key_limit"] is None
@@ -582,14 +591,14 @@ def _signal_parameters(
 ) -> tuple[object, ...]:
     return (
         job_id,
-        validate_wait_name(name, "Signal"),
-        encode_wait_value(payload, "Signal payload"),
-        validate_idempotency_key(idempotency_key, "Signal idempotency_key"),
-        validate_requested_by(requested_by, "Signal requested_by"),
+        _validate_wait_name(name, "Signal"),
+        _encode_wait_value(payload, "Signal payload"),
+        _validate_idempotency_key(idempotency_key, "Signal idempotency_key"),
+        _validate_requested_by(requested_by, "Signal requested_by"),
     )
 
 
-def _signal_result(row: Row, job_id: str, name: str) -> SignalDeliveryResult:
+def _signal_result(row: _Row, job_id: str, name: str) -> SignalDeliveryResult:
     if row["status"] == "conflict":
         raise SignalIdempotencyConflictError(job_id, name)
     return SignalDeliveryResult(
@@ -611,14 +620,14 @@ def _human_parameters(
 ) -> tuple[object, ...]:
     return (
         job_id,
-        validate_wait_name(name, "Human wait"),
-        encode_wait_value(result, "Human wait result"),
-        validate_idempotency_key(idempotency_key, "Human wait idempotency_key"),
-        validate_requested_by(requested_by, "Human wait requested_by"),
+        _validate_wait_name(name, "Human wait"),
+        _encode_wait_value(result, "Human wait result"),
+        _validate_idempotency_key(idempotency_key, "Human wait idempotency_key"),
+        _validate_requested_by(requested_by, "Human wait requested_by"),
     )
 
 
-def _human_result(row: Row, job_id: str, name: str) -> HumanWaitCompletionResult:
+def _human_result(row: _Row, job_id: str, name: str) -> HumanWaitCompletionResult:
     if row["status"] == "conflict":
         raise HumanWaitIdempotencyConflictError(job_id, name)
     return HumanWaitCompletionResult(
@@ -629,3 +638,6 @@ def _human_result(row: Row, job_id: str, name: str) -> HumanWaitCompletionResult
         completed_at=cast(Any, row["completed_at"]),
         completed_by=cast(str | None, row["completed_by"]),
     )
+
+
+__all__ = ["AsyncQueue", "Queue"]

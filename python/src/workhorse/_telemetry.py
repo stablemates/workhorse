@@ -109,8 +109,7 @@ class _NoOpInstrument:
 
 
 try:
-    from opentelemetry import context as otel_context
-    from opentelemetry import metrics, trace
+    from opentelemetry import context as otel_context, metrics, trace
     from opentelemetry._logs import SeverityNumber, get_logger
     from opentelemetry.context import Context
     from opentelemetry.trace import SpanKind, StatusCode

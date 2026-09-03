@@ -29,7 +29,7 @@ type CancelStatus = Literal["canceled", "cancel_requested", "already_terminal", 
 type JobState = Literal[
     "blocked", "scheduled", "ready", "active", "succeeded", "failed", "canceled"
 ]
-TJson = TypeVar("TJson", bound=Json)
+_TJson = TypeVar("_TJson", bound=Json)
 
 
 @dataclass(frozen=True)
@@ -361,8 +361,8 @@ class HandlerContext:
     def set_progress(self, value: Json) -> JobProgress:
         return self._set_progress(value)
 
-    def checkpoint(self, name: str, operation: Callable[[], TJson]) -> TJson:
-        return cast(TJson, self._checkpoint(name, operation))
+    def checkpoint(self, name: str, operation: Callable[[], _TJson]) -> _TJson:
+        return cast(_TJson, self._checkpoint(name, operation))
 
     def sleep(self, name: str, duration_ms: int) -> None:
         self._sleep(name, duration_ms)
@@ -437,8 +437,8 @@ class AsyncHandlerContext:
     async def set_progress(self, value: Json) -> JobProgress:
         return await self._set_progress(value)
 
-    async def checkpoint(self, name: str, operation: Callable[[], Awaitable[TJson]]) -> TJson:
-        return cast(TJson, await self._checkpoint(name, operation))
+    async def checkpoint(self, name: str, operation: Callable[[], Awaitable[_TJson]]) -> _TJson:
+        return cast(_TJson, await self._checkpoint(name, operation))
 
     async def sleep(self, name: str, duration_ms: int) -> None:
         await self._sleep(name, duration_ms)
@@ -490,8 +490,8 @@ class BatchHandlerContext:
     def set_progress(self, value: Json) -> JobProgress:
         return self._set_progress(value)
 
-    def checkpoint(self, name: str, operation: Callable[[], TJson]) -> TJson:
-        return cast(TJson, self._checkpoint(name, operation))
+    def checkpoint(self, name: str, operation: Callable[[], _TJson]) -> _TJson:
+        return cast(_TJson, self._checkpoint(name, operation))
 
 
 @dataclass(frozen=True)
@@ -520,8 +520,8 @@ class AsyncBatchHandlerContext:
     async def set_progress(self, value: Json) -> JobProgress:
         return await self._set_progress(value)
 
-    async def checkpoint(self, name: str, operation: Callable[[], Awaitable[TJson]]) -> TJson:
-        return cast(TJson, await self._checkpoint(name, operation))
+    async def checkpoint(self, name: str, operation: Callable[[], Awaitable[_TJson]]) -> _TJson:
+        return cast(_TJson, await self._checkpoint(name, operation))
 
 
 @dataclass(frozen=True)
@@ -561,3 +561,58 @@ class ScheduleDefinition:
     job: ScheduledJob
     timezone: str = "UTC"
     enabled: bool = True
+
+
+__all__ = [
+    "AsyncBatchHandlerContext",
+    "AsyncBatchHandlerItem",
+    "AsyncCancellationToken",
+    "AsyncHandlerContext",
+    "BatchFailed",
+    "BatchHandlerContext",
+    "BatchHandlerItem",
+    "BatchHandlerOutcome",
+    "BatchSucceeded",
+    "CancelResult",
+    "CancelStatus",
+    "CancellationToken",
+    "ChildCanceled",
+    "ChildFailed",
+    "ChildJobRequest",
+    "ChildOutcome",
+    "ChildSucceeded",
+    "ClaimedJob",
+    "ConcurrencyPolicy",
+    "ConcurrencyPolicyDefinition",
+    "Debounce",
+    "Dependencies",
+    "DependencyTerminalPolicy",
+    "EnqueueNonReplaceableReason",
+    "EnqueueOptions",
+    "EnqueueOutcome",
+    "EnqueueRequest",
+    "EnqueueResult",
+    "HandlerContext",
+    "HumanWaitCompletionResult",
+    "HumanWaitCompletionStatus",
+    "Idempotency",
+    "JobCheckpoint",
+    "JobContractVersion",
+    "JobProgress",
+    "JobState",
+    "JobTypeContracts",
+    "JobWait",
+    "Json",
+    "NonReplaceableReason",
+    "QueueHealth",
+    "RateLimit",
+    "RateLimitPolicy",
+    "RateLimitPolicyDefinition",
+    "RetryPolicy",
+    "ScheduleDefinition",
+    "ScheduledJob",
+    "SignalDeliveryResult",
+    "SignalDeliveryStatus",
+    "TerminalPolicy",
+    "Throttle",
+]

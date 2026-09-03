@@ -96,6 +96,16 @@ use `enqueue_many_v1`; recurring definitions use `sync_schedule_definitions_v1`.
 `cancel_v1`; signal delivery uses `send_signal_v1`; human completion uses
 `complete_human_wait_v1`.
 
+Every module under `python/src/workhorse/` whose path carries no leading underscore declares
+`__all__`, and that list is the module's supported surface. `workhorse` re-exports 126 names;
+`types`, `errors`, `admin`, `client`, `worker`, `async_worker`, `worker_process`, `compatibility`,
+`dashboard_v1`, and `workhorse.dashboard` each declare their own. A name a private module owns
+reaches a public module only through an underscore-prefixed alias, so `import workhorse.admin`
+no longer resolves `SQL_STATEMENTS`, `LIST_JOBS`, `MAX_PAGE_SIZE`, or `JOB_STATES`, and
+`import workhorse.errors` no longer resolves `translate_database_error`.
+`python/tests/test_public_surface.py` asserts both rules for every public module and executes the
+`workhorse` import lines in `docs/guides/`, `site/content/docs/`, and `python/README.md`.
+
 `Queue.cancel(job_id, *, requested_by=None, reason=None)` and the asynchronous equivalent return
 `CancelResult`. Its status is `canceled`, `cancel_requested`, `already_terminal`, or `not_found`.
 The result contains the job identity, state, current attempt, request attribution, reason, and
@@ -700,8 +710,9 @@ so a WSGI request cannot leave locks or an idle transaction behind. `DashboardPr
 the authenticated identity. `DashboardResponse` lets the
 authorization hook return a complete denial or redirect response. The host authorizes before
 `assert_sync_compatible`, rejects cross-origin mutations before decoding input, validates through
-`dashboard_v1.validate_input`, overwrites `audit.actor`, and then calls `DashboardBackend`.
-`DashboardBackend.procedures()` implements every database-owned contract procedure through
+`dashboard_v1.validate_input`, overwrites `audit.actor`, and then calls the private
+`workhorse.dashboard._backend.DashboardBackend`. Its `procedures()` implements every
+database-owned contract procedure through
 versioned dashboard views and lifecycle functions. The host supplies `enqueueTest` and
 `setScheduleEnabled`, whose behavior belongs to the embedding runtime.
 `python/tests/test_dashboard_conformance.py` executes all six

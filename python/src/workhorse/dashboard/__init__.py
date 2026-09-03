@@ -15,11 +15,11 @@ from threading import Lock
 from typing import Any, Protocol, cast
 from urllib.parse import urlsplit
 
-from .._compatibility import assert_sync_compatible
-from .._drivers import PsycopgConnection, SyncExecutor
+from .._compatibility import assert_sync_compatible as _assert_sync_compatible
+from .._drivers import PsycopgConnection as _PsycopgConnection, SyncExecutor as _SyncExecutor
 from ..dashboard_v1 import DashboardInputValidationError, validate_input
-from ._backend import DashboardBackend
-from ._errors import DashboardRPCError
+from ._backend import DashboardBackend as _DashboardBackend
+from ._errors import DashboardRPCError as _DashboardRPCError
 
 _MUTATIONS = frozenset(
     {
@@ -70,7 +70,7 @@ class DashboardProcedure(Protocol):
 Authorize = Callable[[dict[str, object]], DashboardPrincipal | bool | DashboardResponse]
 
 
-def normalize_dashboard_path(path: str) -> str:
+def _normalize_dashboard_path(path: str) -> str:
     normalized = "/" + "/".join(part for part in path.split("/") if part)
     return "" if normalized == "/" else normalized
 
@@ -97,14 +97,14 @@ class DashboardHost:
     ) -> None:
         if getattr(connection, "autocommit", None) is not True:
             raise ValueError("dashboard connection must use autocommit=True")
-        self.base_path = normalize_dashboard_path(path)
+        self.base_path = _normalize_dashboard_path(path)
         self._authorize = authorize
         self._environment = environment
         self._audit_actor = audit_actor
         self._read_only = read_only
         self._browser_modules = browser_modules
-        self._executor = SyncExecutor(cast(PsycopgConnection, connection))
-        backend = DashboardBackend(
+        self._executor = _SyncExecutor(cast(_PsycopgConnection, connection))
+        backend = _DashboardBackend(
             self._executor,
             environment=environment,
             configured_workers=configured_workers,
@@ -177,7 +177,7 @@ class DashboardHost:
             return
         with self._compatibility_lock:
             if not self._compatible:
-                assert_sync_compatible(self._executor)
+                _assert_sync_compatible(self._executor)
                 self._compatible = True
 
     def _rpc(self, environ: dict[str, object], procedure: str, actor: str) -> DashboardResponse:
@@ -207,7 +207,7 @@ class DashboardHost:
                 and input_value.get("kind") == "feature"
                 and "feature" not in input_value
             ):
-                raise DashboardRPCError(
+                raise _DashboardRPCError(
                     400,
                     "BAD_REQUEST",
                     "Input validation failed",
@@ -252,7 +252,7 @@ class DashboardHost:
             return self._rpc_error(400, "BAD_REQUEST", str(error))
         except (json.JSONDecodeError, ValueError) as error:
             return self._rpc_error(400, "BAD_REQUEST", str(error))
-        except DashboardRPCError as error:
+        except _DashboardRPCError as error:
             return self._rpc_error(error.status, error.code, error.message, error.data)
         except Exception:
             return self._rpc_error(500, "INTERNAL_SERVER_ERROR", "Internal server error")
@@ -355,4 +355,10 @@ class DashboardHost:
         )
 
 
-__all__ = ["DashboardHost", "DashboardPrincipal", "DashboardResponse", "normalize_dashboard_path"]
+__all__ = [
+    "Authorize",
+    "DashboardHost",
+    "DashboardPrincipal",
+    "DashboardProcedure",
+    "DashboardResponse",
+]

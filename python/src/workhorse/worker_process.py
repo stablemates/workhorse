@@ -52,3 +52,6 @@ def run_worker_process(
             deadline.cancel()
         for signum, previous in previous_handlers.items():
             signal.signal(signum, previous)
+
+
+__all__ = ["run_worker_process"]

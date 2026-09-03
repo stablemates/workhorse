@@ -253,7 +253,7 @@ class PurgeIdempotencyConflictError(WorkhorseError):
         super().__init__("PostgreSQL rejected a materially different idempotent queue purge")
 
 
-def translate_database_error(error: Exception) -> WorkhorseError | None:
+def _translate_database_error(error: Exception) -> WorkhorseError | None:
     sqlstate = getattr(error, "sqlstate", None) or getattr(error, "code", None)
     if sqlstate not in {"P1001", "P1003", "P1005"}:
         return None
@@ -274,3 +274,42 @@ def translate_database_error(error: Exception) -> WorkhorseError | None:
     if sqlstate == "P1005":
         return DependencyLimitExceededError(details)
     return DependencyCycleError(details)
+
+
+__all__ = [
+    "CancellationRequestedError",
+    "CheckpointConflictError",
+    "CheckpointLeaseLostError",
+    "ChildConflictError",
+    "ChildLeaseLostError",
+    "ChildLimitExceededError",
+    "ChildResultLimitExceededError",
+    "CompatibilityCode",
+    "DeadlineExceededError",
+    "DependencyCycleError",
+    "DependencyLimitExceededError",
+    "EnqueueIdempotencyConflictError",
+    "ExecutionTimeoutError",
+    "HumanWaitAlreadyWaitingError",
+    "HumanWaitConflictError",
+    "HumanWaitIdempotencyConflictError",
+    "HumanWaitLeaseLostError",
+    "HumanWaitLimitExceededError",
+    "JobContractUnavailableError",
+    "JobContractValidationError",
+    "LifecycleError",
+    "ProgressLeaseLostError",
+    "ProgressRateLimitError",
+    "ProtocolCompatibilityError",
+    "PurgeIdempotencyConflictError",
+    "RedriveIdempotencyConflictError",
+    "SignalIdempotencyConflictError",
+    "SignalWaitConflictError",
+    "SignalWaitLeaseLostError",
+    "SignalWaitLimitExceededError",
+    "StaleLeaseError",
+    "WaitConflictError",
+    "WaitLeaseLostError",
+    "WaitLimitExceededError",
+    "WorkhorseError",
+]

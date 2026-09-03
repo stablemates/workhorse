@@ -5,65 +5,68 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 
-from ._compatibility import assert_async_compatible, assert_sync_compatible
-from ._drivers import (
-    AsyncpgConnection,
-    AsyncpgExecutor,
-    AsyncPsycopgConnection,
-    AsyncPsycopgExecutor,
-    PsycopgConnection,
-    Row,
-    SyncExecutor,
+from ._compatibility import (
+    assert_async_compatible as _assert_async_compatible,
+    assert_sync_compatible as _assert_sync_compatible,
 )
-from ._statements import SQL_STATEMENTS, DriverStatement
+from ._drivers import (
+    AsyncpgConnection as _AsyncpgConnection,
+    AsyncpgExecutor as _AsyncpgExecutor,
+    AsyncPsycopgConnection as _AsyncPsycopgConnection,
+    AsyncPsycopgExecutor as _AsyncPsycopgExecutor,
+    PsycopgConnection as _PsycopgConnection,
+    Row as _Row,
+    SyncExecutor as _SyncExecutor,
+)
+from ._statements import SQL_STATEMENTS as _SQL_STATEMENTS, DriverStatement as _DriverStatement
 from .errors import (
     PurgeIdempotencyConflictError,
     RedriveIdempotencyConflictError,
-    translate_database_error,
+    _translate_database_error,
 )
 from .types import JobCheckpoint, JobProgress, JobState, JobWait, Json, RetryPolicy
 
 if TYPE_CHECKING:
     import psycopg
 
-    SyncConnection = psycopg.Connection[Any]
-    AsyncPsycopgConnectionInput = psycopg.AsyncConnection[Any]
+    _SyncConnection = psycopg.Connection[Any]
+    _AsyncPsycopgConnectionInput = psycopg.AsyncConnection[Any]
 else:
-    SyncConnection = PsycopgConnection
-    AsyncPsycopgConnectionInput = AsyncPsycopgConnection
+    _SyncConnection = _PsycopgConnection
+    _AsyncPsycopgConnectionInput = _AsyncPsycopgConnection
 
-MAX_PAGE_SIZE = 1_000
-MAX_REDRIVE_BATCH_SIZE = 1_000
-DEFAULT_PAYLOAD_BYTES = 16_384
-MAX_PAYLOAD_BYTES = 1_048_576
-MAX_REDACT_KEYS = 50
-JOB_STATES = frozenset(
+_MAX_PAGE_SIZE = 1_000
+_MAX_REDRIVE_BATCH_SIZE = 1_000
+_DEFAULT_PAYLOAD_BYTES = 16_384
+_MAX_PAYLOAD_BYTES = 1_048_576
+_MAX_REDACT_KEYS = 50
+_JOB_STATES = frozenset(
     {"blocked", "scheduled", "ready", "active", "succeeded", "failed", "canceled"}
 )
 
 
-def _catalogue_statement(name: str) -> DriverStatement:
-    psycopg, asyncpg = SQL_STATEMENTS[name]
-    return DriverStatement(psycopg=psycopg, asyncpg=asyncpg)
+def _catalogue_statement(name: str) -> _DriverStatement:
+    psycopg, asyncpg = _SQL_STATEMENTS[name]
+    return _DriverStatement(psycopg=psycopg, asyncpg=asyncpg)
 
 
-LIST_JOBS = _catalogue_statement("list_jobs")
-GET_JOB = _catalogue_statement("get_job")
-LIST_TIMELINE = _catalogue_statement("list_job_timeline")
-LIST_DEAD_LETTERS = _catalogue_statement("list_dead_letters")
-REDRIVE = _catalogue_statement("redrive")
-REDRIVE_MANY = _catalogue_statement("redrive_many")
-GET_CHECKPOINT = _catalogue_statement("get_checkpoint")
-LIST_CHECKPOINTS = _catalogue_statement("list_checkpoints")
-GET_PROGRESS = _catalogue_statement("get_progress")
-GET_WAIT = _catalogue_statement("get_wait")
-LIST_WAITS = _catalogue_statement("list_waits")
-LIST_SIGNAL_WAITS = _catalogue_statement("list_signal_waits")
-LIST_HUMAN_WAITS = _catalogue_statement("list_human_waits")
-LIST_WORKERS = _catalogue_statement("list_workers")
-SET_WORKER_PAUSED = _catalogue_statement("set_worker_paused")
-SET_QUEUE_PAUSED = _catalogue_statement("set_queue_paused")
-PURGE_QUEUE = _catalogue_statement("purge_queue")
+_LIST_JOBS = _catalogue_statement("list_jobs")
+_GET_JOB = _catalogue_statement("get_job")
+_LIST_TIMELINE = _catalogue_statement("list_job_timeline")
+_LIST_DEAD_LETTERS = _catalogue_statement("list_dead_letters")
+_REDRIVE = _catalogue_statement("redrive")
+_REDRIVE_MANY = _catalogue_statement("redrive_many")
+_GET_CHECKPOINT = _catalogue_statement("get_checkpoint")
+_LIST_CHECKPOINTS = _catalogue_statement("list_checkpoints")
+_GET_PROGRESS = _catalogue_statement("get_progress")
+_GET_WAIT = _catalogue_statement("get_wait")
+_LIST_WAITS = _catalogue_statement("list_waits")
+_LIST_SIGNAL_WAITS = _catalogue_statement("list_signal_waits")
+_LIST_HUMAN_WAITS = _catalogue_statement("list_human_waits")
+_LIST_WORKERS = _catalogue_statement("list_workers")
+_SET_WORKER_PAUSED = _catalogue_statement("set_worker_paused")
+_SET_QUEUE_PAUSED = _catalogue_statement("set_queue_paused")
+_PURGE_QUEUE = _catalogue_statement("purge_queue")
 
 
 @dataclass(frozen=True)
@@ -130,7 +133,7 @@ class JobListCursor:
 @dataclass(frozen=True)
 class JobPayloadProjection:
     include: bool = False
-    max_bytes: int = DEFAULT_PAYLOAD_BYTES
+    max_bytes: int = _DEFAULT_PAYLOAD_BYTES
     redact_keys: tuple[str, ...] = ()
 
 
@@ -351,66 +354,68 @@ class WorkerRegistryEntry(WorkerPauseResult):
 
 class _AdminOperations:
     def _sync_rows(
-        self, statement: DriverStatement, parameters: tuple[object, ...] = ()
-    ) -> list[Row]:
+        self, statement: _DriverStatement, parameters: tuple[object, ...] = ()
+    ) -> list[_Row]:
         raise NotImplementedError
 
     async def _async_rows(
-        self, statement: DriverStatement, parameters: tuple[object, ...] = ()
-    ) -> list[Row]:
+        self, statement: _DriverStatement, parameters: tuple[object, ...] = ()
+    ) -> list[_Row]:
         raise NotImplementedError
 
 
 class Admin(_AdminOperations):
     """Synchronous operator client over a caller-owned Psycopg connection."""
 
-    def __init__(self, connection: SyncConnection, default_queue: str = "default") -> None:
-        self._executor = SyncExecutor(cast(PsycopgConnection, connection))
+    def __init__(self, connection: _SyncConnection, default_queue: str = "default") -> None:
+        self._executor = _SyncExecutor(cast(_PsycopgConnection, connection))
         self.default_queue = default_queue
 
     @classmethod
-    def _from_executor(cls, executor: SyncExecutor, default_queue: str = "default") -> Admin:
+    def _from_executor(cls, executor: _SyncExecutor, default_queue: str = "default") -> Admin:
         instance = cls.__new__(cls)
         instance._executor = executor
         instance.default_queue = default_queue
         return instance
 
     def _sync_rows(
-        self, statement: DriverStatement, parameters: tuple[object, ...] = ()
-    ) -> list[Row]:
+        self, statement: _DriverStatement, parameters: tuple[object, ...] = ()
+    ) -> list[_Row]:
         return self._executor.rows(statement, parameters)
 
     def list_jobs(self, query: JobListQuery | None = None) -> JobListPage:
-        assert_sync_compatible(self._executor)
+        _assert_sync_compatible(self._executor)
         value = _validate_job_query(query or JobListQuery())
-        return _job_page(self._sync_rows(LIST_JOBS, _job_parameters(value)))
+        return _job_page(self._sync_rows(_LIST_JOBS, _job_parameters(value)))
 
     def get_job(self, job_id: str) -> JobSnapshot | None:
-        assert_sync_compatible(self._executor)
-        rows = self._sync_rows(GET_JOB, (job_id,))
+        _assert_sync_compatible(self._executor)
+        rows = self._sync_rows(_GET_JOB, (job_id,))
         return None if not rows else _job_snapshot(rows[0])
 
     def get_job_timeline(
         self, job_id: str, *, limit: int = 100, cursor: JobTimelineCursor | None = None
     ) -> JobTimelinePage:
-        assert_sync_compatible(self._executor)
+        _assert_sync_compatible(self._executor)
         return _timeline_page(
-            job_id, self._sync_rows(LIST_TIMELINE, _timeline_parameters(job_id, limit, cursor))
+            job_id, self._sync_rows(_LIST_TIMELINE, _timeline_parameters(job_id, limit, cursor))
         )
 
     def list_dead_letters(self, query: DeadLetterQuery | None = None) -> DeadLetterPage:
-        assert_sync_compatible(self._executor)
+        _assert_sync_compatible(self._executor)
         value = query or DeadLetterQuery()
-        return _dead_letter_page(self._sync_rows(LIST_DEAD_LETTERS, _dead_letter_parameters(value)))
+        return _dead_letter_page(
+            self._sync_rows(_LIST_DEAD_LETTERS, _dead_letter_parameters(value))
+        )
 
     def redrive(self, source_job_id: str, audit: AdminAudit) -> RedriveResult:
-        assert_sync_compatible(self._executor)
+        _assert_sync_compatible(self._executor)
         _validate_audit(audit)
         try:
             return _redrive_result(
                 _one(
                     self._sync_rows(
-                        REDRIVE, (source_job_id, audit.actor, audit.reason, audit.request_id)
+                        _REDRIVE, (source_job_id, audit.actor, audit.reason, audit.request_id)
                     ),
                     "workhorse.redrive_v1",
                 )
@@ -424,66 +429,66 @@ class Admin(_AdminOperations):
         audit: AdminAudit,
         options: BulkRedriveOptions | None = None,
     ) -> BulkRedrivePage:
-        assert_sync_compatible(self._executor)
+        _assert_sync_compatible(self._executor)
         _validate_audit(audit)
         value = options or BulkRedriveOptions()
         try:
             return _bulk_redrive_page(
-                self._sync_rows(REDRIVE_MANY, _bulk_redrive_parameters(filter, audit, value))
+                self._sync_rows(_REDRIVE_MANY, _bulk_redrive_parameters(filter, audit, value))
             )
         except Exception as error:
             _raise_admin_error(error)
 
     def get_checkpoint(self, job_id: str, name: str) -> JobCheckpoint | None:
-        assert_sync_compatible(self._executor)
-        rows = self._sync_rows(GET_CHECKPOINT, (job_id, name))
+        _assert_sync_compatible(self._executor)
+        rows = self._sync_rows(_GET_CHECKPOINT, (job_id, name))
         return None if not rows else _checkpoint(rows[0])
 
     def list_checkpoints(self, job_id: str) -> tuple[JobCheckpoint, ...]:
-        assert_sync_compatible(self._executor)
-        return tuple(_checkpoint(row) for row in self._sync_rows(LIST_CHECKPOINTS, (job_id,)))
+        _assert_sync_compatible(self._executor)
+        return tuple(_checkpoint(row) for row in self._sync_rows(_LIST_CHECKPOINTS, (job_id,)))
 
     def get_progress(self, job_id: str) -> JobProgress | None:
-        assert_sync_compatible(self._executor)
-        rows = self._sync_rows(GET_PROGRESS, (job_id,))
+        _assert_sync_compatible(self._executor)
+        rows = self._sync_rows(_GET_PROGRESS, (job_id,))
         return None if not rows else _progress(rows[0])
 
     def get_wait(self, job_id: str, name: str) -> JobWait | None:
-        assert_sync_compatible(self._executor)
-        rows = self._sync_rows(GET_WAIT, (job_id, name))
+        _assert_sync_compatible(self._executor)
+        rows = self._sync_rows(_GET_WAIT, (job_id, name))
         return None if not rows else _wait(rows[0])
 
     def list_waits(self, job_id: str) -> tuple[JobWait, ...]:
-        assert_sync_compatible(self._executor)
-        return tuple(_wait(row) for row in self._sync_rows(LIST_WAITS, (job_id,)))
+        _assert_sync_compatible(self._executor)
+        return tuple(_wait(row) for row in self._sync_rows(_LIST_WAITS, (job_id,)))
 
     def list_signal_waits(
         self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None
     ) -> ExternalWaitPage:
-        assert_sync_compatible(self._executor)
+        _assert_sync_compatible(self._executor)
         return _external_wait_page(
-            self._sync_rows(LIST_SIGNAL_WAITS, _wait_page_parameters(limit, cursor)), limit
+            self._sync_rows(_LIST_SIGNAL_WAITS, _wait_page_parameters(limit, cursor)), limit
         )
 
     def list_human_waits(
         self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None
     ) -> HumanWaitPage:
-        assert_sync_compatible(self._executor)
+        _assert_sync_compatible(self._executor)
         return _human_wait_page(
-            self._sync_rows(LIST_HUMAN_WAITS, _wait_page_parameters(limit, cursor)), limit
+            self._sync_rows(_LIST_HUMAN_WAITS, _wait_page_parameters(limit, cursor)), limit
         )
 
     def list_workers(self) -> tuple[WorkerRegistryEntry, ...]:
-        assert_sync_compatible(self._executor)
-        return tuple(_worker(row) for row in self._sync_rows(LIST_WORKERS))
+        _assert_sync_compatible(self._executor)
+        return tuple(_worker(row) for row in self._sync_rows(_LIST_WORKERS))
 
     def set_worker_paused(
         self, worker_id: str, paused: bool, audit: AdminAudit
     ) -> WorkerPauseResult | None:
-        assert_sync_compatible(self._executor)
+        _assert_sync_compatible(self._executor)
         _validate_audit(audit)
         rows = self._sync_rows(
-            SET_WORKER_PAUSED, (worker_id, paused, audit.actor, audit.reason, audit.request_id)
+            _SET_WORKER_PAUSED, (worker_id, paused, audit.actor, audit.reason, audit.request_id)
         )
         return None if not rows else _worker_pause(rows[0])
 
@@ -494,19 +499,19 @@ class Admin(_AdminOperations):
         self._set_queue_paused(queue_name, False, audit)
 
     def _set_queue_paused(self, queue_name: str, paused: bool, audit: AdminAudit) -> None:
-        assert_sync_compatible(self._executor)
+        _assert_sync_compatible(self._executor)
         _validate_audit(audit)
         self._sync_rows(
-            SET_QUEUE_PAUSED, (queue_name, paused, audit.actor, audit.reason, audit.request_id)
+            _SET_QUEUE_PAUSED, (queue_name, paused, audit.actor, audit.reason, audit.request_id)
         )
 
     def purge_queue(self, queue_name: str, audit: AdminAudit) -> int:
-        assert_sync_compatible(self._executor)
+        _assert_sync_compatible(self._executor)
         _validate_audit(audit)
         try:
             row = _one(
                 self._sync_rows(
-                    PURGE_QUEUE, (queue_name, audit.actor, audit.reason, audit.request_id)
+                    _PURGE_QUEUE, (queue_name, audit.actor, audit.reason, audit.request_id)
                 ),
                 "workhorse.purge_queue_v1",
             )
@@ -519,62 +524,62 @@ class AsyncAdmin(_AdminOperations):
     """Asynchronous operator client over a caller-owned Psycopg or asyncpg connection."""
 
     def __init__(
-        self, executor: AsyncPsycopgExecutor | AsyncpgExecutor, default_queue: str = "default"
+        self, executor: _AsyncPsycopgExecutor | _AsyncpgExecutor, default_queue: str = "default"
     ) -> None:
         self._executor = executor
         self.default_queue = default_queue
 
     @classmethod
     def from_psycopg(
-        cls, connection: AsyncPsycopgConnectionInput, default_queue: str = "default"
+        cls, connection: _AsyncPsycopgConnectionInput, default_queue: str = "default"
     ) -> AsyncAdmin:
-        return cls(AsyncPsycopgExecutor(cast(AsyncPsycopgConnection, connection)), default_queue)
+        return cls(_AsyncPsycopgExecutor(cast(_AsyncPsycopgConnection, connection)), default_queue)
 
     @classmethod
     def from_asyncpg(
-        cls, connection: AsyncpgConnection, default_queue: str = "default"
+        cls, connection: _AsyncpgConnection, default_queue: str = "default"
     ) -> AsyncAdmin:
-        return cls(AsyncpgExecutor(connection), default_queue)
+        return cls(_AsyncpgExecutor(connection), default_queue)
 
     async def _async_rows(
-        self, statement: DriverStatement, parameters: tuple[object, ...] = ()
-    ) -> list[Row]:
+        self, statement: _DriverStatement, parameters: tuple[object, ...] = ()
+    ) -> list[_Row]:
         return await self._executor.rows(statement, parameters)
 
     async def list_jobs(self, query: JobListQuery | None = None) -> JobListPage:
-        await assert_async_compatible(self._executor)
+        await _assert_async_compatible(self._executor)
         value = _validate_job_query(query or JobListQuery())
-        return _job_page(await self._async_rows(LIST_JOBS, _job_parameters(value)))
+        return _job_page(await self._async_rows(_LIST_JOBS, _job_parameters(value)))
 
     async def get_job(self, job_id: str) -> JobSnapshot | None:
-        await assert_async_compatible(self._executor)
-        rows = await self._async_rows(GET_JOB, (job_id,))
+        await _assert_async_compatible(self._executor)
+        rows = await self._async_rows(_GET_JOB, (job_id,))
         return None if not rows else _job_snapshot(rows[0])
 
     async def get_job_timeline(
         self, job_id: str, *, limit: int = 100, cursor: JobTimelineCursor | None = None
     ) -> JobTimelinePage:
-        await assert_async_compatible(self._executor)
+        await _assert_async_compatible(self._executor)
         return _timeline_page(
             job_id,
-            await self._async_rows(LIST_TIMELINE, _timeline_parameters(job_id, limit, cursor)),
+            await self._async_rows(_LIST_TIMELINE, _timeline_parameters(job_id, limit, cursor)),
         )
 
     async def list_dead_letters(self, query: DeadLetterQuery | None = None) -> DeadLetterPage:
-        await assert_async_compatible(self._executor)
+        await _assert_async_compatible(self._executor)
         value = query or DeadLetterQuery()
         return _dead_letter_page(
-            await self._async_rows(LIST_DEAD_LETTERS, _dead_letter_parameters(value))
+            await self._async_rows(_LIST_DEAD_LETTERS, _dead_letter_parameters(value))
         )
 
     async def redrive(self, source_job_id: str, audit: AdminAudit) -> RedriveResult:
-        await assert_async_compatible(self._executor)
+        await _assert_async_compatible(self._executor)
         _validate_audit(audit)
         try:
             return _redrive_result(
                 _one(
                     await self._async_rows(
-                        REDRIVE, (source_job_id, audit.actor, audit.reason, audit.request_id)
+                        _REDRIVE, (source_job_id, audit.actor, audit.reason, audit.request_id)
                     ),
                     "workhorse.redrive_v1",
                 )
@@ -585,68 +590,70 @@ class AsyncAdmin(_AdminOperations):
     async def redrive_many(
         self, filter: DeadLetterFilter, audit: AdminAudit, options: BulkRedriveOptions | None = None
     ) -> BulkRedrivePage:
-        await assert_async_compatible(self._executor)
+        await _assert_async_compatible(self._executor)
         _validate_audit(audit)
         value = options or BulkRedriveOptions()
         try:
             return _bulk_redrive_page(
-                await self._async_rows(REDRIVE_MANY, _bulk_redrive_parameters(filter, audit, value))
+                await self._async_rows(
+                    _REDRIVE_MANY, _bulk_redrive_parameters(filter, audit, value)
+                )
             )
         except Exception as error:
             _raise_admin_error(error)
 
     async def get_checkpoint(self, job_id: str, name: str) -> JobCheckpoint | None:
-        await assert_async_compatible(self._executor)
-        rows = await self._async_rows(GET_CHECKPOINT, (job_id, name))
+        await _assert_async_compatible(self._executor)
+        rows = await self._async_rows(_GET_CHECKPOINT, (job_id, name))
         return None if not rows else _checkpoint(rows[0])
 
     async def list_checkpoints(self, job_id: str) -> tuple[JobCheckpoint, ...]:
-        await assert_async_compatible(self._executor)
+        await _assert_async_compatible(self._executor)
         return tuple(
-            _checkpoint(row) for row in await self._async_rows(LIST_CHECKPOINTS, (job_id,))
+            _checkpoint(row) for row in await self._async_rows(_LIST_CHECKPOINTS, (job_id,))
         )
 
     async def get_progress(self, job_id: str) -> JobProgress | None:
-        await assert_async_compatible(self._executor)
-        rows = await self._async_rows(GET_PROGRESS, (job_id,))
+        await _assert_async_compatible(self._executor)
+        rows = await self._async_rows(_GET_PROGRESS, (job_id,))
         return None if not rows else _progress(rows[0])
 
     async def get_wait(self, job_id: str, name: str) -> JobWait | None:
-        await assert_async_compatible(self._executor)
-        rows = await self._async_rows(GET_WAIT, (job_id, name))
+        await _assert_async_compatible(self._executor)
+        rows = await self._async_rows(_GET_WAIT, (job_id, name))
         return None if not rows else _wait(rows[0])
 
     async def list_waits(self, job_id: str) -> tuple[JobWait, ...]:
-        await assert_async_compatible(self._executor)
-        return tuple(_wait(row) for row in await self._async_rows(LIST_WAITS, (job_id,)))
+        await _assert_async_compatible(self._executor)
+        return tuple(_wait(row) for row in await self._async_rows(_LIST_WAITS, (job_id,)))
 
     async def list_signal_waits(
         self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None
     ) -> ExternalWaitPage:
-        await assert_async_compatible(self._executor)
+        await _assert_async_compatible(self._executor)
         return _external_wait_page(
-            await self._async_rows(LIST_SIGNAL_WAITS, _wait_page_parameters(limit, cursor)), limit
+            await self._async_rows(_LIST_SIGNAL_WAITS, _wait_page_parameters(limit, cursor)), limit
         )
 
     async def list_human_waits(
         self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None
     ) -> HumanWaitPage:
-        await assert_async_compatible(self._executor)
+        await _assert_async_compatible(self._executor)
         return _human_wait_page(
-            await self._async_rows(LIST_HUMAN_WAITS, _wait_page_parameters(limit, cursor)), limit
+            await self._async_rows(_LIST_HUMAN_WAITS, _wait_page_parameters(limit, cursor)), limit
         )
 
     async def list_workers(self) -> tuple[WorkerRegistryEntry, ...]:
-        await assert_async_compatible(self._executor)
-        return tuple(_worker(row) for row in await self._async_rows(LIST_WORKERS))
+        await _assert_async_compatible(self._executor)
+        return tuple(_worker(row) for row in await self._async_rows(_LIST_WORKERS))
 
     async def set_worker_paused(
         self, worker_id: str, paused: bool, audit: AdminAudit
     ) -> WorkerPauseResult | None:
-        await assert_async_compatible(self._executor)
+        await _assert_async_compatible(self._executor)
         _validate_audit(audit)
         rows = await self._async_rows(
-            SET_WORKER_PAUSED, (worker_id, paused, audit.actor, audit.reason, audit.request_id)
+            _SET_WORKER_PAUSED, (worker_id, paused, audit.actor, audit.reason, audit.request_id)
         )
         return None if not rows else _worker_pause(rows[0])
 
@@ -657,19 +664,19 @@ class AsyncAdmin(_AdminOperations):
         await self._set_queue_paused(queue_name, False, audit)
 
     async def _set_queue_paused(self, queue_name: str, paused: bool, audit: AdminAudit) -> None:
-        await assert_async_compatible(self._executor)
+        await _assert_async_compatible(self._executor)
         _validate_audit(audit)
         await self._async_rows(
-            SET_QUEUE_PAUSED, (queue_name, paused, audit.actor, audit.reason, audit.request_id)
+            _SET_QUEUE_PAUSED, (queue_name, paused, audit.actor, audit.reason, audit.request_id)
         )
 
     async def purge_queue(self, queue_name: str, audit: AdminAudit) -> int:
-        await assert_async_compatible(self._executor)
+        await _assert_async_compatible(self._executor)
         _validate_audit(audit)
         try:
             row = _one(
                 await self._async_rows(
-                    PURGE_QUEUE, (queue_name, audit.actor, audit.reason, audit.request_id)
+                    _PURGE_QUEUE, (queue_name, audit.actor, audit.reason, audit.request_id)
                 ),
                 "workhorse.purge_queue_v1",
             )
@@ -694,21 +701,21 @@ def _validate_limit(limit: int, maximum: int, label: str) -> int:
 
 
 def _validate_job_query(query: JobListQuery) -> JobListQuery:
-    _validate_limit(query.limit, MAX_PAGE_SIZE, "list_jobs limit")
+    _validate_limit(query.limit, _MAX_PAGE_SIZE, "list_jobs limit")
     if query.created_after and query.created_before and query.created_after >= query.created_before:
         raise ValueError("created_after must be earlier than created_before")
     if len(set(query.states)) != len(query.states):
         raise ValueError("states must be unique")
-    if any(state not in JOB_STATES for state in query.states):
+    if any(state not in _JOB_STATES for state in query.states):
         raise ValueError("states contains an invalid job state")
     if (
         isinstance(query.payload.max_bytes, bool)
         or not isinstance(query.payload.max_bytes, int)
-        or not 1 <= query.payload.max_bytes <= MAX_PAYLOAD_BYTES
+        or not 1 <= query.payload.max_bytes <= _MAX_PAYLOAD_BYTES
     ):
         raise ValueError("payload max_bytes is out of range")
-    if len(query.payload.redact_keys) > MAX_REDACT_KEYS:
-        raise ValueError(f"payload redact_keys must contain at most {MAX_REDACT_KEYS} keys")
+    if len(query.payload.redact_keys) > _MAX_REDACT_KEYS:
+        raise ValueError(f"payload redact_keys must contain at most {_MAX_REDACT_KEYS} keys")
     if len(set(query.payload.redact_keys)) != len(query.payload.redact_keys):
         raise ValueError("payload redact_keys must be unique")
     if any(
@@ -726,7 +733,7 @@ def _iso(value: datetime | None) -> str | None:
     return None if value is None else value.isoformat()
 
 
-def _dependency_policy(row: Row) -> DependencyPolicy | None:
+def _dependency_policy(row: _Row) -> DependencyPolicy | None:
     if row["dependency_on_failure"] is None:
         return None
     return DependencyPolicy(
@@ -759,7 +766,7 @@ def _job_parameters(query: JobListQuery) -> tuple[object, ...]:
     )
 
 
-def _job_item(row: Row) -> JobListItem:
+def _job_item(row: _Row) -> JobListItem:
     return JobListItem(
         id=str(row["job_id"]),
         queue=cast(str, row["queue_name"]),
@@ -802,7 +809,7 @@ def _job_item(row: Row) -> JobListItem:
     )
 
 
-def _job_page(rows: list[Row]) -> JobListPage:
+def _job_page(rows: list[_Row]) -> JobListPage:
     last = rows[-1] if rows else None
     cursor = (
         None
@@ -814,7 +821,7 @@ def _job_page(rows: list[Row]) -> JobListPage:
     return JobListPage(tuple(_job_item(row) for row in rows), cursor)
 
 
-def _job_snapshot(row: Row) -> JobSnapshot:
+def _job_snapshot(row: _Row) -> JobSnapshot:
     progress = (
         None
         if row["progress_revision"] is None
@@ -877,7 +884,7 @@ def _job_snapshot(row: Row) -> JobSnapshot:
 def _timeline_parameters(
     job_id: str, limit: int, cursor: JobTimelineCursor | None
 ) -> tuple[object, ...]:
-    _validate_limit(limit, MAX_PAGE_SIZE, "get_job_timeline limit")
+    _validate_limit(limit, _MAX_PAGE_SIZE, "get_job_timeline limit")
     if cursor is not None and cursor.job_id != job_id:
         raise ValueError("cursor job_id must match the requested job_id")
     return (
@@ -889,7 +896,7 @@ def _timeline_parameters(
     )
 
 
-def _timeline_entry(row: Row) -> JobTimelineEntry:
+def _timeline_entry(row: _Row) -> JobTimelineEntry:
     if row["kind"] == "event":
         return JobTimelineEvent(
             "event",
@@ -916,7 +923,7 @@ def _timeline_entry(row: Row) -> JobTimelineEntry:
     )
 
 
-def _timeline_page(job_id: str, rows: list[Row]) -> JobTimelinePage:
+def _timeline_page(job_id: str, rows: list[_Row]) -> JobTimelinePage:
     last = rows[-1] if rows else None
     cursor = (
         None
@@ -942,7 +949,7 @@ def _filter_document(filter: DeadLetterFilter) -> str:
 
 
 def _dead_letter_parameters(query: DeadLetterQuery) -> tuple[object, ...]:
-    _validate_limit(query.limit, MAX_REDRIVE_BATCH_SIZE, "list_dead_letters limit")
+    _validate_limit(query.limit, _MAX_REDRIVE_BATCH_SIZE, "list_dead_letters limit")
     return (
         _filter_document(query),
         query.limit,
@@ -951,7 +958,7 @@ def _dead_letter_parameters(query: DeadLetterQuery) -> tuple[object, ...]:
     )
 
 
-def _dead_letter(row: Row) -> DeadLetter:
+def _dead_letter(row: _Row) -> DeadLetter:
     return DeadLetter(
         str(row["job_id"]),
         cast(str, row["queue_name"]),
@@ -976,7 +983,7 @@ def _dead_letter(row: Row) -> DeadLetter:
     )
 
 
-def _dead_letter_page(rows: list[Row]) -> DeadLetterPage:
+def _dead_letter_page(rows: list[_Row]) -> DeadLetterPage:
     last = rows[-1] if rows else None
     cursor = (
         None
@@ -986,7 +993,7 @@ def _dead_letter_page(rows: list[Row]) -> DeadLetterPage:
     return DeadLetterPage(tuple(_dead_letter(row) for row in rows), cursor)
 
 
-def _redrive_result(row: Row) -> RedriveResult:
+def _redrive_result(row: _Row) -> RedriveResult:
     return RedriveResult(
         cast(Any, row["status"]),
         str(row["source_job_id"]),
@@ -1000,7 +1007,7 @@ def _redrive_result(row: Row) -> RedriveResult:
 def _bulk_redrive_parameters(
     filter: DeadLetterFilter, audit: AdminAudit, options: BulkRedriveOptions
 ) -> tuple[object, ...]:
-    _validate_limit(options.limit, MAX_REDRIVE_BATCH_SIZE, "redrive_many limit")
+    _validate_limit(options.limit, _MAX_REDRIVE_BATCH_SIZE, "redrive_many limit")
     return (
         _filter_document(filter),
         options.limit,
@@ -1013,7 +1020,7 @@ def _bulk_redrive_parameters(
     )
 
 
-def _bulk_redrive_page(rows: list[Row]) -> BulkRedrivePage:
+def _bulk_redrive_page(rows: list[_Row]) -> BulkRedrivePage:
     last = rows[-1] if rows else None
     cursor = (
         None
@@ -1023,7 +1030,7 @@ def _bulk_redrive_page(rows: list[Row]) -> BulkRedrivePage:
     return BulkRedrivePage(tuple(_redrive_result(row) for row in rows), cursor)
 
 
-def _checkpoint(row: Row) -> JobCheckpoint:
+def _checkpoint(row: _Row) -> JobCheckpoint:
     return JobCheckpoint(
         str(row["job_id"]),
         cast(str, row["checkpoint_name"]),
@@ -1035,7 +1042,7 @@ def _checkpoint(row: Row) -> JobCheckpoint:
     )
 
 
-def _progress(row: Row) -> JobProgress:
+def _progress(row: _Row) -> JobProgress:
     return JobProgress(
         str(row["job_id"]),
         _json(row["progress_value"]),
@@ -1048,7 +1055,7 @@ def _progress(row: Row) -> JobProgress:
     )
 
 
-def _wait(row: Row) -> JobWait:
+def _wait(row: _Row) -> JobWait:
     return JobWait(
         str(row["job_id"]),
         cast(str, row["wait_name"]),
@@ -1064,7 +1071,7 @@ def _wait(row: Row) -> JobWait:
 
 
 def _wait_page_parameters(limit: int, cursor: ExternalWaitCursor | None) -> tuple[object, ...]:
-    _validate_limit(limit, MAX_PAGE_SIZE, "external wait limit")
+    _validate_limit(limit, _MAX_PAGE_SIZE, "external wait limit")
     return (
         limit + 1,
         cursor.created_at if cursor else None,
@@ -1073,7 +1080,7 @@ def _wait_page_parameters(limit: int, cursor: ExternalWaitCursor | None) -> tupl
     )
 
 
-def _external_wait(row: Row) -> ExternalWait:
+def _external_wait(row: _Row) -> ExternalWait:
     return ExternalWait(
         str(row["job_id"]),
         cast(str, row["queue_name"]),
@@ -1085,7 +1092,7 @@ def _external_wait(row: Row) -> ExternalWait:
     )
 
 
-def _external_wait_page(rows: list[Row], limit: int) -> ExternalWaitPage:
+def _external_wait_page(rows: list[_Row], limit: int) -> ExternalWaitPage:
     page = rows[:limit]
     last = page[-1] if page else None
     cursor = (
@@ -1098,7 +1105,7 @@ def _external_wait_page(rows: list[Row], limit: int) -> ExternalWaitPage:
     return ExternalWaitPage(tuple(_external_wait(row) for row in page), cursor)
 
 
-def _human_wait_page(rows: list[Row], limit: int) -> HumanWaitPage:
+def _human_wait_page(rows: list[_Row], limit: int) -> HumanWaitPage:
     page = rows[:limit]
     last = page[-1] if page else None
     cursor = (
@@ -1116,7 +1123,7 @@ def _human_wait_page(rows: list[Row], limit: int) -> HumanWaitPage:
     )
 
 
-def _worker_pause(row: Row) -> WorkerPauseResult:
+def _worker_pause(row: _Row) -> WorkerPauseResult:
     return WorkerPauseResult(
         cast(str, row["worker_id"]),
         bool(row["paused"]),
@@ -1127,7 +1134,7 @@ def _worker_pause(row: Row) -> WorkerPauseResult:
     )
 
 
-def _worker(row: Row) -> WorkerRegistryEntry:
+def _worker(row: _Row) -> WorkerRegistryEntry:
     base = _worker_pause(row)
     return WorkerRegistryEntry(
         **base.__dict__,
@@ -1143,14 +1150,14 @@ def _worker(row: Row) -> WorkerRegistryEntry:
     )
 
 
-def _one(rows: list[Row], operation: str) -> Row:
+def _one(rows: list[_Row], operation: str) -> _Row:
     if len(rows) != 1:
         raise RuntimeError(f"{operation} returned {len(rows)} rows; expected one")
     return rows[0]
 
 
 def _raise_admin_error(error: Exception) -> NoReturn:
-    translated = translate_database_error(error)
+    translated = _translate_database_error(error)
     if translated is not None:
         raise translated from error
     sqlstate = getattr(error, "sqlstate", None) or getattr(error, "code", None)
@@ -1172,3 +1179,37 @@ def _database_details(error: Exception) -> dict[str, object]:
         except json.JSONDecodeError:
             return {}
     return dict(raw) if isinstance(raw, dict) else {}
+
+
+__all__ = [
+    "Admin",
+    "AdminAudit",
+    "AsyncAdmin",
+    "BulkRedriveOptions",
+    "BulkRedrivePage",
+    "DeadLetter",
+    "DeadLetterCursor",
+    "DeadLetterFilter",
+    "DeadLetterPage",
+    "DeadLetterQuery",
+    "DependencyPolicy",
+    "ExternalWait",
+    "ExternalWaitCursor",
+    "ExternalWaitPage",
+    "HumanWait",
+    "HumanWaitPage",
+    "JobListCursor",
+    "JobListItem",
+    "JobListPage",
+    "JobListQuery",
+    "JobPayloadProjection",
+    "JobSnapshot",
+    "JobTimelineAttempt",
+    "JobTimelineCursor",
+    "JobTimelineEntry",
+    "JobTimelineEvent",
+    "JobTimelinePage",
+    "RedriveResult",
+    "WorkerPauseResult",
+    "WorkerRegistryEntry",
+]

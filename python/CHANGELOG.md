@@ -22,6 +22,15 @@ Requires **schema v1** and Python **3.12** or newer.
   runtime to make. `assert_schema_compatible(connection)` takes a Psycopg connection, and
   `assert_schema_compatible_psycopg` and `assert_schema_compatible_asyncpg` name their asynchronous
   driver, mirroring `AsyncQueue.from_psycopg` and `AsyncQueue.from_asyncpg`.
+- `workhorse` exports nine names that were reachable only through a submodule and are the declared
+  type of an already-exported field or callback: `CancelStatus`, `CompatibilityCode`,
+  `DependencyPolicy`, `EnqueueOutcome`, `Handler`, `HumanWaitCompletionStatus`, `JobState`,
+  `JobTimelineEntry`, and `SignalDeliveryStatus`. `workhorse.dashboard` exports `Authorize`, the
+  declared type of its documented `authorize` hook, and `DashboardProcedure`, the declared type of
+  its `enqueue_test` and `set_schedule_enabled` parameters.
+- Every module under `workhorse` whose name carries no leading underscore now declares `__all__`,
+  so `from workhorse.worker import *` and `dir(workhorse.admin)` describe the supported surface.
+  Only `workhorse.dashboard` declared one before.
 
 ### Fixed
 
@@ -35,6 +44,27 @@ Requires **schema v1** and Python **3.12** or newer.
 
 - The README states the unpinned install command and the schema install step, which the TypeScript
   CLI owns.
+
+### Removed
+
+- The public submodules no longer re-export the private helpers they import. About seventy names
+  from `workhorse._compatibility`, `workhorse._contracts`, `workhorse._drivers`,
+  `workhorse._external_waits`, `workhorse._notifications`, `workhorse._protocol`,
+  `workhorse._statements`, and `workhorse._telemetry` are gone from `workhorse.admin`,
+  `workhorse.client`, `workhorse.compatibility`, `workhorse.dashboard`, and `workhorse.worker`.
+  Among them are `SQL_STATEMENTS`, `STATEMENTS`, `DriverStatement`, `Row`, `SyncConnection`,
+  `SyncExecutor`, `PsycopgConnection`, `AsyncpgConnection`, and every other driver protocol. Import
+  the supported name from `workhorse` instead; nothing in the documented surface referenced them.
+- `workhorse.errors.translate_database_error`, `workhorse.worker.AttemptOutcome`,
+  `workhorse.worker.JobExecutionOutcome`, `workhorse.async_worker.T`,
+  `workhorse.types.TJson`, `workhorse.dashboard.DashboardBackend`,
+  `workhorse.dashboard.DashboardRPCError`, and `workhorse.dashboard.normalize_dashboard_path`
+  are private. They were internal helpers that no document or test named.
+- The `workhorse.admin` statement and limit constants `GET_*`, `LIST_*`, `REDRIVE`,
+  `REDRIVE_MANY`, `SET_*`, `PURGE_QUEUE`, `DEFAULT_PAYLOAD_BYTES`, `JOB_STATES`, `MAX_PAGE_SIZE`,
+  `MAX_PAYLOAD_BYTES`, `MAX_REDACT_KEYS`, and `MAX_REDRIVE_BATCH_SIZE` are private. The limits stay
+  internal rather than becoming public under the TypeScript names, because the Go module publishes
+  no counterpart and no Python document states them.
 - The dashboard backend's run-now action calls the audited `workhorse.run_task_now_v1` instead of
   `workhorse.dashboard_run_task_now_v1`, which is removed from the schema. The action now records
   the authenticated actor, the reason, and the request identity in its `promoted` event, matching

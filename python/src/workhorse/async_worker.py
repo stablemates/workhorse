@@ -7,14 +7,14 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, cast
 
-from ._compatibility import AsyncRowExecutor
+from ._compatibility import AsyncRowExecutor as _AsyncRowExecutor
 from ._drivers import (
-    AsyncpgConnection,
-    AsyncpgExecutor,
-    AsyncPsycopgConnection,
-    AsyncPsycopgExecutor,
+    AsyncpgConnection as _AsyncpgConnection,
+    AsyncpgExecutor as _AsyncpgExecutor,
+    AsyncPsycopgConnection as _AsyncPsycopgConnection,
+    AsyncPsycopgExecutor as _AsyncPsycopgExecutor,
 )
-from ._statements import DriverStatement
+from ._statements import DriverStatement as _DriverStatement
 from .types import (
     AsyncBatchHandlerContext,
     AsyncBatchHandlerItem,
@@ -36,20 +36,20 @@ from .worker import Worker
 if TYPE_CHECKING:
     import psycopg
 
-    AsyncPsycopgConnectionInput = psycopg.AsyncConnection[Any]
+    _AsyncPsycopgConnectionInput = psycopg.AsyncConnection[Any]
 else:
-    AsyncPsycopgConnectionInput = AsyncPsycopgConnection
+    _AsyncPsycopgConnectionInput = _AsyncPsycopgConnection
 
 AsyncHandler = Callable[[Any, AsyncHandlerContext], Awaitable[Json]]
 AsyncBatchHandler = Callable[
     [Sequence[AsyncBatchHandlerItem]], Awaitable[Sequence[BatchHandlerOutcome]]
 ]
-AsyncNotificationConnectionFactory = Callable[[], Awaitable[Any]]
+_AsyncNotificationConnectionFactory = Callable[[], Awaitable[Any]]
 
 _CHANNEL = "workhorse_jobs"
 _RECONNECT_INITIAL_SECONDS = 0.1
 _RECONNECT_MAX_SECONDS = 5.0
-T = TypeVar("T")
+_T = TypeVar("_T")
 
 
 async def _await_value[T](value: Awaitable[T]) -> T:
@@ -59,7 +59,7 @@ async def _await_value[T](value: Awaitable[T]) -> T:
 class _AsyncExecutorBridge:
     """Expose an async driver to the shared synchronous lifecycle core."""
 
-    def __init__(self, executor: AsyncRowExecutor) -> None:
+    def __init__(self, executor: _AsyncRowExecutor) -> None:
         self._executor = executor
         self._loop: asyncio.AbstractEventLoop | None = None
         self._driver_lock: asyncio.Lock | None = None
@@ -69,7 +69,7 @@ class _AsyncExecutorBridge:
         self._driver_lock = asyncio.Lock()
 
     def rows(
-        self, statement: DriverStatement, parameters: Sequence[object] = ()
+        self, statement: _DriverStatement, parameters: Sequence[object] = ()
     ) -> list[Mapping[str, object]]:
         loop = self._loop
         if loop is None:
@@ -78,7 +78,7 @@ class _AsyncExecutorBridge:
         return future.result()
 
     async def _rows(
-        self, statement: DriverStatement, parameters: Sequence[object]
+        self, statement: _DriverStatement, parameters: Sequence[object]
     ) -> list[Mapping[str, object]]:
         lock = self._driver_lock
         if lock is None:
@@ -191,11 +191,11 @@ class AsyncWorker:
 
     def __init__(
         self,
-        executor: AsyncRowExecutor,
+        executor: _AsyncRowExecutor,
         query_connection: object,
         driver: Literal["psycopg", "asyncpg"],
         *,
-        notification_connection_factory: AsyncNotificationConnectionFactory | None = None,
+        notification_connection_factory: _AsyncNotificationConnectionFactory | None = None,
         on_notification_error: Callable[[BaseException], None] | None = None,
         on_registration_error: Callable[[BaseException], None] | None = None,
         **worker_options: Any,
@@ -218,7 +218,7 @@ class AsyncWorker:
     @classmethod
     def from_psycopg(
         cls,
-        connection: AsyncPsycopgConnectionInput,
+        connection: _AsyncPsycopgConnectionInput,
         *,
         queue: str | None = None,
         queues: Sequence[str] | None = None,
@@ -231,7 +231,7 @@ class AsyncWorker:
         registry_interval_ms: int = 5_000,
         schedule_namespaces: Sequence[str] = (),
         schedule_catchup_limit: int = 100,
-        notification_connection_factory: AsyncNotificationConnectionFactory | None = None,
+        notification_connection_factory: _AsyncNotificationConnectionFactory | None = None,
         on_notification_error: Callable[[BaseException], None] | None = None,
         on_registration_error: Callable[[BaseException], None] | None = None,
     ) -> AsyncWorker:
@@ -240,7 +240,7 @@ class AsyncWorker:
                 "AsyncWorker requires a dedicated Psycopg connection in autocommit mode"
             )
         return cls(
-            AsyncPsycopgExecutor(cast(AsyncPsycopgConnection, connection)),
+            _AsyncPsycopgExecutor(cast(_AsyncPsycopgConnection, connection)),
             connection,
             "psycopg",
             notification_connection_factory=notification_connection_factory,
@@ -262,7 +262,7 @@ class AsyncWorker:
     @classmethod
     def from_asyncpg(
         cls,
-        connection: AsyncpgConnection,
+        connection: _AsyncpgConnection,
         *,
         queue: str | None = None,
         queues: Sequence[str] | None = None,
@@ -275,14 +275,14 @@ class AsyncWorker:
         registry_interval_ms: int = 5_000,
         schedule_namespaces: Sequence[str] = (),
         schedule_catchup_limit: int = 100,
-        notification_connection_factory: AsyncNotificationConnectionFactory | None = None,
+        notification_connection_factory: _AsyncNotificationConnectionFactory | None = None,
         on_notification_error: Callable[[BaseException], None] | None = None,
         on_registration_error: Callable[[BaseException], None] | None = None,
     ) -> AsyncWorker:
         if connection.is_in_transaction():
             raise ValueError("AsyncWorker requires a dedicated asyncpg connection")
         return cls(
-            AsyncpgExecutor(connection),
+            _AsyncpgExecutor(connection),
             connection,
             "asyncpg",
             notification_connection_factory=notification_connection_factory,
@@ -391,7 +391,7 @@ class AsyncWorker:
         self._loop = loop
         self._bridge.bind(loop)
 
-    async def _run_inner(self, operation: Callable[[], T]) -> T:
+    async def _run_inner(self, operation: Callable[[], _T]) -> _T:
         run = asyncio.create_task(asyncio.to_thread(operation))
         try:
             return await asyncio.shield(run)
@@ -411,7 +411,7 @@ class AsyncWorker:
             connection: Any | None = None
             try:
                 factory = cast(
-                    AsyncNotificationConnectionFactory, self._notification_connection_factory
+                    _AsyncNotificationConnectionFactory, self._notification_connection_factory
                 )
                 connection = await factory()
                 if connection is self._query_connection:
@@ -469,3 +469,6 @@ class AsyncWorker:
             with suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=0.1)
         await connection.remove_listener(_CHANNEL, wake)
+
+
+__all__ = ["AsyncBatchHandler", "AsyncHandler", "AsyncWorker"]

@@ -88,6 +88,10 @@ select = [
   "UP",
 ]
 
+[tool.ruff.lint.isort]
+# Aliased private imports keep one statement per source module instead of one per name.
+combine-as-imports = true
+
 [tool.ruff.lint.per-file-ignores]
 # This example imports only the driver selected by the caller, so either optional dependency can
 # remain uninstalled when the other path runs.
