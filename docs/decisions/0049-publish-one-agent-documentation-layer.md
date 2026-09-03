@@ -19,7 +19,7 @@ checkpoint, which is the one remedy `site/content/docs/for-ai-agents.mdx` never 
 
 The supporting conditions are in the repository. `site/scripts/gen-docs-index.ts` copies each page
 body into its twin unchanged, so `<Tabs>` and `<Tab>` reach the agent verbatim, and
-`deployment/site.conf` declares no Markdown type, so the origin serves a twin as
+`site/nginx.conf` declares no Markdown type, so the origin serves a twin as
 `application/octet-stream`. Nine install snippets disagree on pinning and on the schema step. The
 three packages publish on a staged train, so their versions legitimately differ and always will.
 
@@ -93,7 +93,7 @@ its date, so ADR 0046 keeps the pin it recorded.
 
 Two proofs stay weaker than they read. `pnpm test:site-smoke` runs in no enabled CI lane, so a smoke
 assertion added for this layer is real but ungated. Nothing in the repository runs the site's nginx,
-so the Markdown type is proved against `deployment/site.conf` text and not against a served
+so the Markdown type is proved against `site/nginx.conf` text and not against a served
 response.
 
 Per-harness packaging stays undecided. A neutral page has to exist before anything can package it,

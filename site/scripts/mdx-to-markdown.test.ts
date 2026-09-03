@@ -170,7 +170,7 @@ describe("the Markdown twin transform", () => {
 
 describe("the origin's Markdown type", () => {
   it("serves .md as text/markdown with a UTF-8 charset", async () => {
-    const config = await readFile(resolve(repositoryRoot, "deployment/site.conf"), "utf8");
+    const config = await readFile(resolve(repositoryRoot, "site/nginx.conf"), "utf8");
     expect(config).toMatch(/types\s*\{\s*text\/markdown\s+md;\s*}/);
     expect(config).toMatch(/^\s*charset\s+utf-8;$/m);
     expect(config).toMatch(/^\s*charset_types\s+[^;]*\btext\/markdown\b[^;]*;$/m);

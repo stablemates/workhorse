@@ -19,7 +19,7 @@ RUN pnpm build:core && pnpm docs:build
 
 FROM nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de AS runtime
 
-COPY deployment/site.conf /etc/nginx/conf.d/default.conf
+COPY site/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /workhorse/site/dist/client/ /usr/share/nginx/html/
 
 EXPOSE 8080

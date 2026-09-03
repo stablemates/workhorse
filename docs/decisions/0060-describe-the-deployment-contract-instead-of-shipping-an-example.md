@@ -38,7 +38,16 @@ and `hooks_path` to the operations repository's own. Every other deployment file
 ## Decision
 
 Delete the deployment orchestration from this repository. Keep `Dockerfile`, `Dockerfile.site`, and
-`deployment/site.conf`, which the live deploy builds.
+`site/nginx.conf`, which the live deploy builds.
+
+The nginx configuration was `deployment/site.conf` and moved when the deletion emptied the directory
+around it. It never was deployment configuration: it is the site image's runtime, and it carries
+behavior this repository owns and tests. The `text/markdown` type and its `charset_types` entry are
+what make the agent-facing Markdown twins serve as UTF-8 text rather than an octet stream
+([ADR 0049](0049-publish-one-agent-documentation-layer.md)), the XML type serves the feed
+([ADR 0052](0052-publish-long-form-content-on-the-site.md)), and the file also declares the `/up`
+endpoint a deployment health-checks. It belongs beside the site it serves, not in a directory named
+for the thing that was removed.
 
 Document the deployment contract rather than an implementation of it.
 `typescript/demo/DEPLOYMENT.md` states what an image must contain, what the schema step requires,

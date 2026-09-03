@@ -20,7 +20,7 @@ A deployment builds two images from this repository and nothing else:
 
 - `Dockerfile` builds the demo.
 - `Dockerfile.site` builds the documentation site, whose runtime serves the static bundle through
-  the nginx configuration in `deployment/site.conf`.
+  the nginx configuration in `site/nginx.conf`.
 
 Both Dockerfiles pin every base image by its multi-platform manifest digest. When updating a base
 image, resolve the new tag to a digest and commit both values together. The tag documents the

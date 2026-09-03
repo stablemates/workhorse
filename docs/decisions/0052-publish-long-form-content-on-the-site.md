@@ -39,7 +39,7 @@ The site build makes a second content section cheap. `site/source.config.ts` def
 collection at build time and emits the sidebar, one record per page, `sitemap.xml`, `robots.txt`,
 the prerender list, `llms.txt`, `llms-full.txt`, and a Markdown twin per page.
 `site/lib/seo.ts` builds each page's canonical link, Open Graph tags, the `text/markdown` alternate,
-and JSON-LD. `vite.config.ts` prerenders every listed path, and `deployment/site.conf` serves the
+and JSON-LD. `vite.config.ts` prerenders every listed path, and `site/nginx.conf` serves the
 result as static files, already naming `application/rss+xml` among its charset types.
 
 Three alternatives were weighed. A third-party host such as dev.to as the home puts the link a
@@ -96,7 +96,7 @@ The execution Issue that builds the section delivers exactly this and nothing mo
    writing rules in `CLAUDE.md` already require.
 
 The section needs no deployment change: it is static files under the existing origin, and the
-feed is served with the XML type `deployment/site.conf` already declares.
+feed is served with the XML type `site/nginx.conf` already declares.
 
 ## Consequences
 
