@@ -95,7 +95,7 @@ type JobSnapshot struct {
 	FenceToken      int64
 	Result          any
 	Error           any
-	Progress        *AdminJobProgress
+	Progress        *JobProgress
 }
 
 type JobTimelineQuery struct {
@@ -191,17 +191,6 @@ type JobCheckpoint struct {
 	FenceToken int64
 	WorkerID   string
 	CreatedAt  time.Time
-}
-
-type AdminJobProgress struct {
-	JobID      string
-	Value      any
-	Revision   int64
-	Attempt    int
-	FenceToken int64
-	WorkerID   string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
 }
 
 type JobWait struct {
@@ -400,7 +389,7 @@ func (admin *Admin) GetJob(ctx context.Context, id string) (*JobSnapshot, error)
 	row := rows[0]
 	result := &JobSnapshot{JobListItem: item, ContractVersion: optionalStringValue(row["contract_version"]), FenceToken: adminInt64Value(row["version"]), Result: jsonValue(row["result"]), Error: jsonValue(row["error"])}
 	if row["progress_revision"] != nil {
-		result.Progress = &AdminJobProgress{JobID: id, Value: jsonValue(row["progress_value"]), Revision: adminInt64Value(row["progress_revision"]), Attempt: intValue(row["progress_attempt"]), FenceToken: adminInt64Value(row["progress_fence_token"]), WorkerID: stringValue(row["progress_worker_id"]), CreatedAt: timeValue(row["progress_created_at"]), UpdatedAt: timeValue(row["progress_updated_at"])}
+		result.Progress = &JobProgress{JobID: id, Value: jsonValue(row["progress_value"]), Revision: adminInt64Value(row["progress_revision"]), Attempt: intValue(row["progress_attempt"]), FenceToken: adminInt64Value(row["progress_fence_token"]), WorkerID: stringValue(row["progress_worker_id"]), CreatedAt: timeValue(row["progress_created_at"]), UpdatedAt: timeValue(row["progress_updated_at"])}
 	}
 	return result, nil
 }
@@ -524,7 +513,7 @@ func (admin *Admin) ListCheckpoints(ctx context.Context, jobID string) ([]JobChe
 	}
 	return result, nil
 }
-func (admin *Admin) GetProgress(ctx context.Context, jobID string) (*AdminJobProgress, error) {
+func (admin *Admin) GetProgress(ctx context.Context, jobID string) (*JobProgress, error) {
 	rows, err := admin.query(ctx, adminStatementRegistry["get_progress"], jobID)
 	if err != nil {
 		return nil, err
@@ -533,7 +522,7 @@ func (admin *Admin) GetProgress(ctx context.Context, jobID string) (*AdminJobPro
 		return nil, nil
 	}
 	row := rows[0]
-	return &AdminJobProgress{JobID: stringValue(row["job_id"]), Value: jsonValue(row["progress_value"]), Revision: adminInt64Value(row["revision"]), Attempt: intValue(row["attempt"]), FenceToken: adminInt64Value(row["fence_token"]), WorkerID: stringValue(row["worker_id"]), CreatedAt: timeValue(row["created_at"]), UpdatedAt: timeValue(row["updated_at"])}, nil
+	return &JobProgress{JobID: stringValue(row["job_id"]), Value: jsonValue(row["progress_value"]), Revision: adminInt64Value(row["revision"]), Attempt: intValue(row["attempt"]), FenceToken: adminInt64Value(row["fence_token"]), WorkerID: stringValue(row["worker_id"]), CreatedAt: timeValue(row["created_at"]), UpdatedAt: timeValue(row["updated_at"])}, nil
 }
 func (admin *Admin) GetWait(ctx context.Context, jobID, name string) (*JobWait, error) {
 	rows, err := admin.query(ctx, adminStatementRegistry["get_wait"], jobID, name)

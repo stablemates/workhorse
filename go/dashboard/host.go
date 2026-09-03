@@ -55,18 +55,17 @@ type HandlerOptions struct {
 	MaintenanceLoops  map[string]int
 	// Procedures permits host-supplied extensions and is primarily useful for enqueueTest.
 	Procedures map[string]Procedure
-	// SkipCompatibilityCheck is intended for transport tests whose executor cannot reach PostgreSQL.
-	SkipCompatibilityCheck bool
 }
 
 type handler struct {
-	options         HandlerOptions
-	basePath        string
-	compatible      bool
-	compatibilityMu sync.Mutex
-	assets          map[string][]byte
-	assetsErr       error
-	assetsOnce      sync.Once
+	options                HandlerOptions
+	basePath               string
+	skipCompatibilityCheck bool
+	compatible             bool
+	compatibilityMu        sync.Mutex
+	assets                 map[string][]byte
+	assetsErr              error
+	assetsOnce             sync.Once
 }
 
 var mutations = map[string]bool{
@@ -87,8 +86,8 @@ var contentTypes = map[string]string{
 	".woff2": "font/woff2",
 }
 
-// NormalizePath canonicalizes a dashboard mount. Root ownership is represented by an empty path.
-func NormalizePath(value string) string {
+// normalizePath canonicalizes a dashboard mount. Root ownership is represented by an empty path.
+func normalizePath(value string) string {
 	parts := strings.FieldsFunc(value, func(r rune) bool { return r == '/' })
 	if len(parts) == 0 {
 		return ""
@@ -98,6 +97,12 @@ func NormalizePath(value string) string {
 
 // NewHandler constructs a framework-neutral net/http dashboard backend.
 func NewHandler(options HandlerOptions) (http.Handler, error) {
+	return newHandler(options, false)
+}
+
+// newHandler builds the handler. skipCompatibilityCheck is reserved for this package's transport
+// tests, whose executor cannot reach PostgreSQL; a caller-facing handler always runs the check.
+func newHandler(options HandlerOptions, skipCompatibilityCheck bool) (http.Handler, error) {
 	if options.Executor == nil {
 		return nil, errors.New("dashboard executor is required")
 	}
@@ -121,7 +126,7 @@ func NewHandler(options HandlerOptions) (http.Handler, error) {
 		builtins[name] = procedure
 	}
 	options.Procedures = builtins
-	return &handler{options: options, basePath: NormalizePath(options.Path)}, nil
+	return &handler{options: options, basePath: normalizePath(options.Path), skipCompatibilityCheck: skipCompatibilityCheck}, nil
 }
 
 func (host *handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -176,7 +181,7 @@ func (host *handler) owns(pathname string) bool {
 }
 
 func (host *handler) assertCompatible(ctx context.Context) error {
-	if host.options.SkipCompatibilityCheck {
+	if host.skipCompatibilityCheck {
 		return nil
 	}
 	host.compatibilityMu.Lock()

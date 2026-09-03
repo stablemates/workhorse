@@ -49,7 +49,7 @@ type DashboardCompleteHumanWaitResult struct {
 	Status      DashboardHumanWaitCompletionStatus `json:"status"`
 	JobID       string                             `json:"jobId"`
 	Name        string                             `json:"name"`
-	Result      DashboardJSON                      `json:"result"`
+	Result      any                                `json:"result"`
 	CompletedAt *string                            `json:"completedAt"`
 	CompletedBy *string                            `json:"completedBy"`
 }
@@ -393,8 +393,6 @@ type DashboardJobRow struct {
 	HumanWait  *DashboardHumanWaitSummary  `json:"humanWait"`
 }
 
-type DashboardJSON any
-
 type DashboardMaintenanceLoopCadences struct {
 	TickIntervalMs float64 `json:"tickIntervalMs"`
 }
@@ -655,7 +653,7 @@ type DashboardSignalTaskResult struct {
 	Status      DashboardSignalDeliveryStatus `json:"status"`
 	JobID       string                        `json:"jobId"`
 	Name        string                        `json:"name"`
-	Payload     DashboardJSON                 `json:"payload"`
+	Payload     any                           `json:"payload"`
 	DeliveredAt *string                       `json:"deliveredAt"`
 	DeliveredBy *string                       `json:"deliveredBy"`
 }
@@ -1217,10 +1215,10 @@ type CancelTaskInput struct {
 type CancelTaskOutput DashboardCancelTaskResult
 
 type SignalTaskInput struct {
-	ID             string        `json:"id"`
-	Name           string        `json:"name"`
-	Payload        DashboardJSON `json:"payload"`
-	IdempotencyKey string        `json:"idempotencyKey"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Payload        any    `json:"payload"`
+	IdempotencyKey string `json:"idempotencyKey"`
 	Audit          struct {
 		Actor     string `json:"actor"`
 		Reason    string `json:"reason"`
@@ -1231,10 +1229,10 @@ type SignalTaskInput struct {
 type SignalTaskOutput DashboardSignalTaskResult
 
 type CompleteHumanWaitInput struct {
-	ID             string        `json:"id"`
-	Name           string        `json:"name"`
-	Result         DashboardJSON `json:"result"`
-	IdempotencyKey string        `json:"idempotencyKey"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Result         any    `json:"result"`
+	IdempotencyKey string `json:"idempotencyKey"`
 	Audit          struct {
 		Actor     string `json:"actor"`
 		Reason    string `json:"reason"`

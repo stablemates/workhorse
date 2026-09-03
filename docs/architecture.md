@@ -681,11 +681,13 @@ change that alters the wire contract lands only with regenerated, reviewed artif
 commands run `dashboard-bindings:generate` or `dashboard-bindings:check` after the artifact step.
 `typescript/dashboard-server/spec/generate-bindings.ts` reads `procedures.json` and emits
 `go/dashboard/v1_generated.go` and `python/src/workhorse/dashboard_v1.py`. Those files contain the
-request and response types and `DashboardRuntimeConfig`. Go exposes `ValidateInput` plus one
-`Validate<Procedure>Input` wrapper per procedure; its internal `validateSchema` interpreter uses
-`number` for JSON numeric coercion. Python exposes `validate_input` plus one
-`validate_<procedure>_input` wrapper per procedure and raises `DashboardInputValidationError`; its
-internal interpreter is `_validate_schema`.
+request and response types and `DashboardRuntimeConfig`. The `DashboardJson` definition gets no Go
+declaration, because Go spells an arbitrary JSON value `any`; Python declares `DashboardJSON` as a
+recursive union, which is the only way to type the same value there. Go exposes `ValidateInput`
+plus one `Validate<Procedure>Input` wrapper per procedure; its internal `validateSchema`
+interpreter uses `number` for JSON numeric coercion.
+Python exposes `validate_input` plus one `validate_<procedure>_input` wrapper per procedure and
+raises `DashboardInputValidationError`; its internal interpreter is `_validate_schema`.
 
 The internal `dashboardRuntimeConfigSchema` in `typescript/dashboard-server/src/server/html.ts`
 is the source of the exported `DashboardRuntimeConfig` through `z.infer`. `z.toJSONSchema` writes

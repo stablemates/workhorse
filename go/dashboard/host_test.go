@@ -20,17 +20,16 @@ func (rejectingExecutor) Query(context.Context, string, ...any) ([]workhorse.Row
 
 func testHandler(t *testing.T, authorize Authorize) http.Handler {
 	t.Helper()
-	handler, err := NewHandler(HandlerOptions{
-		Executor:               rejectingExecutor{},
-		Authorize:              authorize,
-		Environment:            "test",
-		SkipCompatibilityCheck: true,
+	handler, err := newHandler(HandlerOptions{
+		Executor:    rejectingExecutor{},
+		Authorize:   authorize,
+		Environment: "test",
 		Procedures: map[string]Procedure{
 			"meta": func(_ context.Context, _ any, actor string) (any, error) {
 				return map[string]any{"environment": "test", "actor": actor}, nil
 			},
 		},
-	})
+	}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,13 +65,12 @@ func TestHandlerServesApplicationAndRPC(t *testing.T) {
 }
 
 func TestHandlerRedirectsARootMount(t *testing.T) {
-	handler, err := NewHandler(HandlerOptions{
+	handler, err := newHandler(HandlerOptions{
 		Executor: rejectingExecutor{}, Path: "/",
 		Authorize: func(*http.Request) Authorization {
 			return Authorization{Principal: &Principal{Actor: "operator@example.test"}}
 		},
-		SkipCompatibilityCheck: true,
-	})
+	}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,14 +91,13 @@ func TestHandlerAuthorizesBeforeDispatch(t *testing.T) {
 }
 
 func TestHandlerRejectsCrossOriginMutation(t *testing.T) {
-	handler, err := NewHandler(HandlerOptions{
-		Executor:               rejectingExecutor{},
-		Authorize:              func(*http.Request) Authorization { return Authorization{Principal: &Principal{Actor: "trusted"}} },
-		SkipCompatibilityCheck: true,
+	handler, err := newHandler(HandlerOptions{
+		Executor:  rejectingExecutor{},
+		Authorize: func(*http.Request) Authorization { return Authorization{Principal: &Principal{Actor: "trusted"}} },
 		Procedures: map[string]Procedure{
 			"purgeQueue": func(context.Context, any, string) (any, error) { return map[string]any{"deletedCount": 1}, nil },
 		},
-	})
+	}, true)
 	if err != nil {
 		t.Fatal(err)
 	}

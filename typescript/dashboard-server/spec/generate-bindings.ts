@@ -88,7 +88,9 @@ function nullableBranch(schema: Schema): Schema | null {
 
 function goType(schema: Schema, indent = ""): string {
   const ref = refName(schema);
-  if (ref) return exportedName(ref === "__schema0" ? jsonDefinitionName : ref);
+  // Go spells an arbitrary JSON value `any`, so the shared JSON definition needs no named Go type.
+  if (ref === jsonDefinitionName || ref === "__schema0") return "any";
+  if (ref) return exportedName(ref);
   const nullable = nullableBranch(schema);
   if (nullable) return `*${goType(nullable, indent)}`;
   if (Array.isArray(schema.anyOf)) {
@@ -276,7 +278,9 @@ function inputSchemas(contract: DashboardContract): Record<string, Schema | null
 
 function generateGo(contract: DashboardContract): string {
   const declarations = [
-    ...Object.entries(contract.$defs).map(([name, schema]) => goDeclaration(name, schema)),
+    ...Object.entries(contract.$defs)
+      .filter(([name]) => name !== jsonDefinitionName)
+      .map(([name, schema]) => goDeclaration(name, schema)),
     goDeclaration("DashboardRuntimeConfig", contract.html.runtimeConfig),
     ...Object.entries(contract.procedures).flatMap(([name, procedure]) => [
       goDeclaration(`${name}Input`, procedure.input ?? { type: "null" }),
