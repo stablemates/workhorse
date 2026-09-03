@@ -135,11 +135,12 @@ workhorse admin queues
 workhorse admin failures --queue billing --json | jq '.items[].jobId'
 ```
 
-Guarded commands — `admin cancel`, `admin redrive`, `admin pause`, `admin resume` — refuse to
-run until the target database is named explicitly with `--env`, verified against
-`current_database()` on the live connection, and the operation is confirmed interactively or
-with `--yes`. Attribution and redrive idempotency follow the same contracts as the
-programmatic APIs.
+Guarded commands — `admin cancel`, `admin redrive`, `admin pause`, `admin resume`,
+`admin purge` — refuse to run until the target database is named explicitly with `--env`,
+verified against `current_database()` on the live connection, and the operation is confirmed
+interactively or with `--yes`. Attribution, redrive idempotency, and purge idempotency follow the
+same contracts as the programmatic APIs. `admin purge` deletes one queue's waiting jobs, leaves
+running ones alone, and reports the deleted count as `deletedCount` under `--json`.
 
 `workhorse tui` renders the same views as a live, self-refreshing terminal application. It is
 read-only unless launched with a verified `--env`, which enables pausing and resuming the

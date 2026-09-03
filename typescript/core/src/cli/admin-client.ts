@@ -255,4 +255,18 @@ export class WorkhorseAdminClient {
       requestId: request.requestId,
     });
   }
+
+  /** Deletes one queue's non-active jobs and answers how many rows went. */
+  purgeQueue(
+    environment: ConfirmedEnvironment,
+    queueName: string,
+    request: AdminControlRequest,
+  ): Promise<number> {
+    void environment;
+    return this.admin.purgeQueue(queueName, {
+      actor: request.requestedBy,
+      reason: request.reason,
+      requestId: request.requestId,
+    });
+  }
 }

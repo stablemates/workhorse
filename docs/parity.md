@@ -93,7 +93,8 @@ Every Planned cell below must be Supported before 1.0.0
 ([WH-581](https://ontrack.sh/projects/WH/issues/WH-581)). Adding a command or a procedure later
 would not break anything, so this is not a compatibility requirement; it is the point at which an
 operator surface stops being excused as beta-incomplete. An operator should not have to change
-tools mid-incident because purge is only in the browser and redrive is only in the terminal.
+tools mid-incident because worker pause is only in the browser and redrive is only in the
+terminal.
 
 <!-- BEGIN GENERATED PARITY PRODUCT -->
 
@@ -103,7 +104,7 @@ tools mid-incident because purge is only in the browser and redrive is only in t
 | Queue health snapshot                      | Supported  | Supported         | Supported         |
 | Cancellation requests                      | Supported  | Supported         | Supported         |
 | Queue pause and resume                     | Supported  | Supported         | Supported         |
-| Queue purge                                | Supported  | Supported         | [Planned][WH-615] |
+| Queue purge                                | Supported  | Supported         | Supported         |
 | Dead-letter listing                        | Supported  | Supported         | Supported         |
 | Redrive                                    | Supported  | [Planned][WH-616] | Supported         |
 | Checkpoint, wait, and human-decision reads | Supported  | Supported         | [Planned][WH-617] |
@@ -181,7 +182,6 @@ stops the published view from becoming another source of truth.
 
 <!-- BEGIN GENERATED PARITY ONTRACK LINKS -->
 
-[WH-615]: https://ontrack.sh/projects/WH/issues/WH-615
 [WH-616]: https://ontrack.sh/projects/WH/issues/WH-616
 [WH-617]: https://ontrack.sh/projects/WH/issues/WH-617
 [WH-618]: https://ontrack.sh/projects/WH/issues/WH-618

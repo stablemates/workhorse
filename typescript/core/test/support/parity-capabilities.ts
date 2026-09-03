@@ -407,7 +407,7 @@ export const PRODUCT_PARITY_ROWS: readonly ProductParityRow[] = [
     capability: "Queue purge",
     postgresql: { file: "integration-queue-administration.test.ts", pattern: "purgeQueue" },
     dashboard: { file: "src/server/operator-controllers.test.ts", pattern: "purgeQueue" },
-    cli: { planned: "WH-615" },
+    cli: { file: "integration-admin-cli.test.ts", pattern: "purge" },
   },
   {
     capability: "Dead-letter listing",

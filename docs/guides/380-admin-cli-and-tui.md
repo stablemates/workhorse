@@ -24,8 +24,8 @@ workhorse admin failures --queue billing --json | jq '.items[].jobId'
 
 ## Changing things requires naming the target twice
 
-The guarded commands — `admin cancel`, `admin redrive`, `admin pause`, `admin resume` — mutate a
-live system, and the most common way to hurt yourself with an operator CLI is not a typo in the
+The guarded commands — `admin cancel`, `admin redrive`, `admin pause`, `admin resume`,
+`admin purge` — mutate a live system, and the most common way to hurt yourself with an operator CLI is not a typo in the
 command. It is running the right command against the wrong database, because a shell still
 carried the environment of whatever you were doing an hour ago.
 
@@ -46,6 +46,13 @@ A redrive always records who asked and why, and carries an idempotency identity,
 runbook step cannot replay a job twice. That is the same contract as [redrive](340-redrive.md)
 through the public `Admin` client — the CLI adds no separate semantics. Queue pause and resume
 also require a reason and retain the request's audit identity.
+
+`admin purge` is the one that empties a queue, and it deletes rather than cancels: it takes out
+that queue's waiting jobs and leaves the ones a worker is already running. Reach for it when a
+backlog is poison and draining it by hand is not worth the incident. It carries the same
+idempotency identity as a redrive, so a retried runbook step re-reports the first purge instead of
+taking a second bite; reusing that identity with different audit fields is refused. The command
+answers with how many jobs it removed.
 
 ## The TUI is the same client with a refresh loop
 

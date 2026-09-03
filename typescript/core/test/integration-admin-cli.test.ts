@@ -229,6 +229,71 @@ describe("admin CLI guarded operations", () => {
       expect.arrayContaining([expect.objectContaining({ queue: "default", paused: false })]),
     );
   });
+
+  it("purges a queue and reports the deleted count", async () => {
+    const queueName = "cli-purge";
+    const first = await queue.enqueue("purge.me", {}, { queue: queueName });
+    const second = await queue.enqueue("purge.me", {}, { queue: queueName });
+    const result = runAdmin([
+      "purge",
+      queueName,
+      "--env",
+      databaseName,
+      "--reason",
+      "drain the poisoned backlog",
+      "--request-id",
+      "cli-purge-request",
+      "--yes",
+      "--json",
+    ]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ queue: queueName, deletedCount: 2 });
+    expect(await admin.getJob(first)).toBeNull();
+    expect(await admin.getJob(second)).toBeNull();
+  });
+
+  it("refuses a purge that reuses a request identity with a different reason", async () => {
+    const queueName = "cli-purge-conflict";
+    await queue.enqueue("purge.me", {}, { queue: queueName });
+    const purge = (reason: string) =>
+      runAdmin([
+        "purge",
+        queueName,
+        "--env",
+        databaseName,
+        "--reason",
+        reason,
+        "--request-id",
+        "cli-purge-conflict-request",
+        "--yes",
+      ]);
+    expect(purge("first destructive request")).toMatchObject({ code: 0 });
+
+    const conflict = purge("a different destructive request");
+    expect(conflict.code).toBe(1);
+    expect(conflict.stderr).toContain(`Refused: Queue purge conflict for ${queueName}`);
+  });
+
+  it("requires --reason and confirmation before purging", async () => {
+    const queueName = "cli-purge-guarded";
+    const jobId = await queue.enqueue("purge.me", {}, { queue: queueName });
+
+    const noReason = runAdmin(["purge", queueName, "--env", databaseName, "--yes"]);
+    expect(noReason.code).toBe(64);
+    expect(noReason.stderr).toContain("requires --reason");
+
+    const noConfirmation = runAdmin([
+      "purge",
+      queueName,
+      "--env",
+      databaseName,
+      "--reason",
+      "drain the poisoned backlog",
+    ]);
+    expect(noConfirmation.code).toBe(64);
+    expect(noConfirmation.stderr).toContain("requires --yes");
+    expect((await admin.getJob(jobId))?.state).toBe("ready");
+  });
 });
 
 describe("tui command", () => {

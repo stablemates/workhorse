@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import readline from "node:readline/promises";
 import { Pool } from "pg";
+import { PurgeIdempotencyConflictError } from "../admin.js";
 import type { JobListQuery, JobState } from "../types.js";
 import { CliUsageError, parseCommandArgs, resolveDatabaseUrl } from "./arguments.js";
 import {
@@ -45,6 +46,7 @@ Guarded commands (mutate; require --env and confirmation):
   redrive <job-id>    Redrive one terminal failure as a new job.
   pause <queue>       Pause claiming for one queue.
   resume <queue>      Resume claiming for one queue.
+  purge <queue>       Delete one queue's non-active jobs.
 
 Common options:
   --database-url <url>  Database URL. This takes precedence over all other sources.
@@ -55,8 +57,9 @@ Guarded-command options:
   --env <database>   Required. Must equal the connected database's own name.
   --yes              Skip the interactive confirmation prompt.
   --actor <name>     Attribution recorded for the mutation (default: workhorse-admin).
-  --reason <text>    Reason recorded for the mutation. Required for redrive, pause, and resume.
-  --request-id <id>  Redrive idempotency identity (default: a random UUID).
+  --reason <text>    Reason recorded for the mutation. Required for redrive, pause, resume, and
+                     purge.
+  --request-id <id>  Redrive and purge idempotency identity (default: a random UUID).
 
 Listing options:
   --queue <name>     Filter by queue.
@@ -89,7 +92,7 @@ const READ_COMMANDS = new Set([
   "workers",
   "maintenance",
 ]);
-const MUTATION_COMMANDS = new Set(["cancel", "redrive", "pause", "resume"]);
+const MUTATION_COMMANDS = new Set(["cancel", "redrive", "pause", "resume", "purge"]);
 
 interface AdminIo {
   out(text: string): void;
@@ -361,12 +364,18 @@ export async function runAdminCommand(
       reason: values.reason,
       requestId: values["request-id"] ?? randomUUID(),
     };
+    if (command === "purge") {
+      const deletedCount = await client.purgeQueue(environment, queueName, request);
+      if (json) io.out(toAdminJson({ queue: queueName, deletedCount }));
+      else io.out(`Purged ${deletedCount} job(s) from queue ${queueName}.\n`);
+      return;
+    }
     if (command === "pause") await client.pauseQueue(environment, queueName, request);
     else await client.resumeQueue(environment, queueName, request);
     if (json) io.out(toAdminJson({ queue: queueName, paused: command === "pause" }));
     else io.out(`${command === "pause" ? "Paused" : "Resumed"} queue ${queueName}.\n`);
   } catch (error) {
-    if (error instanceof AdminSafetyError) {
+    if (error instanceof AdminSafetyError || error instanceof PurgeIdempotencyConflictError) {
       io.error(`Refused: ${error.message}\n`);
       process.exitCode = 1;
       return;
