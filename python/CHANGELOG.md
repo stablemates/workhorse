@@ -45,6 +45,16 @@ Requires **schema v1** and Python **3.12** or newer.
   exported from `workhorse`, which neither old name was. Each old name stays in `workhorse.types` as
   a deprecated alias of its replacement, so no code has to change on this release. The aliases are
   removed in `1.0.0`.
+- **`workhorse.dashboard_v1` type names.** Every type generated from a shared `dashboard/v1` wire
+  type now carries the `Dashboard` prefix, so the module no longer declares a second `CancelStatus`
+  and `JSON` beside `workhorse.types`. `CancelStatus`, `SendSignalStatus`,
+  `CompleteHumanWaitStatus`, `JSON`, `QueueHealthReason`, `QueueHealthReasonCode`,
+  `RetentionPolicyImpact`, and `MaintenanceLoopCadences` become `DashboardCancelStatus`,
+  `DashboardSignalDeliveryStatus`, `DashboardHumanWaitCompletionStatus`, `DashboardJSON`,
+  `DashboardQueueHealthReason`, `DashboardQueueHealthReasonCode`,
+  `DashboardRetentionPolicyImpact`, and `DashboardMaintenanceLoopCadences`. The module is
+  generated, so it carries no aliases: a caller that names one of the eight updates the name. No
+  request or response payload changes.
 
 ### Upgrade notes
 

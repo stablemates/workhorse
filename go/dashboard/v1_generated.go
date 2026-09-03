@@ -7,8 +7,6 @@ import (
 	"regexp"
 )
 
-type CancelStatus string
-
 type DashboardActivityBucket struct {
 	BucketStart string             `json:"bucketStart"`
 	Counts      map[string]float64 `json:"counts"`
@@ -28,15 +26,17 @@ type DashboardActivityPage struct {
 
 type DashboardActivityPeriod string
 
+type DashboardCancelStatus string
+
 type DashboardCancelTaskResult struct {
-	Status         CancelStatus `json:"status"`
-	JobID          string       `json:"jobId"`
-	State          any          `json:"state"`
-	CurrentAttempt *float64     `json:"currentAttempt"`
-	RequestedAt    *string      `json:"requestedAt"`
-	RequestedBy    *string      `json:"requestedBy"`
-	Reason         *string      `json:"reason"`
-	FinishedAt     *string      `json:"finishedAt"`
+	Status         DashboardCancelStatus `json:"status"`
+	JobID          string                `json:"jobId"`
+	State          any                   `json:"state"`
+	CurrentAttempt *float64              `json:"currentAttempt"`
+	RequestedAt    *string               `json:"requestedAt"`
+	RequestedBy    *string               `json:"requestedBy"`
+	Reason         *string               `json:"reason"`
+	FinishedAt     *string               `json:"finishedAt"`
 }
 
 type DashboardCancellationRequest struct {
@@ -46,12 +46,12 @@ type DashboardCancellationRequest struct {
 }
 
 type DashboardCompleteHumanWaitResult struct {
-	Status      HumanWaitCompletionStatus `json:"status"`
-	JobID       string                    `json:"jobId"`
-	Name        string                    `json:"name"`
-	Result      JSON                      `json:"result"`
-	CompletedAt *string                   `json:"completedAt"`
-	CompletedBy *string                   `json:"completedBy"`
+	Status      DashboardHumanWaitCompletionStatus `json:"status"`
+	JobID       string                             `json:"jobId"`
+	Name        string                             `json:"name"`
+	Result      DashboardJSON                      `json:"result"`
+	CompletedAt *string                            `json:"completedAt"`
+	CompletedBy *string                            `json:"completedBy"`
 }
 
 type DashboardConcurrencyPolicySummary struct {
@@ -70,7 +70,7 @@ type DashboardCronPage struct {
 	CapturedAt  string                 `json:"capturedAt"`
 	Schedules   []DashboardScheduleRow `json:"schedules"`
 	Maintenance struct {
-		Cadences MaintenanceLoopCadences `json:"cadences"`
+		Cadences DashboardMaintenanceLoopCadences `json:"cadences"`
 		Policy   struct {
 			Timezone                       string  `json:"timezone"`
 			PartitionPreparationIntervalMs float64 `json:"partitionPreparationIntervalMs"`
@@ -161,6 +161,8 @@ type DashboardEventsPage struct {
 }
 
 type DashboardEventsWindow string
+
+type DashboardHumanWaitCompletionStatus string
 
 type DashboardHumanWaitPage struct {
 	CapturedAt  string `json:"capturedAt"`
@@ -391,6 +393,12 @@ type DashboardJobRow struct {
 	HumanWait  *DashboardHumanWaitSummary  `json:"humanWait"`
 }
 
+type DashboardJSON any
+
+type DashboardMaintenanceLoopCadences struct {
+	TickIntervalMs float64 `json:"tickIntervalMs"`
+}
+
 type DashboardMaintenancePolicy struct {
 	Timezone                       string  `json:"timezone"`
 	PartitionPreparationIntervalMs float64 `json:"partitionPreparationIntervalMs"`
@@ -445,6 +453,17 @@ type DashboardManagedQueueRow struct {
 	ConcurrencyPolicy         *DashboardConcurrencyPolicySummary `json:"concurrencyPolicy"`
 	RateLimitPolicy           *DashboardRateLimitPolicySummary   `json:"rateLimitPolicy"`
 }
+
+type DashboardQueueHealthReason struct {
+	Code     DashboardQueueHealthReasonCode `json:"code"`
+	Severity string                         `json:"severity"`
+	Observed float64                        `json:"observed"`
+	Budget   float64                        `json:"budget"`
+	Queue    *string                        `json:"queue,omitempty"`
+	Category *string                        `json:"category,omitempty"`
+}
+
+type DashboardQueueHealthReasonCode string
 
 type DashboardQueuesPage struct {
 	CapturedAt                string                     `json:"capturedAt"`
@@ -542,6 +561,23 @@ type DashboardRetentionPolicy struct {
 	UpdatedAt string `json:"updatedAt"`
 }
 
+type DashboardRetentionPolicyImpact struct {
+	Eligible struct {
+		TerminalJobs        float64 `json:"terminalJobs"`
+		JobEvents           float64 `json:"jobEvents"`
+		AttemptHistory      float64 `json:"attemptHistory"`
+		ScheduleOccurrences float64 `json:"scheduleOccurrences"`
+		Statistics          float64 `json:"statistics"`
+	} `json:"eligible"`
+	Capped struct {
+		TerminalJobs        bool `json:"terminalJobs"`
+		JobEvents           bool `json:"jobEvents"`
+		AttemptHistory      bool `json:"attemptHistory"`
+		ScheduleOccurrences bool `json:"scheduleOccurrences"`
+		Statistics          bool `json:"statistics"`
+	} `json:"capped"`
+}
+
 type DashboardRunNowResult struct {
 	Status DashboardRunNowStatus `json:"status"`
 	ID     string                `json:"id"`
@@ -579,7 +615,7 @@ type DashboardSettingsPage struct {
 	Maintenance          DashboardMaintenancePolicy `json:"maintenance"`
 	Retention            DashboardRetentionPolicy   `json:"retention"`
 	RecommendationInputs struct {
-		Reasons    []QueueHealthReason `json:"reasons"`
+		Reasons    []DashboardQueueHealthReason `json:"reasons"`
 		Statistics struct {
 			RolledUpThrough string  `json:"rolledUpThrough"`
 			LagMs           float64 `json:"lagMs"`
@@ -613,13 +649,15 @@ type DashboardSettingsPage struct {
 	} `json:"workers"`
 }
 
+type DashboardSignalDeliveryStatus string
+
 type DashboardSignalTaskResult struct {
-	Status      SignalDeliveryStatus `json:"status"`
-	JobID       string               `json:"jobId"`
-	Name        string               `json:"name"`
-	Payload     JSON                 `json:"payload"`
-	DeliveredAt *string              `json:"deliveredAt"`
-	DeliveredBy *string              `json:"deliveredBy"`
+	Status      DashboardSignalDeliveryStatus `json:"status"`
+	JobID       string                        `json:"jobId"`
+	Name        string                        `json:"name"`
+	Payload     DashboardJSON                 `json:"payload"`
+	DeliveredAt *string                       `json:"deliveredAt"`
+	DeliveredBy *string                       `json:"deliveredBy"`
 }
 
 type DashboardSignalWaitRow struct {
@@ -673,8 +711,8 @@ type DashboardSystemPage struct {
 	Window        DashboardSystemWindow `json:"window"`
 	WindowSeconds float64               `json:"windowSeconds"`
 	Status        struct {
-		Level   string              `json:"level"`
-		Reasons []QueueHealthReason `json:"reasons"`
+		Level   string                       `json:"level"`
+		Reasons []DashboardQueueHealthReason `json:"reasons"`
 	} `json:"status"`
 	PausedQueues []string `json:"pausedQueues"`
 	Kpis         struct {
@@ -892,44 +930,6 @@ type DashboardWorkersPage struct {
 	Workers          []DashboardWorkerRow `json:"workers"`
 }
 
-type HumanWaitCompletionStatus string
-
-type JSON any
-
-type MaintenanceLoopCadences struct {
-	TickIntervalMs float64 `json:"tickIntervalMs"`
-}
-
-type QueueHealthReason struct {
-	Code     QueueHealthReasonCode `json:"code"`
-	Severity string                `json:"severity"`
-	Observed float64               `json:"observed"`
-	Budget   float64               `json:"budget"`
-	Queue    *string               `json:"queue,omitempty"`
-	Category *string               `json:"category,omitempty"`
-}
-
-type QueueHealthReasonCode string
-
-type RetentionPolicyImpact struct {
-	Eligible struct {
-		TerminalJobs        float64 `json:"terminalJobs"`
-		JobEvents           float64 `json:"jobEvents"`
-		AttemptHistory      float64 `json:"attemptHistory"`
-		ScheduleOccurrences float64 `json:"scheduleOccurrences"`
-		Statistics          float64 `json:"statistics"`
-	} `json:"eligible"`
-	Capped struct {
-		TerminalJobs        bool `json:"terminalJobs"`
-		JobEvents           bool `json:"jobEvents"`
-		AttemptHistory      bool `json:"attemptHistory"`
-		ScheduleOccurrences bool `json:"scheduleOccurrences"`
-		Statistics          bool `json:"statistics"`
-	} `json:"capped"`
-}
-
-type SignalDeliveryStatus string
-
 type DashboardRuntimeConfig struct {
 	BasePath       string `json:"basePath"`
 	RPCURL         string `json:"rpcUrl"`
@@ -1045,7 +1045,7 @@ type PreviewRetentionPolicyInput struct {
 	} `json:"definition"`
 }
 
-type PreviewRetentionPolicyOutput RetentionPolicyImpact
+type PreviewRetentionPolicyOutput DashboardRetentionPolicyImpact
 
 type JobDetailInput struct {
 	ID string `json:"id"`
@@ -1217,10 +1217,10 @@ type CancelTaskInput struct {
 type CancelTaskOutput DashboardCancelTaskResult
 
 type SignalTaskInput struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	Payload        JSON   `json:"payload"`
-	IdempotencyKey string `json:"idempotencyKey"`
+	ID             string        `json:"id"`
+	Name           string        `json:"name"`
+	Payload        DashboardJSON `json:"payload"`
+	IdempotencyKey string        `json:"idempotencyKey"`
 	Audit          struct {
 		Actor     string `json:"actor"`
 		Reason    string `json:"reason"`
@@ -1231,10 +1231,10 @@ type SignalTaskInput struct {
 type SignalTaskOutput DashboardSignalTaskResult
 
 type CompleteHumanWaitInput struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	Result         JSON   `json:"result"`
-	IdempotencyKey string `json:"idempotencyKey"`
+	ID             string        `json:"id"`
+	Name           string        `json:"name"`
+	Result         DashboardJSON `json:"result"`
+	IdempotencyKey string        `json:"idempotencyKey"`
 	Audit          struct {
 		Actor     string `json:"actor"`
 		Reason    string `json:"reason"`

@@ -21,7 +21,7 @@ import {
   DashboardTasksPage,
   DashboardWorkersPage,
   DashboardSettingsPage,
-  MaintenanceLoopCadences,
+  DashboardMaintenanceLoopCadences,
 } from "../wire.js";
 import { sql, type DashboardDatabase } from "./sql.js";
 import type { DashboardDurabilityProjector } from "./types.js";
@@ -197,7 +197,7 @@ export async function readDashboardTaskFacets(
 
 export async function readDashboardCron(
   database: DashboardDatabase,
-  maintenanceLoops: MaintenanceLoopCadences,
+  maintenanceLoops: DashboardMaintenanceLoopCadences,
 ): Promise<DashboardCronPage> {
   const input = JSON.stringify({ maintenanceLoops });
   const rows = await database.execute<{ result: DashboardCronPage }>(sql`

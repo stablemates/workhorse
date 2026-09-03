@@ -65,6 +65,15 @@ function snakeName(value: string): string {
     .join("_");
 }
 
+/**
+ * The shared JSON value type, as `procedures.json` keys it under `$defs`.
+ *
+ * A procedure input carries its own recursive JSON definition, which `z.toJSONSchema` names
+ * `__schema0` local to that input document. Both bindings resolve it to the one shared type
+ * instead of emitting a second copy per procedure.
+ */
+const jsonDefinitionName = "DashboardJson";
+
 function refName(schema: Schema): string | null {
   const ref = schema.$ref;
   return typeof ref === "string" ? (ref.split("/").at(-1) ?? null) : null;
@@ -79,7 +88,7 @@ function nullableBranch(schema: Schema): Schema | null {
 
 function goType(schema: Schema, indent = ""): string {
   const ref = refName(schema);
-  if (ref) return exportedName(ref === "__schema0" ? "Json" : ref);
+  if (ref) return exportedName(ref === "__schema0" ? jsonDefinitionName : ref);
   const nullable = nullableBranch(schema);
   if (nullable) return `*${goType(nullable, indent)}`;
   if (Array.isArray(schema.anyOf)) {
@@ -132,7 +141,7 @@ function pythonLiteral(value: unknown): string {
 
 function pythonType(schema: Schema, names?: WeakMap<Schema, string>): string {
   const ref = refName(schema);
-  if (ref) return pythonName(ref === "__schema0" ? "Json" : ref);
+  if (ref) return pythonName(ref === "__schema0" ? jsonDefinitionName : ref);
   const nullable = nullableBranch(schema);
   if (nullable) return `${pythonType(nullable, names)} | None`;
   if (Array.isArray(schema.anyOf)) {

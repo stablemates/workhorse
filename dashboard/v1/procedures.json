@@ -582,7 +582,7 @@
         ]
       },
       "output": {
-        "$ref": "#/$defs/RetentionPolicyImpact"
+        "$ref": "#/$defs/DashboardRetentionPolicyImpact"
       }
     },
     "jobDetail": {
@@ -1634,14 +1634,6 @@
     }
   },
   "$defs": {
-    "CancelStatus": {
-      "enum": [
-        "already_terminal",
-        "cancel_requested",
-        "canceled",
-        "not_found"
-      ]
-    },
     "DashboardActivityBucket": {
       "type": "object",
       "properties": {
@@ -1729,11 +1721,19 @@
         "7d"
       ]
     },
+    "DashboardCancelStatus": {
+      "enum": [
+        "already_terminal",
+        "cancel_requested",
+        "canceled",
+        "not_found"
+      ]
+    },
     "DashboardCancelTaskResult": {
       "type": "object",
       "properties": {
         "status": {
-          "$ref": "#/$defs/CancelStatus"
+          "$ref": "#/$defs/DashboardCancelStatus"
         },
         "jobId": {
           "type": "string"
@@ -1865,7 +1865,7 @@
       "type": "object",
       "properties": {
         "status": {
-          "$ref": "#/$defs/HumanWaitCompletionStatus"
+          "$ref": "#/$defs/DashboardHumanWaitCompletionStatus"
         },
         "jobId": {
           "type": "string"
@@ -1874,7 +1874,7 @@
           "type": "string"
         },
         "result": {
-          "$ref": "#/$defs/Json"
+          "$ref": "#/$defs/DashboardJson"
         },
         "completedAt": {
           "anyOf": [
@@ -1972,7 +1972,7 @@
           "type": "object",
           "properties": {
             "cadences": {
-              "$ref": "#/$defs/MaintenanceLoopCadences"
+              "$ref": "#/$defs/DashboardMaintenanceLoopCadences"
             },
             "policy": {
               "type": "object",
@@ -2476,6 +2476,16 @@
         "1h",
         "24h",
         "6h"
+      ]
+    },
+    "DashboardHumanWaitCompletionStatus": {
+      "enum": [
+        "already_completed",
+        "completed",
+        "duplicate",
+        "not_found",
+        "not_waiting",
+        "stale"
       ]
     },
     "DashboardHumanWaitPage": {
@@ -3865,6 +3875,45 @@
       ],
       "additionalProperties": {}
     },
+    "DashboardJson": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardJson"
+          }
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/DashboardJson"
+          }
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "DashboardMaintenanceLoopCadences": {
+      "type": "object",
+      "properties": {
+        "tickIntervalMs": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "tickIntervalMs"
+      ]
+    },
     "DashboardMaintenancePolicy": {
       "type": "object",
       "properties": {
@@ -4108,6 +4157,61 @@
         "terminalCountsApproximate",
         "concurrencyPolicy",
         "rateLimitPolicy"
+      ]
+    },
+    "DashboardQueueHealthReason": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/DashboardQueueHealthReasonCode"
+        },
+        "severity": {
+          "enum": [
+            "critical",
+            "degraded"
+          ]
+        },
+        "observed": {
+          "type": "number"
+        },
+        "budget": {
+          "type": "number"
+        },
+        "queue": {
+          "type": "string"
+        },
+        "category": {
+          "enum": [
+            "attemptHistory",
+            "jobEvents",
+            "jobIdentity",
+            "scheduleOccurrences",
+            "statistics",
+            "terminalOutcome"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "severity",
+        "observed",
+        "budget"
+      ]
+    },
+    "DashboardQueueHealthReasonCode": {
+      "enum": [
+        "concurrency-blocked",
+        "default-history-rows",
+        "eligible-history-partitions",
+        "expired-leases",
+        "missing-history-partitions",
+        "overdue-deadlines",
+        "overdue-execution-timeouts",
+        "overdue-external-waits",
+        "rate-limit-throttled",
+        "retention-lag",
+        "rollup-stalled",
+        "stalled-promotion"
       ]
     },
     "DashboardQueuesPage": {
@@ -4631,6 +4735,69 @@
         "updatedAt"
       ]
     },
+    "DashboardRetentionPolicyImpact": {
+      "type": "object",
+      "properties": {
+        "eligible": {
+          "type": "object",
+          "properties": {
+            "terminalJobs": {
+              "type": "number"
+            },
+            "jobEvents": {
+              "type": "number"
+            },
+            "attemptHistory": {
+              "type": "number"
+            },
+            "scheduleOccurrences": {
+              "type": "number"
+            },
+            "statistics": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "terminalJobs",
+            "jobEvents",
+            "attemptHistory",
+            "scheduleOccurrences",
+            "statistics"
+          ]
+        },
+        "capped": {
+          "type": "object",
+          "properties": {
+            "terminalJobs": {
+              "type": "boolean"
+            },
+            "jobEvents": {
+              "type": "boolean"
+            },
+            "attemptHistory": {
+              "type": "boolean"
+            },
+            "scheduleOccurrences": {
+              "type": "boolean"
+            },
+            "statistics": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "terminalJobs",
+            "jobEvents",
+            "attemptHistory",
+            "scheduleOccurrences",
+            "statistics"
+          ]
+        }
+      },
+      "required": [
+        "eligible",
+        "capped"
+      ]
+    },
     "DashboardRunNowResult": {
       "type": "object",
       "properties": {
@@ -4788,7 +4955,7 @@
             "reasons": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/QueueHealthReason"
+                "$ref": "#/$defs/DashboardQueueHealthReason"
               }
             },
             "statistics": {
@@ -4980,11 +5147,21 @@
         "workers"
       ]
     },
+    "DashboardSignalDeliveryStatus": {
+      "enum": [
+        "already_delivered",
+        "delivered",
+        "duplicate",
+        "not_found",
+        "not_waiting",
+        "stale"
+      ]
+    },
     "DashboardSignalTaskResult": {
       "type": "object",
       "properties": {
         "status": {
-          "$ref": "#/$defs/SignalDeliveryStatus"
+          "$ref": "#/$defs/DashboardSignalDeliveryStatus"
         },
         "jobId": {
           "type": "string"
@@ -4993,7 +5170,7 @@
           "type": "string"
         },
         "payload": {
-          "$ref": "#/$defs/Json"
+          "$ref": "#/$defs/DashboardJson"
         },
         "deliveredAt": {
           "anyOf": [
@@ -5223,7 +5400,7 @@
             "reasons": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/QueueHealthReason"
+                "$ref": "#/$defs/DashboardQueueHealthReason"
               }
             }
           },
@@ -6361,183 +6538,6 @@
         "capturedAt",
         "canManageWorkers",
         "workers"
-      ]
-    },
-    "HumanWaitCompletionStatus": {
-      "enum": [
-        "already_completed",
-        "completed",
-        "duplicate",
-        "not_found",
-        "not_waiting",
-        "stale"
-      ]
-    },
-    "Json": {
-      "anyOf": [
-        {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Json"
-          }
-        },
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "null"
-        },
-        {
-          "type": "number"
-        },
-        {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/Json"
-          }
-        },
-        {
-          "type": "string"
-        }
-      ]
-    },
-    "MaintenanceLoopCadences": {
-      "type": "object",
-      "properties": {
-        "tickIntervalMs": {
-          "type": "number"
-        }
-      },
-      "required": [
-        "tickIntervalMs"
-      ]
-    },
-    "QueueHealthReason": {
-      "type": "object",
-      "properties": {
-        "code": {
-          "$ref": "#/$defs/QueueHealthReasonCode"
-        },
-        "severity": {
-          "enum": [
-            "critical",
-            "degraded"
-          ]
-        },
-        "observed": {
-          "type": "number"
-        },
-        "budget": {
-          "type": "number"
-        },
-        "queue": {
-          "type": "string"
-        },
-        "category": {
-          "enum": [
-            "attemptHistory",
-            "jobEvents",
-            "jobIdentity",
-            "scheduleOccurrences",
-            "statistics",
-            "terminalOutcome"
-          ]
-        }
-      },
-      "required": [
-        "code",
-        "severity",
-        "observed",
-        "budget"
-      ]
-    },
-    "QueueHealthReasonCode": {
-      "enum": [
-        "concurrency-blocked",
-        "default-history-rows",
-        "eligible-history-partitions",
-        "expired-leases",
-        "missing-history-partitions",
-        "overdue-deadlines",
-        "overdue-execution-timeouts",
-        "overdue-external-waits",
-        "rate-limit-throttled",
-        "retention-lag",
-        "rollup-stalled",
-        "stalled-promotion"
-      ]
-    },
-    "RetentionPolicyImpact": {
-      "type": "object",
-      "properties": {
-        "eligible": {
-          "type": "object",
-          "properties": {
-            "terminalJobs": {
-              "type": "number"
-            },
-            "jobEvents": {
-              "type": "number"
-            },
-            "attemptHistory": {
-              "type": "number"
-            },
-            "scheduleOccurrences": {
-              "type": "number"
-            },
-            "statistics": {
-              "type": "number"
-            }
-          },
-          "required": [
-            "terminalJobs",
-            "jobEvents",
-            "attemptHistory",
-            "scheduleOccurrences",
-            "statistics"
-          ]
-        },
-        "capped": {
-          "type": "object",
-          "properties": {
-            "terminalJobs": {
-              "type": "boolean"
-            },
-            "jobEvents": {
-              "type": "boolean"
-            },
-            "attemptHistory": {
-              "type": "boolean"
-            },
-            "scheduleOccurrences": {
-              "type": "boolean"
-            },
-            "statistics": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "terminalJobs",
-            "jobEvents",
-            "attemptHistory",
-            "scheduleOccurrences",
-            "statistics"
-          ]
-        }
-      },
-      "required": [
-        "eligible",
-        "capped"
-      ]
-    },
-    "SignalDeliveryStatus": {
-      "enum": [
-        "already_delivered",
-        "delivered",
-        "duplicate",
-        "not_found",
-        "not_waiting",
-        "stale"
       ]
     }
   }

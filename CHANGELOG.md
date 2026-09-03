@@ -43,11 +43,18 @@ and 24 and PostgreSQL 15 through 18.
   `HumanWaitCompletionStatus`, and `ExternalWaitListOptions` becomes `ExternalWaitQuery`. Every old
   name is still exported as a deprecated alias of its replacement, so no code has to change on this
   release. The aliases are removed in `1.0.0`.
-- **Dashboard contract.** Two shared wire types in `dashboard/v1/procedures.json` follow that
-  rename: the `$defs` entries `SendSignalStatus` and `CompleteHumanWaitStatus` become
-  `SignalDeliveryStatus` and `HumanWaitCompletionStatus`, and the generated Go and Python bindings
-  rename their types to match. No request or response payload changes, so an HTTP client of the
-  dashboard is unaffected and `dashboard/v1/conformance.json` is unchanged.
+- **Dashboard contract.** Every shared wire type in `dashboard/v1/procedures.json` now carries the
+  `Dashboard` prefix. Eight `$defs` entries are renamed: `CancelStatus`, `SignalDeliveryStatus`,
+  `HumanWaitCompletionStatus`, `Json`, `QueueHealthReason`, `QueueHealthReasonCode`,
+  `RetentionPolicyImpact`, and `MaintenanceLoopCadences` gain the prefix, and the generated Go and
+  Python bindings rename their types to match. Those types are core types that reach a dashboard
+  response, so without the prefix `go/dashboard` declared a second `CancelStatus` beside `go`'s own
+  and `workhorse.dashboard_v1` declared a second one beside `workhorse.types`. Generated bindings
+  carry no aliases, so a Go or Python caller that names one of the eight updates the name.
+  `@stablemates/workhorse-dashboard-server/wire` keeps `MaintenanceLoopCadences` as a deprecated
+  alias of `DashboardMaintenanceLoopCadences` for the rest of the `0.x` line. No request or
+  response payload changes, so an HTTP client of the dashboard is unaffected and
+  `dashboard/v1/conformance.json` and `dashboard/v1/manifest.json` are unchanged.
 - All nine packages move from `0.1.0-beta.2` to `0.1.0`, and every peer range on
   `@stablemates/workhorse` becomes `>=0.1.0 <0.2.0`. A later prerelease of this line is a
   `0.2.0-beta.N`; a published version is never reissued.

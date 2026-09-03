@@ -9,9 +9,6 @@ from typing import Literal, NotRequired, Required, TypedDict
 # fmt: off
 # Generated declarations stay byte-for-byte stable across formatter versions.
 
-type CancelStatus = Literal["already_terminal", "cancel_requested", "canceled", "not_found"]
-
-
 class DashboardActivityBucket(TypedDict, total=False):
     bucketStart: Required[str]
     counts: Required[dict[str, float]]
@@ -33,8 +30,11 @@ class DashboardActivityPage(TypedDict, total=False):
 type DashboardActivityPeriod = Literal["15m", "1h", "24h", "6h", "7d"]
 
 
+type DashboardCancelStatus = Literal["already_terminal", "cancel_requested", "canceled", "not_found"]
+
+
 class DashboardCancelTaskResult(TypedDict, total=False):
-    status: Required[CancelStatus]
+    status: Required[DashboardCancelStatus]
     jobId: Required[str]
     state: Required[Literal["active"] | Literal["blocked"] | Literal["canceled"] | Literal["failed"] | Literal["ready"] | Literal["scheduled"] | Literal["succeeded"] | None]
     currentAttempt: Required[float | None]
@@ -51,10 +51,10 @@ class DashboardCancellationRequest(TypedDict, total=False):
 
 
 class DashboardCompleteHumanWaitResult(TypedDict, total=False):
-    status: Required[HumanWaitCompletionStatus]
+    status: Required[DashboardHumanWaitCompletionStatus]
     jobId: Required[str]
     name: Required[str]
-    result: Required[JSON]
+    result: Required[DashboardJSON]
     completedAt: Required[str | None]
     completedBy: Required[str | None]
 
@@ -88,7 +88,7 @@ class DashboardCronPageMaintenanceTasksItem(TypedDict, total=False):
 
 
 class DashboardCronPageMaintenance(TypedDict, total=False):
-    cadences: Required[MaintenanceLoopCadences]
+    cadences: Required[DashboardMaintenanceLoopCadences]
     policy: Required[DashboardCronPageMaintenancePolicy]
     tasks: Required[list[DashboardCronPageMaintenanceTasksItem]]
 
@@ -179,6 +179,9 @@ class DashboardEventsPage(TypedDict, total=False):
 
 
 type DashboardEventsWindow = Literal["15m", "1h", "24h", "6h"]
+
+
+type DashboardHumanWaitCompletionStatus = Literal["already_completed", "completed", "duplicate", "not_found", "not_waiting", "stale"]
 
 
 class DashboardHumanWaitPageDiagnostics(TypedDict, total=False):
@@ -488,6 +491,13 @@ class DashboardJobRow(TypedDict, total=False):
     humanWait: Required[DashboardHumanWaitSummary | None]
 
 
+type DashboardJSON = list[DashboardJSON] | bool | float | dict[str, DashboardJSON] | str | None
+
+
+class DashboardMaintenanceLoopCadences(TypedDict, total=False):
+    tickIntervalMs: Required[float]
+
+
 class DashboardMaintenancePolicyProvenanceTimezone(TypedDict, total=False):
     source: Required[Literal["application", "operator"]]
     applicationDefault: Required[str]
@@ -557,6 +567,18 @@ class DashboardManagedQueueRow(TypedDict, total=False):
     terminalCountsApproximate: Required[bool]
     concurrencyPolicy: Required[DashboardConcurrencyPolicySummary | None]
     rateLimitPolicy: Required[DashboardRateLimitPolicySummary | None]
+
+
+class DashboardQueueHealthReason(TypedDict, total=False):
+    code: Required[DashboardQueueHealthReasonCode]
+    severity: Required[Literal["critical", "degraded"]]
+    observed: Required[float]
+    budget: Required[float]
+    queue: NotRequired[str]
+    category: NotRequired[Literal["attemptHistory", "jobEvents", "jobIdentity", "scheduleOccurrences", "statistics", "terminalOutcome"]]
+
+
+type DashboardQueueHealthReasonCode = Literal["concurrency-blocked", "default-history-rows", "eligible-history-partitions", "expired-leases", "missing-history-partitions", "overdue-deadlines", "overdue-execution-timeouts", "overdue-external-waits", "rate-limit-throttled", "retention-lag", "rollup-stalled", "stalled-promotion"]
 
 
 class DashboardQueuesPage(TypedDict, total=False):
@@ -684,6 +706,27 @@ class DashboardRetentionPolicy(TypedDict, total=False):
     updatedAt: Required[str]
 
 
+class DashboardRetentionPolicyImpactEligible(TypedDict, total=False):
+    terminalJobs: Required[float]
+    jobEvents: Required[float]
+    attemptHistory: Required[float]
+    scheduleOccurrences: Required[float]
+    statistics: Required[float]
+
+
+class DashboardRetentionPolicyImpactCapped(TypedDict, total=False):
+    terminalJobs: Required[bool]
+    jobEvents: Required[bool]
+    attemptHistory: Required[bool]
+    scheduleOccurrences: Required[bool]
+    statistics: Required[bool]
+
+
+class DashboardRetentionPolicyImpact(TypedDict, total=False):
+    eligible: Required[DashboardRetentionPolicyImpactEligible]
+    capped: Required[DashboardRetentionPolicyImpactCapped]
+
+
 class DashboardRunNowResult(TypedDict, total=False):
     status: Required[DashboardRunNowStatus]
     id: Required[str]
@@ -740,7 +783,7 @@ class DashboardSettingsPageRecommendationInputsEnqueueRate(TypedDict, total=Fals
 
 
 class DashboardSettingsPageRecommendationInputs(TypedDict, total=False):
-    reasons: Required[list[QueueHealthReason]]
+    reasons: Required[list[DashboardQueueHealthReason]]
     statistics: Required[DashboardSettingsPageRecommendationInputsStatistics]
     defaultHistoryRows: Required[DashboardSettingsPageRecommendationInputsDefaultHistoryRows]
     defaultHistoryRowsCapped: Required[DashboardSettingsPageRecommendationInputsDefaultHistoryRowsCapped]
@@ -770,11 +813,14 @@ class DashboardSettingsPage(TypedDict, total=False):
     workers: Required[list[DashboardSettingsPageWorkersItem]]
 
 
+type DashboardSignalDeliveryStatus = Literal["already_delivered", "delivered", "duplicate", "not_found", "not_waiting", "stale"]
+
+
 class DashboardSignalTaskResult(TypedDict, total=False):
-    status: Required[SignalDeliveryStatus]
+    status: Required[DashboardSignalDeliveryStatus]
     jobId: Required[str]
     name: Required[str]
-    payload: Required[JSON]
+    payload: Required[DashboardJSON]
     deliveredAt: Required[str | None]
     deliveredBy: Required[str | None]
 
@@ -827,7 +873,7 @@ class DashboardSystemOutcomeBucket(TypedDict, total=False):
 
 class DashboardSystemPageStatus(TypedDict, total=False):
     level: Required[Literal["critical", "degraded", "healthy"]]
-    reasons: Required[list[QueueHealthReason]]
+    reasons: Required[list[DashboardQueueHealthReason]]
 
 
 class DashboardSystemPageKpisDrain(TypedDict, total=False):
@@ -1092,52 +1138,6 @@ class DashboardWorkersPage(TypedDict, total=False):
     workers: Required[list[DashboardWorkerRow]]
 
 
-type HumanWaitCompletionStatus = Literal["already_completed", "completed", "duplicate", "not_found", "not_waiting", "stale"]
-
-
-type JSON = str | int | float | bool | list[JSON] | dict[str, JSON] | None
-
-
-class MaintenanceLoopCadences(TypedDict, total=False):
-    tickIntervalMs: Required[float]
-
-
-class QueueHealthReason(TypedDict, total=False):
-    code: Required[QueueHealthReasonCode]
-    severity: Required[Literal["critical", "degraded"]]
-    observed: Required[float]
-    budget: Required[float]
-    queue: NotRequired[str]
-    category: NotRequired[Literal["attemptHistory", "jobEvents", "jobIdentity", "scheduleOccurrences", "statistics", "terminalOutcome"]]
-
-
-type QueueHealthReasonCode = Literal["concurrency-blocked", "default-history-rows", "eligible-history-partitions", "expired-leases", "missing-history-partitions", "overdue-deadlines", "overdue-execution-timeouts", "overdue-external-waits", "rate-limit-throttled", "retention-lag", "rollup-stalled", "stalled-promotion"]
-
-
-class RetentionPolicyImpactEligible(TypedDict, total=False):
-    terminalJobs: Required[float]
-    jobEvents: Required[float]
-    attemptHistory: Required[float]
-    scheduleOccurrences: Required[float]
-    statistics: Required[float]
-
-
-class RetentionPolicyImpactCapped(TypedDict, total=False):
-    terminalJobs: Required[bool]
-    jobEvents: Required[bool]
-    attemptHistory: Required[bool]
-    scheduleOccurrences: Required[bool]
-    statistics: Required[bool]
-
-
-class RetentionPolicyImpact(TypedDict, total=False):
-    eligible: Required[RetentionPolicyImpactEligible]
-    capped: Required[RetentionPolicyImpactCapped]
-
-
-type SignalDeliveryStatus = Literal["already_delivered", "delivered", "duplicate", "not_found", "not_waiting", "stale"]
-
-
 class DashboardRuntimeConfigAuthentication(TypedDict, total=False):
     loginUrl: Required[str]
     logoutUrl: Required[str]
@@ -1277,7 +1277,7 @@ class PreviewRetentionPolicyInput(TypedDict, total=False):
     definition: Required[PreviewRetentionPolicyInputDefinition]
 
 
-type PreviewRetentionPolicyOutput = RetentionPolicyImpact
+type PreviewRetentionPolicyOutput = DashboardRetentionPolicyImpact
 
 
 class JobDetailInput(TypedDict, total=False):
@@ -1493,7 +1493,7 @@ class SignalTaskInputAudit(TypedDict, total=False):
 class SignalTaskInput(TypedDict, total=False):
     id: Required[str]
     name: Required[str]
-    payload: Required[JSON]
+    payload: Required[DashboardJSON]
     idempotencyKey: Required[str]
     audit: Required[SignalTaskInputAudit]
 
@@ -1510,7 +1510,7 @@ class CompleteHumanWaitInputAudit(TypedDict, total=False):
 class CompleteHumanWaitInput(TypedDict, total=False):
     id: Required[str]
     name: Required[str]
-    result: Required[JSON]
+    result: Required[DashboardJSON]
     idempotencyKey: Required[str]
     audit: Required[CompleteHumanWaitInputAudit]
 

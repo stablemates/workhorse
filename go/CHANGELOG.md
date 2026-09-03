@@ -18,8 +18,19 @@ Requires **schema v1** and Go **1.25** or newer.
 
 ### Changed
 
-- No exported API changed since `0.1.0-beta.1`. The README states the unpinned install command and
-  the schema install step, which the TypeScript CLI owns.
+- The only exported API change since `0.1.0-beta.1` is the `dashboard` package rename below. The
+  README states the unpinned install command and the schema install step, which the TypeScript CLI
+  owns.
+- **`dashboard` package type names.** Every type generated from a shared `dashboard/v1` wire type
+  now carries the `Dashboard` prefix, so the package no longer declares a second `CancelStatus`,
+  `SignalDeliveryStatus`, and `HumanWaitCompletionStatus` beside the ones the root package already
+  exports. `CancelStatus`, `SendSignalStatus`, `CompleteHumanWaitStatus`, `JSON`,
+  `QueueHealthReason`, `QueueHealthReasonCode`, `RetentionPolicyImpact`, and
+  `MaintenanceLoopCadences` become `DashboardCancelStatus`, `DashboardSignalDeliveryStatus`,
+  `DashboardHumanWaitCompletionStatus`, `DashboardJSON`, `DashboardQueueHealthReason`,
+  `DashboardQueueHealthReasonCode`, `DashboardRetentionPolicyImpact`, and
+  `DashboardMaintenanceLoopCadences`. The file is generated, so it carries no aliases: a caller
+  that names one of the eight updates the name. No request or response payload changes.
 - The dashboard backend's run-now action calls the audited `workhorse.run_task_now_v1` instead of
   `workhorse.dashboard_run_task_now_v1`, which is removed from the schema. The action now records
   the authenticated actor, the reason, and the request identity in its `promoted` event, matching

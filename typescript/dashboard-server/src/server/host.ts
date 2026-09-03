@@ -5,7 +5,7 @@ import { SeverityNumber, logs } from "@opentelemetry/api-logs";
 import { RPCHandler } from "@orpc/server/fetch";
 import type { DashboardSingleAdminOptions } from "@stablemates/workhorse-dashboard-contract";
 import { Admin, assertSchemaCompatible, Queue, type Queryable } from "@stablemates/workhorse";
-import type { MaintenanceLoopCadences } from "../wire.js";
+import type { DashboardMaintenanceLoopCadences } from "../wire.js";
 import { dashboardAssetsDirectory } from "./assets.js";
 import { createSingleAdminAuthentication } from "./authentication.js";
 import { renderDashboardHtml } from "./html.js";
@@ -54,7 +54,7 @@ export interface DashboardHostOptions {
   path?: string;
   environment?: string;
   configuredWorkers?: readonly string[];
-  maintenanceLoops?: MaintenanceLoopCadences;
+  maintenanceLoops?: DashboardMaintenanceLoopCadences;
   operator?: DashboardOperator;
   scheduleController?: DashboardScheduleController;
   queueController?: DashboardQueueController;
@@ -108,7 +108,7 @@ export interface DashboardWorkspaceOptions {
   databaseName?: string;
   environment?: string;
   configuredWorkers?: readonly string[];
-  maintenanceLoops?: MaintenanceLoopCadences;
+  maintenanceLoops?: DashboardMaintenanceLoopCadences;
   operator?: DashboardOperator;
   scheduleController?: DashboardScheduleController;
   queueController?: DashboardQueueController;
@@ -157,7 +157,7 @@ interface HostWorkspace {
   queue: Queue;
   environment: string;
   configuredWorkers: readonly string[];
-  maintenanceLoops: MaintenanceLoopCadences;
+  maintenanceLoops: DashboardMaintenanceLoopCadences;
   operator: DashboardOperator;
   scheduleController?: DashboardScheduleController;
   queueController?: DashboardQueueController;

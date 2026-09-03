@@ -1,4 +1,5 @@
 import type {
+  CancelStatus,
   MaintenancePolicy,
   Queue,
   QueueHealth,
@@ -204,12 +205,14 @@ export type DashboardLifecycleState =
   | DashboardTerminalState
   | "unknown";
 
-/** Statuses `Queue.cancel` can report, mirrored so the demo never invents its own vocabulary. */
-export type DashboardCancelStatus =
-  | "canceled"
-  | "cancel_requested"
-  | "already_terminal"
-  | "not_found";
+/**
+ * Statuses `Queue.cancel` can report, named so the demo never invents its own vocabulary.
+ *
+ * This is `CancelStatus` itself rather than a hand-copied union, so the two cannot drift. The
+ * `dashboard/v1` contract names the same shape `DashboardCancelStatus`, because every `$defs` key
+ * carries that prefix.
+ */
+export type DashboardCancelStatus = CancelStatus;
 
 /**
  * Statuses the run-now mutation can report. Mirrors the server contract rather than inventing a
@@ -382,9 +385,12 @@ export interface DashboardScheduleRow {
   evaluatorCount: number;
 }
 
-export interface MaintenanceLoopCadences {
+export interface DashboardMaintenanceLoopCadences {
   tickIntervalMs: number;
 }
+
+/** @deprecated Renamed to `DashboardMaintenanceLoopCadences`. Removed in 1.0.0. */
+export type MaintenanceLoopCadences = DashboardMaintenanceLoopCadences;
 
 export interface DashboardWorkerRow {
   id: string;
@@ -505,7 +511,7 @@ export interface DashboardCronPage {
   capturedAt: string;
   schedules: DashboardScheduleRow[];
   maintenance: {
-    cadences: MaintenanceLoopCadences;
+    cadences: DashboardMaintenanceLoopCadences;
     policy: {
       timezone: string;
       partitionPreparationIntervalMs: number;

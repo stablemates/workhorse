@@ -639,6 +639,19 @@ request-input JSON Schema, and response JSON Schema, with shared wire types unde
 `dashboard/v1/README.md` specifies the envelope, error codes, request handling order, and the
 application-serving surfaces.
 
+Every `$defs` key carries the `Dashboard` prefix, whether or not the TypeScript symbol it was
+resolved from does. `dashboardDefinitionName` in
+`typescript/dashboard-server/spec/response-schemas.ts` applies that rule, and the
+`names every shared wire type with the Dashboard prefix` test in
+`typescript/dashboard-server/test/dashboard-spec.test.ts` pins it to the committed artifact. The
+rule exists because a core type that reaches a dashboard response would otherwise name a second
+copy of itself in a generated binding, beside the core one the same SDK already exports:
+`CancelStatus`, `SignalDeliveryStatus`, `HumanWaitCompletionStatus`, `Json`, `QueueHealthReason`,
+`QueueHealthReasonCode`, and `RetentionPolicyImpact` are all keyed with the prefix. The prefix
+names the contract's schema, not the TypeScript symbol, so the core type stays the one source of
+the shape. `generate-bindings.ts` resolves a procedure input's local `__schema0`, which
+`z.toJSONSchema` names inside that input document, to the shared `DashboardJson`.
+
 The committed dashboard artifacts are the authority, and `dashboardRouter` is their generator.
 The SQL flow has the opposite ownership: `sql/schema/current.sql` is the tracked authority, and
 the build generates `sql/schema.sql` from it. `typescript/dashboard-server/spec/generate.ts`
@@ -2308,7 +2321,10 @@ The idempotency wire family carries the `Dashboard` prefix every other wire name
 `DashboardIdempotencyEvidence`, `readDashboardIdempotencyEvidence`,
 `hasDashboardIdempotencyEvidence`, and `dashboardIdempotencyEventDetailKeys`. Each unprefixed name
 remains an exported `@deprecated` alias for the rest of the `0.x` line and is removed in `1.0.0`.
-`MaintenanceLoopCadences` keeps its name, because Python and Go share it.
+`MaintenanceLoopCadences` becomes `DashboardMaintenanceLoopCadences`, keeping the name Python and
+Go share, because every `dashboard/v1` `$defs` key now carries that prefix. `DashboardCancelStatus`
+is `CancelStatus` itself rather than a hand-copied union, so the dashboard vocabulary and the one
+`Queue.cancel` reports cannot drift.
 
 `scripts/generate-dashboard-bundle.ts` packages `dashboard/app/dist/app` and
 `dashboard/app/browser/login.html` into the deterministic

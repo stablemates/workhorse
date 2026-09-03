@@ -7,7 +7,7 @@ import type {
   DashboardEventTypeFilter,
   DashboardSystemWindow,
   DashboardTaskSort,
-  MaintenanceLoopCadences,
+  DashboardMaintenanceLoopCadences,
 } from "../wire.js";
 import {
   dashboardAttemptOutcomes,
@@ -50,7 +50,7 @@ export interface DashboardRpcContext {
   queue: Queue;
   configuredWorkers: readonly string[];
   environment: string;
-  maintenanceLoops: MaintenanceLoopCadences;
+  maintenanceLoops: DashboardMaintenanceLoopCadences;
   operator: DashboardOperator;
   scheduleController?: DashboardScheduleController;
   queueController?: DashboardQueueController;

@@ -27,6 +27,16 @@ const specDirectory = dirname(fileURLToPath(import.meta.url));
 
 const excludedReferenceNames = new Set(["Array", "ReadonlyArray", "Record", "__type", "__object"]);
 
+/** The prefix every `$defs` key carries. Exported so a test can pin the rule to the artifact. */
+export const dashboardDefinitionPrefix = "Dashboard";
+
+/** Apply the `$defs` naming rule to one TypeScript symbol name. */
+function dashboardDefinitionName(symbolName: string): string {
+  return symbolName.startsWith(dashboardDefinitionPrefix)
+    ? symbolName
+    : `${dashboardDefinitionPrefix}${symbolName}`;
+}
+
 class ResponseSchemaBuilder {
   private readonly definitions = new Map<string, JsonSchema>();
   private readonly nameByType = new Map<ts.Type, string>();
@@ -69,7 +79,16 @@ class ResponseSchemaBuilder {
     return { $ref: `#/$defs/${unique}` };
   }
 
-  /** The `$defs` name for a named alias or interface, or undefined for structural emission. */
+  /**
+   * The `$defs` name for a named alias or interface, or undefined for structural emission.
+   *
+   * Every name carries the `Dashboard` prefix, whether or not the TypeScript symbol does. A core
+   * type that reaches a response — `CancelStatus`, `Json` — would otherwise put a second
+   * dashboard-shaped copy of that name in the generated Go and Python bindings, beside the core
+   * one the same SDK already exports. The prefix is a naming rule of the `dashboard/v1` contract
+   * rather than a claim about the TypeScript symbol, so a core type stays the single source of
+   * the shape it describes.
+   */
   private referenceName(type: ts.Type): string | undefined {
     if (type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Never)) {
       return undefined;
@@ -88,7 +107,7 @@ class ResponseSchemaBuilder {
     if (!declaration) return undefined;
     const file = declaration.getSourceFile();
     if (file.hasNoDefaultLib || file.fileName.includes("/typescript/lib/")) return undefined;
-    return symbol.name;
+    return dashboardDefinitionName(symbol.name);
   }
 
   private structuralSchema(type: ts.Type, path: string): JsonSchema {
