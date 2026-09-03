@@ -453,23 +453,28 @@ describe("documentation", () => {
       .find((line) => line.startsWith("require github.com/jackc/pgx/v5 "))
       ?.split(" ")
       .at(-1);
-    expect(supportTable["Node.js"]).toMatchObject({
-      Supported: claimedNodeMajors,
-      Minimum: String(manifest.support.node.minimum),
-    });
-    expect(supportTable.Python).toMatchObject({
-      Supported: `${pythonTested[0]}–${pythonTested.at(-1)}`,
-      Minimum: manifest.support.python.minimum,
-    });
-    expect(supportTable.Go).toMatchObject({
-      Supported: `${goMinimum} and newer`,
-      Minimum: goMinimum,
-      Notes: `The module pins pgx ${pgxVersion}.`,
-    });
-    expect(supportTable.PostgreSQL).toMatchObject({
-      Supported: claimed,
-      Minimum: String(manifest.support.postgres.minimum),
-    });
+    // The published page carries the same four rows as the reference rather than deferring to it,
+    // because a reader deciding whether to adopt should not have to open a Markdown file on GitHub
+    // to learn whether their Python version is supported. Both tables are asserted from the same
+    // expectation, so the two layers cannot state different numbers.
+    const siteTable = markdownTable(sitePage, "## The tested matrix");
+    const expectedSupport = {
+      Go: { Supported: `${goMinimum} and newer`, Minimum: goMinimum },
+      "Node.js": {
+        Supported: claimedNodeMajors,
+        Minimum: String(manifest.support.node.minimum),
+      },
+      PostgreSQL: { Supported: claimed, Minimum: String(manifest.support.postgres.minimum) },
+      Python: {
+        Supported: `${pythonTested[0]}–${pythonTested.at(-1)}`,
+        Minimum: manifest.support.python.minimum,
+      },
+    } satisfies Record<string, { Supported: string; Minimum: string }>;
+    for (const [runtime, cells] of Object.entries(expectedSupport)) {
+      expect(supportTable[runtime]).toMatchObject(cells);
+      expect(siteTable[runtime]).toMatchObject(cells);
+    }
+    expect(supportTable.Go).toMatchObject({ Notes: `The module pins pgx ${pgxVersion}.` });
     for (const sdkReadme of [coreReadme, pythonReadme, goReadme]) {
       const sections = [
         "## Install",
@@ -507,15 +512,9 @@ describe("documentation", () => {
     expect(sitePage).toContain(
       "https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md",
     );
-    expect(sitePage).not.toContain(claimed);
-    expect(sitePage).not.toContain(claimedNodeMajors);
     expect(installation).toContain("[Compatibility](/docs/compatibility)");
-    // Installation links to Compatibility rather than restating a floor, so raising one in
-    // support.json needs no edit here. What is forbidden is the shape, not the value: the page
-    // states no supported version, so `Node.js 20` is as much a restatement as `Node.js 22`, and
-    // a rule built from the current floor would only ever catch the number that is right. The
-    // runtime names come from the manifest's own keys, so a newly supported runtime fails here
-    // until it is brought under the same rule.
+    // The runtime names come from the manifest's own keys, so a newly supported runtime fails here
+    // until it is given a row on both tables and brought under the restatement rule below.
     const runtimeNames = {
       go: "Go",
       node: "Node.js",
@@ -523,9 +522,38 @@ describe("documentation", () => {
       python: "Python",
     } satisfies Record<keyof SupportManifest["support"], string>;
     expect(Object.keys(runtimeNames).toSorted()).toEqual(Object.keys(manifest.support).toSorted());
+    expect(Object.keys(expectedSupport).toSorted()).toEqual(Object.values(runtimeNames).toSorted());
+    // Every version on Compatibility belongs to its table, where the assertions above hold it to
+    // support.json. Prose on that page evades those assertions, which is how "Node.js 22 and 24
+    // with PostgreSQL 15, 16, 17, and 18" outlived the matrix it restated, so the shape is
+    // forbidden outside the table rather than any particular value. Installation carries the same
+    // rule throughout, because it links to Compatibility instead of restating a floor.
+    const sitePageProse = sitePage
+      .split("\n")
+      .filter((line) => !line.startsWith("|"))
+      .join("\n");
     for (const name of Object.values(runtimeNames)) {
-      expect(installation).not.toMatch(new RegExp(`${name.replaceAll(".", "\\.")}\\s\\d`));
+      const restatement = new RegExp(`${name.replaceAll(".", "\\.")}\\s\\d`);
+      expect(installation).not.toMatch(restatement);
+      expect(sitePageProse).not.toMatch(restatement);
     }
+    // The model is a floor with no ceiling inside a major line, so the page must not promise the
+    // exact match or the refusal of a newer schema that ADR 0053 replaced.
+    expect(sitePage).not.toMatch(/schema must agree exactly|exact-match schema/);
+    expect(sitePage).not.toContain("or newer schemas");
+    // Schema tooling ships only in the TypeScript package, and the page that states the support
+    // boundary is where a Python or Go reader learns their deployment machine needs Node.js.
+    expect(sitePage).toContain("## Schema tooling ships in the TypeScript package");
+    for (const entrypoint of [
+      "assertSchemaCompatible",
+      "assert_schema_compatible",
+      "AssertCompatible",
+    ]) {
+      expect(sitePage).toContain(entrypoint);
+    }
+    // The repository is public and its workflows run. A page that says otherwise tells a reader
+    // the release paths they can see running are forbidden to run.
+    expect(sitePage).not.toContain("while the repository is private");
     // The smoke tier is a weaker claim than support, and both layers must state it as such: the
     // reference names each runtime's tier section, and the site page describes it without pinning
     // versions it does not test.

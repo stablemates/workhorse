@@ -104,6 +104,10 @@ describe("documentation site guide coverage", () => {
     expect(files[4]).toContain("pending [keyed debounce]");
     expect(files[2]).toContain("calls `expire_owned_v1`");
     expect(files[6]).toContain("calls `expire_owned_v1`");
-    expect(files[7]).toContain("Call `assertSchemaCompatible` during startup");
+    // Compatibility used to name the TypeScript entrypoint alone, which read as a TypeScript-only
+    // instruction on a page three SDKs share. It now names all three, so what this holds is the
+    // claim rather than the spelling: the page still tells a reader to assert before a process
+    // works. support-matrix.test.ts holds the three entrypoint names.
+    expect(files[7]).toContain("Assert compatibility when a process starts");
   });
 });

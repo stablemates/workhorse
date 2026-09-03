@@ -81,9 +81,10 @@ business writes lives.
 versions retired before that baseline have no migration history, so operators must reset those
 development schemas instead of upgrading them.
 
-Workaround: keep schema changes in the deployment path and call `migrateSchema` — or
-`workhorse schema migrate` — before starting a new runtime. The changelog records each release's
-required schema version.
+Workaround: keep schema changes in the deployment path and run `workhorse schema migrate` — the
+command every language uses — before starting a new runtime. TypeScript applications that prefer to
+drive it in code can call `migrateSchema` instead. The changelog records each release's required
+schema version.
 
 ## Dashboard authentication has one built-in role
 
