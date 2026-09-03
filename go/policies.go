@@ -77,7 +77,7 @@ func (queue *Queue) SyncConcurrencyPolicies(
 	if err != nil {
 		return nil, err
 	}
-	if err := AssertCompatible(ctx, queue.executor); err != nil {
+	if err := AssertSchemaCompatible(ctx, queue.executor); err != nil {
 		return nil, err
 	}
 	rows, err := queue.executor.Query(
@@ -132,7 +132,7 @@ func (queue *Queue) SyncRateLimitPolicies(
 	if err != nil {
 		return nil, err
 	}
-	if err := AssertCompatible(ctx, queue.executor); err != nil {
+	if err := AssertSchemaCompatible(ctx, queue.executor); err != nil {
 		return nil, err
 	}
 	rows, err := queue.executor.Query(

@@ -20,7 +20,7 @@ type ChildJobRequest struct {
 	Options EnqueueOptions
 }
 
-// ChildOutcome is one tagged terminal outcome returned by CreateChildren.
+// ChildOutcome is one tagged terminal outcome returned by RunChildren.
 type ChildOutcome interface {
 	OutcomeStatus() string
 	childOutcome()
@@ -72,7 +72,7 @@ type ChildResult struct {
 	Outcome ChildOutcome `json:"outcome"`
 }
 
-// ChildSuccessResult is one successful result from CreateChildrenAll.
+// ChildSuccessResult is one successful result from RunChildrenAll.
 type ChildSuccessResult struct {
 	Name   string `json:"name"`
 	Result any    `json:"result"`
@@ -158,8 +158,8 @@ type childrenCall struct {
 	err     error
 }
 
-// CreateChild creates one named child or joins its retained result after parent replay.
-func (handler *HandlerContext) CreateChild(
+// RunChild creates one named child or joins its retained result after parent replay.
+func (handler *HandlerContext) RunChild(
 	name string,
 	jobType string,
 	payload any,
@@ -243,9 +243,9 @@ func (handler *HandlerContext) createChild(name string, request []byte) (any, er
 	}
 }
 
-// CreateChildren creates one bounded child set or joins its results after parent replay.
+// RunChildren creates one bounded child set or joins its results after parent replay.
 // Results retain request order, while Name provides stable keyed lookup to callers.
-func (handler *HandlerContext) CreateChildren(children []ChildJobRequest) ([]ChildResult, error) {
+func (handler *HandlerContext) RunChildren(children []ChildJobRequest) ([]ChildResult, error) {
 	value, err := handler.createChildSet(children, childSettledModeValue)
 	if err != nil {
 		return nil, err
@@ -253,8 +253,8 @@ func (handler *HandlerContext) CreateChildren(children []ChildJobRequest) ([]Chi
 	return value.([]ChildResult), nil
 }
 
-// CreateChildrenAll preserves propagation semantics and returns only successful child results.
-func (handler *HandlerContext) CreateChildrenAll(children []ChildJobRequest) ([]ChildSuccessResult, error) {
+// RunChildrenAll preserves propagation semantics and returns only successful child results.
+func (handler *HandlerContext) RunChildrenAll(children []ChildJobRequest) ([]ChildSuccessResult, error) {
 	value, err := handler.createChildSet(children, childAllSuccessModeValue)
 	if err != nil {
 		return nil, err

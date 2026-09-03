@@ -29,7 +29,7 @@ those boundaries while your application continues to own model calls, tool code,
     ```go
     plan, err := handler.Checkpoint("plan", func() (any, error) { return callModel(prompt) })
     progress, err := handler.SetProgress(map[string]any{"stage": "planned"})
-    tools, err := handler.CreateChildrenAll(toolRequests)
+    tools, err := handler.RunChildrenAll(toolRequests)
     err = handler.Sleep("model-cooldown", cooldown)
     approval, err := handler.WaitForSignal("approval")
     ```

@@ -866,7 +866,7 @@ func registerAgent(worker *workhorse.Worker, model Model, cooldown time.Duration
 			})
 		}
 
-		tools, err := handler.CreateChildrenAll(children)
+		tools, err := handler.RunChildrenAll(children)
 		if err != nil {
 			return nil, err
 		}

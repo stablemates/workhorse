@@ -344,7 +344,7 @@ func (queue *Queue) SendSignal(
 	if err != nil {
 		return SignalDeliveryResult{}, err
 	}
-	if err := AssertCompatible(ctx, queue.executor); err != nil {
+	if err := AssertSchemaCompatible(ctx, queue.executor); err != nil {
 		return SignalDeliveryResult{}, err
 	}
 	rows, err := queue.executor.Query(
@@ -403,7 +403,7 @@ func (queue *Queue) CompleteHumanWait(
 	if err != nil {
 		return HumanWaitCompletionResult{}, err
 	}
-	if err := AssertCompatible(ctx, queue.executor); err != nil {
+	if err := AssertSchemaCompatible(ctx, queue.executor); err != nil {
 		return HumanWaitCompletionResult{}, err
 	}
 	rows, err := queue.executor.Query(

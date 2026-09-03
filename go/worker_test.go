@@ -1543,11 +1543,11 @@ func executeWorkerLeaseLossFixture(t *testing.T, fixture workerRuntimeFixture) {
 				return err
 			}},
 			{name: "runChild", run: func() error {
-				_, err := durability.CreateChild("too-late", "protocol.child", nil)
+				_, err := durability.RunChild("too-late", "protocol.child", nil)
 				return err
 			}},
 			{name: "runChildren", run: func() error {
-				_, err := durability.CreateChildren([]workhorse.ChildJobRequest{{Name: "too-late", Type: "protocol.child"}})
+				_, err := durability.RunChildren([]workhorse.ChildJobRequest{{Name: "too-late", Type: "protocol.child"}})
 				return err
 			}},
 		}

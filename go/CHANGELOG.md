@@ -18,9 +18,16 @@ Requires **schema v1** and Go **1.25** or newer.
 
 ### Changed
 
-- The only exported API change since `0.1.0-beta.1` is the `dashboard` package rename below. The
-  README states the unpinned install command and the schema install step, which the TypeScript CLI
-  owns.
+- **Shared names for three parts of the public API.** Go was the odd language out on each one, so
+  each moved to the spelling TypeScript and Python already share. `AssertCompatible` is now
+  `AssertSchemaCompatible`. `HandlerContext.CreateChild`, `CreateChildren`, and `CreateChildrenAll`
+  are now `RunChild`, `RunChildren`, and `RunChildrenAll`. The three `EnqueueNonReplaceableReason`
+  constants now carry the enum prefix every other constant group in the package carries:
+  `IncompatibleKeyMode`, `NotPending`, and `WindowElapsedPending` are now
+  `NonReplaceableIncompatibleKeyMode`, `NonReplaceableNotPending`, and
+  `NonReplaceableWindowElapsed`. Every old name stays in the module as a deprecated alias with the
+  same behaviour and the same value, so no caller changes on this release. The aliases are removed
+  in `1.0.0`.
 - **`dashboard` package type names.** Every type generated from a shared `dashboard/v1` wire type
   now carries the `Dashboard` prefix, so the package no longer declares a second `CancelStatus`,
   `SignalDeliveryStatus`, and `HumanWaitCompletionStatus` beside the ones the root package already
@@ -31,6 +38,8 @@ Requires **schema v1** and Go **1.25** or newer.
   `DashboardQueueHealthReasonCode`, `DashboardRetentionPolicyImpact`, and
   `DashboardMaintenanceLoopCadences`. The file is generated, so it carries no aliases: a caller
   that names one of the eight updates the name. No request or response payload changes.
+- Those two entries are the only exported API changes since `0.1.0-beta.1`. The README states the
+  unpinned install command and the schema install step, which the TypeScript CLI owns.
 - The dashboard backend's run-now action calls the audited `workhorse.run_task_now_v1` instead of
   `workhorse.dashboard_run_task_now_v1`, which is removed from the schema. The action now records
   the authenticated actor, the reason, and the request identity in its `promoted` event, matching

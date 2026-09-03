@@ -25,7 +25,7 @@ func main() {
 		payload any,
 		handler *workhorse.HandlerContext,
 	) (any, error) {
-		children, err := handler.CreateChildrenAll([]workhorse.ChildJobRequest{
+		children, err := handler.RunChildrenAll([]workhorse.ChildJobRequest{
 			{Name: "invoice", Type: "invoice.create", Payload: payload},
 			{Name: "receipt", Type: "receipt.send", Payload: payload},
 		})

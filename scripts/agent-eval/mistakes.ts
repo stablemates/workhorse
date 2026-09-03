@@ -114,7 +114,7 @@ function schemaSignal(source: string, language: Language): Signal {
     language === "typescript"
       ? /\bassertSchemaCompatible\s*\(/
       : language === "go"
-        ? /\bAssertCompatible\s*\(/
+        ? /\bAssert(?:Schema)?Compatible\s*\(/
         : /\bassert_(?:schema|sync|async)_compatible\s*\(/;
   if (installer.test(source)) {
     return { verdict: "committed", reason: "the application installs the schema itself" };

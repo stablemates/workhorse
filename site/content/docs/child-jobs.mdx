@@ -29,7 +29,7 @@ parent releases its lease while the child runs, then restarts from the top when 
   </Tab>
   <Tab value="Go">
     ```go
-    charge, err := handler.CreateChild(
+    charge, err := handler.RunChild(
         "charge",
         "payments.charge",
         map[string]any{"orderId": order.ID},
@@ -47,9 +47,9 @@ Use `runChildren` to create and join independent work in parallel. PostgreSQL re
 only after the whole set settles. The method returns a tagged `succeeded`, `failed`, or `canceled`
 outcome for every child, so the parent handler chooses its own final result.
 
-Python handlers call `run_child` or `run_children`. Go handlers call `CreateChild` or
-`CreateChildren`. Both set methods retain the declared names and request order. Use
-`runChildrenAll`, `run_children_all`, or `CreateChildrenAll` when a child failure or cancellation
+Python handlers call `run_child` or `run_children`. Go handlers call `RunChild` or
+`RunChildren`. Both set methods retain the declared names and request order. Use
+`runChildrenAll`, `run_children_all`, or `RunChildrenAll` when a child failure or cancellation
 must propagate to the parent.
 
 Go represents the three tags as `ChildSucceeded`, `ChildFailed`, and `ChildCanceled`.

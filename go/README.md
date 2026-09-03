@@ -29,8 +29,8 @@ Pin that version to the `github.com/stablemates/workhorse/go` version the applic
 The two are released together from one commit, so the numbers match. A schema tool older than the
 application leaves a schema the application refuses to start against.
 
-Runtime processes verify compatibility instead of changing the schema. Call `AssertCompatible` at
-startup.
+Runtime processes verify compatibility instead of changing the schema. Call
+`AssertSchemaCompatible` at startup.
 
 Requires Go 1.25 or newer and PostgreSQL 15 through 18. pgx v5.9.2 is the minimum and the tested version.
 

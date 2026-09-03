@@ -47,9 +47,9 @@ const (
 type EnqueueNonReplaceableReason string
 
 const (
-	IncompatibleKeyMode  EnqueueNonReplaceableReason = reasonIncompatibleKeyModeValue
-	NotPending           EnqueueNonReplaceableReason = reasonNotPendingValue
-	WindowElapsedPending EnqueueNonReplaceableReason = reasonWindowElapsedValue
+	NonReplaceableIncompatibleKeyMode EnqueueNonReplaceableReason = reasonIncompatibleKeyModeValue
+	NonReplaceableNotPending          EnqueueNonReplaceableReason = reasonNotPendingValue
+	NonReplaceableWindowElapsed       EnqueueNonReplaceableReason = reasonWindowElapsedValue
 )
 
 // DebounceSchedule controls whether a replacement resets or preserves the original window.
@@ -217,7 +217,7 @@ func NewQueue(executor Executor, defaultQueue string) *Queue {
 
 // Health reads PostgreSQL's database-authoritative queue health snapshot.
 func (queue *Queue) Health(ctx context.Context) (QueueHealth, error) {
-	if err := AssertCompatible(ctx, queue.executor); err != nil {
+	if err := AssertSchemaCompatible(ctx, queue.executor); err != nil {
 		return nil, err
 	}
 	rows, err := queue.executor.Query(
@@ -240,7 +240,7 @@ func (queue *Queue) Cancel(
 	jobID string,
 	request CancellationRequest,
 ) (CancelResult, error) {
-	if err := AssertCompatible(ctx, queue.executor); err != nil {
+	if err := AssertSchemaCompatible(ctx, queue.executor); err != nil {
 		return CancelResult{}, err
 	}
 	rows, err := queue.executor.Query(
@@ -428,7 +428,7 @@ func (queue *Queue) EnqueueManyWithResults(
 	if err != nil {
 		return nil, err
 	}
-	if err := AssertCompatible(ctx, queue.executor); err != nil {
+	if err := AssertSchemaCompatible(ctx, queue.executor); err != nil {
 		return nil, err
 	}
 	payload, err = queue.applyPayloadContracts(ctx, requests, payload)
@@ -542,7 +542,7 @@ func (queue *Queue) SyncSchedules(
 	if err != nil {
 		return err
 	}
-	if err := AssertCompatible(ctx, queue.executor); err != nil {
+	if err := AssertSchemaCompatible(ctx, queue.executor); err != nil {
 		return err
 	}
 	_, err = queue.executor.Query(
@@ -811,7 +811,9 @@ func enqueueResult(row Row) (EnqueueResult, error) {
 			return EnqueueResult{}, ErrInvalidEnqueueResult
 		}
 		value := EnqueueNonReplaceableReason(reason)
-		if value != IncompatibleKeyMode && value != NotPending && value != WindowElapsedPending {
+		if value != NonReplaceableIncompatibleKeyMode &&
+			value != NonReplaceableNotPending &&
+			value != NonReplaceableWindowElapsed {
 			return EnqueueResult{}, ErrInvalidEnqueueResult
 		}
 		result.Reason = &value

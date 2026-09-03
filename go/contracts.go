@@ -182,7 +182,7 @@ func (queue *Queue) SyncContracts(ctx context.Context, contracts map[string]JobT
 	if err != nil {
 		return err
 	}
-	if err := AssertCompatible(ctx, queue.executor); err != nil {
+	if err := AssertSchemaCompatible(ctx, queue.executor); err != nil {
 		return err
 	}
 	_, err = queue.executor.Query(ctx, protocolStatementRegistry[syncContractDefinitionsStatementName], payload)

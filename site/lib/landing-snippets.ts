@@ -668,7 +668,7 @@ func configureCheckout(ctx context.Context, queue *workhorse.Queue, worker *work
 	worker.Handle("order.fulfill", func(
 		_ context.Context, order any, handler *workhorse.HandlerContext,
 	) (any, error) {
-		return handler.CreateChild("charge", "payment.capture", order, workhorse.EnqueueOptions{})
+		return handler.RunChild("charge", "payment.capture", order, workhorse.EnqueueOptions{})
 	})
 	return nil
 }`,

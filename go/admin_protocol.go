@@ -280,7 +280,7 @@ func validateAdminAudit(audit AdminAudit) error {
 }
 
 func (admin *Admin) query(ctx context.Context, statement string, arguments ...any) ([]Row, error) {
-	if err := AssertCompatible(ctx, admin.executor); err != nil {
+	if err := AssertSchemaCompatible(ctx, admin.executor); err != nil {
 		return nil, err
 	}
 	return admin.executor.Query(ctx, statement, arguments...)

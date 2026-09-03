@@ -44,7 +44,7 @@ func TestGoParentJoinsTypeScriptChildrenInCreationOrderWithoutDuplicatingThem(t 
 		handler *workhorse.HandlerContext,
 	) (any, error) {
 		activations++
-		results, err := handler.CreateChildren([]workhorse.ChildJobRequest{
+		results, err := handler.RunChildren([]workhorse.ChildJobRequest{
 			{Name: "second", Type: "typescript.child", Payload: map[string]any{"value": 2}, Options: workhorse.EnqueueOptions{Queue: childQueue}},
 			{Name: "first", Type: "typescript.child", Payload: map[string]any{"value": 1}, Options: workhorse.EnqueueOptions{Queue: childQueue}},
 		})
@@ -99,7 +99,7 @@ func TestGoParentReceivesMixedSettledOutcomes(t *testing.T) {
 	}
 	var joined []workhorse.ChildResult
 	parent.Handle("go.settled-parent", func(_ context.Context, _ any, handler *workhorse.HandlerContext) (any, error) {
-		results, err := handler.CreateChildren([]workhorse.ChildJobRequest{
+		results, err := handler.RunChildren([]workhorse.ChildJobRequest{
 			{Name: "accepted", Type: "go.settled-success", Options: workhorse.EnqueueOptions{Queue: "go-settled-success", MaxAttempts: 1}},
 			{Name: "rejected", Type: "go.settled-failure", Options: workhorse.EnqueueOptions{Queue: "go-settled-failure", MaxAttempts: 1}},
 			{Name: "skipped", Type: "go.settled-canceled", Options: workhorse.EnqueueOptions{Queue: "go-settled-canceled", MaxAttempts: 1}},
@@ -160,7 +160,7 @@ func TestGoParentReceivesMixedSettledOutcomes(t *testing.T) {
 	}
 }
 
-func TestGoCreateChildrenAllPropagatesFailure(t *testing.T) {
+func TestGoRunChildrenAllPropagatesFailure(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "go-child-all-success")
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -178,7 +178,7 @@ func TestGoCreateChildrenAllPropagatesFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	parent.Handle("go.all-success-parent", func(_ context.Context, _ any, handler *workhorse.HandlerContext) (any, error) {
-		return handler.CreateChildrenAll([]workhorse.ChildJobRequest{{Name: "rejected", Type: "go.all-success-child", Options: workhorse.EnqueueOptions{Queue: "go-all-success-child", MaxAttempts: 1}}})
+		return handler.RunChildrenAll([]workhorse.ChildJobRequest{{Name: "rejected", Type: "go.all-success-child", Options: workhorse.EnqueueOptions{Queue: "go-all-success-child", MaxAttempts: 1}}})
 	})
 	child, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{Queue: "go-all-success-child", WorkerID: "go-all-success-child-worker"})
 	if err != nil {
@@ -223,7 +223,7 @@ func TestGoParentCreatesAndJoinsOneChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	parent.Handle("go.single-parent", func(_ context.Context, _ any, handler *workhorse.HandlerContext) (any, error) {
-		return handler.CreateChild(
+		return handler.RunChild(
 			"only", "go.single-child", map[string]any{"value": 4},
 			workhorse.EnqueueOptions{Queue: "go-single-child"},
 		)
@@ -258,7 +258,7 @@ func TestGoParentCreatesAndJoinsOneChild(t *testing.T) {
 	}
 }
 
-func TestCreateChildrenReturnsTypedJoinedResultLimitError(t *testing.T) {
+func TestRunChildrenReturnsTypedJoinedResultLimitError(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "go-child-result-limit")
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -288,7 +288,7 @@ func TestCreateChildrenReturnsTypedJoinedResultLimitError(t *testing.T) {
 	}
 	returned := make(chan error, 1)
 	worker.Handle("go.result-limit", func(_ context.Context, _ any, handler *workhorse.HandlerContext) (any, error) {
-		_, err := handler.CreateChildren(nil)
+		_, err := handler.RunChildren(nil)
 		returned <- err
 		return nil, err
 	})

@@ -51,7 +51,7 @@ npx --package @stablemates/workhorse@0.1.0 workhorse schema install
 That command needs Node.js on the machine that runs your deployment, and
 [Compatibility](/docs/compatibility.md) names the version. The application itself does not need
 Node: a Python or Go service installs the schema this way and then runs without it. Assert compatibility when the application starts, with `assertSchemaCompatible` in TypeScript,
-`assert_schema_compatible` in Python, or `AssertCompatible` in Go.
+`assert_schema_compatible` in Python, or `AssertSchemaCompatible` in Go.
 
 Install the SDK your application uses:
 

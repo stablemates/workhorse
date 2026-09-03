@@ -85,9 +85,10 @@ func servedProtocol(servedProtocolVersions []int, clientProtocolVersion int) (bo
 	return false, oldest
 }
 
-// AssertCompatible reads the installed schema on every call. One statement returns both the schema
-// version and the client protocols the schema declares it serves, so the check stays one round trip.
-func AssertCompatible(ctx context.Context, executor Executor) error {
+// AssertSchemaCompatible reads the installed schema on every call. One statement returns both the
+// schema version and the client protocols the schema declares it serves, so the check stays one
+// round trip.
+func AssertSchemaCompatible(ctx context.Context, executor Executor) error {
 	rows, err := executor.Query(ctx, internalStatementRegistry[compatibilityStateStatement])
 	if err != nil {
 		if hasSQLState(err, "42P01", "3F000") {
@@ -133,7 +134,7 @@ func NewCachedCompatibilityCheck(executor Executor) *CachedCompatibilityCheck {
 // Assert returns the result of the first compatibility query for every call.
 func (check *CachedCompatibilityCheck) Assert(ctx context.Context) error {
 	check.once.Do(func() {
-		check.err = AssertCompatible(ctx, check.executor)
+		check.err = AssertSchemaCompatible(ctx, check.executor)
 	})
 	return check.err
 }

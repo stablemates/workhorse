@@ -159,8 +159,8 @@ narrows the schema later with `workhorse schema contract`. Until that step runs,
 previous major keeps working against a schema in the new major line.
 
 `workhorse.protocol_version` is where the installed schema states that bound, and
-`assertSchemaCompatible`, `AssertCompatible`, and `assert_compatible` read it in the same statement
-that reads the schema version.
+`assertSchemaCompatible`, `AssertSchemaCompatible`, and `assert_compatible` read it in the same
+statement that reads the schema version.
 
 **1.0.0 is not that boundary** ([ADR 0054](decisions/0054-define-what-1-0-0-promises.md)). It removes
 no superseded function and narrows `workhorse.protocol_version` by nothing, so a 0.x client keeps

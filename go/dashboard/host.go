@@ -184,7 +184,7 @@ func (host *handler) assertCompatible(ctx context.Context) error {
 	if host.compatible {
 		return nil
 	}
-	if err := workhorse.AssertCompatible(ctx, host.options.Executor); err != nil {
+	if err := workhorse.AssertSchemaCompatible(ctx, host.options.Executor); err != nil {
 		return err
 	}
 	host.compatible = true

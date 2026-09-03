@@ -211,7 +211,7 @@ const playbookProseAllowlist: Record<string, string> = {
   // The example never asserts schema compatibility, because the schema is installed by deployment.
   assertSchemaCompatible: "typescript/core/src/schema.ts",
   assert_schema_compatible: "python/src/workhorse/compatibility.py",
-  AssertCompatible: "go/compatibility.go",
+  AssertSchemaCompatible: "go/compatibility.go",
   // Enqueue bounds the example does not set. Prose with no language attribution is read as the
   // TypeScript spelling, which is the spelling the cross-SDK pages lead with.
   deadline: "typescript/core/src/types.ts",

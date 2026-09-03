@@ -54,7 +54,7 @@ uses the `npx --package` form everywhere, because the bare form resolves an unre
 named `workhorse` in any project that is not a Node project. Every Python and Go install surface
 states that the schema is a deployment step, names the command, and names its Node requirement. The
 runtime answers the version question, through `workhorse schema status`, `assertSchemaCompatible`,
-`assert_schema_compatible`, and `AssertCompatible`.
+`assert_schema_compatible`, and `AssertSchemaCompatible`.
 
 **One agent-facing page.** `site/content/docs/for-ai-agents.mdx` is rewritten in place as the
 playbook, and `docs/guides/385-agent-integration.md` stays its guide-layer sibling. The page carries

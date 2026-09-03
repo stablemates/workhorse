@@ -167,7 +167,7 @@ A zero `ScheduledJob.Queue` uses the queue default. `Priority` accepts 0 through
 `sensitivePayloadKeys` and `sensitiveResultKeys` are empty arrays. `Enabled` serializes as true when
 its pointer is nil.
 
-Each non-empty call serializes and validates every request before it runs `AssertCompatible`
+Each non-empty call serializes and validates every request before it runs `AssertSchemaCompatible`
 through the caller-owned `Executor`. Validation rejects multiple keyed modes. It rejects priority
 outside 0 through 100 and negative `MaxAttempts`. A debounce cannot combine with `RunAt`.
 Debounce and throttle cannot combine with `Dependencies`. Prerequisite lists cannot be empty,
@@ -186,7 +186,11 @@ ordered job ID, outcome, and optional non-replaceable reason. The queue never co
 or closes the pgx or `database/sql` resource behind the executor. An incomplete, duplicate, or
 out-of-range ordinal returns `ErrInvalidEnqueueResult`. SQLSTATEs `P1001`, `P1003`, and `P1005`
 return `EnqueueIdempotencyConflictError`, `DependencyCycleError`, and
-`DependencyLimitExceededError` with typed detail structs and matching sentinel errors.
+`DependencyLimitExceededError` with typed detail structs and matching sentinel errors. The three
+`EnqueueNonReplaceableReason` constants carry the enum prefix every other Go constant group carries:
+`NonReplaceableIncompatibleKeyMode`, `NonReplaceableNotPending`, and `NonReplaceableWindowElapsed`.
+`IncompatibleKeyMode`, `NotPending`, and `WindowElapsedPending` remain as deprecated Go aliases of
+the same values for the rest of the `0.x` line and are removed in `1.0.0`.
 
 `python/src/workhorse/worker.py` exports `Worker` for a dedicated synchronous Psycopg connection
 whose `autocommit` property is `True`. `Worker.handle(type, handler)` registers a handler whose
@@ -271,22 +275,25 @@ share one in-flight result.
 Status `stale` returns `WaitLeaseLostError`, which unwraps to `ErrLeaseLost`; `conflict` and
 `limit_exceeded` return `WaitConflictError` and `WaitLimitExceededError`.
 
-Go `HandlerContext.CreateChild(name, jobType, payload, options ...EnqueueOptions)` accepts one
+Go `HandlerContext.RunChild(name, jobType, payload, options ...EnqueueOptions)` accepts one
 optional `EnqueueOptions` value. A child name contains 1 through 200 Unicode code points. The method
 rejects idempotency, debounce, throttle, and dependencies before it calls `create_child_v1`. The
 default child queue is `default`. Status `created` records the private child suspension and cancels
 the handler context. Status `completed` returns the retained result. Concurrent calls with one name
 share one result only when their canonical requests match.
 
-Go `HandlerContext.CreateChildren(children)` accepts at most 100 unique `ChildJobRequest.Name`
+Go `HandlerContext.RunChildren(children)` accepts at most 100 unique `ChildJobRequest.Name`
 values. It calls `create_children_v1` with mode `settled`. Status `created` uses the same suspension
 path. Status `completed` reads the ordered `children` array and returns `[]ChildResult` in request
 order. Each `ChildResult.Outcome` is `ChildSucceeded`, `ChildFailed`, or `ChildCanceled`.
-`HandlerContext.CreateChildrenAll(children)` passes mode `all_success`, returns
+`HandlerContext.RunChildrenAll(children)` passes mode `all_success`, returns
 `[]ChildSuccessResult`, and propagates a failed or canceled child to the parent. An empty slice
 returns an empty result without suspension. `ChildLeaseLostError`, `ChildConflictError`,
 `ChildLimitExceededError`, and `ChildResultLimitExceededError` map the corresponding protocol
 statuses. The result-limit error retains `ResultBytes` and `ResultLimitBytes`.
+The `Create`-prefixed spelling of each of these three methods remains as a deprecated Go alias for
+the rest of the `0.x` line and is removed in `1.0.0`. `go/CHANGELOG.md` pairs every old Go name with
+its replacement.
 
 `HandlerContext.wait_for_signal(name, *, timeout_ms=None)` calls `wait_for_signal_v1`. Status
 `waiting` submits `suspended_for_wait` through the same private sentinel and lifecycle arbiter as a
@@ -602,11 +609,12 @@ protocol version, and the protocol versions the installed schema declares it ser
 line a migration only adds. The upper bound comes from the served set instead: a client protocol
 below the oldest served version is `schema-too-new`, and one above the newest served version is
 `schema-too-old`. An empty served declaration enforces nothing.
-`AssertCompatible` executes the `compatibility_state` statement on every call, which returns both
-facts in one round trip as `kind`/`version` rows, and translates SQLSTATE `42P01` or `3F000` to
+`AssertSchemaCompatible` executes the `compatibility_state` statement on every call, which returns
+both facts in one round trip as `kind`/`version` rows, and translates SQLSTATE `42P01` or `3F000` to
 `schema-not-installed`. It accepts exactly one `schema` row. `NewCachedCompatibilityCheck` returns a `CachedCompatibilityCheck` whose
 `Assert` uses `sync.Once` to cache the first result, including a compatibility or database error.
-`go/compatibility_test.go` executes every case in `protocol/v1/compatibility.json`.
+`AssertCompatible` remains as a deprecated Go alias for the rest of the `0.x` line and is removed in
+`1.0.0`. `go/compatibility_test.go` executes every case in `protocol/v1/compatibility.json`.
 
 `scripts/verify-sql-protocol.ts` interprets the language-neutral files. It reads
 `workhorse.schema_version` and rejects incompatible schema or client protocol versions before a

@@ -46,12 +46,12 @@ if (results.fraud.status === "failed") {
 }
 ```
 
-Go handlers use `CreateChild` for one child and `CreateChildren` for a stable set. The set method
+Go handlers use `RunChild` for one child and `RunChildren` for a stable set. The set method
 returns named `ChildResult` values in request order. Each result contains a `ChildSucceeded`,
 `ChildFailed`, or `ChildCanceled` outcome, so a type switch covers every terminal state.
 
 ```go
-results, err := handler.CreateChildren([]workhorse.ChildJobRequest{
+results, err := handler.RunChildren([]workhorse.ChildJobRequest{
 	{Name: "fraud", Type: "orders.check-fraud", Payload: order},
 	{Name: "inventory", Type: "orders.reserve", Payload: order},
 })
@@ -61,7 +61,7 @@ An empty set returns immediately. A non-empty set suspends the parent once, and 
 it only after every child reaches a terminal state. A failed or canceled child stays in the returned
 set, so the parent decides its own result.
 
-Use `runChildrenAll`, `run_children_all`, or `CreateChildrenAll` when every child must succeed. That
+Use `runChildrenAll`, `run_children_all`, or `RunChildrenAll` when every child must succeed. That
 operation preserves propagation: a failed child fails the parent, while cancellation cancels it
 unless a failure takes precedence.
 

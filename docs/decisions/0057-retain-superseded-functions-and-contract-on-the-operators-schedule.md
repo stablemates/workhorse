@@ -139,9 +139,9 @@ major boundary exists yet.
 
 `workhorse.protocol_version` becomes operator state rather than release state. Two databases at the
 same schema version may serve different protocol sets. Nothing about the compatibility check moves:
-`assertSchemaCompatible`, `AssertCompatible`, and `assert_compatible` already read the table instead
-of inferring a bound from the schema version, which is exactly the property that makes this decision
-implementable without touching them.
+`assertSchemaCompatible`, `AssertSchemaCompatible`, and `assert_compatible` already read the table
+instead of inferring a bound from the schema version, which is exactly the property that makes this
+decision implementable without touching them.
 
 Twelve months puts a floor under the interval between a supersession and the release that offers to
 remove it. It does not slow a major release, because the major no longer removes anything. It does

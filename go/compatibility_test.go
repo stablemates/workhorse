@@ -58,11 +58,11 @@ func TestCompatibilityFixtures(t *testing.T) {
 	}
 }
 
-func TestAssertCompatibleChecksEveryCall(t *testing.T) {
+func TestAssertSchemaCompatibleChecksEveryCall(t *testing.T) {
 	executor := &recordingExecutor{rows: []workhorse.Row{{"kind": "schema", "version": int32(1)}, {"kind": "protocol", "version": int32(1)}}}
 
 	for range 2 {
-		if err := workhorse.AssertCompatible(context.Background(), executor); err != nil {
+		if err := workhorse.AssertSchemaCompatible(context.Background(), executor); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -87,10 +87,10 @@ func TestCachedCompatibilityCheckQueriesOnce(t *testing.T) {
 	}
 }
 
-func TestAssertCompatibleTranslatesMissingSchema(t *testing.T) {
+func TestAssertSchemaCompatibleTranslatesMissingSchema(t *testing.T) {
 	executor := &recordingExecutor{err: sqlStateError{state: "42P01"}}
 
-	err := workhorse.AssertCompatible(context.Background(), executor)
+	err := workhorse.AssertSchemaCompatible(context.Background(), executor)
 	var compatibilityError *workhorse.CompatibilityError
 	if !errors.As(err, &compatibilityError) {
 		t.Fatalf("expected CompatibilityError, got %T: %v", err, err)

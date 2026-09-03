@@ -549,7 +549,7 @@ describe("documentation", () => {
     for (const entrypoint of [
       "assertSchemaCompatible",
       "assert_schema_compatible",
-      "AssertCompatible",
+      "AssertSchemaCompatible",
     ]) {
       expect(sitePage).toContain(entrypoint);
     }
