@@ -11,10 +11,14 @@ type Json = bool | int | float | str | list["Json"] | dict[str, "Json"] | None
 type QueueHealth = dict[str, Json]
 type RetryPolicy = Mapping[str, Json]
 type EnqueueOutcome = Literal["accepted", "replayed", "replaced", "non_replaceable", "coalesced"]
-type NonReplaceableReason = Literal[
+type EnqueueNonReplaceableReason = Literal[
     "incompatible_key_mode", "not_pending", "window_elapsed_pending"
 ]
-type TerminalPolicy = Literal["release", "cancel", "fail"]
+type NonReplaceableReason = EnqueueNonReplaceableReason
+"""Deprecated. Renamed to ``EnqueueNonReplaceableReason``. Removed in 1.0.0."""
+type DependencyTerminalPolicy = Literal["release", "cancel", "fail"]
+type TerminalPolicy = DependencyTerminalPolicy
+"""Deprecated. Renamed to ``DependencyTerminalPolicy``. Removed in 1.0.0."""
 type SignalDeliveryStatus = Literal[
     "delivered", "duplicate", "not_waiting", "already_delivered", "stale", "not_found"
 ]
@@ -69,9 +73,9 @@ class Throttle:
 @dataclass(frozen=True)
 class Dependencies:
     prerequisite_job_ids: Sequence[str]
-    on_success: TerminalPolicy
-    on_failure: TerminalPolicy
-    on_cancellation: TerminalPolicy
+    on_success: DependencyTerminalPolicy
+    on_failure: DependencyTerminalPolicy
+    on_cancellation: DependencyTerminalPolicy
 
 
 @dataclass(frozen=True)
@@ -167,7 +171,7 @@ type ChildOutcome = ChildSucceeded | ChildFailed | ChildCanceled
 class EnqueueResult:
     job_id: str
     outcome: EnqueueOutcome
-    reason: NonReplaceableReason | None = None
+    reason: EnqueueNonReplaceableReason | None = None
 
 
 @dataclass(frozen=True)

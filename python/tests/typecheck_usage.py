@@ -19,7 +19,11 @@ from workhorse import (
     ChildJobRequest,
     ConcurrencyPolicyDefinition,
     DeadLetterQuery,
+    Dependencies,
+    DependencyTerminalPolicy,
+    EnqueueNonReplaceableReason,
     EnqueueOptions,
+    EnqueueResult,
     HandlerContext,
     Idempotency,
     Json,
@@ -32,6 +36,7 @@ from workhorse import (
     assert_schema_compatible_psycopg,
     run_worker_process,
 )
+from workhorse.types import NonReplaceableReason, TerminalPolicy
 
 
 def sync_startup_check(connection: psycopg.Connection[Any]) -> None:
@@ -210,3 +215,19 @@ def unsupported_connections_are_rejected() -> None:
     AsyncAdmin.from_asyncpg(object())  # type: ignore[arg-type]
     AsyncWorker.from_psycopg(object())  # type: ignore[arg-type]
     AsyncWorker.from_asyncpg(object())  # type: ignore[arg-type]
+
+
+def renamed_types_keep_their_deprecated_aliases() -> None:
+    policy: DependencyTerminalPolicy = "release"
+    deprecated_policy: TerminalPolicy = policy
+    reason: EnqueueNonReplaceableReason = "not_pending"
+    deprecated_reason: NonReplaceableReason = reason
+    EnqueueOptions(
+        dependencies=Dependencies(
+            prerequisite_job_ids=("import",),
+            on_success=deprecated_policy,
+            on_failure="fail",
+            on_cancellation="cancel",
+        )
+    )
+    EnqueueResult(job_id="one", outcome="non_replaceable", reason=deprecated_reason)

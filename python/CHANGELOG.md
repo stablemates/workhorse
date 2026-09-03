@@ -39,6 +39,12 @@ Requires **schema v1** and Python **3.12** or newer.
   `workhorse.dashboard_run_task_now_v1`, which is removed from the schema. The action now records
   the authenticated actor, the reason, and the request identity in its `promoted` event, matching
   the TypeScript dashboard server.
+- **Type names.** Two exported type aliases take the names the TypeScript and Go SDKs already share:
+  `workhorse.types.TerminalPolicy` becomes `DependencyTerminalPolicy` and
+  `workhorse.types.NonReplaceableReason` becomes `EnqueueNonReplaceableReason`. Both new names are
+  exported from `workhorse`, which neither old name was. Each old name stays in `workhorse.types` as
+  a deprecated alias of its replacement, so no code has to change on this release. The aliases are
+  removed in `1.0.0`.
 
 ### Upgrade notes
 
