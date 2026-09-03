@@ -146,8 +146,14 @@ that has crossed it.
 `assertSchemaCompatible`, `AssertCompatible`, and `assert_compatible` read it in the same statement
 that reads the schema version.
 
-How long a superseded function is retained is not yet decided. `docs/compatibility.md` records the
-range each release supports.
+**1.0.0 is not that boundary** ([ADR 0054](decisions/0054-define-what-1-0-0-promises.md)). It removes
+no superseded function and narrows `workhorse.protocol_version` by nothing, so a 0.x client keeps
+working against a 1.0.0 schema and the upgrade is an ordinary rolling deployment. Removals
+accumulated during 0.x wait for 2.0.0. A breaking change to this surface is a narrowing of
+`workhorse.protocol_version`, not a schema-version bump.
+
+How long a superseded function is retained beyond that is not yet decided.
+`docs/compatibility.md` records the range each release supports.
 
 ## Application data
 
