@@ -169,7 +169,9 @@ database, at least once a day for the whole window, and keep every file:
 pnpm soak:observe -- --database-url "$DATABASE_URL_PRIMARY" --output <observations>
 ```
 
-It opens one read-only transaction and writes nothing to the installation it reads.
+It opens one read-only transaction and writes nothing to the installation it reads. It has to run
+somewhere `DATABASE_URL_PRIMARY` resolves, which for a deployment that reaches PostgreSQL over a
+Unix socket is the database host rather than the machine that deploys it.
 
 One of the bars is an ungraceful kill. Stop a worker container with `SIGKILL` while the demo is
 under its usual load, so the worker acknowledges nothing and its held jobs are recovered through
