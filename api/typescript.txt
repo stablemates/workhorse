@@ -4608,16 +4608,16 @@ const dashboardRouter: {
     taskCounts: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardTaskCounts, import("../wire.js").DashboardTaskCounts>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     tasks: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
       filter: z.ZodDefault<z.ZodEnum<{
+        canceled: "canceled";
+        scheduled: "scheduled";
+        waiting: "waiting";
         all: "all";
         blocked: "blocked";
-        waiting: "waiting";
-        scheduled: "scheduled";
         retried: "retried";
         queued: "queued";
         running: "running";
         completed: "completed";
         discarded: "discarded";
-        canceled: "canceled";
       }>>;
       queue: z.ZodDefault<z.ZodNullable<z.ZodString>>;
       page: z.ZodDefault<z.ZodNumber>;
@@ -4635,16 +4635,16 @@ const dashboardRouter: {
     taskFacets: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardTaskFacets, import("../wire.js").DashboardTaskFacets>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     activity: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
       filter: z.ZodDefault<z.ZodEnum<{
+        canceled: "canceled";
+        scheduled: "scheduled";
+        waiting: "waiting";
         all: "all";
         blocked: "blocked";
-        waiting: "waiting";
-        scheduled: "scheduled";
         retried: "retried";
         queued: "queued";
         running: "running";
         completed: "completed";
         discarded: "discarded";
-        canceled: "canceled";
       }>>;
       period: z.ZodDefault<z.ZodEnum<{
         "15m": "15m";
@@ -4673,30 +4673,30 @@ const dashboardRouter: {
       page: z.ZodDefault<z.ZodNumber>;
       pageSize: z.ZodDefault<z.ZodUnion<readonly [z.ZodLiteral<25>, z.ZodLiteral<50>, z.ZodLiteral<100>]>>;
       kind: z.ZodDefault<z.ZodEnum<{
+        attempt: "attempt";
         all: "all";
         event: "event";
-        attempt: "attempt";
       }>>;
       queue: z.ZodDefault<z.ZodNullable<z.ZodString>>;
       jobType: z.ZodDefault<z.ZodNullable<z.ZodString>>;
       types: z.ZodDefault<z.ZodArray<z.ZodEnum<{
-        canceled: "canceled";
         enqueued: "enqueued";
+        succeeded: "succeeded";
+        failed: "failed";
+        canceled: "canceled";
+        cancel_requested: "cancel_requested";
+        redriven: "redriven";
         debounced: "debounced";
         debounce_rejected: "debounce_rejected";
         throttled: "throttled";
         claimed: "claimed";
         batch_dispatched: "batch_dispatched";
         batch_failed: "batch_failed";
-        succeeded: "succeeded";
-        failed: "failed";
         retry_scheduled: "retry_scheduled";
-        cancel_requested: "cancel_requested";
         promoted: "promoted";
         lease_expired: "lease_expired";
         deadline_exceeded: "deadline_exceeded";
         execution_timed_out: "execution_timed_out";
-        redriven: "redriven";
         redrive_created: "redrive_created";
         checkpoint_saved: "checkpoint_saved";
         progress_updated: "progress_updated";
@@ -4760,8 +4760,8 @@ const dashboardRouter: {
     humanWaits: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardHumanWaitPage, import("../wire.js").DashboardHumanWaitPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     enqueueTest: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
       kind: z.ZodEnum<{
-        success: "success";
         retry: "retry";
+        success: "success";
         durable: "durable";
         timer: "timer";
         failure: "failure";
@@ -4776,13 +4776,13 @@ const dashboardRouter: {
         "report-publication": "report-publication";
       }>>;
       feature: z.ZodOptional<z.ZodEnum<{
+        cancellation: "cancellation";
         "ingress-routing": "ingress-routing";
         "retry-policies": "retry-policies";
         "durable-checkpoints": "durable-checkpoints";
         "durable-waits": "durable-waits";
         progress: "progress";
         "timing-controls": "timing-controls";
-        cancellation: "cancellation";
         "dead-letters-redrive": "dead-letters-redrive";
         "job-dependencies": "job-dependencies";
         "child-workflows": "child-workflows";

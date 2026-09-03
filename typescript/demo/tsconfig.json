@@ -13,9 +13,7 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-    "noUncheckedIndexedAccess": true,
-    "incremental": true,
-    "tsBuildInfoFile": "../../.build/demo.tsbuildinfo"
+    "noUncheckedIndexedAccess": true
   },
   "include": ["src/**/*.ts"]
 }

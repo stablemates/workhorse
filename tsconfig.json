@@ -13,8 +13,7 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-    "noUncheckedIndexedAccess": true,
-    "incremental": true
+    "noUncheckedIndexedAccess": true
   },
   "include": [
     "typescript/core/src/**/*.ts",
