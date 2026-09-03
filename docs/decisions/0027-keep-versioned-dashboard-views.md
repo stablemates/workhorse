@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-12
+- **Amended by:** [ADR 0057](0057-retain-superseded-functions-and-contract-on-the-operators-schedule.md)
 
 ## Context
 

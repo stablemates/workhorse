@@ -39,6 +39,12 @@ Go APIs, the `workhorse` CLI, the `dashboard/v1` wire contract, and the OpenTele
 span, and attribute names. Everything else is internal and may change in any release.
 _Avoid_: Public API, public interface, stable API
 
+**Contract step**:
+The one migration that removes rather than adds: it drops superseded functions and narrows the
+protocols the installed schema serves. A release ships it; the operator applies it with
+`workhorse schema contract` once their fleet has moved, so no release ever performs it for them.
+_Avoid_: Cleanup migration, breaking migration, down migration
+
 **Release train**:
 The staged publication of Python, npm, and Go artifacts from one source commit within one
 controlled release window.

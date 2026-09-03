@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-09-02
 - **Amends:** [ADR 0034](0034-reset-the-pre-release-schema-baseline.md), [ADR 0042](0042-publish-the-first-public-beta.md), [ADR 0050](0050-release-0-1-0-without-a-prerelease-suffix.md)
+- **Amended by:** [ADR 0057](0057-retain-superseded-functions-and-contract-on-the-operators-schedule.md)
 - **Related:** [WH-604](https://ontrack.sh/projects/WH/issues/WH-604), [WH-607](https://ontrack.sh/projects/WH/issues/WH-607), [WH-605](https://ontrack.sh/projects/WH/issues/WH-605), [WH-582](https://ontrack.sh/projects/WH/issues/WH-582)
 
 ## Context

@@ -102,7 +102,9 @@ so every running process version always finds the schema shape it expects:
    bounded, idempotent statements inside the expand or a follow-up migration, never as unbounded
    rewrites of large relations.
 3. **Contract.** A later migration removes the old shape only after no supported application
-   version reads or writes it.
+   version reads or writes it. When the removal narrows `workhorse.protocol_version`, that step
+   ships as a contract step the operator runs deliberately, not as part of `workhorse schema
+migrate`; see [Contract steps and the major boundary](#contract-steps-and-the-major-boundary).
 
 Destructive or long-running changes require a separately rehearsed rollout with a documented
 rollback or roll-forward decision before they ship. Dual-write compatibility views remain
@@ -113,7 +115,10 @@ rejected; the migration chain is the single authority.
 Take a backup before `migrateSchema` runs: a `pg_dump` of the database, or a provider snapshot or
 PITR restore point. The migration framework has no down migrations by design; restoring the backup
 is the rollback path, and it discards jobs enqueued after the backup, so stop producers first for a
-clean rollback window.
+clean rollback window. The absence of down migrations is the decision, not a gap in one: a reversed
+migration cannot restore rows a forward step interpreted, so a restore is the only rollback that
+means what it says
+([ADR 0057](decisions/0057-retain-superseded-functions-and-contract-on-the-operators-schedule.md)).
 
 Run migrations from a deployment step before any process from the new release starts. Processes
 from the previous release keep running against the migrated schema, because inside a major line a
@@ -140,11 +145,12 @@ versions, and PostgreSQL support at any point in this process.
 
 ## Supported upgrade window
 
-A client accepts an installed schema at or above its own minimum, up to the next major boundary.
-Inside a major line there is no upper bound, because the additive rule guarantees that a newer
-schema still carries every function an older release calls. At the boundary the bound closes: a
-major release removes superseded functions, so a client from the previous major refuses a schema
-that has crossed it.
+A client accepts an installed schema at or above its own minimum and applies no upper bound of its
+own, because the additive rule guarantees that a newer schema still carries every function an older
+release calls. The bound closes only when the installed schema stops serving the client's protocol,
+which is one deliberate step and not a version number: a major release still adds, and the operator
+narrows the schema later with `workhorse schema contract`. Until that step runs, a client from the
+previous major keeps working against a schema in the new major line.
 
 `workhorse.protocol_version` is where the installed schema states that bound, and
 `assertSchemaCompatible`, `AssertCompatible`, and `assert_compatible` read it in the same statement
@@ -153,11 +159,20 @@ that reads the schema version.
 **1.0.0 is not that boundary** ([ADR 0054](decisions/0054-define-what-1-0-0-promises.md)). It removes
 no superseded function and narrows `workhorse.protocol_version` by nothing, so a 0.x client keeps
 working against a 1.0.0 schema and the upgrade is an ordinary rolling deployment. Removals
-accumulated during 0.x wait for 2.0.0. A breaking change to this surface is a narrowing of
-`workhorse.protocol_version`, not a schema-version bump.
+accumulated during 0.x wait for the first contract step of the 2.x line. A breaking change to this
+surface is a narrowing of `workhorse.protocol_version`, not a schema-version bump.
 
-How long a superseded function is retained beyond that is not yet decided.
-`docs/compatibility.md` records the range each release supports.
+A superseded function is retained until a major release has shipped that supersedes it **and**
+twelve months have passed since the release that shipped its successor, whichever is later
+([ADR 0057](decisions/0057-retain-superseded-functions-and-contract-on-the-operators-schedule.md)).
+Retention is not support: keeping the old function beside the new one costs schema size and nothing
+else, so it is promised on a date rather than on a release number. `SECURITY.md` states which
+released versions receive fixes, and `docs/compatibility.md` records the range each release supports.
+
+A database may lag arbitrarily far behind. The migration chain is never pruned, so every released
+step stays in `sql/migrations/` and in `SCHEMA_MIGRATIONS` and a database at any released version
+migrates forward in one `workhorse schema migrate` run. There is no version below which a database
+is stranded, and an operator never skips a step: the runner applies every intervening step in order.
 
 ## The 1.0.0 boundary
 
@@ -188,6 +203,33 @@ Two mechanisms hold the rule. The release checklist compares the 1.0.0 candidate
 artifact. `typescript/core/test/schema-migrations.test.ts` requires every frozen artifact to migrate
 to a schema byte-identical to a clean installation, which is what catches drift in any release, not
 only this one. No baseline digest is pinned.
+
+## Contract steps and the major boundary
+
+A major release adds; it does not remove. Its migrations are additive like every other migration,
+and it keeps serving every protocol its predecessor served, so a major upgrade is an ordinary
+rolling deployment and a fleet on the previous major keeps running while the new one rolls out.
+
+Removal is a **contract step**: a separate migration, shipped by the new major line, that drops
+superseded functions and narrows `workhorse.protocol_version`. `workhorse schema migrate` never
+applies it. The operator applies it with `workhorse schema contract`, once their own fleet is
+entirely on the new major. That command refuses while `workhorse.worker_registry` shows a worker on
+the retiring protocol heartbeating inside its lease, names the workers it can see, states that it
+cannot see producers, and requires explicit confirmation.
+
+Two consequences follow. `workhorse.protocol_version` is operator state rather than release state,
+so two databases at the same schema version may serve different protocol sets; the compatibility
+check is unaffected because it reads that table instead of inferring a bound from the schema
+version. And a clean install of a major line installs the contracted shape while a database migrated
+into it keeps the retained functions until it contracts. The dump-equality guarantee that
+`typescript/core/test/schema-migrations.test.ts` enforces is therefore scoped to inside a major line;
+it catches drift in every release up to the first contract step, and that step is what will need it
+restated.
+
+`dashboard_*_v1` views are schema objects under the same rules. A migration may add a column to a
+shipped view and may not remove one, retype one, or change what one means; a new shape is
+`dashboard_*_v2` beside it, retained and contracted on the same schedule. A core upgrade therefore
+never requires a dashboard release inside a major line.
 
 ## Application data
 

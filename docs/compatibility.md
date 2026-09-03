@@ -137,8 +137,10 @@ The current release is `0.1.0`. “Public beta” means the release is usable fo
 [What SemVer governs](#what-semver-governs).
 
 The dashboard and core may use different patch releases within the same minor line. The dashboard
-server reads `workhorse.dashboard_*_v1` views and versioned functions, so a core patch remains
-compatible when its migration preserves those contracts.
+server reads `workhorse.dashboard_*_v1` views and versioned functions, and a migration may not
+remove, retype, or reinterpret a shipped view, so a core release remains compatible with the
+dashboard it shipped beside. At 1.0.0 the dashboard's peer range on `@stablemates/workhorse` widens
+from the minor line to the major line; see [Retention and removal](#retention-and-removal).
 
 While the line is `0.x`, any minor release may make a breaking change in behaviour. The schema is
 not one of them: from `0.1.0` every release ships ordered, immutable migrations, and inside a major
@@ -214,9 +216,10 @@ JSDoc tag in TypeScript, `@experimental` on the first line of a Python docstring
 
 1.0.0 is a promise change, not a shape change. It removes nothing: no superseded `_vN` function, no
 narrowing of `workhorse.protocol_version`, no export, name, identifier, flag, or telemetry name.
-Accumulated removals wait for 2.0.0. The upgrade from the last 0.x to 1.0.0 is therefore an ordinary
-rolling deployment — `workhorse schema migrate` from the pipeline, then a package bump — and not a
-release that requires stopping every process.
+Accumulated removals wait for the first contract step of the 2.x line, which 2.0.0 itself does not
+apply; see [Retention and removal](#retention-and-removal). The upgrade from the last 0.x to 1.0.0 is
+therefore an ordinary rolling deployment — `workhorse schema migrate` from the pipeline, then a
+package bump — and not a release that requires stopping every process.
 
 1.0.0 adds no migration step of its own, so that migrate command reports an already-current schema
 and changes nothing. The last 0.x minor carries the final schema change before the boundary. Running
@@ -230,6 +233,35 @@ as they do today.
 
 At 1.0.0 the “public beta” label retires and “stable” replaces it.
 
+### Retention and removal
+
+A superseded `_vN` function is retained until a major release has shipped that supersedes it **and**
+twelve months have passed since the release that shipped its successor, whichever is later.
+Twelve months is chosen so that an operator upgrading on an annual cadence never finds a function
+gone between two consecutive upgrades. [ADR 0057](decisions/0057-retain-superseded-functions-and-contract-on-the-operators-schedule.md)
+records the decision.
+
+Retention is not support. Keeping the old function beside the new one costs schema size and nothing
+else — no backports and no second implementation to maintain — which is why it is promised on a date.
+[`SECURITY.md`](../SECURITY.md) states which released versions receive fixes.
+
+**A major release removes nothing.** Its migrations add, and it keeps serving every protocol its
+predecessor served, so a major upgrade is an ordinary rolling deployment. Removal is a separate
+**contract step** the new major line ships and the operator applies with `workhorse schema contract`
+once their fleet is entirely on the new major. `workhorse schema migrate` never applies it. The
+command refuses while `workhorse.worker_registry` shows a worker on the retiring protocol
+heartbeating inside its lease; producers do not register, so it names what it can see and requires
+explicit confirmation.
+
+Two consequences are worth stating plainly. `workhorse.protocol_version` is operator state rather
+than release state, so two databases at the same schema version may serve different protocol sets.
+And a clean install of a major line installs the contracted shape while a database migrated into it
+keeps the retained functions until it contracts.
+
+`dashboard_*_v1` views are schema objects under the same rules: a migration may add a column to a
+shipped view and may not remove, retype, or reinterpret one, so a core upgrade never requires a
+dashboard release inside a major line.
+
 ## Protocol and schema compatibility
 
 The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guarantees:
@@ -239,9 +271,13 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
   upper bound of its own. A schema that is merely newer still carries every function the runtime
   calls, because inside a major line a migration only adds, so refusing it would make every rolling
   deployment an outage. The ceiling is `workhorse.protocol_version`, where the installed schema
-  lists the client protocols it still answers; a major release drops the ones it stops serving, and
-  every older runtime then refuses at once. A mixed fleet mid-deploy is therefore supported, which
-  is what makes a rolling deployment safe.
+  lists the client protocols it still answers; a contract step drops the ones it stops serving, and
+  every older runtime then refuses at once. That narrowing is a contract step the operator runs,
+  never something a release performs on their behalf, so a mixed fleet mid-deploy is supported at
+  every version boundary including a major one.
+
+  See [Retention and removal](#retention-and-removal).
+
 - **Installation is clean-database only; migration owns every upgrade from 0.1.0.** `installSchema`
   refuses to interpret an older or unversioned `workhorse` schema. `migrateSchema` applies ordered,
   immutable, transactional migrations forward from the baseline frozen as `sql/releases/0001.sql`.

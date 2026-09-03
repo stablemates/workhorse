@@ -71,10 +71,11 @@ command forms, and [Limitations](/docs/limitations) states the boundary alongsid
 ## A client accepts its own schema version and newer
 
 The PostgreSQL schema is the durable protocol between every process that touches the queue. A client
-accepts the schema version it was built against and every later version inside the same major line,
-because a migration inside a major line only adds: it may add a function, view, column, table, or
-index, and it supersedes a function by adding a new one beside it. A client refuses an installed
-schema below its floor, and refuses one at or beyond the next major boundary.
+accepts the schema version it was built against and every later version, because a migration only
+adds: it may add a function, view, column, table, or index, and it supersedes a function by adding a
+new one beside it. A client refuses an installed schema below its floor, and refuses one that has
+stopped serving the client's protocol. A major release does not stop serving it — the schema stops
+only when you run the contract step yourself, after your fleet has moved.
 
 That floor with no ceiling inside a major line is what makes a rolling upgrade work. Your pipeline
 migrates first, every still-running process keeps working because the schema only grew, and the new
