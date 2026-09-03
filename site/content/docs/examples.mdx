@@ -67,37 +67,37 @@ order share one commit or one rollback.
   </Tab>
   <Tab value="Go">
     ```go verify
-package transaction
+    package transaction
 
-import (
-	"context"
+    import (
+    	"context"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-	workhorse "github.com/stablemates/workhorse/go"
-)
+    	"github.com/jackc/pgx/v5/pgxpool"
+    	workhorse "github.com/stablemates/workhorse/go"
+    )
 
-func createOrder(ctx context.Context, pool *pgxpool.Pool, orderID string, items []string) error {
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
+    func createOrder(ctx context.Context, pool *pgxpool.Pool, orderID string, items []string) error {
+    	tx, err := pool.Begin(ctx)
+    	if err != nil {
+    		return err
+    	}
+    	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx,
-		"INSERT INTO orders (id, items) VALUES ($1, $2)",
-		orderID,
-		items,
-	); err != nil {
-		return err
-	}
-	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(tx), "orders")
-	if _, err := queue.Enqueue(ctx, "order.fulfill", map[string]any{
-		"orderId": orderID,
-	}, workhorse.EnqueueOptions{}); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
-}
+    	if _, err := tx.Exec(ctx,
+    		"INSERT INTO orders (id, items) VALUES ($1, $2)",
+    		orderID,
+    		items,
+    	); err != nil {
+    		return err
+    	}
+    	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(tx), "orders")
+    	if _, err := queue.Enqueue(ctx, "order.fulfill", map[string]any{
+    		"orderId": orderID,
+    	}, workhorse.EnqueueOptions{}); err != nil {
+    		return err
+    	}
+    	return tx.Commit(ctx)
+    }
     ```
 
   </Tab>
@@ -160,55 +160,55 @@ releases the worker slot for the whole week.
   </Tab>
   <Tab value="Go">
     ```go verify
-package trial
+    package trial
 
-import (
-	"context"
-	"fmt"
-	"time"
+    import (
+    	"context"
+    	"fmt"
+    	"time"
 
-	workhorse "github.com/stablemates/workhorse/go"
-)
+    	workhorse "github.com/stablemates/workhorse/go"
+    )
 
-func registerTrialHandler(worker *workhorse.Worker) {
-	worker.Handle("trial.lifecycle", func(
-		_ context.Context,
-		payload any,
-		handler *workhorse.HandlerContext,
-	) (any, error) {
-		message, ok := payload.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("trial payload must be an object")
-		}
-		to, ok := message["to"].(string)
-		if !ok {
-			return nil, fmt.Errorf("trial payload needs a string to field")
-		}
-		followUpText, ok := message["followUpAt"].(string)
-		if !ok {
-			return nil, fmt.Errorf("trial payload needs a string followUpAt field")
-		}
-		followUpAt, err := time.Parse(time.RFC3339, followUpText)
-		if err != nil {
-			return nil, err
-		}
+    func registerTrialHandler(worker *workhorse.Worker) {
+    	worker.Handle("trial.lifecycle", func(
+    		_ context.Context,
+    		payload any,
+    		handler *workhorse.HandlerContext,
+    	) (any, error) {
+    		message, ok := payload.(map[string]any)
+    		if !ok {
+    			return nil, fmt.Errorf("trial payload must be an object")
+    		}
+    		to, ok := message["to"].(string)
+    		if !ok {
+    			return nil, fmt.Errorf("trial payload needs a string to field")
+    		}
+    		followUpText, ok := message["followUpAt"].(string)
+    		if !ok {
+    			return nil, fmt.Errorf("trial payload needs a string followUpAt field")
+    		}
+    		followUpAt, err := time.Parse(time.RFC3339, followUpText)
+    		if err != nil {
+    			return nil, err
+    		}
 
-		if _, err := handler.Checkpoint("welcome", func() (any, error) {
-			return map[string]any{"deliveredTo": to, "kind": "welcome"}, nil
-		}); err != nil {
-			return nil, err
-		}
-		if err := handler.SleepUntil("follow-up-window", followUpAt); err != nil {
-			return nil, err
-		}
-		if _, err := handler.Checkpoint("follow-up", func() (any, error) {
-			return map[string]any{"deliveredTo": to, "kind": "follow-up"}, nil
-		}); err != nil {
-			return nil, err
-		}
-		return map[string]any{"deliveredTo": to}, nil
-	})
-}
+    		if _, err := handler.Checkpoint("welcome", func() (any, error) {
+    			return map[string]any{"deliveredTo": to, "kind": "welcome"}, nil
+    		}); err != nil {
+    			return nil, err
+    		}
+    		if err := handler.SleepUntil("follow-up-window", followUpAt); err != nil {
+    			return nil, err
+    		}
+    		if _, err := handler.Checkpoint("follow-up", func() (any, error) {
+    			return map[string]any{"deliveredTo": to, "kind": "follow-up"}, nil
+    		}); err != nil {
+    			return nil, err
+    		}
+    		return map[string]any{"deliveredTo": to}, nil
+    	})
+    }
     ```
 
   </Tab>
@@ -300,47 +300,47 @@ namespace fires it.
   </Tab>
   <Tab value="Go">
     ```go verify
-package billing
+    package billing
 
-import (
-	"context"
+    import (
+    	"context"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-	workhorse "github.com/stablemates/workhorse/go"
-)
+    	"github.com/jackc/pgx/v5/pgxpool"
+    	workhorse "github.com/stablemates/workhorse/go"
+    )
 
-func runBillingWorker(ctx context.Context, pool *pgxpool.Pool) error {
-	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "billing")
-	if err := queue.SyncSchedules(ctx, "billing-production", []workhorse.ScheduleDefinition{
-		{
-			Name:     "nightly-invoice-run",
-			Schedule: "0 3 * * *",
-			Job: workhorse.ScheduledJob{
-				Type:    "invoice.generate",
-				Queue:   "billing",
-				Payload: map[string]any{"scope": "due"},
-			},
-		},
-	}); err != nil {
-		return err
-	}
+    func runBillingWorker(ctx context.Context, pool *pgxpool.Pool) error {
+    	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "billing")
+    	if err := queue.SyncSchedules(ctx, "billing-production", []workhorse.ScheduleDefinition{
+    		{
+    			Name:     "nightly-invoice-run",
+    			Schedule: "0 3 * * *",
+    			Job: workhorse.ScheduledJob{
+    				Type:    "invoice.generate",
+    				Queue:   "billing",
+    				Payload: map[string]any{"scope": "due"},
+    			},
+    		},
+    	}); err != nil {
+    		return err
+    	}
 
-	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-		Queue:              "billing",
-		ScheduleNamespaces: []string{"billing-production"},
-	})
-	if err != nil {
-		return err
-	}
-	worker.Handle("invoice.generate", func(
-		_ context.Context,
-		payload any,
-		_ *workhorse.HandlerContext,
-	) (any, error) {
-		return map[string]any{"generated": true, "payload": payload}, nil
-	})
-	return worker.Run(ctx)
-}
+    	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+    		Queue:              "billing",
+    		ScheduleNamespaces: []string{"billing-production"},
+    	})
+    	if err != nil {
+    		return err
+    	}
+    	worker.Handle("invoice.generate", func(
+    		_ context.Context,
+    		payload any,
+    		_ *workhorse.HandlerContext,
+    	) (any, error) {
+    		return map[string]any{"generated": true, "payload": payload}, nil
+    	})
+    	return worker.Run(ctx)
+    }
     ```
 
   </Tab>
@@ -407,40 +407,40 @@ job instead of creating another.
   </Tab>
   <Tab value="Go">
     ```go verify
-package webhook
+    package webhook
 
-import (
-	"context"
+    import (
+    	"context"
 
-	workhorse "github.com/stablemates/workhorse/go"
-)
+    	workhorse "github.com/stablemates/workhorse/go"
+    )
 
-type stripeEvent struct {
-	ID   string
-	Type string
-	Data any
-}
+    type stripeEvent struct {
+    	ID   string
+    	Type string
+    	Data any
+    }
 
-func handleStripeWebhook(
-	ctx context.Context,
-	queue *workhorse.Queue,
-	event stripeEvent,
-) (map[string]string, error) {
-	jobID, err := queue.Enqueue(ctx, "stripe.event", map[string]any{
-		"eventId":   event.ID,
-		"eventType": event.Type,
-	}, workhorse.EnqueueOptions{
-		Queue: "webhooks",
-		Idempotency: &workhorse.Idempotency{
-			Key:   "stripe:" + event.ID,
-			Scope: "stripe-webhooks",
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-	return map[string]string{"accepted": jobID}, nil
-}
+    func handleStripeWebhook(
+    	ctx context.Context,
+    	queue *workhorse.Queue,
+    	event stripeEvent,
+    ) (map[string]string, error) {
+    	jobID, err := queue.Enqueue(ctx, "stripe.event", map[string]any{
+    		"eventId":   event.ID,
+    		"eventType": event.Type,
+    	}, workhorse.EnqueueOptions{
+    		Queue: "webhooks",
+    		Idempotency: &workhorse.Idempotency{
+    			Key:   "stripe:" + event.ID,
+    			Scope: "stripe-webhooks",
+    		},
+    	})
+    	if err != nil {
+    		return nil, err
+    	}
+    	return map[string]string{"accepted": jobID}, nil
+    }
     ```
 
   </Tab>
@@ -527,57 +527,57 @@ one incident request ID across pages so a crashed script can rerun without dupli
   </Tab>
   <Tab value="Go">
     ```go verify
-package incident
+    package incident
 
-import (
-	"context"
-	"fmt"
+    import (
+    	"context"
+    	"fmt"
 
-	workhorse "github.com/stablemates/workhorse/go"
-)
+    	workhorse "github.com/stablemates/workhorse/go"
+    )
 
-func redriveIncident(ctx context.Context, admin *workhorse.Admin) error {
-	filter := workhorse.DeadLetterFilter{
-		Queue:     "billing",
-		ErrorName: "ProviderTimeout",
-	}
-	audit := workhorse.AdminAudit{
-		Actor:     "reviewer@example.com",
-		Reason:    "provider incident INC-2041 resolved",
-		RequestID: "INC-2041",
-	}
+    func redriveIncident(ctx context.Context, admin *workhorse.Admin) error {
+    	filter := workhorse.DeadLetterFilter{
+    		Queue:     "billing",
+    		ErrorName: "ProviderTimeout",
+    	}
+    	audit := workhorse.AdminAudit{
+    		Actor:     "reviewer@example.com",
+    		Reason:    "provider incident INC-2041 resolved",
+    		RequestID: "INC-2041",
+    	}
 
-	preview, err := admin.RedriveMany(ctx, filter, audit, workhorse.BulkRedriveOptions{
-		DryRun: true,
-		Limit:  100,
-	})
-	if err != nil {
-		return err
-	}
-	fmt.Printf("%d jobs eligible\n", len(preview.Results))
+    	preview, err := admin.RedriveMany(ctx, filter, audit, workhorse.BulkRedriveOptions{
+    		DryRun: true,
+    		Limit:  100,
+    	})
+    	if err != nil {
+    		return err
+    	}
+    	fmt.Printf("%d jobs eligible\n", len(preview.Results))
 
-	var cursor *workhorse.AdminCursor
-	for {
-		page, err := admin.RedriveMany(ctx, filter, audit, workhorse.BulkRedriveOptions{
-			Limit:  100,
-			Cursor: cursor,
-		})
-		if err != nil {
-			return err
-		}
-		for _, result := range page.Results {
-			target := ""
-			if result.TargetJobID != nil {
-				target = *result.TargetJobID
-			}
-			fmt.Println(result.Status, result.SourceJobID, "->", target)
-		}
-		cursor = page.NextCursor
-		if cursor == nil {
-			return nil
-		}
-	}
-}
+    	var cursor *workhorse.AdminCursor
+    	for {
+    		page, err := admin.RedriveMany(ctx, filter, audit, workhorse.BulkRedriveOptions{
+    			Limit:  100,
+    			Cursor: cursor,
+    		})
+    		if err != nil {
+    			return err
+    		}
+    		for _, result := range page.Results {
+    			target := ""
+    			if result.TargetJobID != nil {
+    				target = *result.TargetJobID
+    			}
+    			fmt.Println(result.Status, result.SourceJobID, "->", target)
+    		}
+    		cursor = page.NextCursor
+    		if cursor == nil {
+    			return nil
+    		}
+    	}
+    }
     ```
 
   </Tab>
@@ -646,61 +646,61 @@ handler cancellation primitive.
   </Tab>
   <Tab value="Go">
     ```go verify
-package export
+    package export
 
-import (
-	"context"
-	"fmt"
+    import (
+    	"context"
+    	"fmt"
 
-	workhorse "github.com/stablemates/workhorse/go"
-)
+    	workhorse "github.com/stablemates/workhorse/go"
+    )
 
-func uploadPart(ctx context.Context, part string) error {
-	fmt.Println("uploading", part)
-	return context.Cause(ctx)
-}
+    func uploadPart(ctx context.Context, part string) error {
+    	fmt.Println("uploading", part)
+    	return context.Cause(ctx)
+    }
 
-func configureExport(
-	ctx context.Context,
-	queue *workhorse.Queue,
-	worker *workhorse.Worker,
-	jobID string,
-) error {
-	requestedBy := "support@example.com"
-	reason := "customer withdrew the order"
-	if _, err := queue.Cancel(ctx, jobID, workhorse.CancellationRequest{
-		RequestedBy: &requestedBy,
-		Reason:      &reason,
-	}); err != nil {
-		return err
-	}
+    func configureExport(
+    	ctx context.Context,
+    	queue *workhorse.Queue,
+    	worker *workhorse.Worker,
+    	jobID string,
+    ) error {
+    	requestedBy := "support@example.com"
+    	reason := "customer withdrew the order"
+    	if _, err := queue.Cancel(ctx, jobID, workhorse.CancellationRequest{
+    		RequestedBy: &requestedBy,
+    		Reason:      &reason,
+    	}); err != nil {
+    		return err
+    	}
 
-	worker.Handle("export.build", func(
-		handlerContext context.Context,
-		payload any,
-		_ *workhorse.HandlerContext,
-	) (any, error) {
-		message, ok := payload.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("export payload must be an object")
-		}
-		parts, ok := message["parts"].([]any)
-		if !ok {
-			return nil, fmt.Errorf("export payload needs an array parts field")
-		}
-		for _, value := range parts {
-			part, ok := value.(string)
-			if !ok {
-				return nil, fmt.Errorf("export part must be a string")
-			}
-			if err := uploadPart(handlerContext, part); err != nil {
-				return nil, err
-			}
-		}
-		return map[string]any{"exported": true}, nil
-	})
-	return nil
-}
+    	worker.Handle("export.build", func(
+    		handlerContext context.Context,
+    		payload any,
+    		_ *workhorse.HandlerContext,
+    	) (any, error) {
+    		message, ok := payload.(map[string]any)
+    		if !ok {
+    			return nil, fmt.Errorf("export payload must be an object")
+    		}
+    		parts, ok := message["parts"].([]any)
+    		if !ok {
+    			return nil, fmt.Errorf("export payload needs an array parts field")
+    		}
+    		for _, value := range parts {
+    			part, ok := value.(string)
+    			if !ok {
+    				return nil, fmt.Errorf("export part must be a string")
+    			}
+    			if err := uploadPart(handlerContext, part); err != nil {
+    				return nil, err
+    			}
+    		}
+    		return map[string]any{"exported": true}, nil
+    	})
+    	return nil
+    }
     ```
 
   </Tab>
@@ -801,93 +801,93 @@ durable timer, then wait for an idempotent signal.
   </Tab>
   <Tab value="Go">
     ```go verify
-package agent
+    package agent
 
-import (
-	"context"
-	"fmt"
-	"time"
+    import (
+    	"context"
+    	"fmt"
+    	"time"
 
-	workhorse "github.com/stablemates/workhorse/go"
-)
+    	workhorse "github.com/stablemates/workhorse/go"
+    )
 
-type Model interface {
-	Plan(context.Context, string, string) (map[string]any, error)
-}
+    type Model interface {
+    	Plan(context.Context, string, string) (map[string]any, error)
+    }
 
-func registerAgent(worker *workhorse.Worker, model Model, cooldown time.Duration) {
-	worker.Handle("agent.run", func(
-		ctx context.Context,
-		payload any,
-		handler *workhorse.HandlerContext,
-	) (any, error) {
-		message, ok := payload.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("agent payload must be an object")
-		}
-		prompt, promptOK := message["prompt"].(string)
-		conversationID, conversationOK := message["conversationId"].(string)
-		if !promptOK || !conversationOK {
-			return nil, fmt.Errorf("agent payload needs string prompt and conversationId fields")
-		}
+    func registerAgent(worker *workhorse.Worker, model Model, cooldown time.Duration) {
+    	worker.Handle("agent.run", func(
+    		ctx context.Context,
+    		payload any,
+    		handler *workhorse.HandlerContext,
+    	) (any, error) {
+    		message, ok := payload.(map[string]any)
+    		if !ok {
+    			return nil, fmt.Errorf("agent payload must be an object")
+    		}
+    		prompt, promptOK := message["prompt"].(string)
+    		conversationID, conversationOK := message["conversationId"].(string)
+    		if !promptOK || !conversationOK {
+    			return nil, fmt.Errorf("agent payload needs string prompt and conversationId fields")
+    		}
 
-		planValue, err := handler.Checkpoint("plan", func() (any, error) {
-			return model.Plan(ctx, prompt, "plan:"+handler.Job.ID)
-		})
-		if err != nil {
-			return nil, err
-		}
-		plan, ok := planValue.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("model plan must be an object")
-		}
-		rawTools, ok := plan["tools"].([]any)
-		if !ok {
-			return nil, fmt.Errorf("model plan needs an array tools field")
-		}
-		children := make([]workhorse.ChildJobRequest, 0, len(rawTools))
-		for _, value := range rawTools {
-			tool, ok := value.(map[string]any)
-			if !ok {
-				return nil, fmt.Errorf("tool must be an object")
-			}
-			toolID, ok := tool["id"].(string)
-			if !ok {
-				return nil, fmt.Errorf("tool needs a string id field")
-			}
-			children = append(children, workhorse.ChildJobRequest{
-				Name:    toolID,
-				Type:    "agent.tool",
-				Payload: tool,
-				Options: workhorse.EnqueueOptions{
-					Queue:          "tools",
-					ConcurrencyKey: conversationID,
-				},
-			})
-		}
+    		planValue, err := handler.Checkpoint("plan", func() (any, error) {
+    			return model.Plan(ctx, prompt, "plan:"+handler.Job.ID)
+    		})
+    		if err != nil {
+    			return nil, err
+    		}
+    		plan, ok := planValue.(map[string]any)
+    		if !ok {
+    			return nil, fmt.Errorf("model plan must be an object")
+    		}
+    		rawTools, ok := plan["tools"].([]any)
+    		if !ok {
+    			return nil, fmt.Errorf("model plan needs an array tools field")
+    		}
+    		children := make([]workhorse.ChildJobRequest, 0, len(rawTools))
+    		for _, value := range rawTools {
+    			tool, ok := value.(map[string]any)
+    			if !ok {
+    				return nil, fmt.Errorf("tool must be an object")
+    			}
+    			toolID, ok := tool["id"].(string)
+    			if !ok {
+    				return nil, fmt.Errorf("tool needs a string id field")
+    			}
+    			children = append(children, workhorse.ChildJobRequest{
+    				Name:    toolID,
+    				Type:    "agent.tool",
+    				Payload: tool,
+    				Options: workhorse.EnqueueOptions{
+    					Queue:          "tools",
+    					ConcurrencyKey: conversationID,
+    				},
+    			})
+    		}
 
-		tools, err := handler.RunChildrenAll(children)
-		if err != nil {
-			return nil, err
-		}
-		if err := handler.Sleep("model-cooldown", cooldown); err != nil {
-			return nil, err
-		}
-		approval, err := handler.WaitForSignal("approval")
-		if err != nil {
-			return nil, err
-		}
-		approvalPayload, ok := approval.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("approval must be an object")
-		}
-		approved, ok := approvalPayload["approved"].(bool)
-		if !ok {
-			return nil, fmt.Errorf("approval needs a boolean approved field")
-		}
-		return map[string]any{"plan": plan, "tools": tools, "approved": approved}, nil
-	})
-}
+    		tools, err := handler.RunChildrenAll(children)
+    		if err != nil {
+    			return nil, err
+    		}
+    		if err := handler.Sleep("model-cooldown", cooldown); err != nil {
+    			return nil, err
+    		}
+    		approval, err := handler.WaitForSignal("approval")
+    		if err != nil {
+    			return nil, err
+    		}
+    		approvalPayload, ok := approval.(map[string]any)
+    		if !ok {
+    			return nil, fmt.Errorf("approval must be an object")
+    		}
+    		approved, ok := approvalPayload["approved"].(bool)
+    		if !ok {
+    			return nil, fmt.Errorf("approval needs a boolean approved field")
+    		}
+    		return map[string]any{"plan": plan, "tools": tools, "approved": approved}, nil
+    	})
+    }
     ```
 
   </Tab>

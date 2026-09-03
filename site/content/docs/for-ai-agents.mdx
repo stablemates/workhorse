@@ -195,96 +195,96 @@ and reads the durable result.
   </Tab>
   <Tab value="Go">
     ```go verify
-package main
+    package main
 
-import (
-	"context"
-	"fmt"
-	"os"
+    import (
+    	"context"
+    	"fmt"
+    	"os"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-	workhorse "github.com/stablemates/workhorse/go"
-)
+    	"github.com/jackc/pgx/v5/pgxpool"
+    	workhorse "github.com/stablemates/workhorse/go"
+    )
 
-func main() {
-	if err := run(); err != nil {
-		panic(err)
-	}
-}
+    func main() {
+    	if err := run(); err != nil {
+    		panic(err)
+    	}
+    }
 
-func sendConfirmationEmail(orderID string) (any, error) {
-	return "receipt-for-" + orderID, nil
-}
+    func sendConfirmationEmail(orderID string) (any, error) {
+    	return "receipt-for-" + orderID, nil
+    }
 
-func run() error {
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
-	if err != nil {
-		return err
-	}
-	defer pool.Close()
+    func run() error {
+    	ctx := context.Background()
+    	pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
+    	if err != nil {
+    		return err
+    	}
+    	defer pool.Close()
 
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx) // This becomes a no-op after Commit.
+    	tx, err := pool.Begin(ctx)
+    	if err != nil {
+    		return err
+    	}
+    	defer tx.Rollback(ctx) // This becomes a no-op after Commit.
 
-	if _, err = tx.Exec(
-		ctx,
-		"INSERT INTO orders (id, status) VALUES ($1, $2)",
-		"order-42",
-		"new",
-	); err != nil {
-		return err
-	}
-	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(tx), "default")
-	jobID, err := queue.Enqueue(
-		ctx,
-		"order.created",
-		map[string]any{"orderId": "order-42"},
-		workhorse.EnqueueOptions{
-			MaxAttempts: 5,
-			RetryPolicy: map[string]any{"type": "fixed", "delayMs": 1000},
-		},
-	)
-	if err != nil {
-		return err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return err
-	}
+    	if _, err = tx.Exec(
+    		ctx,
+    		"INSERT INTO orders (id, status) VALUES ($1, $2)",
+    		"order-42",
+    		"new",
+    	); err != nil {
+    		return err
+    	}
+    	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(tx), "default")
+    	jobID, err := queue.Enqueue(
+    		ctx,
+    		"order.created",
+    		map[string]any{"orderId": "order-42"},
+    		workhorse.EnqueueOptions{
+    			MaxAttempts: 5,
+    			RetryPolicy: map[string]any{"type": "fixed", "delayMs": 1000},
+    		},
+    	)
+    	if err != nil {
+    		return err
+    	}
+    	if err = tx.Commit(ctx); err != nil {
+    		return err
+    	}
 
-	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{PollingOnly: true})
-	if err != nil {
-		return err
-	}
-	worker.Handle("order.created", func(
-		_ context.Context,
-		payload any,
-		handler *workhorse.HandlerContext,
-	) (any, error) {
-		orderID := payload.(map[string]any)["orderId"].(string)
-		// The send runs once. A replay reuses the recorded receipt.
-		receipt, err := handler.Checkpoint("confirmation-email", func() (any, error) {
-			return sendConfirmationEmail(orderID)
-		})
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"processedOrderId": orderID, "receipt": receipt}, nil
-	})
-	if _, err = worker.RunOnce(ctx); err != nil { // Production workers call Run.
-		return err
-	}
+    	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{PollingOnly: true})
+    	if err != nil {
+    		return err
+    	}
+    	worker.Handle("order.created", func(
+    		_ context.Context,
+    		payload any,
+    		handler *workhorse.HandlerContext,
+    	) (any, error) {
+    		orderID := payload.(map[string]any)["orderId"].(string)
+    		// The send runs once. A replay reuses the recorded receipt.
+    		receipt, err := handler.Checkpoint("confirmation-email", func() (any, error) {
+    			return sendConfirmationEmail(orderID)
+    		})
+    		if err != nil {
+    			return nil, err
+    		}
+    		return map[string]any{"processedOrderId": orderID, "receipt": receipt}, nil
+    	})
+    	if _, err = worker.RunOnce(ctx); err != nil { // Production workers call Run.
+    		return err
+    	}
 
-	job, err := workhorse.NewAdmin(workhorse.NewPGXExecutor(pool)).GetJob(ctx, jobID)
-	if err != nil {
-		return err
-	}
-	fmt.Println(job.State, job.Result)
-	return nil
-}
+    	job, err := workhorse.NewAdmin(workhorse.NewPGXExecutor(pool)).GetJob(ctx, jobID)
+    	if err != nil {
+    		return err
+    	}
+    	fmt.Println(job.State, job.Result)
+    	return nil
+    }
     ```
 
   </Tab>

@@ -138,10 +138,17 @@ for (const fencePath of goFencePaths) {
     // A fence may be indented inside an MDX tab while its body still starts at column 0. Whichever
     // base indent the block already uses is the one the reformatted block keeps.
     const populated = code.split("\n").filter((line) => line.trim() !== "");
-    const baseIndent =
-      fenceIndent !== "" && populated.every((line) => line.startsWith(fenceIndent))
-        ? fenceIndent
-        : "";
+    // Markdown strips as many leading whitespace columns from a fenced body as the opening fence is
+    // indented, and it measures a tab as reaching the next four-column stop. A fence indented inside
+    // an MDX tab therefore eats a whole leading tab from a body that starts at column 0, and every
+    // nested line of gofmt output renders one level short. Carrying the fence indent through the body
+    // gives the strip something to take that is not gofmt's indentation.
+    if (fenceIndent !== "" && !populated.every((line) => line.startsWith(fenceIndent))) {
+      throw new Error(
+        `${label} is indented ${fenceIndent.length} columns but its body is not, so Markdown will strip a level of Go indentation`,
+      );
+    }
+    const baseIndent = fenceIndent;
     const snippet = code
       .split("\n")
       .map((line) =>

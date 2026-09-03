@@ -130,66 +130,66 @@ file so you can watch the whole lifecycle.
   </Tab>
   <Tab value="Go">
     ```go verify
-package main
+    package main
 
-import (
-	"context"
-	"fmt"
-	"os"
+    import (
+    	"context"
+    	"fmt"
+    	"os"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-	workhorse "github.com/stablemates/workhorse/go"
-)
+    	"github.com/jackc/pgx/v5/pgxpool"
+    	workhorse "github.com/stablemates/workhorse/go"
+    )
 
-func main() {
-	if err := run(); err != nil {
-		panic(err)
-	}
-}
+    func main() {
+    	if err := run(); err != nil {
+    		panic(err)
+    	}
+    }
 
-func run() error {
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
-	if err != nil {
-		return err
-	}
-	defer pool.Close()
+    func run() error {
+    	ctx := context.Background()
+    	pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
+    	if err != nil {
+    		return err
+    	}
+    	defer pool.Close()
 
-	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "default")
-	jobID, err := queue.Enqueue(ctx, "email.welcome", map[string]any{
-		"to": "ada@example.com",
-	}, workhorse.EnqueueOptions{})
-	if err != nil {
-		return err
-	}
+    	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "default")
+    	jobID, err := queue.Enqueue(ctx, "email.welcome", map[string]any{
+    		"to": "ada@example.com",
+    	}, workhorse.EnqueueOptions{})
+    	if err != nil {
+    		return err
+    	}
 
-	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{})
-	if err != nil {
-		return err
-	}
-	worker.Handle("email.welcome", func(
-		_ context.Context,
-		payload any,
-		_ *workhorse.HandlerContext,
-	) (any, error) {
-		message := payload.(map[string]any)
-		return map[string]any{"deliveredTo": message["to"]}, nil
-	})
-	if _, err := worker.RunOnce(ctx); err != nil { // production uses Run(ctx)
-		return err
-	}
+    	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{})
+    	if err != nil {
+    		return err
+    	}
+    	worker.Handle("email.welcome", func(
+    		_ context.Context,
+    		payload any,
+    		_ *workhorse.HandlerContext,
+    	) (any, error) {
+    		message := payload.(map[string]any)
+    		return map[string]any{"deliveredTo": message["to"]}, nil
+    	})
+    	if _, err := worker.RunOnce(ctx); err != nil { // production uses Run(ctx)
+    		return err
+    	}
 
-	var state string
-	var result []byte
-	if err := pool.QueryRow(ctx,
-		"SELECT state, result FROM workhorse.job_outcome WHERE job_id = $1",
-		jobID,
-	).Scan(&state, &result); err != nil {
-		return err
-	}
-	fmt.Println(state, string(result))
-	return nil
-}
+    	var state string
+    	var result []byte
+    	if err := pool.QueryRow(ctx,
+    		"SELECT state, result FROM workhorse.job_outcome WHERE job_id = $1",
+    		jobID,
+    	).Scan(&state, &result); err != nil {
+    		return err
+    	}
+    	fmt.Println(state, string(result))
+    	return nil
+    }
     ```
 
   </Tab>
@@ -300,33 +300,33 @@ argument and the job commits — or rolls back — with your business write.
   </Tab>
   <Tab value="Go">
     ```go verify
-package transaction
+    package transaction
 
-import (
-	"context"
+    import (
+    	"context"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-	workhorse "github.com/stablemates/workhorse/go"
-)
+    	"github.com/jackc/pgx/v5/pgxpool"
+    	workhorse "github.com/stablemates/workhorse/go"
+    )
 
-func createOrder(ctx context.Context, pool *pgxpool.Pool, orderID string) error {
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
+    func createOrder(ctx context.Context, pool *pgxpool.Pool, orderID string) error {
+    	tx, err := pool.Begin(ctx)
+    	if err != nil {
+    		return err
+    	}
+    	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx, "INSERT INTO orders (id) VALUES ($1)", orderID); err != nil {
-		return err
-	}
-	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(tx), "default")
-	if _, err := queue.Enqueue(ctx, "order.fulfill", map[string]any{
-		"orderId": orderID,
-	}, workhorse.EnqueueOptions{}); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
-}
+    	if _, err := tx.Exec(ctx, "INSERT INTO orders (id) VALUES ($1)", orderID); err != nil {
+    		return err
+    	}
+    	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(tx), "default")
+    	if _, err := queue.Enqueue(ctx, "order.fulfill", map[string]any{
+    		"orderId": orderID,
+    	}, workhorse.EnqueueOptions{}); err != nil {
+    		return err
+    	}
+    	return tx.Commit(ctx)
+    }
     ```
 
   </Tab>
