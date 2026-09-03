@@ -52,8 +52,9 @@ that compiled or ran correctly against the previous release stop compiling or be
 The public surface is what each ecosystem already treats as public: for TypeScript, the names and
 types reachable through a package's `exports` map and shipped `.d.ts`; for Python, the names in a
 public module's `__all__`, excluding every underscore-prefixed module such as `workhorse._protocol`;
-for Go, the exported identifiers of the module's non-`internal` packages, where a break is what
-`apidiff` reports as incompatible. A type-level break is a break: a narrowed parameter or a widened
+for Go, the exported identifiers of the module's non-`internal` packages, where the standard is
+Go's own: what `apidiff` calls an incompatible change. No CI gate enforces these definitions yet;
+WH-584 files that work. A type-level break is a break: a narrowed parameter or a widened
 return that an existing caller cannot hold counts, even when no runtime behaviour moved.
 
 **5. The `workhorse` CLI.** A breaking change is removing or renaming a command or flag, changing
