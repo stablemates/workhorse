@@ -7,7 +7,7 @@ import { WORKHORSE_SCHEMA_VERSION } from "../typescript/core/src/index.js";
 
 /** The release this repository cuts next: one version on npm, PyPI, and Go from one commit. */
 const releaseVersion = "0.1.0";
-const releaseDate = "2026-09-14";
+const releaseDate = "2026-09-04";
 const corePeerRange = ">=0.1.0 <0.2.0";
 
 /** The published beta. Its entries stay in the changelogs as history and must keep their facts. */

@@ -15,7 +15,7 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 `0.1.0` the schema upgrades in place: every release ships ordered, immutable migrations, and inside
 a major line a migration only adds. Breaking changes are always listed with upgrade steps.
 
-## 0.1.0 — 2026-09-14
+## 0.1.0 — 2026-09-04
 
 Published to npm from one source commit shared with the Python distribution and the Go module,
 tagged `v0.1.0`. This is the first version without a prerelease suffix

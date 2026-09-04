@@ -8,7 +8,7 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
-## 0.1.0 — 2026-09-14
+## 0.1.0 — 2026-09-04
 
 Published to PyPI from one source commit shared with the npm packages and the Go module, tagged
 `python/v0.1.0`. This is the first version without a prerelease suffix

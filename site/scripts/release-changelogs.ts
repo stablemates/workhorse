@@ -24,7 +24,7 @@ import {
  * misordered row in it is read as fact.
  */
 
-/** `## 0.1.0 — 2026-09-14`, and its beta forms `0.1.0-beta.2` and `0.1.0b3`. */
+/** `## 0.1.0 — 2026-09-04`, and its beta forms `0.1.0-beta.2` and `0.1.0b3`. */
 const releaseHeading = /^## (\S+) — (\d{4}-\d{2}-\d{2})$/;
 /** Any `##` heading, so a release heading that lost its shape is caught rather than skipped. */
 const anyHeading = /^## /;
