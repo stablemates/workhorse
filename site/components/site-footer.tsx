@@ -1,6 +1,29 @@
+import support from "../../support.json";
+
 import { WorkhorseMark } from "@/components/logo";
 import { hasPosts } from "@/lib/blog";
 import { demoUrl, siteConfig } from "@/lib/site";
+
+/**
+ * The runtime floors, read from `support.json` rather than typed here.
+ *
+ * The footer states them on every page, and a floor that has been raised still
+ * looks like a floor, so a hand-typed copy goes stale with nobody noticing. That
+ * is the failure ADR 0058 removed from `/docs/releases`, and `support.json` is
+ * the repository's source of truth for every minimum.
+ *
+ * All three SDK runtimes are named. Workhorse publishes a TypeScript, a Python,
+ * and a Go line, so a line that named only Node left two of them off the one
+ * sentence that says what Workhorse runs on.
+ */
+const runtimes = [
+  `PostgreSQL ${support.support.postgres.minimum}+`,
+  `Node ${support.support.node.minimum}+`,
+  `Python ${support.support.python.minimum}+`,
+  // `support.json` spells the Go floor as a full version, `1.25.0`. Every other
+  // surface prints the language version a reader installs (support-matrix).
+  `Go ${support.support.go.minimum.replace(/\.0$/, "")}+`,
+].join(" · ");
 
 const columns = [
   {
@@ -76,9 +99,7 @@ export function SiteFooter() {
           <p className="font-mono text-[11.5px] text-fd-muted-foreground">
             Public beta · Apache-2.0
           </p>
-          <p className="font-mono text-[11.5px] text-fd-muted-foreground">
-            PostgreSQL 15+ · Node 22+
-          </p>
+          <p className="font-mono text-[11.5px] text-fd-muted-foreground">{runtimes}</p>
         </div>
       </div>
     </footer>
