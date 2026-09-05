@@ -1,6 +1,6 @@
 # ADR 0049: Publish one agent documentation layer
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by [ADR 0061](0061-record-the-agent-docs-eval-through-the-claude-cli.md)
 - **Date:** 2026-09-02
 - **Related:** [WH-517](https://ontrack.sh/projects/WH/issues/WH-517), [ADR 0033](0033-maintain-site-docs-as-a-guide-consumer.md), [ADR 0043](0043-public-ci-and-release-policy.md), [ADR 0046](0046-make-readmes-entry-points.md)
 
@@ -65,14 +65,15 @@ targets a Markdown twin. Its identifiers are verified in three tiers: compiled i
 fence, named in prose and required to appear in that language's fence, or allowlisted against the
 source path that must still contain them.
 
-**The eval records once and scores offline.** `record` produces a session and needs a model key.
+**The eval records once and scores offline.** `record` produces a session and needs a model
+credential; ADR 0061 makes that the maintainer's CLI login rather than an API key.
 `score` reads a frozen fixture and needs nothing. Four tasks reuse the baseline's task text and its
 four start points, so the TypeScript pair that differs only in start point measures the entry point
 directly. Scoring is mechanical on the transcript, over discovery index, off-site signature fetches,
 failed fetches, and install resolution against real registries, plus a recorded maintainer read for
 the three known mistakes. The harness lives in `scripts/agent-eval/` and its dated notes in
-`docs/agent-evals/`. It runs on demand and in no CI lane, because ADR 0043 keeps model keys out of
-CI and a frozen fixture's score cannot go red.
+`docs/agent-evals/`. It runs on demand and in no CI lane, because ADR 0043 keeps model credentials
+out of CI and a frozen fixture's score cannot go red.
 
 ## Consequences
 

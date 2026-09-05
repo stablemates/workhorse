@@ -3,18 +3,25 @@
  *
  * Usage: pnpm agent-eval:record <task> [--run <name>] [--model <id>]
  *
- * This needs a model key and the network, so it can never be a CI job: ADR 0043 states that CI
- * receives no secrets. A maintainer runs it on demand, before and after a documentation change,
- * and commits the fixture it writes. Scoring the fixture afterwards needs neither.
+ * This drives the `claude` CLI, which authenticates from the maintainer's own login rather than
+ * from an API key. It needs that login and the network, so it can never be a CI job: ADR 0043
+ * states that CI receives no secrets, and a login is a credential like any other. A maintainer
+ * runs it on demand, before and after a documentation change, and commits the fixture it writes.
+ * Scoring the fixture afterwards needs neither the login nor the network.
  *
  * The session is fetch-only. It gets one tool, one start URL, and a fetch budget; it never
- * searches, and every other URL must be reached by following a link. The transcript keeps each
- * fetch's URL, status, content type and byte count, and no response body.
+ * searches, and every other URL must be reached by following a link. The harness performs every
+ * fetch, which is why the transcript can carry each fetch's status, content type and byte count,
+ * and it keeps no response body.
+ *
+ * `session.ts` holds the options that keep the session inside that tool, and a test reads them.
  */
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import Anthropic from "@anthropic-ai/sdk";
 import { documentationHost, fetchBudget, taskById, taskText } from "./tasks.js";
+import { parseStream, producedText, sessionArguments } from "./session.js";
 import {
   formatTranscript,
   sessionsRoot,
@@ -25,133 +32,83 @@ import {
 
 const defaultModel = "claude-opus-5";
 
-const systemPrompt = [
-  "You are integrating a third-party library into an application you are helping someone build.",
-  "You may only read documentation by calling fetch_url. You have no repository checkout, no web",
-  "search, and no prior knowledge of this library that you did not read this session.",
-  `You may make at most ${fetchBudget} fetches.`,
-  "Reach every URL by following a link you have read, except the one you were given to start.",
-  "When you are done, output the complete code the application needs, in one message, and then",
-  "list every install command the reader must run, one per line, in a fenced block labelled",
-  "'install'.",
-].join(" ");
-
-const fetchTool: Anthropic.Tool = {
-  name: "fetch_url",
-  description:
-    "Fetch one URL and return its body as text. Returns the status when the fetch is not 2xx.",
-  input_schema: {
-    type: "object",
-    properties: {
-      url: { type: "string", description: "The absolute URL to fetch." },
-      purpose: {
-        type: "string",
-        enum: ["read", "signature"],
-        description:
-          "Use 'signature' when the fetch is to learn an SDK name or type rather than to read guidance.",
-      },
-    },
-    required: ["url"],
-    additionalProperties: false,
-  },
-};
-
-interface FetchOutcome {
-  readonly record: TranscriptFetch;
-  readonly body: string;
-}
-
-async function fetchOnce(url: string, purpose: string | undefined): Promise<FetchOutcome> {
-  try {
-    const response = await globalThis.fetch(url, { redirect: "follow" });
-    const body = await response.text();
-    return {
-      record: {
-        url,
-        status: response.status,
-        ...(purpose === "signature" ? { purpose: "signature" as const } : {}),
-        contentType: response.headers.get("content-type") ?? "unknown",
-        bytes: Buffer.byteLength(body),
-      },
-      body: response.ok ? body : `HTTP ${response.status}`,
-    };
-  } catch (error) {
-    return {
-      record: {
-        url,
-        status: null,
-        ...(purpose === "signature" ? { purpose: "signature" as const } : {}),
-        note: `fetch failed: ${(error as Error).message}`,
-      },
-      body: `The fetch failed: ${(error as Error).message}`,
-    };
-  }
-}
-
-function textOf(message: Anthropic.Message): string {
-  return message.content
-    .filter((block): block is Anthropic.TextBlock => block.type === "text")
-    .map((block) => block.text)
-    .join("\n");
+function runClaude(
+  cwd: string,
+  args: readonly string[],
+  prompt: string,
+): Promise<{ stdout: string; stderr: string; code: number | null }> {
+  return new Promise((resolve, reject) => {
+    // The login is the CLI's own. An inherited key would bill a different account and could run a
+    // different model, so it is removed rather than trusted to be absent.
+    const { ANTHROPIC_API_KEY: _ignored, ...environment } = process.env;
+    const child = spawn("claude", args, {
+      cwd,
+      // A documentation page must reach the session whole. The CLI truncates a tool result past
+      // MAX_MCP_OUTPUT_TOKENS, which defaults to 25,000, and spills the rest to a file whose path
+      // it names. The fetch server refuses that path, so a truncated page costs the session
+      // content but never a fetch.
+      env: { ...environment, MAX_MCP_OUTPUT_TOKENS: "200000" },
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+    child.on("error", reject);
+    child.on("close", (code) => resolve({ stdout, stderr, code }));
+    child.stdin.end(prompt);
+  });
 }
 
 async function run(taskId: string, runName: string, model: string): Promise<void> {
   const task = taskById(taskId);
-  const client = new Anthropic();
-  const messages: Anthropic.MessageParam[] = [
-    {
-      role: "user",
-      content: [
-        `${taskText}`,
-        `Write it in ${task.language}.`,
-        `Start here: ${task.startUrl}`,
-      ].join("\n\n"),
-    },
-  ];
-  const fetches: TranscriptFetch[] = [];
-  let transcriptText = "";
 
-  while (fetches.length <= fetchBudget) {
-    const response = await client.messages.create({
-      model,
-      max_tokens: 16000,
-      thinking: { type: "adaptive" },
-      system: systemPrompt,
-      tools: [fetchTool],
-      messages,
-    });
-    messages.push({ role: "assistant", content: response.content });
+  // The session runs here, not in the checkout. A `CLAUDE.md` at or above the working directory
+  // would reach it whatever the settings flags say, and this repository's own instructions would
+  // then be part of what the eval measures.
+  const scratch = await mkdtemp(path.join(tmpdir(), "agent-eval-"));
+  const fetchLog = path.join(scratch, "fetches.jsonl");
+  await writeFile(fetchLog, "");
 
-    if (response.stop_reason !== "tool_use") {
-      transcriptText = textOf(response);
-      break;
-    }
+  const mcpConfig = path.join(scratch, "mcp.json");
+  await writeFile(
+    mcpConfig,
+    JSON.stringify({
+      mcpServers: {
+        agent_eval: {
+          // Absolute, because the session's working directory is outside the checkout and the
+          // CLI's inherited `PATH` is not something this recorder should depend on.
+          command: path.resolve(import.meta.dirname, "../../node_modules/.bin/tsx"),
+          args: [path.join(import.meta.dirname, "fetch-server.ts")],
+          env: {
+            AGENT_EVAL_FETCH_LOG: fetchLog,
+            AGENT_EVAL_FETCH_BUDGET: String(fetchBudget),
+          },
+        },
+      },
+    }),
+  );
 
-    const calls = response.content.filter(
-      (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
+  const prompt = [taskText, `Write it in ${task.language}.`, `Start here: ${task.startUrl}`].join(
+    "\n\n",
+  );
+
+  const result = await runClaude(scratch, sessionArguments({ model, mcpConfig }), prompt);
+  const events = parseStream(result.stdout);
+
+  if (events.length === 0) {
+    await rm(scratch, { recursive: true, force: true });
+    throw new Error(
+      `The CLI produced no stream events (exit ${String(result.code)}). stderr: ${result.stderr.trim()}`,
     );
-    const results: Anthropic.ToolResultBlockParam[] = [];
-    for (const call of calls) {
-      const input = call.input as { url?: unknown; purpose?: unknown };
-      const url = typeof input.url === "string" ? input.url : "";
-      if (url === "" || fetches.length >= fetchBudget) {
-        results.push({
-          type: "tool_result",
-          tool_use_id: call.id,
-          is_error: true,
-          content: url === "" ? "No url given." : "Fetch budget exhausted.",
-        });
-        continue;
-      }
-      const outcome = await fetchOnce(
-        url,
-        typeof input.purpose === "string" ? input.purpose : undefined,
-      );
-      fetches.push(outcome.record);
-      results.push({ type: "tool_result", tool_use_id: call.id, content: outcome.body });
-    }
-    messages.push({ role: "user", content: results });
   }
+
+  const fetches: TranscriptFetch[] = (await readFile(fetchLog, "utf8"))
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line) as TranscriptFetch);
+
+  const transcriptText = producedText(events);
+  await rm(scratch, { recursive: true, force: true });
 
   const directory = path.join(sessionsRoot, runName, task.id.toLowerCase());
   await mkdir(directory, { recursive: true });
