@@ -183,6 +183,22 @@ try {
     'aria-label="go"',
   ]);
 
+  // Shiki writes a token's colours as a class, and one generated stylesheet
+  // carries the rules. Written inline instead, the same few dozen hex colours
+  // repeat once per token: the landing page alone once shipped 361 KB of them,
+  // more than every documentation page put together. The ceiling is set just
+  // above the built size, so it catches the pipeline losing its transformer
+  // rather than ordinary growth.
+  if (landingHtml.includes("--shiki-light:")) {
+    throw new Error(
+      "The landing page ships per-token inline colours again; gen-code-theme.ts and the highlighting transformers have come apart",
+    );
+  }
+  const landingBytes = Buffer.byteLength(landingHtml, "utf8");
+  if (landingBytes > 380_000) {
+    throw new Error(`The landing page grew to ${landingBytes} bytes, past its shape`);
+  }
+
   const quickstartHtml = await (await fetch(`${baseUrl}/docs/quickstart`)).text();
   assertIncludesTokens(quickstartHtml, "The quickstart page", [
     '<link rel="canonical" href="https://workhorse.run/docs/quickstart"',
@@ -193,6 +209,10 @@ try {
 
   // The catalog reaches an agent only if the generator expanded the component
   // into Markdown. A twin that still carries the tag serves an empty page.
+  if (quickstartHtml.includes("--shiki-light:")) {
+    throw new Error("A documentation page ships per-token inline colours again");
+  }
+
   const catalogTwin = await (await fetch(`${baseUrl}/docs/integrations.md`)).text();
   if (catalogTwin.includes("<IntegrationCatalog")) {
     throw new Error("The integrations twin shipped the catalog component instead of the catalog");

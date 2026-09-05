@@ -160,6 +160,9 @@ importers:
       '@fontsource-variable/geist-mono':
         specifier: ^5.3.0
         version: 5.3.0
+      '@shikijs/transformers':
+        specifier: 4.4.1
+        version: 4.4.1
       '@tailwindcss/vite':
         specifier: ^4.3.3
         version: 4.3.3(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.1)(yaml@2.9.0))
@@ -2458,6 +2461,10 @@ packages:
 
   '@shikijs/themes@4.4.1':
     resolution: {integrity: sha512-wudOaoFro+/Zl9gQv2W1Ur5XlVduqvTuYLI483Xi0wgc1A+cy1hfB2r6ac6ufBgF+ID7KJEW7L41MHrzQ4wH+w==}
+    engines: {node: '>=20'}
+
+  '@shikijs/transformers@4.4.1':
+    resolution: {integrity: sha512-Sb9Eehas+5EhClpFgNuklwY3aWf354FLaKRCiAWmjdNbHAjoQUpv6WmSj+N19eTXO6GLIWh1dIOH9dxyauhVWw==}
     engines: {node: '>=20'}
 
   '@shikijs/types@4.4.1':
@@ -7267,6 +7274,11 @@ snapshots:
 
   '@shikijs/themes@4.4.1':
     dependencies:
+      '@shikijs/types': 4.4.1
+
+  '@shikijs/transformers@4.4.1':
+    dependencies:
+      '@shikijs/core': 4.4.1
       '@shikijs/types': 4.4.1
 
   '@shikijs/types@4.4.1':

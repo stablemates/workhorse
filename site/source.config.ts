@@ -1,5 +1,6 @@
 import { pageSchema } from "fumadocs-core/source/schema";
 import { defineCollections, defineConfig, defineDocs } from "fumadocs-mdx/config";
+import { createTokenClassTransformer, docsCodeThemes } from "./lib/code-highlighting.js";
 
 export const docs = defineDocs({
   dir: "content/docs",
@@ -25,10 +26,11 @@ export default defineConfig({
     // and Shiki highlighting with dual light/dark themes.
     preset: "fumadocs",
     rehypeCodeOptions: {
-      themes: {
-        light: "github-light",
-        dark: "github-dark-dimmed",
-      },
+      themes: docsCodeThemes,
+      // Token colours reach the page as classes rather than as a style on
+      // every token, and `scripts/gen-code-theme.ts` writes the rules. A page
+      // once carried more repeated hex colours than text.
+      transformers: [createTokenClassTransformer()],
     },
   },
 });

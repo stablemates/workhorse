@@ -4,6 +4,7 @@ import { highlight } from "fumadocs-core/highlight";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { createTokenClassTransformer, landingCodeThemes } from "../lib/code-highlighting.js";
 import {
   landingSnippetLanguages,
   landingSnippets,
@@ -21,28 +22,26 @@ import {
  */
 
 /**
- * Theme pair for every landing snippet.
- *
- * Both themes are written into the same markup and selected by CSS variables,
- * so they have to be chosen as a pair: `one-light` and `one-dark-pro` share a
- * hue assignment (keywords violet, strings green, types yellow, calls blue),
- * which keeps a snippet legible as the same code in either scheme.
+ * Token colours reach the page as classes, and `scripts/gen-code-theme.ts`
+ * writes the rules. This transformer has to be built the same way there.
  */
-const codeThemes = { light: "one-light", dark: "one-dark-pro" } as const;
+const tokenClasses = createTokenClassTransformer();
 
 const rendered: Record<string, string> = {};
 
 for (const [id, code] of Object.entries(landingSnippets)) {
   const node = await highlight(code, {
     lang: landingSnippetLanguages[id as LandingSnippetId] ?? "ts",
-    themes: codeThemes,
+    themes: landingCodeThemes,
+    transformers: [tokenClasses],
     defaultColor: false,
     components: {
-      // Shiki emits per-token colours as `--shiki-light` / `--shiki-dark`
-      // custom properties and relies on a `.shiki code span` rule to apply
-      // them. That rule is keyed off the `shiki` class Shiki puts on the
-      // `pre`, so the incoming className has to be preserved — replacing it
-      // outright renders every token in the inherited foreground colour.
+      // The `pre` carries the class holding `--shiki-light-bg` and
+      // `--shiki-dark-bg`, which `.wh-code-surface` reads for the frame
+      // colour, as well as the `shiki` class the token rules are keyed off.
+      // So the incoming className has to be preserved — replacing it outright
+      // renders every token in the inherited foreground colour on an
+      // unthemed frame.
       pre: ({ className, ...props }) =>
         createElement("pre", {
           ...props,

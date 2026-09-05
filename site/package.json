@@ -5,10 +5,10 @@
   "description": "Workhorse documentation site",
   "type": "module",
   "scripts": {
-    "dev": "tsx scripts/gen-docs-index.ts && tsx scripts/gen-landing-code.ts && vite dev",
-    "build": "tsx scripts/check-language-examples.ts && tsx scripts/gen-docs-index.ts && tsx scripts/gen-landing-code.ts && vite build",
+    "dev": "tsx scripts/gen-code-theme.ts && tsx scripts/gen-docs-index.ts && tsx scripts/gen-landing-code.ts && vite dev",
+    "build": "tsx scripts/check-language-examples.ts && tsx scripts/gen-code-theme.ts && tsx scripts/gen-docs-index.ts && tsx scripts/gen-landing-code.ts && vite build",
     "start": "vite preview",
-    "typecheck": "fumadocs-mdx && tsx scripts/check-language-examples.ts && tsx scripts/gen-docs-index.ts && tsx scripts/gen-landing-code.ts && tsc --noEmit"
+    "typecheck": "fumadocs-mdx && tsx scripts/check-language-examples.ts && tsx scripts/gen-code-theme.ts && tsx scripts/gen-docs-index.ts && tsx scripts/gen-landing-code.ts && tsc --noEmit"
   },
   "dependencies": {
     "@hugeicons/core-free-icons": "^4.2.3",
@@ -24,6 +24,7 @@
   "devDependencies": {
     "@fontsource-variable/geist": "^5.3.0",
     "@fontsource-variable/geist-mono": "^5.3.0",
+    "@shikijs/transformers": "4.4.1",
     "@tailwindcss/vite": "^4.3.3",
     "@types/mdx": "^2.0.13",
     "@types/node": "^24.1.0",
