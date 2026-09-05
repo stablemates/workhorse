@@ -1,0 +1,130 @@
+{
+  "task": "D",
+  "language": "typescript",
+  "run": "2026-09-05-agent-docs",
+  "recordedAt": "2026-09-05",
+  "model": "claude-opus-5",
+  "provenance": "recorded",
+  "fetches": [
+    {
+      "url": "https://raw.githubusercontent.com/stablemates/workhorse/main/README.md",
+      "status": 200,
+      "contentType": "text/plain; charset=utf-8",
+      "bytes": 6770
+    },
+    {
+      "url": "https://workhorse.run/llms.txt",
+      "status": 200,
+      "contentType": "text/plain; charset=utf-8",
+      "bytes": 8204
+    },
+    {
+      "url": "https://workhorse.run/docs/quickstart",
+      "status": 200,
+      "contentType": "text/html; charset=utf-8",
+      "bytes": 99206
+    },
+    {
+      "url": "https://workhorse.run/docs/for-ai-agents.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 11071
+    },
+    {
+      "url": "https://workhorse.run/docs/enqueue.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 8776
+    },
+    {
+      "url": "https://workhorse.run/docs/workers.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 11775
+    },
+    {
+      "url": "https://workhorse.run/docs/durable-execution.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 7635
+    },
+    {
+      "url": "https://workhorse.run/docs/retries.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 5127
+    },
+    {
+      "url": "https://workhorse.run/docs/worker-processes.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 5342
+    },
+    {
+      "url": "https://workhorse.run/docs/installation.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 10794
+    },
+    {
+      "url": "https://workhorse.run/docs/api.md",
+      "status": 200,
+      "purpose": "signature",
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 11226
+    },
+    {
+      "url": "https://workhorse.run/docs/contracts.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 5923
+    },
+    {
+      "url": "https://workhorse.run/docs/idempotency.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 7032
+    },
+    {
+      "url": "https://workhorse.run/docs/examples.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 25370
+    },
+    {
+      "url": "https://workhorse.run/docs/rate-limits.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 4646
+    }
+  ],
+  "install": [
+    {
+      "command": "npm install @stablemates/workhorse",
+      "registry": "npm",
+      "package": "@stablemates/workhorse",
+      "version": null,
+      "resolved": true
+    },
+    {
+      "command": "npm exec --no -- workhorse schema install",
+      "registry": "npm",
+      "package": "@stablemates/workhorse",
+      "version": null,
+      "resolved": true
+    },
+    {
+      "command": "npm exec --no -- workhorse schema status --json",
+      "registry": "npm",
+      "package": "@stablemates/workhorse",
+      "version": null,
+      "resolved": true
+    }
+  ],
+  "mistakes": {
+    "enqueueOutsideTransaction": "clean",
+    "schemaOnRuntimePath": "clean",
+    "effectOutsideCheckpoint": "clean"
+  },
+  "produced": ["produced.md"]
+}
