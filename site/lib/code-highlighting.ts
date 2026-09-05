@@ -31,11 +31,6 @@ export const docsCodeThemes = { light: "github-light", dark: "github-dark-dimmed
 export const landingCodeThemes = { light: "one-light", dark: "one-dark-pro" } as const;
 
 /**
- * Where the generated stylesheet is written, relative to the site package.
- */
-export const codeThemeStylesheet = ".source/code-theme.css";
-
-/**
  * Six characters of the hash Shiki derives from a token's colours.
  *
  * The full name is twelve characters and repeats once per token, so the
@@ -44,7 +39,7 @@ export const codeThemeStylesheet = ".source/code-theme.css";
  * produces, and `gen-code-theme.ts` fails the build if two styles ever do
  * collide.
  */
-export function shortenTokenClass(name: string): string {
+function shortenTokenClass(name: string): string {
   return name.slice(0, 6);
 }
 
