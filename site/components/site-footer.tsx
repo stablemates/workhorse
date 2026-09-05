@@ -53,6 +53,11 @@ const columns = [
       { href: siteConfig.github, text: "GitHub", external: true },
       { href: siteConfig.npm, text: "npm", external: true },
       { href: demoUrl, text: "Hosted demo", external: true },
+      // The trust pages (ADR 0062) are linked from every page, because an agent
+      // deciding whether a publisher is real looks for them by name in the footer.
+      { href: "/about", text: "About" },
+      { href: "/contact", text: "Contact" },
+      { href: "/privacy", text: "Privacy" },
     ],
   },
 ] as const;

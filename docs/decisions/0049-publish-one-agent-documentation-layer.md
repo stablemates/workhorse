@@ -1,6 +1,6 @@
 # ADR 0049: Publish one agent documentation layer
 
-- **Status:** Accepted; amended by [ADR 0061](0061-record-the-agent-docs-eval-through-the-claude-cli.md)
+- **Status:** Accepted; amended by [ADR 0061](0061-record-the-agent-docs-eval-through-the-claude-cli.md) and [ADR 0062](0062-negotiate-markdown-on-accept-and-publish-the-machine-readable-surfaces.md)
 - **Date:** 2026-09-02
 - **Related:** [WH-517](https://ontrack.sh/projects/WH/issues/WH-517), [ADR 0033](0033-maintain-site-docs-as-a-guide-consumer.md), [ADR 0043](0043-public-ci-and-release-policy.md), [ADR 0046](0046-make-readmes-entry-points.md)
 

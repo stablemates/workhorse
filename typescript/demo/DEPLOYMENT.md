@@ -29,6 +29,13 @@ intended release; the digest prevents a registry-side tag change from altering a
 The demo image installs Python runtime dependencies from the committed `python/uv.lock`. Update that
 lock with uv whenever `python/pyproject.toml` changes; the image build rejects a stale lock.
 
+The site image negotiates the representation of a page on the request's `Accept` header: a client
+that names `text/markdown` receives the page's Markdown twin, and every other client receives the
+HTML. Every negotiated response carries `Vary: Accept`, and a 404 answers in the representation the
+client asked for. If a CDN or cache sits in front of the site, it must honour `Vary` and must not
+strip the header, or a browser can receive a cached twin. After a deploy that changes negotiation,
+the operator must purge that cache.
+
 ## What the deployment must provide
 
 - A Linux host with Docker, SSH access, and public ports 80 and 443.

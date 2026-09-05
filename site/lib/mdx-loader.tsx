@@ -66,3 +66,28 @@ export const postLoader = browserCollections.blog.createClientLoader<{ readonly 
     );
   },
 });
+
+/**
+ * Renders one site page (ADR 0062) from the browser collection, in the post's
+ * article shell without the date line. The title and description come from the
+ * compiled frontmatter, which is all a page carries.
+ */
+export const pageLoader = browserCollections.pages.createClientLoader<Record<string, never>>({
+  id: "pages",
+  component: (loaded) => {
+    const MDX = loaded.default;
+    const { title, description } = loaded.frontmatter;
+
+    return (
+      <article className="mx-auto w-full max-w-3xl px-5 py-12 lg:px-8">
+        <header>
+          <h1 className="wh-docs-title text-3xl font-semibold sm:text-4xl">{title}</h1>
+          <p className="wh-docs-description mt-4 text-lg text-fd-muted-foreground">{description}</p>
+        </header>
+        <div className="prose wh-docs-body">
+          <MDX components={getMDXComponents()} />
+        </div>
+      </article>
+    );
+  },
+});

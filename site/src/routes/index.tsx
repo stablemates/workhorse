@@ -34,7 +34,7 @@ import {
   type LandingFeatureSnippetId,
   type LandingSnippetId,
 } from "@/lib/landing-snippets";
-import { demoUrl, siteConfig } from "@/lib/site";
+import { demoUrl, publisherReference, siteConfig } from "@/lib/site";
 
 /*
  * Snippet sources live in `lib/landing-snippets.ts` and arrive here as
@@ -77,6 +77,9 @@ export const Route = createFileRoute("/")({
             url: siteConfig.url,
             image: siteConfig.socialImage,
             codeRepository: siteConfig.github,
+            license: "https://www.apache.org/licenses/LICENSE-2.0",
+            sameAs: [siteConfig.github, siteConfig.npm, siteConfig.pypi, siteConfig.goModule],
+            publisher: publisherReference,
           }),
         },
       ],

@@ -168,11 +168,55 @@ describe("the Markdown twin transform", () => {
   });
 });
 
-describe("the origin's Markdown type", () => {
+describe("the origin's negotiation and Markdown type", () => {
+  const config = () => readFile(resolve(repositoryRoot, "site/nginx.conf"), "utf8");
+
   it("serves .md as text/markdown with a UTF-8 charset", async () => {
-    const config = await readFile(resolve(repositoryRoot, "site/nginx.conf"), "utf8");
-    expect(config).toMatch(/types\s*\{\s*text\/markdown\s+md;\s*}/);
-    expect(config).toMatch(/^\s*charset\s+utf-8;$/m);
-    expect(config).toMatch(/^\s*charset_types\s+[^;]*\btext\/markdown\b[^;]*;$/m);
+    const source = await config();
+    expect(source).toMatch(/types\s*\{\s*text\/markdown\s+md;\s*}/);
+    expect(source).toMatch(/^\s*charset\s+utf-8;$/m);
+    expect(source).toMatch(/^\s*charset_types\s+[^;]*\btext\/markdown\b[^;]*;$/m);
+  });
+
+  it("labels the JSON 404 body with the same charset", async () => {
+    expect(await config()).toMatch(/^\s*charset_types\s+[^;]*\bapplication\/json\b[^;]*;$/m);
+  });
+
+  // A map stops at its first matching regex, so a rejection that followed the
+  // acceptance would never fire and `text/markdown;q=0` would get the twin.
+  it("reads Accept once and lists the q=0 rejection before the acceptance", async () => {
+    const source = await config();
+    expect(source).toMatch(/^map \$http_accept \$want \{$/m);
+    const rejection = source.indexOf('"~*text/markdown\\s*;\\s*q=0(\\.0+)?\\s*(,|$)" html;');
+    const acceptance = source.indexOf('"~*text/markdown" markdown;');
+    expect(rejection).toBeGreaterThan(-1);
+    expect(acceptance).toBeGreaterThan(rejection);
+  });
+
+  // `Vary: Accept` is what keeps a cache from handing a browser the twin. The
+  // `always` is what keeps it on a 404, and the 404 body follows the same
+  // negotiation instead of being one HTML page for every client.
+  it("varies every negotiated response by Accept, errors included", async () => {
+    const source = await config();
+    const catchAll = /^  location \/ \{([^}]*)\}/m.exec(source)?.[1];
+    expect(catchAll).toContain("add_header Vary Accept always;");
+    expect(source).toMatch(/^\s*error_page 404 \$not_found_body;$/m);
+  });
+
+  // The 404 bodies are files in the web root. Without `internal`, a crawler
+  // that reaches /404.md gets a 200 page to index.
+  it("keeps the 404 bodies internal", async () => {
+    const source = await config();
+    const internalBlock = [...source.matchAll(/^  location ~ ([^{]+)\{([^}]*)\}/gm)].find((block) =>
+      block[2]!.includes("internal;"),
+    );
+    expect(internalBlock).toBeDefined();
+    const pattern = internalBlock![1]!;
+    expect(pattern).toContain("404\\.(md|json)");
+    expect(pattern).toContain("not-found/index\\.html");
+  });
+
+  it("answers a Markdown-only client with 406 when a page has no twin", async () => {
+    expect(await config()).toMatch(/^  location @unavailable \{[\s\S]*?return 406 /m);
   });
 });

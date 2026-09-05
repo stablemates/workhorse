@@ -31,3 +31,9 @@ scripts/with-env-probe.tmp.*
 /site/public/docs/
 /site/public/blog/
 /sql/schema.sql
+/site/public/404.md
+/site/public/404.json
+/site/public/openapi.json
+/site/public/about.md
+/site/public/contact.md
+/site/public/privacy.md

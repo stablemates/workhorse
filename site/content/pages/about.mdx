@@ -1,0 +1,50 @@
+---
+title: About Workhorse
+description: What Workhorse is, who publishes it, what it promises, and where its source lives.
+---
+
+Workhorse is a durable job queue that lives inside PostgreSQL. An application enqueues a job in
+the same transaction that writes its own data, so the job and the data commit together or not at
+all. Workers in TypeScript, Python, and Go claim and run those jobs through one SQL protocol, and
+the database keeps the evidence: every attempt, checkpoint, wait, and outcome is a row an operator
+can query.
+
+## Who publishes it
+
+Stablemates publishes Workhorse and maintains it in the open at
+[github.com/stablemates/workhorse](https://github.com/stablemates/workhorse). The packages are
+released under the Apache License 2.0, and contributions are accepted under the contributor
+agreement in that repository. There is no paid tier today. The beta withholds nothing; a later
+commercial product would be new files under its own licence, not a second licence of the same
+code.
+
+## What ships
+
+Three lines ship from the same repository and speak the same protocol:
+
+- The TypeScript package `@stablemates/workhorse` on npm, which also carries the schema tool, the
+  worker runtime, the operator dashboard, and the `workhorse` command line.
+- The Python distribution `stablemates-workhorse` on PyPI.
+- The Go module `github.com/stablemates/workhorse/go`.
+
+The current published version of each line, and which versions receive fixes, are on
+[Releases](/docs/releases). The tested runtimes and PostgreSQL versions are on
+[Compatibility](/docs/compatibility).
+
+## What it promises, and what it does not
+
+Workhorse is a public beta. It is usable for evaluation and early production adoption. A minor
+release may change behaviour, so read the changelog before you upgrade. Inside a major line a
+migration only adds, so a running deployment upgrades in place and is never asked to recreate its
+database.
+
+Handlers run at least once, PostgreSQL is the only supported database, and there is no separate
+workflow definition language: durable steps are composed in ordinary handler code.
+[Limitations](/docs/limitations) lists every boundary with the workaround where one exists, and
+[Core concepts](/docs/concepts) explains the model behind the guarantees.
+
+## Where to start
+
+[Quickstart](/docs/quickstart) installs the schema and runs a first job. Coding agents start at
+[Workhorse for AI coding agents](/docs/for-ai-agents), and [llms.txt](/llms.txt) indexes every page
+in a form an agent can read. Questions and bug reports go to the channels on [Contact](/contact).

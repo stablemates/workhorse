@@ -2,7 +2,7 @@ import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-r
 import { RootProvider } from "fumadocs-ui/provider/tanstack";
 
 import { StaticSearchDialog } from "@/components/search";
-import { siteConfig } from "@/lib/site";
+import { organization, siteConfig } from "@/lib/site";
 // oxlint-disable-next-line import/no-unassigned-import -- font faces are global side effects.
 import "@fontsource-variable/geist";
 // oxlint-disable-next-line import/no-unassigned-import -- font faces are global side effects.
@@ -52,6 +52,15 @@ export const Route = createRootRoute({
       { rel: "stylesheet", href: appCss },
       { rel: "icon", href: "/icon.png" },
       { rel: "apple-touch-icon", href: "/apple-icon.png" },
+    ],
+    // The publisher, once, on every page (ADR 0062). Each page's own JSON-LD
+    // record names this node by `@id`, so an agent verifying who stands behind
+    // the site finds the answer wherever it landed.
+    scripts: [
+      {
+        type: "application/ld+json",
+        children: JSON.stringify({ "@context": "https://schema.org", ...organization }),
+      },
     ],
   }),
   component: RootDocument,

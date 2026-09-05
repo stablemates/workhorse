@@ -10,8 +10,10 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as SlugRouteImport } from './routes/$slug'
 import { Route as BlogRouteImport } from './routes/blog'
 import { Route as DocsRouteImport } from './routes/docs'
+import { Route as NotFoundRouteImport } from './routes/not-found'
 import { Route as ApiSearchRouteImport } from './routes/api/search'
 import { Route as BlogIndexRouteImport } from './routes/blog/index'
 import { Route as BlogSlugRouteImport } from './routes/blog/$slug'
@@ -23,6 +25,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SlugRoute = SlugRouteImport.update({
+  id: '/$slug',
+  path: '/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const BlogRoute = BlogRouteImport.update({
   id: '/blog',
   path: '/blog',
@@ -31,6 +38,11 @@ const BlogRoute = BlogRouteImport.update({
 const DocsRoute = DocsRouteImport.update({
   id: '/docs',
   path: '/docs',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NotFoundRoute = NotFoundRouteImport.update({
+  id: '/not-found',
+  path: '/not-found',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiSearchRoute = ApiSearchRouteImport.update({
@@ -61,8 +73,10 @@ const DocsSplatRoute = DocsSplatRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/$slug': typeof SlugRoute
   '/blog': typeof BlogRouteWithChildren
   '/docs': typeof DocsRouteWithChildren
+  '/not-found': typeof NotFoundRoute
   '/api/search': typeof ApiSearchRoute
   '/blog/$slug': typeof BlogSlugRoute
   '/docs/$': typeof DocsSplatRoute
@@ -71,6 +85,8 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/$slug': typeof SlugRoute
+  '/not-found': typeof NotFoundRoute
   '/api/search': typeof ApiSearchRoute
   '/blog/$slug': typeof BlogSlugRoute
   '/docs/$': typeof DocsSplatRoute
@@ -80,8 +96,10 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/$slug': typeof SlugRoute
   '/blog': typeof BlogRouteWithChildren
   '/docs': typeof DocsRouteWithChildren
+  '/not-found': typeof NotFoundRoute
   '/api/search': typeof ApiSearchRoute
   '/blog/$slug': typeof BlogSlugRoute
   '/docs/$': typeof DocsSplatRoute
@@ -92,20 +110,32 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/$slug'
     | '/blog'
     | '/docs'
+    | '/not-found'
     | '/api/search'
     | '/blog/$slug'
     | '/docs/$'
     | '/blog/'
     | '/docs/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/search' | '/blog/$slug' | '/docs/$' | '/blog' | '/docs'
+  to:
+    | '/'
+    | '/$slug'
+    | '/not-found'
+    | '/api/search'
+    | '/blog/$slug'
+    | '/docs/$'
+    | '/blog'
+    | '/docs'
   id:
     | '__root__'
     | '/'
+    | '/$slug'
     | '/blog'
     | '/docs'
+    | '/not-found'
     | '/api/search'
     | '/blog/$slug'
     | '/docs/$'
@@ -115,8 +145,10 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  SlugRoute: typeof SlugRoute
   BlogRoute: typeof BlogRouteWithChildren
   DocsRoute: typeof DocsRouteWithChildren
+  NotFoundRoute: typeof NotFoundRoute
   ApiSearchRoute: typeof ApiSearchRoute
 }
 
@@ -127,6 +159,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/$slug': {
+      id: '/$slug'
+      path: '/$slug'
+      fullPath: '/$slug'
+      preLoaderRoute: typeof SlugRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/blog': {
@@ -141,6 +180,13 @@ declare module '@tanstack/react-router' {
       path: '/docs'
       fullPath: '/docs'
       preLoaderRoute: typeof DocsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/not-found': {
+      id: '/not-found'
+      path: '/not-found'
+      fullPath: '/not-found'
+      preLoaderRoute: typeof NotFoundRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/search': {
@@ -207,8 +253,10 @@ const DocsRouteWithChildren = DocsRoute._addFileChildren(DocsRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  SlugRoute: SlugRoute,
   BlogRoute: BlogRouteWithChildren,
   DocsRoute: DocsRouteWithChildren,
+  NotFoundRoute: NotFoundRoute,
   ApiSearchRoute: ApiSearchRoute,
 }
 export const routeTree = rootRouteImport

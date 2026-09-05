@@ -24,6 +24,16 @@ directory; this directory then only receives compatible corrections.
   runtime-configuration schema that every backend inserts into `index.html`.
 - `conformance.json` carries the executable HTTP conformance fixtures described under
   [Conformance](#conformance).
+- `openapi.json` is the OpenAPI 3.1 description of this contract. It derives from
+  `manifest.json`, `procedures.json`, and `conformance.json` through
+  `typescript/dashboard-server/spec/openapi.ts`: every procedure is one `post` operation with a
+  summary, a description, typed request and response schemas, the host and envelope error
+  responses, and examples taken from the conformance exchanges with generated values replaced by
+  placeholders. `pnpm dashboard-spec:generate` writes it and `pnpm dashboard-spec:check` fails
+  when it is stale. It reads the committed fixtures, so when fixtures change, run
+  `pnpm dashboard-conformance:generate` first and `pnpm dashboard-spec:generate` second. The
+  documentation site publishes it unchanged at `https://workhorse.run/openapi.json`; the API
+  itself is served by each deployment, never by that host.
 - `governed-surface.json` is the promise the other two are checked against: every procedure,
   request field, and response field this contract has served, with its type and whether validation
   requires it. `pnpm dashboard-spec:generate` adds to it and never drops from it, so removing a
@@ -80,7 +90,8 @@ A failed call answers the error envelope with a matching HTTP status:
 
 Codes the reference implementation uses: `BAD_REQUEST` (400, malformed envelope or input rejected
 by the request schema), `FORBIDDEN` (403, mutation on a read-only dashboard), `NOT_FOUND` (404,
-`eventDetail`, `jobDetail`, `runTaskNow`, `cancelTask`, `signalTask`, `completeHumanWait`),
+`eventDetail`, `jobDetail`, `runTaskNow`, `cancelTask`, `signalTask`, `completeHumanWait`,
+`redriveTask`),
 `METHOD_NOT_SUPPORTED` (405), and `INTERNAL_SERVER_ERROR` (500). Input constraints beyond JSON
 Schema — for example `enqueueTest` requiring `feature` when `kind` is `"feature"` — are enforced
 server-side and answer `BAD_REQUEST`.

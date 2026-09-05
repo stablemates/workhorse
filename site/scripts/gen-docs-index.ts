@@ -1,11 +1,19 @@
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 
 import { type Integration, type IntegrationCategory, isPublished } from "../lib/integrations.js";
 import { siteConfig } from "../lib/site.js";
+import {
+  renderCliSection,
+  renderMachineReadable,
+  renderNotFoundJson,
+  renderNotFoundMarkdown,
+  renderWhenToUse,
+} from "./agent-surfaces.js";
 import { loadPosts, renderFeed } from "./blog-posts.js";
 import { frontmatterValue, stripFrontmatter } from "./frontmatter.js";
 import { mdxToMarkdown } from "./mdx-to-markdown.js";
 import { readReleaseLines } from "./release-changelogs.js";
+import { loadSitePages } from "./site-pages.js";
 
 /**
  * Builds everything the docs routes need without loading Fumadocs at runtime.
@@ -477,6 +485,19 @@ await writeFile(
   `${JSON.stringify({ posts: posts.map(({ body: _body, ...post }) => post) }, null, 2)}\n`,
 );
 
+/**
+ * The site pages (ADR 0062): `/about`, `/contact`, and `/privacy`. Like posts,
+ * they join the prerender list and the sitemap and each gets a twin, and
+ * `llms.txt` never lists one, because an agent integrating Workhorse has no
+ * need of them and an agent verifying the publisher finds them in the footer.
+ */
+const sitePages = await loadSitePages(new URL("../content/pages/", import.meta.url));
+
+await writeFile(
+  new URL("pages-index.json", outDir),
+  `${JSON.stringify({ pages: sitePages.map(({ body: _body, ...page }) => page) }, null, 2)}\n`,
+);
+
 const routes = [
   "/",
   "/docs",
@@ -485,11 +506,20 @@ const routes = [
     .filter((url) => url !== "/docs")
     .toSorted(),
   ...blogRoutes,
+  ...sitePages.map((page) => page.url),
 ];
+
+/**
+ * `/not-found` is prerendered so `site/nginx.conf` can serve its HTML as the
+ * body of every 404. It is a real route only because the prerenderer refuses a
+ * page that answers anything but 2xx, so it stays out of the sitemap and asks
+ * not to be indexed.
+ */
+const notFoundRoute = "/not-found";
 
 await writeFile(
   new URL("prerender.json", outDir),
-  `${JSON.stringify([...routes, "/api/search"], null, 2)}\n`,
+  `${JSON.stringify([...routes, notFoundRoute, "/api/search"], null, 2)}\n`,
 );
 
 const base = siteConfig.url;
@@ -502,7 +532,13 @@ ${routes
   .map(
     (route) =>
       `  <url><loc>${base}${route}</loc><changefreq>weekly</changefreq><priority>${
-        route === "/" ? 1 : route === "/docs" ? 0.9 : 0.7
+        route === "/"
+          ? 1
+          : route === "/docs"
+            ? 0.9
+            : sitePages.some((page) => page.url === route)
+              ? 0.5
+              : 0.7
       }</priority></url>`,
   )
   .join("\n")}
@@ -577,6 +613,29 @@ if (posts.length > 0) {
 }
 
 /**
+ * Site page twins at `/<slug>.md`, so `/about` negotiates to Markdown like
+ * every other page. The frontmatter is the docs twin's: title, description,
+ * canonical, and no version.
+ */
+await Promise.all(
+  sitePages.map(async (page) => {
+    const frontmatter = [
+      "---",
+      `title: ${JSON.stringify(page.title)}`,
+      `description: ${JSON.stringify(page.description)}`,
+      `canonical: ${JSON.stringify(`${base}${page.url}`)}`,
+      "---",
+      "",
+    ].join("\n");
+    const document = `# ${page.title}\n\n> ${page.description}\n\n${mdxToMarkdown(page.body, page.slug)}`;
+    await writeFile(
+      new URL(`../public/${page.slug}.md`, import.meta.url),
+      `${frontmatter}\n${document}`,
+    );
+  }),
+);
+
+/**
  * The page an agent starts at, and the page whose install commands it copies.
  * `llms.txt` names both above the fold, so each slug is resolved against
  * `pages` and the build fails rather than routing an agent to a page nobody
@@ -592,6 +651,10 @@ const routerPage = (slug: string): PageRecord => {
 };
 const entryPoint = routerPage(entryPointSlug);
 const installation = routerPage(installationSlug);
+const limitations = routerPage("limitations");
+const apiPage = routerPage("api");
+const operations = routerPage("operations");
+const site = { base, name: siteConfig.name };
 
 /**
  * `/llms.txt`, the index an agent reads before fetching anything. Its lead is
@@ -665,11 +728,16 @@ version, and the runtime compatibility check confirms the schema before a proces
 
 [llms-full.txt](${base}/llms-full.txt) is every page below in one file, about ${llmsFullKilobytes} KB.
 
+${renderWhenToUse(site, { entryPoint, installation, limitations })}
 ${structure.map((group) => llmsSection(group)).join("\n")}
+${renderCliSection(site, { api: apiPage, operations })}
+${renderMachineReadable(site)}
 ## Optional
 
 - [Repository](${siteConfig.github})
 - [npm](${siteConfig.npm})
+- [PyPI](${siteConfig.pypi})
+- [Go module](${siteConfig.goModule})
 `,
 );
 
@@ -695,6 +763,38 @@ Sitemap: ${base}/sitemap.xml
 `,
 );
 
+/**
+ * The bodies a 404 carries (ADR 0062). `site/nginx.conf` serves `/404.md` to a
+ * client that asked for Markdown and `/404.json` to one that asked for JSON,
+ * with status 404 either way. Both are derived from the same page records as
+ * `llms.txt`, so a link in a 404 body cannot point at a page nobody ships.
+ */
+const firstPages = structure.map((group) => {
+  const slug = group.pages?.[0];
+  const first = slug ? pages.get(slug) : undefined;
+  if (!first) throw new Error(`The sidebar group "${group.title}" lists no first page`);
+  return { title: group.title, first };
+});
+await writeFile(
+  new URL("../public/404.md", import.meta.url),
+  renderNotFoundMarkdown(site, entryPoint, firstPages),
+);
+await writeFile(
+  new URL("../public/404.json", import.meta.url),
+  renderNotFoundJson(site, entryPoint),
+);
+
+/**
+ * The OpenAPI description of the dashboard API, published at `/openapi.json`.
+ * `pnpm dashboard-spec:generate` writes the tracked artifact from the wire
+ * contract; the site copies it byte for byte so the published file is the
+ * reviewed one.
+ */
+await copyFile(
+  new URL("dashboard/v1/openapi.json", repositoryDir),
+  new URL("../public/openapi.json", import.meta.url),
+);
+
 console.log(
-  `Wrote the sidebar tree and metadata for ${pages.size} pages and ${posts.length} posts`,
+  `Wrote the sidebar tree and metadata for ${pages.size} pages, ${posts.length} posts, and ${sitePages.length} site pages`,
 );

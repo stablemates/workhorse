@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +11,12 @@ import {
   dashboardRuntimeConfigSchema,
 } from "../src/server/html.js";
 import { generateResponseSchemas } from "./response-schemas.js";
+import {
+  composeDashboardOpenApi,
+  type DashboardConformance,
+  type DashboardManifest,
+  type DashboardProcedures,
+} from "./openapi.js";
 import {
   classifyDashboardSurface,
   describeDashboardSurface,
@@ -145,9 +152,22 @@ export function composeDashboardSpec(): Record<string, string> {
     $defs: definitions,
   };
 
+  const manifestContent = `${JSON.stringify(manifest, null, 2)}\n`;
+  const proceduresContent = `${JSON.stringify(proceduresDocument, null, 2)}\n`;
+  // The OpenAPI document derives from the two artifacts above and the committed conformance
+  // fixtures, so it follows a fixture change only once `dashboard-conformance:generate` has run.
+  const conformance = JSON.parse(
+    readFileSync(join(artifactDirectory, "conformance.json"), "utf8"),
+  ) as DashboardConformance;
+
   return {
-    "manifest.json": `${JSON.stringify(manifest, null, 2)}\n`,
-    "procedures.json": `${JSON.stringify(proceduresDocument, null, 2)}\n`,
+    "manifest.json": manifestContent,
+    "procedures.json": proceduresContent,
+    "openapi.json": composeDashboardOpenApi({
+      manifest: JSON.parse(manifestContent) as DashboardManifest,
+      procedures: JSON.parse(proceduresContent) as DashboardProcedures,
+      conformance,
+    }),
   };
 }
 

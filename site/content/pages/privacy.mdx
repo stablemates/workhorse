@@ -1,0 +1,44 @@
+---
+title: Privacy notice
+description: What workhorse.run collects when you read it, who processes it, and how to opt out.
+---
+
+This notice covers the documentation site at workhorse.run. It is a static site: it has no user
+accounts, no sign-in, no forms, and no comments, and it stores nothing you type. Reading it sends
+the ordinary data an HTTP request carries, and two third parties see that data.
+
+## What is collected
+
+**Request logs.** The site is served through Cloudflare, which proxies every request and sees your
+IP address, the page you asked for, your browser's user agent, and the referring page. Cloudflare
+uses this to serve the page, to cache it, and to protect the site from abuse, under
+[Cloudflare's privacy policy](https://www.cloudflare.com/privacypolicy/). The origin server behind
+Cloudflare keeps no access log.
+
+**Analytics.** Every HTML page loads Google Analytics 4 with the measurement ID `G-9NC8FKZPVB`.
+Google Analytics sets cookies in your browser, records the pages you view and how you reached them,
+and reports aggregate usage to the maintainers, under
+[Google's privacy policy](https://policies.google.com/privacy). The maintainers use the reports to
+see which pages are read and which are not. They do not sell the data, and they do not combine it
+with any other source.
+
+Machine-readable files such as `llms.txt`, the Markdown twins, `sitemap.xml`, and `openapi.json`
+load no analytics script. A client that asks for Markdown with the `Accept` header receives the
+twin and never loads the script.
+
+## How to opt out
+
+Block the `googletagmanager.com` domain in your browser or with a content blocker, install
+[Google's opt-out extension](https://tools.google.com/dlpage/gaoptout), or read the Markdown twin
+of any page by adding `.md` to its URL. The site works fully without the analytics script.
+
+## Other services
+
+The hosted demo at demo.workhorse.run is a separate application with its own logs; this notice does
+not cover it. Links to GitHub, npm, PyPI, and pkg.go.dev lead to services with their own notices.
+
+## Changes and contact
+
+This notice took effect on 5 September 2026 and changes when the site's behaviour changes; the
+current text is always the one at this URL. Questions about it go to the channels on
+[Contact](/contact).

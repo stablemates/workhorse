@@ -20,6 +20,19 @@ export const blog = defineCollections({
   schema: pageSchema,
 });
 
+/**
+ * The site pages: prose that is neither documentation nor a post, served at
+ * `/<slug>` (ADR 0062). Today these are the trust pages `/about`, `/contact`,
+ * and `/privacy`. The frontmatter is `title` and `description`; there is no
+ * date, because a page is current rather than dated. `scripts/site-pages.ts`
+ * reads and validates the collection at build time.
+ */
+export const pages = defineCollections({
+  type: "doc",
+  dir: "content/pages",
+  schema: pageSchema,
+});
+
 export default defineConfig({
   mdxOptions: {
     // `fumadocs` preset supplies GFM, heading anchors, structured search data,

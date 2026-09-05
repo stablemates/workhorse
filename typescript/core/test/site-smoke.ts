@@ -2,9 +2,11 @@ import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { resolve } from "node:path";
+import { CLI_COMMANDS } from "../src/cli/surface.js";
 import { WORKHORSE_VERSION } from "../src/version.js";
 
 const repositoryRoot = resolve(import.meta.dirname, "../../..");
+const siteConfig = { url: "https://workhorse.run" } as const;
 const port = 32_000 + Math.floor(Math.random() * 1_000);
 const baseUrl = `http://127.0.0.1:${port}`;
 
@@ -71,6 +73,20 @@ try {
     ["/docs/quickstart.md", ["**TypeScript**", "**Python**", "**Go**", "pip install"]],
     ["/docs/retries", ["retry", "backoff"]],
     ["/llms.txt", ["llms-full.txt", "/docs/quickstart.md"]],
+    // The trust pages (ADR 0062) and their twins. An agent verifying the
+    // publisher reads these by name, so each has to exist with real content.
+    ["/about", ["Stablemates", "Apache", "public beta"]],
+    ["/about.md", ["# About Workhorse", "Stablemates", "Apache"]],
+    ["/contact", ["github.com/stablemates/workhorse/issues", "security/advisories/new"]],
+    ["/contact.md", ["# Contact", "security/advisories/new"]],
+    ["/privacy", ["G-9NC8FKZPVB", "Cloudflare"]],
+    ["/privacy.md", ["# Privacy notice", "G-9NC8FKZPVB"]],
+    // The 404 page and the two 404 bodies. The preview server serves them as
+    // files at 200; nginx serves them with status 404 through error_page.
+    ["/not-found", ["This page does not exist", 'name="robots" content="noindex"']],
+    ["/404.md", ["# 404", "/llms.txt", "/docs/for-ai-agents.md", "/sitemap.xml"]],
+    ["/404.json", ['"code": "not_found"', "/llms.txt"]],
+    ["/openapi.json", ['"openapi": "3.1', "dashboard_tasks", '"components"']],
     ["/llms-full.txt", ["https://workhorse.run/docs/quickstart", "Queue.enqueue"]],
     ["/robots.txt", ["Sitemap"]],
     ["/sitemap.xml", ["<urlset"]],
@@ -168,6 +184,61 @@ try {
     "name no version",
   ]);
 
+  // The router's three agent sections (ADR 0062): when to reach for Workhorse,
+  // the command line, and the machine-readable files. The CLI list is checked
+  // against the binary's own declaration, so a new command cannot ship unlisted.
+  const llmsText = await (await fetch(`${baseUrl}/llms.txt`)).text();
+  assertIncludesTokens(llmsText, "llms.txt", [
+    "## When to use Workhorse",
+    "## Command line",
+    "## Machine-readable",
+    `${siteConfig.url}/openapi.json`,
+    "npm exec --no -- workhorse",
+    ...CLI_COMMANDS.map((command) => `- \`workhorse ${command.name}\`: `),
+  ]);
+  if (/npx workhorse\b/.test(llmsText)) {
+    throw new Error("llms.txt recommends the bare `npx workhorse` form");
+  }
+  for (const page of ["/about", "/contact", "/privacy"]) {
+    if (llmsText.includes(`${siteConfig.url}${page}`)) {
+      throw new Error(`llms.txt lists the trust page ${page}, which is not documentation`);
+    }
+  }
+
+  // Each trust page carries at least the audit's minimum of real text once the
+  // markup is gone, and its twin negotiates like any other page's.
+  for (const page of ["/about", "/contact", "/privacy"]) {
+    const twin = await (await fetch(`${baseUrl}${page}.md`)).text();
+    const text = twin.replace(/^---[\s\S]*?---\n/, "").replace(/[#>*`[\]()]/g, "");
+    if (text.length < 500) {
+      throw new Error(`${page}.md carries ${text.length} characters of text, under the 500 floor`);
+    }
+  }
+
+  // The OpenAPI document is the tracked artifact, copied and not rewritten.
+  const openapi = JSON.parse(await (await fetch(`${baseUrl}/openapi.json`)).text()) as {
+    openapi: string;
+    paths: Record<string, unknown>;
+  };
+  const manifest = JSON.parse(
+    await readFile(resolve(repositoryRoot, "dashboard/v1/manifest.json"), "utf8"),
+  ) as { procedures: Record<string, unknown> };
+  if (!/^3\.1\.\d+$/.test(openapi.openapi)) {
+    throw new Error(`/openapi.json declares OpenAPI ${openapi.openapi}, not 3.1`);
+  }
+  if (Object.keys(openapi.paths).length !== Object.keys(manifest.procedures).length) {
+    throw new Error(
+      `/openapi.json has ${Object.keys(openapi.paths).length} paths for ${Object.keys(manifest.procedures).length} procedures`,
+    );
+  }
+
+  const notFoundJson = JSON.parse(await (await fetch(`${baseUrl}/404.json`)).text()) as {
+    error: { code: string; status: number; links: Record<string, string> };
+  };
+  if (notFoundJson.error.code !== "not_found" || notFoundJson.error.status !== 404) {
+    throw new Error("/404.json does not carry the not_found code and the 404 status");
+  }
+
   const landingHtml = await (await fetch(`${baseUrl}/`)).text();
   assertIncludesTokens(landingHtml, "The landing page", [
     // The footer link is the only agent entry point on the landing page, so a
@@ -178,6 +249,14 @@ try {
     'property="og:image" content="https://workhorse.run/brand/workhorse-mark.png"',
     'type="application/ld+json"',
     '"@type":"SoftwareApplication"',
+    // The publisher, on every page (ADR 0062), with the contact point an agent
+    // reads to verify the site. Its `@id` is what the page records point at.
+    '"@type":"Organization"',
+    '"@type":"ContactPoint"',
+    `"@id":"${siteConfig.url}/#organization"`,
+    'href="/about"',
+    'href="/contact"',
+    'href="/privacy"',
     'aria-label="typescript"',
     'aria-label="python"',
     'aria-label="go"',
@@ -236,6 +315,8 @@ try {
     '<link rel="alternate" type="text/markdown" href="https://workhorse.run/docs/quickstart.md"',
     'name="twitter:title" content="Quickstart — Workhorse"',
     '"@type":"TechArticle"',
+    '"@type":"Organization"',
+    `"publisher":{"@id":"${siteConfig.url}/#organization"}`,
   ]);
 
   // The catalog reaches an agent only if the generator expanded the component
@@ -286,6 +367,14 @@ try {
   }
   if (sitemap.includes("<lastmod>")) {
     throw new Error("The sitemap claims a modification date that the source does not track");
+  }
+  for (const page of ["/about", "/contact", "/privacy"]) {
+    if (!sitemap.includes(`<loc>${siteConfig.url}${page}</loc>`)) {
+      throw new Error(`The sitemap omitted the trust page ${page}`);
+    }
+  }
+  if (sitemap.includes("/not-found")) {
+    throw new Error("The sitemap lists /not-found, which exists only to be served as a 404 body");
   }
 
   // The blog (ADR 0052) ships with zero posts and grows one file at a time.
