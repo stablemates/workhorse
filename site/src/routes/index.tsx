@@ -56,7 +56,14 @@ export const Route = createFileRoute("/")({
         { name: "twitter:title", content: title },
         { name: "twitter:description", content: siteConfig.description },
       ],
-      links: [{ rel: "canonical", href: siteConfig.url }],
+      links: [
+        { rel: "canonical", href: siteConfig.url },
+        // The landing page is where an agent most often starts, and its HTML is
+        // about seven times its own text. `scripts/gen-landing-twin.ts` derives
+        // the Markdown form from the built page; this link is how an agent
+        // finds it without reading the whole page to reach the footer.
+        { rel: "alternate", type: "text/markdown", href: `${siteConfig.url}/index.md` },
+      ],
       scripts: [
         {
           type: "application/ld+json",

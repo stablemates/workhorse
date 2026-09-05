@@ -199,6 +199,37 @@ try {
     throw new Error(`The landing page grew to ${landingBytes} bytes, past its shape`);
   }
 
+  // The landing page is the one an agent is most likely to reach first, and its
+  // HTML is about seven times its own text. The twin is derived from the built
+  // page rather than written beside it, so the two cannot drift; these
+  // assertions catch the derivation failing rather than the copy going stale.
+  assertIncludesTokens(landingHtml, "The landing page", [
+    '<link rel="alternate" type="text/markdown" href="https://workhorse.run/index.md"',
+  ]);
+  const landingTwinResponse = await fetch(`${baseUrl}/index.md`);
+  const landingTwin = await landingTwinResponse.text();
+  if (!(landingTwinResponse.headers.get("content-type") ?? "").startsWith("text/markdown")) {
+    throw new Error(
+      `The landing twin is served as ${landingTwinResponse.headers.get("content-type")}, not text/markdown`,
+    );
+  }
+  for (const heading of landingHtml.matchAll(/<h[12][^>]*>(.*?)<\/h[12]>/g)) {
+    const text = heading[1]!
+      .replace(/<[^>]+>/g, "")
+      .replace(/&#x27;/g, "'")
+      .trim();
+    if (text !== "" && !landingTwin.includes(text)) {
+      throw new Error(`The landing twin is missing the heading "${text}"`);
+    }
+  }
+  const pageSnippets = [...landingHtml.matchAll(/<pre\b/g)].length;
+  const twinSnippets = [...landingTwin.matchAll(/^```/gm)].length / 2;
+  if (twinSnippets < pageSnippets) {
+    throw new Error(
+      `The landing page has ${pageSnippets} code blocks and its twin has ${twinSnippets}`,
+    );
+  }
+
   const quickstartHtml = await (await fetch(`${baseUrl}/docs/quickstart`)).text();
   assertIncludesTokens(quickstartHtml, "The quickstart page", [
     '<link rel="canonical" href="https://workhorse.run/docs/quickstart"',

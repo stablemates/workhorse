@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx scripts/gen-code-theme.ts && tsx scripts/gen-docs-index.ts && tsx scripts/gen-landing-code.ts && vite dev",
-    "build": "tsx scripts/check-language-examples.ts && tsx scripts/gen-code-theme.ts && tsx scripts/gen-docs-index.ts && tsx scripts/gen-landing-code.ts && vite build",
+    "build": "tsx scripts/check-language-examples.ts && tsx scripts/gen-code-theme.ts && tsx scripts/gen-docs-index.ts && tsx scripts/gen-landing-code.ts && vite build && tsx scripts/gen-landing-twin.ts",
     "start": "vite preview",
     "typecheck": "fumadocs-mdx && tsx scripts/check-language-examples.ts && tsx scripts/gen-code-theme.ts && tsx scripts/gen-docs-index.ts && tsx scripts/gen-landing-code.ts && tsc --noEmit"
   },
@@ -32,6 +32,7 @@
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^4.7.0",
     "fumadocs-mdx": "15.2.2",
+    "parse5": "7.3.0",
     "tailwindcss": "^4.1.18",
     "tsx": "^4.23.1",
     "typescript": "^5.8.3",
