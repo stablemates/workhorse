@@ -27,7 +27,7 @@ concurrency:
 jobs:
   smoke:
     name: smoke benchmark
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     # An explicit ceiling. A benchmark that hangs — a scenario waiting on a job that never claims,
     # a churn producer that never drains — must fail the run rather than occupy a runner for the
     # six-hour default.

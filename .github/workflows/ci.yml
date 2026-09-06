@@ -26,7 +26,7 @@ env:
 jobs:
   plan:
     name: support matrix
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
     outputs:
       typescript: ${{ steps.matrix.outputs.typescript }}
@@ -47,7 +47,7 @@ jobs:
   static:
     name: format, generated files, lint, security, types
     if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -81,7 +81,7 @@ jobs:
   unit:
     name: environment-independent tests
     if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -102,7 +102,7 @@ jobs:
     name: TypeScript (node ${{ matrix.node }}, postgres ${{ matrix.postgres }})
     needs: plan
     if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -152,7 +152,7 @@ jobs:
     name: Python ${{ matrix.python }} (postgres ${{ matrix.postgres }})
     needs: plan
     if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -195,7 +195,7 @@ jobs:
     name: Go ${{ matrix.go }} (postgres ${{ matrix.postgres }})
     needs: plan
     if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -236,7 +236,7 @@ jobs:
   runtime-smoke:
     name: runtime smoke (${{ matrix.runtime }})
     if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -280,7 +280,7 @@ jobs:
     name: packed install (node ${{ matrix.node }})
     needs: plan
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '43 3 * * *'
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -316,7 +316,7 @@ jobs:
   demo:
     name: demo and site smoke
     if: ${{ false }} # Temporarily disabled while its repeated full builds are too expensive for CI.
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 40
     services:
       postgres:
@@ -355,7 +355,7 @@ jobs:
     name: required
     if: always()
     needs: [plan, static, unit, typescript, python, go, runtime-smoke, packed]
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 5
     env:
       RESULTS: ${{ toJSON(needs) }}

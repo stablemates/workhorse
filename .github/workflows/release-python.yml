@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 30
     services:
       postgres:
@@ -68,7 +68,7 @@ jobs:
   publish:
     if: startsWith(github.ref, 'refs/tags/python/v') && inputs.dry-run != true
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
     environment: pypi
     permissions:
