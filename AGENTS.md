@@ -60,6 +60,16 @@ When another Agent can continue the current work as-is, Comment the handoff and 
 When a Human decision or action is required, Comment the boundary and move it to Backlog at that
 moment. Do not leave a live Lease behind while waiting.
 
+## Sign agent commits with the model
+
+A commit an agent makes ends with one `Co-Authored-By:` trailer per model that produced the change,
+naming the exact model ID. That trailer is the message's only agent attribution: it names no
+harness, product, or session.
+
+```
+Co-Authored-By: claude-fable-5-1 <noreply@anthropic.com>
+```
+
 ## Do not run the demo server
 
 Do not start the demo. Not `pnpm demo`, not `pnpm demo:app`, and not a variant in the background.
