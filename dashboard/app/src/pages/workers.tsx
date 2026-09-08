@@ -38,8 +38,18 @@ export function WorkersPage({
         <EmptyState>No worker has reported activity.</EmptyState>
       ) : (
         <Paper withBorder>
-          <ScrollArea>
-            <Table highlightOnHover verticalSpacing={6} horizontalSpacing="md" miw={1180}>
+          <ScrollArea
+            type="auto"
+            offsetScrollbars="x"
+            viewportProps={{ tabIndex: 0, role: "region", "aria-label": "Workers table" }}
+          >
+            <Table
+              highlightOnHover
+              verticalSpacing={6}
+              horizontalSpacing="md"
+              className="dashboard-table dashboard-table--workers"
+              miw={1180}
+            >
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Worker</Table.Th>

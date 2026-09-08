@@ -211,20 +211,32 @@ export function DashboardContent({
   return (
     <AppShell
       {...refreshBlockingInputCapture}
-      header={{ height: 64 }}
+      header={{ height: { base: 104, md: 56 } }}
       navbar={{
-        width: 256,
+        width: { sm: 232, xl: 256 },
         breakpoint: "sm",
         collapsed: { mobile: !navbarOpened },
       }}
-      padding={{ base: "md", sm: "xl" }}
+      padding={{ base: "sm", sm: "md", xl: "xl" }}
     >
       <AppShell.Header>
         {/* The right padding tracks the main-area padding so the last header item lines up with
             the content's right edge; the left stays at the sidebar's inset. */}
-        <Group h="100%" pl="md" pr={{ base: "md", sm: "xl" }} justify="space-between" wrap="nowrap">
-          <Group gap={0} wrap="nowrap">
-            <Group gap="sm" wrap="nowrap" w={{ sm: 240 }}>
+        <Group
+          className="dashboard-header"
+          h="100%"
+          pl={{ base: "sm", sm: "md" }}
+          pr={{ base: "sm", sm: "md", xl: "xl" }}
+          justify="space-between"
+          wrap="nowrap"
+        >
+          <Group className="dashboard-header__left" gap={0} wrap="nowrap">
+            <Group
+              className="dashboard-header__brand"
+              gap="sm"
+              wrap="nowrap"
+              w={{ sm: 216, xl: 240 }}
+            >
               <Burger
                 opened={navbarOpened}
                 onClick={toggleNavbar}
@@ -244,16 +256,15 @@ export function DashboardContent({
               </Box>
             </Group>
             {workspaces.length >= 2 && workspace ? (
-              <Box ml={{ base: "md", sm: "xl" }} style={{ flexShrink: 0 }}>
+              <Box
+                className="dashboard-header__workspace"
+                ml={{ sm: "md" }}
+                style={{ flexShrink: 0 }}
+              >
                 <DashboardWorkspaceSwitcher workspaces={workspaces} workspace={workspace} />
               </Box>
             ) : null}
-            <Group
-              gap={0}
-              wrap="nowrap"
-              ml={{ base: "md", sm: "xl" }}
-              className="dashboard-refresh-control"
-            >
+            <Group gap={0} wrap="nowrap" ml={{ sm: "md" }} className="dashboard-refresh-control">
               <Button
                 variant="default"
                 size="xs"
@@ -317,7 +328,7 @@ export function DashboardContent({
               ) : null}
             </Group>
           </Group>
-          <Group gap="sm" wrap="nowrap">
+          <Group className="dashboard-header__status" gap="sm" wrap="nowrap">
             {logoutUrl ? (
               <Menu position="bottom-end" withinPortal>
                 <Menu.Target>
@@ -325,7 +336,9 @@ export function DashboardContent({
                     variant="default"
                     size="xs"
                     leftSection={<UserFocus size={14} />}
+                    className="dashboard-header__account"
                     aria-label={`Signed in as ${auditActor}`}
+                    title={auditActor}
                   >
                     {auditActor}
                   </Button>
@@ -360,7 +373,7 @@ export function DashboardContent({
                   <CheckCircle size={12} />
                 )
               }
-              visibleFrom="xs"
+              visibleFrom="xl"
               role="status"
               aria-label={
                 loadState.status === "error"
@@ -381,8 +394,8 @@ export function DashboardContent({
         </Group>
       </AppShell.Header>
 
-      <AppShell.Navbar p="md">
-        <AppShell.Section grow component={ScrollArea}>
+      <AppShell.Navbar className="dashboard-navbar" p="sm">
+        <AppShell.Section grow component={ScrollArea} type="auto" scrollbars="y">
           <Stack gap={2}>
             <Text c="dimmed" fw={600} size="xs" px="sm" mb={4}>
               Tasks
@@ -487,13 +500,13 @@ export function DashboardContent({
             variant="light"
           />
           {/* Breathing room keeps the beta badge from reading as part of the link above. */}
-          <Box mt="md" px="sm">
+          <Box className="dashboard-navbar__version" mt="xs" px="sm">
             <WorkhorseVersion />
           </Box>
         </AppShell.Section>
       </AppShell.Navbar>
 
-      <AppShell.Main>
+      <AppShell.Main className="dashboard-main">
         <Box w="100%">{content}</Box>
       </AppShell.Main>
       <TaskDetailDrawer

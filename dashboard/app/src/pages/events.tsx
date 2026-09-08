@@ -215,8 +215,18 @@ export function EventsPage({
         </EmptyState>
       ) : (
         <Paper withBorder>
-          <ScrollArea>
-            <Table highlightOnHover verticalSpacing={6} horizontalSpacing="md" miw={1100}>
+          <ScrollArea
+            type="auto"
+            offsetScrollbars="x"
+            viewportProps={{ tabIndex: 0, role: "region", "aria-label": "Events table" }}
+          >
+            <Table
+              highlightOnHover
+              verticalSpacing={6}
+              horizontalSpacing="md"
+              className="dashboard-table dashboard-table--events"
+              miw={1100}
+            >
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th w={150} style={{ whiteSpace: "nowrap" }}>

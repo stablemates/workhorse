@@ -37,8 +37,18 @@ export function QueuesPage({
         <EmptyState>No queue has accepted a task yet.</EmptyState>
       ) : (
         <Paper withBorder>
-          <ScrollArea>
-            <Table highlightOnHover verticalSpacing={6} horizontalSpacing="md" miw={1380}>
+          <ScrollArea
+            type="auto"
+            offsetScrollbars="x"
+            viewportProps={{ tabIndex: 0, role: "region", "aria-label": "Queues table" }}
+          >
+            <Table
+              highlightOnHover
+              verticalSpacing={6}
+              horizontalSpacing="md"
+              className="dashboard-table dashboard-table--queues"
+              miw={1380}
+            >
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Queue</Table.Th>

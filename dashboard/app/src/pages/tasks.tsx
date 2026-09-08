@@ -577,28 +577,29 @@ export function TasksPage({
           </Group>
         </Stack>
         <Divider />
-        <ScrollArea type="auto">
+        <ScrollArea
+          className="task-table-viewport"
+          type="auto"
+          offsetScrollbars="x"
+          viewportProps={{ tabIndex: 0, role: "region", "aria-label": "Tasks table" }}
+        >
           <Table
             striped
             highlightOnHover
             verticalSpacing={6}
             horizontalSpacing="sm"
             aria-label="Tasks matching the current filters"
-            className="task-table"
+            className="dashboard-table task-table"
           >
             <Table.Thead>
               <Table.Tr>
                 <Table.Th className="task-table__col--id">ID</Table.Th>
                 <Table.Th className="task-table__col--queue">Queue</Table.Th>
-                <Table.Th className="task-table__col--task" w={260}>
-                  Task
-                </Table.Th>
+                <Table.Th className="task-table__col--task">Task</Table.Th>
                 <Table.Th className="task-table__col--tags" miw={180}>
                   Tags
                 </Table.Th>
-                <Table.Th className="task-table__col--status" miw={280}>
-                  Status
-                </Table.Th>
+                <Table.Th className="task-table__col--status">Status</Table.Th>
                 <Table.Th className="task-table__col--blocked" miw={180}>
                   Blocked by
                 </Table.Th>
@@ -655,7 +656,7 @@ export function TasksPage({
                         {job.queue}
                       </Text>
                     </Table.Td>
-                    <Table.Td className="task-table__col--task" w={260}>
+                    <Table.Td className="task-table__col--task">
                       <TaskOpenButton
                         jobId={job.id}
                         taskType={job.type}
