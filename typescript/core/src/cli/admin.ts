@@ -2,8 +2,12 @@ import { randomUUID } from "node:crypto";
 import readline from "node:readline/promises";
 import { Pool } from "pg";
 import { PurgeIdempotencyConflictError } from "../admin.js";
-import { MAX_EXTERNAL_WAIT_LIST_SIZE } from "../types.js";
-import type { JobListQuery, JobState } from "../types.js";
+import {
+  MAX_EXTERNAL_WAIT_LIST_SIZE,
+  MAX_JOB_QUERY_PAGE_SIZE,
+  MAX_REDRIVE_BATCH_SIZE,
+} from "../types.js";
+import type { DeadLetterFilter, JobListQuery, JobState } from "../types.js";
 import type { ExternalWaitCursor } from "../queue/external-waits.js";
 import { CliUsageError, parseCommandArgs, resolveDatabaseUrl } from "./arguments.js";
 import {
@@ -37,6 +41,17 @@ import {
   waitsTableRows,
   workersTableRows,
 } from "./admin-format.js";
+import {
+  continuationHint,
+  parseCursor,
+  parseDateRange,
+  readDeliveryPayload,
+} from "./admin-input.js";
+import {
+  validateExternalWaitDeliveryRequest,
+  validateExternalWaitName,
+  encodeExternalWaitValue,
+} from "../queue/external-waits.js";
 import { ADMIN_COMMANDS, CLI_OPTIONS } from "./surface.js";
 
 const ADMIN_HELP = `Usage: workhorse admin <command> [options]
@@ -61,6 +76,10 @@ Inspection commands (safe, read-only):
 Guarded commands (mutate; require --env and confirmation):
   cancel <job-id>     Request cooperative cancellation of one job.
   redrive <job-id>    Redrive one terminal failure as a new job.
+  redrive-many       Recover one oldest-first page of failures; --dry-run previews without writes.
+  signal <job-id>    Deliver JSON to the signal wait selected by --name.
+  complete-human <job-id>
+                     Answer the human decision selected by --name.
   pause <queue>       Pause claiming for one queue.
   resume <queue>      Resume claiming for one queue.
   purge <queue>       Delete one queue's non-active jobs.
@@ -79,15 +98,31 @@ Guarded-command options:
   --yes              Skip the interactive confirmation prompt.
   --actor <name>     Attribution recorded for the mutation (default: workhorse-admin).
   --reason <text>    Reason recorded for the mutation. Required for every guarded command except
-                     cancel.
+                     cancel, signal, and complete-human.
   --request-id <id>  Request identity recorded with the mutation (default: a random UUID).
-                     Redrive and purge additionally use it for idempotency.
+                     Redrive and purge additionally use it for idempotency. Required explicitly
+                     for redrive-many execution, signal, and complete-human; reuse on retries.
+  --dry-run         Preview redrive-many without --env or confirmation; --reason is still required.
+  --payload-json <json>
+                     Signal or human decision value, including JSON null, false, and scalar values.
+  --payload-file <path>
+                     Read the delivery value from a JSON file instead of --payload-json.
 
 Listing options:
   --queue <name>     Filter by queue.
   --type <type>      Filter by job type.
   --state <state>    Filter jobs by lifecycle state; repeatable or comma-separated.
-  --limit <count>    Page size.
+  --limit <count>    Page size, at most 1000 for jobs, timeline, failures, and redrive-many.
+  --cursor <json>   Continue jobs, timeline, failures, or redrive-many from its own nextCursor.
+                     Keep filters unchanged; failure listings descend and bulk recovery ascends.
+  --created-after <timestamp>, --created-before <timestamp>
+                     Filter jobs by creation time (inclusive lower, exclusive upper bound).
+  --finished-after <timestamp>, --finished-before <timestamp>
+                     Filter failures or redrive-many by finish time (same bounds).
+                     Timestamps must include a timezone.
+  --tag <tag>       Require every supplied tag on failures or redrive-many; repeatable.
+  --error-name <name>
+                     Filter failures or redrive-many by the exact error name.
   --namespace <ns>   Filter schedules by namespace; repeatable or comma-separated.
   --name <name>      Show one named checkpoint or wait instead of the list.
   --human-cursor <json>
@@ -163,7 +198,7 @@ function parseStates(values: readonly string[] | undefined): JobState[] | undefi
       );
     }
   }
-  return states as JobState[];
+  return [...new Set(states)] as JobState[];
 }
 
 /**
@@ -262,8 +297,65 @@ export async function runAdminCommand(
     io.out(ADMIN_HELP);
     return;
   }
+  // Never silently ignore a preview or selection flag on a mutating command.
+  const scopedOptions: Record<string, readonly string[]> = {
+    cursor: ["jobs", "timeline", "failures", "redrive-many"],
+    "created-after": ["jobs"],
+    "created-before": ["jobs"],
+    "finished-after": ["failures", "redrive-many"],
+    "finished-before": ["failures", "redrive-many"],
+    tag: ["failures", "redrive-many"],
+    "error-name": ["failures", "redrive-many"],
+    "dry-run": ["redrive-many"],
+    "payload-json": ["signal", "complete-human"],
+    "payload-file": ["signal", "complete-human"],
+    state: ["jobs"],
+    namespace: ["schedules"],
+    limit: ["jobs", "timeline", "failures", "redrive-many", "external-waits"],
+    queue: ["jobs", "failures", "redrive-many"],
+    type: ["jobs", "failures", "redrive-many"],
+    name: ["checkpoints", "waits", "signal", "complete-human"],
+    "human-cursor": ["external-waits"],
+    "signal-cursor": ["external-waits"],
+  };
+  for (const [flag, commands] of Object.entries(scopedOptions)) {
+    if (values[flag as keyof typeof values] !== undefined && !commands.includes(command)) {
+      throw new CliUsageError(`admin ${command} does not support --${flag}`);
+    }
+  }
+  const definition = ADMIN_COMMANDS.find((entry) => entry.name === command)!;
+  if (definition.positionals.length === 0 && positionals.length > 0) {
+    throw new CliUsageError(`Unexpected admin ${command} argument: ${positionals[0]}`);
+  }
   const limit =
     values.limit === undefined ? undefined : parsePositiveInteger(values.limit, "--limit");
+  const maximum =
+    command === "external-waits"
+      ? MAX_EXTERNAL_WAIT_LIST_SIZE
+      : command === "redrive-many"
+        ? MAX_REDRIVE_BATCH_SIZE
+        : MAX_JOB_QUERY_PAGE_SIZE;
+  if (limit !== undefined && limit > maximum) {
+    throw new CliUsageError(`admin ${command} --limit must be at most ${maximum}`);
+  }
+  const [createdAfter, createdBefore] = parseDateRange(
+    values["created-after"],
+    values["created-before"],
+    "created",
+  );
+  const [finishedAfter, finishedBefore] = parseDateRange(
+    values["finished-after"],
+    values["finished-before"],
+    "finished",
+  );
+  const failureFilter: DeadLetterFilter = {
+    queue: values.queue,
+    type: values.type,
+    tags: values.tag,
+    errorName: values["error-name"],
+    finishedAfter,
+    finishedBefore,
+  };
   const json = values.json ?? false;
   const pool = new Pool({ connectionString: resolveDatabaseUrl(values) });
   const client = new WorkhorseAdminClient(pool);
@@ -273,13 +365,16 @@ export async function runAdminCommand(
         queue: values.queue,
         type: values.type,
         states: parseStates(values.state),
+        createdAfter,
+        createdBefore,
+        cursor: parseCursor(values.cursor, ["createdAt", "jobId", "signature"]),
         limit,
       };
       const page = await client.listJobs(query);
       io.out(
         json
           ? toAdminJson("admin jobs", page)
-          : `${formatTable(JOBS_TABLE_HEADERS, jobsTableRows(page.items))}\n`,
+          : `${formatTable(JOBS_TABLE_HEADERS, jobsTableRows(page.items))}\n${continuationHint(page.nextCursor)}`,
       );
       return;
     }
@@ -298,11 +393,24 @@ export async function runAdminCommand(
     }
     if (command === "timeline") {
       const jobId = requirePositional(positionals, command, "job-id");
-      const page = await client.getJobTimeline(jobId, { limit });
+      const cursor = parseCursor(values.cursor, ["jobId", "occurredAt", "kind", "recordId"]);
+      if (
+        cursor !== undefined &&
+        (cursor.jobId !== jobId || (cursor.kind !== "event" && cursor.kind !== "attempt"))
+      ) {
+        throw new CliUsageError("--cursor must belong to this job and have kind event or attempt");
+      }
+      const page = await client.getJobTimeline(jobId, {
+        limit,
+        cursor:
+          cursor === undefined
+            ? undefined
+            : { ...cursor, kind: cursor.kind as "event" | "attempt" },
+      });
       io.out(
         json
           ? toAdminJson("admin timeline", page)
-          : `${formatTable(TIMELINE_TABLE_HEADERS, timelineTableRows(page.items))}\n`,
+          : `${formatTable(TIMELINE_TABLE_HEADERS, timelineTableRows(page.items))}\n${continuationHint(page.nextCursor)}`,
       );
       return;
     }
@@ -351,14 +459,6 @@ export async function runAdminCommand(
       return;
     }
     if (command === "external-waits") {
-      if (positionals.length > 0) {
-        throw new CliUsageError(`Unexpected admin external-waits argument: ${positionals[0]}`);
-      }
-      if (limit !== undefined && limit > MAX_EXTERNAL_WAIT_LIST_SIZE) {
-        throw new CliUsageError(
-          `admin external-waits --limit must be at most ${MAX_EXTERNAL_WAIT_LIST_SIZE}`,
-        );
-      }
       const waits = await client.externalWaits({
         limit,
         humanCursor: parseExternalWaitCursor(values["human-cursor"], "--human-cursor"),
@@ -373,14 +473,14 @@ export async function runAdminCommand(
     }
     if (command === "failures") {
       const page = await client.listDeadLetters({
-        queue: values.queue,
-        type: values.type,
+        ...failureFilter,
         limit,
+        cursor: parseCursor(values.cursor, ["finishedAt", "jobId"]),
       });
       io.out(
         json
           ? toAdminJson("admin failures", page)
-          : `${formatTable(FAILURES_TABLE_HEADERS, failuresTableRows(page.items))}\n`,
+          : `${formatTable(FAILURES_TABLE_HEADERS, failuresTableRows(page.items))}\n${continuationHint(page.nextCursor)}`,
       );
       return;
     }
@@ -420,9 +520,87 @@ export async function runAdminCommand(
       return;
     }
 
-    // Guarded commands below. Every path passes through confirmMutation, which owns both the
-    // explicit-environment check and the human confirmation.
+    // Every mutation passes through confirmMutation. Bulk preview is the read-only exception.
     const actor = values.actor ?? "workhorse-admin";
+    if (command === "redrive-many") {
+      if (!values.reason?.trim())
+        throw new CliUsageError("admin redrive-many requires --reason <text>");
+      if (!values["dry-run"] && !values["request-id"]?.trim()) {
+        throw new CliUsageError(
+          "admin redrive-many requires --request-id <id> for replayable recovery",
+        );
+      }
+      const request = {
+        requestedBy: actor,
+        reason: values.reason,
+        requestId: values["request-id"] ?? "workhorse-admin-preview",
+      };
+      const options = { limit, cursor: parseCursor(values.cursor, ["finishedAt", "jobId"]) };
+      const environment = values["dry-run"]
+        ? null
+        : await confirmMutation(client, io, values, command, values.queue ?? "all queues");
+      if (!values["dry-run"] && environment === null) return;
+      const page =
+        environment === null
+          ? await client.previewRedrive(failureFilter, request, options)
+          : await client.redriveMany(environment, failureFilter, request, options);
+      io.out(
+        json
+          ? toAdminJson("admin redrive-many", page)
+          : `${formatTable(
+              ["SOURCE", "TARGET", "STATUS"],
+              page.results.map((result) => [
+                result.sourceJobId,
+                result.targetJobId ?? "-",
+                result.status,
+              ]),
+            )}\n${continuationHint(page.nextCursor)}`,
+      );
+      if (
+        page.results.some(
+          (result) => result.status === "not_found" || result.status === "not_failed",
+        )
+      )
+        process.exitCode = 1;
+      return;
+    }
+    if (command === "signal" || command === "complete-human") {
+      const jobId = requirePositional(positionals, command, "job-id");
+      if (!values.name) throw new CliUsageError(`admin ${command} requires --name <name>`);
+      if (!values["request-id"]?.trim())
+        throw new CliUsageError(`admin ${command} requires --request-id <id>`);
+      const payload = await readDeliveryPayload(values["payload-json"], values["payload-file"]);
+      const request = { requestedBy: actor, idempotencyKey: values["request-id"] };
+      try {
+        validateExternalWaitName(values.name, "Delivery");
+        validateExternalWaitDeliveryRequest(request, "Delivery");
+        encodeExternalWaitValue(payload, "Delivery payload");
+      } catch (error) {
+        if (error instanceof TypeError || error instanceof RangeError)
+          throw new CliUsageError(error.message);
+        throw error;
+      }
+      const environment = await confirmMutation(client, io, values, command, jobId);
+      if (environment === null) return;
+      const result =
+        command === "signal"
+          ? await client.sendSignal(environment, jobId, values.name, payload, request)
+          : await client.completeHumanWait(environment, jobId, values.name, payload, request);
+      const accepted =
+        result.status === "delivered" ||
+        result.status === "completed" ||
+        result.status === "duplicate";
+      if (json) {
+        if ("deliveredAt" in result) io.out(toAdminJson("admin signal", result));
+        else io.out(toAdminJson("admin complete-human", result));
+      } else {
+        const message = `${command} ${jobId} / ${values.name}: ${result.status}.\n`;
+        if (accepted) io.out(message);
+        else io.error(message);
+      }
+      if (!accepted) process.exitCode = 1;
+      return;
+    }
     if (command === "cancel") {
       const jobId = requirePositional(positionals, command, "job-id");
       const environment = await confirmMutation(client, io, values, "cancel", jobId);

@@ -1,3 +1,4 @@
+import { seedStagingData, syncStagingSchedules } from "./staging.js";
 import { getRequestListener } from "@hono/node-server";
 import { assertSchemaCompatible, installSchema } from "@stablemates/workhorse";
 import { createServer } from "node:http";
@@ -51,7 +52,7 @@ const environment = process.env.WORKHORSE_DEMO_ENV ?? "development";
 const pool = new Pool({ connectionString: databaseUrl, max: 10 });
 
 // A provisioned staging database turns the dashboard into two switchable workspaces: the busy
-// worker-driven "production" one, and a quiet seeded "staging" one that no worker ever touches.
+// worker-driven "production" one, and a smaller "staging" one served by a dedicated TypeScript worker.
 // Without the variable the demo keeps its familiar single-workspace URLs.
 const stagingDatabaseUrl = process.env.DATABASE_URL_SECONDARY;
 const stagingPool = stagingDatabaseUrl
@@ -106,6 +107,12 @@ if (stagingPool && stagingDatabase) {
     install: () => installSchema(stagingPool),
     installDemo: () => installDemoSchema(stagingDatabase),
   });
+}
+if (stagingPool) {
+  await syncStagingSchedules(stagingPool);
+  // Apply admission policies to jobs retained from the older shared seed, too.
+  await syncDemoConcurrencyPolicies(stagingPool);
+  await syncDemoRateLimitPolicies(stagingPool);
 }
 await syncDemoSchedules(pool);
 await syncDemoConcurrencyPolicies(pool);
@@ -166,9 +173,7 @@ if (process.env.SEED_DEMO_DATA !== "false") {
     },
   );
   if (stagingDatabase) {
-    // Staging gets the same seed but no schedules, policies, or workers, so it stays a readable
-    // snapshot instead of a second live system.
-    const stagingSeed = await seedDemoData(stagingDatabase);
+    const stagingSeed = await seedStagingData(stagingDatabase);
     demoLogger.info(
       stagingSeed.seeded ? "workhorse.demo.staging_seeded" : "workhorse.demo.staging_seed_reused",
       stagingSeed.seeded

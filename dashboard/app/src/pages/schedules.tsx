@@ -26,8 +26,18 @@ export function CronPage({
         <EmptyState>Workhorse has no recurring schedules.</EmptyState>
       ) : (
         <Paper withBorder>
-          <ScrollArea>
-            <Table highlightOnHover verticalSpacing={6} horizontalSpacing="md" miw={800}>
+          <ScrollArea
+            type="auto"
+            offsetScrollbars="x"
+            viewportProps={{ tabIndex: 0, role: "region", "aria-label": "Schedules table" }}
+          >
+            <Table
+              highlightOnHover
+              verticalSpacing={6}
+              horizontalSpacing="md"
+              className="dashboard-table dashboard-table--schedules"
+              miw={800}
+            >
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Schedule</Table.Th>

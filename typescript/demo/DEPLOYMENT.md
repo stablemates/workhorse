@@ -63,10 +63,19 @@ supply:
 demo mode and environment labels, the single-admin credentials, telemetry, seeding, and the shutdown
 grace period.
 
-Each demo workspace should have a dedicated role and database. The primary workspace runs the live
-workers. The secondary workspace is seeded at startup but stays quiet and read-only in the
-dashboard. Each URL must resolve from inside the deployed container, so a loopback address on the
-build machine is not usable.
+Each demo workspace should have a dedicated role and database. The primary workspace runs TypeScript,
+Python, and Go workers. When `DATABASE_URL_SECONDARY` is set, both launchers add one dedicated
+TypeScript worker for staging, with two execution slots and its own connection pool. The launcher
+maps the secondary URL to that child process only and sets `WORKHORSE_DEMO_WORKSPACE=staging`.
+The container supervises and drains this worker alongside the primary workers.
+
+Staging stays read-only in the dashboard but executes a smaller release-validation seed and one
+report every ten minutes. Its seed covers dependencies, retry recovery, durable timers, cancellation,
+scheduled work, and expired deadlines. Startup markers prevent repeated seed insertion. Existing
+staging history is retained, and admission policies also govern jobs left by the previous seed.
+Fresh production history includes task-specific customer, email, order, and report context.
+Each URL must resolve from inside the deployed container, so a loopback address on the build machine
+is not usable.
 
 If the demo reaches PostgreSQL over a Unix socket, give that instance a dedicated socket directory
 and mount only that directory. Do not mount a host-wide socket directory such as

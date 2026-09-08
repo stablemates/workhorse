@@ -38,6 +38,10 @@ This is the authoritative implementation snapshot for schema version 1. “Suppo
 | Notification-assisted dispatch with polling fallback       |                                               |                                        |
 | Consistent bounded operational health snapshots            |                                               |                                        |
 
+The terminal operator surface also supports cursor continuation for jobs, timelines, and failures;
+filtered bulk redrive with read-only previews and explicit replay identities; and attributed signal
+and human-decision delivery. PostgreSQL owns each transition, matching the SDK semantics.
+
 ## Core job and dispatch
 
 | Feature                           | Status    | Current behavior and limits                                                                                                                                                                                                                                                 |

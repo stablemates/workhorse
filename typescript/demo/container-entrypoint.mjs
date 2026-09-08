@@ -57,6 +57,19 @@ const processes = [
   },
 ];
 
+if (process.env.DATABASE_URL_SECONDARY) {
+  processes.push({
+    name: "staging TypeScript worker",
+    command: process.execPath,
+    arguments: workerArguments,
+    environment: {
+      DATABASE_URL_PRIMARY: process.env.DATABASE_URL_SECONDARY,
+      WORKHORSE_DEMO_WORKSPACE: "staging",
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-staging",
+    },
+  });
+}
+
 const children = processes.map(({ name, command, arguments: arguments_, environment }) => ({
   name,
   child: spawn(command, arguments_, {

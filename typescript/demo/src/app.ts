@@ -423,7 +423,32 @@ function buildHistoricalJobs(now = new Date()): HistoricalJob[] {
     const finishedAt = new Date(runAt.getTime() + durationMs + (retried ? 4_000 : 0));
     const workerId = HISTORICAL_WORKER_IDS[index % HISTORICAL_WORKER_IDS.length]!;
     const fenceToken = index * 10 + currentAttempt + 1;
-    const error = failed ? errors[index % errors.length]! : null;
+    const taskError =
+      errors[task.queueName === "emails" ? 0 : task.queueName === "orders" ? 1 : 2]!;
+    const error = failed ? taskError : null;
+    const customer = ["acme", "globex", "initech", "umbrella"][index % 4]!;
+    const context: Json =
+      task.queueName === "emails"
+        ? {
+            recipient: `${customer}.${index + 1}@example.com`,
+            template: task.jobType === "email.digest" ? "weekly-activity" : "order-confirmation",
+            campaign: `autumn-${customer}`,
+          }
+        : task.queueName === "orders"
+          ? {
+              orderId: `ORD-${String(index + 1).padStart(5, "0")}`,
+              customer,
+              amountCents: 1_500 + Math.floor(random() * 45_000),
+              currency: "USD",
+              ...(task.jobType === "order.refund"
+                ? { reason: "returned-item" }
+                : { items: 1 + (index % 5) }),
+            }
+          : {
+              report: task.jobType === REPORT_JOB_TYPE ? "queue-health" : "dependency-health",
+              region: ["us-east", "eu-west", "ap-south"][index % 3]!,
+              customer,
+            };
     const attempts: HistoricalAttempt[] = [];
 
     if (retried) {
@@ -436,11 +461,7 @@ function buildHistoricalJobs(now = new Date()): HistoricalJob[] {
         outcome: "retry",
         startedAt: retryStartedAt,
         finishedAt: retryFinishedAt,
-        error: {
-          name: "TransientError",
-          message: "dependency unavailable; retrying",
-          code: "EAGAIN",
-        },
+        error: taskError,
       });
     }
 
@@ -462,6 +483,7 @@ function buildHistoricalJobs(now = new Date()): HistoricalJob[] {
       payload: {
         demoSeed: HISTORICAL_SEED_NAME,
         sequence: index + 1,
+        ...context,
         source: task.queueName === "emails" ? "campaign" : "historical-demo",
       },
       tags:
@@ -482,7 +504,20 @@ function buildHistoricalJobs(now = new Date()): HistoricalJob[] {
       currentAttempt,
       fenceToken,
       runAt,
-      result: failed ? null : { ok: true, durationMs: Math.round(durationMs) },
+      result: failed
+        ? null
+        : {
+            ok: true,
+            durationMs: Math.round(durationMs),
+            ...(task.queueName === "emails"
+              ? { provider: "demo-mail", delivered: 1 }
+              : task.queueName === "orders"
+                ? { customer, action: task.jobType === "order.refund" ? "refunded" : "fulfilled" }
+                : {
+                    rowsProcessed: 100 + index * 13,
+                    region: ["us-east", "eu-west", "ap-south"][index % 3]!,
+                  }),
+          },
       error,
       finishedAt,
       workerId,

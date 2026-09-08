@@ -1,3 +1,4 @@
+import { seedStagingData, syncStagingSchedules } from "../src/staging.js";
 /* oxlint-disable vitest/no-standalone-expect -- dashboardBrowserTest wraps Vitest callbacks. */
 import { existsSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -684,6 +685,55 @@ describe("Workhorse demo", () => {
         })).toSorted((left, right) => left.schedule_name.localeCompare(right.schedule_name)),
       ],
     });
+  });
+
+  it("seeds a distinct staging workload once and executes its dependencies and retries", async () => {
+    const seed = await seedStagingData(database);
+    expect(seed.jobIds).toHaveLength(7);
+    expect(await seedStagingData(database)).toEqual({ seeded: false, jobIds: [] });
+    await syncStagingSchedules(pool);
+    await syncStagingSchedules(pool);
+    expect(
+      (
+        await pool.query(
+          "SELECT schedule_name AS name, cron_expression FROM workhorse.schedule_definition WHERE namespace = $1",
+          [DEMO_SCHEDULE_NAMESPACE],
+        )
+      ).rows,
+    ).toEqual([{ name: "staging.release-validation", cron_expression: "*/10 * * * *" }]);
+    const adapter = createDrizzleAdapter(database, {
+      defaultQueue: DEMO_QUEUE,
+      queueOptions: DEMO_QUEUE_OPTIONS,
+    });
+    const definition = createDemoWorkerDefinition(database, adapter.queue, {
+      concurrency: 2,
+      workerId: "test-staging",
+      pollMs: 20,
+      registryIntervalMs: 100,
+      maintenanceIntervalMs: 100,
+      durableTimerWaitMs: 20,
+      scheduleNamespaces: [],
+    });
+    const worker = adapter.createWorker(definition.options);
+    definition.configure(worker);
+    const run = worker.run();
+    try {
+      await waitFor(
+        async () => {
+          const jobs = await Promise.all(seed.jobIds.map((id) => adapter.admin.getJob(id)));
+          return (
+            jobs.map((job) => job?.state).join(",") ===
+            "succeeded,succeeded,succeeded,succeeded,canceled,scheduled,failed"
+          );
+        },
+        (done) => done,
+        1000,
+      );
+      expect((await adapter.admin.getJob(seed.jobIds[2]!))?.currentAttempt).toBe(2);
+    } finally {
+      await worker.stop();
+      await run;
+    }
   });
 
   it("seeds representative dashboard data exactly once", async () => {
