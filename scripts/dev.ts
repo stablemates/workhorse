@@ -63,6 +63,21 @@ const commands: Array<{
   },
 ];
 
+if (process.env.DATABASE_URL_SECONDARY) {
+  commands.push({
+    command: "pnpm",
+    arguments: ["--filter", "@stablemates/workhorse-demo", typescriptWorkerScript],
+    env: {
+      ...process.env,
+      DATABASE_URL_PRIMARY: process.env.DATABASE_URL_SECONDARY,
+      WORKHORSE_DEMO_WORKSPACE: "staging",
+      WORKHORSE_DEMO_MODE: mode,
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-staging",
+      NODE_OPTIONS: nodeOptions,
+    },
+  });
+}
+
 /**
  * Optionally run the dashboard's own UI harness alongside the demo.
  *

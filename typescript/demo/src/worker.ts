@@ -32,7 +32,8 @@ const databaseUrl = resolveDemoDatabaseUrl();
 const workerPollMs = process.env.WORKHORSE_WORKER_POLL_MS
   ? Number(process.env.WORKHORSE_WORKER_POLL_MS)
   : DEMO_WORKER_POLL_MS;
-const workerId = `demo-typescript-${hostname().replaceAll(/[^\w.-]/g, "-")}-${process.pid}-${randomUUID().slice(0, 8)}`;
+const staging = process.env.WORKHORSE_DEMO_WORKSPACE === "staging";
+const workerId = `demo-${staging ? "staging" : "typescript"}-${hostname().replaceAll(/[^\w.-]/g, "-")}-${process.pid}-${randomUUID().slice(0, 8)}`;
 const pool = new Pool({ connectionString: databaseUrl, max: 10 });
 const database = createDemoDatabase(pool);
 const adapter = createDrizzleAdapter(database, {
@@ -46,7 +47,7 @@ export default defineWorkerProcess({
   workers: [
     createDemoWorkerDefinition(database, adapter.queue, {
       queues: [DEMO_QUEUE, DEMO_RATE_LIMIT_QUEUE, DEMO_SHARED_QUEUE],
-      concurrency: DEMO_WORKER_CONCURRENCY[0],
+      concurrency: staging ? 2 : DEMO_WORKER_CONCURRENCY[0],
       workerId,
       scheduleNamespaces: [DEMO_SCHEDULE_NAMESPACE],
       pollMs: workerPollMs,
