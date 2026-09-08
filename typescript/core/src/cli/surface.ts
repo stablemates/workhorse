@@ -1,4 +1,5 @@
 import type {
+  BulkRedrivePage,
   CancelResult,
   DeadLetterPage,
   JobCheckpoint,
@@ -11,6 +12,8 @@ import type {
   WorkerPauseResult,
   WorkerRegistryEntry,
 } from "../types.js";
+import type { SignalDeliveryResult } from "../queue/signals.js";
+import type { HumanWaitCompletionResult } from "../queue/human-waits.js";
 import type { StoredSchedule } from "../queue/cron-schedules.js";
 import type {
   AdminExternalWaits,
@@ -74,8 +77,8 @@ export const CLI_OPTIONS = {
   /**
    * One option set for every `admin` subcommand.
    *
-   * `admin` parses once, before it knows which subcommand ran, so a flag only some subcommands use
-   * is still accepted by all of them. The snapshot says so rather than implying eighteen sets.
+   * `admin` parses a shared vocabulary, then rejects selection and delivery flags that do not
+   * apply to the selected subcommand. In particular, --dry-run is valid only for redrive-many.
    */
   admin: {
     ...DATABASE_OPTIONS,
@@ -86,6 +89,16 @@ export const CLI_OPTIONS = {
     limit: { type: "string" },
     namespace: { type: "string", multiple: true },
     name: { type: "string" },
+    cursor: { type: "string" },
+    "created-after": { type: "string" },
+    "created-before": { type: "string" },
+    "finished-after": { type: "string" },
+    "finished-before": { type: "string" },
+    tag: { type: "string", multiple: true },
+    "error-name": { type: "string" },
+    "dry-run": { type: "boolean" },
+    "payload-json": { type: "string" },
+    "payload-file": { type: "string" },
     "human-cursor": { type: "string" },
     "signal-cursor": { type: "string" },
     env: { type: "string" },
@@ -150,7 +163,7 @@ export interface AdminCommand {
   readonly positionals: readonly string[];
 }
 
-/** The eighteen `admin` subcommands, inspection before mutation as the help lists them. */
+/** The declared `admin` subcommands, inspection before mutation as the help lists them. */
 export const ADMIN_COMMANDS = [
   { name: "jobs", mutates: false, positionals: [] },
   { name: "job", mutates: false, positionals: ["job-id"] },
@@ -165,6 +178,9 @@ export const ADMIN_COMMANDS = [
   { name: "maintenance", mutates: false, positionals: [] },
   { name: "cancel", mutates: true, positionals: ["job-id"] },
   { name: "redrive", mutates: true, positionals: ["job-id"] },
+  { name: "redrive-many", mutates: true, positionals: [] },
+  { name: "signal", mutates: true, positionals: ["job-id"] },
+  { name: "complete-human", mutates: true, positionals: ["job-id"] },
   { name: "pause", mutates: true, positionals: ["queue"] },
   { name: "resume", mutates: true, positionals: ["queue"] },
   { name: "purge", mutates: true, positionals: ["queue"] },
@@ -172,7 +188,7 @@ export const ADMIN_COMMANDS = [
   { name: "resume-worker", mutates: true, positionals: ["worker-id"] },
 ] as const satisfies readonly AdminCommand[];
 
-/** One of the eighteen names {@link ADMIN_COMMANDS} declares. */
+/** One of the declared names {@link ADMIN_COMMANDS} declares. */
 export type AdminCommandName = (typeof ADMIN_COMMANDS)[number]["name"];
 
 /**
@@ -243,6 +259,9 @@ export interface CliJsonPayloads {
   readonly "admin maintenance": AdminMaintenanceState;
   readonly "admin cancel": CancelResult;
   readonly "admin redrive": RedriveResult;
+  readonly "admin redrive-many": BulkRedrivePage;
+  readonly "admin signal": SignalDeliveryResult;
+  readonly "admin complete-human": HumanWaitCompletionResult;
   readonly "admin pause": AdminQueuePauseReport;
   readonly "admin resume": AdminQueuePauseReport;
   readonly "admin purge": AdminQueuePurgeReport;

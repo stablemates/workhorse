@@ -2924,8 +2924,8 @@ of that name. The snippet is printed only; `init` writes no route file and edits
 `WorkhorseAdminClient` in `typescript/core/src/cli/admin-client.ts`. The client uses `Admin` for
 `listJobs`, `getJob`, `getJobTimeline`, `listDeadLetters`, `queueMetricSnapshot`, `schedules`,
 `listWorkers`, `listCheckpoints`, `getCheckpoint`, `listWaits`, `getWait`, `listHumanWaits`,
-`listSignalWaits`, policy reads, `redrive`, `pauseQueue`, `resumeQueue`, `purgeQueue`, and
-`setWorkerPaused`. It uses `Queue` for the application-shaped `health` and `cancel` operations.
+`listSignalWaits`, policy reads, `redrive`, `redriveMany`, `pauseQueue`, `resumeQueue`, `purgeQueue`, and
+`setWorkerPaused`. It uses `Queue` for `cancel`, `sendSignal`, and `completeHumanWait`; `Admin` owns `health`.
 Queue status still merges metric snapshots with `workhorse.queue_control`, while namespace
 discovery reads `workhorse.schedule_definition`.
 
@@ -2952,12 +2952,12 @@ merges both lists oldest-first with a `KIND` column, and only a human decision c
 pages independently, because `ExternalWaitCursor` is scoped to one list: `--human-cursor` and
 `--signal-cursor` each take back the exact JSON `nextCursor` object the previous page printed, and
 a value that is not an object with string `createdAt`, `jobId`, and `name` fields is a usage error
-exiting 64. This command lists boundaries only. Completing a human decision stays in
-`Queue.completeHumanWait`; the CLI exposes no external-wait mutation.
+exiting 64. This command lists boundaries only; `admin signal` and `admin complete-human` answer them.
 
 Guarded commands are `admin cancel <job-id>`, `admin redrive <job-id>`, `admin pause <queue>`,
 `admin resume <queue>`, `admin purge <queue>`, `admin pause-worker <worker-id>`, and
-`admin resume-worker <worker-id>`. Two independent checks gate every mutation:
+`admin resume-worker <worker-id>`, `admin redrive-many`, `admin signal <job-id>`, and
+`admin complete-human <job-id>`. Two independent checks gate every mutation:
 
 1. **Explicit target environment.** The command requires `--env <database>`, and
    `WorkhorseAdminClient.confirmEnvironment` compares it against `current_database()` on the live
@@ -2970,13 +2970,47 @@ Guarded commands are `admin cancel <job-id>`, `admin redrive <job-id>`, `admin p
    queue name, or worker id — at a prompt written to stderr; a mismatched answer changes nothing
    and exits 1. A non-interactive session without `--yes` is a usage error.
 
-Every guarded command except `admin cancel` requires `--reason`. They record `--actor` (default
-`workhorse-admin`) and use `--request-id` (default: a random UUID). Redrive and purge use the
-request identity for idempotency. `admin purge` prints the deleted row count and emits it as
+Every guarded command except `admin cancel`, `admin signal`, and `admin complete-human` requires `--reason`.
+They record `--actor` (default `workhorse-admin`). Existing controls default `--request-id` to a random UUID;
+bulk recovery execution and external-wait delivery require it explicitly. Redrive and purge use the
+request identity for idempotency; scripts must preserve it on retries. `admin purge` prints the deleted row count and emits it as
 `deletedCount` beside `queue` under `--json`; a reused request identity carrying different audit
 fields raises `PurgeIdempotencyConflictError`, which the CLI reports as `Refused:` and exits 1.
 Queue and worker pause retain a safe request preview, digest, and length with the actor and reason.
 `admin cancel` records attribution optionally.
+
+`admin jobs`, `admin timeline`, and `admin failures` accept `--cursor` containing their exact JSON `nextCursor`.
+Text output prints the continuation too. `parseCursor` preserves timestamp strings without converting them to JavaScript dates.
+Jobs require `createdAt`, `jobId`, and `signature`; failures require `finishedAt` and `jobId`.
+Timelines require `jobId`, `occurredAt`, `kind`, and `recordId`; `kind` must be `event` or `attempt`, and the job must match.
+Malformed cursor shapes exit 64. PostgreSQL still verifies job-list signatures against the normalized filters.
+These pages remain weakly consistent; CLI continuation adds no snapshot guarantee.
+
+Jobs accept `--created-after` and `--created-before`. Failure listings and bulk recovery accept
+`--finished-after`, `--finished-before`, repeated `--tag` (all required), and `--error-name`.
+`parseDateRange` requires finite ISO timestamps with explicit timezones and increasing bounds.
+Lower bounds are inclusive and upper bounds exclusive. Jobs, timelines, failures, and bulk recovery cap `--limit` at 1,000;
+the default is 100. Inapplicable selection, delivery, or dry-run flags exit 64 rather than being ignored.
+
+`admin redrive-many` calls `Admin.redriveMany` once per invocation and emits `BulkRedrivePage` under `--json`.
+It selects sources oldest-first through PostgreSQL, with the same filters as failure listing.
+`--dry-run` calls `WorkhorseAdminClient.previewRedrive`, which always passes `dryRun: true` and writes no database state.
+A preview requires `--reason` but no `--env`, confirmation, or request ID; its default request ID is `workhorse-admin-preview`.
+Execution requires an explicit `--request-id` and the usual environment and confirmation checks.
+For an unfiltered queue selection, interactive confirmation requires typing `all queues`.
+Use only a previous bulk page's cursor, since failure listing orders the same cursor fields newest-first.
+Preserving request identity and audit fields replays each selected source's original target.
+A preview does not reserve candidates, and each execution processes only its bounded page.
+
+`admin signal <job-id>` and `admin complete-human <job-id>` require `--name`, `--request-id`, and exactly one
+of `--payload-json` or `--payload-file`. The latter reads UTF-8 JSON from a file.
+`readDeliveryPayload` accepts every JSON shape, including `null`, and reports malformed input without echoing payload content.
+The CLI validates existing external-wait name, value-size, actor, and idempotency bounds before confirmation.
+It passes the actor as `requestedBy` and request ID as `idempotencyKey` to `Queue.sendSignal` or `Queue.completeHumanWait`.
+The database records delivery attribution; these commands do not record a reason.
+JSON output is `SignalDeliveryResult` or `HumanWaitCompletionResult`, with dates serialized as ISO strings.
+`delivered`, `completed`, and `duplicate` succeed. `not_found`, `not_waiting`, `already_delivered`,
+`already_completed`, and `stale` exit 1; conflicts also fail without replacing the accepted answer.
 
 `admin pause-worker` and `admin resume-worker` write `workhorse.worker_registry.paused` through
 `Admin.setWorkerPaused` and emit the stored `WorkerPauseResult` — `workerId`, `paused`, `pausedBy`,

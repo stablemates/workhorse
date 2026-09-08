@@ -3,6 +3,10 @@ import type { Pool } from "pg";
 import { expectOneRow } from "../errors.js";
 import { Admin, Queue } from "../index.js";
 import type {
+  BulkRedriveOptions,
+  BulkRedrivePage,
+  DeadLetterFilter,
+  Json,
   CancelResult,
   DeadLetterPage,
   DeadLetterQuery,
@@ -21,9 +25,9 @@ import type {
   WorkerRegistryEntry,
 } from "../types.js";
 import type { StoredSchedule } from "../queue/cron-schedules.js";
-import type { ExternalWaitCursor } from "../queue/external-waits.js";
-import type { HumanWaitPage } from "../queue/human-waits.js";
-import type { SignalWaitPage } from "../queue/signals.js";
+import type { ExternalWaitDeliveryRequest, ExternalWaitCursor } from "../queue/external-waits.js";
+import type { HumanWaitCompletionResult, HumanWaitPage } from "../queue/human-waits.js";
+import type { SignalDeliveryResult, SignalWaitPage } from "../queue/signals.js";
 
 /**
  * A refused administrative operation. The refusal is a safety outcome, not malformed usage, so
@@ -282,6 +286,62 @@ export class WorkhorseAdminClient {
       reason: request.reason,
       requestId: request.requestId,
     });
+  }
+
+  previewRedrive(
+    filter: DeadLetterFilter,
+    request: AdminRedriveRequest,
+    options: Omit<BulkRedriveOptions, "dryRun"> = {},
+  ): Promise<BulkRedrivePage> {
+    return this.admin.redriveMany(
+      filter,
+      {
+        actor: request.requestedBy,
+        reason: request.reason,
+        requestId: request.requestId,
+      },
+      { ...options, dryRun: true },
+    );
+  }
+
+  redriveMany(
+    environment: ConfirmedEnvironment,
+    filter: DeadLetterFilter,
+    request: AdminRedriveRequest,
+    options: Omit<BulkRedriveOptions, "dryRun"> = {},
+  ): Promise<BulkRedrivePage> {
+    void environment;
+    return this.admin.redriveMany(
+      filter,
+      {
+        actor: request.requestedBy,
+        reason: request.reason,
+        requestId: request.requestId,
+      },
+      { ...options, dryRun: false },
+    );
+  }
+
+  sendSignal(
+    environment: ConfirmedEnvironment,
+    jobId: string,
+    name: string,
+    payload: Json,
+    request: ExternalWaitDeliveryRequest,
+  ): Promise<SignalDeliveryResult> {
+    void environment;
+    return this.queue.sendSignal(jobId, name, payload, request);
+  }
+
+  completeHumanWait(
+    environment: ConfirmedEnvironment,
+    jobId: string,
+    name: string,
+    payload: Json,
+    request: ExternalWaitDeliveryRequest,
+  ): Promise<HumanWaitCompletionResult> {
+    void environment;
+    return this.queue.completeHumanWait(jobId, name, payload, request);
   }
 
   async pauseQueue(

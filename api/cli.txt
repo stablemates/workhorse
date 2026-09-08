@@ -33,6 +33,9 @@ workers  read-only
 maintenance  read-only
 cancel <job-id>  mutates
 redrive <job-id>  mutates
+redrive-many  mutates
+signal <job-id>  mutates
+complete-human <job-id>  mutates
 pause <queue>  mutates
 resume <queue>  mutates
 purge <queue>  mutates
@@ -48,19 +51,29 @@ resume-worker <worker-id>  mutates
 ### admin
 
 --actor <string>
+--created-after <string>
+--created-before <string>
+--cursor <string>
 --database-url <string>
+--dry-run
 --env <string>
+--error-name <string>
+--finished-after <string>
+--finished-before <string>
 --help, -h
 --human-cursor <string>
 --json
 --limit <string>
 --name <string>
 --namespace <string>  (repeatable)
+--payload-file <string>
+--payload-json <string>
 --queue <string>
 --reason <string>
 --request-id <string>
 --signal-cursor <string>
 --state <string>  (repeatable)
+--tag <string>  (repeatable)
 --type <string>
 --yes
 
@@ -150,6 +163,9 @@ admin workers         readonly WorkerRegistryEntry[]
 admin maintenance     AdminMaintenanceState
 admin cancel          CancelResult
 admin redrive         RedriveResult
+admin redrive-many    BulkRedrivePage
+admin signal          SignalDeliveryResult
+admin complete-human  HumanWaitCompletionResult
 admin pause           AdminQueuePauseReport
 admin resume          AdminQueuePauseReport
 admin purge           AdminQueuePurgeReport
@@ -190,6 +206,11 @@ interface AdminQueueStatus {
   concurrencyActive: number;
   rateLimitPerSecond: number | null;
   rateLimitThrottledReadyDepth: number;
+}
+
+interface BulkRedrivePage {
+  results: RedriveResult[];
+  nextCursor: DeadLetterCursor | null;
 }
 
 interface CancelResult {
@@ -264,6 +285,17 @@ interface ExternalWaitRecord {
 interface HumanWait<TContext extends Json = Json> extends ExternalWaitRecord {
   context: TContext;
 }
+
+interface HumanWaitCompletionResult<TResult extends Json = Json> {
+  status: HumanWaitCompletionStatus;
+  jobId: string;
+  name: string;
+  payload: TResult | null;
+  completedAt: Date | null;
+  completedBy: string | null;
+}
+
+type HumanWaitCompletionStatus = "completed" | "duplicate" | "not_waiting" | "already_completed" | "stale" | "not_found";
 
 interface HumanWaitPage<TContext extends Json = Json> {
   items: HumanWait<TContext>[];
@@ -835,6 +867,17 @@ interface SchemaStatusReport {
     readonly note: string;
   } | null;
 }
+
+interface SignalDeliveryResult<TPayload extends Json = Json> {
+  status: SignalDeliveryStatus;
+  jobId: string;
+  name: string;
+  payload: TPayload | null;
+  deliveredAt: Date | null;
+  deliveredBy: string | null;
+}
+
+type SignalDeliveryStatus = "delivered" | "duplicate" | "not_waiting" | "already_delivered" | "stale" | "not_found";
 
 type SignalWait = ExternalWaitRecord;
 

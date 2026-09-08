@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 import { createIntegrationTestContext } from "./support/integration.js";
@@ -556,4 +558,354 @@ describe("tui command", () => {
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("requires an interactive terminal");
   });
+});
+
+describe("admin CLI paged investigations", () => {
+  it("walks jobs without skipping identities and rejects a cursor with changed filters", async () => {
+    const ids = await queue.enqueueMany([
+      { type: "page.me", payload: {} },
+      { type: "page.me", payload: {} },
+      { type: "page.me", payload: {} },
+    ]);
+    const args = ["jobs", "--type", "page.me", "--limit", "1", "--json"];
+    const seen: string[] = [];
+    let cursor: object | null = null;
+    let firstCursor: object | null = null;
+    do {
+      const result = runAdmin([...args, ...(cursor ? ["--cursor", JSON.stringify(cursor)] : [])]);
+      expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+      const page = JSON.parse(result.stdout);
+      seen.push(...page.items.map((item: { id: string }) => item.id));
+      cursor = page.nextCursor;
+      firstCursor ??= cursor;
+      expect(seen.length).toBeLessThanOrEqual(ids.length);
+    } while (cursor);
+    const wrong = runAdmin([
+      "jobs",
+      "--type",
+      "different",
+      "--cursor",
+      JSON.stringify(firstCursor),
+      "--json",
+    ]);
+    expect(wrong.code).toBe(1);
+    expect(seen.toSorted()).toEqual(ids.toSorted());
+    expect(runAdmin(["jobs", "--limit", "1"]).stdout).toContain("Next cursor");
+    const snapshot = await admin.getJob(ids[0]!);
+    expect(
+      JSON.parse(
+        runAdmin(["jobs", "--created-before", snapshot!.createdAt.toISOString(), "--json"]).stdout,
+      ).items,
+    ).toEqual([]);
+  });
+
+  it("continues a merged timeline to its final page", async () => {
+    const jobId = await createFailedJob({ type: "timeline.page" });
+    const expected = await admin.getJobTimeline(jobId);
+    const seen: object[] = [];
+    let cursor: object | null = null;
+    do {
+      const result = runAdmin([
+        "timeline",
+        jobId,
+        "--limit",
+        "1",
+        "--json",
+        ...(cursor ? ["--cursor", JSON.stringify(cursor)] : []),
+      ]);
+      expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+      const page = JSON.parse(result.stdout);
+      seen.push(...page.items);
+      cursor = page.nextCursor;
+      expect(seen.length).toBeLessThanOrEqual(expected.items.length);
+    } while (cursor);
+    // Compare the CLI's JSON representation, including stringified fence tokens and timestamps.
+    expect(seen).toEqual(
+      JSON.parse(
+        JSON.stringify(expected.items, (_key, value) =>
+          typeof value === "bigint" ? String(value) : value,
+        ),
+      ),
+    );
+  });
+
+  it("filters and pages failures with tags, error names, and finish-time bounds", async () => {
+    const lower = new Date().toISOString();
+    const first = await createFailedJob({
+      type: "failed.page",
+      tags: ["incident", "billing"],
+      errorName: "ProviderError",
+    });
+    const second = await createFailedJob({
+      type: "failed.page",
+      tags: ["incident", "billing"],
+      errorName: "ProviderError",
+    });
+    await createFailedJob({ type: "failed.page", tags: ["incident"], errorName: "ProviderError" });
+    await createFailedJob({
+      type: "failed.page",
+      tags: ["incident", "billing"],
+      errorName: "OtherError",
+    });
+    const args = [
+      "failures",
+      "--type",
+      "failed.page",
+      "--tag",
+      "incident",
+      "--tag",
+      "billing",
+      "--error-name",
+      "ProviderError",
+      "--finished-after",
+      lower,
+      "--finished-before",
+      new Date(Date.now() + 1000).toISOString(),
+      "--limit",
+      "1",
+      "--json",
+    ];
+    const firstResult = runAdmin(args);
+    expect({ code: firstResult.code, stderr: firstResult.stderr }).toEqual({ code: 0, stderr: "" });
+    const page = JSON.parse(firstResult.stdout);
+    expect(page.items.map((item: { jobId: string }) => item.jobId)).toEqual([second]);
+    const next = runAdmin([...args, "--cursor", JSON.stringify(page.nextCursor)]);
+    expect({ code: next.code, stderr: next.stderr }).toEqual({ code: 0, stderr: "" });
+    expect(JSON.parse(next.stdout)).toMatchObject({ items: [{ jobId: first }], nextCursor: null });
+  });
+
+  it.each([
+    ["jobs", "--cursor", "null"],
+    ["jobs", "--cursor", '{"createdAt":"date","jobId":"id"}'],
+    ["failures", "--cursor", "[]"],
+    ["jobs", "--created-after", "yesterday"],
+    ["jobs", "--created-after", "2026-09-07T12:00:00"],
+    [
+      "failures",
+      "--finished-after",
+      "2026-09-08T00:00:00Z",
+      "--finished-before",
+      "2026-09-07T00:00:00Z",
+    ],
+    ["jobs", "--limit", "1001"],
+    ["redrive", "unused", "--dry-run"],
+    ["redrive-many", "--state", "failed"],
+    ["jobs", "unexpected"],
+  ])("rejects malformed or inapplicable options: %j", (...args) => {
+    expect(runAdmin(args).code).toBe(64);
+  });
+});
+
+describe("admin CLI bulk recovery", () => {
+  it("previews without writes, executes oldest-first, replays, and continues", async () => {
+    const first = await createFailedJob({
+      type: "bulk.recover",
+      tags: ["incident"],
+      errorName: "ProviderError",
+    });
+    const second = await createFailedJob({
+      type: "bulk.recover",
+      tags: ["incident"],
+      errorName: "ProviderError",
+    });
+    const excluded = await createFailedJob({ type: "bulk.recover", errorName: "OtherError" });
+    const args = [
+      "redrive-many",
+      "--queue",
+      "default",
+      "--type",
+      "bulk.recover",
+      "--tag",
+      "incident",
+      "--error-name",
+      "ProviderError",
+      "--limit",
+      "1",
+      "--reason",
+      "provider restored",
+      "--request-id",
+      "bulk-cli-recovery",
+      "--json",
+    ];
+    const before = await admin.getJobTimeline(first);
+    const preview = runAdmin([...args, "--dry-run"]);
+    expect({ code: preview.code, stderr: preview.stderr }).toEqual({ code: 0, stderr: "" });
+    expect(JSON.parse(preview.stdout)).toMatchObject({
+      results: [{ sourceJobId: first, targetJobId: null, status: "eligible" }],
+    });
+    expect((await admin.getRedriveLineage(first)).records).toEqual([]);
+    expect(await admin.getJobTimeline(first)).toEqual(before);
+    const execute = [...args, "--env", databaseName, "--yes"];
+    const result = runAdmin(execute);
+    expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+    const page = JSON.parse(result.stdout);
+    expect(page.results).toEqual([
+      expect.objectContaining({ sourceJobId: first, status: "redriven" }),
+    ]);
+    expect((await admin.getJob(page.results[0].targetJobId))?.state).toBe("ready");
+    const replay = runAdmin(execute);
+    expect({ code: replay.code, stderr: replay.stderr }).toEqual({ code: 0, stderr: "" });
+    expect(JSON.parse(replay.stdout).results).toEqual([
+      expect.objectContaining({ targetJobId: page.results[0].targetJobId, status: "replayed" }),
+    ]);
+    const next = runAdmin([...execute, "--cursor", JSON.stringify(page.nextCursor)]);
+    expect({ code: next.code, stderr: next.stderr }).toEqual({ code: 0, stderr: "" });
+    expect(JSON.parse(next.stdout)).toMatchObject({
+      results: [{ sourceJobId: second, status: "redriven" }],
+      nextCursor: null,
+    });
+    expect((await admin.getRedriveLineage(excluded)).records).toEqual([]);
+    expect((await admin.getJob(first))?.state).toBe("failed");
+    const changed = runAdmin(
+      execute.map((arg) => (arg === "provider restored" ? "changed reason" : arg)),
+    );
+    expect(changed.code).toBe(1);
+    expect((await admin.getRedriveLineage(first)).records).toHaveLength(1);
+  });
+
+  it("requires a replay identity, environment, and confirmation before bulk writes", async () => {
+    const jobId = await createFailedJob({ type: "guarded.bulk" });
+    const args = ["redrive-many", "--reason", "recovery"];
+    expect(runAdmin([...args, "--env", databaseName, "--yes"]).code).toBe(64);
+    expect(runAdmin([...args, "--request-id", "bulk-guard", "--yes"]).code).toBe(64);
+    expect(runAdmin([...args, "--request-id", "bulk-guard", "--env", databaseName]).code).toBe(64);
+    expect(
+      runAdmin([...args, "--request-id", "bulk-guard", "--env", "wrong-database", "--yes"]).code,
+    ).toBe(1);
+    expect((await admin.getRedriveLineage(jobId)).records).toEqual([]);
+  });
+});
+
+describe("admin CLI external-wait delivery", () => {
+  it("completes a human decision from a JSON file", async () => {
+    const jobId = await queue.enqueue("file.decision", {});
+    const job = await queue.claim("file-worker", { leaseMs: 30_000 });
+    await queue.waitForHuman(job!, "file-worker", "approval", {});
+    const directory = await mkdtemp(path.join(tmpdir(), "workhorse-cli-decision-"));
+    const file = path.join(directory, "answer.json");
+    try {
+      await writeFile(file, '{"approved":true,"comment":"reviewed"}');
+      const result = runAdmin([
+        "complete-human",
+        jobId,
+        "--name",
+        "approval",
+        "--payload-file",
+        file,
+        "--request-id",
+        "file-answer",
+        "--env",
+        databaseName,
+        "--yes",
+        "--json",
+      ]);
+      expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        status: "completed",
+        payload: { approved: true, comment: "reviewed" },
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["signal", "complete-human"] as const)(
+    "delivers and replays %s with attribution",
+    async (command) => {
+      const jobId = await queue.enqueue("await.delivery", {});
+      const job = await queue.claim("delivery-worker", { leaseMs: 30_000 });
+      if (command === "signal") await queue.waitForSignal(job!, "delivery-worker", "answer");
+      else await queue.waitForHuman(job!, "delivery-worker", "answer", { prompt: "Approve?" });
+      const args = [
+        command,
+        jobId,
+        "--name",
+        "answer",
+        "--payload-json",
+        "false",
+        "--request-id",
+        "delivery-request",
+        "--actor",
+        "oncall",
+        "--env",
+        databaseName,
+        "--yes",
+        "--json",
+      ];
+      const result = runAdmin(args);
+      expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        jobId,
+        name: "answer",
+        payload: false,
+        status: command === "signal" ? "delivered" : "completed",
+        [command === "signal" ? "deliveredBy" : "completedBy"]: "oncall",
+      });
+      const replay = runAdmin(args);
+      expect({ code: replay.code, stderr: replay.stderr }).toEqual({ code: 0, stderr: "" });
+      expect(JSON.parse(replay.stdout)).toMatchObject({ status: "duplicate", payload: false });
+      const conflict = runAdmin(args.map((arg) => (arg === "false" ? "true" : arg)));
+      expect(conflict.code).toBe(1);
+      const different = runAdmin(
+        args.map((arg) => (arg === "delivery-request" ? "another-request" : arg)),
+      );
+      expect(different.code).toBe(1);
+      const resumed = await queue.claim("resumed-worker");
+      expect(resumed?.id).toBe(jobId);
+      const answer =
+        command === "signal"
+          ? await queue.waitForSignal(resumed!, "resumed-worker", "answer")
+          : await queue.waitForHuman(resumed!, "resumed-worker", "answer", { prompt: "Approve?" });
+      expect(answer).toEqual({
+        status: command === "signal" ? "delivered" : "completed",
+        payload: false,
+      });
+    },
+  );
+
+  it.each(["signal", "complete-human"])(
+    "refuses invalid %s delivery without changing the wait",
+    async (command) => {
+      const jobId = await queue.enqueue("guard.delivery", {});
+      const job = await queue.claim("guard-worker", { leaseMs: 30_000 });
+      if (command === "signal") await queue.waitForSignal(job!, "guard-worker", "answer");
+      else await queue.waitForHuman(job!, "guard-worker", "answer", {});
+      const base = [
+        command,
+        jobId,
+        "--name",
+        "answer",
+        "--payload-json",
+        "null",
+        "--request-id",
+        "guard-request",
+      ];
+      expect(runAdmin([...base, "--yes"]).code).toBe(64);
+      expect(runAdmin([...base, "--env", "wrong", "--yes"]).code).toBe(1);
+      expect(runAdmin([...base, "--env", databaseName]).code).toBe(64);
+      expect(
+        runAdmin([
+          ...base.map((arg) => (arg === "null" ? "invalid json" : arg)),
+          "--env",
+          databaseName,
+          "--yes",
+        ]).code,
+      ).toBe(64);
+      expect(
+        runAdmin([...base, "--payload-file", "unused", "--env", databaseName, "--yes"]).code,
+      ).toBe(64);
+      const pending =
+        command === "signal" ? await admin.listSignalWaits() : await admin.listHumanWaits();
+      expect(pending.items.map((wait) => wait.jobId)).toEqual([jobId]);
+      const missing = runAdmin([
+        ...base.map((arg) => (arg === jobId ? "00000000-0000-0000-0000-000000000000" : arg)),
+        "--env",
+        databaseName,
+        "--yes",
+        "--json",
+      ]);
+      expect(missing.code).toBe(1);
+      expect(JSON.parse(missing.stdout).status).toBe("not_found");
+    },
+  );
 });

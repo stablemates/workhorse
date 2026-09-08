@@ -1,4 +1,4 @@
-# Admin CLI and TUI: operating a queue from the terminal
+# How do I operate a queue from the terminal?
 
 The dashboard is not always where you are. Sometimes you are in a shell on a bastion host, or
 writing a runbook script, and you still need to see what a queue is doing — or stop it.
@@ -22,6 +22,14 @@ shape, not a private CLI format.
 ```sh
 workhorse admin failures --queue billing --json | jq '.items[].jobId'
 ```
+
+`admin jobs`, `admin timeline`, and `admin failures` accept `--cursor` with the previous
+answer's `nextCursor` object. Text output also prints that continuation. Keep the same filters
+when continuing; PostgreSQL rejects a job-list cursor used with different filters.
+
+To narrow an incident window, use `--created-after` and `--created-before` on jobs.
+Failure listings accept `--finished-after`, `--finished-before`, repeated `--tag`, and `--error-name`.
+Timestamp filters require a timezone and include the lower bound while excluding the upper bound.
 
 ## Finding out what a stalled job is waiting on
 
@@ -48,14 +56,24 @@ Long lists page. Each `--json` answer carries the continuation for its own list,
 that object back on the next call. This is the same paging the dashboard does, so both surfaces
 walk a busy queue's waits the same way.
 
-Answering a decision is not here. These commands only read; [human
-decisions](145-human-decisions.md) explains where a completion comes from and why it is
-attributed.
+When you have the answer, `admin signal` delivers a signal and `admin complete-human` completes
+a [human decision](145-human-decisions.md). Both select a job and its wait with `--name`.
+Pass the answer through `--payload-json` or `--payload-file`, and identify the delivery with
+`--request-id` and `--actor`.
+
+```sh
+workhorse admin complete-human "$JOB_ID" --name approval --payload-file decision.json \
+  --request-id "$DELIVERY_ID" --actor oncall --env workhorse_production --yes
+```
+
+Reuse the request identity, actor, and payload after an uncertain delivery. An exact duplicate
+succeeds without answering again; a conflicting answer or an unavailable wait fails.
 
 ## Changing things requires naming the target twice
 
 The guarded commands — `admin cancel`, `admin redrive`, `admin pause`, `admin resume`,
-`admin purge`, `admin pause-worker`, `admin resume-worker` — mutate a live system. The most common
+`admin purge`, `admin pause-worker`, `admin resume-worker`, `admin redrive-many`, `admin signal`,
+and `admin complete-human` — mutate a live system. The most common
 way to hurt yourself with an operator CLI is not a typo in the command. It is running the right
 command against the wrong database, because a shell still carried the environment of whatever you
 were doing an hour ago.
@@ -73,8 +91,8 @@ default, decides the command may proceed unattended.
 workhorse admin redrive 7d9f… --env workhorse_production --reason "upstream fixed" --yes
 ```
 
-A redrive always records who asked and why, and carries an idempotency identity, so retrying a
-runbook step cannot replay a job twice. That is the same contract as [redrive](340-redrive.md)
+A redrive records who asked and why, and carries an idempotency identity. Supply the same
+`--request-id` when retrying a runbook step so it returns the original target. That is the same contract as [redrive](340-redrive.md)
 through the public `Admin` client — the CLI adds no separate semantics. Queue pause and resume
 also require a reason and retain the request's audit identity.
 
@@ -84,6 +102,22 @@ backlog is poison and draining it by hand is not worth the incident. It carries 
 idempotency identity as a redrive, so a retried runbook step re-reports the first purge instead of
 taking a second bite; reusing that identity with different audit fields is refused. The command
 answers with how many jobs it removed.
+
+## Recovering a failed backlog
+
+`admin redrive-many` recovers a bounded page using the same filters as `admin failures`.
+Start with `--dry-run` to inspect eligible sources without creating jobs or audit records.
+A preview requires a reason but needs no environment confirmation.
+
+```sh
+workhorse admin redrive-many --queue billing --error-name ProviderError \
+  --reason "provider restored" --dry-run --json
+```
+
+To execute, remove `--dry-run` and supply `--env`, confirmation, and an explicit `--request-id`.
+Continue with the returned `nextCursor` through `--cursor`, keeping the filter and request identity.
+Recovery proceeds oldest-first, so its cursor belongs to recovery rather than the newest-first failure list.
+Each call processes its own page; a preview does not reserve the candidate set.
 
 ## Taking one worker out of rotation
 
