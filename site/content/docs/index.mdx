@@ -12,6 +12,20 @@ versioned SQL functions, with supported SDKs for TypeScript, Python, and Go. The
 Redis, and no PostgreSQL extension — one database owns your business data, your queued work, your
 execution state, and the evidence of what happened.
 
+## Start with your task
+
+If you are new to Workhorse, follow the [quickstart](/docs/quickstart) to install the schema,
+enqueue a job, and run a worker. Choose the TypeScript, Python, or Go example for your application.
+
+| I want to…                   | Read this                              | What you will learn                                                         |
+| ---------------------------- | -------------------------------------- | --------------------------------------------------------------------------- |
+| Run my first job             | [Quickstart](/docs/quickstart)         | Connect a producer and worker to the same database.                         |
+| Commit a job with my data    | [Transactional enqueue](/docs/enqueue) | Use an application transaction so the write and job commit together.        |
+| Make a handler safe to retry | [Core concepts](/docs/concepts)        | Understand delivery guarantees before adding checkpoints or external calls. |
+| Use my existing ORM          | [Integrations](/docs/integrations)     | Choose the adapter for your database client.                                |
+| Operate a worker fleet       | [Operations](/docs/operations)         | Inspect health, monitor queues, and respond to failures.                    |
+| Look up a method             | [API reference](/docs/api)             | Find the reference for your language SDK.                                   |
+
 ## The core promise
 
 `Queue.enqueue` accepts your open transaction as its last argument. If the transaction commits, the
@@ -29,6 +43,9 @@ try {
   await client.query("INSERT INTO orders (id) VALUES ($1)", [orderId]);
   await queue.enqueue("order.fulfill", { orderId }, {}, client);
   await client.query("COMMIT");
+} catch (error) {
+  await client.query("ROLLBACK");
+  throw error;
 } finally {
   client.release();
 }
@@ -39,15 +56,18 @@ grants a temporary lease and a fence token. If the worker dies, the lease expire
 recovers the job, and the fence token blocks the dead worker from writing stale results.
 
 Handlers run outside database transactions, so delivery is at least once: a handler can run twice
-after a crash. Named checkpoints make that safe. If a handler restarts, `ctx.checkpoint` replays
-each completed stage's stored result instead of running it again.
+after a crash. If a handler restarts, `ctx.checkpoint` replays each completed stage's stored result
+instead of running it again. A checkpoint cannot atomically commit an external service's response.
+If the process dies after the service succeeds but before the checkpoint is saved, the call can repeat.
+Use a stable provider idempotency key for effects such as charging a card.
 
 ```ts
 import { Worker } from "@stablemates/workhorse";
 
 const worker = new Worker(queue).handle("order.fulfill", async (payload, ctx) => {
+  // These application helpers must use stable provider idempotency keys.
   const charge = await ctx.checkpoint("charge", () => chargeCard(payload.orderId));
-  // If the process dies here, the retry skips "charge" and resumes below.
+  // Once the checkpoint is saved, a retry reuses the charge result.
   const label = await ctx.checkpoint("label", () => printLabel(payload.orderId));
   return { chargeId: charge.chargeId, labelId: label.labelId };
 });
@@ -90,6 +110,13 @@ TypeScript applications add an adapter when they want to enqueue inside an ORM t
 
 If you are integrating Workhorse with an AI coding agent, start with the
 [agent documentation index](/llms.txt) or the [agent integration guide](/docs/for-ai-agents).
+
+## Before you deploy
+
+Read [delivery guarantees](/docs/concepts) to identify effects that must tolerate a retry.
+Then configure [worker processes](/docs/worker-processes) for shutdown and
+[operations](/docs/operations) for health checks and incident response.
+Check [compatibility](/docs/compatibility) before choosing a release or upgrading an existing installation.
 
 ## Next
 

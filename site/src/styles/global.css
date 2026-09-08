@@ -97,6 +97,7 @@
 
   --color-fd-primary: var(--color-signal-400);
   --color-fd-ring: var(--color-signal-400);
+  --color-fd-muted-foreground: hsl(0 0% 68%);
 }
 
 html {
@@ -134,6 +135,53 @@ body {
  * the zoomed layout. Narrower screens, where the layout already fills the
  * width, stay 1:1.
  */
+/* Leave room below the hero on laptop screens, including browser chrome. */
+@media (min-width: 1024px) and (max-width: 1679px) {
+  .wh-hero-copy,
+  .wh-hero-install {
+    padding-block: 3rem;
+  }
+}
+
+.wh-derby-track {
+  position: relative;
+  height: 1.5rem;
+  overflow: hidden;
+  background: repeating-linear-gradient(
+    to right,
+    transparent 0,
+    transparent calc(25% - 1px),
+    var(--wh-rule) calc(25% - 1px),
+    var(--wh-rule) 25%
+  );
+  border-bottom: 1px solid var(--wh-rule);
+  border-right: 2px dashed currentColor;
+}
+
+.wh-derby-distance {
+  position: absolute;
+  inset: 0;
+  background: currentColor;
+  opacity: 0.12;
+  transform: scaleX(var(--race-progress));
+  transform-origin: left;
+}
+
+.wh-derby-runner {
+  position: absolute;
+  inset: 0 1.5rem 0 0;
+  display: flex;
+  align-items: center;
+  transform: translateX(calc(var(--race-progress) * 100%));
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .wh-derby-runner,
+  .wh-derby-distance {
+    transition: transform 120ms linear;
+  }
+}
+
 @media (min-width: 1680px) {
   .wh-page-scale {
     zoom: 1.25;
