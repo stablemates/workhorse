@@ -57,6 +57,7 @@ class DashboardBackend:
             "meta": self.meta,
             "taskCounts": self.task_counts,
             "tasks": self.tasks,
+            "tasksCursor": self.tasks_cursor,
             "activity": self.activity,
             "taskFacets": self.task_facets,
             "queues": self.queues,
@@ -115,6 +116,13 @@ class DashboardBackend:
         }
         return self._json_result(
             "SELECT workhorse.dashboard_tasks_v1(%s::jsonb) AS result",
+            (json.dumps(query),),
+        )
+
+    def tasks_cursor(self, input: object, _actor: str) -> object:
+        query = {**cast(Mapping[str, object], input), "canCompleteHumanWait": not self._read_only}
+        return self._json_result(
+            "SELECT workhorse.dashboard_tasks_cursor_v1(%s::jsonb) AS result",
             (json.dumps(query),),
         )
 
@@ -189,7 +197,7 @@ class DashboardBackend:
 
     def system(self, input: object, _actor: str) -> object:
         value = self._rows(
-            "SELECT workhorse.dashboard_system_v1(%s::jsonb) AS result",
+            "SELECT workhorse.dashboard_system_v2(%s::jsonb) AS result",
             (json.dumps(input),),
         )[0]["result"]
         return _iso(json.loads(value) if isinstance(value, str | bytes) else value)

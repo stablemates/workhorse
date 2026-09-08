@@ -1,8 +1,9 @@
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { spawn } from "node:child_process";
+import { dirname, join, resolve } from "node:path";
+import { execFileSync, spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
+import { fullBuildOutputDirectories } from "../../../scripts/test-build-outputs.js";
 
 const repositoryRoot = resolve(import.meta.dirname, "../../..");
 const scratchRoot = process.env.JCODE_SCRATCH_DIR ?? tmpdir();
@@ -12,6 +13,7 @@ const port = 31_000 + Math.floor(Math.random() * 1_000);
 const demoDatabaseUrl =
   process.env.DATABASE_URL_PRIMARY ??
   "postgresql://workhorse:workhorse@localhost:5432/workhorse_dev_primary";
+const reuseBuild = process.argv.includes("--reuse-build");
 
 interface CommandResult {
   code: number;
@@ -52,12 +54,34 @@ try {
   console.log(
     `JCODE_CHECKPOINT ${JSON.stringify({ message: "Exporting tracked clean checkout" })}`,
   );
-  const exported = await run(
+  if (reuseBuild) {
+    const verified = await run("pnpm", ["build:check"]);
+    if (verified.code !== 0)
+      throw new Error(`Cannot reuse stale build artifacts\n${verified.output}`);
+  }
+  // Export the working sources that produced the verified build, including uncommitted edits.
+  const sourceFiles = execFileSync(
     "git",
-    ["checkout-index", "--all", "--force", `--prefix=${checkout}/`],
-    { cwd: repositoryRoot },
-  );
-  if (exported.code !== 0) throw new Error(`Failed to export checkout\n${exported.output}`);
+    ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+    { cwd: repositoryRoot, encoding: "utf8" },
+  )
+    .split("\0")
+    .filter(Boolean);
+  for (const file of new Set(sourceFiles)) {
+    await mkdir(dirname(join(checkout, file)), { recursive: true });
+    await cp(join(repositoryRoot, file), join(checkout, file)).catch(
+      (error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+      },
+    );
+  }
+  // The isolated source build uses Git's ignore rules for its source fingerprint too.
+  const initialized = await run("git", ["init", "--quiet"], {
+    cwd: checkout,
+    env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
+  });
+  if (initialized.code !== 0)
+    throw new Error(`Failed to initialize checkout\n${initialized.output}`);
 
   console.log(`JCODE_CHECKPOINT ${JSON.stringify({ message: "Installing clean checkout" })}`);
   const installResult = await run(
@@ -72,9 +96,19 @@ try {
   }
   installed = true;
 
-  console.log(`JCODE_CHECKPOINT ${JSON.stringify({ message: "Building clean checkout" })}`);
-  const buildResult = await run("pnpm", ["build"], { cwd: checkout });
-  if (buildResult.code !== 0) throw new Error(`Clean checkout build failed\n${buildResult.output}`);
+  if (reuseBuild) {
+    console.log(
+      `JCODE_CHECKPOINT ${JSON.stringify({ message: "Copying verified build artifacts" })}`,
+    );
+    for (const directory of fullBuildOutputDirectories) {
+      await cp(join(repositoryRoot, directory), join(checkout, directory), { recursive: true });
+    }
+  } else {
+    console.log(`JCODE_CHECKPOINT ${JSON.stringify({ message: "Building clean checkout" })}`);
+    const buildResult = await run("pnpm", ["build"], { cwd: checkout });
+    if (buildResult.code !== 0)
+      throw new Error(`Clean checkout build failed\n${buildResult.output}`);
+  }
   const buildCheck = await run("pnpm", ["test:build-check"], { cwd: checkout });
   if (buildCheck.code !== 0)
     throw new Error(`Clean checkout build output is incomplete\n${buildCheck.output}`);

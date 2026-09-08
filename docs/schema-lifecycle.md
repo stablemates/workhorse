@@ -2,7 +2,7 @@
 
 ## Current policy
 
-Schema version 1 is the whole schema. `sql/schema/current.sql` is the tracked source and
+Schema version 2 is current; version 1 is the released migration baseline. `sql/schema/current.sql` is the tracked source and
 `sql/schema.sql` is a build artifact for published packages. `sql/releases/0001.sql` freezes the
 0.1.0 clean-install artifact, and `sql/migrations/` holds every step after it.
 
@@ -72,7 +72,7 @@ throws a plain error instead, because an unreachable database says nothing about
 `migrateSchema(database)` is the explicit upgrade API. It rejects an uninstalled schema, versions
 below the baseline, versions newer than the runtime, mixed version rows, and gaps in the ordered
 plan. `workhorse schema migrate` exposes the same step from the CLI. An already-current schema is
-left unchanged, which is every schema while the plan is empty.
+left unchanged. Migration `0002-dashboard-reads.sql` upgrades the released baseline.
 
 ## Migration execution contract
 

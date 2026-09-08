@@ -1,12 +1,9 @@
 # SQL sources
 
-`schema/current.sql` is the tracked source for a clean installation. Edit it directly while the
-project remains pre-release. Repository tests also read this file, so a schema change touches one
-tracked artifact.
+`schema/current.sql` is the tracked source for a clean installation. Every schema change also
+adds an ordered step under `migrations/`. Released artifacts under `releases/` are immutable.
+See `docs/schema-lifecycle.md` for the additive migration contract.
 
-Package builds run `pnpm schema:generate`. That command writes the ignored `schema.sql` artifact,
-which the TypeScript package copies into `dist/sql/schema.sql` for runtime installation. Do not
-edit or commit the generated file.
-
-After the first stable release, add forward migrations under `migrations/` and freeze released
-clean-install artifacts under `releases/` as described in `docs/schema-lifecycle.md`.
+Package builds run `pnpm schema:generate` to write the ignored `schema.sql` artifact.
+The TypeScript package copies that artifact and the migrations into `dist/sql`.
+Do not edit or commit the generated file.

@@ -8,6 +8,7 @@ import type {
   DashboardSystemWindow,
   DashboardTaskFilter,
   DashboardTasksPage,
+  DashboardTasksCursorPage,
   DashboardWorkersPage,
   DashboardSettingsPage,
 } from "@stablemates/workhorse-dashboard-server/wire";
@@ -157,7 +158,7 @@ export type DurableDemoScenario =
   | "customer-onboarding"
   | "report-publication";
 export type PageData =
-  | { route: "/tasks"; value: DashboardTasksPage }
+  | { route: "/tasks"; value: DashboardTasksPage | DashboardTasksCursorPage }
   | { route: "/events"; value: DashboardEventsPage }
   | { route: "/cron"; value: DashboardCronPage }
   | { route: "/queues"; value: DashboardQueuesPage }

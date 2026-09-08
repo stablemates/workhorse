@@ -139,11 +139,19 @@
       "arguments": ["jsonb"],
       "returns": "jsonb"
     },
+    "dashboard_system_v2": {
+      "arguments": ["jsonb"],
+      "returns": "jsonb"
+    },
     "dashboard_task_counts_v1": {
       "arguments": ["jsonb"],
       "returns": "jsonb"
     },
     "dashboard_task_facets_v1": {
+      "arguments": ["jsonb"],
+      "returns": "jsonb"
+    },
+    "dashboard_tasks_cursor_v1": {
       "arguments": ["jsonb"],
       "returns": "jsonb"
     },

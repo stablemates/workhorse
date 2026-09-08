@@ -202,7 +202,11 @@ it("promises every governed function and column the installed schema still provi
   const promised = JSON.parse(
     await readFile(path.join(repository, "protocol/v1/governed-surface.json"), "utf8"),
   ) as GovernedSurface;
-  const current = deriveGovernedSurface(schema, await readSurfaceSources(repository));
+  const current = deriveGovernedSurface(
+    schema,
+    await readSurfaceSources(repository),
+    Object.keys(promised.functions),
+  );
   expect(classifyGovernedSurface(promised, current)).toEqual([]);
   expect(
     mergeGovernedSurface(promised, current),

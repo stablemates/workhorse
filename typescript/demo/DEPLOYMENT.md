@@ -200,3 +200,11 @@ republishes the previous build and reports success, which is indistinguishable f
 did nothing. Verify the revision before deploying, and prefer a deployment path that refuses a
 source checkout that is stale or has uncommitted changes rather than one that trusts the operator to
 remember.
+
+### Dashboard read migration
+
+This source requires Workhorse schema version 2. Before starting its containers, run the existing
+schema migration step against each demo database. Migration `0002-dashboard-reads.sql` adds the
+cursor task procedure and the shared-statistics system procedure, retaining the version 1 functions
+for an older process during rollout. The migration adds functions only; it does not rebuild tables
+or indexes. Runtime processes still refuse an older schema and never migrate at startup.

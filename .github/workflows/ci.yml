@@ -315,7 +315,7 @@ jobs:
 
   demo:
     name: demo and site smoke
-    if: ${{ false }} # Temporarily disabled while its repeated full builds are too expensive for CI.
+    if: github.event_name != 'schedule' || github.event.schedule == '17 4 * * 0'
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 40
     services:
@@ -348,13 +348,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:reset:dev-primary
       - run: pnpm build
-      - run: pnpm test:demo-smoke
-      - run: pnpm test:site-smoke
+      - run: pnpm test:demo-smoke:built
+      - run: pnpm test:site-smoke:built
 
   required:
     name: required
     if: always()
-    needs: [plan, static, unit, typescript, python, go, runtime-smoke, packed]
+    needs: [plan, static, unit, typescript, python, go, runtime-smoke, packed, demo]
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 5
     env:

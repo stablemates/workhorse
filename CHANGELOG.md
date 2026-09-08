@@ -15,6 +15,15 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 `0.1.0` the schema upgrades in place: every release ships ordered, immutable migrations, and inside
 a major line a migration only adds. Breaking changes are always listed with upgrade steps.
 
+**Unreleased**
+
+Requires **schema v2**. Run `workhorse schema migrate` before starting this version; existing data
+and version 1 SQL functions are preserved.
+
+- Add cursor task browsing through `tasksCursor`, with optional exact totals and backward navigation.
+- Read system statistics once per response, sharing the live history tail across dashboard panels.
+- Coalesce dashboard refreshes and reuse validated full builds across repository smoke checks.
+
 ## 0.1.0 — 2026-09-04
 
 Published to npm from one source commit shared with the Python distribution and the Go module,

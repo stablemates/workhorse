@@ -540,6 +540,20 @@ export interface DashboardTasksPage {
   jobs: DashboardJobRow[];
 }
 
+/** A stable ordering tuple, retaining database timestamp precision. */
+export interface DashboardTaskCursor {
+  id: string;
+  updatedAt: string;
+  priority: number;
+}
+
+/** Cursor browsing omits the full count unless explicitly requested. */
+export interface DashboardTasksCursorPage extends Omit<DashboardTasksPage, "total"> {
+  total: number | null;
+  nextCursor: DashboardTaskCursor | null;
+  previousCursor: DashboardTaskCursor | null;
+}
+
 export interface DashboardTaskFacets {
   queues: string[];
   workers: string[];

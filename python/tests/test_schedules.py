@@ -6,6 +6,7 @@ from protocol_fixtures import assert_fixture_execution, read_protocol_fixture
 from test_enqueue import Connection
 
 from workhorse import Queue, ScheduleDefinition, ScheduledJob
+from workhorse._statements import MINIMUM_SCHEMA_VERSION
 
 
 def test_synchronizes_every_shared_schedule_fixture_through_the_versioned_sql_function() -> None:
@@ -13,7 +14,13 @@ def test_synchronizes_every_shared_schedule_fixture_through_the_versioned_sql_fu
     executed: set[str] = set()
     for fixture in fixtures:
         connection = Connection(
-            [[{"kind": "schema", "version": 1}, {"kind": "protocol", "version": 1}], []]
+            [
+                [
+                    {"kind": "schema", "version": MINIMUM_SCHEMA_VERSION},
+                    {"kind": "protocol", "version": 1},
+                ],
+                [],
+            ]
         )
 
         Queue(connection, default_queue=fixture["defaultQueue"]).sync_schedules(

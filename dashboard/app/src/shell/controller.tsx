@@ -1,3 +1,4 @@
+import { createRefreshRequests } from "../refresh-requests.js";
 import {
   createDashboardPollingClock,
   createDashboardRefreshResumePolicy,
@@ -113,6 +114,7 @@ export function useDashboardController(
 ) {
   const client = useDashboardClient();
   const refreshBlockers = useRefreshBlockers();
+  const refreshRequests = useMemo(() => createRefreshRequests(), [client]);
   const [navbarOpened, { toggle: toggleNavbar, close: closeNavbar }] = useDisclosure();
   // Timestamps format through module-level displayTimeZone; re-render everything on change.
   const [, setTimeZoneTick] = useState(0);
@@ -276,6 +278,8 @@ export function useDashboardController(
   const loadPage = useCallback(
     async ({ background = false }: { background?: boolean } = {}) => {
       if (shouldDiscardBackgroundRefresh(background)) return;
+      const key = JSON.stringify([route, listingKey, systemWindow, eventsKey]);
+      if (background && refreshRequests.has(key)) return;
       const activeRequest = ++requestId.current;
       if (!background) {
         setLoadState((current) => ({
@@ -285,54 +289,69 @@ export function useDashboardController(
         }));
       }
       try {
-        let data: PageData;
-        if (route === "/tasks") {
-          const listing = listingRef.current;
-          data = {
-            route: "/tasks",
-            value: await client.tasks({
-              filter: listing.filter,
-              queue: listing.queue,
-              worker: listing.worker,
-              jobType: listing.jobType,
-              sort: listing.sort,
-              tags: listing.tags,
-              search: listing.search ?? undefined,
-              page: listing.page,
-              pageSize: listing.pageSize,
-            }),
-          };
-        } else if (route === "/events") {
-          const events = eventsRef.current;
-          data = {
-            route: "/events",
-            value: await client.events({
-              window: events.window,
-              page: events.page,
-              pageSize: events.pageSize,
-              kind: events.kind,
-              queue: events.queue,
-              jobType: events.jobType,
-              types: events.types,
-            }),
-          };
-        } else if (route === "/cron") {
-          data = { route: "/cron", value: await client.cron() };
-        } else if (route === "/queues") {
-          data = { route: "/queues", value: await client.queues() };
-        } else if (route === "/system") {
-          data = {
-            route: "/system",
-            value: await client.system({ window: systemWindow }),
-          };
-        } else if (route === "/settings") {
-          data = { route: "/settings", value: await client.settings() };
-        } else {
-          data = {
-            route: "/workers",
-            value: await client.workers(),
-          };
-        }
+        const data = await refreshRequests.run(
+          key,
+          async () => {
+            let pageData: PageData;
+            if (route === "/tasks") {
+              const listing = listingRef.current;
+              const query = {
+                filter: listing.filter,
+                queue: listing.queue,
+                worker: listing.worker,
+                jobType: listing.jobType,
+                sort: listing.sort,
+                tags: listing.tags,
+                search: listing.search ?? undefined,
+                pageSize: listing.pageSize,
+              };
+              pageData = {
+                route: "/tasks",
+                value:
+                  listing.page > 1 && !listing.cursor
+                    ? await client.tasks({ ...query, page: listing.page })
+                    : await client.tasksCursor({
+                        ...query,
+                        cursor: listing.cursor ?? null,
+                        direction: listing.direction ?? "next",
+                        count: "none",
+                      }),
+              };
+            } else if (route === "/events") {
+              const events = eventsRef.current;
+              pageData = {
+                route: "/events",
+                value: await client.events({
+                  window: events.window,
+                  page: events.page,
+                  pageSize: events.pageSize,
+                  kind: events.kind,
+                  queue: events.queue,
+                  jobType: events.jobType,
+                  types: events.types,
+                }),
+              };
+            } else if (route === "/cron") {
+              pageData = { route: "/cron", value: await client.cron() };
+            } else if (route === "/queues") {
+              pageData = { route: "/queues", value: await client.queues() };
+            } else if (route === "/system") {
+              pageData = {
+                route: "/system",
+                value: await client.system({ window: systemWindow }),
+              };
+            } else if (route === "/settings") {
+              pageData = { route: "/settings", value: await client.settings() };
+            } else {
+              pageData = {
+                route: "/workers",
+                value: await client.workers(),
+              };
+            }
+            return pageData;
+          },
+          !background,
+        );
         if (activeRequest === requestId.current) {
           if (!shouldDiscardBackgroundRefresh(background)) {
             setLoadState({ status: "ready", data, error: null });
@@ -352,20 +371,28 @@ export function useDashboardController(
       // `listingKey` is the dependency the task listing actually has; the values themselves are
       // read from a ref so that a re-render for an unrelated reason cannot send a stale request.
     },
-    [client, route, listingKey, systemWindow, eventsKey, shouldDiscardBackgroundRefresh],
+    [
+      client,
+      route,
+      listingKey,
+      systemWindow,
+      eventsKey,
+      shouldDiscardBackgroundRefresh,
+      refreshRequests,
+    ],
   );
 
   const loadTaskCounts = useCallback(
     async ({ background = false }: { background?: boolean } = {}) => {
       if (shouldDiscardBackgroundRefresh(background)) return;
       try {
-        const counts = await client.taskCounts();
+        const counts = await refreshRequests.run("taskCounts", () => client.taskCounts());
         if (!shouldDiscardBackgroundRefresh(background)) setTaskCounts(counts);
       } catch {
         // The active page owns the connection state; keep the last navigation counts on failure.
       }
     },
-    [client, shouldDiscardBackgroundRefresh],
+    [client, shouldDiscardBackgroundRefresh, refreshRequests],
   );
 
   const runDemoJob = useCallback(

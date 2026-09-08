@@ -47,6 +47,7 @@ import {
   readDashboardTaskFacets,
   readDashboardTaskCounts,
   readDashboardTasks,
+  readDashboardTasksCursor,
   readDashboardWorkers,
   readDashboardSettings,
 } from "./read-model.js";
@@ -123,6 +124,18 @@ const tasksInput = z.object({
     .optional()
     .transform((value) => value || null),
   pageSize: z.union([z.literal(25), z.literal(50), z.literal(100)]).default(50),
+});
+const tasksCursorInput = tasksInput.omit({ page: true }).extend({
+  cursor: z
+    .object({
+      id: z.uuid(),
+      updatedAt: z.iso.datetime({ precision: 6 }),
+      priority: z.number().int().min(0).max(dashboardTaskPriorityMax),
+    })
+    .nullable()
+    .default(null),
+  direction: z.enum(["next", "previous"]).default("next"),
+  count: z.enum(["none", "exact"]).default("none"),
 });
 const activityInput = z.object({
   filter: taskFilter.default("all"),
@@ -379,6 +392,17 @@ export const dashboardRouter = {
       .input(tasksInput)
       .handler(({ context, input }) =>
         readDashboardTasks(
+          context.database,
+          input,
+          context.projectDurability,
+          context.operator.mode === "writable" &&
+            Boolean(context.taskController?.completeHumanWait),
+        ),
+      ),
+    tasksCursor: procedure
+      .input(tasksCursorInput)
+      .handler(({ context, input }) =>
+        readDashboardTasksCursor(
           context.database,
           input,
           context.projectDurability,

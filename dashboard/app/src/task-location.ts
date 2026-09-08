@@ -3,6 +3,7 @@ import {
   dashboardTaskSorts,
   type DashboardTaskFilter,
   type DashboardTaskSort,
+  type DashboardTaskCursor,
 } from "@stablemates/workhorse-dashboard-server/wire";
 
 export const taskPageSizes = [25, 50, 100] as const;
@@ -19,6 +20,8 @@ export interface TaskLocationState {
   tags: string[];
   search: string | null;
   page: number;
+  cursor?: DashboardTaskCursor | null;
+  direction?: "next" | "previous";
   pageSize: TaskPageSize;
   period: TaskActivityPeriod;
   group: TaskActivityGroup;
@@ -79,7 +82,34 @@ export function parseTaskLocation(
     .slice(0, 20);
   const requestedTaskId = optionalValue(parameters, "task");
 
+  let cursor: DashboardTaskCursor | null = null;
+  const encoded = optionalValue(parameters, "cursor");
+  if (encoded && encoded.length <= 500) {
+    try {
+      const candidate = JSON.parse(encoded) as DashboardTaskCursor;
+      if (
+        typeof candidate.id === "string" &&
+        /^[0-9a-f-]{36}$/i.test(candidate.id) &&
+        typeof candidate.updatedAt === "string" &&
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(candidate.updatedAt) &&
+        Number.isFinite(Date.parse(candidate.updatedAt)) &&
+        Number.isInteger(candidate.priority) &&
+        candidate.priority >= 0 &&
+        candidate.priority <= 100
+      )
+        cursor = candidate;
+    } catch {
+      /* Ignore malformed location state. */
+    }
+  }
   return {
+    ...(cursor
+      ? {
+          cursor,
+          direction:
+            parameters.get("direction") === "previous" ? ("previous" as const) : ("next" as const),
+        }
+      : {}),
     filter: requestedFilter && filters.has(requestedFilter) ? requestedFilter : "all",
     queue: optionalValue(parameters, "queue"),
     worker: optionalValue(parameters, "worker"),
@@ -112,6 +142,10 @@ export function taskLocationHref(state: TaskLocationState): string {
   if (state.worker) parameters.set("worker", state.worker);
   if (state.jobType) parameters.set("type", state.jobType);
   if (state.sort !== "updated") parameters.set("sort", state.sort);
+  if (state.cursor) {
+    parameters.set("cursor", JSON.stringify(state.cursor));
+    if (state.direction === "previous") parameters.set("direction", "previous");
+  }
   if (state.page > 1) parameters.set("page", String(state.page));
   if (state.pageSize !== 50) parameters.set("per", String(state.pageSize));
   if (state.period !== "1h") parameters.set("period", state.period);
@@ -140,5 +174,7 @@ export function taskListingKey(state: TaskLocationState): string {
     state.sort,
     state.page,
     state.pageSize,
+    state.cursor ?? null,
+    state.direction ?? "next",
   ]);
 }

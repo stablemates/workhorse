@@ -7,6 +7,23 @@ import {
 } from "./task-location.js";
 
 describe("task location state", () => {
+  it("round-trips precise cursor navigation and ignores malformed cursors", () => {
+    const state = {
+      ...parseTaskLocation(""),
+      cursor: {
+        id: "01890abc-0000-7000-8000-000000000001",
+        updatedAt: "2026-09-08T01:02:03.123456Z",
+        priority: 50,
+      },
+      direction: "previous" as const,
+    };
+    const restored = parseTaskLocation(taskLocationHref(state).split("?")[1]!);
+    expect(restored).toEqual(state);
+    expect(taskListingKey(restored)).not.toBe(taskListingKey(parseTaskLocation("")));
+    expect(parseTaskLocation("?cursor=null").cursor).toBeUndefined();
+    expect(parseTaskLocation("?cursor=broken").cursor).toBeUndefined();
+  });
+
   it("round-trips shareable task filters and omits defaults", () => {
     const state = parseTaskLocation(
       "?filter=retried&tags=billing,weekly&q=invoice*&queue=orders&worker=worker-1&type=order.process&sort=priority&page=3&per=100&period=7d&group=task",

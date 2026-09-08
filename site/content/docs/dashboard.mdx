@@ -16,6 +16,13 @@ job listings, per-job timelines with redacted payloads, dead letters, the worker
 health verdict with its reasons. With host-authorized controllers wired in, it can also cancel jobs,
 run schedules now, pause queues and workers, and edit maintenance and retention policy.
 
+Task browsing uses Previous and Next controls, so opening a page does not require counting every
+matching historical job. Filters and navigation cursors remain in the URL for sharing and browser
+history. Older links with a page number still work. Jobs can move between pages as their state changes.
+
+When a page refresh is still loading, automatic refresh waits rather than starting the same read
+again. After an operator action, the dashboard fetches its committed result.
+
 ## Mount it in your server
 
 Choose the host for your application's language. Each host serves the browser bundle and the same

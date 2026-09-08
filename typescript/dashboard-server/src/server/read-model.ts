@@ -19,6 +19,8 @@ import {
   DashboardTaskFilter,
   DashboardTaskSort,
   DashboardTasksPage,
+  DashboardTasksCursorPage,
+  DashboardTaskCursor,
   DashboardWorkersPage,
   DashboardSettingsPage,
   DashboardMaintenanceLoopCadences,
@@ -145,6 +147,35 @@ export async function readDashboardTasks(
     SELECT workhorse.dashboard_tasks_v1(${input}::jsonb) AS result
   `);
   const page = expectOneRow(rows, "the dashboard tasks procedure").result;
+  return projectTaskDurability(database, page, projectDurability);
+}
+
+export async function readDashboardTasksCursor(
+  database: DashboardDatabase,
+  query: Omit<DashboardTasksQuery, "page"> & {
+    cursor: DashboardTaskCursor | null;
+    direction: "next" | "previous";
+    count: "none" | "exact";
+  },
+  projectDurability: DashboardDurabilityProjector = noDashboardDurability,
+  canCompleteHumanWait = false,
+): Promise<DashboardTasksCursorPage> {
+  const input = JSON.stringify({ ...query, canCompleteHumanWait });
+  const rows = await database.execute<{ result: DashboardTasksCursorPage }>(sql`
+    SELECT workhorse.dashboard_tasks_cursor_v1(${input}::jsonb) AS result
+  `);
+  return projectTaskDurability(
+    database,
+    expectOneRow(rows, "the dashboard cursor tasks procedure").result,
+    projectDurability,
+  );
+}
+
+async function projectTaskDurability<T extends { jobs: DashboardTasksPage["jobs"] }>(
+  database: DashboardDatabase,
+  page: T,
+  projectDurability: DashboardDurabilityProjector,
+): Promise<T> {
   if (projectDurability === noDashboardDurability || page.jobs.length === 0) return page;
 
   const durabilityRows = await database.execute<{
@@ -211,7 +242,7 @@ export async function readDashboardSystem(
 ): Promise<DashboardSystemPage> {
   const input = JSON.stringify({ window });
   const rows = await database.execute<{ result: DashboardSystemPage }>(sql`
-    SELECT workhorse.dashboard_system_v1(${input}::jsonb) AS result
+    SELECT workhorse.dashboard_system_v2(${input}::jsonb) AS result
   `);
   return expectOneRow(rows, "the dashboard system procedure").result;
 }

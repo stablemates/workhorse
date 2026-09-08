@@ -11,6 +11,7 @@ from workhorse._compatibility import (
     assert_async_compatible,
     assert_sync_compatible,
 )
+from workhorse._statements import MINIMUM_SCHEMA_VERSION
 
 
 class SyncExecutor:
@@ -34,7 +35,9 @@ class AsyncExecutor:
 
 
 def test_sync_compatibility_check_queries_on_every_call() -> None:
-    executor = SyncExecutor([{"kind": "schema", "version": 1}, {"kind": "protocol", "version": 1}])
+    executor = SyncExecutor(
+        [{"kind": "schema", "version": MINIMUM_SCHEMA_VERSION}, {"kind": "protocol", "version": 1}]
+    )
 
     assert_sync_compatible(executor)
     assert_sync_compatible(executor)
@@ -43,7 +46,9 @@ def test_sync_compatibility_check_queries_on_every_call() -> None:
 
 
 def test_sync_cached_compatibility_check_queries_once() -> None:
-    executor = SyncExecutor([{"kind": "schema", "version": 1}, {"kind": "protocol", "version": 1}])
+    executor = SyncExecutor(
+        [{"kind": "schema", "version": MINIMUM_SCHEMA_VERSION}, {"kind": "protocol", "version": 1}]
+    )
     check = CachedCompatibilityCheck(executor)
 
     check.assert_compatible()
@@ -66,7 +71,9 @@ def test_sync_cached_compatibility_check_reuses_a_refusal() -> None:
 
 @pytest.mark.asyncio
 async def test_async_compatibility_check_queries_on_every_call() -> None:
-    executor = AsyncExecutor([{"kind": "schema", "version": 1}, {"kind": "protocol", "version": 1}])
+    executor = AsyncExecutor(
+        [{"kind": "schema", "version": MINIMUM_SCHEMA_VERSION}, {"kind": "protocol", "version": 1}]
+    )
 
     await assert_async_compatible(executor)
     await assert_async_compatible(executor)
@@ -76,7 +83,9 @@ async def test_async_compatibility_check_queries_on_every_call() -> None:
 
 @pytest.mark.asyncio
 async def test_async_cached_compatibility_check_queries_once() -> None:
-    executor = AsyncExecutor([{"kind": "schema", "version": 1}, {"kind": "protocol", "version": 1}])
+    executor = AsyncExecutor(
+        [{"kind": "schema", "version": MINIMUM_SCHEMA_VERSION}, {"kind": "protocol", "version": 1}]
+    )
     check = AsyncCachedCompatibilityCheck(executor)
 
     await check.assert_compatible()
@@ -125,7 +134,7 @@ class FakeConnection:
 
 
 def test_public_assert_schema_compatible_accepts_the_installed_version() -> None:
-    assert_schema_compatible(FakeConnection(1))
+    assert_schema_compatible(FakeConnection(MINIMUM_SCHEMA_VERSION))
 
 
 def test_public_assert_schema_compatible_refuses_an_older_schema() -> None:

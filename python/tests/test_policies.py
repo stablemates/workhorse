@@ -16,13 +16,17 @@ from workhorse import (
     RateLimit,
     RateLimitPolicyDefinition,
 )
+from workhorse._statements import MINIMUM_SCHEMA_VERSION
 
 
 def test_sync_client_synchronizes_and_maps_concurrency_policies() -> None:
     updated_at = datetime(2026, 8, 23, 20, 0, tzinfo=UTC)
     connection = Connection(
         [
-            [{"kind": "schema", "version": 1}, {"kind": "protocol", "version": 1}],
+            [
+                {"kind": "schema", "version": MINIMUM_SCHEMA_VERSION},
+                {"kind": "protocol", "version": 1},
+            ],
             [
                 {
                     "namespace": "python-deployment",

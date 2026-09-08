@@ -4,6 +4,7 @@ import {
   type DashboardJobRow,
   type DashboardRedriveCursor,
   type DashboardTasksPage,
+  type DashboardTasksCursorPage,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import { taskPageSizes, type TaskLocationState, type TaskPageSize } from "../task-location.js";
 import { type RunNowFeedback } from "../run-now.js";
@@ -85,7 +86,7 @@ export function TasksPage({
   auditActor,
   reload,
 }: {
-  data: DashboardTasksPage;
+  data: DashboardTasksPage | DashboardTasksCursorPage;
   navigate: (href: string) => void;
   replace: (href: string) => void;
   taskLocation: TaskLocationState;
@@ -125,7 +126,13 @@ export function TasksPage({
   const locationState: TaskLocationState = taskLocation;
   const updateLocation = useCallback(
     (updates: Partial<TaskLocationState>, useReplace = false) => {
-      const href = taskHref({ ...locationState, page: 1, ...updates });
+      const href = taskHref({
+        ...locationState,
+        page: 1,
+        cursor: null,
+        direction: "next",
+        ...updates,
+      });
       if (useReplace) replace(href);
       else navigate(href);
     },
@@ -296,16 +303,49 @@ export function TasksPage({
       setRedrivingSelection({ cursor, redriven, running: false });
     }
   };
-  const totalPages = Math.max(1, Math.ceil(data.total / data.pageSize));
-  const pagination = (
-    <Pagination
-      value={Math.min(data.page, totalPages)}
-      onChange={(page) => navigate(taskHref({ ...locationState, page }))}
-      total={totalPages}
-      size="xs"
-      aria-label="Tasks pagination"
-    />
-  );
+  const totalPages = Math.max(1, Math.ceil((data.total ?? 0) / data.pageSize));
+  const pagination =
+    "nextCursor" in data ? (
+      <Group gap="xs" aria-label="Tasks pagination">
+        <Button
+          size="xs"
+          variant="subtle"
+          disabled={!data.previousCursor}
+          onClick={() =>
+            navigate(
+              taskHref({
+                ...locationState,
+                page: 1,
+                cursor: data.previousCursor,
+                direction: "previous",
+              }),
+            )
+          }
+        >
+          Previous
+        </Button>
+        <Button
+          size="xs"
+          variant="subtle"
+          disabled={!data.nextCursor}
+          onClick={() =>
+            navigate(
+              taskHref({ ...locationState, page: 1, cursor: data.nextCursor, direction: "next" }),
+            )
+          }
+        >
+          Next
+        </Button>
+      </Group>
+    ) : (
+      <Pagination
+        value={Math.min(data.page, totalPages)}
+        onChange={(page) => navigate(taskHref({ ...locationState, page }))}
+        total={totalPages}
+        size="xs"
+        aria-label="Tasks pagination"
+      />
+    );
   const enqueueTestTask = (kind: DemoJobKind, options?: DemoJobOptions) =>
     runDemoJob?.(kind, options);
 

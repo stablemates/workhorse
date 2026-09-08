@@ -376,7 +376,7 @@ describe("continuous integration", () => {
     expect(workflow).toContain("schedule:");
     expect(workflow).toContain("name: required");
     expect(workflow).toContain(
-      "needs: [plan, static, unit, typescript, python, go, runtime-smoke, packed]",
+      "needs: [plan, static, unit, typescript, python, go, runtime-smoke, packed, demo]",
     );
     expect(workflow).toContain('cron: "43 3 * * *" # Daily packed-install verification.');
     expect(workflow).toContain('cron: "17 4 * * 0" # Weekly full compatibility matrix.');
@@ -387,10 +387,10 @@ describe("continuous integration", () => {
       workflow.match(
         /if: github\.event_name != 'schedule' \|\| github\.event\.schedule == '17 4 \* \* 0'/g,
       ),
-    ).toHaveLength(6);
+    ).toHaveLength(7);
     expect(workflow).toContain('all(.[]; .result == "success" or .result == "skipped")');
     expect(workflow).toContain(
-      "name: demo and site smoke\n    if: ${{ false }} # Temporarily disabled",
+      "name: demo and site smoke\n    if: github.event_name != 'schedule'",
     );
     expect(workflow.match(/max-parallel: 2/g)).toHaveLength(3);
     expect(workflow).toContain("pnpm --silent exec tsx scripts/ci-matrix.ts");
@@ -418,8 +418,8 @@ describe("continuous integration", () => {
     expect(check).toContain("pnpm python:vuln");
     expect(check).toContain("pnpm go:vuln");
     expect(check).toContain("pnpm go:test:race");
-    expect(check).toContain("pnpm build:runtime");
-    expect(check.indexOf("pnpm build:runtime")).toBeLessThan(check.indexOf("pnpm test"));
+    expect(check).toContain("pnpm build:verified");
+    expect(check.indexOf("pnpm build:verified")).toBeLessThan(check.indexOf("pnpm test"));
   });
 
   it("smoke-tests exactly the declared JS runtimes without claiming them as supported", async () => {

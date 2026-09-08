@@ -38,7 +38,7 @@ func TestDeprecatedAliasesResolveToTheirReplacements(t *testing.T) {
 }
 
 func TestDeprecatedAssertCompatibleQueriesLikeItsReplacement(t *testing.T) {
-	executor := &recordingExecutor{rows: []workhorse.Row{{"kind": "schema", "version": int32(1)}, {"kind": "protocol", "version": int32(1)}}}
+	executor := &recordingExecutor{rows: []workhorse.Row{{"kind": "schema", "version": int32(testSchemaVersion)}, {"kind": "protocol", "version": int32(1)}}}
 
 	if err := workhorse.AssertCompatible(context.Background(), executor); err != nil {
 		t.Fatal(err)

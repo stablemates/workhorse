@@ -9,6 +9,7 @@ from protocol_fixtures import assert_fixture_execution, read_protocol_fixture
 from test_protocol_conformance import assert_value
 
 from workhorse import EnqueueOptions, EnqueueRequest, Idempotency, ProtocolCompatibilityError, Queue
+from workhorse._statements import MINIMUM_SCHEMA_VERSION
 
 
 class Cursor:
@@ -48,7 +49,10 @@ def test_serializes_every_shared_request_fixture_and_returns_the_canonical_resul
     for fixture in fixtures:
         connection = Connection(
             [
-                [{"kind": "schema", "version": 1}, {"kind": "protocol", "version": 1}],
+                [
+                    {"kind": "schema", "version": MINIMUM_SCHEMA_VERSION},
+                    {"kind": "protocol", "version": 1},
+                ],
                 [
                     {
                         "ordinal": 1,
@@ -115,7 +119,10 @@ def test_cancel_returns_postgres_cancellation_metadata() -> None:
     requested_at = datetime(2026, 8, 23, 2, 0, tzinfo=UTC)
     connection = Connection(
         [
-            [{"kind": "schema", "version": 1}, {"kind": "protocol", "version": 1}],
+            [
+                {"kind": "schema", "version": MINIMUM_SCHEMA_VERSION},
+                {"kind": "protocol", "version": 1},
+            ],
             [
                 {
                     "status": "cancel_requested",
@@ -153,7 +160,10 @@ def test_cancel_returns_postgres_cancellation_metadata() -> None:
 def test_batch_preserves_result_order() -> None:
     connection = Connection(
         [
-            [{"kind": "schema", "version": 1}, {"kind": "protocol", "version": 1}],
+            [
+                {"kind": "schema", "version": MINIMUM_SCHEMA_VERSION},
+                {"kind": "protocol", "version": 1},
+            ],
             [
                 {"ordinal": 1, "job_id": "one", "outcome": "accepted", "reason": None},
                 {"ordinal": 2, "job_id": "two", "outcome": "replayed", "reason": None},

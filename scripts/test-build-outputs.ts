@@ -12,3 +12,18 @@ export const requiredTestBuildOutputs = [
   "typescript/prisma/dist/index.js",
   "typescript/typeorm/dist/index.js",
 ] as const;
+
+/** Complete artifacts reused by smoke checks after the full-build fingerprint passes. */
+export const fullBuildOutputDirectories = [
+  ...new Set(
+    requiredTestBuildOutputs
+      .filter((file) => file.includes("/dist/"))
+      .map((file) => file.split("/dist/")[0] + "/dist"),
+  ),
+  "typescript/dashboard/development",
+  "typescript/demo/dist",
+  "typescript/otel/dist",
+  "site/dist",
+  "python/dist",
+  "dashboard/v1/bundle",
+];

@@ -3,6 +3,7 @@ import type {
   DashboardJobRow,
   DashboardTaskFacets,
   DashboardTasksPage,
+  DashboardTasksCursorPage,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import {
   ActionIcon,
@@ -400,7 +401,7 @@ export function TaskListingFilters({
   taskFacets,
   updateLocation,
 }: {
-  data: DashboardTasksPage;
+  data: DashboardTasksPage | DashboardTasksCursorPage;
   searchInput: string;
   setSearchInput: (value: string) => void;
   taskFacets: ReturnType<typeof useTaskFacets>;

@@ -12,6 +12,7 @@ from workhorse import (
     ProtocolCompatibilityError,
     Queue,
 )
+from workhorse._statements import MINIMUM_SCHEMA_VERSION
 
 
 class Diagnostic:
@@ -45,7 +46,7 @@ class Cursor:
             raise self.error
 
     def fetchall(self) -> list[tuple[str, int]]:
-        return [("schema", 1), ("protocol", 1)]
+        return [("schema", MINIMUM_SCHEMA_VERSION), ("protocol", 1)]
 
 
 class Connection:

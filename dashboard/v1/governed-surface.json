@@ -3671,6 +3671,348 @@
         }
       }
     },
+    "tasksCursor": {
+      "mutation": false,
+      "request": {
+        "count": {
+          "type": "enum",
+          "enum": [
+            "exact",
+            "none"
+          ],
+          "required": false
+        },
+        "cursor": {
+          "type": "null|object",
+          "required": false
+        },
+        "cursor.id": {
+          "type": "string",
+          "required": false
+        },
+        "cursor.priority": {
+          "type": "integer",
+          "required": false
+        },
+        "cursor.updatedAt": {
+          "type": "string",
+          "required": false
+        },
+        "direction": {
+          "type": "enum",
+          "enum": [
+            "next",
+            "previous"
+          ],
+          "required": false
+        },
+        "filter": {
+          "type": "enum",
+          "enum": [
+            "all",
+            "blocked",
+            "canceled",
+            "completed",
+            "discarded",
+            "queued",
+            "retried",
+            "running",
+            "scheduled",
+            "waiting"
+          ],
+          "required": false
+        },
+        "jobType": {
+          "type": "null|string",
+          "required": false
+        },
+        "pageSize": {
+          "type": "number",
+          "enum": [
+            "100",
+            "25",
+            "50"
+          ],
+          "required": false
+        },
+        "priority": {
+          "type": "integer|null",
+          "required": false
+        },
+        "queue": {
+          "type": "null|string",
+          "required": false
+        },
+        "search": {
+          "type": "string",
+          "required": false
+        },
+        "sort": {
+          "type": "enum",
+          "enum": [
+            "priority",
+            "updated"
+          ],
+          "required": false
+        },
+        "tags": {
+          "type": "array",
+          "required": false
+        },
+        "tags[]": {
+          "type": "string",
+          "required": false
+        },
+        "worker": {
+          "type": "null|string",
+          "required": false
+        }
+      },
+      "response": {
+        "canCompleteHumanWait": {
+          "type": "boolean"
+        },
+        "capturedAt": {
+          "type": "string"
+        },
+        "filter": {
+          "type": "enum",
+          "enum": [
+            "all",
+            "blocked",
+            "canceled",
+            "completed",
+            "discarded",
+            "queued",
+            "retried",
+            "running",
+            "scheduled",
+            "waiting"
+          ]
+        },
+        "jobType": {
+          "type": "null|string"
+        },
+        "jobs": {
+          "type": "array"
+        },
+        "jobs[]": {
+          "type": "object"
+        },
+        "jobs[].attempt": {
+          "type": "number"
+        },
+        "jobs[].blockedReason": {
+          "type": "null|unknown"
+        },
+        "jobs[].cancellation": {
+          "type": "null|object"
+        },
+        "jobs[].cancellation.reason": {
+          "type": "null|string"
+        },
+        "jobs[].cancellation.requestedAt": {
+          "type": "string"
+        },
+        "jobs[].cancellation.requestedBy": {
+          "type": "null|string"
+        },
+        "jobs[].createdAt": {
+          "type": "string"
+        },
+        "jobs[].deadlineAt": {
+          "type": "null|string"
+        },
+        "jobs[].durability": {
+          "type": "null|object"
+        },
+        "jobs[].durability.completedSteps": {
+          "type": "number"
+        },
+        "jobs[].durability.totalSteps": {
+          "type": "number"
+        },
+        "jobs[].errorMessage": {
+          "type": "null|string"
+        },
+        "jobs[].executionTimeoutMs": {
+          "type": "null|number"
+        },
+        "jobs[].finishedAt": {
+          "type": "null|string"
+        },
+        "jobs[].humanWait": {
+          "type": "null|object"
+        },
+        "jobs[].humanWait.context": {
+          "type": "unknown"
+        },
+        "jobs[].humanWait.deadlineAt": {
+          "type": "string"
+        },
+        "jobs[].humanWait.name": {
+          "type": "string"
+        },
+        "jobs[].id": {
+          "type": "string"
+        },
+        "jobs[].keyed": {
+          "type": "boolean"
+        },
+        "jobs[].lastWorkerId": {
+          "type": "null|string"
+        },
+        "jobs[].maxAttempts": {
+          "type": "number"
+        },
+        "jobs[].prerequisiteJobIds": {
+          "type": "array"
+        },
+        "jobs[].prerequisiteJobIds[]": {
+          "type": "string"
+        },
+        "jobs[].priority": {
+          "type": "number"
+        },
+        "jobs[].queue": {
+          "type": "string"
+        },
+        "jobs[].retryPolicy": {
+          "type": "null|object"
+        },
+        "jobs[].retryPolicy.baseDelayMs": {
+          "type": "number"
+        },
+        "jobs[].retryPolicy.delayMs": {
+          "type": "number"
+        },
+        "jobs[].retryPolicy.initialDelayMs": {
+          "type": "number"
+        },
+        "jobs[].retryPolicy.maxDelayMs": {
+          "type": "number"
+        },
+        "jobs[].retryPolicy.multiplier": {
+          "type": "number"
+        },
+        "jobs[].retryPolicy.type": {
+          "type": "enum",
+          "enum": [
+            "fixed"
+          ]
+        },
+        "jobs[].runAt": {
+          "type": "null|string"
+        },
+        "jobs[].signalWait": {
+          "type": "null|object"
+        },
+        "jobs[].signalWait.deadlineAt": {
+          "type": "string"
+        },
+        "jobs[].signalWait.name": {
+          "type": "string"
+        },
+        "jobs[].state": {
+          "type": "string"
+        },
+        "jobs[].tags": {
+          "type": "array"
+        },
+        "jobs[].tags[]": {
+          "type": "string"
+        },
+        "jobs[].type": {
+          "type": "string"
+        },
+        "jobs[].updatedAt": {
+          "type": "string"
+        },
+        "jobs[].wait": {
+          "type": "null|object"
+        },
+        "jobs[].wait.mode": {
+          "type": "enum",
+          "enum": [
+            "absolute",
+            "relative"
+          ]
+        },
+        "jobs[].wait.name": {
+          "type": "string"
+        },
+        "jobs[].wait.wakeAt": {
+          "type": "string"
+        },
+        "jobs[].waitName": {
+          "type": "null|string"
+        },
+        "jobs[].wakeAt": {
+          "type": "null|string"
+        },
+        "jobs[].workerId": {
+          "type": "null|string"
+        },
+        "nextCursor": {
+          "type": "null|object"
+        },
+        "nextCursor.id": {
+          "type": "string"
+        },
+        "nextCursor.priority": {
+          "type": "number"
+        },
+        "nextCursor.updatedAt": {
+          "type": "string"
+        },
+        "page": {
+          "type": "number"
+        },
+        "pageSize": {
+          "type": "number"
+        },
+        "previousCursor": {
+          "type": "null|object"
+        },
+        "previousCursor.id": {
+          "type": "string"
+        },
+        "previousCursor.priority": {
+          "type": "number"
+        },
+        "previousCursor.updatedAt": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "null|number"
+        },
+        "queue": {
+          "type": "null|string"
+        },
+        "search": {
+          "type": "null|string"
+        },
+        "sort": {
+          "type": "enum",
+          "enum": [
+            "priority",
+            "updated"
+          ]
+        },
+        "tags": {
+          "type": "array"
+        },
+        "tags[]": {
+          "type": "string"
+        },
+        "total": {
+          "type": "null|number"
+        },
+        "worker": {
+          "type": "null|string"
+        }
+      }
+    },
     "workers": {
       "mutation": false,
       "request": {},

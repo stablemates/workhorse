@@ -5026,6 +5026,438 @@
               }
             }
           }
+        },
+        {
+          "id": "tasks-cursor-default",
+          "procedure": "tasksCursor",
+          "request": {
+            "json": {}
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "jobs": [
+                  {
+                    "id": {
+                      "$ref": "redriveBatchJob"
+                    },
+                    "tags": [],
+                    "type": "conformance.redrive.batch",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-redrive",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "failed",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "maxAttempts": 1,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": "conformance.redrive.batch failed",
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "redriveOneJob"
+                    },
+                    "tags": [],
+                    "type": "conformance.redrive.one",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-redrive",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "failed",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "maxAttempts": 1,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": "conformance.redrive.one failed",
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "purgeTargetJob"
+                    },
+                    "tags": [],
+                    "type": "conformance.purge",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-purge",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "ready",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "cancelTargetJob"
+                    },
+                    "tags": [],
+                    "type": "conformance.cancel-target",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "ready",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "scheduledJob"
+                    },
+                    "tags": [],
+                    "type": "conformance.scheduled",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance",
+                    "runAt": "2031-01-01T00:00:00.000Z",
+                    "state": "scheduled",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "readyJob"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.ready",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "ready",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 5,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "humanJob"
+                    },
+                    "tags": [],
+                    "type": "conformance.human",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance",
+                    "runAt": "9999-12-31T00:00:00.000Z",
+                    "state": "scheduled",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": "review",
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": {
+                      "name": "review",
+                      "context": {
+                        "question": "Approve the conformance run?"
+                      },
+                      "deadlineAt": {
+                        "$type": "timestamp"
+                      }
+                    },
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "signalJob"
+                    },
+                    "tags": [],
+                    "type": "conformance.signal",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance",
+                    "runAt": "9999-12-31T00:00:00.000Z",
+                    "state": "scheduled",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": "approval",
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": {
+                      "name": "approval",
+                      "deadlineAt": {
+                        "$type": "timestamp"
+                      }
+                    },
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "failedJob"
+                    },
+                    "tags": [],
+                    "type": "conformance.fail",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "failed",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "maxAttempts": 1,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": "conformance.fail failed",
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "succeededJob"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.succeed",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "succeeded",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  }
+                ],
+                "page": 1,
+                "sort": "updated",
+                "tags": [],
+                "queue": null,
+                "total": null,
+                "filter": "all",
+                "search": null,
+                "worker": null,
+                "jobType": null,
+                "pageSize": 50,
+                "priority": null,
+                "capturedAt": {
+                  "$type": "timestamp"
+                },
+                "nextCursor": null,
+                "previousCursor": null,
+                "canCompleteHumanWait": true
+              }
+            }
+          }
         }
       ]
     },
@@ -6701,6 +7133,439 @@
               }
             }
           }
+        },
+        {
+          "id": "tasks-cursor-read-only",
+          "procedure": "tasksCursor",
+          "request": {
+            "json": {}
+          },
+          "mode": "read-only",
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "jobs": [
+                  {
+                    "id": {
+                      "$ref": "redriveBatchJob"
+                    },
+                    "tags": [],
+                    "type": "conformance.redrive.batch",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-redrive",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "failed",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "maxAttempts": 1,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": "conformance.redrive.batch failed",
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "redriveOneJob"
+                    },
+                    "tags": [],
+                    "type": "conformance.redrive.one",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-redrive",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "failed",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "maxAttempts": 1,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": "conformance.redrive.one failed",
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "purgeTargetJob"
+                    },
+                    "tags": [],
+                    "type": "conformance.purge",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance-purge",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "ready",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "cancelTargetJob"
+                    },
+                    "tags": [],
+                    "type": "conformance.cancel-target",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "ready",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "scheduledJob"
+                    },
+                    "tags": [],
+                    "type": "conformance.scheduled",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance",
+                    "runAt": "2031-01-01T00:00:00.000Z",
+                    "state": "scheduled",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "readyJob"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.ready",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "ready",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 5,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "humanJob"
+                    },
+                    "tags": [],
+                    "type": "conformance.human",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance",
+                    "runAt": "9999-12-31T00:00:00.000Z",
+                    "state": "scheduled",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": "review",
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": {
+                      "name": "review",
+                      "context": {
+                        "question": "Approve the conformance run?"
+                      },
+                      "deadlineAt": {
+                        "$type": "timestamp"
+                      }
+                    },
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "signalJob"
+                    },
+                    "tags": [],
+                    "type": "conformance.signal",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance",
+                    "runAt": "9999-12-31T00:00:00.000Z",
+                    "state": "scheduled",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": "approval",
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": null,
+                    "signalWait": {
+                      "name": "approval",
+                      "deadlineAt": {
+                        "$type": "timestamp"
+                      }
+                    },
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "failedJob"
+                    },
+                    "tags": [],
+                    "type": "conformance.fail",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "failed",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "maxAttempts": 1,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": "conformance.fail failed",
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  },
+                  {
+                    "id": {
+                      "$ref": "succeededJob"
+                    },
+                    "tags": [
+                      "conformance"
+                    ],
+                    "type": "conformance.succeed",
+                    "wait": null,
+                    "keyed": false,
+                    "queue": "conformance",
+                    "runAt": {
+                      "$type": "timestamp"
+                    },
+                    "state": "succeeded",
+                    "wakeAt": null,
+                    "attempt": 1,
+                    "priority": 0,
+                    "waitName": null,
+                    "workerId": null,
+                    "createdAt": {
+                      "$type": "timestamp"
+                    },
+                    "humanWait": null,
+                    "updatedAt": {
+                      "$type": "timestamp"
+                    },
+                    "deadlineAt": null,
+                    "durability": null,
+                    "finishedAt": {
+                      "$type": "timestamp"
+                    },
+                    "signalWait": null,
+                    "maxAttempts": 25,
+                    "retryPolicy": null,
+                    "cancellation": null,
+                    "errorMessage": null,
+                    "lastWorkerId": null,
+                    "blockedReason": null,
+                    "executionTimeoutMs": null,
+                    "prerequisiteJobIds": []
+                  }
+                ],
+                "page": 1,
+                "sort": "updated",
+                "tags": [],
+                "queue": null,
+                "total": null,
+                "filter": "all",
+                "search": null,
+                "worker": null,
+                "jobType": null,
+                "pageSize": 50,
+                "priority": null,
+                "capturedAt": {
+                  "$type": "timestamp"
+                },
+                "nextCursor": null,
+                "previousCursor": null,
+                "canCompleteHumanWait": false
+              }
+            }
+          }
         }
       ]
     },
@@ -7001,7 +7866,7 @@
                       "request_reason": "conformance exchange",
                       "request_id_digest": "d4e9bf8d68c9",
                       "request_id_length": 19,
-                      "request_id_preview": "conforma…uest"
+                      "request_id_preview": "conforma\u2026uest"
                     },
                     "jobType": "conformance.scheduled",
                     "recordId": {

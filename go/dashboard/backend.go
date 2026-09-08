@@ -23,7 +23,7 @@ func (service *backend) procedures() map[string]Procedure {
 	return map[string]Procedure{
 		"meta": service.meta, "taskCounts": service.taskCounts,
 		"taskFacets": service.taskFacets, "queues": service.queues,
-		"tasks": service.tasks, "activity": service.activity,
+		"tasks": service.tasks, "tasksCursor": service.tasksCursor, "activity": service.activity,
 		"cron": service.cron, "workers": service.workers, "humanWaits": service.humanWaits,
 		"events": service.events, "eventDetail": service.eventDetail,
 		"previewRetentionPolicy": service.previewRetentionPolicy,
@@ -41,6 +41,15 @@ func (service *backend) procedures() map[string]Procedure {
 }
 
 func (service *backend) jsonQuery(ctx context.Context, statement string, arguments ...any) (any, error) {
+	value, err := service.rawJSONQuery(ctx, statement, arguments...)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeJSON(value), nil
+}
+
+// SQL-owned cursor timestamps must pass through without display-time rounding.
+func (service *backend) rawJSONQuery(ctx context.Context, statement string, arguments ...any) (any, error) {
 	rows, err := service.executor.Query(ctx, statement, arguments...)
 	if err != nil {
 		return nil, err
@@ -50,24 +59,32 @@ func (service *backend) jsonQuery(ctx context.Context, statement string, argumen
 		return nil, err
 	}
 	value := row["result"]
-	return decodeJSONCell(value)
+	return decodeRawJSONCell(value)
 }
 
 func decodeJSONCell(value any) (any, error) {
+	decoded, err := decodeRawJSONCell(value)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeJSON(decoded), nil
+}
+
+func decodeRawJSONCell(value any) (any, error) {
 	var decoded any
 	switch encoded := value.(type) {
 	case []byte:
 		if err := json.Unmarshal(encoded, &decoded); err != nil {
 			return nil, err
 		}
-		return normalizeJSON(decoded), nil
+		return decoded, nil
 	case string:
 		if err := json.Unmarshal([]byte(encoded), &decoded); err != nil {
 			return nil, err
 		}
-		return normalizeJSON(decoded), nil
+		return decoded, nil
 	default:
-		return normalizeJSON(value), nil
+		return value, nil
 	}
 }
 

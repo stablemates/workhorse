@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 import pytest
 
 from workhorse import AsyncQueue
+from workhorse._statements import MINIMUM_SCHEMA_VERSION
 
 
 class AsyncpgConnection:
@@ -14,7 +15,10 @@ class AsyncpgConnection:
     async def fetch(self, sql: str, *parameters: object) -> Sequence[Mapping[str, object]]:
         self.calls.append((sql, parameters))
         if "schema_version" in sql:
-            return [{"kind": "schema", "version": 1}, {"kind": "protocol", "version": 1}]
+            return [
+                {"kind": "schema", "version": MINIMUM_SCHEMA_VERSION},
+                {"kind": "protocol", "version": 1},
+            ]
         if "cancel_v1" in sql:
             return [
                 {
@@ -77,7 +81,7 @@ class AsyncPsycopgCursor:
 
     async def fetchall(self) -> Sequence[Sequence[object]]:
         if "compatibility" in self.sql or "schema_version" in self.sql:
-            return [("schema", 1), ("protocol", 1)]
+            return [("schema", MINIMUM_SCHEMA_VERSION), ("protocol", 1)]
         return [(1, "psycopg", "accepted", None)]
 
 

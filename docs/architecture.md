@@ -2,21 +2,17 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript and Go `Queue`, `Admin`, and `Worker` remain thin protocol clients.
 
-The current schema version is 47. Version 43 is the permanent migration baseline
-(`WORKHORSE_SCHEMA_BASELINE_VERSION`); no earlier version is a supported upgrade source.
+The current schema version is 2. Version 1 is the permanent migration baseline
+(`WORKHORSE_SCHEMA_BASELINE_VERSION`) frozen at the 0.1.0 release.
 
-`installSchema` reads `sql/schema.sql`. It accepts only a fresh database or an already-current
-version 1 schema. `migrateSchema` reads the single `workhorse.schema_version` row and applies the
-ordered steps in `SCHEMA_MIGRATIONS` from `sql/migrations/`; migration `0044-protocol-version.sql`
-is the first, `0045-statistics-maintenance-policy.sql` is the second, and
-`0046-statistics-tiers.sql` adds the long-horizon tiers, and `0047-multi-queue-workers.sql` adds
-multi-queue worker registration. `workhorse schema migrate` runs the same steps from the CLI.
+`installSchema` reads `sql/schema.sql` and accepts a fresh database or an already-current schema.
+`migrateSchema` applies `SCHEMA_MIGRATIONS` from `sql/migrations/` through the same path as
+`workhorse schema migrate`. Migration `0002-dashboard-reads.sql` adds cursor task browsing and
+shared system statistics. It retains every version 1 function.
 
-A clean installation records the full lineage — `(43, 'pre-release baseline')`,
-`(44, 'protocol version registry')`, `(45, 'statistics maintenance policy')`, and
-`(46, 'long-horizon statistics tiers')`, and `(47, 'multi-queue workers')` — in
-`workhorse.schema_migration`, so a migrated and a
-clean-installed database carry identical history. `workhorse.protocol_version` records the served
+A clean installation records `(1, 'baseline')` and `(2, 'dashboard read optimizations')` in
+`workhorse.schema_migration`. A migrated database carries the same lineage.
+`workhorse.protocol_version` records the served
 SQL protocol versions (currently 1) independently of that history; `readProtocolVersions` reads it
 and returns null below version 44. `migrateSchema` delegates ordered execution to the internal
 `applySchemaMigrationPlan` function. Its `SchemaMigrationPlan` has `baselineVersion`,
@@ -2167,7 +2163,7 @@ named non-negative integer values. `revert_queue_health_policy_v1` restores name
 defaults. `get_queue_health_policy_v1` returns the policy row. `QueueHealth.budgets` reports the
 values used for the returned verdict; callers cannot supply per-call thresholds.
 
-`workhorse health --json` writes the same `QueueHealth` object and exits 2 when the level is not `healthy`. `createDashboardQueueHealthReader` calls `Admin.health()` on the workspace's `Admin`, so the dashboard reads the health snapshot through the same public operator method any application uses and holds no conversion of its own. It shares an in-flight read and its resolved `QueueHealth` for 3,000 milliseconds. The readers in one host workspace's `DashboardRpcContext` use that cache. A failed read is never cached. `dashboard_system_v1` and `dashboard_settings_v1` call `queue_health_v1` inside PostgreSQL instead. `DashboardSystemPage.status` carries `level` and the raw reasons. The SPA derives human wording through `healthCheckMessages` and adds no thresholds. `DashboardSystemPage.kpis` also projects `dependencies`, `children`, and `externalWaits` from the same snapshot for current-pressure drill-downs. `dashboard_system_v1` groups ready rows by `queue_name` and `priority`. Each `DashboardSystemQueueRow.priorityBacklog` returns `priority`, `ready`, and `oldestReadyMs`, ordered by priority descending. PostgreSQL orders queue rows by `queue_name`; the SPA applies display-risk order.
+`workhorse health --json` writes the same `QueueHealth` object and exits 2 when the level is not `healthy`. `createDashboardQueueHealthReader` calls `Admin.health()` on the workspace's `Admin`, so the dashboard reads the health snapshot through the same public operator method any application uses and holds no conversion of its own. It shares an in-flight read and its resolved `QueueHealth` for 3,000 milliseconds. The readers in one host workspace's `DashboardRpcContext` use that cache. A failed read is never cached. `dashboard_system_v2` and `dashboard_settings_v1` call `queue_health_v1` inside PostgreSQL instead. `DashboardSystemPage.status` carries `level` and the raw reasons. The SPA derives human wording through `healthCheckMessages` and adds no thresholds. `DashboardSystemPage.kpis` also projects `dependencies`, `children`, and `externalWaits` from the same snapshot for current-pressure drill-downs. `dashboard_system_v2` groups ready rows by `queue_name` and `priority`. Each `DashboardSystemQueueRow.priorityBacklog` returns `priority`, `ready`, and `oldestReadyMs`, ordered by priority descending. PostgreSQL orders queue rows by `queue_name`; the SPA applies display-risk order.
 
 Retention health includes the persisted policy, oldest retained timestamps, per-category cleanup lag, counts of fully eligible event and attempt partitions, and bounded row counts for both default partitions. Fallback counts are exact through 10,000 rows; `defaultHistoryRowsCapped` marks 10,001 as a lower bound. Live jobs are excluded from terminal identity lag. History lag is based only on fully droppable partitions or expired default rows, not the intentionally retained partial boundary day.
 
@@ -2211,6 +2207,20 @@ dashboard uses it to choose exact counts or estimates without naming the private
 complete version 1 task-page JSON document. The wire validator limits `pageSize` to 25, 50, or
 100, `page` to 100, selected tags to 20 values, and each search or string filter to 200 characters
 before the backend calls the function.
+
+`dashboard_tasks_cursor_v1(p_input jsonb)` backs the additive `tasksCursor` procedure.
+It accepts the same filters and page sizes as `tasks`, without a page number.
+`cursor` contains `id`, `priority`, and `updatedAt` with six fractional timestamp digits.
+`direction` is `next` by default or `previous`. Callers pass returned cursors unchanged.
+`count` defaults to `none`, which returns `total: null` without counting the full selection.
+With `count: exact`, `total` counts all matching jobs, independently of the cursor.
+`nextCursor` and `previousCursor` are null when no further page is known in that direction.
+The query reads one extra candidate before enriching the requested page.
+Updated ordering uses `(updated_at, job_id)`; priority ordering prefixes that tuple with `priority`.
+Live and terminal rows use separate query branches, preserving the terminal update-time index.
+No update-time index is added to live rows because heartbeats must retain HOT eligibility.
+Concurrent state changes can move jobs between pages; browsing does not hold a snapshot across requests.
+The SPA uses cursor navigation and preserves legacy page-number links through `tasks`.
 
 `dashboard_task_counts_v1(p_input jsonb)` returns the complete version 1 sidebar-count JSON
 document and ignores its input. If the job estimate is below 50,000, it counts every filter
@@ -2284,7 +2294,7 @@ supplies current concurrency utilization only for a live job. The function retur
 when `id` does not exist. TypeScript replaces the returned `durability: null` with
 `DashboardDurabilityProjector`; Python and Go leave it null.
 
-After the backend validates the input, `dashboard_system_v1(p_input jsonb)` accepts `window` as
+After the backend validates the input, `dashboard_system_v2(p_input jsonb)` accepts `window` as
 `15m`, `1h`, or `24h`. It returns the complete version 1 system-page JSON document. The function
 calls `queue_health_v1()` once per invocation. PostgreSQL owns the rolling statistics, queue and
 priority backlog, retry buckets, failing types, retention, storage, partition, admission-policy,
@@ -3045,3 +3055,21 @@ interactive stdin and stdout is refused with exit 1.
   compatibility default and never opens a listener. Every pass uses authoritative `claim_many_v1`
   transitions.
 - Retention operates on minimum windows. Daily granularity, bounded passes, and retained attribution can extend actual storage beyond a configured cutoff.
+
+### Dashboard refresh and build reuse
+
+The SPA shares identical in-flight reads by route and filter. Background refreshes skip an
+identical pending page request. After a mutation, a foreground refresh waits for an older read
+and then fetches the committed result. Failures release the pending entry so a later refresh can retry.
+
+`dashboard_system_v2` captures one timestamp for its window bounds and response timestamp.
+A materialized CTE reads the current statistics window once for outcomes, summaries, queue-wait
+percentiles, queue rates, and failing types. The previous comparison window is read separately.
+The retained `dashboard_system_v1` remains callable by older clients.
+
+`pnpm build` records source and output fingerprints after completing the full build.
+`pnpm build:check` rejects missing or stale artifacts. The `test:packed:built`,
+`test:site-smoke:built`, and `test:demo-smoke:built` commands check those fingerprints before testing.
+Standalone test commands build first; `pnpm check` and smoke CI reuse one full build.
+The demo smoke harness copies those verified outputs into its isolated source checkout when passed
+`--reuse-build`, preserving its clean dependency installation without compiling again.

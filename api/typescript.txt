@@ -394,9 +394,11 @@ interface DashboardSystemRetryBucket
 interface DashboardSystemStorage
 type DashboardSystemWindow
 type DashboardTaskCounts
+interface DashboardTaskCursor
 interface DashboardTaskFacets
 type DashboardTaskFilter
 type DashboardTaskSort
+interface DashboardTasksCursorPage
 interface DashboardTasksPage
 type DashboardTerminalState
 interface DashboardWorkerRow
@@ -611,9 +613,11 @@ interface DashboardSystemRetryBucket
 interface DashboardSystemStorage
 type DashboardSystemWindow
 type DashboardTaskCounts
+interface DashboardTaskCursor
 interface DashboardTaskFacets
 type DashboardTaskFilter
 type DashboardTaskSort
+interface DashboardTasksCursorPage
 interface DashboardTasksPage
 type DashboardTerminalState
 interface DashboardWorkerRow
@@ -2265,6 +2269,12 @@ interface DashboardTaskController {
 
 type DashboardTaskCounts = Record<DashboardTaskFilter, number>;
 
+interface DashboardTaskCursor {
+  id: string;
+  updatedAt: string;
+  priority: number;
+}
+
 interface DashboardTaskFacets {
   queues: string[];
   workers: string[];
@@ -2275,6 +2285,12 @@ interface DashboardTaskFacets {
 type DashboardTaskFilter = (typeof dashboardTaskFilters)[number];
 
 type DashboardTaskSort = (typeof dashboardTaskSorts)[number];
+
+interface DashboardTasksCursorPage extends Omit<DashboardTasksPage, "total"> {
+  total: number | null;
+  nextCursor: DashboardTaskCursor | null;
+  previousCursor: DashboardTaskCursor | null;
+}
 
 interface DashboardTasksPage {
   capturedAt: string;
@@ -3045,7 +3061,7 @@ class KyselyQueryError extends QueryError {
 
 const MAXIMUM_PROTOCOL_VERSION = 1;
 
-const MAXIMUM_SCHEMA_VERSION = 1;
+const MAXIMUM_SCHEMA_VERSION = 2;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -3115,7 +3131,7 @@ const MINIMUM_POSTGRES_MAJOR = 15;
 
 const MINIMUM_PROTOCOL_VERSION = 1;
 
-const MINIMUM_SCHEMA_VERSION = 1;
+const MINIMUM_SCHEMA_VERSION = 2;
 
 const MIN_PROGRESS_UPDATE_INTERVAL_MS = 100;
 
@@ -4033,6 +4049,8 @@ interface TaskLocationState {
   tags: string[];
   search: string | null;
   page: number;
+  cursor?: DashboardTaskCursor | null;
+  direction?: "next" | "previous";
   pageSize: TaskPageSize;
   period: TaskActivityPeriod;
   group: TaskActivityGroup;
@@ -4157,7 +4175,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 1;
 
-const WORKHORSE_SCHEMA_VERSION = 1;
+const WORKHORSE_SCHEMA_VERSION = 2;
 
 const WORKHORSE_VERSION = "0.1.0";
 
@@ -4632,6 +4650,44 @@ const dashboardRouter: {
       search: z.ZodPipe<z.ZodOptional<z.ZodString>, z.ZodTransform<string | null, string | undefined>>;
       pageSize: z.ZodDefault<z.ZodUnion<readonly [z.ZodLiteral<25>, z.ZodLiteral<50>, z.ZodLiteral<100>]>>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardTasksPage, import("../wire.js").DashboardTasksPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
+    tasksCursor: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+      queue: z.ZodDefault<z.ZodNullable<z.ZodString>>;
+      priority: z.ZodDefault<z.ZodNullable<z.ZodNumber>>;
+      tags: z.ZodDefault<z.ZodArray<z.ZodString>>;
+      worker: z.ZodDefault<z.ZodNullable<z.ZodString>>;
+      filter: z.ZodDefault<z.ZodEnum<{
+        canceled: "canceled";
+        scheduled: "scheduled";
+        waiting: "waiting";
+        all: "all";
+        blocked: "blocked";
+        retried: "retried";
+        queued: "queued";
+        running: "running";
+        completed: "completed";
+        discarded: "discarded";
+      }>>;
+      jobType: z.ZodDefault<z.ZodNullable<z.ZodString>>;
+      sort: z.ZodDefault<z.ZodEnum<{
+        priority: "priority";
+        updated: "updated";
+      }>>;
+      search: z.ZodPipe<z.ZodOptional<z.ZodString>, z.ZodTransform<string | null, string | undefined>>;
+      pageSize: z.ZodDefault<z.ZodUnion<readonly [z.ZodLiteral<25>, z.ZodLiteral<50>, z.ZodLiteral<100>]>>;
+      cursor: z.ZodDefault<z.ZodNullable<z.ZodObject<{
+        id: z.ZodUUID;
+        updatedAt: z.ZodISODateTime;
+        priority: z.ZodNumber;
+      }, z.core.$strip>>>;
+      direction: z.ZodDefault<z.ZodEnum<{
+        next: "next";
+        previous: "previous";
+      }>>;
+      count: z.ZodDefault<z.ZodEnum<{
+        none: "none";
+        exact: "exact";
+      }>>;
+    }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardTasksCursorPage, import("../wire.js").DashboardTasksCursorPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     taskFacets: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardTaskFacets, import("../wire.js").DashboardTaskFacets>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     activity: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
       filter: z.ZodDefault<z.ZodEnum<{

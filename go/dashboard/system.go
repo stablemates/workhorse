@@ -11,7 +11,7 @@ func (service *backend) system(ctx context.Context, input any, _ string) (any, e
 	}
 	return service.jsonQuery(
 		ctx,
-		"SELECT workhorse.dashboard_system_v1($1::jsonb) AS result",
+		"SELECT workhorse.dashboard_system_v2($1::jsonb) AS result",
 		string(mustJSON(value)),
 	)
 }

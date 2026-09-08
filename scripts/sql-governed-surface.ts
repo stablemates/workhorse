@@ -140,11 +140,20 @@ function describeFunction(definition: FunctionDefinition): GovernedFunction {
 export function deriveGovernedSurface(
   schema: SqlSchema,
   sources: readonly ReadSurfaceSource[],
+  retainedFunctions: readonly string[] = [],
 ): GovernedSurface {
   const functions = new Map<string, GovernedFunction>();
   const relations = new Map<string, GovernedRelation>();
 
-  for (const source of sources) {
+  // A client upgrade cannot withdraw a function a previously released client still calls.
+  const readers = [
+    ...sources,
+    {
+      filename: "retained-function-contracts",
+      text: retainedFunctions.map((name) => `workhorse.${name}`).join("\n"),
+    },
+  ];
+  for (const source of readers) {
     const named = new Set(Array.from(source.text.matchAll(QUALIFIED), (match) => match[1] ?? ""));
     const words = new Set(Array.from(source.text.matchAll(IDENTIFIER), (match) => match[0]));
     for (const name of named) {

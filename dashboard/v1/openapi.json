@@ -467,6 +467,583 @@
         }
       }
     },
+    "/rpc/dashboard/tasksCursor": {
+      "post": {
+        "operationId": "dashboard_tasksCursor",
+        "summary": "Browse tasks with a cursor",
+        "description": "Returns a task page with nextCursor and previousCursor. Pass a returned cursor unchanged with direction next or previous. Counts are omitted by default (total is null); count exact requests the full matching total. Ordering uses database timestamp precision. Live tasks can move between pages when their state changes.",
+        "tags": [
+          "reads"
+        ],
+        "x-workhorse-mutation": false,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "json": {
+                    "type": "object",
+                    "properties": {
+                      "filter": {
+                        "default": "all",
+                        "type": "string",
+                        "enum": [
+                          "all",
+                          "blocked",
+                          "waiting",
+                          "scheduled",
+                          "retried",
+                          "queued",
+                          "running",
+                          "completed",
+                          "discarded",
+                          "canceled"
+                        ]
+                      },
+                      "queue": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "worker": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "jobType": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "priority": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 100
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "sort": {
+                        "default": "updated",
+                        "type": "string",
+                        "enum": [
+                          "updated",
+                          "priority"
+                        ]
+                      },
+                      "tags": {
+                        "default": [],
+                        "maxItems": 20,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 100
+                        }
+                      },
+                      "search": {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      "pageSize": {
+                        "default": 50,
+                        "anyOf": [
+                          {
+                            "type": "number",
+                            "const": 25
+                          },
+                          {
+                            "type": "number",
+                            "const": 50
+                          },
+                          {
+                            "type": "number",
+                            "const": 100
+                          }
+                        ]
+                      },
+                      "cursor": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "updatedAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{6}(?:Z))$"
+                              },
+                              "priority": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 100
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "updatedAt",
+                              "priority"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "direction": {
+                        "default": "next",
+                        "type": "string",
+                        "enum": [
+                          "next",
+                          "previous"
+                        ]
+                      },
+                      "count": {
+                        "default": "none",
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "exact"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "json"
+                ]
+              },
+              "examples": {
+                "conformance": {
+                  "summary": "Request",
+                  "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: tasks-cursor-default.",
+                  "value": {
+                    "json": {}
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The procedure's result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "json": {
+                      "$ref": "#/components/schemas/DashboardTasksCursorPage"
+                    }
+                  },
+                  "required": [
+                    "json"
+                  ]
+                },
+                "examples": {
+                  "conformance": {
+                    "summary": "Response",
+                    "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: tasks-cursor-default.",
+                    "value": {
+                      "json": {
+                        "jobs": [
+                          {
+                            "id": "00000000-0000-7000-8000-000000000000",
+                            "tags": [],
+                            "type": "conformance.redrive.batch",
+                            "wait": null,
+                            "keyed": false,
+                            "queue": "conformance-redrive",
+                            "runAt": "2026-01-01T00:00:00.000Z",
+                            "state": "failed",
+                            "wakeAt": null,
+                            "attempt": 1,
+                            "priority": 0,
+                            "waitName": null,
+                            "workerId": null,
+                            "createdAt": "2026-01-01T00:00:00.000Z",
+                            "humanWait": null,
+                            "updatedAt": "2026-01-01T00:00:00.000Z",
+                            "deadlineAt": null,
+                            "durability": null,
+                            "finishedAt": "2026-01-01T00:00:00.000Z",
+                            "signalWait": null,
+                            "maxAttempts": 1,
+                            "retryPolicy": null,
+                            "cancellation": null,
+                            "errorMessage": "conformance.redrive.batch failed",
+                            "lastWorkerId": null,
+                            "blockedReason": null,
+                            "executionTimeoutMs": null,
+                            "prerequisiteJobIds": []
+                          },
+                          {
+                            "id": "00000000-0000-7000-8000-000000000000",
+                            "tags": [],
+                            "type": "conformance.redrive.one",
+                            "wait": null,
+                            "keyed": false,
+                            "queue": "conformance-redrive",
+                            "runAt": "2026-01-01T00:00:00.000Z",
+                            "state": "failed",
+                            "wakeAt": null,
+                            "attempt": 1,
+                            "priority": 0,
+                            "waitName": null,
+                            "workerId": null,
+                            "createdAt": "2026-01-01T00:00:00.000Z",
+                            "humanWait": null,
+                            "updatedAt": "2026-01-01T00:00:00.000Z",
+                            "deadlineAt": null,
+                            "durability": null,
+                            "finishedAt": "2026-01-01T00:00:00.000Z",
+                            "signalWait": null,
+                            "maxAttempts": 1,
+                            "retryPolicy": null,
+                            "cancellation": null,
+                            "errorMessage": "conformance.redrive.one failed",
+                            "lastWorkerId": null,
+                            "blockedReason": null,
+                            "executionTimeoutMs": null,
+                            "prerequisiteJobIds": []
+                          },
+                          {
+                            "id": "00000000-0000-7000-8000-000000000000",
+                            "tags": [],
+                            "type": "conformance.purge",
+                            "wait": null,
+                            "keyed": false,
+                            "queue": "conformance-purge",
+                            "runAt": "2026-01-01T00:00:00.000Z",
+                            "state": "ready",
+                            "wakeAt": null,
+                            "attempt": 1,
+                            "priority": 0,
+                            "waitName": null,
+                            "workerId": null,
+                            "createdAt": "2026-01-01T00:00:00.000Z",
+                            "humanWait": null,
+                            "updatedAt": "2026-01-01T00:00:00.000Z",
+                            "deadlineAt": null,
+                            "durability": null,
+                            "finishedAt": null,
+                            "signalWait": null,
+                            "maxAttempts": 25,
+                            "retryPolicy": null,
+                            "cancellation": null,
+                            "errorMessage": null,
+                            "lastWorkerId": null,
+                            "blockedReason": null,
+                            "executionTimeoutMs": null,
+                            "prerequisiteJobIds": []
+                          },
+                          {
+                            "id": "00000000-0000-7000-8000-000000000000",
+                            "tags": [],
+                            "type": "conformance.cancel-target",
+                            "wait": null,
+                            "keyed": false,
+                            "queue": "conformance",
+                            "runAt": "2026-01-01T00:00:00.000Z",
+                            "state": "ready",
+                            "wakeAt": null,
+                            "attempt": 1,
+                            "priority": 0,
+                            "waitName": null,
+                            "workerId": null,
+                            "createdAt": "2026-01-01T00:00:00.000Z",
+                            "humanWait": null,
+                            "updatedAt": "2026-01-01T00:00:00.000Z",
+                            "deadlineAt": null,
+                            "durability": null,
+                            "finishedAt": null,
+                            "signalWait": null,
+                            "maxAttempts": 25,
+                            "retryPolicy": null,
+                            "cancellation": null,
+                            "errorMessage": null,
+                            "lastWorkerId": null,
+                            "blockedReason": null,
+                            "executionTimeoutMs": null,
+                            "prerequisiteJobIds": []
+                          },
+                          {
+                            "id": "00000000-0000-7000-8000-000000000000",
+                            "tags": [],
+                            "type": "conformance.scheduled",
+                            "wait": null,
+                            "keyed": false,
+                            "queue": "conformance",
+                            "runAt": "2031-01-01T00:00:00.000Z",
+                            "state": "scheduled",
+                            "wakeAt": null,
+                            "attempt": 1,
+                            "priority": 0,
+                            "waitName": null,
+                            "workerId": null,
+                            "createdAt": "2026-01-01T00:00:00.000Z",
+                            "humanWait": null,
+                            "updatedAt": "2026-01-01T00:00:00.000Z",
+                            "deadlineAt": null,
+                            "durability": null,
+                            "finishedAt": null,
+                            "signalWait": null,
+                            "maxAttempts": 25,
+                            "retryPolicy": null,
+                            "cancellation": null,
+                            "errorMessage": null,
+                            "lastWorkerId": null,
+                            "blockedReason": null,
+                            "executionTimeoutMs": null,
+                            "prerequisiteJobIds": []
+                          },
+                          {
+                            "id": "00000000-0000-7000-8000-000000000000",
+                            "tags": [
+                              "conformance"
+                            ],
+                            "type": "conformance.ready",
+                            "wait": null,
+                            "keyed": false,
+                            "queue": "conformance",
+                            "runAt": "2026-01-01T00:00:00.000Z",
+                            "state": "ready",
+                            "wakeAt": null,
+                            "attempt": 1,
+                            "priority": 5,
+                            "waitName": null,
+                            "workerId": null,
+                            "createdAt": "2026-01-01T00:00:00.000Z",
+                            "humanWait": null,
+                            "updatedAt": "2026-01-01T00:00:00.000Z",
+                            "deadlineAt": null,
+                            "durability": null,
+                            "finishedAt": null,
+                            "signalWait": null,
+                            "maxAttempts": 25,
+                            "retryPolicy": null,
+                            "cancellation": null,
+                            "errorMessage": null,
+                            "lastWorkerId": null,
+                            "blockedReason": null,
+                            "executionTimeoutMs": null,
+                            "prerequisiteJobIds": []
+                          },
+                          {
+                            "id": "00000000-0000-7000-8000-000000000000",
+                            "tags": [],
+                            "type": "conformance.human",
+                            "wait": null,
+                            "keyed": false,
+                            "queue": "conformance",
+                            "runAt": "9999-12-31T00:00:00.000Z",
+                            "state": "scheduled",
+                            "wakeAt": null,
+                            "attempt": 1,
+                            "priority": 0,
+                            "waitName": "review",
+                            "workerId": null,
+                            "createdAt": "2026-01-01T00:00:00.000Z",
+                            "humanWait": {
+                              "name": "review",
+                              "context": {
+                                "question": "Approve the conformance run?"
+                              },
+                              "deadlineAt": "2026-01-01T00:00:00.000Z"
+                            },
+                            "updatedAt": "2026-01-01T00:00:00.000Z",
+                            "deadlineAt": null,
+                            "durability": null,
+                            "finishedAt": null,
+                            "signalWait": null,
+                            "maxAttempts": 25,
+                            "retryPolicy": null,
+                            "cancellation": null,
+                            "errorMessage": null,
+                            "lastWorkerId": null,
+                            "blockedReason": null,
+                            "executionTimeoutMs": null,
+                            "prerequisiteJobIds": []
+                          },
+                          {
+                            "id": "00000000-0000-7000-8000-000000000000",
+                            "tags": [],
+                            "type": "conformance.signal",
+                            "wait": null,
+                            "keyed": false,
+                            "queue": "conformance",
+                            "runAt": "9999-12-31T00:00:00.000Z",
+                            "state": "scheduled",
+                            "wakeAt": null,
+                            "attempt": 1,
+                            "priority": 0,
+                            "waitName": "approval",
+                            "workerId": null,
+                            "createdAt": "2026-01-01T00:00:00.000Z",
+                            "humanWait": null,
+                            "updatedAt": "2026-01-01T00:00:00.000Z",
+                            "deadlineAt": null,
+                            "durability": null,
+                            "finishedAt": null,
+                            "signalWait": {
+                              "name": "approval",
+                              "deadlineAt": "2026-01-01T00:00:00.000Z"
+                            },
+                            "maxAttempts": 25,
+                            "retryPolicy": null,
+                            "cancellation": null,
+                            "errorMessage": null,
+                            "lastWorkerId": null,
+                            "blockedReason": null,
+                            "executionTimeoutMs": null,
+                            "prerequisiteJobIds": []
+                          },
+                          {
+                            "id": "00000000-0000-7000-8000-000000000000",
+                            "tags": [],
+                            "type": "conformance.fail",
+                            "wait": null,
+                            "keyed": false,
+                            "queue": "conformance",
+                            "runAt": "2026-01-01T00:00:00.000Z",
+                            "state": "failed",
+                            "wakeAt": null,
+                            "attempt": 1,
+                            "priority": 0,
+                            "waitName": null,
+                            "workerId": null,
+                            "createdAt": "2026-01-01T00:00:00.000Z",
+                            "humanWait": null,
+                            "updatedAt": "2026-01-01T00:00:00.000Z",
+                            "deadlineAt": null,
+                            "durability": null,
+                            "finishedAt": "2026-01-01T00:00:00.000Z",
+                            "signalWait": null,
+                            "maxAttempts": 1,
+                            "retryPolicy": null,
+                            "cancellation": null,
+                            "errorMessage": "conformance.fail failed",
+                            "lastWorkerId": null,
+                            "blockedReason": null,
+                            "executionTimeoutMs": null,
+                            "prerequisiteJobIds": []
+                          },
+                          {
+                            "id": "00000000-0000-7000-8000-000000000000",
+                            "tags": [
+                              "conformance"
+                            ],
+                            "type": "conformance.succeed",
+                            "wait": null,
+                            "keyed": false,
+                            "queue": "conformance",
+                            "runAt": "2026-01-01T00:00:00.000Z",
+                            "state": "succeeded",
+                            "wakeAt": null,
+                            "attempt": 1,
+                            "priority": 0,
+                            "waitName": null,
+                            "workerId": null,
+                            "createdAt": "2026-01-01T00:00:00.000Z",
+                            "humanWait": null,
+                            "updatedAt": "2026-01-01T00:00:00.000Z",
+                            "deadlineAt": null,
+                            "durability": null,
+                            "finishedAt": "2026-01-01T00:00:00.000Z",
+                            "signalWait": null,
+                            "maxAttempts": 25,
+                            "retryPolicy": null,
+                            "cancellation": null,
+                            "errorMessage": null,
+                            "lastWorkerId": null,
+                            "blockedReason": null,
+                            "executionTimeoutMs": null,
+                            "prerequisiteJobIds": []
+                          }
+                        ],
+                        "page": 1,
+                        "sort": "updated",
+                        "tags": [],
+                        "queue": null,
+                        "total": null,
+                        "filter": "all",
+                        "search": null,
+                        "worker": null,
+                        "jobType": null,
+                        "pageSize": 50,
+                        "priority": null,
+                        "capturedAt": "2026-01-01T00:00:00.000Z",
+                        "nextCursor": null,
+                        "previousCursor": null,
+                        "canCompleteHumanWait": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/UnknownWorkspace"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotSupported"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/SchemaIncompatible"
+          }
+        }
+      }
+    },
     "/rpc/dashboard/taskFacets": {
       "post": {
         "operationId": "dashboard_taskFacets",
@@ -10571,6 +11148,25 @@
           "discarded"
         ]
       },
+      "DashboardTaskCursor": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updatedAt",
+          "priority"
+        ]
+      },
       "DashboardTaskFacets": {
         "type": "object",
         "properties": {
@@ -10604,6 +11200,153 @@
           "workers",
           "jobTypes",
           "tags"
+        ]
+      },
+      "DashboardTasksCursorPage": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DashboardTaskCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "previousCursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DashboardTaskCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "queue": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sort": {
+            "enum": [
+              "priority",
+              "updated"
+            ]
+          },
+          "filter": {
+            "enum": [
+              "all",
+              "blocked",
+              "canceled",
+              "completed",
+              "discarded",
+              "queued",
+              "retried",
+              "running",
+              "scheduled",
+              "waiting"
+            ]
+          },
+          "search": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "jobType": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "capturedAt": {
+            "type": "string"
+          },
+          "worker": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "canCompleteHumanWait": {
+            "type": "boolean"
+          },
+          "page": {
+            "type": "number"
+          },
+          "pageSize": {
+            "type": "number"
+          },
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardJobRow"
+            }
+          }
+        },
+        "required": [
+          "total",
+          "nextCursor",
+          "previousCursor",
+          "queue",
+          "priority",
+          "tags",
+          "sort",
+          "filter",
+          "search",
+          "jobType",
+          "capturedAt",
+          "worker",
+          "canCompleteHumanWait",
+          "page",
+          "pageSize",
+          "jobs"
         ]
       },
       "DashboardTasksPage": {

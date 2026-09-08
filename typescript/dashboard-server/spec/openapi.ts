@@ -81,6 +81,11 @@ export const procedureDocs: Record<ProcedureName, ProcedureDoc> = {
     description:
       "Returns one count per task filter: all, queued, blocked, retried, running, waiting, canceled, completed, discarded, and scheduled. These are the numbers behind the task view's filter tabs. Takes no input.",
   },
+  tasksCursor: {
+    summary: "Browse tasks with a cursor",
+    description:
+      "Returns a task page with nextCursor and previousCursor. Pass a returned cursor unchanged with direction next or previous. Counts are omitted by default (total is null); count exact requests the full matching total. Ordering uses database timestamp precision. Live tasks can move between pages when their state changes.",
+  },
   tasks: {
     summary: "List tasks, filtered and paged",
     description:
