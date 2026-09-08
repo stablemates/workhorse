@@ -1,5 +1,5 @@
-import { Button, Stack, Text } from "@mantine/core";
-import { Notifications, notifications } from "@mantine/notifications";
+import { Button, Stack, Text } from "./ui/index.js";
+import { Toaster, toast } from "sonner";
 import { CheckCircle, Info, WarningCircle } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
 import {
@@ -48,12 +48,6 @@ export interface DashboardNotification {
   autoClose?: number | false;
 }
 
-const toneColor: Record<DashboardResultTone, string> = {
-  neutral: "gray",
-  success: "teal",
-  failure: "red",
-};
-
 // A failure is given longer than a result an operator merely acknowledges, because it is the one
 // outcome they may need to read twice, copy, or act on.
 const toneAutoClose: Record<DashboardResultTone, number> = {
@@ -79,23 +73,19 @@ export function notifyDashboard(notification: DashboardNotification): string {
   const tone = notification.tone ?? "neutral";
   const action = notification.action;
   const id = notification.id ?? `workhorse-${crypto.randomUUID()}`;
-  // `show` ignores an id that is already on screen, so a repeated action would report nothing at
-  // all the second time. Removing the previous answer first is what makes the new one replace it.
-  if (notification.id !== undefined) notifications.hide(notification.id);
-  return notifications.show({
+  // Sonner updates an existing identity so repeated results replace the previous answer.
+  toast(notification.title, {
     id,
-    color: toneColor[tone],
     icon: toneIcon(tone),
-    title: notification.title,
-    withBorder: true,
-    autoClose: notification.autoClose ?? toneAutoClose[tone],
-    role: tone === "failure" ? "alert" : "status",
+    duration:
+      notification.autoClose === false ? Infinity : (notification.autoClose ?? toneAutoClose[tone]),
+
     // The action sits under the sentence rather than beside it. Sharing one row makes the button
     // compete with the message for a fixed toast width, and the loser is whichever the browser
     // decides to shrink: a button reading "Open" instead of "Open task" is the same bug as a
     // truncated sentence. Stacked, each gets the full width and neither can clip the other.
-    message: (
-      <Stack gap={6} align="flex-start">
+    description: (
+      <Stack gap={6} align="flex-start" role={tone === "failure" ? "alert" : "status"}>
         <Text size="sm" title={notification.exact}>
           {notification.message}
         </Text>
@@ -103,11 +93,11 @@ export function notifyDashboard(notification: DashboardNotification): string {
           <Button
             size="compact-xs"
             variant="light"
-            // Mantine's own padding, unmodified. Aligning the label with the sentence above by
+            // Standard button padding. Aligning the label with the sentence above by
             // pulling the control left by its padding reads as a button padded on one side only,
             // which is worse than the small indent it was trying to remove.
             onClick={() => {
-              notifications.hide(id);
+              toast.dismiss(id);
               action.onClick();
             }}
           >
@@ -117,6 +107,7 @@ export function notifyDashboard(notification: DashboardNotification): string {
       </Stack>
     ),
   });
+  return id;
 }
 
 /**
@@ -229,7 +220,7 @@ export function notifyRedriveBatch(batch: {
 
 /** Drop every notification on screen, for a context change that makes their results irrelevant. */
 export function clearDashboardNotifications(): void {
-  notifications.clean();
+  toast.dismiss();
 }
 
 /**
@@ -240,5 +231,12 @@ export function clearDashboardNotifications(): void {
  * the system without wiring anything.
  */
 export function DashboardNotifications() {
-  return <Notifications position={dashboardNotificationPosition} containerWidth={420} limit={4} />;
+  return (
+    <Toaster
+      position={dashboardNotificationPosition}
+      visibleToasts={4}
+      closeButton
+      toastOptions={{ style: { width: "min(420px, calc(100vw - 32px))" } }}
+    />
+  );
 }

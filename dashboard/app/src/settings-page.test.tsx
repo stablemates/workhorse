@@ -1,6 +1,6 @@
+import { Fragment } from "react";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { MantineProvider } from "@mantine/core";
 import { describe, expect, it } from "vitest";
 import type { DashboardSettingsPage } from "@stablemates/workhorse-dashboard-server/wire";
 
@@ -103,7 +103,7 @@ describe("settings page", () => {
         RefreshBlockerProvider,
         null,
         createElement(
-          MantineProvider,
+          Fragment,
           null,
           createElement(SettingsPage, {
             data,
@@ -122,10 +122,10 @@ describe("settings page", () => {
     expect(html).toContain("Database-wide settings");
     expect(html).toContain("Maintenance schedule");
     expect(html).toContain("Choose when database-wide cleanup runs");
-    expect(html).toMatch(/mantine-Select-label[^>]*>Maintenance timezone/);
+    expect(html).toMatch(/<label[^>]*>Maintenance timezone/);
     expect(html).toContain("Advanced maintenance");
     expect(html).toContain("How often Workhorse checks that upcoming history partitions exist");
-    expect(html).not.toMatch(/mantine-Select-label[^>]*>Partition preparation interval/);
+    expect(html).not.toMatch(/<label[^>]*>Partition preparation interval/);
     expect(html).toContain("Effective: 5 hours");
     expect(html).toContain("Effective: 5 minutes");
     expect(html).not.toContain("Custom partition preparation interval");

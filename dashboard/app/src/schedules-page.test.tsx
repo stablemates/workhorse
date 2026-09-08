@@ -1,4 +1,4 @@
-import { MantineProvider } from "@mantine/core";
+import { Fragment } from "react";
 import type { DashboardCronPage } from "@stablemates/workhorse-dashboard-server/wire";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -58,7 +58,7 @@ describe("schedules page", () => {
     expect(presentSchedules(page)[0]?.lastFiredAt).toBe("2026-08-26T11:59:59.010Z");
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        Fragment,
         null,
         createElement(CronPage, {
           data: page,

@@ -11,7 +11,7 @@ import {
   Stepper,
   Text,
   Tooltip,
-} from "@mantine/core";
+} from "../ui/index.js";
 import { CheckCircle, Clock, Copy, Prohibit } from "@phosphor-icons/react";
 import {
   describeDurableBoundary,

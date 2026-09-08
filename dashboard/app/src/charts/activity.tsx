@@ -1,6 +1,15 @@
 import type { DashboardTaskFilter } from "@stablemates/workhorse-dashboard-server/wire";
-import { BarChart } from "@mantine/charts";
-import { Group, Paper, SegmentedControl, Text } from "@mantine/core";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import { color, Group, Paper, SegmentedControl, Text } from "../ui/index.js";
 import { useEffect, useState } from "react";
 // oxlint-disable-next-line import/no-unassigned-import -- Keep chart CSS in the chart's lazy chunk.
 import "./activity.css";
@@ -138,43 +147,48 @@ export default function TasksActivityChart({
           />
         </Group>
       </Group>
-      <BarChart
-        h={320}
-        data={chartData}
-        dataKey="bucket"
-        type="stacked"
-        series={series}
-        withLegend={series.length > 1}
-        legendProps={{
-          layout: "vertical",
-          align: "left",
-          verticalAlign: "middle",
-          width: 280,
-          wrapperStyle: { paddingRight: 16, textAlign: "left" },
-        }}
-        styles={{
-          legend: {
-            justifyContent: "flex-start",
-            flexDirection: "column",
-            alignItems: "flex-start",
-          },
-          legendItem: { width: "100%", minWidth: 0 },
-          legendItemName: {
-            flex: 1,
-            minWidth: 0,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          },
-        }}
-        gridAxis="xy"
-        tickLine="y"
-        withYAxis
-        withTooltip
-        barProps={{ radius: 2 }}
-        yAxisProps={{ allowDecimals: false, width: 36 }}
-        xAxisProps={{ interval: "preserveStartEnd", minTickGap: 24 }}
-      />
+      <div className="activity-chart" role="img" aria-label={`Task activity grouped by ${groupBy}`}>
+        <ResponsiveContainer width="100%" height={320}>
+          <BarChart data={chartData} margin={{ top: 12, right: 12, bottom: 0, left: 0 }}>
+            <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="3 3" />
+            <XAxis
+              dataKey="bucket"
+              tickLine={false}
+              axisLine={false}
+              minTickGap={24}
+              tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
+            />
+            <YAxis
+              allowDecimals={false}
+              width={36}
+              tickLine={false}
+              axisLine={false}
+              tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
+            />
+            <Tooltip
+              contentStyle={{
+                background: "var(--card)",
+                border: "1px solid var(--border)",
+                borderRadius: 8,
+                fontSize: 12,
+              }}
+              cursor={{ fill: "var(--muted)" }}
+            />
+            {series.length > 1 ? <Legend wrapperStyle={{ fontSize: 11, paddingTop: 16 }} /> : null}
+            {series.map((entry) => (
+              <Bar
+                key={entry.name}
+                dataKey={entry.name}
+                name={entry.label}
+                stackId="activity"
+                fill={color(entry.color)}
+                radius={2}
+                isAnimationActive={false}
+              />
+            ))}
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
     </Paper>
   );
 }

@@ -1,4 +1,4 @@
-import { MantineProvider } from "@mantine/core";
+import { Fragment } from "react";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -30,7 +30,7 @@ describe("dashboard signal waits", () => {
       signalWait: { name: signalWait.name, deadlineAt: signalWait.deadlineAt },
     } as DashboardJobRow;
     const html = renderToStaticMarkup(
-      createElement(MantineProvider, null, createElement(TaskWaitBadge, { job })),
+      createElement(Fragment, null, createElement(TaskWaitBadge, { job })),
     );
 
     expect(html).toContain("Waiting for signal");
@@ -50,7 +50,7 @@ describe("dashboard signal waits", () => {
       },
     } as DashboardJobRow;
     const html = renderToStaticMarkup(
-      createElement(MantineProvider, null, createElement(TaskWaitBadge, { job })),
+      createElement(Fragment, null, createElement(TaskWaitBadge, { job })),
     );
 
     expect(html).toContain("Waiting for decision");
@@ -61,7 +61,7 @@ describe("dashboard signal waits", () => {
     const { SignalWaitCard } = await import("./dashboard.js");
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        Fragment,
         null,
         createElement(SignalWaitCard, {
           wait: signalWait,

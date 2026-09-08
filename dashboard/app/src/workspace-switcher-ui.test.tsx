@@ -1,4 +1,4 @@
-import { MantineProvider } from "@mantine/core";
+import { Fragment } from "react";
 import { createElement, type ComponentType } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -13,7 +13,7 @@ const { DashboardWorkspaceSwitcher } = await import("./dashboard.js");
 function render(props: Record<string, unknown>): string {
   return renderToStaticMarkup(
     createElement(
-      MantineProvider,
+      Fragment,
       null,
       createElement(DashboardWorkspaceSwitcher as ComponentType, {
         // Render the dropdown inline so static markup includes the menu items.

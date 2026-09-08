@@ -18,7 +18,7 @@ import {
   Table,
   Text,
   TextInput,
-} from "@mantine/core";
+} from "../../ui/index.js";
 import { useEffect, useState } from "react";
 import { dashboardRefreshBlockers, useRefreshBlocker } from "../../refresh-blockers.js";
 import { Select } from "../../dropdown-activity.js";

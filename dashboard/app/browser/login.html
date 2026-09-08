@@ -9,21 +9,20 @@
       :root {
         color-scheme: light dark;
         font-family:
-          Inter,
           ui-sans-serif,
           system-ui,
           -apple-system,
           BlinkMacSystemFont,
           "Segoe UI",
           sans-serif;
-        --background: #f4f6f8;
+        --background: #fafafa;
         --panel: #ffffff;
-        --border: #ccd3da;
-        --text: #1f252b;
-        --muted: #626f7b;
+        --border: #e5e5e5;
+        --text: #171717;
+        --muted: #737373;
         --field: #ffffff;
-        --button: #535e68;
-        --button-hover: #454e57;
+        --button: #171717;
+        --button-hover: #333333;
         --error: #c92a2a;
       }
       * {
@@ -36,7 +35,7 @@
         display: flex;
         justify-content: center;
         margin: 0;
-        min-height: 100vh;
+        min-height: 100dvh;
         padding: 24px;
       }
       main {
@@ -81,7 +80,7 @@
       label {
         display: grid;
         font-size: 14px;
-        font-weight: 650;
+        font-weight: 500;
         gap: 7px;
       }
       input {
@@ -94,18 +93,18 @@
         padding: 9px 11px;
       }
       input:focus {
-        border-color: #768592;
-        outline: 2px solid #ccd3da;
+        border-color: #a3a3a3;
+        outline: 2px solid #a3a3a3;
         outline-offset: 1px;
       }
       button {
         background: var(--button);
         border: 0;
         border-radius: 5px;
-        color: #ffffff;
+        color: var(--button-text, #ffffff);
         cursor: pointer;
         font: inherit;
-        font-weight: 700;
+        font-weight: 500;
         min-height: 42px;
         padding: 9px 16px;
       }
@@ -119,14 +118,15 @@
       }
       @media (prefers-color-scheme: dark) {
         :root {
-          --background: #141618;
-          --panel: #1a1d20;
-          --border: #454e57;
-          --text: #f1efea;
-          --muted: #afb9c3;
-          --field: #202428;
-          --button: #768592;
-          --button-hover: #8594a1;
+          --background: #171717;
+          --panel: #1f1f1f;
+          --border: #383838;
+          --text: #fafafa;
+          --muted: #a3a3a3;
+          --field: #171717;
+          --button: #fafafa;
+          --button-text: #171717;
+          --button-hover: #dedede;
           --error: #ff8787;
         }
       }

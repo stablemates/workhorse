@@ -1,10 +1,10 @@
-import { notifications, notificationsStore } from "@mantine/notifications";
+import { toast } from "sonner";
+import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { notifyDashboard, notifyFailure, notifyRunNow } from "./notifications.js";
 
 function shown() {
-  const state = notificationsStore.getState();
-  return [...state.notifications, ...state.queue];
+  return toast.getToasts();
 }
 
 /**
@@ -14,11 +14,10 @@ function shown() {
  * silently swallowed is a result the operator never gets: there is no banner left behind to read.
  */
 describe("dashboard notifications", () => {
-  beforeEach(() => notifications.clean());
+  beforeEach(() => toast.dismiss());
 
   it("replaces the previous answer for a repeated action instead of swallowing it", () => {
-    // Mantine's `show` ignores an id already on screen, so this is the case that would otherwise
-    // leave a second click reporting nothing at all.
+    // Repeated actions must replace stale feedback rather than disappear or duplicate it.
     notifyDashboard({ id: "clipboard", title: "Task id copied", message: "first" });
     notifyDashboard({ id: "clipboard", title: "Args copied", message: "second" });
 
@@ -50,8 +49,12 @@ describe("dashboard notifications", () => {
     );
 
     const [failure, refusal] = shown();
-    expect(failure).toMatchObject({ role: "alert", color: "red", title: "Task not canceled" });
-    expect(refusal).toMatchObject({ role: "status", color: "gray", title: "Suspended at a wait" });
+    expect(failure).toMatchObject({ title: "Task not canceled" });
+    expect(refusal).toMatchObject({ title: "Suspended at a wait" });
+    expect(renderToStaticMarkup(failure!.description as React.ReactNode)).toContain('role="alert"');
+    expect(renderToStaticMarkup(refusal!.description as React.ReactNode)).toContain(
+      'role="status"',
+    );
   });
 
   it("keeps a failure on screen longer than a result that is merely acknowledged", () => {
@@ -63,7 +66,7 @@ describe("dashboard notifications", () => {
     notifyFailure("Queue not cleared", new Error("Permission denied"), "Unable to clear the queue");
 
     const [success, failure] = shown();
-    expect(Number(failure!.autoClose)).toBeGreaterThan(Number(success!.autoClose));
+    expect(Number(failure!.duration)).toBeGreaterThan(Number(success!.duration));
   });
 
   it("reports a transport failure with the cause the server gave", () => {
@@ -71,6 +74,6 @@ describe("dashboard notifications", () => {
       { jobId: "job-1", status: null, described: null, failure: "Job not found" },
       { openTask: () => undefined },
     );
-    expect(shown()[0]).toMatchObject({ title: "Task not run now", color: "red" });
+    expect(shown()[0]).toMatchObject({ title: "Task not run now" });
   });
 });

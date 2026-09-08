@@ -1,4 +1,4 @@
-import { Accordion, Alert, Button, Code, Group, Stack, Text, Textarea } from "@mantine/core";
+import { Accordion, Alert, Button, Code, Group, Stack, Text, Textarea } from "./ui/index.js";
 
 export function SignalPayloadEditor({
   ariaLabel,

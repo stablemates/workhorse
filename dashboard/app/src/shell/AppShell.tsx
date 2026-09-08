@@ -17,7 +17,7 @@ import {
   Stack,
   Text,
   type MenuProps,
-} from "@mantine/core";
+} from "../ui/index.js";
 import {
   ArrowClockwise,
   BookOpenText,
@@ -37,7 +37,7 @@ import {
   useRefreshBlockingInputCapture,
   useDashboardWindowActivityRefreshBlocker,
 } from "../refresh-blockers.js";
-import { useMediaQuery } from "@mantine/hooks";
+import { useMediaQuery } from "../ui/hooks.js";
 import { useCallback, useLayoutEffect, useRef } from "react";
 import { dashboardRefreshIntervalMs, dashboardRefreshIntervals } from "../refresh-policy.js";
 import {

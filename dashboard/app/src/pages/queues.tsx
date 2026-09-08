@@ -1,5 +1,5 @@
 import type { DashboardQueuesPage } from "@stablemates/workhorse-dashboard-server/wire";
-import { Button, Code, Group, Paper, ScrollArea, Stack, Switch, Table, Text } from "@mantine/core";
+import { Button, Code, Group, Paper, ScrollArea, Stack, Switch, Table, Text } from "../ui/index.js";
 import {
   concurrencyCappedFootnote,
   describeConcurrencyBlocked,
@@ -128,7 +128,7 @@ export function QueuesPage({
                           disabled={togglingQueue === queue.queue}
                           label={queue.paused ? "Paused" : "Running"}
                           styles={{
-                            label: { fontSize: "var(--mantine-font-size-xs)" },
+                            label: { fontSize: "0.75rem" },
                           }}
                           aria-label={`${queue.paused ? "Resume" : "Pause"} ${queue.queue}`}
                           onChange={(event) =>

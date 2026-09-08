@@ -23,7 +23,7 @@ import {
   Table,
   Text,
   Tooltip,
-} from "@mantine/core";
+} from "../ui/index.js";
 import { MultiSelect, Select } from "../dropdown-activity.js";
 import { ArrowSquareOut } from "@phosphor-icons/react";
 import { type ReactNode } from "react";

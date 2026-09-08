@@ -68,31 +68,31 @@ export const SystemOutcomeChart = lazy(async () => {
     default: ({ data }: { data: SystemOutcomeChartPoint[] }) => (
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 12, right: 12, bottom: 0, left: -12 }}>
-          <CartesianGrid stroke="var(--mantine-color-default-border)" strokeDasharray="3 3" />
+          <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
           <XAxis
             dataKey="bucket"
             minTickGap={36}
-            tick={{ fontSize: 11, fill: "var(--mantine-color-dimmed)" }}
+            tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
             tickLine={false}
           />
           <YAxis
             allowDecimals={false}
             width={38}
-            tick={{ fontSize: 11, fill: "var(--mantine-color-dimmed)" }}
+            tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
             tickLine={false}
           />
           <RechartsTooltip />
           <Legend wrapperStyle={{ fontSize: 12 }} />
-          <Bar dataKey="succeeded" stackId="outcomes" fill="var(--mantine-color-teal-6)" />
-          <Bar dataKey="failed" stackId="outcomes" fill="var(--mantine-color-red-6)" />
-          <Bar dataKey="retry" stackId="outcomes" fill="var(--mantine-color-orange-6)" />
-          <Bar dataKey="leaseExpired" stackId="outcomes" fill="var(--mantine-color-grape-6)" />
+          <Bar dataKey="succeeded" stackId="outcomes" fill="var(--status-teal)" />
+          <Bar dataKey="failed" stackId="outcomes" fill="var(--status-red)" />
+          <Bar dataKey="retry" stackId="outcomes" fill="var(--status-orange)" />
+          <Bar dataKey="leaseExpired" stackId="outcomes" fill="var(--status-grape)" />
           {/* Cancellation is deliberate operator action, so it never joins the failure series. */}
-          <Bar dataKey="canceled" stackId="outcomes" fill="var(--mantine-color-gray-6)" />
+          <Bar dataKey="canceled" stackId="outcomes" fill="var(--status-gray)" />
           <Line
             dataKey="enqueued"
             type="monotone"
-            stroke="var(--mantine-color-blue-7)"
+            stroke="var(--status-blue)"
             strokeWidth={2}
             dot={false}
           />

@@ -50,28 +50,36 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && cp src/styles.css dist/library/styles.css && rm -rf dist/library/assets dist/app && mkdir -p dist/library/assets && cp -R src/assets/. dist/library/assets/ && vite build",
+    "build": "tsc -p tsconfig.json && cp src/ui/LICENSE dist/library/ui/LICENSE && tailwindcss -i src/styles.css -o dist/library/styles.css --minify && rm -rf dist/library/assets dist/app && mkdir -p dist/library/assets && cp -R src/assets/. dist/library/assets/ && vite build",
     "build:dev": "pnpm build:library",
-    "build:library": "tsc -p tsconfig.json && cp src/styles.css dist/library/styles.css && cp -R src/assets dist/library/assets",
+    "build:library": "tsc -p tsconfig.json && cp src/ui/LICENSE dist/library/ui/LICENSE && tailwindcss -i src/styles.css -o dist/library/styles.css --minify && cp -R src/assets dist/library/assets",
     "dev": "vite",
     "typecheck": "tsc -p tsconfig.typecheck.json"
   },
   "dependencies": {
-    "@mantine/charts": "^8.3.18",
-    "@mantine/core": "^8.3.14",
-    "@mantine/hooks": "^8.3.14",
-    "@mantine/notifications": "^8.3.18",
     "@phosphor-icons/react": "^2.1.10",
     "@stablemates/workhorse-dashboard-server": "workspace:*",
-    "recharts": "^3.10.1"
+    "@tailwindcss/vite": "^4.3.3",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "radix-ui": "^1.6.7",
+    "recharts": "^3.10.1",
+    "sonner": "^2.0.8",
+    "tailwind-merge": "^3.6.0",
+    "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
     "@orpc/client": "^1.14.8",
     "@stablemates/workhorse": "workspace:*",
+    "@tailwindcss/cli": "^4.3.3",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
     "@types/node": "^24.1.0",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^4.7.0",
+    "happy-dom": "^20.14.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-grab": "^0.1.50",

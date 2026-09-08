@@ -1,1 +1,7 @@
-@import "@mantine/charts/styles.css";
+.activity-chart {
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+.activity-chart .recharts-legend-item-text {
+  color: var(--muted-foreground) !important;
+}

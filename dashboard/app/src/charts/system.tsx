@@ -14,7 +14,7 @@ import {
   Text,
   ThemeIcon,
   Tooltip,
-} from "@mantine/core";
+} from "../ui/index.js";
 import type {
   DashboardSystemPage,
   DashboardSystemRetryBucket,
@@ -95,9 +95,9 @@ export function RetryBars({ buckets }: { buckets: DashboardSystemRetryBucket[] }
           <Text c="dimmed" size="xs" w={34} ta="right">
             {retryBucketLabel(bucket)}
           </Text>
-          <Box bg="var(--mantine-color-default-hover)" h={7} style={{ flex: 1, borderRadius: 8 }}>
+          <Box bg="var(--muted)" h={7} style={{ flex: 1, borderRadius: 8 }}>
             <Box
-              bg="var(--mantine-color-orange-6)"
+              bg="var(--status-orange)"
               h="100%"
               w={`${(bucket.count / maximum) * 100}%`}
               style={{ borderRadius: 8 }}
@@ -150,11 +150,7 @@ export function HealthKpi({
   return (
     // A two-line row: the measures stack into one narrow column beside the activity chart,
     // so every row keeps the same rhythm while staying comfortable to read.
-    <Box
-      px="md"
-      py={12}
-      style={divided ? { borderTop: "1px solid var(--mantine-color-default-border)" } : undefined}
-    >
+    <Box px="md" py={12} style={divided ? { borderTop: "1px solid var(--border)" } : undefined}>
       <Group justify="space-between" align="center" gap="sm" wrap="nowrap">
         <Group gap={10} wrap="nowrap" style={{ minWidth: 0, flex: 1 }}>
           <ThemeIcon variant="light" color={color} size="md" style={{ flexShrink: 0 }}>
@@ -422,11 +418,11 @@ export function SystemKpiList({
           series={[
             {
               values: recentOutcomes.map((bucket) => bucket.enqueued),
-              color: "var(--mantine-color-blue-6)",
+              color: "var(--status-blue)",
             },
             {
               values: recentOutcomes.map((bucket) => bucket.succeeded + bucket.failed),
-              color: "var(--mantine-color-teal-6)",
+              color: "var(--status-teal)",
             },
           ]}
         />

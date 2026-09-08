@@ -1,4 +1,4 @@
-import { Badge, Box, Group, Text, type BoxProps } from "@mantine/core";
+import { Badge, Box, Group, Text, type BoxProps } from "./ui/index.js";
 import { WORKHORSE_VERSION } from "@stablemates/workhorse/version";
 const workhorseMarkUrl = new URL("./assets/workhorse-mark.svg", import.meta.url).href;
 const workhorseWordmarkUrl = new URL("./assets/workhorse-wordmark.svg", import.meta.url).href;

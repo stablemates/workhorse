@@ -1,14 +1,4 @@
-import {
-  ActionIcon,
-  Box,
-  CheckIcon,
-  createTheme,
-  Group,
-  MantineProvider,
-  SegmentedControl,
-  Text,
-  Tooltip,
-} from "@mantine/core";
+import { ActionIcon, Box, CheckIcon, Group, SegmentedControl, Text, Tooltip } from "./ui/index.js";
 import { Menu } from "./dropdown-activity.js";
 import { Moon, Palette, Sun } from "@phosphor-icons/react";
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
@@ -18,33 +8,6 @@ export type DashboardColorScheme = "light" | "dark";
 
 const themeStorageKey = "workhorse-theme-scheme";
 const themeSchemes = new Set<DashboardColorScheme>(["light", "dark"]);
-
-const theme = createTheme({
-  primaryColor: "steel",
-  primaryShade: { light: 7, dark: 5 },
-  fontFamily:
-    'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  headings: {
-    fontFamily:
-      'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-    fontWeight: "700",
-  },
-  defaultRadius: "sm",
-  colors: {
-    steel: [
-      "#f4f6f8",
-      "#e6eaee",
-      "#ccd3da",
-      "#afb9c3",
-      "#96a2ae",
-      "#8594a1",
-      "#768592",
-      "#626f7b",
-      "#535e68",
-      "#454e57",
-    ],
-  },
-});
 
 interface ThemeContextValue {
   scheme: DashboardColorScheme;
@@ -65,21 +28,22 @@ export function WorkhorseThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     localStorage.setItem(themeStorageKey, scheme);
     document.documentElement.style.colorScheme = scheme;
+    document.documentElement.classList.toggle("dark", scheme === "dark");
 
     const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
-    themeColor?.setAttribute("content", scheme === "light" ? "#f7f8fa" : "#1a1b1e");
+    themeColor?.setAttribute("content", scheme === "light" ? "#ffffff" : "#171717");
   }, [scheme]);
 
   const contextValue = useMemo(() => ({ scheme, setScheme }), [scheme]);
 
   return (
     <ThemeContext.Provider value={contextValue}>
-      <MantineProvider theme={theme} forceColorScheme={scheme}>
+      <>
         {/* Mounted above the application so an operator result raised during navigation, or by a
             panel that closes itself, still has a container to arrive in. */}
         <DashboardNotifications />
         {children}
-      </MantineProvider>
+      </>
     </ThemeContext.Provider>
   );
 }

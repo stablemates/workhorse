@@ -68,13 +68,16 @@
     "typecheck": "tsc -p tsconfig.typecheck.json"
   },
   "dependencies": {
-    "@mantine/charts": "^8.3.18",
-    "@mantine/core": "^8.3.14",
-    "@mantine/hooks": "^8.3.14",
-    "@mantine/notifications": "^8.3.18",
     "@phosphor-icons/react": "^2.1.10",
     "@stablemates/workhorse-dashboard-server": "workspace:*",
-    "recharts": "^3.10.1"
+    "@tailwindcss/vite": "^4.3.3",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "radix-ui": "^1.6.7",
+    "recharts": "^3.10.1",
+    "sonner": "^2.0.8",
+    "tailwind-merge": "^3.6.0",
+    "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
     "@stablemates/workhorse": "workspace:*",

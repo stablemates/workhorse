@@ -1,4 +1,4 @@
-import { MantineProvider } from "@mantine/core";
+import { Fragment } from "react";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -70,7 +70,7 @@ describe("system health counters", () => {
     const { SystemKpiList } = await import("./dashboard.js");
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        Fragment,
         null,
         createElement(SystemKpiList, { data: systemPage, navigate: () => undefined }),
       ),
@@ -96,7 +96,7 @@ describe("system health counters", () => {
     const { ExternalWaitAlert } = await import("./dashboard.js");
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        Fragment,
         null,
         createElement(ExternalWaitAlert, {
           externalWaits: systemPage.kpis.externalWaits,
@@ -114,7 +114,7 @@ describe("system health counters", () => {
     const { QueuePressure } = await import("./dashboard.js");
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        Fragment,
         null,
         createElement(QueuePressure, { data: systemPage, navigate: () => undefined }),
       ),

@@ -1,5 +1,5 @@
 import type { DashboardCronPage } from "@stablemates/workhorse-dashboard-server/wire";
-import { Badge, Code, Group, Paper, ScrollArea, Stack, Switch, Table, Text } from "@mantine/core";
+import { Badge, Code, Group, Paper, ScrollArea, Stack, Switch, Table, Text } from "../ui/index.js";
 import { StatusBadge } from "../status-badge.js";
 import { HelpButton } from "../charts/system.js";
 import { EmptyState, PageHeader } from "../components/task-list.js";
@@ -132,7 +132,7 @@ export function CronPage({
                             label={schedule.enabled ? "Enabled" : "Disabled"}
                             styles={{
                               label: {
-                                fontSize: "var(--mantine-font-size-xs)",
+                                fontSize: "0.75rem",
                               },
                             }}
                             aria-label={`${schedule.enabled ? "Disable" : "Enable"} ${schedule.name}`}

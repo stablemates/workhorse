@@ -15,7 +15,7 @@ import {
   useRefreshBlocker,
   useRefreshBlockers,
 } from "../refresh-blockers.js";
-import { useDisclosure } from "@mantine/hooks";
+import { useDisclosure } from "../ui/hooks.js";
 import {
   useCallback,
   useEffect,
@@ -51,7 +51,7 @@ import { taskDetailNavigation, taskListingKey } from "../task-location.js";
 import { notifyCancel, notifyDashboard, notifyFailure } from "../notifications.js";
 import type { MaintenancePolicyDefinition, MaintenancePolicySetting } from "@stablemates/workhorse";
 import { requestRunNow, type RunNowFeedback } from "../run-now.js";
-import { Button, Center, Loader, Stack, Text } from "@mantine/core";
+import { Button, Center, Loader, Stack, Text } from "../ui/index.js";
 import { WarningCircle } from "@phosphor-icons/react";
 import {
   DemoJobKind,
@@ -910,7 +910,7 @@ export function useDashboardController(
     content = (
       <Center mih="60vh">
         <Stack align="center" gap="sm">
-          <WarningCircle size={28} color="var(--mantine-color-red-6)" />
+          <WarningCircle size={28} color="var(--status-red)" />
           <Text fw={600}>Workhorse could not load this page.</Text>
           <Text c="dimmed" size="sm">
             {loadState.error}

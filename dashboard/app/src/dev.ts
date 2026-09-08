@@ -11,8 +11,8 @@ import { fileURLToPath } from "node:url";
  * `createDashboardHost`, and one origin serves both the live-compiled frontend and your API — the
  * HTML still going through the same host code path a production consumer uses.
  *
- * `vite` is an optional peer. It is loaded on demand, so an application that never runs this in
- * development does not carry a bundler in its dependency tree.
+ * Vite and the Tailwind plugin are loaded on demand. Production dashboard hosts serve the
+ * precompiled artifact without starting either tool.
  */
 export interface DashboardDevServer {
   /**
@@ -68,6 +68,7 @@ export async function createDashboardDevServer(
     );
   }
 
+  const { default: tailwindcss } = await import("@tailwindcss/vite");
   const source = join(developmentRoot(), "src");
   const root = options.root ?? join(developmentRoot(), "browser");
   const server = await vite.createServer({
@@ -77,6 +78,7 @@ export async function createDashboardDevServer(
     // automatic JSX runtime here. Without it, Vite emits `React.createElement` without importing
     // React and the first module-scope JSX expression fails in the browser.
     esbuild: { jsx: "automatic" },
+    plugins: [tailwindcss()],
     // The host owns HTML, so Vite must not try to serve an index itself.
     appType: "custom",
     server: { middlewareMode: true },

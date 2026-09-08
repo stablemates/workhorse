@@ -1,4 +1,4 @@
-import { Badge } from "@mantine/core";
+import { Badge } from "./ui/index.js";
 
 const healthyStates = new Set(["succeeded", "ready", "active", "busy"]);
 const failureStates = new Set(["failed", "discarded", "incomplete"]);

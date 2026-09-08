@@ -1,4 +1,4 @@
-import { MantineProvider } from "@mantine/core";
+import { Fragment } from "react";
 import type { DashboardJobDetail } from "@stablemates/workhorse-dashboard-server/wire";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -12,7 +12,7 @@ async function renderBatchExecution(batch: DashboardJobDetail["batchExecutions"]
   const { BatchExecutionLine } = await import("./dashboard.js");
   return renderToStaticMarkup(
     createElement(
-      MantineProvider,
+      Fragment,
       null,
       createElement(BatchExecutionLine, {
         batch,

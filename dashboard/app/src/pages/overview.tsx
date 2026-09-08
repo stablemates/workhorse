@@ -21,7 +21,7 @@ import {
   Table,
   Text,
   Title,
-} from "@mantine/core";
+} from "../ui/index.js";
 import { Suspense } from "react";
 import {
   ExternalWaitAlert,

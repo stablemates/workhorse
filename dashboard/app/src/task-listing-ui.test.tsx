@@ -1,4 +1,4 @@
-import { MantineProvider } from "@mantine/core";
+import { Fragment } from "react";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -9,7 +9,7 @@ Object.defineProperty(globalThis, "localStorage", {
 
 function render(component: unknown, props: Record<string, unknown>): string {
   return renderToStaticMarkup(
-    createElement(MantineProvider, null, createElement(component as never, props)),
+    createElement(Fragment, null, createElement(component as never, props)),
   );
 }
 
@@ -35,7 +35,7 @@ describe("task listing identity", () => {
     });
     const tooltipHtml = render(TaskTagsTooltipContent, { tags });
 
-    expect(html.match(/mantine-Badge-root/g)).toHaveLength(3);
+    expect(html.match(/ui-badge/g)).toHaveLength(3);
     expect(html).toContain('aria-label="Tags: billing, weekly, durable-checkpoint"');
     expect(tooltipHtml).toContain("<ul");
     expect(tooltipHtml.match(/<li/g)).toHaveLength(3);

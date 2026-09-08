@@ -12,7 +12,7 @@ import {
   Text,
   TextInput,
   Tooltip,
-} from "@mantine/core";
+} from "../ui/index.js";
 import {
   describeCancellationRequest,
   describeCancelOutcome,

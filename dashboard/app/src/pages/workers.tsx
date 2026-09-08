@@ -12,7 +12,7 @@ import {
   Table,
   Text,
   Tooltip,
-} from "@mantine/core";
+} from "../ui/index.js";
 import { StatusBadge } from "../status-badge.js";
 import { EmptyState, PageHeader } from "../components/task-list.js";
 import { formatDuration, formatExact, formatRelative } from "../preferences.js";

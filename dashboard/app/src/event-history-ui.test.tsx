@@ -1,4 +1,4 @@
-import { MantineProvider } from "@mantine/core";
+import { Fragment } from "react";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -44,9 +44,7 @@ async function renderExport(
 ) {
   const dashboard = await import("./dashboard.js");
   const Component = dashboard[name];
-  return renderToStaticMarkup(
-    createElement(MantineProvider, null, createElement(Component, { job })),
-  );
+  return renderToStaticMarkup(createElement(Fragment, null, createElement(Component, { job })));
 }
 
 describe("dashboard event history", () => {
@@ -70,7 +68,7 @@ describe("dashboard event history", () => {
     } satisfies DashboardEventRow;
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        Fragment,
         null,
         createElement(EventDetails, {
           event,

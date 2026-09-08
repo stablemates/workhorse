@@ -1,4 +1,4 @@
-import { MantineProvider } from "@mantine/core";
+import { Fragment } from "react";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -9,7 +9,7 @@ Object.defineProperty(globalThis, "localStorage", {
 
 function render(component: unknown, props: Record<string, unknown>): string {
   return renderToStaticMarkup(
-    createElement(MantineProvider, null, createElement(component as never, props)),
+    createElement(Fragment, null, createElement(component as never, props)),
   );
 }
 

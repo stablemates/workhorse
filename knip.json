@@ -25,16 +25,19 @@
     },
     "typescript/dashboard": {
       "ignoreDependencies": [
-        "@mantine/charts",
-        "@mantine/core",
-        "@mantine/hooks",
-        "@mantine/notifications",
         "@phosphor-icons/react",
-        "@stablemates/workhorse",
         "@stablemates/workhorse-dashboard-server",
+        "@tailwindcss/vite",
+        "class-variance-authority",
+        "clsx",
+        "radix-ui",
+        "recharts",
+        "sonner",
+        "tailwind-merge",
+        "tailwindcss",
+        "@stablemates/workhorse",
         "react",
         "react-dom",
-        "recharts",
         "vite"
       ]
     },

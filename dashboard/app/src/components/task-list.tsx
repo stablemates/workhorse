@@ -20,7 +20,7 @@ import {
   ThemeIcon,
   Title,
   Tooltip,
-} from "@mantine/core";
+} from "../ui/index.js";
 import {
   describeCancellationRequest,
   describeRetryPolicy,

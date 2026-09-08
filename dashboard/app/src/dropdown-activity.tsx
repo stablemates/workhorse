@@ -1,11 +1,11 @@
 import {
-  Menu as MantineMenu,
-  MultiSelect as MantineMultiSelect,
-  Select as MantineSelect,
+  Menu as BaseMenu,
+  MultiSelect as BaseMultiSelect,
+  Select as BaseSelect,
   type MenuProps,
   type MultiSelectProps,
   type SelectProps,
-} from "@mantine/core";
+} from "./ui/index.js";
 import {
   createContext,
   useCallback,
@@ -123,7 +123,7 @@ function TrackedMenuRoot({
 }: MenuProps & { blocksRefresh?: boolean }) {
   const track = useTrackedDropdown(blocksRefresh);
   return (
-    <MantineMenu
+    <BaseMenu
       {...props}
       onChange={(opened) => {
         track(opened);
@@ -133,14 +133,14 @@ function TrackedMenuRoot({
   );
 }
 
-export const Menu = Object.assign(TrackedMenuRoot, MantineMenu);
+export const Menu = Object.assign(TrackedMenuRoot, BaseMenu);
 
 export function Select({ onDropdownOpen, onDropdownClose, ...props }: SelectProps) {
   const tracking = useTrackedSelectDropdown(onDropdownOpen, onDropdownClose);
-  return <MantineSelect {...props} {...tracking} />;
+  return <BaseSelect {...props} {...tracking} />;
 }
 
 export function MultiSelect({ onDropdownOpen, onDropdownClose, ...props }: MultiSelectProps) {
   const tracking = useTrackedSelectDropdown(onDropdownOpen, onDropdownClose);
-  return <MantineMultiSelect {...props} {...tracking} />;
+  return <BaseMultiSelect {...props} {...tracking} />;
 }

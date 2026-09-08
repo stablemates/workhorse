@@ -1,4 +1,4 @@
-import { UnstyledButton } from "@mantine/core";
+import { UnstyledButton } from "./ui/index.js";
 import type { ReactNode } from "react";
 
 export function taskOpenButtonId(jobId: string): string {

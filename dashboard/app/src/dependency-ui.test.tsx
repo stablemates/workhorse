@@ -1,4 +1,4 @@
-import { MantineProvider } from "@mantine/core";
+import { Fragment } from "react";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -32,7 +32,7 @@ async function renderDependency(
   } as DashboardJobDetail;
   return renderToStaticMarkup(
     createElement(
-      MantineProvider,
+      Fragment,
       null,
       createElement(DependencyLine, { job, taskLinkHref: (id: string) => `/tasks?task=${id}` }),
     ),
@@ -47,7 +47,7 @@ async function renderRedrive(
   const job = { identity: { id }, redriveLineage } as DashboardJobDetail;
   return renderToStaticMarkup(
     createElement(
-      MantineProvider,
+      Fragment,
       null,
       createElement(RedriveLine, {
         job,
@@ -62,7 +62,7 @@ async function renderChild(childLineage: DashboardJobDetail["childLineage"]): Pr
   const job = { identity: { id: "parent-job" }, childLineage } as DashboardJobDetail;
   return renderToStaticMarkup(
     createElement(
-      MantineProvider,
+      Fragment,
       null,
       createElement(ChildLine, {
         job,

@@ -5,7 +5,7 @@ import type {
   DashboardJobDetail,
   DashboardSignalWaitRow,
 } from "@stablemates/workhorse-dashboard-server/wire";
-import { Box, Button, Code, Group, Paper, Stack, Text } from "@mantine/core";
+import { Box, Button, Code, Group, Paper, Stack, Text } from "../ui/index.js";
 import { ExternalWaitDeadline, SignalPayloadEditor } from "../external-wait-controls.js";
 import { useState } from "react";
 import { formatExact } from "../preferences.js";

@@ -39,7 +39,7 @@ import {
   Table,
   Text,
   VisuallyHidden,
-} from "@mantine/core";
+} from "../ui/index.js";
 import { Menu, Select } from "../dropdown-activity.js";
 import {
   ArrowCounterClockwise,

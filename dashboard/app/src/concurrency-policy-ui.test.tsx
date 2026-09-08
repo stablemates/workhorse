@@ -1,6 +1,6 @@
+import { Fragment } from "react";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { MantineProvider } from "@mantine/core";
 import { describe, expect, it } from "vitest";
 import type {
   DashboardConcurrencyPolicySummary,
@@ -73,7 +73,7 @@ function queuesPage(overrides: Partial<DashboardQueuesPage> = {}): DashboardQueu
 function renderQueues(data: DashboardQueuesPage, QueuesPage: unknown): string {
   return renderToStaticMarkup(
     createElement(
-      MantineProvider,
+      Fragment,
       null,
       createElement(QueuesPage as never, {
         data,
@@ -94,7 +94,7 @@ function renderQueuePressure(
 ): string {
   return renderToStaticMarkup(
     createElement(
-      MantineProvider,
+      Fragment,
       null,
       createElement(QueuePressure as never, {
         data: data as DashboardSystemPage,
@@ -473,7 +473,7 @@ describe("task drawer concurrency line", () => {
     const { ConcurrencyPolicyLine } = await import("./dashboard.js");
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        Fragment,
         null,
         createElement(ConcurrencyPolicyLine, {
           job: job({
@@ -499,7 +499,7 @@ describe("task drawer concurrency line", () => {
     const { ConcurrencyPolicyLine } = await import("./dashboard.js");
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        Fragment,
         null,
         createElement(ConcurrencyPolicyLine, {
           job: job({
@@ -518,7 +518,7 @@ describe("task drawer concurrency line", () => {
     const { ConcurrencyPolicyLine } = await import("./dashboard.js");
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        Fragment,
         null,
         createElement(ConcurrencyPolicyLine, {
           job: job({
@@ -546,7 +546,7 @@ describe("task drawer concurrency line", () => {
     const { ConcurrencyPolicyLine } = await import("./dashboard.js");
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        Fragment,
         null,
         createElement(ConcurrencyPolicyLine, {
           job: job({
@@ -569,7 +569,7 @@ describe("task drawer concurrency line", () => {
     const { ConcurrencyPolicyLine } = await import("./dashboard.js");
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        Fragment,
         null,
         createElement(ConcurrencyPolicyLine, {
           job: job({ runtimeState: null }) as unknown as DashboardJobDetail,

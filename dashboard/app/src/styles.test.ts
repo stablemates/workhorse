@@ -16,8 +16,6 @@ describe("task drawer control alignment", () => {
   });
 
   it("removes inline baseline space from durable step loaders", () => {
-    expect(styles).toMatch(
-      /\.task-drawer__content \.mantine-Stepper-stepLoader\s*\{[^}]*display:\s*block;/s,
-    );
+    expect(styles).toMatch(/\.task-drawer__content \.ui-loader\s*\{[^}]*display:\s*block;/s);
   });
 });

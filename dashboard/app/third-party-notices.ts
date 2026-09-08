@@ -121,6 +121,14 @@ async function createDashboardThirdPartyNotices(bundle: OutputBundleLike): Promi
     }),
   );
 
+  sections.push(
+    [
+      "shadcn/ui copied component source",
+      "Source: https://github.com/shadcn-ui/ui",
+      await readFile(path.join(repositoryRoot, "dashboard/app/src/ui/LICENSE"), "utf8"),
+    ].join("\n\n"),
+  );
+
   return [
     "Workhorse dashboard third-party notices",
     "",

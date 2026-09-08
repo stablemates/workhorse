@@ -1,5 +1,5 @@
 import type { DashboardJobDetail } from "@stablemates/workhorse-dashboard-server/wire";
-import { Badge, Box, Code, Divider, Group, Paper, Stack, Text } from "@mantine/core";
+import { Badge, Box, Code, Divider, Group, Paper, Stack, Text } from "../ui/index.js";
 import { describeTaskConcurrency } from "../concurrency-policy.js";
 import { readDashboardIdempotencyEvidence } from "@stablemates/workhorse-dashboard-server/wire";
 import {

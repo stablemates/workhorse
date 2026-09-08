@@ -1,15 +1,14 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { MantineProvider } from "@mantine/core";
 import { WORKHORSE_VERSION } from "@stablemates/workhorse/version";
 import { WorkhorseBrand, WorkhorseVersion } from "./brand.js";
 
 describe("WorkhorseBrand", () => {
   it("does not include the Workhorse version", () => {
     const html = renderToStaticMarkup(
-      <MantineProvider>
+      <>
         <WorkhorseBrand />
-      </MantineProvider>,
+      </>,
     );
 
     expect(html).not.toContain(`v${WORKHORSE_VERSION}`);
@@ -19,9 +18,9 @@ describe("WorkhorseBrand", () => {
 describe("WorkhorseVersion", () => {
   it("shows the beta label and current version", () => {
     const html = renderToStaticMarkup(
-      <MantineProvider>
+      <>
         <WorkhorseVersion />
-      </MantineProvider>,
+      </>,
     );
 
     expect(html).toContain(`aria-label="Workhorse version ${WORKHORSE_VERSION}"`);
