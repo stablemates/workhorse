@@ -111,6 +111,17 @@ export function createHorses(): HorseState[] {
   }));
 }
 
+/** Shared places for ties; keep lanes in their original order on the track. */
+export function raceStandings(horses: readonly HorseState[]) {
+  const ordered = horses.toSorted((a, b) => b.jobsDone - a.jobsDone);
+  const leadingJobs = ordered[0]?.jobsDone ?? 0;
+  return ordered.map((horse) => ({
+    horse,
+    rank: 1 + ordered.filter((other) => other.jobsDone > horse.jobsDone).length,
+    behind: leadingJobs - horse.jobsDone,
+  }));
+}
+
 export function createRace(seed: number): RaceState {
   let prngState = seed >>> 0;
   const rand = (): number => {
@@ -233,6 +244,13 @@ export function stepRace(state: RaceState): RaceState {
         throttle.released = true;
         log.push({ t: tick, text: "throttle provider-api released — permits free", tone: "muted" });
       }
+      if (horse.status === "backoff" || horse.status === "throttled") {
+        log.push({
+          t: tick,
+          text: `${horse.id} resumed after ${horse.status} — processing jobs again`,
+          tone: "good",
+        });
+      }
       horse.status = "running";
       horse.stallTicksLeft = 0;
       continue;
@@ -257,7 +275,18 @@ export function stepRace(state: RaceState): RaceState {
     }
 
     const completed = 1 + (rand() < DERBY_TUNING.doubleJobChance ? 1 : 0);
+    const previousDone = horse.jobsDone;
     horse.jobsDone = Math.min(horse.jobsTotal, horse.jobsDone + completed);
+    for (const percent of [25, 50, 75]) {
+      const milestone = Math.ceil((horse.jobsTotal * percent) / 100);
+      if (previousDone < milestone && horse.jobsDone >= milestone) {
+        log.push({
+          t: tick,
+          text: `${horse.id} passed ${percent}% — ${horse.jobsDone}/${horse.jobsTotal} jobs completed`,
+          tone: "muted",
+        });
+      }
+    }
     if (horse.jobsDone >= horse.jobsTotal) {
       horse.status = "drained";
       winnerId = horse.id;

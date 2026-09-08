@@ -130,7 +130,8 @@ const features: readonly Feature[] = [
       <>
         Wrap each completed stage in a named <code>checkpoint</code>. When a retry or restart runs
         the handler again, completed checkpoints return their stored result instead of re-executing.
-        The customer is charged once, no matter how many times the process dies.
+        Use a provider idempotency key for external effects: a crash can happen after the charge
+        succeeds but before its checkpoint is saved.
       </>
     ),
     file: "invoice.ts",
@@ -488,7 +489,7 @@ function FeatureSection({ feature, index }: { feature: Feature; index: number })
       : []),
   ];
   return (
-    <section id={feature.id} className="wh-rule border-t py-14">
+    <section id={feature.id} className="wh-rule scroll-mt-24 border-t py-14">
       <div className="grid gap-8 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] lg:gap-14">
         <div>
           <p className="inline-flex items-center gap-2 rounded-sm border wh-rule bg-fd-muted/40 px-2.5 py-1 font-mono text-[11.5px] uppercase tracking-[0.12em] text-fd-muted-foreground">
@@ -558,7 +559,7 @@ function HeroActions() {
     <div className="flex flex-wrap items-center gap-3">
       <a
         href="/docs/quickstart"
-        className="inline-flex items-center gap-2 rounded-md bg-brand-700 px-5 py-2.5 text-[15px] font-medium text-white shadow-sm transition-colors hover:bg-brand-800 dark:bg-brand-500 dark:hover:bg-brand-400"
+        className="inline-flex items-center gap-2 rounded-md bg-brand-700 px-5 py-2.5 text-[15px] font-medium text-white shadow-sm transition-colors hover:bg-brand-800 dark:bg-brand-600 dark:hover:bg-brand-700"
       >
         Build your first worker
       </a>
@@ -580,14 +581,14 @@ function Hero() {
     <section className="relative overflow-hidden pt-6 sm:pt-8">
       <div aria-hidden className="wh-hero-grid pointer-events-none absolute inset-0" />
       <div className="relative mx-auto grid w-full max-w-7xl border-t wh-rule lg:grid-cols-2">
-        <div className="flex flex-col justify-center border-b px-5 py-14 wh-rule sm:px-10 sm:py-20 lg:border-b-0 lg:border-r lg:px-8">
+        <div className="wh-hero-copy flex flex-col justify-center border-b px-5 py-14 wh-rule sm:px-10 sm:py-20 lg:border-b-0 lg:border-r lg:px-8">
           <BetaMark />
-          <h1 className="mt-7 whitespace-nowrap text-base font-semibold leading-tight tracking-[-0.035em] sm:text-2xl lg:text-xl xl:text-2xl 2xl:text-3xl">
-            <span className="wh-accent-text">Harness</span> the Postgres you already run.
+          <h1 className="mt-7 max-w-xl text-balance text-4xl font-semibold leading-[1.08] tracking-[-0.035em] sm:text-5xl lg:text-[3.25rem]">
+            Durable jobs. <span className="wh-accent-text">The Postgres you already run.</span>
           </h1>
           <p className="mt-6 max-w-xl text-pretty text-lg leading-relaxed text-fd-muted-foreground">
-            Durable background tasks with crash recovery, efficient long waits, and fleet-wide
-            concurrency controls.
+            Commit jobs with your application data. Recover after a crash. Wait without holding a
+            worker. A durable job queue for TypeScript, Python, and Go, with no separate broker.
           </p>
           <div className="mt-8">
             <HeroActions />
@@ -597,7 +598,7 @@ function Hero() {
             keeps its existing transaction and deployment model.
           </div>
         </div>
-        <div className="bg-[#F2F0ED] px-5 py-14 sm:px-10 sm:py-20 lg:px-12 dark:bg-(--wh-panel)">
+        <div className="wh-hero-install bg-[#F2F0ED] px-5 py-14 sm:px-10 sm:py-20 lg:px-12 dark:bg-(--wh-panel)">
           <p className="font-mono text-xs uppercase tracking-[0.14em] text-fd-muted-foreground">
             Choose your runtime
           </p>
@@ -616,6 +617,47 @@ function Hero() {
         </div>
       </div>
     </section>
+  );
+}
+
+function FeatureNavigation() {
+  return (
+    <nav aria-labelledby="feature-navigation-title" className="wh-rule border-b">
+      <div className="mx-auto grid w-full max-w-7xl gap-7 px-5 py-9 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] lg:gap-14 lg:px-8">
+        <div>
+          <p id="feature-navigation-title" className="text-lg font-semibold tracking-tight">
+            Find the guarantee your job needs.
+          </p>
+          <p className="mt-2 max-w-sm text-sm leading-relaxed text-fd-muted-foreground">
+            Explore working examples below, or follow the quickstart to run your first job.
+          </p>
+          <a
+            href="/docs/quickstart"
+            className="wh-link-underline mt-3 inline-block text-sm font-medium"
+          >
+            Start with the quickstart →
+          </a>
+          <a href="#derby" className="wh-link-underline ml-5 inline-block text-sm font-medium">
+            Play the Derby →
+          </a>
+        </div>
+        <ul className="grid gap-x-6 sm:grid-cols-2">
+          {features.map((feature, index) => (
+            <li key={feature.id}>
+              <a
+                href={`#${feature.id}`}
+                className="wh-rule flex items-baseline gap-3 border-b py-2.5 text-sm hover:text-(--wh-accent)"
+              >
+                <span aria-hidden className="font-mono text-xs text-fd-muted-foreground">
+                  {String(index + 1).padStart(2, "0")}
+                </span>
+                <span className="first-letter:uppercase">{feature.kicker}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </nav>
   );
 }
 
@@ -774,17 +816,20 @@ function Tile({ href, label, note }: { href: string; label: string; note: string
 
 function DerbySection() {
   return (
-    <section className="mx-auto w-full max-w-7xl px-5 py-14 lg:px-8">
+    <section id="derby" className="mx-auto w-full max-w-7xl scroll-mt-24 px-5 py-14 lg:px-8">
       <Rule label="the derby" />
-      <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] lg:gap-14">
+      <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)] lg:gap-12">
         <div>
           <h2 className="text-balance text-2xl font-semibold leading-snug tracking-tight sm:text-[27px]">
-            Four workers. Four queues. Pick your horse.
+            Pick your horse. Watch the queue race.
           </h2>
           <p className="mt-3 text-pretty text-[16px] leading-relaxed text-fd-muted-foreground">
-            A toy race on real mechanics: each lane is a worker draining its queue, with random
-            throughput, retry backoff, a throttle window, and one dead-letter that redrives. The
-            simulation is fair — the house is PostgreSQL.
+            Back a worker and see if it drains its queue first. A retry can cost the lead, a
+            throttle can close the gap, and a dead-letter can still make a comeback.
+          </p>
+          <p className="mt-3 text-sm leading-relaxed text-fd-muted-foreground">
+            A short simulation of Workhorse mechanics. No stakes, just bragging rights. Open the
+            race events to see what happened under the hood.
           </p>
           <p className="mt-5">
             <a href="/docs/dead-letters" className="wh-link-underline text-[15px] font-medium">
@@ -838,6 +883,7 @@ function HomePage() {
     <div className="wh-page-scale flex flex-1 flex-col">
       <HomeLayout {...baseOptions} className="flex-1">
         <Hero />
+        <FeatureNavigation />
         <DemoScreenshots />
 
         {/* ---------- Language clients ---------- */}

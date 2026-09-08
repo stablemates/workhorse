@@ -40,6 +40,21 @@ Points that keep this safe, and that any change must preserve:
 - Firefox supports `zoom` from version 126; older browsers simply render the
   unscaled layout.
 
+## Laptop and Derby checks
+
+Review the landing at CSS viewport sizes of 1280×800, 1440×900, and 1512×982, then
+check 390×844 for mobile. These represent browser layout space, not Retina panel pixels.
+The hero uses tighter vertical padding below the wide-screen zoom threshold, so laptop
+readers can see the start of the feature navigation without shrinking the headline.
+
+The Derby keeps horse selection separate from its seeded simulation. Standings share
+places when progress is tied; lanes never reorder during a race. A rematch keeps the pick,
+while “Change horse” reopens selection. The score lasts for the mounted page only.
+Reduced motion runs the same simulation directly to its result. Verify both paths,
+including a rematch with the same winner, keyboard selection, and leaving mid-race.
+The event panel retains the full race history, newest first, in a bounded scrollable
+region. It includes progress milestones and resumed work alongside failures and recovery.
+
 ## The integration catalog
 
 `integrations.json` is the one place an integration is declared. Three surfaces
