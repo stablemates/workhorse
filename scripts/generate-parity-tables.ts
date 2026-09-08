@@ -92,16 +92,16 @@ const plannedItems = [
     ].flatMap((cell) => ("planned" in cell ? [cell.planned] : [])),
   ),
 ].toSorted();
-const plannedStart = "<!-- BEGIN GENERATED PARITY ONTRACK LINKS -->";
-const plannedEnd = "<!-- END GENERATED PARITY ONTRACK LINKS -->";
+const plannedStart = "<!-- BEGIN GENERATED PARITY LINEAR LINKS -->";
+const plannedEnd = "<!-- END GENERATED PARITY LINEAR LINKS -->";
 const plannedPattern = new RegExp(`${plannedStart}[\\s\\S]*?${plannedEnd}`);
 if (!plannedPattern.test(generated)) {
-  throw new Error("Missing generated parity Ontrack link markers");
+  throw new Error("Missing generated parity Linear link markers");
 }
 // Prettier surrounds link definitions with blank lines, so emit them the same way or the two
 // rewrite each other forever. With no Planned cell there is nothing to separate.
 const linkDefinitions = plannedItems.map(
-  (item) => `[${item}]: https://ontrack.sh/projects/WH/issues/${item}`,
+  (item) => `[${item}]: https://linear.app/stablemates/issue/${item}`,
 );
 const withLinks = generated.replace(
   plannedPattern,

@@ -5,10 +5,10 @@
 - **Assembled by:** [ADR 0059](0059-assemble-the-1-0-0-specification.md)
 - **Related:** [ADR 0053](0053-start-migrations-at-0-1-0-and-keep-them-additive.md),
   [ADR 0054](0054-define-what-1-0-0-promises.md),
-  [WH-580](https://ontrack.sh/projects/WH/issues/WH-580),
-  [WH-584](https://ontrack.sh/projects/WH/issues/WH-584),
-  [WH-608](https://ontrack.sh/projects/WH/issues/WH-608),
-  [WH-614](https://ontrack.sh/projects/WH/issues/WH-614)
+  WH-580,
+  WH-584,
+  WH-608,
+  WH-614
 
 ## Context
 

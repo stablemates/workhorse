@@ -87,7 +87,7 @@ documentation asks for, so the recorded read is `clean`. `schemaSignal` matches 
 anywhere in the source and cannot see where the call sits, so it says `committed`.
 
 The recorded read is authoritative and the disagreement is meant to be visible, so the fixture is
-left as it stands. [WH-662](https://ontrack.sh/projects/WH/issues/WH-662) fixes the detector.
+left as it stands. WH-662 fixes the detector.
 
 ## Caveat
 

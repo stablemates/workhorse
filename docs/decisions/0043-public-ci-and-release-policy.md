@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-25
-- **Related:** [Plane WH-438](https://ontrack.sh/projects/WH/issues/WH-278)
+- **Related:** Plane WH-438
 
 ## Context
 

@@ -174,7 +174,7 @@ describe("parity matrix", () => {
     expect(unexplainedAbsent(productCells.map(({ row, target }) => row[target]))).toEqual([]);
   });
 
-  it("links the Ontrack Issue behind every Planned cell", () => {
+  it("links the Linear Issue behind every Planned cell", () => {
     // A Planned cell's evidence is the open Issue that owns the gap. The document must link
     // it, so the cell cannot outlive the work it points at unnoticed.
     const unlinked = [
@@ -185,8 +185,8 @@ describe("parity matrix", () => {
       .map((cell) => ("planned" in cell ? cell.planned : ""))
       .filter(
         (item) =>
-          !/^WH-\d+$/.test(item) ||
-          !markdown.includes(`[${item}]: https://ontrack.sh/projects/WH/issues/${item}`),
+          !/^SM-\d+$/.test(item) ||
+          !markdown.includes(`[${item}]: https://linear.app/stablemates/issue/${item}`),
       );
     expect(unlinked).toEqual([]);
   });

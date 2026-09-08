@@ -2,63 +2,39 @@
 
 Instructions for coding agents and contributors.
 
-## Work from production Ontrack
+## Work from Linear
 
-All repository work lives in the production Ontrack `Workhorse` Project (`WH`). Connect over
-pgwire with `ONTRACK_AGENT_DSN` from this checkout's ignored `.env`; the Board is hosted at
-`https://ontrack.sh` and is never a local process. If the hosted Board is unreachable, stop and tell
-the Human. A local Ontrack database contains no authoritative Workhorse Issues.
+All repository work lives in Linear's `stablemates` workspace, under the `SM` team identifier
+and the `workhorse` project. Linear is authoritative for priorities, blockers, and completion.
+Use the connected Linear tools or the hosted workspace at `https://linear.app/stablemates`.
+Scope every issue search and creation to this workspace, team, and project; the `SM` team can
+contain other projects.
 
-The machine's Private Token lives once in `~/.pgpass`, whose mode must be `0600`. The DSN carries no
-password, requires `sslmode=require`, and uses its username only as this checkout's Agent Session
-name. The secret resolves the host Agent; the Session separates simultaneous checkouts. Never put a
-secret in `.env`, a command, a Comment, or Git.
-
-This checkout's `.env` must contain `ONTRACK_AGENT_DSN` explicitly. Never inherit another
-checkout's ambient value. A linked worktree gets the host DSN from its primary checkout, strips any
-password, and rewrites the username to its worktree ID. If the key is absent, configure it in the
-primary checkout and rerun that repository's worktree setup; do not copy another worktree's DSN or
-mint another Agent.
-
-If a request names an exact `WH-*` Issue, that Issue is the target. If a request asks for the next
-piece of work, claim it with `app.claim_next(project_key => 'WH')`: one atomic statement that
-takes the highest-priority, oldest, unblocked Todo Issue in `WH` and skips rows other Sessions hold.
-Do not query the Board, pick a key, and then call `app.claim_issue`; on a shared Board the gap
-between the query and the claim is a race. If a request names an outcome but no key, search open
-Workhorse Issues for one that owns that outcome. If none matches, file an Issue with
-`app.file_issue`, `project_key => 'WH'`, and checkable acceptance criteria.
+If a request names an exact `SM-*` issue, that issue is the target. If a request names an outcome,
+search open issues in `workhorse` for one that owns it. If none matches, create an issue with
+checkable acceptance criteria. When asked for the next piece of work, select the highest-priority,
+oldest, unblocked Todo issue without an active owner.
 
 Before changing tracked files:
 
-1. Load this checkout's `.env` and connect with a PostgreSQL client. Require the DSN to be
-   passwordless, TLS-required, and named for this checkout.
-2. Claim the target: `app.claim_next(project_key => 'WH')` for the next Issue, or
-   `app.claim_issue('WH-123')` when the request names that exact Issue. Work only Issues this
-   Session holds.
-3. Read the claimed `WH-*` Issue, its Comments, and both ends of its Relations. Read the
-   repository's `CONTEXT.md` and relevant decision records when the work changes domain behavior.
-   If the Issue turns out not to be workable by this Session, Comment why and release it with
-   `app.release_issue`.
+1. Read the target issue, its comments, and linked dependencies. Verify that it belongs to
+   `stablemates`, the `SM` team, and the `workhorse` project.
+2. Establish ownership through the issue's assignee and move it to In Progress. Re-read the issue
+   before starting; if another contributor owns the work, choose another eligible issue or report
+   the conflict. Assignment is coordination, not an atomic lease.
+3. Read `CONTEXT.md` and relevant decision records when the work changes domain behavior.
 
-The host Agent may see other Ontrack Projects, so every Board read must filter
-`project_key = 'WH'`, every new Issue must pass `project_key => 'WH'`, and every mutation must name
-an exact `WH-*` key. Never call the bare `app.claim_next()` without `project_key`: that form spans
-every Project the Agent is a Member of and can claim another repository's work.
+Keep the issue current with comments for material decisions, scope changes, and verification
+evidence. Finish only after every acceptance item is verified and relevant repository checks pass.
+Record the exact evidence, update the checklist, and move the issue to Done in the same task.
+When another contributor can continue the work as-is, record the handoff and move it to Todo.
+When a human decision or action is required, record the boundary and move it to Backlog.
+Clear your assignment when handing off or waiting. Use the team's configured workflow states
+corresponding to these stages.
 
-An imported Issue's Ontrack `WH-*` key is its current working identity. Its `Plane provenance`
-section and source UUID preserve the historical Plane key. In Git history, `WH-*` subjects before
-the tracker cutover commit mean Plane keys; later subjects mean native Ontrack keys. Use
-`docs/tracker-history.md` and imported provenance to cross that boundary.
-
-Keep the Board current while working. Renew the Lease at least every two minutes with
-`app.renew_lease('WH-123')`, and add Comments for material decisions, scope changes, and verification
-evidence with `app.add_comment`. A live Lease means In Progress; do not set that Status directly.
-
-Finish only after every acceptance item is verified and the relevant repository checks pass. Add a
-Comment with the exact evidence, update the Issue checklist, and set it to Done in the same task.
-When another Agent can continue the current work as-is, Comment the handoff and move it to Todo.
-When a Human decision or action is required, Comment the boundary and move it to Backlog at that
-moment. Do not leave a live Lease behind while waiting.
+Linear starts fresh: do not migrate old tickets or translate `WH-*` numbers into `SM-*` numbers.
+When following historical issue references in commits or decision records, read
+[tracker history](docs/tracker-history.md). Use `SM-*` identifiers for new work and commit subjects.
 
 ## Sign agent commits with the model
 

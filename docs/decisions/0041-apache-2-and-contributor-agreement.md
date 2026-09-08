@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-25
-- **Related:** [Plane WH-434](https://ontrack.sh/projects/WH/issues/WH-281)
+- **Related:** Plane WH-434
 
 ## Context
 

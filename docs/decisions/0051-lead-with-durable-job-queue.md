@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-02
-- **Related:** [WH-554](https://ontrack.sh/projects/WH/issues/WH-554), [WH-548](https://ontrack.sh/projects/WH/issues/WH-548), [ADR 0042](0042-publish-the-first-public-beta.md), [ADR 0046](0046-make-readmes-entry-points.md)
+- **Related:** WH-554, WH-548, [ADR 0042](0042-publish-the-first-public-beta.md), [ADR 0046](0046-make-readmes-entry-points.md)
 
 ## Context
 

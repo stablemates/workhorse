@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-25
-- **Related:** [Plane WH-440](https://ontrack.sh/projects/WH/issues/WH-23)
+- **Related:** Plane WH-440
 
 ## Context
 

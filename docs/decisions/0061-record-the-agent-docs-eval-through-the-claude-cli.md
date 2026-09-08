@@ -4,8 +4,8 @@
 - **Date:** 2026-09-05
 - **Related:** [ADR 0049](0049-publish-one-agent-documentation-layer.md),
   [ADR 0043](0043-public-ci-and-release-policy.md),
-  [WH-659](https://ontrack.sh/projects/WH/issues/WH-659),
-  [WH-540](https://ontrack.sh/projects/WH/issues/WH-540)
+  WH-659,
+  WH-540
 - **Amends:** the ADR 0049 clause "`record` produces a session and needs a model key"
 
 ## Context

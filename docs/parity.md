@@ -8,7 +8,7 @@ document never restates them.
 Statuses:
 
 - **Supported.** Shipped in that language and covered by tests in this repository.
-- **Planned.** Deliberately sequenced work with an open Ontrack Issue. The Issue owns the
+- **Planned.** Deliberately sequenced work with an open Linear Issue. The Issue owns the
   acceptance criteria; this matrix records the resulting language support.
 - **Absent.** Not shipped and not scheduled. An Absent cell is a fact, not a commitment.
 
@@ -80,7 +80,8 @@ telemetry, and graceful shutdown.
 
 <!-- END GENERATED PARITY WORKER -->
 
-Ontrack owns the SDK roadmap, sequencing, blockers, and completion state. This document changes only
+Linear owns the SDK roadmap, sequencing, blockers, and completion state in the `stablemates`
+workspace, `SM` team, and `workhorse` project. This document changes only
 when repository tests prove a capability has shipped or been withdrawn.
 
 ## Product operator capability
@@ -90,7 +91,7 @@ the `workhorse` CLI expose the subsets shown below against any database, whateve
 enqueued the work. That product capability does not vary by worker language.
 
 Every Planned cell below must be Supported before 1.0.0
-([WH-581](https://ontrack.sh/projects/WH/issues/WH-581)). Adding a command or a procedure later
+(WH-581). Adding a command or a procedure later
 would not break anything, so this is not a compatibility requirement; it is the point at which an
 operator surface stops being excused as beta-incomplete. An operator should not have to change
 tools mid-incident because one action is only in the browser. The table below now meets that bar;
@@ -157,7 +158,7 @@ compatibility check" row above is Supported everywhere, and it is what turns a m
 into a refused start rather than a corrupted write.
 
 This boundary holds at 1.0.0, and the CLI and TUI hold it with the schema tooling
-([WH-581](https://ontrack.sh/projects/WH/issues/WH-581)). What 1.0.0 promises is that every
+(WH-581). What 1.0.0 promises is that every
 language reaches the same operator capability through its own `Admin` client and refuses to start
 against a schema it cannot speak, not that every language grows a second migration runner.
 
@@ -173,12 +174,12 @@ and every runtime fixture through `python/tests/test_worker_runtime_conformance.
 `typescript/core/test/support/parity-capabilities.ts`. `pnpm parity:check` fails if the checked-in
 document is stale. Every Supported cell must name an existing test file for that surface. The file
 must match every evidence pattern. Every Absent cell must record why it is absent. Every Planned
-cell must name an Ontrack Issue, whose link the generator also writes.
+cell must name a Linear `SM-*` issue, whose link the generator also writes.
 
 That check binds the document to declared evidence, not to a proof of behaviour — no static check
 can supply one. Naming a test file that never exercises the capability would satisfy it. The rule
 this document states still governs: a cell says Supported because tests prove it, and generation
 stops the published view from becoming another source of truth.
 
-<!-- BEGIN GENERATED PARITY ONTRACK LINKS -->
-<!-- END GENERATED PARITY ONTRACK LINKS -->
+<!-- BEGIN GENERATED PARITY LINEAR LINKS -->
+<!-- END GENERATED PARITY LINEAR LINKS -->

@@ -2,9 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-02
-- **Related:** [WH-556](https://ontrack.sh/projects/WH/issues/WH-556),
-  [WH-589](https://ontrack.sh/projects/WH/issues/WH-589),
-  [WH-548](https://ontrack.sh/projects/WH/issues/WH-548),
+- **Related:** WH-556,
+  WH-589,
+  WH-548,
   [ADR 0033](0033-maintain-site-docs-as-a-guide-consumer.md),
   [ADR 0046](0046-make-readmes-entry-points.md),
   [ADR 0049](0049-publish-one-agent-documentation-layer.md)

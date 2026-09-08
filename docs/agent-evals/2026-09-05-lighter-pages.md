@@ -50,7 +50,7 @@ carries it.** It can only help an agent that learns about the twin before fetchi
 sessions have no way to do that: they make no `HEAD` request and read no header.
 
 So the twin is correct, agrees with its page, and is currently unused.
-[WH-665](https://ontrack.sh/projects/WH/issues/WH-665) carries the question of what to do about
+WH-665 carries the question of what to do about
 that.
 
 The saving in the table above is therefore WH-660's alone.
@@ -64,7 +64,7 @@ the documentation asks for, so the recorded read is `clean`.
 
 `schemaSignal` matched the call anyway, exactly as it did for task D in the morning's run. Two runs,
 two different tasks, the same false positive: it will recur on any well-structured program.
-[WH-662](https://ontrack.sh/projects/WH/issues/WH-662) fixes it.
+WH-662 fixes it.
 
 ## Caveat
 

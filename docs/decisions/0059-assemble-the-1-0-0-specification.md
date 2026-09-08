@@ -8,8 +8,8 @@
   [ADR 0057](0057-retain-superseded-functions-and-contract-on-the-operators-schedule.md),
   [ADR 0058](0058-fix-the-current-line-and-gate-floors-on-upstream-end-of-life.md),
   [ADR 0045](0045-stage-the-first-public-beta-release.md),
-  [WH-565](https://ontrack.sh/projects/WH/issues/WH-565),
-  [WH-584](https://ontrack.sh/projects/WH/issues/WH-584)
+  WH-565,
+  WH-584
 
 ## Context
 
@@ -31,15 +31,15 @@ right and this one is stale.
 
 ### The seven decisions and their answers
 
-| Ticket                                                 | Question                                 | Answer lives in                                                                           |
-| ------------------------------------------------------ | ---------------------------------------- | ----------------------------------------------------------------------------------------- |
-| [WH-577](https://ontrack.sh/projects/WH/issues/WH-577) | What exactly would 1.0.0 freeze?         | This ADR, from `docs/research/api-surface-audit.md` in `stablemates/workhorse-operations` |
-| [WH-578](https://ontrack.sh/projects/WH/issues/WH-578) | What does 1.0.0 promise on each line?    | [ADR 0054](0054-define-what-1-0-0-promises.md)                                            |
-| [WH-579](https://ontrack.sh/projects/WH/issues/WH-579) | What must be true before the tag?        | [ADR 0056](0056-set-the-1-0-0-exit-criteria.md)                                           |
-| [WH-580](https://ontrack.sh/projects/WH/issues/WH-580) | Where is the schema boundary?            | [ADR 0055](0055-the-1-0-0-schema-boundary-adds-no-migration.md)                           |
-| [WH-581](https://ontrack.sh/projects/WH/issues/WH-581) | What is the parity bar?                  | This ADR, from the WH-581 Answers Comment                                                 |
-| [WH-582](https://ontrack.sh/projects/WH/issues/WH-582) | What are the operational promises?       | [ADR 0057](0057-retain-superseded-functions-and-contract-on-the-operators-schedule.md)    |
-| [WH-583](https://ontrack.sh/projects/WH/issues/WH-583) | What is the security and support policy? | [ADR 0058](0058-fix-the-current-line-and-gate-floors-on-upstream-end-of-life.md)          |
+| Ticket | Question                                 | Answer lives in                                                                           |
+| ------ | ---------------------------------------- | ----------------------------------------------------------------------------------------- |
+| WH-577 | What exactly would 1.0.0 freeze?         | This ADR, from `docs/research/api-surface-audit.md` in `stablemates/workhorse-operations` |
+| WH-578 | What does 1.0.0 promise on each line?    | [ADR 0054](0054-define-what-1-0-0-promises.md)                                            |
+| WH-579 | What must be true before the tag?        | [ADR 0056](0056-set-the-1-0-0-exit-criteria.md)                                           |
+| WH-580 | Where is the schema boundary?            | [ADR 0055](0055-the-1-0-0-schema-boundary-adds-no-migration.md)                           |
+| WH-581 | What is the parity bar?                  | This ADR, from the WH-581 Answers Comment                                                 |
+| WH-582 | What are the operational promises?       | [ADR 0057](0057-retain-superseded-functions-and-contract-on-the-operators-schedule.md)    |
+| WH-583 | What is the security and support policy? | [ADR 0058](0058-fix-the-current-line-and-gate-floors-on-upstream-end-of-life.md)          |
 
 **WH-578 — what 1.0.0 promises.** SemVer governs seven surfaces: the SQL protocol and schema, the
 TypeScript, Python, and Go APIs, the `workhorse` CLI, the `dashboard/v1` wire contract, and the

@@ -6,11 +6,11 @@
 - **Amends:** [ADR 0042](0042-publish-the-first-public-beta.md)
 - **Related:** [ADR 0053](0053-start-migrations-at-0-1-0-and-keep-them-additive.md),
   [ADR 0056](0056-set-the-1-0-0-exit-criteria.md),
-  [WH-578](https://ontrack.sh/projects/WH/issues/WH-578),
-  [WH-576](https://ontrack.sh/projects/WH/issues/WH-576),
-  [WH-580](https://ontrack.sh/projects/WH/issues/WH-580),
-  [WH-581](https://ontrack.sh/projects/WH/issues/WH-581),
-  [WH-582](https://ontrack.sh/projects/WH/issues/WH-582)
+  WH-578,
+  WH-576,
+  WH-580,
+  WH-581,
+  WH-582
 
 ## Context
 
@@ -87,7 +87,7 @@ is a defect in the list, not an exclusion.
 
 1.0.0 is one release train: the nine npm packages, the Python distribution, and the Go module
 publish 1.0.0 from one source commit, in the established Python, npm, Go order. A line that cannot
-clear the parity bar ([WH-581](https://ontrack.sh/projects/WH/issues/WH-581)) slips the train rather
+clear the parity bar (WH-581) slips the train rather
 than being left behind, because "Workhorse 1.0" naming a promise that holds in one language and not
 another is not a promise a reader can use.
 
@@ -136,7 +136,7 @@ uneventful boundary, and it is the same price ADR 0053 already accepted inside a
 once more.
 
 A 1.0.0 that removes nothing constrains the freeze:
-[WH-580](https://ontrack.sh/projects/WH/issues/WH-580) now decides _when_ the last 0.x minor becomes
+WH-580 now decides _when_ the last 0.x minor becomes
 schema-identical to 1.0.0, not _whether_ it does. Any rename the API audit wants is 0.x work with a
 deadline, not 1.0 work.
 

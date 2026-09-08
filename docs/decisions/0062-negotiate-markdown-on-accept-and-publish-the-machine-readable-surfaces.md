@@ -6,8 +6,8 @@
   [ADR 0023](0023-language-sdks-and-http-boundaries.md),
   [ADR 0054](0054-define-what-1-0-0-promises.md),
   [ADR 0060](0060-describe-the-deployment-contract-instead-of-shipping-an-example.md),
-  [WH-665](https://ontrack.sh/projects/WH/issues/WH-665),
-  [WH-666](https://ontrack.sh/projects/WH/issues/WH-666)
+  WH-665,
+  WH-666
 - **Amends:** the ADR 0049 clauses "a canonical HTML URL does not negotiate on `Accept`" and
   "nothing in the repository runs the site's nginx"
 

@@ -7,9 +7,9 @@
   [ADR 0027](0027-keep-versioned-dashboard-views.md)
 - **Related:** [ADR 0054](0054-define-what-1-0-0-promises.md),
   [ADR 0034](0034-reset-the-pre-release-schema-baseline.md),
-  [WH-582](https://ontrack.sh/projects/WH/issues/WH-582),
-  [WH-576](https://ontrack.sh/projects/WH/issues/WH-576),
-  [WH-584](https://ontrack.sh/projects/WH/issues/WH-584)
+  WH-582,
+  WH-576,
+  WH-584
 
 ## Context
 

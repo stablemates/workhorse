@@ -3,9 +3,9 @@
 - **Status:** Accepted
 - **Date:** 2026-09-03
 - **Related:** [ADR 0053](0053-start-migrations-at-0-1-0-and-keep-them-additive.md),
-  [WH-640](https://ontrack.sh/projects/WH/issues/WH-640),
-  [WH-641](https://ontrack.sh/projects/WH/issues/WH-641),
-  [WH-645](https://ontrack.sh/projects/WH/issues/WH-645)
+  WH-640,
+  WH-641,
+  WH-645
 - **Supersedes in part:** the ADR 0044 clause "Keep parameterized examples and generic deployment
   guidance in this repository"
 

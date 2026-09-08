@@ -7,10 +7,10 @@
   [ADR 0055](0055-the-1-0-0-schema-boundary-adds-no-migration.md),
   [ADR 0053](0053-start-migrations-at-0-1-0-and-keep-them-additive.md),
   [ADR 0043](0043-public-ci-and-release-policy.md),
-  [WH-579](https://ontrack.sh/projects/WH/issues/WH-579),
-  [WH-565](https://ontrack.sh/projects/WH/issues/WH-565),
-  [WH-581](https://ontrack.sh/projects/WH/issues/WH-581),
-  [WH-584](https://ontrack.sh/projects/WH/issues/WH-584)
+  WH-579,
+  WH-565,
+  WH-581,
+  WH-584
 
 ## Context
 

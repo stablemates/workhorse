@@ -7,9 +7,9 @@
   [ADR 0056](0056-set-the-1-0-0-exit-criteria.md),
   [ADR 0057](0057-retain-superseded-functions-and-contract-on-the-operators-schedule.md),
   [ADR 0043](0043-public-ci-and-release-policy.md),
-  [WH-583](https://ontrack.sh/projects/WH/issues/WH-583),
-  [WH-576](https://ontrack.sh/projects/WH/issues/WH-576),
-  [WH-584](https://ontrack.sh/projects/WH/issues/WH-584)
+  WH-583,
+  WH-576,
+  WH-584
 
 ## Context
 
