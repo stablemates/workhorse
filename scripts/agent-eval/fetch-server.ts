@@ -56,7 +56,13 @@ const fetchToolSchema = {
 
 async function fetchOnce(url: string, purpose: string | undefined): Promise<FetchOutcome> {
   try {
-    const response = await globalThis.fetch(url, { redirect: "follow" });
+    // The eval simulates an agent that accepts Markdown first, so the origin serves the twin on its
+    // first fetch and not the HTML it would serve to a browser. This is the Accept header Claude
+    // Code sends and the one the site's Accept negotiation is designed for.
+    const response = await globalThis.fetch(url, {
+      redirect: "follow",
+      headers: { Accept: "text/markdown, text/html, */*" },
+    });
     const body = await response.text();
     return {
       record: {

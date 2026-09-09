@@ -1,0 +1,113 @@
+{
+  "task": "A",
+  "language": "typescript",
+  "run": "2026-09-09-accept-negotiation",
+  "recordedAt": "2026-09-09",
+  "model": "claude-opus-5",
+  "provenance": "recorded",
+  "fetches": [
+    {
+      "url": "https://workhorse.run",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 48042
+    },
+    {
+      "url": "https://workhorse.run/docs/quickstart",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 9700
+    },
+    {
+      "url": "https://workhorse.run/docs/api",
+      "status": 200,
+      "purpose": "signature",
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 11226
+    },
+    {
+      "url": "https://workhorse.run/docs/enqueue",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 8776
+    },
+    {
+      "url": "https://workhorse.run/docs/workers",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 11775
+    },
+    {
+      "url": "https://workhorse.run/docs/durable-execution",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 7635
+    },
+    {
+      "url": "https://workhorse.run/docs/retries",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 5127
+    },
+    {
+      "url": "https://workhorse.run/docs/worker-processes",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 5342
+    },
+    {
+      "url": "https://workhorse.run/docs/installation",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 10794
+    },
+    {
+      "url": "https://workhorse.run/docs/idempotency",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 7032
+    },
+    {
+      "url": "https://workhorse.run/docs/cancellation",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 4565
+    },
+    {
+      "url": "https://workhorse.run/docs/examples",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 25370
+    },
+    {
+      "url": "https://workhorse.run/docs/rate-limits",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 4646
+    }
+  ],
+  "install": [
+    {
+      "command": "npm install @stablemates/workhorse",
+      "registry": "npm",
+      "package": "@stablemates/workhorse",
+      "version": null,
+      "resolved": true
+    },
+    {
+      "command": "npm exec --no -- workhorse schema install",
+      "registry": "npm",
+      "package": "@stablemates/workhorse",
+      "version": null,
+      "resolved": true
+    }
+  ],
+  "mistakes": {
+    "enqueueOutsideTransaction": "clean",
+    "schemaOnRuntimePath": "clean",
+    "effectOutsideCheckpoint": "clean"
+  },
+  "produced": [
+    "produced.md"
+  ]
+}
