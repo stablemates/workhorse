@@ -474,7 +474,15 @@ describe("continuous integration", () => {
     expect(workflow).toContain("environment: npm");
     expect(workflow).toContain("actions/download-artifact");
     expect(workflow).toContain("id-token: write");
-    expect(workflow).toContain("npm publish --provenance");
+    // The publish step is a script rather than a loop, because npm publication cannot be rolled
+    // back: the credential and every target version are checked before the first write, and a
+    // failure partway through names what reached the registry.
+    expect(workflow).toContain("run: pnpm npm:publish");
+    const publish = await read("scripts/publish-npm.ts");
+    expect(scripts["npm:publish"]).toContain("scripts/publish-npm.ts");
+    expect(publish).toContain('"publish", "--provenance", "--access", "public", tarball');
+    expect(publish).toContain("await preflight(packages)");
+    expect(publish).toContain("describeLedger(ledger)");
   });
 
   it("publishes Python distributions from a checked, versioned tag", async () => {

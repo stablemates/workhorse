@@ -291,18 +291,17 @@ describe("consumers of the package list", () => {
     const workflow = await read(".github/workflows/release.yml");
     const releaseCheck = await read("scripts/check-npm-release.ts");
     const versionCheck = await read("scripts/check-release.ts");
+    const publish = await read("scripts/publish-npm.ts");
     expect(releaseCheck).toContain("const packages = await publishedPackages()");
     expect(releaseCheck).toContain("for (const entry of packages)");
     expect(releaseCheck).toContain("entry.location");
     expect(releaseCheck).toContain('"pack",');
     expect(versionCheck).toContain("for (const entry of await publishedPackages())");
     expect(versionCheck).toContain("entry.manifest");
-    expect(workflow).toContain(
-      "for tarball in $(pnpm --silent exec tsx scripts/packages.ts --tarballs); do",
-    );
-    expect(workflow).toContain(
-      'npm publish --provenance --access public "./dist-tarballs/$tarball"',
-    );
+    expect(publish).toContain("const packages = await publishedPackages()");
+    expect(publish).toContain("entry.tarball");
+    expect(publish).toContain('"publish", "--provenance", "--access", "public", tarball');
+    expect(workflow).toContain("run: pnpm npm:publish");
     expect(workflow).not.toContain("packages/$package");
     expect(workflow).not.toContain("workhorse-js-");
   });

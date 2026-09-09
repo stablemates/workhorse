@@ -87,14 +87,14 @@ jobs:
           name: tarballs
           path: dist-tarballs
 
-      # @stablemates/workhorse goes first because every adapter declares it as a peer.
-      - name: Publish with provenance
+      # Verifies NPM_TOKEN and every target version against the registry before the first write,
+      # then publishes @stablemates/workhorse ahead of the adapters that declare it as a peer. A
+      # failure partway through reports which packages reached the registry; npm publication cannot
+      # be rolled back, so that ledger is the only record of what recovery has to work around.
+      - name: Preflight the credential, then publish with provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          for tarball in $(pnpm --silent exec tsx scripts/packages.ts --tarballs); do
-            npm publish --provenance --access public "./dist-tarballs/$tarball"
-          done
+        run: pnpm npm:publish
 
   # The schema tool ships only on npm, so a Python or Go developer without a Node.js toolchain has
   # no way to create a development database from a published artifact. Attaching the clean-install

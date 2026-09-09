@@ -80,6 +80,7 @@
     "lint:dead-code": "knip --dependencies --exports --no-config-hints",
     "lint:fix": "oxlint --fix --import-plugin --vitest-plugin typescript dashboard site scripts vitest*.config.ts",
     "npm:lint": "oxlint --deny-warnings --import-plugin --vitest-plugin typescript dashboard scripts vitest*.config.ts && pnpm lint:dead-code",
+    "npm:publish": "tsx scripts/publish-npm.ts",
     "npm:release-check": "tsx scripts/check-npm-release.ts",
     "npm:test:packed": "tsx scripts/with-env.ts tsx typescript/core/test/packed-packages.ts",
     "npm:test:unit": "tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run --config vitest.npm.config.ts",

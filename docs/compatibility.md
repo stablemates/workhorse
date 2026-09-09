@@ -565,9 +565,11 @@ those commits.
    behavior. It builds every tarball once, then installs and exercises those exact files in clean
    consumers against PostgreSQL.
 4. The build job uploads the unchanged tarballs without publication credentials.
-5. The protected `npm` environment requires approval, then publishes each package with
-   `npm publish --provenance`. `@stablemates/workhorse` goes first because the other packages
-   declare it as a peer.
+5. The protected `npm` environment requires approval. `scripts/publish-npm.ts` then verifies the
+   credential and every target version against the registry before it writes anything, and
+   publishes each package with `npm publish --provenance`. `@stablemates/workhorse` goes first
+   because the other packages declare it as a peer. A failure partway through prints the ledger
+   described in [Recovering a partially published release](#recovering-a-partially-published-release).
 
 **Provenance.** Every published tarball carries an npm provenance attestation linking it to this
 repository, the commit it was built from, and the workflow that built it. Verify a downloaded
@@ -594,6 +596,63 @@ pipeline.
 The public repository requires pull requests and `CI / required` on `main`. Outside collaborators
 require workflow approval. The protected `npm` and `pypi` environments require review and prevent
 administrator bypass.
+
+### Publication credentials
+
+The three registries authenticate three different ways, and only one of them holds a credential that
+can expire.
+
+npm publication uses the `NPM_TOKEN` secret. Only the `npm` environment in
+`.github/workflows/release.yml` can read it. It is a granular automation token with read-write
+access to the `@stablemates` scope, and the repository maintainers own it. npm gives such a token an
+expiry date, and an expired token stops every release. So a maintainer records that date on the
+`npm` environment and rotates the token before it arrives. Rotation is also the response to any
+exposure, under the rules in [`SECURITY.md`](../SECURITY.md).
+
+An expired token used to fail in the worst possible place. npm answers an unauthorized write to a
+scoped package with `404 Not Found`, so the job blamed a missing package rather than a dead
+credential, and it had already signed a public provenance attestation by then.
+`scripts/publish-npm.ts` now asks the registry who the token is, and which `@stablemates` packages
+it may write, before it publishes anything. A refused credential fails the job by name.
+
+PyPI publication stores no credential. The `pypi` environment mints a short-lived token through
+trusted publishing, and PyPI issues that token only for this repository, this workflow file, and
+this environment name. Nothing expires, so nothing needs rotating. Those three names are the
+credential instead. Renaming `.github/workflows/release-python.yml`, renaming the `pypi`
+environment, or renaming the repository breaks publication until someone updates the trusted
+publisher on PyPI. A maintainer who changes one of them updates PyPI in the same change.
+
+The Go module proxy needs no credential at all. `scripts/release-go.sh` pushes a tag, and the proxy
+serves what the public repository already holds.
+
+### Recovering a partially published release
+
+npm publishes one package at a time. Nine packages cannot be published atomically, so a failure in
+the middle leaves some at the new version and the rest at the old one.
+
+That state is permanent. npm refuses any version that has ever existed, so the packages that did not
+publish can never carry this version number. Unpublishing is available only within 72 hours, and
+only while nothing depends on the version, so it is not a recovery plan.
+
+The publish step reports the split. It names every package that reached the registry, every package
+it never attempted, and the version each one carries. The report goes to the job log and to the run
+summary. Read that report. Do not infer registry state from whichever npm command logged last.
+
+Recover by re-cutting the whole train at the next patch version.
+[ADR 0050](decisions/0050-release-0-1-0-without-a-prerelease-suffix.md) requires one version across
+the three registries, so every package moves, not only the ones that failed. The packages that did
+publish stay published, because removal is unavailable and would break anyone who installed them.
+Deprecate each with `npm deprecate <name>@<version>` so an installer is pointed at the version that
+replaces it.
+
+Python has already published by then, because the train publishes PyPI first. That distribution is
+not defective, so it stays available and the higher version supersedes it. The Go tag was never
+pushed, because the Go stage runs last and a stopped train never reaches it. One version number can
+therefore end up complete on PyPI, partial on npm, and absent from the module proxy.
+
+The half-published version is never completed and never reused. Its number is spent. Record what
+happened in [`CHANGELOG.md`](../CHANGELOG.md) under the version that replaces it, so a reader who
+finds the orphaned packages on npm can tell why they exist.
 
 ## Benchmark validation is not the support boundary
 
