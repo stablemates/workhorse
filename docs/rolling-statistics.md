@@ -38,7 +38,7 @@ One row per closed minute per `(queue_name, job_type)`. Primary key `(bucket_sta
 
 | Column                                                                                              | Grain   | Meaning                                                         |
 | --------------------------------------------------------------------------------------------------- | ------- | --------------------------------------------------------------- |
-| `bucket_start`                                                                                      | —       | Minute boundary, `date_bin('1 minute', …, '2000-01-01')`        |
+| `bucket_start`                                                                                      | —       | UTC minute boundary, `date_bin('1 minute', …, UTC origin)`      |
 | `enqueued`                                                                                          | job     | `job_event` rows with `event_type = 'enqueued'`                 |
 | `job_succeeded`, `job_failed`, `job_canceled`                                                       | job     | `job_outcome` rows by terminal state                            |
 | `attempt_succeeded`, `attempt_failed`, `attempt_retry`, `attempt_lease_expired`, `attempt_canceled` | attempt | `attempt_history` rows by outcome                               |
@@ -46,6 +46,11 @@ One row per closed minute per `(queue_name, job_type)`. Primary key `(bucket_sta
 | `attempt_duration_ms`                                                                               | attempt | Sum of `finished_at - started_at`                               |
 | `wait_sketch`                                                                                       | job     | Mergeable first-claim wait histogram                            |
 | `last_attempt_at`, `last_error`, `last_error_at`                                                    | attempt | Latest attempt and latest error message (≤ 500 chars) in minute |
+
+**Every boundary is a UTC boundary.** `date_bin` takes an origin, and the origin is
+`timestamp '2000-01-01' AT TIME ZONE 'UTC'` — a fixed instant, not a wall-clock literal a session
+resolves in its own `TimeZone`. That is what makes a day bucket agree with the history day
+partition it was derived from, on a database in any timezone.
 
 **Grain is never conflated.** A job that retried four times before succeeding contributes one `job_succeeded` and five attempts. Mixing the two is the usual way a throughput panel starts disagreeing with a task list, so the columns are named for their grain and the dashboard picks one deliberately per panel.
 

@@ -17,12 +17,13 @@ a major line a migration only adds. Breaking changes are always listed with upgr
 
 **Unreleased**
 
-Requires **schema v2**. Run `workhorse schema migrate` before starting this version; existing data
-and version 1 SQL functions are preserved.
+Requires **schema v1**.
 
 - Add cursor task browsing through `tasksCursor`, with optional exact totals and backward navigation.
 - Read system statistics once per response, sharing the live history tail across dashboard panels.
 - Coalesce dashboard refreshes and reuse validated full builds across repository smoke checks.
+- Anchor every statistics bucket on UTC, so day and hour boundaries no longer follow the
+  database's timezone setting.
 
 ## 0.1.0 — 2026-09-04
 

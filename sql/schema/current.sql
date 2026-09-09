@@ -1438,14 +1438,19 @@ CREATE TABLE IF NOT EXISTS workhorse.job_stat_state (
   hourly_rolled_up_through timestamptz NOT NULL CHECK (isfinite(hourly_rolled_up_through)),
   daily_rolled_up_through timestamptz NOT NULL CHECK (isfinite(daily_rolled_up_through))
 );
+-- Every statistics bin anchors on `timestamp '2000-01-01' AT TIME ZONE 'UTC'`, a fixed instant.
+-- A bare `timestamptz '2000-01-01'` literal would resolve in the session's TimeZone, at the offset
+-- in force in 2000 rather than today, so bucket boundaries would follow the database's timezone and
+-- shift by an hour across a daylight-saving transition. Day buckets must agree with the history day
+-- partitions, which pin UTC the same way.
 INSERT INTO workhorse.job_stat_state(
   singleton, rolled_up_through, hourly_rolled_up_through, daily_rolled_up_through
 )
 VALUES (
   true,
-  date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01'),
-  date_bin('1 hour', clock_timestamp(), timestamp with time zone '2000-01-01'),
-  date_bin('1 day', clock_timestamp(), timestamp with time zone '2000-01-01')
+  date_bin('1 minute', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC'),
+  date_bin('1 hour', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC'),
+  date_bin('1 day', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC')
 )
 ON CONFLICT (singleton) DO NOTHING;
 
@@ -9492,18 +9497,18 @@ AS $$ BEGIN
     RAISE EXCEPTION 'statistics window must have finite increasing bounds';
   END IF;
   IF p_to - p_from >= interval '90 days' THEN
-    IF p_from <> date_bin('1 day', p_from, timestamp with time zone '2000-01-01') THEN
+    IF p_from <> date_bin('1 day', p_from, timestamp '2000-01-01' AT TIME ZONE 'UTC') THEN
       RAISE EXCEPTION 'statistics windows of at least 90 days require a day-aligned lower bound';
     END IF;
     RETURN 'day';
   END IF;
   IF p_to - p_from >= interval '2 days' THEN
-    IF p_from <> date_bin('1 hour', p_from, timestamp with time zone '2000-01-01') THEN
+    IF p_from <> date_bin('1 hour', p_from, timestamp '2000-01-01' AT TIME ZONE 'UTC') THEN
       RAISE EXCEPTION 'statistics windows of at least 2 days require an hour-aligned lower bound';
     END IF;
     RETURN 'hour';
   END IF;
-  IF p_from <> date_bin('1 minute', p_from, timestamp with time zone '2000-01-01') THEN
+  IF p_from <> date_bin('1 minute', p_from, timestamp '2000-01-01' AT TIME ZONE 'UTC') THEN
     RAISE EXCEPTION 'statistics windows require a minute-aligned lower bound';
   END IF;
   RETURN 'minute';
@@ -9531,7 +9536,8 @@ CREATE OR REPLACE FUNCTION workhorse.aggregate_stats_v1(
 LANGUAGE sql STABLE
 AS $$
   WITH enqueue_source AS (
-    SELECT date_bin('1 minute', event.occurred_at, timestamp with time zone '2000-01-01') AS bucket,
+    SELECT date_bin('1 minute', event.occurred_at,
+                    timestamp '2000-01-01' AT TIME ZONE 'UTC') AS bucket,
            job.queue_name AS queue, job.job_type AS type,
            count(*)::integer AS enqueued
       FROM workhorse.job_event event
@@ -9540,7 +9546,8 @@ AS $$
        AND event.occurred_at >= p_from AND event.occurred_at < p_to
      GROUP BY 1, 2, 3
   ), attempt_source AS (
-    SELECT date_bin('1 minute', history.occurred_at, timestamp with time zone '2000-01-01') AS bucket,
+    SELECT date_bin('1 minute', history.occurred_at,
+                    timestamp '2000-01-01' AT TIME ZONE 'UTC') AS bucket,
            job.queue_name AS queue, job.job_type AS type,
            count(*) FILTER (WHERE history.outcome = 'succeeded')::integer AS attempt_succeeded,
            count(*) FILTER (WHERE history.outcome = 'failed')::integer AS attempt_failed,
@@ -9567,7 +9574,7 @@ AS $$
      GROUP BY 1, 2, 3
   ), wait_bin_source AS (
     SELECT date_bin('1 minute', claimed.occurred_at,
-                    timestamp with time zone '2000-01-01') AS bucket,
+                    timestamp '2000-01-01' AT TIME ZONE 'UTC') AS bucket,
            job.queue_name AS queue, job.job_type AS type,
            workhorse.stat_sketch_index_v1(
              extract(epoch FROM claimed.occurred_at - enqueued.occurred_at) * 1000
@@ -9587,7 +9594,8 @@ AS $$
       FROM wait_bin_source
      GROUP BY 1, 2, 3
   ), outcome_source AS (
-    SELECT date_bin('1 minute', outcome.finished_at, timestamp with time zone '2000-01-01') AS bucket,
+    SELECT date_bin('1 minute', outcome.finished_at,
+                    timestamp '2000-01-01' AT TIME ZONE 'UTC') AS bucket,
            job.queue_name AS queue, job.job_type AS type,
            count(*) FILTER (WHERE outcome.state = 'succeeded')::integer AS job_succeeded,
            count(*) FILTER (WHERE outcome.state = 'failed')::integer AS job_failed,
@@ -9720,14 +9728,14 @@ AS $$
   ), boundary AS (
     SELECT selected.tier IN ('hour', 'day') AS use_hour,
            selected.tier = 'day' AS use_day,
-           CASE WHEN p_from = date_bin('1 hour', p_from, timestamp with time zone '2000-01-01')
+           CASE WHEN p_from = date_bin('1 hour', p_from, timestamp '2000-01-01' AT TIME ZONE 'UTC')
              THEN p_from ELSE date_bin('1 hour', p_from,
-               timestamp with time zone '2000-01-01') + interval '1 hour' END AS hour_start,
-           date_bin('1 hour', p_to, timestamp with time zone '2000-01-01') AS hour_end,
-           CASE WHEN p_from = date_bin('1 day', p_from, timestamp with time zone '2000-01-01')
+               timestamp '2000-01-01' AT TIME ZONE 'UTC') + interval '1 hour' END AS hour_start,
+           date_bin('1 hour', p_to, timestamp '2000-01-01' AT TIME ZONE 'UTC') AS hour_end,
+           CASE WHEN p_from = date_bin('1 day', p_from, timestamp '2000-01-01' AT TIME ZONE 'UTC')
              THEN p_from ELSE date_bin('1 day', p_from,
-               timestamp with time zone '2000-01-01') + interval '1 day' END AS day_start,
-           date_bin('1 day', p_to, timestamp with time zone '2000-01-01') AS day_end,
+               timestamp '2000-01-01' AT TIME ZONE 'UTC') + interval '1 day' END AS day_start,
+           date_bin('1 day', p_to, timestamp '2000-01-01' AT TIME ZONE 'UTC') AS day_end,
            (SELECT state.rolled_up_through FROM workhorse.job_stat_state state WHERE singleton)
              AS minute_watermark
       FROM selected
@@ -9847,7 +9855,7 @@ DECLARE v_inserted integer; BEGIN
   skipped_lock := false;
   error := NULL;
   v_started_at := clock_timestamp(); BEGIN
-    v_closed := date_bin('1 minute', p_now, timestamp with time zone '2000-01-01');
+    v_closed := date_bin('1 minute', p_now, timestamp '2000-01-01' AT TIME ZONE 'UTC');
     v_from := LEAST(
       v_state.rolled_up_through
         - make_interval(mins => v_maintenance.statistics_recompute_buckets),
@@ -9870,9 +9878,9 @@ DECLARE v_inserted integer; BEGIN
 
       v_hour_from := LEAST(
         v_state.hourly_rolled_up_through,
-        date_bin('1 hour', v_from, timestamp with time zone '2000-01-01')
+        date_bin('1 hour', v_from, timestamp '2000-01-01' AT TIME ZONE 'UTC')
       );
-      v_hour_to := date_bin('1 hour', v_to, timestamp with time zone '2000-01-01');
+      v_hour_to := date_bin('1 hour', v_to, timestamp '2000-01-01' AT TIME ZONE 'UTC');
       IF v_hour_to > v_hour_from THEN
         DELETE FROM workhorse.job_stat_bucket_hour
          WHERE bucket_start >= v_hour_from AND bucket_start < v_hour_to;
@@ -9884,7 +9892,7 @@ DECLARE v_inserted integer; BEGIN
           attempt_duration_ms, wait_sketch, last_attempt_at, last_error, last_error_at
         )
         SELECT date_bin('1 hour', bucket.bucket_start,
-                        timestamp with time zone '2000-01-01'),
+                        timestamp '2000-01-01' AT TIME ZONE 'UTC'),
                bucket.queue_name, bucket.job_type,
                sum(bucket.enqueued), sum(bucket.job_succeeded), sum(bucket.job_failed),
                sum(bucket.job_canceled), sum(bucket.attempt_succeeded),
@@ -9907,9 +9915,9 @@ DECLARE v_inserted integer; BEGIN
 
       v_day_from := LEAST(
         v_state.daily_rolled_up_through,
-        date_bin('1 day', v_hour_from, timestamp with time zone '2000-01-01')
+        date_bin('1 day', v_hour_from, timestamp '2000-01-01' AT TIME ZONE 'UTC')
       );
-      v_day_to := date_bin('1 day', v_hour_to, timestamp with time zone '2000-01-01');
+      v_day_to := date_bin('1 day', v_hour_to, timestamp '2000-01-01' AT TIME ZONE 'UTC');
       IF v_day_to > v_day_from THEN
         DELETE FROM workhorse.job_stat_bucket_day
          WHERE bucket_start >= v_day_from AND bucket_start < v_day_to;
@@ -9921,7 +9929,7 @@ DECLARE v_inserted integer; BEGIN
           attempt_duration_ms, wait_sketch, last_attempt_at, last_error, last_error_at
         )
         SELECT date_bin('1 day', bucket.bucket_start,
-                        timestamp with time zone '2000-01-01'),
+                        timestamp '2000-01-01' AT TIME ZONE 'UTC'),
                bucket.queue_name, bucket.job_type,
                sum(bucket.enqueued), sum(bucket.job_succeeded), sum(bucket.job_failed),
                sum(bucket.job_canceled), sum(bucket.attempt_succeeded),
@@ -11740,10 +11748,10 @@ AS $$
     SELECT generate_series(
              date_bin(make_interval(secs => windowed.bucket_seconds),
                       windowed.captured_at - make_interval(secs => windowed.window_seconds),
-                      timestamp with time zone '2000-01-01')
+                      timestamp '2000-01-01' AT TIME ZONE 'UTC')
                + make_interval(secs => windowed.bucket_seconds),
              date_bin(make_interval(secs => windowed.bucket_seconds), windowed.captured_at,
-                      timestamp with time zone '2000-01-01'),
+                      timestamp '2000-01-01' AT TIME ZONE 'UTC'),
              make_interval(secs => windowed.bucket_seconds)
            ) AS bucket_start
       FROM windowed
@@ -12807,7 +12815,7 @@ AS $$
   ), enqueue_rate AS (
     SELECT COALESCE(sum(stat.enqueued), 0)::bigint AS jobs
       FROM workhorse.stat_buckets_v1(
-        date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+        date_bin('1 minute', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC')
           - interval '1 hour' + interval '1 minute',
         clock_timestamp()
       ) stat
@@ -12920,9 +12928,9 @@ BEGIN
 
   WITH buckets AS (
     SELECT generate_series(
-      date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+      date_bin('1 minute', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC')
         - make_interval(secs => v_seconds) + interval '1 minute',
-      date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01'),
+      date_bin('1 minute', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC'),
       interval '1 minute'
     ) AS bucket_start
   ), rolled AS (
@@ -12934,7 +12942,7 @@ BEGIN
            sum(stat.attempt_lease_expired)::integer AS lease_expired,
            sum(stat.attempt_canceled)::integer AS canceled
       FROM workhorse.stat_buckets_v1(
-        date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+        date_bin('1 minute', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC')
           - make_interval(secs => v_seconds) + interval '1 minute',
         clock_timestamp()
       ) stat
@@ -12967,7 +12975,7 @@ BEGIN
              + stat.attempt_lease_expired + stat.attempt_other), 0)::integer AS errors,
            COALESCE(sum(stat.attempt_lease_expired), 0)::integer AS recovered
       FROM workhorse.stat_buckets_v1(
-        date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+        date_bin('1 minute', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC')
           - make_interval(secs => v_seconds) + interval '1 minute',
         clock_timestamp()
       ) stat
@@ -12978,9 +12986,9 @@ BEGIN
            COALESCE(sum(stat.attempt_failed + stat.attempt_retry
              + stat.attempt_lease_expired + stat.attempt_other), 0)::integer AS errors
       FROM workhorse.stat_buckets_v1(
-        date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+        date_bin('1 minute', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC')
           - make_interval(secs => v_seconds * 2) + interval '1 minute',
-        date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+        date_bin('1 minute', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC')
           - make_interval(secs => v_seconds) + interval '1 minute'
       ) stat
   )
@@ -12991,7 +12999,7 @@ BEGIN
   WITH merged AS (
     SELECT workhorse.stat_sketch_merge_v1(array_agg(stat.wait_sketch)) AS sketch
       FROM workhorse.stat_buckets_v1(
-        date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+        date_bin('1 minute', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC')
           - make_interval(secs => v_seconds) + interval '1 minute',
         clock_timestamp()
       ) stat
@@ -13043,7 +13051,7 @@ BEGIN
            COALESCE(sum(stat.attempt_succeeded + stat.attempt_failed
              + stat.attempt_canceled), 0)::integer AS completed
       FROM workhorse.stat_buckets_v1(
-        date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+        date_bin('1 minute', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC')
           - make_interval(secs => v_seconds) + interval '1 minute',
         clock_timestamp()
       ) stat
@@ -13167,7 +13175,7 @@ BEGIN
              FILTER (WHERE stat.last_error IS NOT NULL))[1] AS last_error,
            max(stat.last_attempt_at) AS last_seen_at
       FROM workhorse.stat_buckets_v1(
-        date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+        date_bin('1 minute', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC')
           - make_interval(secs => v_seconds) + interval '1 minute',
         clock_timestamp()
       ) stat
@@ -13634,7 +13642,7 @@ BEGIN
   v_health := workhorse.queue_health_v1();
 
   WITH current_stats AS MATERIALIZED (SELECT * FROM workhorse.stat_buckets_v1(
-        date_bin('1 minute', v_now, timestamp with time zone '2000-01-01')
+        date_bin('1 minute', v_now, timestamp '2000-01-01' AT TIME ZONE 'UTC')
           - make_interval(secs => v_seconds) + interval '1 minute',
         v_now
       ) stat)
@@ -13642,9 +13650,9 @@ BEGIN
     (
 WITH buckets AS (
     SELECT generate_series(
-      date_bin('1 minute', v_now, timestamp with time zone '2000-01-01')
+      date_bin('1 minute', v_now, timestamp '2000-01-01' AT TIME ZONE 'UTC')
         - make_interval(secs => v_seconds) + interval '1 minute',
-      date_bin('1 minute', v_now, timestamp with time zone '2000-01-01'),
+      date_bin('1 minute', v_now, timestamp '2000-01-01' AT TIME ZONE 'UTC'),
       interval '1 minute'
     ) AS bucket_start
   ), rolled AS (
@@ -13693,9 +13701,9 @@ WITH current_window AS (
            COALESCE(sum(stat.attempt_failed + stat.attempt_retry
              + stat.attempt_lease_expired + stat.attempt_other), 0)::integer AS errors
       FROM workhorse.stat_buckets_v1(
-        date_bin('1 minute', v_now, timestamp with time zone '2000-01-01')
+        date_bin('1 minute', v_now, timestamp '2000-01-01' AT TIME ZONE 'UTC')
           - make_interval(secs => v_seconds * 2) + interval '1 minute',
-        date_bin('1 minute', v_now, timestamp with time zone '2000-01-01')
+        date_bin('1 minute', v_now, timestamp '2000-01-01' AT TIME ZONE 'UTC')
           - make_interval(secs => v_seconds) + interval '1 minute'
       ) stat
   )
@@ -14099,10 +14107,9 @@ END;
 $$;
 
 INSERT INTO workhorse.schema_migration(version, description) VALUES
-  (1, 'baseline'),
-  (2, 'dashboard read optimizations')
+  (1, 'baseline')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (2) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (1) ON CONFLICT DO NOTHING;
 INSERT INTO workhorse.protocol_version(version) VALUES (1) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date

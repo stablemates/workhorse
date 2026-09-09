@@ -33,6 +33,9 @@ requested horizon. Queue-wait percentiles merge a logarithmic sketch across thos
 long-window reads stay bounded without keeping every sample. Worker and tag breakdowns remain live
 queries because their data-controlled cardinality would make aggregate storage unbounded.
 
+Every summary boundary is a UTC boundary, whatever timezone the database is set to, so a day
+summary covers a UTC day and names the same day for every operator reading the chart.
+
 A background rollup summarises fully elapsed periods and records how far it got as a watermark.
 Window reads combine pre-computed rows below the watermark with live computation above it, so a
 window is correct the instant a job runs; a lagging rollup means a longer live section and a

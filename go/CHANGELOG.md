@@ -10,8 +10,7 @@ adds.
 
 **Unreleased**
 
-Requires **schema v2**. Run `workhorse schema migrate` before starting this version; existing data
-and version 1 SQL functions are preserved.
+Requires **schema v1**.
 
 - Add cursor task browsing through `tasksCursor`, with optional exact totals and backward navigation.
 - Read system statistics once per response, sharing the live history tail across dashboard panels.

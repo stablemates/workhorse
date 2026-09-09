@@ -381,7 +381,7 @@ describe("retention maintenance", () => {
           `SELECT COALESCE(sum(enqueued), 0)::integer AS enqueued
              FROM workhorse.stat_buckets_v1(
                date_bin('1 minute', clock_timestamp(),
-                 timestamp with time zone '2000-01-01') - interval '1 hour',
+                 timestamp '2000-01-01' AT TIME ZONE 'UTC') - interval '1 hour',
                clock_timestamp()
              )`,
         )
@@ -411,25 +411,25 @@ describe("retention maintenance", () => {
     await pool.query(
       `UPDATE workhorse.job_event
           SET occurred_at = date_bin('1 day', clock_timestamp(),
-                timestamp with time zone '2000-01-01') + interval '1 hour 5 minutes'
+                timestamp '2000-01-01' AT TIME ZONE 'UTC') + interval '1 hour 5 minutes'
         WHERE job_id = $1 AND event_type = 'enqueued'`,
       [jobId],
     );
     await pool.query(
       `UPDATE workhorse.job_event
           SET occurred_at = date_bin('1 day', clock_timestamp(),
-                timestamp with time zone '2000-01-01') + interval '1 hour 15 minutes'
+                timestamp '2000-01-01' AT TIME ZONE 'UTC') + interval '1 hour 15 minutes'
         WHERE job_id = $1 AND event_type = 'claimed'`,
       [jobId],
     );
     await pool.query(
       `UPDATE workhorse.job_stat_state
           SET rolled_up_through = date_bin('1 day', clock_timestamp(),
-                timestamp with time zone '2000-01-01') + interval '1 hour',
+                timestamp '2000-01-01' AT TIME ZONE 'UTC') + interval '1 hour',
               hourly_rolled_up_through = date_bin('1 day', clock_timestamp(),
-                timestamp with time zone '2000-01-01') + interval '1 hour',
+                timestamp '2000-01-01' AT TIME ZONE 'UTC') + interval '1 hour',
               daily_rolled_up_through = date_bin('1 day', clock_timestamp(),
-                timestamp with time zone '2000-01-01')`,
+                timestamp '2000-01-01' AT TIME ZONE 'UTC')`,
     );
 
     const tomorrow = new Date(Date.now() + 24 * 60 * 60_000);
@@ -454,7 +454,7 @@ describe("retention maintenance", () => {
                 workhorse.stat_sketch_merge_v1(array_agg(stat.wait_sketch)), 0.50
               ) AS p50_ms
          FROM workhorse.stat_buckets_v1(
-           date_bin('1 day', clock_timestamp(), timestamp with time zone '2000-01-01'),
+           date_bin('1 day', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC'),
            $1::timestamptz
          ) stat`,
       [tomorrow],
@@ -491,7 +491,7 @@ describe("retention maintenance", () => {
     await queue.rollupStatistics({ now: new Date(Date.now() + 120_000) });
     await pool.query(
       `INSERT INTO workhorse.job_stat_bucket_day (bucket_start, queue_name, job_type, enqueued)
-       SELECT date_bin('1 day', bucket_start, timestamp with time zone '2000-01-01'),
+       SELECT date_bin('1 day', bucket_start, timestamp '2000-01-01' AT TIME ZONE 'UTC'),
               queue_name, job_type, sum(enqueued)
          FROM workhorse.job_stat_bucket
         GROUP BY 1, 2, 3`,
@@ -608,7 +608,7 @@ describe("retention maintenance", () => {
     await pool.query(
       `UPDATE workhorse.job_stat_state
           SET rolled_up_through = date_bin('1 minute', clock_timestamp(),
-            timestamp with time zone '2000-01-01')`,
+            timestamp '2000-01-01' AT TIME ZONE 'UTC')`,
     );
     await queue.retainHistory({ force: true });
     const pruned = await pool.query<{ count: string }>("SELECT count(*) FROM workhorse.job_event");

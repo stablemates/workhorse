@@ -42,6 +42,10 @@ Hour summaries come only from complete minute summaries, and day summaries come 
 complete hour summaries. A long window starts on the matching tier boundary, uses coarse complete
 rows, then fills its newest section from finer rows and raw history.
 
+Every boundary is a UTC boundary, whatever timezone the database is set to. A day summary covers a
+UTC day, so the same throughput chart names the same day for every operator reading it, and a day
+summary lines up with the day of history it was derived from.
+
 Wait percentiles travel with every tier as a logarithmic sketch. Sketches merge by adding
 matching bins, so long windows avoid both the raw-event join and a list of every wait sample.
 

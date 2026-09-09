@@ -276,7 +276,7 @@ beforeEach(async () => {
     workhorse.enqueue_idempotency, workhorse.job_outcome, workhorse.job_runtime,
     workhorse.job_stat_bucket, workhorse.job RESTART IDENTITY CASCADE`);
   await pool.query(`UPDATE workhorse.job_stat_state SET
-    rolled_up_through = date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01'),
+    rolled_up_through = date_bin('1 minute', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC'),
     last_run_at = NULL, updated_at = clock_timestamp()`);
   await new Queue(pool).syncRetentionPolicy({
     jobIdentityRetentionDays: null,

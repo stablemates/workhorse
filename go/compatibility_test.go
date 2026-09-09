@@ -10,7 +10,9 @@ import (
 	workhorse "github.com/stablemates/workhorse/go"
 )
 
-const testSchemaVersion = 2
+// An installed schema version these tests' fake executors report so the compatibility check
+// accepts them. Track protocol/v1/manifest.json's schema.minimumVersion when it advances.
+const testSchemaVersion = 1
 
 type compatibilityFixture struct {
 	ID                     string  `json:"id"`

@@ -113,7 +113,7 @@ export function createIntegrationTestContext(
   beforeEach(async () => {
     await database.reset();
     await pool.query(`UPDATE workhorse.job_stat_state SET
-      rolled_up_through = date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01'),
+      rolled_up_through = date_bin('1 minute', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC'),
       last_run_at = NULL, updated_at = clock_timestamp()`);
     await pool.query("ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1");
     await queue.syncRetentionPolicy(defaultRetentionPolicy, { force: true });

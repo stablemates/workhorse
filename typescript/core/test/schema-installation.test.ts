@@ -438,10 +438,7 @@ describe("schema installation", () => {
     );
     // A clean install records the whole lineage, so it agrees with a migrated database about the
     // baseline..current range rather than claiming to have started where the runtime now is.
-    expect(migrations.rows).toEqual([
-      { version: 1, description: "baseline" },
-      { version: 2, description: "dashboard read optimizations" },
-    ]);
+    expect(migrations.rows).toEqual([{ version: 1, description: "baseline" }]);
 
     const protocols = await pool.query<{ version: number }>(
       "SELECT version FROM workhorse.protocol_version ORDER BY version",

@@ -19,7 +19,7 @@ import { sql } from "./sql.js";
  */
 export function statWindowStart(windowSeconds: number, multiple = 1) {
   return sql`(
-    date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01')
+    date_bin('1 minute', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC')
     - make_interval(secs => ${windowSeconds * multiple})
     + interval '1 minute'
   )`;

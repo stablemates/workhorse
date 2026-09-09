@@ -158,11 +158,11 @@ export async function runStatisticsTiersBenchmark(
   await pool.query(
     `UPDATE workhorse.job_stat_state
         SET rolled_up_through = date_bin('1 day', clock_timestamp(),
-              timestamp with time zone '2000-01-01') - make_interval(days => $1),
+              timestamp '2000-01-01' AT TIME ZONE 'UTC') - make_interval(days => $1),
             hourly_rolled_up_through = date_bin('1 day', clock_timestamp(),
-              timestamp with time zone '2000-01-01') - make_interval(days => $1),
+              timestamp '2000-01-01' AT TIME ZONE 'UTC') - make_interval(days => $1),
             daily_rolled_up_through = date_bin('1 day', clock_timestamp(),
-              timestamp with time zone '2000-01-01') - make_interval(days => $1)`,
+              timestamp '2000-01-01' AT TIME ZONE 'UTC') - make_interval(days => $1)`,
     [resolved.days + 1],
   );
   const rollupPasses: number[] = [];
@@ -170,7 +170,7 @@ export async function runStatisticsTiersBenchmark(
   for (;;) {
     const state = await pool.query<{ caught_up: boolean }>(
       `SELECT rolled_up_through >= date_bin('1 minute', clock_timestamp(),
-                timestamp with time zone '2000-01-01') AS caught_up
+                timestamp '2000-01-01' AT TIME ZONE 'UTC') AS caught_up
          FROM workhorse.job_stat_state WHERE singleton`,
     );
     if (state.rows[0]!.caught_up) break;
@@ -200,7 +200,7 @@ export async function runStatisticsTiersBenchmark(
   );
   const latency = [];
   for (const days of windows) {
-    const from = `date_bin('1 day', clock_timestamp(), timestamp with time zone '2000-01-01')
+    const from = `date_bin('1 day', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC')
       - make_interval(days => $1)`;
     const tieredSql = `SELECT workhorse.stat_sketch_percentile_v1(
       workhorse.stat_sketch_merge_v1(array_agg(wait_sketch)), 0.95
@@ -274,17 +274,17 @@ export async function runStatisticsTiersBenchmark(
           CROSS JOIN LATERAL (
             VALUES
               ('minute'::text, date_bin(
-                '1 minute', claimed.occurred_at, timestamp with time zone '2000-01-01'
+                '1 minute', claimed.occurred_at, timestamp '2000-01-01' AT TIME ZONE 'UTC'
               ), claimed.occurred_at >= date_bin(
-                '1 day', clock_timestamp(), timestamp with time zone '2000-01-01'
+                '1 day', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC'
               ) - interval '2 days'),
               ('hour', date_bin(
-                '1 hour', claimed.occurred_at, timestamp with time zone '2000-01-01'
+                '1 hour', claimed.occurred_at, timestamp '2000-01-01' AT TIME ZONE 'UTC'
               ), claimed.occurred_at >= date_bin(
-                '1 day', clock_timestamp(), timestamp with time zone '2000-01-01'
+                '1 day', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC'
               ) - interval '90 days'),
               ('day', date_bin(
-                '1 day', claimed.occurred_at, timestamp with time zone '2000-01-01'
+                '1 day', claimed.occurred_at, timestamp '2000-01-01' AT TIME ZONE 'UTC'
               ), true)
           ) grain(tier, bucket_start, retained)
          WHERE claimed.event_type = 'claimed' AND claimed.attempt = 1
@@ -337,7 +337,7 @@ export async function runStatisticsTiersBenchmark(
       )
       FROM public.${table}
       WHERE tier = $2 AND bucket_start >= date_bin(
-        '1 day', clock_timestamp(), timestamp with time zone '2000-01-01'
+        '1 day', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC'
       ) - make_interval(days => $1)`;
     dimensions[dimensionName] = {
       rows,

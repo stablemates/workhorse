@@ -88,23 +88,15 @@ describe("soak observation collector", () => {
     expect(claimed?.id).toBe(jobId);
     expect(await queue.complete(claimed!, "soak-throughput-worker", null)).toBe(true);
 
-    // Match the rollup bucket origin in the database session, which may not use UTC.
-    const {
-      rows: [bucket],
-    } = await pool.query<{ day: string }>(
-      `SELECT to_char(date_bin('1 day', clock_timestamp(),
-         timestamp with time zone '2000-01-01') AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day`,
-    );
-
     // Roll the statistics forward past today so today closes into the daily tier.
     await pool.query(
       `UPDATE workhorse.job_stat_state
           SET rolled_up_through = date_bin('1 day', clock_timestamp(),
-                timestamp with time zone '2000-01-01'),
+                timestamp '2000-01-01' AT TIME ZONE 'UTC'),
               hourly_rolled_up_through = date_bin('1 day', clock_timestamp(),
-                timestamp with time zone '2000-01-01'),
+                timestamp '2000-01-01' AT TIME ZONE 'UTC'),
               daily_rolled_up_through = date_bin('1 day', clock_timestamp(),
-                timestamp with time zone '2000-01-01')`,
+                timestamp '2000-01-01' AT TIME ZONE 'UTC')`,
     );
     const result = await queue.rollupStatistics({
       force: true,
@@ -115,7 +107,7 @@ describe("soak observation collector", () => {
 
     const observation = await collectSoakObservation(pool);
 
-    const day = observation.throughput.find((entry) => entry.day === bucket!.day);
+    const day = observation.throughput.find((entry) => entry.day === today());
     expect(day).toMatchObject({ enqueued: expect.any(Number), jobSucceeded: expect.any(Number) });
     expect(day!.enqueued).toBeGreaterThanOrEqual(1);
   });
