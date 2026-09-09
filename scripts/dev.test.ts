@@ -60,8 +60,10 @@ describe("demo development supervisor", () => {
       const supervisor = spawn(process.execPath, ["--import", "tsx", resolve("scripts/dev.ts")], {
         env: {
           ...process.env,
+          DATABASE_URL_SECONDARY: "",
           PATH: `${directory}:${process.env.PATH ?? ""}`,
           PROCESS_ID_LOG: processIdLog,
+          WORKHORSE_DEMO_DASHBOARD_DEV: "false",
         },
         stdio: "ignore",
       });

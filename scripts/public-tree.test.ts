@@ -50,6 +50,10 @@ const forbiddenFragments = [
 
 const homeDirectoryPattern = new RegExp(`/(?:${["ho", "me"].join("")}|Users)/[^/\\s"']+/`);
 
+// Recorded evidence (benchmark runs, agent transcripts) captures the environment it was produced
+// in, so the public-tree hygiene sweep deliberately excludes those paths.
+const recordedEvidenceRoots = ["docs/benchmarks/results/", "scripts/agent-eval/sessions/"] as const;
+
 async function publicTextFiles() {
   const { stdout } = await execFileAsync("git", ["ls-files", "--cached", "-z"], {
     encoding: "utf8",
@@ -63,6 +67,8 @@ describe("public repository hygiene", () => {
     const findings: string[] = [];
 
     for (const path of await publicTextFiles()) {
+      if (recordedEvidenceRoots.some((root) => path.startsWith(root))) continue;
+
       let contents: Buffer;
       try {
         contents = await readFile(path);

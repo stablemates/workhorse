@@ -104,6 +104,12 @@ const exemptPackageReadmes = new Map([
  */
 const exemptDirectory = "docs/decisions/";
 
+/**
+ * Agent-evaluation transcripts are recorded evidence, not reader-facing install instructions, so
+ * the command policy deliberately excludes them.
+ */
+const recordedEvidenceDirectory = "scripts/agent-eval/sessions/";
+
 /** Every shape a Workhorse install command uses to name a version. */
 const versionPatterns: readonly { readonly label: string; readonly pattern: RegExp }[] = [
   { label: "npm version", pattern: /@stablemates\/[\w-]+@\S+/ },
@@ -145,7 +151,9 @@ async function documentedSurfaces(): Promise<readonly (readonly [string, string]
   const files = stdout
     .split("\0")
     .filter(Boolean)
-    .filter((file) => !file.startsWith(exemptDirectory));
+    .filter(
+      (file) => !file.startsWith(exemptDirectory) && !file.startsWith(recordedEvidenceDirectory),
+    );
   return Promise.all(files.map(async (file) => [file, await read(file)] as const));
 }
 

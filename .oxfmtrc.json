@@ -3,9 +3,11 @@
   "ignorePatterns": [
     "dashboard/v1/*.json",
     "docs/benchmarks/results/2026-08-24-dashboard-read-surface.json",
+    "docs/benchmarks/results/**",
     "docs/research/**",
     "migrations/**",
     "pnpm-lock.yaml",
+    "scripts/agent-eval/sessions/**",
     "site/content/docs/examples.mdx",
     "site/content/docs/for-ai-agents.mdx",
     "site/content/docs/quickstart.mdx",
