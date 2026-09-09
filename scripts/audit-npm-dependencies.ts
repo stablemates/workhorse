@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { publishedPackages } from "./packages.js";
 
 /**
  * Dependency advisory scanning for the npm half of the repository.
@@ -125,10 +126,18 @@ interface AuditRun {
   readonly exitCode: number | null;
 }
 
-async function runAudit(): Promise<AuditReport> {
+/**
+ * Run `pnpm audit --prod --json` in one directory and return a report worth reading.
+ *
+ * The directory is a parameter because two gates audit two different trees. `pnpm npm:vuln` audits
+ * the workspace the lockfile pins; the packed-release gate audits a throwaway consumer that has the
+ * published tarballs installed. Both meet the same service and both can be handed the same
+ * unusable answer, so both come through here.
+ */
+export async function readAuditReport(directory: string = repositoryRoot): Promise<AuditReport> {
   const run = await new Promise<AuditRun>((resolve, reject) => {
     const child = spawn("pnpm", ["audit", "--prod", "--json"], {
-      cwd: repositoryRoot,
+      cwd: directory,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let report = "";
@@ -275,8 +284,19 @@ async function readAcceptances(): Promise<readonly Acceptance[]> {
   return file.acceptances;
 }
 
+/** Assemble one message from every problem, so both gates report a finding in the same shape. */
+export function describeProblems(problems: readonly AuditProblem[]): string {
+  const lines: string[] = [];
+  for (const problem of problems) {
+    lines.push(problem.headline);
+    for (const line of problem.detail) lines.push(`  ${line}`);
+    lines.push("");
+  }
+  return `npm dependency advisories need a decision:\n\n${lines.join("\n")}`;
+}
+
 export async function auditNpmDependencies(): Promise<void> {
-  const findings = collectFindings(await runAudit());
+  const findings = collectFindings(await readAuditReport());
   const acceptances = await readAcceptances();
   const today = new Date().toISOString().slice(0, 10);
   const problems = findProblems(findings, acceptances, today);
@@ -289,13 +309,80 @@ export async function auditNpmDependencies(): Promise<void> {
     );
     return;
   }
-  const lines: string[] = [];
-  for (const problem of problems) {
-    lines.push(problem.headline);
-    for (const line of problem.detail) lines.push(`  ${line}`);
-    lines.push("");
+  throw new Error(describeProblems(problems));
+}
+
+/**
+ * Severities the packed-release gate refuses.
+ *
+ * {@link findProblems} applies no threshold, for the reason stated at the top of this file, and it
+ * reads the tree the lockfile pins. The packed gate reads a different tree: the published tarballs
+ * installed from a fresh resolution, which is what someone installing the release receives. It asks
+ * the narrower question a release has to answer — does the tree a user gets carry something severe —
+ * and leaves "is every advisory written down" to `pnpm npm:vuln`, which covers the same packages.
+ */
+const packedSeverities = new Set(["high", "critical"]);
+
+/** `pnpm audit` writes `typescript/core` as `typescript__core`, so a location converts to a name. */
+function auditWorkspaceName(location: string): string {
+  return location.replace(/\//g, "__");
+}
+
+/**
+ * Compare the packed release tree against the acceptance list.
+ *
+ * Nothing in that tree is a workspace package — outside a workspace `pnpm audit` roots every
+ * dependency path at `.`, the throwaway consumer the tarballs were installed into — so an
+ * acceptance cannot be matched by the package a finding reaches. It is matched by its own claim
+ * instead. An entry naming only `site` says the advisory is outside the published closure, and an
+ * advisory reported here is inside it, so that entry does not cover this finding. Only an entry
+ * naming a published package does.
+ *
+ * The stale and unmatched checks {@link findProblems} makes stay with `pnpm npm:vuln`. Every entry
+ * written about a package outside the published closure matches nothing here by design, and a
+ * release is the wrong moment to ask a maintainer to re-date a decision about `site`.
+ */
+export function findPublishedClosureProblems(
+  findings: readonly AdvisoryFinding[],
+  acceptances: readonly Acceptance[],
+  publishedWorkspacePackages: readonly string[],
+): readonly AuditProblem[] {
+  const closure = new Set(publishedWorkspacePackages);
+  const problems: AuditProblem[] = [];
+  for (const finding of findings) {
+    if (!packedSeverities.has(finding.severity)) continue;
+    const accepted = acceptances.some(
+      (entry) =>
+        entry.advisory === finding.advisory &&
+        entry.workspacePackages.some((name) => closure.has(name)),
+    );
+    if (accepted) continue;
+    problems.push({
+      headline: `Advisory ${String(finding.advisory)} in ${finding.module} reaches the packed release tree, and no entry in ${acceptanceFileName} accepts it for a published package`,
+      detail: describeFinding(finding),
+    });
   }
-  throw new Error(`npm dependency advisories need a decision:\n\n${lines.join("\n")}`);
+  return problems;
+}
+
+/**
+ * Audit a directory that has the packed tarballs installed.
+ *
+ * `typescript/core/test/packed-packages.ts` calls this rather than running `pnpm audit` itself, so
+ * one implementation decides what an unusable report means. An unreachable advisory service fails
+ * with {@link requireReadableReport}'s message, which names the service; an advisory fails with a
+ * message naming the advisory and {@link acceptanceFileName}. Telling those two apart is the point,
+ * because one says stop and fix the tree and the other says wait and re-run.
+ */
+export async function auditPackedTree(directory: string): Promise<void> {
+  const findings = collectFindings(await readAuditReport(directory));
+  const published = await publishedPackages();
+  const problems = findPublishedClosureProblems(
+    findings,
+    await readAcceptances(),
+    published.map((entry) => auditWorkspaceName(entry.location)),
+  );
+  if (problems.length > 0) throw new Error(describeProblems(problems));
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {

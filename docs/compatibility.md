@@ -134,6 +134,15 @@ an entry stops matching anything, and when an accepted advisory starts reaching 
 the entry does not name — which is how an advisory outside the published closure gets caught the
 day it enters it.
 
+The packed-release gate in `typescript/core/test/packed-packages.ts` scans a second tree. It
+installs the packed tarballs into a throwaway consumer and audits that, so it reads the resolution
+someone installing the release receives rather than the one this repository's lockfile pins. Both
+scans call `readAuditReport` in `scripts/audit-npm-dependencies.ts`, so an advisory service that
+never answered is refused in one place and never read as a clean tree. The packed scan fails on a
+high or critical advisory that no acceptance names a published package for; `pnpm npm:vuln` remains
+the scan with no severity threshold. A release therefore needs an answer from the advisory service
+twice, which is deliberate: the two trees can hold different versions of the same dependency.
+
 Fixing beats accepting. Prefer a lockfile bump, then a declared-range bump; write an entry only when
 no released version carries the fix, or when the path is provably outside what this repository
 publishes. [`SECURITY.md`](../SECURITY.md) states the triage window and fix target per severity.

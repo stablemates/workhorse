@@ -464,8 +464,12 @@ describe("continuous integration", () => {
     expect(npmTestConfig).toContain('"scripts/sql-catalogue-python-bindings.test.ts"');
     expect(releaseCheck).toContain("WORKHORSE_NPM_TARBALLS: stagedTarballs");
     expect(releaseCheck).toContain('"pack",');
+    // The packed tree is scanned through the one reader that tells an unreachable advisory service
+    // apart from an advisory. A bare `pnpm audit` exits non-zero for both, and a release cannot act
+    // on that: one answer says stop and fix the tree, the other says wait and re-run.
     const packedTest = await read("typescript/core/test/packed-packages.ts");
-    expect(packedTest).toContain('["audit", "--prod", "--audit-level", "high"]');
+    expect(packedTest).toContain("auditPackedTree(auditConsumer)");
+    expect(packedTest).not.toContain('"audit",');
     expect(workflow).toContain("needs: build");
     expect(workflow).toContain("environment: npm");
     expect(workflow).toContain("actions/download-artifact");

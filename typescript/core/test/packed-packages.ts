@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { auditPackedTree } from "../../../scripts/audit-npm-dependencies.js";
 import { publishedPackages, workspacePackages } from "../../../scripts/packages.js";
 import { hasPublicBetaNotice } from "../../../scripts/public-beta-notice.js";
 import { WORKHORSE_SCHEMA_VERSION } from "../src/schema.js";
@@ -175,7 +176,10 @@ try {
     }),
   );
   await run("pnpm", ["install", "--ignore-scripts", "--frozen-lockfile=false"], auditConsumer);
-  await run("pnpm", ["audit", "--prod", "--audit-level", "high"], auditConsumer);
+  // Not a bare `pnpm audit`: that exits non-zero both when the tree carries an advisory and when
+  // the advisory service never answered, and the two demand opposite responses. `auditPackedTree`
+  // reads the report instead, and names either the advisory or the service.
+  await auditPackedTree(auditConsumer);
 
   const dashboardContainer = await readFile(path.join(repository, "Dockerfile.dashboard"), "utf8");
   for (const artifact of [

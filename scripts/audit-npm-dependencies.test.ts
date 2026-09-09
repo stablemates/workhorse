@@ -6,7 +6,9 @@ import {
   type AuditReport,
   acceptanceFileName,
   collectFindings,
+  describeProblems,
   findProblems,
+  findPublishedClosureProblems,
   requireReadableReport,
 } from "./audit-npm-dependencies.js";
 
@@ -157,5 +159,92 @@ describe("an audit report that never reached the service", () => {
   it("passes a report that carries findings", () => {
     expect(requireReadableReport(report as AuditReport)).toBe(report);
     expect(collectFindings(report as AuditReport).length).toBeGreaterThan(0);
+  });
+});
+
+// The packed-release gate reads the tree a user installs, and it used to run a bare `pnpm audit`
+// whose non-zero exit meant either "this release ships a severe advisory" or "npm never answered".
+// A maintainer has to act on those in opposite ways, so the two failures have to read differently.
+describe("the packed release gate", () => {
+  const published = ["typescript__core", "typescript__dashboard"];
+  // `pnpm audit` roots every path at `.` outside a workspace, which is what the consumer is.
+  const packedPath = ".>@stablemates/workhorse>nanoid";
+  const packed = {
+    advisories: {
+      "1139427": {
+        ...report.advisories["1139427"],
+        findings: [{ version: "3.3.16", paths: [packedPath] }],
+      },
+    },
+  } satisfies AuditReport;
+  const timedOut = {
+    error: {
+      code: "ERR_SOCKET_TIMEOUT",
+      message:
+        "request to https://registry.npmjs.org/-/npm/v1/security/audits failed, reason: Socket timeout",
+    },
+  } satisfies AuditReport;
+
+  function refusal(): string {
+    try {
+      requireReadableReport(timedOut);
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+    throw new Error("An unreadable report was not refused");
+  }
+
+  it("fails on a severe advisory in the packed tree, naming the advisory and the acceptance file", () => {
+    const problems = findPublishedClosureProblems(collectFindings(packed), [], published);
+    expect(problems).toHaveLength(1);
+    const message = describeProblems(problems);
+    expect(message).toContain("1139427");
+    expect(message).toContain("nanoid@3.3.16");
+    expect(message).toContain(acceptanceFileName);
+    expect(message).toContain(packedPath);
+  });
+
+  it("fails differently when the advisory service never answered", () => {
+    const message = refusal();
+    expect(message).toContain("could not read the npm advisory service");
+    expect(message).toContain("ERR_SOCKET_TIMEOUT");
+    // Naming no advisory is the point: none was reported, and none was ruled out either.
+    expect(message).not.toContain("1139427");
+    expect(message).not.toContain("reaches the packed release tree");
+  });
+
+  it("refuses an unreachable service in the same words as pnpm npm:vuln", () => {
+    expect(refusal()).toContain(`no acceptance in ${acceptanceFileName} is stale`);
+  });
+
+  it("passes an advisory an entry accepts for a published package", () => {
+    const entry: Acceptance = { ...acceptance, workspacePackages: ["typescript__core"] };
+    expect(findPublishedClosureProblems(collectFindings(packed), [entry], published)).toEqual([]);
+  });
+
+  it("fails an advisory accepted only outside the published closure", () => {
+    // `site` is not published, so the entry's stated reason — outside the published closure — is
+    // contradicted by the finding: the packed tree is the published closure.
+    const problems = findPublishedClosureProblems(collectFindings(packed), [acceptance], published);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]?.headline).toContain("reaches the packed release tree");
+  });
+
+  it("leaves a moderate advisory to pnpm npm:vuln", () => {
+    const moderate = collectFindings({
+      advisories: {
+        "1139427": {
+          ...packed.advisories["1139427"],
+          severity: "moderate",
+        },
+      },
+    });
+    expect(findPublishedClosureProblems(moderate, [], published)).toEqual([]);
+    expect(findProblems(moderate, [], "2026-09-09")).toHaveLength(1);
+  });
+
+  it("passes a packed tree with no advisory at all", () => {
+    const clean = { advisories: {} } satisfies AuditReport;
+    expect(findPublishedClosureProblems(collectFindings(clean), [], published)).toEqual([]);
   });
 });
