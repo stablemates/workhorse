@@ -1,6 +1,8 @@
 FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS go-build
 
 WORKDIR /workhorse/go
+ARG BUILD_CONCURRENCY=4
+ENV GOMAXPROCS=${BUILD_CONCURRENCY}
 COPY go/ ./
 RUN CGO_ENABLED=0 go build -o /opt/workhorse-go-demo-worker ./examples/demo-worker
 
@@ -10,6 +12,9 @@ FROM python:3.14-alpine@sha256:05b2b8b732ecd268fee8727a369f936f022d1321b59befd13
 
 COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /workhorse
+ARG BUILD_CONCURRENCY=4
+ENV UV_CONCURRENT_DOWNLOADS=${BUILD_CONCURRENCY}
+ENV UV_CONCURRENT_INSTALLS=${BUILD_CONCURRENCY}
 COPY python/pyproject.toml python/uv.lock ./python/
 RUN uv export \
       --project python \
@@ -30,6 +35,11 @@ ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 
 RUN corepack enable && corepack prepare pnpm@10.18.3 --activate
+
+ARG BUILD_CONCURRENCY=4
+ENV GOMAXPROCS=${BUILD_CONCURRENCY}
+ENV PNPM_CONFIG_NETWORK_CONCURRENCY=${BUILD_CONCURRENCY}
+ENV PNPM_CONFIG_MAX_SOCKETS=${BUILD_CONCURRENCY}
 
 WORKDIR /workhorse
 COPY . .
