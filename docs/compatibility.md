@@ -160,6 +160,22 @@ What the validation runs recorded:
   `process.execPath` on the TypeScript sources — under Deno that child needs
   `--unstable-sloppy-imports` to resolve the repository's `.js`-suffixed imports of `.ts` files.
   The failures say nothing about the built package, which is plain ESM.
+- **Node.js (2026-09-09, Node.js 24.15.0).** Benchmark baseline on the same machine and
+  PostgreSQL 18.4, run as `pnpm benchmark` (`suite=all`, `profile=default`). Conventional design at
+  worker concurrency 8: throughput ~3,295 jobs/s, claim p50 ~0.91 ms, p99 ~8.35 ms.
+  Concurrent producer-consumer churn: throughput ~105 jobs/s, claim p50 ~0.91 ms, p99 ~2.94 ms.
+- **Bun (2026-09-09, Bun 1.2.17).** The full `pnpm benchmark` suite (`suite=all`,
+  `profile=default`) passes on the same PostgreSQL 18.4 and the same machine as the Node.js 24
+  baseline. Conventional design at worker concurrency 8: throughput ~3,158 jobs/s, claim p50
+  ~0.91 ms, p99 ~7.85 ms. Concurrent producer-consumer churn: throughput ~105 jobs/s, claim p50
+  ~0.89 ms, p99 ~1.77 ms. Vitest 4 under Bun runs the unit suites: 1,299 of 1,324 tests passed,
+  20 skipped. The 5 failures are test-harness issues: one supervisor test spawns
+  `process.execPath` and gets a different descendant count under Bun; four demo telemetry tests
+  spawn `node --require` and fail because the demo's `@stablemates/workhorse-otel` points at a
+  `dist/` that is not built in this worktree. Database vitest suites: 669 of 671 tests passed,
+  2 skipped, 0 failed. The raw JSON reports are in
+  `docs/benchmarks/results/2026-09-09-node-24.15.0-all-default.json` and
+  `docs/benchmarks/results/2026-09-09-bun-1.2.17-all-default.json`.
 
 No runtime-specific code paths or shims exist, and none are planned. If a smoke lane turns red,
 the fix is filed against the runtime story, never inlined as a conditional in the library.

@@ -27,6 +27,7 @@ import {
   DeadlineExceededError,
   EnqueueIdempotencyConflictError,
   ExecutionTimeoutError,
+  MAX_ENQUEUE_BATCH_SIZE,
   MAX_JOB_DEPENDENTS,
   ProgressLeaseLostError,
   ProgressRateLimitError,
@@ -3569,12 +3570,13 @@ async function dependencyOperations(
   const historyJobs = Math.max(1_000, context.options.jobCount * 100);
   const historyQueueName = `${context.queueName}-history`;
   const historyQueue = operationalQueue(context.pool, historyQueueName);
-  await historyQueue.enqueueMany(
-    Array.from({ length: historyJobs }, (_, index) => ({
-      type: "dependency-plan-history",
-      payload: { index },
-    })),
-  );
+  const historyRequests = Array.from({ length: historyJobs }, (_, index) => ({
+    type: "dependency-plan-history",
+    payload: { index },
+  }));
+  for (let offset = 0; offset < historyRequests.length; offset += MAX_ENQUEUE_BATCH_SIZE) {
+    await historyQueue.enqueueMany(historyRequests.slice(offset, offset + MAX_ENQUEUE_BATCH_SIZE));
+  }
   for (let index = 0; index < historyJobs; index += 1) {
     const workerId = `dependency-history-${index}`;
     const job = await historyQueue.claim(workerId);

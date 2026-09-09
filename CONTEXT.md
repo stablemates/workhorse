@@ -39,6 +39,14 @@ Go APIs, the `workhorse` CLI, the `dashboard/v1` wire contract, and the OpenTele
 span, and attribute names. Everything else is internal and may change in any release.
 _Avoid_: Public API, public interface, stable API
 
+**Supported runtime**:
+A runtime version in the support matrix. The weekly CI run exercises every declared combination. A
+regression on one of these is a release blocker.
+
+**Smoke-tested runtime**:
+A runtime exercised only by CI's `runtime-smoke` lane. The lane runs one enqueue, claim, and
+complete round-trip on each change and promises nothing beyond that.
+
 **Contract step**:
 The one migration that removes rather than adds: it drops superseded functions and narrows the
 protocols the installed schema serves. A release ships it; the operator applies it with
