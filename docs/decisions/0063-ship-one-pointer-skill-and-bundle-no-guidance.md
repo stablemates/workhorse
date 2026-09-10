@@ -65,7 +65,8 @@ nobody ships. The tracked file is the generator's output, and a check inside `pn
 when the two differ, the way `dashboard-spec:check` covers `openapi.json`. The skill joins the
 governed list in `scripts/install-commands.test.ts` with no commands, so the no-version rule
 reaches it. The identifier sweep from SM-583 stays bound to the page, because the skill names no
-identifier for it to check. The owner is the site generator and `site/scripts/agent-surfaces.test.ts`.
+identifier for it to check. The owner is the site generator and
+`site/scripts/agent-surfaces.test.ts`.
 
 **Freshness is the registry's hash and nothing of ours.** A pointer holds nothing that a release
 changes. The only content that can go stale is a URL, and the generator resolves every URL against
