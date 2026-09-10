@@ -6,7 +6,7 @@ import { compatibilityNotice, prose, publicBetaLabel } from "./public-beta-notic
 import { WORKHORSE_SCHEMA_BASELINE_VERSION } from "../typescript/core/src/index.js";
 
 /** The release this repository cuts next: one version on npm, PyPI, and Go from one commit. */
-const releaseVersion = "0.1.2";
+const releaseVersion = "0.1.3";
 const releaseDate = "2026-09-10";
 const corePeerRange = ">=0.1.0 <0.2.0";
 
@@ -42,7 +42,7 @@ function changelogEntry(changelog: string, version: string, date: string): strin
   return next === -1 ? body : body.slice(0, next);
 }
 
-describe("the 0.1.2 release", () => {
+describe("the 0.1.3 release", () => {
   it("carries the plain version and peer range in every published manifest", async () => {
     for (const entry of await publishedPackages()) {
       const manifest = JSON.parse(await read(entry.manifest)) as {
@@ -73,7 +73,7 @@ describe("the 0.1.2 release", () => {
     );
   });
 
-  it("dates the release entry in each changelog with the schema version and the upgrade step", async () => {
+  it("dates each release entry with the schema version and runtime requirements", async () => {
     const manifest = JSON.parse(await read("support.json")) as SupportManifest;
     const floors = [
       [
@@ -93,7 +93,6 @@ describe("the 0.1.2 release", () => {
       // The published release remains pinned to its immutable schema baseline.
       expect(entry).toContain(`**schema v${WORKHORSE_SCHEMA_BASELINE_VERSION}**`);
       expect(entry).toContain("from one source commit");
-      expect(entry).toContain("recreate the database");
       for (const requirement of requirements) {
         expect(entry).toContain(requirement);
       }

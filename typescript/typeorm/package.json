@@ -1,6 +1,6 @@
 {
   "name": "@stablemates/workhorse-typeorm",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Public beta TypeORM provider for Workhorse",
   "homepage": "https://workhorse.run",
   "bugs": {

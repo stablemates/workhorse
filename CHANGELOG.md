@@ -15,6 +15,19 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 `0.1.0` the schema upgrades in place: every release ships ordered, immutable migrations, and inside
 a major line a migration only adds. Breaking changes are always listed with upgrade steps.
 
+## 0.1.3 — 2026-09-10
+
+The npm packages, Python distribution, and Go module release from one source commit.
+
+Requires **schema v1**, Node.js **22** or newer, and PostgreSQL **15** or newer.
+
+- Improve task and event tables with readable status labels, compact columns, full hover text,
+  and task ID copy controls.
+- Add worker and search filters to Events, and show task tags and accepted enqueue modes in details.
+- Share task actions between listings and details, with cancellation confirmation and an optional reason.
+- Keep task menus responsive on long pages and reset pagination when selecting a task view in the sidebar.
+- Remember chart visibility and task drawer width, and clarify rate-limit labels on Queues.
+
 ## 0.1.2 — 2026-09-10
 
 Published to npm from one source commit shared with the Python distribution and the Go module,

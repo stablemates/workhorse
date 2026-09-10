@@ -576,7 +576,7 @@ repository test suite.
 `npm install @stablemates/workhorse`, `python` is `pip install stablemates-workhorse`, `go` is
 `go get github.com/stablemates/workhorse/go`, `schema` is
 `npm exec --no -- workhorse schema install`, and `schemaPinned` is
-`npx --package @stablemates/workhorse@0.1.2 workhorse schema install`. The three language commands
+`npx --package @stablemates/workhorse@0.1.3 workhorse schema install`. The three language commands
 carry no version. The two schema commands are the deployment tool rather than an adoption step, and
 their version must equal the SDK the application depends on: `schema` achieves that by resolving
 the binary from the project's own `node_modules`, which `--no` requires and never installs, and
