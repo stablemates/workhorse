@@ -24,6 +24,19 @@ export interface TranscriptFetch {
   readonly note?: string;
 }
 
+/**
+ * One read of the scratch repository by a task E session. Reads are logged apart from fetches: they
+ * spend no fetch budget and shift no discovery index, and the note reads them to say whether the
+ * session found the installed package's README.
+ */
+export interface TranscriptRead {
+  readonly tool: "list_files" | "read_file";
+  /** The path as the session gave it, relative to the repository root. */
+  readonly path: string;
+  readonly outcome: "ok" | "missing" | "refused";
+  readonly bytes?: number;
+}
+
 export type Registry = "npm" | "pypi" | "goproxy";
 
 export interface TranscriptInstall {
@@ -61,6 +74,8 @@ export interface Transcript {
   /** Where a reconstructed fixture came from. Required when provenance is not "recorded". */
   readonly source?: string;
   readonly fetches: readonly TranscriptFetch[];
+  /** Present only for a session that started inside a repository. */
+  readonly reads?: readonly TranscriptRead[];
   readonly install: readonly TranscriptInstall[];
   /** The maintainer's read, which the score reports and a produced program can contradict. */
   readonly mistakes: TranscriptMistakes;
@@ -135,6 +150,29 @@ function parseFetch(value: unknown, location: string): TranscriptFetch {
   };
 }
 
+const readTools = new Set<TranscriptRead["tool"]>(["list_files", "read_file"]);
+const readOutcomes = new Set<TranscriptRead["outcome"]>(["ok", "missing", "refused"]);
+
+function parseRead(value: unknown, location: string): TranscriptRead {
+  const raw = asRecord(value, location);
+  const tool = asString(raw["tool"], `${location}.tool`);
+  if (!readTools.has(tool as TranscriptRead["tool"])) {
+    fail(`${location}.tool`, `expected one of ${[...readTools].join(", ")}`);
+  }
+  const outcome = asString(raw["outcome"], `${location}.outcome`);
+  if (!readOutcomes.has(outcome as TranscriptRead["outcome"])) {
+    fail(`${location}.outcome`, `expected one of ${[...readOutcomes].join(", ")}`);
+  }
+  return {
+    tool: tool as TranscriptRead["tool"],
+    path: asString(raw["path"], `${location}.path`),
+    outcome: outcome as TranscriptRead["outcome"],
+    ...(raw["bytes"] === undefined
+      ? {}
+      : { bytes: asNullableNumber(raw["bytes"], `${location}.bytes`) ?? 0 }),
+  };
+}
+
 function parseInstall(value: unknown, location: string): TranscriptInstall {
   const raw = asRecord(value, location);
   const registry = asString(raw["registry"], `${location}.registry`);
@@ -200,6 +238,13 @@ export function parseTranscript(value: unknown, location: string): Transcript {
     fetches: asArray(raw["fetches"], `${location}.fetches`).map((entry, index) =>
       parseFetch(entry, `${location}.fetches[${index}]`),
     ),
+    ...(raw["reads"] === undefined
+      ? {}
+      : {
+          reads: asArray(raw["reads"], `${location}.reads`).map((entry, index) =>
+            parseRead(entry, `${location}.reads[${index}]`),
+          ),
+        }),
     install: asArray(raw["install"], `${location}.install`).map((entry, index) =>
       parseInstall(entry, `${location}.install[${index}]`),
     ),

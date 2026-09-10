@@ -116,8 +116,26 @@ describe("discovery", () => {
     }
   });
 
+  // ADR 0062: the same URL answers `Accept: text/markdown` with the twin. The response decides.
+  it("counts a docs page the origin negotiated to Markdown", () => {
+    expect(
+      isAgentSurface({
+        url: "https://workhorse.run/docs/enqueue",
+        status: 200,
+        contentType: "text/markdown; charset=utf-8",
+      }),
+    ).toBe(true);
+  });
+
   it("does not count an HTML docs page, another host, or a failed fetch", () => {
     expect(isAgentSurface({ url: "https://workhorse.run/docs/enqueue", status: 200 })).toBe(false);
+    expect(
+      isAgentSurface({
+        url: "https://workhorse.run/docs/enqueue",
+        status: 200,
+        contentType: "text/html; charset=utf-8",
+      }),
+    ).toBe(false);
     expect(isAgentSurface({ url: "https://pkg.go.dev/x.md", status: 200 })).toBe(false);
     expect(isAgentSurface({ url: "https://workhorse.run/llms.txt", status: 404 })).toBe(false);
   });
@@ -205,6 +223,6 @@ describe("the fixture schema", () => {
   });
 
   it("rejects an unknown task", () => {
-    expect(() => parseTranscript(baseTranscript({ task: "E" }), "fixture")).toThrow(/task/);
+    expect(() => parseTranscript(baseTranscript({ task: "Z" }), "fixture")).toThrow(/task/);
   });
 });

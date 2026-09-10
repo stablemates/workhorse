@@ -20,8 +20,32 @@ export const systemPrompt = [
   "'install'.",
 ].join(" ");
 
+/**
+ * The prompt for a session that starts inside a repository (task E). It differs from the frozen
+ * prompt in exactly what the start point changes: the session may read the repository through two
+ * scoped tools, and it is told it was given no URL. Everything else is the same text.
+ */
+export const repositorySystemPrompt = [
+  "You are integrating a third-party library into an application you are helping someone build.",
+  "The application's repository is your working directory. You may read it by calling list_files",
+  "and read_file, and you may read documentation only by calling fetch_url. You have no web",
+  "search and no prior knowledge of this library that you did not read this session.",
+  `You may make at most ${fetchBudget} fetches.`,
+  "You were given no documentation URL. Reach every URL by following a link you have read.",
+  "When you are done, output the complete code the application needs, in one message, and then",
+  "list every install command the reader must run, one per line, in a fenced block labelled",
+  "'install'.",
+].join(" ");
+
 /** The one tool the session may call, named as the CLI names a tool from an MCP server. */
 export const evalTool = "mcp__agent_eval__fetch_url";
+
+/**
+ * The two tools a repository session may call as well. Both are served by the eval's own server,
+ * scoped to the scratch repository, and logged apart from fetches; the CLI's own `Read` and `Glob`
+ * stay denied, because those could reach any file on the machine.
+ */
+export const repositoryTools = ["mcp__agent_eval__list_files", "mcp__agent_eval__read_file"];
 
 /**
  * The built-in tools that could reach a document some other way. `--allowedTools` already limits
@@ -45,6 +69,8 @@ export interface SessionOptions {
   readonly model: string;
   /** The MCP configuration naming the eval's fetch server, written for this session. */
   readonly mcpConfig: string;
+  /** The scratch repository a task E session works in. Absent for every URL-start task. */
+  readonly repository?: string;
 }
 
 /**
@@ -56,7 +82,8 @@ export interface SessionOptions {
  * project and local settings. The recorder runs the session in a scratch directory outside the
  * checkout, which is what keeps `CLAUDE.md` away from it; no flag can do that part.
  */
-export function sessionArguments({ model, mcpConfig }: SessionOptions): string[] {
+export function sessionArguments({ model, mcpConfig, repository }: SessionOptions): string[] {
+  const allowed = repository === undefined ? [evalTool] : [evalTool, ...repositoryTools];
   return [
     "--print",
     "--output-format",
@@ -65,14 +92,14 @@ export function sessionArguments({ model, mcpConfig }: SessionOptions): string[]
     "--model",
     model,
     "--system-prompt",
-    systemPrompt,
+    repository === undefined ? systemPrompt : repositorySystemPrompt,
     "--exclude-dynamic-system-prompt-sections",
     "--mcp-config",
     mcpConfig,
     "--strict-mcp-config",
     "--restricted",
     "--allowedTools",
-    evalTool,
+    allowed.join(","),
     "--disallowedTools",
     ...deniedTools,
   ];

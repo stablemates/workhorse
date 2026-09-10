@@ -1,0 +1,210 @@
+{
+  "task": "E",
+  "language": "typescript",
+  "run": "2026-09-10-repository-start",
+  "recordedAt": "2026-09-10",
+  "model": "claude-opus-5",
+  "provenance": "recorded",
+  "fetches": [
+    {
+      "url": "https://workhorse.run/llms.txt",
+      "status": 200,
+      "contentType": "text/plain; charset=utf-8",
+      "bytes": 12366
+    },
+    {
+      "url": "https://workhorse.run/docs/for-ai-agents.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 11071
+    },
+    {
+      "url": "https://workhorse.run/docs/enqueue.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 8776
+    },
+    {
+      "url": "https://workhorse.run/docs/workers.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 11775
+    },
+    {
+      "url": "https://workhorse.run/docs/durable-execution.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 7635
+    },
+    {
+      "url": "https://workhorse.run/docs/installation.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 10794
+    },
+    {
+      "url": "https://workhorse.run/docs/worker-processes.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 5342
+    },
+    {
+      "url": "https://workhorse.run/docs/retries.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 5127
+    },
+    {
+      "url": "https://workhorse.run/docs/contracts.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 5923
+    },
+    {
+      "url": "https://workhorse.run/docs/api.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 11226
+    },
+    {
+      "url": "https://workhorse.run/docs/idempotency.md",
+      "status": 200,
+      "contentType": "text/markdown; charset=utf-8",
+      "bytes": 7032
+    }
+  ],
+  "reads": [
+    {
+      "tool": "list_files",
+      "path": ".",
+      "outcome": "ok",
+      "bytes": 73
+    },
+    {
+      "tool": "read_file",
+      "path": "package.json",
+      "outcome": "ok",
+      "bytes": 276
+    },
+    {
+      "tool": "list_files",
+      "path": "src",
+      "outcome": "ok",
+      "bytes": 15
+    },
+    {
+      "tool": "read_file",
+      "path": "README.md",
+      "outcome": "ok",
+      "bytes": 69
+    },
+    {
+      "tool": "read_file",
+      "path": "src/db.ts",
+      "outcome": "ok",
+      "bytes": 106
+    },
+    {
+      "tool": "read_file",
+      "path": "src/orders.ts",
+      "outcome": "ok",
+      "bytes": 314
+    },
+    {
+      "tool": "list_files",
+      "path": "node_modules/@stablemates/workhorse",
+      "outcome": "ok",
+      "bytes": 43
+    },
+    {
+      "tool": "read_file",
+      "path": "node_modules/@stablemates/workhorse/package.json",
+      "outcome": "ok",
+      "bytes": 1989
+    },
+    {
+      "tool": "read_file",
+      "path": "node_modules/@stablemates/workhorse/README.md",
+      "outcome": "ok",
+      "bytes": 3194
+    },
+    {
+      "tool": "list_files",
+      "path": "node_modules/@stablemates/workhorse/dist/src",
+      "outcome": "ok",
+      "bytes": 1203
+    },
+    {
+      "tool": "read_file",
+      "path": "node_modules/@stablemates/workhorse/dist/src/index.d.ts",
+      "outcome": "ok",
+      "bytes": 7201
+    },
+    {
+      "tool": "read_file",
+      "path": "node_modules/@stablemates/workhorse/dist/src/worker-process.d.ts",
+      "outcome": "ok",
+      "bytes": 3818
+    },
+    {
+      "tool": "read_file",
+      "path": "node_modules/@stablemates/workhorse/dist/src/worker.d.ts",
+      "outcome": "ok",
+      "bytes": 18925
+    },
+    {
+      "tool": "read_file",
+      "path": "node_modules/@stablemates/workhorse/dist/src/types.d.ts",
+      "outcome": "ok",
+      "bytes": 46390
+    },
+    {
+      "tool": "read_file",
+      "path": "node_modules/@stablemates/workhorse/dist/src/adapter.d.ts",
+      "outcome": "ok",
+      "bytes": 6581
+    },
+    {
+      "tool": "read_file",
+      "path": "tsconfig.json",
+      "outcome": "ok",
+      "bytes": 210
+    },
+    {
+      "tool": "list_files",
+      "path": "node_modules/@stablemates/workhorse/dist/src/queue",
+      "outcome": "ok",
+      "bytes": 1687
+    },
+    {
+      "tool": "read_file",
+      "path": "node_modules/@stablemates/workhorse/dist/src/queue/enqueue-contracts.d.ts",
+      "outcome": "ok",
+      "bytes": 4287
+    }
+  ],
+  "install": [
+    {
+      "command": "npm install",
+      "registry": "npm",
+      "package": "@stablemates/workhorse",
+      "version": null,
+      "resolved": true
+    },
+    {
+      "command": "npm exec --no -- workhorse schema install",
+      "registry": "npm",
+      "package": "@stablemates/workhorse",
+      "version": null,
+      "resolved": true
+    }
+  ],
+  "mistakes": {
+    "enqueueOutsideTransaction": "clean",
+    "schemaOnRuntimePath": "clean",
+    "effectOutsideCheckpoint": "clean"
+  },
+  "produced": [
+    "produced.md"
+  ]
+}

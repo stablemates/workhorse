@@ -1,12 +1,20 @@
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { deniedTools, evalTool, parseStream, producedText, sessionArguments } from "./session.js";
-import { fetchBudget } from "./tasks.js";
-import type { TranscriptFetch } from "./transcript.js";
+import { repositoryFiles, repositoryPackage } from "./repository.js";
+import {
+  deniedTools,
+  evalTool,
+  parseStream,
+  producedText,
+  repositoryTools,
+  sessionArguments,
+} from "./session.js";
+import { fetchBudget, taskById } from "./tasks.js";
+import type { TranscriptFetch, TranscriptRead } from "./transcript.js";
 
 const scratchRoots: string[] = [];
 
@@ -60,6 +68,33 @@ describe("sessionArguments", () => {
       expect(deniedTools).toContain(tool);
       expect(args).toContain(tool);
     }
+  });
+
+  // Task E (SM-704) starts inside a repository. The session may read it, through the eval's own
+  // scoped tools and never the CLI's, and its prompt says it was given no URL. A URL-start session
+  // keeps the frozen prompt and the one tool.
+  it("adds the two repository tools and the repository prompt only for a repository session", () => {
+    const withRepository = sessionArguments({
+      model: "claude-opus-5",
+      mcpConfig: "/tmp/mcp.json",
+      repository: "/tmp/orders-app",
+    });
+    expect(valueAfter(withRepository, "--allowedTools")).toBe(
+      [evalTool, ...repositoryTools].join(","),
+    );
+    expect(valueAfter(withRepository, "--system-prompt")).toContain(
+      "You were given no documentation URL",
+    );
+    expect(valueAfter(withRepository, "--system-prompt")).toContain(
+      `at most ${fetchBudget} fetches`,
+    );
+    for (const tool of ["Read", "Glob", "Grep", "Bash"]) {
+      expect(withRepository).toContain(tool);
+    }
+
+    const withoutRepository = argumentsFor();
+    expect(valueAfter(withoutRepository, "--allowedTools")).toBe(evalTool);
+    expect(valueAfter(withoutRepository, "--system-prompt")).toContain("no repository checkout");
   });
 
   it("asks for the stream the recorder parses", () => {
@@ -118,15 +153,37 @@ function startSite(): Promise<{ origin: string; close: () => Promise<void> }> {
   });
 }
 
+interface ServerCall {
+  readonly name: "fetch_url" | "list_files" | "read_file";
+  readonly arguments: Record<string, string>;
+}
+
+interface ServerRun {
+  readonly replies: { text: string; isError: boolean }[];
+  readonly logged: TranscriptFetch[];
+  readonly reads: TranscriptRead[];
+  readonly tools: string[];
+}
+
+async function readJsonLines<T>(file: string): Promise<T[]> {
+  return (await readFile(file, "utf8"))
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line) as T);
+}
+
 /** Drives the MCP server the way the CLI does: one JSON-RPC message per line on stdin. */
-async function callServer(
+async function driveServer(
   budget: number,
-  calls: readonly { url: string }[],
-): Promise<{ replies: { text: string; isError: boolean }[]; logged: TranscriptFetch[] }> {
+  calls: readonly ServerCall[],
+  repository?: string,
+): Promise<ServerRun> {
   const root = await mkdtemp(path.join(tmpdir(), "workhorse-fetch-server-"));
   scratchRoots.push(root);
   const log = path.join(root, "fetches.jsonl");
+  const readLog = path.join(root, "reads.jsonl");
   await writeFile(log, "");
+  await writeFile(readLog, "");
 
   const server = path.join(import.meta.dirname, "fetch-server.ts");
   const tsx = path.resolve(import.meta.dirname, "../../node_modules/.bin/tsx");
@@ -135,19 +192,23 @@ async function callServer(
       ...process.env,
       AGENT_EVAL_FETCH_LOG: log,
       AGENT_EVAL_FETCH_BUDGET: String(budget),
+      ...(repository === undefined
+        ? {}
+        : { AGENT_EVAL_REPOSITORY: repository, AGENT_EVAL_READ_LOG: readLog }),
     },
   });
 
   let stdout = "";
   child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
   child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 0, method: "initialize" })}\n`);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: -1, method: "tools/list" })}\n`);
   calls.forEach((call, index) => {
     child.stdin.write(
       `${JSON.stringify({
         jsonrpc: "2.0",
         id: index + 1,
         method: "tools/call",
-        params: { name: "fetch_url", arguments: { url: call.url } },
+        params: { name: call.name, arguments: call.arguments },
       })}\n`,
     );
   });
@@ -156,28 +217,62 @@ async function callServer(
     child.on("close", () => resolve());
   });
 
-  const replies = stdout
+  const messages = stdout
     .split("\n")
     .filter((line) => line.trim() !== "")
     .map(
       (line) =>
         JSON.parse(line) as {
           id: number;
-          result?: { content?: [{ text: string }]; isError?: boolean };
+          result?: {
+            content?: [{ text: string }];
+            isError?: boolean;
+            tools?: { name: string }[];
+          };
         },
-    )
-    .filter((message) => message.id !== 0)
+    );
+  const replies = messages
+    .filter((message) => message.id > 0)
     .map((message) => ({
       text: message.result?.content?.[0]?.text ?? "",
       isError: message.result?.isError === true,
     }));
+  const tools = (messages.find((message) => message.id === -1)?.result?.tools ?? []).map(
+    (tool) => tool.name,
+  );
 
-  const logged = (await readFile(log, "utf8"))
-    .split("\n")
-    .filter((line) => line.trim() !== "")
-    .map((line) => JSON.parse(line) as TranscriptFetch);
+  return {
+    replies,
+    logged: await readJsonLines<TranscriptFetch>(log),
+    reads: await readJsonLines<TranscriptRead>(readLog),
+    tools,
+  };
+}
 
-  return { replies, logged };
+function callServer(
+  budget: number,
+  calls: readonly { url: string }[],
+): Promise<{ replies: ServerRun["replies"]; logged: TranscriptFetch[] }> {
+  return driveServer(
+    budget,
+    calls.map((call) => ({ name: "fetch_url", arguments: { url: call.url } })),
+  );
+}
+
+/** A scratch repository with the shape `repository.ts` writes, minus the install. */
+async function scratchRepository(): Promise<string> {
+  const root = await mkdtemp(path.join(tmpdir(), "workhorse-eval-repository-"));
+  scratchRoots.push(root);
+  for (const [name, body] of Object.entries(repositoryFiles)) {
+    await mkdir(path.dirname(path.join(root, name)), { recursive: true });
+    await writeFile(path.join(root, name), body);
+  }
+  await mkdir(path.join(root, "node_modules", "@stablemates", "workhorse"), { recursive: true });
+  await writeFile(
+    path.join(root, "node_modules", "@stablemates", "workhorse", "README.md"),
+    "# @stablemates/workhorse\n\n[For AI agents](https://workhorse.run/llms.txt)\n",
+  );
+  return root;
 }
 
 describe("the fetch server", () => {
@@ -244,4 +339,72 @@ describe("the fetch server", () => {
       await site.close();
     }
   }, 30_000);
+});
+
+describe("the repository tools", () => {
+  it("are offered only when a repository is named", async () => {
+    const withoutRepository = await driveServer(1, []);
+    expect(withoutRepository.tools).toEqual(["fetch_url"]);
+
+    const withRepository = await driveServer(1, [], await scratchRepository());
+    expect(withRepository.tools).toEqual(["fetch_url", "list_files", "read_file"]);
+  }, 30_000);
+
+  // A read is not a fetch. It spends no budget and never enters the fetch log, so the discovery
+  // index still reads a position among fetches alone.
+  it("read the repository, log apart from fetches, and spend no fetch budget", async () => {
+    const repository = await scratchRepository();
+    const { replies, logged, reads } = await driveServer(
+      1,
+      [
+        { name: "list_files", arguments: { path: "." } },
+        { name: "read_file", arguments: { path: "package.json" } },
+        { name: "read_file", arguments: { path: "node_modules/@stablemates/workhorse/README.md" } },
+      ],
+      repository,
+    );
+
+    expect(replies[0]?.isError).toBe(false);
+    expect(replies[0]?.text.split("\n")).toContain("src/");
+    expect(replies[1]?.text).toContain(repositoryPackage);
+    expect(replies[2]?.text).toContain("https://workhorse.run/llms.txt");
+    expect(logged).toEqual([]);
+    expect(reads.map((read) => [read.tool, read.path, read.outcome])).toEqual([
+      ["list_files", ".", "ok"],
+      ["read_file", "package.json", "ok"],
+      ["read_file", "node_modules/@stablemates/workhorse/README.md", "ok"],
+    ]);
+  }, 30_000);
+
+  it("refuse a path outside the repository and record the refusal", async () => {
+    const repository = await scratchRepository();
+    const { replies, reads } = await driveServer(
+      1,
+      [
+        { name: "read_file", arguments: { path: "../../etc/hostname" } },
+        { name: "read_file", arguments: { path: "/etc/hostname" } },
+        { name: "read_file", arguments: { path: "src/missing.ts" } },
+      ],
+      repository,
+    );
+
+    expect(replies[0]?.isError).toBe(true);
+    expect(replies[0]?.text).toContain("outside the repository");
+    expect(replies[1]?.isError).toBe(true);
+    expect(replies[2]?.isError).toBe(true);
+    expect(replies[2]?.text).toContain("does not exist");
+    expect(reads.map((read) => read.outcome)).toEqual(["refused", "refused", "missing"]);
+  }, 30_000);
+});
+
+describe("the task E repository", () => {
+  it("depends on the SDK, inserts the order row, and points nowhere", () => {
+    expect(taskById("E").startUrl).toBeNull();
+    const manifest = JSON.parse(repositoryFiles["package.json"]!) as {
+      dependencies: Record<string, string>;
+    };
+    expect(Object.keys(manifest.dependencies)).toContain(repositoryPackage);
+    expect(repositoryFiles["src/orders.ts"]).toContain("INSERT INTO orders");
+    expect(repositoryFiles["README.md"]).not.toMatch(/workhorse\.run|llms\.txt|http/);
+  });
 });

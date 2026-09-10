@@ -9,17 +9,19 @@
  * runs it on demand, before and after a documentation change, and commits the fixture it writes.
  * Scoring the fixture afterwards needs neither the login nor the network.
  *
- * The session is fetch-only. It gets one tool, one start URL, and a fetch budget; it never
- * searches, and every other URL must be reached by following a link. The harness performs every
- * fetch, which is why the transcript can carry each fetch's status, content type and byte count,
- * and it keeps no response body.
+ * A URL-start session is fetch-only. It gets one tool, one start URL, and a fetch budget; it never
+ * searches, and every other URL must be reached by following a link. A repository-start session
+ * (task E) gets two more tools that read a scratch repository the recorder installs for it, and no
+ * URL at all. Either way the harness performs every fetch, which is why the transcript can carry
+ * each fetch's status, content type and byte count, and it keeps no response body.
  *
- * `session.ts` holds the options that keep the session inside that tool, and a test reads them.
+ * `session.ts` holds the options that keep the session inside those tools, and a test reads them.
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { prepareRepository } from "./repository.js";
 import { documentationHost, fetchBudget, taskById, taskText } from "./tasks.js";
 import { parseStream, producedText, sessionArguments } from "./session.js";
 import {
@@ -27,6 +29,7 @@ import {
   sessionsRoot,
   type Transcript,
   type TranscriptFetch,
+  type TranscriptRead,
   transcriptFileName,
 } from "./transcript.js";
 
@@ -59,6 +62,13 @@ function runClaude(
   });
 }
 
+async function readLines<T>(file: string): Promise<T[]> {
+  return (await readFile(file, "utf8"))
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line) as T);
+}
+
 async function run(taskId: string, runName: string, model: string): Promise<void> {
   const task = taskById(taskId);
 
@@ -68,6 +78,13 @@ async function run(taskId: string, runName: string, model: string): Promise<void
   const scratch = await mkdtemp(path.join(tmpdir(), "agent-eval-"));
   const fetchLog = path.join(scratch, "fetches.jsonl");
   await writeFile(fetchLog, "");
+
+  // A repository-start session works inside a scratch application that really depends on the
+  // SDK. It is installed here, once per session, so the installed package's README is present the
+  // way it is in any project; that README is the pointer the session may or may not find.
+  const readLog = path.join(scratch, "reads.jsonl");
+  const repository = task.startUrl === null ? await prepareRepository(scratch) : undefined;
+  if (repository !== undefined) await writeFile(readLog, "");
 
   const mcpConfig = path.join(scratch, "mcp.json");
   await writeFile(
@@ -82,17 +99,28 @@ async function run(taskId: string, runName: string, model: string): Promise<void
           env: {
             AGENT_EVAL_FETCH_LOG: fetchLog,
             AGENT_EVAL_FETCH_BUDGET: String(fetchBudget),
+            ...(repository === undefined
+              ? {}
+              : { AGENT_EVAL_REPOSITORY: repository, AGENT_EVAL_READ_LOG: readLog }),
           },
         },
       },
     }),
   );
 
-  const prompt = [taskText, `Write it in ${task.language}.`, `Start here: ${task.startUrl}`].join(
-    "\n\n",
-  );
+  // The start clause is the one line that differs between tasks. A URL-start task is handed its
+  // URL; a repository-start task is told where it is and that it was given none.
+  const start =
+    task.startUrl === null
+      ? "The application's repository is your working directory. It already depends on the job library you should use. You were given no documentation URL."
+      : `Start here: ${task.startUrl}`;
+  const prompt = [taskText, `Write it in ${task.language}.`, start].join("\n\n");
 
-  const result = await runClaude(scratch, sessionArguments({ model, mcpConfig }), prompt);
+  const result = await runClaude(
+    repository ?? scratch,
+    sessionArguments({ model, mcpConfig, ...(repository === undefined ? {} : { repository }) }),
+    prompt,
+  );
   const events = parseStream(result.stdout);
 
   if (events.length === 0) {
@@ -102,10 +130,8 @@ async function run(taskId: string, runName: string, model: string): Promise<void
     );
   }
 
-  const fetches: TranscriptFetch[] = (await readFile(fetchLog, "utf8"))
-    .split("\n")
-    .filter((line) => line.trim() !== "")
-    .map((line) => JSON.parse(line) as TranscriptFetch);
+  const fetches = await readLines<TranscriptFetch>(fetchLog);
+  const reads = repository === undefined ? undefined : await readLines<TranscriptRead>(readLog);
 
   const transcriptText = producedText(events);
   await rm(scratch, { recursive: true, force: true });
@@ -121,6 +147,7 @@ async function run(taskId: string, runName: string, model: string): Promise<void
     model,
     provenance: "recorded",
     fetches,
+    ...(reads === undefined ? {} : { reads }),
     install: [],
     mistakes: {
       enqueueOutsideTransaction: "clean",
@@ -137,6 +164,7 @@ async function run(taskId: string, runName: string, model: string): Promise<void
     [
       `Recorded task ${task.id} into ${path.relative(process.cwd(), directory)}.`,
       `  ${fetches.length} fetches against ${documentationHost} and elsewhere.`,
+      ...(reads === undefined ? [] : [`  ${reads.length} reads of the scratch repository.`]),
       "",
       "Before committing this fixture, fill in by hand:",
       "  - install: one entry per install command the session produced, with its registry verdict.",

@@ -1,5 +1,6 @@
 /**
- * The eval's MCP server: one stdio process that offers `fetch_url` and nothing else.
+ * The eval's MCP server: one stdio process that offers `fetch_url`, and for a repository session
+ * two scoped file tools, and nothing else.
  *
  * `record` starts the `claude` CLI with `--strict-mcp-config`, so this server is the session's
  * only tool source. The server fetches, appends one JSON line per fetch to the log the recorder
@@ -7,12 +8,18 @@
  * than in a turn count because the CLI has no turn limit, and because a fetch is what the budget
  * has always counted.
  *
+ * When `AGENT_EVAL_REPOSITORY` names a directory, the server also offers `list_files` and
+ * `read_file`, both confined to that directory and logged to `AGENT_EVAL_READ_LOG`. A read is not
+ * a fetch: it spends no budget and never enters the fetch log, so the discovery index still reads
+ * a position among fetches alone (SM-704).
+ *
  * The protocol is small enough to answer directly: `initialize`, `tools/list`, `tools/call`, and
  * the notifications that need no reply.
  */
-import { appendFileSync } from "node:fs";
+import { appendFileSync, type Dirent, readdirSync, readFileSync, realpathSync } from "node:fs";
+import path from "node:path";
 import { createInterface } from "node:readline";
-import type { TranscriptFetch } from "./transcript.js";
+import type { TranscriptFetch, TranscriptRead } from "./transcript.js";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -29,6 +36,11 @@ if (!Number.isInteger(budget) || budget <= 0) {
   process.stderr.write("AGENT_EVAL_FETCH_BUDGET must be a positive whole number.\n");
   process.exit(2);
 }
+
+const repositoryEnv = process.env["AGENT_EVAL_REPOSITORY"];
+const repositoryRoot =
+  repositoryEnv === undefined || repositoryEnv === "" ? undefined : realpathSync(repositoryEnv);
+const readLogPath = repositoryRoot === undefined ? undefined : required("AGENT_EVAL_READ_LOG");
 
 interface FetchOutcome {
   readonly record: TranscriptFetch;
@@ -51,6 +63,24 @@ const fetchToolSchema = {
     },
   },
   required: ["url"],
+  additionalProperties: false,
+} as const;
+
+/** The repository tools as the session sees them. Frozen with the repository prompt. */
+const listToolDescription =
+  "List the entries at one directory inside the application's repository, by path relative to its root. A directory entry ends with a slash.";
+const readToolDescription =
+  "Read one file inside the application's repository as text, by path relative to its root.";
+
+const pathToolSchema = {
+  type: "object",
+  properties: {
+    path: {
+      type: "string",
+      description: "A path relative to the repository root. '.' is the root itself.",
+    },
+  },
+  required: ["path"],
   additionalProperties: false,
 } as const;
 
@@ -104,10 +134,83 @@ function textResult(text: string, isError = false): unknown {
   return { content: [{ type: "text", text }], isError };
 }
 
+type Located =
+  | { readonly outcome: "ok"; readonly absolute: string }
+  | { readonly outcome: "missing" | "refused" };
+
+/**
+ * Resolve a session-given path against the repository root and refuse anything that escapes it.
+ * The check runs on the real path, so a symlink out of the repository is refused as well.
+ */
+function locate(root: string, relative: string): Located {
+  const absolute = path.resolve(root, relative);
+  let real: string;
+  try {
+    real = realpathSync(absolute);
+  } catch {
+    // A missing path could also be one outside the root; both answers tell the session nothing
+    // about the machine, and "missing" is the one that helps it correct a typo.
+    return { outcome: "missing" };
+  }
+  if (real !== root && !real.startsWith(`${root}${path.sep}`)) {
+    return { outcome: "refused" };
+  }
+  return { outcome: "ok", absolute: real };
+}
+
+function logRead(record: TranscriptRead): void {
+  appendFileSync(readLogPath!, `${JSON.stringify(record)}\n`);
+}
+
+function refusal(tool: TranscriptRead["tool"], relative: string, outcome: "missing" | "refused") {
+  logRead({ tool, path: relative, outcome });
+  return textResult(
+    outcome === "missing"
+      ? `${relative} does not exist in the repository.`
+      : `${relative} is outside the repository. Only paths inside it can be read.`,
+    true,
+  );
+}
+
+function listFiles(root: string, relative: string): unknown {
+  const located = locate(root, relative);
+  if (located.outcome !== "ok") return refusal("list_files", relative, located.outcome);
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(located.absolute, { withFileTypes: true });
+  } catch {
+    logRead({ tool: "list_files", path: relative, outcome: "ok", bytes: 0 });
+    return textResult(`${relative} is a file. Use read_file to read it.`, true);
+  }
+  const listing = entries
+    .map((entry) => `${entry.name}${entry.isDirectory() ? "/" : ""}`)
+    .toSorted()
+    .join("\n");
+  logRead({ tool: "list_files", path: relative, outcome: "ok", bytes: Buffer.byteLength(listing) });
+  return textResult(listing === "" ? "(empty)" : listing);
+}
+
+function readFile(root: string, relative: string): unknown {
+  const located = locate(root, relative);
+  if (located.outcome !== "ok") return refusal("read_file", relative, located.outcome);
+  let body: string;
+  try {
+    body = readFileSync(located.absolute, "utf8");
+  } catch {
+    logRead({ tool: "read_file", path: relative, outcome: "ok", bytes: 0 });
+    return textResult(`${relative} is a directory. Use list_files to list it.`, true);
+  }
+  logRead({ tool: "read_file", path: relative, outcome: "ok", bytes: Buffer.byteLength(body) });
+  return textResult(body);
+}
+
 async function handle(message: {
   id?: unknown;
   method?: string;
-  params?: { name?: string; arguments?: { url?: unknown; purpose?: unknown } };
+  params?: {
+    name?: string;
+    arguments?: { url?: unknown; purpose?: unknown; path?: unknown };
+  };
 }): Promise<void> {
   // A notification carries no id and takes no reply.
   if (message.id === undefined) return;
@@ -133,15 +236,45 @@ async function handle(message: {
             // `record` also raises MAX_MCP_OUTPUT_TOKENS and the eval note records the cut.
             _meta: { "anthropic/maxResultSizeChars": maxResultSizeChars },
           },
+          ...(repositoryRoot === undefined
+            ? []
+            : [
+                {
+                  name: "list_files",
+                  description: listToolDescription,
+                  inputSchema: pathToolSchema,
+                },
+                {
+                  name: "read_file",
+                  description: readToolDescription,
+                  inputSchema: pathToolSchema,
+                  _meta: { "anthropic/maxResultSizeChars": maxResultSizeChars },
+                },
+              ]),
         ],
       });
       return;
     case "tools/call": {
-      if (message.params?.name !== "fetch_url") {
-        reply(message.id, textResult(`Unknown tool ${String(message.params?.name)}.`, true));
+      const name = message.params?.name;
+      const input = message.params?.arguments ?? {};
+      if (repositoryRoot !== undefined && (name === "list_files" || name === "read_file")) {
+        const relative = typeof input.path === "string" ? input.path : "";
+        if (relative === "") {
+          reply(message.id, textResult("No path given.", true));
+          return;
+        }
+        reply(
+          message.id,
+          name === "list_files"
+            ? listFiles(repositoryRoot, relative)
+            : readFile(repositoryRoot, relative),
+        );
         return;
       }
-      const input = message.params.arguments ?? {};
+      if (name !== "fetch_url") {
+        reply(message.id, textResult(`Unknown tool ${String(name)}.`, true));
+        return;
+      }
       const url = typeof input.url === "string" ? input.url : "";
       if (url === "") {
         reply(message.id, textResult("No url given.", true));

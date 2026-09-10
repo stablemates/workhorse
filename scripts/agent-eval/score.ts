@@ -40,7 +40,12 @@ async function newestRun(): Promise<string> {
   return path.join(sessionsRoot, newest);
 }
 
-/** A fetch that returned an agent surface: the router, the whole corpus, or a Markdown twin. */
+/**
+ * A fetch that returned an agent surface: the router, the whole corpus, the agent page, or a
+ * Markdown twin. Since ADR 0062 a page URL answers `Accept: text/markdown` with the twin, so a docs
+ * fetch whose response is Markdown counts the way the `.md` URL does; the response is the same
+ * file. SM-704 added that clause, and the 2026-09-09 note records the indices it changed.
+ */
 export function isAgentSurface(fetch: TranscriptFetch): boolean {
   let url: URL;
   try {
@@ -55,11 +60,13 @@ export function isAgentSurface(fetch: TranscriptFetch): boolean {
     return false;
   }
   const { pathname } = url;
+  const underDocs = pathname === "/docs" || pathname.startsWith("/docs/");
   return (
     pathname === "/llms.txt" ||
     pathname === "/llms-full.txt" ||
     pathname === "/docs/for-ai-agents" ||
-    (pathname.startsWith("/docs/") && pathname.endsWith(".md"))
+    (underDocs && pathname.endsWith(".md")) ||
+    (underDocs && (fetch.contentType ?? "").startsWith("text/markdown"))
   );
 }
 
@@ -83,6 +90,8 @@ export interface SessionScore {
   readonly language: Language;
   readonly provenance: Transcript["provenance"];
   readonly fetches: number;
+  /** Repository reads by a session that started inside one, or null for a URL-start session. */
+  readonly reads: number | null;
   /** 1-based index of the first fetch returning an agent surface, or null when it never happens. */
   readonly discoveryIndex: number | null;
   readonly offSiteSignatureFetches: number;
@@ -142,6 +151,7 @@ export async function scoreSession(directory: string): Promise<SessionScore> {
     language: transcript.language,
     provenance: transcript.provenance,
     fetches: transcript.fetches.length,
+    reads: transcript.reads?.length ?? null,
     discoveryIndex: discoveryPosition === -1 ? null : discoveryPosition + 1,
     offSiteSignatureFetches: transcript.fetches.filter(
       (fetch) => fetch.purpose === "signature" && isOffSite(fetch),
@@ -216,7 +226,8 @@ function report(score: RunScore): string {
   const lines: string[] = [`Agent documentation eval — run ${score.run}`, ""];
   for (const session of score.sessions) {
     lines.push(
-      `  Task ${session.task} (${session.language}, ${session.provenance}) — ${session.fetches} fetches`,
+      `  Task ${session.task} (${session.language}, ${session.provenance}) — ${session.fetches} fetches` +
+        (session.reads === null ? "" : `, ${session.reads} repository reads`),
       `    discovery index: ${session.discoveryIndex ?? "never"}`,
       `    off-site signature fetches: ${session.offSiteSignatureFetches}`,
       `    failed fetches: ${session.failedFetches}`,

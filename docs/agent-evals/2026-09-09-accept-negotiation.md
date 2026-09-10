@@ -53,6 +53,10 @@ The landing twin is no longer unused. In the 2026-09-05 run, not one session fet
 
 SM-47 (WH-665) therefore kept the twin and the fix was `Accept` negotiation. The remaining acceptance item, the later eval run, is now recorded here.
 
+## Rescored on 2026-09-10
+
+SM-704 amended `isAgentSurface` so a `/docs/*` fetch whose response is `text/markdown` counts the way the `.md` URL does, because the response is the same file. Under that definition tasks A, B and C score a discovery index of 2 instead of `never`: their second fetch was a canonical docs page the origin negotiated to Markdown. Task D stays at 2. The 2026-09-05 runs are unchanged, because their docs fetches were served as HTML.
+
 ## Reproduce the scoring
 
 ```bash

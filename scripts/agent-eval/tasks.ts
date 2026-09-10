@@ -1,13 +1,17 @@
 /**
  * The agent documentation eval's task set, fixed by WH-524 and ADR 0049.
  *
- * Four tasks reuse the WH-518 baseline's task text verbatim, so a later run compares against
+ * Every task reuses the WH-518 baseline's task text verbatim, so a later run compares against
  * recorded sessions rather than against a fresh prompt. The start point is a task dimension and
  * never a scored one: tasks A and D differ only in it, and that pair measures what the agent entry
  * point costs.
+ *
+ * Task E, added by SM-704 for ADR 0063, starts inside a repository that already depends on the SDK
+ * and is given no URL at all. It measures the start point a packaged skill exists for: the session
+ * has to find a documentation URL in the repository, or guess one, before it can fetch anything.
  */
 
-export const taskIds = ["A", "B", "C", "D"] as const;
+export const taskIds = ["A", "B", "C", "D", "E"] as const;
 
 export type TaskId = (typeof taskIds)[number];
 
@@ -16,8 +20,11 @@ export type Language = "typescript" | "python" | "go";
 export interface Task {
   readonly id: TaskId;
   readonly language: Language;
-  /** The one URL a session is given. Everything else must be reached by following a link. */
-  readonly startUrl: string;
+  /**
+   * The one URL a session is given, or null when it starts inside a repository and is given none.
+   * Everything else must be reached by following a link.
+   */
+  readonly startUrl: string | null;
   /** How the start point reads in a report. */
   readonly startLabel: string;
 }
@@ -62,6 +69,12 @@ export const tasks: readonly Task[] = [
     language: "typescript",
     startUrl: "https://raw.githubusercontent.com/stablemates/workhorse/main/README.md",
     startLabel: "the root README on GitHub",
+  },
+  {
+    id: "E",
+    language: "typescript",
+    startUrl: null,
+    startLabel: "a repository that already depends on the SDK, with no URL",
   },
 ];
 
