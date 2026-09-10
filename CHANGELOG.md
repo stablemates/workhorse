@@ -15,9 +15,18 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 `0.1.0` the schema upgrades in place: every release ships ordered, immutable migrations, and inside
 a major line a migration only adds. Breaking changes are always listed with upgrade steps.
 
-**Unreleased**
+## 0.1.1 — 2026-09-10
 
-Requires **schema v1**.
+Published to npm from one source commit shared with the Python distribution and the Go module,
+tagged `v0.1.1`. Workhorse stays a public beta on the `0.x` line.
+
+Requires **schema v1**, Node.js **22** or newer, PostgreSQL **15** or newer. CI exercises Node.js 22
+and 24 and PostgreSQL 15 through 18.
+
+**Upgrading from `0.1.0` means you recreate the database.** The clean-install baseline was re-cut
+so that schema version 1 installs the corrected statistics functions. A `0.1.0` database still
+reports version 1 and passes `assertSchemaCompatible`, yet holds the uncorrected ones, and no
+migration carries it forward. Recreate the database, or keep running `0.1.0`.
 
 - Add cursor task browsing through `tasksCursor`, with optional exact totals and backward navigation.
 - Read system statistics once per response, sharing the live history tail across dashboard panels.

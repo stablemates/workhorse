@@ -8,13 +8,23 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
-**Unreleased**
+## 0.1.1 — 2026-09-10
 
-Requires **schema v1**.
+Published to the Go module proxy from one source commit shared with the npm packages and the Python
+distribution, tagged `go/v0.1.1`. Workhorse stays a public beta on the `0.x` line.
+
+Requires **schema v1** and Go **1.25** or newer.
+
+**Upgrading from `0.1.0` means you recreate the database.** The clean-install baseline was re-cut
+so that schema version 1 installs the corrected statistics functions. A `0.1.0` database still
+reports version 1 and passes `assertSchemaCompatible`, yet holds the uncorrected ones, and no
+migration carries it forward. Recreate the database, or keep running `0.1.0`.
 
 - Add cursor task browsing through `tasksCursor`, with optional exact totals and backward navigation.
 - Read system statistics once per response, sharing the live history tail across dashboard panels.
 - Coalesce dashboard refreshes and reuse validated full builds across repository smoke checks.
+- Anchor every statistics bucket on UTC, so day and hour boundaries no longer follow the
+  database's timezone setting.
 
 ## 0.1.0 — 2026-09-04
 

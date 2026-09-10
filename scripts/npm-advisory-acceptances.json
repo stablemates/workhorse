@@ -9,14 +9,6 @@
       "reviewBy": "2027-03-01"
     },
     {
-      "advisory": 1138115,
-      "githubAdvisoryId": "GHSA-5p4m-2wfm-xmqj",
-      "module": "js-yaml",
-      "workspacePackages": ["site"],
-      "reason": "Outside the published closure. No published package depends on js-yaml; it is reached only through the private `site` package, under `@tanstack/start-plugin-core`'s `xmlbuilder2`. The quadratic resolution needs attacker-supplied YAML containing `!!omap`, and the site build parses none.",
-      "reviewBy": "2027-03-01"
-    },
-    {
       "advisory": 1139427,
       "githubAdvisoryId": "GHSA-2v37-7h3g-55p8",
       "module": "nanoid",

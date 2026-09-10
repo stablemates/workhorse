@@ -214,7 +214,7 @@ func TestProductionSQLLiteralsLiveInStatementRegistry(t *testing.T) {
 		// Not SQL: what this client library is, reported to the worker registry so an operator can
 		// see which build each worker runs.
 		"go":    {},
-		"0.1.0": {},
+		"0.1.1": {},
 	}
 	// admin_protocol.go is hand-written, so pin every non-SQL runtime string rather
 	// than exempting the file from the statement-registry check.

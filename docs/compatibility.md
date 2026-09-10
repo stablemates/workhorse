@@ -241,7 +241,7 @@ version 1 are their compatibility boundary instead. Their version numbers still 
 packages, because every line releases from one commit.
 
 Every release publishes one version to npm, PyPI, and the Go module proxy from one source commit.
-The current release is `0.1.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
+The current release is `0.1.1`. “Public beta” means the release is usable for evaluation and early production adoption without a
 0.x compatibility promise. The label is retired at 1.0.0 and replaced by “stable”; see
 [What SemVer governs](#what-semver-governs).
 
