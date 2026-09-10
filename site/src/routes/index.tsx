@@ -678,6 +678,11 @@ const demoScreenshots = [
     label: "System health",
   },
   {
+    src: "/screenshots/demo-queues.png",
+    alt: "Workhorse queues dashboard with per-queue status, concurrency limits, and rate budgets",
+    label: "Queues",
+  },
+  {
     src: "/screenshots/demo-workers.png",
     alt: "Workhorse worker fleet with queue assignments, capacity, and recent results",
     label: "Workers",

@@ -30,15 +30,16 @@ effects still need stable provider idempotency keys or compensation.
 
 ## See it operate
 
-The dashboard exposes task activity, lifecycle events, system health, worker capacity, and schedules
-without making the queue's PostgreSQL tables part of your operator interface.
+The dashboard exposes task activity, lifecycle events, system health, worker capacity, queues, and
+schedules without making the queue's PostgreSQL tables part of your operator interface.
 
 <p>
-  <a href="site/public/screenshots/demo-tasks.png"><img src="site/public/screenshots/demo-tasks.png" width="19%" alt="Workhorse dashboard task activity chart and task table"></a>
-  <a href="site/public/screenshots/demo-events.png"><img src="site/public/screenshots/demo-events.png" width="19%" alt="Workhorse event stream with task lifecycle events and operational details"></a>
-  <a href="site/public/screenshots/demo-health.png"><img src="site/public/screenshots/demo-health.png" width="19%" alt="Workhorse system health dashboard with queue backlog and retry metrics"></a>
-  <a href="site/public/screenshots/demo-workers.png"><img src="site/public/screenshots/demo-workers.png" width="19%" alt="Workhorse worker fleet with queue assignments, capacity, and recent results"></a>
-  <a href="site/public/screenshots/demo-schedules.png"><img src="site/public/screenshots/demo-schedules.png" width="19%" alt="Workhorse schedule list with expressions, destinations, and recent runs"></a>
+  <a href="site/public/screenshots/demo-tasks.png"><img src="site/public/screenshots/demo-tasks.png" width="14%" hspace="8" alt="Workhorse dashboard task activity chart and task table"></a>
+  <a href="site/public/screenshots/demo-events.png"><img src="site/public/screenshots/demo-events.png" width="14%" hspace="8" alt="Workhorse event stream with task lifecycle events and operational details"></a>
+  <a href="site/public/screenshots/demo-health.png"><img src="site/public/screenshots/demo-health.png" width="14%" hspace="8" alt="Workhorse system health dashboard with queue backlog and retry metrics"></a>
+  <a href="site/public/screenshots/demo-queues.png"><img src="site/public/screenshots/demo-queues.png" width="14%" hspace="8" alt="Workhorse queues dashboard with per-queue status, concurrency limits, and rate budgets"></a>
+  <a href="site/public/screenshots/demo-workers.png"><img src="site/public/screenshots/demo-workers.png" width="14%" hspace="8" alt="Workhorse worker fleet with queue assignments, capacity, and recent results"></a>
+  <a href="site/public/screenshots/demo-schedules.png"><img src="site/public/screenshots/demo-schedules.png" width="14%" hspace="8" alt="Workhorse schedule list with expressions, destinations, and recent runs"></a>
 </p>
 
 Open the [live demo](https://demo.workhorse.run) to explore the dashboard, including recurring
