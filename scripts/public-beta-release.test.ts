@@ -6,7 +6,7 @@ import { compatibilityNotice, prose, publicBetaLabel } from "./public-beta-notic
 import { WORKHORSE_SCHEMA_BASELINE_VERSION } from "../typescript/core/src/index.js";
 
 /** The release this repository cuts next: one version on npm, PyPI, and Go from one commit. */
-const releaseVersion = "0.1.1";
+const releaseVersion = "0.1.2";
 const releaseDate = "2026-09-10";
 const corePeerRange = ">=0.1.0 <0.2.0";
 
@@ -42,7 +42,7 @@ function changelogEntry(changelog: string, version: string, date: string): strin
   return next === -1 ? body : body.slice(0, next);
 }
 
-describe("the 0.1.1 release", () => {
+describe("the 0.1.2 release", () => {
   it("carries the plain version and peer range in every published manifest", async () => {
     for (const entry of await publishedPackages()) {
       const manifest = JSON.parse(await read(entry.manifest)) as {

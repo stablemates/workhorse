@@ -241,7 +241,7 @@ version 1 are their compatibility boundary instead. Their version numbers still 
 packages, because every line releases from one commit.
 
 Every release publishes one version to npm, PyPI, and the Go module proxy from one source commit.
-The current release is `0.1.1`. “Public beta” means the release is usable for evaluation and early production adoption without a
+The current release is `0.1.2`. “Public beta” means the release is usable for evaluation and early production adoption without a
 0.x compatibility promise. The label is retired at 1.0.0 and replaced by “stable”; see
 [What SemVer governs](#what-semver-governs).
 
@@ -564,7 +564,11 @@ those commits.
 3. `pnpm npm:release-check` validates generated package assets, lint, dependencies, types, and unit
    behavior. It builds every tarball once, then installs and exercises those exact files in clean
    consumers against PostgreSQL.
-4. The build job uploads the unchanged tarballs without publication credentials.
+4. The build job uploads the unchanged tarballs without publication credentials. It runs on Depot
+   like the rest of CI; the publish job that follows does not. npm verifies the Sigstore provenance
+   bundle against the runner environment and rejects anything it reads as `self-hosted`, which is
+   how it classifies a Depot runner, so the publish job runs GitHub-hosted. That is the only job in
+   the repository that does.
 5. The protected `npm` environment requires approval. `scripts/publish-npm.ts` then verifies the
    credential and every target version against the registry before it writes anything, and
    publishes each package with `npm publish --provenance`. `@stablemates/workhorse` goes first

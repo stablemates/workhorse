@@ -15,10 +15,10 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 `0.1.0` the schema upgrades in place: every release ships ordered, immutable migrations, and inside
 a major line a migration only adds. Breaking changes are always listed with upgrade steps.
 
-## 0.1.1 — 2026-09-10
+## 0.1.2 — 2026-09-10
 
 Published to npm from one source commit shared with the Python distribution and the Go module,
-tagged `v0.1.1`. Workhorse stays a public beta on the `0.x` line.
+tagged `v0.1.2`. Workhorse stays a public beta on the `0.x` line.
 
 Requires **schema v1**, Node.js **22** or newer, PostgreSQL **15** or newer. CI exercises Node.js 22
 and 24 and PostgreSQL 15 through 18.
@@ -28,11 +28,20 @@ so that schema version 1 installs the corrected statistics functions. A `0.1.0` 
 reports version 1 and passes `assertSchemaCompatible`, yet holds the uncorrected ones, and no
 migration carries it forward. Recreate the database, or keep running `0.1.0`.
 
+**`0.1.1` was a stopped train and its number is spent.** Its npm stage failed before it wrote
+anything: `npm publish --provenance` is rejected from a runner npm reads as `self-hosted`, which is
+how it classifies the Depot runners every job used. Nothing reached npm and the Go tag was never
+pushed, so `0.1.1` exists only on PyPI, where the distribution is complete and not defective.
+`0.1.2` carries the identical content to all three registries and supersedes it. Nothing on npm
+needs deprecating, because nothing was published there.
+
 - Add cursor task browsing through `tasksCursor`, with optional exact totals and backward navigation.
 - Read system statistics once per response, sharing the live history tail across dashboard panels.
 - Coalesce dashboard refreshes and reuse validated full builds across repository smoke checks.
 - Anchor every statistics bucket on UTC, so day and hour boundaries no longer follow the
   database's timezone setting.
+- Publish npm packages from a GitHub-hosted runner, which is the only environment npm accepts a
+  provenance attestation from.
 
 ## 0.1.0 — 2026-09-04
 

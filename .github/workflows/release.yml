@@ -67,7 +67,11 @@ jobs:
   publish:
     if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true
     needs: build
-    runs-on: depot-ubuntu-24.04
+    # GitHub-hosted, not Depot, and only this job. npm verifies the Sigstore provenance bundle
+    # against the runner environment and rejects anything it reads as `self-hosted`, which is how
+    # it classifies a Depot runner. The build job keeps Depot because it does the heavy compute;
+    # this job only downloads the tarballs the build produced and writes them to the registry.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: npm
     permissions:
