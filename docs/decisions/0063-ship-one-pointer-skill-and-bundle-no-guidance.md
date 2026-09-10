@@ -25,7 +25,13 @@ The eval measures no other start point. An agent working inside a repository tha
 on Workhorse, asked to add a job and handed no URL, has nothing on the site to find it with. That is
 the case a skill exists for: a harness loads it by its description when the task matches, before
 any fetch. The survey recorded on SM-566 found every peer shipping one, six of seven through the
-`npx skills add` registry, and none with evidence that it changed an outcome.
+`npx skills add` registry, and none with evidence that it changed an outcome. The peers' skills
+carry substance: guidelines, best practices, authoring rules. A pointer carries two URLs.
+
+That start point is unmeasured, not unaddressed. ADR 0049 put one router pointer in each package
+README, and all three registries ship the README with the package, so an agent that reads the
+installed package's README lands on `llms.txt` from there. The 2026-09-05 run recorded the README
+start point reaching the router on its second fetch.
 
 The freshness answers the peers found split by mechanism. Trigger.dev bundles guidance inside its
 SDK package, so an upgrade carries the guidance with it. That works because one npm package holds
@@ -46,12 +52,12 @@ drift on its own schedule.
 
 ## Decision
 
-**One skill ships, and it is a pointer.** `skills/workhorse/SKILL.md` is tracked in this repository
-and installs with `npx skills add stablemates/workhorse`, which writes into every harness's skill
-directory. The body carries the trigger description, the instruction to fetch
-`/docs/for-ai-agents.md` first, the `.md` rule and the `Accept` rule, and the router's URL. It names
-no SDK identifier, no install command, and no version. The playbook stays the one place that says
-what to write.
+**If a skill ships, it is a pointer, and it ships only on a measured miss.**
+`skills/workhorse/SKILL.md` is tracked in this repository and installs with
+`npx skills add stablemates/workhorse`, which writes into every harness's skill directory. The body
+carries the trigger description, the instruction to fetch `/docs/for-ai-agents.md` first, the `.md`
+rule and the `Accept` rule, and the router's URL. It names no SDK identifier, no install command,
+and no version. The playbook stays the one place that says what to write.
 
 **The generator writes it, and a check keeps the tracked file honest.** `gen-docs-index.ts` renders
 the skill from the same page records that produce `llms.txt` and `404.md`, so it cannot name a page
@@ -72,19 +78,21 @@ into the user's repository, and the `workhorse` CLI is TypeScript-only. Per-harn
 Claude Code plugin marketplace entry, or Cursor rules add surfaces without evidence. An MCP server
 stays out of scope, as SM-566 decided.
 
-**The eval gains the start point the skill is for.** A fifth task starts inside a repository that
-depends on the SDK and hands the session no URL, once without the skill and once with it. Its
-result is the evidence this decision lacks. If the half without the skill already reaches the
-playbook, the skill is kept because it costs one generated file. If the half with the skill fails,
+**The eval decides whether the skill is built.** A fifth task starts inside a repository that
+depends on the SDK and hands the session no URL. It runs first, with no skill installed. If that
+session reaches the playbook, no skill is built: a surface with no measured value is a maintenance
+cost and nothing else, and being cheap does not earn it a place. If the session misses, the skill
+is built and the task is recorded again with it installed. If it misses with the skill installed,
 this decision is reopened, and bundling into `@stablemates/workhorse` is the recorded next
 candidate.
 
 ## Consequences
 
-The three lines SM-566 held as not yet specified are answered. Packaging is a pointer skill through
-the `npx skills add` registry. The drift check beyond the page is the generator check plus the
-install sweep, and the identifier sweep is not extended to the READMEs or to the skill, because
-neither names an identifier. The freshness mechanism is the registry hash.
+The three lines SM-566 held as not yet specified are answered. Packaging, if any, is a pointer
+skill through the `npx skills add` registry, and the eval decides whether any ships. The drift check
+beyond the page is the generator check plus the install sweep, and the identifier sweep is not
+extended to the READMEs or to the skill, because neither names an identifier. The freshness
+mechanism is the registry hash.
 
 An agent that installs the skill still pays one fetch to read the playbook. That is the trade: one
 fetch against a second copy of the prose that would need its own sweep.
@@ -92,6 +100,6 @@ fetch against a second copy of the prose that would need its own sweep.
 The tracked skill file is the first generated artifact under `skills/`. `oxfmt` either ignores it
 or the generator writes what `oxfmt` accepts.
 
-Execution is SM-702, which generates, checks, and publishes the skill; SM-704, which records the
-repository start point with and without it; and SM-703, which corrects the stale `Accept` sentence
-found while deciding this.
+Execution is SM-704 first, which records the repository start point with no skill installed;
+SM-702, which generates, checks, and publishes the skill only if SM-704 records a miss; and
+SM-703, which corrects the stale `Accept` sentence found while deciding this.
