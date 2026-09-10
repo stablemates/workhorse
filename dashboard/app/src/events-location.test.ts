@@ -9,13 +9,15 @@ import {
 describe("events location state", () => {
   it("round-trips every shareable filter and the open event", () => {
     const state = parseEventsLocation(
-      "?window=24h&source=attempt&queue=orders&type=order.process&events=failed,timeout&page=3&per=100&event=attempt:018f0000-0000-7000-8000-000000000042",
+      "?window=24h&source=attempt&queue=orders&type=order.process&worker=worker-1&q=invoice&events=failed,timeout&page=3&per=100&event=attempt:018f0000-0000-7000-8000-000000000042",
     );
     expect(state).toEqual({
       window: "24h",
       kind: "attempt",
       queue: "orders",
       jobType: "order.process",
+      worker: "worker-1",
+      search: "invoice",
       types: ["failed", "timeout"],
       page: 3,
       pageSize: 100,

@@ -12,17 +12,13 @@ import {
   useContext,
   useEffect,
   useId,
-  useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
 import { dashboardRefreshBlockers, useRefreshBlocker } from "./refresh-blockers.js";
 
-interface DropdownActivityContextValue {
-  opened: boolean;
-  setOpened: (id: string, opened: boolean, blocksRefresh: boolean) => void;
-}
+type TrackDropdown = (id: string, opened: boolean, blocksRefresh: boolean) => void;
 
 export interface DropdownActivityEntry {
   opened: boolean;
@@ -43,7 +39,9 @@ export function dropdownActivitySnapshot(entries: ReadonlyMap<string, DropdownAc
   return { opened, refreshBlocked };
 }
 
-const DropdownActivityContext = createContext<DropdownActivityContextValue | null>(null);
+// Tracking an open menu must not subscribe every other menu and select to its state.
+const DropdownTrackingContext = createContext<TrackDropdown | null>(null);
+const DropdownOpenedContext = createContext(false);
 
 export function DropdownActivityProvider({ children }: { children: ReactNode }) {
   const [entries, setEntries] = useState<ReadonlyMap<string, DropdownActivityEntry>>(
@@ -64,25 +62,23 @@ export function DropdownActivityProvider({ children }: { children: ReactNode }) 
       return next;
     });
   }, []);
-  const value = useMemo(
-    () => ({ opened: snapshot.opened, setOpened }),
-    [snapshot.opened, setOpened],
-  );
-
   return (
-    <DropdownActivityContext.Provider value={value}>{children}</DropdownActivityContext.Provider>
+    <DropdownTrackingContext.Provider value={setOpened}>
+      <DropdownOpenedContext.Provider value={snapshot.opened}>
+        {children}
+      </DropdownOpenedContext.Provider>
+    </DropdownTrackingContext.Provider>
   );
 }
 
 export function useDropdownActivity(): boolean {
-  return useContext(DropdownActivityContext)?.opened ?? false;
+  return useContext(DropdownOpenedContext);
 }
 
 function useTrackedDropdown(blocksRefresh = false): (opened: boolean) => void {
-  const activity = useContext(DropdownActivityContext);
+  const setOpened = useContext(DropdownTrackingContext);
   const id = useId();
   const openedRef = useRef(false);
-  const setOpened = activity?.setOpened;
   const track = useCallback(
     (opened: boolean) => {
       openedRef.current = opened;
@@ -98,6 +94,12 @@ function useTrackedDropdown(blocksRefresh = false): (opened: boolean) => void {
     [blocksRefresh, id, setOpened],
   );
   return track;
+}
+
+/** A confirmation pauses refresh and owns Escape ahead of the task drawer underneath it. */
+export function useConfirmationActivity(opened: boolean): void {
+  const track = useTrackedDropdown(true);
+  useEffect(() => track(opened), [opened, track]);
 }
 
 function useTrackedSelectDropdown(

@@ -35,20 +35,14 @@ import type {
   DashboardSystemWindow,
   DashboardTaskCounts,
 } from "@stablemates/workhorse-dashboard-server/wire";
-import {
-  cancelResultAppliesTo,
-  clearPendingCancel,
-  createLatestRequestGuard,
-  taskDrawerOpened,
-  taskDrawerSync,
-} from "../task-drawer.js";
+import { createLatestRequestGuard, taskDrawerOpened, taskDrawerSync } from "../task-drawer.js";
 import {
   eventsListingKey,
   eventsLocationHref,
   type EventsLocationState,
 } from "../events-location.js";
 import { taskDetailNavigation, taskListingKey } from "../task-location.js";
-import { notifyCancel, notifyDashboard, notifyFailure } from "../notifications.js";
+import { notifyDashboard, notifyFailure } from "../notifications.js";
 import type { MaintenancePolicyDefinition, MaintenancePolicySetting } from "@stablemates/workhorse";
 import { requestRunNow, type RunNowFeedback } from "../run-now.js";
 import { Button, Center, Loader, Stack, Text } from "@mantine/core";
@@ -175,16 +169,6 @@ export function useDashboardController(
    * not trust. This ref is written at the same moment the selection changes.
    */
   const selectedJobIdRef = useRef<string | null>(null);
-  /**
-   * The task a row's action menu asked to cancel, consumed once the drawer opens on it.
-   *
-   * Held outside the URL so the armed confirmation belongs to this operator's click and cannot be
-   * shared, reloaded, or reached with Back.
-   */
-  const armCancelForJobId = useRef<string | null>(null);
-  const [confirmingCancel, setConfirmingCancel] = useState(false);
-  const [cancelReason, setCancelReason] = useState("");
-  const [cancelingJobId, setCancelingJobId] = useState<string | null>(null);
   const [refreshInterval, setRefreshInterval] =
     useState<DashboardRefreshIntervalValue>(readStoredRefreshInterval);
   const [resumeCountdown, setResumeCountdown] = useState<number | null>(null);
@@ -329,6 +313,8 @@ export function useDashboardController(
                   queue: events.queue,
                   jobType: events.jobType,
                   types: events.types,
+                  worker: events.worker,
+                  search: events.search,
                 }),
               };
             } else if (route === "/cron") {
@@ -605,10 +591,6 @@ export function useDashboardController(
    * This is driven by the URL rather than called from the click handler, so a deep link, a
    * reload, and Back all reach the drawer through the same path as a click and cannot disagree
    * with the address bar.
-   *
-   * The one thing the address bar does not carry is whether the operator arrived by choosing
-   * cancel in a row's action menu. That intent is held in a ref rather than the URL, because a
-   * shared link should open a task, never open it with an irreversible action already confirmed.
    */
   const showJobDetail = useCallback(
     async (id: string) => {
@@ -616,13 +598,8 @@ export function useDashboardController(
       // resolves after it.
       const ticket = jobDetailRequests.current.begin();
       selectedJobIdRef.current = id;
-      const armCancel = armCancelForJobId.current === id;
-      armCancelForJobId.current = null;
       setSelectedJob(null);
       setJobDetailError(null);
-      // Opening a different task must never inherit the previous task's confirmation.
-      setConfirmingCancel(armCancel);
-      setCancelReason("");
       try {
         const detail = await client.jobDetail({ id });
         if (!jobDetailRequests.current.current(ticket)) return;
@@ -639,6 +616,10 @@ export function useDashboardController(
   const reloadSelectedJob = useCallback(async () => {
     if (selectedJobIdRef.current) await showJobDetail(selectedJobIdRef.current);
   }, [showJobDetail]);
+  const reloadTasks = useCallback(async () => {
+    await loadPage();
+    await reloadSelectedJob();
+  }, [loadPage, reloadSelectedJob]);
 
   /**
    * Empty the drawer and abandon any detail load still in flight.
@@ -671,19 +652,7 @@ export function useDashboardController(
     [location, navigate, replace],
   );
 
-  /**
-   * Open one task's drawer, optionally with its cancellation confirmation already armed.
-   *
-   * A row's action menu offers cancel this way rather than canceling in place, so the
-   * irreversibility is still stated and the optional reason still reaches the audit trail.
-   */
-  const inspectJob = useCallback(
-    (id: string, options: { confirmCancel?: boolean } = {}) => {
-      armCancelForJobId.current = options.confirmCancel === true ? id : null;
-      selectTask(id);
-    },
-    [selectTask],
-  );
+  const inspectJob = useCallback((id: string) => selectTask(id), [selectTask]);
   const closeJobDetail = useCallback(() => selectTask(null), [selectTask]);
   const inspectEvent = useCallback(
     (event: DashboardEventRow) => {
@@ -755,60 +724,6 @@ export function useDashboardController(
   }, [location.route, location.events.eventId, showEventDetail]);
 
   /**
-   * Request cancellation of one task and report exactly what Workhorse did.
-   *
-   * When the operator supplies a reason, it is sent as the audit reason and stored as the
-   * cancellation reason, so the two can never disagree. The drawer is refreshed from the server afterwards
-   * rather than optimistically edited, because whether an active task is now canceled or only
-   * cancel-requested is a durable fact this dashboard does not get to guess.
-   *
-   * The request is sent regardless of what the operator does next, because a cancellation the
-   * server accepted stays accepted. Only the drawer writes are conditional: once the operator has
-   * moved to another task, this task's result, failure, and refreshed detail belong to a panel
-   * that is no longer on screen, so reporting them there would attribute them to the wrong task.
-   */
-  const cancelTask = useCallback(
-    async (id: string, reason: string) => {
-      setCancelingJobId(id);
-      try {
-        const result = await client.cancelTask({
-          id,
-          audit: {
-            actor: auditActor,
-            reason: reason || null,
-            requestId: crypto.randomUUID(),
-          },
-        });
-        // Announced for the task that was canceled, not for whichever task the drawer now shows,
-        // and offered as a link back to it so an operator who has moved on can still reach it.
-        notifyCancel(
-          { jobId: id, status: result.status, state: result.state },
-          { openTask: inspectJob },
-        );
-        if (!cancelResultAppliesTo(id, selectedJobIdRef.current)) {
-          // The task list still has to show the new state, even though the drawer moved on.
-          await loadPage();
-          return;
-        }
-        setConfirmingCancel(false);
-        setCancelReason("");
-        // Claim the drawer for this refresh, so a detail load started by a later click wins.
-        const ticket = jobDetailRequests.current.begin();
-        const detail = await client.jobDetail({ id }).catch(() => null);
-        if (detail && jobDetailRequests.current.current(ticket)) setSelectedJob(detail);
-        await loadPage();
-      } catch (cause) {
-        notifyFailure("Task not canceled", cause, "Workhorse could not cancel the task");
-      } finally {
-        // Clearing unconditionally would unstick a spinner this call never started, so only the
-        // task whose cancellation is settling drops the pending flag.
-        setCancelingJobId((pending) => clearPendingCancel(pending, id));
-      }
-    },
-    [auditActor, client, inspectJob, loadPage],
-  );
-
-  /**
    * Release one scheduled task so a worker can claim it now.
    *
    * The reported status is exactly what the server did, so the list can distinguish a task that was
@@ -830,9 +745,10 @@ export function useDashboardController(
       // Reloaded on every outcome: a refusal is still a statement about durable state this list
       // should be showing, and a released task has already changed row.
       await loadPage();
+      await reloadSelectedJob();
       return feedback;
     };
-  }, [auditActor, client, loadPage]);
+  }, [auditActor, client, loadPage, reloadSelectedJob]);
 
   useEffect(() => {
     const onPopState = () => {
@@ -933,7 +849,7 @@ export function useDashboardController(
         inspectJob={inspectJob}
         runTaskNow={runTaskNow}
         auditActor={auditActor}
-        reload={loadPage}
+        reload={reloadTasks}
       />
     );
   } else if (loadState.data?.route === "/events") {
@@ -1025,6 +941,8 @@ export function useDashboardController(
     taskCounts,
     handleLink,
     content,
+    navigate,
+    runTaskNow,
     selectedJobId,
     selectedEventId,
     selectedEvent,
@@ -1035,11 +953,5 @@ export function useDashboardController(
     inspectJob,
     closeJobDetail,
     closeEventDetail,
-    confirmingCancel,
-    setConfirmingCancel,
-    cancelReason,
-    setCancelReason,
-    cancelingJobId,
-    cancelTask,
   };
 }

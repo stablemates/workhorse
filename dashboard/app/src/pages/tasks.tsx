@@ -1,30 +1,32 @@
+import { useTaskActions } from "../task-actions.js";
+import { readTaskChartVisibility, saveTaskChartVisibility } from "../task-view-preferences.js";
 import {
   dashboardRedriveBatchDefault,
   type DashboardDemoFeature,
-  type DashboardJobRow,
   type DashboardRedriveCursor,
   type DashboardTasksPage,
   type DashboardTasksCursorPage,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import { taskPageSizes, type TaskLocationState, type TaskPageSize } from "../task-location.js";
 import { type RunNowFeedback } from "../run-now.js";
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import {
+  lazy,
+  memo,
+  Suspense,
+  useCallback,
+  useEffect,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   dashboardDemoFeatureExamples,
   describeRedriveSelection,
-  humanWaitQuickAction,
   redriveAtLeastOnceWarning,
 } from "../presentation.js";
-import type { TaskRowActionId } from "../presentation.js";
-import {
-  notifyDashboard,
-  notifyFailure,
-  notifyRedrive,
-  notifyRedriveBatch,
-  notifyRunNow,
-} from "../notifications.js";
+import { notifyFailure, notifyRedriveBatch } from "../notifications.js";
 import {
   Badge,
+  Box,
   Button,
   Center,
   Code,
@@ -43,6 +45,7 @@ import {
 import { Menu, Select } from "../dropdown-activity.js";
 import {
   ArrowCounterClockwise,
+  ChartBar,
   CheckCircle,
   Clock,
   Lightning,
@@ -51,22 +54,25 @@ import {
   XCircle,
 } from "@phosphor-icons/react";
 import { TaskOpenButton } from "../task-table-ui.js";
-import { StatusBadge } from "../status-badge.js";
+import { TaskTableId } from "../components/task-table-id.js";
 import { DemoJobKind, DurableDemoScenario, taskHref, useDashboardClient } from "../core.js";
 import {
-  CancelRequestedBadge,
   DurableProgressBadge,
-  TaskBlockedBy,
   TaskListingFilters,
   TaskName,
+  TaskEnqueueBadge,
   TaskRowActions,
-  TaskStatusDetail,
   TaskTags,
-  TaskWaitBadge,
+  TaskStatusIndicators,
   taskDuration,
   useTaskFacets,
 } from "../components/task-list.js";
-import { copyToClipboard, formatExact, formatJson, formatRelative } from "../preferences.js";
+import {
+  currentTimeZoneValue,
+  formatExact,
+  formatRelative,
+  subscribeTimeZone,
+} from "../preferences.js";
 
 const TasksActivityChart = lazy(() => import("../charts/activity.js"));
 
@@ -74,7 +80,8 @@ export interface DemoJobOptions {
   scenario?: DurableDemoScenario;
   feature?: DashboardDemoFeature;
 }
-export function TasksPage({
+// Opening a menu updates the shell's refresh state, but does not change this listing.
+export const TasksPage = memo(function TasksPage({
   data,
   navigate,
   runDemoJob,
@@ -92,7 +99,7 @@ export function TasksPage({
   taskLocation: TaskLocationState;
   runDemoJob: ((kind: DemoJobKind, options?: DemoJobOptions) => Promise<void>) | null;
   runningDemoJob: DemoJobKind | null;
-  inspectJob: (id: string, options?: { confirmCancel?: boolean }) => void;
+  inspectJob: (id: string) => void;
   /**
    * Release one scheduled task, or null when the host cannot. Null is passed through to the menu
    * as a stated reason rather than removing the item.
@@ -102,18 +109,9 @@ export function TasksPage({
   reload: () => Promise<void>;
 }) {
   const client = useDashboardClient();
+  const [chartVisible, setChartVisible] = useState(readTaskChartVisibility);
+  useSyncExternalStore(subscribeTimeZone, currentTimeZoneValue, currentTimeZoneValue);
   const [searchDraft, setSearchDraft] = useState<string | null>(null);
-  // The one row action that is applied here rather than in the drawer. What it reported goes to
-  // the notification system, so only the in-flight row is state this page has to hold.
-  const [runningNowJobId, setRunningNowJobId] = useState<string | null>(null);
-  const [completingHumanWaitJobId, setCompletingHumanWaitJobId] = useState<string | null>(null);
-  const [confirmingHumanWait, setConfirmingHumanWait] = useState<{
-    jobId: string;
-    waitName: string;
-    quickAction: NonNullable<ReturnType<typeof humanWaitQuickAction>>;
-  } | null>(null);
-  const [confirmingRedrive, setConfirmingRedrive] = useState<DashboardJobRow | null>(null);
-  const [redrivingJobId, setRedrivingJobId] = useState<string | null>(null);
   // A filtered redrive walks a backlog one page at a time. The cursor is what the previous page
   // reported, so confirming again continues rather than redriving the same page a second time.
   const [redrivingSelection, setRedrivingSelection] = useState<{
@@ -147,124 +145,22 @@ export function TasksPage({
     }, 300);
     return () => clearTimeout(timer);
   }, [searchDraft, taskLocation.search, updateLocation]);
-  /**
-   * Apply one row action.
-   *
-   * Only the two clipboard actions finish here. Filtering goes through the same location update the
-   * filter controls use, so the URL stays the single description of what this list is showing, and
-   * cancellation opens the drawer instead of acting, because an irreversible action is confirmed
-   * with a reason before it is applied.
-   */
-  const runRowAction = useCallback(
-    (id: TaskRowActionId, job: DashboardJobRow) => {
-      if (id === "inspect") return inspectJob(job.id);
-      if (id === "cancel") return inspectJob(job.id, { confirmCancel: true });
-      if (id === "complete-human-wait") {
-        const wait = job.humanWait;
-        const quickAction = wait ? humanWaitQuickAction(wait.context) : null;
-        if (!wait || !quickAction || !data.canCompleteHumanWait || completingHumanWaitJobId) return;
-        setConfirmingHumanWait({ jobId: job.id, waitName: wait.name, quickAction });
-        return;
-      }
-      if (id === "run-now") {
-        if (runTaskNow === null || runningNowJobId !== null) return;
-        setRunningNowJobId(job.id);
-        void runTaskNow(job.id)
-          .then((feedback) => notifyRunNow(feedback, { openTask: inspectJob }))
-          .finally(() => setRunningNowJobId(null));
-        return;
-      }
-      if (id === "redrive") {
-        if (job.state !== "failed" || redrivingJobId !== null) return;
-        setConfirmingRedrive(job);
-        return;
-      }
-      if (id === "filter-type") return updateLocation({ jobType: job.type });
-      if (id === "filter-queue") return updateLocation({ queue: job.queue });
-      if (id === "filter-worker") {
-        const worker = job.workerId ?? job.lastWorkerId;
-        if (worker !== null) updateLocation({ worker });
-        return;
-      }
-      const copying = id === "copy-id" ? "Task ID" : "Input";
-      void copyToClipboard(id === "copy-id" ? job.id : formatJson(job.payload)).then((failure) =>
-        notifyDashboard({
-          // One id for both clipboard actions: copying twice is one running answer, not a stack.
-          id: "workhorse-task-clipboard",
-          title: failure ? `${copying} not copied` : `${copying} copied`,
-          message: failure ?? `${copying} copied to the clipboard.`,
-          tone: failure ? "failure" : "neutral",
-        }),
-      );
-    },
-    [
-      completingHumanWaitJobId,
-      data.canCompleteHumanWait,
-      inspectJob,
-      redrivingJobId,
-      runTaskNow,
-      runningNowJobId,
-      updateLocation,
-    ],
-  );
-  const completeHumanWait = async () => {
-    if (!confirmingHumanWait || !data.canCompleteHumanWait) return;
-    const { jobId, waitName, quickAction } = confirmingHumanWait;
-    setCompletingHumanWaitJobId(jobId);
-    try {
-      const completion = await client.completeHumanWait({
-        id: jobId,
-        name: waitName,
-        result: quickAction.result,
-        idempotencyKey: crypto.randomUUID(),
-        audit: {
-          actor: auditActor,
-          reason: `${quickAction.label} human wait ${waitName} from the task list`,
-          requestId: crypto.randomUUID(),
-        },
-      });
-      notifyDashboard({
-        title: completion.status === "completed" ? "Decision completed" : "Decision unchanged",
-        message: `${waitName}: ${completion.status}`,
-        tone: completion.status === "completed" ? "success" : "neutral",
-      });
-      setConfirmingHumanWait(null);
-      await reload();
-    } catch (cause) {
-      notifyFailure("Decision not completed", cause, "Workhorse rejected the human decision");
-    } finally {
-      setCompletingHumanWaitJobId(null);
-    }
-  };
+  const taskActions = useTaskActions({
+    canCompleteHumanWait: data.canCompleteHumanWait,
+    inspectJob,
+    runTaskNow,
+    auditActor,
+    reload,
+    updateLocation,
+  });
+  const {
+    runRowAction,
+    completingHumanWaitJobId,
+    redrivingJobId,
+    runningNowJobId,
+    cancelingJobId,
+  } = taskActions;
   const redriveSelection = describeRedriveSelection(data);
-  /**
-   * Redrive one dead letter, then refresh the listing.
-   *
-   * The result is reported from what the server said rather than guessed, because whether a failure
-   * produced a fresh copy or replayed one it had already produced is a durable fact this dashboard
-   * does not get to decide.
-   */
-  const redriveTask = async (job: DashboardJobRow) => {
-    if (!client.redriveTask) return;
-    setRedrivingJobId(job.id);
-    try {
-      const result = await client.redriveTask({
-        id: job.id,
-        audit: {
-          actor: auditActor,
-          reason: `Redrive dead letter ${job.id} from the task list`,
-          requestId: crypto.randomUUID(),
-        },
-      });
-      notifyRedrive(result, { openTask: inspectJob });
-      setConfirmingRedrive(null);
-      await reload();
-    } catch (cause) {
-      notifyFailure("Task not redriven", cause, "Workhorse could not redrive the task");
-    } finally {
-      setRedrivingJobId(null);
-    }
-  };
   /**
    * Redrive one bounded page of the dead letters this listing selects.
    *
@@ -351,69 +247,7 @@ export function TasksPage({
 
   return (
     <Stack gap="xl">
-      <Modal
-        opened={confirmingHumanWait !== null}
-        onClose={() => setConfirmingHumanWait(null)}
-        title={
-          confirmingHumanWait
-            ? `Confirm ${confirmingHumanWait.quickAction.label}`
-            : "Confirm decision"
-        }
-        centered
-      >
-        <Text size="sm" mb="sm">
-          The first accepted result resumes the handler and cannot be replaced. Confirm the result
-          before completing this decision.
-        </Text>
-        {confirmingHumanWait ? (
-          <Code block>{confirmingHumanWait.quickAction.formatted}</Code>
-        ) : null}
-        <Group justify="flex-end" mt="lg">
-          <Button
-            variant="default"
-            disabled={completingHumanWaitJobId !== null}
-            onClick={() => setConfirmingHumanWait(null)}
-          >
-            Cancel
-          </Button>
-          <Button
-            loading={completingHumanWaitJobId !== null}
-            onClick={() => void completeHumanWait()}
-          >
-            Confirm decision
-          </Button>
-        </Group>
-      </Modal>
-      <Modal
-        opened={confirmingRedrive !== null}
-        onClose={() => setConfirmingRedrive(null)}
-        title="Redrive this dead letter"
-        centered
-      >
-        <Text size="sm" mb="sm">
-          {redriveAtLeastOnceWarning}
-        </Text>
-        {confirmingRedrive ? (
-          <Code
-            block
-          >{`${confirmingRedrive.type} in ${confirmingRedrive.queue}\n${confirmingRedrive.id}`}</Code>
-        ) : null}
-        <Group justify="flex-end" mt="lg">
-          <Button
-            variant="default"
-            disabled={redrivingJobId !== null}
-            onClick={() => setConfirmingRedrive(null)}
-          >
-            Cancel
-          </Button>
-          <Button
-            loading={redrivingJobId !== null}
-            onClick={() => void (confirmingRedrive && redriveTask(confirmingRedrive))}
-          >
-            Redrive as a new task
-          </Button>
-        </Group>
-      </Modal>
+      {taskActions.confirmations}
       <Modal
         opened={redrivingSelection !== null}
         onClose={() => setRedrivingSelection(null)}
@@ -448,26 +282,30 @@ export function TasksPage({
           </Button>
         </Group>
       </Modal>
-      <Suspense
-        fallback={
-          <Paper withBorder p="md">
-            <Center h={320}>
-              <Loader size="sm" />
-            </Center>
-          </Paper>
-        }
-      >
-        <TasksActivityChart
-          filter={data.filter}
-          period={locationState.period}
-          groupBy={locationState.group}
-          tags={data.tags}
-          queue={data.queue}
-          worker={data.worker}
-          refreshKey={data}
-          updateLocation={updateLocation}
-        />
-      </Suspense>
+      {chartVisible ? (
+        <Box id="task-activity-chart">
+          <Suspense
+            fallback={
+              <Paper withBorder p="md">
+                <Center h={320}>
+                  <Loader size="sm" />
+                </Center>
+              </Paper>
+            }
+          >
+            <TasksActivityChart
+              filter={data.filter}
+              period={locationState.period}
+              groupBy={locationState.group}
+              tags={data.tags}
+              queue={data.queue}
+              worker={data.worker}
+              refreshKey={data}
+              updateLocation={updateLocation}
+            />
+          </Suspense>
+        </Box>
+      ) : null}
       <Paper withBorder>
         <Stack gap="xs" p="md">
           <TaskListingFilters
@@ -478,6 +316,21 @@ export function TasksPage({
             updateLocation={updateLocation}
           />
           <Group justify="flex-end" wrap="wrap">
+            <Button
+              variant="default"
+              size="xs"
+              mr="auto"
+              leftSection={<ChartBar size={16} />}
+              aria-expanded={chartVisible}
+              aria-controls="task-activity-chart"
+              onClick={() => {
+                const visible = !chartVisible;
+                setChartVisible(visible);
+                saveTaskChartVisibility(visible);
+              }}
+            >
+              {chartVisible ? "Hide chart" : "Show chart"}
+            </Button>
             <Group gap="xs" wrap="wrap">
               {data.filter === "discarded" ? (
                 <Button
@@ -526,12 +379,6 @@ export function TasksPage({
                       onClick={() => void enqueueTestTask("retry")}
                     >
                       Fail once, then retry
-                    </Menu.Item>
-                    <Menu.Item
-                      leftSection={<CheckCircle size={16} />}
-                      onClick={() => void enqueueTestTask("idempotent")}
-                    >
-                      Reuse one task for repeat requests
                     </Menu.Item>
                     <Menu.Item
                       leftSection={<ListChecks size={16} />}
@@ -583,16 +430,43 @@ export function TasksPage({
                       Long-running · 20s
                     </Menu.Item>
                     <Menu.Divider />
+                    <Menu.Label>Enqueue behavior</Menu.Label>
+                    <Menu.Item
+                      leftSection={<Lightning size={16} />}
+                      onClick={() => void enqueueTestTask("idempotent")}
+                    >
+                      Idempotency · reuse one task for repeat requests
+                    </Menu.Item>
+                    {dashboardDemoFeatureExamples
+                      .filter(
+                        ({ feature }) =>
+                          feature === "keyed-debounce" || feature === "keyed-throttle",
+                      )
+                      .map(({ feature, label }) => (
+                        <Menu.Item
+                          key={feature}
+                          leftSection={<Lightning size={16} />}
+                          onClick={() => void enqueueTestTask("feature", { feature })}
+                        >
+                          {label}
+                        </Menu.Item>
+                      ))}
+                    <Menu.Divider />
                     <Menu.Label>Feature examples</Menu.Label>
-                    {dashboardDemoFeatureExamples.map(({ feature, label }) => (
-                      <Menu.Item
-                        key={feature}
-                        leftSection={<Lightning size={16} />}
-                        onClick={() => void enqueueTestTask("feature", { feature })}
-                      >
-                        {label}
-                      </Menu.Item>
-                    ))}
+                    {dashboardDemoFeatureExamples
+                      .filter(
+                        ({ feature }) =>
+                          feature !== "keyed-debounce" && feature !== "keyed-throttle",
+                      )
+                      .map(({ feature, label }) => (
+                        <Menu.Item
+                          key={feature}
+                          leftSection={<Lightning size={16} />}
+                          onClick={() => void enqueueTestTask("feature", { feature })}
+                        >
+                          {label}
+                        </Menu.Item>
+                      ))}
                   </Menu.Dropdown>
                 </Menu>
               ) : null}
@@ -633,37 +507,32 @@ export function TasksPage({
           >
             <Table.Thead>
               <Table.Tr>
-                <Table.Th className="task-table__col--id">ID</Table.Th>
+                <Table.Th className="task-table__col--actions" w={44}>
+                  <VisuallyHidden>Actions</VisuallyHidden>
+                </Table.Th>
+                <Table.Th className="task-table__col--id">Task ID</Table.Th>
+                <Table.Th className="task-table__col--status">Status</Table.Th>
                 <Table.Th className="task-table__col--queue">Queue</Table.Th>
                 <Table.Th className="task-table__col--task">Task</Table.Th>
-                <Table.Th className="task-table__col--tags" miw={180}>
-                  Tags
-                </Table.Th>
-                <Table.Th className="task-table__col--status">Status</Table.Th>
-                <Table.Th className="task-table__col--blocked" miw={180}>
-                  Blocked by
-                </Table.Th>
+                <Table.Th className="task-table__col--tags">Tags</Table.Th>
                 <Table.Th className="task-table__col--steps" ta="right">
                   Steps
                 </Table.Th>
                 <Table.Th className="task-table__col--attempt" ta="right">
                   Attempt
                 </Table.Th>
-                <Table.Th className="task-table__col--duration" ta="right">
+                <Table.Th className="task-table__col--duration" ta="left">
                   Duration
                 </Table.Th>
-                <Table.Th className="task-table__col--updated" ta="right">
+                <Table.Th className="task-table__col--updated" ta="left">
                   Updated
-                </Table.Th>
-                <Table.Th className="task-table__col--actions" w={44}>
-                  <VisuallyHidden>Actions</VisuallyHidden>
                 </Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
               {data.jobs.length === 0 ? (
                 <Table.Tr>
-                  <Table.Td colSpan={11}>
+                  <Table.Td colSpan={10}>
                     <Center mih={120}>
                       <Text c="dimmed" size="sm">
                         No tasks match this filter.
@@ -678,21 +547,35 @@ export function TasksPage({
                     onClick={() => inspectJob(job.id)}
                     style={{ cursor: "pointer" }}
                   >
-                    <Table.Td className="task-table__col--id">
-                      <Code
-                        fz="xs"
-                        title={job.id}
-                        style={{
-                          background: "transparent",
-                          paddingBlock: 0,
-                          paddingInline: 0,
+                    <Table.Td className="task-table__col--actions">
+                      <TaskRowActions
+                        job={job}
+                        onAction={runRowAction}
+                        capabilities={{
+                          runNow: runTaskNow !== null,
+                          completeHumanWait: data.canCompleteHumanWait,
                         }}
-                      >
-                        {job.id.slice(0, 8)}
-                      </Code>
+                        pendingAction={
+                          cancelingJobId === job.id
+                            ? "cancel"
+                            : completingHumanWaitJobId === job.id
+                              ? "complete-human-wait"
+                              : redrivingJobId === job.id
+                                ? "redrive"
+                                : runningNowJobId === job.id
+                                  ? "run-now"
+                                  : null
+                        }
+                      />
+                    </Table.Td>
+                    <Table.Td className="task-table__col--id">
+                      <TaskTableId id={job.id} />
+                    </Table.Td>
+                    <Table.Td className="task-table__col--status">
+                      <TaskStatusIndicators job={job} />
                     </Table.Td>
                     <Table.Td className="task-table__col--queue">
-                      <Text size="sm" c="dimmed">
+                      <Text size="sm" c="dimmed" title={job.queue}>
                         {job.queue}
                       </Text>
                     </Table.Td>
@@ -704,17 +587,7 @@ export function TasksPage({
                       >
                         <Group gap={4} wrap="nowrap" style={{ minWidth: 0 }}>
                           <TaskName type={job.type} queue={job.queue} />
-                          {job.keyed ? (
-                            <Badge
-                              size="xs"
-                              variant="light"
-                              color="violet"
-                              tt="none"
-                              title="Workhorse accepted this task with an idempotency key. If the same request repeats during retention, Workhorse returns this task again."
-                            >
-                              Keyed
-                            </Badge>
-                          ) : null}
+                          <TaskEnqueueBadge job={job} />
                           {job.priority > 0 ? (
                             <Badge
                               size="xs"
@@ -732,17 +605,6 @@ export function TasksPage({
                     <Table.Td className="task-table__col--tags">
                       <TaskTags tags={job.tags} />
                     </Table.Td>
-                    <Table.Td className="task-table__col--status">
-                      <Group className="task-table__status" gap="xs" wrap="nowrap">
-                        <StatusBadge state={job.state} />
-                        <CancelRequestedBadge cancellation={job.cancellation} />
-                        <TaskWaitBadge job={job} />
-                        <TaskStatusDetail job={job} />
-                      </Group>
-                    </Table.Td>
-                    <Table.Td className="task-table__col--blocked">
-                      <TaskBlockedBy job={job} />
-                    </Table.Td>
                     <Table.Td className="task-table__col--steps" ta="right">
                       <DurableProgressBadge job={job} />
                     </Table.Td>
@@ -755,34 +617,15 @@ export function TasksPage({
                         {job.attempt}/{job.maxAttempts}
                       </Text>
                     </Table.Td>
-                    <Table.Td className="task-table__col--duration" ta="right">
+                    <Table.Td className="task-table__col--duration" ta="left">
                       <Text size="sm" c="dimmed">
                         {taskDuration(job) ?? "—"}
                       </Text>
                     </Table.Td>
-                    <Table.Td className="task-table__col--updated" ta="right">
+                    <Table.Td className="task-table__col--updated" ta="left">
                       <Text size="sm" title={formatExact(job.updatedAt)} c="dimmed">
                         {formatRelative(job.updatedAt)}
                       </Text>
-                    </Table.Td>
-                    <Table.Td className="task-table__col--actions">
-                      <TaskRowActions
-                        job={job}
-                        onAction={runRowAction}
-                        capabilities={{
-                          runNow: runTaskNow !== null,
-                          completeHumanWait: data.canCompleteHumanWait,
-                        }}
-                        pendingAction={
-                          completingHumanWaitJobId === job.id
-                            ? "complete-human-wait"
-                            : redrivingJobId === job.id
-                              ? "redrive"
-                              : runningNowJobId === job.id
-                                ? "run-now"
-                                : null
-                        }
-                      />
                     </Table.Td>
                   </Table.Tr>
                 ))
@@ -797,4 +640,4 @@ export function TasksPage({
       </Paper>
     </Stack>
   );
-}
+});

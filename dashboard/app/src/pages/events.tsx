@@ -1,3 +1,7 @@
+import { taskStatusColors } from "../status-colors.js";
+import { StatusLabel } from "../status-badge.js";
+import { TaskTableId } from "../components/task-table-id.js";
+import { TaskIdChip } from "../components/task-detail-relations.js";
 import type {
   DashboardEventDetail,
   DashboardEventRow,
@@ -10,7 +14,6 @@ import {
 } from "@stablemates/workhorse-dashboard-server/wire";
 import { isEventTypeFilter, type EventsLocationState } from "../events-location.js";
 import {
-  Badge,
   Box,
   Code,
   Group,
@@ -22,16 +25,15 @@ import {
   Stack,
   Table,
   Text,
+  TextInput,
   Tooltip,
 } from "@mantine/core";
 import { MultiSelect, Select } from "../dropdown-activity.js";
 import { ArrowSquareOut } from "@phosphor-icons/react";
-import { type ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { JsonValue, boundaryEventPresentation } from "../components/task-detail-overview.js";
-import { shortTaskId } from "../components/task-detail-relations.js";
 import {
   EmptyState,
-  PageHeader,
   includeSelectedOption,
   includeSelectedOptions,
   useTaskFacets,
@@ -53,8 +55,8 @@ export const eventsKindOptions = [
 export function eventTypeColor(type: string): string {
   const lifecycle = boundaryEventPresentation[type];
   if (lifecycle !== undefined) return lifecycle.color;
-  if (type === "timeout") return "red";
-  if (type === "retry") return "orange";
+  if (type === "timeout") return taskStatusColors.failed;
+  if (type === "retry") return taskStatusColors.scheduled;
   return "gray";
 }
 /** One-line rendering of an event payload, for a table cell that cannot hold formatted JSON. */
@@ -94,13 +96,24 @@ export function EventsPage({
   setQuery: (next: EventsLocationState) => void;
   inspectEvent: (event: DashboardEventRow) => void;
 }) {
+  const [searchDraft, setSearchDraft] = useState<string | null>(null);
+  useEffect(() => {
+    if (searchDraft === null) return;
+    const timer = setTimeout(() => {
+      const search = searchDraft.trim() || null;
+      if (search !== query.search) setQuery({ ...query, search, page: 1, eventId: null });
+      setSearchDraft(null);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchDraft, query, setQuery]);
   const eventFacets = useTaskFacets({
     queue: query.queue,
-    worker: null,
+    worker: query.worker,
     jobType: query.jobType,
     tags: [],
   });
   const queueOptions = includeSelectedOption(eventFacets.facets.queues, query.queue);
+  const workerOptions = includeSelectedOption(eventFacets.facets.workers, query.worker);
   const typeOptions = includeSelectedOption(eventFacets.facets.jobTypes, query.jobType);
   const eventTypeOptions = includeSelectedOptions(
     uniqueSorted([...dashboardJobEventTypes, ...dashboardAttemptOutcomes]),
@@ -123,34 +136,17 @@ export function EventsPage({
 
   return (
     <Stack gap="xl">
-      <PageHeader
-        title="Events"
-        description="See what happened across all tasks, with the newest records first."
-      />
       <Paper withBorder p="md">
         <Group gap="md" align="flex-end" wrap="wrap">
-          <Box>
-            <Text c="dimmed" fw={600} size="xs" mb={4}>
-              Window
-            </Text>
-            <SegmentedControl
-              size="xs"
-              value={query.window}
-              data={[...eventsWindowOptions]}
-              onChange={(value) => filter({ window: value as DashboardEventsWindow })}
-            />
-          </Box>
-          <Box>
-            <Text c="dimmed" fw={600} size="xs" mb={4}>
-              Source
-            </Text>
-            <SegmentedControl
-              size="xs"
-              value={query.kind}
-              data={eventsKindOptions}
-              onChange={(value) => filter({ kind: value as EventsLocationState["kind"] })}
-            />
-          </Box>
+          <TextInput
+            size="xs"
+            label="Search"
+            placeholder="Task ID, name, event, or error"
+            w={260}
+            value={searchDraft ?? query.search ?? ""}
+            onChange={(event) => setSearchDraft(event.currentTarget.value)}
+            maxLength={200}
+          />
           <Select
             size="xs"
             label="Queue"
@@ -179,6 +175,19 @@ export function EventsPage({
             rightSection={eventFacets.loading ? <Loader size={14} /> : undefined}
             nothingFoundMessage={facetMessage ?? "No task types found"}
           />
+          <Select
+            size="xs"
+            label="Worker"
+            placeholder="Any worker"
+            clearable
+            searchable
+            w={200}
+            data={workerOptions}
+            value={query.worker}
+            onChange={(worker) => filter({ worker })}
+            onDropdownOpen={eventFacets.load}
+            nothingFoundMessage={facetMessage ?? "No workers found"}
+          />
           <MultiSelect
             size="xs"
             label="Event"
@@ -203,6 +212,30 @@ export function EventsPage({
               })
             }
           />
+          <Group ms="auto" gap="md" align="flex-end" justify="flex-end" wrap="wrap">
+            <Box>
+              <Text c="dimmed" fw={600} size="xs" mb={4}>
+                Window
+              </Text>
+              <SegmentedControl
+                size="xs"
+                value={query.window}
+                data={[...eventsWindowOptions]}
+                onChange={(value) => filter({ window: value as DashboardEventsWindow })}
+              />
+            </Box>
+            <Box>
+              <Text c="dimmed" fw={600} size="xs" mb={4}>
+                Source
+              </Text>
+              <SegmentedControl
+                size="xs"
+                value={query.kind}
+                data={eventsKindOptions}
+                onChange={(value) => filter({ kind: value as EventsLocationState["kind"] })}
+              />
+            </Box>
+          </Group>
         </Group>
       </Paper>
       {/* Queue and task filters are matched against the job a history row points at. History
@@ -229,26 +262,24 @@ export function EventsPage({
             >
               <Table.Thead>
                 <Table.Tr>
-                  <Table.Th w={150} style={{ whiteSpace: "nowrap" }}>
-                    When
-                  </Table.Th>
-                  <Table.Th w={190} style={{ whiteSpace: "nowrap" }}>
-                    Event
-                  </Table.Th>
-                  <Table.Th w={90} style={{ whiteSpace: "nowrap" }}>
-                    ID
-                  </Table.Th>
-                  <Table.Th style={{ whiteSpace: "nowrap" }}>Task</Table.Th>
-                  <Table.Th w={140} style={{ whiteSpace: "nowrap" }}>
-                    Queue
-                  </Table.Th>
-                  <Table.Th w={80} ta="right" style={{ whiteSpace: "nowrap" }}>
-                    Attempt
+                  <Table.Th className="event-table__col--id">Task ID</Table.Th>
+                  <Table.Th className="event-table__col--status">Event</Table.Th>
+                  <Table.Th className="event-table__col--when">When</Table.Th>
+                  <Table.Th className="event-table__col--queue">Queue</Table.Th>
+                  <Table.Th
+                    className="event-table__col--task"
+                    w={416}
+                    style={{ whiteSpace: "nowrap" }}
+                  >
+                    Task
                   </Table.Th>
                   <Table.Th w={160} style={{ whiteSpace: "nowrap" }}>
                     Worker
                   </Table.Th>
-                  <Table.Th w={110} ta="right" style={{ whiteSpace: "nowrap" }}>
+                  <Table.Th className="event-table__col--attempt" ta="right">
+                    Attempt
+                  </Table.Th>
+                  <Table.Th className="event-table__col--duration" ta="right">
                     Duration
                   </Table.Th>
                   <Table.Th w={280}>Detail</Table.Th>
@@ -282,9 +313,10 @@ export function EventsPage({
         </Group>
       ) : null}
       <Text c="dimmed" size="xs">
-        This feed stays complete when notifications are missed because Workhorse reads durable
-        history. Retention limits its depth: {retentionNote}. Open a task to see its complete
-        timeline.
+        A task completion can record both a lifecycle transition and an attempt outcome. Use Source
+        to view either separately. This feed stays complete when notifications are missed because
+        Workhorse reads durable history. Retention limits its depth: {retentionNote}. Open a task to
+        see its complete timeline.
       </Text>
     </Stack>
   );
@@ -301,6 +333,7 @@ export function EventRow({
     <Table.Tr
       onClick={() => inspectEvent(event)}
       onKeyDown={(keyboardEvent) => {
+        if (keyboardEvent.target !== keyboardEvent.currentTarget) return;
         if (keyboardEvent.key === "Enter" || keyboardEvent.key === " ") {
           keyboardEvent.preventDefault();
           inspectEvent(event);
@@ -311,62 +344,44 @@ export function EventRow({
       aria-label={`Inspect ${event.type.replaceAll("_", " ")} event for ${event.jobType ?? event.jobId}`}
       style={{ cursor: "pointer" }}
     >
-      <Table.Td style={{ whiteSpace: "nowrap" }}>
+      <Table.Td className="event-table__col--id">
+        <TaskTableId id={event.jobId} />
+      </Table.Td>
+      <Table.Td className="event-table__col--status">
+        <StatusLabel
+          state={event.type}
+          text={`${event.kind === "attempt" ? "Attempt" : "Task"} ${event.type.replaceAll("_", " ")}`}
+          color={eventTypeColor(event.type)}
+        />
+      </Table.Td>
+      <Table.Td className="event-table__col--when">
         <Tooltip label={formatExact(event.occurredAt)} withArrow>
           <Text size="sm">{formatRelative(event.occurredAt)}</Text>
         </Tooltip>
       </Table.Td>
-      <Table.Td style={{ whiteSpace: "nowrap" }}>
-        <Group gap={6} wrap="nowrap">
-          <Badge color={eventTypeColor(event.type)} variant="light" style={{ flexShrink: 0 }}>
-            {event.type.replaceAll("_", " ")}
-          </Badge>
-          {/* Which table the row came from is worth stating: an attempt row is a closed attempt
-              with a measured duration, a lifecycle row is a transition the queue recorded. */}
-          {event.kind === "attempt" ? (
-            <Badge color="gray" variant="outline" size="xs" style={{ flexShrink: 0 }}>
-              attempt
-            </Badge>
-          ) : null}
-        </Group>
-      </Table.Td>
-      {/* The identifier is abbreviated to the prefix a person actually reads, with the whole value
-          on the title so it stays copyable in full from the drawer the click opens. */}
-      <Table.Td style={{ whiteSpace: "nowrap" }}>
-        <Code
-          fz="xs"
-          c="blue"
-          title={event.jobId}
-          style={{
-            background: "transparent",
-            paddingBlock: 0,
-            paddingInline: 0,
-          }}
-        >
-          {event.jobId.slice(0, 8)}
-        </Code>
-      </Table.Td>
-      <Table.Td style={{ whiteSpace: "nowrap" }}>
-        <Text size="sm">{event.jobType ?? "—"}</Text>
-      </Table.Td>
-      <Table.Td style={{ whiteSpace: "nowrap" }}>
-        <Text size="sm">
-          {event.queue ?? (
-            <Text component="span" c="dimmed" fz="xs">
-              Task deleted
-            </Text>
-          )}
+      <Table.Td className="event-table__col--queue">
+        <Text size="sm" c="dimmed" title={event.queue ?? "Task deleted"}>
+          {event.queue ?? "Task deleted"}
         </Text>
       </Table.Td>
-      <Table.Td ta="right" style={{ whiteSpace: "nowrap" }}>
-        <Text size="sm">{event.attempt ?? "—"}</Text>
+      <Table.Td className="event-table__col--task">
+        <Text
+          size="sm"
+          title={event.jobType ?? "Task deleted"}
+          style={{ overflowWrap: "anywhere" }}
+        >
+          {event.jobType ?? "—"}
+        </Text>
       </Table.Td>
       <Table.Td style={{ whiteSpace: "nowrap", maxWidth: 160 }}>
-        <Text size="sm" truncate>
+        <Text size="sm" truncate title={event.workerId ?? undefined}>
           {event.workerId ?? "—"}
         </Text>
       </Table.Td>
-      <Table.Td ta="right" style={{ whiteSpace: "nowrap" }}>
+      <Table.Td className="event-table__col--attempt" ta="right">
+        <Text size="sm">{event.attempt ?? "—"}</Text>
+      </Table.Td>
+      <Table.Td className="event-table__col--duration" ta="right">
         <Text size="sm">{formatDuration(event.durationMs)}</Text>
       </Table.Td>
       <Table.Td style={{ maxWidth: 280 }}>
@@ -392,26 +407,28 @@ export function EventDetails({
   event: DashboardEventDetail;
   taskLinkHref: (id: string) => string;
 }) {
-  const taskId =
-    event.jobType === null ? (
-      <Code title={event.jobId}>{shortTaskId(event.jobId)}</Code>
-    ) : (
-      <Text
-        component="a"
-        href={taskLinkHref(event.jobId)}
-        target="_blank"
-        rel="noopener noreferrer"
-        title={event.jobId}
-        aria-label={`Open task ${event.jobId} in a new window`}
-        style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
-      >
-        <Code>{shortTaskId(event.jobId)}</Code>
-        {/* The icon says this identifier opens the task in a new window. */}
-        <ArrowSquareOut size={12} aria-hidden style={{ flexShrink: 0 }} />
-      </Text>
-    );
+  const taskId = (
+    <Group gap="xs" wrap="nowrap">
+      <TaskIdChip id={event.jobId} />
+      {event.jobType !== null ? (
+        <Text
+          component="a"
+          href={taskLinkHref(event.jobId)}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={`Open task ${event.jobId}`}
+          aria-label={`Open task ${event.jobId} in a new window`}
+        >
+          <ArrowSquareOut size={14} aria-hidden />
+        </Text>
+      ) : null}
+    </Group>
+  );
   const fields: Array<[string, ReactNode]> = [
-    ["Event", event.type.replaceAll("_", " ")],
+    [
+      "Event",
+      `${event.kind === "attempt" ? "Attempt" : "Task"} ${event.type.replaceAll("_", " ")}`,
+    ],
     ["Source", event.kind === "event" ? "Lifecycle" : "Attempt history"],
     ["Occurred", formatExact(event.occurredAt)],
     ["Task", event.jobType ?? "Retained away"],

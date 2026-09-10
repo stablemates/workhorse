@@ -253,7 +253,7 @@ describe("queues page rate-limit columns", () => {
     const html = renderQueues(queuesPage({ queues: [queueRow({ rateLimitPolicy })] }), QueuesPage);
 
     expect(html).toContain(">Start rate<");
-    expect(html).toContain(">Throttled<");
+    expect(html).toContain(">Rate-limited<");
     expect(html).toContain("12/1m · burst 3");
     expect(html).toContain("2/1s · burst 1 per key");
     expect(html).toContain("4 · 2 keys");

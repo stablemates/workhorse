@@ -1,3 +1,5 @@
+import { taskStatusColors } from "../status-colors.js";
+import { StatusLabel } from "../status-badge.js";
 import type {
   DashboardCancellationRequest,
   DashboardJobRow,
@@ -43,7 +45,11 @@ import {
 import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { type TaskLocationState } from "../task-location.js";
 import { Menu, MultiSelect, Select } from "../dropdown-activity.js";
-import type { TaskRowActionCapabilities, TaskRowActionId } from "../presentation.js";
+import type {
+  TaskActionTarget,
+  TaskRowActionCapabilities,
+  TaskRowActionId,
+} from "../presentation.js";
 import {
   formatClock,
   formatDuration,
@@ -133,18 +139,14 @@ export function TaskStatusDetail({ job }: { job: DashboardJobRow }) {
     // cancellation envelope lives in the same column a failure would use.
     detail = `canceled ${formatRelative(job.finishedAt)}`;
     exactTime = formatExact(job.finishedAt);
-  } else if (job.state === "succeeded" && job.finishedAt) {
-    detail = `finished ${formatRelative(job.finishedAt)}`;
-    exactTime = formatExact(job.finishedAt);
   }
   if (!detail) return null;
   return (
     <Text
       c={job.state === "failed" ? "red.7" : "dimmed"}
       size="xs"
-      lineClamp={1}
-      style={{ wordBreak: "break-all" }}
-      title={exactTime ?? detail}
+      style={{ overflowWrap: "anywhere" }}
+      title={[detail, exactTime].filter(Boolean).join(" · ")}
     >
       {detail}
     </Text>
@@ -188,8 +190,8 @@ export function TaskName({ type, queue }: { type: string; queue: string }) {
       title={displayName}
       className="task-table__task-name"
       style={{
-        width: 180,
-        maxWidth: 180,
+        flex: 1,
+        maxWidth: "100%",
         minWidth: 0,
         overflow: "hidden",
         textOverflow: "ellipsis",
@@ -490,7 +492,7 @@ export function taskRowActionIcon(id: TaskRowActionId): ReactNode {
  * finished task cannot be canceled in the place they went to cancel it, rather than from a menu
  * that quietly changes shape from row to row.
  *
- * Cancellation is never applied from here. It opens the task drawer with the confirmation armed,
+ * Cancellation is never applied from here. It opens a confirmation dialog,
  * because cancellation is irreversible and its reason belongs in the audit trail. Running a
  * scheduled task now is applied in place instead: it deliberately releases the task early, shows
  * the mutation in flight, and reports the durable result without claiming the handler ran inline.
@@ -500,22 +502,32 @@ export function TaskRowActions({
   onAction,
   capabilities,
   pendingAction,
+  showOpenDetails = true,
 }: {
-  job: DashboardJobRow;
-  onAction: (id: TaskRowActionId, job: DashboardJobRow) => void;
+  job: TaskActionTarget;
+  onAction: (id: TaskRowActionId, job: TaskActionTarget) => void;
   capabilities: TaskRowActionCapabilities;
   /** The action currently in flight for this row, so its item can show it rather than look idle. */
   pendingAction: TaskRowActionId | null;
+  showOpenDetails?: boolean;
 }) {
   const groups = taskRowActionGroups(job, capabilities);
   return (
-    <Menu blocksRefresh position="bottom-end" withinPortal shadow="md" width={280}>
+    <Menu
+      blocksRefresh
+      position="bottom-start"
+      withinPortal
+      shadow="md"
+      width={280}
+      transitionProps={{ duration: 0 }}
+    >
       <Menu.Target>
         <ActionIcon
           size="sm"
           variant="subtle"
           color="gray"
           aria-label={`Actions for task ${job.id}`}
+          className="task-table__action-trigger"
           loading={pendingAction !== null}
           // The row itself opens the drawer on click, which is not what opening this menu means.
           onClick={(event) => event.stopPropagation()}
@@ -529,6 +541,7 @@ export function TaskRowActions({
             {index > 0 ? <Menu.Divider /> : null}
             <Menu.Label>{group.label}</Menu.Label>
             {group.actions.map((action) => {
+              if (action.id === "inspect" && !showOpenDetails) return null;
               const pending = pendingAction === action.id;
               return (
                 <Menu.Item
@@ -553,5 +566,116 @@ export function TaskRowActions({
         ))}
       </Menu.Dropdown>
     </Menu>
+  );
+}
+
+export function TaskStatusIndicators({ job }: { job: DashboardJobRow }) {
+  const waiting = job.signalWait
+    ? {
+        text: "Waiting for signal",
+        label: `Waiting for signal: ${job.signalWait.name}`,
+        color: taskStatusColors.signalWait,
+        timing: `Deadline ${formatExact(job.signalWait.deadlineAt)}`,
+      }
+    : job.humanWait
+      ? {
+          text: "Waiting for decision",
+          label: `Waiting for decision: ${job.humanWait.name}`,
+          color: taskStatusColors.humanWait,
+          timing: `Deadline ${formatExact(job.humanWait.deadlineAt)}`,
+        }
+      : job.state === "scheduled" && job.wait
+        ? {
+            text: "Durable wait",
+            label: `Durable wait: ${job.wait.name}`,
+            color: taskStatusColors.durableWait,
+            timing: `Wake at ${formatExact(job.wait.wakeAt)}`,
+          }
+        : null;
+  return (
+    <Group gap={4} wrap="nowrap">
+      <StatusLabel
+        state={waiting ? "waiting" : job.state}
+        text={waiting?.text}
+        color={waiting?.color}
+        label={
+          waiting?.label ?? `Status: ${job.state}${job.errorMessage ? `. ${job.errorMessage}` : ""}`
+        }
+      >
+        <Stack gap={4}>
+          <Text
+            size="sm"
+            tt={waiting ? undefined : "capitalize"}
+            style={{ overflowWrap: "anywhere" }}
+          >
+            {waiting?.label ?? job.state}
+          </Text>
+          {waiting ? (
+            <>
+              <Text size="xs">{waiting.timing}</Text>
+              <Text size="xs">Status: {job.state}</Text>
+            </>
+          ) : (
+            <TaskStatusDetail job={job} />
+          )}
+          {job.blockedReason ? (
+            <Text size="xs">Blocked by: {job.prerequisiteJobIds.join(", ")}</Text>
+          ) : null}
+          {job.finishedAt ? (
+            <Text size="xs">
+              Finished {formatRelative(job.finishedAt)} · {formatExact(job.finishedAt)}
+            </Text>
+          ) : null}
+        </Stack>
+      </StatusLabel>
+      {job.cancellation ? (
+        <StatusLabel
+          state="cancel_requested"
+          label={`Cancellation requested: ${job.cancellation.reason}`}
+        >
+          <CancelRequestedBadge cancellation={job.cancellation} />
+        </StatusLabel>
+      ) : null}
+    </Group>
+  );
+}
+
+/** Keep older hosts readable while newer listings identify the accepted keyed mode. */
+export function TaskEnqueueBadge({ job }: { job: Pick<DashboardJobRow, "keyed" | "enqueueMode"> }) {
+  const modes = {
+    idempotency: {
+      label: "Idempotency",
+      color: "violet",
+      description:
+        "Matching requests reuse this task while the key is retained. Different requests with the same key are rejected.",
+    },
+    debounce: {
+      label: "Debounce",
+      color: "grape",
+      description:
+        "Repeated requests replace this task while it is pending within the debounce window.",
+    },
+    throttle: {
+      label: "Throttle",
+      color: "cyan",
+      description:
+        "Matching requests reuse the first task within the throttle window. Different requests with the same key are rejected.",
+    },
+  };
+  const mode = job.enqueueMode ? modes[job.enqueueMode] : undefined;
+  if (!mode && !job.keyed) return null;
+  return (
+    <Badge
+      size="xs"
+      variant="light"
+      color={mode?.color ?? "violet"}
+      tt="none"
+      title={
+        mode?.description ??
+        "This task uses a scoped key. Open task details to see its enqueue mode."
+      }
+    >
+      {mode?.label ?? "Keyed"}
+    </Badge>
   );
 }

@@ -1,3 +1,4 @@
+import { taskStatusColors } from "../status-colors.js";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   ActionIcon,
@@ -531,44 +532,46 @@ export function eventDetail(event: JobEvent, key: string): string | null {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 export const boundaryEventPresentation: Record<string, { label: string; color: string }> = {
-  enqueued: { label: "Enqueued", color: "violet" },
+  enqueued: { label: "Enqueued", color: "gray" },
   debounced: { label: "Debounced", color: "grape" },
   debounce_rejected: { label: "Debounce rejected", color: "orange" },
   throttled: { label: "Throttled", color: "grape" },
-  wait_scheduled: { label: "Wait scheduled", color: "indigo" },
-  wait_elapsed: { label: "Wait elapsed", color: "cyan" },
+  wait_scheduled: { label: "Wait scheduled", color: taskStatusColors.durableWait },
+  wait_elapsed: { label: "Wait elapsed", color: taskStatusColors.ready },
   wait_replayed: { label: "Wait replayed", color: "grape" },
-  signal_waiting: { label: "Waiting for signal", color: "indigo" },
+  signal_waiting: { label: "Waiting for signal", color: taskStatusColors.signalWait },
   signal_received: { label: "Signal received", color: "teal" },
   signal_replayed: { label: "Signal replayed", color: "grape" },
   signal_rejected: { label: "Signal rejected", color: "orange" },
-  claimed: { label: "Claimed", color: "blue" },
+  batch_dispatched: { label: "Batch dispatched", color: taskStatusColors.active },
+  batch_failed: { label: "Batch failed", color: taskStatusColors.failed },
+  claimed: { label: "Claimed", color: taskStatusColors.active },
   checkpoint_saved: { label: "Checkpoint saved", color: "teal" },
-  progress_updated: { label: "Progress updated", color: "blue" },
-  retry_scheduled: { label: "Retry scheduled", color: "orange" },
-  cancel_requested: { label: "Cancellation requested", color: "gray" },
-  promoted: { label: "Promoted", color: "yellow" },
-  lease_expired: { label: "Lease expired", color: "red" },
-  deadline_exceeded: { label: "Deadline exceeded", color: "red" },
-  execution_timed_out: { label: "Execution timed out", color: "red" },
+  progress_updated: { label: "Progress updated", color: taskStatusColors.active },
+  retry_scheduled: { label: "Retry scheduled", color: taskStatusColors.scheduled },
+  cancel_requested: { label: "Cancellation requested", color: taskStatusColors.canceled },
+  promoted: { label: "Promoted", color: taskStatusColors.ready },
+  lease_expired: { label: "Lease expired", color: taskStatusColors.failed },
+  deadline_exceeded: { label: "Deadline exceeded", color: taskStatusColors.failed },
+  execution_timed_out: { label: "Execution timed out", color: taskStatusColors.failed },
   redriven: { label: "Redriven", color: "orange" },
   redrive_created: { label: "Redrive created", color: "orange" },
-  dependency_blocked: { label: "Dependency blocked", color: "orange" },
+  dependency_blocked: { label: "Dependency blocked", color: taskStatusColors.blocked },
   dependency_released: { label: "Dependency released", color: "teal" },
-  dependency_failed: { label: "Dependency failed", color: "red" },
-  dependency_canceled: { label: "Dependency canceled", color: "gray" },
+  dependency_failed: { label: "Dependency failed", color: taskStatusColors.failed },
+  dependency_canceled: { label: "Dependency canceled", color: taskStatusColors.canceled },
   child_created: { label: "Child created", color: "blue" },
   child_joined: { label: "Child joined", color: "teal" },
   children_created: { label: "Children created", color: "blue" },
   children_joined: { label: "Children joined", color: "teal" },
   parent_linked: { label: "Parent linked", color: "blue" },
-  human_wait_created: { label: "Human wait created", color: "indigo" },
+  human_wait_created: { label: "Human wait created", color: taskStatusColors.humanWait },
   human_wait_completed: { label: "Human wait completed", color: "teal" },
   human_wait_replayed: { label: "Human wait replayed", color: "grape" },
   human_wait_rejected: { label: "Human wait rejected", color: "orange" },
-  succeeded: { label: "Succeeded", color: "green" },
-  failed: { label: "Failed", color: "red" },
-  canceled: { label: "Canceled", color: "gray" },
+  succeeded: { label: "Succeeded", color: taskStatusColors.succeeded },
+  failed: { label: "Failed", color: taskStatusColors.failed },
+  canceled: { label: "Canceled", color: taskStatusColors.canceled },
 };
 export function genericEventLabel(type: string): string {
   const words = type.replaceAll("_", " ");
@@ -586,7 +589,10 @@ export interface CoalescingEvidence {
   rejected: number;
 }
 export function coalescingEvidenceFor(job: DashboardJobDetail): CoalescingEvidence | null {
+  let latest: { type: string; occurredAt: string; evidence: CoalescingEvidence } | null = null;
   for (const event of job.events) {
+    // Rejected submissions describe a proposal, not the task's accepted configuration.
+    if (!["enqueued", "debounced", "throttled"].includes(event.type)) continue;
     if (!event.details || typeof event.details !== "object") continue;
     const details = event.details as Record<string, unknown>;
     const mode = details.debounce ? "debounce" : details.throttle ? "throttle" : null;
@@ -599,7 +605,12 @@ export function coalescingEvidenceFor(job: DashboardJobDetail): CoalescingEviden
     const keyLength = typeof record.key_length === "number" ? record.key_length : null;
     const windowMs = typeof record.window_ms === "number" ? record.window_ms : null;
     if (scope === null || keyDigest === null || keyLength === null || windowMs === null) continue;
-    return {
+    // Throttle preserves the initial window; debounce replacements may reset theirs.
+    if (mode === "throttle" && latest?.type === "enqueued") continue;
+    const originalThrottle = mode === "throttle" && event.type === "enqueued";
+    if (!originalThrottle && latest && Date.parse(event.occurredAt) < Date.parse(latest.occurredAt))
+      continue;
+    const evidence: CoalescingEvidence = {
       mode,
       scope,
       keyDigest,
@@ -607,13 +618,23 @@ export function coalescingEvidenceFor(job: DashboardJobDetail): CoalescingEviden
       windowMs,
       schedule: typeof record.schedule === "string" ? record.schedule : null,
       expiresAt: typeof record.expires_at === "string" ? record.expires_at : null,
-      absorbed: job.events.filter((candidate) =>
-        mode === "debounce" ? candidate.type === "debounced" : candidate.type === "throttled",
-      ).length,
-      rejected: job.events.filter((candidate) => candidate.type === "debounce_rejected").length,
+      absorbed: 0,
+      rejected: 0,
     };
+    latest = { type: event.type, occurredAt: event.occurredAt, evidence };
   }
-  return null;
+  if (!latest) return null;
+  const evidence = latest.evidence;
+  return {
+    ...evidence,
+    absorbed: job.events.filter((event) =>
+      evidence.mode === "debounce" ? event.type === "debounced" : event.type === "throttled",
+    ).length,
+    rejected:
+      evidence.mode === "debounce"
+        ? job.events.filter((event) => event.type === "debounce_rejected").length
+        : 0,
+  };
 }
 export function enqueueCount(count: number, adjective: string): string {
   return `${count} ${adjective} enqueue${count === 1 ? "" : "s"}`;

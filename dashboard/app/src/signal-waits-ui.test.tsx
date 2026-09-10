@@ -22,6 +22,43 @@ const signalWait: DashboardSignalWaitRow = {
 };
 
 describe("dashboard signal waits", () => {
+  it.each([
+    { kind: "signal", color: "violet", label: "Waiting for signal: account-approval" },
+    { kind: "human", color: "pink", label: "Waiting for decision: account-review" },
+    { kind: "durable", color: "indigo", label: "Durable wait: retry-delay" },
+  ])(
+    "uses one $kind waiting indicator instead of also showing scheduled",
+    async ({ kind, color, label }) => {
+      const { TaskStatusIndicators } = await import("./components/task-list.js");
+      const job = {
+        state: "scheduled",
+        signalWait:
+          kind === "signal" ? { name: signalWait.name, deadlineAt: signalWait.deadlineAt } : null,
+        humanWait:
+          kind === "human"
+            ? { name: "account-review", deadlineAt: signalWait.deadlineAt, context: null }
+            : null,
+        wait:
+          kind === "durable"
+            ? { name: "retry-delay", wakeAt: signalWait.deadlineAt, mode: "relative" }
+            : null,
+      } as DashboardJobRow;
+      const html = renderToStaticMarkup(
+        createElement(MantineProvider, null, createElement(TaskStatusIndicators, { job })),
+      );
+
+      expect(html.match(/mantine-Badge-root/g)).toHaveLength(1);
+      expect(html).toContain(`aria-label="${label}"`);
+      expect(html).toContain(`--mantine-color-${color}-light`);
+      expect(html).toContain(
+        kind === "durable"
+          ? ">Durable wait<"
+          : `>Waiting for ${kind === "signal" ? "signal" : "decision"}<`,
+      );
+      expect(html).not.toContain('aria-label="Status: scheduled"');
+    },
+  );
+
   it("marks a task row as waiting for its named signal", async () => {
     const { TaskWaitBadge } = await import("./dashboard.js");
     const job = {

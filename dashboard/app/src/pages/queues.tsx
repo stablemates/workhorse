@@ -85,10 +85,10 @@ export function QueuesPage({
                   </Table.Th>
                   <Table.Th ta="right">
                     <Group gap={4} justify="flex-end" wrap="nowrap">
-                      <span>Throttled</span>
+                      <span>Rate-limited</span>
                       <HelpButton
-                        label="Throttled"
-                        help="Ready tasks waiting for a queue or per-key token. This is a bounded lower bound, and the detail shows the earliest database-calculated eligibility time."
+                        label="Rate-limited"
+                        help="Ready tasks waiting to start because a queue or per-key start-rate limit has no tokens available. Enqueue throttling instead coalesces matching submissions into one task. This count is a bounded lower bound; hover over it to see the earliest eligibility time."
                       />
                     </Group>
                   </Table.Th>
@@ -181,7 +181,7 @@ export function QueuesPage({
                           c={throttled.throttling ? "yellow.8" : undefined}
                           fw={throttled.throttling ? 650 : undefined}
                           title={throttled.title}
-                          aria-label={`Throttled: ${throttled.title}`}
+                          aria-label={`Rate-limited: ${throttled.title}`}
                         >
                           {throttled.label}
                         </Text>

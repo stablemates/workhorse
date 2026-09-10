@@ -3,30 +3,26 @@ import {
   ActionIcon,
   Badge,
   Box,
-  Button,
   Code,
   CopyButton,
   Group,
   Paper,
   Stack,
   Text,
-  TextInput,
   Tooltip,
 } from "@mantine/core";
 import {
-  describeCancellationRequest,
   describeCancelOutcome,
   describeIdempotency,
   describeRetryEventSource,
   describeRetryPolicy,
   formatRetryDelay,
-  idempotencyEvidenceLine,
-  isTerminalTaskState,
+  formatIdempotencyWindow,
 } from "../presentation.js";
 import { readDashboardIdempotencyEvidence } from "@stablemates/workhorse-dashboard-server/wire";
 import type { RetryPolicy } from "@stablemates/workhorse";
-import { Fragment, useEffect, useRef } from "react";
-import { CheckCircle, Copy, LinkSimple, Prohibit } from "@phosphor-icons/react";
+import { Fragment } from "react";
+import { CheckCircle, Copy, LinkSimple } from "@phosphor-icons/react";
 import {
   DrawerSection,
   JobEvent,
@@ -38,37 +34,106 @@ import {
 import { formatDuration, formatExact, formatRelative } from "../preferences.js";
 import { HelpButton } from "../charts/system.js";
 
+function KeyEvidenceRows({
+  scope,
+  keyLength,
+  keyDigest,
+}: {
+  scope: string;
+  keyLength: number;
+  keyDigest: string;
+}) {
+  return (
+    <>
+      <MetaRow label="Scope">
+        <Code className="task-drawer__evidence-value">{scope}</Code>
+      </MetaRow>
+      <MetaRow label="Key length">
+        <Text size="sm">{keyLength} bytes</Text>
+      </MetaRow>
+      <MetaRow label="Key digest">
+        <Code className="task-drawer__evidence-value">{keyDigest}</Code>
+      </MetaRow>
+    </>
+  );
+}
+
+/** The accepted enqueue mode owns one section, even when SQL also records shared key metadata. */
+export function TaskEnqueueSection({ job }: { job: DashboardJobDetail }) {
+  return coalescingEvidenceFor(job) ? (
+    <CoalescingSection job={job} />
+  ) : (
+    <IdempotencySection job={job} />
+  );
+}
+
 /** Persisted debounce or throttle evidence for the identity that survived coalescing. */
 export function CoalescingSection({ job }: { job: DashboardJobDetail }) {
   const evidence = coalescingEvidenceFor(job);
   if (evidence === null) return null;
   const label = evidence.mode === "debounce" ? "Debounce" : "Throttle";
-  const counts = [enqueueCount(evidence.absorbed, "absorbed")];
-  if (evidence.rejected > 0) counts.push(enqueueCount(evidence.rejected, "rejected"));
+  const initialRequest = idempotencyEvidenceFor(job)?.requestDigest;
   return (
     <DrawerSection
       id="coalescing-heading"
-      title="Coalescing"
+      title={label}
       aside={
         <Badge size="xs" variant="light" color="grape" tt="none">
-          {label}
+          {evidence.mode === "debounce" ? "Replace pending" : "Keep first"}
         </Badge>
       }
     >
-      <Text c="dimmed" size="xs">
-        {formatDuration(evidence.windowMs)} window
-        {evidence.schedule === null ? "" : ` · ${evidence.schedule} schedule`} ·{" "}
-        {counts.join(" · ")}
+      <Text size="sm" mb="sm">
+        {evidence.mode === "debounce"
+          ? "New submissions with this key can replace the task's input while it is pending."
+          : "Matching submissions within this window return this task without changing its input. A different request with the same key is rejected."}
       </Text>
-      <Text c="dimmed" size="xs" mt={4}>
-        scope {evidence.scope} · key length {evidence.keyLength} · digest {evidence.keyDigest}
-      </Text>
-      {evidence.expiresAt === null ? null : (
-        <Text c="dimmed" size="xs" mt={4} title={formatExact(evidence.expiresAt)}>
-          Current window ends {formatExact(evidence.expiresAt)}.
-        </Text>
-      )}
-      <Text c="dimmed" size="xs" mt={4}>
+      <Stack gap={8}>
+        <MetaRow label="Window">
+          <Text size="sm">{formatDuration(evidence.windowMs)}</Text>
+        </MetaRow>
+        {evidence.schedule === null ? null : (
+          <MetaRow label="Schedule">
+            <Text size="sm" title={evidence.schedule}>
+              {evidence.schedule === "reset"
+                ? "Restart the window after each replacement"
+                : evidence.schedule === "preserve"
+                  ? "Keep the original run time"
+                  : evidence.schedule}
+            </Text>
+          </MetaRow>
+        )}
+        <MetaRow label="Submissions">
+          <Badge variant="light" color="teal" tt="none">
+            {enqueueCount(
+              evidence.absorbed,
+              evidence.mode === "debounce" ? "replaced" : "absorbed",
+            )}
+          </Badge>
+          {evidence.rejected > 0 ? (
+            <Badge variant="light" color="orange" tt="none">
+              {enqueueCount(evidence.rejected, "rejected")}
+            </Badge>
+          ) : null}
+        </MetaRow>
+        <KeyEvidenceRows {...evidence} />
+        {initialRequest ? (
+          <MetaRow label="Initial request">
+            <Code
+              className="task-drawer__evidence-value"
+              title="Request digest recorded when the task was first enqueued"
+            >
+              {initialRequest}
+            </Code>
+          </MetaRow>
+        ) : null}
+        {evidence.expiresAt === null ? null : (
+          <MetaRow label="Window ends">
+            <Text size="sm">{formatExact(evidence.expiresAt)}</Text>
+          </MetaRow>
+        )}
+      </Stack>
+      <Text c="dimmed" size="xs" mt="sm">
         The raw key is never shown; the digest identifies matching submissions without exposing it.
       </Text>
     </DrawerSection>
@@ -127,7 +192,7 @@ function idempotencyEvidenceFor(job: DashboardJobDetail) {
  * Deduplication evidence for one task. Rendered only for a keyed task, so an unkeyed task keeps
  * exactly the drawer it had before. Colour is decoration; the label and wording carry the meaning.
  */
-export function IdempotencySection({ job }: { job: DashboardJobDetail }) {
+function IdempotencySection({ job }: { job: DashboardJobDetail }) {
   const evidence = idempotencyEvidenceFor(job);
   if (evidence === null) return null;
   const described = describeIdempotency(evidence);
@@ -141,13 +206,24 @@ export function IdempotencySection({ job }: { job: DashboardJobDetail }) {
         </Badge>
       }
     >
-      <Text c="dimmed" size="xs" title={described.exact}>
+      <Text size="sm" mb="sm" style={{ overflowWrap: "anywhere" }}>
         {described.summary}.
       </Text>
-      <Text c="dimmed" size="xs" mt={4} title={described.exact}>
-        {idempotencyEvidenceLine(evidence)}
-      </Text>
-      <Text c="dimmed" size="xs" mt={4}>
+      <Stack gap={8}>
+        <MetaRow label="Retention">
+          <Text size="sm">{formatIdempotencyWindow(evidence.ttlMs)}</Text>
+        </MetaRow>
+        <KeyEvidenceRows {...evidence} />
+        <MetaRow label="Request digest">
+          <Code className="task-drawer__evidence-value">{evidence.requestDigest}</Code>
+        </MetaRow>
+        {evidence.expiresAt === null ? null : (
+          <MetaRow label="Expires">
+            <Text size="sm">{formatExact(evidence.expiresAt)}</Text>
+          </MetaRow>
+        )}
+      </Stack>
+      <Text c="dimmed" size="xs" mt="sm">
         The raw key is never recorded with the task, so it is never shown here.
       </Text>
     </DrawerSection>
@@ -172,149 +248,6 @@ export function retryEventDescription(event: JobEvent): { text: string; title: s
       ? `${described.exact} ${described.summary}.`
       : `${described.exact} Chosen delay ${delayMs} ms. ${described.summary}.`;
   return { text, title };
-}
-/** The lifecycle states an operator may cancel. Everything else is terminal or unknown. */
-function canCancelTask(job: DashboardJobDetail): boolean {
-  const runtime = job.current.runtime;
-  if (runtime === null) return false;
-  if (isTerminalTaskState(job.identity.state)) return false;
-  // A scheduled task covers both a plain future run and a suspended durable wait, which the demo
-  // shows as "waiting". Both are cancelable because neither is executing right now.
-  return runtime.state === "scheduled" || runtime.state === "ready" || runtime.state === "active";
-}
-/**
- * Audited cancellation for one task.
- *
- * The action is a two-step confirmation with an optional reason. Cancellation is irreversible: a
- * canceled outcome is immutable and there is no uncancel. Wording changes with
- * the task's state, and for a running task it says plainly that cancellation is cooperative and
- * that external effects can continue until the handler observes the signal. Nothing here claims
- * force, immediacy, or that anything already done externally is undone.
- */
-export function CancelTaskPanel({
-  job,
-  confirming,
-  setConfirming,
-  reason,
-  setReason,
-  pending,
-  cancelTask,
-}: {
-  job: DashboardJobDetail;
-  confirming: boolean;
-  setConfirming: (confirming: boolean) => void;
-  reason: string;
-  setReason: (reason: string) => void;
-  pending: boolean;
-  cancelTask: (id: string, reason: string) => void;
-}) {
-  const reasonRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (confirming) reasonRef.current?.focus();
-  }, [confirming]);
-
-  const cancellation = job.current.runtime?.cancellation ?? null;
-  const requested = describeCancellationRequest(cancellation);
-  const cancelable = canCancelTask(job);
-  const running = job.current.runtime?.state === "active";
-  const waiting =
-    job.current.runtime?.state === "scheduled" && job.current.runtime.waitName !== null;
-  const trimmedReason = reason.trim();
-
-  // Everything an assistive technology needs is in text: the heading and the current state
-  // sentence. What a cancellation reported is announced by the notification it raises, which
-  // outlives this panel, because closing the drawer must not take the answer with it.
-  return (
-    <DrawerSection
-      id="cancellation-heading"
-      title="Cancellation"
-      aside={
-        requested === null ? null : (
-          <Badge size="xs" variant="light" color="gray" tt="none" title={requested.exact}>
-            {requested.label}
-          </Badge>
-        )
-      }
-    >
-      {requested === null ? null : (
-        <Text c="dimmed" size="xs" mb="xs" title={requested.exact}>
-          {requested.summary}.{" "}
-          {cancellation === null ? null : (
-            <span title={formatExact(cancellation.requestedAt)}>
-              Requested {formatRelative(cancellation.requestedAt)}
-              {cancellation.requestedBy === null ? "" : ` by ${cancellation.requestedBy}`}
-              {cancellation.reason === null ? "" : ` · ${cancellation.reason}`}.
-            </span>
-          )}
-        </Text>
-      )}
-      {cancelable ? (
-        confirming ? (
-          <Stack gap="xs">
-            <Text size="xs" c="dimmed">
-              {running
-                ? "Workhorse asks the handler to stop, but it cannot force the handler. Until the " +
-                  "handler checks the signal, external effects that it started can continue."
-                : waiting
-                  ? "This task is at a durable wait. Workhorse closes its attempt without resuming " +
-                    "the handler, but it cannot undo earlier external work."
-                  : "This task has not started. Workhorse can cancel it before any handler runs."}{" "}
-              You cannot undo a cancellation.
-            </Text>
-            <TextInput
-              ref={reasonRef}
-              size="xs"
-              label="Reason (optional)"
-              description="Workhorse records this reason in the audit trail."
-              placeholder="Why are you canceling this task?"
-              value={reason}
-              disabled={pending}
-              onChange={(event) => setReason(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape" && !pending) setConfirming(false);
-              }}
-            />
-            <Group gap="xs">
-              <Button
-                size="xs"
-                color="red"
-                variant="light"
-                loading={pending}
-                disabled={pending}
-                onClick={() => cancelTask(job.identity.id, trimmedReason)}
-              >
-                {running ? "Request cancellation" : "Cancel task"}
-              </Button>
-              <Button
-                size="xs"
-                variant="default"
-                disabled={pending}
-                onClick={() => setConfirming(false)}
-              >
-                Keep running
-              </Button>
-            </Group>
-          </Stack>
-        ) : (
-          <Button
-            size="xs"
-            variant="default"
-            leftSection={<Prohibit size={14} />}
-            disabled={pending}
-            onClick={() => setConfirming(true)}
-          >
-            Cancel task
-          </Button>
-        )
-      ) : (
-        <Text c="dimmed" size="xs">
-          {isTerminalTaskState(job.identity.state)
-            ? `Because this task finished as ${job.identity.state}, Workhorse cannot change its outcome.`
-            : "Workhorse cannot cancel this task because it has no live runtime."}
-        </Text>
-      )}
-    </DrawerSection>
-  );
 }
 /**
  * Persisted retry scheduling for one task. The policy is stated in words, never as a raw stored
@@ -354,7 +287,7 @@ export function RetryPolicyLine({ job }: { job: DashboardJobDetail }) {
  * Display form of a task UUID: the first eight characters, matching the task table's ID column.
  * Every renderer of a shortened id carries the full id in `title`, so hover always recovers it.
  */
-export function shortTaskId(id: string): string {
+function shortTaskId(id: string): string {
   return id.slice(0, 8);
 }
 /** One task UUID shown shortened, recoverable on hover, and copyable in full. */

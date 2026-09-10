@@ -17,11 +17,25 @@ health verdict with its reasons. With host-authorized controllers wired in, it c
 run schedules now, pause queues and workers, and edit maintenance and retention policy.
 
 Task browsing uses Previous and Next controls, so opening a page does not require counting every
-matching historical job. Filters and navigation cursors remain in the URL for sharing and browser
-history. Older links with a page number still work. Jobs can move between pages as their state changes.
+matching historical job. Sidebar task links start a fresh page; browser Back restores the saved
+position. Filters and navigation cursors remain in the URL for sharing and browser history. Older links with a page number still work. Jobs can move between pages as their state changes.
 
 When a page refresh is still loading, automatic refresh waits rather than starting the same read
 again. After an operator action, the dashboard fetches its committed result.
+
+Tasks show tags in a separate column and keep actions beside the left edge of the table.
+Task details offers the same actions, including their confirmation steps.
+Status indicators reveal the full state, waits, blockers, and timing on hover, focus, or touch.
+
+Task listings distinguish Idempotency, Debounce, and Throttle, with a tooltip explaining how each handles repeated requests.
+Older hosts still show the generic “Keyed” marker.
+The enqueue menu groups all three modes under Enqueue behavior.
+Task details shows one section for the accepted mode, with its scope, key digest, and window or retention settings.
+Rejected debounce proposals appear in Task history without changing the displayed mode.
+
+Events supports worker and text filters across the selected time window.
+A successful execution can produce a task lifecycle record and an attempt record.
+Their status tooltips distinguish the two sources, and event details lets you copy the task ID.
 
 ## Mount it in your server
 

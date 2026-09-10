@@ -1,7 +1,7 @@
 import type { DashboardRateLimitPolicySummary } from "@stablemates/workhorse-dashboard-server/wire";
 
 export const rateLimitCappedFootnote =
-  "Rate-limit pressure uses a bounded sample, so throttled counts are lower bounds.";
+  "Rate-limit pressure uses a bounded sample, so rate-limited task counts are lower bounds.";
 
 function intervalLabel(intervalMs: number): string {
   if (intervalMs % 60_000 === 0) return `${intervalMs / 60_000}m`;

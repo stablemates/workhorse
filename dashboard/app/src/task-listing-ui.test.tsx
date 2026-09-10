@@ -22,7 +22,8 @@ describe("task listing identity", () => {
     });
 
     expect(html).toContain('title="customer.invoice.reconciliation.requested"');
-    expect(html).toContain("width:180px");
+    expect(html).toContain("flex:1");
+    expect(html).toContain("max-width:100%");
     expect(html).toContain("white-space:nowrap");
     expect(html).toContain("text-overflow:ellipsis");
   });

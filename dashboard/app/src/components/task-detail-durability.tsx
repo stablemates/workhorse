@@ -340,7 +340,7 @@ export function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
   return (
     <Box mt="md">
       <Text fw={600} size="xs" mb={6}>
-        Boundary timeline
+        Task history
       </Text>
       <Stack gap={4}>
         {events.map((event) => {
@@ -365,6 +365,16 @@ export function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
             knownParts.length > 0
               ? knownParts
               : [eventDetailSummary(event.details)].filter((part): part is string => part !== null);
+          const eventLabel =
+            boundaryEventPresentation[event.type]?.label ?? genericEventLabel(event.type);
+          const summary = [
+            event.attempt === null ? "no attempt" : `attempt ${event.attempt}`,
+            ...(claimIndex === null ? [] : [`claim ${claimIndex}`]),
+            ...parts,
+          ].join(" · ");
+          const hoverDetails = [summary, cancel?.title ?? retry?.title]
+            .filter(Boolean)
+            .join("\n\n");
           return (
             <Group key={event.id} gap="xs" wrap="nowrap" align="flex-start">
               <Badge
@@ -374,19 +384,18 @@ export function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
                 tt="none"
                 miw={116}
                 styles={{ root: { justifyContent: "start" } }}
+                title={eventLabel}
               >
-                {boundaryEventPresentation[event.type]?.label ?? genericEventLabel(event.type)}
+                {eventLabel}
               </Badge>
               <Text
                 c="dimmed"
                 size="xs"
                 style={{ flex: 1, minWidth: 0 }}
                 lineClamp={1}
-                title={cancel?.title ?? retry?.title}
+                title={hoverDetails}
               >
-                {event.attempt === null ? "no attempt" : `attempt ${event.attempt}`}
-                {claimIndex === null ? "" : ` · claim ${claimIndex}`}
-                {parts.length > 0 ? ` · ${parts.join(" · ")}` : ""}
+                {summary}
               </Text>
               <Text c="dimmed" size="xs" title={formatExact(event.occurredAt)} ta="right">
                 {formatClock(event.occurredAt)}

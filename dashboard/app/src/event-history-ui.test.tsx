@@ -7,6 +7,7 @@ import type {
   DashboardJobDetail,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import { dashboardJobEventTypes } from "@stablemates/workhorse-dashboard-server/wire";
+import { taskStatusColors } from "./status-colors.js";
 
 Object.defineProperty(globalThis, "localStorage", {
   value: { getItem: () => null, setItem: () => undefined },
@@ -131,6 +132,9 @@ describe("dashboard event history", () => {
 
     expect(html).toContain("operator@example.com");
     expect(html).toContain("stuck deployment");
+    expect(html).toContain(
+      'title="attempt 2 · by operator@example.com · reason stuck deployment · awaiting handler',
+    );
   });
 
   it("attributes a finalized cancellation to Workhorse", async () => {
@@ -153,7 +157,7 @@ describe("dashboard event history", () => {
 
   it("gives the new Events feed categories meaningful colors", async () => {
     const { eventTypeColor } = await import("./dashboard.js");
-    expect(eventTypeColor("dependency_blocked")).toBe("orange");
+    expect(eventTypeColor("dependency_blocked")).toBe(taskStatusColors.blocked);
     expect(eventTypeColor("dependency_released")).toBe("teal");
     expect(eventTypeColor("child_created")).toBe("blue");
     expect(eventTypeColor("human_wait_completed")).toBe("teal");
@@ -197,14 +201,16 @@ describe("dashboard event history", () => {
       ]),
     );
     expect(html).toContain("Debounce");
-    expect(html).toContain("scope search");
-    expect(html).toContain("digest 0123456789ab");
-    expect(html).toContain("1 absorbed enqueue");
+    expect(html).toContain(">Scope<");
+    expect(html).toContain(">search</code>");
+    expect(html).toContain(">Key digest<");
+    expect(html).toContain(">0123456789ab</code>");
+    expect(html).toContain("1 replaced enqueue");
     expect(html).toContain("1 rejected enqueue");
     expect(html).not.toContain("super-secret");
   });
 
-  it("explains a non-replaceable debounce attempt from its rejection evidence", async () => {
+  it("does not present rejected debounce settings as the task's accepted mode", async () => {
     const html = await renderExport(
       "CoalescingSection",
       jobWithEvents([
@@ -226,9 +232,7 @@ describe("dashboard event history", () => {
         },
       ]),
     );
-    expect(html).toContain("Debounce");
-    expect(html).toContain("scope search");
-    expect(html).toContain("0 absorbed enqueues");
-    expect(html).toContain("1 rejected enqueue");
+    expect(html).not.toContain("coalescing-heading");
+    expect(html).not.toContain(">search</code>");
   });
 });

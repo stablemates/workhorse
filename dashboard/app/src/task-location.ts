@@ -178,3 +178,15 @@ export function taskListingKey(state: TaskLocationState): string {
     state.direction ?? "next",
   ]);
 }
+
+/** Sidebar selection starts a fresh list; history restoration still uses the original URL. */
+export function taskFilterHref(state: TaskLocationState, filter: DashboardTaskFilter): string {
+  return taskLocationHref({
+    ...state,
+    filter,
+    page: 1,
+    cursor: null,
+    direction: "next",
+    taskId: null,
+  });
+}

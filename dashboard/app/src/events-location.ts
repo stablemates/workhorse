@@ -19,6 +19,8 @@ export interface EventsLocationState {
   kind: EventsKindFilter;
   queue: string | null;
   jobType: string | null;
+  worker: string | null;
+  search: string | null;
   types: DashboardEventTypeFilter[];
   /** The history record shown in the drawer, encoded as `kind:recordId`. */
   eventId: string | null;
@@ -31,6 +33,8 @@ export const defaultEventsLocation: EventsLocationState = {
   kind: "all",
   queue: null,
   jobType: null,
+  worker: null,
+  search: null,
   types: [],
   eventId: null,
 };
@@ -78,6 +82,8 @@ export function parseEventsLocation(search: string | URLSearchParams): EventsLoc
     kind: requestedKind && kinds.has(requestedKind) ? requestedKind : "all",
     queue: optionalValue(parameters, "queue"),
     jobType: optionalValue(parameters, "type"),
+    worker: optionalValue(parameters, "worker"),
+    search: optionalValue(parameters, "q"),
     types,
     page: Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1,
     pageSize: eventPageSizes.includes(requestedPageSize as EventPageSize)
@@ -93,6 +99,8 @@ export function eventsLocationHref(state: EventsLocationState): string {
   if (state.kind !== "all") parameters.set("source", state.kind);
   if (state.queue) parameters.set("queue", state.queue);
   if (state.jobType) parameters.set("type", state.jobType);
+  if (state.worker) parameters.set("worker", state.worker);
+  if (state.search) parameters.set("q", state.search);
   if (state.types.length > 0) parameters.set("events", state.types.join(","));
   if (state.page > 1) parameters.set("page", String(state.page));
   if (state.pageSize !== 50) parameters.set("per", String(state.pageSize));
@@ -111,5 +119,7 @@ export function eventsListingKey(state: EventsLocationState): string {
     state.queue,
     state.jobType,
     state.types,
+    state.worker,
+    state.search,
   ]);
 }

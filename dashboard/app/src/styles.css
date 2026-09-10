@@ -130,6 +130,25 @@ body {
   --mantine-line-height-md: 1.55;
 }
 
+.task-drawer__resize-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 8px;
+  height: 100dvh;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.task-drawer__resize-handle:hover,
+.task-drawer__resize-handle:focus-visible,
+.task-drawer__resize-handle:active {
+  background: var(--mantine-primary-color-light);
+  box-shadow: inset 2px 0 var(--mantine-primary-color-filled);
+  outline: none;
+}
+
 /*
  * Each drawer section carries its own separator, because sections render conditionally and a
  * standalone divider beside a section that returned null would leave a stray rule.
@@ -145,6 +164,12 @@ body {
  */
 .task-drawer__meta-label {
   flex: 0 0 6.5rem;
+}
+
+.task-drawer__evidence-value {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /*
@@ -185,6 +210,7 @@ body {
 .task-table__open {
   border-radius: var(--mantine-radius-sm);
   display: block;
+  width: 100%;
   max-width: 100%;
   text-align: left;
 }
@@ -265,8 +291,8 @@ body {
   overflow-wrap: anywhere;
 }
 
-.dashboard-table--events :is(th, td):nth-child(4) {
-  min-width: 16rem;
+.event-table__col--task {
+  min-width: 20rem;
 }
 
 .dashboard-table--events :is(th, td):last-child {
@@ -282,38 +308,38 @@ body {
 }
 
 .task-table__col--task {
-  min-width: 16.25rem;
-  width: 18rem;
+  min-width: 20rem;
+  width: 60%;
+  max-width: 0;
 }
 
 .task-table__col--queue {
-  min-width: 9rem;
-  max-width: 14rem;
-  overflow-wrap: anywhere;
-}
-
-.task-table__col--status {
-  min-width: 14rem;
-}
-
-.task-table__col--duration,
-.task-table__col--updated {
+  width: 1%;
   white-space: nowrap;
 }
 
-/* Status explanations can wrap without forcing the task name out of view. */
-.task-table__status {
-  flex-wrap: wrap;
-  gap: 0.25rem 0.5rem;
+.task-table__col--tags {
+  min-width: 10rem;
+  width: 40%;
+  max-width: 0;
+}
+
+.task-table__col--status {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.task-table__col--id,
+.task-table__col--steps,
+.task-table__col--attempt,
+.task-table__col--duration,
+.task-table__col--updated {
+  width: 1%;
+  white-space: nowrap;
 }
 
 .task-table {
-  min-width: 1124px;
-}
-
-.task-table__col--tags {
-  max-width: 180px;
-  width: 180px;
+  min-width: 920px;
 }
 
 @container task-list (max-width: 75rem) {
@@ -328,7 +354,6 @@ body {
 }
 
 @container task-list (max-width: 58rem) {
-  .task-table__col--blocked,
   .task-table__col--duration {
     display: none;
   }
@@ -353,18 +378,18 @@ body {
 
   .task-table {
     min-width: 0;
-    table-layout: fixed;
+    table-layout: auto;
     width: 100%;
   }
 
   .task-table__col--task {
     min-width: 0;
-    width: 52% !important;
+    width: 100% !important;
   }
 
   .task-table__col--status {
     min-width: 0 !important;
-    width: auto;
+    width: 1%;
   }
 
   .task-table__col--actions {
@@ -374,11 +399,6 @@ body {
   .task-table__task-name {
     max-width: 100% !important;
     width: auto !important;
-  }
-
-  .task-table__status {
-    align-items: flex-start;
-    flex-direction: column;
   }
 }
 
@@ -471,7 +491,9 @@ html[data-mantine-color-scheme="dark"] .workhorse-brand__wordmark {
     border-right: 1px solid var(--mantine-color-default-border);
   }
 
-  .dashboard-table tr:hover td:first-child {
+  .dashboard-table--queues tr:hover td:first-child,
+  .dashboard-table--workers tr:hover td:first-child,
+  .dashboard-table--schedules tr:hover td:first-child {
     background: var(--mantine-color-default-hover);
   }
 }
@@ -479,5 +501,84 @@ html[data-mantine-color-scheme="dark"] .workhorse-brand__wordmark {
 @media (max-width: 35.99em) {
   .dashboard-header__brand .workhorse-brand__wordmark {
     display: none;
+  }
+}
+
+.status-label:focus-visible {
+  outline: 2px solid var(--mantine-primary-color-filled);
+  outline-offset: 3px;
+}
+
+html[data-mantine-color-scheme="dark"] .mantine-Badge-root[data-variant="light"] {
+  background: hsl(from var(--badge-color) h s 27%);
+  color: color-mix(in srgb, var(--badge-color) 20%, white);
+}
+
+.task-table__col--actions {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--mantine-color-body);
+  width: 44px;
+  min-width: 44px;
+}
+
+.task-table tbody tr[data-striped="odd"]:nth-of-type(odd) .task-table__col--actions,
+.task-table tbody tr[data-striped="even"]:nth-of-type(even) .task-table__col--actions {
+  background: var(--table-striped-color);
+}
+
+.task-table .task-table__action-trigger {
+  opacity: 0;
+}
+
+.task-table tr:hover .task-table__action-trigger,
+.task-table tr:focus-within .task-table__action-trigger,
+.task-table .task-table__action-trigger[aria-expanded="true"],
+.task-table .task-table__action-trigger[data-loading] {
+  opacity: 1;
+}
+
+@media (hover: hover) {
+  .task-table tbody tr[data-hover]:hover .task-table__col--actions {
+    background: var(--tr-hover-bg);
+  }
+}
+
+@media (hover: none) {
+  .task-table tbody tr[data-hover]:active .task-table__col--actions {
+    background: var(--tr-hover-bg);
+  }
+
+  .task-table .task-table__action-trigger {
+    opacity: 1;
+  }
+}
+
+.event-table__col--id,
+.event-table__col--when,
+.event-table__col--status,
+.event-table__col--queue,
+.event-table__col--attempt,
+.event-table__col--duration {
+  width: 1%;
+  white-space: nowrap;
+}
+.dashboard-table--events td {
+  overflow-wrap: anywhere;
+}
+
+.task-table-id__copy {
+  opacity: 0;
+}
+
+.task-table-id:hover .task-table-id__copy,
+.task-table-id:focus-within .task-table-id__copy {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .task-table-id__copy {
+    opacity: 1;
   }
 }

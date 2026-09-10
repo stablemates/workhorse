@@ -1,3 +1,4 @@
+import { taskFilterHref } from "./task-location.js";
 import { describe, expect, it } from "vitest";
 import {
   parseTaskLocation,
@@ -167,4 +168,18 @@ describe("task location state", () => {
     expect(taskListingKey({ ...closed, search: "invoice" })).not.toBe(taskListingKey(closed));
     expect(taskListingKey({ ...closed, sort: "priority" })).not.toBe(taskListingKey(closed));
   });
+});
+
+it("clears sidebar pagination and drawer selection while preserving useful filters", () => {
+  const state = {
+    ...parseTaskLocation("?queue=billing&page=3&task=job-1"),
+    cursor: { id: "job-1", updatedAt: "2026-09-10T12:00:00Z", priority: 1 },
+    direction: "previous" as const,
+  };
+  const selected = parseTaskLocation(taskFilterHref(state, "running").split("?")[1] ?? "");
+  expect(selected).toMatchObject({ queue: "billing", filter: "running", page: 1, taskId: null });
+  expect(selected.cursor).toBeUndefined();
+  expect(selected.direction).toBeUndefined();
+  expect(state.page).toBe(3);
+  expect(state.direction).toBe("previous");
 });

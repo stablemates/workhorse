@@ -1,3 +1,4 @@
+import { taskFilterHref } from "../task-location.js";
 import type { DashboardDemoTools } from "@stablemates/workhorse-dashboard-server";
 import type { DashboardWorkspaceLink } from "@stablemates/workhorse-dashboard-server/server";
 import { Menu, useDropdownActivity } from "../dropdown-activity.js";
@@ -401,11 +402,7 @@ export function DashboardContent({
               Tasks
             </Text>
             {taskFilters.map((filter) => {
-              const href = taskHref({
-                ...location,
-                filter: filter.value,
-                page: 1,
-              });
+              const href = taskFilterHref(location, filter.value);
               const count = taskCounts?.[filter.value];
               const Icon = filter.icon;
               return (
