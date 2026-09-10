@@ -62,8 +62,13 @@ try {
     ["/docs/for-ai-agents", ["TypeScript", "Python", "Go"]],
     // The playbook's remedy for a non-restart-safe external effect is a
     // checkpoint. A rewrite that drops the word drops the one mistake a
-    // recorded baseline session actually made.
-    ["/docs/for-ai-agents.md", ["TypeScript", "Python", "Go", "checkpoint"]],
+    // recorded baseline session actually made. The page also states the
+    // `Accept` route to the twin (ADR 0062); it once said the opposite, and
+    // the entry point cannot contradict the origin.
+    [
+      "/docs/for-ai-agents.md",
+      ["TypeScript", "Python", "Go", "checkpoint", "`Accept: text/markdown`"],
+    ],
     ["/docs/integrations", ["Verified", "Documented", "Tested against drizzle-orm"]],
     ["/docs/integrations.md", ["ORMs and query builders", "Tested against drizzle-orm"]],
     ["/docs/quickstart", ["quickstart", "worker"]],

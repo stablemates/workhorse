@@ -6,9 +6,10 @@ solves discovery first, then walks one integration end to end.
 
 ## Read the Markdown, not the HTML
 
-Append `.md` to any documentation URL to reach that page's Markdown twin. The twin shows every
-language at once, because it expands each language tab inline. The suffix is the only route; asking
-for Markdown through content negotiation does not work.
+Every documentation page has a Markdown twin, which shows every language at once because it
+expands each language tab inline. There are two routes to it. A request that asks for Markdown in
+its `Accept` header receives the twin from the page's own URL. Appending `.md` to the URL fetches
+the same file without negotiation.
 
 Two index files sit above the twins. One is a compact map of every page, grouped like the sidebar.
 The other is the whole corpus in a single response, which is large and worth fetching only when a

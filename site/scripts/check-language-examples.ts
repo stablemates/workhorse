@@ -337,8 +337,6 @@ const playbookProseAllowlist: Record<string, string> = {
   // TypeScript spelling, which is the spelling the cross-SDK pages lead with.
   deadline: "typescript/core/src/types.ts",
   executionTimeoutMs: "typescript/core/src/types.ts",
-  // An HTTP header, not an SDK name. ADR 0049 records that the Markdown twin does not negotiate on it.
-  Accept: "docs/decisions/0049-publish-one-agent-documentation-layer.md",
 };
 const playbookFences = Object.fromEntries(
   (["ts", "python", "go"] as const).map((language) => {

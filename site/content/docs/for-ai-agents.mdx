@@ -9,10 +9,11 @@ and how to confirm the job settled.
 
 ## How to read this documentation
 
-Append `.md` to any documentation URL for its Markdown twin, such as `/docs/enqueue.md`. Read the
-twin, not the HTML page. A Markdown twin shows every language; the HTML page shows one, because its
-language tabs collapse to whichever tab is selected. The suffix is the only route to the twin — a
-canonical HTML URL does not negotiate on `Accept`.
+Every documentation page has a Markdown twin, and there are two routes to it. Send
+`Accept: text/markdown` and the page URL answers with the twin. Or append `.md` to the URL, such as
+`/docs/enqueue.md`, which fetches the same file without negotiation. Read the twin, not the HTML
+page. A Markdown twin shows every language; the HTML page shows one, because its language tabs
+collapse to whichever tab is selected.
 
 Fetch `/llms.txt` for a compact map of every page, grouped like the sidebar. Fetch `/llms-full.txt`
 only when a change crosses several contracts at once and you need to search them together; it is
