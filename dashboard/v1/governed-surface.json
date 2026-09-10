@@ -556,6 +556,10 @@
           "type": "null|string",
           "required": false
         },
+        "search": {
+          "type": "null|string",
+          "required": false
+        },
         "types": {
           "type": "array",
           "required": false
@@ -616,6 +620,10 @@
             "24h",
             "6h"
           ],
+          "required": false
+        },
+        "worker": {
+          "type": "null|string",
           "required": false
         }
       },
@@ -883,6 +891,9 @@
         },
         "batchExecutions[].members[].type": {
           "type": "string"
+        },
+        "canCompleteHumanWait": {
+          "type": "boolean"
         },
         "canSignal": {
           "type": "boolean"
@@ -1175,6 +1186,18 @@
         "events[].type": {
           "type": "string"
         },
+        "humanWait": {
+          "type": "null|object"
+        },
+        "humanWait.context": {
+          "type": "unknown"
+        },
+        "humanWait.deadlineAt": {
+          "type": "string"
+        },
+        "humanWait.name": {
+          "type": "string"
+        },
         "identity": {
           "type": "object"
         },
@@ -1356,6 +1379,12 @@
           "type": "string"
         },
         "signalWait.name": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array"
+        },
+        "tags[]": {
           "type": "string"
         },
         "waits": {
@@ -3514,6 +3543,9 @@
         "jobs[].durability.totalSteps": {
           "type": "number"
         },
+        "jobs[].enqueueMode": {
+          "type": "null|unknown"
+        },
         "jobs[].errorMessage": {
           "type": "null|string"
         },
@@ -3831,6 +3863,9 @@
         },
         "jobs[].durability.totalSteps": {
           "type": "number"
+        },
+        "jobs[].enqueueMode": {
+          "type": "null|unknown"
         },
         "jobs[].errorMessage": {
           "type": "null|string"

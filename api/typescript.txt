@@ -435,6 +435,7 @@ interface RedriveOutcomeDescription
 interface RedriveSelection
 interface RetryPolicyDescription
 interface RunNowOutcomeDescription
+type TaskActionTarget
 interface TaskResultDescription
 interface TaskResultEvidence
 type TaskResultState
@@ -1407,6 +1408,9 @@ interface DashboardIdempotencyEvidence {
 }
 
 interface DashboardJobDetail {
+  tags: string[];
+  humanWait: DashboardHumanWaitSummary | null;
+  canCompleteHumanWait: boolean;
   identity: {
     id: string;
     queue: string;
@@ -1608,6 +1612,8 @@ interface DashboardJobRow extends Record<string, unknown> {
   * metadata on the initial `enqueued` event, so an unkeyed task stays exactly as it was.
   */
   keyed: boolean;
+  /** Accepted mode from the initial enqueue event; absent on older dashboard hosts. */
+  enqueueMode?: "idempotency" | "debounce" | "throttle" | null;
   /**
   * Cooperative cancellation recorded against this live task, or null when none was requested.
   * A canceled task carries its request on the terminal outcome instead and reports null here.
@@ -4034,6 +4040,10 @@ interface StoredSchedule {
 
 const TRACE_ATTRIBUTE_COUNT_LIMIT = 8;
 
+type TaskActionTarget = Pick<DashboardJobRow, "id" | "type" | "queue" | "state" | "workerId" | "lastWorkerId" | "cancellation" | "waitName" | "wait" | "humanWait"> & {
+  payload?: unknown;
+};
+
 type TaskActivityGroup = "queue" | "worker" | "task" | "status";
 
 type TaskActivityPeriod = "15m" | "1h" | "6h" | "24h" | "7d";
@@ -4735,6 +4745,8 @@ const dashboardRouter: {
       }>>;
       queue: z.ZodDefault<z.ZodNullable<z.ZodString>>;
       jobType: z.ZodDefault<z.ZodNullable<z.ZodString>>;
+      worker: z.ZodDefault<z.ZodNullable<z.ZodString>>;
+      search: z.ZodDefault<z.ZodNullable<z.ZodString>>;
       types: z.ZodDefault<z.ZodArray<z.ZodEnum<{
         enqueued: "enqueued";
         succeeded: "succeeded";
@@ -5278,7 +5290,7 @@ function taskLocationHref(state: TaskLocationState): string;
 
 const taskPageSizes: readonly [25, 50, 100];
 
-function taskRowActionGroups(job: DashboardJobRow, capabilities?: TaskRowActionCapabilities): TaskRowActionGroup[];
+function taskRowActionGroups(job: TaskActionTarget, capabilities?: TaskRowActionCapabilities): TaskRowActionGroup[];
 
 function typeOrmQueryable(executor: TypeOrmExecutor, notificationPool?: AdapterNotificationPool): Queryable;
 

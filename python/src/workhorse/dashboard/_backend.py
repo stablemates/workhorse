@@ -182,7 +182,15 @@ class DashboardBackend:
         supplied = cast(Mapping[str, object], input)
         value = self._rows(
             "SELECT workhorse.dashboard_job_detail_v1(%s::jsonb) AS result",
-            (json.dumps({**supplied, "canSignal": not self._read_only}),),
+            (
+                json.dumps(
+                    {
+                        **supplied,
+                        "canSignal": not self._read_only,
+                        "canCompleteHumanWait": not self._read_only,
+                    }
+                ),
+            ),
         )[0]["result"]
         if value is None:
             raise DashboardRPCError(404, "NOT_FOUND", "Task not found")
@@ -197,7 +205,7 @@ class DashboardBackend:
 
     def system(self, input: object, _actor: str) -> object:
         value = self._rows(
-            "SELECT workhorse.dashboard_system_v2(%s::jsonb) AS result",
+            "SELECT workhorse.dashboard_system_v1(%s::jsonb) AS result",
             (json.dumps(input),),
         )[0]["result"]
         return _iso(json.loads(value) if isinstance(value, str | bytes) else value)

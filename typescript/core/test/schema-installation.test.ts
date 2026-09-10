@@ -367,11 +367,8 @@ describe("schema installation", () => {
     expect(duplicates).toEqual([]);
   });
 
-  it("retains the predecessor of every superseded function", async () => {
-    // A `_vN` above 1 is how supersession works, so its presence is expected. What must never be
-    // true is a successor without its predecessor: `docs/schema-lifecycle.md` retains the old one
-    // until an operator runs the contract step, and a clean install that shipped only the
-    // successor would refuse a client the release promised to keep serving.
+  it("installs one version of every function in the baseline", async () => {
+    // The baseline contains no superseded functions.
     const versioned = await pool.query<{ name: string }>(
       `SELECT proname AS name
          FROM pg_proc
@@ -385,7 +382,7 @@ describe("schema installation", () => {
           AND relname ~ '_v[0-9]+$' AND relname !~ '_v1$'
         ORDER BY name`,
     );
-    expect(versioned.rows.map((row) => row.name)).toEqual(["dashboard_system_v2"]);
+    expect(versioned.rows).toEqual([]);
 
     const orphaned = await pool.query<{ name: string }>(
       `WITH successors AS (

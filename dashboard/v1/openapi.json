@@ -705,6 +705,7 @@
                             "durability": null,
                             "finishedAt": "2026-01-01T00:00:00.000Z",
                             "signalWait": null,
+                            "enqueueMode": null,
                             "maxAttempts": 1,
                             "retryPolicy": null,
                             "cancellation": null,
@@ -735,6 +736,7 @@
                             "durability": null,
                             "finishedAt": "2026-01-01T00:00:00.000Z",
                             "signalWait": null,
+                            "enqueueMode": null,
                             "maxAttempts": 1,
                             "retryPolicy": null,
                             "cancellation": null,
@@ -765,6 +767,7 @@
                             "durability": null,
                             "finishedAt": null,
                             "signalWait": null,
+                            "enqueueMode": null,
                             "maxAttempts": 25,
                             "retryPolicy": null,
                             "cancellation": null,
@@ -795,6 +798,7 @@
                             "durability": null,
                             "finishedAt": null,
                             "signalWait": null,
+                            "enqueueMode": null,
                             "maxAttempts": 25,
                             "retryPolicy": null,
                             "cancellation": null,
@@ -825,6 +829,7 @@
                             "durability": null,
                             "finishedAt": null,
                             "signalWait": null,
+                            "enqueueMode": null,
                             "maxAttempts": 25,
                             "retryPolicy": null,
                             "cancellation": null,
@@ -857,6 +862,7 @@
                             "durability": null,
                             "finishedAt": null,
                             "signalWait": null,
+                            "enqueueMode": null,
                             "maxAttempts": 25,
                             "retryPolicy": null,
                             "cancellation": null,
@@ -893,6 +899,7 @@
                             "durability": null,
                             "finishedAt": null,
                             "signalWait": null,
+                            "enqueueMode": null,
                             "maxAttempts": 25,
                             "retryPolicy": null,
                             "cancellation": null,
@@ -926,6 +933,7 @@
                               "name": "approval",
                               "deadlineAt": "2026-01-01T00:00:00.000Z"
                             },
+                            "enqueueMode": null,
                             "maxAttempts": 25,
                             "retryPolicy": null,
                             "cancellation": null,
@@ -956,6 +964,7 @@
                             "durability": null,
                             "finishedAt": "2026-01-01T00:00:00.000Z",
                             "signalWait": null,
+                            "enqueueMode": null,
                             "maxAttempts": 1,
                             "retryPolicy": null,
                             "cancellation": null,
@@ -988,6 +997,7 @@
                             "durability": null,
                             "finishedAt": "2026-01-01T00:00:00.000Z",
                             "signalWait": null,
+                            "enqueueMode": null,
                             "maxAttempts": 25,
                             "retryPolicy": null,
                             "cancellation": null,
@@ -1541,6 +1551,32 @@
                           }
                         ]
                       },
+                      "worker": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "search": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "types": {
                         "default": [],
                         "maxItems": 42,
@@ -1804,7 +1840,7 @@
                         },
                         "jobType": "conformance.redrive.batch",
                         "recordId": "00000000-0000-7000-8000-000000000000",
-                        "workerId": null,
+                        "workerId": "conformance-worker",
                         "claimedAt": null,
                         "startedAt": null,
                         "durationMs": null,
@@ -3804,6 +3840,9 @@
                     "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: job-detail.",
                     "value": {
                       "json": {
+                        "tags": [
+                          "conformance"
+                        ],
                         "waits": [],
                         "events": [
                           {
@@ -3893,6 +3932,7 @@
                         },
                         "progress": null,
                         "canSignal": true,
+                        "humanWait": null,
                         "durability": null,
                         "signalWait": null,
                         "checkpoints": [],
@@ -3909,7 +3949,8 @@
                         "dependencyLineage": {
                           "records": [],
                           "truncated": false
-                        }
+                        },
+                        "canCompleteHumanWait": true
                       }
                     }
                   }
@@ -7393,6 +7434,25 @@
       "DashboardJobDetail": {
         "type": "object",
         "properties": {
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "humanWait": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DashboardHumanWaitSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "canCompleteHumanWait": {
+            "type": "boolean"
+          },
           "identity": {
             "type": "object",
             "properties": {
@@ -8312,6 +8372,9 @@
           }
         },
         "required": [
+          "tags",
+          "humanWait",
+          "canCompleteHumanWait",
           "identity",
           "dependencyLineage",
           "childLineage",
@@ -8462,6 +8525,22 @@
           },
           "keyed": {
             "type": "boolean"
+          },
+          "enqueueMode": {
+            "anyOf": [
+              {
+                "const": "debounce"
+              },
+              {
+                "const": "idempotency"
+              },
+              {
+                "const": "throttle"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "cancellation": {
             "anyOf": [

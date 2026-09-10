@@ -2,9 +2,9 @@
 
 ## Current policy
 
-Schema version 1 is current and is the released migration baseline. `sql/schema/current.sql` is the tracked source and
-`sql/schema.sql` is a build artifact for published packages. `sql/releases/0001.sql` freezes the
-baseline clean-install artifact, and `sql/migrations/` holds every step after it.
+Schema version 1 is current and is the migration baseline. `sql/schema/current.sql` is the tracked source and
+`sql/schema.sql` is a build artifact for published packages. `sql/releases/0001.sql` contains the baseline clean-install artifact.
+`sql/migrations/` is empty; future schema versions add ordered steps there.
 
 **The migration chain begins at 0.1.0** ([ADR 0053](decisions/0053-start-migrations-at-0-1-0-and-keep-them-additive.md)).
 A database this project has agreed to carry forward exists from that release, so a schema change is
@@ -72,8 +72,7 @@ throws a plain error instead, because an unreachable database says nothing about
 `migrateSchema(database)` is the explicit upgrade API. It rejects an uninstalled schema, versions
 below the baseline, versions newer than the runtime, mixed version rows, and gaps in the ordered
 plan. `workhorse schema migrate` exposes the same step from the CLI. An already-current schema is
-left unchanged. `sql/migrations/` is empty; the first step lands with the first schema change
-after the baseline.
+left unchanged. The current baseline needs no incremental migration.
 
 ## Migration execution contract
 

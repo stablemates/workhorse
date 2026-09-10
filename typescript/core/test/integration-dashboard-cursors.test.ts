@@ -106,7 +106,7 @@ describe("dashboard cursor pages", () => {
     for (const window of ["15m", "1h", "24h"]) {
       const result = await database.pool.query<{
         result: { window: string; outcomes: unknown[]; kpis: unknown };
-      }>("SELECT workhorse.dashboard_system_v2($1::jsonb) AS result", [JSON.stringify({ window })]);
+      }>("SELECT workhorse.dashboard_system_v1($1::jsonb) AS result", [JSON.stringify({ window })]);
       expect(result.rows[0]!.result.window).toBe(window);
       expect(result.rows[0]!.result.outcomes.length).toBeGreaterThan(0);
       expect(result.rows[0]!.result.kpis).toHaveProperty("queueWait");

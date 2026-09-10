@@ -37,8 +37,7 @@ export {
 };
 
 // Version 1 is the permanent baseline, installed whole from sql/schema.sql; every later version
-// arrives as one ordered, immutable step here. 0.1.0 publishes the baseline and no step, so the
-// first entry lands with the first schema change after it.
+// arrives as one ordered, immutable step here.
 const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [];
 
 function sqlAsset(relativePath: string): URL {
@@ -65,7 +64,7 @@ export interface WorkerClientProtocol {
  * This is the evidence that step is gated on. It is evidence and not proof: producers never
  * register, so a protocol absent here may still have callers.
  *
- * A schema below version 2 has no such function, which is the normal first half of a rolling
+ * An older schema may lack this function, which is the normal first half of a rolling
  * upgrade. That returns `null` rather than throwing, because the command an operator runs to
  * discover the schema is behind must not fail on the schema being behind.
  */

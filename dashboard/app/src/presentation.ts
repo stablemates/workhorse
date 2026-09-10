@@ -724,10 +724,10 @@ export interface TaskRowActionGroup {
  *
  * A terminal outcome is immutable, an already-requested cancellation is not repeated, and an active
  * task is described as cooperative rather than forced. The row never promises more than
- * `Queue.cancel` delivers, and it never offers a one-click cancel: the item opens the task drawer
+ * `Queue.cancel` delivers, and it never offers a one-click cancel: the item opens a confirmation dialog
  * where the irreversibility is stated and an optional reason is recorded.
  */
-function cancelRowAction(job: DashboardJobRow): TaskRowAction {
+function cancelRowAction(job: TaskActionTarget): TaskRowAction {
   const destructive = true;
   if (isTerminalTaskState(job.state)) {
     return {
@@ -778,7 +778,7 @@ function cancelRowAction(job: DashboardJobRow): TaskRowAction {
  * resumed. Every refusal names its reason so the operator learns it here rather than from a menu
  * item that is simply dim.
  */
-function runNowRowAction(job: DashboardJobRow, supported: boolean): TaskRowAction {
+function runNowRowAction(job: TaskActionTarget, supported: boolean): TaskRowAction {
   const destructive = false;
   if (!supported) {
     return {
@@ -847,7 +847,7 @@ function runNowRowAction(job: DashboardJobRow, supported: boolean): TaskRowActio
  * label says "as a new task" everywhere it appears, because redrive never restarts the failure an
  * operator is looking at: the original stays failed and a copy is enqueued beside it.
  */
-function redriveRowAction(job: DashboardJobRow): TaskRowAction {
+function redriveRowAction(job: TaskActionTarget): TaskRowAction {
   const destructive = false;
   if (job.state === "failed") {
     return { id: "redrive", label: "Redrive as a new task…", unavailable: null, destructive };
@@ -868,7 +868,7 @@ function redriveRowAction(job: DashboardJobRow): TaskRowAction {
   };
 }
 
-function completeHumanWaitRowAction(job: DashboardJobRow, supported: boolean): TaskRowAction {
+function completeHumanWaitRowAction(job: TaskActionTarget, supported: boolean): TaskRowAction {
   const quickAction = job.humanWait ? humanWaitQuickAction(job.humanWait.context) : null;
   if (!job.humanWait) {
     return {
@@ -900,6 +900,21 @@ function completeHumanWaitRowAction(job: DashboardJobRow, supported: boolean): T
  * What the connected host is able to do, so the menu can state a capability limit as a reason
  * rather than by quietly dropping an item.
  */
+export type TaskActionTarget = Pick<
+  DashboardJobRow,
+  | "id"
+  | "type"
+  | "queue"
+  | "state"
+  | "workerId"
+  | "lastWorkerId"
+  | "cancellation"
+  | "waitName"
+  | "wait"
+  | "humanWait"
+> & { payload?: unknown };
+
+/** What the connected host can do, so unavailable actions explain the capability limit. */
 export interface TaskRowActionCapabilities {
   /** True when the host exposes `runTaskNow`. */
   runNow: boolean;
@@ -917,7 +932,7 @@ export interface TaskRowActionCapabilities {
  * limit rather than as a missing feature.
  */
 export function taskRowActionGroups(
-  job: DashboardJobRow,
+  job: TaskActionTarget,
   capabilities: TaskRowActionCapabilities = { runNow: true, completeHumanWait: true },
 ): TaskRowActionGroup[] {
   const worker = job.workerId ?? job.lastWorkerId;

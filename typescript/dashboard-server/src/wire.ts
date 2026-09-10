@@ -361,6 +361,8 @@ export interface DashboardJobRow extends Record<string, unknown> {
    * metadata on the initial `enqueued` event, so an unkeyed task stays exactly as it was.
    */
   keyed: boolean;
+  /** Accepted mode from the initial enqueue event; absent on older dashboard hosts. */
+  enqueueMode?: "idempotency" | "debounce" | "throttle" | null;
   /**
    * Cooperative cancellation recorded against this live task, or null when none was requested.
    * A canceled task carries its request on the terminal outcome instead and reports null here.
@@ -973,6 +975,9 @@ export interface DashboardMetricBucket {
 }
 
 export interface DashboardJobDetail {
+  tags: string[];
+  humanWait: DashboardHumanWaitSummary | null;
+  canCompleteHumanWait: boolean;
   identity: {
     id: string;
     queue: string;

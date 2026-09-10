@@ -491,6 +491,32 @@
               }
             ]
           },
+          "worker": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "search": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "types": {
             "default": [],
             "maxItems": 42,
@@ -2937,6 +2963,25 @@
     "DashboardJobDetail": {
       "type": "object",
       "properties": {
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "humanWait": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DashboardHumanWaitSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "canCompleteHumanWait": {
+          "type": "boolean"
+        },
         "identity": {
           "type": "object",
           "properties": {
@@ -3856,6 +3901,9 @@
         }
       },
       "required": [
+        "tags",
+        "humanWait",
+        "canCompleteHumanWait",
         "identity",
         "dependencyLineage",
         "childLineage",
@@ -4006,6 +4054,22 @@
         },
         "keyed": {
           "type": "boolean"
+        },
+        "enqueueMode": {
+          "anyOf": [
+            {
+              "const": "debounce"
+            },
+            {
+              "const": "idempotency"
+            },
+            {
+              "const": "throttle"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "cancellation": {
           "anyOf": [

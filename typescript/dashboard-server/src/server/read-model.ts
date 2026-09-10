@@ -242,7 +242,7 @@ export async function readDashboardSystem(
 ): Promise<DashboardSystemPage> {
   const input = JSON.stringify({ window });
   const rows = await database.execute<{ result: DashboardSystemPage }>(sql`
-    SELECT workhorse.dashboard_system_v2(${input}::jsonb) AS result
+    SELECT workhorse.dashboard_system_v1(${input}::jsonb) AS result
   `);
   return expectOneRow(rows, "the dashboard system procedure").result;
 }
@@ -267,8 +267,9 @@ export async function readDashboardJobDetail(
   canSignal = false,
   _readQueueHealth?: DashboardQueueHealthReader,
   redactErrorStacks = false,
+  canCompleteHumanWait = false,
 ): Promise<DashboardJobDetail | null> {
-  const input = JSON.stringify({ id, canSignal });
+  const input = JSON.stringify({ id, canSignal, canCompleteHumanWait });
   const result = await database.execute<{ result: DashboardJobDetail | null }>(sql`
     SELECT workhorse.dashboard_job_detail_v1(${input}::jsonb) AS result
   `);
@@ -330,6 +331,8 @@ export function redactDashboardJobDetailErrorStacks(
  * needs the export; no subpath re-exports it.
  */
 export interface DashboardEventsQuery {
+  worker?: string | null;
+  search?: string | null;
   window?: DashboardEventsWindow;
   /** 1-based page index. */
   page?: number;

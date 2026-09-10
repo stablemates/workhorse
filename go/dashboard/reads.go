@@ -110,6 +110,7 @@ func (service *backend) previewRetentionPolicy(ctx context.Context, input any, _
 func (service *backend) jobDetail(ctx context.Context, input any, _ string) (any, error) {
 	value, _ := document(input)
 	value["canSignal"] = !service.readOnly
+	value["canCompleteHumanWait"] = !service.readOnly
 	result, err := service.jsonQuery(
 		ctx,
 		"SELECT workhorse.dashboard_job_detail_v1($1::jsonb) AS result",

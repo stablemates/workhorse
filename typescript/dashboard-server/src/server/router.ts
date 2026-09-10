@@ -219,6 +219,8 @@ const eventsInput = z.object({
   kind: z.enum(["all", "event", "attempt"]).default("all"),
   queue: dashboardFilterString.nullable().default(null),
   jobType: dashboardFilterString.nullable().default(null),
+  worker: dashboardFilterString.nullable().default(null),
+  search: dashboardFilterString.nullable().default(null),
   types: z.array(eventType).max(eventType.options.length).default([]),
   jobId: z.uuid().nullable().default(null),
 });
@@ -471,6 +473,7 @@ export const dashboardRouter = {
         context.operator.mode === "writable" && Boolean(context.taskController?.signalTask),
         context.readQueueHealth,
         context.redactErrorStacks,
+        context.operator.mode === "writable" && Boolean(context.taskController?.completeHumanWait),
       );
       if (!detail) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
       return detail;

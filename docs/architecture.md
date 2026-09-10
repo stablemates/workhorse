@@ -2,19 +2,17 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript and Go `Queue`, `Admin`, and `Worker` remain thin protocol clients.
 
-The current schema version is 2. Version 1 is the permanent migration baseline
-(`WORKHORSE_SCHEMA_BASELINE_VERSION`) frozen at the 0.1.0 release.
+The current schema version and migration baseline are 1 (`WORKHORSE_SCHEMA_BASELINE_VERSION`).
+`sql/releases/0001.sql` contains the baseline clean-install artifact.
 
 `installSchema` reads `sql/schema.sql` and accepts a fresh database or an already-current schema.
 `migrateSchema` applies `SCHEMA_MIGRATIONS` from `sql/migrations/` through the same path as
-`workhorse schema migrate`. Migration `0002-dashboard-reads.sql` adds cursor task browsing and
-shared system statistics. It retains every version 1 function.
+`workhorse schema migrate`. The current migration plan is empty.
 
-A clean installation records `(1, 'baseline')` and `(2, 'dashboard read optimizations')` in
-`workhorse.schema_migration`. A migrated database carries the same lineage.
+A clean installation records `(1, 'baseline')` in `workhorse.schema_migration`.
 `workhorse.protocol_version` records the served
 SQL protocol versions (currently 1) independently of that history; `readProtocolVersions` reads it
-and returns null below version 44. `migrateSchema` delegates ordered execution to the internal
+and returns null when that table is absent. `migrateSchema` delegates ordered execution to the internal
 `applySchemaMigrationPlan` function. Its `SchemaMigrationPlan` has `baselineVersion`,
 `currentVersion`, `steps`, and `readStep` fields. Each `SchemaMigrationStep` has `fromVersion`,
 `toVersion`, `file`, and `description` fields.
@@ -2165,7 +2163,7 @@ named non-negative integer values. `revert_queue_health_policy_v1` restores name
 defaults. `get_queue_health_policy_v1` returns the policy row. `QueueHealth.budgets` reports the
 values used for the returned verdict; callers cannot supply per-call thresholds.
 
-`workhorse health --json` writes the same `QueueHealth` object and exits 2 when the level is not `healthy`. `createDashboardQueueHealthReader` calls `Admin.health()` on the workspace's `Admin`, so the dashboard reads the health snapshot through the same public operator method any application uses and holds no conversion of its own. It shares an in-flight read and its resolved `QueueHealth` for 3,000 milliseconds. The readers in one host workspace's `DashboardRpcContext` use that cache. A failed read is never cached. `dashboard_system_v2` and `dashboard_settings_v1` call `queue_health_v1` inside PostgreSQL instead. `DashboardSystemPage.status` carries `level` and the raw reasons. The SPA derives human wording through `healthCheckMessages` and adds no thresholds. `DashboardSystemPage.kpis` also projects `dependencies`, `children`, and `externalWaits` from the same snapshot for current-pressure drill-downs. `dashboard_system_v2` groups ready rows by `queue_name` and `priority`. Each `DashboardSystemQueueRow.priorityBacklog` returns `priority`, `ready`, and `oldestReadyMs`, ordered by priority descending. PostgreSQL orders queue rows by `queue_name`; the SPA applies display-risk order.
+`workhorse health --json` writes the same `QueueHealth` object and exits 2 when the level is not `healthy`. `createDashboardQueueHealthReader` calls `Admin.health()` on the workspace's `Admin`, so the dashboard reads the health snapshot through the same public operator method any application uses and holds no conversion of its own. It shares an in-flight read and its resolved `QueueHealth` for 3,000 milliseconds. The readers in one host workspace's `DashboardRpcContext` use that cache. A failed read is never cached. `dashboard_system_v1` and `dashboard_settings_v1` call `queue_health_v1` inside PostgreSQL instead. `DashboardSystemPage.status` carries `level` and the raw reasons. The SPA derives human wording through `healthCheckMessages` and adds no thresholds. `DashboardSystemPage.kpis` also projects `dependencies`, `children`, and `externalWaits` from the same snapshot for current-pressure drill-downs. `dashboard_system_v1` groups ready rows by `queue_name` and `priority`. Each `DashboardSystemQueueRow.priorityBacklog` returns `priority`, `ready`, and `oldestReadyMs`, ordered by priority descending. PostgreSQL orders queue rows by `queue_name`; the SPA applies display-risk order.
 
 Retention health includes the persisted policy, oldest retained timestamps, per-category cleanup lag, counts of fully eligible event and attempt partitions, and bounded row counts for both default partitions. Fallback counts are exact through 10,000 rows; `defaultHistoryRowsCapped` marks 10,001 as a lower bound. Live jobs are excluded from terminal identity lag. History lag is based only on fully droppable partitions or expired default rows, not the intentionally retained partial boundary day.
 
@@ -2253,10 +2251,19 @@ the backend calls the function. The function disables JIT because compiling its 
 plan costs more than executing the bounded reads. It returns the complete version 1 events JSON
 document, including retention days from `dashboard_retention_policy_v1`.
 
+The event listing also accepts `worker` and `search`.
+Both filters apply before source limits and in the total count.
+`worker` matches the recorded attempt worker, including lifecycle records linked to that attempt.
+An event's explicit `details.worker_id` takes precedence over the linked attempt worker.
+`search` performs a case-insensitive literal substring match across task ID, queue, type, event name, worker, and recorded details or error message.
+Both strings are limited to 200 characters.
+
 `dashboard_event_detail_v1(p_input jsonb)` accepts the stable `event:<UUIDv7 event_id>` or
 `attempt:<UUIDv7 attempt_id>` identity. It returns the complete version 1 event-detail JSON document.
 The document includes attempt timing and error fields. A malformed or missing identity returns SQL
 `NULL`. Backends map SQL `NULL` to the version 1 `NOT_FOUND` error.
+
+Event details use the same attempt-linked worker resolution as the event listing.
 
 `dashboard_workers_v1(p_input jsonb)` accepts `configuredWorkers` and `canManageWorkers`. It
 returns the complete version 1 worker-page JSON document. The worker fleet combines configured
@@ -2296,7 +2303,11 @@ supplies current concurrency utilization only for a live job. The function retur
 when `id` does not exist. TypeScript replaces the returned `durability: null` with
 `DashboardDurabilityProjector`; Python and Go leave it null.
 
-After the backend validates the input, `dashboard_system_v2(p_input jsonb)` accepts `window` as
+`dashboard_job_detail_v1(p_input jsonb)` also returns `tags`, `humanWait`, and `canCompleteHumanWait`.
+The host supplies `canCompleteHumanWait` from its operator mode and completion capability.
+The shared SPA uses these fields for the same action menu shown in task listings.
+
+After the backend validates the input, `dashboard_system_v1(p_input jsonb)` accepts `window` as
 `15m`, `1h`, or `24h`. It returns the complete version 1 system-page JSON document. The function
 calls `queue_health_v1()` once per invocation. PostgreSQL owns the rolling statistics, queue and
 priority backlog, retry buckets, failing types, retention, storage, partition, admission-policy,
@@ -2334,9 +2345,18 @@ without a dashboard release when it preserves these view and function contracts.
 coalescing, dependency, child, signal, human-wait, progress, and cancellation events. The Events
 feed exposes that vocabulary as filter values. The task drawer renders every returned event and
 uses a humanized type name with a neutral color when a newer SQL producer returns an unknown type.
-Its coalescing section reads only `scope`, `key_digest`, `key_length`, `window_ms`, `schedule`, and
-`expires_at` from `details.debounce` or `details.throttle`. It counts `debounced`, `throttled`, and
-`debounce_rejected` events and never reads `key_preview` or a raw key.
+`TaskEnqueueSection` renders one accepted mode: Idempotency, Debounce, or Throttle.
+Debounce and throttle acceptance events also contain shared idempotency metadata; the drawer does not render a second Idempotency section for them.
+`coalescingEvidenceFor` reads `scope`, `key_digest`, `key_length`, `window_ms`, `schedule`, and
+`expires_at` from `details.debounce` or `details.throttle` on `enqueued`, `debounced`, and `throttled` events.
+Debounce uses the latest accepted settings; throttle preserves its initial acceptance window when that event remains available.
+The section counts `debounced` or `throttled` events and, for debounce tasks, `debounce_rejected` events.
+Rejected proposals remain visible in Task history and never establish the task's accepted mode.
+The initial request digest comes from safe idempotency metadata; neither section reads `key_preview` or a raw key.
+The listing's optional `enqueueMode` is `idempotency`, `debounce`, `throttle`, or null, derived from the initial `enqueued` event.
+`dashboard_tasks_v1` and `dashboard_tasks_cursor_v1` expose this field using the existing page-scoped event lookup.
+The UI labels each accepted mode explicitly and falls back to Keyed for older hosts that only supply `keyed`.
+The enqueue menu groups Idempotency, Debounce, and Throttle under Enqueue behavior.
 
 `@stablemates/workhorse-dashboard-contract` exports `DashboardCommandOptions`, `RunningDashboard`, and
 `DashboardStandaloneModule<Database>`. The package contains declarations only and imports neither
@@ -3098,7 +3118,7 @@ The SPA shares identical in-flight reads by route and filter. Background refresh
 identical pending page request. After a mutation, a foreground refresh waits for an older read
 and then fetches the committed result. Failures release the pending entry so a later refresh can retry.
 
-`dashboard_system_v2` captures one timestamp for its window bounds and response timestamp.
+`dashboard_system_v1` captures one timestamp for its window bounds and response timestamp.
 A materialized CTE reads the current statistics window once for outcomes, summaries, queue-wait
 percentiles, queue rates, and failing types. The previous comparison window is read separately.
 The retained `dashboard_system_v1` remains callable by older clients.
