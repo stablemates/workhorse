@@ -87,7 +87,7 @@ describe("the llms.txt sections", () => {
   });
 
   it("list every CLI command the binary declares, and only those", () => {
-    const section = renderCliSection(site, { api, operations });
+    const section = renderCliSection(site, { api, installation, operations });
     expect(section.startsWith("## Command line\n")).toBe(true);
     for (const command of CLI_COMMANDS) {
       expect(section).toContain(`- \`workhorse ${command.name}\`: `);
@@ -98,6 +98,8 @@ describe("the llms.txt sections", () => {
     expect(section).not.toMatch(/npx workhorse\b/);
     expect(section).toContain("npm exec --no -- workhorse");
     expect(section).toContain("no Homebrew formula and no PyPI script");
+    expect(section).toContain("`schema.sql`");
+    expect(section).toContain("https://workhorse.run/docs/installation.md");
   });
 
   it("name the machine-readable files and the negotiation rule", () => {

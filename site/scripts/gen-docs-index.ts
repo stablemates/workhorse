@@ -730,7 +730,7 @@ version, and the runtime compatibility check confirms the schema before a proces
 
 ${renderWhenToUse(site, { entryPoint, installation, limitations })}
 ${structure.map((group) => llmsSection(group)).join("\n")}
-${renderCliSection(site, { api: apiPage, operations })}
+${renderCliSection(site, { api: apiPage, installation, operations })}
 ${renderMachineReadable(site)}
 ## Optional
 
