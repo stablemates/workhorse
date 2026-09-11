@@ -71,8 +71,8 @@ PARALLEL SAFE
 AS $$
   SELECT CASE WHEN NOT COALESCE(p_redact, false) OR p_error IS NULL THEN p_error
     ELSE jsonb_build_object(
-      'name', 'RedactedJobError',
-      'message', 'Job handler failed; details redacted'
+      'name', 'RedactedTaskError',
+      'message', 'Task handler failed; details redacted'
     ) END;
 $$;
 
@@ -134,7 +134,7 @@ END;
 $$;
 
 -- Safe, bounded cancellation diagnostics. requested_by is attribution only and does not assert that
--- the caller was authorized to cancel the job.
+-- the caller was authorized to cancel the task.
 CREATE OR REPLACE FUNCTION workhorse.cancellation_envelope_v1(
   p_requested_at timestamptz, p_requested_by text, p_reason text
 ) RETURNS jsonb
@@ -144,7 +144,7 @@ PARALLEL SAFE
 AS $$
   SELECT jsonb_build_object(
     'name', 'CancellationRequested',
-    'message', 'job cancellation was requested',
+    'message', 'task cancellation was requested',
     'requested_at', p_requested_at,
     'requested_by', p_requested_by,
     'reason', p_reason
@@ -210,7 +210,7 @@ END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.retry_delay_v1(
-  p_job_id uuid, p_attempt integer, p_policy jsonb, p_previous_retry_delay_ms bigint,
+  p_task_id uuid, p_attempt integer, p_policy jsonb, p_previous_retry_delay_ms bigint,
   p_override_delay_ms integer, p_omitted_source text
 ) RETURNS TABLE (delay_ms bigint, source text, next_previous_retry_delay_ms bigint)
 LANGUAGE plpgsql
@@ -222,7 +222,7 @@ DECLARE
   v_upper bigint;
   v_hash bigint;
 BEGIN
-  IF p_job_id IS NULL OR p_attempt < 1 THEN RAISE EXCEPTION 'job identity and attempt are required'; END IF;
+  IF p_task_id IS NULL OR p_attempt < 1 THEN RAISE EXCEPTION 'task identity and attempt are required'; END IF;
   IF p_override_delay_ms IS NOT NULL THEN
     delay_ms := GREATEST(0, p_override_delay_ms); source := 'override';
   ELSIF v_policy IS NULL THEN
@@ -248,7 +248,7 @@ BEGIN
     IF v_upper = v_base THEN delay_ms := v_base;
     ELSE
       v_hash := hashtextextended(
-        p_job_id::text || ':' || p_attempt::text || ':' ||
+        p_task_id::text || ':' || p_attempt::text || ':' ||
         COALESCE(p_previous_retry_delay_ms::text, 'null'),
         0
       );
@@ -280,7 +280,7 @@ CREATE TABLE IF NOT EXISTS workhorse.queue_control (
 );
 
 -- A purge request is both the destructive-operation audit record and its replay barrier. The raw
--- request id is never stored, and a replay returns the original count without touching jobs that
+-- request id is never stored, and a replay returns the original count without touching tasks that
 -- arrived after the first purge committed.
 CREATE TABLE IF NOT EXISTS workhorse.queue_purge_request (
   request_id_hash bytea PRIMARY KEY CHECK (octet_length(request_id_hash) = 32),
@@ -379,7 +379,7 @@ CREATE TABLE IF NOT EXISTS workhorse.worker_registry (
   heartbeat_ms integer NOT NULL CHECK (heartbeat_ms > 0 AND heartbeat_ms < lease_ms),
   poll_ms integer NOT NULL CHECK (poll_ms >= 0),
   maintenance_interval_ms integer NOT NULL CHECK (maintenance_interval_ms >= 100),
-  maintenance_task_poll_ms integer NOT NULL CHECK (maintenance_task_poll_ms >= 100),
+  maintenance_routine_poll_ms integer NOT NULL CHECK (maintenance_routine_poll_ms >= 100),
   registry_interval_ms integer NOT NULL CHECK (registry_interval_ms >= 100),
   active_slots integer NOT NULL DEFAULT 0 CHECK (active_slots >= 0),
   draining boolean NOT NULL DEFAULT false,
@@ -433,12 +433,12 @@ CREATE INDEX IF NOT EXISTS worker_registry_heartbeat_idx
 CREATE INDEX IF NOT EXISTS worker_registry_queue_idx
   ON workhorse.worker_registry (queue_name, worker_id);
 
--- Stable accepted-job identity and definition. Keyed debounce may replace the definition only
+-- Stable accepted-task identity and definition. Keyed debounce may replace the definition only
 -- while its runtime remains pending; dispatch makes the accepted definition immutable.
-CREATE TABLE IF NOT EXISTS workhorse.job (
+CREATE TABLE IF NOT EXISTS workhorse.task (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   queue_name text NOT NULL CHECK (queue_name <> ''),
-  job_type text NOT NULL CHECK (job_type <> ''),
+  task_type text NOT NULL CHECK (task_type <> ''),
   concurrency_key text CHECK (
     concurrency_key IS NULL OR (concurrency_key <> '' AND octet_length(concurrency_key) <= 256)
   ),
@@ -457,12 +457,12 @@ CREATE TABLE IF NOT EXISTS workhorse.job (
   result_redact_keys text[] NOT NULL DEFAULT '{}'
     CHECK (workhorse.valid_contract_redact_keys_v1(result_redact_keys)),
   trace_context jsonb
-    CONSTRAINT job_trace_context_valid CHECK (workhorse.valid_trace_context_v1(trace_context)),
+    CONSTRAINT task_trace_context_valid CHECK (workhorse.valid_trace_context_v1(trace_context)),
   tags text[] NOT NULL DEFAULT '{}'
-    CONSTRAINT job_tags_valid CHECK (workhorse.valid_tags_v1(tags)),
+    CONSTRAINT task_tags_valid CHECK (workhorse.valid_tags_v1(tags)),
   max_attempts integer NOT NULL CHECK (max_attempts BETWEEN 1 AND 100),
   retry_policy jsonb
-    CONSTRAINT job_retry_policy_normalized CHECK (
+    CONSTRAINT task_retry_policy_normalized CHECK (
       retry_policy IS NULL OR (
         retry_policy <> 'null'::jsonb
         AND retry_policy = workhorse.normalize_retry_policy_v1(retry_policy)
@@ -474,70 +474,70 @@ CREATE TABLE IF NOT EXISTS workhorse.job (
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   priority integer NOT NULL DEFAULT 0 CHECK (priority BETWEEN 0 AND 100)
 );
--- GIN indexes array elements so overlap and containment tag filters avoid scanning every job row.
-CREATE INDEX IF NOT EXISTS job_tags_gin_idx ON workhorse.job USING gin (tags);
-CREATE INDEX IF NOT EXISTS job_created_retention_idx ON workhorse.job (created_at, id);
+-- GIN indexes array elements so overlap and containment tag filters avoid scanning every task row.
+CREATE INDEX IF NOT EXISTS task_tags_gin_idx ON workhorse.task USING gin (tags);
+CREATE INDEX IF NOT EXISTS task_created_retention_idx ON workhorse.task (created_at, id);
 
 -- Bounded prerequisite edges. Prerequisite references deliberately restrict identity pruning so
 -- retention cannot strand blocked work. Terminal-storage maintenance removes released edges after
 -- the dependent is terminal, when dispatch no longer needs the edge and retained lineage may age.
-CREATE TABLE IF NOT EXISTS workhorse.job_dependency (
-  dependent_job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE CASCADE,
-  prerequisite_job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE RESTRICT,
+CREATE TABLE IF NOT EXISTS workhorse.task_dependency (
+  dependent_task_id uuid NOT NULL REFERENCES workhorse.task(id) ON DELETE CASCADE,
+  prerequisite_task_id uuid NOT NULL REFERENCES workhorse.task(id) ON DELETE RESTRICT,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   released_at timestamptz,
   on_failure text NOT NULL CHECK (on_failure IN ('release', 'cancel', 'fail')),
   on_cancellation text NOT NULL CHECK (on_cancellation IN ('release', 'cancel', 'fail')),
   on_success text NOT NULL CHECK (on_success IN ('release', 'cancel', 'fail')),
   resolution text CHECK (resolution IN ('release', 'cancel', 'fail')),
-  PRIMARY KEY (dependent_job_id, prerequisite_job_id),
-  CHECK (dependent_job_id <> prerequisite_job_id),
+  PRIMARY KEY (dependent_task_id, prerequisite_task_id),
+  CHECK (dependent_task_id <> prerequisite_task_id),
   CHECK (
     (released_at IS NULL AND resolution IS NULL)
     OR (released_at >= created_at AND resolution IS NOT NULL)
   )
 );
-CREATE INDEX IF NOT EXISTS job_dependency_prerequisite_pending_idx
-  ON workhorse.job_dependency (prerequisite_job_id, dependent_job_id)
+CREATE INDEX IF NOT EXISTS task_dependency_prerequisite_pending_idx
+  ON workhorse.task_dependency (prerequisite_task_id, dependent_task_id)
   WHERE released_at IS NULL;
-CREATE INDEX IF NOT EXISTS job_dependency_prerequisite_idx
-  ON workhorse.job_dependency (prerequisite_job_id, dependent_job_id);
-CREATE INDEX IF NOT EXISTS job_dependency_dependent_pending_idx
-  ON workhorse.job_dependency (dependent_job_id, prerequisite_job_id)
+CREATE INDEX IF NOT EXISTS task_dependency_prerequisite_idx
+  ON workhorse.task_dependency (prerequisite_task_id, dependent_task_id);
+CREATE INDEX IF NOT EXISTS task_dependency_dependent_pending_idx
+  ON workhorse.task_dependency (dependent_task_id, prerequisite_task_id)
   WHERE released_at IS NULL;
-CREATE INDEX IF NOT EXISTS job_dependency_released_retention_idx
-  ON workhorse.job_dependency (released_at, dependent_job_id, prerequisite_job_id)
+CREATE INDEX IF NOT EXISTS task_dependency_released_retention_idx
+  ON workhorse.task_dependency (released_at, dependent_task_id, prerequisite_task_id)
   WHERE released_at IS NOT NULL;
 
 -- Immutable named child edges support bounded fan-out. The parent owns edge lifetime. Retention
 -- only removes it after every child is terminal and outside the configured evidence windows.
-CREATE TABLE IF NOT EXISTS workhorse.job_child (
-  parent_job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE CASCADE,
-  child_job_id uuid NOT NULL UNIQUE REFERENCES workhorse.job(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS workhorse.task_child (
+  parent_task_id uuid NOT NULL REFERENCES workhorse.task(id) ON DELETE CASCADE,
+  child_task_id uuid NOT NULL UNIQUE REFERENCES workhorse.task(id) ON DELETE CASCADE,
   child_name text NOT NULL CHECK (child_name <> '' AND char_length(child_name) <= 200),
   request_fingerprint jsonb NOT NULL,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   joined_at timestamptz,
   created_as_set boolean NOT NULL DEFAULT false,
-  PRIMARY KEY (parent_job_id, child_name),
-  CHECK (parent_job_id <> child_job_id),
+  PRIMARY KEY (parent_task_id, child_name),
+  CHECK (parent_task_id <> child_task_id),
   CHECK (joined_at IS NULL OR joined_at >= created_at)
 );
-CREATE INDEX IF NOT EXISTS job_child_unjoined_idx
-  ON workhorse.job_child (parent_job_id, child_job_id) WHERE joined_at IS NULL;
-CREATE OR REPLACE FUNCTION workhorse.reject_self_job_dependency_v1()
+CREATE INDEX IF NOT EXISTS task_child_unjoined_idx
+  ON workhorse.task_child (parent_task_id, child_task_id) WHERE joined_at IS NULL;
+CREATE OR REPLACE FUNCTION workhorse.reject_self_task_dependency_v1()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  IF NEW.dependent_job_id = NEW.prerequisite_job_id THEN
+  IF NEW.dependent_task_id = NEW.prerequisite_task_id THEN
     RAISE EXCEPTION USING
       ERRCODE = 'P1003',
       MESSAGE = 'dependency cycle rejected',
       DETAIL = jsonb_build_object(
-        'dependentJobId', NEW.dependent_job_id,
-        'prerequisiteJobId', NEW.prerequisite_job_id,
-        'cycleJobIds', jsonb_build_array(NEW.dependent_job_id, NEW.prerequisite_job_id),
+        'dependentTaskId', NEW.dependent_task_id,
+        'prerequisiteTaskId', NEW.prerequisite_task_id,
+        'cycleTaskIds', jsonb_build_array(NEW.dependent_task_id, NEW.prerequisite_task_id),
         'truncated', false
       )::text;
   END IF;
@@ -545,79 +545,79 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.validate_job_dependencies_v1()
+CREATE OR REPLACE FUNCTION workhorse.validate_task_dependencies_v1()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_component_job_id text;
+  v_component_task_id text;
   v_cycle uuid[];
   v_fan_out_root uuid;
-  v_limit_job_id uuid;
+  v_limit_task_id uuid;
 BEGIN
-  -- Lock every job in each pre-existing component touched by this statement in canonical order.
+  -- Lock every task in each pre-existing component touched by this statement in canonical order.
   -- Transactions which mutate disconnected components proceed independently. Mutations which
   -- overlap a component share a lock even when a concurrent commit has just merged its root.
-  FOR v_component_job_id IN
-    WITH RECURSIVE inserted_jobs(job_id) AS (
-      SELECT inserted.dependent_job_id FROM inserted_dependencies inserted
+  FOR v_component_task_id IN
+    WITH RECURSIVE inserted_tasks(task_id) AS (
+      SELECT inserted.dependent_task_id FROM inserted_dependencies inserted
       UNION
-      SELECT inserted.prerequisite_job_id FROM inserted_dependencies inserted
-    ), component(seed_job_id, job_id) AS (
-      SELECT inserted_jobs.job_id, inserted_jobs.job_id FROM inserted_jobs
+      SELECT inserted.prerequisite_task_id FROM inserted_dependencies inserted
+    ), component(seed_task_id, task_id) AS (
+      SELECT inserted_tasks.task_id, inserted_tasks.task_id FROM inserted_tasks
       UNION
-      SELECT component.seed_job_id, neighbor.job_id
+      SELECT component.seed_task_id, neighbor.task_id
         FROM component
         CROSS JOIN LATERAL (
-          SELECT dependency.prerequisite_job_id AS job_id
-            FROM workhorse.job_dependency dependency
-           WHERE dependency.dependent_job_id = component.job_id
+          SELECT dependency.prerequisite_task_id AS task_id
+            FROM workhorse.task_dependency dependency
+           WHERE dependency.dependent_task_id = component.task_id
              AND NOT EXISTS (
                SELECT 1 FROM inserted_dependencies inserted
-                WHERE inserted.dependent_job_id = dependency.dependent_job_id
-                  AND inserted.prerequisite_job_id = dependency.prerequisite_job_id
+                WHERE inserted.dependent_task_id = dependency.dependent_task_id
+                  AND inserted.prerequisite_task_id = dependency.prerequisite_task_id
              )
           UNION
-          SELECT dependency.dependent_job_id
-            FROM workhorse.job_dependency dependency
-           WHERE dependency.prerequisite_job_id = component.job_id
+          SELECT dependency.dependent_task_id
+            FROM workhorse.task_dependency dependency
+           WHERE dependency.prerequisite_task_id = component.task_id
              AND NOT EXISTS (
                SELECT 1 FROM inserted_dependencies inserted
-                WHERE inserted.dependent_job_id = dependency.dependent_job_id
-                  AND inserted.prerequisite_job_id = dependency.prerequisite_job_id
+                WHERE inserted.dependent_task_id = dependency.dependent_task_id
+                  AND inserted.prerequisite_task_id = dependency.prerequisite_task_id
              )
         ) neighbor
     )
-    SELECT DISTINCT component.job_id::text
+    SELECT DISTINCT component.task_id::text
       FROM component
-     ORDER BY component.job_id::text
+     ORDER BY component.task_id::text
   LOOP
     PERFORM pg_advisory_xact_lock(hashtextextended(
-      'workhorse:job-dependency-component-job:' || v_component_job_id,
+      'workhorse:task-dependency-component-task:' || v_component_task_id,
       0
     ));
   END LOOP;
 
-  WITH RECURSIVE reachable(dependent_job_id, job_id, path) AS (
-    SELECT inserted.dependent_job_id,
-           inserted.prerequisite_job_id,
-           ARRAY[inserted.dependent_job_id, inserted.prerequisite_job_id]
+  WITH RECURSIVE reachable(dependent_task_id, task_id, path) AS (
+    SELECT inserted.dependent_task_id,
+           inserted.prerequisite_task_id,
+           ARRAY[inserted.dependent_task_id, inserted.prerequisite_task_id]
       FROM inserted_dependencies inserted
     UNION ALL
-    SELECT reachable.dependent_job_id,
-           edge.prerequisite_job_id,
-           reachable.path || edge.prerequisite_job_id
+    SELECT reachable.dependent_task_id,
+           edge.prerequisite_task_id,
+           reachable.path || edge.prerequisite_task_id
       FROM reachable
-      JOIN workhorse.job_dependency edge ON edge.dependent_job_id = reachable.job_id
+      JOIN workhorse.task_dependency edge ON edge.dependent_task_id = reachable.task_id
      WHERE (
-       edge.prerequisite_job_id = reachable.dependent_job_id
-       OR NOT edge.prerequisite_job_id = ANY(reachable.path)
+       edge.prerequisite_task_id = reachable.dependent_task_id
+       OR NOT edge.prerequisite_task_id = ANY(reachable.path)
      )
-       AND reachable.job_id <> reachable.dependent_job_id
+       AND reachable.task_id <> reachable.dependent_task_id
   )
   SELECT reachable.path INTO v_cycle
     FROM reachable
-   WHERE reachable.job_id = reachable.dependent_job_id
+   WHERE reachable.task_id = reachable.dependent_task_id
    ORDER BY cardinality(reachable.path)
    LIMIT 1;
   IF v_cycle IS NOT NULL THEN
@@ -625,131 +625,131 @@ BEGIN
       ERRCODE = 'P1003',
       MESSAGE = 'dependency cycle rejected',
       DETAIL = jsonb_build_object(
-        'dependentJobId', v_cycle[1],
-        'prerequisiteJobId', v_cycle[2],
-        'cycleJobIds', to_jsonb(v_cycle[1:101]),
+        'dependentTaskId', v_cycle[1],
+        'prerequisiteTaskId', v_cycle[2],
+        'cycleTaskIds', to_jsonb(v_cycle[1:101]),
         'truncated', cardinality(v_cycle) > 101
       )::text;
   END IF;
-  SELECT dependency.dependent_job_id INTO v_limit_job_id
-      FROM workhorse.job_dependency dependency
+  SELECT dependency.dependent_task_id INTO v_limit_task_id
+      FROM workhorse.task_dependency dependency
       JOIN (
-        SELECT DISTINCT inserted.dependent_job_id FROM inserted_dependencies inserted
+        SELECT DISTINCT inserted.dependent_task_id FROM inserted_dependencies inserted
          WHERE inserted.released_at IS NULL
-      ) touched USING (dependent_job_id)
+      ) touched USING (dependent_task_id)
      WHERE dependency.released_at IS NULL
-     GROUP BY dependency.dependent_job_id
+     GROUP BY dependency.dependent_task_id
     HAVING count(*) > 100
-     ORDER BY dependency.dependent_job_id
+     ORDER BY dependency.dependent_task_id
      LIMIT 1;
-  IF v_limit_job_id IS NOT NULL THEN
+  IF v_limit_task_id IS NOT NULL THEN
     RAISE EXCEPTION USING
       ERRCODE = 'P1005',
-      MESSAGE = 'a job accepts at most 100 prerequisite dependencies',
+      MESSAGE = 'a task accepts at most 100 prerequisite dependencies',
       DETAIL = jsonb_build_object(
-        'jobId', v_limit_job_id,
+        'taskId', v_limit_task_id,
         'limit', 'prerequisites',
         'max', 100
       )::text;
   END IF;
-  SELECT dependency.prerequisite_job_id INTO v_limit_job_id
-      FROM workhorse.job_dependency dependency
+  SELECT dependency.prerequisite_task_id INTO v_limit_task_id
+      FROM workhorse.task_dependency dependency
       JOIN (
-        SELECT DISTINCT inserted.prerequisite_job_id FROM inserted_dependencies inserted
-      ) touched USING (prerequisite_job_id)
-     GROUP BY dependency.prerequisite_job_id
+        SELECT DISTINCT inserted.prerequisite_task_id FROM inserted_dependencies inserted
+      ) touched USING (prerequisite_task_id)
+     GROUP BY dependency.prerequisite_task_id
     HAVING count(*) > 100
-     ORDER BY dependency.prerequisite_job_id
+     ORDER BY dependency.prerequisite_task_id
      LIMIT 1;
-  IF v_limit_job_id IS NOT NULL THEN
+  IF v_limit_task_id IS NOT NULL THEN
     RAISE EXCEPTION USING
       ERRCODE = 'P1005',
-      MESSAGE = 'a job accepts at most 100 dependent jobs',
+      MESSAGE = 'a task accepts at most 100 dependent tasks',
       DETAIL = jsonb_build_object(
-        'jobId', v_limit_job_id,
+        'taskId', v_limit_task_id,
         'limit', 'dependents',
         'max', 100
       )::text;
   END IF;
   IF EXISTS (SELECT 1 FROM inserted_dependencies inserted WHERE inserted.released_at IS NULL) THEN
-    WITH RECURSIVE affected(root_job_id) AS (
-      SELECT inserted.prerequisite_job_id
+    WITH RECURSIVE affected(root_task_id) AS (
+      SELECT inserted.prerequisite_task_id
         FROM inserted_dependencies inserted
        WHERE inserted.released_at IS NULL
       UNION
-      SELECT dependency.prerequisite_job_id
+      SELECT dependency.prerequisite_task_id
         FROM affected
-        JOIN workhorse.job_dependency dependency
-          ON dependency.dependent_job_id = affected.root_job_id
+        JOIN workhorse.task_dependency dependency
+          ON dependency.dependent_task_id = affected.root_task_id
          AND dependency.released_at IS NULL
-    ), reachable(root_job_id, dependent_job_id) AS (
-      SELECT affected.root_job_id, dependency.dependent_job_id
+    ), reachable(root_task_id, dependent_task_id) AS (
+      SELECT affected.root_task_id, dependency.dependent_task_id
         FROM affected
-        JOIN workhorse.job_dependency dependency
-          ON dependency.prerequisite_job_id = affected.root_job_id
+        JOIN workhorse.task_dependency dependency
+          ON dependency.prerequisite_task_id = affected.root_task_id
          AND dependency.released_at IS NULL
       UNION
-      SELECT reachable.root_job_id, dependency.dependent_job_id
+      SELECT reachable.root_task_id, dependency.dependent_task_id
         FROM reachable
-        JOIN workhorse.job_dependency dependency
-          ON dependency.prerequisite_job_id = reachable.dependent_job_id
+        JOIN workhorse.task_dependency dependency
+          ON dependency.prerequisite_task_id = reachable.dependent_task_id
          AND dependency.released_at IS NULL
     )
-    SELECT reachable.root_job_id INTO v_fan_out_root
+    SELECT reachable.root_task_id INTO v_fan_out_root
       FROM reachable
-     GROUP BY reachable.root_job_id
+     GROUP BY reachable.root_task_id
     HAVING count(*) > 100
-     ORDER BY reachable.root_job_id
+     ORDER BY reachable.root_task_id
      LIMIT 1;
     IF v_fan_out_root IS NOT NULL THEN
       RAISE EXCEPTION USING
         ERRCODE = 'P1005',
-        MESSAGE = 'a job accepts at most 100 unresolved transitive dependent jobs',
+        MESSAGE = 'a task accepts at most 100 unresolved transitive dependent tasks',
         DETAIL = jsonb_build_object(
-          'jobId', v_fan_out_root,
+          'taskId', v_fan_out_root,
           'limit', 'unresolved_dependents',
           'max', 100
         )::text;
     END IF;
   END IF;
   IF EXISTS (
-    SELECT dependency.dependent_job_id
-      FROM workhorse.job_dependency dependency
+    SELECT dependency.dependent_task_id
+      FROM workhorse.task_dependency dependency
       JOIN (
-        SELECT DISTINCT inserted.dependent_job_id FROM inserted_dependencies inserted
+        SELECT DISTINCT inserted.dependent_task_id FROM inserted_dependencies inserted
          WHERE inserted.released_at IS NULL
-      ) touched USING (dependent_job_id)
+      ) touched USING (dependent_task_id)
      WHERE dependency.released_at IS NULL
-     GROUP BY dependency.dependent_job_id
+     GROUP BY dependency.dependent_task_id
     HAVING count(DISTINCT (
       dependency.on_success,
       dependency.on_failure,
       dependency.on_cancellation
     )) > 1
   ) THEN
-    RAISE EXCEPTION 'every dependency edge for one job must use the same outcome policies';
+    RAISE EXCEPTION 'every dependency edge for one task must use the same outcome policies';
   END IF;
   RETURN NULL;
 END;
 $$;
 
-CREATE OR REPLACE TRIGGER job_dependency_reject_self_insert
-  BEFORE INSERT ON workhorse.job_dependency
-  FOR EACH ROW EXECUTE FUNCTION workhorse.reject_self_job_dependency_v1();
-CREATE OR REPLACE TRIGGER job_dependency_validate_insert
-  AFTER INSERT ON workhorse.job_dependency
+CREATE OR REPLACE TRIGGER task_dependency_reject_self_insert
+  BEFORE INSERT ON workhorse.task_dependency
+  FOR EACH ROW EXECUTE FUNCTION workhorse.reject_self_task_dependency_v1();
+CREATE OR REPLACE TRIGGER task_dependency_validate_insert
+  AFTER INSERT ON workhorse.task_dependency
   REFERENCING NEW TABLE AS inserted_dependencies
-  FOR EACH STATEMENT EXECUTE FUNCTION workhorse.validate_job_dependencies_v1();
+  FOR EACH STATEMENT EXECUTE FUNCTION workhorse.validate_task_dependencies_v1();
 
 -- PostgreSQL owns enqueue deduplication. The deferred reference lets enqueue reserve a scoped key
--- through the unique index before creating any job, event, FIFO, or notification side effects.
+-- through the unique index before creating any task, event, FIFO, or notification side effects.
 CREATE TABLE IF NOT EXISTS workhorse.enqueue_idempotency (
   idempotency_scope text NOT NULL CHECK (
     idempotency_scope <> '' AND octet_length(idempotency_scope) <= 256
   ),
   idempotency_key_hash bytea NOT NULL CHECK (octet_length(idempotency_key_hash) = 32),
   request_fingerprint jsonb NOT NULL,
-  job_id uuid NOT NULL REFERENCES workhorse.job(id) DEFERRABLE INITIALLY DEFERRED,
+  task_id uuid NOT NULL REFERENCES workhorse.task(id) DEFERRABLE INITIALLY DEFERRED,
   expires_at timestamptz NOT NULL CHECK (isfinite(expires_at)),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   coalescing_mode text NOT NULL DEFAULT 'idempotency'
@@ -758,33 +758,33 @@ CREATE TABLE IF NOT EXISTS workhorse.enqueue_idempotency (
 );
 CREATE INDEX IF NOT EXISTS enqueue_idempotency_expiry_idx
   ON workhorse.enqueue_idempotency (expires_at, idempotency_scope, idempotency_key_hash);
-CREATE INDEX IF NOT EXISTS enqueue_idempotency_job_idx
-  ON workhorse.enqueue_idempotency (job_id);
+CREATE INDEX IF NOT EXISTS enqueue_idempotency_task_idx
+  ON workhorse.enqueue_idempotency (task_id);
 
--- Immutable explicit restart boundaries. A name can be completed once for a stable job identity and
+-- Immutable explicit restart boundaries. A name can be completed once for a stable task identity and
 -- remains available across retries and terminal materialization.
-CREATE TABLE IF NOT EXISTS workhorse.job_checkpoint (
-  job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS workhorse.task_checkpoint (
+  task_id uuid NOT NULL REFERENCES workhorse.task(id) ON DELETE CASCADE,
   checkpoint_name text NOT NULL CHECK (
     checkpoint_name <> '' AND char_length(checkpoint_name) <= 200
   ),
   checkpoint_value jsonb NOT NULL
-    CONSTRAINT job_checkpoint_value_size CHECK (
+    CONSTRAINT task_checkpoint_value_size CHECK (
       octet_length(checkpoint_value::text) <= 1048576
     ),
   attempt integer NOT NULL CHECK (attempt >= 1),
   fence_token bigint NOT NULL CHECK (fence_token > 0),
   worker_id text NOT NULL CHECK (worker_id <> ''),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-  PRIMARY KEY (job_id, checkpoint_name)
+  PRIMARY KEY (task_id, checkpoint_name)
 );
 
 -- One bounded mutable progress projection per stable identity. Progress is separate from immutable
 -- payloads, checkpoints, and outcomes and retains provenance for its latest accepted change.
-CREATE TABLE IF NOT EXISTS workhorse.job_progress (
-  job_id uuid PRIMARY KEY REFERENCES workhorse.job(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS workhorse.task_progress (
+  task_id uuid PRIMARY KEY REFERENCES workhorse.task(id) ON DELETE CASCADE,
   progress_value jsonb NOT NULL
-    CONSTRAINT job_progress_value_size CHECK (
+    CONSTRAINT task_progress_value_size CHECK (
       octet_length(progress_value::text) <= 65536
     ),
   revision bigint NOT NULL CHECK (revision >= 1),
@@ -797,8 +797,8 @@ CREATE TABLE IF NOT EXISTS workhorse.job_progress (
 
 -- Immutable named durable timer boundaries. Relative waits preserve the first PostgreSQL-computed
 -- target, while absolute waits preserve the caller's exact target for deterministic replay.
-CREATE TABLE IF NOT EXISTS workhorse.job_wait (
-  job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS workhorse.task_wait (
+  task_id uuid NOT NULL REFERENCES workhorse.task(id) ON DELETE CASCADE,
   wait_name text NOT NULL CHECK (wait_name <> '' AND char_length(wait_name) <= 200),
   mode text NOT NULL CHECK (mode IN ('relative', 'absolute')),
   duration_ms bigint,
@@ -809,7 +809,7 @@ CREATE TABLE IF NOT EXISTS workhorse.job_wait (
   worker_id text NOT NULL CHECK (worker_id <> ''),
   claimed_at timestamptz NOT NULL CHECK (isfinite(claimed_at)),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-  PRIMARY KEY (job_id, wait_name),
+  PRIMARY KEY (task_id, wait_name),
   CHECK (
     (mode = 'relative' AND duration_ms BETWEEN 1 AND 31536000000
       AND requested_wake_at IS NULL)
@@ -819,10 +819,10 @@ CREATE TABLE IF NOT EXISTS workhorse.job_wait (
   )
 );
 
--- One named external signal boundary per stable job identity. A row starts as a fenced waiting
+-- One named external signal boundary per stable task identity. A row starts as a fenced waiting
 -- declaration and later retains the one accepted payload, idempotency identity, and audit actor.
-CREATE TABLE IF NOT EXISTS workhorse.job_signal_wait (
-  job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS workhorse.task_signal_wait (
+  task_id uuid NOT NULL REFERENCES workhorse.task(id) ON DELETE CASCADE,
   signal_name text NOT NULL CHECK (
     signal_name <> '' AND char_length(signal_name) <= 200 AND signal_name = btrim(signal_name)
   ),
@@ -830,7 +830,7 @@ CREATE TABLE IF NOT EXISTS workhorse.job_signal_wait (
   fence_token bigint NOT NULL CHECK (fence_token > 0),
   worker_id text NOT NULL CHECK (worker_id <> ''),
   claimed_at timestamptz NOT NULL CHECK (isfinite(claimed_at)),
-  payload jsonb CONSTRAINT job_signal_payload_size CHECK (
+  payload jsonb CONSTRAINT task_signal_payload_size CHECK (
     payload IS NULL OR octet_length(payload::text) <= 65536
   ),
   idempotency_key_hash bytea CHECK (
@@ -842,9 +842,9 @@ CREATE TABLE IF NOT EXISTS workhorse.job_signal_wait (
   ),
   delivered_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-  timeout_at timestamptz NOT NULL CONSTRAINT job_signal_wait_timeout_finite
+  timeout_at timestamptz NOT NULL CONSTRAINT task_signal_wait_timeout_finite
     CHECK (isfinite(timeout_at)),
-  PRIMARY KEY (job_id, signal_name),
+  PRIMARY KEY (task_id, signal_name),
   CHECK (
     (payload IS NULL AND idempotency_key_hash IS NULL AND request_fingerprint IS NULL
       AND delivered_by IS NULL AND delivered_at IS NULL)
@@ -854,23 +854,23 @@ CREATE TABLE IF NOT EXISTS workhorse.job_signal_wait (
   )
 );
 
-CREATE INDEX IF NOT EXISTS job_signal_wait_pending_idx
-  ON workhorse.job_signal_wait(created_at, job_id, signal_name)
+CREATE INDEX IF NOT EXISTS task_signal_wait_pending_idx
+  ON workhorse.task_signal_wait(created_at, task_id, signal_name)
   WHERE delivered_at IS NULL;
 
--- One named human decision per stable job. Context tells an operator what they are deciding;
+-- One named human decision per stable task. Context tells an operator what they are deciding;
 -- completion retains the first bounded result and trusted actor for deterministic replay.
-CREATE TABLE IF NOT EXISTS workhorse.job_human_wait (
-  job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS workhorse.task_human_wait (
+  task_id uuid NOT NULL REFERENCES workhorse.task(id) ON DELETE CASCADE,
   token_name text NOT NULL CHECK (token_name <> '' AND char_length(token_name) <= 200),
-  context jsonb NOT NULL CONSTRAINT job_human_wait_context_size CHECK (
+  context jsonb NOT NULL CONSTRAINT task_human_wait_context_size CHECK (
     octet_length(context::text) <= 65536
   ),
   attempt integer NOT NULL CHECK (attempt >= 1),
   fence_token bigint NOT NULL CHECK (fence_token > 0),
   worker_id text NOT NULL CHECK (worker_id <> ''),
   claimed_at timestamptz NOT NULL CHECK (isfinite(claimed_at)),
-  result jsonb CONSTRAINT job_human_wait_result_size CHECK (
+  result jsonb CONSTRAINT task_human_wait_result_size CHECK (
     result IS NULL OR octet_length(result::text) <= 65536
   ),
   idempotency_key_hash bytea CHECK (
@@ -882,9 +882,9 @@ CREATE TABLE IF NOT EXISTS workhorse.job_human_wait (
   ),
   completed_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-  timeout_at timestamptz NOT NULL CONSTRAINT job_human_wait_timeout_finite
+  timeout_at timestamptz NOT NULL CONSTRAINT task_human_wait_timeout_finite
     CHECK (isfinite(timeout_at)),
-  PRIMARY KEY (job_id, token_name),
+  PRIMARY KEY (task_id, token_name),
   CHECK (
     (completed_at IS NULL AND result IS NULL AND idempotency_key_hash IS NULL
       AND request_fingerprint IS NULL AND completed_by IS NULL)
@@ -894,18 +894,18 @@ CREATE TABLE IF NOT EXISTS workhorse.job_human_wait (
   )
 );
 
-CREATE INDEX IF NOT EXISTS job_human_wait_actionable_idx
-  ON workhorse.job_human_wait(created_at, job_id, token_name)
+CREATE INDEX IF NOT EXISTS task_human_wait_actionable_idx
+  ON workhorse.task_human_wait(created_at, task_id, token_name)
   WHERE completed_at IS NULL;
 
 -- Monotonic ownership generations and FIFO placement generations.
 CREATE SEQUENCE IF NOT EXISTS workhorse.fence_token_seq;
 CREATE SEQUENCE IF NOT EXISTS workhorse.ready_sequence_seq;
 
--- The sole mutable row for a nonterminal job. State-specific columns are constrained so a runtime
+-- The sole mutable row for a nonterminal task. State-specific columns are constrained so a runtime
 -- cannot simultaneously represent ready, scheduled, and active ownership.
-CREATE TABLE IF NOT EXISTS workhorse.job_runtime (
-  job_id uuid PRIMARY KEY REFERENCES workhorse.job(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS workhorse.task_runtime (
+  task_id uuid PRIMARY KEY REFERENCES workhorse.task(id) ON DELETE CASCADE,
   queue_name text NOT NULL CHECK (queue_name <> ''),
   concurrency_key text CHECK (
     concurrency_key IS NULL OR (concurrency_key <> '' AND octet_length(concurrency_key) <= 256)
@@ -947,7 +947,7 @@ CREATE TABLE IF NOT EXISTS workhorse.job_runtime (
     (cancel_requested_at IS NULL AND cancel_requested_by IS NULL AND cancel_reason IS NULL)
     OR (state = 'active' AND cancel_requested_at IS NOT NULL)
   ),
-  CONSTRAINT job_runtime_state_shape_check CHECK (
+  CONSTRAINT task_runtime_state_shape_check CHECK (
     (state = 'blocked' AND ready_at IS NULL AND sequence IS NULL AND worker_id IS NULL
       AND acquired_at IS NULL AND heartbeat_at IS NULL AND expires_at IS NULL
       AND attempt_timeout_at IS NULL AND fence_token = 0
@@ -970,26 +970,26 @@ CREATE TABLE IF NOT EXISTS workhorse.job_runtime (
       AND fence_token > 0 AND wait_name IS NULL AND attempt_started_at IS NOT NULL)
   )
 ) WITH (fillfactor = 70);
-CREATE INDEX IF NOT EXISTS job_runtime_ready_idx
-  ON workhorse.job_runtime (queue_name, priority DESC, sequence, job_id) WHERE state = 'ready';
-CREATE INDEX IF NOT EXISTS job_runtime_blocked_queue_idx
-  ON workhorse.job_runtime (queue_name, job_id) WHERE state = 'blocked';
-CREATE INDEX IF NOT EXISTS job_runtime_ready_age_idx
-  ON workhorse.job_runtime (ready_at, job_id) WHERE state = 'ready';
-CREATE INDEX IF NOT EXISTS job_runtime_scheduled_idx
-  ON workhorse.job_runtime (run_at, job_id) WHERE state = 'scheduled';
-CREATE INDEX IF NOT EXISTS job_runtime_scheduled_wait_idx
-  ON workhorse.job_runtime (run_at, job_id)
+CREATE INDEX IF NOT EXISTS task_runtime_ready_idx
+  ON workhorse.task_runtime (queue_name, priority DESC, sequence, task_id) WHERE state = 'ready';
+CREATE INDEX IF NOT EXISTS task_runtime_blocked_queue_idx
+  ON workhorse.task_runtime (queue_name, task_id) WHERE state = 'blocked';
+CREATE INDEX IF NOT EXISTS task_runtime_ready_age_idx
+  ON workhorse.task_runtime (ready_at, task_id) WHERE state = 'ready';
+CREATE INDEX IF NOT EXISTS task_runtime_scheduled_idx
+  ON workhorse.task_runtime (run_at, task_id) WHERE state = 'scheduled';
+CREATE INDEX IF NOT EXISTS task_runtime_scheduled_wait_idx
+  ON workhorse.task_runtime (run_at, task_id)
   WHERE state = 'scheduled' AND wait_name IS NOT NULL;
-CREATE INDEX IF NOT EXISTS job_runtime_expired_active_idx
-  ON workhorse.job_runtime (job_id) WHERE state = 'active';
-CREATE INDEX IF NOT EXISTS job_runtime_active_queue_key_expiry_idx
-  ON workhorse.job_runtime (queue_name, concurrency_key, job_id)
+CREATE INDEX IF NOT EXISTS task_runtime_expired_active_idx
+  ON workhorse.task_runtime (task_id) WHERE state = 'active';
+CREATE INDEX IF NOT EXISTS task_runtime_active_queue_key_expiry_idx
+  ON workhorse.task_runtime (queue_name, concurrency_key, task_id)
   WHERE state = 'active';
-CREATE INDEX IF NOT EXISTS job_runtime_deadline_idx
-  ON workhorse.job_runtime (deadline_at, job_id) WHERE deadline_at IS NOT NULL;
-CREATE INDEX IF NOT EXISTS job_runtime_timeout_idx
-  ON workhorse.job_runtime (attempt_timeout_at, job_id)
+CREATE INDEX IF NOT EXISTS task_runtime_deadline_idx
+  ON workhorse.task_runtime (deadline_at, task_id) WHERE deadline_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS task_runtime_timeout_idx
+  ON workhorse.task_runtime (attempt_timeout_at, task_id)
   WHERE state = 'active' AND attempt_timeout_at IS NOT NULL;
 
 CREATE OR REPLACE FUNCTION workhorse.notify_concurrency_capacity_v1()
@@ -1003,23 +1003,23 @@ BEGIN
        SELECT 1 FROM workhorse.concurrency_policy policy
         WHERE policy.queue_name = OLD.queue_name
      ) THEN
-    PERFORM pg_notify('workhorse_jobs', OLD.queue_name);
+    PERFORM pg_notify('workhorse_tasks', OLD.queue_name);
   END IF;
   RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
 END;
 $$;
 
-CREATE OR REPLACE TRIGGER job_runtime_concurrency_capacity_update
-AFTER UPDATE OF state ON workhorse.job_runtime
+CREATE OR REPLACE TRIGGER task_runtime_concurrency_capacity_update
+AFTER UPDATE OF state ON workhorse.task_runtime
 FOR EACH ROW EXECUTE FUNCTION workhorse.notify_concurrency_capacity_v1();
 
-CREATE OR REPLACE TRIGGER job_runtime_concurrency_capacity_delete
-AFTER DELETE ON workhorse.job_runtime
+CREATE OR REPLACE TRIGGER task_runtime_concurrency_capacity_delete
+AFTER DELETE ON workhorse.task_runtime
 FOR EACH ROW EXECUTE FUNCTION workhorse.notify_concurrency_capacity_v1();
 
 -- Immutable terminal materialization. Moving here removes completed work from every dispatch index.
-CREATE TABLE IF NOT EXISTS workhorse.job_outcome (
-  job_id uuid PRIMARY KEY REFERENCES workhorse.job(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS workhorse.task_outcome (
+  task_id uuid PRIMARY KEY REFERENCES workhorse.task(id) ON DELETE CASCADE,
   state text NOT NULL CHECK (state IN ('succeeded', 'failed', 'canceled')),
   current_attempt integer NOT NULL CHECK (current_attempt >= 1),
   fence_token bigint NOT NULL CHECK (fence_token >= 0),
@@ -1040,65 +1040,65 @@ CREATE TABLE IF NOT EXISTS workhorse.job_outcome (
     OR (state = 'canceled' AND error IS NOT NULL)
   )
 );
-CREATE INDEX IF NOT EXISTS job_outcome_retention_idx
-  ON workhorse.job_outcome (finished_at, job_id);
+CREATE INDEX IF NOT EXISTS task_outcome_retention_idx
+  ON workhorse.task_outcome (finished_at, task_id);
 -- Failed outcomes are operationally cold and never participate in dispatch. This partial index
 -- supports dead-letter keyset scans without adding failed work to any runtime dispatch index.
-CREATE INDEX IF NOT EXISTS job_outcome_failed_finished_idx
-  ON workhorse.job_outcome (finished_at DESC, job_id DESC) WHERE state = 'failed';
-CREATE INDEX IF NOT EXISTS job_outcome_dependency_failed_idx
-  ON workhorse.job_outcome (job_id)
+CREATE INDEX IF NOT EXISTS task_outcome_failed_finished_idx
+  ON workhorse.task_outcome (finished_at DESC, task_id DESC) WHERE state = 'failed';
+CREATE INDEX IF NOT EXISTS task_outcome_dependency_failed_idx
+  ON workhorse.task_outcome (task_id)
   WHERE state = 'failed' AND error->>'name' = 'DependencyFailed';
-CREATE INDEX IF NOT EXISTS job_outcome_dependency_canceled_idx
-  ON workhorse.job_outcome (job_id)
+CREATE INDEX IF NOT EXISTS task_outcome_dependency_canceled_idx
+  ON workhorse.task_outcome (task_id)
   WHERE state = 'canceled' AND error->>'name' = 'DependencyCanceled';
 -- Operator activity views ask which tasks changed inside a trailing window. Without this they have
--- to start from every job that ever existed; with it they start from the window. updated_at is
+-- to start from every task that ever existed; with it they start from the window. updated_at is
 -- stamped once when the row is written, so this never costs a heartbeat a HOT update the way the
--- same index on job_runtime would.
-CREATE INDEX IF NOT EXISTS job_outcome_updated_idx
-  ON workhorse.job_outcome (updated_at, job_id);
+-- same index on task_runtime would.
+CREATE INDEX IF NOT EXISTS task_outcome_updated_idx
+  ON workhorse.task_outcome (updated_at, task_id);
 
 -- Bounded operator routing projection. Mutable lifecycle fields remain in their authoritative
 -- relations so claims, retries, promotion, cancellation, and completion never rewrite this row.
-CREATE TABLE IF NOT EXISTS workhorse.job_query (
-  job_id uuid PRIMARY KEY REFERENCES workhorse.job(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS workhorse.task_query (
+  task_id uuid PRIMARY KEY REFERENCES workhorse.task(id) ON DELETE CASCADE,
   queue_name text NOT NULL CHECK (queue_name <> ''),
-  job_type text NOT NULL CHECK (job_type <> ''),
+  task_type text NOT NULL CHECK (task_type <> ''),
   created_at timestamptz NOT NULL
 );
-CREATE INDEX IF NOT EXISTS job_query_created_idx
-  ON workhorse.job_query (created_at DESC, job_id DESC);
-CREATE INDEX IF NOT EXISTS job_query_queue_created_idx
-  ON workhorse.job_query (queue_name, created_at DESC, job_id DESC);
-CREATE INDEX IF NOT EXISTS job_query_type_created_idx
-  ON workhorse.job_query (job_type, created_at DESC, job_id DESC);
-CREATE OR REPLACE FUNCTION workhorse.project_job_query_v1()
+CREATE INDEX IF NOT EXISTS task_query_created_idx
+  ON workhorse.task_query (created_at DESC, task_id DESC);
+CREATE INDEX IF NOT EXISTS task_query_queue_created_idx
+  ON workhorse.task_query (queue_name, created_at DESC, task_id DESC);
+CREATE INDEX IF NOT EXISTS task_query_type_created_idx
+  ON workhorse.task_query (task_type, created_at DESC, task_id DESC);
+CREATE OR REPLACE FUNCTION workhorse.project_task_query_v1()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  INSERT INTO workhorse.job_query(job_id, queue_name, job_type, created_at)
-  VALUES (NEW.id, NEW.queue_name, NEW.job_type, NEW.created_at)
-  ON CONFLICT (job_id) DO UPDATE SET
+  INSERT INTO workhorse.task_query(task_id, queue_name, task_type, created_at)
+  VALUES (NEW.id, NEW.queue_name, NEW.task_type, NEW.created_at)
+  ON CONFLICT (task_id) DO UPDATE SET
     queue_name = EXCLUDED.queue_name,
-    job_type = EXCLUDED.job_type;
+    task_type = EXCLUDED.task_type;
   RETURN NEW;
 END;
 $$;
-CREATE OR REPLACE TRIGGER job_query_projection_insert
-  AFTER INSERT ON workhorse.job
-  FOR EACH ROW EXECUTE FUNCTION workhorse.project_job_query_v1();
-CREATE OR REPLACE TRIGGER job_query_projection_update
-  AFTER UPDATE OF queue_name, job_type ON workhorse.job
-  FOR EACH ROW EXECUTE FUNCTION workhorse.project_job_query_v1();
+CREATE OR REPLACE TRIGGER task_query_projection_insert
+  AFTER INSERT ON workhorse.task
+  FOR EACH ROW EXECUTE FUNCTION workhorse.project_task_query_v1();
+CREATE OR REPLACE TRIGGER task_query_projection_update
+  AFTER UPDATE OF queue_name, task_type ON workhorse.task
+  FOR EACH ROW EXECUTE FUNCTION workhorse.project_task_query_v1();
 
 -- Durable redrive lineage is both the idempotency record and the audit record. A source identity
 -- cannot be removed while any descendant target still exists. Deleting a target removes its
 -- incoming lineage edge, allowing retention to prune the source in a later pass.
-CREATE TABLE IF NOT EXISTS workhorse.job_redrive (
-  source_job_id uuid NOT NULL REFERENCES workhorse.job(id),
-  target_job_id uuid NOT NULL UNIQUE REFERENCES workhorse.job(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS workhorse.task_redrive (
+  source_task_id uuid NOT NULL REFERENCES workhorse.task(id),
+  target_task_id uuid NOT NULL UNIQUE REFERENCES workhorse.task(id) ON DELETE CASCADE,
   request_id_hash bytea NOT NULL CHECK (octet_length(request_id_hash) = 32),
   request_id_preview text NOT NULL,
   request_id_digest text NOT NULL CHECK (char_length(request_id_digest) = 12),
@@ -1109,18 +1109,18 @@ CREATE TABLE IF NOT EXISTS workhorse.job_redrive (
   source_state text NOT NULL DEFAULT 'failed' CHECK (source_state = 'failed'),
   target_initial_state text NOT NULL DEFAULT 'ready' CHECK (target_initial_state = 'ready'),
   requested_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-  PRIMARY KEY (source_job_id, request_id_hash),
-  CHECK (source_job_id <> target_job_id)
+  PRIMARY KEY (source_task_id, request_id_hash),
+  CHECK (source_task_id <> target_task_id)
 );
-CREATE INDEX IF NOT EXISTS job_redrive_source_time_idx
-  ON workhorse.job_redrive (source_job_id, requested_at, target_job_id);
+CREATE INDEX IF NOT EXISTS task_redrive_source_time_idx
+  ON workhorse.task_redrive (source_task_id, requested_at, target_task_id);
 
 CREATE OR REPLACE FUNCTION workhorse.redrive_lineage_v1(
-  p_job_id uuid,
+  p_task_id uuid,
   p_limit integer
 ) RETURNS TABLE (
-  source_job_id uuid,
-  target_job_id uuid,
+  source_task_id uuid,
+  target_task_id uuid,
   requested_by text,
   reason text,
   request_id_preview text,
@@ -1134,15 +1134,15 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 DECLARE
-  v_frontier uuid[] := ARRAY[p_job_id];
-  v_seen_nodes uuid[] := ARRAY[p_job_id];
+  v_frontier uuid[] := ARRAY[p_task_id];
+  v_seen_nodes uuid[] := ARRAY[p_task_id];
   v_seen_edges uuid[] := '{}'::uuid[];
   v_node uuid;
   v_neighbor uuid;
   v_edge record;
   v_count integer := 0;
 BEGIN
-  IF p_job_id IS NULL THEN RAISE EXCEPTION 'lineage job identity is required'; END IF;
+  IF p_task_id IS NULL THEN RAISE EXCEPTION 'lineage task identity is required'; END IF;
   IF p_limit NOT BETWEEN 1 AND 1001 THEN
     RAISE EXCEPTION 'redrive lineage limit must be between 1 and 1001';
   END IF;
@@ -1152,16 +1152,16 @@ BEGIN
     v_frontier := COALESCE(v_frontier[2:cardinality(v_frontier)], '{}'::uuid[]);
     FOR v_edge IN
       SELECT edge.*
-        FROM workhorse.job_redrive edge
-       WHERE (edge.source_job_id = v_node OR edge.target_job_id = v_node)
-         AND NOT edge.target_job_id = ANY(v_seen_edges)
-       ORDER BY edge.requested_at, edge.source_job_id, edge.target_job_id
+        FROM workhorse.task_redrive edge
+       WHERE (edge.source_task_id = v_node OR edge.target_task_id = v_node)
+         AND NOT edge.target_task_id = ANY(v_seen_edges)
+       ORDER BY edge.requested_at, edge.source_task_id, edge.target_task_id
        LIMIT p_limit - v_count
     LOOP
-      v_seen_edges := array_append(v_seen_edges, v_edge.target_job_id);
+      v_seen_edges := array_append(v_seen_edges, v_edge.target_task_id);
       v_count := v_count + 1;
-      v_neighbor := CASE WHEN v_edge.source_job_id = v_node
-        THEN v_edge.target_job_id ELSE v_edge.source_job_id END;
+      v_neighbor := CASE WHEN v_edge.source_task_id = v_node
+        THEN v_edge.target_task_id ELSE v_edge.source_task_id END;
       IF NOT v_neighbor = ANY(v_seen_nodes) THEN
         v_seen_nodes := array_append(v_seen_nodes, v_neighbor);
         v_frontier := array_append(v_frontier, v_neighbor);
@@ -1170,43 +1170,43 @@ BEGIN
   END LOOP;
 
   RETURN QUERY
-    SELECT edge.source_job_id, edge.target_job_id, edge.requested_by, edge.reason,
+    SELECT edge.source_task_id, edge.target_task_id, edge.requested_by, edge.reason,
            edge.request_id_preview, edge.request_id_digest, edge.request_id_length,
            edge.source_state, edge.target_initial_state, edge.requested_at
-      FROM workhorse.job_redrive edge
-     WHERE edge.target_job_id = ANY(v_seen_edges)
-     ORDER BY array_position(v_seen_edges, edge.target_job_id);
+      FROM workhorse.task_redrive edge
+     WHERE edge.target_task_id = ANY(v_seen_edges)
+     ORDER BY array_position(v_seen_edges, edge.target_task_id);
 END;
 $$;
 
 -- Append-only lifecycle audit.
-CREATE TABLE IF NOT EXISTS workhorse.job_event (
+CREATE TABLE IF NOT EXISTS workhorse.task_event (
   event_id uuid NOT NULL DEFAULT workhorse.uuid_v7_v1(),
-  job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE CASCADE,
+  task_id uuid NOT NULL REFERENCES workhorse.task(id) ON DELETE CASCADE,
   attempt integer,
   event_type text NOT NULL,
   details jsonb NOT NULL DEFAULT '{}'::jsonb,
   occurred_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   PRIMARY KEY (occurred_at, event_id)
 ) PARTITION BY RANGE (occurred_at);
-CREATE TABLE IF NOT EXISTS workhorse.job_event_default
-  PARTITION OF workhorse.job_event DEFAULT;
-CREATE INDEX IF NOT EXISTS job_event_job_time_idx
-  ON workhorse.job_event (job_id, occurred_at, event_id);
-CREATE INDEX IF NOT EXISTS job_event_identity_idx
-  ON workhorse.job_event (event_id);
-CREATE INDEX IF NOT EXISTS job_event_rejected_delivery_idx
-  ON workhorse.job_event (occurred_at DESC, event_id DESC)
-  INCLUDE (job_id, event_type)
+CREATE TABLE IF NOT EXISTS workhorse.task_event_default
+  PARTITION OF workhorse.task_event DEFAULT;
+CREATE INDEX IF NOT EXISTS task_event_task_time_idx
+  ON workhorse.task_event (task_id, occurred_at, event_id);
+CREATE INDEX IF NOT EXISTS task_event_identity_idx
+  ON workhorse.task_event (event_id);
+CREATE INDEX IF NOT EXISTS task_event_rejected_delivery_idx
+  ON workhorse.task_event (occurred_at DESC, event_id DESC)
+  INCLUDE (task_id, event_type)
   WHERE event_type IN ('signal_rejected', 'human_wait_rejected');
-CREATE INDEX IF NOT EXISTS job_event_batch_id_idx
-  ON workhorse.job_event ((details->>'batch_id'), event_type)
+CREATE INDEX IF NOT EXISTS task_event_batch_id_idx
+  ON workhorse.task_event ((details->>'batch_id'), event_type)
   WHERE event_type IN ('batch_dispatched', 'batch_failed');
 
 -- One immutable row for every closed attempt.
 CREATE TABLE IF NOT EXISTS workhorse.attempt_history (
   attempt_id uuid NOT NULL DEFAULT workhorse.uuid_v7_v1(),
-  job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE CASCADE,
+  task_id uuid NOT NULL REFERENCES workhorse.task(id) ON DELETE CASCADE,
   attempt integer NOT NULL,
   fence_token bigint NOT NULL,
   worker_id text NOT NULL,
@@ -1225,15 +1225,15 @@ CREATE TABLE IF NOT EXISTS workhorse.attempt_history (
 ) PARTITION BY RANGE (occurred_at);
 CREATE TABLE IF NOT EXISTS workhorse.attempt_history_default
   PARTITION OF workhorse.attempt_history DEFAULT;
-CREATE INDEX IF NOT EXISTS attempt_history_job_idx
-  ON workhorse.attempt_history (job_id, attempt, occurred_at);
-CREATE INDEX IF NOT EXISTS attempt_history_job_time_idx
-  ON workhorse.attempt_history (job_id, occurred_at, attempt_id);
+CREATE INDEX IF NOT EXISTS attempt_history_task_idx
+  ON workhorse.attempt_history (task_id, attempt, occurred_at);
+CREATE INDEX IF NOT EXISTS attempt_history_task_time_idx
+  ON workhorse.attempt_history (task_id, occurred_at, attempt_id);
 CREATE INDEX IF NOT EXISTS attempt_history_identity_idx
   ON workhorse.attempt_history (attempt_id);
 
 -- One database-owned schedule coordinates low-frequency maintenance across every worker process.
--- The IANA timezone and local time control the daily history-retention boundary; interval tasks remain
+-- The IANA timezone and local time control the daily history-retention boundary; interval routines remain
 -- elapsed-time based so daylight-saving transitions cannot duplicate or suppress them.
 CREATE TABLE IF NOT EXISTS workhorse.maintenance_policy (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
@@ -1342,8 +1342,8 @@ INSERT INTO workhorse.queue_health_policy(
 ON CONFLICT (singleton) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS workhorse.maintenance_state (
-  task_name text PRIMARY KEY CHECK (
-    task_name IN ('tick', 'history_partitions', 'history_retention', 'terminal_storage')
+  routine_name text PRIMARY KEY CHECK (
+    routine_name IN ('tick', 'history_partitions', 'history_retention', 'terminal_storage')
   ),
   last_started_at timestamptz,
   last_completed_at timestamptz,
@@ -1352,38 +1352,38 @@ CREATE TABLE IF NOT EXISTS workhorse.maintenance_state (
   terminal_prune_dependency_starved boolean NOT NULL DEFAULT false,
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   CHECK (
-    (task_name = 'history_retention')
+    (routine_name = 'history_retention')
     OR (last_completed_local_date IS NULL AND history_retained_before IS NULL)
   ),
-  CHECK (task_name = 'terminal_storage' OR NOT terminal_prune_dependency_starved)
+  CHECK (routine_name = 'terminal_storage' OR NOT terminal_prune_dependency_starved)
 );
 INSERT INTO workhorse.maintenance_state(
-  task_name, history_retained_before
+  routine_name, history_retained_before
 ) VALUES
   ('tick', NULL),
   ('history_partitions', NULL),
   ('history_retention', date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC')
     AT TIME ZONE 'UTC' - interval '14 days'),
   ('terminal_storage', NULL)
-ON CONFLICT (task_name) DO NOTHING;
+ON CONFLICT (routine_name) DO NOTHING;
 
 -- Rolling statistics. Operator time windows are answered from bounded per-minute aggregates rather
 -- than from scans over retained history: one row per closed minute per (queue, task type) instead
 -- of one row per event. Buckets are derived from raw history and recomputed idempotently, so a pass
 -- that reruns a closed minute to absorb a late commit converges instead of double counting.
 --
--- Measures are deliberately split by grain. Job-level measures count terminal jobs, attempt-level
--- measures count closed attempts, and a job that retried four times before succeeding contributes
--- one job_succeeded and five attempts. Conflating the two is the usual way a throughput panel
+-- Measures are deliberately split by grain. Task-level measures count terminal tasks, attempt-level
+-- measures count closed attempts, and a task that retried four times before succeeding contributes
+-- one task_succeeded and five attempts. Conflating the two is the usual way a throughput panel
 -- starts disagreeing with a task list.
-CREATE TABLE IF NOT EXISTS workhorse.job_stat_bucket (
+CREATE TABLE IF NOT EXISTS workhorse.task_stat_bucket (
   bucket_start timestamptz NOT NULL CHECK (isfinite(bucket_start)),
   queue_name text NOT NULL CHECK (queue_name <> ''),
-  job_type text NOT NULL CHECK (job_type <> ''),
+  task_type text NOT NULL CHECK (task_type <> ''),
   enqueued integer NOT NULL DEFAULT 0 CHECK (enqueued >= 0),
-  job_succeeded integer NOT NULL DEFAULT 0 CHECK (job_succeeded >= 0),
-  job_failed integer NOT NULL DEFAULT 0 CHECK (job_failed >= 0),
-  job_canceled integer NOT NULL DEFAULT 0 CHECK (job_canceled >= 0),
+  task_succeeded integer NOT NULL DEFAULT 0 CHECK (task_succeeded >= 0),
+  task_failed integer NOT NULL DEFAULT 0 CHECK (task_failed >= 0),
+  task_canceled integer NOT NULL DEFAULT 0 CHECK (task_canceled >= 0),
   attempt_succeeded integer NOT NULL DEFAULT 0 CHECK (attempt_succeeded >= 0),
   attempt_failed integer NOT NULL DEFAULT 0 CHECK (attempt_failed >= 0),
   attempt_retry integer NOT NULL DEFAULT 0 CHECK (attempt_retry >= 0),
@@ -1399,17 +1399,17 @@ CREATE TABLE IF NOT EXISTS workhorse.job_stat_bucket (
   -- A logarithmic, relative-error histogram encoded as {bin: count}. Its bins are stable across
   -- tiers, so PostgreSQL can merge percentiles without retaining individual wait samples.
   wait_sketch jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(wait_sketch) = 'object'),
-  PRIMARY KEY (bucket_start, queue_name, job_type)
+  PRIMARY KEY (bucket_start, queue_name, task_type)
 );
 
-CREATE TABLE IF NOT EXISTS workhorse.job_stat_bucket_hour (
+CREATE TABLE IF NOT EXISTS workhorse.task_stat_bucket_hour (
   bucket_start timestamptz NOT NULL CHECK (isfinite(bucket_start)),
   queue_name text NOT NULL CHECK (queue_name <> ''),
-  job_type text NOT NULL CHECK (job_type <> ''),
+  task_type text NOT NULL CHECK (task_type <> ''),
   enqueued bigint NOT NULL DEFAULT 0 CHECK (enqueued >= 0),
-  job_succeeded bigint NOT NULL DEFAULT 0 CHECK (job_succeeded >= 0),
-  job_failed bigint NOT NULL DEFAULT 0 CHECK (job_failed >= 0),
-  job_canceled bigint NOT NULL DEFAULT 0 CHECK (job_canceled >= 0),
+  task_succeeded bigint NOT NULL DEFAULT 0 CHECK (task_succeeded >= 0),
+  task_failed bigint NOT NULL DEFAULT 0 CHECK (task_failed >= 0),
+  task_canceled bigint NOT NULL DEFAULT 0 CHECK (task_canceled >= 0),
   attempt_succeeded bigint NOT NULL DEFAULT 0 CHECK (attempt_succeeded >= 0),
   attempt_failed bigint NOT NULL DEFAULT 0 CHECK (attempt_failed >= 0),
   attempt_retry bigint NOT NULL DEFAULT 0 CHECK (attempt_retry >= 0),
@@ -1421,19 +1421,19 @@ CREATE TABLE IF NOT EXISTS workhorse.job_stat_bucket_hour (
   last_attempt_at timestamptz,
   last_error text CHECK (last_error IS NULL OR char_length(last_error) <= 500),
   last_error_at timestamptz,
-  PRIMARY KEY (bucket_start, queue_name, job_type)
+  PRIMARY KEY (bucket_start, queue_name, task_type)
 );
 
-CREATE TABLE IF NOT EXISTS workhorse.job_stat_bucket_day (
-  LIKE workhorse.job_stat_bucket_hour INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES
+CREATE TABLE IF NOT EXISTS workhorse.task_stat_bucket_day (
+  LIKE workhorse.task_stat_bucket_hour INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES
 );
 
 -- One watermark for the derived aggregates above. Raw history retention is forbidden from crossing
 -- it, so a stalled rollup degrades health instead of silently producing gaps that no later pass can
 -- fill.
-CREATE TABLE IF NOT EXISTS workhorse.job_stat_state (
+CREATE TABLE IF NOT EXISTS workhorse.task_stat_state (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
-  -- Exclusive, minute-aligned. Every closed minute below this is materialized in job_stat_bucket.
+  -- Exclusive, minute-aligned. Every closed minute below this is materialized in task_stat_bucket.
   rolled_up_through timestamptz NOT NULL CHECK (isfinite(rolled_up_through)),
   last_run_at timestamptz,
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -1445,7 +1445,7 @@ CREATE TABLE IF NOT EXISTS workhorse.job_stat_state (
 -- in force in 2000 rather than today, so bucket boundaries would follow the database's timezone and
 -- shift by an hour across a daylight-saving transition. Day buckets must agree with the history day
 -- partitions, which pin UTC the same way.
-INSERT INTO workhorse.job_stat_state(
+INSERT INTO workhorse.task_stat_state(
   singleton, rolled_up_through, hourly_rolled_up_through, daily_rolled_up_through
 )
 VALUES (
@@ -1459,7 +1459,7 @@ ON CONFLICT (singleton) DO NOTHING;
 -- Declarative schedules are synchronized from application code and evaluated by worker processes.
 -- Payloads, occurrence ownership, and queue semantics remain owned by the Workhorse protocol.
 CREATE TABLE IF NOT EXISTS workhorse.contract_definition (
-  job_type text NOT NULL CHECK (job_type <> ''),
+  task_type text NOT NULL CHECK (task_type <> ''),
   version text NOT NULL CHECK (char_length(version) BETWEEN 1 AND 100),
   schema jsonb NOT NULL CHECK (
     jsonb_typeof(schema) = 'object'
@@ -1478,7 +1478,7 @@ CREATE TABLE IF NOT EXISTS workhorse.contract_definition (
     CHECK (workhorse.valid_contract_redact_keys_v1(result_redact_keys)),
   source text NOT NULL DEFAULT 'application' CHECK (source IN ('application', 'operator')),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-  PRIMARY KEY (job_type, version)
+  PRIMARY KEY (task_type, version)
 );
 
 CREATE OR REPLACE FUNCTION workhorse.reject_contract_definition_mutation_v1()
@@ -1495,17 +1495,17 @@ CREATE OR REPLACE TRIGGER contract_definition_immutable
   FOR EACH ROW EXECUTE FUNCTION workhorse.reject_contract_definition_mutation_v1();
 
 -- Contract documents never change after insertion. This separate row selects the version for new
--- jobs and records whether application sync or an operator owns that selection under ADR 0020.
+-- tasks and records whether application sync or an operator owns that selection under ADR 0020.
 CREATE TABLE IF NOT EXISTS workhorse.contract_policy (
-  job_type text PRIMARY KEY CHECK (job_type <> ''),
+  task_type text PRIMARY KEY CHECK (task_type <> ''),
   current_version text NOT NULL,
   application_current_version text NOT NULL,
   operator_override boolean NOT NULL DEFAULT false,
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-  FOREIGN KEY (job_type, current_version)
-    REFERENCES workhorse.contract_definition(job_type, version),
-  FOREIGN KEY (job_type, application_current_version)
-    REFERENCES workhorse.contract_definition(job_type, version)
+  FOREIGN KEY (task_type, current_version)
+    REFERENCES workhorse.contract_definition(task_type, version),
+  FOREIGN KEY (task_type, application_current_version)
+    REFERENCES workhorse.contract_definition(task_type, version)
 );
 
 CREATE TABLE IF NOT EXISTS workhorse.schedule_definition (
@@ -1514,7 +1514,7 @@ CREATE TABLE IF NOT EXISTS workhorse.schedule_definition (
   cron_expression text NOT NULL CHECK (cron_expression <> ''),
   timezone text NOT NULL DEFAULT 'UTC' CHECK (timezone <> ''),
   queue_name text NOT NULL CHECK (queue_name <> ''),
-  job_type text NOT NULL CHECK (job_type <> ''),
+  task_type text NOT NULL CHECK (task_type <> ''),
   concurrency_key text CHECK (
     concurrency_key IS NULL OR (concurrency_key <> '' AND octet_length(concurrency_key) <= 256)
   ),
@@ -1554,7 +1554,7 @@ CREATE TABLE IF NOT EXISTS workhorse.schedule_occurrence (
   namespace text NOT NULL,
   schedule_name text NOT NULL,
   occurrence_at timestamptz NOT NULL,
-  job_id uuid UNIQUE REFERENCES workhorse.job(id) ON DELETE SET NULL,
+  task_id uuid UNIQUE REFERENCES workhorse.task(id) ON DELETE SET NULL,
   fired_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   PRIMARY KEY (namespace, schedule_name, occurrence_at),
   FOREIGN KEY (namespace, schedule_name)
@@ -1564,22 +1564,22 @@ CREATE INDEX IF NOT EXISTS schedule_occurrence_time_idx
   ON workhorse.schedule_occurrence (namespace, schedule_name, occurrence_at DESC);
 CREATE INDEX IF NOT EXISTS schedule_occurrence_retention_idx
   ON workhorse.schedule_occurrence (occurrence_at);
-CREATE INDEX IF NOT EXISTS schedule_occurrence_job_idx
-  ON workhorse.schedule_occurrence (job_id) WHERE job_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS schedule_occurrence_task_idx
+  ON workhorse.schedule_occurrence (task_id) WHERE task_id IS NOT NULL;
 
 -- One durable policy controls background retention. Null minimum windows disable that category.
 -- Identity remains the attribution anchor, so finite identity retention is accepted only when all
 -- dependent history has a finite window no longer than the identity window.
 CREATE TABLE IF NOT EXISTS workhorse.retention_policy (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
-  job_identity_retention_days integer CHECK (
-    job_identity_retention_days IS NULL OR job_identity_retention_days BETWEEN 1 AND 36500
+  task_identity_retention_days integer CHECK (
+    task_identity_retention_days IS NULL OR task_identity_retention_days BETWEEN 1 AND 36500
   ),
   terminal_outcome_retention_days integer CHECK (
     terminal_outcome_retention_days IS NULL OR terminal_outcome_retention_days BETWEEN 1 AND 36500
   ),
-  job_event_retention_days integer CHECK (
-    job_event_retention_days IS NULL OR job_event_retention_days BETWEEN 1 AND 36500
+  task_event_retention_days integer CHECK (
+    task_event_retention_days IS NULL OR task_event_retention_days BETWEEN 1 AND 36500
   ),
   attempt_history_retention_days integer CHECK (
     attempt_history_retention_days IS NULL OR attempt_history_retention_days BETWEEN 1 AND 36500
@@ -1589,12 +1589,12 @@ CREATE TABLE IF NOT EXISTS workhorse.retention_policy (
     OR schedule_occurrence_retention_days BETWEEN 1 AND 36500
   ),
   -- Derived statistics are deliberately outside the identity chain below. A bucket is not
-  -- attribution for a job, it is a summary that outlives one, so keeping aggregates far longer than
+  -- attribution for a task, it is a summary that outlives one, so keeping aggregates far longer than
   -- the history they were derived from is the intended configuration rather than a violation.
   statistics_retention_days integer CHECK (
     statistics_retention_days IS NULL OR statistics_retention_days BETWEEN 1 AND 36500
   ),
-  terminal_job_prune_limit integer NOT NULL CHECK (terminal_job_prune_limit BETWEEN 1 AND 100000),
+  terminal_task_prune_limit integer NOT NULL CHECK (terminal_task_prune_limit BETWEEN 1 AND 100000),
   history_partitions_per_pass integer NOT NULL CHECK (
     history_partitions_per_pass BETWEEN 1 AND 52
   ),
@@ -1607,17 +1607,17 @@ CREATE TABLE IF NOT EXISTS workhorse.retention_policy (
   statistics_rows_per_pass integer NOT NULL CHECK (
     statistics_rows_per_pass BETWEEN 1 AND 1000000
   ),
-  application_job_identity_retention_days integer CHECK (
-    application_job_identity_retention_days IS NULL
-    OR application_job_identity_retention_days BETWEEN 1 AND 36500
+  application_task_identity_retention_days integer CHECK (
+    application_task_identity_retention_days IS NULL
+    OR application_task_identity_retention_days BETWEEN 1 AND 36500
   ),
   application_terminal_outcome_retention_days integer CHECK (
     application_terminal_outcome_retention_days IS NULL
     OR application_terminal_outcome_retention_days BETWEEN 1 AND 36500
   ),
-  application_job_event_retention_days integer CHECK (
-    application_job_event_retention_days IS NULL
-    OR application_job_event_retention_days BETWEEN 1 AND 36500
+  application_task_event_retention_days integer CHECK (
+    application_task_event_retention_days IS NULL
+    OR application_task_event_retention_days BETWEEN 1 AND 36500
   ),
   application_attempt_history_retention_days integer CHECK (
     application_attempt_history_retention_days IS NULL
@@ -1631,8 +1631,8 @@ CREATE TABLE IF NOT EXISTS workhorse.retention_policy (
     application_statistics_retention_days IS NULL
     OR application_statistics_retention_days BETWEEN 1 AND 36500
   ),
-  application_terminal_job_prune_limit integer NOT NULL CHECK (
-    application_terminal_job_prune_limit BETWEEN 1 AND 100000
+  application_terminal_task_prune_limit integer NOT NULL CHECK (
+    application_terminal_task_prune_limit BETWEEN 1 AND 100000
   ),
   application_history_partitions_per_pass integer NOT NULL CHECK (
     application_history_partitions_per_pass BETWEEN 1 AND 52
@@ -1648,58 +1648,58 @@ CREATE TABLE IF NOT EXISTS workhorse.retention_policy (
   ),
   operator_overrides text[] NOT NULL DEFAULT '{}' CHECK (
     operator_overrides <@ ARRAY[
-      'job_identity_retention_days', 'terminal_outcome_retention_days',
-      'job_event_retention_days', 'attempt_history_retention_days',
+      'task_identity_retention_days', 'terminal_outcome_retention_days',
+      'task_event_retention_days', 'attempt_history_retention_days',
       'schedule_occurrence_retention_days', 'statistics_retention_days',
-      'terminal_job_prune_limit', 'history_partitions_per_pass',
+      'terminal_task_prune_limit', 'history_partitions_per_pass',
       'default_partition_rows_per_pass', 'occurrence_rows_per_pass',
       'statistics_rows_per_pass'
     ]::text[]
   ),
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   CHECK (
-    (terminal_outcome_retention_days IS NULL OR job_identity_retention_days IS NOT NULL)
+    (terminal_outcome_retention_days IS NULL OR task_identity_retention_days IS NOT NULL)
     AND (
-      job_identity_retention_days IS NULL
+      task_identity_retention_days IS NULL
       OR (
       terminal_outcome_retention_days IS NOT NULL
-      AND job_event_retention_days IS NOT NULL
+      AND task_event_retention_days IS NOT NULL
       AND attempt_history_retention_days IS NOT NULL
       AND schedule_occurrence_retention_days IS NOT NULL
-      AND job_identity_retention_days >= terminal_outcome_retention_days
-      AND job_identity_retention_days >= job_event_retention_days
-      AND job_identity_retention_days >= attempt_history_retention_days
-      AND job_identity_retention_days >= schedule_occurrence_retention_days
+      AND task_identity_retention_days >= terminal_outcome_retention_days
+      AND task_identity_retention_days >= task_event_retention_days
+      AND task_identity_retention_days >= attempt_history_retention_days
+      AND task_identity_retention_days >= schedule_occurrence_retention_days
       )
     )
   ),
   CHECK (
     (application_terminal_outcome_retention_days IS NULL
-      OR application_job_identity_retention_days IS NOT NULL)
+      OR application_task_identity_retention_days IS NOT NULL)
     AND (
-      application_job_identity_retention_days IS NULL
+      application_task_identity_retention_days IS NULL
       OR (
         application_terminal_outcome_retention_days IS NOT NULL
-        AND application_job_event_retention_days IS NOT NULL
+        AND application_task_event_retention_days IS NOT NULL
         AND application_attempt_history_retention_days IS NOT NULL
         AND application_schedule_occurrence_retention_days IS NOT NULL
-        AND application_job_identity_retention_days >= application_terminal_outcome_retention_days
-        AND application_job_identity_retention_days >= application_job_event_retention_days
-        AND application_job_identity_retention_days >= application_attempt_history_retention_days
-        AND application_job_identity_retention_days >= application_schedule_occurrence_retention_days
+        AND application_task_identity_retention_days >= application_terminal_outcome_retention_days
+        AND application_task_identity_retention_days >= application_task_event_retention_days
+        AND application_task_identity_retention_days >= application_attempt_history_retention_days
+        AND application_task_identity_retention_days >= application_schedule_occurrence_retention_days
       )
     )
   )
 );
 INSERT INTO workhorse.retention_policy(
-  singleton, job_identity_retention_days, terminal_outcome_retention_days,
-  job_event_retention_days, attempt_history_retention_days,
-  schedule_occurrence_retention_days, statistics_retention_days, terminal_job_prune_limit,
+  singleton, task_identity_retention_days, terminal_outcome_retention_days,
+  task_event_retention_days, attempt_history_retention_days,
+  schedule_occurrence_retention_days, statistics_retention_days, terminal_task_prune_limit,
   history_partitions_per_pass, default_partition_rows_per_pass, occurrence_rows_per_pass,
-  statistics_rows_per_pass, application_job_identity_retention_days,
-  application_terminal_outcome_retention_days, application_job_event_retention_days,
+  statistics_rows_per_pass, application_task_identity_retention_days,
+  application_terminal_outcome_retention_days, application_task_event_retention_days,
   application_attempt_history_retention_days, application_schedule_occurrence_retention_days,
-  application_statistics_retention_days, application_terminal_job_prune_limit,
+  application_statistics_retention_days, application_terminal_task_prune_limit,
   application_history_partitions_per_pass, application_default_partition_rows_per_pass,
   application_occurrence_rows_per_pass, application_statistics_rows_per_pass
 ) VALUES (
@@ -1885,7 +1885,7 @@ AS $$
       'code', 'missing-history-partitions', 'severity', 'critical',
       'observed', missing.count, 'budget', 0
     ) FROM (
-      SELECT count(*) FILTER (WHERE NOT value->>'has_job_events' = 'true')
+      SELECT count(*) FILTER (WHERE NOT value->>'has_task_events' = 'true')
            + count(*) FILTER (WHERE NOT value->>'has_attempt_history' = 'true') AS count
         FROM jsonb_array_elements(p_snapshot->'history_partition_days') value
     ) missing WHERE missing.count > 0
@@ -1904,11 +1904,11 @@ AS $$
       'category', retention.category
     ) FROM (
       VALUES
-        (1, 'jobIdentity', p_snapshot->>'job_identity_lag_ms',
+        (1, 'taskIdentity', p_snapshot->>'task_identity_lag_ms',
           p_policy->>'row_retention_lag_ms'),
         (2, 'terminalOutcome', p_snapshot->>'terminal_outcome_lag_ms',
           p_policy->>'row_retention_lag_ms'),
-        (3, 'jobEvents', p_snapshot->>'job_event_lag_ms',
+        (3, 'taskEvents', p_snapshot->>'task_event_lag_ms',
           p_policy->>'partition_retention_lag_ms'),
         (4, 'attemptHistory', p_snapshot->>'attempt_history_lag_ms',
           p_policy->>'partition_retention_lag_ms'),
@@ -1992,7 +1992,7 @@ BEGIN
                     AND min(version) = max(version)
                     AND NOT EXISTS (
                       SELECT 1
-                        FROM unnest(ARRAY['job_current', 'ready_job', 'scheduled_job', 'lease'])
+                        FROM unnest(ARRAY['task_current', 'ready_task', 'scheduled_task', 'lease'])
                           AS legacy(relation_name)
                        WHERE to_regclass(format('workhorse.%I', relation_name)) IS NOT NULL
                     )
@@ -2001,60 +2001,60 @@ BEGIN
                  END AS schema_version
             FROM workhorse.schema_version
         ), depth AS (
-          SELECT count(runtime.job_id) FILTER (WHERE runtime.state = 'blocked')::text AS blocked,
-               count(runtime.job_id) FILTER (WHERE runtime.state = 'ready')::text AS ready,
-               count(runtime.job_id) FILTER (WHERE runtime.state = 'scheduled')::text AS scheduled,
-               count(runtime.job_id) FILTER (
+          SELECT count(runtime.task_id) FILTER (WHERE runtime.state = 'blocked')::text AS blocked,
+               count(runtime.task_id) FILTER (WHERE runtime.state = 'ready')::text AS ready,
+               count(runtime.task_id) FILTER (WHERE runtime.state = 'scheduled')::text AS scheduled,
+               count(runtime.task_id) FILTER (
              WHERE runtime.state = 'scheduled' AND runtime.wait_name IS NOT NULL
                AND EXISTS (
-                 SELECT 1 FROM workhorse.job_wait timer
-                  WHERE timer.job_id = runtime.job_id AND timer.wait_name = runtime.wait_name
+                 SELECT 1 FROM workhorse.task_wait timer
+                  WHERE timer.task_id = runtime.task_id AND timer.wait_name = runtime.wait_name
                )
            )::text AS sleeping,
-               count(runtime.job_id) FILTER (
+               count(runtime.task_id) FILTER (
              WHERE runtime.state = 'scheduled' AND runtime.wait_name IS NOT NULL
                AND EXISTS (
-                 SELECT 1 FROM workhorse.job_wait timer
-                  WHERE timer.job_id = runtime.job_id AND timer.wait_name = runtime.wait_name
+                 SELECT 1 FROM workhorse.task_wait timer
+                  WHERE timer.task_id = runtime.task_id AND timer.wait_name = runtime.wait_name
                )
                AND runtime.run_at <= clock_timestamp()
            )::text AS overdue_waits,
                min(runtime.run_at) FILTER (
              WHERE runtime.state = 'scheduled' AND runtime.wait_name IS NOT NULL
                AND EXISTS (
-                 SELECT 1 FROM workhorse.job_wait timer
-                  WHERE timer.job_id = runtime.job_id AND timer.wait_name = runtime.wait_name
+                 SELECT 1 FROM workhorse.task_wait timer
+                  WHERE timer.task_id = runtime.task_id AND timer.wait_name = runtime.wait_name
                )
            ) AS next_wake_at,
-               count(runtime.job_id) FILTER (WHERE runtime.state = 'active')::text AS active,
-               count(runtime.job_id) FILTER (
+               count(runtime.task_id) FILTER (WHERE runtime.state = 'active')::text AS active,
+               count(runtime.task_id) FILTER (
              WHERE runtime.state = 'active' AND runtime.expires_at <= clock_timestamp()
            )::text AS expired,
                extract(epoch FROM clock_timestamp() - min(runtime.ready_at) FILTER (
              WHERE runtime.state = 'ready'
            )) * 1000 AS oldest_ready_age_ms,
-               count(runtime.job_id) FILTER (
+               count(runtime.task_id) FILTER (
              WHERE runtime.state = 'scheduled' AND runtime.run_at <= clock_timestamp()
            )::text AS overdue_scheduled,
                extract(epoch FROM clock_timestamp() - min(runtime.run_at) FILTER (
              WHERE runtime.state = 'scheduled' AND runtime.run_at <= clock_timestamp()
            )) * 1000 AS oldest_overdue_scheduled_age_ms,
-               count(runtime.job_id) FILTER (WHERE runtime.deadline_at IS NOT NULL)::text AS pending_deadlines,
-               count(runtime.job_id) FILTER (
+               count(runtime.task_id) FILTER (WHERE runtime.deadline_at IS NOT NULL)::text AS pending_deadlines,
+               count(runtime.task_id) FILTER (
              WHERE runtime.deadline_at IS NOT NULL AND runtime.deadline_at <= clock_timestamp()
            )::text AS overdue_deadlines,
-               count(runtime.job_id) FILTER (
+               count(runtime.task_id) FILTER (
              WHERE runtime.deadline_at > clock_timestamp()
                AND runtime.deadline_at <= clock_timestamp() + interval '1 minute'
            )::text AS deadlines_due_within_minute,
                min(runtime.deadline_at) AS earliest_deadline_at,
-               count(runtime.job_id) FILTER (
+               count(runtime.task_id) FILTER (
              WHERE runtime.state = 'active' AND runtime.attempt_timeout_at IS NOT NULL
            )::text AS active_execution_timeouts,
-               count(runtime.job_id) FILTER (
+               count(runtime.task_id) FILTER (
              WHERE runtime.state = 'active' AND runtime.attempt_timeout_at <= clock_timestamp()
            )::text AS overdue_execution_timeouts
-            FROM workhorse.job_runtime runtime
+            FROM workhorse.task_runtime runtime
         ), terminal AS (
           -- Terminal history is unbounded, so its counts stop scanning at the cap. Live-state counts
           -- come from depth and stay exact; claim-shaped work never pays for lifetime history here.
@@ -2062,7 +2062,7 @@ BEGIN
                  count(*) FILTER (WHERE state = 'failed')::text AS failed_count,
                  count(*) FILTER (WHERE state = 'canceled')::text AS canceled_count,
                  count(*) > 100000 AS terminal_counts_capped
-            FROM (SELECT state FROM workhorse.job_outcome LIMIT 100001)
+            FROM (SELECT state FROM workhorse.task_outcome LIMIT 100001)
               sampled_outcomes
         ), retention AS (
           -- The LIMIT 1 clauses on the singleton CTEs here and below are planner facts, not semantics:
@@ -2072,42 +2072,42 @@ BEGIN
             SELECT * FROM workhorse.retention_policy WHERE singleton LIMIT 1
           ), boundaries AS (
             SELECT
-              (SELECT job.created_at
-                 FROM workhorse.job job
-                 JOIN workhorse.job_outcome outcome ON outcome.job_id = job.id
-                ORDER BY job.created_at, job.id LIMIT 1)
-                AS oldest_job_identity_at,
-              (SELECT finished_at FROM workhorse.job_outcome ORDER BY finished_at, job_id LIMIT 1)
+              (SELECT task.created_at
+                 FROM workhorse.task task
+                 JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
+                ORDER BY task.created_at, task.id LIMIT 1)
+                AS oldest_task_identity_at,
+              (SELECT finished_at FROM workhorse.task_outcome ORDER BY finished_at, task_id LIMIT 1)
                 AS oldest_terminal_outcome_at,
-              (SELECT job.created_at
-                 FROM workhorse.job job
-                 JOIN workhorse.job_outcome outcome ON outcome.job_id = job.id
-                WHERE policy.job_identity_retention_days IS NOT NULL
+              (SELECT task.created_at
+                 FROM workhorse.task task
+                 JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
+                WHERE policy.task_identity_retention_days IS NOT NULL
                   AND policy.terminal_outcome_retention_days IS NOT NULL
-                  AND job.created_at < clock_timestamp()
-                    - make_interval(days => policy.job_identity_retention_days)
+                  AND task.created_at < clock_timestamp()
+                    - make_interval(days => policy.task_identity_retention_days)
                   AND outcome.finished_at < clock_timestamp()
                     - make_interval(days => policy.terminal_outcome_retention_days)
-                ORDER BY job.created_at, job.id LIMIT 1)
-                AS eligible_job_identity_at,
+                ORDER BY task.created_at, task.id LIMIT 1)
+                AS eligible_task_identity_at,
               (SELECT outcome.finished_at
-                 FROM workhorse.job job
-                 JOIN workhorse.job_outcome outcome ON outcome.job_id = job.id
-                WHERE policy.job_identity_retention_days IS NOT NULL
+                 FROM workhorse.task task
+                 JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
+                WHERE policy.task_identity_retention_days IS NOT NULL
                   AND policy.terminal_outcome_retention_days IS NOT NULL
-                  AND job.created_at < clock_timestamp()
-                    - make_interval(days => policy.job_identity_retention_days)
+                  AND task.created_at < clock_timestamp()
+                    - make_interval(days => policy.task_identity_retention_days)
                   AND outcome.finished_at < clock_timestamp()
                     - make_interval(days => policy.terminal_outcome_retention_days)
-                ORDER BY outcome.finished_at, outcome.job_id LIMIT 1)
+                ORDER BY outcome.finished_at, outcome.task_id LIMIT 1)
                 AS eligible_terminal_outcome_at,
-              (SELECT occurred_at FROM workhorse.job_event ORDER BY occurred_at, event_id LIMIT 1)
-                AS oldest_job_event_at,
-              (SELECT occurred_at FROM workhorse.job_event
-                WHERE tableoid <> 'workhorse.job_event_default'::regclass
-                ORDER BY occurred_at, event_id LIMIT 1) AS oldest_partitioned_job_event_at,
-              (SELECT occurred_at FROM workhorse.job_event_default
-                ORDER BY occurred_at, event_id LIMIT 1) AS oldest_default_job_event_at,
+              (SELECT occurred_at FROM workhorse.task_event ORDER BY occurred_at, event_id LIMIT 1)
+                AS oldest_task_event_at,
+              (SELECT occurred_at FROM workhorse.task_event
+                WHERE tableoid <> 'workhorse.task_event_default'::regclass
+                ORDER BY occurred_at, event_id LIMIT 1) AS oldest_partitioned_task_event_at,
+              (SELECT occurred_at FROM workhorse.task_event_default
+                ORDER BY occurred_at, event_id LIMIT 1) AS oldest_default_task_event_at,
               (SELECT occurred_at FROM workhorse.attempt_history ORDER BY occurred_at, attempt_id LIMIT 1)
                 AS oldest_attempt_history_at,
               (SELECT occurred_at FROM workhorse.attempt_history
@@ -2118,9 +2118,9 @@ BEGIN
               (SELECT occurrence_at FROM workhorse.schedule_occurrence ORDER BY occurrence_at LIMIT 1)
                 AS oldest_schedule_occurrence_at,
               (SELECT min(bucket_start) FROM (
-                 SELECT bucket_start FROM workhorse.job_stat_bucket
-                 UNION ALL SELECT bucket_start FROM workhorse.job_stat_bucket_hour
-                 UNION ALL SELECT bucket_start FROM workhorse.job_stat_bucket_day
+                 SELECT bucket_start FROM workhorse.task_stat_bucket
+                 UNION ALL SELECT bucket_start FROM workhorse.task_stat_bucket_hour
+                 UNION ALL SELECT bucket_start FROM workhorse.task_stat_bucket_day
                ) statistic_tiers) AS oldest_statistics_at
             FROM policy
           ), partitions AS (
@@ -2134,15 +2134,15 @@ BEGIN
               JOIN pg_namespace namespace ON namespace.oid = parent.relnamespace
               JOIN pg_class child ON child.oid = inheritance.inhrelid
              WHERE namespace.nspname = 'workhorse'
-               AND parent.relname IN ('job_event', 'attempt_history')
+               AND parent.relname IN ('task_event', 'attempt_history')
                AND child.relname <> parent.relname || '_default'
           ), eligible AS (
             SELECT
               count(*) FILTER (
-                WHERE parent_name = 'job_event'
-                  AND policy.job_event_retention_days IS NOT NULL
+                WHERE parent_name = 'task_event'
+                  AND policy.task_event_retention_days IS NOT NULL
                   AND upper_bound <= clock_timestamp()
-                    - make_interval(days => policy.job_event_retention_days)
+                    - make_interval(days => policy.task_event_retention_days)
                   AND upper_bound <= (
                     date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
                   )
@@ -2165,7 +2165,7 @@ BEGIN
               FROM (
                 SELECT
                   (SELECT count(*) FROM (
-                    SELECT 1 FROM workhorse.job_event_default LIMIT 10001
+                    SELECT 1 FROM workhorse.task_event_default LIMIT 10001
                   ) sampled_events) AS event_rows,
                   (SELECT count(*) FROM (
                     SELECT 1 FROM workhorse.attempt_history_default LIMIT 10001
@@ -2173,32 +2173,32 @@ BEGIN
               ) sampled
           )
           SELECT policy.*, boundaries.*,
-                 CASE WHEN policy.job_identity_retention_days IS NULL
-                             OR boundaries.eligible_job_identity_at IS NULL THEN NULL
+                 CASE WHEN policy.task_identity_retention_days IS NULL
+                             OR boundaries.eligible_task_identity_at IS NULL THEN NULL
                       ELSE GREATEST(0, extract(epoch FROM
-                        clock_timestamp() - make_interval(days => policy.job_identity_retention_days)
-                        - boundaries.eligible_job_identity_at) * 1000) END AS job_identity_lag_ms,
+                        clock_timestamp() - make_interval(days => policy.task_identity_retention_days)
+                        - boundaries.eligible_task_identity_at) * 1000) END AS task_identity_lag_ms,
                  CASE WHEN policy.terminal_outcome_retention_days IS NULL
                              OR boundaries.eligible_terminal_outcome_at IS NULL THEN NULL
                       ELSE GREATEST(0, extract(epoch FROM
                         clock_timestamp() - make_interval(days => policy.terminal_outcome_retention_days)
                         - boundaries.eligible_terminal_outcome_at) * 1000) END AS terminal_outcome_lag_ms,
-                 CASE WHEN policy.job_event_retention_days IS NULL
-                             OR boundaries.oldest_job_event_at IS NULL THEN NULL
+                 CASE WHEN policy.task_event_retention_days IS NULL
+                             OR boundaries.oldest_task_event_at IS NULL THEN NULL
                       ELSE GREATEST(
                         0,
                         COALESCE(extract(epoch FROM
                           date_trunc(
                             'day',
                             (clock_timestamp() - make_interval(
-                              days => policy.job_event_retention_days
+                              days => policy.task_event_retention_days
                             )) AT TIME ZONE 'UTC'
                           ) AT TIME ZONE 'UTC'
-                          - boundaries.oldest_partitioned_job_event_at) * 1000, 0),
+                          - boundaries.oldest_partitioned_task_event_at) * 1000, 0),
                         COALESCE(extract(epoch FROM
-                          clock_timestamp() - make_interval(days => policy.job_event_retention_days)
-                          - boundaries.oldest_default_job_event_at) * 1000, 0)
-                      ) END AS job_event_lag_ms,
+                          clock_timestamp() - make_interval(days => policy.task_event_retention_days)
+                          - boundaries.oldest_default_task_event_at) * 1000, 0)
+                      ) END AS task_event_lag_ms,
                  CASE WHEN policy.attempt_history_retention_days IS NULL
                              OR boundaries.oldest_attempt_history_at IS NULL THEN NULL
                       ELSE GREATEST(
@@ -2233,31 +2233,31 @@ BEGIN
                  eligible.*, default_rows.*
             FROM policy CROSS JOIN boundaries CROSS JOIN eligible CROSS JOIN default_rows
         ), dependencies AS (
-          SELECT LEAST(blocked_jobs, 10000)::text
-                   AS dependency_blocked_jobs,
+          SELECT LEAST(blocked_tasks, 10000)::text
+                   AS dependency_blocked_tasks,
                  LEAST(pending_edges, 10000)::text
                    AS dependency_pending_edges,
                  LEAST(failed_resolutions, 10000)::text
                    AS dependency_failed_resolutions,
                  (SELECT terminal_prune_dependency_starved
                     FROM workhorse.maintenance_state
-                   WHERE task_name = 'terminal_storage') AS dependency_retention_prune_starved,
-                 blocked_jobs > 10000
+                   WHERE routine_name = 'terminal_storage') AS dependency_retention_prune_starved,
+                 blocked_tasks > 10000
                    OR pending_edges > 10000
                    OR failed_resolutions > 10000
                    AS dependency_counts_capped
             FROM (
               SELECT
                 (SELECT count(*) FROM (
-                  SELECT 1 FROM workhorse.job_runtime WHERE state = 'blocked'
+                  SELECT 1 FROM workhorse.task_runtime WHERE state = 'blocked'
                    LIMIT 10001
-                ) sampled_blocked) AS blocked_jobs,
+                ) sampled_blocked) AS blocked_tasks,
                 (SELECT count(*) FROM (
-                  SELECT 1 FROM workhorse.job_dependency WHERE released_at IS NULL
+                  SELECT 1 FROM workhorse.task_dependency WHERE released_at IS NULL
                    LIMIT 10001
                 ) sampled_pending) AS pending_edges,
                 (SELECT count(*) FROM (
-                  SELECT 1 FROM workhorse.job_outcome
+                  SELECT 1 FROM workhorse.task_outcome
                    WHERE state = 'failed' AND error->>'name' = 'DependencyFailed'
                    LIMIT 10001
                 ) sampled_failed) AS failed_resolutions
@@ -2282,99 +2282,99 @@ BEGIN
             FROM (
           SELECT
             (SELECT count(*) FROM (
-              SELECT 1 FROM workhorse.job_runtime runtime
+              SELECT 1 FROM workhorse.task_runtime runtime
                WHERE runtime.state = 'blocked'
                  AND EXISTS (
-                   SELECT 1 FROM workhorse.job_child edge WHERE edge.parent_job_id = runtime.job_id
+                   SELECT 1 FROM workhorse.task_child edge WHERE edge.parent_task_id = runtime.task_id
                  )
                LIMIT 10001
             ) sampled_waiting) AS waiting_parents,
             (SELECT count(*) FROM (
-              SELECT 1 FROM workhorse.job_child edge
+              SELECT 1 FROM workhorse.task_child edge
 
                WHERE edge.joined_at IS NULL
                  AND NOT EXISTS (
-                   SELECT 1 FROM workhorse.job_outcome outcome WHERE outcome.job_id = edge.child_job_id
+                   SELECT 1 FROM workhorse.task_outcome outcome WHERE outcome.task_id = edge.child_task_id
                  )
                LIMIT 10001
             ) sampled_pending) AS pending_children,
             (SELECT count(*) FROM (
-              SELECT 1 FROM workhorse.job_child edge
+              SELECT 1 FROM workhorse.task_child edge
 
-               JOIN workhorse.job_outcome outcome ON outcome.job_id = edge.child_job_id
+               JOIN workhorse.task_outcome outcome ON outcome.task_id = edge.child_task_id
               WHERE edge.joined_at IS NULL AND outcome.state = 'succeeded'
                LIMIT 10001
             ) sampled_unjoined) AS unjoined_results,
             (SELECT count(*) FROM (
-              SELECT 1 FROM workhorse.job_outcome outcome
+              SELECT 1 FROM workhorse.task_outcome outcome
 
                WHERE outcome.state = 'failed'
                  AND outcome.error->>'name' = 'DependencyFailed'
                  AND EXISTS (
-                   SELECT 1 FROM workhorse.job_child edge WHERE edge.parent_job_id = outcome.job_id
+                   SELECT 1 FROM workhorse.task_child edge WHERE edge.parent_task_id = outcome.task_id
                  )
                LIMIT 10001
             ) sampled_failed) AS failed_parents,
             (SELECT count(*) FROM (
-              SELECT 1 FROM workhorse.job_outcome outcome
+              SELECT 1 FROM workhorse.task_outcome outcome
 
                WHERE outcome.state = 'canceled'
                  AND outcome.error->>'name' = 'DependencyCanceled'
                  AND EXISTS (
-                   SELECT 1 FROM workhorse.job_child edge WHERE edge.parent_job_id = outcome.job_id
+                   SELECT 1 FROM workhorse.task_child edge WHERE edge.parent_task_id = outcome.task_id
                  )
                LIMIT 10001
             ) sampled_canceled) AS canceled_parents) samples
         ), external_waits AS (
           WITH pending AS (
             SELECT 'signal'::text AS kind, signal.created_at, runtime.deadline_at
-              FROM workhorse.job_signal_wait signal
-              JOIN workhorse.job_runtime runtime
-                ON runtime.job_id = signal.job_id
+              FROM workhorse.task_signal_wait signal
+              JOIN workhorse.task_runtime runtime
+                ON runtime.task_id = signal.task_id
                AND runtime.state = 'scheduled'
                AND runtime.wait_name = signal.signal_name
                AND runtime.current_attempt = signal.attempt
              WHERE signal.delivered_at IS NULL
-             ORDER BY signal.created_at, signal.job_id, signal.signal_name
+             ORDER BY signal.created_at, signal.task_id, signal.signal_name
              LIMIT 10001
           ), pending_human AS (
             SELECT 'human'::text AS kind, human_wait.created_at, runtime.deadline_at
-              FROM workhorse.job_human_wait human_wait
-              JOIN workhorse.job_runtime runtime
-                ON runtime.job_id = human_wait.job_id
+              FROM workhorse.task_human_wait human_wait
+              JOIN workhorse.task_runtime runtime
+                ON runtime.task_id = human_wait.task_id
                AND runtime.state = 'scheduled'
                AND runtime.wait_name = human_wait.token_name
                AND runtime.current_attempt = human_wait.attempt
              WHERE human_wait.completed_at IS NULL
-             ORDER BY human_wait.created_at, human_wait.job_id, human_wait.token_name
+             ORDER BY human_wait.created_at, human_wait.task_id, human_wait.token_name
              LIMIT 10001
           ), combined AS (
             SELECT * FROM pending UNION ALL SELECT * FROM pending_human
           ), overdue_signals AS (
             SELECT 1
-              FROM workhorse.job_signal_wait signal
-              JOIN workhorse.job_runtime runtime
-                ON runtime.job_id = signal.job_id
+              FROM workhorse.task_signal_wait signal
+              JOIN workhorse.task_runtime runtime
+                ON runtime.task_id = signal.task_id
                AND runtime.state = 'scheduled'
                AND runtime.wait_name = signal.signal_name
                AND runtime.current_attempt = signal.attempt
              WHERE signal.delivered_at IS NULL AND runtime.deadline_at <= clock_timestamp()
-             ORDER BY runtime.deadline_at, signal.job_id, signal.signal_name
+             ORDER BY runtime.deadline_at, signal.task_id, signal.signal_name
              LIMIT 10001
           ), overdue_humans AS (
             SELECT 1
-              FROM workhorse.job_human_wait human_wait
-              JOIN workhorse.job_runtime runtime
-                ON runtime.job_id = human_wait.job_id
+              FROM workhorse.task_human_wait human_wait
+              JOIN workhorse.task_runtime runtime
+                ON runtime.task_id = human_wait.task_id
                AND runtime.state = 'scheduled'
                AND runtime.wait_name = human_wait.token_name
                AND runtime.current_attempt = human_wait.attempt
              WHERE human_wait.completed_at IS NULL AND runtime.deadline_at <= clock_timestamp()
-             ORDER BY runtime.deadline_at, human_wait.job_id, human_wait.token_name
+             ORDER BY runtime.deadline_at, human_wait.task_id, human_wait.token_name
              LIMIT 10001
           ), rejected AS (
             SELECT 1
-              FROM workhorse.job_event
+              FROM workhorse.task_event
              WHERE event_type IN ('signal_rejected', 'human_wait_rejected')
                AND occurred_at >= p_rejected_since
              ORDER BY occurred_at DESC, event_id DESC
@@ -2407,17 +2407,17 @@ BEGIN
                  bucket_sample.buckets::text AS buckets,
                  bucket_sample.buckets_capped,
                  (SELECT max(bucket_start) FROM (
-                    SELECT bucket_start FROM workhorse.job_stat_bucket
-                    UNION ALL SELECT bucket_start FROM workhorse.job_stat_bucket_hour
-                    UNION ALL SELECT bucket_start FROM workhorse.job_stat_bucket_day
+                    SELECT bucket_start FROM workhorse.task_stat_bucket
+                    UNION ALL SELECT bucket_start FROM workhorse.task_stat_bucket_hour
+                    UNION ALL SELECT bucket_start FROM workhorse.task_stat_bucket_day
                   ) statistic_tiers) AS newest_bucket_at
-            FROM workhorse.job_stat_state state
+            FROM workhorse.task_stat_state state
             CROSS JOIN LATERAL (
               SELECT count(*) AS buckets, count(*) > 100000 AS buckets_capped
                 FROM (
-                  SELECT 1 FROM workhorse.job_stat_bucket
-                  UNION ALL SELECT 1 FROM workhorse.job_stat_bucket_hour
-                  UNION ALL SELECT 1 FROM workhorse.job_stat_bucket_day
+                  SELECT 1 FROM workhorse.task_stat_bucket
+                  UNION ALL SELECT 1 FROM workhorse.task_stat_bucket_hour
+                  UNION ALL SELECT 1 FROM workhorse.task_stat_bucket_day
                   LIMIT 100001
                 ) sampled_buckets
             ) bucket_sample
@@ -2450,7 +2450,7 @@ BEGIN
                      ), 0)::integer AS highest_key_active
                 FROM (
                   SELECT active.concurrency_key, count(*)::integer AS key_active
-                    FROM workhorse.job_runtime active
+                    FROM workhorse.task_runtime active
                    WHERE active.state = 'active'
                      AND active.queue_name = policy.queue_name
                      AND active.expires_at > clock_timestamp()
@@ -2470,14 +2470,14 @@ BEGIN
                 FROM (
                   SELECT ready.concurrency_key,
                          (SELECT count(*)::integer
-                            FROM workhorse.job_runtime active
+                            FROM workhorse.task_runtime active
                            WHERE active.state = 'active'
                              AND active.queue_name = policy.queue_name
                              AND active.concurrency_key = ready.concurrency_key
                              AND active.expires_at > clock_timestamp()) AS key_active
-                    FROM workhorse.job_runtime ready
+                    FROM workhorse.task_runtime ready
                    WHERE ready.state = 'ready' AND ready.queue_name = policy.queue_name
-                   ORDER BY ready.sequence, ready.job_id
+                   ORDER BY ready.sequence, ready.task_id
                    LIMIT 101
                 ) sample
             ) blocked
@@ -2545,9 +2545,9 @@ BEGIN
                        END AS eligible_at
                   FROM (
                     SELECT runtime.concurrency_key
-                      FROM workhorse.job_runtime runtime
+                      FROM workhorse.task_runtime runtime
                      WHERE runtime.state = 'ready' AND runtime.queue_name = policy.queue_name
-                     ORDER BY runtime.sequence, runtime.job_id LIMIT 101
+                     ORDER BY runtime.sequence, runtime.task_id LIMIT 101
                   ) ready
                   CROSS JOIN LATERAL (
                     SELECT CASE
@@ -2576,8 +2576,8 @@ BEGIN
          ORDER BY policy.queue_name LIMIT 100
         ), partition_days AS (
           SELECT to_char(day_start, 'YYYYMMDD') AS day, day_start AS starts_at,
-                 to_regclass(format('workhorse.%I', 'job_event_' || to_char(day_start, 'YYYYMMDD')))
-                   IS NOT NULL AS has_job_events,
+                 to_regclass(format('workhorse.%I', 'task_event_' || to_char(day_start, 'YYYYMMDD')))
+                   IS NOT NULL AS has_task_events,
                  to_regclass(format('workhorse.%I', 'attempt_history_' || to_char(day_start, 'YYYYMMDD')))
                    IS NOT NULL AS has_attempt_history
             FROM generate_series(
@@ -2656,13 +2656,13 @@ END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.sync_retention_policy_v1(
-  p_job_identity_retention_days integer,
+  p_task_identity_retention_days integer,
   p_terminal_outcome_retention_days integer,
-  p_job_event_retention_days integer,
+  p_task_event_retention_days integer,
   p_attempt_history_retention_days integer,
   p_schedule_occurrence_retention_days integer,
   p_statistics_retention_days integer DEFAULT NULL,
-  p_terminal_job_prune_limit integer DEFAULT NULL,
+  p_terminal_task_prune_limit integer DEFAULT NULL,
   p_history_partitions_per_pass integer DEFAULT NULL,
   p_default_partition_rows_per_pass integer DEFAULT NULL,
   p_occurrence_rows_per_pass integer DEFAULT NULL,
@@ -2679,14 +2679,14 @@ BEGIN
    WHERE singleton
    FOR UPDATE;
   UPDATE workhorse.retention_policy policy SET
-    application_job_identity_retention_days = p_job_identity_retention_days,
+    application_task_identity_retention_days = p_task_identity_retention_days,
     application_terminal_outcome_retention_days = p_terminal_outcome_retention_days,
-    application_job_event_retention_days = p_job_event_retention_days,
+    application_task_event_retention_days = p_task_event_retention_days,
     application_attempt_history_retention_days = p_attempt_history_retention_days,
     application_schedule_occurrence_retention_days = p_schedule_occurrence_retention_days,
     application_statistics_retention_days = p_statistics_retention_days,
-    application_terminal_job_prune_limit = COALESCE(
-      p_terminal_job_prune_limit, policy.application_terminal_job_prune_limit
+    application_terminal_task_prune_limit = COALESCE(
+      p_terminal_task_prune_limit, policy.application_terminal_task_prune_limit
     ),
     application_history_partitions_per_pass = COALESCE(
       p_history_partitions_per_pass, policy.application_history_partitions_per_pass
@@ -2700,15 +2700,15 @@ BEGIN
     application_statistics_rows_per_pass = COALESCE(
       p_statistics_rows_per_pass, policy.application_statistics_rows_per_pass
     ),
-    job_identity_retention_days = CASE
-      WHEN p_force OR NOT ('job_identity_retention_days' = ANY(policy.operator_overrides))
-        THEN p_job_identity_retention_days ELSE policy.job_identity_retention_days END,
+    task_identity_retention_days = CASE
+      WHEN p_force OR NOT ('task_identity_retention_days' = ANY(policy.operator_overrides))
+        THEN p_task_identity_retention_days ELSE policy.task_identity_retention_days END,
     terminal_outcome_retention_days = CASE
       WHEN p_force OR NOT ('terminal_outcome_retention_days' = ANY(policy.operator_overrides))
         THEN p_terminal_outcome_retention_days ELSE policy.terminal_outcome_retention_days END,
-    job_event_retention_days = CASE
-      WHEN p_force OR NOT ('job_event_retention_days' = ANY(policy.operator_overrides))
-        THEN p_job_event_retention_days ELSE policy.job_event_retention_days END,
+    task_event_retention_days = CASE
+      WHEN p_force OR NOT ('task_event_retention_days' = ANY(policy.operator_overrides))
+        THEN p_task_event_retention_days ELSE policy.task_event_retention_days END,
     attempt_history_retention_days = CASE
       WHEN p_force OR NOT ('attempt_history_retention_days' = ANY(policy.operator_overrides))
         THEN p_attempt_history_retention_days ELSE policy.attempt_history_retention_days END,
@@ -2718,13 +2718,13 @@ BEGIN
     statistics_retention_days = CASE
       WHEN p_force OR NOT ('statistics_retention_days' = ANY(policy.operator_overrides))
         THEN p_statistics_retention_days ELSE policy.statistics_retention_days END,
-    terminal_job_prune_limit = CASE
+    terminal_task_prune_limit = CASE
       WHEN p_force THEN COALESCE(
-        p_terminal_job_prune_limit, policy.application_terminal_job_prune_limit
+        p_terminal_task_prune_limit, policy.application_terminal_task_prune_limit
       )
-      WHEN p_terminal_job_prune_limit IS NULL THEN policy.terminal_job_prune_limit
-      WHEN NOT ('terminal_job_prune_limit' = ANY(policy.operator_overrides))
-        THEN p_terminal_job_prune_limit ELSE policy.terminal_job_prune_limit END,
+      WHEN p_terminal_task_prune_limit IS NULL THEN policy.terminal_task_prune_limit
+      WHEN NOT ('terminal_task_prune_limit' = ANY(policy.operator_overrides))
+        THEN p_terminal_task_prune_limit ELSE policy.terminal_task_prune_limit END,
     history_partitions_per_pass = CASE
       WHEN p_force THEN COALESCE(
         p_history_partitions_per_pass, policy.application_history_partitions_per_pass
@@ -2758,7 +2758,7 @@ BEGIN
   WHERE singleton
   RETURNING * INTO v_policy;
   IF (
-       v_previous.job_event_retention_days IS DISTINCT FROM v_policy.job_event_retention_days
+       v_previous.task_event_retention_days IS DISTINCT FROM v_policy.task_event_retention_days
        OR v_previous.attempt_history_retention_days IS DISTINCT FROM
             v_policy.attempt_history_retention_days
        OR v_previous.schedule_occurrence_retention_days IS DISTINCT FROM
@@ -2766,13 +2766,13 @@ BEGIN
      ) THEN
     UPDATE workhorse.maintenance_state state
        SET history_retained_before = CASE
-             WHEN v_policy.job_event_retention_days IS NOT NULL
+             WHEN v_policy.task_event_retention_days IS NOT NULL
               AND v_policy.attempt_history_retention_days IS NOT NULL THEN
                LEAST(
                  state.history_retained_before,
                  LEAST(
                    date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-                     - make_interval(days => v_policy.job_event_retention_days),
+                     - make_interval(days => v_policy.task_event_retention_days),
                    date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
                      - make_interval(days => v_policy.attempt_history_retention_days)
                  )
@@ -2781,7 +2781,7 @@ BEGIN
            END,
            last_completed_local_date = NULL,
            updated_at = clock_timestamp()
-     WHERE state.task_name = 'history_retention';
+     WHERE state.routine_name = 'history_retention';
   END IF;
   RETURN v_policy;
 END;
@@ -2802,10 +2802,10 @@ BEGIN
   END IF;
   SELECT array_agg(name ORDER BY name) INTO v_names FROM jsonb_object_keys(p_overrides) name;
   IF NOT v_names <@ ARRAY[
-    'job_identity_retention_days', 'terminal_outcome_retention_days',
-    'job_event_retention_days', 'attempt_history_retention_days',
+    'task_identity_retention_days', 'terminal_outcome_retention_days',
+    'task_event_retention_days', 'attempt_history_retention_days',
     'schedule_occurrence_retention_days', 'statistics_retention_days',
-    'terminal_job_prune_limit', 'history_partitions_per_pass',
+    'terminal_task_prune_limit', 'history_partitions_per_pass',
     'default_partition_rows_per_pass', 'occurrence_rows_per_pass',
     'statistics_rows_per_pass'
   ]::text[] THEN
@@ -2814,15 +2814,15 @@ BEGIN
 
   SELECT * INTO STRICT v_previous FROM workhorse.retention_policy WHERE singleton FOR UPDATE;
   UPDATE workhorse.retention_policy policy SET
-    job_identity_retention_days = CASE WHEN p_overrides ? 'job_identity_retention_days'
-      THEN (p_overrides->>'job_identity_retention_days')::integer
-      ELSE policy.job_identity_retention_days END,
+    task_identity_retention_days = CASE WHEN p_overrides ? 'task_identity_retention_days'
+      THEN (p_overrides->>'task_identity_retention_days')::integer
+      ELSE policy.task_identity_retention_days END,
     terminal_outcome_retention_days = CASE WHEN p_overrides ? 'terminal_outcome_retention_days'
       THEN (p_overrides->>'terminal_outcome_retention_days')::integer
       ELSE policy.terminal_outcome_retention_days END,
-    job_event_retention_days = CASE WHEN p_overrides ? 'job_event_retention_days'
-      THEN (p_overrides->>'job_event_retention_days')::integer
-      ELSE policy.job_event_retention_days END,
+    task_event_retention_days = CASE WHEN p_overrides ? 'task_event_retention_days'
+      THEN (p_overrides->>'task_event_retention_days')::integer
+      ELSE policy.task_event_retention_days END,
     attempt_history_retention_days = CASE WHEN p_overrides ? 'attempt_history_retention_days'
       THEN (p_overrides->>'attempt_history_retention_days')::integer
       ELSE policy.attempt_history_retention_days END,
@@ -2833,9 +2833,9 @@ BEGIN
     statistics_retention_days = CASE WHEN p_overrides ? 'statistics_retention_days'
       THEN (p_overrides->>'statistics_retention_days')::integer
       ELSE policy.statistics_retention_days END,
-    terminal_job_prune_limit = CASE WHEN p_overrides ? 'terminal_job_prune_limit'
-      THEN (p_overrides->>'terminal_job_prune_limit')::integer
-      ELSE policy.terminal_job_prune_limit END,
+    terminal_task_prune_limit = CASE WHEN p_overrides ? 'terminal_task_prune_limit'
+      THEN (p_overrides->>'terminal_task_prune_limit')::integer
+      ELSE policy.terminal_task_prune_limit END,
     history_partitions_per_pass = CASE WHEN p_overrides ? 'history_partitions_per_pass'
       THEN (p_overrides->>'history_partitions_per_pass')::integer
       ELSE policy.history_partitions_per_pass END,
@@ -2856,7 +2856,7 @@ BEGIN
   WHERE singleton
   RETURNING * INTO v_policy;
   IF (
-       v_previous.job_event_retention_days IS DISTINCT FROM v_policy.job_event_retention_days
+       v_previous.task_event_retention_days IS DISTINCT FROM v_policy.task_event_retention_days
        OR v_previous.attempt_history_retention_days IS DISTINCT FROM
             v_policy.attempt_history_retention_days
        OR v_previous.schedule_occurrence_retention_days IS DISTINCT FROM
@@ -2864,13 +2864,13 @@ BEGIN
      ) THEN
     UPDATE workhorse.maintenance_state state
        SET history_retained_before = CASE
-             WHEN v_policy.job_event_retention_days IS NOT NULL
+             WHEN v_policy.task_event_retention_days IS NOT NULL
               AND v_policy.attempt_history_retention_days IS NOT NULL THEN
                LEAST(
                  state.history_retained_before,
                  LEAST(
                    date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-                     - make_interval(days => v_policy.job_event_retention_days),
+                     - make_interval(days => v_policy.task_event_retention_days),
                    date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
                      - make_interval(days => v_policy.attempt_history_retention_days)
                  )
@@ -2879,7 +2879,7 @@ BEGIN
            END,
            last_completed_local_date = NULL,
            updated_at = clock_timestamp()
-     WHERE state.task_name = 'history_retention';
+     WHERE state.routine_name = 'history_retention';
   END IF;
   RETURN v_policy;
 END;
@@ -2893,24 +2893,24 @@ AS $$
 DECLARE v_policy workhorse.retention_policy%ROWTYPE;
 BEGIN
   IF p_settings IS NULL OR cardinality(p_settings) = 0 OR NOT p_settings <@ ARRAY[
-    'job_identity_retention_days', 'terminal_outcome_retention_days',
-    'job_event_retention_days', 'attempt_history_retention_days',
+    'task_identity_retention_days', 'terminal_outcome_retention_days',
+    'task_event_retention_days', 'attempt_history_retention_days',
     'schedule_occurrence_retention_days', 'statistics_retention_days',
-    'terminal_job_prune_limit', 'history_partitions_per_pass',
+    'terminal_task_prune_limit', 'history_partitions_per_pass',
     'default_partition_rows_per_pass', 'occurrence_rows_per_pass',
     'statistics_rows_per_pass'
   ]::text[] THEN
     RAISE EXCEPTION 'retention revert must name known settings';
   END IF;
   UPDATE workhorse.retention_policy policy SET
-    job_identity_retention_days = CASE WHEN 'job_identity_retention_days' = ANY(p_settings)
-      THEN policy.application_job_identity_retention_days
-      ELSE policy.job_identity_retention_days END,
+    task_identity_retention_days = CASE WHEN 'task_identity_retention_days' = ANY(p_settings)
+      THEN policy.application_task_identity_retention_days
+      ELSE policy.task_identity_retention_days END,
     terminal_outcome_retention_days = CASE WHEN 'terminal_outcome_retention_days' = ANY(p_settings)
       THEN policy.application_terminal_outcome_retention_days
       ELSE policy.terminal_outcome_retention_days END,
-    job_event_retention_days = CASE WHEN 'job_event_retention_days' = ANY(p_settings)
-      THEN policy.application_job_event_retention_days ELSE policy.job_event_retention_days END,
+    task_event_retention_days = CASE WHEN 'task_event_retention_days' = ANY(p_settings)
+      THEN policy.application_task_event_retention_days ELSE policy.task_event_retention_days END,
     attempt_history_retention_days = CASE WHEN 'attempt_history_retention_days' = ANY(p_settings)
       THEN policy.application_attempt_history_retention_days
       ELSE policy.attempt_history_retention_days END,
@@ -2920,8 +2920,8 @@ BEGIN
       ELSE policy.schedule_occurrence_retention_days END,
     statistics_retention_days = CASE WHEN 'statistics_retention_days' = ANY(p_settings)
       THEN policy.application_statistics_retention_days ELSE policy.statistics_retention_days END,
-    terminal_job_prune_limit = CASE WHEN 'terminal_job_prune_limit' = ANY(p_settings)
-      THEN policy.application_terminal_job_prune_limit ELSE policy.terminal_job_prune_limit END,
+    terminal_task_prune_limit = CASE WHEN 'terminal_task_prune_limit' = ANY(p_settings)
+      THEN policy.application_terminal_task_prune_limit ELSE policy.terminal_task_prune_limit END,
     history_partitions_per_pass = CASE WHEN 'history_partitions_per_pass' = ANY(p_settings)
       THEN policy.application_history_partitions_per_pass ELSE policy.history_partitions_per_pass END,
     default_partition_rows_per_pass = CASE
@@ -2940,9 +2940,9 @@ BEGIN
   RETURNING * INTO v_policy;
   UPDATE workhorse.maintenance_state
      SET last_completed_local_date = NULL, updated_at = clock_timestamp()
-   WHERE task_name = 'history_retention'
+   WHERE routine_name = 'history_retention'
      AND p_settings && ARRAY[
-       'job_event_retention_days', 'attempt_history_retention_days',
+       'task_event_retention_days', 'attempt_history_retention_days',
        'schedule_occurrence_retention_days'
      ]::text[];
   RETURN v_policy;
@@ -3056,7 +3056,7 @@ BEGIN
      OR v_previous.history_retention_local_time IS DISTINCT FROM v_policy.history_retention_local_time THEN
     UPDATE workhorse.maintenance_state
        SET last_completed_local_date = NULL, updated_at = clock_timestamp()
-     WHERE task_name = 'history_retention';
+     WHERE routine_name = 'history_retention';
   END IF;
   RETURN v_policy;
 END;
@@ -3137,7 +3137,7 @@ BEGIN
      OR v_previous.history_retention_local_time IS DISTINCT FROM v_policy.history_retention_local_time THEN
     UPDATE workhorse.maintenance_state
        SET last_completed_local_date = NULL, updated_at = clock_timestamp()
-     WHERE task_name = 'history_retention';
+     WHERE routine_name = 'history_retention';
   END IF;
   RETURN v_policy;
 END;
@@ -3196,7 +3196,7 @@ BEGIN
      OR v_previous.history_retention_local_time IS DISTINCT FROM v_policy.history_retention_local_time THEN
     UPDATE workhorse.maintenance_state
        SET last_completed_local_date = NULL, updated_at = clock_timestamp()
-     WHERE task_name = 'history_retention';
+     WHERE routine_name = 'history_retention';
   END IF;
   RETURN v_policy;
 END;
@@ -3632,20 +3632,20 @@ BEGIN
     SELECT 1
       FROM jsonb_array_elements(p_definitions) definition
      WHERE jsonb_typeof(definition) <> 'object'
-        OR COALESCE(definition->>'jobType', '') = ''
+        OR COALESCE(definition->>'taskType', '') = ''
         OR char_length(COALESCE(definition->>'currentVersion', '')) NOT BETWEEN 1 AND 100
         OR jsonb_typeof(definition->'versions') <> 'object'
         OR NOT (definition->'versions' ? (definition->>'currentVersion'))
   ) THEN
-    RAISE EXCEPTION 'each contract requires a jobType, currentVersion, and matching versions object';
+    RAISE EXCEPTION 'each contract requires a taskType, currentVersion, and matching versions object';
   END IF;
   IF (
     SELECT count(*) FROM jsonb_array_elements(p_definitions)
   ) <> (
-    SELECT count(DISTINCT definition->>'jobType')
+    SELECT count(DISTINCT definition->>'taskType')
       FROM jsonb_array_elements(p_definitions) definition
   ) THEN
-    RAISE EXCEPTION 'contract job types must be unique';
+    RAISE EXCEPTION 'contract task types must be unique';
   END IF;
   IF EXISTS (
     SELECT 1
@@ -3668,7 +3668,7 @@ BEGIN
       FROM jsonb_array_elements(p_definitions) definition
       CROSS JOIN LATERAL jsonb_each(definition->'versions') version
       JOIN workhorse.contract_definition existing
-        ON existing.job_type = definition->>'jobType' AND existing.version = version.key
+        ON existing.task_type = definition->>'taskType' AND existing.version = version.key
      WHERE ROW(
        existing.schema,
        existing.payload_max_bytes,
@@ -3694,10 +3694,10 @@ BEGIN
   END IF;
 
   INSERT INTO workhorse.contract_definition(
-    job_type, version, schema, payload_max_bytes, result_max_bytes,
+    task_type, version, schema, payload_max_bytes, result_max_bytes,
     payload_redact_keys, result_redact_keys, source
   )
-  SELECT definition->>'jobType', version.key,
+  SELECT definition->>'taskType', version.key,
          jsonb_build_object(
            'payload', COALESCE(version.value->'payloadSchema', 'true'::jsonb),
            'result', COALESCE(version.value->'resultSchema', 'true'::jsonb)
@@ -3713,15 +3713,15 @@ BEGIN
          'application'
     FROM jsonb_array_elements(p_definitions) definition
     CROSS JOIN LATERAL jsonb_each(definition->'versions') version
-  ON CONFLICT (job_type, version) DO NOTHING;
+  ON CONFLICT (task_type, version) DO NOTHING;
 
   INSERT INTO workhorse.contract_policy AS policy(
-    job_type, current_version, application_current_version, operator_override
+    task_type, current_version, application_current_version, operator_override
   )
-  SELECT definition->>'jobType', definition->>'currentVersion',
+  SELECT definition->>'taskType', definition->>'currentVersion',
          definition->>'currentVersion', false
     FROM jsonb_array_elements(p_definitions) definition
-  ON CONFLICT (job_type) DO UPDATE
+  ON CONFLICT (task_type) DO UPDATE
     SET current_version = CASE WHEN policy.operator_override
           THEN policy.current_version ELSE EXCLUDED.current_version END,
         application_current_version = EXCLUDED.application_current_version,
@@ -3730,20 +3730,20 @@ END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.get_contract_definition_v1(
-  p_job_type text, p_version text DEFAULT NULL
+  p_task_type text, p_version text DEFAULT NULL
 ) RETURNS SETOF workhorse.contract_definition
 LANGUAGE sql
 STABLE
 AS $$
   SELECT definition
     FROM workhorse.contract_definition definition
-    LEFT JOIN workhorse.contract_policy policy ON policy.job_type = definition.job_type
-   WHERE definition.job_type = p_job_type
+    LEFT JOIN workhorse.contract_policy policy ON policy.task_type = definition.task_type
+   WHERE definition.task_type = p_task_type
      AND definition.version = COALESCE(p_version, policy.current_version);
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.override_contract_version_v1(
-  p_job_type text, p_version text
+  p_task_type text, p_version text
 ) RETURNS workhorse.contract_policy
 LANGUAGE plpgsql
 AS $$
@@ -3753,9 +3753,9 @@ BEGIN
   UPDATE workhorse.contract_policy policy
      SET current_version = p_version, operator_override = true,
          updated_at = clock_timestamp()
-   WHERE policy.job_type = p_job_type
+   WHERE policy.task_type = p_task_type
   RETURNING policy.* INTO v_policy;
-  IF NOT FOUND THEN RAISE EXCEPTION 'contract policy does not exist for %', p_job_type; END IF;
+  IF NOT FOUND THEN RAISE EXCEPTION 'contract policy does not exist for %', p_task_type; END IF;
   RETURN v_policy;
 END;
 $$;
@@ -3812,7 +3812,7 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:schedules:' || p_namespace, 0));
 
   INSERT INTO workhorse.schedule_definition AS existing(
-    namespace, schedule_name, cron_expression, timezone, queue_name, job_type, concurrency_key, priority, payload,
+    namespace, schedule_name, cron_expression, timezone, queue_name, task_type, concurrency_key, priority, payload,
     contract_version, payload_max_bytes, result_max_bytes, payload_redact_keys, result_redact_keys,
     max_attempts, retry_policy, enabled
   )
@@ -3836,13 +3836,13 @@ BEGIN
     FROM jsonb_array_elements(p_definitions) definition
   ON CONFLICT (namespace, schedule_name) DO UPDATE
     SET revision = existing.revision + CASE WHEN ROW(
-          existing.cron_expression, existing.timezone, existing.queue_name, existing.job_type,
+          existing.cron_expression, existing.timezone, existing.queue_name, existing.task_type,
           existing.concurrency_key, existing.priority, existing.payload,
           existing.contract_version, existing.payload_max_bytes, existing.result_max_bytes,
           existing.payload_redact_keys, existing.result_redact_keys,
           existing.max_attempts, existing.retry_policy, existing.enabled
         ) IS DISTINCT FROM ROW(
-          EXCLUDED.cron_expression, EXCLUDED.timezone, EXCLUDED.queue_name, EXCLUDED.job_type,
+          EXCLUDED.cron_expression, EXCLUDED.timezone, EXCLUDED.queue_name, EXCLUDED.task_type,
           EXCLUDED.concurrency_key, EXCLUDED.priority, EXCLUDED.payload,
           EXCLUDED.contract_version, EXCLUDED.payload_max_bytes, EXCLUDED.result_max_bytes,
           EXCLUDED.payload_redact_keys, EXCLUDED.result_redact_keys,
@@ -3851,7 +3851,7 @@ BEGIN
         cron_expression = EXCLUDED.cron_expression,
         timezone = EXCLUDED.timezone,
         queue_name = EXCLUDED.queue_name,
-        job_type = EXCLUDED.job_type,
+        task_type = EXCLUDED.task_type,
         concurrency_key = EXCLUDED.concurrency_key,
         priority = EXCLUDED.priority,
         payload = EXCLUDED.payload,
@@ -3888,7 +3888,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   v_definition workhorse.schedule_definition%ROWTYPE;
-  v_job_id uuid;
+  v_task_id uuid;
 BEGIN
   IF NOT pg_try_advisory_xact_lock(hashtextextended(
     'workhorse:schedule:' || p_namespace || ':' || p_schedule_name || ':' ||
@@ -3910,15 +3910,15 @@ BEGIN
   INSERT INTO workhorse.schedule_occurrence(namespace, schedule_name, occurrence_at)
     VALUES (p_namespace, p_schedule_name, date_trunc('second', p_occurrence_at))
   ON CONFLICT DO NOTHING
-  RETURNING job_id INTO v_job_id;
+  RETURNING task_id INTO v_task_id;
 
   IF NOT FOUND THEN
     RETURN NULL;
   END IF;
 
-  v_job_id := workhorse.enqueue_v1(
+  v_task_id := workhorse.enqueue_v1(
     v_definition.queue_name,
-    v_definition.job_type,
+    v_definition.task_type,
     v_definition.payload,
     clock_timestamp(),
     v_definition.max_attempts,
@@ -3933,11 +3933,11 @@ BEGIN
     v_definition.priority
   );
   UPDATE workhorse.schedule_occurrence occurrence
-     SET job_id = v_job_id
+     SET task_id = v_task_id
    WHERE occurrence.namespace = p_namespace
      AND occurrence.schedule_name = p_schedule_name
      AND occurrence.occurrence_at = date_trunc('second', p_occurrence_at);
-  RETURN v_job_id;
+  RETURN v_task_id;
 END;
 $$;
 
@@ -3949,7 +3949,7 @@ CREATE OR REPLACE FUNCTION workhorse.fire_due_schedules_v1(
   namespace text,
   schedule_name text,
   occurrence_at timestamptz,
-  job_id uuid
+  task_id uuid
 )
 LANGUAGE plpgsql
 AS $$
@@ -4006,7 +4006,7 @@ BEGIN
       namespace := v_definition.namespace;
       schedule_name := v_definition.schedule_name;
       occurrence_at := v_occurrence;
-      job_id := workhorse.fire_schedule_v1(
+      task_id := workhorse.fire_schedule_v1(
         v_definition.namespace,
         v_definition.schedule_name,
         v_definition.revision,
@@ -4160,7 +4160,7 @@ BEGIN
       FROM unnest(v_notify_queues) AS affected(queue_name)
      ORDER BY affected.queue_name
   LOOP
-    PERFORM pg_notify('workhorse_jobs', v_queue_name);
+    PERFORM pg_notify('workhorse_tasks', v_queue_name);
   END LOOP;
 
   RETURN QUERY
@@ -4328,7 +4328,7 @@ BEGIN
       FROM unnest(v_notify_queues) AS affected(queue_name)
      ORDER BY affected.queue_name
   LOOP
-    PERFORM pg_notify('workhorse_jobs', v_queue_name);
+    PERFORM pg_notify('workhorse_tasks', v_queue_name);
   END LOOP;
   RETURN QUERY
     SELECT policy.namespace, policy.queue_name, policy.rate_limit, policy.rate_interval_ms,
@@ -4403,8 +4403,8 @@ BEGIN
 END;
 $$;
 
--- The core batch insert path. Accept up to 1,000 jobs atomically. Scoped idempotency keys are
--- resolved in ordinal order through their unique index before any durable job side effects. Exact
+-- The core batch insert path. Accept up to 1,000 tasks atomically. Scoped idempotency keys are
+-- resolved in ordinal order through their unique index before any durable task side effects. Exact
 -- replays return the original identity; material mismatches abort the whole statement with SQLSTATE
 -- P1001.
 --
@@ -4412,7 +4412,7 @@ $$;
 -- underneath it, enqueue_v1, enqueue_debounce_v1, and enqueue_throttle_v1, and it reports plain
 -- acceptance rather than the coalescing outcomes those callers map.
 CREATE OR REPLACE FUNCTION workhorse.enqueue_batch_v1(p_requests jsonb)
-RETURNS TABLE (ordinal integer, job_id uuid, accepted boolean)
+RETURNS TABLE (ordinal integer, task_id uuid, accepted boolean)
 LANGUAGE plpgsql
 AS $$
 DECLARE
@@ -4422,7 +4422,7 @@ DECLARE
   v_lock record;
   v_ordinal integer;
   v_queue_name text;
-  v_job_type text;
+  v_task_type text;
   v_concurrency_key text;
   v_priority numeric;
   v_payload jsonb;
@@ -4439,8 +4439,8 @@ DECLARE
   v_deadline_at timestamptz;
   v_execution_timeout_ms numeric;
   v_dependencies jsonb;
-  v_prerequisite_job_ids uuid[];
-  v_prerequisite_job_id uuid;
+  v_prerequisite_task_ids uuid[];
+  v_prerequisite_task_id uuid;
   v_on_success text;
   v_on_failure text;
   v_on_cancellation text;
@@ -4463,7 +4463,7 @@ DECLARE
   v_fingerprint_tags text[];
   v_request_digest text;
   v_conflicting_fields text[];
-  v_proposed_job_id uuid;
+  v_proposed_task_id uuid;
   v_existing workhorse.enqueue_idempotency%ROWTYPE;
   v_is_new boolean;
   v_is_keyed boolean;
@@ -4526,7 +4526,7 @@ BEGIN
      ORDER BY ordinality
   LOOP
     v_queue_name := v_request->>'queue';
-    v_job_type := v_request->>'type';
+    v_task_type := v_request->>'type';
     v_concurrency_key := v_request->>'concurrencyKey';
     v_priority := COALESCE((v_request->>'priority')::numeric, 0);
     v_payload := COALESCE(v_request->'payload', 'null'::jsonb);
@@ -4591,7 +4591,7 @@ BEGIN
     IF v_priority <> trunc(v_priority) OR v_priority NOT BETWEEN 0 AND 100 THEN
       RAISE EXCEPTION 'priority must be an integer between 0 and 100';
     END IF;
-    IF COALESCE(v_queue_name, '') = '' OR COALESCE(v_job_type, '') = ''
+    IF COALESCE(v_queue_name, '') = '' OR COALESCE(v_task_type, '') = ''
        OR jsonb_typeof(COALESCE(v_request->'tags', '[]'::jsonb)) <> 'array'
        OR jsonb_array_length(COALESCE(v_request->'tags', '[]'::jsonb)) > 20
        OR EXISTS (
@@ -4625,73 +4625,73 @@ BEGIN
     ) THEN
       RAISE EXCEPTION 'executionTimeoutMs must be an integer between 1 and 31536000000';
     END IF;
-    IF v_request ? 'prerequisiteJobId'
-       AND v_request->'prerequisiteJobId' <> 'null'::jsonb
-       AND jsonb_typeof(v_request->'prerequisiteJobId') <> 'string' THEN
-      RAISE EXCEPTION 'prerequisiteJobId must be a UUID string or null';
+    IF v_request ? 'prerequisiteTaskId'
+       AND v_request->'prerequisiteTaskId' <> 'null'::jsonb
+       AND jsonb_typeof(v_request->'prerequisiteTaskId') <> 'string' THEN
+      RAISE EXCEPTION 'prerequisiteTaskId must be a UUID string or null';
     END IF;
     v_dependencies := v_request->'dependencies';
-    IF v_request->>'prerequisiteJobId' IS NOT NULL
+    IF v_request->>'prerequisiteTaskId' IS NOT NULL
        AND v_dependencies IS NOT NULL AND v_dependencies <> 'null'::jsonb THEN
-      RAISE EXCEPTION 'prerequisiteJobId and dependencies cannot be combined';
+      RAISE EXCEPTION 'prerequisiteTaskId and dependencies cannot be combined';
     END IF;
     IF v_dependencies IS NOT NULL AND v_dependencies <> 'null'::jsonb THEN
       IF jsonb_typeof(v_dependencies) <> 'object'
-         OR v_dependencies - ARRAY['prerequisiteJobIds', 'onSuccess', 'onFailure', 'onCancellation'] <> '{}'::jsonb
-         OR jsonb_typeof(v_dependencies->'prerequisiteJobIds') <> 'array'
-         OR jsonb_array_length(v_dependencies->'prerequisiteJobIds') NOT BETWEEN 1 AND 100
+         OR v_dependencies - ARRAY['prerequisiteTaskIds', 'onSuccess', 'onFailure', 'onCancellation'] <> '{}'::jsonb
+         OR jsonb_typeof(v_dependencies->'prerequisiteTaskIds') <> 'array'
+         OR jsonb_array_length(v_dependencies->'prerequisiteTaskIds') NOT BETWEEN 1 AND 100
          OR v_dependencies->>'onSuccess' NOT IN ('release', 'cancel', 'fail')
          OR v_dependencies->>'onFailure' NOT IN ('release', 'cancel', 'fail')
          OR v_dependencies->>'onCancellation' NOT IN ('release', 'cancel', 'fail')
          OR EXISTS (
-           SELECT 1 FROM jsonb_array_elements(v_dependencies->'prerequisiteJobIds') item
+           SELECT 1 FROM jsonb_array_elements(v_dependencies->'prerequisiteTaskIds') item
             WHERE jsonb_typeof(item) <> 'string'
          ) THEN
         RAISE EXCEPTION 'dependencies requires 1 to 100 UUID strings and release, cancel, or fail outcome policies';
       END IF;
-      v_prerequisite_job_ids := ARRAY(
+      v_prerequisite_task_ids := ARRAY(
         SELECT value::uuid
-          FROM jsonb_array_elements_text(v_dependencies->'prerequisiteJobIds') value
+          FROM jsonb_array_elements_text(v_dependencies->'prerequisiteTaskIds') value
          ORDER BY value::uuid
       );
       v_on_success := v_dependencies->>'onSuccess';
       v_on_failure := v_dependencies->>'onFailure';
       v_on_cancellation := v_dependencies->>'onCancellation';
-    ELSIF v_request->>'prerequisiteJobId' IS NOT NULL THEN
-      v_prerequisite_job_ids := ARRAY[(v_request->>'prerequisiteJobId')::uuid];
+    ELSIF v_request->>'prerequisiteTaskId' IS NOT NULL THEN
+      v_prerequisite_task_ids := ARRAY[(v_request->>'prerequisiteTaskId')::uuid];
       v_on_success := 'release';
       v_on_failure := 'fail';
       v_on_cancellation := 'cancel';
     ELSE
-      v_prerequisite_job_ids := '{}';
+      v_prerequisite_task_ids := '{}';
       v_on_success := 'release';
       v_on_failure := 'fail';
       v_on_cancellation := 'cancel';
     END IF;
-    v_prerequisite_job_id := CASE
+    v_prerequisite_task_id := CASE
       WHEN v_dependencies IS NULL OR v_dependencies = 'null'::jsonb
-        THEN NULLIF(v_request->>'prerequisiteJobId', '')::uuid
+        THEN NULLIF(v_request->>'prerequisiteTaskId', '')::uuid
       ELSE NULL
     END;
-    IF cardinality(v_prerequisite_job_ids) <> (
-      SELECT count(DISTINCT prerequisite_id) FROM unnest(v_prerequisite_job_ids) prerequisite_id
+    IF cardinality(v_prerequisite_task_ids) <> (
+      SELECT count(DISTINCT prerequisite_id) FROM unnest(v_prerequisite_task_ids) prerequisite_id
     ) THEN
-      RAISE EXCEPTION 'dependency prerequisiteJobIds must be unique';
+      RAISE EXCEPTION 'dependency prerequisiteTaskIds must be unique';
     END IF;
-    PERFORM 1 FROM workhorse.job prerequisite
-     WHERE prerequisite.id = ANY(v_prerequisite_job_ids)
+    PERFORM 1 FROM workhorse.task prerequisite
+     WHERE prerequisite.id = ANY(v_prerequisite_task_ids)
      ORDER BY prerequisite.id FOR UPDATE;
     GET DIAGNOSTICS v_pending_prerequisites = ROW_COUNT;
-    IF v_pending_prerequisites <> cardinality(v_prerequisite_job_ids) THEN
-      RAISE EXCEPTION 'prerequisite job does not exist';
+    IF v_pending_prerequisites <> cardinality(v_prerequisite_task_ids) THEN
+      RAISE EXCEPTION 'prerequisite task does not exist';
     END IF;
     SELECT count(*)::integer INTO v_pending_prerequisites
-      FROM unnest(v_prerequisite_job_ids) prerequisite_id
-      LEFT JOIN workhorse.job_outcome outcome ON outcome.job_id = prerequisite_id
-     WHERE outcome.job_id IS NULL;
-    SELECT outcome.job_id, outcome.state, action.policy_action
+      FROM unnest(v_prerequisite_task_ids) prerequisite_id
+      LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = prerequisite_id
+     WHERE outcome.task_id IS NULL;
+    SELECT outcome.task_id, outcome.state, action.policy_action
       INTO v_terminal_prerequisite_id, v_terminal_prerequisite_state, v_terminal_action
-      FROM workhorse.job_outcome outcome
+      FROM workhorse.task_outcome outcome
       CROSS JOIN LATERAL (
         SELECT CASE outcome.state
           WHEN 'succeeded' THEN v_on_success
@@ -4700,9 +4700,9 @@ BEGIN
           ELSE 'release'
         END AS policy_action
       ) action
-     WHERE outcome.job_id = ANY(v_prerequisite_job_ids)
+     WHERE outcome.task_id = ANY(v_prerequisite_task_ids)
        AND action.policy_action IN ('fail', 'cancel')
-     ORDER BY CASE action.policy_action WHEN 'fail' THEN 0 ELSE 1 END, outcome.job_id
+     ORDER BY CASE action.policy_action WHEN 'fail' THEN 0 ELSE 1 END, outcome.task_id
      LIMIT 1;
     v_state := CASE
       WHEN v_terminal_action IS NOT NULL THEN 'blocked'
@@ -4758,7 +4758,7 @@ BEGIN
       );
       v_fingerprint := jsonb_build_object(
         'queue', v_queue_name,
-        'type', v_job_type,
+        'type', v_task_type,
         'payload', v_payload,
         'priority', v_priority,
         'concurrencyKey', to_jsonb(v_concurrency_key),
@@ -4775,11 +4775,11 @@ BEGIN
         'executionTimeoutMs', to_jsonb(v_execution_timeout_ms),
         'maxAttempts', v_max_attempts,
         'retryPolicy', v_retry_policy,
-        'prerequisiteJobId', to_jsonb(v_prerequisite_job_id),
+        'prerequisiteTaskId', to_jsonb(v_prerequisite_task_id),
         'dependencies', CASE WHEN v_dependencies IS NULL OR v_dependencies = 'null'::jsonb
           THEN 'null'::jsonb ELSE
           jsonb_build_object(
-            'prerequisiteJobIds', to_jsonb(v_prerequisite_job_ids),
+            'prerequisiteTaskIds', to_jsonb(v_prerequisite_task_ids),
             'onSuccess', v_on_success,
             'onFailure', v_on_failure,
             'onCancellation', v_on_cancellation
@@ -4789,25 +4789,25 @@ BEGIN
       v_request_digest := workhorse.sha256_hex_v1(v_fingerprint::text);
 
       LOOP
-        v_proposed_job_id := gen_random_uuid();
+        v_proposed_task_id := gen_random_uuid();
         INSERT INTO workhorse.enqueue_idempotency AS existing(
-          idempotency_scope, idempotency_key_hash, request_fingerprint, job_id, expires_at
+          idempotency_scope, idempotency_key_hash, request_fingerprint, task_id, expires_at
         ) VALUES (
-          v_scope, v_key_hash, v_fingerprint, v_proposed_job_id, v_expires_at
+          v_scope, v_key_hash, v_fingerprint, v_proposed_task_id, v_expires_at
         )
         ON CONFLICT (idempotency_scope, idempotency_key_hash) DO UPDATE
           SET idempotency_key_hash = existing.idempotency_key_hash
         RETURNING existing.* INTO v_existing;
 
-        IF v_existing.job_id = v_proposed_job_id THEN
-          job_id := v_proposed_job_id;
+        IF v_existing.task_id = v_proposed_task_id THEN
+          task_id := v_proposed_task_id;
           EXIT;
         END IF;
         IF v_existing.expires_at <= v_now THEN
           DELETE FROM workhorse.enqueue_idempotency AS expired
            WHERE expired.idempotency_scope = v_scope
              AND expired.idempotency_key_hash = v_key_hash
-             AND expired.job_id = v_existing.job_id AND expired.expires_at <= v_now;
+             AND expired.task_id = v_existing.task_id AND expired.expires_at <= v_now;
           CONTINUE;
         END IF;
         IF v_existing.request_fingerprint <> v_fingerprint THEN
@@ -4823,71 +4823,71 @@ BEGIN
               'keyPreview', v_key_preview,
               'keyDigest', v_key_digest,
               'keyLength', v_key_length,
-              'existingJobId', v_existing.job_id,
+              'existingTaskId', v_existing.task_id,
               'ordinal', v_ordinal,
               'conflictingFields', to_jsonb(v_conflicting_fields),
               'storedRequestDigest', workhorse.sha256_hex_v1(v_existing.request_fingerprint::text),
               'rejectedRequestDigest', v_request_digest
             )::text;
         END IF;
-        job_id := v_existing.job_id;
+        task_id := v_existing.task_id;
         v_is_new := false;
         EXIT;
       END LOOP;
     ELSE
-      job_id := gen_random_uuid();
+      task_id := gen_random_uuid();
     END IF;
 
     IF v_is_new THEN
-      INSERT INTO workhorse.job(
-        id, queue_name, job_type, concurrency_key, priority, payload, contract_version,
+      INSERT INTO workhorse.task(
+        id, queue_name, task_type, concurrency_key, priority, payload, contract_version,
         payload_max_bytes, result_max_bytes,
         payload_redact_keys, result_redact_keys, trace_context, tags, max_attempts, retry_policy,
         deadline_at, execution_timeout_ms
       ) VALUES (
-        job_id, v_queue_name, v_job_type, v_concurrency_key, v_priority::integer, v_payload, v_contract_version,
+        task_id, v_queue_name, v_task_type, v_concurrency_key, v_priority::integer, v_payload, v_contract_version,
         v_payload_max_bytes::integer, v_result_max_bytes::integer,
         v_payload_redact_keys, v_result_redact_keys, v_trace_context, v_tags,
         v_max_attempts, v_retry_policy,
         v_deadline_at, v_execution_timeout_ms::bigint
       );
-      INSERT INTO workhorse.job_runtime(
-        job_id, queue_name, concurrency_key, priority, state, current_attempt, run_at, ready_at, sequence,
+      INSERT INTO workhorse.task_runtime(
+        task_id, queue_name, concurrency_key, priority, state, current_attempt, run_at, ready_at, sequence,
         deadline_at
       ) VALUES (
-        job_id, v_queue_name, v_concurrency_key, v_priority::integer, v_state, 1, v_run_at,
+        task_id, v_queue_name, v_concurrency_key, v_priority::integer, v_state, 1, v_run_at,
         CASE WHEN v_state = 'ready' THEN v_now END,
         CASE WHEN v_state = 'ready' THEN nextval('workhorse.ready_sequence_seq') END,
         v_deadline_at
       );
       WITH prerequisites AS MATERIALIZED (
-        SELECT input.prerequisite_job_id, outcome.state,
+        SELECT input.prerequisite_task_id, outcome.state,
                outcome.state IS NOT NULL AND (
                  (outcome.state = 'succeeded' AND v_on_success = 'release')
                  OR (outcome.state = 'failed' AND v_on_failure = 'release')
                  OR (outcome.state = 'canceled' AND v_on_cancellation = 'release')
                ) AS releases_immediately
-          FROM unnest(v_prerequisite_job_ids) input(prerequisite_job_id)
-          LEFT JOIN workhorse.job_outcome outcome
-            ON outcome.job_id = input.prerequisite_job_id
+          FROM unnest(v_prerequisite_task_ids) input(prerequisite_task_id)
+          LEFT JOIN workhorse.task_outcome outcome
+            ON outcome.task_id = input.prerequisite_task_id
       ), inserted_edges AS (
-        INSERT INTO workhorse.job_dependency(
-          dependent_job_id, prerequisite_job_id, on_success, on_failure, on_cancellation,
+        INSERT INTO workhorse.task_dependency(
+          dependent_task_id, prerequisite_task_id, on_success, on_failure, on_cancellation,
           created_at, released_at, resolution
         )
-        SELECT job_id, prerequisites.prerequisite_job_id,
+        SELECT task_id, prerequisites.prerequisite_task_id,
                v_on_success, v_on_failure, v_on_cancellation, v_now,
                CASE WHEN prerequisites.releases_immediately THEN v_now END,
                CASE WHEN prerequisites.releases_immediately THEN 'release' END
           FROM prerequisites
-        RETURNING prerequisite_job_id, released_at
+        RETURNING prerequisite_task_id, released_at
       )
-      INSERT INTO workhorse.job_event(job_id, event_type, details)
-      SELECT job_id,
+      INSERT INTO workhorse.task_event(task_id, event_type, details)
+      SELECT task_id,
              CASE WHEN inserted_edges.released_at IS NOT NULL
                THEN 'dependency_released' ELSE 'dependency_blocked' END,
              jsonb_build_object(
-               'prerequisite_job_id', inserted_edges.prerequisite_job_id,
+               'prerequisite_task_id', inserted_edges.prerequisite_task_id,
                'state', v_state,
                'reason', CASE
                  WHEN NOT prerequisites.releases_immediately THEN 'prerequisite_pending'
@@ -4896,17 +4896,17 @@ BEGIN
                END
              )
         FROM inserted_edges
-        JOIN prerequisites USING (prerequisite_job_id);
+        JOIN prerequisites USING (prerequisite_task_id);
       FOR v_terminal IN
-        SELECT outcome.job_id, outcome.state FROM workhorse.job_outcome outcome
-         WHERE outcome.job_id = ANY(v_prerequisite_job_ids)
-         ORDER BY outcome.job_id
+        SELECT outcome.task_id, outcome.state FROM workhorse.task_outcome outcome
+         WHERE outcome.task_id = ANY(v_prerequisite_task_ids)
+         ORDER BY outcome.task_id
       LOOP
-        PERFORM workhorse.resolve_dependents_v1(v_terminal.job_id, v_terminal.state);
+        PERFORM workhorse.resolve_dependents_v1(v_terminal.task_id, v_terminal.state);
       END LOOP;
-      INSERT INTO workhorse.job_event(job_id, event_type, details)
+      INSERT INTO workhorse.task_event(task_id, event_type, details)
         VALUES (
-          job_id,
+          task_id,
           'enqueued',
           jsonb_build_object(
             'state', v_state,
@@ -4928,7 +4928,7 @@ BEGIN
           ) ELSE '{}'::jsonb END
         );
       IF v_deadline_at IS NOT NULL AND v_deadline_at <= v_now THEN
-        PERFORM workhorse.terminalize_deadline_v1(job_id);
+        PERFORM workhorse.terminalize_deadline_v1(task_id);
       ELSIF v_state = 'ready' AND NOT v_queue_name = ANY(v_ready_queues) THEN
         v_ready_queues := array_append(v_ready_queues, v_queue_name);
       END IF;
@@ -4939,14 +4939,14 @@ BEGIN
   END LOOP;
 
   FOREACH v_notify_queue IN ARRAY v_ready_queues LOOP
-    PERFORM pg_notify('workhorse_jobs', v_notify_queue);
+    PERFORM pg_notify('workhorse_tasks', v_notify_queue);
   END LOOP;
 END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.enqueue_v1(
   p_queue_name text,
-  p_job_type text,
+  p_task_type text,
   p_payload jsonb,
   p_run_at timestamptz DEFAULT clock_timestamp(),
   p_max_attempts integer DEFAULT 25,
@@ -4962,8 +4962,8 @@ CREATE OR REPLACE FUNCTION workhorse.enqueue_v1(
 ) RETURNS uuid
 LANGUAGE sql
 AS $$
-  SELECT job_id FROM workhorse.enqueue_batch_v1(jsonb_build_array(jsonb_build_object(
-    'queue', p_queue_name, 'type', p_job_type, 'payload', COALESCE(p_payload, 'null'::jsonb),
+  SELECT task_id FROM workhorse.enqueue_batch_v1(jsonb_build_array(jsonb_build_object(
+    'queue', p_queue_name, 'type', p_task_type, 'payload', COALESCE(p_payload, 'null'::jsonb),
     'runAt', p_run_at, 'maxAttempts', p_max_attempts, 'tags', to_jsonb(COALESCE(p_tags, '{}')),
     'retryPolicy', p_retry_policy, 'contractVersion', p_contract_version,
     'payloadMaxBytes', p_payload_max_bytes, 'resultMaxBytes', p_result_max_bytes,
@@ -4974,7 +4974,7 @@ AS $$
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.enqueue_debounce_v1(p_request jsonb)
-RETURNS TABLE (job_id uuid, outcome text)
+RETURNS TABLE (task_id uuid, outcome text)
 LANGUAGE plpgsql
 AS $$
 DECLARE
@@ -4992,7 +4992,7 @@ DECLARE
   v_expires_at timestamptz;
   v_normalized jsonb;
   v_existing record;
-  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
   v_has_identity boolean;
   v_validation record;
   v_row record;
@@ -5023,10 +5023,10 @@ BEGIN
   IF p_request ? 'runAt' THEN
     RAISE EXCEPTION 'debounced enqueue uses its PostgreSQL-owned window instead of runAt';
   END IF;
-  IF COALESCE(p_request->'prerequisiteJobId', 'null'::jsonb) <> 'null'::jsonb
+  IF COALESCE(p_request->'prerequisiteTaskId', 'null'::jsonb) <> 'null'::jsonb
      OR COALESCE(p_request->'dependencies', 'null'::jsonb) <> 'null'::jsonb THEN
     RAISE EXCEPTION
-      'enqueue requests cannot combine debounce or throttle with prerequisiteJobId or dependencies';
+      'enqueue requests cannot combine debounce or throttle with prerequisiteTaskId or dependencies';
   END IF;
 
   v_key := v_debounce->>'key';
@@ -5056,7 +5056,7 @@ BEGIN
   END;
   PERFORM pg_advisory_xact_lock(hashtextextended(v_scope || chr(31) || v_key, 0));
 
-  SELECT identity.job_id, identity.request_fingerprint, identity.expires_at,
+  SELECT identity.task_id, identity.request_fingerprint, identity.expires_at,
          identity.coalescing_mode
     INTO v_existing
     FROM workhorse.enqueue_idempotency identity
@@ -5067,8 +5067,8 @@ BEGIN
   IF v_has_identity THEN
     SELECT runtime.*
       INTO v_runtime
-      FROM workhorse.job_runtime runtime
-     WHERE runtime.job_id = v_existing.job_id
+      FROM workhorse.task_runtime runtime
+     WHERE runtime.task_id = v_existing.task_id
      FOR UPDATE;
   END IF;
 
@@ -5076,8 +5076,8 @@ BEGIN
     IF v_existing.coalescing_mode <> 'debounce'
        OR v_runtime.state IS NULL
        OR v_runtime.state NOT IN ('ready', 'scheduled') THEN
-      INSERT INTO workhorse.job_event(job_id, event_type, details)
-      VALUES (v_existing.job_id, 'debounce_rejected', jsonb_build_object(
+      INSERT INTO workhorse.task_event(task_id, event_type, details)
+      VALUES (v_existing.task_id, 'debounce_rejected', jsonb_build_object(
         'state', COALESCE(v_runtime.state, 'terminal'),
         'reason', CASE WHEN v_existing.coalescing_mode <> 'debounce'
           THEN 'incompatible_key_mode' ELSE 'not_pending' END,
@@ -5086,7 +5086,7 @@ BEGIN
           'key_length', v_key_length, 'window_ms', v_window_ms, 'schedule', v_schedule
         )
       ));
-      job_id := v_existing.job_id;
+      task_id := v_existing.task_id;
       outcome := 'non_replaceable';
       RETURN NEXT;
       RETURN;
@@ -5149,9 +5149,9 @@ BEGIN
     v_stored_digest := workhorse.sha256_hex_v1(v_existing.request_fingerprint::text);
     v_request_digest := workhorse.sha256_hex_v1(v_fingerprint::text);
 
-    UPDATE workhorse.job SET
+    UPDATE workhorse.task SET
       queue_name = v_normalized->>'queue',
-      job_type = v_normalized->>'type',
+      task_type = v_normalized->>'type',
       concurrency_key = v_normalized->>'concurrencyKey',
       payload = COALESCE(v_normalized->'payload', 'null'::jsonb),
       contract_version = v_normalized->>'contractVersion',
@@ -5166,7 +5166,7 @@ BEGIN
       retry_policy = v_retry_policy,
       deadline_at = (v_normalized->>'deadline')::timestamptz,
       execution_timeout_ms = (v_normalized->>'executionTimeoutMs')::bigint
-    WHERE id = v_existing.job_id;
+    WHERE id = v_existing.task_id;
 
     v_state := CASE WHEN v_run_at <= v_now THEN 'ready' ELSE 'scheduled' END;
     v_sequence := CASE
@@ -5174,7 +5174,7 @@ BEGIN
       WHEN v_state = 'ready' THEN nextval('workhorse.ready_sequence_seq')
       ELSE NULL
     END;
-    UPDATE workhorse.job_runtime runtime SET
+    UPDATE workhorse.task_runtime runtime SET
       queue_name = v_normalized->>'queue',
       concurrency_key = v_normalized->>'concurrencyKey',
       priority = COALESCE((v_normalized->>'priority')::integer, 0),
@@ -5185,15 +5185,15 @@ BEGIN
       sequence = v_sequence,
       deadline_at = (v_normalized->>'deadline')::timestamptz,
       updated_at = v_now
-    WHERE runtime.job_id = v_existing.job_id;
+    WHERE runtime.task_id = v_existing.task_id;
 
     UPDATE workhorse.enqueue_idempotency SET
       request_fingerprint = v_fingerprint,
       expires_at = v_expires_at
     WHERE idempotency_scope = v_scope AND idempotency_key_hash = v_key_hash;
 
-    INSERT INTO workhorse.job_event(job_id, event_type, details)
-    VALUES (v_existing.job_id, 'debounced', jsonb_build_object(
+    INSERT INTO workhorse.task_event(task_id, event_type, details)
+    VALUES (v_existing.task_id, 'debounced', jsonb_build_object(
       'state', v_state, 'run_at', v_run_at,
       'stored_request_digest', v_stored_digest, 'request_digest', v_request_digest,
       'debounce', jsonb_build_object(
@@ -5203,11 +5203,11 @@ BEGIN
       )
     ));
     IF (v_normalized->>'deadline')::timestamptz <= v_now THEN
-      PERFORM workhorse.terminalize_deadline_v1(v_existing.job_id);
+      PERFORM workhorse.terminalize_deadline_v1(v_existing.task_id);
     ELSIF v_state = 'ready' THEN
-      PERFORM pg_notify('workhorse_jobs', v_normalized->>'queue');
+      PERFORM pg_notify('workhorse_tasks', v_normalized->>'queue');
     END IF;
-    job_id := v_existing.job_id;
+    task_id := v_existing.task_id;
     outcome := 'replaced';
     RETURN NEXT;
     RETURN;
@@ -5215,15 +5215,15 @@ BEGIN
 
   IF v_has_identity AND v_existing.expires_at <= v_now
      AND v_runtime.state IN ('ready', 'scheduled') THEN
-    INSERT INTO workhorse.job_event(job_id, event_type, details)
-    VALUES (v_existing.job_id, 'debounce_rejected', jsonb_build_object(
+    INSERT INTO workhorse.task_event(task_id, event_type, details)
+    VALUES (v_existing.task_id, 'debounce_rejected', jsonb_build_object(
       'state', v_runtime.state, 'reason', 'window_elapsed_pending',
       'debounce', jsonb_build_object(
         'scope', v_scope, 'key_preview', v_key_preview, 'key_digest', v_key_digest,
         'key_length', v_key_length, 'window_ms', v_window_ms, 'schedule', v_schedule
       )
     ));
-    job_id := v_existing.job_id;
+    task_id := v_existing.task_id;
     outcome := 'non_replaceable';
     RETURN NEXT;
     RETURN;
@@ -5237,7 +5237,7 @@ BEGIN
   SELECT * INTO v_row FROM workhorse.enqueue_batch_v1(jsonb_build_array(v_normalized));
   UPDATE workhorse.enqueue_idempotency SET coalescing_mode = 'debounce', expires_at = v_run_at
    WHERE idempotency_scope = v_scope AND idempotency_key_hash = v_key_hash;
-  UPDATE workhorse.job_event event SET details = event.details || jsonb_build_object(
+  UPDATE workhorse.task_event event SET details = event.details || jsonb_build_object(
     'debounce', jsonb_build_object(
       'scope', v_scope, 'key_preview', v_key_preview, 'key_digest', v_key_digest,
       'key_length', v_key_length, 'window_ms', v_window_ms, 'schedule', v_schedule,
@@ -5245,15 +5245,15 @@ BEGIN
     )
   ) || jsonb_build_object(
     'idempotency', jsonb_set(event.details->'idempotency', '{expires_at}', to_jsonb(v_run_at))
-  ) WHERE event.job_id = v_row.job_id AND event.event_type = 'enqueued';
-  job_id := v_row.job_id;
+  ) WHERE event.task_id = v_row.task_id AND event.event_type = 'enqueued';
+  task_id := v_row.task_id;
   outcome := CASE WHEN v_row.accepted THEN 'accepted' ELSE 'replayed' END;
   RETURN NEXT;
 END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.enqueue_throttle_v1(p_request jsonb)
-RETURNS TABLE (job_id uuid, outcome text)
+RETURNS TABLE (task_id uuid, outcome text)
 LANGUAGE plpgsql
 AS $$
 DECLARE
@@ -5282,10 +5282,10 @@ BEGIN
   IF p_request ? 'idempotency' OR p_request ? 'debounce' THEN
     RAISE EXCEPTION 'enqueue requests cannot combine idempotency, debounce, or throttle';
   END IF;
-  IF COALESCE(p_request->'prerequisiteJobId', 'null'::jsonb) <> 'null'::jsonb
+  IF COALESCE(p_request->'prerequisiteTaskId', 'null'::jsonb) <> 'null'::jsonb
      OR COALESCE(p_request->'dependencies', 'null'::jsonb) <> 'null'::jsonb THEN
     RAISE EXCEPTION
-      'enqueue requests cannot combine debounce or throttle with prerequisiteJobId or dependencies';
+      'enqueue requests cannot combine debounce or throttle with prerequisiteTaskId or dependencies';
   END IF;
 
   v_key := v_throttle->>'key';
@@ -5306,7 +5306,7 @@ BEGIN
   v_key_length := char_length(v_key);
   PERFORM pg_advisory_xact_lock(hashtextextended(v_scope || chr(31) || v_key, 0));
   v_now := clock_timestamp();
-  SELECT identity.job_id, identity.expires_at, identity.coalescing_mode
+  SELECT identity.task_id, identity.expires_at, identity.coalescing_mode
     INTO v_existing
     FROM workhorse.enqueue_idempotency identity
    WHERE identity.idempotency_scope = v_scope
@@ -5329,22 +5329,22 @@ BEGIN
     FROM workhorse.enqueue_idempotency
    WHERE idempotency_scope = v_scope AND idempotency_key_hash = v_key_hash;
   IF v_row.accepted THEN
-    UPDATE workhorse.job_event event SET details = event.details || jsonb_build_object(
+    UPDATE workhorse.task_event event SET details = event.details || jsonb_build_object(
       'throttle', jsonb_build_object(
         'scope', v_scope, 'key_digest', v_key_digest, 'key_length', v_key_length,
         'window_ms', v_window_ms, 'expires_at', v_expires_at
       )
-    ) WHERE event.job_id = v_row.job_id AND event.event_type = 'enqueued';
+    ) WHERE event.task_id = v_row.task_id AND event.event_type = 'enqueued';
   ELSE
-    INSERT INTO workhorse.job_event(job_id, event_type, details)
-    VALUES (v_row.job_id, 'throttled', jsonb_build_object(
+    INSERT INTO workhorse.task_event(task_id, event_type, details)
+    VALUES (v_row.task_id, 'throttled', jsonb_build_object(
       'throttle', jsonb_build_object(
         'scope', v_scope, 'key_digest', v_key_digest, 'key_length', v_key_length,
         'window_ms', v_window_ms, 'expires_at', v_expires_at
       )
     ));
   END IF;
-  job_id := v_row.job_id;
+  task_id := v_row.task_id;
   outcome := CASE WHEN v_row.accepted THEN 'accepted' ELSE 'coalesced' END;
   RETURN NEXT;
 END;
@@ -5353,7 +5353,7 @@ $$;
 -- The client batch entry point. Adds keyed debounce and throttle handling over
 -- workhorse.enqueue_batch_v1 and reports one coalescing outcome per member.
 CREATE OR REPLACE FUNCTION workhorse.enqueue_many_v1(p_requests jsonb)
-RETURNS TABLE (ordinal integer, job_id uuid, outcome text, reason text)
+RETURNS TABLE (ordinal integer, task_id uuid, outcome text, reason text)
 LANGUAGE plpgsql
 AS $$
 DECLARE
@@ -5373,19 +5373,19 @@ BEGIN
   END IF;
 
   SELECT jsonb_build_object(
-           'jobTypes', jsonb_agg(mismatch.job_type ORDER BY mismatch.job_type COLLATE "C")
+           'taskTypes', jsonb_agg(mismatch.task_type ORDER BY mismatch.task_type COLLATE "C")
          )
     INTO v_contract_mismatch
     FROM (
-      SELECT DISTINCT request->>'type' AS job_type
+      SELECT DISTINCT request->>'type' AS task_type
         FROM jsonb_array_elements(p_requests) input(request)
-        JOIN workhorse.contract_policy policy ON policy.job_type = request->>'type'
+        JOIN workhorse.contract_policy policy ON policy.task_type = request->>'type'
        WHERE request ? 'contractVersion'
          AND request->>'contractVersion' IS DISTINCT FROM policy.current_version
   ) mismatch;
-  IF jsonb_typeof(v_contract_mismatch->'jobTypes') = 'array' THEN
+  IF jsonb_typeof(v_contract_mismatch->'taskTypes') = 'array' THEN
     ordinal := 0;
-    job_id := NULL;
+    task_id := NULL;
     outcome := 'contract_mismatch';
     reason := v_contract_mismatch::text;
     RETURN NEXT;
@@ -5471,7 +5471,7 @@ BEGIN
      WHERE request ? 'debounce' OR request ? 'throttle'
   ) THEN
     RETURN QUERY
-      SELECT result.ordinal, result.job_id,
+      SELECT result.ordinal, result.task_id,
              CASE WHEN result.accepted THEN 'accepted' ELSE 'replayed' END,
              NULL::text
         FROM workhorse.enqueue_batch_v1(p_requests) result ORDER BY result.ordinal;
@@ -5486,12 +5486,12 @@ BEGIN
     IF v_request ? 'debounce' THEN
       SELECT * INTO v_row FROM workhorse.enqueue_debounce_v1(v_request);
       ordinal := v_ordinal;
-      job_id := v_row.job_id;
+      task_id := v_row.task_id;
       outcome := v_row.outcome;
       reason := CASE WHEN outcome = 'non_replaceable' THEN (
         SELECT event.details->>'reason'
-          FROM workhorse.job_event event
-         WHERE event.job_id = v_row.job_id
+          FROM workhorse.task_event event
+         WHERE event.task_id = v_row.task_id
            AND event.event_type = 'debounce_rejected'
          ORDER BY event.occurred_at DESC, event.event_id DESC
          LIMIT 1
@@ -5509,7 +5509,7 @@ BEGIN
           DETAIL = (v_error_detail::jsonb || jsonb_build_object('ordinal', v_ordinal))::text;
       END;
       ordinal := v_ordinal;
-      job_id := v_row.job_id;
+      task_id := v_row.task_id;
       outcome := v_row.outcome;
       reason := NULL;
     ELSE
@@ -5525,7 +5525,7 @@ BEGIN
           DETAIL = (v_error_detail::jsonb || jsonb_build_object('ordinal', v_ordinal))::text;
       END;
       ordinal := v_ordinal;
-      job_id := v_row.job_id;
+      task_id := v_row.task_id;
       outcome := CASE WHEN v_row.accepted THEN 'accepted' ELSE 'replayed' END;
       reason := NULL;
     END IF;
@@ -5538,9 +5538,9 @@ CREATE OR REPLACE FUNCTION workhorse.list_dead_letters_v1(
   p_filter jsonb DEFAULT '{}'::jsonb,
   p_limit integer DEFAULT 100,
   p_cursor_finished_at timestamptz DEFAULT NULL,
-  p_cursor_job_id uuid DEFAULT NULL
+  p_cursor_task_id uuid DEFAULT NULL
 ) RETURNS TABLE (
-  job_id uuid, queue_name text, job_type text, concurrency_key text, priority integer,
+  task_id uuid, queue_name text, task_type text, concurrency_key text, priority integer,
   payload jsonb, tags text[],
   current_attempt integer, max_attempts integer, retry_policy jsonb,
   deadline_at timestamptz, execution_timeout_ms bigint, error jsonb,
@@ -5564,8 +5564,8 @@ BEGIN
   IF p_limit NOT BETWEEN 1 AND 1000 THEN
     RAISE EXCEPTION 'dead-letter limit must be between 1 and 1000';
   END IF;
-  IF (p_cursor_finished_at IS NULL) <> (p_cursor_job_id IS NULL) THEN
-    RAISE EXCEPTION 'dead-letter cursor requires both finished_at and job_id';
+  IF (p_cursor_finished_at IS NULL) <> (p_cursor_task_id IS NULL) THEN
+    RAISE EXCEPTION 'dead-letter cursor requires both finished_at and task_id';
   END IF;
   IF p_cursor_finished_at IS NOT NULL AND NOT isfinite(p_cursor_finished_at) THEN
     RAISE EXCEPTION 'dead-letter cursor finished_at must be finite';
@@ -5610,29 +5610,29 @@ BEGIN
 
   RETURN QUERY
   WITH candidates AS MATERIALIZED (
-    SELECT job.id, job.queue_name, job.job_type, job.concurrency_key, job.priority,
-           workhorse.redact_top_level_keys_v1(job.payload, job.payload_redact_keys) AS payload,
-           job.tags,
-           outcome.current_attempt, job.max_attempts, job.retry_policy,
-           job.deadline_at, job.execution_timeout_ms, outcome.error,
+    SELECT task.id, task.queue_name, task.task_type, task.concurrency_key, task.priority,
+           workhorse.redact_top_level_keys_v1(task.payload, task.payload_redact_keys) AS payload,
+           task.tags,
+           outcome.current_attempt, task.max_attempts, task.retry_policy,
+           task.deadline_at, task.execution_timeout_ms, outcome.error,
            outcome.finished_at,
-           (SELECT count(*)::integer FROM workhorse.job_redrive redrive
-             WHERE redrive.source_job_id = job.id) AS redrive_count
-      FROM workhorse.job_outcome outcome
-      JOIN workhorse.job job ON job.id = outcome.job_id
+           (SELECT count(*)::integer FROM workhorse.task_redrive redrive
+             WHERE redrive.source_task_id = task.id) AS redrive_count
+      FROM workhorse.task_outcome outcome
+      JOIN workhorse.task task ON task.id = outcome.task_id
      WHERE outcome.state = 'failed'
-       AND (NOT (v_filter ? 'queue') OR job.queue_name = v_filter->>'queue')
-       AND (NOT (v_filter ? 'type') OR job.job_type = v_filter->>'type')
-       AND (v_tags IS NULL OR job.tags @> v_tags)
+       AND (NOT (v_filter ? 'queue') OR task.queue_name = v_filter->>'queue')
+       AND (NOT (v_filter ? 'type') OR task.task_type = v_filter->>'type')
+       AND (v_tags IS NULL OR task.tags @> v_tags)
        AND (NOT (v_filter ? 'errorName') OR outcome.error->>'name' = v_filter->>'errorName')
        AND (v_finished_after IS NULL OR outcome.finished_at >= v_finished_after)
        AND (v_finished_before IS NULL OR outcome.finished_at < v_finished_before)
        AND (p_cursor_finished_at IS NULL OR
-            (outcome.finished_at, outcome.job_id) < (p_cursor_finished_at, p_cursor_job_id))
-     ORDER BY outcome.finished_at DESC, outcome.job_id DESC
+            (outcome.finished_at, outcome.task_id) < (p_cursor_finished_at, p_cursor_task_id))
+     ORDER BY outcome.finished_at DESC, outcome.task_id DESC
      LIMIT p_limit + 1
   )
-  SELECT candidate.id, candidate.queue_name, candidate.job_type, candidate.concurrency_key,
+  SELECT candidate.id, candidate.queue_name, candidate.task_type, candidate.concurrency_key,
          candidate.priority, candidate.payload, candidate.tags,
          candidate.current_attempt, candidate.max_attempts, candidate.retry_policy,
          candidate.deadline_at, candidate.execution_timeout_ms, candidate.error,
@@ -5646,20 +5646,20 @@ END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.redrive_v1(
-  p_source_job_id uuid,
+  p_source_task_id uuid,
   p_requested_by text,
   p_reason text,
   p_request_id text
 ) RETURNS TABLE (
-  status text, source_job_id uuid, target_job_id uuid, source_state text,
+  status text, source_task_id uuid, target_task_id uuid, source_state text,
   target_state text, requested_at timestamptz
 )
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_job workhorse.job%ROWTYPE;
-  v_outcome workhorse.job_outcome%ROWTYPE;
-  v_existing workhorse.job_redrive%ROWTYPE;
+  v_task workhorse.task%ROWTYPE;
+  v_outcome workhorse.task_outcome%ROWTYPE;
+  v_existing workhorse.task_redrive%ROWTYPE;
   v_fingerprint jsonb;
   v_conflicting_fields text[];
   v_request_id_hash bytea;
@@ -5668,7 +5668,7 @@ DECLARE
   v_request_id_length integer;
   v_now timestamptz := clock_timestamp();
 BEGIN
-  IF p_source_job_id IS NULL THEN RAISE EXCEPTION 'source_job_id is required'; END IF;
+  IF p_source_task_id IS NULL THEN RAISE EXCEPTION 'source_task_id is required'; END IF;
   IF p_requested_by IS NULL OR p_requested_by = '' OR char_length(p_requested_by) > 200 THEN
     RAISE EXCEPTION 'requested_by must contain between 1 and 200 characters';
   END IF;
@@ -5689,11 +5689,11 @@ BEGIN
     ELSE left(p_request_id, 8) || '…' || right(p_request_id, 4)
   END;
   PERFORM pg_advisory_xact_lock(hashtextextended(
-    'workhorse:redrive:' || p_source_job_id::text || ':' || p_request_id, 0
+    'workhorse:redrive:' || p_source_task_id::text || ':' || p_request_id, 0
   ));
 
-  SELECT * INTO v_existing FROM workhorse.job_redrive redrive
-   WHERE redrive.source_job_id = p_source_job_id
+  SELECT * INTO v_existing FROM workhorse.task_redrive redrive
+   WHERE redrive.source_task_id = p_source_task_id
      AND redrive.request_id_hash = v_request_id_hash;
   IF FOUND THEN
     IF v_existing.request_fingerprint <> v_fingerprint THEN
@@ -5705,8 +5705,8 @@ BEGIN
         ERRCODE = 'P1002',
         MESSAGE = 'redrive request conflict with a retained request',
         DETAIL = jsonb_build_object(
-          'sourceJobId', p_source_job_id,
-          'existingTargetJobId', v_existing.target_job_id,
+          'sourceTaskId', p_source_task_id,
+          'existingTargetTaskId', v_existing.target_task_id,
           'requestIdPreview', v_request_id_preview,
           'requestIdDigest', v_request_id_digest,
           'requestIdLength', v_request_id_length,
@@ -5716,84 +5716,84 @@ BEGIN
         )::text;
     END IF;
     RETURN QUERY
-    SELECT 'replayed'::text, p_source_job_id, v_existing.target_job_id,
+    SELECT 'replayed'::text, p_source_task_id, v_existing.target_task_id,
            'failed'::text,
            COALESCE(runtime.state, outcome.state), v_existing.requested_at
       FROM (VALUES (1)) singleton(value)
-      LEFT JOIN workhorse.job_runtime runtime ON runtime.job_id = v_existing.target_job_id
-      LEFT JOIN workhorse.job_outcome outcome ON outcome.job_id = v_existing.target_job_id;
+      LEFT JOIN workhorse.task_runtime runtime ON runtime.task_id = v_existing.target_task_id
+      LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = v_existing.target_task_id;
     RETURN;
   END IF;
 
-  SELECT job.* INTO v_job FROM workhorse.job job
-   WHERE job.id = p_source_job_id FOR KEY SHARE;
+  SELECT task.* INTO v_task FROM workhorse.task task
+   WHERE task.id = p_source_task_id FOR KEY SHARE;
   IF NOT FOUND THEN
-    RETURN QUERY VALUES ('not_found'::text, p_source_job_id, NULL::uuid, NULL::text, NULL::text, NULL::timestamptz);
+    RETURN QUERY VALUES ('not_found'::text, p_source_task_id, NULL::uuid, NULL::text, NULL::text, NULL::timestamptz);
     RETURN;
   END IF;
-  SELECT outcome.* INTO v_outcome FROM workhorse.job_outcome outcome
-   WHERE outcome.job_id = p_source_job_id FOR SHARE;
+  SELECT outcome.* INTO v_outcome FROM workhorse.task_outcome outcome
+   WHERE outcome.task_id = p_source_task_id FOR SHARE;
   IF NOT FOUND OR v_outcome.state <> 'failed' THEN
     RETURN QUERY VALUES (
-      'not_failed'::text, p_source_job_id, NULL::uuid,
-      COALESCE(v_outcome.state, (SELECT runtime.state FROM workhorse.job_runtime runtime
-                                 WHERE runtime.job_id = p_source_job_id)),
+      'not_failed'::text, p_source_task_id, NULL::uuid,
+      COALESCE(v_outcome.state, (SELECT runtime.state FROM workhorse.task_runtime runtime
+                                 WHERE runtime.task_id = p_source_task_id)),
       NULL::text, NULL::timestamptz
     );
     RETURN;
   END IF;
 
-  target_job_id := gen_random_uuid();
-  INSERT INTO workhorse.job(
-    id, queue_name, job_type, concurrency_key, priority, payload, contract_version,
+  target_task_id := gen_random_uuid();
+  INSERT INTO workhorse.task(
+    id, queue_name, task_type, concurrency_key, priority, payload, contract_version,
     payload_max_bytes, result_max_bytes,
     payload_redact_keys, result_redact_keys, tags, max_attempts, retry_policy,
     deadline_at, execution_timeout_ms
   ) VALUES (
-    target_job_id, v_job.queue_name, v_job.job_type, v_job.concurrency_key, v_job.priority,
-    v_job.payload, v_job.contract_version,
-    v_job.payload_max_bytes, v_job.result_max_bytes,
-    v_job.payload_redact_keys, v_job.result_redact_keys, v_job.tags,
-    v_job.max_attempts, v_job.retry_policy, NULL, v_job.execution_timeout_ms
+    target_task_id, v_task.queue_name, v_task.task_type, v_task.concurrency_key, v_task.priority,
+    v_task.payload, v_task.contract_version,
+    v_task.payload_max_bytes, v_task.result_max_bytes,
+    v_task.payload_redact_keys, v_task.result_redact_keys, v_task.tags,
+    v_task.max_attempts, v_task.retry_policy, NULL, v_task.execution_timeout_ms
   );
-  INSERT INTO workhorse.job_runtime(
-    job_id, queue_name, concurrency_key, priority, state, current_attempt, run_at, ready_at, sequence,
+  INSERT INTO workhorse.task_runtime(
+    task_id, queue_name, concurrency_key, priority, state, current_attempt, run_at, ready_at, sequence,
     deadline_at
   ) VALUES (
-    target_job_id, v_job.queue_name, v_job.concurrency_key, v_job.priority, 'ready', 1, v_now, v_now,
+    target_task_id, v_task.queue_name, v_task.concurrency_key, v_task.priority, 'ready', 1, v_now, v_now,
     nextval('workhorse.ready_sequence_seq'), NULL
   );
-  INSERT INTO workhorse.job_redrive(
-    source_job_id, target_job_id, request_id_hash, request_id_preview,
+  INSERT INTO workhorse.task_redrive(
+    source_task_id, target_task_id, request_id_hash, request_id_preview,
     request_id_digest, request_id_length, requested_by, reason,
     request_fingerprint, source_state, target_initial_state, requested_at
   ) VALUES (
-    p_source_job_id, target_job_id, v_request_id_hash, v_request_id_preview,
+    p_source_task_id, target_task_id, v_request_id_hash, v_request_id_preview,
     v_request_id_digest, v_request_id_length, p_requested_by, p_reason,
     v_fingerprint, 'failed', 'ready', v_now
   );
   -- The history foreign key keeps the source identity while this event is retained. Semantic
   -- terminal evidence and its materialization watermark remain immutable.
-  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
-    VALUES (p_source_job_id, v_outcome.current_attempt, 'redriven', jsonb_build_object(
-      'target_job_id', target_job_id,
+  INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
+    VALUES (p_source_task_id, v_outcome.current_attempt, 'redriven', jsonb_build_object(
+      'target_task_id', target_task_id,
       'request_id_preview', v_request_id_preview,
       'request_id_digest', v_request_id_digest,
       'request_id_length', v_request_id_length,
       'requested_by', p_requested_by, 'reason', p_reason, 'requested_at', v_now
     ));
-  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
-    VALUES (target_job_id, 1, 'redrive_created', jsonb_build_object(
-      'source_job_id', p_source_job_id,
+  INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
+    VALUES (target_task_id, 1, 'redrive_created', jsonb_build_object(
+      'source_task_id', p_source_task_id,
       'request_id_preview', v_request_id_preview,
       'request_id_digest', v_request_id_digest,
       'request_id_length', v_request_id_length,
       'requested_by', p_requested_by, 'reason', p_reason, 'requested_at', v_now,
-      'state', 'ready', 'priority', v_job.priority
+      'state', 'ready', 'priority', v_task.priority
     ));
-  PERFORM pg_notify('workhorse_jobs', v_job.queue_name);
+  PERFORM pg_notify('workhorse_tasks', v_task.queue_name);
   RETURN QUERY VALUES (
-    'redriven'::text, p_source_job_id, target_job_id, 'failed'::text, 'ready'::text, v_now
+    'redriven'::text, p_source_task_id, target_task_id, 'failed'::text, 'ready'::text, v_now
   );
 END;
 $$;
@@ -5806,9 +5806,9 @@ CREATE OR REPLACE FUNCTION workhorse.redrive_many_v1(
   p_reason text,
   p_request_id text,
   p_cursor_finished_at timestamptz DEFAULT NULL,
-  p_cursor_job_id uuid DEFAULT NULL
+  p_cursor_task_id uuid DEFAULT NULL
 ) RETURNS TABLE (
-  ordinal integer, status text, source_job_id uuid, target_job_id uuid,
+  ordinal integer, status text, source_task_id uuid, target_task_id uuid,
   source_state text, target_state text, requested_at timestamptz,
   source_finished_at_cursor text, has_more boolean
 )
@@ -5824,8 +5824,8 @@ BEGIN
   IF p_limit NOT BETWEEN 1 AND 1000 THEN
     RAISE EXCEPTION 'bulk redrive limit must be between 1 and 1000';
   END IF;
-  IF (p_cursor_finished_at IS NULL) <> (p_cursor_job_id IS NULL) THEN
-    RAISE EXCEPTION 'bulk redrive cursor requires both finished_at and job_id';
+  IF (p_cursor_finished_at IS NULL) <> (p_cursor_task_id IS NULL) THEN
+    RAISE EXCEPTION 'bulk redrive cursor requires both finished_at and task_id';
   END IF;
   IF p_cursor_finished_at IS NOT NULL AND NOT isfinite(p_cursor_finished_at) THEN
     RAISE EXCEPTION 'bulk redrive cursor finished_at must be finite';
@@ -5887,32 +5887,32 @@ BEGIN
   ordinal := 0;
   FOR v_candidate IN
     WITH candidates AS MATERIALIZED (
-      SELECT outcome.job_id, outcome.finished_at
-        FROM workhorse.job_outcome outcome
-        JOIN workhorse.job job ON job.id = outcome.job_id
+      SELECT outcome.task_id, outcome.finished_at
+        FROM workhorse.task_outcome outcome
+        JOIN workhorse.task task ON task.id = outcome.task_id
        WHERE outcome.state = 'failed'
-         AND (NOT (v_filter ? 'queue') OR job.queue_name = v_filter->>'queue')
-         AND (NOT (v_filter ? 'type') OR job.job_type = v_filter->>'type')
-         AND (v_tags IS NULL OR job.tags @> v_tags)
+         AND (NOT (v_filter ? 'queue') OR task.queue_name = v_filter->>'queue')
+         AND (NOT (v_filter ? 'type') OR task.task_type = v_filter->>'type')
+         AND (v_tags IS NULL OR task.tags @> v_tags)
          AND (NOT (v_filter ? 'errorName') OR outcome.error->>'name' = v_filter->>'errorName')
          AND (v_finished_after IS NULL OR outcome.finished_at >= v_finished_after)
          AND (v_finished_before IS NULL OR outcome.finished_at < v_finished_before)
          AND (p_cursor_finished_at IS NULL OR
-              (outcome.finished_at, outcome.job_id) > (p_cursor_finished_at, p_cursor_job_id))
-       ORDER BY outcome.finished_at, outcome.job_id
+              (outcome.finished_at, outcome.task_id) > (p_cursor_finished_at, p_cursor_task_id))
+       ORDER BY outcome.finished_at, outcome.task_id
        LIMIT p_limit + 1
     )
-    SELECT candidate.job_id, candidate.finished_at,
+    SELECT candidate.task_id, candidate.finished_at,
            (SELECT count(*) FROM candidates) > p_limit AS has_more
       FROM candidates candidate
-     ORDER BY candidate.finished_at, candidate.job_id
+     ORDER BY candidate.finished_at, candidate.task_id
      LIMIT p_limit
   LOOP
     ordinal := ordinal + 1;
     IF p_dry_run THEN
       status := 'eligible';
-      source_job_id := v_candidate.job_id;
-      target_job_id := NULL;
+      source_task_id := v_candidate.task_id;
+      target_task_id := NULL;
       source_state := 'failed';
       target_state := NULL;
       requested_at := NULL;
@@ -5923,14 +5923,14 @@ BEGIN
       RETURN NEXT;
     ELSE
       RETURN QUERY
-      SELECT ordinal, result.status, result.source_job_id, result.target_job_id,
+      SELECT ordinal, result.status, result.source_task_id, result.target_task_id,
              result.source_state, result.target_state, result.requested_at,
              to_char(
                v_candidate.finished_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
              ),
              v_candidate.has_more
         FROM workhorse.redrive_v1(
-          v_candidate.job_id, p_requested_by, p_reason, p_request_id
+          v_candidate.task_id, p_requested_by, p_reason, p_request_id
         ) result;
     END IF;
   END LOOP;
@@ -6018,7 +6018,7 @@ CREATE OR REPLACE FUNCTION workhorse.register_worker_v1(
   p_heartbeat_ms integer,
   p_poll_ms integer,
   p_maintenance_interval_ms integer,
-  p_maintenance_task_poll_ms integer,
+  p_maintenance_routine_poll_ms integer,
   p_registry_interval_ms integer,
   p_active_slots integer,
   p_draining boolean,
@@ -6073,12 +6073,12 @@ BEGIN
   INSERT INTO workhorse.worker_registry AS registry
     (worker_id, instance_id, hostname, pid, queue_names, schedule_namespaces, queue_name,
      concurrency, lease_ms, heartbeat_ms,
-     poll_ms, maintenance_interval_ms, maintenance_task_poll_ms, registry_interval_ms,
+     poll_ms, maintenance_interval_ms, maintenance_routine_poll_ms, registry_interval_ms,
      active_slots, draining, client_protocol_version, sdk_language, sdk_version)
   VALUES (p_worker_id, p_instance_id, p_hostname, p_pid, p_queue_names, p_schedule_namespaces,
           p_queue_names[1], p_concurrency,
           p_lease_ms, p_heartbeat_ms, p_poll_ms, p_maintenance_interval_ms,
-          p_maintenance_task_poll_ms, p_registry_interval_ms,
+          p_maintenance_routine_poll_ms, p_registry_interval_ms,
           COALESCE(p_active_slots, 0), COALESCE(p_draining, false),
           p_client_protocol_version, p_sdk_language, p_sdk_version)
   ON CONFLICT (worker_id) DO UPDATE
@@ -6093,7 +6093,7 @@ BEGIN
         heartbeat_ms = EXCLUDED.heartbeat_ms,
         poll_ms = EXCLUDED.poll_ms,
         maintenance_interval_ms = EXCLUDED.maintenance_interval_ms,
-        maintenance_task_poll_ms = EXCLUDED.maintenance_task_poll_ms,
+        maintenance_routine_poll_ms = EXCLUDED.maintenance_routine_poll_ms,
         registry_interval_ms = EXCLUDED.registry_interval_ms,
         active_slots = EXCLUDED.active_slots,
         draining = EXCLUDED.draining,
@@ -6285,7 +6285,7 @@ AS $$
 $$;
 
 -- Drop registrations whose process stopped heartbeating long ago. The relation holds one row per
--- worker, so this stays a trivial bounded delete regardless of job volume.
+-- worker, so this stays a trivial bounded delete regardless of task volume.
 CREATE OR REPLACE FUNCTION workhorse.prune_worker_registry_v1(
   p_max_age interval DEFAULT interval '1 day'
 )
@@ -6316,30 +6316,30 @@ BEGIN
     VALUES (p_queue_name, false)
   ON CONFLICT (queue_name) DO NOTHING;
   -- Lock both runtime and parent identities before taking a fresh statement snapshot for history
-  -- deletion. The history insert trigger takes KEY SHARE on job, so it either commits before these
+  -- deletion. The history insert trigger takes KEY SHARE on task, so it either commits before these
   -- deletes become visible or fails after the parent disappears; it cannot commit an orphan.
   PERFORM 1
-    FROM workhorse.job_runtime runtime
-    JOIN workhorse.job job ON job.id = runtime.job_id
+    FROM workhorse.task_runtime runtime
+    JOIN workhorse.task task ON task.id = runtime.task_id
    WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('blocked', 'ready', 'scheduled')
-   FOR UPDATE OF runtime, job;
+   FOR UPDATE OF runtime, task;
 
   DELETE FROM workhorse.enqueue_idempotency idempotency
-   USING workhorse.job_runtime runtime
+   USING workhorse.task_runtime runtime
    WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('blocked', 'ready', 'scheduled')
-     AND idempotency.job_id = runtime.job_id;
-  DELETE FROM workhorse.job_event event
-   USING workhorse.job_runtime runtime
+     AND idempotency.task_id = runtime.task_id;
+  DELETE FROM workhorse.task_event event
+   USING workhorse.task_runtime runtime
    WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('blocked', 'ready', 'scheduled')
-     AND event.job_id = runtime.job_id;
+     AND event.task_id = runtime.task_id;
   DELETE FROM workhorse.attempt_history attempt
-   USING workhorse.job_runtime runtime
+   USING workhorse.task_runtime runtime
    WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('blocked', 'ready', 'scheduled')
-     AND attempt.job_id = runtime.job_id;
-  DELETE FROM workhorse.job job
-   USING workhorse.job_runtime runtime
+     AND attempt.task_id = runtime.task_id;
+  DELETE FROM workhorse.task task
+   USING workhorse.task_runtime runtime
    WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('blocked', 'ready', 'scheduled')
-     AND job.id = runtime.job_id;
+     AND task.id = runtime.task_id;
   GET DIAGNOSTICS v_count = ROW_COUNT;
   RETURN v_count;
 END;
@@ -6440,22 +6440,22 @@ DECLARE
   v_notify_queue text;
 BEGIN
   WITH due AS (
-    SELECT r.job_id, r.wait_name, r.run_at AS wake_at FROM workhorse.job_runtime r
+    SELECT r.task_id, r.wait_name, r.run_at AS wake_at FROM workhorse.task_runtime r
      WHERE r.state = 'scheduled' AND r.run_at <= clock_timestamp()
-     ORDER BY r.run_at, r.job_id FOR UPDATE SKIP LOCKED
+     ORDER BY r.run_at, r.task_id FOR UPDATE SKIP LOCKED
      LIMIT GREATEST(1, LEAST(p_limit, 10000))
   ), promoted AS (
-    UPDATE workhorse.job_runtime r
+    UPDATE workhorse.task_runtime r
        SET state = 'ready', ready_at = clock_timestamp(),
            sequence = nextval('workhorse.ready_sequence_seq'), wait_name = NULL,
            updated_at = clock_timestamp()
-      FROM due d WHERE r.job_id = d.job_id AND r.state = 'scheduled'
-    RETURNING r.job_id, r.queue_name, r.current_attempt, d.wait_name, d.wake_at
+      FROM due d WHERE r.task_id = d.task_id AND r.state = 'scheduled'
+    RETURNING r.task_id, r.queue_name, r.current_attempt, d.wait_name, d.wake_at
   ), events AS (
-    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
-      SELECT job_id, current_attempt, 'promoted', '{}'::jsonb FROM promoted
+    INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
+      SELECT task_id, current_attempt, 'promoted', '{}'::jsonb FROM promoted
       UNION ALL
-      SELECT job_id, current_attempt, 'wait_elapsed',
+      SELECT task_id, current_attempt, 'wait_elapsed',
              jsonb_build_object('name', wait_name, 'wake_at', wake_at, 'reason', 'due')
         FROM promoted WHERE wait_name IS NOT NULL
     RETURNING 1
@@ -6467,16 +6467,16 @@ BEGIN
   FOR v_notify_queue IN
     SELECT unnest(COALESCE(v_notify_queues, '{}'::text[]))
   LOOP
-    PERFORM pg_notify('workhorse_jobs', v_notify_queue);
+    PERFORM pg_notify('workhorse_tasks', v_notify_queue);
   END LOOP;
   RETURN v_count;
 END;
 $$;
 
 -- Audited operator release. The request identity is recorded only when the call
--- changes the job, and the raw request id never enters retained history.
+-- changes the task, and the raw request id never enters retained history.
 CREATE OR REPLACE FUNCTION workhorse.run_task_now_v1(
-  p_job_id uuid,
+  p_task_id uuid,
   p_requested_by text,
   p_reason text,
   p_request_id text
@@ -6485,8 +6485,8 @@ RETURNS TABLE(status text, state text, run_at timestamptz)
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_runtime workhorse.job_runtime%ROWTYPE;
-  v_outcome workhorse.job_outcome%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
+  v_outcome workhorse.task_outcome%ROWTYPE;
   v_now timestamptz := clock_timestamp();
   v_request_id_hash bytea;
   v_request_id_length integer;
@@ -6510,8 +6510,8 @@ BEGIN
   END;
 
   SELECT * INTO v_runtime
-    FROM workhorse.job_runtime runtime
-   WHERE runtime.job_id = p_job_id
+    FROM workhorse.task_runtime runtime
+   WHERE runtime.task_id = p_task_id
    FOR UPDATE;
 
   IF FOUND THEN
@@ -6524,18 +6524,18 @@ BEGIN
       RETURN;
     END IF;
 
-    UPDATE workhorse.job_runtime runtime
+    UPDATE workhorse.task_runtime runtime
        SET state = 'ready', run_at = v_now, ready_at = v_now,
            sequence = nextval('workhorse.ready_sequence_seq'), updated_at = v_now
-     WHERE runtime.job_id = p_job_id AND runtime.state = 'scheduled'
+     WHERE runtime.task_id = p_task_id AND runtime.state = 'scheduled'
     RETURNING * INTO v_runtime;
     IF NOT FOUND THEN
-      RAISE EXCEPTION 'locked scheduled task % changed state unexpectedly', p_job_id;
+      RAISE EXCEPTION 'locked scheduled task % changed state unexpectedly', p_task_id;
     END IF;
 
-    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
       VALUES (
-        p_job_id,
+        p_task_id,
         v_runtime.current_attempt,
         'promoted',
         jsonb_build_object(
@@ -6547,20 +6547,20 @@ BEGIN
           'request_id_length', v_request_id_length
         )
       );
-    PERFORM pg_notify('workhorse_jobs', v_runtime.queue_name);
+    PERFORM pg_notify('workhorse_tasks', v_runtime.queue_name);
     RETURN QUERY VALUES ('released'::text, v_runtime.state, v_runtime.run_at);
     RETURN;
   END IF;
 
   SELECT * INTO v_outcome
-    FROM workhorse.job_outcome outcome
-   WHERE outcome.job_id = p_job_id;
+    FROM workhorse.task_outcome outcome
+   WHERE outcome.task_id = p_task_id;
   IF FOUND THEN
     RETURN QUERY VALUES ('not_scheduled'::text, v_outcome.state, v_outcome.run_at);
     RETURN;
   END IF;
 
-  IF EXISTS (SELECT 1 FROM workhorse.job job WHERE job.id = p_job_id) THEN
+  IF EXISTS (SELECT 1 FROM workhorse.task task WHERE task.id = p_task_id) THEN
     RETURN QUERY VALUES ('not_scheduled'::text, NULL::text, NULL::timestamptz);
   ELSE
     RETURN QUERY VALUES ('not_found'::text, NULL::text, NULL::timestamptz);
@@ -6577,7 +6577,7 @@ CREATE OR REPLACE FUNCTION workhorse.claim_v1(
   p_worker_id text,
   p_lease_ms integer DEFAULT 30000
 ) RETURNS TABLE (
-  job_id uuid, job_type text, priority integer, payload jsonb, contract_version text, result_max_bytes integer,
+  task_id uuid, task_type text, priority integer, payload jsonb, contract_version text, result_max_bytes integer,
   redact_error_details boolean,
   trace_context jsonb,
   attempt integer, max_attempts integer,
@@ -6587,7 +6587,7 @@ CREATE OR REPLACE FUNCTION workhorse.claim_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
   v_policy workhorse.concurrency_policy%ROWTYPE;
   v_rate_policy workhorse.rate_limit_policy%ROWTYPE;
   v_rate_status record;
@@ -6642,7 +6642,7 @@ BEGIN
      AND bucket.bucket_key = refilled.bucket_key;
   IF v_policy.queue_name IS NOT NULL THEN
     SELECT count(*)::integer INTO v_active
-      FROM workhorse.job_runtime active
+      FROM workhorse.task_runtime active
      WHERE active.state = 'active'
        AND active.queue_name = p_queue_name
        AND active.expires_at > v_now;
@@ -6657,25 +6657,25 @@ BEGIN
 
   v_fence := nextval('workhorse.fence_token_seq');
   WITH ready_window AS MATERIALIZED (
-    SELECT runtime.job_id, runtime.concurrency_key, runtime.priority, runtime.sequence
-      FROM workhorse.job_runtime runtime
-      JOIN workhorse.job job ON job.id = runtime.job_id
+    SELECT runtime.task_id, runtime.concurrency_key, runtime.priority, runtime.sequence
+      FROM workhorse.task_runtime runtime
+      JOIN workhorse.task task ON task.id = runtime.task_id
      WHERE runtime.state = 'ready' AND runtime.queue_name = p_queue_name
        AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
-       AND (job.execution_timeout_ms IS NULL
-         OR runtime.execution_used_ms < job.execution_timeout_ms)
+       AND (task.execution_timeout_ms IS NULL
+         OR runtime.execution_used_ms < task.execution_timeout_ms)
        AND NOT EXISTS (
          SELECT 1 FROM workhorse.queue_control control
           WHERE control.queue_name = p_queue_name AND control.paused
        )
-     ORDER BY runtime.priority DESC, runtime.sequence, runtime.job_id
+     ORDER BY runtime.priority DESC, runtime.sequence, runtime.task_id
      FOR UPDATE OF runtime SKIP LOCKED
      LIMIT CASE
        WHEN v_policy.queue_name IS NULL AND v_rate_policy.per_key_limit IS NULL THEN 1
        ELSE 100
      END
   ), candidate AS (
-    SELECT ready.job_id
+    SELECT ready.task_id
       FROM ready_window ready
       CROSS JOIN LATERAL workhorse.rate_limit_bucket_v1(
         p_queue_name, 'key', ready.concurrency_key, v_rate_policy.per_key_limit,
@@ -6687,29 +6687,29 @@ BEGIN
        OR ready.concurrency_key IS NULL
        OR (
           SELECT count(*)
-            FROM workhorse.job_runtime active
+            FROM workhorse.task_runtime active
            WHERE active.state = 'active'
              AND active.queue_name = p_queue_name
              AND active.concurrency_key = ready.concurrency_key
              AND active.expires_at > v_now
         ) < v_policy.max_active_per_key
      ) AND keyed_rate.allowed
-     ORDER BY ready.priority DESC, ready.sequence, ready.job_id
+     ORDER BY ready.priority DESC, ready.sequence, ready.task_id
      LIMIT 1
   )
-  UPDATE workhorse.job_runtime runtime
+  UPDATE workhorse.task_runtime runtime
      SET state = 'active', fence_token = v_fence, worker_id = p_worker_id,
          acquired_at = v_now, heartbeat_at = v_now, expires_at = v_expires,
          ready_at = NULL, sequence = NULL, wait_name = NULL,
          attempt_started_at = COALESCE(runtime.attempt_started_at, v_now),
          attempt_timeout_at = CASE
-           WHEN job.execution_timeout_ms IS NULL THEN NULL
+           WHEN task.execution_timeout_ms IS NULL THEN NULL
            ELSE v_now + make_interval(secs =>
-             (job.execution_timeout_ms - runtime.execution_used_ms)::double precision / 1000.0)
+             (task.execution_timeout_ms - runtime.execution_used_ms)::double precision / 1000.0)
          END,
          error = NULL, updated_at = v_now
-    FROM candidate, workhorse.job job
-   WHERE runtime.job_id = candidate.job_id AND runtime.state = 'ready' AND job.id = runtime.job_id
+    FROM candidate, workhorse.task task
+   WHERE runtime.task_id = candidate.task_id AND runtime.state = 'ready' AND task.id = runtime.task_id
      AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
   RETURNING runtime.* INTO v_runtime;
   IF NOT FOUND THEN RETURN; END IF;
@@ -6723,21 +6723,21 @@ BEGIN
     v_rate_policy.per_key_interval_ms, v_rate_policy.per_key_burst, v_now, true
   );
 
-  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
-    VALUES (v_runtime.job_id, v_runtime.current_attempt, 'claimed',
+  INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
+    VALUES (v_runtime.task_id, v_runtime.current_attempt, 'claimed',
       jsonb_build_object('worker_id', p_worker_id, 'fence_token', v_fence::text, 'expires_at', v_expires));
   RETURN QUERY
-    SELECT job.id, job.job_type, job.priority, job.payload, job.contract_version, job.result_max_bytes,
-           cardinality(job.payload_redact_keys) > 0 OR cardinality(job.result_redact_keys) > 0,
-           job.trace_context,
-           v_runtime.current_attempt, job.max_attempts,
-           job.retry_policy, job.deadline_at, job.execution_timeout_ms,
+    SELECT task.id, task.task_type, task.priority, task.payload, task.contract_version, task.result_max_bytes,
+           cardinality(task.payload_redact_keys) > 0 OR cardinality(task.result_redact_keys) > 0,
+           task.trace_context,
+           v_runtime.current_attempt, task.max_attempts,
+           task.retry_policy, task.deadline_at, task.execution_timeout_ms,
            v_runtime.attempt_timeout_at, v_fence, v_expires
-      FROM workhorse.job job WHERE job.id = v_runtime.job_id;
+      FROM workhorse.task task WHERE task.id = v_runtime.task_id;
 END;
 $$;
 
--- Claim several jobs through one client round trip while retaining claim_v1 as the single owner
+-- Claim several tasks through one client round trip while retaining claim_v1 as the single owner
 -- of ordering, policy admission, rate tokens, fencing, and claim event semantics.
 CREATE OR REPLACE FUNCTION workhorse.claim_many_v1(
   p_queue_name text,
@@ -6745,7 +6745,7 @@ CREATE OR REPLACE FUNCTION workhorse.claim_many_v1(
   p_limit integer,
   p_lease_ms integer DEFAULT 30000
 ) RETURNS TABLE (
-  job_id uuid, job_type text, priority integer, payload jsonb, contract_version text, result_max_bytes integer,
+  task_id uuid, task_type text, priority integer, payload jsonb, contract_version text, result_max_bytes integer,
   redact_error_details boolean,
   trace_context jsonb,
   attempt integer, max_attempts integer,
@@ -6772,7 +6772,7 @@ $$;
 CREATE OR REPLACE FUNCTION workhorse.record_batch_event_v1(
   p_event_type text,
   p_batch_id uuid,
-  p_job_ids uuid[],
+  p_task_ids uuid[],
   p_attempts integer[],
   p_fence_tokens bigint[],
   p_worker_id text
@@ -6780,7 +6780,7 @@ CREATE OR REPLACE FUNCTION workhorse.record_batch_event_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_size integer := cardinality(p_job_ids);
+  v_size integer := cardinality(p_task_ids);
   v_members jsonb;
   v_existing integer;
   v_matching integer;
@@ -6800,38 +6800,38 @@ BEGIN
   IF cardinality(p_attempts) <> v_size OR cardinality(p_fence_tokens) <> v_size THEN
     RAISE EXCEPTION 'batch member arrays must have equal lengths';
   END IF;
-  IF array_position(p_job_ids, NULL) IS NOT NULL
+  IF array_position(p_task_ids, NULL) IS NOT NULL
      OR array_position(p_attempts, NULL) IS NOT NULL
      OR array_position(p_fence_tokens, NULL) IS NOT NULL THEN
     RAISE EXCEPTION 'batch member arrays must not contain nulls';
   END IF;
   IF EXISTS (
-    SELECT 1 FROM unnest(p_job_ids) member(job_id)
-     GROUP BY member.job_id HAVING count(*) > 1
+    SELECT 1 FROM unnest(p_task_ids) member(task_id)
+     GROUP BY member.task_id HAVING count(*) > 1
   ) THEN
-    RAISE EXCEPTION 'batch job ids must be unique';
+    RAISE EXCEPTION 'batch task ids must be unique';
   END IF;
 
   SELECT jsonb_agg(
-           jsonb_build_object('job_id', member.job_id, 'attempt', member.attempt)
+           jsonb_build_object('task_id', member.task_id, 'attempt', member.attempt)
            ORDER BY member.ordinal
          )
     INTO v_members
-    FROM unnest(p_job_ids, p_attempts) WITH ORDINALITY
-      AS member(job_id, attempt, ordinal);
+    FROM unnest(p_task_ids, p_attempts) WITH ORDINALITY
+      AS member(task_id, attempt, ordinal);
 
   PERFORM pg_advisory_xact_lock(hashtextextended(p_batch_id::text, 0));
   SELECT count(*)::integer
     INTO v_existing
-    FROM workhorse.job_event event
+    FROM workhorse.task_event event
    WHERE event.event_type IN ('batch_dispatched', 'batch_failed')
      AND event.details->>'batch_id' = p_batch_id::text;
   IF v_existing > 0 THEN
     SELECT count(*)::integer
       INTO v_matching
-      FROM unnest(p_job_ids, p_attempts, p_fence_tokens) AS member(job_id, attempt, fence_token)
-      JOIN workhorse.job_event event
-        ON event.job_id = member.job_id
+      FROM unnest(p_task_ids, p_attempts, p_fence_tokens) AS member(task_id, attempt, fence_token)
+      JOIN workhorse.task_event event
+        ON event.task_id = member.task_id
        AND event.attempt = member.attempt
        AND event.event_type IN ('batch_dispatched', 'batch_failed')
        AND event.details = jsonb_build_object(
@@ -6846,7 +6846,7 @@ BEGIN
     END IF;
     SELECT count(*)::integer
       INTO v_requested
-      FROM workhorse.job_event event
+      FROM workhorse.task_event event
      WHERE event.event_type = p_event_type
        AND event.details->>'batch_id' = p_batch_id::text;
     IF v_requested = v_size THEN RETURN v_size; END IF;
@@ -6857,11 +6857,11 @@ BEGIN
 
   SELECT count(*)::integer
     INTO v_authorized
-    FROM unnest(p_job_ids, p_attempts, p_fence_tokens) AS member(job_id, attempt, fence_token)
+    FROM unnest(p_task_ids, p_attempts, p_fence_tokens) AS member(task_id, attempt, fence_token)
    WHERE EXISTS (
      SELECT 1
-       FROM workhorse.job_event claim
-      WHERE claim.job_id = member.job_id
+       FROM workhorse.task_event claim
+      WHERE claim.task_id = member.task_id
         AND claim.attempt = member.attempt
         AND claim.event_type = 'claimed'
         AND claim.details->>'worker_id' = p_worker_id
@@ -6871,8 +6871,8 @@ BEGIN
     RAISE EXCEPTION 'batch members must match retained claims';
   END IF;
 
-  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
-    SELECT member.job_id, member.attempt, p_event_type,
+  INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
+    SELECT member.task_id, member.attempt, p_event_type,
            jsonb_build_object(
              'batch_id', p_batch_id,
              'size', v_size,
@@ -6880,8 +6880,8 @@ BEGIN
              'worker_id', p_worker_id,
              'fence_token', member.fence_token::text
            )
-      FROM unnest(p_job_ids, p_attempts, p_fence_tokens) WITH ORDINALITY
-        AS member(job_id, attempt, fence_token, ordinal)
+      FROM unnest(p_task_ids, p_attempts, p_fence_tokens) WITH ORDINALITY
+        AS member(task_id, attempt, fence_token, ordinal)
      ORDER BY member.ordinal;
   RETURN v_size;
 END;
@@ -6889,7 +6889,7 @@ $$;
 
 CREATE OR REPLACE FUNCTION workhorse.record_batch_dispatch_v1(
   p_batch_id uuid,
-  p_job_ids uuid[],
+  p_task_ids uuid[],
   p_attempts integer[],
   p_fence_tokens bigint[],
   p_worker_id text
@@ -6897,13 +6897,13 @@ CREATE OR REPLACE FUNCTION workhorse.record_batch_dispatch_v1(
 LANGUAGE sql
 AS $$
   SELECT workhorse.record_batch_event_v1(
-    'batch_dispatched', p_batch_id, p_job_ids, p_attempts, p_fence_tokens, p_worker_id
+    'batch_dispatched', p_batch_id, p_task_ids, p_attempts, p_fence_tokens, p_worker_id
   );
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.record_batch_failure_v1(
   p_batch_id uuid,
-  p_job_ids uuid[],
+  p_task_ids uuid[],
   p_attempts integer[],
   p_fence_tokens bigint[],
   p_worker_id text
@@ -6911,7 +6911,7 @@ CREATE OR REPLACE FUNCTION workhorse.record_batch_failure_v1(
 LANGUAGE sql
 AS $$
   SELECT workhorse.record_batch_event_v1(
-    'batch_failed', p_batch_id, p_job_ids, p_attempts, p_fence_tokens, p_worker_id
+    'batch_failed', p_batch_id, p_task_ids, p_attempts, p_fence_tokens, p_worker_id
   );
 $$;
 
@@ -6923,7 +6923,7 @@ PARALLEL SAFE
 AS $$
   SELECT jsonb_build_object(
     'name', 'DeadlineExceeded',
-    'message', 'job deadline was exceeded',
+    'message', 'task deadline was exceeded',
     'deadline_at', p_deadline_at
   );
 $$;
@@ -6944,43 +6944,43 @@ AS $$
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.timeout_owned_v1(
-  p_job_id uuid, p_worker_id text, p_fence_token bigint
+  p_task_id uuid, p_worker_id text, p_fence_token bigint
 ) RETURNS boolean
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_runtime workhorse.job_runtime%ROWTYPE;
-  v_job workhorse.job%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
+  v_task workhorse.task%ROWTYPE;
   v_error jsonb;
   v_retry record;
   v_state text;
   v_run_at timestamptz;
 BEGIN
-  SELECT * INTO v_runtime FROM workhorse.job_runtime runtime
-   WHERE runtime.job_id = p_job_id AND runtime.state = 'active'
+  SELECT * INTO v_runtime FROM workhorse.task_runtime runtime
+   WHERE runtime.task_id = p_task_id AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id AND runtime.fence_token = p_fence_token
    FOR UPDATE;
   IF NOT FOUND OR v_runtime.attempt_timeout_at IS NULL
      OR v_runtime.attempt_timeout_at > clock_timestamp() THEN RETURN false; END IF;
   IF v_runtime.cancel_requested_at IS NOT NULL THEN RETURN false; END IF;
-  SELECT * INTO STRICT v_job FROM workhorse.job job WHERE job.id = p_job_id;
-  IF v_job.deadline_at IS NOT NULL
-     AND v_job.deadline_at <= v_runtime.attempt_timeout_at
-     AND v_job.deadline_at <= clock_timestamp() THEN
-    RETURN workhorse.terminalize_deadline_v1(p_job_id);
+  SELECT * INTO STRICT v_task FROM workhorse.task task WHERE task.id = p_task_id;
+  IF v_task.deadline_at IS NOT NULL
+     AND v_task.deadline_at <= v_runtime.attempt_timeout_at
+     AND v_task.deadline_at <= clock_timestamp() THEN
+    RETURN workhorse.terminalize_deadline_v1(p_task_id);
   END IF;
   v_error := workhorse.timeout_envelope_v1(
-    v_job.execution_timeout_ms, v_runtime.attempt_timeout_at
+    v_task.execution_timeout_ms, v_runtime.attempt_timeout_at
   );
-  IF v_runtime.current_attempt < v_job.max_attempts THEN
+  IF v_runtime.current_attempt < v_task.max_attempts THEN
     SELECT * INTO STRICT v_retry FROM workhorse.retry_delay_v1(
-      p_job_id, v_runtime.current_attempt, v_job.retry_policy,
+      p_task_id, v_runtime.current_attempt, v_task.retry_policy,
       v_runtime.previous_retry_delay_ms, NULL, 'execution-timeout-immediate'
     );
     v_run_at := clock_timestamp() +
       make_interval(secs => v_retry.delay_ms::double precision / 1000.0);
     v_state := CASE WHEN v_retry.delay_ms <= 0 THEN 'ready' ELSE 'scheduled' END;
-    UPDATE workhorse.job_runtime runtime SET
+    UPDATE workhorse.task_runtime runtime SET
       state = v_state,
       current_attempt = runtime.current_attempt + 1,
       fence_token = 0,
@@ -6998,15 +6998,15 @@ BEGIN
       previous_retry_delay_ms = v_retry.next_previous_retry_delay_ms,
       error = v_error,
       updated_at = clock_timestamp()
-     WHERE runtime.job_id = p_job_id;
-    IF v_state = 'ready' THEN PERFORM pg_notify('workhorse_jobs', v_job.queue_name); END IF;
-    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+     WHERE runtime.task_id = p_task_id;
+    IF v_state = 'ready' THEN PERFORM pg_notify('workhorse_tasks', v_task.queue_name); END IF;
+    INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
       VALUES (
-        p_job_id, v_runtime.current_attempt, 'execution_timed_out',
+        p_task_id, v_runtime.current_attempt, 'execution_timed_out',
         jsonb_build_object(
           'fence_token', p_fence_token::text,
           'timeout_at', v_runtime.attempt_timeout_at,
-          'execution_timeout_ms', v_job.execution_timeout_ms,
+          'execution_timeout_ms', v_task.execution_timeout_ms,
           'next_state', v_state,
           'next_attempt', v_runtime.current_attempt + 1,
           'retry_delay_ms', v_retry.delay_ms,
@@ -7014,28 +7014,28 @@ BEGIN
         )
       );
   ELSE
-    DELETE FROM workhorse.job_runtime runtime WHERE runtime.job_id = p_job_id;
-    INSERT INTO workhorse.job_outcome(
-      job_id, state, current_attempt, fence_token, run_at, error, history_through_at
+    DELETE FROM workhorse.task_runtime runtime WHERE runtime.task_id = p_task_id;
+    INSERT INTO workhorse.task_outcome(
+      task_id, state, current_attempt, fence_token, run_at, error, history_through_at
     ) VALUES (
-      p_job_id, 'failed', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, v_error,
+      p_task_id, 'failed', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, v_error,
       clock_timestamp()
     );
-    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
       VALUES (
-        p_job_id, v_runtime.current_attempt, 'execution_timed_out',
+        p_task_id, v_runtime.current_attempt, 'execution_timed_out',
         jsonb_build_object(
           'fence_token', p_fence_token::text,
           'timeout_at', v_runtime.attempt_timeout_at,
-          'execution_timeout_ms', v_job.execution_timeout_ms,
+          'execution_timeout_ms', v_task.execution_timeout_ms,
           'next_state', 'failed'
         )
       );
   END IF;
   INSERT INTO workhorse.attempt_history(
-    job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+    task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
   ) VALUES (
-    p_job_id, v_runtime.current_attempt, p_fence_token, p_worker_id, 'timeout',
+    p_task_id, v_runtime.current_attempt, p_fence_token, p_worker_id, 'timeout',
     v_runtime.attempt_started_at, v_runtime.acquired_at, v_error
   );
   RETURN true;
@@ -7043,15 +7043,15 @@ END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.expire_owned_v1(
-  p_job_id uuid, p_worker_id text, p_fence_token bigint
+  p_task_id uuid, p_worker_id text, p_fence_token bigint
 ) RETURNS text
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
 BEGIN
-  SELECT * INTO v_runtime FROM workhorse.job_runtime runtime
-   WHERE runtime.job_id = p_job_id AND runtime.state = 'active'
+  SELECT * INTO v_runtime FROM workhorse.task_runtime runtime
+   WHERE runtime.task_id = p_task_id AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id AND runtime.fence_token = p_fence_token
    FOR UPDATE;
   IF NOT FOUND THEN RETURN 'stale'; END IF;
@@ -7062,18 +7062,18 @@ BEGIN
        OR v_runtime.attempt_timeout_at > clock_timestamp()
        OR v_runtime.deadline_at <= v_runtime.attempt_timeout_at
      ) THEN
-    IF workhorse.terminalize_deadline_v1(p_job_id) THEN RETURN 'deadline_exceeded'; END IF;
+    IF workhorse.terminalize_deadline_v1(p_task_id) THEN RETURN 'deadline_exceeded'; END IF;
     RETURN 'stale';
   END IF;
   IF v_runtime.attempt_timeout_at IS NOT NULL
      AND v_runtime.attempt_timeout_at <= clock_timestamp() THEN
-    IF workhorse.timeout_owned_v1(p_job_id, p_worker_id, p_fence_token) THEN
+    IF workhorse.timeout_owned_v1(p_task_id, p_worker_id, p_fence_token) THEN
       RETURN 'timeout_exceeded';
     END IF;
     RETURN 'stale';
   END IF;
   IF v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= clock_timestamp() THEN
-    IF workhorse.terminalize_deadline_v1(p_job_id) THEN RETURN 'deadline_exceeded'; END IF;
+    IF workhorse.terminalize_deadline_v1(p_task_id) THEN RETURN 'deadline_exceeded'; END IF;
     RETURN 'stale';
   END IF;
   RETURN 'not_due';
@@ -7081,21 +7081,21 @@ END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.expire_owned_telemetry_v1(
-  p_job_id uuid, p_worker_id text, p_fence_token bigint
+  p_task_id uuid, p_worker_id text, p_fence_token bigint
 ) RETURNS TABLE(status text, retry_state text)
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  status := workhorse.expire_owned_v1(p_job_id, p_worker_id, p_fence_token);
-  SELECT runtime.state INTO retry_state FROM workhorse.job_runtime runtime
-     WHERE runtime.job_id = p_job_id AND runtime.state IN ('ready', 'scheduled')
+  status := workhorse.expire_owned_v1(p_task_id, p_worker_id, p_fence_token);
+  SELECT runtime.state INTO retry_state FROM workhorse.task_runtime runtime
+     WHERE runtime.task_id = p_task_id AND runtime.state IN ('ready', 'scheduled')
        AND status = 'timeout_exceeded';
   RETURN NEXT;
 END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.heartbeat_v1(
-  p_job_id uuid, p_worker_id text, p_fence_token bigint, p_lease_ms integer DEFAULT 30000
+  p_task_id uuid, p_worker_id text, p_fence_token bigint, p_lease_ms integer DEFAULT 30000
 ) RETURNS text
 LANGUAGE plpgsql
 AS $$
@@ -7107,7 +7107,7 @@ BEGIN
   IF p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
     RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
   END IF;
-  UPDATE workhorse.job_runtime r
+  UPDATE workhorse.task_runtime r
      SET heartbeat_at = CASE
            WHEN r.cancel_requested_at IS NULL
              AND (r.deadline_at IS NULL OR r.deadline_at > v_now)
@@ -7127,7 +7127,7 @@ BEGIN
              AND (r.attempt_timeout_at IS NULL OR r.attempt_timeout_at > v_now)
              AND r.expires_at > v_now THEN v_now
            ELSE r.updated_at END
-   WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
+   WHERE r.task_id = p_task_id AND r.state = 'active' AND r.worker_id = p_worker_id
      AND r.fence_token = p_fence_token
   RETURNING CASE
     WHEN r.cancel_requested_at IS NOT NULL THEN 'cancel_requested'
@@ -7142,7 +7142,7 @@ $$;
 
 CREATE OR REPLACE FUNCTION workhorse.heartbeat_many_v1(
   p_worker_id text, p_leases jsonb
-) RETURNS TABLE (ordinal bigint, job_id uuid, status text)
+) RETURNS TABLE (ordinal bigint, task_id uuid, status text)
 LANGUAGE plpgsql
 AS $$
 DECLARE
@@ -7155,20 +7155,20 @@ BEGIN
   END IF;
   IF EXISTS (
     SELECT 1 FROM jsonb_array_elements(p_leases) item
-     WHERE item->>'jobId' IS NULL OR item->>'fenceToken' IS NULL OR item->>'leaseMs' IS NULL
+     WHERE item->>'taskId' IS NULL OR item->>'fenceToken' IS NULL OR item->>'leaseMs' IS NULL
        OR (item->>'leaseMs')::integer NOT BETWEEN 100 AND 86400000
   ) THEN
-    RAISE EXCEPTION 'each lease requires jobId, fenceToken, and leaseMs between 100 and 86400000';
+    RAISE EXCEPTION 'each lease requires taskId, fenceToken, and leaseMs between 100 and 86400000';
   END IF;
   RETURN QUERY
   WITH leases AS MATERIALIZED (
     SELECT item.ordinality AS ordinal,
-           (item.value->>'jobId')::uuid AS job_id,
+           (item.value->>'taskId')::uuid AS task_id,
            (item.value->>'fenceToken')::bigint AS fence_token,
            (item.value->>'leaseMs')::integer AS lease_ms
       FROM jsonb_array_elements(p_leases) WITH ORDINALITY AS item(value, ordinality)
   ), heartbeated AS (
-    UPDATE workhorse.job_runtime runtime
+    UPDATE workhorse.task_runtime runtime
        SET heartbeat_at = CASE
              WHEN runtime.cancel_requested_at IS NULL
                AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
@@ -7189,9 +7189,9 @@ BEGIN
                AND runtime.expires_at > v_now THEN v_now
              ELSE runtime.updated_at END
       FROM leases lease
-     WHERE runtime.job_id = lease.job_id AND runtime.state = 'active'
+     WHERE runtime.task_id = lease.task_id AND runtime.state = 'active'
        AND runtime.worker_id = p_worker_id AND runtime.fence_token = lease.fence_token
-    RETURNING lease.ordinal, runtime.job_id,
+    RETURNING lease.ordinal, runtime.task_id,
       CASE
         WHEN runtime.cancel_requested_at IS NOT NULL THEN 'cancel_requested'
         WHEN runtime.deadline_at IS NOT NULL AND runtime.deadline_at <= v_now THEN 'deadline_exceeded'
@@ -7200,25 +7200,25 @@ BEGIN
         ELSE 'accepted'
       END AS status
   )
-  SELECT lease.ordinal, lease.job_id, COALESCE(heartbeated.status, 'stale')
+  SELECT lease.ordinal, lease.task_id, COALESCE(heartbeated.status, 'stale')
     FROM leases lease
-    LEFT JOIN heartbeated USING (ordinal, job_id)
+    LEFT JOIN heartbeated USING (ordinal, task_id)
    ORDER BY lease.ordinal;
 END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.acknowledge_cancel_v1(
-  p_job_id uuid, p_worker_id text, p_fence_token bigint
+  p_task_id uuid, p_worker_id text, p_fence_token bigint
 ) RETURNS boolean
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
   v_envelope jsonb;
 BEGIN
   SELECT * INTO v_runtime
-    FROM workhorse.job_runtime runtime
-   WHERE runtime.job_id = p_job_id AND runtime.state = 'active'
+    FROM workhorse.task_runtime runtime
+   WHERE runtime.task_id = p_task_id AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id AND runtime.fence_token = p_fence_token
    FOR UPDATE;
   IF NOT FOUND OR v_runtime.expires_at <= clock_timestamp()
@@ -7228,27 +7228,27 @@ BEGIN
   v_envelope := workhorse.cancellation_envelope_v1(
     v_runtime.cancel_requested_at, v_runtime.cancel_requested_by, v_runtime.cancel_reason
   );
-  DELETE FROM workhorse.job_runtime runtime
-   WHERE runtime.job_id = p_job_id AND runtime.state = 'active'
+  DELETE FROM workhorse.task_runtime runtime
+   WHERE runtime.task_id = p_task_id AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id AND runtime.fence_token = p_fence_token
      AND runtime.expires_at > clock_timestamp() AND runtime.cancel_requested_at IS NOT NULL;
   IF NOT FOUND THEN RETURN false; END IF;
-  INSERT INTO workhorse.job_outcome(
-    job_id, state, current_attempt, fence_token, run_at, error, history_through_at
+  INSERT INTO workhorse.task_outcome(
+    task_id, state, current_attempt, fence_token, run_at, error, history_through_at
   )
     VALUES (
-      p_job_id, 'canceled', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, v_envelope,
+      p_task_id, 'canceled', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, v_envelope,
       clock_timestamp()
     );
   INSERT INTO workhorse.attempt_history(
-    job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+    task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
   ) VALUES (
-    p_job_id, v_runtime.current_attempt, p_fence_token, p_worker_id, 'canceled',
+    p_task_id, v_runtime.current_attempt, p_fence_token, p_worker_id, 'canceled',
     v_runtime.attempt_started_at, v_runtime.acquired_at, v_envelope
   );
-  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+  INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
     VALUES (
-      p_job_id,
+      p_task_id,
       v_runtime.current_attempt,
       'canceled',
       jsonb_build_object(
@@ -7266,7 +7266,7 @@ $$;
 -- Persist one immutable named checkpoint only while the caller owns the active, unexpired lease.
 -- Locking the runtime row serializes this write with completion, failure, and expiry recovery.
 CREATE OR REPLACE FUNCTION workhorse.save_checkpoint_v1(
-  p_job_id uuid,
+  p_task_id uuid,
   p_worker_id text,
   p_fence_token bigint,
   p_checkpoint_name text,
@@ -7282,8 +7282,8 @@ CREATE OR REPLACE FUNCTION workhorse.save_checkpoint_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_runtime workhorse.job_runtime%ROWTYPE;
-  v_checkpoint workhorse.job_checkpoint%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
+  v_checkpoint workhorse.task_checkpoint%ROWTYPE;
 BEGIN
   IF p_checkpoint_name IS NULL OR p_checkpoint_name = '' OR char_length(p_checkpoint_name) > 200 THEN
     RAISE EXCEPTION 'checkpoint_name must contain between 1 and 200 characters';
@@ -7296,8 +7296,8 @@ BEGIN
   END IF;
 
   SELECT * INTO v_runtime
-    FROM workhorse.job_runtime runtime
-   WHERE runtime.job_id = p_job_id
+    FROM workhorse.task_runtime runtime
+   WHERE runtime.task_id = p_task_id
      AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id
      AND runtime.fence_token = p_fence_token
@@ -7316,8 +7316,8 @@ BEGIN
   END IF;
 
   SELECT * INTO v_checkpoint
-    FROM workhorse.job_checkpoint checkpoint
-   WHERE checkpoint.job_id = p_job_id AND checkpoint.checkpoint_name = p_checkpoint_name;
+    FROM workhorse.task_checkpoint checkpoint
+   WHERE checkpoint.task_id = p_task_id AND checkpoint.checkpoint_name = p_checkpoint_name;
   IF FOUND THEN
     RETURN QUERY VALUES (
       CASE
@@ -7334,16 +7334,16 @@ BEGIN
     RETURN;
   END IF;
 
-  INSERT INTO workhorse.job_checkpoint(
-    job_id, checkpoint_name, checkpoint_value, attempt, fence_token, worker_id
+  INSERT INTO workhorse.task_checkpoint(
+    task_id, checkpoint_name, checkpoint_value, attempt, fence_token, worker_id
   ) VALUES (
-    p_job_id, p_checkpoint_name, p_checkpoint_value, v_runtime.current_attempt,
+    p_task_id, p_checkpoint_name, p_checkpoint_value, v_runtime.current_attempt,
     p_fence_token, p_worker_id
   )
   RETURNING * INTO v_checkpoint;
-  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+  INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
     VALUES (
-      p_job_id,
+      p_task_id,
       v_runtime.current_attempt,
       'checkpoint_saved',
       jsonb_build_object('name', p_checkpoint_name, 'fence_token', p_fence_token::text)
@@ -7363,7 +7363,7 @@ $$;
 -- Replace the latest progress only while the caller owns the exact active, unexpired generation.
 -- Changed writes from one generation are limited to ten per second. Identical writes are no-ops.
 CREATE OR REPLACE FUNCTION workhorse.update_progress_v1(
-  p_job_id uuid,
+  p_task_id uuid,
   p_worker_id text,
   p_fence_token bigint,
   p_progress_value jsonb
@@ -7381,8 +7381,8 @@ CREATE OR REPLACE FUNCTION workhorse.update_progress_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_runtime workhorse.job_runtime%ROWTYPE;
-  v_progress workhorse.job_progress%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
+  v_progress workhorse.task_progress%ROWTYPE;
   v_now timestamptz;
   v_elapsed_ms numeric;
 BEGIN
@@ -7394,8 +7394,8 @@ BEGIN
   END IF;
 
   SELECT * INTO v_runtime
-    FROM workhorse.job_runtime runtime
-   WHERE runtime.job_id = p_job_id
+    FROM workhorse.task_runtime runtime
+   WHERE runtime.task_id = p_task_id
      AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id
      AND runtime.fence_token = p_fence_token
@@ -7414,8 +7414,8 @@ BEGIN
     RETURN;
   END IF;
   SELECT * INTO v_progress
-    FROM workhorse.job_progress progress
-   WHERE progress.job_id = p_job_id
+    FROM workhorse.task_progress progress
+   WHERE progress.task_id = p_task_id
    FOR UPDATE;
   -- A non-protocol writer could hold the progress row while this transaction owns runtime. Resample
   -- before any mutation so a lease, deadline, or execution timeout cannot expire during that wait.
@@ -7450,24 +7450,24 @@ BEGIN
     END IF;
   END IF;
 
-  INSERT INTO workhorse.job_progress(
-    job_id, progress_value, revision, attempt, fence_token, worker_id, created_at, updated_at
+  INSERT INTO workhorse.task_progress(
+    task_id, progress_value, revision, attempt, fence_token, worker_id, created_at, updated_at
   ) VALUES (
-    p_job_id, p_progress_value, 1, v_runtime.current_attempt, p_fence_token, p_worker_id,
+    p_task_id, p_progress_value, 1, v_runtime.current_attempt, p_fence_token, p_worker_id,
     v_now, v_now
   )
-  ON CONFLICT (job_id) DO UPDATE SET
+  ON CONFLICT (task_id) DO UPDATE SET
     progress_value = EXCLUDED.progress_value,
-    revision = workhorse.job_progress.revision + 1,
+    revision = workhorse.task_progress.revision + 1,
     attempt = EXCLUDED.attempt,
     fence_token = EXCLUDED.fence_token,
     worker_id = EXCLUDED.worker_id,
     updated_at = EXCLUDED.updated_at
   RETURNING * INTO v_progress;
 
-  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+  INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
     VALUES (
-      p_job_id,
+      p_task_id,
       v_runtime.current_attempt,
       'progress_updated',
       jsonb_build_object(
@@ -7488,7 +7488,7 @@ $$;
 -- Atomically record or replay one named durable timer boundary while the caller owns the exact
 -- active, unexpired runtime generation. Wait rows are immutable after their first committed write.
 CREATE OR REPLACE FUNCTION workhorse.schedule_wait_v1(
-  p_job_id uuid,
+  p_task_id uuid,
   p_worker_id text,
   p_fence_token bigint,
   p_wait_name text,
@@ -7509,8 +7509,8 @@ CREATE OR REPLACE FUNCTION workhorse.schedule_wait_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_runtime workhorse.job_runtime%ROWTYPE;
-  v_wait workhorse.job_wait%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
+  v_wait workhorse.task_wait%ROWTYPE;
   v_mode text;
   v_now timestamptz;
   v_requested_target timestamptz;
@@ -7530,8 +7530,8 @@ BEGIN
   v_mode := CASE WHEN p_duration_ms IS NOT NULL THEN 'relative' ELSE 'absolute' END;
 
   SELECT * INTO v_runtime
-    FROM workhorse.job_runtime runtime
-   WHERE runtime.job_id = p_job_id
+    FROM workhorse.task_runtime runtime
+   WHERE runtime.task_id = p_task_id
      AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id
      AND runtime.fence_token = p_fence_token
@@ -7555,8 +7555,8 @@ BEGIN
   END;
 
   SELECT * INTO v_wait
-    FROM workhorse.job_wait stored
-   WHERE stored.job_id = p_job_id AND stored.wait_name = p_wait_name;
+    FROM workhorse.task_wait stored
+   WHERE stored.task_id = p_task_id AND stored.wait_name = p_wait_name;
   IF FOUND THEN
     IF v_wait.mode <> v_mode
        OR (v_mode = 'absolute' AND v_wait.requested_wake_at IS DISTINCT FROM p_wake_at) THEN
@@ -7568,9 +7568,9 @@ BEGIN
       RETURN;
     END IF;
 
-    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
       VALUES (
-        p_job_id,
+        p_task_id,
         v_runtime.current_attempt,
         'wait_replayed',
         jsonb_build_object(
@@ -7594,7 +7594,7 @@ BEGIN
   IF p_wake_at IS NOT NULL AND p_wake_at > v_now + interval '365 days' THEN
     RAISE EXCEPTION 'wake_at must be no more than 365 days in the future';
   END IF;
-  IF (SELECT count(*) FROM workhorse.job_wait stored WHERE stored.job_id = p_job_id) >= 1000 THEN
+  IF (SELECT count(*) FROM workhorse.task_wait stored WHERE stored.task_id = p_task_id) >= 1000 THEN
     RETURN QUERY VALUES (
       'limit_exceeded'::text, NULL::text, NULL::text, NULL::bigint, NULL::timestamptz,
       NULL::timestamptz, NULL::integer, NULL::bigint, NULL::text, NULL::timestamptz
@@ -7602,19 +7602,19 @@ BEGIN
     RETURN;
   END IF;
 
-  INSERT INTO workhorse.job_wait(
-    job_id, wait_name, mode, duration_ms, requested_wake_at, wake_at,
+  INSERT INTO workhorse.task_wait(
+    task_id, wait_name, mode, duration_ms, requested_wake_at, wake_at,
     attempt, fence_token, worker_id, claimed_at
   ) VALUES (
-    p_job_id, p_wait_name, v_mode, p_duration_ms, p_wake_at, v_requested_target,
+    p_task_id, p_wait_name, v_mode, p_duration_ms, p_wake_at, v_requested_target,
     v_runtime.current_attempt, p_fence_token, p_worker_id, v_runtime.acquired_at
   )
   RETURNING * INTO v_wait;
 
   IF v_wait.wake_at <= v_now THEN
-    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
       VALUES (
-        p_job_id,
+        p_task_id,
         v_runtime.current_attempt,
         'wait_elapsed',
         jsonb_build_object(
@@ -7634,7 +7634,7 @@ BEGIN
     RETURN;
   END IF;
 
-  UPDATE workhorse.job_runtime runtime
+  UPDATE workhorse.task_runtime runtime
      SET state = 'scheduled', run_at = v_wait.wake_at, fence_token = 0,
          ready_at = NULL, sequence = NULL, worker_id = NULL, acquired_at = NULL,
          heartbeat_at = NULL, expires_at = NULL, wait_name = p_wait_name,
@@ -7646,7 +7646,7 @@ BEGIN
          ),
          attempt_timeout_at = NULL,
          error = NULL, updated_at = clock_timestamp()
-   WHERE runtime.job_id = p_job_id
+   WHERE runtime.task_id = p_task_id
      AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id
      AND runtime.fence_token = p_fence_token
@@ -7657,8 +7657,8 @@ BEGIN
     -- The lease can cross its deadline after the post-lock validation above while the immutable
     -- row is being inserted. Remove that transaction-local row and preserve the public stale
     -- result instead of leaking an implementation exception to the client.
-    DELETE FROM workhorse.job_wait stored
-     WHERE stored.job_id = p_job_id AND stored.wait_name = p_wait_name;
+    DELETE FROM workhorse.task_wait stored
+     WHERE stored.task_id = p_task_id AND stored.wait_name = p_wait_name;
     RETURN QUERY VALUES (
       'stale'::text, NULL::text, NULL::text, NULL::bigint, NULL::timestamptz,
       NULL::timestamptz, NULL::integer, NULL::bigint, NULL::text, NULL::timestamptz
@@ -7666,9 +7666,9 @@ BEGIN
     RETURN;
   END IF;
 
-  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+  INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
     VALUES (
-      p_job_id,
+      p_task_id,
       v_runtime.current_attempt,
       'wait_scheduled',
       jsonb_build_object(
@@ -7691,7 +7691,7 @@ $$;
 -- Declare or replay one named signal wait while the caller owns the exact active generation.
 -- A first declaration releases the lease and preserves the logical attempt for handler replay.
 CREATE OR REPLACE FUNCTION workhorse.wait_for_signal_v1(
-  p_job_id uuid,
+  p_task_id uuid,
   p_worker_id text,
   p_fence_token bigint,
   p_signal_name text,
@@ -7700,8 +7700,8 @@ CREATE OR REPLACE FUNCTION workhorse.wait_for_signal_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_runtime workhorse.job_runtime%ROWTYPE;
-  v_wait workhorse.job_signal_wait%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
+  v_wait workhorse.task_signal_wait%ROWTYPE;
   v_wait_exists boolean;
   v_now timestamptz;
   v_timeout_at timestamptz;
@@ -7720,11 +7720,11 @@ BEGIN
   END IF;
 
   PERFORM pg_advisory_xact_lock(hashtextextended(
-    'workhorse:signal:' || p_job_id::text || ':' || p_signal_name, 0
+    'workhorse:signal:' || p_task_id::text || ':' || p_signal_name, 0
   ));
   SELECT * INTO v_wait
-    FROM workhorse.job_signal_wait stored
-   WHERE stored.job_id = p_job_id AND stored.signal_name = p_signal_name;
+    FROM workhorse.task_signal_wait stored
+   WHERE stored.task_id = p_task_id AND stored.signal_name = p_signal_name;
   v_wait_exists := FOUND;
   IF v_wait_exists AND v_wait.delivered_at IS NULL THEN
     IF v_wait.worker_id IS DISTINCT FROM p_worker_id
@@ -7737,8 +7737,8 @@ BEGIN
   END IF;
 
   SELECT * INTO v_runtime
-    FROM workhorse.job_runtime runtime
-   WHERE runtime.job_id = p_job_id
+    FROM workhorse.task_runtime runtime
+   WHERE runtime.task_id = p_task_id
      AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id
      AND runtime.fence_token = p_fence_token
@@ -7757,28 +7757,28 @@ BEGIN
   );
 
   IF v_wait_exists THEN
-    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
       VALUES (
-        p_job_id, v_runtime.current_attempt, 'signal_replayed',
+        p_task_id, v_runtime.current_attempt, 'signal_replayed',
         jsonb_build_object('name', p_signal_name, 'delivered_at', v_wait.delivered_at)
       );
     RETURN QUERY VALUES ('delivered'::text, v_wait.payload);
     RETURN;
   END IF;
 
-  IF (SELECT count(*) FROM workhorse.job_signal_wait stored WHERE stored.job_id = p_job_id) >= 1000 THEN
+  IF (SELECT count(*) FROM workhorse.task_signal_wait stored WHERE stored.task_id = p_task_id) >= 1000 THEN
     RETURN QUERY VALUES ('limit_exceeded'::text, NULL::jsonb);
     RETURN;
   END IF;
 
-  INSERT INTO workhorse.job_signal_wait(
-    job_id, signal_name, attempt, fence_token, worker_id, claimed_at, timeout_at
+  INSERT INTO workhorse.task_signal_wait(
+    task_id, signal_name, attempt, fence_token, worker_id, claimed_at, timeout_at
   ) VALUES (
-    p_job_id, p_signal_name, v_runtime.current_attempt, p_fence_token,
+    p_task_id, p_signal_name, v_runtime.current_attempt, p_fence_token,
     p_worker_id, v_runtime.acquired_at, v_timeout_at
   );
 
-  UPDATE workhorse.job_runtime runtime
+  UPDATE workhorse.task_runtime runtime
      SET state = 'scheduled', run_at = '9999-12-31 00:00:00+00'::timestamptz,
          fence_token = 0, ready_at = NULL, sequence = NULL, worker_id = NULL,
          acquired_at = NULL, heartbeat_at = NULL, expires_at = NULL,
@@ -7791,7 +7791,7 @@ BEGIN
          ),
          attempt_timeout_at = NULL, deadline_at = v_timeout_at,
          error = NULL, updated_at = clock_timestamp()
-   WHERE runtime.job_id = p_job_id
+   WHERE runtime.task_id = p_task_id
      AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id
      AND runtime.fence_token = p_fence_token
@@ -7799,15 +7799,15 @@ BEGIN
      AND (runtime.deadline_at IS NULL OR runtime.deadline_at > clock_timestamp())
      AND (runtime.attempt_timeout_at IS NULL OR runtime.attempt_timeout_at > clock_timestamp());
   IF NOT FOUND THEN
-    DELETE FROM workhorse.job_signal_wait stored
-     WHERE stored.job_id = p_job_id AND stored.signal_name = p_signal_name;
+    DELETE FROM workhorse.task_signal_wait stored
+     WHERE stored.task_id = p_task_id AND stored.signal_name = p_signal_name;
     RETURN QUERY VALUES ('stale'::text, NULL::jsonb);
     RETURN;
   END IF;
 
-  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+  INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
     VALUES (
-      p_job_id, v_runtime.current_attempt, 'signal_waiting',
+      p_task_id, v_runtime.current_attempt, 'signal_waiting',
       jsonb_build_object('name', p_signal_name, 'fence_token', p_fence_token::text)
     );
   RETURN QUERY VALUES ('waiting'::text, NULL::jsonb);
@@ -7817,7 +7817,7 @@ $$;
 -- Deliver one bounded signal at the waiting-to-ready transition. The retained key hash and request
 -- fingerprint make same-key retries return the accepted result without repeating the transition.
 CREATE OR REPLACE FUNCTION workhorse.send_signal_v1(
-  p_job_id uuid,
+  p_task_id uuid,
   p_signal_name text,
   p_payload jsonb,
   p_idempotency_key text,
@@ -7831,8 +7831,8 @@ CREATE OR REPLACE FUNCTION workhorse.send_signal_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_wait workhorse.job_signal_wait%ROWTYPE;
-  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_wait workhorse.task_signal_wait%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
   v_key_hash bytea;
   v_key_digest text;
   v_fingerprint jsonb;
@@ -7859,26 +7859,26 @@ BEGIN
   END IF;
 
   v_key_hash := workhorse.idempotency_key_hash_v1(
-    'signal:' || p_job_id::text || ':' || p_signal_name, p_idempotency_key
+    'signal:' || p_task_id::text || ':' || p_signal_name, p_idempotency_key
   );
   v_key_digest := left(encode(v_key_hash, 'hex'), 12);
   v_fingerprint := jsonb_build_object('payload', p_payload, 'requestedBy', p_requested_by);
   PERFORM pg_advisory_xact_lock(hashtextextended(
-    'workhorse:signal:' || p_job_id::text || ':' || p_signal_name, 0
+    'workhorse:signal:' || p_task_id::text || ':' || p_signal_name, 0
   ));
 
-  IF NOT EXISTS (SELECT 1 FROM workhorse.job WHERE id = p_job_id) THEN
+  IF NOT EXISTS (SELECT 1 FROM workhorse.task WHERE id = p_task_id) THEN
     RETURN QUERY VALUES ('not_found'::text, NULL::jsonb, NULL::timestamptz, NULL::text);
     RETURN;
   END IF;
   SELECT * INTO v_wait
-    FROM workhorse.job_signal_wait stored
-   WHERE stored.job_id = p_job_id AND stored.signal_name = p_signal_name
+    FROM workhorse.task_signal_wait stored
+   WHERE stored.task_id = p_task_id AND stored.signal_name = p_signal_name
    FOR UPDATE;
   IF NOT FOUND THEN
-    INSERT INTO workhorse.job_event(job_id, event_type, details)
+    INSERT INTO workhorse.task_event(task_id, event_type, details)
       VALUES (
-        p_job_id, 'signal_rejected',
+        p_task_id, 'signal_rejected',
         jsonb_build_object(
           'name', p_signal_name, 'reason', 'not_waiting', 'requested_by', p_requested_by,
           'idempotency_key_digest', v_key_digest
@@ -7903,9 +7903,9 @@ BEGIN
       v_reason := 'already_delivered';
       status := 'already_delivered';
     END IF;
-    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
       VALUES (
-        p_job_id, v_wait.attempt, 'signal_rejected',
+        p_task_id, v_wait.attempt, 'signal_rejected',
         jsonb_build_object(
           'name', p_signal_name, 'reason', v_reason, 'requested_by', p_requested_by,
           'idempotency_key_digest', v_key_digest
@@ -7916,17 +7916,17 @@ BEGIN
   END IF;
 
   SELECT * INTO v_runtime
-    FROM workhorse.job_runtime runtime
-   WHERE runtime.job_id = p_job_id
+    FROM workhorse.task_runtime runtime
+   WHERE runtime.task_id = p_task_id
      AND runtime.state = 'scheduled'
      AND runtime.wait_name = p_signal_name
      AND runtime.current_attempt = v_wait.attempt
    FOR UPDATE;
   v_now := clock_timestamp();
   IF NOT FOUND OR (v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= v_now) THEN
-    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
       VALUES (
-        p_job_id, v_wait.attempt, 'signal_rejected',
+        p_task_id, v_wait.attempt, 'signal_rejected',
         jsonb_build_object(
           'name', p_signal_name, 'reason', 'stale', 'requested_by', p_requested_by,
           'idempotency_key_digest', v_key_digest
@@ -7936,26 +7936,26 @@ BEGIN
     RETURN;
   END IF;
 
-  UPDATE workhorse.job_signal_wait stored
+  UPDATE workhorse.task_signal_wait stored
      SET payload = p_payload, idempotency_key_hash = v_key_hash,
          request_fingerprint = v_fingerprint, delivered_by = p_requested_by, delivered_at = v_now
-   WHERE stored.job_id = p_job_id AND stored.signal_name = p_signal_name
+   WHERE stored.task_id = p_task_id AND stored.signal_name = p_signal_name
    RETURNING * INTO v_wait;
-  UPDATE workhorse.job_runtime runtime
+  UPDATE workhorse.task_runtime runtime
      SET state = 'ready', run_at = v_now, ready_at = v_now,
          sequence = nextval('workhorse.ready_sequence_seq'), wait_name = NULL,
-         deadline_at = (SELECT job.deadline_at FROM workhorse.job job WHERE job.id = p_job_id),
+         deadline_at = (SELECT task.deadline_at FROM workhorse.task task WHERE task.id = p_task_id),
          updated_at = v_now
-   WHERE runtime.job_id = p_job_id;
-  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+   WHERE runtime.task_id = p_task_id;
+  INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
     VALUES (
-      p_job_id, v_wait.attempt, 'signal_received',
+      p_task_id, v_wait.attempt, 'signal_received',
       jsonb_build_object(
         'name', p_signal_name, 'requested_by', p_requested_by,
         'idempotency_key_digest', v_key_digest, 'payload_bytes', octet_length(p_payload::text)
       )
     );
-  PERFORM pg_notify('workhorse_jobs', v_runtime.queue_name);
+  PERFORM pg_notify('workhorse_tasks', v_runtime.queue_name);
   RETURN QUERY VALUES ('delivered'::text, v_wait.payload, v_wait.delivered_at, v_wait.delivered_by);
 END;
 $$;
@@ -7963,14 +7963,14 @@ $$;
 -- Create one child and suspend its exact active parent generation in the same transaction. A
 -- replay after the child succeeds returns its retained result and marks the join exactly once.
 CREATE OR REPLACE FUNCTION workhorse.create_single_child_v1(
-  p_parent_job_id uuid,
+  p_parent_task_id uuid,
   p_worker_id text,
   p_fence_token bigint,
   p_child_name text,
   p_request jsonb
 ) RETURNS TABLE (
   status text,
-  child_job_id uuid,
+  child_task_id uuid,
   child_type text,
   created_at timestamptz,
   joined_at timestamptz,
@@ -7979,10 +7979,10 @@ CREATE OR REPLACE FUNCTION workhorse.create_single_child_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_runtime workhorse.job_runtime%ROWTYPE;
-  v_edge workhorse.job_child%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
+  v_edge workhorse.task_child%ROWTYPE;
   v_enqueue record;
-  v_outcome workhorse.job_outcome%ROWTYPE;
+  v_outcome workhorse.task_outcome%ROWTYPE;
   v_now timestamptz;
 BEGIN
   IF p_child_name IS NULL OR p_child_name = '' OR char_length(p_child_name) > 200 THEN
@@ -7992,14 +7992,14 @@ BEGIN
     RAISE EXCEPTION 'child request must be a JSON object';
   END IF;
   IF p_request ?| ARRAY['idempotency', 'debounce', 'throttle']
-     OR COALESCE(p_request->'prerequisiteJobId', 'null'::jsonb) <> 'null'::jsonb
+     OR COALESCE(p_request->'prerequisiteTaskId', 'null'::jsonb) <> 'null'::jsonb
      OR COALESCE(p_request->'dependencies', 'null'::jsonb) <> 'null'::jsonb THEN
-    RAISE EXCEPTION 'child jobs cannot use coalescing or dependency enqueue options';
+    RAISE EXCEPTION 'child tasks cannot use coalescing or dependency enqueue options';
   END IF;
 
   SELECT * INTO v_runtime
-    FROM workhorse.job_runtime runtime
-   WHERE runtime.job_id = p_parent_job_id
+    FROM workhorse.task_runtime runtime
+   WHERE runtime.task_id = p_parent_task_id
      AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id
      AND runtime.fence_token = p_fence_token
@@ -8017,59 +8017,59 @@ BEGIN
   END IF;
 
   SELECT * INTO v_edge
-    FROM workhorse.job_child edge
-   WHERE edge.parent_job_id = p_parent_job_id
+    FROM workhorse.task_child edge
+   WHERE edge.parent_task_id = p_parent_task_id
    FOR UPDATE;
   IF FOUND THEN
     IF v_edge.child_name <> p_child_name THEN
       RETURN QUERY VALUES (
-        'limit_exceeded'::text, v_edge.child_job_id,
-        (SELECT job_type FROM workhorse.job WHERE id = v_edge.child_job_id),
+        'limit_exceeded'::text, v_edge.child_task_id,
+        (SELECT task_type FROM workhorse.task WHERE id = v_edge.child_task_id),
         v_edge.created_at, v_edge.joined_at, NULL::jsonb
       );
       RETURN;
     END IF;
     IF v_edge.request_fingerprint <> p_request THEN
       RETURN QUERY VALUES (
-        'conflict'::text, v_edge.child_job_id,
-        (SELECT job_type FROM workhorse.job WHERE id = v_edge.child_job_id),
+        'conflict'::text, v_edge.child_task_id,
+        (SELECT task_type FROM workhorse.task WHERE id = v_edge.child_task_id),
         v_edge.created_at, v_edge.joined_at, NULL::jsonb
       );
       RETURN;
     END IF;
-    SELECT * INTO v_outcome FROM workhorse.job_outcome outcome
-     WHERE outcome.job_id = v_edge.child_job_id;
+    SELECT * INTO v_outcome FROM workhorse.task_outcome outcome
+     WHERE outcome.task_id = v_edge.child_task_id;
     IF NOT FOUND OR v_outcome.state <> 'succeeded' THEN
       RETURN QUERY VALUES (
-        'stale'::text, v_edge.child_job_id,
-        (SELECT job_type FROM workhorse.job WHERE id = v_edge.child_job_id),
+        'stale'::text, v_edge.child_task_id,
+        (SELECT task_type FROM workhorse.task WHERE id = v_edge.child_task_id),
         v_edge.created_at, v_edge.joined_at, NULL::jsonb
       );
       RETURN;
     END IF;
     IF v_edge.joined_at IS NULL THEN
-      UPDATE workhorse.job_child edge SET joined_at = v_now
-       WHERE edge.parent_job_id = p_parent_job_id
+      UPDATE workhorse.task_child edge SET joined_at = v_now
+       WHERE edge.parent_task_id = p_parent_task_id
        RETURNING * INTO v_edge;
-      INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+      INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
         VALUES (
-          p_parent_job_id, v_runtime.current_attempt, 'child_joined',
+          p_parent_task_id, v_runtime.current_attempt, 'child_joined',
           jsonb_build_object(
             'name', p_child_name,
-            'child_job_id', v_edge.child_job_id,
+            'child_task_id', v_edge.child_task_id,
             'fence_token', p_fence_token::text
           )
         );
     END IF;
     RETURN QUERY VALUES (
-      'completed'::text, v_edge.child_job_id,
-      (SELECT job_type FROM workhorse.job WHERE id = v_edge.child_job_id),
+      'completed'::text, v_edge.child_task_id,
+      (SELECT task_type FROM workhorse.task WHERE id = v_edge.child_task_id),
       v_edge.created_at, v_edge.joined_at, v_outcome.result
     );
     RETURN;
   END IF;
 
-  IF EXISTS (SELECT 1 FROM workhorse.job_child edge WHERE edge.parent_job_id = p_parent_job_id) THEN
+  IF EXISTS (SELECT 1 FROM workhorse.task_child edge WHERE edge.parent_task_id = p_parent_task_id) THEN
     RETURN QUERY VALUES (
       'limit_exceeded'::text, NULL::uuid, NULL::text, NULL::timestamptz,
       NULL::timestamptz, NULL::jsonb
@@ -8080,20 +8080,20 @@ BEGIN
   BEGIN
     SELECT * INTO v_enqueue FROM workhorse.enqueue_many_v1(jsonb_build_array(p_request));
     IF v_enqueue.outcome <> 'accepted' THEN
-      RAISE EXCEPTION 'child enqueue must create one new job';
+      RAISE EXCEPTION 'child enqueue must create one new task';
     END IF;
-    INSERT INTO workhorse.job_child(
-      parent_job_id, child_job_id, child_name, request_fingerprint, created_at
+    INSERT INTO workhorse.task_child(
+      parent_task_id, child_task_id, child_name, request_fingerprint, created_at
     ) VALUES (
-      p_parent_job_id, v_enqueue.job_id, p_child_name, p_request, v_now
+      p_parent_task_id, v_enqueue.task_id, p_child_name, p_request, v_now
     ) RETURNING * INTO v_edge;
-    INSERT INTO workhorse.job_dependency(
-      dependent_job_id, prerequisite_job_id, on_success, on_failure, on_cancellation, created_at
+    INSERT INTO workhorse.task_dependency(
+      dependent_task_id, prerequisite_task_id, on_success, on_failure, on_cancellation, created_at
     ) VALUES (
-      p_parent_job_id, v_enqueue.job_id, 'release', 'fail', 'cancel', v_now
+      p_parent_task_id, v_enqueue.task_id, 'release', 'fail', 'cancel', v_now
     );
 
-    UPDATE workhorse.job_runtime runtime
+    UPDATE workhorse.task_runtime runtime
        SET state = 'blocked', fence_token = 0, ready_at = NULL, sequence = NULL,
            worker_id = NULL, acquired_at = NULL, heartbeat_at = NULL, expires_at = NULL,
            wait_name = NULL, attempt_started_at = NULL,
@@ -8104,7 +8104,7 @@ BEGIN
              )
            ),
            attempt_timeout_at = NULL, error = NULL, updated_at = v_now
-     WHERE runtime.job_id = p_parent_job_id
+     WHERE runtime.task_id = p_parent_task_id
        AND runtime.state = 'active'
        AND runtime.worker_id = p_worker_id
        AND runtime.fence_token = p_fence_token
@@ -8117,22 +8117,22 @@ BEGIN
         MESSAGE = 'child creation lost the parent lease';
     END IF;
 
-    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
       VALUES (
-        p_parent_job_id, v_runtime.current_attempt, 'child_created',
+        p_parent_task_id, v_runtime.current_attempt, 'child_created',
         jsonb_build_object(
           'name', p_child_name,
-          'child_job_id', v_edge.child_job_id,
+          'child_task_id', v_edge.child_task_id,
           'fence_token', p_fence_token::text
         )
       );
-    INSERT INTO workhorse.job_event(job_id, event_type, details)
+    INSERT INTO workhorse.task_event(task_id, event_type, details)
       VALUES (
-        v_edge.child_job_id, 'parent_linked',
-        jsonb_build_object('parent_job_id', p_parent_job_id, 'name', p_child_name)
+        v_edge.child_task_id, 'parent_linked',
+        jsonb_build_object('parent_task_id', p_parent_task_id, 'name', p_child_name)
       );
     RETURN QUERY VALUES (
-      'created'::text, v_edge.child_job_id, p_request->>'type', v_edge.created_at,
+      'created'::text, v_edge.child_task_id, p_request->>'type', v_edge.created_at,
       NULL::timestamptz, NULL::jsonb
     );
   EXCEPTION
@@ -8146,14 +8146,14 @@ END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.create_child_v1(
-  p_parent_job_id uuid,
+  p_parent_task_id uuid,
   p_worker_id text,
   p_fence_token bigint,
   p_child_name text,
   p_request jsonb
 ) RETURNS TABLE (
   status text,
-  child_job_id uuid,
+  child_task_id uuid,
   child_type text,
   created_at timestamptz,
   joined_at timestamptz,
@@ -8163,8 +8163,8 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
   IF EXISTS (
-    SELECT 1 FROM workhorse.job_child edge
-     WHERE edge.parent_job_id = p_parent_job_id AND edge.created_as_set
+    SELECT 1 FROM workhorse.task_child edge
+     WHERE edge.parent_task_id = p_parent_task_id AND edge.created_as_set
   ) THEN
     RETURN QUERY VALUES (
       'limit_exceeded'::text, NULL::uuid, NULL::text, NULL::timestamptz,
@@ -8173,16 +8173,16 @@ BEGIN
     RETURN;
   END IF;
   RETURN QUERY
-    SELECT single.status, single.child_job_id, single.child_type, single.created_at,
+    SELECT single.status, single.child_task_id, single.child_type, single.created_at,
            single.joined_at, single.result
       FROM workhorse.create_single_child_v1(
-        p_parent_job_id, p_worker_id, p_fence_token, p_child_name, p_request
+        p_parent_task_id, p_worker_id, p_fence_token, p_child_name, p_request
       ) single;
 END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.create_children_v1(
-  p_parent_job_id uuid,
+  p_parent_task_id uuid,
   p_worker_id text,
   p_fence_token bigint,
   p_children jsonb,
@@ -8197,7 +8197,7 @@ CREATE OR REPLACE FUNCTION workhorse.create_children_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
   v_item record;
   v_enqueue record;
   v_existing_count integer;
@@ -8237,16 +8237,16 @@ BEGIN
   END IF;
 
   SELECT runtime.* INTO v_runtime
-    FROM workhorse.job_runtime runtime
-    JOIN workhorse.job job ON job.id = runtime.job_id
-   WHERE runtime.job_id = p_parent_job_id
+    FROM workhorse.task_runtime runtime
+    JOIN workhorse.task task ON task.id = runtime.task_id
+   WHERE runtime.task_id = p_parent_task_id
      AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id
      AND runtime.fence_token = p_fence_token
    FOR UPDATE OF runtime;
   IF FOUND THEN
-    SELECT job.result_max_bytes INTO STRICT v_result_limit
-      FROM workhorse.job job WHERE job.id = p_parent_job_id;
+    SELECT task.result_max_bytes INTO STRICT v_result_limit
+      FROM workhorse.task task WHERE task.id = p_parent_task_id;
   END IF;
   v_now := clock_timestamp();
   IF NOT FOUND OR v_runtime.expires_at <= v_now
@@ -8259,11 +8259,11 @@ BEGIN
     RETURN;
   END IF;
 
-  PERFORM 1 FROM workhorse.job_child edge
-   WHERE edge.parent_job_id = p_parent_job_id
+  PERFORM 1 FROM workhorse.task_child edge
+   WHERE edge.parent_task_id = p_parent_task_id
    ORDER BY edge.child_name FOR UPDATE;
-  SELECT count(*)::integer INTO v_existing_count FROM workhorse.job_child edge
-   WHERE edge.parent_job_id = p_parent_job_id;
+  SELECT count(*)::integer INTO v_existing_count FROM workhorse.task_child edge
+   WHERE edge.parent_task_id = p_parent_task_id;
 
   IF jsonb_array_length(p_children) = 0 THEN
     IF v_existing_count > 0 THEN
@@ -8283,19 +8283,19 @@ BEGIN
   IF v_existing_count > 0 THEN
     IF v_existing_count <> jsonb_array_length(p_children) OR EXISTS (
       SELECT 1 FROM jsonb_array_elements(p_children) input(item)
-      LEFT JOIN workhorse.job_child edge
-        ON edge.parent_job_id = p_parent_job_id AND edge.child_name = item->>'name'
-      WHERE edge.child_job_id IS NULL OR edge.request_fingerprint <> item->'request'
+      LEFT JOIN workhorse.task_child edge
+        ON edge.parent_task_id = p_parent_task_id AND edge.child_name = item->>'name'
+      WHERE edge.child_task_id IS NULL OR edge.request_fingerprint <> item->'request'
     ) OR EXISTS (
-      SELECT 1 FROM workhorse.job_child edge
-       WHERE edge.parent_job_id = p_parent_job_id AND NOT edge.created_as_set
+      SELECT 1 FROM workhorse.task_child edge
+       WHERE edge.parent_task_id = p_parent_task_id AND NOT edge.created_as_set
     ) OR EXISTS (
       SELECT 1
-        FROM workhorse.job_dependency dependency
-        JOIN workhorse.job_child edge
-          ON edge.parent_job_id = p_parent_job_id
-         AND edge.child_job_id = dependency.prerequisite_job_id
-       WHERE dependency.dependent_job_id = p_parent_job_id
+        FROM workhorse.task_dependency dependency
+        JOIN workhorse.task_child edge
+          ON edge.parent_task_id = p_parent_task_id
+         AND edge.child_task_id = dependency.prerequisite_task_id
+       WHERE dependency.dependent_task_id = p_parent_task_id
          AND (
            dependency.on_success <> 'release'
            OR dependency.on_failure <> CASE WHEN p_mode = 'settled' THEN 'release' ELSE 'fail' END
@@ -8308,11 +8308,11 @@ BEGIN
       RETURN;
     END IF;
     IF EXISTS (
-      SELECT 1 FROM workhorse.job_child edge
-      LEFT JOIN workhorse.job_outcome outcome ON outcome.job_id = edge.child_job_id
-       WHERE edge.parent_job_id = p_parent_job_id
+      SELECT 1 FROM workhorse.task_child edge
+      LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = edge.child_task_id
+       WHERE edge.parent_task_id = p_parent_task_id
          AND (
-           outcome.job_id IS NULL
+           outcome.task_id IS NULL
            OR (p_mode = 'all_success' AND outcome.state <> 'succeeded')
          )
     ) THEN
@@ -8324,9 +8324,9 @@ BEGIN
 
     SELECT jsonb_object_agg(edge.child_name, joined.value),
            jsonb_agg(jsonb_build_object(
-             'childJobId', edge.child_job_id,
+             'childTaskId', edge.child_task_id,
              'name', edge.child_name,
-             'type', job.job_type,
+             'type', task.task_type,
              'createdAt', edge.created_at,
              'joinedAt', COALESCE(edge.joined_at, v_now),
              CASE WHEN p_mode = 'all_success' THEN 'result' ELSE 'outcome' END,
@@ -8335,10 +8335,10 @@ BEGIN
            bool_or(edge.joined_at IS NULL)
       INTO v_results, v_children, v_had_unjoined
       FROM jsonb_array_elements(p_children) WITH ORDINALITY input(item, ordinality)
-      JOIN workhorse.job_child edge
-        ON edge.parent_job_id = p_parent_job_id AND edge.child_name = input.item->>'name'
-      JOIN workhorse.job job ON job.id = edge.child_job_id
-      JOIN workhorse.job_outcome outcome ON outcome.job_id = edge.child_job_id
+      JOIN workhorse.task_child edge
+        ON edge.parent_task_id = p_parent_task_id AND edge.child_name = input.item->>'name'
+      JOIN workhorse.task task ON task.id = edge.child_task_id
+      JOIN workhorse.task_outcome outcome ON outcome.task_id = edge.child_task_id
       CROSS JOIN LATERAL (
         SELECT CASE WHEN p_mode = 'all_success' THEN outcome.result ELSE
           CASE outcome.state
@@ -8362,11 +8362,11 @@ BEGIN
       RETURN;
     END IF;
     IF v_had_unjoined THEN
-      UPDATE workhorse.job_child edge SET joined_at = v_now
-       WHERE edge.parent_job_id = p_parent_job_id AND edge.joined_at IS NULL;
-      INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+      UPDATE workhorse.task_child edge SET joined_at = v_now
+       WHERE edge.parent_task_id = p_parent_task_id AND edge.joined_at IS NULL;
+      INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
         VALUES (
-          p_parent_job_id, v_runtime.current_attempt, 'children_joined',
+          p_parent_task_id, v_runtime.current_attempt, 'children_joined',
           jsonb_build_object(
             'child_count', v_existing_count,
             'names', (SELECT jsonb_agg(item->>'name' ORDER BY ordinality)
@@ -8391,29 +8391,29 @@ BEGIN
       SELECT * INTO v_enqueue
         FROM workhorse.enqueue_many_v1(jsonb_build_array(v_item.item->'request'));
       IF v_enqueue.outcome <> 'accepted' THEN
-        RAISE EXCEPTION 'child enqueue must create one new job';
+        RAISE EXCEPTION 'child enqueue must create one new task';
       END IF;
-      INSERT INTO workhorse.job_child(
-        parent_job_id, child_job_id, child_name, request_fingerprint, created_at, created_as_set
+      INSERT INTO workhorse.task_child(
+        parent_task_id, child_task_id, child_name, request_fingerprint, created_at, created_as_set
       ) VALUES (
-        p_parent_job_id, v_enqueue.job_id, v_item.item->>'name', v_item.item->'request', v_now, true
+        p_parent_task_id, v_enqueue.task_id, v_item.item->>'name', v_item.item->'request', v_now, true
       );
-      INSERT INTO workhorse.job_dependency(
-        dependent_job_id, prerequisite_job_id, on_success, on_failure, on_cancellation, created_at
+      INSERT INTO workhorse.task_dependency(
+        dependent_task_id, prerequisite_task_id, on_success, on_failure, on_cancellation, created_at
       ) VALUES (
-        p_parent_job_id, v_enqueue.job_id, 'release',
+        p_parent_task_id, v_enqueue.task_id, 'release',
         CASE WHEN p_mode = 'settled' THEN 'release' ELSE 'fail' END,
         CASE WHEN p_mode = 'settled' THEN 'release' ELSE 'cancel' END,
         v_now
       );
-      INSERT INTO workhorse.job_event(job_id, event_type, details)
+      INSERT INTO workhorse.task_event(task_id, event_type, details)
         VALUES (
-          v_enqueue.job_id, 'parent_linked',
-          jsonb_build_object('parent_job_id', p_parent_job_id, 'name', v_item.item->>'name')
+          v_enqueue.task_id, 'parent_linked',
+          jsonb_build_object('parent_task_id', p_parent_task_id, 'name', v_item.item->>'name')
         );
     END LOOP;
 
-    UPDATE workhorse.job_runtime runtime
+    UPDATE workhorse.task_runtime runtime
        SET state = 'blocked', fence_token = 0, ready_at = NULL, sequence = NULL,
            worker_id = NULL, acquired_at = NULL, heartbeat_at = NULL, expires_at = NULL,
            wait_name = NULL, attempt_started_at = NULL,
@@ -8424,7 +8424,7 @@ BEGIN
              )
            ),
            attempt_timeout_at = NULL, error = NULL, updated_at = v_now
-     WHERE runtime.job_id = p_parent_job_id
+     WHERE runtime.task_id = p_parent_task_id
        AND runtime.state = 'active'
        AND runtime.worker_id = p_worker_id
        AND runtime.fence_token = p_fence_token
@@ -8436,20 +8436,20 @@ BEGIN
     END IF;
 
     SELECT jsonb_agg(jsonb_build_object(
-             'childJobId', edge.child_job_id,
+             'childTaskId', edge.child_task_id,
              'name', edge.child_name,
-             'type', job.job_type,
+             'type', task.task_type,
              'createdAt', edge.created_at,
              'joinedAt', edge.joined_at
            ) ORDER BY input.ordinality)
       INTO v_children
       FROM jsonb_array_elements(p_children) WITH ORDINALITY input(item, ordinality)
-      JOIN workhorse.job_child edge
-        ON edge.parent_job_id = p_parent_job_id AND edge.child_name = input.item->>'name'
-      JOIN workhorse.job job ON job.id = edge.child_job_id;
-    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+      JOIN workhorse.task_child edge
+        ON edge.parent_task_id = p_parent_task_id AND edge.child_name = input.item->>'name'
+      JOIN workhorse.task task ON task.id = edge.child_task_id;
+    INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
       VALUES (
-        p_parent_job_id, v_runtime.current_attempt, 'children_created',
+        p_parent_task_id, v_runtime.current_attempt, 'children_created',
         jsonb_build_object(
           'child_count', jsonb_array_length(p_children),
           'names', (SELECT jsonb_agg(item->>'name' ORDER BY ordinality)
@@ -8473,19 +8473,19 @@ $$;
 -- Dependents lock in identity order, so concurrent fan-in outcomes serialize at the one state
 -- transition boundary without repeating terminal evidence, FIFO allocation, or notifications.
 CREATE OR REPLACE FUNCTION workhorse.resolve_dependents_v1(
-  p_prerequisite_job_id uuid, p_prerequisite_state text
+  p_prerequisite_task_id uuid, p_prerequisite_state text
 )
 RETURNS integer
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_dependency workhorse.job_dependency%ROWTYPE;
-  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_dependency workhorse.task_dependency%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
   v_now timestamptz := clock_timestamp();
   v_count integer := 0;
   v_action text;
   v_final_action text;
-  v_final_prerequisite_job_id uuid;
+  v_final_prerequisite_task_id uuid;
   v_final_prerequisite_state text;
   v_error jsonb;
 BEGIN
@@ -8493,36 +8493,36 @@ BEGIN
     RAISE EXCEPTION 'prerequisite state must be succeeded, failed, or canceled';
   END IF;
   FOR v_dependency IN
-    SELECT dependency.* FROM workhorse.job_dependency dependency
-     WHERE dependency.prerequisite_job_id = p_prerequisite_job_id
+    SELECT dependency.* FROM workhorse.task_dependency dependency
+     WHERE dependency.prerequisite_task_id = p_prerequisite_task_id
        AND dependency.released_at IS NULL
-     ORDER BY dependency.dependent_job_id FOR UPDATE
+     ORDER BY dependency.dependent_task_id FOR UPDATE
   LOOP
-    SELECT * INTO v_runtime FROM workhorse.job_runtime runtime
-     WHERE runtime.job_id = v_dependency.dependent_job_id FOR UPDATE;
+    SELECT * INTO v_runtime FROM workhorse.task_runtime runtime
+     WHERE runtime.task_id = v_dependency.dependent_task_id FOR UPDATE;
     IF NOT FOUND OR v_runtime.state <> 'blocked' THEN CONTINUE; END IF;
     v_action := CASE p_prerequisite_state
       WHEN 'succeeded' THEN v_dependency.on_success
       WHEN 'failed' THEN v_dependency.on_failure
       WHEN 'canceled' THEN v_dependency.on_cancellation
     END;
-    UPDATE workhorse.job_dependency dependency
+    UPDATE workhorse.task_dependency dependency
        SET released_at = v_now, resolution = v_action
-     WHERE dependency.dependent_job_id = v_dependency.dependent_job_id
-       AND dependency.prerequisite_job_id = p_prerequisite_job_id
+     WHERE dependency.dependent_task_id = v_dependency.dependent_task_id
+       AND dependency.prerequisite_task_id = p_prerequisite_task_id
        AND dependency.released_at IS NULL;
     IF EXISTS (
-      SELECT 1 FROM workhorse.job_dependency dependency
-       WHERE dependency.dependent_job_id = v_dependency.dependent_job_id
+      SELECT 1 FROM workhorse.task_dependency dependency
+       WHERE dependency.dependent_task_id = v_dependency.dependent_task_id
          AND dependency.released_at IS NULL
     ) THEN CONTINUE; END IF;
-    SELECT dependency.resolution, dependency.prerequisite_job_id, outcome.state
-      INTO STRICT v_final_action, v_final_prerequisite_job_id, v_final_prerequisite_state
-      FROM workhorse.job_dependency dependency
-      JOIN workhorse.job_outcome outcome ON outcome.job_id = dependency.prerequisite_job_id
-     WHERE dependency.dependent_job_id = v_dependency.dependent_job_id
+    SELECT dependency.resolution, dependency.prerequisite_task_id, outcome.state
+      INTO STRICT v_final_action, v_final_prerequisite_task_id, v_final_prerequisite_state
+      FROM workhorse.task_dependency dependency
+      JOIN workhorse.task_outcome outcome ON outcome.task_id = dependency.prerequisite_task_id
+     WHERE dependency.dependent_task_id = v_dependency.dependent_task_id
      ORDER BY CASE dependency.resolution WHEN 'fail' THEN 0 WHEN 'cancel' THEN 1 ELSE 2 END,
-              dependency.prerequisite_job_id
+              dependency.prerequisite_task_id
      LIMIT 1;
     IF v_final_action IN ('fail', 'cancel') THEN
       v_error := jsonb_build_object(
@@ -8530,43 +8530,43 @@ BEGIN
         'message', CASE WHEN v_final_action = 'fail'
           THEN 'a prerequisite reached a terminal outcome rejected by dependency policy'
           ELSE 'a prerequisite reached a terminal outcome that canceled its dependent' END,
-        'prerequisite_job_id', v_final_prerequisite_job_id,
+        'prerequisite_task_id', v_final_prerequisite_task_id,
         'prerequisite_state', v_final_prerequisite_state,
         'policy_action', v_final_action
       );
-      DELETE FROM workhorse.job_runtime runtime
-       WHERE runtime.job_id = v_dependency.dependent_job_id AND runtime.state = 'blocked';
+      DELETE FROM workhorse.task_runtime runtime
+       WHERE runtime.task_id = v_dependency.dependent_task_id AND runtime.state = 'blocked';
       IF NOT FOUND THEN CONTINUE; END IF;
-      INSERT INTO workhorse.job_outcome(
-        job_id, state, current_attempt, fence_token, run_at, error, finished_at, updated_at,
+      INSERT INTO workhorse.task_outcome(
+        task_id, state, current_attempt, fence_token, run_at, error, finished_at, updated_at,
         history_through_at
       ) VALUES (
-        v_dependency.dependent_job_id,
+        v_dependency.dependent_task_id,
         CASE WHEN v_final_action = 'fail' THEN 'failed' ELSE 'canceled' END,
         v_runtime.current_attempt, 0, v_runtime.run_at, v_error, v_now, v_now, v_now
       );
-      INSERT INTO workhorse.job_event(job_id, event_type, details)
+      INSERT INTO workhorse.task_event(task_id, event_type, details)
         VALUES (
-          v_dependency.dependent_job_id,
+          v_dependency.dependent_task_id,
           CASE WHEN v_final_action = 'fail' THEN 'dependency_failed' ELSE 'dependency_canceled' END,
           v_error
         );
       v_count := v_count + 1;
       CONTINUE;
     END IF;
-    UPDATE workhorse.job_runtime runtime
+    UPDATE workhorse.task_runtime runtime
        SET state = CASE WHEN runtime.run_at <= v_now THEN 'ready' ELSE 'scheduled' END,
            ready_at = CASE WHEN runtime.run_at <= v_now THEN v_now END,
            sequence = CASE WHEN runtime.run_at <= v_now
              THEN nextval('workhorse.ready_sequence_seq') END,
            updated_at = v_now
-     WHERE runtime.job_id = v_dependency.dependent_job_id AND runtime.state = 'blocked'
+     WHERE runtime.task_id = v_dependency.dependent_task_id AND runtime.state = 'blocked'
     RETURNING * INTO v_runtime;
     IF NOT FOUND THEN CONTINUE; END IF;
 
-    INSERT INTO workhorse.job_event(job_id, event_type, details)
-      VALUES (v_runtime.job_id, 'dependency_released', jsonb_build_object(
-        'prerequisite_job_id', p_prerequisite_job_id, 'state', v_runtime.state,
+    INSERT INTO workhorse.task_event(task_id, event_type, details)
+      VALUES (v_runtime.task_id, 'dependency_released', jsonb_build_object(
+        'prerequisite_task_id', p_prerequisite_task_id, 'state', v_runtime.state,
         'reason', CASE p_prerequisite_state
           WHEN 'succeeded' THEN 'prerequisite_succeeded'
           WHEN 'failed' THEN 'prerequisite_failed_policy'
@@ -8575,61 +8575,61 @@ BEGIN
       ));
     v_count := v_count + 1;
     IF v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= v_now THEN
-      PERFORM workhorse.terminalize_deadline_v1(v_runtime.job_id);
+      PERFORM workhorse.terminalize_deadline_v1(v_runtime.task_id);
     ELSIF v_runtime.state = 'ready' THEN
-      PERFORM pg_notify('workhorse_jobs', v_runtime.queue_name);
+      PERFORM pg_notify('workhorse_tasks', v_runtime.queue_name);
     END IF;
   END LOOP;
   RETURN v_count;
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.release_dependents_v1(p_prerequisite_job_id uuid)
+CREATE OR REPLACE FUNCTION workhorse.release_dependents_v1(p_prerequisite_task_id uuid)
 RETURNS integer
 LANGUAGE sql
 AS $$
-  SELECT workhorse.resolve_dependents_v1(p_prerequisite_job_id, 'succeeded');
+  SELECT workhorse.resolve_dependents_v1(p_prerequisite_task_id, 'succeeded');
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.resolve_job_outcome_dependencies_v1()
+CREATE OR REPLACE FUNCTION workhorse.resolve_task_outcome_dependencies_v1()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  PERFORM workhorse.resolve_dependents_v1(NEW.job_id, NEW.state);
+  PERFORM workhorse.resolve_dependents_v1(NEW.task_id, NEW.state);
   RETURN NEW;
 END;
 $$;
 
-CREATE OR REPLACE TRIGGER job_outcome_resolve_dependencies_insert
-  AFTER INSERT ON workhorse.job_outcome
-  FOR EACH ROW EXECUTE FUNCTION workhorse.resolve_job_outcome_dependencies_v1();
+CREATE OR REPLACE TRIGGER task_outcome_resolve_dependencies_insert
+  AFTER INSERT ON workhorse.task_outcome
+  FOR EACH ROW EXECUTE FUNCTION workhorse.resolve_task_outcome_dependencies_v1();
 
 CREATE OR REPLACE FUNCTION workhorse.complete_v1(
-  p_job_id uuid, p_worker_id text, p_fence_token bigint, p_result jsonb DEFAULT 'null'::jsonb
+  p_task_id uuid, p_worker_id text, p_fence_token bigint, p_result jsonb DEFAULT 'null'::jsonb
 ) RETURNS boolean
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
   v_result_max_bytes integer;
 BEGIN
-  SELECT job.result_max_bytes INTO v_result_max_bytes
-    FROM workhorse.job_runtime runtime
-    JOIN workhorse.job job ON job.id = runtime.job_id
-   WHERE runtime.job_id = p_job_id AND runtime.state = 'active'
+  SELECT task.result_max_bytes INTO v_result_max_bytes
+    FROM workhorse.task_runtime runtime
+    JOIN workhorse.task task ON task.id = runtime.task_id
+   WHERE runtime.task_id = p_task_id AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id AND runtime.fence_token = p_fence_token
      AND runtime.expires_at > clock_timestamp()
      AND (runtime.deadline_at IS NULL OR runtime.deadline_at > clock_timestamp())
      AND (runtime.attempt_timeout_at IS NULL OR runtime.attempt_timeout_at > clock_timestamp())
      AND runtime.cancel_requested_at IS NULL
-   FOR UPDATE OF runtime, job;
+   FOR UPDATE OF runtime, task;
   IF NOT FOUND THEN RETURN false; END IF;
   IF octet_length(COALESCE(p_result, 'null'::jsonb)::text) > v_result_max_bytes THEN
     RAISE EXCEPTION 'result exceeds its configured size limit';
   END IF;
-  DELETE FROM workhorse.job_runtime r
-   WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
+  DELETE FROM workhorse.task_runtime r
+   WHERE r.task_id = p_task_id AND r.state = 'active' AND r.worker_id = p_worker_id
      AND r.fence_token = p_fence_token AND r.expires_at > clock_timestamp()
      AND (r.deadline_at IS NULL OR r.deadline_at > clock_timestamp())
      AND (r.attempt_timeout_at IS NULL OR r.attempt_timeout_at > clock_timestamp())
@@ -8637,33 +8637,33 @@ BEGIN
   RETURNING * INTO v_runtime;
   IF NOT FOUND THEN RETURN false; END IF;
 
-  INSERT INTO workhorse.job_outcome(
-    job_id, state, current_attempt, fence_token, run_at, result, history_through_at
+  INSERT INTO workhorse.task_outcome(
+    task_id, state, current_attempt, fence_token, run_at, result, history_through_at
   ) VALUES (
-    p_job_id, 'succeeded', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, p_result,
+    p_task_id, 'succeeded', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, p_result,
     clock_timestamp()
   );
   INSERT INTO workhorse.attempt_history(
-    job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at
+    task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at
   ) VALUES (
-    p_job_id, v_runtime.current_attempt, p_fence_token, p_worker_id, 'succeeded',
+    p_task_id, v_runtime.current_attempt, p_fence_token, p_worker_id, 'succeeded',
     v_runtime.attempt_started_at, v_runtime.acquired_at
   );
-  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
-    VALUES (p_job_id, v_runtime.current_attempt, 'succeeded', jsonb_build_object('fence_token', p_fence_token::text));
+  INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
+    VALUES (p_task_id, v_runtime.current_attempt, 'succeeded', jsonb_build_object('fence_token', p_fence_token::text));
   RETURN true;
 END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.fail_v1(
-  p_job_id uuid, p_worker_id text, p_fence_token bigint, p_error jsonb,
+  p_task_id uuid, p_worker_id text, p_fence_token bigint, p_error jsonb,
   p_retry_delay_ms integer DEFAULT NULL
 ) RETURNS text
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_runtime workhorse.job_runtime%ROWTYPE;
-  v_job workhorse.job%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
+  v_task workhorse.task%ROWTYPE;
   v_run_at timestamptz;
   v_state text;
   v_started_at timestamptz;
@@ -8671,35 +8671,35 @@ DECLARE
   v_retry record;
   v_error jsonb;
 BEGIN
-  SELECT * INTO v_runtime FROM workhorse.job_runtime r
-   WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
+  SELECT * INTO v_runtime FROM workhorse.task_runtime r
+   WHERE r.task_id = p_task_id AND r.state = 'active' AND r.worker_id = p_worker_id
      AND r.fence_token = p_fence_token
    FOR UPDATE;
   IF NOT FOUND OR v_runtime.expires_at <= clock_timestamp() THEN RETURN 'stale'; END IF;
   IF v_runtime.cancel_requested_at IS NOT NULL THEN RETURN 'cancel_requested'; END IF;
   IF v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= clock_timestamp() THEN
-    RETURN workhorse.expire_owned_v1(p_job_id, p_worker_id, p_fence_token);
+    RETURN workhorse.expire_owned_v1(p_task_id, p_worker_id, p_fence_token);
   END IF;
   IF v_runtime.attempt_timeout_at IS NOT NULL
      AND v_runtime.attempt_timeout_at <= clock_timestamp() THEN
-    RETURN workhorse.expire_owned_v1(p_job_id, p_worker_id, p_fence_token);
+    RETURN workhorse.expire_owned_v1(p_task_id, p_worker_id, p_fence_token);
   END IF;
-  SELECT * INTO STRICT v_job FROM workhorse.job j WHERE j.id = p_job_id;
+  SELECT * INTO STRICT v_task FROM workhorse.task j WHERE j.id = p_task_id;
   v_error := workhorse.redact_error_details_v1(
     p_error,
-    cardinality(v_job.payload_redact_keys) > 0 OR cardinality(v_job.result_redact_keys) > 0
+    cardinality(v_task.payload_redact_keys) > 0 OR cardinality(v_task.result_redact_keys) > 0
   );
 
-  IF v_runtime.current_attempt < v_job.max_attempts THEN
+  IF v_runtime.current_attempt < v_task.max_attempts THEN
     v_started_at := v_runtime.attempt_started_at;
     v_claimed_at := v_runtime.acquired_at;
     SELECT * INTO STRICT v_retry FROM workhorse.retry_delay_v1(
-      p_job_id, v_runtime.current_attempt, v_job.retry_policy,
+      p_task_id, v_runtime.current_attempt, v_task.retry_policy,
       v_runtime.previous_retry_delay_ms, p_retry_delay_ms, 'legacy-handler'
     );
     v_run_at := clock_timestamp() + make_interval(secs => v_retry.delay_ms::double precision / 1000.0);
     v_state := CASE WHEN v_retry.delay_ms <= 0 THEN 'ready' ELSE 'scheduled' END;
-    UPDATE workhorse.job_runtime r
+    UPDATE workhorse.task_runtime r
        SET state = v_state, current_attempt = r.current_attempt + 1, fence_token = 0,
            run_at = v_run_at,
            ready_at = CASE WHEN v_state = 'ready' THEN clock_timestamp() END,
@@ -8709,46 +8709,46 @@ BEGIN
            attempt_timeout_at = NULL,
            previous_retry_delay_ms = v_retry.next_previous_retry_delay_ms,
            error = v_error, updated_at = clock_timestamp()
-     WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
+     WHERE r.task_id = p_task_id AND r.state = 'active' AND r.worker_id = p_worker_id
        AND r.fence_token = p_fence_token AND r.expires_at > clock_timestamp()
        AND (r.deadline_at IS NULL OR r.deadline_at > clock_timestamp())
        AND (r.attempt_timeout_at IS NULL OR r.attempt_timeout_at > clock_timestamp())
     RETURNING * INTO v_runtime;
     IF NOT FOUND THEN RETURN 'stale'; END IF;
-    IF v_state = 'ready' THEN PERFORM pg_notify('workhorse_jobs', v_job.queue_name); END IF;
+    IF v_state = 'ready' THEN PERFORM pg_notify('workhorse_tasks', v_task.queue_name); END IF;
     INSERT INTO workhorse.attempt_history(
-      job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+      task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
     )
-      VALUES (p_job_id, v_runtime.current_attempt - 1, p_fence_token, p_worker_id, 'retry',
+      VALUES (p_task_id, v_runtime.current_attempt - 1, p_fence_token, p_worker_id, 'retry',
         v_started_at, v_claimed_at, v_error);
-    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
-      VALUES (p_job_id, v_runtime.current_attempt - 1, 'retry_scheduled',
+    INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
+      VALUES (p_task_id, v_runtime.current_attempt - 1, 'retry_scheduled',
         jsonb_build_object('next_attempt', v_runtime.current_attempt, 'run_at', v_run_at,
-          'error', v_error, 'retry_policy', v_job.retry_policy,
+          'error', v_error, 'retry_policy', v_task.retry_policy,
           'retry_delay_ms', v_retry.delay_ms, 'retry_delay_source', v_retry.source));
   ELSE
-    DELETE FROM workhorse.job_runtime r
-     WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
+    DELETE FROM workhorse.task_runtime r
+     WHERE r.task_id = p_task_id AND r.state = 'active' AND r.worker_id = p_worker_id
        AND r.fence_token = p_fence_token AND r.expires_at > clock_timestamp()
        AND (r.deadline_at IS NULL OR r.deadline_at > clock_timestamp())
        AND (r.attempt_timeout_at IS NULL OR r.attempt_timeout_at > clock_timestamp())
     RETURNING * INTO v_runtime;
     IF NOT FOUND THEN RETURN 'stale'; END IF;
     v_state := 'failed';
-    INSERT INTO workhorse.job_outcome(
-      job_id, state, current_attempt, fence_token, run_at, error, history_through_at
+    INSERT INTO workhorse.task_outcome(
+      task_id, state, current_attempt, fence_token, run_at, error, history_through_at
     ) VALUES (
-      p_job_id, 'failed', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, v_error,
+      p_task_id, 'failed', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, v_error,
       clock_timestamp()
     );
     INSERT INTO workhorse.attempt_history(
-      job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+      task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
     ) VALUES (
-      p_job_id, v_runtime.current_attempt, p_fence_token, p_worker_id, 'failed',
+      p_task_id, v_runtime.current_attempt, p_fence_token, p_worker_id, 'failed',
       v_runtime.attempt_started_at, v_runtime.acquired_at, v_error
     );
-    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
-      VALUES (p_job_id, v_runtime.current_attempt, 'failed', jsonb_build_object('error', v_error));
+    INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
+      VALUES (p_task_id, v_runtime.current_attempt, 'failed', jsonb_build_object('error', v_error));
   END IF;
   RETURN v_state;
 END;
@@ -8760,8 +8760,8 @@ CREATE OR REPLACE FUNCTION workhorse.recover_expired_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_runtime workhorse.job_runtime%ROWTYPE;
-  v_job workhorse.job%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
+  v_task workhorse.task%ROWTYPE;
   v_state text;
   v_run_at timestamptz;
   v_error jsonb := jsonb_build_object('name', 'LeaseExpired', 'message', 'worker lease expired');
@@ -8780,7 +8780,7 @@ BEGIN
   PERFORM set_config('workhorse.recovery_retried', '0', true);
   PERFORM set_config('workhorse.recovery_retry_dimensions', '[]', true);
   FOR v_runtime IN
-    SELECT runtime.* FROM workhorse.job_runtime runtime
+    SELECT runtime.* FROM workhorse.task_runtime runtime
      WHERE runtime.deadline_at IS NOT NULL AND runtime.deadline_at <= clock_timestamp()
        AND (
          runtime.state <> 'active'
@@ -8788,10 +8788,10 @@ BEGIN
          OR runtime.attempt_timeout_at > clock_timestamp()
          OR runtime.deadline_at <= runtime.attempt_timeout_at
        )
-     ORDER BY runtime.deadline_at, runtime.job_id FOR UPDATE SKIP LOCKED
+     ORDER BY runtime.deadline_at, runtime.task_id FOR UPDATE SKIP LOCKED
      LIMIT GREATEST(1, LEAST(p_limit, 10000))
   LOOP
-    IF workhorse.terminalize_deadline_v1(v_runtime.job_id) THEN
+    IF workhorse.terminalize_deadline_v1(v_runtime.task_id) THEN
       v_count := v_count + 1;
       v_notify_queues := array_append(v_notify_queues, v_runtime.queue_name);
     END IF;
@@ -8799,7 +8799,7 @@ BEGIN
 
   IF v_count < GREATEST(1, LEAST(p_limit, 10000)) THEN
     FOR v_runtime IN
-      SELECT runtime.* FROM workhorse.job_runtime runtime
+      SELECT runtime.* FROM workhorse.task_runtime runtime
        WHERE runtime.state = 'active' AND runtime.attempt_timeout_at IS NOT NULL
          AND runtime.attempt_timeout_at <= clock_timestamp()
          AND (
@@ -8807,19 +8807,19 @@ BEGIN
            OR runtime.deadline_at > clock_timestamp()
            OR runtime.attempt_timeout_at < runtime.deadline_at
          )
-       ORDER BY runtime.attempt_timeout_at, runtime.job_id FOR UPDATE SKIP LOCKED
+       ORDER BY runtime.attempt_timeout_at, runtime.task_id FOR UPDATE SKIP LOCKED
        LIMIT GREATEST(0, LEAST(p_limit, 10000) - v_count)
     LOOP
-      SELECT * INTO STRICT v_job FROM workhorse.job job WHERE job.id = v_runtime.job_id;
+      SELECT * INTO STRICT v_task FROM workhorse.task task WHERE task.id = v_runtime.task_id;
       IF workhorse.timeout_owned_v1(
-        v_runtime.job_id, v_runtime.worker_id, v_runtime.fence_token
+        v_runtime.task_id, v_runtime.worker_id, v_runtime.fence_token
       ) THEN
         v_count := v_count + 1;
-        v_notify_queues := array_append(v_notify_queues, v_job.queue_name);
-        IF v_runtime.current_attempt < v_job.max_attempts THEN
+        v_notify_queues := array_append(v_notify_queues, v_task.queue_name);
+        IF v_runtime.current_attempt < v_task.max_attempts THEN
           v_retried := v_retried + 1;
           v_retry_dimensions := v_retry_dimensions || jsonb_build_array(jsonb_build_object(
-            'queue', v_job.queue_name, 'type', v_job.job_type
+            'queue', v_task.queue_name, 'type', v_task.task_type
           ));
         END IF;
       END IF;
@@ -8835,13 +8835,13 @@ BEGIN
         FROM unnest(v_notify_queues) AS affected(queue_name)
        ORDER BY affected.queue_name
     LOOP
-      PERFORM pg_notify('workhorse_jobs', v_notify_queue);
+      PERFORM pg_notify('workhorse_tasks', v_notify_queue);
     END LOOP;
     RETURN v_count;
   END IF;
 
   FOR v_runtime IN
-    SELECT r.* FROM workhorse.job_runtime r
+    SELECT r.* FROM workhorse.task_runtime r
      WHERE r.state = 'active' AND r.expires_at <= clock_timestamp()
        AND (
          r.cancel_requested_at IS NOT NULL
@@ -8851,36 +8851,36 @@ BEGIN
          r.cancel_requested_at IS NOT NULL
          OR r.attempt_timeout_at IS NULL OR r.attempt_timeout_at > clock_timestamp()
        )
-     ORDER BY r.expires_at, r.job_id FOR UPDATE SKIP LOCKED
+     ORDER BY r.expires_at, r.task_id FOR UPDATE SKIP LOCKED
      LIMIT GREATEST(0, LEAST(p_limit, 10000) - v_count)
   LOOP
-    SELECT * INTO STRICT v_job FROM workhorse.job j WHERE j.id = v_runtime.job_id;
+    SELECT * INTO STRICT v_task FROM workhorse.task j WHERE j.id = v_runtime.task_id;
     IF v_runtime.cancel_requested_at IS NOT NULL THEN
       v_envelope := workhorse.cancellation_envelope_v1(
         v_runtime.cancel_requested_at, v_runtime.cancel_requested_by, v_runtime.cancel_reason
       );
-      DELETE FROM workhorse.job_runtime r
-       WHERE r.job_id = v_runtime.job_id AND r.state = 'active'
+      DELETE FROM workhorse.task_runtime r
+       WHERE r.task_id = v_runtime.task_id AND r.state = 'active'
          AND r.fence_token = v_runtime.fence_token AND r.expires_at <= clock_timestamp()
          AND r.cancel_requested_at IS NOT NULL;
       IF NOT FOUND THEN CONTINUE; END IF;
-      INSERT INTO workhorse.job_outcome(
-        job_id, state, current_attempt, fence_token, run_at, error, history_through_at
+      INSERT INTO workhorse.task_outcome(
+        task_id, state, current_attempt, fence_token, run_at, error, history_through_at
       )
         VALUES (
-          v_runtime.job_id, 'canceled', v_runtime.current_attempt, v_runtime.fence_token,
+          v_runtime.task_id, 'canceled', v_runtime.current_attempt, v_runtime.fence_token,
           v_runtime.run_at, v_envelope, clock_timestamp()
         );
       INSERT INTO workhorse.attempt_history(
-        job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+        task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
       ) VALUES (
-        v_runtime.job_id, v_runtime.current_attempt, v_runtime.fence_token,
+        v_runtime.task_id, v_runtime.current_attempt, v_runtime.fence_token,
         v_runtime.worker_id, 'canceled', v_runtime.attempt_started_at,
         v_runtime.acquired_at, v_envelope
       );
-      INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+      INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
         VALUES (
-          v_runtime.job_id,
+          v_runtime.task_id,
           v_runtime.current_attempt,
           'canceled',
           jsonb_build_object(
@@ -8893,19 +8893,19 @@ BEGIN
         );
       v_count := v_count + 1;
       v_expired_leases := v_expired_leases + 1;
-      v_notify_queues := array_append(v_notify_queues, v_job.queue_name);
+      v_notify_queues := array_append(v_notify_queues, v_task.queue_name);
       CONTINUE;
     END IF;
-    IF v_runtime.current_attempt < v_job.max_attempts THEN
+    IF v_runtime.current_attempt < v_task.max_attempts THEN
       SELECT * INTO STRICT v_retry FROM workhorse.retry_delay_v1(
-        v_runtime.job_id, v_runtime.current_attempt, v_job.retry_policy,
+        v_runtime.task_id, v_runtime.current_attempt, v_task.retry_policy,
         v_runtime.previous_retry_delay_ms, p_retry_delay_ms, 'lease-recovery-immediate'
       );
       v_retry_delay_ms := v_retry.delay_ms;
       v_retry_source := v_retry.source;
       v_run_at := clock_timestamp() + make_interval(secs => v_retry_delay_ms::double precision / 1000.0);
       v_state := CASE WHEN v_retry_delay_ms <= 0 THEN 'ready' ELSE 'scheduled' END;
-      UPDATE workhorse.job_runtime r
+      UPDATE workhorse.task_runtime r
          SET state = v_state, current_attempt = r.current_attempt + 1, fence_token = 0,
              run_at = v_run_at,
              ready_at = CASE WHEN v_state = 'ready' THEN clock_timestamp() END,
@@ -8915,41 +8915,41 @@ BEGIN
              attempt_timeout_at = NULL,
              previous_retry_delay_ms = v_retry.next_previous_retry_delay_ms,
              error = v_error, updated_at = clock_timestamp()
-       WHERE r.job_id = v_runtime.job_id AND r.state = 'active'
+       WHERE r.task_id = v_runtime.task_id AND r.state = 'active'
          AND r.fence_token = v_runtime.fence_token AND r.expires_at <= clock_timestamp();
       IF NOT FOUND THEN CONTINUE; END IF;
       v_retried := v_retried + 1;
       v_retry_dimensions := v_retry_dimensions || jsonb_build_array(jsonb_build_object(
-        'queue', v_job.queue_name, 'type', v_job.job_type
+        'queue', v_task.queue_name, 'type', v_task.task_type
       ));
     ELSE
       v_state := 'failed';
       v_retry_delay_ms := NULL;
       v_retry_source := 'terminal';
-      DELETE FROM workhorse.job_runtime r
-       WHERE r.job_id = v_runtime.job_id AND r.state = 'active'
+      DELETE FROM workhorse.task_runtime r
+       WHERE r.task_id = v_runtime.task_id AND r.state = 'active'
          AND r.fence_token = v_runtime.fence_token AND r.expires_at <= clock_timestamp();
       IF NOT FOUND THEN CONTINUE; END IF;
-      INSERT INTO workhorse.job_outcome(
-        job_id, state, current_attempt, fence_token, run_at, error, history_through_at
+      INSERT INTO workhorse.task_outcome(
+        task_id, state, current_attempt, fence_token, run_at, error, history_through_at
       ) VALUES (
-        v_runtime.job_id, 'failed', v_runtime.current_attempt, v_runtime.fence_token,
+        v_runtime.task_id, 'failed', v_runtime.current_attempt, v_runtime.fence_token,
         v_runtime.run_at, v_error, clock_timestamp()
       );
     END IF;
     INSERT INTO workhorse.attempt_history(
-      job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+      task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
     )
-      VALUES (v_runtime.job_id, v_runtime.current_attempt, v_runtime.fence_token, v_runtime.worker_id,
+      VALUES (v_runtime.task_id, v_runtime.current_attempt, v_runtime.fence_token, v_runtime.worker_id,
         'lease_expired', v_runtime.attempt_started_at, v_runtime.acquired_at, v_error);
-    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
-      VALUES (v_runtime.job_id, v_runtime.current_attempt, 'lease_expired',
+    INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
+      VALUES (v_runtime.task_id, v_runtime.current_attempt, 'lease_expired',
         jsonb_build_object('fence_token', v_runtime.fence_token::text, 'next_state', v_state,
-          'retry_policy', v_job.retry_policy, 'retry_delay_ms', v_retry_delay_ms,
+          'retry_policy', v_task.retry_policy, 'retry_delay_ms', v_retry_delay_ms,
           'retry_delay_source', v_retry_source));
     v_count := v_count + 1;
     v_expired_leases := v_expired_leases + 1;
-    v_notify_queues := array_append(v_notify_queues, v_job.queue_name);
+    v_notify_queues := array_append(v_notify_queues, v_task.queue_name);
   END LOOP;
   PERFORM set_config('workhorse.recovery_expired_leases', v_expired_leases::text, true);
   PERFORM set_config('workhorse.recovery_retried', v_retried::text, true);
@@ -8959,7 +8959,7 @@ BEGIN
       FROM unnest(v_notify_queues) AS affected(queue_name)
      ORDER BY affected.queue_name
   LOOP
-    PERFORM pg_notify('workhorse_jobs', v_notify_queue);
+    PERFORM pg_notify('workhorse_tasks', v_notify_queue);
   END LOOP;
   RETURN v_count;
 END;
@@ -9010,7 +9010,7 @@ BEGIN
   v_tick_started_at := clock_timestamp();
   UPDATE workhorse.maintenance_state
      SET last_started_at = v_tick_started_at, updated_at = v_tick_started_at
-   WHERE task_name = 'tick';
+   WHERE routine_name = 'tick';
 
   phase := 'promote';
   rows_affected := 0;
@@ -9052,7 +9052,7 @@ BEGIN
   IF NOT v_had_error THEN
     UPDATE workhorse.maintenance_state
        SET last_completed_at = clock_timestamp(), updated_at = clock_timestamp()
-     WHERE task_name = 'tick';
+     WHERE routine_name = 'tick';
   END IF;
 END;
 $$;
@@ -9067,8 +9067,8 @@ DECLARE
   v_count integer := 0;
   v_previous_lock_timeout text;
 BEGIN
-  IF p_parent NOT IN ('job_event', 'attempt_history') THEN
-    RAISE EXCEPTION 'history parent must be job_event or attempt_history';
+  IF p_parent NOT IN ('task_event', 'attempt_history') THEN
+    RAISE EXCEPTION 'history parent must be task_event or attempt_history';
   END IF;
   IF p_before IS NULL OR NOT isfinite(p_before) THEN RAISE EXCEPTION 'retention cutoff is required'; END IF;
   IF p_limit NOT BETWEEN 1 AND 52 THEN RAISE EXCEPTION 'partition limit must be between 1 and 52'; END IF;
@@ -9134,13 +9134,13 @@ DECLARE v_count integer;
 BEGIN
   IF p_before IS NULL OR NOT isfinite(p_before) THEN RAISE EXCEPTION 'retention cutoff is required'; END IF;
   IF p_limit NOT BETWEEN 1 AND 1000000 THEN RAISE EXCEPTION 'row limit must be between 1 and 1000000'; END IF;
-  IF p_parent = 'job_event' THEN
+  IF p_parent = 'task_event' THEN
     WITH candidates AS (
-      SELECT ctid FROM workhorse.job_event_default
+      SELECT ctid FROM workhorse.task_event_default
        WHERE occurred_at < p_before ORDER BY occurred_at, event_id
        FOR UPDATE SKIP LOCKED LIMIT p_limit
     )
-    DELETE FROM workhorse.job_event_default history USING candidates
+    DELETE FROM workhorse.task_event_default history USING candidates
      WHERE history.ctid = candidates.ctid;
   ELSIF p_parent = 'attempt_history' THEN
     WITH candidates AS (
@@ -9151,14 +9151,14 @@ BEGIN
     DELETE FROM workhorse.attempt_history_default history USING candidates
      WHERE history.ctid = candidates.ctid;
   ELSE
-    RAISE EXCEPTION 'history parent must be job_event or attempt_history';
+    RAISE EXCEPTION 'history parent must be task_event or attempt_history';
   END IF;
   GET DIAGNOSTICS v_count = ROW_COUNT;
   RETURN v_count;
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.prune_terminal_jobs_v1(
+CREATE OR REPLACE FUNCTION workhorse.prune_terminal_tasks_v1(
   p_identity_before timestamptz, p_outcome_before timestamptz,
   p_history_before timestamptz, p_limit integer
 ) RETURNS integer
@@ -9171,51 +9171,51 @@ BEGIN
      OR NOT isfinite(p_history_before) THEN
     RAISE EXCEPTION 'identity, outcome, and history cutoffs are required';
   END IF;
-  IF p_limit NOT BETWEEN 1 AND 100000 THEN RAISE EXCEPTION 'terminal job limit must be between 1 and 100000'; END IF;
+  IF p_limit NOT BETWEEN 1 AND 100000 THEN RAISE EXCEPTION 'terminal task limit must be between 1 and 100000'; END IF;
 
   WITH candidate_window AS MATERIALIZED (
-    SELECT job.id, outcome.finished_at
-      FROM workhorse.job job
-      JOIN workhorse.job_outcome outcome ON outcome.job_id = job.id
-     WHERE job.created_at < p_identity_before
+    SELECT task.id, outcome.finished_at
+      FROM workhorse.task task
+      JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
+     WHERE task.created_at < p_identity_before
        AND outcome.finished_at < p_outcome_before
        AND outcome.history_through_at < p_history_before
-       AND NOT EXISTS (SELECT 1 FROM workhorse.job_runtime runtime WHERE runtime.job_id = job.id)
-       AND NOT EXISTS (SELECT 1 FROM workhorse.job_event event WHERE event.job_id = job.id)
+       AND NOT EXISTS (SELECT 1 FROM workhorse.task_runtime runtime WHERE runtime.task_id = task.id)
+       AND NOT EXISTS (SELECT 1 FROM workhorse.task_event event WHERE event.task_id = task.id)
        AND NOT EXISTS (
-             SELECT 1 FROM workhorse.attempt_history attempt WHERE attempt.job_id = job.id
+             SELECT 1 FROM workhorse.attempt_history attempt WHERE attempt.task_id = task.id
            )
-     ORDER BY outcome.finished_at, job.id
-     FOR UPDATE OF job SKIP LOCKED
+     ORDER BY outcome.finished_at, task.id
+     FOR UPDATE OF task SKIP LOCKED
      LIMIT LEAST(p_limit * 4, 100000)
   ), candidates AS (
     SELECT candidate.id
       FROM candidate_window candidate
      WHERE NOT EXISTS (
              SELECT 1 FROM workhorse.schedule_occurrence occurrence
-              WHERE occurrence.job_id = candidate.id
+              WHERE occurrence.task_id = candidate.id
            )
        AND NOT EXISTS (
              SELECT 1 FROM workhorse.enqueue_idempotency idempotency
-              WHERE idempotency.job_id = candidate.id
+              WHERE idempotency.task_id = candidate.id
            )
        AND NOT EXISTS (
-             SELECT 1 FROM workhorse.job_redrive redrive
-              WHERE redrive.source_job_id = candidate.id
+             SELECT 1 FROM workhorse.task_redrive redrive
+              WHERE redrive.source_task_id = candidate.id
            )
        AND NOT EXISTS (
-             SELECT 1 FROM workhorse.job_dependency dependency
-              WHERE dependency.prerequisite_job_id = candidate.id
+             SELECT 1 FROM workhorse.task_dependency dependency
+              WHERE dependency.prerequisite_task_id = candidate.id
            )
        AND NOT EXISTS (
              SELECT 1
-               FROM workhorse.job_child edge
-               JOIN workhorse.job child ON child.id = edge.child_job_id
-               LEFT JOIN workhorse.job_outcome child_outcome
-                 ON child_outcome.job_id = edge.child_job_id
-              WHERE edge.parent_job_id = candidate.id
+               FROM workhorse.task_child edge
+               JOIN workhorse.task child ON child.id = edge.child_task_id
+               LEFT JOIN workhorse.task_outcome child_outcome
+                 ON child_outcome.task_id = edge.child_task_id
+              WHERE edge.parent_task_id = candidate.id
                 AND (
-                  child_outcome.job_id IS NULL
+                  child_outcome.task_id IS NULL
                   OR child.created_at >= p_identity_before
                   OR child_outcome.finished_at >= p_outcome_before
                   OR child_outcome.history_through_at >= p_history_before
@@ -9224,15 +9224,15 @@ BEGIN
      ORDER BY candidate.finished_at, candidate.id
      LIMIT p_limit
   ), deleted AS (
-    DELETE FROM workhorse.job job USING candidates WHERE job.id = candidates.id
-    RETURNING job.id
+    DELETE FROM workhorse.task task USING candidates WHERE task.id = candidates.id
+    RETURNING task.id
   ), result AS (
     SELECT count(*)::integer AS pruned,
            count(*) = 0 AND EXISTS (
              SELECT 1
                FROM candidate_window candidate
-               JOIN workhorse.job_dependency dependency
-                 ON dependency.prerequisite_job_id = candidate.id
+               JOIN workhorse.task_dependency dependency
+                 ON dependency.prerequisite_task_id = candidate.id
            ) AS dependency_starved
       FROM deleted
   ), recorded AS (
@@ -9240,7 +9240,7 @@ BEGIN
        SET terminal_prune_dependency_starved = result.dependency_starved,
            updated_at = clock_timestamp()
       FROM result
-     WHERE state.task_name = 'terminal_storage'
+     WHERE state.routine_name = 'terminal_storage'
     RETURNING result.pruned
   )
   SELECT pruned INTO STRICT v_count FROM recorded;
@@ -9258,19 +9258,19 @@ BEGIN
     RAISE EXCEPTION 'released dependency limit must be between 1 and 100000';
   END IF;
   WITH candidates AS MATERIALIZED (
-    SELECT dependency.dependent_job_id, dependency.prerequisite_job_id
-      FROM workhorse.job_dependency dependency
-      JOIN workhorse.job_outcome outcome ON outcome.job_id = dependency.dependent_job_id
+    SELECT dependency.dependent_task_id, dependency.prerequisite_task_id
+      FROM workhorse.task_dependency dependency
+      JOIN workhorse.task_outcome outcome ON outcome.task_id = dependency.dependent_task_id
      WHERE dependency.released_at IS NOT NULL
      ORDER BY dependency.released_at,
-              dependency.dependent_job_id,
-              dependency.prerequisite_job_id
+              dependency.dependent_task_id,
+              dependency.prerequisite_task_id
        FOR UPDATE OF dependency SKIP LOCKED
      LIMIT p_limit
   )
-  DELETE FROM workhorse.job_dependency dependency USING candidates
-   WHERE dependency.dependent_job_id = candidates.dependent_job_id
-     AND dependency.prerequisite_job_id = candidates.prerequisite_job_id;
+  DELETE FROM workhorse.task_dependency dependency USING candidates
+   WHERE dependency.dependent_task_id = candidates.dependent_task_id
+     AND dependency.prerequisite_task_id = candidates.prerequisite_task_id;
   GET DIAGNOSTICS v_count = ROW_COUNT;
   RETURN v_count;
 END;
@@ -9303,7 +9303,7 @@ BEGIN
    WHERE idempotency.idempotency_scope = candidates.idempotency_scope
      AND idempotency.idempotency_key_hash = candidates.idempotency_key_hash;
   GET DIAGNOSTICS v_count = ROW_COUNT;
-  SELECT job_identity_retention_days INTO v_purge_retention_days
+  SELECT task_identity_retention_days INTO v_purge_retention_days
     FROM workhorse.retention_policy WHERE singleton;
   IF v_purge_retention_days IS NOT NULL THEN
     WITH candidates AS MATERIALIZED (
@@ -9331,8 +9331,8 @@ AS $$
 DECLARE v_partitions_remain boolean;
 DECLARE v_default_rows_remain boolean;
 BEGIN
-  IF p_parent NOT IN ('job_event', 'attempt_history') THEN
-    RAISE EXCEPTION 'history parent must be job_event or attempt_history';
+  IF p_parent NOT IN ('task_event', 'attempt_history') THEN
+    RAISE EXCEPTION 'history parent must be task_event or attempt_history';
   END IF;
   IF p_before IS NULL OR NOT isfinite(p_before) THEN
     RAISE EXCEPTION 'retention cutoff is required';
@@ -9351,9 +9351,9 @@ BEGIN
              'TO \(''([^'']+)''\)'
            ))[1])::timestamptz <= p_before
   ) INTO v_partitions_remain;
-  IF p_parent = 'job_event' THEN
+  IF p_parent = 'task_event' THEN
     SELECT EXISTS (
-      SELECT 1 FROM workhorse.job_event_default WHERE occurred_at < p_before LIMIT 1
+      SELECT 1 FROM workhorse.task_event_default WHERE occurred_at < p_before LIMIT 1
     ) INTO v_default_rows_remain;
   ELSE
     SELECT EXISTS (
@@ -9388,7 +9388,7 @@ BEGIN
   END IF;
   SELECT * INTO STRICT v_policy FROM workhorse.maintenance_policy WHERE singleton;
   SELECT * INTO STRICT v_state FROM workhorse.maintenance_state
-   WHERE task_name = 'history_partitions' FOR UPDATE;
+   WHERE routine_name = 'history_partitions' FOR UPDATE;
   IF NOT p_force AND v_state.last_completed_at IS NOT NULL
      AND v_state.last_completed_at > p_now - make_interval(
        secs => v_policy.partition_preparation_interval_ms / 1000.0
@@ -9396,7 +9396,7 @@ BEGIN
     RETURN;
   END IF;
   UPDATE workhorse.maintenance_state SET last_started_at = p_now, updated_at = clock_timestamp()
-   WHERE task_name = 'history_partitions';
+   WHERE routine_name = 'history_partitions';
 
   phase := 'history_partitions';
   rows_affected := 0;
@@ -9406,7 +9406,7 @@ BEGIN
   BEGIN
     FOR v_day_offset IN 0..3 LOOP
       v_suffix := to_char(v_today + v_day_offset, 'YYYYMMDD');
-      IF to_regclass(format('workhorse.%I', 'job_event_' || v_suffix)) IS NULL
+      IF to_regclass(format('workhorse.%I', 'task_event_' || v_suffix)) IS NULL
          OR to_regclass(format('workhorse.%I', 'attempt_history_' || v_suffix)) IS NULL THEN
         PERFORM workhorse.create_history_day_v1(v_today + v_day_offset);
         rows_affected := rows_affected + 1;
@@ -9422,13 +9422,13 @@ BEGIN
   IF error IS NULL THEN
     UPDATE workhorse.maintenance_state
        SET last_completed_at = p_now, updated_at = clock_timestamp()
-     WHERE task_name = 'history_partitions';
+     WHERE routine_name = 'history_partitions';
   END IF;
   RETURN NEXT;
 END;
 $$;
 
--- Job type used when a bucket exceeds its group limit. Statistics stay bounded even if job types
+-- Task type used when a bucket exceeds its group limit. Statistics stay bounded even if task types
 -- are generated rather than declared, and the overflow stays attributed to its queue.
 CREATE OR REPLACE FUNCTION workhorse.stat_overflow_type_v1() RETURNS text
 LANGUAGE sql IMMUTABLE PARALLEL SAFE
@@ -9519,13 +9519,13 @@ $$;
 -- workhorse.stat_buckets_v1 evaluates it live for the minutes a rollup has not reached yet.
 --
 -- Sources are bucketed by the timestamp each grain is stamped with when it lands: enqueue events
--- and closed attempts by occurred_at, which is also the history partition key, and terminal jobs by
+-- and closed attempts by occurred_at, which is also the history partition key, and terminal tasks by
 -- finished_at. Bucketing by anything the row does not carry would make recomputation non-idempotent.
 CREATE OR REPLACE FUNCTION workhorse.aggregate_stats_v1(
   p_from timestamptz, p_to timestamptz, p_group_limit integer DEFAULT 200
 ) RETURNS TABLE (
-  bucket_start timestamptz, queue_name text, job_type text, enqueued integer,
-  job_succeeded integer, job_failed integer, job_canceled integer,
+  bucket_start timestamptz, queue_name text, task_type text, enqueued integer,
+  task_succeeded integer, task_failed integer, task_canceled integer,
   attempt_succeeded integer, attempt_failed integer, attempt_retry integer,
   attempt_lease_expired integer, attempt_canceled integer, attempt_other integer,
   attempt_duration_ms bigint,
@@ -9537,17 +9537,17 @@ AS $$
   WITH enqueue_source AS (
     SELECT date_bin('1 minute', event.occurred_at,
                     timestamp '2000-01-01' AT TIME ZONE 'UTC') AS bucket,
-           job.queue_name AS queue, job.job_type AS type,
+           task.queue_name AS queue, task.task_type AS type,
            count(*)::integer AS enqueued
-      FROM workhorse.job_event event
-      JOIN workhorse.job job ON job.id = event.job_id
+      FROM workhorse.task_event event
+      JOIN workhorse.task task ON task.id = event.task_id
      WHERE event.event_type = 'enqueued'
        AND event.occurred_at >= p_from AND event.occurred_at < p_to
      GROUP BY 1, 2, 3
   ), attempt_source AS (
     SELECT date_bin('1 minute', history.occurred_at,
                     timestamp '2000-01-01' AT TIME ZONE 'UTC') AS bucket,
-           job.queue_name AS queue, job.job_type AS type,
+           task.queue_name AS queue, task.task_type AS type,
            count(*) FILTER (WHERE history.outcome = 'succeeded')::integer AS attempt_succeeded,
            count(*) FILTER (WHERE history.outcome = 'failed')::integer AS attempt_failed,
            count(*) FILTER (WHERE history.outcome = 'retry')::integer AS attempt_retry,
@@ -9568,22 +9568,22 @@ AS $$
             ) FILTER (WHERE history.error IS NOT NULL))[1] AS last_error,
            max(history.finished_at) FILTER (WHERE history.error IS NOT NULL) AS last_error_at
       FROM workhorse.attempt_history history
-      JOIN workhorse.job job ON job.id = history.job_id
+      JOIN workhorse.task task ON task.id = history.task_id
      WHERE history.occurred_at >= p_from AND history.occurred_at < p_to
      GROUP BY 1, 2, 3
   ), wait_bin_source AS (
     SELECT date_bin('1 minute', claimed.occurred_at,
                     timestamp '2000-01-01' AT TIME ZONE 'UTC') AS bucket,
-           job.queue_name AS queue, job.job_type AS type,
+           task.queue_name AS queue, task.task_type AS type,
            workhorse.stat_sketch_index_v1(
              extract(epoch FROM claimed.occurred_at - enqueued.occurred_at) * 1000
            ) AS bin,
            count(*)::bigint AS samples
-      FROM workhorse.job_event claimed
-      JOIN workhorse.job_event enqueued ON enqueued.job_id = claimed.job_id
+      FROM workhorse.task_event claimed
+      JOIN workhorse.task_event enqueued ON enqueued.task_id = claimed.task_id
        AND enqueued.event_type = 'enqueued'
        AND enqueued.occurred_at <= claimed.occurred_at
-      JOIN workhorse.job job ON job.id = claimed.job_id
+      JOIN workhorse.task task ON task.id = claimed.task_id
      WHERE claimed.event_type = 'claimed' AND claimed.attempt = 1
        AND claimed.occurred_at >= p_from AND claimed.occurred_at < p_to
      GROUP BY 1, 2, 3, 4
@@ -9595,17 +9595,17 @@ AS $$
   ), outcome_source AS (
     SELECT date_bin('1 minute', outcome.finished_at,
                     timestamp '2000-01-01' AT TIME ZONE 'UTC') AS bucket,
-           job.queue_name AS queue, job.job_type AS type,
-           count(*) FILTER (WHERE outcome.state = 'succeeded')::integer AS job_succeeded,
-           count(*) FILTER (WHERE outcome.state = 'failed')::integer AS job_failed,
-           count(*) FILTER (WHERE outcome.state = 'canceled')::integer AS job_canceled
-      FROM workhorse.job_outcome outcome
-      JOIN workhorse.job job ON job.id = outcome.job_id
+           task.queue_name AS queue, task.task_type AS type,
+           count(*) FILTER (WHERE outcome.state = 'succeeded')::integer AS task_succeeded,
+           count(*) FILTER (WHERE outcome.state = 'failed')::integer AS task_failed,
+           count(*) FILTER (WHERE outcome.state = 'canceled')::integer AS task_canceled
+      FROM workhorse.task_outcome outcome
+      JOIN workhorse.task task ON task.id = outcome.task_id
      WHERE outcome.finished_at >= p_from AND outcome.finished_at < p_to
      GROUP BY 1, 2, 3
   ), measure AS (
     SELECT source.bucket, source.queue, source.type, source.enqueued,
-           0 AS job_succeeded, 0 AS job_failed, 0 AS job_canceled,
+           0 AS task_succeeded, 0 AS task_failed, 0 AS task_canceled,
            0 AS attempt_succeeded, 0 AS attempt_failed, 0 AS attempt_retry,
            0 AS attempt_lease_expired, 0 AS attempt_canceled, 0 AS attempt_other,
            0::bigint AS attempt_duration_ms,
@@ -9633,7 +9633,7 @@ AS $$
       FROM wait_source source
      UNION ALL
     SELECT source.bucket, source.queue, source.type, 0,
-           source.job_succeeded, source.job_failed, source.job_canceled,
+           source.task_succeeded, source.task_failed, source.task_canceled,
            0, 0, 0,
            0, 0, 0,
            0::bigint,
@@ -9643,9 +9643,9 @@ AS $$
   ), total AS (
     SELECT measure.bucket, measure.queue, measure.type,
            sum(measure.enqueued)::integer AS enqueued,
-           sum(measure.job_succeeded)::integer AS job_succeeded,
-           sum(measure.job_failed)::integer AS job_failed,
-           sum(measure.job_canceled)::integer AS job_canceled,
+           sum(measure.task_succeeded)::integer AS task_succeeded,
+           sum(measure.task_failed)::integer AS task_failed,
+           sum(measure.task_canceled)::integer AS task_canceled,
            sum(measure.attempt_succeeded)::integer AS attempt_succeeded,
            sum(measure.attempt_failed)::integer AS attempt_failed,
            sum(measure.attempt_retry)::integer AS attempt_retry,
@@ -9677,9 +9677,9 @@ AS $$
   ), folded AS (
     SELECT total.bucket, total.queue, fold.fold_type,
            sum(total.enqueued)::integer AS enqueued,
-           sum(total.job_succeeded)::integer AS job_succeeded,
-           sum(total.job_failed)::integer AS job_failed,
-           sum(total.job_canceled)::integer AS job_canceled,
+           sum(total.task_succeeded)::integer AS task_succeeded,
+           sum(total.task_failed)::integer AS task_failed,
+           sum(total.task_canceled)::integer AS task_canceled,
            sum(total.attempt_succeeded)::integer AS attempt_succeeded,
            sum(total.attempt_failed)::integer AS attempt_failed,
            sum(total.attempt_retry)::integer AS attempt_retry,
@@ -9698,7 +9698,7 @@ AS $$
      GROUP BY 1, 2, 3
   )
   SELECT folded.bucket, folded.queue, folded.fold_type, folded.enqueued,
-         folded.job_succeeded, folded.job_failed, folded.job_canceled,
+         folded.task_succeeded, folded.task_failed, folded.task_canceled,
          folded.attempt_succeeded, folded.attempt_failed, folded.attempt_retry,
          folded.attempt_lease_expired, folded.attempt_canceled, folded.attempt_other,
          folded.attempt_duration_ms,
@@ -9713,8 +9713,8 @@ $$;
 CREATE OR REPLACE FUNCTION workhorse.stat_buckets_v1(
   p_from timestamptz, p_to timestamptz
 ) RETURNS TABLE (
-  bucket_start timestamptz, queue_name text, job_type text, enqueued bigint,
-  job_succeeded bigint, job_failed bigint, job_canceled bigint,
+  bucket_start timestamptz, queue_name text, task_type text, enqueued bigint,
+  task_succeeded bigint, task_failed bigint, task_canceled bigint,
   attempt_succeeded bigint, attempt_failed bigint, attempt_retry bigint,
   attempt_lease_expired bigint, attempt_canceled bigint, attempt_other bigint,
   attempt_duration_ms numeric, wait_sketch jsonb,
@@ -9735,18 +9735,18 @@ AS $$
              THEN p_from ELSE date_bin('1 day', p_from,
                timestamp '2000-01-01' AT TIME ZONE 'UTC') + interval '1 day' END AS day_start,
            date_bin('1 day', p_to, timestamp '2000-01-01' AT TIME ZONE 'UTC') AS day_end,
-           (SELECT state.rolled_up_through FROM workhorse.job_stat_state state WHERE singleton)
+           (SELECT state.rolled_up_through FROM workhorse.task_stat_state state WHERE singleton)
              AS minute_watermark
       FROM selected
   ), stored AS (
-    SELECT bucket.bucket_start, bucket.queue_name, bucket.job_type,
-           bucket.enqueued::bigint, bucket.job_succeeded::bigint, bucket.job_failed::bigint,
-           bucket.job_canceled::bigint, bucket.attempt_succeeded::bigint,
+    SELECT bucket.bucket_start, bucket.queue_name, bucket.task_type,
+           bucket.enqueued::bigint, bucket.task_succeeded::bigint, bucket.task_failed::bigint,
+           bucket.task_canceled::bigint, bucket.attempt_succeeded::bigint,
            bucket.attempt_failed::bigint, bucket.attempt_retry::bigint,
            bucket.attempt_lease_expired::bigint, bucket.attempt_canceled::bigint,
            bucket.attempt_other::bigint, bucket.attempt_duration_ms::numeric,
            bucket.wait_sketch, bucket.last_attempt_at, bucket.last_error, bucket.last_error_at
-      FROM workhorse.job_stat_bucket bucket, boundary
+      FROM workhorse.task_stat_bucket bucket, boundary
      WHERE bucket.bucket_start >= p_from
        AND bucket.bucket_start < LEAST(p_to, boundary.minute_watermark)
        AND (
@@ -9755,13 +9755,13 @@ AS $$
          OR bucket.bucket_start >= boundary.hour_end
        )
     UNION ALL
-    SELECT bucket.bucket_start, bucket.queue_name, bucket.job_type,
-           bucket.enqueued, bucket.job_succeeded, bucket.job_failed, bucket.job_canceled,
+    SELECT bucket.bucket_start, bucket.queue_name, bucket.task_type,
+           bucket.enqueued, bucket.task_succeeded, bucket.task_failed, bucket.task_canceled,
            bucket.attempt_succeeded, bucket.attempt_failed, bucket.attempt_retry,
            bucket.attempt_lease_expired, bucket.attempt_canceled, bucket.attempt_other,
            bucket.attempt_duration_ms, bucket.wait_sketch,
            bucket.last_attempt_at, bucket.last_error, bucket.last_error_at
-      FROM workhorse.job_stat_bucket_hour bucket, boundary
+      FROM workhorse.task_stat_bucket_hour bucket, boundary
      WHERE boundary.use_hour
        AND bucket.bucket_start >= boundary.hour_start AND bucket.bucket_start < boundary.hour_end
        AND (
@@ -9770,32 +9770,32 @@ AS $$
          OR bucket.bucket_start >= boundary.day_end
        )
     UNION ALL
-    SELECT bucket.bucket_start, bucket.queue_name, bucket.job_type,
-           bucket.enqueued, bucket.job_succeeded, bucket.job_failed, bucket.job_canceled,
+    SELECT bucket.bucket_start, bucket.queue_name, bucket.task_type,
+           bucket.enqueued, bucket.task_succeeded, bucket.task_failed, bucket.task_canceled,
            bucket.attempt_succeeded, bucket.attempt_failed, bucket.attempt_retry,
            bucket.attempt_lease_expired, bucket.attempt_canceled, bucket.attempt_other,
            bucket.attempt_duration_ms, bucket.wait_sketch,
            bucket.last_attempt_at, bucket.last_error, bucket.last_error_at
-      FROM workhorse.job_stat_bucket_day bucket, boundary
+      FROM workhorse.task_stat_bucket_day bucket, boundary
      WHERE boundary.use_day
        AND bucket.bucket_start >= boundary.day_start AND bucket.bucket_start < boundary.day_end
   )
   SELECT * FROM stored
   UNION ALL
-  SELECT live.bucket_start, live.queue_name, live.job_type, live.enqueued::bigint,
-         live.job_succeeded::bigint, live.job_failed::bigint, live.job_canceled::bigint,
+  SELECT live.bucket_start, live.queue_name, live.task_type, live.enqueued::bigint,
+         live.task_succeeded::bigint, live.task_failed::bigint, live.task_canceled::bigint,
          live.attempt_succeeded::bigint, live.attempt_failed::bigint, live.attempt_retry::bigint,
          live.attempt_lease_expired::bigint, live.attempt_canceled::bigint,
          live.attempt_other::bigint, live.attempt_duration_ms::numeric, live.wait_sketch,
          live.last_attempt_at, live.last_error, live.last_error_at
     FROM workhorse.aggregate_stats_v1(
            GREATEST(p_from, (
-             SELECT state.rolled_up_through FROM workhorse.job_stat_state state WHERE state.singleton
+             SELECT state.rolled_up_through FROM workhorse.task_stat_state state WHERE state.singleton
            )),
            p_to
          ) live
    WHERE p_to > (
-           SELECT state.rolled_up_through FROM workhorse.job_stat_state state WHERE state.singleton
+           SELECT state.rolled_up_through FROM workhorse.task_stat_state state WHERE state.singleton
          )
 $$;
 
@@ -9813,7 +9813,7 @@ CREATE OR REPLACE FUNCTION workhorse.rollup_stats_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE v_started_at timestamptz;
-DECLARE v_state workhorse.job_stat_state%ROWTYPE;
+DECLARE v_state workhorse.task_stat_state%ROWTYPE;
 DECLARE v_policy workhorse.retention_policy%ROWTYPE;
 DECLARE v_maintenance workhorse.maintenance_policy%ROWTYPE;
 DECLARE v_from timestamptz;
@@ -9835,7 +9835,7 @@ DECLARE v_inserted integer; BEGIN
     RETURN;
   END IF;
   SELECT * INTO STRICT v_maintenance FROM workhorse.maintenance_policy WHERE singleton;
-  SELECT * INTO STRICT v_state FROM workhorse.job_stat_state WHERE singleton FOR UPDATE;
+  SELECT * INTO STRICT v_state FROM workhorse.task_stat_state WHERE singleton FOR UPDATE;
   SELECT * INTO STRICT v_policy FROM workhorse.retention_policy WHERE singleton;
   -- The cadence, recompute window, and group limit are maintenance policy, not caller options:
   -- a fleet shares one statistics contract, and a zero interval opts the whole fleet out while
@@ -9863,11 +9863,11 @@ DECLARE v_inserted integer; BEGIN
     -- Catching up after an outage advances in bounded passes rather than in one long transaction.
     v_to := LEAST(v_closed, v_from + make_interval(mins => p_max_buckets));
     IF v_to > v_from THEN
-      DELETE FROM workhorse.job_stat_bucket
+      DELETE FROM workhorse.task_stat_bucket
        WHERE bucket_start >= v_from AND bucket_start < v_to;
-      INSERT INTO workhorse.job_stat_bucket (
-        bucket_start, queue_name, job_type, enqueued,
-        job_succeeded, job_failed, job_canceled,
+      INSERT INTO workhorse.task_stat_bucket (
+        bucket_start, queue_name, task_type, enqueued,
+        task_succeeded, task_failed, task_canceled,
         attempt_succeeded, attempt_failed, attempt_retry,
         attempt_lease_expired, attempt_canceled, attempt_other,
         attempt_duration_ms, wait_sketch, last_attempt_at, last_error, last_error_at
@@ -9881,20 +9881,20 @@ DECLARE v_inserted integer; BEGIN
       );
       v_hour_to := date_bin('1 hour', v_to, timestamp '2000-01-01' AT TIME ZONE 'UTC');
       IF v_hour_to > v_hour_from THEN
-        DELETE FROM workhorse.job_stat_bucket_hour
+        DELETE FROM workhorse.task_stat_bucket_hour
          WHERE bucket_start >= v_hour_from AND bucket_start < v_hour_to;
-        INSERT INTO workhorse.job_stat_bucket_hour (
-          bucket_start, queue_name, job_type, enqueued,
-          job_succeeded, job_failed, job_canceled,
+        INSERT INTO workhorse.task_stat_bucket_hour (
+          bucket_start, queue_name, task_type, enqueued,
+          task_succeeded, task_failed, task_canceled,
           attempt_succeeded, attempt_failed, attempt_retry,
           attempt_lease_expired, attempt_canceled, attempt_other,
           attempt_duration_ms, wait_sketch, last_attempt_at, last_error, last_error_at
         )
         SELECT date_bin('1 hour', bucket.bucket_start,
                         timestamp '2000-01-01' AT TIME ZONE 'UTC'),
-               bucket.queue_name, bucket.job_type,
-               sum(bucket.enqueued), sum(bucket.job_succeeded), sum(bucket.job_failed),
-               sum(bucket.job_canceled), sum(bucket.attempt_succeeded),
+               bucket.queue_name, bucket.task_type,
+               sum(bucket.enqueued), sum(bucket.task_succeeded), sum(bucket.task_failed),
+               sum(bucket.task_canceled), sum(bucket.attempt_succeeded),
                sum(bucket.attempt_failed), sum(bucket.attempt_retry),
                sum(bucket.attempt_lease_expired), sum(bucket.attempt_canceled),
                sum(bucket.attempt_other), sum(bucket.attempt_duration_ms),
@@ -9903,7 +9903,7 @@ DECLARE v_inserted integer; BEGIN
                (array_agg(bucket.last_error ORDER BY bucket.last_error_at DESC NULLS LAST)
                  FILTER (WHERE bucket.last_error IS NOT NULL))[1],
                max(bucket.last_error_at)
-          FROM workhorse.job_stat_bucket bucket
+          FROM workhorse.task_stat_bucket bucket
          WHERE bucket.bucket_start >= v_hour_from AND bucket.bucket_start < v_hour_to
          GROUP BY 1, 2, 3;
         GET DIAGNOSTICS v_inserted = ROW_COUNT;
@@ -9918,20 +9918,20 @@ DECLARE v_inserted integer; BEGIN
       );
       v_day_to := date_bin('1 day', v_hour_to, timestamp '2000-01-01' AT TIME ZONE 'UTC');
       IF v_day_to > v_day_from THEN
-        DELETE FROM workhorse.job_stat_bucket_day
+        DELETE FROM workhorse.task_stat_bucket_day
          WHERE bucket_start >= v_day_from AND bucket_start < v_day_to;
-        INSERT INTO workhorse.job_stat_bucket_day (
-          bucket_start, queue_name, job_type, enqueued,
-          job_succeeded, job_failed, job_canceled,
+        INSERT INTO workhorse.task_stat_bucket_day (
+          bucket_start, queue_name, task_type, enqueued,
+          task_succeeded, task_failed, task_canceled,
           attempt_succeeded, attempt_failed, attempt_retry,
           attempt_lease_expired, attempt_canceled, attempt_other,
           attempt_duration_ms, wait_sketch, last_attempt_at, last_error, last_error_at
         )
         SELECT date_bin('1 day', bucket.bucket_start,
                         timestamp '2000-01-01' AT TIME ZONE 'UTC'),
-               bucket.queue_name, bucket.job_type,
-               sum(bucket.enqueued), sum(bucket.job_succeeded), sum(bucket.job_failed),
-               sum(bucket.job_canceled), sum(bucket.attempt_succeeded),
+               bucket.queue_name, bucket.task_type,
+               sum(bucket.enqueued), sum(bucket.task_succeeded), sum(bucket.task_failed),
+               sum(bucket.task_canceled), sum(bucket.attempt_succeeded),
                sum(bucket.attempt_failed), sum(bucket.attempt_retry),
                sum(bucket.attempt_lease_expired), sum(bucket.attempt_canceled),
                sum(bucket.attempt_other), sum(bucket.attempt_duration_ms),
@@ -9940,7 +9940,7 @@ DECLARE v_inserted integer; BEGIN
                (array_agg(bucket.last_error ORDER BY bucket.last_error_at DESC NULLS LAST)
                  FILTER (WHERE bucket.last_error IS NOT NULL))[1],
                max(bucket.last_error_at)
-          FROM workhorse.job_stat_bucket_hour bucket
+          FROM workhorse.task_stat_bucket_hour bucket
          WHERE bucket.bucket_start >= v_day_from AND bucket.bucket_start < v_day_to
          GROUP BY 1, 2, 3;
         GET DIAGNOSTICS v_inserted = ROW_COUNT;
@@ -9949,14 +9949,14 @@ DECLARE v_inserted integer; BEGIN
         v_day_to := v_state.daily_rolled_up_through;
       END IF;
 
-      UPDATE workhorse.job_stat_state
+      UPDATE workhorse.task_stat_state
          SET rolled_up_through = v_to,
              hourly_rolled_up_through = GREATEST(hourly_rolled_up_through, v_hour_to),
              daily_rolled_up_through = GREATEST(daily_rolled_up_through, v_day_to),
              last_run_at = p_now, updated_at = clock_timestamp()
        WHERE singleton;
     ELSE
-      UPDATE workhorse.job_stat_state
+      UPDATE workhorse.task_stat_state
          SET last_run_at = p_now, updated_at = clock_timestamp()
        WHERE singleton;
     END IF;
@@ -9977,7 +9977,7 @@ DECLARE v_inserted integer; BEGIN
   v_started_at := clock_timestamp(); BEGIN
     WITH expired AS (
       SELECT bucket.ctid
-        FROM workhorse.job_stat_bucket bucket
+        FROM workhorse.task_stat_bucket bucket
        WHERE bucket.bucket_start < p_now - make_interval(
          days => LEAST(COALESCE(v_policy.statistics_retention_days, 2), 2)
        )
@@ -9985,13 +9985,13 @@ DECLARE v_inserted integer; BEGIN
          FOR UPDATE SKIP LOCKED
        LIMIT v_policy.statistics_rows_per_pass
     )
-    DELETE FROM workhorse.job_stat_bucket bucket USING expired
+    DELETE FROM workhorse.task_stat_bucket bucket USING expired
      WHERE bucket.ctid = expired.ctid;
     GET DIAGNOSTICS rows_affected = ROW_COUNT;
 
     WITH expired AS (
       SELECT bucket.ctid
-        FROM workhorse.job_stat_bucket_hour bucket
+        FROM workhorse.task_stat_bucket_hour bucket
        WHERE bucket.bucket_start < p_now - make_interval(
          days => LEAST(COALESCE(v_policy.statistics_retention_days, 90), 90)
        )
@@ -9999,7 +9999,7 @@ DECLARE v_inserted integer; BEGIN
          FOR UPDATE SKIP LOCKED
        LIMIT v_policy.statistics_rows_per_pass
     )
-    DELETE FROM workhorse.job_stat_bucket_hour bucket USING expired
+    DELETE FROM workhorse.task_stat_bucket_hour bucket USING expired
      WHERE bucket.ctid = expired.ctid;
     GET DIAGNOSTICS v_inserted = ROW_COUNT;
     rows_affected := rows_affected + v_inserted;
@@ -10007,14 +10007,14 @@ DECLARE v_inserted integer; BEGIN
     IF v_policy.statistics_retention_days IS NOT NULL THEN
       WITH expired AS (
         SELECT bucket.ctid
-          FROM workhorse.job_stat_bucket_day bucket
+          FROM workhorse.task_stat_bucket_day bucket
          WHERE bucket.bucket_start < p_now
                - make_interval(days => v_policy.statistics_retention_days)
          ORDER BY bucket.bucket_start
            FOR UPDATE SKIP LOCKED
          LIMIT v_policy.statistics_rows_per_pass
       )
-      DELETE FROM workhorse.job_stat_bucket_day bucket USING expired
+      DELETE FROM workhorse.task_stat_bucket_day bucket USING expired
        WHERE bucket.ctid = expired.ctid;
       GET DIAGNOSTICS v_inserted = ROW_COUNT;
       rows_affected := rows_affected + v_inserted;
@@ -10063,7 +10063,7 @@ BEGIN
   SELECT * INTO STRICT v_policy FROM workhorse.retention_policy WHERE singleton;
   SELECT * INTO STRICT v_maintenance FROM workhorse.maintenance_policy WHERE singleton;
   SELECT * INTO STRICT v_state FROM workhorse.maintenance_state
-   WHERE task_name = 'history_retention' FOR UPDATE;
+   WHERE routine_name = 'history_retention' FOR UPDATE;
   v_local_now := p_now AT TIME ZONE v_maintenance.timezone;
   IF NOT p_force AND (
     v_local_now::time(0) < v_maintenance.history_retention_local_time
@@ -10072,9 +10072,9 @@ BEGIN
     RETURN;
   END IF;
   UPDATE workhorse.maintenance_state SET last_started_at = p_now, updated_at = clock_timestamp()
-   WHERE task_name = 'history_retention';
+   WHERE routine_name = 'history_retention';
   v_event_before := date_trunc('day', p_now AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-    - make_interval(days => COALESCE(v_policy.job_event_retention_days, 0));
+    - make_interval(days => COALESCE(v_policy.task_event_retention_days, 0));
   v_attempt_before := date_trunc('day', p_now AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
     - make_interval(days => COALESCE(v_policy.attempt_history_retention_days, 0));
   v_occurrence_before := p_now
@@ -10084,7 +10084,7 @@ BEGIN
   -- holds history instead: the cutoff waits, retention reports itself incomplete, and the growing
   -- retention lag is what surfaces on the health page.
   SELECT state.rolled_up_through INTO v_rolled_up_through
-    FROM workhorse.job_stat_state state WHERE state.singleton;
+    FROM workhorse.task_stat_state state WHERE state.singleton;
   IF v_rolled_up_through IS NOT NULL THEN
     v_event_before := LEAST(v_event_before, v_rolled_up_through);
     v_attempt_before := LEAST(v_attempt_before, v_rolled_up_through);
@@ -10096,12 +10096,12 @@ BEGIN
   error := NULL;
   v_started_at := clock_timestamp();
   BEGIN
-    IF v_policy.job_event_retention_days IS NOT NULL THEN
+    IF v_policy.task_event_retention_days IS NOT NULL THEN
       rows_affected := workhorse.retire_history_partitions_v1(
-        'job_event', v_event_before, v_policy.history_partitions_per_pass
+        'task_event', v_event_before, v_policy.history_partitions_per_pass
       );
       rows_affected := rows_affected + workhorse.prune_default_history_v1(
-        'job_event', v_event_before, v_policy.default_partition_rows_per_pass
+        'task_event', v_event_before, v_policy.default_partition_rows_per_pass
       );
     END IF;
   EXCEPTION WHEN OTHERS THEN
@@ -10157,8 +10157,8 @@ BEGIN
 
   IF v_success THEN
     v_complete := (
-      v_policy.job_event_retention_days IS NULL
-      OR workhorse.history_retention_complete_v1('job_event', v_event_before)
+      v_policy.task_event_retention_days IS NULL
+      OR workhorse.history_retention_complete_v1('task_event', v_event_before)
     ) AND (
       v_policy.attempt_history_retention_days IS NULL
       OR workhorse.history_retention_complete_v1('attempt_history', v_attempt_before)
@@ -10176,7 +10176,7 @@ BEGIN
              last_completed_local_date = v_local_now::date,
              history_retained_before = GREATEST(history_retained_before, v_safe_before),
              updated_at = clock_timestamp()
-       WHERE task_name = 'history_retention';
+       WHERE routine_name = 'history_retention';
     END IF;
   END IF;
 END;
@@ -10206,13 +10206,13 @@ BEGIN
     RETURN QUERY VALUES
       ('enqueue_idempotency'::text, 0, 0, true, NULL::jsonb),
       ('released_dependencies'::text, 0, 0, true, NULL::jsonb),
-      ('terminal_jobs'::text, 0, 0, true, NULL::jsonb);
+      ('terminal_tasks'::text, 0, 0, true, NULL::jsonb);
     RETURN;
   END IF;
   SELECT * INTO STRICT v_policy FROM workhorse.retention_policy WHERE singleton;
   SELECT * INTO STRICT v_maintenance FROM workhorse.maintenance_policy WHERE singleton;
   SELECT * INTO STRICT v_state FROM workhorse.maintenance_state
-   WHERE task_name = 'terminal_storage' FOR UPDATE;
+   WHERE routine_name = 'terminal_storage' FOR UPDATE;
   IF NOT p_force AND v_state.last_completed_at IS NOT NULL
      AND v_state.last_completed_at > p_now - make_interval(
        secs => v_maintenance.terminal_cleanup_interval_ms / 1000.0
@@ -10220,9 +10220,9 @@ BEGIN
     RETURN;
   END IF;
   SELECT history_retained_before INTO v_history_before
-    FROM workhorse.maintenance_state WHERE task_name = 'history_retention';
+    FROM workhorse.maintenance_state WHERE routine_name = 'history_retention';
   UPDATE workhorse.maintenance_state SET last_started_at = p_now, updated_at = clock_timestamp()
-   WHERE task_name = 'terminal_storage';
+   WHERE routine_name = 'terminal_storage';
 
   phase := 'enqueue_idempotency';
   rows_affected := 0;
@@ -10231,7 +10231,7 @@ BEGIN
   v_started_at := clock_timestamp();
   BEGIN
     rows_affected := workhorse.prune_enqueue_idempotency_v1(
-      p_now, v_policy.terminal_job_prune_limit
+      p_now, v_policy.terminal_task_prune_limit
     );
   EXCEPTION WHEN OTHERS THEN
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
@@ -10248,7 +10248,7 @@ BEGIN
   v_started_at := clock_timestamp();
   BEGIN
     rows_affected := workhorse.prune_released_dependencies_v1(
-      v_policy.terminal_job_prune_limit
+      v_policy.terminal_task_prune_limit
     );
   EXCEPTION WHEN OTHERS THEN
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
@@ -10259,25 +10259,25 @@ BEGIN
   );
   RETURN NEXT;
 
-  phase := 'terminal_jobs';
+  phase := 'terminal_tasks';
   rows_affected := 0;
   error := NULL;
   v_started_at := clock_timestamp();
   BEGIN
-    IF v_policy.job_identity_retention_days IS NOT NULL AND v_history_before IS NOT NULL THEN
-      v_identity_before := p_now - make_interval(days => v_policy.job_identity_retention_days);
+    IF v_policy.task_identity_retention_days IS NOT NULL AND v_history_before IS NOT NULL THEN
+      v_identity_before := p_now - make_interval(days => v_policy.task_identity_retention_days);
       v_outcome_before := p_now - make_interval(days => v_policy.terminal_outcome_retention_days);
-      rows_affected := workhorse.prune_terminal_jobs_v1(
+      rows_affected := workhorse.prune_terminal_tasks_v1(
         v_identity_before,
         v_outcome_before,
         v_history_before,
-        v_policy.terminal_job_prune_limit
+        v_policy.terminal_task_prune_limit
       );
     ELSE
       UPDATE workhorse.maintenance_state
          SET terminal_prune_dependency_starved = false,
              updated_at = clock_timestamp()
-       WHERE task_name = 'terminal_storage';
+       WHERE routine_name = 'terminal_storage';
     END IF;
   EXCEPTION WHEN OTHERS THEN
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
@@ -10289,13 +10289,13 @@ BEGIN
   IF v_success THEN
     UPDATE workhorse.maintenance_state
        SET last_completed_at = p_now, updated_at = clock_timestamp()
-     WHERE task_name = 'terminal_storage';
+     WHERE routine_name = 'terminal_storage';
   END IF;
   RETURN NEXT;
 END;
 $$;
 
--- Run every slow maintenance task in one database-owned order so each language worker participates
+-- Run every slow maintenance routine in one database-owned order so each language worker participates
 -- in the same housekeeping contract. The individual functions retain their own cadence gates and
 -- advisory locks, and report their expected per-phase failures as telemetry rows. Registry pruning
 -- remains best-effort so its failure cannot reject an otherwise successful maintenance pass.
@@ -10340,9 +10340,9 @@ DECLARE
   v_start timestamptz := p_day::timestamp AT TIME ZONE 'UTC';
   v_end timestamptz := (p_day + 1)::timestamp AT TIME ZONE 'UTC';
   v_suffix text := to_char(p_day, 'YYYYMMDD');
-  v_event_partition text := 'job_event_' || v_suffix;
+  v_event_partition text := 'task_event_' || v_suffix;
   v_attempt_partition text := 'attempt_history_' || v_suffix;
-  v_event_staging text := 'workhorse_job_event_' || v_suffix;
+  v_event_staging text := 'workhorse_task_event_' || v_suffix;
   v_attempt_staging text := 'workhorse_attempt_history_' || v_suffix;
   v_event_exists boolean;
   v_attempt_exists boolean;
@@ -10352,23 +10352,23 @@ BEGIN
   v_attempt_exists := to_regclass(format('workhorse.%I', v_attempt_partition)) IS NOT NULL;
   IF v_event_exists AND v_attempt_exists THEN RETURN; END IF;
 
-  -- Lifecycle transitions insert attempt history before job events. Take the partitioned-parent
+  -- Lifecycle transitions insert attempt history before task events. Take the partitioned-parent
   -- locks in that order before either CREATE TABLE can acquire them implicitly, otherwise a
   -- transition and paired partition creation can each hold the relation the other needs.
   LOCK TABLE ONLY workhorse.attempt_history IN ACCESS EXCLUSIVE MODE;
-  LOCK TABLE ONLY workhorse.job_event IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE ONLY workhorse.task_event IN ACCESS EXCLUSIVE MODE;
   LOCK TABLE workhorse.attempt_history_default IN ACCESS EXCLUSIVE MODE;
-  LOCK TABLE workhorse.job_event_default IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE workhorse.task_event_default IN ACCESS EXCLUSIVE MODE;
   IF NOT v_event_exists THEN
     EXECUTE format(
-      'CREATE TEMP TABLE %I ON COMMIT DROP AS SELECT * FROM workhorse.job_event_default WHERE occurred_at >= %L AND occurred_at < %L',
+      'CREATE TEMP TABLE %I ON COMMIT DROP AS SELECT * FROM workhorse.task_event_default WHERE occurred_at >= %L AND occurred_at < %L',
       v_event_staging, v_start, v_end);
-    DELETE FROM workhorse.job_event_default WHERE occurred_at >= v_start AND occurred_at < v_end;
+    DELETE FROM workhorse.task_event_default WHERE occurred_at >= v_start AND occurred_at < v_end;
     EXECUTE format(
-      'CREATE TABLE workhorse.%I PARTITION OF workhorse.job_event FOR VALUES FROM (%L) TO (%L)',
+      'CREATE TABLE workhorse.%I PARTITION OF workhorse.task_event FOR VALUES FROM (%L) TO (%L)',
       v_event_partition, v_start, v_end);
     EXECUTE format(
-      'INSERT INTO workhorse.%I (event_id, job_id, attempt, event_type, details, occurred_at) SELECT event_id, job_id, attempt, event_type, details, occurred_at FROM %I',
+      'INSERT INTO workhorse.%I (event_id, task_id, attempt, event_type, details, occurred_at) SELECT event_id, task_id, attempt, event_type, details, occurred_at FROM %I',
       v_event_partition, v_event_staging);
     EXECUTE format('DROP TABLE %I', v_event_staging);
   END IF;
@@ -10382,7 +10382,7 @@ BEGIN
       'CREATE TABLE workhorse.%I PARTITION OF workhorse.attempt_history FOR VALUES FROM (%L) TO (%L)',
       v_attempt_partition, v_start, v_end);
     EXECUTE format(
-      'INSERT INTO workhorse.%I (attempt_id, job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at, error, occurred_at) SELECT attempt_id, job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at, error, occurred_at FROM %I',
+      'INSERT INTO workhorse.%I (attempt_id, task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at, error, occurred_at) SELECT attempt_id, task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at, error, occurred_at FROM %I',
       v_attempt_partition, v_attempt_staging);
     EXECUTE format('DROP TABLE %I', v_attempt_staging);
   END IF;
@@ -10402,23 +10402,23 @@ BEGIN
   END IF;
   PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:history-day:' || v_start, 0));
   LOCK TABLE ONLY workhorse.attempt_history IN ACCESS EXCLUSIVE MODE;
-  LOCK TABLE ONLY workhorse.job_event IN ACCESS EXCLUSIVE MODE;
-  EXECUTE format('DROP TABLE IF EXISTS workhorse.%I', 'job_event_' || v_suffix);
+  LOCK TABLE ONLY workhorse.task_event IN ACCESS EXCLUSIVE MODE;
+  EXECUTE format('DROP TABLE IF EXISTS workhorse.%I', 'task_event_' || v_suffix);
   EXECUTE format('DROP TABLE IF EXISTS workhorse.%I', 'attempt_history_' || v_suffix);
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.list_jobs_v1(
+CREATE OR REPLACE FUNCTION workhorse.list_tasks_v1(
   p_filter jsonb,
   p_limit integer,
   p_cursor_created_at timestamptz,
-  p_cursor_job_id uuid,
+  p_cursor_task_id uuid,
   p_cursor_signature text,
   p_payload_projection jsonb
 ) RETURNS TABLE (
-  job_id uuid,
+  task_id uuid,
   queue_name text,
-  job_type text,
+  task_type text,
   concurrency_key text,
   priority integer,
   tags text[],
@@ -10583,9 +10583,9 @@ BEGIN
     'payloadProjection', v_normalized_projection
   )::text), 16);
 
-  IF (p_cursor_created_at IS NULL) <> (p_cursor_job_id IS NULL)
+  IF (p_cursor_created_at IS NULL) <> (p_cursor_task_id IS NULL)
      OR (p_cursor_created_at IS NULL) <> (p_cursor_signature IS NULL) THEN
-    RAISE EXCEPTION 'cursor timestamp, job id, and signature must be provided together';
+    RAISE EXCEPTION 'cursor timestamp, task id, and signature must be provided together';
   END IF;
   IF p_cursor_created_at IS NOT NULL THEN
     IF NOT isfinite(p_cursor_created_at) THEN RAISE EXCEPTION 'cursor timestamp must be finite'; END IF;
@@ -10599,56 +10599,56 @@ BEGIN
 
   RETURN QUERY
   WITH candidates AS MATERIALIZED (
-    SELECT query_row.job_id, query_row.queue_name, query_row.job_type,
+    SELECT query_row.task_id, query_row.queue_name, query_row.task_type,
            lifecycle.state, lifecycle.current_attempt, lifecycle.run_at,
            query_row.created_at, lifecycle.updated_at,
            lifecycle.cancel_requested_at, lifecycle.cancel_requested_by,
            lifecycle.cancel_reason
-    FROM workhorse.job_query query_row
+    FROM workhorse.task_query query_row
     JOIN LATERAL (
       SELECT runtime.state, runtime.current_attempt, runtime.run_at, runtime.updated_at,
              runtime.cancel_requested_at, runtime.cancel_requested_by, runtime.cancel_reason
-        FROM workhorse.job_runtime runtime
-       WHERE runtime.job_id = query_row.job_id
+        FROM workhorse.task_runtime runtime
+       WHERE runtime.task_id = query_row.task_id
       UNION ALL
       SELECT outcome.state, outcome.current_attempt, outcome.run_at, outcome.updated_at,
              CASE WHEN outcome.state = 'canceled'
                THEN NULLIF(outcome.error->>'requested_at', '')::timestamptz END,
              CASE WHEN outcome.state = 'canceled' THEN outcome.error->>'requested_by' END,
              CASE WHEN outcome.state = 'canceled' THEN outcome.error->>'reason' END
-        FROM workhorse.job_outcome outcome
-       WHERE outcome.job_id = query_row.job_id
+        FROM workhorse.task_outcome outcome
+       WHERE outcome.task_id = query_row.task_id
     ) lifecycle ON true
     WHERE (v_queue IS NULL OR query_row.queue_name = v_queue)
-      AND (v_type IS NULL OR query_row.job_type = v_type)
+      AND (v_type IS NULL OR query_row.task_type = v_type)
       AND (v_states IS NULL OR lifecycle.state = ANY(v_states))
       AND (v_created_after IS NULL OR query_row.created_at >= v_created_after)
       AND (v_created_before IS NULL OR query_row.created_at < v_created_before)
       AND (p_cursor_created_at IS NULL
-        OR (query_row.created_at, query_row.job_id) < (p_cursor_created_at, p_cursor_job_id))
-    ORDER BY query_row.created_at DESC, query_row.job_id DESC
+        OR (query_row.created_at, query_row.task_id) < (p_cursor_created_at, p_cursor_task_id))
+    ORDER BY query_row.created_at DESC, query_row.task_id DESC
     LIMIT p_limit + 1
   ), page AS MATERIALIZED (
     SELECT candidate.*
     FROM candidates candidate
-    ORDER BY candidate.created_at DESC, candidate.job_id DESC
+    ORDER BY candidate.created_at DESC, candidate.task_id DESC
     LIMIT p_limit
   ), page_meta AS (
     SELECT count(*) > p_limit AS has_more FROM candidates
   )
   SELECT
-    page.job_id,
+    page.task_id,
     page.queue_name,
-    page.job_type,
-    job.concurrency_key,
-    job.priority,
-    job.tags,
+    page.task_type,
+    task.concurrency_key,
+    task.priority,
+    task.tags,
     page.state,
     page.current_attempt,
-    job.max_attempts,
-    job.retry_policy,
-    job.deadline_at,
-    job.execution_timeout_ms,
+    task.max_attempts,
+    task.retry_policy,
+    task.deadline_at,
+    task.execution_timeout_ms,
     page.run_at,
     page.cancel_requested_at,
     page.cancel_requested_by,
@@ -10667,23 +10667,23 @@ BEGIN
     page.created_at,
     v_signature
   FROM page
-  JOIN workhorse.job job ON job.id = page.job_id
+  JOIN workhorse.task task ON task.id = page.task_id
   CROSS JOIN page_meta
   LEFT JOIN LATERAL (
     SELECT redacted.payload, octet_length(redacted.payload::text)::integer AS payload_bytes
     FROM (
       SELECT workhorse.redact_top_level_keys_v1(
-        job.payload, job.payload_redact_keys || v_redact_keys
+        task.payload, task.payload_redact_keys || v_redact_keys
       ) AS payload
     ) redacted
     WHERE v_include
   ) payload_value ON true
-  ORDER BY page.created_at DESC, page.job_id DESC;
+  ORDER BY page.created_at DESC, page.task_id DESC;
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.list_job_timeline_v1(
-  p_job_id uuid,
+CREATE OR REPLACE FUNCTION workhorse.list_task_timeline_v1(
+  p_task_id uuid,
   p_limit integer,
   p_cursor_occurred_at timestamptz,
   p_cursor_kind text,
@@ -10691,7 +10691,7 @@ CREATE OR REPLACE FUNCTION workhorse.list_job_timeline_v1(
 ) RETURNS TABLE (
   kind text,
   record_id uuid,
-  job_id uuid,
+  task_id uuid,
   priority integer,
   occurred_at timestamptz,
   attempt integer,
@@ -10713,7 +10713,7 @@ AS $$
 DECLARE
   v_cursor_rank integer;
 BEGIN
-  IF p_job_id IS NULL THEN RAISE EXCEPTION 'job_id is required'; END IF;
+  IF p_task_id IS NULL THEN RAISE EXCEPTION 'task_id is required'; END IF;
   IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 1000 THEN
     RAISE EXCEPTION 'limit must be between 1 and 1000';
   END IF;
@@ -10736,7 +10736,7 @@ BEGIN
     SELECT
       'event'::text AS kind,
       event.event_id AS record_id,
-      event.job_id,
+      event.task_id,
       event.occurred_at,
       event.attempt,
       event.event_type,
@@ -10749,8 +10749,8 @@ BEGIN
       NULL::timestamptz AS finished_at,
       NULL::jsonb AS error,
       1 AS kind_rank
-    FROM workhorse.job_event event
-    WHERE event.job_id = p_job_id
+    FROM workhorse.task_event event
+    WHERE event.task_id = p_task_id
       AND (p_cursor_occurred_at IS NULL
         OR (event.occurred_at, 1, event.event_id)
           < (p_cursor_occurred_at, v_cursor_rank, p_cursor_record_id))
@@ -10758,7 +10758,7 @@ BEGIN
     SELECT
       'attempt'::text,
       history.attempt_id,
-      history.job_id,
+      history.task_id,
       history.occurred_at,
       history.attempt,
       NULL::text,
@@ -10772,7 +10772,7 @@ BEGIN
       history.error,
       0 AS kind_rank
     FROM workhorse.attempt_history history
-    WHERE history.job_id = p_job_id
+    WHERE history.task_id = p_task_id
       AND (p_cursor_occurred_at IS NULL
         OR (history.occurred_at, 0, history.attempt_id)
           < (p_cursor_occurred_at, v_cursor_rank, p_cursor_record_id))
@@ -10788,8 +10788,8 @@ BEGIN
   SELECT
     page.kind,
     page.record_id,
-    page.job_id,
-    job.priority,
+    page.task_id,
+    task.priority,
     page.occurred_at,
     page.attempt,
     page.event_type,
@@ -10804,14 +10804,14 @@ BEGIN
     page_meta.has_more,
     page.occurred_at
   FROM page
-  JOIN workhorse.job job ON job.id = page.job_id
+  JOIN workhorse.task task ON task.id = page.task_id
   CROSS JOIN page_meta
   ORDER BY page.occurred_at DESC, page.kind_rank DESC, page.record_id DESC;
 END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.wait_for_human_v1(
-  p_job_id uuid,
+  p_task_id uuid,
   p_worker_id text,
   p_fence_token bigint,
   p_token_name text,
@@ -10821,8 +10821,8 @@ CREATE OR REPLACE FUNCTION workhorse.wait_for_human_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_runtime workhorse.job_runtime%ROWTYPE;
-  v_wait workhorse.job_human_wait%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
+  v_wait workhorse.task_human_wait%ROWTYPE;
   v_wait_exists boolean;
   v_now timestamptz;
   v_timeout_at timestamptz;
@@ -10844,11 +10844,11 @@ BEGIN
   END IF;
 
   PERFORM pg_advisory_xact_lock(hashtextextended(
-    'workhorse:human-wait:' || p_job_id::text || ':' || p_token_name, 0
+    'workhorse:human-wait:' || p_task_id::text || ':' || p_token_name, 0
   ));
   SELECT * INTO v_wait
-    FROM workhorse.job_human_wait stored
-   WHERE stored.job_id = p_job_id AND stored.token_name = p_token_name;
+    FROM workhorse.task_human_wait stored
+   WHERE stored.task_id = p_task_id AND stored.token_name = p_token_name;
   v_wait_exists := FOUND;
   IF v_wait_exists AND v_wait.completed_at IS NULL THEN
     IF v_wait.worker_id IS DISTINCT FROM p_worker_id
@@ -10865,8 +10865,8 @@ BEGIN
   END IF;
 
   SELECT * INTO v_runtime
-    FROM workhorse.job_runtime runtime
-   WHERE runtime.job_id = p_job_id
+    FROM workhorse.task_runtime runtime
+   WHERE runtime.task_id = p_task_id
      AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id
      AND runtime.fence_token = p_fence_token
@@ -10889,27 +10889,27 @@ BEGIN
       RETURN QUERY VALUES ('conflict'::text, NULL::jsonb);
       RETURN;
     END IF;
-    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
       VALUES (
-        p_job_id, v_runtime.current_attempt, 'human_wait_replayed',
+        p_task_id, v_runtime.current_attempt, 'human_wait_replayed',
         jsonb_build_object('name', p_token_name, 'completed_at', v_wait.completed_at)
       );
     RETURN QUERY VALUES ('completed'::text, v_wait.result);
     RETURN;
   END IF;
 
-  IF (SELECT count(*) FROM workhorse.job_human_wait stored WHERE stored.job_id = p_job_id) >= 1000 THEN
+  IF (SELECT count(*) FROM workhorse.task_human_wait stored WHERE stored.task_id = p_task_id) >= 1000 THEN
     RETURN QUERY VALUES ('limit_exceeded'::text, NULL::jsonb);
     RETURN;
   END IF;
 
-  INSERT INTO workhorse.job_human_wait(
-    job_id, token_name, context, attempt, fence_token, worker_id, claimed_at, timeout_at
+  INSERT INTO workhorse.task_human_wait(
+    task_id, token_name, context, attempt, fence_token, worker_id, claimed_at, timeout_at
   ) VALUES (
-    p_job_id, p_token_name, p_context, v_runtime.current_attempt, p_fence_token,
+    p_task_id, p_token_name, p_context, v_runtime.current_attempt, p_fence_token,
     p_worker_id, v_runtime.acquired_at, v_timeout_at
   );
-  UPDATE workhorse.job_runtime runtime
+  UPDATE workhorse.task_runtime runtime
      SET state = 'scheduled', run_at = '9999-12-31 00:00:00+00'::timestamptz,
          fence_token = 0, ready_at = NULL, sequence = NULL, worker_id = NULL,
          acquired_at = NULL, heartbeat_at = NULL, expires_at = NULL,
@@ -10922,7 +10922,7 @@ BEGIN
          ),
          attempt_timeout_at = NULL, deadline_at = v_timeout_at,
          error = NULL, updated_at = clock_timestamp()
-   WHERE runtime.job_id = p_job_id
+   WHERE runtime.task_id = p_task_id
      AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id
      AND runtime.fence_token = p_fence_token
@@ -10930,15 +10930,15 @@ BEGIN
      AND (runtime.deadline_at IS NULL OR runtime.deadline_at > clock_timestamp())
      AND (runtime.attempt_timeout_at IS NULL OR runtime.attempt_timeout_at > clock_timestamp());
   IF NOT FOUND THEN
-    DELETE FROM workhorse.job_human_wait stored
-     WHERE stored.job_id = p_job_id AND stored.token_name = p_token_name;
+    DELETE FROM workhorse.task_human_wait stored
+     WHERE stored.task_id = p_task_id AND stored.token_name = p_token_name;
     RETURN QUERY VALUES ('stale'::text, NULL::jsonb);
     RETURN;
   END IF;
 
-  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+  INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
     VALUES (
-      p_job_id, v_runtime.current_attempt, 'human_wait_created',
+      p_task_id, v_runtime.current_attempt, 'human_wait_created',
       jsonb_build_object(
         'name', p_token_name, 'fence_token', p_fence_token::text,
         'context_bytes', octet_length(p_context::text)
@@ -10949,7 +10949,7 @@ END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.complete_human_wait_v1(
-  p_job_id uuid,
+  p_task_id uuid,
   p_token_name text,
   p_result jsonb,
   p_idempotency_key text,
@@ -10963,8 +10963,8 @@ CREATE OR REPLACE FUNCTION workhorse.complete_human_wait_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_wait workhorse.job_human_wait%ROWTYPE;
-  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_wait workhorse.task_human_wait%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
   v_key_hash bytea;
   v_key_digest text;
   v_fingerprint jsonb;
@@ -10988,26 +10988,26 @@ BEGIN
   END IF;
 
   v_key_hash := workhorse.idempotency_key_hash_v1(
-    'human-wait:' || p_job_id::text || ':' || p_token_name, p_idempotency_key
+    'human-wait:' || p_task_id::text || ':' || p_token_name, p_idempotency_key
   );
   v_key_digest := left(encode(v_key_hash, 'hex'), 12);
   v_fingerprint := jsonb_build_object('result', p_result, 'completedBy', p_completed_by);
   PERFORM pg_advisory_xact_lock(hashtextextended(
-    'workhorse:human-wait:' || p_job_id::text || ':' || p_token_name, 0
+    'workhorse:human-wait:' || p_task_id::text || ':' || p_token_name, 0
   ));
 
-  IF NOT EXISTS (SELECT 1 FROM workhorse.job WHERE id = p_job_id) THEN
+  IF NOT EXISTS (SELECT 1 FROM workhorse.task WHERE id = p_task_id) THEN
     RETURN QUERY VALUES ('not_found'::text, NULL::jsonb, NULL::timestamptz, NULL::text);
     RETURN;
   END IF;
   SELECT * INTO v_wait
-    FROM workhorse.job_human_wait stored
-   WHERE stored.job_id = p_job_id AND stored.token_name = p_token_name
+    FROM workhorse.task_human_wait stored
+   WHERE stored.task_id = p_task_id AND stored.token_name = p_token_name
    FOR UPDATE;
   IF NOT FOUND THEN
-    INSERT INTO workhorse.job_event(job_id, event_type, details)
+    INSERT INTO workhorse.task_event(task_id, event_type, details)
       VALUES (
-        p_job_id, 'human_wait_rejected',
+        p_task_id, 'human_wait_rejected',
         jsonb_build_object(
           'name', p_token_name, 'reason', 'not_waiting', 'completed_by', p_completed_by,
           'idempotency_key_digest', v_key_digest
@@ -11032,9 +11032,9 @@ BEGIN
       v_reason := 'already_completed';
       status := 'already_completed';
     END IF;
-    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
       VALUES (
-        p_job_id, v_wait.attempt, 'human_wait_rejected',
+        p_task_id, v_wait.attempt, 'human_wait_rejected',
         jsonb_build_object(
           'name', p_token_name, 'reason', v_reason, 'completed_by', p_completed_by,
           'idempotency_key_digest', v_key_digest
@@ -11045,17 +11045,17 @@ BEGIN
   END IF;
 
   SELECT * INTO v_runtime
-    FROM workhorse.job_runtime runtime
-   WHERE runtime.job_id = p_job_id
+    FROM workhorse.task_runtime runtime
+   WHERE runtime.task_id = p_task_id
      AND runtime.state = 'scheduled'
      AND runtime.wait_name = p_token_name
      AND runtime.current_attempt = v_wait.attempt
    FOR UPDATE;
   v_now := clock_timestamp();
   IF NOT FOUND OR (v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= v_now) THEN
-    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
       VALUES (
-        p_job_id, v_wait.attempt, 'human_wait_rejected',
+        p_task_id, v_wait.attempt, 'human_wait_rejected',
         jsonb_build_object(
           'name', p_token_name, 'reason', 'stale', 'completed_by', p_completed_by,
           'idempotency_key_digest', v_key_digest
@@ -11065,50 +11065,50 @@ BEGIN
     RETURN;
   END IF;
 
-  UPDATE workhorse.job_human_wait stored
+  UPDATE workhorse.task_human_wait stored
      SET result = p_result, idempotency_key_hash = v_key_hash,
          request_fingerprint = v_fingerprint, completed_by = p_completed_by, completed_at = v_now
-   WHERE stored.job_id = p_job_id AND stored.token_name = p_token_name
+   WHERE stored.task_id = p_task_id AND stored.token_name = p_token_name
    RETURNING * INTO v_wait;
-  UPDATE workhorse.job_runtime runtime
+  UPDATE workhorse.task_runtime runtime
      SET state = 'ready', run_at = v_now, ready_at = v_now,
          sequence = nextval('workhorse.ready_sequence_seq'), wait_name = NULL,
-         deadline_at = (SELECT job.deadline_at FROM workhorse.job job WHERE job.id = p_job_id),
+         deadline_at = (SELECT task.deadline_at FROM workhorse.task task WHERE task.id = p_task_id),
          updated_at = v_now
-   WHERE runtime.job_id = p_job_id;
-  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+   WHERE runtime.task_id = p_task_id;
+  INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
     VALUES (
-      p_job_id, v_wait.attempt, 'human_wait_completed',
+      p_task_id, v_wait.attempt, 'human_wait_completed',
       jsonb_build_object(
         'name', p_token_name, 'completed_by', p_completed_by,
         'idempotency_key_digest', v_key_digest, 'result_bytes', octet_length(p_result::text)
       )
     );
-  PERFORM pg_notify('workhorse_jobs', v_runtime.queue_name);
+  PERFORM pg_notify('workhorse_tasks', v_runtime.queue_name);
   RETURN QUERY VALUES ('completed'::text, v_wait.result, v_wait.completed_at, v_wait.completed_by);
 END;
 $$;
 
 CREATE OR REPLACE VIEW workhorse.dashboard_signal_wait_v1 AS
-  SELECT wait.job_id, job.queue_name, job.job_type, wait.signal_name,
+  SELECT wait.task_id, task.queue_name, task.task_type, wait.signal_name,
          wait.attempt, wait.created_at, runtime.deadline_at
-    FROM workhorse.job_signal_wait wait
-    JOIN workhorse.job job ON job.id = wait.job_id
-    JOIN workhorse.job_runtime runtime
-      ON runtime.job_id = wait.job_id
+    FROM workhorse.task_signal_wait wait
+    JOIN workhorse.task task ON task.id = wait.task_id
+    JOIN workhorse.task_runtime runtime
+      ON runtime.task_id = wait.task_id
      AND runtime.state = 'scheduled'
      AND runtime.wait_name = wait.signal_name
      AND runtime.current_attempt = wait.attempt
    WHERE wait.delivered_at IS NULL;
 
 CREATE OR REPLACE VIEW workhorse.dashboard_human_wait_v1 AS
-  SELECT wait.job_id, job.queue_name, job.job_type, wait.token_name, wait.context,
+  SELECT wait.task_id, task.queue_name, task.task_type, wait.token_name, wait.context,
          wait.attempt, wait.created_at, wait.completed_at, wait.completed_by,
          runtime.deadline_at
-    FROM workhorse.job_human_wait wait
-    JOIN workhorse.job job ON job.id = wait.job_id
-    JOIN workhorse.job_runtime runtime
-      ON runtime.job_id = wait.job_id
+    FROM workhorse.task_human_wait wait
+    JOIN workhorse.task task ON task.id = wait.task_id
+    JOIN workhorse.task_runtime runtime
+      ON runtime.task_id = wait.task_id
      AND runtime.state = 'scheduled'
      AND runtime.wait_name = wait.token_name
      AND runtime.current_attempt = wait.attempt
@@ -11116,41 +11116,41 @@ CREATE OR REPLACE VIEW workhorse.dashboard_human_wait_v1 AS
 
 -- These lifecycle functions read every suspension provenance table, so the clean-install layout
 -- defines them after human waits instead of carrying incomplete earlier versions.
-CREATE OR REPLACE FUNCTION workhorse.terminalize_deadline_v1(p_job_id uuid)
+CREATE OR REPLACE FUNCTION workhorse.terminalize_deadline_v1(p_task_id uuid)
 RETURNS boolean
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
   v_error jsonb;
   v_worker_id text;
   v_fence_token bigint := 0;
   v_claimed_at timestamptz;
 BEGIN
-  SELECT * INTO v_runtime FROM workhorse.job_runtime runtime
-   WHERE runtime.job_id = p_job_id FOR UPDATE;
+  SELECT * INTO v_runtime FROM workhorse.task_runtime runtime
+   WHERE runtime.task_id = p_task_id FOR UPDATE;
   IF NOT FOUND OR v_runtime.deadline_at IS NULL
      OR v_runtime.deadline_at > clock_timestamp() THEN RETURN false; END IF;
   IF v_runtime.cancel_requested_at IS NOT NULL THEN
     v_error := workhorse.cancellation_envelope_v1(
       v_runtime.cancel_requested_at, v_runtime.cancel_requested_by, v_runtime.cancel_reason
     );
-    DELETE FROM workhorse.job_runtime runtime WHERE runtime.job_id = p_job_id;
-    INSERT INTO workhorse.job_outcome(
-      job_id, state, current_attempt, fence_token, run_at, error, history_through_at
+    DELETE FROM workhorse.task_runtime runtime WHERE runtime.task_id = p_task_id;
+    INSERT INTO workhorse.task_outcome(
+      task_id, state, current_attempt, fence_token, run_at, error, history_through_at
     ) VALUES (
-      p_job_id, 'canceled', v_runtime.current_attempt, v_runtime.fence_token,
+      p_task_id, 'canceled', v_runtime.current_attempt, v_runtime.fence_token,
       v_runtime.run_at, v_error, clock_timestamp()
     );
     INSERT INTO workhorse.attempt_history(
-      job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+      task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
     ) VALUES (
-      p_job_id, v_runtime.current_attempt, v_runtime.fence_token, v_runtime.worker_id,
+      p_task_id, v_runtime.current_attempt, v_runtime.fence_token, v_runtime.worker_id,
       'canceled', v_runtime.attempt_started_at, v_runtime.acquired_at, v_error
     );
-    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
       VALUES (
-        p_job_id, v_runtime.current_attempt, 'canceled',
+        p_task_id, v_runtime.current_attempt, 'canceled',
         jsonb_build_object(
           'requested_at', v_runtime.cancel_requested_at,
           'requested_by', v_runtime.cancel_requested_by,
@@ -11172,40 +11172,40 @@ BEGIN
       FROM (
         SELECT wait_row.worker_id, wait_row.fence_token, wait_row.claimed_at,
                wait_row.created_at, wait_row.wait_name AS name
-          FROM workhorse.job_wait wait_row
-         WHERE wait_row.job_id = p_job_id AND wait_row.attempt = v_runtime.current_attempt
+          FROM workhorse.task_wait wait_row
+         WHERE wait_row.task_id = p_task_id AND wait_row.attempt = v_runtime.current_attempt
         UNION ALL
         SELECT signal.worker_id, signal.fence_token, signal.claimed_at,
                signal.created_at, signal.signal_name AS name
-          FROM workhorse.job_signal_wait signal
-         WHERE signal.job_id = p_job_id AND signal.attempt = v_runtime.current_attempt
+          FROM workhorse.task_signal_wait signal
+         WHERE signal.task_id = p_task_id AND signal.attempt = v_runtime.current_attempt
         UNION ALL
         SELECT human_wait.worker_id, human_wait.fence_token, human_wait.claimed_at,
                human_wait.created_at, human_wait.token_name AS name
-          FROM workhorse.job_human_wait human_wait
-         WHERE human_wait.job_id = p_job_id
+          FROM workhorse.task_human_wait human_wait
+         WHERE human_wait.task_id = p_task_id
            AND human_wait.attempt = v_runtime.current_attempt
       ) provenance
      ORDER BY provenance.created_at DESC, provenance.name DESC LIMIT 1;
   END IF;
-  DELETE FROM workhorse.job_runtime runtime WHERE runtime.job_id = p_job_id;
-  INSERT INTO workhorse.job_outcome(
-    job_id, state, current_attempt, fence_token, run_at, error, history_through_at
+  DELETE FROM workhorse.task_runtime runtime WHERE runtime.task_id = p_task_id;
+  INSERT INTO workhorse.task_outcome(
+    task_id, state, current_attempt, fence_token, run_at, error, history_through_at
   ) VALUES (
-    p_job_id, 'failed', v_runtime.current_attempt, v_fence_token, v_runtime.run_at, v_error,
+    p_task_id, 'failed', v_runtime.current_attempt, v_fence_token, v_runtime.run_at, v_error,
     clock_timestamp()
   );
   IF v_runtime.attempt_started_at IS NOT NULL THEN
     INSERT INTO workhorse.attempt_history(
-      job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+      task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
     ) VALUES (
-      p_job_id, v_runtime.current_attempt, v_fence_token, v_worker_id,
+      p_task_id, v_runtime.current_attempt, v_fence_token, v_worker_id,
       'deadline_exceeded', v_runtime.attempt_started_at, v_claimed_at, v_error
     );
   END IF;
-  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+  INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
     VALUES (
-      p_job_id,
+      p_task_id,
       CASE WHEN v_runtime.attempt_started_at IS NULL THEN NULL ELSE v_runtime.current_attempt END,
       'deadline_exceeded',
       jsonb_build_object(
@@ -11219,7 +11219,7 @@ END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.cancel_v1(
-  p_job_id uuid, p_requested_by text DEFAULT NULL, p_reason text DEFAULT NULL
+  p_task_id uuid, p_requested_by text DEFAULT NULL, p_reason text DEFAULT NULL
 ) RETURNS TABLE (
   status text, state text, current_attempt integer, requested_at timestamptz,
   requested_by text, reason text, finished_at timestamptz
@@ -11227,8 +11227,8 @@ CREATE OR REPLACE FUNCTION workhorse.cancel_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_runtime workhorse.job_runtime%ROWTYPE;
-  v_outcome workhorse.job_outcome%ROWTYPE;
+  v_runtime workhorse.task_runtime%ROWTYPE;
+  v_outcome workhorse.task_outcome%ROWTYPE;
   v_now timestamptz := clock_timestamp();
   v_fence_token bigint := 0;
   v_worker_id text;
@@ -11236,7 +11236,7 @@ DECLARE
   v_attempt integer;
   v_envelope jsonb;
 BEGIN
-  IF p_job_id IS NULL THEN RAISE EXCEPTION 'job_id is required'; END IF;
+  IF p_task_id IS NULL THEN RAISE EXCEPTION 'task_id is required'; END IF;
   IF p_requested_by IS NOT NULL
      AND (p_requested_by = '' OR char_length(p_requested_by) > 200) THEN
     RAISE EXCEPTION 'requested_by must contain between 1 and 200 characters';
@@ -11246,24 +11246,24 @@ BEGIN
   END IF;
 
   SELECT * INTO v_runtime
-    FROM workhorse.job_runtime runtime
-   WHERE runtime.job_id = p_job_id
+    FROM workhorse.task_runtime runtime
+   WHERE runtime.task_id = p_task_id
    FOR UPDATE;
   IF FOUND THEN
     IF v_runtime.state = 'active' THEN
       IF v_runtime.cancel_requested_at IS NULL THEN
-        UPDATE workhorse.job_runtime runtime
+        UPDATE workhorse.task_runtime runtime
            SET cancel_requested_at = v_now,
                cancel_requested_by = p_requested_by,
                cancel_reason = p_reason,
                updated_at = v_now
-         WHERE runtime.job_id = p_job_id AND runtime.state = 'active'
+         WHERE runtime.task_id = p_task_id AND runtime.state = 'active'
            AND runtime.cancel_requested_at IS NULL
         RETURNING * INTO v_runtime;
         IF FOUND THEN
-          INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+          INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
             VALUES (
-              p_job_id,
+              p_task_id,
               v_runtime.current_attempt,
               'cancel_requested',
               jsonb_build_object(
@@ -11296,46 +11296,46 @@ BEGIN
         FROM (
           SELECT wait_row.fence_token, wait_row.worker_id, wait_row.attempt,
                  wait_row.claimed_at, wait_row.created_at, wait_row.wait_name AS name
-            FROM workhorse.job_wait wait_row
-           WHERE wait_row.job_id = p_job_id AND wait_row.attempt = v_runtime.current_attempt
+            FROM workhorse.task_wait wait_row
+           WHERE wait_row.task_id = p_task_id AND wait_row.attempt = v_runtime.current_attempt
           UNION ALL
           SELECT signal.fence_token, signal.worker_id, signal.attempt,
                  signal.claimed_at, signal.created_at, signal.signal_name AS name
-            FROM workhorse.job_signal_wait signal
-           WHERE signal.job_id = p_job_id AND signal.attempt = v_runtime.current_attempt
+            FROM workhorse.task_signal_wait signal
+           WHERE signal.task_id = p_task_id AND signal.attempt = v_runtime.current_attempt
           UNION ALL
           SELECT human_wait.fence_token, human_wait.worker_id, human_wait.attempt,
                  human_wait.claimed_at, human_wait.created_at, human_wait.token_name AS name
-            FROM workhorse.job_human_wait human_wait
-           WHERE human_wait.job_id = p_job_id
+            FROM workhorse.task_human_wait human_wait
+           WHERE human_wait.task_id = p_task_id
              AND human_wait.attempt = v_runtime.current_attempt
         ) provenance
        ORDER BY provenance.created_at DESC, provenance.name DESC
        LIMIT 1;
       IF NOT FOUND THEN
-        RAISE EXCEPTION 'started job % has no retained suspension attribution', p_job_id;
+        RAISE EXCEPTION 'started task % has no retained suspension attribution', p_task_id;
       END IF;
     END IF;
     v_envelope := workhorse.cancellation_envelope_v1(v_now, p_requested_by, p_reason);
-    DELETE FROM workhorse.job_runtime runtime WHERE runtime.job_id = p_job_id;
-    INSERT INTO workhorse.job_outcome(
-      job_id, state, current_attempt, fence_token, run_at, error, finished_at, updated_at,
+    DELETE FROM workhorse.task_runtime runtime WHERE runtime.task_id = p_task_id;
+    INSERT INTO workhorse.task_outcome(
+      task_id, state, current_attempt, fence_token, run_at, error, finished_at, updated_at,
       history_through_at
     ) VALUES (
-      p_job_id, 'canceled', v_runtime.current_attempt, v_fence_token, v_runtime.run_at,
+      p_task_id, 'canceled', v_runtime.current_attempt, v_fence_token, v_runtime.run_at,
       v_envelope, v_now, v_now, v_now
     ) RETURNING * INTO v_outcome;
     IF v_runtime.attempt_started_at IS NOT NULL THEN
       INSERT INTO workhorse.attempt_history(
-        job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+        task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
       ) VALUES (
-        p_job_id, v_attempt, v_fence_token, v_worker_id, 'canceled',
+        p_task_id, v_attempt, v_fence_token, v_worker_id, 'canceled',
         v_runtime.attempt_started_at, v_claimed_at, v_envelope
       );
     END IF;
-    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    INSERT INTO workhorse.task_event(task_id, attempt, event_type, details)
       VALUES (
-        p_job_id,
+        p_task_id,
         CASE WHEN v_runtime.attempt_started_at IS NULL THEN NULL ELSE v_attempt END,
         'canceled',
         jsonb_build_object(
@@ -11353,7 +11353,7 @@ BEGIN
     RETURN;
   END IF;
 
-  SELECT * INTO v_outcome FROM workhorse.job_outcome outcome WHERE outcome.job_id = p_job_id;
+  SELECT * INTO v_outcome FROM workhorse.task_outcome outcome WHERE outcome.task_id = p_task_id;
   IF FOUND THEN
     IF v_outcome.state = 'canceled' THEN
       RETURN QUERY VALUES (
@@ -11384,102 +11384,102 @@ $$;
 -- Stable, versioned relations owned by core for dashboard reads. PostgreSQL stores each view's
 -- expanded target list, so later private-table changes can preserve this contract in one migration.
 CREATE OR REPLACE VIEW workhorse.dashboard_attempt_history_v1 AS
-  SELECT attempt_id, job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at,
+  SELECT attempt_id, task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at,
          finished_at, error, occurred_at FROM workhorse.attempt_history;
 CREATE OR REPLACE VIEW workhorse.dashboard_concurrency_policy_v1 AS
   SELECT namespace, queue_name, max_active, max_active_per_key, updated_at
     FROM workhorse.concurrency_policy;
-CREATE OR REPLACE VIEW workhorse.dashboard_job_checkpoint_v1 AS
-  SELECT job_id, checkpoint_name, checkpoint_value, attempt, fence_token, worker_id, created_at
-    FROM workhorse.job_checkpoint;
-CREATE OR REPLACE VIEW workhorse.dashboard_job_dependency_v1 AS
-  SELECT dependent_job_id, prerequisite_job_id, on_success, on_failure, on_cancellation,
+CREATE OR REPLACE VIEW workhorse.dashboard_task_checkpoint_v1 AS
+  SELECT task_id, checkpoint_name, checkpoint_value, attempt, fence_token, worker_id, created_at
+    FROM workhorse.task_checkpoint;
+CREATE OR REPLACE VIEW workhorse.dashboard_task_dependency_v1 AS
+  SELECT dependent_task_id, prerequisite_task_id, on_success, on_failure, on_cancellation,
          created_at, released_at, resolution
-    FROM workhorse.job_dependency;
-CREATE OR REPLACE VIEW workhorse.dashboard_job_child_v1 AS
-  SELECT parent_job_id, child_job_id, child_name, created_at, joined_at
-    FROM workhorse.job_child;
-CREATE OR REPLACE VIEW workhorse.dashboard_job_redrive_v1 AS
-  SELECT source_job_id, target_job_id, request_id_preview, request_id_digest, request_id_length,
+    FROM workhorse.task_dependency;
+CREATE OR REPLACE VIEW workhorse.dashboard_task_child_v1 AS
+  SELECT parent_task_id, child_task_id, child_name, created_at, joined_at
+    FROM workhorse.task_child;
+CREATE OR REPLACE VIEW workhorse.dashboard_task_redrive_v1 AS
+  SELECT source_task_id, target_task_id, request_id_preview, request_id_digest, request_id_length,
          requested_by, reason, source_state, target_initial_state, requested_at
-    FROM workhorse.job_redrive;
-CREATE OR REPLACE VIEW workhorse.dashboard_job_event_v1 AS
-  SELECT event_id, job_id, attempt, event_type, details, occurred_at FROM workhorse.job_event;
--- `result` is deliberately absent. Its redaction keys live on workhorse.job, so projecting it
--- here would join every reader of this view to workhorse.job, including the task list and the
+    FROM workhorse.task_redrive;
+CREATE OR REPLACE VIEW workhorse.dashboard_task_event_v1 AS
+  SELECT event_id, task_id, attempt, event_type, details, occurred_at FROM workhorse.task_event;
+-- `result` is deliberately absent. Its redaction keys live on workhorse.task, so projecting it
+-- here would join every reader of this view to workhorse.task, including the task list and the
 -- activity chart, which never read a result. Measurement showed that join changing the loaded plan
--- for both. The one caller that needs a result reads workhorse.dashboard_job_result_v1 instead,
+-- for both. The one caller that needs a result reads workhorse.dashboard_task_result_v1 instead,
 -- which ADR 0027 reserves for exactly this: a policy-bearing read a view cannot carry.
-CREATE OR REPLACE VIEW workhorse.dashboard_job_outcome_v1 AS
-  SELECT job_id, state, current_attempt, run_at, error, finished_at, updated_at
-    FROM workhorse.job_outcome;
+CREATE OR REPLACE VIEW workhorse.dashboard_task_outcome_v1 AS
+  SELECT task_id, state, current_attempt, run_at, error, finished_at, updated_at
+    FROM workhorse.task_outcome;
 
--- The redacted terminal result for one job. Redaction is applied here, not by each dashboard
+-- The redacted terminal result for one task. Redaction is applied here, not by each dashboard
 -- backend, so a backend in any language cannot forget it (ADR 0015, ADR 0035).
-CREATE OR REPLACE FUNCTION workhorse.dashboard_job_result_v1(p_job_id uuid)
+CREATE OR REPLACE FUNCTION workhorse.dashboard_task_result_v1(p_task_id uuid)
 RETURNS jsonb
 LANGUAGE sql
 STABLE
 PARALLEL SAFE
 AS $$
-  SELECT workhorse.redact_top_level_keys_v1(outcome.result, job.result_redact_keys)
-    FROM workhorse.job_outcome outcome
-    JOIN workhorse.job job ON job.id = outcome.job_id
-   WHERE outcome.job_id = p_job_id;
+  SELECT workhorse.redact_top_level_keys_v1(outcome.result, task.result_redact_keys)
+    FROM workhorse.task_outcome outcome
+    JOIN workhorse.task task ON task.id = outcome.task_id
+   WHERE outcome.task_id = p_task_id;
 $$;
-CREATE OR REPLACE VIEW workhorse.dashboard_job_progress_v1 AS
-  SELECT job_id, progress_value, revision, attempt, fence_token, worker_id, created_at, updated_at
-    FROM workhorse.job_progress;
-CREATE OR REPLACE VIEW workhorse.dashboard_job_runtime_v1 AS
-  SELECT job_id, queue_name, state, current_attempt, fence_token, run_at, ready_at, worker_id,
+CREATE OR REPLACE VIEW workhorse.dashboard_task_progress_v1 AS
+  SELECT task_id, progress_value, revision, attempt, fence_token, worker_id, created_at, updated_at
+    FROM workhorse.task_progress;
+CREATE OR REPLACE VIEW workhorse.dashboard_task_runtime_v1 AS
+  SELECT task_id, queue_name, state, current_attempt, fence_token, run_at, ready_at, worker_id,
          acquired_at, heartbeat_at, expires_at, attempt_timeout_at, wait_name, attempt_started_at,
          cancel_requested_at, cancel_requested_by, cancel_reason, error, updated_at
-    FROM workhorse.job_runtime;
+    FROM workhorse.task_runtime;
 -- `payload` is redacted here, not by each backend, for the reason recorded on
--- dashboard_job_outcome_v1. The key arrays stay projected so the dashboard can report how many
+-- dashboard_task_outcome_v1. The key arrays stay projected so the dashboard can report how many
 -- keys were withheld without ever receiving their values.
-CREATE OR REPLACE VIEW workhorse.dashboard_job_v1 AS
-  SELECT id, queue_name, job_type, concurrency_key,
+CREATE OR REPLACE VIEW workhorse.dashboard_task_v1 AS
+  SELECT id, queue_name, task_type, concurrency_key,
          workhorse.redact_top_level_keys_v1(payload, payload_redact_keys) AS payload,
          payload_redact_keys,
          result_redact_keys, tags, max_attempts, retry_policy, deadline_at, execution_timeout_ms,
-         created_at, priority FROM workhorse.job;
-CREATE OR REPLACE VIEW workhorse.dashboard_job_wait_v1 AS
-  SELECT job_id, wait_name, mode, duration_ms, requested_wake_at, wake_at, attempt, fence_token,
-         worker_id, created_at FROM workhorse.job_wait;
+         created_at, priority FROM workhorse.task;
+CREATE OR REPLACE VIEW workhorse.dashboard_task_wait_v1 AS
+  SELECT task_id, wait_name, mode, duration_ms, requested_wake_at, wake_at, attempt, fence_token,
+         worker_id, created_at FROM workhorse.task_wait;
 CREATE OR REPLACE VIEW workhorse.dashboard_maintenance_policy_v1 AS
   SELECT singleton, timezone, partition_preparation_interval_ms, terminal_cleanup_interval_ms,
          history_retention_local_time, statistics_rollup_interval_ms, statistics_group_limit,
          statistics_recompute_buckets, updated_at FROM workhorse.maintenance_policy;
 CREATE OR REPLACE VIEW workhorse.dashboard_maintenance_state_v1 AS
-  SELECT task_name, last_started_at, last_completed_at, last_completed_local_date
+  SELECT routine_name, last_started_at, last_completed_at, last_completed_local_date
     FROM workhorse.maintenance_state;
 CREATE OR REPLACE VIEW workhorse.dashboard_queue_control_v1 AS
   SELECT queue_name, paused FROM workhorse.queue_control;
 CREATE OR REPLACE VIEW workhorse.dashboard_rate_limit_policy_v1 AS
   SELECT queue_name FROM workhorse.rate_limit_policy;
 CREATE OR REPLACE VIEW workhorse.dashboard_retention_policy_v1 AS
-  SELECT singleton, job_event_retention_days, attempt_history_retention_days
+  SELECT singleton, task_event_retention_days, attempt_history_retention_days
     FROM workhorse.retention_policy;
 CREATE OR REPLACE VIEW workhorse.dashboard_schedule_definition_v1 AS
-  SELECT namespace, schedule_name, cron_expression, timezone, queue_name, job_type, enabled, revision,
+  SELECT namespace, schedule_name, cron_expression, timezone, queue_name, task_type, enabled, revision,
          updated_at, priority FROM workhorse.schedule_definition;
 CREATE OR REPLACE VIEW workhorse.dashboard_schedule_occurrence_v1 AS
   SELECT namespace, schedule_name, occurrence_at, fired_at FROM workhorse.schedule_occurrence;
 CREATE OR REPLACE VIEW workhorse.dashboard_worker_registry_v1 AS
   SELECT worker_id, hostname, pid, queue_name, concurrency, lease_ms, heartbeat_ms, poll_ms,
-         maintenance_interval_ms, maintenance_task_poll_ms, registry_interval_ms, active_slots,
+         maintenance_interval_ms, maintenance_routine_poll_ms, registry_interval_ms, active_slots,
          draining, paused, started_at, last_heartbeat_at, queue_names, schedule_namespaces,
          client_protocol_version, sdk_language, sdk_version
     FROM workhorse.worker_registry;
 
-CREATE OR REPLACE FUNCTION workhorse.dashboard_job_estimate_v1()
+CREATE OR REPLACE FUNCTION workhorse.dashboard_task_estimate_v1()
 RETURNS TABLE (estimate bigint)
 LANGUAGE sql
 STABLE
 PARALLEL SAFE
 AS $$
-  SELECT reltuples::bigint FROM pg_class WHERE oid = 'workhorse.job'::regclass;
+  SELECT reltuples::bigint FROM pg_class WHERE oid = 'workhorse.task'::regclass;
 $$;
 
 -- Dashboard procedures return the versioned wire document directly. Language backends validate
@@ -11502,7 +11502,7 @@ AS $$
     SELECT COALESCE(NULLIF(p_input->>'filter', ''), 'all') AS filter,
            NULLIF(p_input->>'queue', '') AS queue_filter,
            NULLIF(p_input->>'worker', '') AS worker_filter,
-           NULLIF(p_input->>'jobType', '') AS type_filter,
+           NULLIF(p_input->>'taskType', '') AS type_filter,
            NULLIF(p_input->>'priority', '')::integer AS priority_filter,
            COALESCE(ARRAY(SELECT jsonb_array_elements_text(p_input->'tags')), ARRAY[]::text[])
              AS tag_filter,
@@ -11517,24 +11517,24 @@ AS $$
            COALESCE((p_input->>'canCompleteHumanWait')::boolean, false)
              AS can_complete_human_wait
   ), task_rows AS (
-    SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.priority,
+    SELECT j.id, j.queue_name AS queue, j.task_type AS type, j.priority,
            COALESCE(r.state, o.state) AS state,
            COALESCE(r.current_attempt, o.current_attempt) AS attempt,
            j.tags, r.worker_id AS current_worker_id, r.wait_name,
            COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at
-      FROM workhorse.dashboard_job_v1 j
-      LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
-      LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
+      FROM workhorse.dashboard_task_v1 j
+      LEFT JOIN workhorse.dashboard_task_runtime_v1 r ON r.task_id = j.id
+      LEFT JOIN workhorse.dashboard_task_outcome_v1 o ON o.task_id = j.id
   ), filtered AS MATERIALIZED (
     SELECT task_rows.* FROM task_rows CROSS JOIN parameters
      WHERE CASE parameters.filter
        WHEN 'blocked' THEN task_rows.state = 'blocked'
        WHEN 'waiting' THEN EXISTS (
          SELECT 1 FROM workhorse.dashboard_signal_wait_v1 signal_wait
-          WHERE signal_wait.job_id = task_rows.id
+          WHERE signal_wait.task_id = task_rows.id
          UNION ALL
          SELECT 1 FROM workhorse.dashboard_human_wait_v1 human_wait
-          WHERE human_wait.job_id = task_rows.id
+          WHERE human_wait.task_id = task_rows.id
        )
        WHEN 'scheduled' THEN task_rows.state = 'scheduled'
        WHEN 'retried' THEN task_rows.attempt > 1
@@ -11549,12 +11549,12 @@ AS $$
        AND (parameters.worker_filter IS NULL OR COALESCE(
          task_rows.current_worker_id,
          (
-           SELECT wait.worker_id FROM workhorse.dashboard_job_wait_v1 wait
-            WHERE wait.job_id = task_rows.id AND wait.wait_name = task_rows.wait_name
+           SELECT wait.worker_id FROM workhorse.dashboard_task_wait_v1 wait
+            WHERE wait.task_id = task_rows.id AND wait.wait_name = task_rows.wait_name
          ),
          (
            SELECT history.worker_id FROM workhorse.dashboard_attempt_history_v1 history
-            WHERE history.job_id = task_rows.id
+            WHERE history.task_id = task_rows.id
             ORDER BY history.attempt DESC LIMIT 1
          )
        ) = parameters.worker_filter)
@@ -11573,15 +11573,15 @@ AS $$
      LIMIT (SELECT page_size FROM parameters)
      OFFSET (SELECT (page - 1) * page_size FROM parameters)
   ), page AS (
-    SELECT j.id, j.queue_name AS queue, j.job_type AS type, page_ids.priority,
+    SELECT j.id, j.queue_name AS queue, j.task_type AS type, page_ids.priority,
            COALESCE(r.state, o.state) AS state,
            CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
            COALESCE((
-             SELECT jsonb_agg(dependency.prerequisite_job_id::text
-                              ORDER BY dependency.prerequisite_job_id)
-               FROM workhorse.dashboard_job_dependency_v1 dependency
-              WHERE dependency.dependent_job_id = j.id AND dependency.released_at IS NULL
-           ), '[]'::jsonb) AS prerequisite_job_ids,
+             SELECT jsonb_agg(dependency.prerequisite_task_id::text
+                              ORDER BY dependency.prerequisite_task_id)
+               FROM workhorse.dashboard_task_dependency_v1 dependency
+              WHERE dependency.dependent_task_id = j.id AND dependency.released_at IS NULL
+           ), '[]'::jsonb) AS prerequisite_task_ids,
            COALESCE(r.current_attempt, o.current_attempt) AS attempt,
            j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.tags,
            COALESCE(r.run_at, o.run_at) AS run_at,
@@ -11597,23 +11597,23 @@ AS $$
            human_wait.deadline_at AS human_wait_deadline_at,
            enqueued_event.details AS enqueued_details
       FROM page_ids
-      JOIN workhorse.dashboard_job_v1 j ON j.id = page_ids.id
-      LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
-      LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
-      LEFT JOIN workhorse.dashboard_job_wait_v1 durable_wait
-        ON durable_wait.job_id = j.id AND durable_wait.wait_name = r.wait_name
+      JOIN workhorse.dashboard_task_v1 j ON j.id = page_ids.id
+      LEFT JOIN workhorse.dashboard_task_runtime_v1 r ON r.task_id = j.id
+      LEFT JOIN workhorse.dashboard_task_outcome_v1 o ON o.task_id = j.id
+      LEFT JOIN workhorse.dashboard_task_wait_v1 durable_wait
+        ON durable_wait.task_id = j.id AND durable_wait.wait_name = r.wait_name
       LEFT JOIN workhorse.dashboard_signal_wait_v1 signal_wait
-        ON signal_wait.job_id = j.id AND signal_wait.signal_name = r.wait_name
+        ON signal_wait.task_id = j.id AND signal_wait.signal_name = r.wait_name
       LEFT JOIN workhorse.dashboard_human_wait_v1 human_wait
-        ON human_wait.job_id = j.id AND human_wait.token_name = r.wait_name
+        ON human_wait.task_id = j.id AND human_wait.token_name = r.wait_name
       LEFT JOIN LATERAL (
-        SELECT event.details FROM workhorse.dashboard_job_event_v1 event
-         WHERE event.job_id = j.id AND event.event_type = 'enqueued'
+        SELECT event.details FROM workhorse.dashboard_task_event_v1 event
+         WHERE event.task_id = j.id AND event.event_type = 'enqueued'
          ORDER BY event.occurred_at, event.event_id LIMIT 1
       ) enqueued_event ON true
       LEFT JOIN LATERAL (
         SELECT history.worker_id FROM workhorse.dashboard_attempt_history_v1 history
-         WHERE history.job_id = j.id ORDER BY history.attempt DESC LIMIT 1
+         WHERE history.task_id = j.id ORDER BY history.attempt DESC LIMIT 1
       ) attempt_worker ON page_ids.worker_filter IS NOT NULL
   )
   SELECT jsonb_build_object(
@@ -11622,7 +11622,7 @@ AS $$
     'filter', parameters.filter,
     'queue', parameters.queue_filter,
     'worker', parameters.worker_filter,
-    'jobType', parameters.type_filter,
+    'taskType', parameters.type_filter,
     'priority', parameters.priority_filter,
     'sort', parameters.sort,
     'tags', to_jsonb(parameters.tag_filter),
@@ -11630,10 +11630,10 @@ AS $$
     'page', parameters.page,
     'pageSize', parameters.page_size,
     'total', (SELECT count(*) FROM filtered),
-    'jobs', COALESCE((
+    'tasks', COALESCE((
       SELECT jsonb_agg(jsonb_build_object(
         'id', id::text, 'queue', queue, 'type', type, 'priority', priority, 'state', state,
-        'blockedReason', blocked_reason, 'prerequisiteJobIds', prerequisite_job_ids,
+        'blockedReason', blocked_reason, 'prerequisiteTaskIds', prerequisite_task_ids,
         'attempt', attempt, 'maxAttempts', max_attempts, 'retryPolicy', retry_policy,
         'deadlineAt', workhorse.dashboard_iso_v1(deadline_at),
         'executionTimeoutMs', execution_timeout_ms, 'tags', tags,
@@ -11701,47 +11701,47 @@ AS $$
            END AS bucket_seconds
       FROM parameters
   ), candidate AS (
-    SELECT runtime.job_id FROM workhorse.dashboard_job_runtime_v1 runtime CROSS JOIN windowed
+    SELECT runtime.task_id FROM workhorse.dashboard_task_runtime_v1 runtime CROSS JOIN windowed
      WHERE runtime.updated_at >= windowed.captured_at
                                  - make_interval(secs => windowed.window_seconds)
     UNION
-    SELECT outcome.job_id FROM workhorse.dashboard_job_outcome_v1 outcome CROSS JOIN windowed
+    SELECT outcome.task_id FROM workhorse.dashboard_task_outcome_v1 outcome CROSS JOIN windowed
      WHERE outcome.updated_at >= windowed.captured_at
                                  - make_interval(secs => windowed.window_seconds)
   ), task_inputs AS MATERIALIZED (
-    SELECT candidate.job_id, windowed.group_by, job.queue_name, job.job_type,
+    SELECT candidate.task_id, windowed.group_by, task.queue_name, task.task_type,
            COALESCE(runtime.state, outcome.state) AS state,
            COALESCE(runtime.current_attempt, outcome.current_attempt) AS attempt,
            COALESCE(runtime.updated_at, outcome.updated_at) AS updated_at,
-           job.tags,
+           task.tags,
            CASE WHEN windowed.group_by = 'worker' OR windowed.worker_filter IS NOT NULL
              THEN COALESCE(runtime.worker_id, (
                SELECT history.worker_id FROM workhorse.dashboard_attempt_history_v1 history
-                WHERE history.job_id = candidate.job_id
+                WHERE history.task_id = candidate.task_id
                 ORDER BY history.attempt DESC LIMIT 1
              ), 'unassigned')
            END AS worker_id
       FROM candidate
       CROSS JOIN windowed
-      JOIN workhorse.dashboard_job_v1 job ON job.id = candidate.job_id
-      LEFT JOIN workhorse.dashboard_job_runtime_v1 runtime
-        ON runtime.job_id = candidate.job_id
-      LEFT JOIN workhorse.dashboard_job_outcome_v1 outcome
-        ON outcome.job_id = candidate.job_id
+      JOIN workhorse.dashboard_task_v1 task ON task.id = candidate.task_id
+      LEFT JOIN workhorse.dashboard_task_runtime_v1 runtime
+        ON runtime.task_id = candidate.task_id
+      LEFT JOIN workhorse.dashboard_task_outcome_v1 outcome
+        ON outcome.task_id = candidate.task_id
   ), tasks AS (
     SELECT CASE windowed.group_by
              WHEN 'queue' THEN task_inputs.queue_name
-             WHEN 'task' THEN task_inputs.job_type
+             WHEN 'task' THEN task_inputs.task_type
              WHEN 'status' THEN task_inputs.state
              WHEN 'worker' THEN task_inputs.worker_id
            END AS group_key,
            task_inputs.state,
            EXISTS (
              SELECT 1 FROM workhorse.dashboard_signal_wait_v1 signal_wait
-              WHERE signal_wait.job_id = task_inputs.job_id
+              WHERE signal_wait.task_id = task_inputs.task_id
              UNION ALL
              SELECT 1 FROM workhorse.dashboard_human_wait_v1 human_wait
-              WHERE human_wait.job_id = task_inputs.job_id
+              WHERE human_wait.task_id = task_inputs.task_id
            ) AS external_wait,
            task_inputs.attempt, task_inputs.updated_at, task_inputs.tags,
            task_inputs.queue_name AS queue, task_inputs.worker_id
@@ -11818,13 +11818,13 @@ AS $$
            COALESCE(NULLIF(p_input->>'pageSize', '')::integer, 50) AS page_size,
            COALESCE(NULLIF(p_input->>'kind', ''), 'all') AS kind,
            NULLIF(p_input->>'queue', '') AS queue_filter,
-           NULLIF(p_input->>'jobType', '') AS type_filter,
+           NULLIF(p_input->>'taskType', '') AS type_filter,
            NULLIF(p_input->>'worker', '') AS worker_filter,
            NULLIF(trim(p_input->>'search'), '') AS search_filter,
            CASE WHEN jsonb_typeof(p_input->'types') = 'array'
                 THEN ARRAY(SELECT jsonb_array_elements_text(p_input->'types'))
                 ELSE ARRAY[]::text[] END AS event_types,
-           NULLIF(p_input->>'jobId', '')::uuid AS job_id,
+           NULLIF(p_input->>'taskId', '')::uuid AS task_id,
            CASE COALESCE(NULLIF(p_input->>'window', ''), '1h')
              WHEN '15m' THEN 900 WHEN '1h' THEN 3600 WHEN '6h' THEN 21600
              WHEN '24h' THEN 86400
@@ -11832,12 +11832,12 @@ AS $$
   ), event_records AS NOT MATERIALIZED (
     SELECT event.*, COALESCE(event.details->>'worker_id', (
       SELECT history.worker_id FROM workhorse.dashboard_attempt_history_v1 history
-       WHERE history.job_id = event.job_id AND history.attempt = event.attempt
+       WHERE history.task_id = event.task_id AND history.attempt = event.attempt
        ORDER BY history.occurred_at DESC, history.attempt_id DESC LIMIT 1
     )) AS resolved_worker_id
-      FROM workhorse.dashboard_job_event_v1 event
+      FROM workhorse.dashboard_task_event_v1 event
   ), event_feed AS (
-    SELECT 'event'::text AS kind, event.event_id AS record_id, event.job_id,
+    SELECT 'event'::text AS kind, event.event_id AS record_id, event.task_id,
            event.occurred_at, event.attempt, event.event_type AS type, event.details,
            event.resolved_worker_id AS worker_id, NULL::bigint AS fence_token,
            NULL::timestamptz AS started_at, NULL::timestamptz AS finished_at,
@@ -11846,23 +11846,23 @@ AS $$
      WHERE parameters.kind <> 'attempt'
        AND event.occurred_at >= parameters.captured_at
                                    - make_interval(secs => parameters.window_seconds)
-       AND (parameters.job_id IS NULL OR event.job_id = parameters.job_id)
+       AND (parameters.task_id IS NULL OR event.task_id = parameters.task_id)
        AND (parameters.worker_filter IS NULL OR event.resolved_worker_id = parameters.worker_filter)
        AND (parameters.search_filter IS NULL
-         OR strpos(lower(concat_ws(' ', event.job_id::text, event.event_type, event.resolved_worker_id, event.details::text)), lower(parameters.search_filter)) > 0
-         OR EXISTS (SELECT 1 FROM workhorse.dashboard_job_v1 job WHERE job.id = event.job_id
-           AND strpos(lower(concat_ws(' ', job.queue_name, job.job_type)), lower(parameters.search_filter)) > 0))
+         OR strpos(lower(concat_ws(' ', event.task_id::text, event.event_type, event.resolved_worker_id, event.details::text)), lower(parameters.search_filter)) > 0
+         OR EXISTS (SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = event.task_id
+           AND strpos(lower(concat_ws(' ', task.queue_name, task.task_type)), lower(parameters.search_filter)) > 0))
        AND (cardinality(parameters.event_types) = 0
             OR event.event_type = ANY (parameters.event_types))
        AND ((parameters.queue_filter IS NULL AND parameters.type_filter IS NULL) OR EXISTS (
-         SELECT 1 FROM workhorse.dashboard_job_v1 job WHERE job.id = event.job_id
-           AND (parameters.queue_filter IS NULL OR job.queue_name = parameters.queue_filter)
-           AND (parameters.type_filter IS NULL OR job.job_type = parameters.type_filter)
+         SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = event.task_id
+           AND (parameters.queue_filter IS NULL OR task.queue_name = parameters.queue_filter)
+           AND (parameters.type_filter IS NULL OR task.task_type = parameters.type_filter)
        ))
      ORDER BY event.occurred_at DESC, event.event_id DESC
      LIMIT (SELECT page * page_size FROM parameters)
   ), attempt_feed AS (
-    SELECT 'attempt'::text AS kind, history.attempt_id AS record_id, history.job_id,
+    SELECT 'attempt'::text AS kind, history.attempt_id AS record_id, history.task_id,
            history.occurred_at, history.attempt, history.outcome AS type,
            NULL::jsonb AS details, history.worker_id, history.fence_token,
            history.started_at, history.finished_at, history.error, 0 AS kind_rank
@@ -11870,18 +11870,18 @@ AS $$
      WHERE parameters.kind <> 'event'
        AND history.occurred_at >= parameters.captured_at
                                      - make_interval(secs => parameters.window_seconds)
-       AND (parameters.job_id IS NULL OR history.job_id = parameters.job_id)
+       AND (parameters.task_id IS NULL OR history.task_id = parameters.task_id)
        AND (parameters.worker_filter IS NULL OR history.worker_id = parameters.worker_filter)
        AND (parameters.search_filter IS NULL
-         OR strpos(lower(concat_ws(' ', history.job_id::text, history.outcome, history.worker_id, history.error->>'message')), lower(parameters.search_filter)) > 0
-         OR EXISTS (SELECT 1 FROM workhorse.dashboard_job_v1 job WHERE job.id = history.job_id
-           AND strpos(lower(concat_ws(' ', job.queue_name, job.job_type)), lower(parameters.search_filter)) > 0))
+         OR strpos(lower(concat_ws(' ', history.task_id::text, history.outcome, history.worker_id, history.error->>'message')), lower(parameters.search_filter)) > 0
+         OR EXISTS (SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = history.task_id
+           AND strpos(lower(concat_ws(' ', task.queue_name, task.task_type)), lower(parameters.search_filter)) > 0))
        AND (cardinality(parameters.event_types) = 0
             OR history.outcome = ANY (parameters.event_types))
        AND ((parameters.queue_filter IS NULL AND parameters.type_filter IS NULL) OR EXISTS (
-         SELECT 1 FROM workhorse.dashboard_job_v1 job WHERE job.id = history.job_id
-           AND (parameters.queue_filter IS NULL OR job.queue_name = parameters.queue_filter)
-           AND (parameters.type_filter IS NULL OR job.job_type = parameters.type_filter)
+         SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = history.task_id
+           AND (parameters.queue_filter IS NULL OR task.queue_name = parameters.queue_filter)
+           AND (parameters.type_filter IS NULL OR task.task_type = parameters.type_filter)
        ))
      ORDER BY history.occurred_at DESC, history.attempt_id DESC
      LIMIT (SELECT page * page_size FROM parameters)
@@ -11899,18 +11899,18 @@ AS $$
        WHERE parameters.kind <> 'attempt'
          AND event.occurred_at >= parameters.captured_at
                                      - make_interval(secs => parameters.window_seconds)
-         AND (parameters.job_id IS NULL OR event.job_id = parameters.job_id)
+         AND (parameters.task_id IS NULL OR event.task_id = parameters.task_id)
        AND (parameters.worker_filter IS NULL OR event.resolved_worker_id = parameters.worker_filter)
        AND (parameters.search_filter IS NULL
-         OR strpos(lower(concat_ws(' ', event.job_id::text, event.event_type, event.resolved_worker_id, event.details::text)), lower(parameters.search_filter)) > 0
-         OR EXISTS (SELECT 1 FROM workhorse.dashboard_job_v1 job WHERE job.id = event.job_id
-           AND strpos(lower(concat_ws(' ', job.queue_name, job.job_type)), lower(parameters.search_filter)) > 0))
+         OR strpos(lower(concat_ws(' ', event.task_id::text, event.event_type, event.resolved_worker_id, event.details::text)), lower(parameters.search_filter)) > 0
+         OR EXISTS (SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = event.task_id
+           AND strpos(lower(concat_ws(' ', task.queue_name, task.task_type)), lower(parameters.search_filter)) > 0))
          AND (cardinality(parameters.event_types) = 0
               OR event.event_type = ANY (parameters.event_types))
          AND ((parameters.queue_filter IS NULL AND parameters.type_filter IS NULL) OR EXISTS (
-           SELECT 1 FROM workhorse.dashboard_job_v1 job WHERE job.id = event.job_id
-             AND (parameters.queue_filter IS NULL OR job.queue_name = parameters.queue_filter)
-             AND (parameters.type_filter IS NULL OR job.job_type = parameters.type_filter)
+           SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = event.task_id
+             AND (parameters.queue_filter IS NULL OR task.queue_name = parameters.queue_filter)
+             AND (parameters.type_filter IS NULL OR task.task_type = parameters.type_filter)
          ))
       UNION ALL
       SELECT history.attempt_id
@@ -11918,18 +11918,18 @@ AS $$
        WHERE parameters.kind <> 'event'
          AND history.occurred_at >= parameters.captured_at
                                        - make_interval(secs => parameters.window_seconds)
-         AND (parameters.job_id IS NULL OR history.job_id = parameters.job_id)
+         AND (parameters.task_id IS NULL OR history.task_id = parameters.task_id)
        AND (parameters.worker_filter IS NULL OR history.worker_id = parameters.worker_filter)
        AND (parameters.search_filter IS NULL
-         OR strpos(lower(concat_ws(' ', history.job_id::text, history.outcome, history.worker_id, history.error->>'message')), lower(parameters.search_filter)) > 0
-         OR EXISTS (SELECT 1 FROM workhorse.dashboard_job_v1 job WHERE job.id = history.job_id
-           AND strpos(lower(concat_ws(' ', job.queue_name, job.job_type)), lower(parameters.search_filter)) > 0))
+         OR strpos(lower(concat_ws(' ', history.task_id::text, history.outcome, history.worker_id, history.error->>'message')), lower(parameters.search_filter)) > 0
+         OR EXISTS (SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = history.task_id
+           AND strpos(lower(concat_ws(' ', task.queue_name, task.task_type)), lower(parameters.search_filter)) > 0))
          AND (cardinality(parameters.event_types) = 0
               OR history.outcome = ANY (parameters.event_types))
          AND ((parameters.queue_filter IS NULL AND parameters.type_filter IS NULL) OR EXISTS (
-           SELECT 1 FROM workhorse.dashboard_job_v1 job WHERE job.id = history.job_id
-             AND (parameters.queue_filter IS NULL OR job.queue_name = parameters.queue_filter)
-             AND (parameters.type_filter IS NULL OR job.job_type = parameters.type_filter)
+           SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = history.task_id
+             AND (parameters.queue_filter IS NULL OR task.queue_name = parameters.queue_filter)
+             AND (parameters.type_filter IS NULL OR task.task_type = parameters.type_filter)
          ))
     ) records
   )
@@ -11939,14 +11939,14 @@ AS $$
     'page', parameters.page, 'pageSize', parameters.page_size,
     'total', (SELECT count FROM total),
     'retention', jsonb_build_object(
-      'jobEventDays', retention.job_event_retention_days,
+      'taskEventDays', retention.task_event_retention_days,
       'attemptHistoryDays', retention.attempt_history_retention_days),
     'events', COALESCE((
       SELECT jsonb_agg(jsonb_build_object(
         'id', event_page.kind || ':' || event_page.record_id::text,
         'kind', event_page.kind, 'recordId', event_page.record_id::text,
-        'jobId', event_page.job_id::text, 'queue', job.queue_name,
-        'jobType', job.job_type,
+        'taskId', event_page.task_id::text, 'queue', task.queue_name,
+        'taskType', task.task_type,
         'occurredAt', workhorse.dashboard_iso_v1(event_page.occurred_at),
         'attempt', event_page.attempt, 'type', event_page.type,
         'details', event_page.details, 'workerId', event_page.worker_id,
@@ -11959,7 +11959,7 @@ AS $$
         ORDER BY event_page.occurred_at DESC, event_page.kind_rank DESC,
                  event_page.record_id DESC)
         FROM event_page
-        LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = event_page.job_id
+        LEFT JOIN workhorse.dashboard_task_v1 task ON task.id = event_page.task_id
     ), '[]'::jsonb))
     FROM parameters CROSS JOIN workhorse.dashboard_retention_policy_v1 retention
    WHERE retention.singleton;
@@ -11984,25 +11984,25 @@ BEGIN
   IF v_kind = 'event' THEN
     SELECT jsonb_build_object(
       'id', 'event:' || event.event_id::text, 'kind', 'event',
-      'recordId', event.event_id::text, 'jobId', event.job_id::text,
-      'queue', job.queue_name, 'jobType', job.job_type,
+      'recordId', event.event_id::text, 'taskId', event.task_id::text,
+      'queue', task.queue_name, 'taskType', task.task_type,
       'occurredAt', workhorse.dashboard_iso_v1(event.occurred_at),
       'attempt', event.attempt, 'type', event.event_type, 'details', event.details,
       'workerId', COALESCE(event.details->>'worker_id', (
         SELECT history.worker_id FROM workhorse.dashboard_attempt_history_v1 history
-         WHERE history.job_id = event.job_id AND history.attempt = event.attempt
+         WHERE history.task_id = event.task_id AND history.attempt = event.attempt
          ORDER BY history.occurred_at DESC, history.attempt_id DESC LIMIT 1
       )), 'fenceToken', NULL, 'startedAt', NULL, 'claimedAt', NULL,
       'finishedAt', NULL, 'durationMs', NULL, 'error', NULL, 'errorMessage', NULL)
       INTO v_result
-      FROM workhorse.dashboard_job_event_v1 event
-      LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = event.job_id
+      FROM workhorse.dashboard_task_event_v1 event
+      LEFT JOIN workhorse.dashboard_task_v1 task ON task.id = event.task_id
      WHERE event.event_id = v_record_id;
   ELSE
     SELECT jsonb_build_object(
       'id', 'attempt:' || history.attempt_id::text, 'kind', 'attempt',
-      'recordId', history.attempt_id::text, 'jobId', history.job_id::text,
-      'queue', job.queue_name, 'jobType', job.job_type,
+      'recordId', history.attempt_id::text, 'taskId', history.task_id::text,
+      'queue', task.queue_name, 'taskType', task.task_type,
       'occurredAt', workhorse.dashboard_iso_v1(history.occurred_at),
       'attempt', history.attempt, 'type', history.outcome, 'details', NULL,
       'workerId', history.worker_id, 'fenceToken', history.fence_token::text,
@@ -12013,7 +12013,7 @@ BEGIN
       'error', history.error, 'errorMessage', history.error->>'message')
       INTO v_result
       FROM workhorse.dashboard_attempt_history_v1 history
-      LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = history.job_id
+      LEFT JOIN workhorse.dashboard_task_v1 task ON task.id = history.task_id
      WHERE history.attempt_id = v_record_id;
   END IF;
 
@@ -12035,7 +12035,7 @@ DECLARE
   v_canceled integer;
   v_retried_terminal integer;
 BEGIN
-  SELECT estimate INTO v_estimate FROM workhorse.dashboard_job_estimate_v1();
+  SELECT estimate INTO v_estimate FROM workhorse.dashboard_task_estimate_v1();
   -- reltuples is -1 until the first vacuum/analyze; treat unknown as small.
   IF v_estimate < 50000 THEN
     RETURN (
@@ -12043,15 +12043,15 @@ BEGIN
         SELECT COALESCE(r.state, o.state) AS state,
                EXISTS (
                  SELECT 1 FROM workhorse.dashboard_signal_wait_v1 signal_wait
-                  WHERE signal_wait.job_id = j.id
+                  WHERE signal_wait.task_id = j.id
                  UNION ALL
                  SELECT 1 FROM workhorse.dashboard_human_wait_v1 human_wait
-                  WHERE human_wait.job_id = j.id
+                  WHERE human_wait.task_id = j.id
                ) AS external_wait,
                COALESCE(r.current_attempt, o.current_attempt) AS attempt
-          FROM workhorse.dashboard_job_v1 j
-          LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
-          LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
+          FROM workhorse.dashboard_task_v1 j
+          LEFT JOIN workhorse.dashboard_task_runtime_v1 r ON r.task_id = j.id
+          LEFT JOIN workhorse.dashboard_task_outcome_v1 o ON o.task_id = j.id
       )
       SELECT jsonb_build_object(
         'all', count(*)::integer,
@@ -12068,26 +12068,26 @@ BEGIN
     );
   END IF;
 
-  -- job_runtime stays small by design (live jobs only), so live states are always counted
-  -- exactly; job and job_outcome grow without bound and switch to planner estimates.
+  -- task_runtime stays small by design (live tasks only), so live states are always counted
+  -- exactly; task and task_outcome grow without bound and switch to planner estimates.
   SELECT count(*) FILTER (WHERE state = 'blocked')::integer AS blocked,
          count(*) FILTER (WHERE EXISTS (
            SELECT 1 FROM workhorse.dashboard_signal_wait_v1 signal_wait
-            WHERE signal_wait.job_id = runtime.job_id
+            WHERE signal_wait.task_id = runtime.task_id
            UNION ALL
            SELECT 1 FROM workhorse.dashboard_human_wait_v1 human_wait
-            WHERE human_wait.job_id = runtime.job_id
+            WHERE human_wait.task_id = runtime.task_id
          ))::integer AS waiting,
          count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled,
          count(*) FILTER (WHERE state = 'ready')::integer AS queued,
          count(*) FILTER (WHERE state = 'active')::integer AS running,
          count(*) FILTER (WHERE current_attempt > 1)::integer AS retried
     INTO v_live
-    FROM workhorse.dashboard_job_runtime_v1 runtime;
+    FROM workhorse.dashboard_task_runtime_v1 runtime;
 
   FOREACH v_state IN ARRAY ARRAY['succeeded', 'failed', 'canceled'] LOOP
     EXECUTE 'EXPLAIN (FORMAT JSON) SELECT 1 '
-            'FROM workhorse.dashboard_job_outcome_v1 WHERE state=$1'
+            'FROM workhorse.dashboard_task_outcome_v1 WHERE state=$1'
       INTO v_plan USING v_state;
     CASE v_state
       WHEN 'succeeded' THEN
@@ -12099,7 +12099,7 @@ BEGIN
     END CASE;
   END LOOP;
   EXECUTE 'EXPLAIN (FORMAT JSON) SELECT 1 '
-          'FROM workhorse.dashboard_job_outcome_v1 WHERE current_attempt>1'
+          'FROM workhorse.dashboard_task_outcome_v1 WHERE current_attempt>1'
     INTO v_plan;
   v_retried_terminal := GREATEST(0, round((v_plan->0->'Plan'->>'Plan Rows')::numeric));
 
@@ -12121,16 +12121,16 @@ AS $$
                   THEN p_input->'configuredWorkers' END
            ) AS worker
   ), queue_values AS (
-    SELECT queue_name AS value FROM workhorse.dashboard_job_v1
+    SELECT queue_name AS value FROM workhorse.dashboard_task_v1
     UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1
   ), worker_values AS (
     SELECT worker AS value FROM configured_workers
-    UNION SELECT worker_id FROM workhorse.dashboard_job_runtime_v1 WHERE worker_id IS NOT NULL
+    UNION SELECT worker_id FROM workhorse.dashboard_task_runtime_v1 WHERE worker_id IS NOT NULL
     UNION SELECT worker_id FROM workhorse.dashboard_attempt_history_v1 WHERE worker_id IS NOT NULL
   ), type_values AS (
-    SELECT DISTINCT job_type AS value FROM workhorse.dashboard_job_v1
+    SELECT DISTINCT task_type AS value FROM workhorse.dashboard_task_v1
   ), tag_values AS (
-    SELECT DISTINCT unnest(tags) AS value FROM workhorse.dashboard_job_v1
+    SELECT DISTINCT unnest(tags) AS value FROM workhorse.dashboard_task_v1
   )
   SELECT jsonb_build_object(
     'queues', COALESCE((
@@ -12139,7 +12139,7 @@ AS $$
     'workers', COALESCE((
       SELECT jsonb_agg(value ORDER BY value) FROM worker_values WHERE value IS NOT NULL
     ), '[]'::jsonb),
-    'jobTypes', COALESCE((
+    'taskTypes', COALESCE((
       SELECT jsonb_agg(value ORDER BY value) FROM type_values
     ), '[]'::jsonb),
     'tags', COALESCE((
@@ -12160,8 +12160,8 @@ AS $$
     SELECT worker_id AS id FROM workhorse.dashboard_worker_registry_v1
     UNION SELECT id FROM configured_workers
   ), active AS (
-    SELECT worker_id AS id, count(*)::integer AS active_jobs, max(acquired_at) AS last_seen_at
-      FROM workhorse.dashboard_job_runtime_v1
+    SELECT worker_id AS id, count(*)::integer AS active_tasks, max(acquired_at) AS last_seen_at
+      FROM workhorse.dashboard_task_runtime_v1
      WHERE state = 'active' AND worker_id IN (SELECT id FROM fleet)
      GROUP BY worker_id
   ), recent_history AS (
@@ -12181,7 +12181,7 @@ AS $$
            registry.concurrency,
            registry.active_slots, registry.draining, registry.paused, registry.started_at,
            registry.last_heartbeat_at, registry.sdk_language, registry.sdk_version,
-           COALESCE(active.active_jobs, 0)::integer AS active_jobs,
+           COALESCE(active.active_tasks, 0)::integer AS active_tasks,
            COALESCE(recent_history.completed_attempts, 0)::integer AS completed_attempts,
            COALESCE(recent_history.failed_attempts, 0)::integer AS failed_attempts,
            recent_history.average_execution_ms,
@@ -12200,7 +12200,7 @@ AS $$
       SELECT jsonb_agg(jsonb_build_object(
         'id', id, 'queues', COALESCE(to_jsonb(queue_names), '[]'::jsonb),
         'scheduleNamespaces', COALESCE(to_jsonb(schedule_namespaces), '[]'::jsonb),
-        'hostname', hostname, 'pid', pid, 'activeJobs', active_jobs,
+        'hostname', hostname, 'pid', pid, 'activeTasks', active_tasks,
         'concurrency', concurrency, 'activeSlots', active_slots,
         'draining', COALESCE(draining, false), 'completedAttempts', completed_attempts,
         'failedAttempts', failed_attempts, 'averageExecutionMs', average_execution_ms,
@@ -12219,7 +12219,7 @@ LANGUAGE sql
 AS $$
   WITH schedule_rows AS (
     SELECT definition.namespace, definition.schedule_name, definition.cron_expression,
-           definition.queue_name, definition.job_type, definition.priority, definition.enabled,
+           definition.queue_name, definition.task_type, definition.priority, definition.enabled,
            definition.revision, definition.updated_at,
            count(occurrence.occurrence_at)::integer AS occurrence_count,
            max(occurrence.fired_at) AS last_fired_at,
@@ -12233,7 +12233,7 @@ AS $$
         ON occurrence.namespace = definition.namespace
        AND occurrence.schedule_name = definition.schedule_name
      GROUP BY definition.namespace, definition.schedule_name, definition.cron_expression,
-              definition.queue_name, definition.job_type, definition.priority,
+              definition.queue_name, definition.task_type, definition.priority,
               definition.enabled, definition.revision, definition.updated_at
      ORDER BY definition.namespace, definition.schedule_name
      LIMIT 50
@@ -12243,7 +12243,7 @@ AS $$
       'identity', jsonb_build_object(
         'kind', 'user', 'namespace', namespace, 'name', schedule_name),
       'namespace', namespace, 'name', schedule_name, 'cron', cron_expression,
-      'queue', queue_name, 'type', job_type, 'priority', priority, 'enabled', enabled,
+      'queue', queue_name, 'type', task_type, 'priority', priority, 'enabled', enabled,
       'active', enabled, 'revision', revision::text,
       'updatedAt', workhorse.dashboard_iso_v1(updated_at),
       'occurrenceCount', occurrence_count,
@@ -12252,12 +12252,12 @@ AS $$
     ) ORDER BY namespace, schedule_name), '[]'::jsonb) AS value FROM schedule_rows
   ), policy AS (
     SELECT * FROM workhorse.dashboard_maintenance_policy_v1 WHERE singleton
-  ), tasks AS (
+  ), routines AS (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
-      'task', state.task_name,
+      'routine', state.routine_name,
       'lastStartedAt', workhorse.dashboard_iso_v1(state.last_started_at),
       'lastCompletedAt', workhorse.dashboard_iso_v1(state.last_completed_at),
-      'due', CASE state.task_name
+      'due', CASE state.routine_name
         WHEN 'tick' THEN state.last_completed_at IS NULL
           OR state.last_completed_at <= clock_timestamp()
             - make_interval(secs => COALESCE(
@@ -12280,10 +12280,10 @@ AS $$
       'incomplete', state.last_started_at IS NOT NULL
         AND (state.last_completed_at IS NULL
           OR state.last_started_at > state.last_completed_at)
-    ) ORDER BY state.task_name), '[]'::jsonb) AS value
+    ) ORDER BY state.routine_name), '[]'::jsonb) AS value
       FROM workhorse.dashboard_maintenance_state_v1 state
       CROSS JOIN policy
-     WHERE state.task_name IN ('tick', 'history_partitions', 'history_retention', 'terminal_storage')
+     WHERE state.routine_name IN ('tick', 'history_partitions', 'history_retention', 'terminal_storage')
   )
   SELECT jsonb_build_object(
     'capturedAt', workhorse.dashboard_iso_v1(clock_timestamp()),
@@ -12296,8 +12296,8 @@ AS $$
         'terminalCleanupIntervalMs', policy.terminal_cleanup_interval_ms,
         'historyRetentionLocalTime', left(policy.history_retention_local_time::text, 5),
         'updatedAt', workhorse.dashboard_iso_v1(policy.updated_at)),
-      'tasks', tasks.value))
-    FROM policy CROSS JOIN schedules CROSS JOIN tasks;
+      'routines', routines.value))
+    FROM policy CROSS JOIN schedules CROSS JOIN routines;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.dashboard_queues_v1(p_input jsonb)
@@ -12319,12 +12319,12 @@ DECLARE
   v_rate_limit jsonb;
 BEGIN
   SELECT estimate >= 50000 INTO v_approximate
-    FROM workhorse.dashboard_job_estimate_v1();
+    FROM workhorse.dashboard_task_estimate_v1();
   v_health := workhorse.queue_health_v1();
 
   FOR v_row IN
     WITH known_queues AS (
-      SELECT queue_name FROM workhorse.dashboard_job_v1
+      SELECT queue_name FROM workhorse.dashboard_task_v1
       UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1
       UNION SELECT queue_name FROM workhorse.dashboard_concurrency_policy_v1
       UNION SELECT queue_name FROM workhorse.dashboard_rate_limit_policy_v1
@@ -12333,15 +12333,15 @@ BEGIN
              count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled,
              count(*) FILTER (WHERE state = 'ready')::integer AS ready,
              count(*) FILTER (WHERE state = 'active')::integer AS active
-        FROM workhorse.dashboard_job_runtime_v1 GROUP BY queue_name
+        FROM workhorse.dashboard_task_runtime_v1 GROUP BY queue_name
     ), terminal_counts AS (
-      SELECT job.queue_name,
+      SELECT task.queue_name,
              count(*) FILTER (WHERE outcome.state = 'succeeded')::integer AS succeeded,
              count(*) FILTER (WHERE outcome.state = 'failed')::integer AS failed,
              count(*) FILTER (WHERE outcome.state = 'canceled')::integer AS canceled
-        FROM workhorse.dashboard_job_outcome_v1 outcome
-        JOIN workhorse.dashboard_job_v1 job ON job.id = outcome.job_id
-       WHERE NOT v_approximate GROUP BY job.queue_name
+        FROM workhorse.dashboard_task_outcome_v1 outcome
+        JOIN workhorse.dashboard_task_v1 task ON task.id = outcome.task_id
+       WHERE NOT v_approximate GROUP BY task.queue_name
     )
     SELECT known.queue_name AS queue, COALESCE(control.paused, false) AS paused,
            COALESCE(live.scheduled, 0)::integer AS scheduled,
@@ -12362,9 +12362,9 @@ BEGIN
     IF v_approximate THEN
       FOREACH v_state IN ARRAY ARRAY['succeeded', 'failed', 'canceled'] LOOP
         EXECUTE 'EXPLAIN (FORMAT JSON) SELECT 1 '
-                'FROM workhorse.dashboard_job_outcome_v1 outcome '
-                'JOIN workhorse.dashboard_job_v1 job ON job.id=outcome.job_id '
-                'WHERE job.queue_name=$1 AND outcome.state=$2'
+                'FROM workhorse.dashboard_task_outcome_v1 outcome '
+                'JOIN workhorse.dashboard_task_v1 task ON task.id=outcome.task_id '
+                'WHERE task.queue_name=$1 AND outcome.state=$2'
           INTO v_plan USING v_row.queue, v_state;
         v_estimate := GREATEST(0, round((v_plan->0->'Plan'->>'Plan Rows')::numeric));
         CASE v_state
@@ -12446,25 +12446,25 @@ AS $$
     ) AS value FROM health
   ), waits AS (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
-      'jobId', job_id::text, 'queue', queue_name, 'jobType', job_type,
+      'taskId', task_id::text, 'queue', queue_name, 'taskType', task_type,
       'name', token_name, 'context', context, 'attempt', attempt,
       'createdAt', workhorse.dashboard_iso_v1(created_at),
       'deadlineAt', workhorse.dashboard_iso_v1(deadline_at)
-    ) ORDER BY created_at, job_id, token_name), '[]'::jsonb) AS value
+    ) ORDER BY created_at, task_id, token_name), '[]'::jsonb) AS value
       FROM (
         SELECT * FROM workhorse.dashboard_human_wait_v1
-         ORDER BY created_at, job_id, token_name LIMIT 50
+         ORDER BY created_at, task_id, token_name LIMIT 50
       ) bounded
   ), signal_waits AS (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
-      'jobId', job_id::text, 'queue', queue_name, 'jobType', job_type,
+      'taskId', task_id::text, 'queue', queue_name, 'taskType', task_type,
       'name', signal_name, 'attempt', attempt,
       'createdAt', workhorse.dashboard_iso_v1(created_at),
       'deadlineAt', workhorse.dashboard_iso_v1(deadline_at)
-    ) ORDER BY created_at, job_id, signal_name), '[]'::jsonb) AS value
+    ) ORDER BY created_at, task_id, signal_name), '[]'::jsonb) AS value
       FROM (
         SELECT * FROM workhorse.dashboard_signal_wait_v1
-         ORDER BY created_at, job_id, signal_name LIMIT 50
+         ORDER BY created_at, task_id, signal_name LIMIT 50
       ) bounded
   )
   SELECT jsonb_build_object(
@@ -12478,15 +12478,15 @@ AS $$
     FROM parameters CROSS JOIN diagnostics CROSS JOIN waits CROSS JOIN signal_waits;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.dashboard_job_detail_v1(p_input jsonb)
+CREATE OR REPLACE FUNCTION workhorse.dashboard_task_detail_v1(p_input jsonb)
 RETURNS jsonb
 LANGUAGE sql
 AS $$
   WITH parameters AS (
-    SELECT (p_input->>'id')::uuid AS job_id,
+    SELECT (p_input->>'id')::uuid AS task_id,
            COALESCE((p_input->>'canSignal')::boolean, false) AS can_signal
-  ), job AS (
-    SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.priority, j.payload,
+  ), task AS (
+    SELECT j.id, j.queue_name AS queue, j.task_type AS type, j.priority, j.payload,
            j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms,
            j.concurrency_key, j.created_at, j.tags,
            runtime.state AS runtime_state, runtime.current_attempt AS runtime_attempt,
@@ -12497,7 +12497,7 @@ AS $$
            runtime.cancel_requested_at, runtime.cancel_requested_by, runtime.cancel_reason,
            runtime.error AS runtime_error,
            outcome.state AS outcome_state, outcome.current_attempt AS outcome_attempt,
-           outcome.finished_at, workhorse.dashboard_job_result_v1(j.id) AS result,
+           outcome.finished_at, workhorse.dashboard_task_result_v1(j.id) AS result,
            outcome.error AS outcome_error,
            progress.progress_value, progress.revision::text AS progress_revision,
            progress.attempt AS progress_attempt,
@@ -12507,91 +12507,91 @@ AS $$
            progress.updated_at AS progress_updated_at,
            signal_wait.deadline_at AS signal_wait_deadline_at
       FROM parameters
-      JOIN workhorse.dashboard_job_v1 j ON j.id = parameters.job_id
-      LEFT JOIN workhorse.dashboard_job_runtime_v1 runtime ON runtime.job_id = j.id
-      LEFT JOIN workhorse.dashboard_job_outcome_v1 outcome ON outcome.job_id = j.id
-      LEFT JOIN workhorse.dashboard_job_progress_v1 progress ON progress.job_id = j.id
+      JOIN workhorse.dashboard_task_v1 j ON j.id = parameters.task_id
+      LEFT JOIN workhorse.dashboard_task_runtime_v1 runtime ON runtime.task_id = j.id
+      LEFT JOIN workhorse.dashboard_task_outcome_v1 outcome ON outcome.task_id = j.id
+      LEFT JOIN workhorse.dashboard_task_progress_v1 progress ON progress.task_id = j.id
       LEFT JOIN workhorse.dashboard_signal_wait_v1 signal_wait
-        ON signal_wait.job_id = j.id AND signal_wait.signal_name = runtime.wait_name
+        ON signal_wait.task_id = j.id AND signal_wait.signal_name = runtime.wait_name
   ), identity AS (
     SELECT jsonb_build_object(
-      'id', job.id::text, 'queue', job.queue, 'type', job.type, 'priority', job.priority,
-      'state', COALESCE(job.outcome_state, job.runtime_state, 'unknown'),
-      'createdAt', workhorse.dashboard_iso_v1(job.created_at),
-      'retryPolicy', job.retry_policy, 'maxAttempts', job.max_attempts,
-      'deadlineAt', workhorse.dashboard_iso_v1(job.deadline_at),
-      'executionTimeoutMs', job.execution_timeout_ms,
-      'concurrencyKey', job.concurrency_key,
-      'prerequisiteJobId', CASE WHEN count(dependency.*) = 1
-        THEN (array_agg(dependency.prerequisite_job_id))[1]::text END,
-      'prerequisiteJobIds', COALESCE(jsonb_agg(dependency.prerequisite_job_id::text
-        ORDER BY dependency.prerequisite_job_id)
-        FILTER (WHERE dependency.prerequisite_job_id IS NOT NULL), '[]'::jsonb),
+      'id', task.id::text, 'queue', task.queue, 'type', task.type, 'priority', task.priority,
+      'state', COALESCE(task.outcome_state, task.runtime_state, 'unknown'),
+      'createdAt', workhorse.dashboard_iso_v1(task.created_at),
+      'retryPolicy', task.retry_policy, 'maxAttempts', task.max_attempts,
+      'deadlineAt', workhorse.dashboard_iso_v1(task.deadline_at),
+      'executionTimeoutMs', task.execution_timeout_ms,
+      'concurrencyKey', task.concurrency_key,
+      'prerequisiteTaskId', CASE WHEN count(dependency.*) = 1
+        THEN (array_agg(dependency.prerequisite_task_id))[1]::text END,
+      'prerequisiteTaskIds', COALESCE(jsonb_agg(dependency.prerequisite_task_id::text
+        ORDER BY dependency.prerequisite_task_id)
+        FILTER (WHERE dependency.prerequisite_task_id IS NOT NULL), '[]'::jsonb),
       'dependencyPolicy', CASE WHEN count(dependency.*) > 0 THEN jsonb_build_object(
         'onSuccess', min(dependency.on_success),
         'onFailure', min(dependency.on_failure),
         'onCancellation', min(dependency.on_cancellation)) END,
       'dependencyReleasedAt', CASE WHEN bool_and(dependency.released_at IS NOT NULL)
         THEN workhorse.dashboard_iso_v1(max(dependency.released_at)) END,
-      'blockedReason', CASE WHEN job.runtime_state = 'blocked' AND count(dependency.*) > 0
+      'blockedReason', CASE WHEN task.runtime_state = 'blocked' AND count(dependency.*) > 0
         THEN 'prerequisite_pending' END
     ) AS value
-      FROM job
-      LEFT JOIN workhorse.dashboard_job_dependency_v1 dependency
-        ON dependency.dependent_job_id = job.id
-     GROUP BY job.id, job.queue, job.type, job.priority, job.outcome_state, job.runtime_state,
-              job.created_at, job.retry_policy, job.max_attempts, job.deadline_at,
-              job.execution_timeout_ms, job.concurrency_key
+      FROM task
+      LEFT JOIN workhorse.dashboard_task_dependency_v1 dependency
+        ON dependency.dependent_task_id = task.id
+     GROUP BY task.id, task.queue, task.type, task.priority, task.outcome_state, task.runtime_state,
+              task.created_at, task.retry_policy, task.max_attempts, task.deadline_at,
+              task.execution_timeout_ms, task.concurrency_key
   ), dependency_lineage AS (
     SELECT jsonb_build_object(
       'records', COALESCE(jsonb_agg(jsonb_build_object(
-        'dependentJobId', dependent_job_id::text,
-        'prerequisiteJobId', prerequisite_job_id::text,
+        'dependentTaskId', dependent_task_id::text,
+        'prerequisiteTaskId', prerequisite_task_id::text,
         'onSuccess', on_success, 'onFailure', on_failure,
         'onCancellation', on_cancellation,
         'createdAt', workhorse.dashboard_iso_v1(created_at),
         'releasedAt', workhorse.dashboard_iso_v1(released_at), 'resolution', resolution
-      ) ORDER BY dependent_job_id, prerequisite_job_id) FILTER (WHERE ordinal <= 100),
+      ) ORDER BY dependent_task_id, prerequisite_task_id) FILTER (WHERE ordinal <= 100),
         '[]'::jsonb),
       'truncated', count(*) > 100
     ) AS value
       FROM (
         SELECT dependency.*, row_number() OVER (
-          ORDER BY dependent_job_id, prerequisite_job_id) AS ordinal
+          ORDER BY dependent_task_id, prerequisite_task_id) AS ordinal
           FROM parameters
-          JOIN workhorse.dashboard_job_dependency_v1 dependency
-            ON dependency.dependent_job_id = parameters.job_id
-            OR dependency.prerequisite_job_id = parameters.job_id
-         ORDER BY dependent_job_id, prerequisite_job_id LIMIT 101
+          JOIN workhorse.dashboard_task_dependency_v1 dependency
+            ON dependency.dependent_task_id = parameters.task_id
+            OR dependency.prerequisite_task_id = parameters.task_id
+         ORDER BY dependent_task_id, prerequisite_task_id LIMIT 101
       ) bounded
   ), child_lineage AS (
     SELECT jsonb_build_object(
       'records', COALESCE(jsonb_agg(jsonb_build_object(
-        'parentJobId', parent_job_id::text, 'childJobId', child_job_id::text,
+        'parentTaskId', parent_task_id::text, 'childTaskId', child_task_id::text,
         'name', child_name, 'type', child_type,
         'createdAt', workhorse.dashboard_iso_v1(created_at),
         'joinedAt', workhorse.dashboard_iso_v1(joined_at),
         'outcomeState', outcome_state, 'error', outcome_error
-      ) ORDER BY created_at, parent_job_id, child_job_id) FILTER (WHERE ordinal <= 101),
+      ) ORDER BY created_at, parent_task_id, child_task_id) FILTER (WHERE ordinal <= 101),
         '[]'::jsonb),
       'truncated', count(*) > 101
     ) AS value
       FROM (
-        SELECT edge.*, child.job_type AS child_type, outcome.state AS outcome_state,
+        SELECT edge.*, child.task_type AS child_type, outcome.state AS outcome_state,
                outcome.error AS outcome_error,
-               row_number() OVER (ORDER BY edge.created_at, edge.parent_job_id,
-                                            edge.child_job_id) AS ordinal
+               row_number() OVER (ORDER BY edge.created_at, edge.parent_task_id,
+                                            edge.child_task_id) AS ordinal
           FROM parameters
-          JOIN workhorse.dashboard_job_child_v1 edge
-            ON edge.parent_job_id = parameters.job_id OR edge.child_job_id = parameters.job_id
-          JOIN workhorse.dashboard_job_v1 child ON child.id = edge.child_job_id
-          LEFT JOIN workhorse.dashboard_job_outcome_v1 outcome ON outcome.job_id = edge.child_job_id
-         ORDER BY edge.created_at, edge.parent_job_id, edge.child_job_id LIMIT 102
+          JOIN workhorse.dashboard_task_child_v1 edge
+            ON edge.parent_task_id = parameters.task_id OR edge.child_task_id = parameters.task_id
+          JOIN workhorse.dashboard_task_v1 child ON child.id = edge.child_task_id
+          LEFT JOIN workhorse.dashboard_task_outcome_v1 outcome ON outcome.task_id = edge.child_task_id
+         ORDER BY edge.created_at, edge.parent_task_id, edge.child_task_id LIMIT 102
       ) bounded
   ), redrive_lineage AS (
     SELECT jsonb_build_object(
       'records', COALESCE(jsonb_agg(jsonb_build_object(
-        'sourceJobId', source_job_id::text, 'targetJobId', target_job_id::text,
+        'sourceTaskId', source_task_id::text, 'targetTaskId', target_task_id::text,
         'requestedBy', requested_by, 'reason', reason,
         'requestIdPreview', request_id_preview, 'requestIdDigest', request_id_digest,
         'requestIdLength', request_id_length, 'sourceState', source_state,
@@ -12603,9 +12603,9 @@ AS $$
       FROM (
         SELECT lineage.*
           FROM parameters
-          CROSS JOIN LATERAL workhorse.redrive_lineage_v1(parameters.job_id, 101)
+          CROSS JOIN LATERAL workhorse.redrive_lineage_v1(parameters.task_id, 101)
             WITH ORDINALITY AS lineage(
-              source_job_id, target_job_id, requested_by, reason, request_id_preview,
+              source_task_id, target_task_id, requested_by, reason, request_id_preview,
               request_id_digest, request_id_length, source_state, target_initial_state,
               requested_at, ordinal
             )
@@ -12622,25 +12622,25 @@ AS $$
       'saturatedKeys', COALESCE((measured.value->>'saturated_keys')::integer, 0),
       'highestKeyActive', COALESCE((measured.value->>'highest_key_active')::integer, 0)
     ) END AS value
-      FROM job
+      FROM task
       LEFT JOIN workhorse.dashboard_concurrency_policy_v1 policy
-        ON policy.queue_name = job.queue
+        ON policy.queue_name = task.queue
       LEFT JOIN LATERAL (
         SELECT item AS value
-          FROM jsonb_array_elements(CASE WHEN job.runtime_state IS NULL THEN '[]'::jsonb
+          FROM jsonb_array_elements(CASE WHEN task.runtime_state IS NULL THEN '[]'::jsonb
             ELSE workhorse.queue_health_v1()->'concurrency_policies' END) item
-         WHERE item->>'queue_name' = job.queue
+         WHERE item->>'queue_name' = task.queue
       ) measured ON true
   ), signal_wait AS (
     SELECT CASE WHEN wait_name IS NOT NULL AND signal_wait_deadline_at IS NOT NULL
       THEN jsonb_build_object('name', wait_name, 'deadlineAt',
-        workhorse.dashboard_iso_v1(signal_wait_deadline_at)) END AS value FROM job
+        workhorse.dashboard_iso_v1(signal_wait_deadline_at)) END AS value FROM task
   ), progress AS (
     SELECT CASE WHEN progress_revision IS NOT NULL THEN jsonb_build_object(
       'value', progress_value, 'revision', progress_revision, 'attempt', progress_attempt,
       'fenceToken', progress_fence_token, 'workerId', progress_worker_id,
       'createdAt', workhorse.dashboard_iso_v1(progress_created_at),
-      'updatedAt', workhorse.dashboard_iso_v1(progress_updated_at)) END AS value FROM job
+      'updatedAt', workhorse.dashboard_iso_v1(progress_updated_at)) END AS value FROM task
   ), current_state AS (
     SELECT jsonb_build_object(
       'runtime', CASE WHEN runtime_state IS NOT NULL THEN jsonb_build_object(
@@ -12662,7 +12662,7 @@ AS $$
         'finishedAt', workhorse.dashboard_iso_v1(finished_at),
         'result', result, 'error', outcome_error) END,
       'result', result, 'error', COALESCE(outcome_error, runtime_error)
-    ) AS value FROM job
+    ) AS value FROM task
   ), batch_executions AS (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
       'id', batch_id, 'attempt', selected_attempt,
@@ -12672,33 +12672,33 @@ AS $$
       FROM (
         SELECT batch_id, selected_attempt, dispatched_at, batch_wide_failure,
                jsonb_agg(jsonb_build_object(
-                 'id', member_job_id, 'type', job_type, 'attempt', attempt,
+                 'id', member_task_id, 'type', task_type, 'attempt', attempt,
                  'outcome', outcome, 'error', error) ORDER BY ordinal) AS members
           FROM (
             SELECT dispatch.details->>'batch_id' AS batch_id,
                    dispatch.attempt AS selected_attempt,
                    dispatch.occurred_at AS dispatched_at,
                    EXISTS (
-                     SELECT 1 FROM workhorse.dashboard_job_event_v1 failure
-                      WHERE failure.job_id = dispatch.job_id
+                     SELECT 1 FROM workhorse.dashboard_task_event_v1 failure
+                      WHERE failure.task_id = dispatch.task_id
                         AND failure.attempt = dispatch.attempt
                         AND failure.event_type = 'batch_failed'
                         AND failure.details->>'batch_id' = dispatch.details->>'batch_id'
                    ) AS batch_wide_failure,
-                   member.ordinal, member.value->>'job_id' AS member_job_id,
-                   COALESCE(member_job.job_type, selected_job.job_type) AS job_type,
+                   member.ordinal, member.value->>'task_id' AS member_task_id,
+                   COALESCE(member_task.task_type, selected_task.task_type) AS task_type,
                    (member.value->>'attempt')::integer AS attempt,
                    history.outcome, history.error
               FROM parameters
-              JOIN workhorse.dashboard_job_event_v1 dispatch
-                ON dispatch.job_id = parameters.job_id AND dispatch.event_type = 'batch_dispatched'
+              JOIN workhorse.dashboard_task_event_v1 dispatch
+                ON dispatch.task_id = parameters.task_id AND dispatch.event_type = 'batch_dispatched'
               CROSS JOIN LATERAL jsonb_array_elements(dispatch.details->'members')
                 WITH ORDINALITY AS member(value, ordinal)
-              JOIN workhorse.dashboard_job_v1 selected_job ON selected_job.id = dispatch.job_id
-              LEFT JOIN workhorse.dashboard_job_v1 member_job
-                ON member_job.id = (member.value->>'job_id')::uuid
+              JOIN workhorse.dashboard_task_v1 selected_task ON selected_task.id = dispatch.task_id
+              LEFT JOIN workhorse.dashboard_task_v1 member_task
+                ON member_task.id = (member.value->>'task_id')::uuid
               LEFT JOIN workhorse.dashboard_attempt_history_v1 history
-                ON history.job_id = (member.value->>'job_id')::uuid
+                ON history.task_id = (member.value->>'task_id')::uuid
                AND history.attempt = (member.value->>'attempt')::integer
           ) batch_rows
          GROUP BY batch_id, selected_attempt, dispatched_at, batch_wide_failure
@@ -12715,7 +12715,7 @@ AS $$
       'error', error) ORDER BY attempt, attempt_id) FILTER (WHERE attempt_id IS NOT NULL),
       '[]'::jsonb) AS value
       FROM parameters
-      LEFT JOIN workhorse.dashboard_attempt_history_v1 history ON history.job_id = parameters.job_id
+      LEFT JOIN workhorse.dashboard_attempt_history_v1 history ON history.task_id = parameters.task_id
   ), checkpoints AS (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
       'name', checkpoint_name, 'value', checkpoint_value, 'attempt', attempt,
@@ -12724,8 +12724,8 @@ AS $$
     ) ORDER BY created_at, checkpoint_name) FILTER (WHERE checkpoint_name IS NOT NULL),
       '[]'::jsonb) AS value
       FROM parameters
-      LEFT JOIN workhorse.dashboard_job_checkpoint_v1 checkpoint
-        ON checkpoint.job_id = parameters.job_id
+      LEFT JOIN workhorse.dashboard_task_checkpoint_v1 checkpoint
+        ON checkpoint.task_id = parameters.task_id
   ), waits AS (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
       'name', wait_name, 'mode', mode, 'durationMs', duration_ms,
@@ -12735,23 +12735,23 @@ AS $$
       'createdAt', workhorse.dashboard_iso_v1(created_at)
     ) ORDER BY created_at, wait_name) FILTER (WHERE wait_name IS NOT NULL), '[]'::jsonb) AS value
       FROM parameters
-      LEFT JOIN workhorse.dashboard_job_wait_v1 wait_record ON wait_record.job_id = parameters.job_id
+      LEFT JOIN workhorse.dashboard_task_wait_v1 wait_record ON wait_record.task_id = parameters.task_id
   ), events AS (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
       'id', event_id::text, 'attempt', attempt, 'type', event_type,
       'details', details, 'occurredAt', workhorse.dashboard_iso_v1(occurred_at)
     ) ORDER BY occurred_at, event_id) FILTER (WHERE event_id IS NOT NULL), '[]'::jsonb) AS value
       FROM parameters
-      LEFT JOIN workhorse.dashboard_job_event_v1 event_record
-        ON event_record.job_id = parameters.job_id
+      LEFT JOIN workhorse.dashboard_task_event_v1 event_record
+        ON event_record.task_id = parameters.task_id
   )
   SELECT jsonb_build_object(
-    'tags', job.tags,
+    'tags', task.tags,
     'canCompleteHumanWait', COALESCE((p_input->>'canCompleteHumanWait')::boolean, false),
     'humanWait', (SELECT jsonb_build_object(
       'name', wait.token_name, 'context', wait.context,
       'deadlineAt', workhorse.dashboard_iso_v1(wait.deadline_at))
-      FROM workhorse.dashboard_human_wait_v1 wait WHERE wait.job_id = job.id),
+      FROM workhorse.dashboard_human_wait_v1 wait WHERE wait.task_id = task.id),
     'identity', identity.value,
     'dependencyLineage', dependency_lineage.value,
     'childLineage', child_lineage.value,
@@ -12759,7 +12759,7 @@ AS $$
     'concurrencyPolicy', concurrency_policy.value,
     'signalWait', signal_wait.value,
     'canSignal', parameters.can_signal,
-    'payload', job.payload,
+    'payload', task.payload,
     'progress', progress.value,
     'durability', NULL,
     'current', current_state.value,
@@ -12770,7 +12770,7 @@ AS $$
     'events', events.value
   )
     FROM parameters
-    JOIN job ON true
+    JOIN task ON true
     JOIN identity ON true
     JOIN dependency_lineage ON true
     JOIN child_lineage ON true
@@ -12812,20 +12812,20 @@ AS $$
           to_jsonb(maintenance.application_statistics_group_limit)),
         ('maintenance', 'statisticsRecomputeBuckets', 'statistics_recompute_buckets',
           to_jsonb(maintenance.application_statistics_recompute_buckets)),
-        ('retention', 'jobIdentityRetentionDays', 'job_identity_retention_days',
-          to_jsonb(retention.application_job_identity_retention_days)),
+        ('retention', 'taskIdentityRetentionDays', 'task_identity_retention_days',
+          to_jsonb(retention.application_task_identity_retention_days)),
         ('retention', 'terminalOutcomeRetentionDays', 'terminal_outcome_retention_days',
           to_jsonb(retention.application_terminal_outcome_retention_days)),
-        ('retention', 'jobEventRetentionDays', 'job_event_retention_days',
-          to_jsonb(retention.application_job_event_retention_days)),
+        ('retention', 'taskEventRetentionDays', 'task_event_retention_days',
+          to_jsonb(retention.application_task_event_retention_days)),
         ('retention', 'attemptHistoryRetentionDays', 'attempt_history_retention_days',
           to_jsonb(retention.application_attempt_history_retention_days)),
         ('retention', 'scheduleOccurrenceRetentionDays', 'schedule_occurrence_retention_days',
           to_jsonb(retention.application_schedule_occurrence_retention_days)),
         ('retention', 'statisticsRetentionDays', 'statistics_retention_days',
           to_jsonb(retention.application_statistics_retention_days)),
-        ('retention', 'terminalJobPruneLimit', 'terminal_job_prune_limit',
-          to_jsonb(retention.application_terminal_job_prune_limit)),
+        ('retention', 'terminalTaskPruneLimit', 'terminal_task_prune_limit',
+          to_jsonb(retention.application_terminal_task_prune_limit)),
         ('retention', 'historyPartitionsPerPass', 'history_partitions_per_pass',
           to_jsonb(retention.application_history_partitions_per_pass)),
         ('retention', 'defaultPartitionRowsPerPass', 'default_partition_rows_per_pass',
@@ -12855,7 +12855,7 @@ AS $$
   ), health AS (
     SELECT workhorse.queue_health_v1() AS document
   ), enqueue_rate AS (
-    SELECT COALESCE(sum(stat.enqueued), 0)::bigint AS jobs
+    SELECT COALESCE(sum(stat.enqueued), 0)::bigint AS tasks
       FROM workhorse.stat_buckets_v1(
         date_bin('1 minute', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC')
           - interval '1 hour' + interval '1 minute',
@@ -12871,7 +12871,7 @@ AS $$
              'heartbeatMs', heartbeat_ms,
              'pollMs', poll_ms,
              'maintenanceIntervalMs', maintenance_interval_ms,
-             'maintenanceTaskPollMs', maintenance_task_poll_ms,
+             'maintenanceRoutinePollMs', maintenance_routine_poll_ms,
              'registryIntervalMs', registry_interval_ms,
              'lastSeenAt', workhorse.dashboard_iso_v1(last_heartbeat_at)
            ) ORDER BY worker_id), '[]'::jsonb) AS document
@@ -12896,13 +12896,13 @@ AS $$
       'updatedAt', workhorse.dashboard_iso_v1(maintenance.updated_at)
     ),
     'retention', jsonb_build_object(
-      'jobIdentityRetentionDays', retention.job_identity_retention_days,
+      'taskIdentityRetentionDays', retention.task_identity_retention_days,
       'terminalOutcomeRetentionDays', retention.terminal_outcome_retention_days,
-      'jobEventRetentionDays', retention.job_event_retention_days,
+      'taskEventRetentionDays', retention.task_event_retention_days,
       'attemptHistoryRetentionDays', retention.attempt_history_retention_days,
       'scheduleOccurrenceRetentionDays', retention.schedule_occurrence_retention_days,
       'statisticsRetentionDays', retention.statistics_retention_days,
-      'terminalJobPruneLimit', retention.terminal_job_prune_limit,
+      'terminalTaskPruneLimit', retention.terminal_task_prune_limit,
       'historyPartitionsPerPass', retention.history_partitions_per_pass,
       'defaultPartitionRowsPerPass', retention.default_partition_rows_per_pass,
       'occurrenceRowsPerPass', retention.occurrence_rows_per_pass,
@@ -12920,14 +12920,14 @@ AS $$
           (health.document->>'last_run_at')::timestamptz)
       ),
       'defaultHistoryRows', jsonb_build_object(
-        'jobEvents', (health.document->>'default_event_rows')::integer,
+        'taskEvents', (health.document->>'default_event_rows')::integer,
         'attemptHistory', (health.document->>'default_attempt_rows')::integer
       ),
       'defaultHistoryRowsCapped', jsonb_build_object(
-        'jobEvents', (health.document->>'default_event_rows_capped')::boolean,
+        'taskEvents', (health.document->>'default_event_rows_capped')::boolean,
         'attemptHistory', (health.document->>'default_attempt_rows_capped')::boolean
       ),
-      'enqueueRate', jsonb_build_object('jobs', enqueue_rate.jobs, 'windowMs', 3600000)
+      'enqueueRate', jsonb_build_object('tasks', enqueue_rate.tasks, 'windowMs', 3600000)
     ),
     'workers', workers.document
   )
@@ -13059,7 +13059,7 @@ WITH rolled AS (
       FROM current_stats stat
      GROUP BY stat.queue_name
   ), queue_names AS (
-    SELECT queue_name FROM workhorse.dashboard_job_runtime_v1
+    SELECT queue_name FROM workhorse.dashboard_task_runtime_v1
     UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1
     UNION SELECT queue_name FROM workhorse.dashboard_concurrency_policy_v1
     UNION SELECT queue_name FROM workhorse.dashboard_rate_limit_policy_v1
@@ -13074,15 +13074,15 @@ WITH rolled AS (
            count(*) FILTER (WHERE state = 'active')::integer AS active,
            count(*) FILTER (WHERE state = 'scheduled'
              AND current_attempt > 1)::integer AS retrying
-      FROM workhorse.dashboard_job_runtime_v1 GROUP BY queue_name
+      FROM workhorse.dashboard_task_runtime_v1 GROUP BY queue_name
   ), priorities AS (
-    SELECT runtime.queue_name, job.priority, count(*)::integer AS ready,
+    SELECT runtime.queue_name, task.priority, count(*)::integer AS ready,
            (extract(epoch FROM v_now - min(runtime.ready_at)) * 1000)::text
              AS oldest_ready_ms
-      FROM workhorse.dashboard_job_runtime_v1 runtime
-      JOIN workhorse.dashboard_job_v1 job ON job.id = runtime.job_id
+      FROM workhorse.dashboard_task_runtime_v1 runtime
+      JOIN workhorse.dashboard_task_v1 task ON task.id = runtime.task_id
      WHERE runtime.state = 'ready'
-     GROUP BY runtime.queue_name, job.priority
+     GROUP BY runtime.queue_name, task.priority
   ), rows AS (
     SELECT queue_names.queue_name AS queue, COALESCE(control.paused, false) AS paused,
            COALESCE(runtime.ready, 0)::integer AS ready, runtime.oldest_ready_ms,
@@ -13152,7 +13152,7 @@ WITH rolled AS (
     ),
     (
 WITH rows AS (
-    SELECT stat.queue_name AS queue, stat.job_type AS type,
+    SELECT stat.queue_name AS queue, stat.task_type AS type,
            sum(stat.attempt_succeeded + stat.attempt_failed + stat.attempt_retry
              + stat.attempt_lease_expired + stat.attempt_canceled
              + stat.attempt_other)::integer AS attempts,
@@ -13163,7 +13163,7 @@ WITH rows AS (
              FILTER (WHERE stat.last_error IS NOT NULL))[1] AS last_error,
            max(stat.last_attempt_at) AS last_seen_at
       FROM current_stats stat
-     GROUP BY stat.queue_name, stat.job_type
+     GROUP BY stat.queue_name, stat.task_type
     HAVING sum(stat.attempt_failed + stat.attempt_retry
       + stat.attempt_lease_expired + stat.attempt_other) > 0
      ORDER BY errors DESC, last_seen_at DESC
@@ -13191,7 +13191,7 @@ WITH rows AS (
            AND expires_at <= v_now + interval '30 seconds')::integer AS expiring_soon,
          count(*) FILTER (WHERE state = 'scheduled'
            AND run_at < v_now - interval '10 seconds')::integer AS due_but_unpromoted
-    INTO v_runtime FROM workhorse.dashboard_job_runtime_v1;
+    INTO v_runtime FROM workhorse.dashboard_task_runtime_v1;
 
   WITH bounds(upper_bound_ms, ordering) AS (
     VALUES (60000, 1), (300000, 2), (900000, 3), (3600000, 4), (NULL::integer, 5)
@@ -13204,7 +13204,7 @@ WITH rows AS (
              ELSE NULL
            END AS upper_bound_ms,
            count(*)::integer AS count
-      FROM workhorse.dashboard_job_runtime_v1
+      FROM workhorse.dashboard_task_runtime_v1
      WHERE state = 'scheduled' AND current_attempt > 1
      GROUP BY 1
   )
@@ -13215,12 +13215,12 @@ WITH rows AS (
     FROM bounds LEFT JOIN counts ON counts.upper_bound_ms IS NOT DISTINCT FROM bounds.upper_bound_ms;
 
   WITH rows AS (
-    SELECT job.queue_name AS queue, job.job_type AS type, count(*)::integer AS count
-      FROM workhorse.dashboard_job_runtime_v1 runtime
-      JOIN workhorse.dashboard_job_v1 job ON job.id = runtime.job_id
+    SELECT task.queue_name AS queue, task.task_type AS type, count(*)::integer AS count
+      FROM workhorse.dashboard_task_runtime_v1 runtime
+      JOIN workhorse.dashboard_task_v1 task ON task.id = runtime.task_id
      WHERE runtime.state = 'scheduled' AND runtime.current_attempt > 1
-     GROUP BY job.queue_name, job.job_type
-     ORDER BY count DESC, job.queue_name, job.job_type
+     GROUP BY task.queue_name, task.task_type
+     ORDER BY count DESC, task.queue_name, task.task_type
      LIMIT 3
   )
   SELECT COALESCE(jsonb_agg(jsonb_build_object(
@@ -13229,21 +13229,21 @@ WITH rows AS (
     INTO v_retry_types FROM rows;
 
   v_categories := jsonb_build_array(
-    jsonb_build_object('category', 'jobIdentity',
-      'retentionDays', (v_health->>'job_identity_retention_days')::integer,
-      'lagMs', (v_health->>'job_identity_lag_ms')::numeric,
+    jsonb_build_object('category', 'taskIdentity',
+      'retentionDays', (v_health->>'task_identity_retention_days')::integer,
+      'lagMs', (v_health->>'task_identity_lag_ms')::numeric,
       'oldestRetainedAt', workhorse.dashboard_iso_v1(
-        (v_health->>'oldest_job_identity_at')::timestamptz), 'prunedByPartition', false),
+        (v_health->>'oldest_task_identity_at')::timestamptz), 'prunedByPartition', false),
     jsonb_build_object('category', 'terminalOutcome',
       'retentionDays', (v_health->>'terminal_outcome_retention_days')::integer,
       'lagMs', (v_health->>'terminal_outcome_lag_ms')::numeric,
       'oldestRetainedAt', workhorse.dashboard_iso_v1(
         (v_health->>'oldest_terminal_outcome_at')::timestamptz), 'prunedByPartition', false),
-    jsonb_build_object('category', 'jobEvents',
-      'retentionDays', (v_health->>'job_event_retention_days')::integer,
-      'lagMs', (v_health->>'job_event_lag_ms')::numeric,
+    jsonb_build_object('category', 'taskEvents',
+      'retentionDays', (v_health->>'task_event_retention_days')::integer,
+      'lagMs', (v_health->>'task_event_lag_ms')::numeric,
       'oldestRetainedAt', workhorse.dashboard_iso_v1(
-        (v_health->>'oldest_job_event_at')::timestamptz), 'prunedByPartition', true),
+        (v_health->>'oldest_task_event_at')::timestamptz), 'prunedByPartition', true),
     jsonb_build_object('category', 'attemptHistory',
       'retentionDays', (v_health->>'attempt_history_retention_days')::integer,
       'lagMs', (v_health->>'attempt_history_lag_ms')::numeric,
@@ -13278,20 +13278,20 @@ WITH rows AS (
     'oldestRetainedAt', v_oldest_retained->>'oldestRetainedAt',
     'oldestRetainedCategory', v_oldest_retained->>'category',
     'eligibleHistoryPartitions', jsonb_build_object(
-      'jobEvents', (v_health->>'eligible_event_partitions')::integer,
+      'taskEvents', (v_health->>'eligible_event_partitions')::integer,
       'attemptHistory', (v_health->>'eligible_attempt_partitions')::integer),
     'defaultHistoryRows', jsonb_build_object(
-      'jobEvents', (v_health->>'default_event_rows')::integer,
+      'taskEvents', (v_health->>'default_event_rows')::integer,
       'attemptHistory', (v_health->>'default_attempt_rows')::integer),
     'defaultHistoryRowsCapped', jsonb_build_object(
-      'jobEvents', (v_health->>'default_event_rows_capped')::boolean,
+      'taskEvents', (v_health->>'default_event_rows_capped')::boolean,
       'attemptHistory', (v_health->>'default_attempt_rows_capped')::boolean)
   );
 
   WITH names(relation, ordering) AS (
-    VALUES ('job', 1), ('job_outcome', 2), ('job_runtime', 3), ('job_query', 4),
-           ('job_event', 5), ('attempt_history', 6), ('schedule_occurrence', 7),
-           ('job_stat_bucket', 8), ('job_stat_bucket_hour', 9), ('job_stat_bucket_day', 10)
+    VALUES ('task', 1), ('task_outcome', 2), ('task_runtime', 3), ('task_query', 4),
+           ('task_event', 5), ('attempt_history', 6), ('schedule_occurrence', 7),
+           ('task_stat_bucket', 8), ('task_stat_bucket_hour', 9), ('task_stat_bucket_day', 10)
   ), observations AS (
     SELECT value FROM jsonb_array_elements(v_health->'observations'->'relations') value
   ), rows AS (
@@ -13336,7 +13336,7 @@ WITH rows AS (
   SELECT COALESCE(jsonb_agg(jsonb_build_object(
            'day', value->>'day',
            'startsAt', workhorse.dashboard_iso_v1((value->>'starts_at')::timestamptz),
-           'eventExists', (value->>'has_job_events')::boolean,
+           'eventExists', (value->>'has_task_events')::boolean,
            'attemptExists', (value->>'has_attempt_history')::boolean
          ) ORDER BY value->>'day'), '[]'::jsonb)
     INTO v_partitions FROM jsonb_array_elements(v_health->'history_partition_days') value;
@@ -13374,7 +13374,7 @@ WITH rows AS (
         'active', v_runtime.active, 'expired', v_runtime.expired,
         'expiringSoon', v_runtime.expiring_soon, 'recovered', (v_summary->>'recovered')::integer),
       'dependencies', jsonb_build_object(
-        'blockedJobs', (v_health->>'dependency_blocked_jobs')::integer,
+        'blockedTasks', (v_health->>'dependency_blocked_tasks')::integer,
         'pendingEdges', (v_health->>'dependency_pending_edges')::integer,
         'failedResolutions', (v_health->>'dependency_failed_resolutions')::integer,
         'retentionPruneStarved', (v_health->>'dependency_retention_prune_starved')::boolean,
@@ -13459,7 +13459,7 @@ WITH parameters AS NOT MATERIALIZED (
            COALESCE(NULLIF($1->>'filter', ''), 'all') AS filter,
            NULLIF($1->>'queue', '') AS queue_filter,
            NULLIF($1->>'worker', '') AS worker_filter,
-           NULLIF($1->>'jobType', '') AS type_filter,
+           NULLIF($1->>'taskType', '') AS type_filter,
            NULLIF($1->>'priority', '')::integer AS priority_filter,
            COALESCE(ARRAY(SELECT jsonb_array_elements_text($1->'tags')), ARRAY[]::text[])
              AS tag_filter,
@@ -13474,27 +13474,27 @@ WITH parameters AS NOT MATERIALIZED (
            COALESCE(($1->>'canCompleteHumanWait')::boolean, false)
              AS can_complete_human_wait
   ), task_rows AS NOT MATERIALIZED (
-    SELECT r.job_id AS id, j.queue_name AS queue, j.job_type AS type, j.priority,
+    SELECT r.task_id AS id, j.queue_name AS queue, j.task_type AS type, j.priority,
            r.state, r.current_attempt AS attempt, j.tags,
            r.worker_id AS current_worker_id, r.wait_name, r.updated_at
-      FROM workhorse.dashboard_job_runtime_v1 r
-      JOIN workhorse.dashboard_job_v1 j ON j.id = r.job_id
+      FROM workhorse.dashboard_task_runtime_v1 r
+      JOIN workhorse.dashboard_task_v1 j ON j.id = r.task_id
     UNION ALL
-    SELECT o.job_id AS id, j.queue_name AS queue, j.job_type AS type, j.priority,
+    SELECT o.task_id AS id, j.queue_name AS queue, j.task_type AS type, j.priority,
            o.state, o.current_attempt AS attempt, j.tags,
            NULL::text AS current_worker_id, NULL::text AS wait_name, o.updated_at
-      FROM workhorse.dashboard_job_outcome_v1 o
-      JOIN workhorse.dashboard_job_v1 j ON j.id = o.job_id
+      FROM workhorse.dashboard_task_outcome_v1 o
+      JOIN workhorse.dashboard_task_v1 j ON j.id = o.task_id
   ), filtered AS NOT MATERIALIZED (
     SELECT task_rows.* FROM task_rows CROSS JOIN parameters
      WHERE CASE parameters.filter
        WHEN 'blocked' THEN task_rows.state = 'blocked'
        WHEN 'waiting' THEN EXISTS (
          SELECT 1 FROM workhorse.dashboard_signal_wait_v1 signal_wait
-          WHERE signal_wait.job_id = task_rows.id
+          WHERE signal_wait.task_id = task_rows.id
          UNION ALL
          SELECT 1 FROM workhorse.dashboard_human_wait_v1 human_wait
-          WHERE human_wait.job_id = task_rows.id
+          WHERE human_wait.task_id = task_rows.id
        )
        WHEN 'scheduled' THEN task_rows.state = 'scheduled'
        WHEN 'retried' THEN task_rows.attempt > 1
@@ -13509,12 +13509,12 @@ WITH parameters AS NOT MATERIALIZED (
        AND (parameters.worker_filter IS NULL OR COALESCE(
          task_rows.current_worker_id,
          (
-           SELECT wait.worker_id FROM workhorse.dashboard_job_wait_v1 wait
-            WHERE wait.job_id = task_rows.id AND wait.wait_name = task_rows.wait_name
+           SELECT wait.worker_id FROM workhorse.dashboard_task_wait_v1 wait
+            WHERE wait.task_id = task_rows.id AND wait.wait_name = task_rows.wait_name
          ),
          (
            SELECT history.worker_id FROM workhorse.dashboard_attempt_history_v1 history
-            WHERE history.job_id = task_rows.id
+            WHERE history.task_id = task_rows.id
             ORDER BY history.attempt DESC LIMIT 1
          )
        ) = parameters.worker_filter)
@@ -13536,15 +13536,15 @@ WITH parameters AS NOT MATERIALIZED (
      ORDER BY __order__
      LIMIT (SELECT page_size FROM parameters)
   ), page AS (
-    SELECT j.id, j.queue_name AS queue, j.job_type AS type, page_ids.priority,
+    SELECT j.id, j.queue_name AS queue, j.task_type AS type, page_ids.priority,
            COALESCE(r.state, o.state) AS state,
            CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
            COALESCE((
-             SELECT jsonb_agg(dependency.prerequisite_job_id::text
-                              ORDER BY dependency.prerequisite_job_id)
-               FROM workhorse.dashboard_job_dependency_v1 dependency
-              WHERE dependency.dependent_job_id = j.id AND dependency.released_at IS NULL
-           ), '[]'::jsonb) AS prerequisite_job_ids,
+             SELECT jsonb_agg(dependency.prerequisite_task_id::text
+                              ORDER BY dependency.prerequisite_task_id)
+               FROM workhorse.dashboard_task_dependency_v1 dependency
+              WHERE dependency.dependent_task_id = j.id AND dependency.released_at IS NULL
+           ), '[]'::jsonb) AS prerequisite_task_ids,
            COALESCE(r.current_attempt, o.current_attempt) AS attempt,
            j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.tags,
            COALESCE(r.run_at, o.run_at) AS run_at,
@@ -13560,23 +13560,23 @@ WITH parameters AS NOT MATERIALIZED (
            human_wait.deadline_at AS human_wait_deadline_at,
            enqueued_event.details AS enqueued_details
       FROM page_ids
-      JOIN workhorse.dashboard_job_v1 j ON j.id = page_ids.id
-      LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
-      LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
-      LEFT JOIN workhorse.dashboard_job_wait_v1 durable_wait
-        ON durable_wait.job_id = j.id AND durable_wait.wait_name = r.wait_name
+      JOIN workhorse.dashboard_task_v1 j ON j.id = page_ids.id
+      LEFT JOIN workhorse.dashboard_task_runtime_v1 r ON r.task_id = j.id
+      LEFT JOIN workhorse.dashboard_task_outcome_v1 o ON o.task_id = j.id
+      LEFT JOIN workhorse.dashboard_task_wait_v1 durable_wait
+        ON durable_wait.task_id = j.id AND durable_wait.wait_name = r.wait_name
       LEFT JOIN workhorse.dashboard_signal_wait_v1 signal_wait
-        ON signal_wait.job_id = j.id AND signal_wait.signal_name = r.wait_name
+        ON signal_wait.task_id = j.id AND signal_wait.signal_name = r.wait_name
       LEFT JOIN workhorse.dashboard_human_wait_v1 human_wait
-        ON human_wait.job_id = j.id AND human_wait.token_name = r.wait_name
+        ON human_wait.task_id = j.id AND human_wait.token_name = r.wait_name
       LEFT JOIN LATERAL (
-        SELECT event.details FROM workhorse.dashboard_job_event_v1 event
-         WHERE event.job_id = j.id AND event.event_type = 'enqueued'
+        SELECT event.details FROM workhorse.dashboard_task_event_v1 event
+         WHERE event.task_id = j.id AND event.event_type = 'enqueued'
          ORDER BY event.occurred_at, event.event_id LIMIT 1
       ) enqueued_event ON true
       LEFT JOIN LATERAL (
         SELECT history.worker_id FROM workhorse.dashboard_attempt_history_v1 history
-         WHERE history.job_id = j.id ORDER BY history.attempt DESC LIMIT 1
+         WHERE history.task_id = j.id ORDER BY history.attempt DESC LIMIT 1
       ) attempt_worker ON page_ids.worker_filter IS NOT NULL
   )
   SELECT jsonb_build_object(
@@ -13585,7 +13585,7 @@ WITH parameters AS NOT MATERIALIZED (
     'filter', parameters.filter,
     'queue', parameters.queue_filter,
     'worker', parameters.worker_filter,
-    'jobType', parameters.type_filter,
+    'taskType', parameters.type_filter,
     'priority', parameters.priority_filter,
     'sort', parameters.sort,
     'tags', to_jsonb(parameters.tag_filter),
@@ -13603,10 +13603,10 @@ WITH parameters AS NOT MATERIALIZED (
       THEN (SELECT jsonb_build_object('id', id::text, 'priority', priority,
         'updatedAt', to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))
       FROM page_ids ORDER BY CASE WHEN parameters.sort = 'priority' THEN priority END DESC, updated_at DESC, id DESC LIMIT 1) END,
-    'jobs', COALESCE((
+    'tasks', COALESCE((
       SELECT jsonb_agg(jsonb_build_object(
         'id', id::text, 'queue', queue, 'type', type, 'priority', priority, 'state', state,
-        'blockedReason', blocked_reason, 'prerequisiteJobIds', prerequisite_job_ids,
+        'blockedReason', blocked_reason, 'prerequisiteTaskIds', prerequisite_task_ids,
         'attempt', attempt, 'maxAttempts', max_attempts, 'retryPolicy', retry_policy,
         'deadlineAt', workhorse.dashboard_iso_v1(deadline_at),
         'executionTimeoutMs', execution_timeout_ms, 'tags', tags,

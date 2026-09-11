@@ -34,7 +34,7 @@ const pythonPublicSource = ["client.py", "admin.py", "worker.py", "types.py"]
 const goPublicSource = [
   "admin_protocol.go",
   "batch.go",
-  "child_jobs.go",
+  "child_tasks.go",
   "contracts.go",
   "durability.go",
   "external_waits.go",
@@ -172,7 +172,7 @@ const crossSdkGuidePaths = [
   "agentic-flow.mdx",
   "batch-handlers.mdx",
   "cancellation.mdx",
-  "child-jobs.mdx",
+  "child-tasks.mdx",
   "concurrency-policies.mdx",
   "contracts.mdx",
   "dead-letters.mdx",
@@ -182,7 +182,7 @@ const crossSdkGuidePaths = [
   "enqueue.mdx",
   "human-waits.mdx",
   "idempotency.mdx",
-  "job-dependencies.mdx",
+  "task-dependencies.mdx",
   "operations.mdx",
   "priority.mdx",
   "progress.mdx",
@@ -251,7 +251,7 @@ for (const guidePath of crossSdkGuidePaths) {
         // The fence sweep above already proved this snippet parses and is gofmt output.
         for (const match of unindented.matchAll(/\b(?:queue|admin|worker|handler)\.([A-Z]\w*)/g)) {
           const name = match[1]!;
-          if (name === "Job") continue;
+          if (name === "Task") continue;
           if (!new RegExp(`\\bfunc \\([^)]*\\) ${name}\\(`).test(goPublicSource)) {
             throw new Error(`${guidePath} uses unknown Go Workhorse method ${name}`);
           }
@@ -373,7 +373,7 @@ function playbookProseLanguages(sentence: string, start: number, end: number): P
 }
 
 function playbookFenceUses(fence: string, identifier: string): boolean {
-  // `Admin.getJob` is satisfied by `new Admin(pool).getJob(jobId)`: the member must appear as a
+  // `Admin.getTask` is satisfied by `new Admin(pool).getTask(taskId)`: the member must appear as a
   // whole word, and each qualifier may end a longer name such as `NewAdmin`.
   const segments = identifier.replace(/\(.*\)$/, "").split(".");
   const member = segments.pop()!;

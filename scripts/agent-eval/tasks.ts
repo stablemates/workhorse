@@ -38,7 +38,7 @@ export const documentationHost = "workhorse.run";
  */
 export const taskText = [
   "An existing application already uses PostgreSQL and inserts an order row.",
-  "Add a background job that sends the confirmation email through an external HTTP provider,",
+  "Add a background task that sends the confirmation email through an external HTTP provider,",
   "enqueued alongside the order write, plus the worker that handles it.",
 ].join(" ");
 

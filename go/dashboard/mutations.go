@@ -136,7 +136,7 @@ func (service *backend) cancelTask(ctx context.Context, input any, actor string)
 	if row["status"] == "not_found" {
 		return nil, &RPCError{Status: 404, Code: "NOT_FOUND", Message: "Task not found"}
 	}
-	return map[string]any{"status": row["status"], "jobId": value["id"], "state": row["state"], "currentAttempt": row["current_attempt"], "requestedAt": timestamp(row["requested_at"]), "requestedBy": row["requested_by"], "reason": row["reason"], "finishedAt": timestamp(row["finished_at"])}, nil
+	return map[string]any{"status": row["status"], "taskId": value["id"], "state": row["state"], "currentAttempt": row["current_attempt"], "requestedAt": timestamp(row["requested_at"]), "requestedBy": row["requested_by"], "reason": row["reason"], "finishedAt": timestamp(row["finished_at"])}, nil
 }
 
 // PostgreSQL returns a bulk redrive cursor as exact microsecond text, and every backend has to
@@ -174,15 +174,15 @@ func redriveLimit(value any) int {
 
 func redriveResult(result workhorse.RedriveResult) map[string]any {
 	value := map[string]any{
-		"status":      result.Status,
-		"sourceJobId": result.SourceJobID,
-		"targetJobId": nil,
-		"sourceState": nil,
-		"targetState": nil,
-		"requestedAt": nil,
+		"status":       result.Status,
+		"sourceTaskId": result.SourceTaskID,
+		"targetTaskId": nil,
+		"sourceState":  nil,
+		"targetState":  nil,
+		"requestedAt":  nil,
 	}
-	if result.TargetJobID != nil {
-		value["targetJobId"] = *result.TargetJobID
+	if result.TargetTaskID != nil {
+		value["targetTaskId"] = *result.TargetTaskID
 	}
 	if result.SourceState != nil {
 		value["sourceState"] = string(*result.SourceState)
@@ -214,8 +214,8 @@ func (service *backend) redriveDeadLetters(ctx context.Context, input any, actor
 	if queue, ok := value["queue"].(string); ok {
 		filter.Queue = queue
 	}
-	if jobType, ok := value["jobType"].(string); ok {
-		filter.Type = jobType
+	if taskType, ok := value["taskType"].(string); ok {
+		filter.Type = taskType
 	}
 	options := workhorse.BulkRedriveOptions{Limit: redriveLimit(value["limit"])}
 	if cursor, ok := value["cursor"].(map[string]any); ok {
@@ -227,7 +227,7 @@ func (service *backend) redriveDeadLetters(ctx context.Context, input any, actor
 		}
 		options.Cursor = &workhorse.AdminCursor{
 			OccurredAt: finished,
-			JobID:      fmt.Sprint(cursor["jobId"]),
+			TaskID:     fmt.Sprint(cursor["taskId"]),
 		}
 	}
 	page, err := service.admin.RedriveMany(ctx, filter, adminAudit(value, actor), options)
@@ -242,7 +242,7 @@ func (service *backend) redriveDeadLetters(ctx context.Context, input any, actor
 	if page.NextCursor != nil {
 		response["nextCursor"] = map[string]any{
 			"finishedAt": page.NextCursor.OccurredAt.UTC().Format(redriveCursorLayout),
-			"jobId":      page.NextCursor.JobID,
+			"taskId":     page.NextCursor.TaskID,
 		}
 	}
 	return response, nil
@@ -259,7 +259,7 @@ func (service *backend) signalTask(ctx context.Context, input any, actor string)
 	if row["status"] == "not_found" {
 		return nil, &RPCError{Status: 404, Code: "NOT_FOUND", Message: "Task not found"}
 	}
-	return map[string]any{"status": row["status"], "jobId": value["id"], "name": value["name"], "payload": row["payload"], "deliveredAt": timestamp(row["delivered_at"]), "deliveredBy": row["delivered_by"]}, nil
+	return map[string]any{"status": row["status"], "taskId": value["id"], "name": value["name"], "payload": row["payload"], "deliveredAt": timestamp(row["delivered_at"]), "deliveredBy": row["delivered_by"]}, nil
 }
 
 func (service *backend) completeHumanWait(ctx context.Context, input any, actor string) (any, error) {
@@ -273,5 +273,5 @@ func (service *backend) completeHumanWait(ctx context.Context, input any, actor 
 	if row["status"] == "not_found" {
 		return nil, &RPCError{Status: 404, Code: "NOT_FOUND", Message: "Task not found"}
 	}
-	return map[string]any{"status": row["status"], "jobId": value["id"], "name": value["name"], "result": row["result"], "completedAt": timestamp(row["completed_at"]), "completedBy": row["completed_by"]}, nil
+	return map[string]any{"status": row["status"], "taskId": value["id"], "name": value["name"], "result": row["result"], "completedAt": timestamp(row["completed_at"]), "completedBy": row["completed_by"]}, nil
 }

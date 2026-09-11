@@ -6,9 +6,9 @@ import { createDatabaseTestHarness } from "./db.js";
 /**
  * Deliberate cross-file state-leak canary.
  *
- * Two sibling test files each run this suite with mirrored job types. Both files believe they own
- * a private database, so each writes its own job type in rounds and asserts after every round that
- * no other job type is visible. If per-file isolation ever regresses — two files hashing to one
+ * Two sibling test files each run this suite with mirrored task types. Both files believe they own
+ * a private database, so each writes its own task type in rounds and asserts after every round that
+ * no other task type is visible. If per-file isolation ever regresses — two files hashing to one
  * database, a harness edit that shares a pool, a suite writing to the guarded shared database —
  * the sibling's rows appear here and the canary names the intruder in its failure.
  *
@@ -19,7 +19,7 @@ export function runIsolationCanary(fileUrl: string, ownType: string, foreignType
   const database = createDatabaseTestHarness(fileUrl);
   const queue = new Queue(database.pool);
   const rounds = 8;
-  const jobsPerRound = 5;
+  const tasksPerRound = 5;
   const roundSpacingMs = 100;
 
   beforeAll(async () => {
@@ -32,19 +32,19 @@ export function runIsolationCanary(fileUrl: string, ownType: string, foreignType
 
   it(`sees only ${ownType} while the ${foreignType} canary runs`, async () => {
     for (let round = 1; round <= rounds; round += 1) {
-      for (let job = 0; job < jobsPerRound; job += 1) {
-        await queue.enqueue(ownType, { round, job });
+      for (let task = 0; task < tasksPerRound; task += 1) {
+        await queue.enqueue(ownType, { round, task });
       }
       await sleep(roundSpacingMs);
-      const observed = await database.pool.query<{ job_type: string; jobs: number }>(
-        `SELECT job_type, count(*)::int AS jobs
-           FROM workhorse.job
-          GROUP BY job_type
-          ORDER BY job_type`,
+      const observed = await database.pool.query<{ task_type: string; tasks: number }>(
+        `SELECT task_type, count(*)::int AS tasks
+           FROM workhorse.task
+          GROUP BY task_type
+          ORDER BY task_type`,
       );
-      // A foreign job type in this result means per-file isolation is broken: another test file
+      // A foreign task type in this result means per-file isolation is broken: another test file
       // reached this file's database. The failure diff names the intruding type.
-      expect(observed.rows).toEqual([{ job_type: ownType, jobs: round * jobsPerRound }]);
+      expect(observed.rows).toEqual([{ task_type: ownType, tasks: round * tasksPerRound }]);
     }
   });
 }

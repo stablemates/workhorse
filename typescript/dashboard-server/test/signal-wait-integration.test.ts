@@ -52,9 +52,9 @@ describe("dashboard signal waits", () => {
       canSignal: true,
       signalWaits: [
         {
-          jobId: id,
+          taskId: id,
           queue: "default",
-          jobType: "dashboard-signal-wait",
+          taskType: "dashboard-signal-wait",
           name: "account-approval",
           attempt: 1,
           createdAt: expect.any(String),
@@ -65,7 +65,7 @@ describe("dashboard signal waits", () => {
     await expect(
       client.dashboard.tasks({ filter: "all", page: 1, pageSize: 25 }),
     ).resolves.toMatchObject({
-      jobs: [
+      tasks: [
         expect.objectContaining({
           id,
           signalWait: {
@@ -75,7 +75,7 @@ describe("dashboard signal waits", () => {
         }),
       ],
     });
-    await expect(client.dashboard.jobDetail({ id })).resolves.toMatchObject({
+    await expect(client.dashboard.taskDetail({ id })).resolves.toMatchObject({
       canSignal: true,
       signalWait: {
         name: "account-approval",
@@ -97,7 +97,7 @@ describe("dashboard signal waits", () => {
     });
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(admin.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getTask(id)).resolves.toMatchObject({
       state: "succeeded",
       result: { approval: { approved: true } },
     });

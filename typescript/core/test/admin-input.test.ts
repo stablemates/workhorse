@@ -6,8 +6,8 @@ import { parseCursor, parseDateRange, readDeliveryPayload } from "../src/cli/adm
 
 describe("admin continuation input", () => {
   it("preserves microsecond timestamps exactly", () => {
-    const cursor = { finishedAt: "2026-09-07 12:00:00.123456+00", jobId: "job" };
-    expect(parseCursor(JSON.stringify(cursor), ["finishedAt", "jobId"])).toEqual(cursor);
+    const cursor = { finishedAt: "2026-09-07 12:00:00.123456+00", taskId: "task" };
+    expect(parseCursor(JSON.stringify(cursor), ["finishedAt", "taskId"])).toEqual(cursor);
   });
 
   it.each([
@@ -15,11 +15,11 @@ describe("admin continuation input", () => {
     "[]",
     "false",
     "{",
-    '{"jobId":"job"}',
-    '{"finishedAt":"time","jobId":"job","extra":"value"}',
-    '{"finishedAt":"time","jobId":12}',
+    '{"taskId":"task"}',
+    '{"finishedAt":"time","taskId":"task","extra":"value"}',
+    '{"finishedAt":"time","taskId":12}',
   ])("rejects malformed cursor %s", (value) => {
-    expect(() => parseCursor(value, ["finishedAt", "jobId"])).toThrow("--cursor must be a JSON");
+    expect(() => parseCursor(value, ["finishedAt", "taskId"])).toThrow("--cursor must be a JSON");
   });
 
   it("normalizes timezone offsets in date filters", () => {

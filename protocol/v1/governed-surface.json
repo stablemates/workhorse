@@ -28,8 +28,6 @@
         "deadline_at": "timestamptz",
         "execution_timeout_ms": "bigint",
         "fence_token": "bigint",
-        "job_id": "uuid",
-        "job_type": "text",
         "lease_expires_at": "timestamptz",
         "max_attempts": "integer",
         "payload": "jsonb",
@@ -37,6 +35,8 @@
         "redact_error_details": "boolean",
         "result_max_bytes": "integer",
         "retry_policy": "jsonb",
+        "task_id": "uuid",
+        "task_type": "text",
         "trace_context": "jsonb"
       }
     },
@@ -50,8 +50,6 @@
         "deadline_at": "timestamptz",
         "execution_timeout_ms": "bigint",
         "fence_token": "bigint",
-        "job_id": "uuid",
-        "job_type": "text",
         "lease_expires_at": "timestamptz",
         "max_attempts": "integer",
         "payload": "jsonb",
@@ -59,6 +57,8 @@
         "redact_error_details": "boolean",
         "result_max_bytes": "integer",
         "retry_policy": "jsonb",
+        "task_id": "uuid",
+        "task_type": "text",
         "trace_context": "jsonb"
       }
     },
@@ -80,7 +80,7 @@
       "arguments": ["uuid", "text", "bigint", "text", "jsonb"],
       "returns": "table",
       "returnsColumns": {
-        "child_job_id": "uuid",
+        "child_task_id": "uuid",
         "child_type": "text",
         "created_at": "timestamptz",
         "joined_at": "timestamptz",
@@ -119,14 +119,6 @@
       "arguments": ["jsonb"],
       "returns": "jsonb"
     },
-    "dashboard_job_detail_v1": {
-      "arguments": ["jsonb"],
-      "returns": "jsonb"
-    },
-    "dashboard_job_result_v1": {
-      "arguments": ["uuid"],
-      "returns": "jsonb"
-    },
     "dashboard_queues_v1": {
       "arguments": ["jsonb"],
       "returns": "jsonb"
@@ -143,8 +135,16 @@
       "arguments": ["jsonb"],
       "returns": "jsonb"
     },
+    "dashboard_task_detail_v1": {
+      "arguments": ["jsonb"],
+      "returns": "jsonb"
+    },
     "dashboard_task_facets_v1": {
       "arguments": ["jsonb"],
+      "returns": "jsonb"
+    },
+    "dashboard_task_result_v1": {
+      "arguments": ["uuid"],
       "returns": "jsonb"
     },
     "dashboard_tasks_cursor_v1": {
@@ -167,10 +167,10 @@
       "arguments": ["jsonb"],
       "returns": "table",
       "returnsColumns": {
-        "job_id": "uuid",
         "ordinal": "integer",
         "outcome": "text",
-        "reason": "text"
+        "reason": "text",
+        "task_id": "uuid"
       }
     },
     "expire_owned_telemetry_v1": {
@@ -189,10 +189,10 @@
       "arguments": ["text[]", "timestamptz", "integer"],
       "returns": "table",
       "returnsColumns": {
-        "job_id": "uuid",
         "namespace": "text",
         "occurrence_at": "timestamptz",
-        "schedule_name": "text"
+        "schedule_name": "text",
+        "task_id": "uuid"
       }
     },
     "fire_schedule_v1": {
@@ -215,9 +215,9 @@
       "arguments": ["text", "jsonb"],
       "returns": "table",
       "returnsColumns": {
-        "job_id": "uuid",
         "ordinal": "bigint",
-        "status": "text"
+        "status": "text",
+        "task_id": "uuid"
       }
     },
     "heartbeat_v1": {
@@ -236,18 +236,18 @@
         "execution_timeout_ms": "bigint",
         "finished_at": "timestamptz",
         "has_more": "boolean",
-        "job_id": "uuid",
-        "job_type": "text",
         "max_attempts": "integer",
         "payload": "jsonb",
         "priority": "integer",
         "queue_name": "text",
         "redrive_count": "integer",
         "retry_policy": "jsonb",
-        "tags": "text[]"
+        "tags": "text[]",
+        "task_id": "uuid",
+        "task_type": "text"
       }
     },
-    "list_job_timeline_v1": {
+    "list_task_timeline_v1": {
       "arguments": ["uuid", "integer", "timestamptz", "text", "uuid"],
       "returns": "table",
       "returnsColumns": {
@@ -260,17 +260,17 @@
         "fence_token": "bigint",
         "finished_at": "timestamptz",
         "has_more": "boolean",
-        "job_id": "uuid",
         "kind": "text",
         "occurred_at": "timestamptz",
         "outcome": "text",
         "priority": "integer",
         "record_id": "uuid",
         "started_at": "timestamptz",
+        "task_id": "uuid",
         "worker_id": "text"
       }
     },
-    "list_jobs_v1": {
+    "list_tasks_v1": {
       "arguments": ["jsonb", "integer", "timestamptz", "uuid", "text", "jsonb"],
       "returns": "table",
       "returnsColumns": {
@@ -285,8 +285,6 @@
         "deadline_at": "timestamptz",
         "execution_timeout_ms": "bigint",
         "has_more": "boolean",
-        "job_id": "uuid",
-        "job_type": "text",
         "max_attempts": "integer",
         "payload": "jsonb",
         "payload_bytes": "integer",
@@ -297,6 +295,8 @@
         "run_at": "timestamptz",
         "state": "text",
         "tags": "text[]",
+        "task_id": "uuid",
+        "task_type": "text",
         "updated_at": "timestamptz"
       }
     },
@@ -383,10 +383,10 @@
         "request_id_preview": "text",
         "requested_at": "timestamptz",
         "requested_by": "text",
-        "source_job_id": "uuid",
         "source_state": "text",
+        "source_task_id": "uuid",
         "target_initial_state": "text",
-        "target_job_id": "uuid"
+        "target_task_id": "uuid"
       }
     },
     "redrive_many_v1": {
@@ -397,11 +397,11 @@
         "ordinal": "integer",
         "requested_at": "timestamptz",
         "source_finished_at_cursor": "text",
-        "source_job_id": "uuid",
         "source_state": "text",
+        "source_task_id": "uuid",
         "status": "text",
-        "target_job_id": "uuid",
-        "target_state": "text"
+        "target_state": "text",
+        "target_task_id": "uuid"
       }
     },
     "redrive_v1": {
@@ -409,11 +409,11 @@
       "returns": "table",
       "returnsColumns": {
         "requested_at": "timestamptz",
-        "source_job_id": "uuid",
         "source_state": "text",
+        "source_task_id": "uuid",
         "status": "text",
-        "target_job_id": "uuid",
-        "target_state": "text"
+        "target_state": "text",
+        "target_task_id": "uuid"
       }
     },
     "register_worker_v1": {
@@ -556,14 +556,14 @@
         "attempt_succeeded": "bigint",
         "bucket_start": "timestamptz",
         "enqueued": "bigint",
-        "job_canceled": "bigint",
-        "job_failed": "bigint",
-        "job_succeeded": "bigint",
-        "job_type": "text",
         "last_attempt_at": "timestamptz",
         "last_error": "text",
         "last_error_at": "timestamptz",
         "queue_name": "text",
+        "task_canceled": "bigint",
+        "task_failed": "bigint",
+        "task_succeeded": "bigint",
+        "task_type": "text",
         "wait_sketch": "jsonb"
       }
     },
@@ -694,10 +694,10 @@
         "error": "jsonb",
         "fence_token": "bigint",
         "finished_at": "timestamptz",
-        "job_id": "uuid",
         "occurred_at": "timestamptz",
         "outcome": "text",
         "started_at": "timestamptz",
+        "task_id": "uuid",
         "worker_id": "text"
       }
     },
@@ -720,10 +720,10 @@
         "error": "jsonb",
         "fence_token": "bigint",
         "finished_at": "timestamptz",
-        "job_id": "uuid",
         "occurred_at": "timestamptz",
         "outcome": "text",
         "started_at": "timestamptz",
+        "task_id": "uuid",
         "worker_id": "text"
       }
     },
@@ -746,154 +746,10 @@
         "context": "jsonb",
         "created_at": "timestamptz",
         "deadline_at": "timestamptz",
-        "job_id": "uuid",
-        "job_type": "text",
         "queue_name": "text",
+        "task_id": "uuid",
+        "task_type": "text",
         "token_name": "text"
-      }
-    },
-    "dashboard_job_checkpoint_v1": {
-      "kind": "view",
-      "columns": {
-        "attempt": "integer",
-        "checkpoint_name": "text",
-        "checkpoint_value": "jsonb",
-        "created_at": "timestamptz",
-        "fence_token": "bigint",
-        "job_id": "uuid",
-        "worker_id": "text"
-      }
-    },
-    "dashboard_job_child_v1": {
-      "kind": "view",
-      "columns": {
-        "child_job_id": "uuid",
-        "child_name": "text",
-        "created_at": "timestamptz",
-        "joined_at": "timestamptz",
-        "parent_job_id": "uuid"
-      }
-    },
-    "dashboard_job_dependency_v1": {
-      "kind": "view",
-      "columns": {
-        "created_at": "timestamptz",
-        "dependent_job_id": "uuid",
-        "on_cancellation": "text",
-        "on_failure": "text",
-        "on_success": "text",
-        "prerequisite_job_id": "uuid",
-        "released_at": "timestamptz",
-        "resolution": "text"
-      }
-    },
-    "dashboard_job_event_v1": {
-      "kind": "view",
-      "columns": {
-        "attempt": "integer",
-        "details": "jsonb",
-        "event_id": "uuid",
-        "event_type": "text",
-        "job_id": "uuid",
-        "occurred_at": "timestamptz"
-      }
-    },
-    "dashboard_job_outcome_v1": {
-      "kind": "view",
-      "columns": {
-        "current_attempt": "integer",
-        "error": "jsonb",
-        "finished_at": "timestamptz",
-        "job_id": "uuid",
-        "run_at": "timestamptz",
-        "state": "text",
-        "updated_at": "timestamptz"
-      }
-    },
-    "dashboard_job_progress_v1": {
-      "kind": "view",
-      "columns": {
-        "attempt": "integer",
-        "created_at": "timestamptz",
-        "fence_token": "bigint",
-        "job_id": "uuid",
-        "progress_value": "jsonb",
-        "revision": "bigint",
-        "updated_at": "timestamptz",
-        "worker_id": "text"
-      }
-    },
-    "dashboard_job_redrive_v1": {
-      "kind": "view",
-      "columns": {
-        "reason": "text",
-        "request_id_digest": "text",
-        "request_id_length": "integer",
-        "request_id_preview": "text",
-        "requested_at": "timestamptz",
-        "requested_by": "text",
-        "source_job_id": "uuid",
-        "source_state": "text",
-        "target_initial_state": "text",
-        "target_job_id": "uuid"
-      }
-    },
-    "dashboard_job_runtime_v1": {
-      "kind": "view",
-      "columns": {
-        "acquired_at": "timestamptz",
-        "attempt_started_at": "timestamptz",
-        "attempt_timeout_at": "timestamptz",
-        "cancel_reason": "text",
-        "cancel_requested_at": "timestamptz",
-        "cancel_requested_by": "text",
-        "current_attempt": "integer",
-        "error": "jsonb",
-        "expires_at": "timestamptz",
-        "fence_token": "bigint",
-        "heartbeat_at": "timestamptz",
-        "job_id": "uuid",
-        "queue_name": "text",
-        "ready_at": "timestamptz",
-        "run_at": "timestamptz",
-        "state": "text",
-        "updated_at": "timestamptz",
-        "wait_name": "text",
-        "worker_id": "text"
-      }
-    },
-    "dashboard_job_v1": {
-      "kind": "view",
-      "columns": {
-        "concurrency_key": "text",
-        "created_at": "timestamptz",
-        "deadline_at": "timestamptz",
-        "execution_timeout_ms": "bigint",
-        "id": "uuid",
-        "job_type": "text",
-        "max_attempts": "integer",
-        "payload": "jsonb",
-        "payload_redact_keys": "text[]",
-        "priority": "integer",
-        "queue_name": "text",
-        "result_redact_keys": "text[]",
-        "retry_policy": "jsonb",
-        "tags": "text[]"
-      }
-    },
-    "dashboard_job_wait_v1": {
-      "kind": "view",
-      "columns": {
-        "attempt": "integer",
-        "created_at": "timestamptz",
-        "duration_ms": "bigint",
-        "fence_token": "bigint",
-        "job_id": "uuid",
-        "mode": "text",
-        "requested_wake_at": "timestamptz",
-        "wait_name": "text",
-        "wake_at": "timestamptz",
-        "worker_id": "text"
       }
     },
     "dashboard_maintenance_policy_v1": {
@@ -916,7 +772,7 @@
         "last_completed_at": "timestamptz",
         "last_completed_local_date": "date",
         "last_started_at": "timestamptz",
-        "task_name": "text"
+        "routine_name": "text"
       }
     },
     "dashboard_queue_control_v1": {
@@ -936,8 +792,8 @@
       "kind": "view",
       "columns": {
         "attempt_history_retention_days": "integer",
-        "job_event_retention_days": "integer",
-        "singleton": "boolean"
+        "singleton": "boolean",
+        "task_event_retention_days": "integer"
       }
     },
     "dashboard_schedule_definition_v1": {
@@ -945,12 +801,12 @@
       "columns": {
         "cron_expression": "text",
         "enabled": "boolean",
-        "job_type": "text",
         "namespace": "text",
         "priority": "integer",
         "queue_name": "text",
         "revision": "bigint",
         "schedule_name": "text",
+        "task_type": "text",
         "timezone": "text",
         "updated_at": "timestamptz"
       }
@@ -970,10 +826,154 @@
         "attempt": "integer",
         "created_at": "timestamptz",
         "deadline_at": "timestamptz",
-        "job_id": "uuid",
-        "job_type": "text",
         "queue_name": "text",
-        "signal_name": "text"
+        "signal_name": "text",
+        "task_id": "uuid",
+        "task_type": "text"
+      }
+    },
+    "dashboard_task_checkpoint_v1": {
+      "kind": "view",
+      "columns": {
+        "attempt": "integer",
+        "checkpoint_name": "text",
+        "checkpoint_value": "jsonb",
+        "created_at": "timestamptz",
+        "fence_token": "bigint",
+        "task_id": "uuid",
+        "worker_id": "text"
+      }
+    },
+    "dashboard_task_child_v1": {
+      "kind": "view",
+      "columns": {
+        "child_name": "text",
+        "child_task_id": "uuid",
+        "created_at": "timestamptz",
+        "joined_at": "timestamptz",
+        "parent_task_id": "uuid"
+      }
+    },
+    "dashboard_task_dependency_v1": {
+      "kind": "view",
+      "columns": {
+        "created_at": "timestamptz",
+        "dependent_task_id": "uuid",
+        "on_cancellation": "text",
+        "on_failure": "text",
+        "on_success": "text",
+        "prerequisite_task_id": "uuid",
+        "released_at": "timestamptz",
+        "resolution": "text"
+      }
+    },
+    "dashboard_task_event_v1": {
+      "kind": "view",
+      "columns": {
+        "attempt": "integer",
+        "details": "jsonb",
+        "event_id": "uuid",
+        "event_type": "text",
+        "occurred_at": "timestamptz",
+        "task_id": "uuid"
+      }
+    },
+    "dashboard_task_outcome_v1": {
+      "kind": "view",
+      "columns": {
+        "current_attempt": "integer",
+        "error": "jsonb",
+        "finished_at": "timestamptz",
+        "run_at": "timestamptz",
+        "state": "text",
+        "task_id": "uuid",
+        "updated_at": "timestamptz"
+      }
+    },
+    "dashboard_task_progress_v1": {
+      "kind": "view",
+      "columns": {
+        "attempt": "integer",
+        "created_at": "timestamptz",
+        "fence_token": "bigint",
+        "progress_value": "jsonb",
+        "revision": "bigint",
+        "task_id": "uuid",
+        "updated_at": "timestamptz",
+        "worker_id": "text"
+      }
+    },
+    "dashboard_task_redrive_v1": {
+      "kind": "view",
+      "columns": {
+        "reason": "text",
+        "request_id_digest": "text",
+        "request_id_length": "integer",
+        "request_id_preview": "text",
+        "requested_at": "timestamptz",
+        "requested_by": "text",
+        "source_state": "text",
+        "source_task_id": "uuid",
+        "target_initial_state": "text",
+        "target_task_id": "uuid"
+      }
+    },
+    "dashboard_task_runtime_v1": {
+      "kind": "view",
+      "columns": {
+        "acquired_at": "timestamptz",
+        "attempt_started_at": "timestamptz",
+        "attempt_timeout_at": "timestamptz",
+        "cancel_reason": "text",
+        "cancel_requested_at": "timestamptz",
+        "cancel_requested_by": "text",
+        "current_attempt": "integer",
+        "error": "jsonb",
+        "expires_at": "timestamptz",
+        "fence_token": "bigint",
+        "heartbeat_at": "timestamptz",
+        "queue_name": "text",
+        "ready_at": "timestamptz",
+        "run_at": "timestamptz",
+        "state": "text",
+        "task_id": "uuid",
+        "updated_at": "timestamptz",
+        "wait_name": "text",
+        "worker_id": "text"
+      }
+    },
+    "dashboard_task_v1": {
+      "kind": "view",
+      "columns": {
+        "concurrency_key": "text",
+        "created_at": "timestamptz",
+        "deadline_at": "timestamptz",
+        "execution_timeout_ms": "bigint",
+        "id": "uuid",
+        "max_attempts": "integer",
+        "payload": "jsonb",
+        "payload_redact_keys": "text[]",
+        "priority": "integer",
+        "queue_name": "text",
+        "result_redact_keys": "text[]",
+        "retry_policy": "jsonb",
+        "tags": "text[]",
+        "task_type": "text"
+      }
+    },
+    "dashboard_task_wait_v1": {
+      "kind": "view",
+      "columns": {
+        "attempt": "integer",
+        "created_at": "timestamptz",
+        "duration_ms": "bigint",
+        "fence_token": "bigint",
+        "mode": "text",
+        "requested_wake_at": "timestamptz",
+        "task_id": "uuid",
+        "wait_name": "text",
+        "wake_at": "timestamptz",
+        "worker_id": "text"
       }
     },
     "dashboard_worker_registry_v1": {
@@ -988,7 +988,7 @@
         "last_heartbeat_at": "timestamptz",
         "lease_ms": "integer",
         "maintenance_interval_ms": "integer",
-        "maintenance_task_poll_ms": "integer",
+        "maintenance_routine_poll_ms": "integer",
         "paused": "boolean",
         "pid": "integer",
         "poll_ms": "integer",
@@ -999,203 +999,6 @@
         "sdk_language": "text",
         "sdk_version": "text",
         "started_at": "timestamptz",
-        "worker_id": "text"
-      }
-    },
-    "job": {
-      "kind": "table",
-      "columns": {
-        "concurrency_key": "text",
-        "contract_version": "text",
-        "created_at": "timestamptz",
-        "deadline_at": "timestamptz",
-        "execution_timeout_ms": "bigint",
-        "id": "uuid",
-        "job_type": "text",
-        "max_attempts": "integer",
-        "payload": "jsonb",
-        "payload_redact_keys": "text[]",
-        "priority": "integer",
-        "queue_name": "text",
-        "result_redact_keys": "text[]",
-        "retry_policy": "jsonb",
-        "tags": "text[]"
-      }
-    },
-    "job_checkpoint": {
-      "kind": "table",
-      "columns": {
-        "attempt": "integer",
-        "checkpoint_name": "text",
-        "checkpoint_value": "jsonb",
-        "created_at": "timestamptz",
-        "fence_token": "bigint",
-        "job_id": "uuid",
-        "worker_id": "text"
-      }
-    },
-    "job_child": {
-      "kind": "table",
-      "columns": {
-        "child_job_id": "uuid",
-        "child_name": "text",
-        "created_at": "timestamptz",
-        "joined_at": "timestamptz",
-        "parent_job_id": "uuid"
-      }
-    },
-    "job_dependency": {
-      "kind": "table",
-      "columns": {
-        "created_at": "timestamptz",
-        "dependent_job_id": "uuid",
-        "on_cancellation": "text",
-        "on_failure": "text",
-        "on_success": "text",
-        "prerequisite_job_id": "uuid",
-        "released_at": "timestamptz",
-        "resolution": "text"
-      }
-    },
-    "job_event": {
-      "kind": "table",
-      "columns": {
-        "attempt": "integer",
-        "details": "jsonb",
-        "event_type": "text",
-        "job_id": "uuid",
-        "occurred_at": "timestamptz"
-      }
-    },
-    "job_human_wait": {
-      "kind": "table",
-      "columns": {
-        "attempt": "integer",
-        "claimed_at": "timestamptz",
-        "completed_at": "timestamptz",
-        "completed_by": "text",
-        "context": "jsonb",
-        "created_at": "timestamptz",
-        "fence_token": "bigint",
-        "job_id": "uuid",
-        "result": "jsonb",
-        "token_name": "text",
-        "worker_id": "text"
-      }
-    },
-    "job_outcome": {
-      "kind": "table",
-      "columns": {
-        "current_attempt": "integer",
-        "error": "jsonb",
-        "fence_token": "bigint",
-        "finished_at": "timestamptz",
-        "job_id": "uuid",
-        "result": "jsonb",
-        "run_at": "timestamptz",
-        "state": "text",
-        "updated_at": "timestamptz"
-      }
-    },
-    "job_progress": {
-      "kind": "table",
-      "columns": {
-        "attempt": "integer",
-        "created_at": "timestamptz",
-        "fence_token": "bigint",
-        "job_id": "uuid",
-        "progress_value": "jsonb",
-        "revision": "bigint",
-        "updated_at": "timestamptz",
-        "worker_id": "text"
-      }
-    },
-    "job_query": {
-      "kind": "table",
-      "columns": {
-        "created_at": "timestamptz",
-        "job_id": "uuid",
-        "job_type": "text",
-        "queue_name": "text"
-      }
-    },
-    "job_runtime": {
-      "kind": "table",
-      "columns": {
-        "attempt_timeout_at": "timestamptz",
-        "cancel_reason": "text",
-        "cancel_requested_at": "timestamptz",
-        "cancel_requested_by": "text",
-        "concurrency_key": "text",
-        "current_attempt": "integer",
-        "deadline_at": "timestamptz",
-        "error": "jsonb",
-        "expires_at": "timestamptz",
-        "fence_token": "bigint",
-        "job_id": "uuid",
-        "priority": "integer",
-        "queue_name": "text",
-        "ready_at": "timestamptz",
-        "run_at": "timestamptz",
-        "sequence": "bigint",
-        "state": "text",
-        "updated_at": "timestamptz",
-        "wait_name": "text",
-        "worker_id": "text"
-      }
-    },
-    "job_signal_wait": {
-      "kind": "table",
-      "columns": {
-        "attempt": "integer",
-        "claimed_at": "timestamptz",
-        "created_at": "timestamptz",
-        "delivered_at": "timestamptz",
-        "delivered_by": "text",
-        "fence_token": "bigint",
-        "job_id": "uuid",
-        "payload": "jsonb",
-        "signal_name": "text",
-        "worker_id": "text"
-      }
-    },
-    "job_stat_bucket": {
-      "kind": "table",
-      "columns": {
-        "bucket_start": "timestamptz",
-        "job_type": "text",
-        "queue_name": "text"
-      }
-    },
-    "job_stat_bucket_day": {
-      "kind": "table",
-      "columns": {
-        "bucket_start": "timestamptz",
-        "job_type": "text",
-        "queue_name": "text"
-      }
-    },
-    "job_stat_bucket_hour": {
-      "kind": "table",
-      "columns": {
-        "bucket_start": "timestamptz",
-        "job_type": "text",
-        "queue_name": "text"
-      }
-    },
-    "job_wait": {
-      "kind": "table",
-      "columns": {
-        "attempt": "integer",
-        "claimed_at": "timestamptz",
-        "created_at": "timestamptz",
-        "duration_ms": "bigint",
-        "fence_token": "bigint",
-        "job_id": "uuid",
-        "mode": "text",
-        "requested_wake_at": "timestamptz",
-        "wait_name": "text",
-        "wake_at": "timestamptz",
         "worker_id": "text"
       }
     },
@@ -1245,7 +1048,6 @@
         "contract_version": "text",
         "cron_expression": "text",
         "enabled": "boolean",
-        "job_type": "text",
         "max_attempts": "integer",
         "namespace": "text",
         "payload": "jsonb",
@@ -1256,6 +1058,7 @@
         "retry_policy": "jsonb",
         "revision": "bigint",
         "schedule_name": "text",
+        "task_type": "text",
         "timezone": "text",
         "updated_at": "timestamptz"
       }
@@ -1263,16 +1066,213 @@
     "schedule_occurrence": {
       "kind": "table",
       "columns": {
-        "job_id": "uuid",
         "namespace": "text",
         "occurrence_at": "timestamptz",
-        "schedule_name": "text"
+        "schedule_name": "text",
+        "task_id": "uuid"
       }
     },
     "schema_version": {
       "kind": "table",
       "columns": {
         "version": "integer"
+      }
+    },
+    "task": {
+      "kind": "table",
+      "columns": {
+        "concurrency_key": "text",
+        "contract_version": "text",
+        "created_at": "timestamptz",
+        "deadline_at": "timestamptz",
+        "execution_timeout_ms": "bigint",
+        "id": "uuid",
+        "max_attempts": "integer",
+        "payload": "jsonb",
+        "payload_redact_keys": "text[]",
+        "priority": "integer",
+        "queue_name": "text",
+        "result_redact_keys": "text[]",
+        "retry_policy": "jsonb",
+        "tags": "text[]",
+        "task_type": "text"
+      }
+    },
+    "task_checkpoint": {
+      "kind": "table",
+      "columns": {
+        "attempt": "integer",
+        "checkpoint_name": "text",
+        "checkpoint_value": "jsonb",
+        "created_at": "timestamptz",
+        "fence_token": "bigint",
+        "task_id": "uuid",
+        "worker_id": "text"
+      }
+    },
+    "task_child": {
+      "kind": "table",
+      "columns": {
+        "child_name": "text",
+        "child_task_id": "uuid",
+        "created_at": "timestamptz",
+        "joined_at": "timestamptz",
+        "parent_task_id": "uuid"
+      }
+    },
+    "task_dependency": {
+      "kind": "table",
+      "columns": {
+        "created_at": "timestamptz",
+        "dependent_task_id": "uuid",
+        "on_cancellation": "text",
+        "on_failure": "text",
+        "on_success": "text",
+        "prerequisite_task_id": "uuid",
+        "released_at": "timestamptz",
+        "resolution": "text"
+      }
+    },
+    "task_event": {
+      "kind": "table",
+      "columns": {
+        "attempt": "integer",
+        "details": "jsonb",
+        "event_type": "text",
+        "occurred_at": "timestamptz",
+        "task_id": "uuid"
+      }
+    },
+    "task_human_wait": {
+      "kind": "table",
+      "columns": {
+        "attempt": "integer",
+        "claimed_at": "timestamptz",
+        "completed_at": "timestamptz",
+        "completed_by": "text",
+        "context": "jsonb",
+        "created_at": "timestamptz",
+        "fence_token": "bigint",
+        "result": "jsonb",
+        "task_id": "uuid",
+        "token_name": "text",
+        "worker_id": "text"
+      }
+    },
+    "task_outcome": {
+      "kind": "table",
+      "columns": {
+        "current_attempt": "integer",
+        "error": "jsonb",
+        "fence_token": "bigint",
+        "finished_at": "timestamptz",
+        "result": "jsonb",
+        "run_at": "timestamptz",
+        "state": "text",
+        "task_id": "uuid",
+        "updated_at": "timestamptz"
+      }
+    },
+    "task_progress": {
+      "kind": "table",
+      "columns": {
+        "attempt": "integer",
+        "created_at": "timestamptz",
+        "fence_token": "bigint",
+        "progress_value": "jsonb",
+        "revision": "bigint",
+        "task_id": "uuid",
+        "updated_at": "timestamptz",
+        "worker_id": "text"
+      }
+    },
+    "task_query": {
+      "kind": "table",
+      "columns": {
+        "created_at": "timestamptz",
+        "queue_name": "text",
+        "task_id": "uuid",
+        "task_type": "text"
+      }
+    },
+    "task_runtime": {
+      "kind": "table",
+      "columns": {
+        "attempt_timeout_at": "timestamptz",
+        "cancel_reason": "text",
+        "cancel_requested_at": "timestamptz",
+        "cancel_requested_by": "text",
+        "concurrency_key": "text",
+        "current_attempt": "integer",
+        "deadline_at": "timestamptz",
+        "error": "jsonb",
+        "expires_at": "timestamptz",
+        "fence_token": "bigint",
+        "priority": "integer",
+        "queue_name": "text",
+        "ready_at": "timestamptz",
+        "run_at": "timestamptz",
+        "sequence": "bigint",
+        "state": "text",
+        "task_id": "uuid",
+        "updated_at": "timestamptz",
+        "wait_name": "text",
+        "worker_id": "text"
+      }
+    },
+    "task_signal_wait": {
+      "kind": "table",
+      "columns": {
+        "attempt": "integer",
+        "claimed_at": "timestamptz",
+        "created_at": "timestamptz",
+        "delivered_at": "timestamptz",
+        "delivered_by": "text",
+        "fence_token": "bigint",
+        "payload": "jsonb",
+        "signal_name": "text",
+        "task_id": "uuid",
+        "worker_id": "text"
+      }
+    },
+    "task_stat_bucket": {
+      "kind": "table",
+      "columns": {
+        "bucket_start": "timestamptz",
+        "queue_name": "text",
+        "task_type": "text"
+      }
+    },
+    "task_stat_bucket_day": {
+      "kind": "table",
+      "columns": {
+        "bucket_start": "timestamptz",
+        "queue_name": "text",
+        "task_type": "text"
+      }
+    },
+    "task_stat_bucket_hour": {
+      "kind": "table",
+      "columns": {
+        "bucket_start": "timestamptz",
+        "queue_name": "text",
+        "task_type": "text"
+      }
+    },
+    "task_wait": {
+      "kind": "table",
+      "columns": {
+        "attempt": "integer",
+        "claimed_at": "timestamptz",
+        "created_at": "timestamptz",
+        "duration_ms": "bigint",
+        "fence_token": "bigint",
+        "mode": "text",
+        "requested_wake_at": "timestamptz",
+        "task_id": "uuid",
+        "wait_name": "text",
+        "wake_at": "timestamptz",
+        "worker_id": "text"
       }
     },
     "worker_registry": {
@@ -1310,7 +1310,7 @@
       "cron_field_values_v1",
       "cron_occurrences_v1",
       "dashboard_iso_v1",
-      "dashboard_job_estimate_v1",
+      "dashboard_task_estimate_v1",
       "deadline_envelope_v1",
       "enqueue_batch_v1",
       "enqueue_debounce_v1",
@@ -1327,23 +1327,23 @@
       "notify_concurrency_capacity_v1",
       "override_contract_version_v1",
       "override_queue_health_policy_v1",
-      "project_job_query_v1",
+      "project_task_query_v1",
       "prune_default_history_v1",
       "prune_enqueue_idempotency_v1",
       "prune_released_dependencies_v1",
       "prune_schedule_occurrences_v1",
-      "prune_terminal_jobs_v1",
+      "prune_terminal_tasks_v1",
       "purge_queue_internal_v1",
       "rate_limit_bucket_v1",
       "record_batch_event_v1",
       "recover_expired_v1",
       "redact_error_details_v1",
       "reject_contract_definition_mutation_v1",
-      "reject_self_job_dependency_v1",
+      "reject_self_task_dependency_v1",
       "release_dependents_v1",
       "resolve_cron_wall_clock_v1",
       "resolve_dependents_v1",
-      "resolve_job_outcome_dependencies_v1",
+      "resolve_task_outcome_dependencies_v1",
       "retire_history_day_v1",
       "retire_history_partitions_v1",
       "retry_delay_v1",
@@ -1363,20 +1363,20 @@
       "valid_contract_redact_keys_v1",
       "valid_tags_v1",
       "valid_trace_context_v1",
-      "validate_job_dependencies_v1"
+      "validate_task_dependencies_v1"
     ],
     "relations": [
       "contract_definition",
       "contract_policy",
       "enqueue_idempotency",
-      "job_redrive",
-      "job_stat_state",
       "maintenance_policy",
       "maintenance_state",
       "queue_health_policy",
       "queue_purge_request",
       "retention_policy",
-      "schema_migration"
+      "schema_migration",
+      "task_redrive",
+      "task_stat_state"
     ]
   }
 }

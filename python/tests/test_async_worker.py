@@ -28,10 +28,10 @@ def enqueue(database_url: str, type: str, payload: object, *, queue: str = "defa
         )
 
 
-def outcome(database_url: str, job_id: str) -> tuple[str, object]:
+def outcome(database_url: str, task_id: str) -> tuple[str, object]:
     with psycopg.connect(database_url) as connection:
         row = connection.execute(
-            "SELECT state, result FROM workhorse.job_outcome WHERE job_id = %s", (job_id,)
+            "SELECT state, result FROM workhorse.task_outcome WHERE task_id = %s", (task_id,)
         ).fetchone()
     assert row is not None
     return row
@@ -41,7 +41,7 @@ def outcome(database_url: str, job_id: str) -> tuple[str, object]:
 async def test_async_psycopg_worker_uses_async_handlers_and_durable_context(
     database_url: str,
 ) -> None:
-    job_id = enqueue(database_url, "async.psycopg", {"value": 3})
+    task_id = enqueue(database_url, "async.psycopg", {"value": 3})
     connection = await psycopg.AsyncConnection.connect(database_url, autocommit=True)
     try:
         operations = 0
@@ -74,9 +74,9 @@ async def test_async_psycopg_worker_uses_async_handlers_and_durable_context(
         )
 
         assert await worker.run_once() is True
-        await eventually_async(worker.run_once, "the durable sleep did not wake the job")
+        await eventually_async(worker.run_once, "the durable sleep did not wake the task")
         assert operations == 1
-        assert outcome(database_url, job_id) == (
+        assert outcome(database_url, task_id) == (
             "succeeded",
             {
                 "value": 3,
@@ -92,7 +92,7 @@ async def test_async_psycopg_worker_uses_async_handlers_and_durable_context(
 @pytest.mark.asyncio
 async def test_asyncpg_worker_reuses_batch_grouping_and_settlement(database_url: str) -> None:
     queue = "async-batch"
-    job_ids = [
+    task_ids = [
         enqueue(database_url, "async.batch", {"index": index}, queue=queue) for index in range(2)
     ]
     connection = await asyncpg.connect(database_url)
@@ -115,7 +115,7 @@ async def test_asyncpg_worker_reuses_batch_grouping_and_settlement(database_url:
 
         assert await worker.run_once() is True
         assert seen == [0, 1]
-        assert [outcome(database_url, job_id)[0] for job_id in job_ids] == [
+        assert [outcome(database_url, task_id)[0] for task_id in task_ids] == [
             "succeeded",
             "succeeded",
         ]
@@ -125,7 +125,7 @@ async def test_asyncpg_worker_reuses_batch_grouping_and_settlement(database_url:
 
 @pytest.mark.asyncio
 async def test_asyncpg_worker_decodes_progress_values(database_url: str) -> None:
-    job_id = enqueue(database_url, "async.progress", {})
+    task_id = enqueue(database_url, "async.progress", {})
     connection = await asyncpg.connect(database_url)
     try:
 
@@ -141,7 +141,7 @@ async def test_asyncpg_worker_decodes_progress_values(database_url: str) -> None
         )
 
         assert await worker.run_once() is True
-        assert outcome(database_url, job_id) == (
+        assert outcome(database_url, task_id) == (
             "succeeded",
             {"progress": {"phase": "working"}, "revision": 1},
         )
@@ -191,7 +191,7 @@ async def test_async_worker_notifications_wake_continuous_dispatch_and_stop_drai
     run = asyncio.create_task(worker.run())
     try:
         await asyncio.sleep(0.15)
-        job_id = await asyncio.to_thread(
+        task_id = await asyncio.to_thread(
             enqueue, database_url, "async.notification", {}, queue=queue
         )
         await asyncio.wait_for(handled.wait(), timeout=2)
@@ -200,7 +200,7 @@ async def test_async_worker_notifications_wake_continuous_dispatch_and_stop_drai
         assert not run.done()
         release.set()
         await asyncio.wait_for(run, timeout=2)
-        assert outcome(database_url, job_id) == ("succeeded", {"handled": True})
+        assert outcome(database_url, task_id) == ("succeeded", {"handled": True})
     finally:
         release.set()
         worker.stop()

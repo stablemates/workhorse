@@ -7,7 +7,7 @@ import { Worker } from "../../core/src/index.js";
 import { createIntegrationTestContext } from "../../core/test/support/integration.js";
 import { createDashboardHost } from "../src/server/host.js";
 import { createDashboardOperatorControllers } from "../src/server/operator-controllers.js";
-import { readDashboardJobDetail } from "../src/server/read-model.js";
+import { readDashboardTaskDetail } from "../src/server/read-model.js";
 import { dashboardDatabase } from "../src/server/sql.js";
 import type { DashboardRouter } from "../src/server/router.js";
 
@@ -67,7 +67,7 @@ describe("dashboard signal integration", () => {
       deliveredBy: "authenticated-operator",
     });
     expect(await worker.runOnce()).toBe(true);
-    await expect(admin.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getTask(id)).resolves.toMatchObject({
       state: "succeeded",
       result: { approved: true },
     });
@@ -77,7 +77,7 @@ describe("dashboard signal integration", () => {
 describe("dashboard batch execution detail", () => {
   it("returns ordered peers and their matching attempt failures", async () => {
     const queueName = `dashboard-batch-${randomUUID()}`;
-    const jobIds = await Promise.all(
+    const taskIds = await Promise.all(
       [1, 2].map((value) =>
         queue.enqueue("dashboard-batch", { value }, { queue: queueName, maxAttempts: 1 }),
       ),
@@ -91,7 +91,7 @@ describe("dashboard batch execution detail", () => {
     });
 
     await expect(worker.runOnce()).resolves.toBe(true);
-    const detail = await readDashboardJobDetail(dashboardDatabase(pool), jobIds[0]!);
+    const detail = await readDashboardTaskDetail(dashboardDatabase(pool), taskIds[0]!);
 
     expect(detail?.batchExecutions).toEqual([
       {
@@ -99,7 +99,7 @@ describe("dashboard batch execution detail", () => {
         attempt: 1,
         dispatchedAt: expect.any(String),
         batchWideFailure: true,
-        members: jobIds.map((id) => ({
+        members: taskIds.map((id) => ({
           id,
           type: "dashboard-batch",
           attempt: 1,

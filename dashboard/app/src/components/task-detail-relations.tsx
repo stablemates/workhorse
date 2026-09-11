@@ -1,4 +1,4 @@
-import type { DashboardJobDetail } from "@stablemates/workhorse-dashboard-server/wire";
+import type { DashboardTaskDetail } from "@stablemates/workhorse-dashboard-server/wire";
 import {
   ActionIcon,
   Badge,
@@ -25,7 +25,7 @@ import { Fragment } from "react";
 import { CheckCircle, Copy, LinkSimple } from "@phosphor-icons/react";
 import {
   DrawerSection,
-  JobEvent,
+  TaskEvent,
   MetaRow,
   coalescingEvidenceFor,
   enqueueCount,
@@ -59,20 +59,20 @@ function KeyEvidenceRows({
 }
 
 /** The accepted enqueue mode owns one section, even when SQL also records shared key metadata. */
-export function TaskEnqueueSection({ job }: { job: DashboardJobDetail }) {
-  return coalescingEvidenceFor(job) ? (
-    <CoalescingSection job={job} />
+export function TaskEnqueueSection({ task }: { task: DashboardTaskDetail }) {
+  return coalescingEvidenceFor(task) ? (
+    <CoalescingSection task={task} />
   ) : (
-    <IdempotencySection job={job} />
+    <IdempotencySection task={task} />
   );
 }
 
 /** Persisted debounce or throttle evidence for the identity that survived coalescing. */
-export function CoalescingSection({ job }: { job: DashboardJobDetail }) {
-  const evidence = coalescingEvidenceFor(job);
+export function CoalescingSection({ task }: { task: DashboardTaskDetail }) {
+  const evidence = coalescingEvidenceFor(task);
   if (evidence === null) return null;
   const label = evidence.mode === "debounce" ? "Debounce" : "Throttle";
-  const initialRequest = idempotencyEvidenceFor(job)?.requestDigest;
+  const initialRequest = idempotencyEvidenceFor(task)?.requestDigest;
   return (
     <DrawerSection
       id="coalescing-heading"
@@ -147,7 +147,7 @@ export function CoalescingSection({ job }: { job: DashboardJobDetail }) {
  * running handler observed the signal and stopped, and `recovered` when the lease expired after a
  * request. None of these claim that external effects were undone.
  */
-export function cancelEventDescription(event: JobEvent): { text: string; title: string } | null {
+export function cancelEventDescription(event: TaskEvent): { text: string; title: string } | null {
   if (event.type !== "cancel_requested" && event.type !== "canceled") return null;
   const source = eventDetail(event, "source");
   if (event.type === "cancel_requested") {
@@ -181,8 +181,8 @@ export function cancelEventDescription(event: JobEvent): { text: string; title: 
  * Everything shown here comes from the safe metadata on the single initial `enqueued` event. The
  * raw key is not stored there and is therefore never available to render.
  */
-function idempotencyEvidenceFor(job: DashboardJobDetail) {
-  for (const event of job.events) {
+function idempotencyEvidenceFor(task: DashboardTaskDetail) {
+  for (const event of task.events) {
     const evidence = readDashboardIdempotencyEvidence(event);
     if (evidence !== null) return evidence;
   }
@@ -192,8 +192,8 @@ function idempotencyEvidenceFor(job: DashboardJobDetail) {
  * Deduplication evidence for one task. Rendered only for a keyed task, so an unkeyed task keeps
  * exactly the drawer it had before. Colour is decoration; the label and wording carry the meaning.
  */
-function IdempotencySection({ job }: { job: DashboardJobDetail }) {
-  const evidence = idempotencyEvidenceFor(job);
+function IdempotencySection({ task }: { task: DashboardTaskDetail }) {
+  const evidence = idempotencyEvidenceFor(task);
   if (evidence === null) return null;
   const described = describeIdempotency(evidence);
   return (
@@ -231,9 +231,9 @@ function IdempotencySection({ job }: { job: DashboardJobDetail }) {
 }
 /**
  * Retry evidence recorded with one `retry_scheduled` event. The stored policy, chosen delay, and
- * delay source travel together, so an override reads differently from the job's persisted policy.
+ * delay source travel together, so an override reads differently from the task's persisted policy.
  */
-export function retryEventDescription(event: JobEvent): { text: string; title: string } | null {
+export function retryEventDescription(event: TaskEvent): { text: string; title: string } | null {
   if (event.type !== "retry_scheduled") return null;
   const details = (event.details ?? {}) as Record<string, unknown>;
   const rawPolicy = details.retry_policy;
@@ -254,14 +254,14 @@ export function retryEventDescription(event: JobEvent): { text: string; title: s
  * kind, and an exhausted attempt budget is called out because a stored policy stops scheduling
  * once the final attempt has been used. Colour is decoration only; the label carries the meaning.
  */
-export function RetryPolicyLine({ job }: { job: DashboardJobDetail }) {
-  const policy = describeRetryPolicy(job.identity.retryPolicy);
-  const attempt = job.current.runtime?.attempt ?? job.current.outcome?.attempt ?? null;
-  const exhausted = attempt !== null && attempt >= job.identity.maxAttempts;
+export function RetryPolicyLine({ task }: { task: DashboardTaskDetail }) {
+  const policy = describeRetryPolicy(task.identity.retryPolicy);
+  const attempt = task.current.runtime?.attempt ?? task.current.outcome?.attempt ?? null;
+  const exhausted = attempt !== null && attempt >= task.identity.maxAttempts;
   const budget =
     attempt === null
-      ? `${job.identity.maxAttempts} attempt budget`
-      : `attempt ${attempt} of ${job.identity.maxAttempts}`;
+      ? `${task.identity.maxAttempts} attempt budget`
+      : `attempt ${attempt} of ${task.identity.maxAttempts}`;
   const title = `${policy.exact}. ${
     exhausted
       ? "The attempt budget is exhausted, so no further retry will be scheduled."
@@ -269,7 +269,7 @@ export function RetryPolicyLine({ job }: { job: DashboardJobDetail }) {
   }`;
   // The default policy's summary is a fixed explainer, so it hides behind the help icon; a
   // configured policy's summary carries its actual delays, which stay visible as data.
-  const isDefaultPolicy = job.identity.retryPolicy === null;
+  const isDefaultPolicy = task.identity.retryPolicy === null;
   return (
     <MetaRow label="Retry policy">
       <Badge size="xs" variant="light" color="orange" title={title} tt="none">
@@ -371,7 +371,7 @@ export function RelatedTaskLinks({
     </Fragment>
   ));
 }
-function batchFailureMessage(batch: DashboardJobDetail["batchExecutions"][number]): string | null {
+function batchFailureMessage(batch: DashboardTaskDetail["batchExecutions"][number]): string | null {
   if (!batch.batchWideFailure) return null;
   for (const member of batch.members) {
     const error = member.error;
@@ -385,13 +385,13 @@ function batchFailureMessage(batch: DashboardJobDetail["batchExecutions"][number
 /** One durable batch dispatch, including links to every other member's task detail. */
 export function BatchExecutionLine({
   batch,
-  selectedJobId,
+  selectedTaskId,
   ...navigation
 }: {
-  batch: DashboardJobDetail["batchExecutions"][number];
-  selectedJobId: string;
+  batch: DashboardTaskDetail["batchExecutions"][number];
+  selectedTaskId: string;
 } & LineageNavigationProps) {
-  const otherMembers = batch.members.filter((member) => member.id !== selectedJobId);
+  const otherMembers = batch.members.filter((member) => member.id !== selectedTaskId);
   const sharedFailure = batchFailureMessage(batch);
   return (
     <Paper withBorder p="sm">
@@ -435,18 +435,18 @@ export function BatchExecutionLine({
   );
 }
 export function BatchExecutions({
-  job,
+  task,
   ...navigation
-}: { job: DashboardJobDetail } & LineageNavigationProps) {
-  if (job.batchExecutions.length === 0) return null;
+}: { task: DashboardTaskDetail } & LineageNavigationProps) {
+  if (task.batchExecutions.length === 0) return null;
   return (
     <DrawerSection id="batch-executions-heading" title="Batch execution">
       <Stack gap="sm">
-        {job.batchExecutions.map((batch) => (
+        {task.batchExecutions.map((batch) => (
           <BatchExecutionLine
             key={batch.id}
             batch={batch}
-            selectedJobId={job.identity.id}
+            selectedTaskId={task.identity.id}
             {...navigation}
           />
         ))}
@@ -454,4 +454,4 @@ export function BatchExecutions({
     </DrawerSection>
   );
 }
-export type DependencyEdge = DashboardJobDetail["dependencyLineage"]["records"][number];
+export type DependencyEdge = DashboardTaskDetail["dependencyLineage"]["records"][number];

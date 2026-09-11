@@ -1,21 +1,21 @@
 import { expectTypeOf, it } from "vitest";
 import { Pool } from "../src/index.js";
-import type { Admin, ClaimedJob, JobSnapshot, Queryable, Queue } from "../src/index.js";
+import type { Admin, ClaimedTask, TaskSnapshot, Queryable, Queue } from "../src/index.js";
 
 function assertNonJsonTypeArgumentsFail(queue: Queue, admin: Admin): void {
   // @ts-expect-error Date cannot be stored in a JSON payload column.
-  expectTypeOf<ClaimedJob<Date>>().toBeObject();
+  expectTypeOf<ClaimedTask<Date>>().toBeObject();
   // @ts-expect-error Date cannot be stored in a JSON result column.
-  expectTypeOf<JobSnapshot<Date>>().toBeObject();
+  expectTypeOf<TaskSnapshot<Date>>().toBeObject();
   // @ts-expect-error Date cannot be stored in a JSON payload column.
   void queue.claim<Date>("worker");
   // @ts-expect-error Date cannot be stored in a JSON result column.
-  void admin.getJob<Date>("job");
+  void admin.getTask<Date>("task");
 }
 
 it("constrains claimed payloads and snapshot results to JSON", () => {
-  expectTypeOf<Awaited<ReturnType<Queue["claim"]>>>().toEqualTypeOf<ClaimedJob | null>();
-  expectTypeOf<Awaited<ReturnType<Admin["getJob"]>>>().toEqualTypeOf<JobSnapshot | null>();
+  expectTypeOf<Awaited<ReturnType<Queue["claim"]>>>().toEqualTypeOf<ClaimedTask | null>();
+  expectTypeOf<Awaited<ReturnType<Admin["getTask"]>>>().toEqualTypeOf<TaskSnapshot | null>();
   expectTypeOf(assertNonJsonTypeArgumentsFail).toBeFunction();
 });
 
@@ -24,8 +24,8 @@ it("exports the default node-postgres pool as a queryable", () => {
 });
 
 it("separates application queue operations from administrative operations", () => {
-  expectTypeOf<Queue>().not.toHaveProperty("getJob");
-  expectTypeOf<Queue>().not.toHaveProperty("listJobs");
+  expectTypeOf<Queue>().not.toHaveProperty("getTask");
+  expectTypeOf<Queue>().not.toHaveProperty("listTasks");
   expectTypeOf<Queue>().not.toHaveProperty("pauseQueue");
   expectTypeOf<Queue>().not.toHaveProperty("purgeQueue");
   expectTypeOf<Queue>().not.toHaveProperty("listCheckpoints");
@@ -35,8 +35,8 @@ it("separates application queue operations from administrative operations", () =
   expectTypeOf<Queue>().not.toHaveProperty("readWorkerProgress");
   expectTypeOf<Queue>().not.toHaveProperty("readWorkerWaits");
 
-  expectTypeOf<Admin>().toHaveProperty("getJob");
-  expectTypeOf<Admin>().toHaveProperty("listJobs");
+  expectTypeOf<Admin>().toHaveProperty("getTask");
+  expectTypeOf<Admin>().toHaveProperty("listTasks");
   expectTypeOf<Admin>().toHaveProperty("pauseQueue");
   expectTypeOf<Admin>().toHaveProperty("purgeQueue");
   expectTypeOf<Admin>().toHaveProperty("listCheckpoints");

@@ -15,7 +15,7 @@ describe("events location state", () => {
       window: "24h",
       kind: "attempt",
       queue: "orders",
-      jobType: "order.process",
+      taskType: "order.process",
       worker: "worker-1",
       search: "invoice",
       types: ["failed", "timeout"],
@@ -30,7 +30,7 @@ describe("events location state", () => {
     expect(eventsLocationHref(defaultEventsLocation)).toBe("/events");
     expect(
       parseEventsLocation(
-        "?window=7d&source=other&page=0&per=200&events=failed,unknown&event=job:42",
+        "?window=7d&source=other&page=0&per=200&events=failed,unknown&event=task:42",
       ),
     ).toEqual({ ...defaultEventsLocation, types: ["failed"] });
   });

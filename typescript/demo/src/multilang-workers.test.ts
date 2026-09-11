@@ -8,10 +8,10 @@ import {
   DEMO_RATE_LIMIT_QUEUE,
   DEMO_SHARED_QUEUE,
   DEMO_WORKER_CONCURRENCY,
-  LANGUAGE_WORKER_JOB_TYPE,
-  SHARED_WORKER_JOB_TYPE,
+  LANGUAGE_WORKER_TASK_TYPE,
+  SHARED_WORKER_TASK_TYPE,
 } from "./constants.js";
-import { sharedWorkerJob } from "./handlers.js";
+import { sharedWorkerTask } from "./handlers.js";
 
 describe("multilanguage demo worker topology", () => {
   it("declares one equal-capacity worker in each runtime", () => {
@@ -23,8 +23,8 @@ describe("multilanguage demo worker topology", () => {
       DEMO_GO_QUEUE,
       DEMO_SHARED_QUEUE,
     ]).toEqual(["demo", "partner-api", "demo-python", "demo-go", "demo-shared"]);
-    expect(LANGUAGE_WORKER_JOB_TYPE).toBe("demo.language-worker");
-    expect(SHARED_WORKER_JOB_TYPE).toBe("demo.shared-worker");
+    expect(LANGUAGE_WORKER_TASK_TYPE).toBe("demo.language-worker");
+    expect(SHARED_WORKER_TASK_TYPE).toBe("demo.shared-worker");
   });
 
   it("packages and supervises the Python and Go workers", async () => {
@@ -55,11 +55,11 @@ describe("multilanguage demo worker topology", () => {
   });
 
   it("enforces the shared handler contract in TypeScript", () => {
-    expect(sharedWorkerJob({ source: "schedule" }, 3)).toEqual({
+    expect(sharedWorkerTask({ source: "schedule" }, 3)).toEqual({
       source: "schedule",
       runtime: "node",
       attempt: 3,
     });
-    expect(() => sharedWorkerJob({ source: 123 }, 1)).toThrow("Shared worker requires a source");
+    expect(() => sharedWorkerTask({ source: 123 }, 1)).toThrow("Shared worker requires a source");
   });
 });

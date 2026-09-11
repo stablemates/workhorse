@@ -12,24 +12,24 @@ import (
 )
 
 type batchRuntimeFixture struct {
-	ID                   string                   `json:"id"`
-	JobType              string                   `json:"jobType"`
-	Concurrency          int                      `json:"concurrency"`
-	BatchMaxSize         int                      `json:"batchMaxSize"`
-	Jobs                 []batchRuntimeJob        `json:"jobs"`
-	ExpectedHandlerOrder []string                 `json:"expectedHandlerOrder"`
-	ExpectedAfterFirst   map[string]batchJobState `json:"expectedAfterFirstRun"`
-	ExpectedAfterSecond  map[string]batchJobState `json:"expectedAfterSecondRun"`
+	ID                   string                    `json:"id"`
+	TaskType             string                    `json:"taskType"`
+	Concurrency          int                       `json:"concurrency"`
+	BatchMaxSize         int                       `json:"batchMaxSize"`
+	Tasks                []batchRuntimeTask        `json:"tasks"`
+	ExpectedHandlerOrder []string                  `json:"expectedHandlerOrder"`
+	ExpectedAfterFirst   map[string]batchTaskState `json:"expectedAfterFirstRun"`
+	ExpectedAfterSecond  map[string]batchTaskState `json:"expectedAfterSecondRun"`
 }
 
-type batchRuntimeJob struct {
+type batchRuntimeTask struct {
 	Key         string `json:"key"`
 	Priority    int    `json:"priority"`
 	MaxAttempts int    `json:"maxAttempts"`
 	Outcome     string `json:"outcome"`
 }
 
-type batchJobState struct {
+type batchTaskState struct {
 	State   string `json:"state"`
 	Attempt int    `json:"attempt"`
 }
@@ -45,18 +45,18 @@ func executeWorkerBatchFixture(t *testing.T, fixture batchRuntimeFixture) {
 
 	queueName := "go-worker-batch-fixture"
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-	jobIDs := make(map[string]string, len(fixture.Jobs))
-	for _, job := range fixture.Jobs {
-		jobID, err := queue.Enqueue(ctx, fixture.JobType, map[string]any{
-			"key": job.Key, "outcome": job.Outcome,
+	taskIDs := make(map[string]string, len(fixture.Tasks))
+	for _, task := range fixture.Tasks {
+		taskID, err := queue.Enqueue(ctx, fixture.TaskType, map[string]any{
+			"key": task.Key, "outcome": task.Outcome,
 		}, workhorse.EnqueueOptions{
-			Priority: job.Priority, MaxAttempts: job.MaxAttempts,
+			Priority: task.Priority, MaxAttempts: task.MaxAttempts,
 			RetryPolicy: map[string]any{"type": "fixed", "delayMs": 0},
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		jobIDs[job.Key] = jobID
+		taskIDs[task.Key] = taskID
 	}
 
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
@@ -68,7 +68,7 @@ func executeWorkerBatchFixture(t *testing.T, fixture batchRuntimeFixture) {
 	}
 	var handlerOrder []string
 	var stop context.CancelFunc
-	worker.HandleBatch(fixture.JobType, workhorse.BatchHandlerOptions{
+	worker.HandleBatch(fixture.TaskType, workhorse.BatchHandlerOptions{
 		MaxSize: fixture.BatchMaxSize, Linger: time.Second,
 	}, func(items []workhorse.BatchHandlerItem) []workhorse.BatchHandlerOutcome {
 		outcomes := make([]workhorse.BatchHandlerOutcome, len(items))
@@ -76,17 +76,17 @@ func executeWorkerBatchFixture(t *testing.T, fixture batchRuntimeFixture) {
 			payload := item.Payload.(map[string]any)
 			key := payload["key"].(string)
 			handlerOrder = append(handlerOrder, key)
-			if payload["outcome"] == "succeed" || item.Context.Job.Attempt > 1 {
-				outcomes[index] = workhorse.BatchSucceeded{Result: map[string]any{"attempt": item.Context.Job.Attempt}}
+			if payload["outcome"] == "succeed" || item.Context.Task.Attempt > 1 {
+				outcomes[index] = workhorse.BatchSucceeded{Result: map[string]any{"attempt": item.Context.Task.Attempt}}
 			} else {
-				outcomes[index] = workhorse.BatchFailed{Error: fmt.Errorf("%s on attempt %d", key, item.Context.Job.Attempt)}
+				outcomes[index] = workhorse.BatchFailed{Error: fmt.Errorf("%s on attempt %d", key, item.Context.Task.Attempt)}
 			}
 		}
 		stop()
 		return outcomes
 	})
 
-	for run, expected := range []map[string]batchJobState{
+	for run, expected := range []map[string]batchTaskState{
 		fixture.ExpectedAfterFirst,
 		fixture.ExpectedAfterSecond,
 	} {
@@ -95,12 +95,12 @@ func executeWorkerBatchFixture(t *testing.T, fixture batchRuntimeFixture) {
 		if err := worker.Run(runContext); err != nil {
 			t.Fatalf("run %d: %v", run+1, err)
 		}
-		assertBatchJobStates(t, ctx, pool, jobIDs, expected)
+		assertBatchTaskStates(t, ctx, pool, taskIDs, expected)
 	}
 	if !reflect.DeepEqual(handlerOrder[:len(fixture.ExpectedHandlerOrder)], fixture.ExpectedHandlerOrder) {
 		t.Fatalf("unexpected first batch order: %v", handlerOrder)
 	}
-	assertBatchAttemptCounts(t, ctx, pool, jobIDs, map[string]int{"succeed": 1, "retry": 2, "fail": 1})
+	assertBatchAttemptCounts(t, ctx, pool, taskIDs, map[string]int{"succeed": 1, "retry": 2, "fail": 1})
 }
 
 func TestWorkerRecoversBatchHandlerPanicForEveryMember(t *testing.T) {
@@ -114,13 +114,13 @@ func TestWorkerRecoversBatchHandlerPanicForEveryMember(t *testing.T) {
 
 	queueName := "go-worker-batch-panic"
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-	jobIDs := make(map[string]string, 3)
+	taskIDs := make(map[string]string, 3)
 	for _, key := range []string{"first", "second", "following"} {
-		jobID, err := queue.Enqueue(ctx, "batch.panic", map[string]any{"key": key}, workhorse.EnqueueOptions{MaxAttempts: 1})
+		taskID, err := queue.Enqueue(ctx, "batch.panic", map[string]any{"key": key}, workhorse.EnqueueOptions{MaxAttempts: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
-		jobIDs[key] = jobID
+		taskIDs[key] = taskID
 	}
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
 		Queue: queueName, WorkerID: "go-batch-panic", Concurrency: 2,
@@ -149,7 +149,7 @@ func TestWorkerRecoversBatchHandlerPanicForEveryMember(t *testing.T) {
 	if err := worker.Run(runContext); err != nil {
 		t.Fatal(err)
 	}
-	assertBatchJobStates(t, ctx, pool, jobIDs, map[string]batchJobState{
+	assertBatchTaskStates(t, ctx, pool, taskIDs, map[string]batchTaskState{
 		"first": {State: "failed", Attempt: 1}, "second": {State: "failed", Attempt: 1},
 		"following": {State: "succeeded", Attempt: 1},
 	})
@@ -157,7 +157,7 @@ func TestWorkerRecoversBatchHandlerPanicForEveryMember(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT
 		count(*) FILTER (WHERE event_type = 'batch_dispatched'),
 		count(*) FILTER (WHERE event_type = 'batch_failed')
-		FROM workhorse.job_event WHERE job_id = ANY($1::uuid[])`, []string{jobIDs["first"], jobIDs["second"]}).Scan(&dispatched, &failed); err != nil {
+		FROM workhorse.task_event WHERE task_id = ANY($1::uuid[])`, []string{taskIDs["first"], taskIDs["second"]}).Scan(&dispatched, &failed); err != nil {
 		t.Fatal(err)
 	}
 	if dispatched != 2 || failed != 2 {
@@ -177,22 +177,22 @@ func loadBatchRuntimeFixture(t *testing.T, id string) batchRuntimeFixture {
 	return batchRuntimeFixture{}
 }
 
-func assertBatchJobStates(
+func assertBatchTaskStates(
 	t *testing.T,
 	ctx context.Context,
 	pool *pgxpool.Pool,
-	jobIDs map[string]string,
-	expected map[string]batchJobState,
+	taskIDs map[string]string,
+	expected map[string]batchTaskState,
 ) {
 	t.Helper()
 	for key, want := range expected {
 		var state string
 		var attempt int
 		err := pool.QueryRow(ctx, `SELECT state, current_attempt FROM (
-			SELECT job_id, state, current_attempt FROM workhorse.job_runtime
+			SELECT task_id, state, current_attempt FROM workhorse.task_runtime
 			UNION ALL
-			SELECT job_id, state, current_attempt FROM workhorse.job_outcome
-		) jobs WHERE job_id = $1::uuid`, jobIDs[key]).Scan(&state, &attempt)
+			SELECT task_id, state, current_attempt FROM workhorse.task_outcome
+		) tasks WHERE task_id = $1::uuid`, taskIDs[key]).Scan(&state, &attempt)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -206,13 +206,13 @@ func assertBatchAttemptCounts(
 	t *testing.T,
 	ctx context.Context,
 	pool *pgxpool.Pool,
-	jobIDs map[string]string,
+	taskIDs map[string]string,
 	expected map[string]int,
 ) {
 	t.Helper()
 	for key, want := range expected {
 		var attempts int
-		if err := pool.QueryRow(ctx, "SELECT count(*) FROM workhorse.attempt_history WHERE job_id = $1::uuid", jobIDs[key]).Scan(&attempts); err != nil {
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM workhorse.attempt_history WHERE task_id = $1::uuid", taskIDs[key]).Scan(&attempts); err != nil {
 			t.Fatal(err)
 		}
 		if attempts != want {

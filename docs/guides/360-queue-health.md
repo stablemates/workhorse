@@ -30,7 +30,7 @@ exact count wins.
 
 ## Bounded by design
 
-A queue with enormous history should not need to scan every old job to say how it
+A queue with enormous history should not need to scan every old task to say how it
 feels. Live work is small by design, so live-state counts are exact. Terminal history is
 unbounded, so its counts are size-capped: the snapshot counts exactly up to a limit, then stops
 and marks the value as a lower bound with an explicit `capped` flag. The same treatment applies

@@ -133,7 +133,7 @@ export const PARITY_CLIENT_ROWS: readonly ParityRow[] = [
     go: { file: "queue_test.go", pattern: "Throttle" },
   },
   {
-    capability: "Job dependencies with terminal policies",
+    capability: "Task dependencies with terminal policies",
     typescript: { file: "integration-dependencies.test.ts", pattern: "dependencies" },
     python: { file: "test_driver_integration.py", pattern: "dependencies" },
     go: { file: "queue_test.go", pattern: "Dependencies" },
@@ -245,7 +245,7 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Notification-assisted dispatch with polling",
-    typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "workhorse_jobs" },
+    typescript: { file: "integration-enqueue-contracts.test.ts", pattern: "workhorse_tasks" },
     python: { file: "test_notifications.py", pattern: "notif" },
     go: { file: "notifications_test.go", pattern: "otif" },
   },
@@ -269,9 +269,9 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
   },
   {
     capability: "Linked child fan-out and result join",
-    typescript: { file: "integration-child-jobs.test.ts", pattern: "child" },
-    python: { file: "test_worker_child_jobs.py", pattern: "child" },
-    go: { file: "child_jobs_test.go", pattern: "hild" },
+    typescript: { file: "integration-child-tasks.test.ts", pattern: "child" },
+    python: { file: "test_worker_child_tasks.py", pattern: "child" },
+    go: { file: "child_tasks_test.go", pattern: "hild" },
   },
   {
     capability: "Latest-value progress reporting",
@@ -325,10 +325,10 @@ export const PARITY_WORKER_ROWS: readonly ParityRow[] = [
 
 export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
   {
-    capability: "Job lookup, listing, and timeline",
-    typescript: { file: "integration-operator-reads.test.ts", pattern: "admin.listJobs" },
+    capability: "Task lookup, listing, and timeline",
+    typescript: { file: "integration-operator-reads.test.ts", pattern: "admin.listTasks" },
     python: pythonAdmin,
-    go: { file: "admin_test.go", pattern: "ListJobs" },
+    go: { file: "admin_test.go", pattern: "ListTasks" },
   },
   {
     capability: "Queue health snapshot",
@@ -371,13 +371,13 @@ export const PARITY_OPERATOR_ROWS: readonly ParityRow[] = [
 /** Operator capabilities implemented by PostgreSQL and exposed through product surfaces. */
 export const PRODUCT_PARITY_ROWS: readonly ProductParityRow[] = [
   {
-    capability: "Job lookup, listing, and timeline",
+    capability: "Task lookup, listing, and timeline",
     postgresql: {
       file: "integration-operator-reads.test.ts",
-      patterns: ["list_jobs_v1", "list_job_timeline_v1"],
+      patterns: ["list_tasks_v1", "list_task_timeline_v1"],
     },
     dashboard: { file: "test/conformance.test.ts", pattern: "verifyDashboardConformanceFixtures" },
-    cli: { file: "integration-admin-cli.test.ts", patterns: ["jobs", "timeline"] },
+    cli: { file: "integration-admin-cli.test.ts", patterns: ["tasks", "timeline"] },
   },
   {
     capability: "Queue health snapshot",

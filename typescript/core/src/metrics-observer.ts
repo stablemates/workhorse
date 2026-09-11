@@ -5,12 +5,12 @@ import { EXTERNAL_WAIT_REJECTION_WINDOW_MS, type Queryable } from "./types.js";
 // Every instrument here uses the lazy lifecycle selected by ADR 0024. A module-scope instrument
 // created eagerly binds to whichever meter provider exists at import, so an application that
 // installs its SDK after importing Workhorse would receive nothing.
-const jobCount = lazyGauge("workhorse.jobs.count", {
-  description: "Current live jobs by queue and runtime state",
-  unit: "{job}",
+const taskCount = lazyGauge("workhorse.tasks.count", {
+  description: "Current live tasks by queue and runtime state",
+  unit: "{task}",
 });
 const oldestReadyAge = lazyGauge("workhorse.queue.oldest_ready.age", {
-  description: "Age of the oldest ready job",
+  description: "Age of the oldest ready task",
   unit: "s",
 });
 const expiredLeases = lazyGauge("workhorse.lease.expired", {
@@ -18,8 +18,8 @@ const expiredLeases = lazyGauge("workhorse.lease.expired", {
   unit: "{lease}",
 });
 const overdueDeadlines = lazyGauge("workhorse.deadline.overdue", {
-  description: "Current live jobs past their absolute deadline",
-  unit: "{job}",
+  description: "Current live tasks past their absolute deadline",
+  unit: "{task}",
 });
 const overdueExecutionTimeouts = lazyGauge("workhorse.execution_timeout.overdue", {
   description: "Current active attempts past their execution timeout",
@@ -135,9 +135,9 @@ export class WorkhorseMetricsObserver {
 
     for (const row of queues.rows) {
       for (const state of ["scheduled", "ready", "active"] as const) {
-        jobCount.record(Number(row[state]), {
+        taskCount.record(Number(row[state]), {
           "workhorse.queue.name": row.queue_name,
-          "workhorse.job.state": state,
+          "workhorse.task.state": state,
         });
       }
       const attributes = { "workhorse.queue.name": row.queue_name };

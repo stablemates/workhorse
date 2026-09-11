@@ -158,7 +158,7 @@ export function notifyRunNow(
     message: `${described.summary}.`,
     exact: described.exact,
     tone: runNowOutcomeTone(feedback.status!),
-    action: { label: "Open task", onClick: () => options.openTask(feedback.jobId) },
+    action: { label: "Open task", onClick: () => options.openTask(feedback.taskId) },
   });
 }
 
@@ -170,7 +170,7 @@ export function notifyRunNow(
  * closed is a result the operator never got.
  */
 export function notifyCancel(
-  outcome: { jobId: string; status: DashboardCancelStatus; state: string | null },
+  outcome: { taskId: string; status: DashboardCancelStatus; state: string | null },
   options: { openTask: (id: string) => void },
 ): string {
   const described = describeCancelOutcome(outcome.status, { state: outcome.state });
@@ -179,7 +179,7 @@ export function notifyCancel(
     message: `${described.summary}.`,
     exact: described.exact,
     tone: cancelOutcomeTone(outcome.status),
-    action: { label: "Open task", onClick: () => options.openTask(outcome.jobId) },
+    action: { label: "Open task", onClick: () => options.openTask(outcome.taskId) },
   });
 }
 
@@ -193,13 +193,13 @@ export function notifyCancel(
 export function notifyRedrive(
   outcome: {
     status: DashboardRedriveStatus;
-    targetJobId: string | null;
+    targetTaskId: string | null;
     sourceState: string | null;
   },
   options: { openTask: (id: string) => void },
 ): string {
   const described = describeRedriveOutcome(outcome.status, { state: outcome.sourceState });
-  const target = outcome.targetJobId;
+  const target = outcome.targetTaskId;
   return notifyDashboard({
     title: described.label,
     message: `${described.summary}.`,
@@ -219,7 +219,7 @@ export function notifyRedrive(
  * actually happened instead of claiming an acceptance that never occurred.
  */
 export function notifyEnqueueTest(
-  result: { jobId: string; outcome?: "accepted" | "replayed" },
+  result: { taskId: string; outcome?: "accepted" | "replayed" },
   options: { openTask: (id: string) => void },
 ): string {
   const replayed = result.outcome === "replayed";
@@ -232,7 +232,7 @@ export function notifyEnqueueTest(
         "it instead of enqueuing a duplicate."
       : "The demonstration task was accepted and is queued to run.",
     tone: "success",
-    action: { label: "Open task", onClick: () => options.openTask(result.jobId) },
+    action: { label: "Open task", onClick: () => options.openTask(result.taskId) },
   });
 }
 

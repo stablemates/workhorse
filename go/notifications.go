@@ -15,8 +15,8 @@ const (
 	notificationCleanupTimeout   = time.Second
 )
 
-func jobNotificationMatches(payload string, queues []string) bool {
-	if payload == jobNotificationWildcard {
+func taskNotificationMatches(payload string, queues []string) bool {
+	if payload == taskNotificationWildcard {
 		return true
 	}
 	for _, queue := range queues {
@@ -34,7 +34,7 @@ func wakeWorker(wake chan<- struct{}) {
 	}
 }
 
-func listenForJobNotifications(
+func listenForTaskNotifications(
 	ctx context.Context,
 	pool *pgxpool.Pool,
 	queues []string,
@@ -57,7 +57,7 @@ func listenForJobNotifications(
 		connection, err := pool.Acquire(ctx)
 		listenSucceeded := false
 		if err == nil {
-			_, err = connection.Exec(ctx, listenForJobsStatement)
+			_, err = connection.Exec(ctx, listenForTasksStatement)
 			listenSucceeded = err == nil
 		}
 		if err == nil {
@@ -70,7 +70,7 @@ func listenForJobNotifications(
 					err = waitErr
 					break
 				}
-				if notification.Channel == jobNotificationChannel && jobNotificationMatches(notification.Payload, queues) {
+				if notification.Channel == taskNotificationChannel && taskNotificationMatches(notification.Payload, queues) {
 					wakeWorker(wake)
 				}
 			}
@@ -79,7 +79,7 @@ func listenForJobNotifications(
 		if connection != nil {
 			if listenSucceeded && ctx.Err() != nil {
 				cleanupContext, cancelCleanup := context.WithTimeout(context.Background(), notificationCleanupTimeout)
-				_, cleanupError := connection.Exec(cleanupContext, unlistenForJobsStatement)
+				_, cleanupError := connection.Exec(cleanupContext, unlistenForTasksStatement)
 				cancelCleanup()
 				if cleanupError != nil {
 					logger.Warn(notificationListenerLogMessage, notificationListenerErrorKey, cleanupError)

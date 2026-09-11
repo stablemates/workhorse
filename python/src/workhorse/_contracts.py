@@ -5,8 +5,8 @@ from typing import Any, cast
 
 from jsonschema import Draft202012Validator
 
-from .errors import JobContractValidationError
-from .types import JobTypeContracts, Json
+from .errors import TaskContractValidationError
+from .types import Json, TaskTypeContracts
 
 DIALECT = "https://json-schema.org/draft/2020-12/schema"
 SCHEMA_VALUES = {
@@ -94,15 +94,15 @@ def compile_contract_schema(schema: Json) -> Draft202012Validator:
 
 
 def validate_contract_value(
-    job_type: str, version: str, kind: str, schema: Json, value: Json
+    task_type: str, version: str, kind: str, schema: Json, value: Json
 ) -> None:
     if not compile_contract_schema(schema).is_valid(value):
-        raise JobContractValidationError(job_type, version, kind)
+        raise TaskContractValidationError(task_type, version, kind)
 
 
-def serialize_contracts(contracts: Mapping[str, JobTypeContracts]) -> list[dict[str, Json]]:
+def serialize_contracts(contracts: Mapping[str, TaskTypeContracts]) -> list[dict[str, Json]]:
     definitions: list[dict[str, Json]] = []
-    for job_type, contract in contracts.items():
+    for task_type, contract in contracts.items():
         versions: dict[str, Json] = {}
         for version, document in contract.versions.items():
             payload_schema = document.payload_schema
@@ -118,6 +118,10 @@ def serialize_contracts(contracts: Mapping[str, JobTypeContracts]) -> list[dict[
                 "sensitiveResultKeys": list(document.sensitive_result_keys),
             }
         definitions.append(
-            {"jobType": job_type, "currentVersion": contract.current_version, "versions": versions}
+            {
+                "taskType": task_type,
+                "currentVersion": contract.current_version,
+                "versions": versions,
+            }
         )
     return definitions

@@ -213,7 +213,7 @@ ${adapterBody}
         concurrency: 1,
       },
       configure(worker) {
-        worker.handle("example.job", async (payload) => {
+        worker.handle("example.task", async (payload) => {
           console.log("handling", payload);
           return { ok: true };
         });

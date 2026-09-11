@@ -80,10 +80,10 @@ def test_worker_telemetry_matches_the_typescript_contract(database_url: str) -> 
         psycopg.connect(database_url) as enqueue_connection,
         psycopg.connect(database_url, autocommit=True) as worker_connection,
     ):
-        job_id = Queue(enqueue_connection, "mail").enqueue("mail.send", {"secret": "payload"})
+        task_id = Queue(enqueue_connection, "mail").enqueue("mail.send", {"secret": "payload"})
         enqueue_connection.execute(
-            "UPDATE workhorse.job SET trace_context = %s::jsonb WHERE id = %s",
-            (json.dumps(trace_context), job_id),
+            "UPDATE workhorse.task SET trace_context = %s::jsonb WHERE id = %s",
+            (json.dumps(trace_context), task_id),
         )
         enqueue_connection.commit()
 
@@ -110,9 +110,9 @@ def test_worker_telemetry_matches_the_typescript_contract(database_url: str) -> 
     assert format(handler_span.parent.span_id, "016x") == "00f067aa0ba902b7"
     assert handler_span.attributes == {
         "workhorse.queue.name": "mail",
-        "workhorse.job.id": job_id,
-        "workhorse.job.type": "mail.send",
-        "workhorse.job.attempt": 1,
+        "workhorse.task.id": task_id,
+        "workhorse.task.type": "mail.send",
+        "workhorse.task.attempt": 1,
         "workhorse.handler.outcome": "succeeded",
     }
     assert completion_span.parent is not None
@@ -122,10 +122,10 @@ def test_worker_telemetry_matches_the_typescript_contract(database_url: str) -> 
     assert "workhorse.recovery.expired_leases" in maintenance_recovery_span.attributes
     assert "workhorse.recovery.retried" in maintenance_recovery_span.attributes
 
-    catalog_job = observed_contexts[0].job
-    record_failure(catalog_job, "scheduled")
+    catalog_task = observed_contexts[0].task
+    record_failure(catalog_task, "scheduled")
     record_recovery(1, 0, [])
-    record_batch(catalog_job.queue, catalog_job.type, 1, 0, True)
+    record_batch(catalog_task.queue, catalog_task.type, 1, 0, True)
     record_heartbeat_failure("stale")
 
     expected_metrics = _typescript_worker_metric_catalog()
@@ -145,26 +145,28 @@ def test_worker_telemetry_matches_the_typescript_contract(database_url: str) -> 
     }
     assert observed_catalog == expected_metrics
     assert len(exported_metrics) == len(expected_metrics)
-    expected_job_attributes = {
+    expected_task_attributes = {
         "workhorse.queue.name": "mail",
-        "workhorse.job.type": "mail.send",
+        "workhorse.task.type": "mail.send",
     }
-    assert expected_job_attributes in _metric_attributes(exported_metrics["workhorse.jobs.claimed"])
-    assert expected_job_attributes in _metric_attributes(
-        exported_metrics["workhorse.jobs.completed"]
+    assert expected_task_attributes in _metric_attributes(
+        exported_metrics["workhorse.tasks.claimed"]
+    )
+    assert expected_task_attributes in _metric_attributes(
+        exported_metrics["workhorse.tasks.completed"]
     )
     for metric in exported_metrics.values():
         for attributes in _metric_attributes(metric):
-            assert "workhorse.job.id" not in attributes
+            assert "workhorse.task.id" not in attributes
 
     events = {record.log_record.event_name for record in LOG_EXPORTER.get_finished_logs()}
     assert {
         "workhorse.handler.registered",
         "workhorse.worker.started",
-        "workhorse.job.claimed",
+        "workhorse.task.claimed",
         "workhorse.handler.started",
-        "workhorse.job.completed",
-        "workhorse.job.execution_finished",
+        "workhorse.task.completed",
+        "workhorse.task.execution_finished",
         "workhorse.handler.finished",
         "workhorse.worker.stopped",
     } <= events
@@ -243,7 +245,7 @@ def test_worker_warns_when_a_handler_swallows_a_suspension_signal(database_url: 
         psycopg.connect(database_url) as enqueue_connection,
         psycopg.connect(database_url, autocommit=True) as worker_connection,
     ):
-        job_id = Queue(enqueue_connection).enqueue("approval", {})
+        task_id = Queue(enqueue_connection).enqueue("approval", {})
         enqueue_connection.commit()
 
         def swallow(_payload: object, context: HandlerContext) -> dict[str, bool]:
@@ -255,7 +257,7 @@ def test_worker_warns_when_a_handler_swallows_a_suspension_signal(database_url: 
         worker.handle("approval", swallow)
         assert worker.run_once() is True
         assert worker_connection.execute(
-            "SELECT state FROM workhorse.job_runtime WHERE job_id = %s", (job_id,)
+            "SELECT state FROM workhorse.task_runtime WHERE task_id = %s", (task_id,)
         ).fetchone() == ("scheduled",)
 
     warning = next(
@@ -266,6 +268,6 @@ def test_worker_warns_when_a_handler_swallows_a_suspension_signal(database_url: 
     assert warning.severity_text == "WARN"
     assert warning.attributes["workhorse.handler.outcome"] == "suspended"
     assert not any(
-        record.log_record.event_name == "workhorse.job.completed"
+        record.log_record.event_name == "workhorse.task.completed"
         for record in LOG_EXPORTER.get_finished_logs()
     )

@@ -48,7 +48,7 @@ def test_python_dashboard_read_procedures_match_the_shared_contract(database_url
                 configured_workers=tuple(harness["configuredWorkers"]),
                 maintenance_loops=harness["maintenanceLoops"],
                 enqueue_test=lambda input, _actor: {
-                    "jobId": Queue(dashboard_connection, default_queue="conformance-demo").enqueue(
+                    "taskId": Queue(dashboard_connection, default_queue="conformance-demo").enqueue(
                         f"conformance.demo-{cast(dict[str, object], input)['kind']}",
                         {},
                         EnqueueOptions(
@@ -108,18 +108,18 @@ def test_python_dashboard_read_procedures_match_the_shared_contract(database_url
                      ON CONFLICT(queue_name,bucket_scope,bucket_key) DO UPDATE
                        SET tokens=excluded.tokens,refilled_at=excluded.refilled_at"""
             )
-            job = connection.execute(
-                """SELECT job.id,runtime.current_attempt FROM workhorse.dashboard_job_v1 job
-                     JOIN workhorse.dashboard_job_runtime_v1 runtime ON runtime.job_id=job.id
-                    WHERE job.queue_name='conformance-demo' ORDER BY job.created_at LIMIT 1"""
+            task = connection.execute(
+                """SELECT task.id,runtime.current_attempt FROM workhorse.dashboard_task_v1 task
+                     JOIN workhorse.dashboard_task_runtime_v1 runtime ON runtime.task_id=task.id
+                    WHERE task.queue_name='conformance-demo' ORDER BY task.created_at LIMIT 1"""
             ).fetchone()
-            assert job is not None
+            assert task is not None
             connection.execute(
-                """INSERT INTO workhorse.job_event(job_id,attempt,event_type,details)
+                """INSERT INTO workhorse.task_event(task_id,attempt,event_type,details)
                      VALUES (%s,%s,'batch_dispatched',jsonb_build_object(
                        'batch_id','dashboard-semantic-batch','members',jsonb_build_array(
-                         jsonb_build_object('job_id',%s::uuid,'attempt',%s))))""",
-                (job["id"], job["current_attempt"], job["id"], job["current_attempt"]),
+                         jsonb_build_object('task_id',%s::uuid,'attempt',%s))))""",
+                (task["id"], task["current_attempt"], task["id"], task["current_attempt"]),
             )
 
             sleep(3.1)
@@ -144,7 +144,7 @@ def test_python_dashboard_read_procedures_match_the_shared_contract(database_url
             _, detail_body = request(
                 host,
                 harness["origin"],
-                {"procedure": "jobDetail", "request": {"json": {"id": str(job["id"])}}},
+                {"procedure": "taskDetail", "request": {"json": {"id": str(task["id"])}}},
                 references,
             )
             detail = detail_body["json"]
@@ -152,13 +152,13 @@ def test_python_dashboard_read_procedures_match_the_shared_contract(database_url
             assert detail["batchExecutions"][0]["id"] == "dashboard-semantic-batch"
 
             connection.execute(
-                """WITH job AS (
-                       INSERT INTO workhorse.job(queue_name,job_type,payload,max_attempts)
+                """WITH task AS (
+                       INSERT INTO workhorse.task(queue_name,task_type,payload,max_attempts)
                        VALUES ('conformance-demo','conformance.retry-summary','{}',3) RETURNING id
-                     ) INSERT INTO workhorse.job_runtime(
-                       job_id,queue_name,state,current_attempt,run_at)
+                     ) INSERT INTO workhorse.task_runtime(
+                       task_id,queue_name,state,current_attempt,run_at)
                      SELECT id,'conformance-demo','scheduled',2,
-                       clock_timestamp()+interval '30 seconds' FROM job"""
+                       clock_timestamp()+interval '30 seconds' FROM task"""
             )
             system_status, system_body = request(
                 host,

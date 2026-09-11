@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterator, Sequence
 from threading import Event, Thread
 from typing import TYPE_CHECKING, Any, Protocol
 
-_CHANNEL = "workhorse_jobs"
+_CHANNEL = "workhorse_tasks"
 _RECONNECT_INITIAL_SECONDS = 0.1
 _RECONNECT_MAX_SECONDS = 5.0
 _READ_TIMEOUT_SECONDS = 0.1
@@ -35,7 +35,7 @@ else:
 NotificationConnectionFactory = Callable[[], NotificationConnection]
 
 
-class JobNotificationListener:
+class TaskNotificationListener:
     def __init__(
         self,
         connection_factory: NotificationConnectionFactory,

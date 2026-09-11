@@ -13,8 +13,8 @@ import {
   startWorkerProcess,
 } from "@stablemates/workhorse";
 
-const LANGUAGE_JOB_TYPE = "demo.language-worker";
-const SHARED_JOB_TYPE = "demo.shared-worker";
+const LANGUAGE_TASK_TYPE = "demo.language-worker";
+const SHARED_TASK_TYPE = "demo.shared-worker";
 const TYPESCRIPT_QUEUE = "demo-typescript";
 const SHARED_QUEUE = "demo-shared";
 
@@ -40,17 +40,17 @@ export function createDemoWorker(databaseUrl) {
         },
         configure(worker) {
           worker
-            .handle(LANGUAGE_JOB_TYPE, async (payload, context) => {
+            .handle(LANGUAGE_TASK_TYPE, async (payload, context) => {
               if (payload.language !== "typescript") {
-                throw new TypeError("TypeScript worker received a job for another language");
+                throw new TypeError("TypeScript worker received a task for another language");
               }
-              return { language: "typescript", runtime: "node", attempt: context.job.attempt };
+              return { language: "typescript", runtime: "node", attempt: context.task.attempt };
             })
-            .handle(SHARED_JOB_TYPE, async (payload, context) => {
+            .handle(SHARED_TASK_TYPE, async (payload, context) => {
               if (typeof payload.source !== "string") {
                 throw new TypeError("Shared worker requires a source");
               }
-              return { source: payload.source, runtime: "node", attempt: context.job.attempt };
+              return { source: payload.source, runtime: "node", attempt: context.task.attempt };
             });
         },
       },
@@ -64,22 +64,22 @@ async function verifyDemoWorker(databaseUrl) {
   try {
     const queue = new Queue(observer);
     const admin = new Admin(observer);
-    const jobIds = await Promise.all([
-      queue.enqueue(LANGUAGE_JOB_TYPE, { language: "typescript" }, { queue: TYPESCRIPT_QUEUE }),
-      queue.enqueue(SHARED_JOB_TYPE, { source: "typescript-example" }, { queue: SHARED_QUEUE }),
+    const taskIds = await Promise.all([
+      queue.enqueue(LANGUAGE_TASK_TYPE, { language: "typescript" }, { queue: TYPESCRIPT_QUEUE }),
+      queue.enqueue(SHARED_TASK_TYPE, { source: "typescript-example" }, { queue: SHARED_QUEUE }),
     ]);
     for (let pass = 0; pass < 100; pass += 1) {
-      const jobs = await Promise.all(jobIds.map((jobId) => admin.getJob(jobId)));
-      if (jobs.every((job) => job?.state === "succeeded")) {
-        return { jobIds, results: jobs.map((job) => job.result) };
+      const tasks = await Promise.all(taskIds.map((taskId) => admin.getTask(taskId)));
+      if (tasks.every((task) => task?.state === "succeeded")) {
+        return { taskIds, results: tasks.map((task) => task.result) };
       }
-      const terminalFailure = jobs.find(
-        (job) => job?.state === "failed" || job?.state === "canceled",
+      const terminalFailure = tasks.find(
+        (task) => task?.state === "failed" || task?.state === "canceled",
       );
-      if (terminalFailure) throw new Error(`Demo worker job finished in ${terminalFailure.state}`);
+      if (terminalFailure) throw new Error(`Demo worker task finished in ${terminalFailure.state}`);
       await delay(20);
     }
-    throw new Error("Demo worker jobs did not finish");
+    throw new Error("Demo worker tasks did not finish");
   } finally {
     await runtime.shutdown();
     await observer.end();

@@ -1,4 +1,4 @@
-# Your job can run more than once
+# Your task can run more than once
 
 Workhorse guarantees **at-least-once** execution. Read that carefully: at least once, not
 exactly once. This guide explains why, and what to do about it.
@@ -6,9 +6,9 @@ exactly once. This guide explains why, and what to do about it.
 ## Why it happens
 
 Your handler sends an email. The email goes out. Then, before the worker can record that the
-job succeeded, the process is killed.
+task succeeded, the process is killed.
 
-Nothing in the database knows the email was sent. The lease expires, recovery puts the job
+Nothing in the database knows the email was sent. The lease expires, recovery puts the task
 back, another worker picks it up, and the email goes out a second time.
 
 There is no way to close that gap. The email provider and your database are two separate
@@ -19,14 +19,14 @@ same thing Workhorse asks of you, just less honestly.
 ## What to do about it
 
 **If repeating the work is harmless, do nothing.** Setting a flag, overwriting a cache,
-recalculating a total — run it twice, no harm done. Most jobs are like this.
+recalculating a total — run it twice, no harm done. Most tasks are like this.
 
 **If repeating it is expensive or wrong,** you have two tools.
 
 ### Provider idempotency keys
 
 Most payment and messaging APIs accept an idempotency key. Send the same key twice and the
-provider does the work once. Derive the key from something stable — the job id, or your own
+provider does the work once. Derive the key from something stable — the task id, or your own
 order id — not from a timestamp or a random value.
 
 This is the strongest option, because the guarantee lives in the system that actually
@@ -69,11 +69,11 @@ does, nothing bad happens. That's the whole discipline.
 
 ## Next
 
-- [020-leases-and-fences.md](020-leases-and-fences.md) — why a dead worker's job comes back
-- [210-enqueue-idempotency.md](210-enqueue-idempotency.md) — stopping duplicate jobs being created
+- [020-leases-and-fences.md](020-leases-and-fences.md) — why a dead worker's task comes back
+- [210-enqueue-idempotency.md](210-enqueue-idempotency.md) — stopping duplicate tasks being created
 - [130-durable-waits.md](130-durable-waits.md) — the other reason a handler runs twice
 
 ---
 
 Exact checkpoint limits and semantics:
-[`architecture.md`](../architecture.md#job_checkpoint).
+[`architecture.md`](../architecture.md#task_checkpoint).

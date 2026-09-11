@@ -15,6 +15,36 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 `0.1.0` the schema upgrades in place: every release ships ordered, immutable migrations, and inside
 a major line a migration only adds. Breaking changes are always listed with upgrade steps.
 
+## 0.1.4 — 2026-09-11
+
+The npm packages, Python distribution, and Go module release from one source commit.
+
+Requires **schema v1**, Node.js **22** or newer, and PostgreSQL **15** or newer.
+
+**A 0.1.x database must be dropped and reinstalled.** This release renames the unit of work from
+"job" to "task" on every surface and re-cuts the schema baseline in place; no migration exists
+between 0.1.3 and 0.1.4 ([ADR 0064](docs/decisions/0064-rename-the-unit-noun-from-job-to-task.md)).
+
+- Rename every `Job*` type, `jobId` field, `HandlerContext.job`, and `Admin.getJob`, `listJobs`,
+  and `getJobTimeline` to their `Task` spellings; `ChildJobRequest` becomes `ChildTaskRequest`.
+- Rename the schema: `workhorse.job` and its companion tables, every `job_id` column and
+  `p_job_id` parameter, `list_jobs_v1`, `dashboard_job_detail_v1`, and the `workhorse_jobs`
+  notification channel, which is now `workhorse_tasks`. `RedactedJobError` becomes
+  `RedactedTaskError`.
+- Rename the OpenTelemetry names: `workhorse.jobs.*` instruments become `workhorse.tasks.*`,
+  `workhorse.job.*` span events and attributes become `workhorse.task.*`, and the `{job}` unit
+  becomes `{task}`. Saved dashboards and alerts on the old names stop matching.
+- Rename the `workhorse` CLI subcommands `admin jobs` and `admin job` to `admin tasks` and
+  `admin task`; positionals are `<task-id>` and the TUI view is `tasks`.
+- Rename the `dashboard/v1` procedure `jobDetail` to `taskDetail` and every `job*` request and
+  response field to its `task*` spelling; the contract is rewritten in place rather than
+  versioned.
+- Rename scheduled maintenance from "task" to "routine": `maintenanceTaskPollMs` becomes
+  `maintenanceRoutinePollMs`, `maintenance_state.task_name` becomes `routine_name`, and the cron
+  page lists `maintenance.routines`.
+- Rename the documentation slugs `/docs/job-dependencies` and `/docs/child-jobs` to
+  `/docs/task-dependencies` and `/docs/child-tasks`; the old URLs redirect.
+
 ## 0.1.3 — 2026-09-10
 
 The npm packages, Python distribution, and Go module release from one source commit.

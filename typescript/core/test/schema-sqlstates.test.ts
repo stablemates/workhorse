@@ -10,9 +10,9 @@ const registry = {
   P1003: ["dependency cycle rejected"],
   P1004: ["child creation lost the parent lease"],
   P1005: [
-    "a job accepts at most 100 prerequisite dependencies",
-    "a job accepts at most 100 dependent jobs",
-    "a job accepts at most 100 unresolved transitive dependent jobs",
+    "a task accepts at most 100 prerequisite dependencies",
+    "a task accepts at most 100 dependent tasks",
+    "a task accepts at most 100 unresolved transitive dependent tasks",
   ],
   P1006: ["queue purge request conflict with a retained request"],
 } as const;

@@ -44,7 +44,7 @@ func TestGoParentJoinsTypeScriptChildrenInCreationOrderWithoutDuplicatingThem(t 
 		handler *workhorse.HandlerContext,
 	) (any, error) {
 		activations++
-		results, err := handler.RunChildren([]workhorse.ChildJobRequest{
+		results, err := handler.RunChildren([]workhorse.ChildTaskRequest{
 			{Name: "second", Type: "typescript.child", Payload: map[string]any{"value": 2}, Options: workhorse.EnqueueOptions{Queue: childQueue}},
 			{Name: "first", Type: "typescript.child", Payload: map[string]any{"value": 1}, Options: workhorse.EnqueueOptions{Queue: childQueue}},
 		})
@@ -99,7 +99,7 @@ func TestGoParentReceivesMixedSettledOutcomes(t *testing.T) {
 	}
 	var joined []workhorse.ChildResult
 	parent.Handle("go.settled-parent", func(_ context.Context, _ any, handler *workhorse.HandlerContext) (any, error) {
-		results, err := handler.RunChildren([]workhorse.ChildJobRequest{
+		results, err := handler.RunChildren([]workhorse.ChildTaskRequest{
 			{Name: "accepted", Type: "go.settled-success", Options: workhorse.EnqueueOptions{Queue: "go-settled-success", MaxAttempts: 1}},
 			{Name: "rejected", Type: "go.settled-failure", Options: workhorse.EnqueueOptions{Queue: "go-settled-failure", MaxAttempts: 1}},
 			{Name: "skipped", Type: "go.settled-canceled", Options: workhorse.EnqueueOptions{Queue: "go-settled-canceled", MaxAttempts: 1}},
@@ -135,7 +135,7 @@ func TestGoParentReceivesMixedSettledOutcomes(t *testing.T) {
 	}
 	var canceledID string
 	if err := pool.QueryRow(ctx,
-		"SELECT child_job_id FROM workhorse.job_child WHERE parent_job_id = $1 AND child_name = $2",
+		"SELECT child_task_id FROM workhorse.task_child WHERE parent_task_id = $1 AND child_name = $2",
 		parentID, "skipped",
 	).Scan(&canceledID); err != nil {
 		t.Fatal(err)
@@ -178,7 +178,7 @@ func TestGoRunChildrenAllPropagatesFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	parent.Handle("go.all-success-parent", func(_ context.Context, _ any, handler *workhorse.HandlerContext) (any, error) {
-		return handler.RunChildrenAll([]workhorse.ChildJobRequest{{Name: "rejected", Type: "go.all-success-child", Options: workhorse.EnqueueOptions{Queue: "go-all-success-child", MaxAttempts: 1}}})
+		return handler.RunChildrenAll([]workhorse.ChildTaskRequest{{Name: "rejected", Type: "go.all-success-child", Options: workhorse.EnqueueOptions{Queue: "go-all-success-child", MaxAttempts: 1}}})
 	})
 	child, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{Queue: "go-all-success-child", WorkerID: "go-all-success-child-worker"})
 	if err != nil {
@@ -194,7 +194,7 @@ func TestGoRunChildrenAllPropagatesFailure(t *testing.T) {
 		t.Fatalf("fail child: processed=%t err=%v", processed, err)
 	}
 	var state string
-	if err := pool.QueryRow(ctx, "SELECT state FROM workhorse.job_outcome WHERE job_id = $1", parentID).Scan(&state); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT state FROM workhorse.task_outcome WHERE task_id = $1", parentID).Scan(&state); err != nil {
 		t.Fatal(err)
 	}
 	if state != "failed" {
@@ -250,7 +250,7 @@ func TestGoParentCreatesAndJoinsOneChild(t *testing.T) {
 	assertChildCount(t, pool, parentID, 1)
 
 	var result any
-	if err := pool.QueryRow(ctx, "SELECT result FROM workhorse.job_outcome WHERE job_id = $1", parentID).Scan(&result); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT result FROM workhorse.task_outcome WHERE task_id = $1", parentID).Scan(&result); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(result, map[string]any{"value": float64(4)}) {
@@ -276,7 +276,7 @@ func TestRunChildrenReturnsTypedJoinedResultLimitError(t *testing.T) {
 	}
 	var parentID string
 	if err := pool.QueryRow(ctx,
-		"SELECT job_id FROM workhorse.enqueue_many_v1($1::jsonb)", request,
+		"SELECT task_id FROM workhorse.enqueue_many_v1($1::jsonb)", request,
 	).Scan(&parentID); err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestRunChildrenReturnsTypedJoinedResultLimitError(t *testing.T) {
 
 	var limitError *workhorse.ChildResultLimitExceededError
 	err = <-returned
-	if !errors.As(err, &limitError) || limitError.ParentJobID != parentID || limitError.ResultBytes != 2 || limitError.ResultLimitBytes != 1 {
+	if !errors.As(err, &limitError) || limitError.ParentTaskID != parentID || limitError.ResultBytes != 2 || limitError.ResultLimitBytes != 1 {
 		t.Fatalf("unexpected joined-result limit error: %#v", err)
 	}
 }
@@ -307,7 +307,7 @@ func assertChildCount(t *testing.T, pool *pgxpool.Pool, parentID string, expecte
 	t.Helper()
 	var count int
 	if err := pool.QueryRow(
-		context.Background(), "SELECT count(*) FROM workhorse.job_child WHERE parent_job_id = $1", parentID,
+		context.Background(), "SELECT count(*) FROM workhorse.task_child WHERE parent_task_id = $1", parentID,
 	).Scan(&count); err != nil {
 		t.Fatal(err)
 	}

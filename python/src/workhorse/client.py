@@ -36,8 +36,8 @@ from ._statements import STATEMENTS as _STATEMENTS
 from ._telemetry import inject_trace_context as _inject_trace_context
 from .errors import (
     HumanWaitIdempotencyConflictError,
-    JobContractValidationError,
     SignalIdempotencyConflictError,
+    TaskContractValidationError,
     _translate_database_error,
 )
 from .types import (
@@ -48,7 +48,6 @@ from .types import (
     EnqueueRequest,
     EnqueueResult,
     HumanWaitCompletionResult,
-    JobTypeContracts,
     Json,
     QueueHealth,
     RateLimit,
@@ -56,6 +55,7 @@ from .types import (
     RateLimitPolicyDefinition,
     ScheduleDefinition,
     SignalDeliveryResult,
+    TaskTypeContracts,
 )
 
 if TYPE_CHECKING:
@@ -78,7 +78,7 @@ class Queue:
         self._contracts_enabled = False
 
     def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str:
-        return self.enqueue_with_result(type, payload, options).job_id
+        return self.enqueue_with_result(type, payload, options).task_id
 
     def health(self) -> QueueHealth:
         """Read PostgreSQL's database-authoritative queue health snapshot."""
@@ -91,7 +91,7 @@ class Queue:
 
     def cancel(
         self,
-        job_id: str,
+        task_id: str,
         *,
         requested_by: str | None = None,
         reason: str | None = None,
@@ -99,10 +99,10 @@ class Queue:
         """Request cooperative cancellation with optional audit attribution."""
         _assert_sync_compatible(self._executor)
         row = _one_row(
-            self._executor.rows(_STATEMENTS.cancel, (job_id, requested_by, reason)),
+            self._executor.rows(_STATEMENTS.cancel, (task_id, requested_by, reason)),
             "workhorse.cancel_v1",
         )
-        return _cancel_result(row, job_id)
+        return _cancel_result(row, task_id)
 
     def enqueue_with_result(
         self, type: str, payload: Json, options: EnqueueOptions | None = None
@@ -112,7 +112,7 @@ class Queue:
         )[0]
 
     def enqueue_many(self, requests: Sequence[EnqueueRequest]) -> list[str]:
-        return [result.job_id for result in self.enqueue_many_with_results(requests)]
+        return [result.task_id for result in self.enqueue_many_with_results(requests)]
 
     def enqueue_many_with_results(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]:
         if not requests:
@@ -183,7 +183,7 @@ class Queue:
         rows = self._executor.rows(_STATEMENTS.list_rate_limit_policies, (names,))
         return [_rate_limit_policy(row) for row in rows]
 
-    def sync_contracts(self, contracts: Mapping[str, JobTypeContracts]) -> None:
+    def sync_contracts(self, contracts: Mapping[str, TaskTypeContracts]) -> None:
         _assert_sync_compatible(self._executor)
         payload = json.dumps(_serialize_contracts(contracts), separators=(",", ":"))
         self._executor.rows(_STATEMENTS.sync_contracts, (payload,))
@@ -191,7 +191,7 @@ class Queue:
 
     def send_signal(
         self,
-        job_id: str,
+        task_id: str,
         name: str,
         payload: Json,
         *,
@@ -202,15 +202,15 @@ class Queue:
         row = _one_row(
             self._executor.rows(
                 _STATEMENTS.send_signal,
-                _signal_parameters(job_id, name, payload, idempotency_key, requested_by),
+                _signal_parameters(task_id, name, payload, idempotency_key, requested_by),
             ),
             "workhorse.send_signal_v1",
         )
-        return _signal_result(row, job_id, name)
+        return _signal_result(row, task_id, name)
 
     def complete_human_wait(
         self,
-        job_id: str,
+        task_id: str,
         name: str,
         result: Json,
         *,
@@ -221,11 +221,11 @@ class Queue:
         row = _one_row(
             self._executor.rows(
                 _STATEMENTS.complete_human_wait,
-                _human_parameters(job_id, name, result, idempotency_key, requested_by),
+                _human_parameters(task_id, name, result, idempotency_key, requested_by),
             ),
             "workhorse.complete_human_wait_v1",
         )
-        return _human_result(row, job_id, name)
+        return _human_result(row, task_id, name)
 
 
 class AsyncQueue:
@@ -254,7 +254,7 @@ class AsyncQueue:
         return cls(_AsyncpgExecutor(connection), default_queue)
 
     async def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str:
-        return (await self.enqueue_with_result(type, payload, options)).job_id
+        return (await self.enqueue_with_result(type, payload, options)).task_id
 
     async def health(self) -> QueueHealth:
         """Read PostgreSQL's database-authoritative queue health snapshot."""
@@ -267,7 +267,7 @@ class AsyncQueue:
 
     async def cancel(
         self,
-        job_id: str,
+        task_id: str,
         *,
         requested_by: str | None = None,
         reason: str | None = None,
@@ -275,10 +275,10 @@ class AsyncQueue:
         """Request cooperative cancellation with optional audit attribution."""
         await _assert_async_compatible(self._executor)
         row = _one_row(
-            await self._executor.rows(_STATEMENTS.cancel, (job_id, requested_by, reason)),
+            await self._executor.rows(_STATEMENTS.cancel, (task_id, requested_by, reason)),
             "workhorse.cancel_v1",
         )
-        return _cancel_result(row, job_id)
+        return _cancel_result(row, task_id)
 
     async def enqueue_with_result(
         self, type: str, payload: Json, options: EnqueueOptions | None = None
@@ -290,7 +290,7 @@ class AsyncQueue:
         )[0]
 
     async def enqueue_many(self, requests: Sequence[EnqueueRequest]) -> list[str]:
-        return [result.job_id for result in await self.enqueue_many_with_results(requests)]
+        return [result.task_id for result in await self.enqueue_many_with_results(requests)]
 
     async def enqueue_many_with_results(
         self, requests: Sequence[EnqueueRequest]
@@ -368,7 +368,7 @@ class AsyncQueue:
         rows = await self._executor.rows(_STATEMENTS.list_rate_limit_policies, (names,))
         return [_rate_limit_policy(row) for row in rows]
 
-    async def sync_contracts(self, contracts: Mapping[str, JobTypeContracts]) -> None:
+    async def sync_contracts(self, contracts: Mapping[str, TaskTypeContracts]) -> None:
         await _assert_async_compatible(self._executor)
         payload = json.dumps(_serialize_contracts(contracts), separators=(",", ":"))
         await self._executor.rows(_STATEMENTS.sync_contracts, (payload,))
@@ -376,7 +376,7 @@ class AsyncQueue:
 
     async def send_signal(
         self,
-        job_id: str,
+        task_id: str,
         name: str,
         payload: Json,
         *,
@@ -387,15 +387,15 @@ class AsyncQueue:
         row = _one_row(
             await self._executor.rows(
                 _STATEMENTS.send_signal,
-                _signal_parameters(job_id, name, payload, idempotency_key, requested_by),
+                _signal_parameters(task_id, name, payload, idempotency_key, requested_by),
             ),
             "workhorse.send_signal_v1",
         )
-        return _signal_result(row, job_id, name)
+        return _signal_result(row, task_id, name)
 
     async def complete_human_wait(
         self,
-        job_id: str,
+        task_id: str,
         name: str,
         result: Json,
         *,
@@ -406,11 +406,11 @@ class AsyncQueue:
         row = _one_row(
             await self._executor.rows(
                 _STATEMENTS.complete_human_wait,
-                _human_parameters(job_id, name, result, idempotency_key, requested_by),
+                _human_parameters(task_id, name, result, idempotency_key, requested_by),
             ),
             "workhorse.complete_human_wait_v1",
         )
-        return _human_result(row, job_id, name)
+        return _human_result(row, task_id, name)
 
 
 def _raise_translated(error: Exception) -> NoReturn:
@@ -422,7 +422,7 @@ def _raise_translated(error: Exception) -> NoReturn:
 
 def _apply_contract(
     row: _Row,
-    job_type: str,
+    task_type: str,
     payload: Json,
     request: dict[str, Json],
     cache: dict[tuple[str, str], Any],
@@ -433,12 +433,12 @@ def _apply_contract(
         document = json.loads(document)
     if not isinstance(document, Mapping) or "payload" not in document:
         raise RuntimeError("workhorse.get_contract_definition_v1 returned an invalid schema")
-    validator = cache.get((job_type, version))
+    validator = cache.get((task_type, version))
     if validator is None:
         validator = _compile_contract_schema(cast(Json, document["payload"]))
-        cache[(job_type, version)] = validator
+        cache[(task_type, version)] = validator
     if not validator.is_valid(payload):
-        raise JobContractValidationError(job_type, version, "payload")
+        raise TaskContractValidationError(task_type, version, "payload")
     request.update(
         {
             "contractVersion": version,
@@ -466,10 +466,10 @@ def _health_document(value: object) -> QueueHealth:
     return cast(QueueHealth, dict(value))
 
 
-def _cancel_result(row: _Row, job_id: str) -> CancelResult:
+def _cancel_result(row: _Row, task_id: str) -> CancelResult:
     return CancelResult(
         status=cast(Any, row["status"]),
-        job_id=job_id,
+        task_id=task_id,
         state=cast(Any, row["state"]),
         current_attempt=cast(int | None, row["current_attempt"]),
         requested_at=cast(datetime | None, row["requested_at"]),
@@ -495,7 +495,7 @@ def _results(rows: Sequence[_Row]) -> list[EnqueueResult]:
             raise RuntimeError("PostgreSQL returned non_replaceable without a valid reason")
         results.append(
             EnqueueResult(
-                job_id=str(row["job_id"]),
+                task_id=str(row["task_id"]),
                 outcome=outcome,
                 reason=cast(
                     Literal["incompatible_key_mode", "not_pending", "window_elapsed_pending"]
@@ -583,14 +583,14 @@ def _rate_limit_policy(row: _Row) -> RateLimitPolicy:
 
 
 def _signal_parameters(
-    job_id: str,
+    task_id: str,
     name: str,
     payload: Json,
     idempotency_key: str,
     requested_by: str,
 ) -> tuple[object, ...]:
     return (
-        job_id,
+        task_id,
         _validate_wait_name(name, "Signal"),
         _encode_wait_value(payload, "Signal payload"),
         _validate_idempotency_key(idempotency_key, "Signal idempotency_key"),
@@ -598,12 +598,12 @@ def _signal_parameters(
     )
 
 
-def _signal_result(row: _Row, job_id: str, name: str) -> SignalDeliveryResult:
+def _signal_result(row: _Row, task_id: str, name: str) -> SignalDeliveryResult:
     if row["status"] == "conflict":
-        raise SignalIdempotencyConflictError(job_id, name)
+        raise SignalIdempotencyConflictError(task_id, name)
     return SignalDeliveryResult(
         status=cast(Any, row["status"]),
-        job_id=job_id,
+        task_id=task_id,
         name=name,
         payload=cast(Json, row["payload"]),
         delivered_at=cast(Any, row["delivered_at"]),
@@ -612,14 +612,14 @@ def _signal_result(row: _Row, job_id: str, name: str) -> SignalDeliveryResult:
 
 
 def _human_parameters(
-    job_id: str,
+    task_id: str,
     name: str,
     result: Json,
     idempotency_key: str,
     requested_by: str,
 ) -> tuple[object, ...]:
     return (
-        job_id,
+        task_id,
         _validate_wait_name(name, "Human wait"),
         _encode_wait_value(result, "Human wait result"),
         _validate_idempotency_key(idempotency_key, "Human wait idempotency_key"),
@@ -627,12 +627,12 @@ def _human_parameters(
     )
 
 
-def _human_result(row: _Row, job_id: str, name: str) -> HumanWaitCompletionResult:
+def _human_result(row: _Row, task_id: str, name: str) -> HumanWaitCompletionResult:
     if row["status"] == "conflict":
-        raise HumanWaitIdempotencyConflictError(job_id, name)
+        raise HumanWaitIdempotencyConflictError(task_id, name)
     return HumanWaitCompletionResult(
         status=cast(Any, row["status"]),
-        job_id=job_id,
+        task_id=task_id,
         name=name,
         payload=cast(Json, row["result"]),
         completed_at=cast(Any, row["completed_at"]),

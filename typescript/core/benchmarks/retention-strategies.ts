@@ -21,7 +21,7 @@ export interface RetentionStrategiesOptions {
   rowsPerCycle?: number[];
   cycles?: number;
   retainedCycles?: number;
-  readyJobs?: number;
+  readyTasks?: number;
   claimSamples?: number;
   triggerRows?: number;
   triggerRepetitions?: number;
@@ -32,7 +32,7 @@ export interface ResolvedRetentionStrategiesOptions {
   rowsPerCycle: number[];
   cycles: number;
   retainedCycles: number;
-  readyJobs: number;
+  readyTasks: number;
   claimSamples: number;
   triggerRows: number;
   triggerRepetitions: number;
@@ -123,14 +123,14 @@ const defaults: ResolvedRetentionStrategiesOptions = {
   rowsPerCycle: [10, 50, 100, 250, 500, 1_000, 10_000, 50_000],
   cycles: 7,
   retainedCycles: 2,
-  readyJobs: 500,
+  readyTasks: 500,
   claimSamples: 40,
   triggerRows: 2_000,
   triggerRepetitions: 5,
   payloadBytes: 128,
 };
 
-const retainedHistoryTables = ["job_event", "attempt_history"] as const;
+const retainedHistoryTables = ["task_event", "attempt_history"] as const;
 const triggerProbeTables = ["history_triggered", "history_plain"] as const;
 type HistoryTable = (typeof retainedHistoryTables)[number] | (typeof triggerProbeTables)[number];
 
@@ -147,7 +147,7 @@ export function resolveRetentionStrategiesOptions(
     rowsPerCycle: options.rowsPerCycle ?? defaults.rowsPerCycle,
     cycles: options.cycles ?? defaults.cycles,
     retainedCycles: options.retainedCycles ?? defaults.retainedCycles,
-    readyJobs: options.readyJobs ?? defaults.readyJobs,
+    readyTasks: options.readyTasks ?? defaults.readyTasks,
     claimSamples: options.claimSamples ?? defaults.claimSamples,
     triggerRows: options.triggerRows ?? defaults.triggerRows,
     triggerRepetitions: options.triggerRepetitions ?? defaults.triggerRepetitions,
@@ -163,7 +163,7 @@ export function resolveRetentionStrategiesOptions(
   for (const key of [
     "cycles",
     "retainedCycles",
-    "readyJobs",
+    "readyTasks",
     "claimSamples",
     "triggerRows",
     "triggerRepetitions",
@@ -191,28 +191,28 @@ async function setupSchema(pool: Pool, strategy: RetentionStrategy): Promise<str
   await pool.query(`DROP SCHEMA IF EXISTS ${qualifiedSchema} CASCADE`);
   await pool.query(`CREATE SCHEMA ${qualifiedSchema}`);
   await pool.query(`
-    CREATE TABLE ${qualifiedSchema}.job (
+    CREATE TABLE ${qualifiedSchema}.task (
       id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       state text NOT NULL DEFAULT 'ready',
       ready_at timestamptz NOT NULL DEFAULT clock_timestamp(),
       priority integer NOT NULL DEFAULT 0
     );
-    CREATE INDEX job_ready_idx ON ${qualifiedSchema}.job (priority DESC, ready_at, id)
+    CREATE INDEX task_ready_idx ON ${qualifiedSchema}.task (priority DESC, ready_at, id)
       WHERE state = 'ready';
-    CREATE TABLE ${qualifiedSchema}.history_job (
+    CREATE TABLE ${qualifiedSchema}.history_task (
       id bigint PRIMARY KEY,
       history_through_at timestamptz
     );
-    CREATE OR REPLACE FUNCTION ${qualifiedSchema}.lock_history_job()
+    CREATE OR REPLACE FUNCTION ${qualifiedSchema}.lock_history_task()
     RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN
-      PERFORM 1 FROM ${qualifiedSchema}.history_job WHERE id = NEW.job_id FOR KEY SHARE;
+      PERFORM 1 FROM ${qualifiedSchema}.history_task WHERE id = NEW.task_id FOR KEY SHARE;
       IF NOT FOUND THEN
-        RAISE EXCEPTION 'history references missing benchmark job %', NEW.job_id;
+        RAISE EXCEPTION 'history references missing benchmark task %', NEW.task_id;
       END IF;
-      UPDATE ${qualifiedSchema}.history_job
+      UPDATE ${qualifiedSchema}.history_task
          SET history_through_at = GREATEST(history_through_at, NEW.occurred_at)
-       WHERE id = NEW.job_id
+       WHERE id = NEW.task_id
          AND history_through_at < NEW.occurred_at;
       RETURN NEW;
     END;
@@ -221,14 +221,14 @@ async function setupSchema(pool: Pool, strategy: RetentionStrategy): Promise<str
 
   const historyDefinition = `(
     id bigint GENERATED ALWAYS AS IDENTITY,
-    job_id bigint NOT NULL,
+    task_id bigint NOT NULL,
     generation integer NOT NULL,
     occurred_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     payload text NOT NULL
   )`;
   if (strategy === "partition-drop") {
     await pool.query(`
-      CREATE TABLE ${qualifiedSchema}.job_event ${historyDefinition} PARTITION BY RANGE (generation);
+      CREATE TABLE ${qualifiedSchema}.task_event ${historyDefinition} PARTITION BY RANGE (generation);
       CREATE TABLE ${qualifiedSchema}.attempt_history ${historyDefinition} PARTITION BY RANGE (generation);
       CREATE TABLE ${qualifiedSchema}.history_triggered ${historyDefinition}
         PARTITION BY RANGE (generation);
@@ -237,8 +237,8 @@ async function setupSchema(pool: Pool, strategy: RetentionStrategy): Promise<str
     `);
   } else {
     await pool.query(`
-      CREATE TABLE ${qualifiedSchema}.job_event ${historyDefinition};
-      CREATE INDEX job_event_generation_idx ON ${qualifiedSchema}.job_event (generation);
+      CREATE TABLE ${qualifiedSchema}.task_event ${historyDefinition};
+      CREATE INDEX task_event_generation_idx ON ${qualifiedSchema}.task_event (generation);
       CREATE TABLE ${qualifiedSchema}.attempt_history ${historyDefinition};
       CREATE INDEX attempt_history_generation_idx ON ${qualifiedSchema}.attempt_history (generation);
       CREATE TABLE ${qualifiedSchema}.history_triggered ${historyDefinition};
@@ -249,15 +249,15 @@ async function setupSchema(pool: Pool, strategy: RetentionStrategy): Promise<str
     `);
   }
   await pool.query(`
-    CREATE TRIGGER job_event_job_exists
-      BEFORE INSERT ON ${qualifiedSchema}.job_event
-      FOR EACH ROW EXECUTE FUNCTION ${qualifiedSchema}.lock_history_job();
-    CREATE TRIGGER attempt_history_job_exists
+    CREATE TRIGGER task_event_task_exists
+      BEFORE INSERT ON ${qualifiedSchema}.task_event
+      FOR EACH ROW EXECUTE FUNCTION ${qualifiedSchema}.lock_history_task();
+    CREATE TRIGGER attempt_history_task_exists
       BEFORE INSERT ON ${qualifiedSchema}.attempt_history
-      FOR EACH ROW EXECUTE FUNCTION ${qualifiedSchema}.lock_history_job();
-    CREATE TRIGGER history_triggered_job_exists
+      FOR EACH ROW EXECUTE FUNCTION ${qualifiedSchema}.lock_history_task();
+    CREATE TRIGGER history_triggered_task_exists
       BEFORE INSERT ON ${qualifiedSchema}.history_triggered
-      FOR EACH ROW EXECUTE FUNCTION ${qualifiedSchema}.lock_history_job();
+      FOR EACH ROW EXECUTE FUNCTION ${qualifiedSchema}.lock_history_task();
   `);
   return schema;
 }
@@ -282,18 +282,18 @@ async function createGeneration(
   }
 }
 
-async function seedReadyJobs(pool: Pool, schema: string, count: number): Promise<void> {
+async function seedReadyTasks(pool: Pool, schema: string, count: number): Promise<void> {
   const qualifiedSchema = quoteIdentifier(schema);
   await pool.query(
-    `INSERT INTO ${qualifiedSchema}.job(priority)
+    `INSERT INTO ${qualifiedSchema}.task(priority)
      SELECT series % 4 FROM generate_series(1, $1) AS series`,
     [count],
   );
 }
 
-async function seedHistoryJobs(pool: Pool, schema: string, count: number): Promise<void> {
+async function seedHistoryTasks(pool: Pool, schema: string, count: number): Promise<void> {
   await pool.query(
-    `INSERT INTO ${quoteIdentifier(schema)}.history_job(id)
+    `INSERT INTO ${quoteIdentifier(schema)}.history_task(id)
      SELECT series FROM generate_series(1, $1) AS series`,
     [count],
   );
@@ -310,7 +310,7 @@ async function insertHistory(
   const started = performance.now();
   await pool.query(
     `INSERT INTO ${quoteIdentifier(schema)}.${quoteIdentifier(table)}
-       (job_id, generation, occurred_at, payload)
+       (task_id, generation, occurred_at, payload)
      SELECT series, $1, clock_timestamp(), repeat('x', $3)
        FROM generate_series(1, $2) AS series`,
     [generation, rows, payloadBytes],
@@ -324,7 +324,7 @@ async function measureTriggerCost(
   strategy: RetentionStrategy,
   options: ResolvedRetentionStrategiesOptions,
 ): Promise<TriggerCostMeasurement> {
-  await seedHistoryJobs(pool, schema, Math.max(options.triggerRows, ...options.rowsPerCycle));
+  await seedHistoryTasks(pool, schema, Math.max(options.triggerRows, ...options.rowsPerCycle));
   const triggeredSamples: number[] = [];
   const plainSamples: number[] = [];
   for (let repetition = 0; repetition < options.triggerRepetitions; repetition += 1) {
@@ -370,13 +370,13 @@ async function claimOnce(pool: Pool, schema: string): Promise<number> {
   try {
     await client.query("BEGIN");
     const result = await client.query<{ id: string }>(`
-      SELECT id FROM ${quoteIdentifier(schema)}.job
+      SELECT id FROM ${quoteIdentifier(schema)}.task
        WHERE state = 'ready' AND ready_at <= clock_timestamp()
        ORDER BY priority DESC, ready_at, id
        LIMIT 1 FOR UPDATE SKIP LOCKED
     `);
     if (result.rows[0]?.id === undefined) {
-      throw new Error(`${schema} claim probe found no ready job`);
+      throw new Error(`${schema} claim probe found no ready task`);
     }
     await client.query("ROLLBACK");
     return performance.now() - started;
@@ -513,8 +513,8 @@ async function runStrategy(
   const triggerCost = await measureTriggerCost(pool, schema, strategy, options);
   // Remove trigger-probe partitions and heap pages before the sustained workload starts.
   await setupSchema(pool, strategy);
-  await seedHistoryJobs(pool, schema, Math.max(...options.rowsPerCycle));
-  await seedReadyJobs(pool, schema, options.readyJobs);
+  await seedHistoryTasks(pool, schema, Math.max(...options.rowsPerCycle));
+  await seedReadyTasks(pool, schema, options.readyTasks);
   const cycles: RetentionCycleMeasurement[] = [];
 
   for (let cycle = 0; cycle < options.cycles; cycle += 1) {

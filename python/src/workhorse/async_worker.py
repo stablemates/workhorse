@@ -22,14 +22,14 @@ from .types import (
     AsyncHandlerContext,
     BatchHandlerItem,
     BatchHandlerOutcome,
-    ChildJobRequest,
     ChildOutcome,
+    ChildTaskRequest,
     EnqueueOptions,
     HandlerContext,
-    JobCheckpoint,
-    JobProgress,
-    JobWait,
     Json,
+    TaskCheckpoint,
+    TaskProgress,
+    TaskWait,
 )
 from .worker import Worker
 
@@ -46,7 +46,7 @@ AsyncBatchHandler = Callable[
 ]
 _AsyncNotificationConnectionFactory = Callable[[], Awaitable[Any]]
 
-_CHANNEL = "workhorse_jobs"
+_CHANNEL = "workhorse_tasks"
 _RECONNECT_INITIAL_SECONDS = 0.1
 _RECONNECT_MAX_SECONDS = 5.0
 _T = TypeVar("_T")
@@ -89,13 +89,13 @@ class _AsyncExecutorBridge:
 
 
 class _CheckpointContext(Protocol):
-    def get_checkpoint(self, name: str) -> JobCheckpoint | None: ...
+    def get_checkpoint(self, name: str) -> TaskCheckpoint | None: ...
 
     def checkpoint(self, name: str, operation: Callable[[], Json]) -> Json: ...
 
-    def get_progress(self) -> JobProgress | None: ...
+    def get_progress(self) -> TaskProgress | None: ...
 
-    def set_progress(self, value: Json) -> JobProgress: ...
+    def set_progress(self, value: Json) -> TaskProgress: ...
 
 
 class _AsyncCheckpointAdapter:
@@ -103,7 +103,7 @@ class _AsyncCheckpointAdapter:
         self._checkpoint_context = context
         self._loop = loop
 
-    async def get_checkpoint(self, name: str) -> JobCheckpoint | None:
+    async def get_checkpoint(self, name: str) -> TaskCheckpoint | None:
         return await asyncio.to_thread(self._checkpoint_context.get_checkpoint, name)
 
     async def checkpoint(self, name: str, operation: Callable[[], Awaitable[Json]]) -> Json:
@@ -112,10 +112,10 @@ class _AsyncCheckpointAdapter:
 
         return await asyncio.to_thread(self._checkpoint_context.checkpoint, name, invoke_operation)
 
-    async def get_progress(self) -> JobProgress | None:
+    async def get_progress(self) -> TaskProgress | None:
         return await asyncio.to_thread(self._checkpoint_context.get_progress)
 
-    async def set_progress(self, value: Json) -> JobProgress:
+    async def set_progress(self, value: Json) -> TaskProgress:
         return await asyncio.to_thread(self._checkpoint_context.set_progress, value)
 
 
@@ -126,7 +126,7 @@ class _AsyncContextAdapter(_AsyncCheckpointAdapter):
 
     def context(self) -> AsyncHandlerContext:
         return AsyncHandlerContext(
-            self._context.job,
+            self._context.task,
             AsyncCancellationToken(self._context.cancellation),
             self.get_checkpoint,
             self.get_wait,
@@ -142,7 +142,7 @@ class _AsyncContextAdapter(_AsyncCheckpointAdapter):
             self.run_children_all,
         )
 
-    async def get_wait(self, name: str) -> JobWait | None:
+    async def get_wait(self, name: str) -> TaskWait | None:
         return await asyncio.to_thread(self._context.get_wait, name)
 
     async def sleep(self, name: str, duration_ms: int) -> None:
@@ -162,10 +162,10 @@ class _AsyncContextAdapter(_AsyncCheckpointAdapter):
     async def run_child(self, name: str, type: str, payload: Json, options: EnqueueOptions) -> Json:
         return await asyncio.to_thread(self._context.run_child, name, type, payload, options)
 
-    async def run_children(self, children: Sequence[ChildJobRequest]) -> dict[str, ChildOutcome]:
+    async def run_children(self, children: Sequence[ChildTaskRequest]) -> dict[str, ChildOutcome]:
         return await asyncio.to_thread(self._context.run_children, children)
 
-    async def run_children_all(self, children: Sequence[ChildJobRequest]) -> dict[str, Json]:
+    async def run_children_all(self, children: Sequence[ChildTaskRequest]) -> dict[str, Json]:
         return await asyncio.to_thread(self._context.run_children_all, children)
 
 
@@ -176,7 +176,7 @@ class _AsyncBatchContextAdapter(_AsyncCheckpointAdapter):
         self.item = AsyncBatchHandlerItem(
             item.payload,
             AsyncBatchHandlerContext(
-                item.context.job,
+                item.context.task,
                 AsyncCancellationToken(item.context.cancellation),
                 self.get_checkpoint,
                 self.get_progress,

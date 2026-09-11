@@ -7,9 +7,9 @@ published site; they do not own product behavior.
 
 ## Choose a starting point
 
-- If you want to run your first job, follow the [quickstart](https://workhorse.run/docs/quickstart) in your SDK's language.
-- If you are learning the execution model, start with [jobs and state](guides/010-jobs-and-state.md), then read [leases](guides/020-leases-and-fences.md) and [delivery guarantees](guides/030-delivery-guarantees.md).
-- If you are adding jobs to an existing application, read [transactional enqueue](guides/200-transactional-enqueue.md) before choosing an [integration](https://workhorse.run/docs/integrations).
+- If you want to run your first task, follow the [quickstart](https://workhorse.run/docs/quickstart) in your SDK's language.
+- If you are learning the execution model, start with [tasks and state](guides/010-tasks-and-state.md), then read [leases](guides/020-leases-and-fences.md) and [delivery guarantees](guides/030-delivery-guarantees.md).
+- If you are adding tasks to an existing application, read [transactional enqueue](guides/200-transactional-enqueue.md) before choosing an [integration](https://workhorse.run/docs/integrations).
 - If you operate workers, start with [worker processes](worker-processes.md) and the [operations guide](https://workhorse.run/docs/operations).
 
 ## Product references

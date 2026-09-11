@@ -31,7 +31,7 @@ try {
   const queue = new Queue(pool, queueName);
   const caller = trace.getTracer("workhorse-go-interoperability-test").startSpan("caller");
   const callerContext = trace.setSpan(context.active(), caller);
-  const jobId = await context.with(callerContext, () =>
+  const taskId = await context.with(callerContext, () =>
     queue.enqueue(
       "telemetry",
       { secret: "never log this" },
@@ -44,7 +44,7 @@ try {
   if (enqueue === undefined) throw new Error("TypeScript enqueue span was not exported");
   process.stdout.write(
     JSON.stringify({
-      jobId,
+      taskId,
       traceId: enqueue.spanContext().traceId,
       spanId: enqueue.spanContext().spanId,
     }),

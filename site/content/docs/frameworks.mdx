@@ -28,7 +28,7 @@ already provides everything else: a module-scoped constant, a container binding,
 provider, a plugin decoration.
 
 The rule that matters is not where the `Queue` comes from. It is that the enqueue must join the
-transaction that writes your application's data, so a rolled-back request leaves no job behind.
+transaction that writes your application's data, so a rolled-back request leaves no task behind.
 [Enqueue](/docs/enqueue.md) owns that, and each [ORM adapter](/docs/integrations.md) owns how its
 transaction type reaches the queue.
 

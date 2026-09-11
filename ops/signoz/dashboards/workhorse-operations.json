@@ -10,18 +10,18 @@
     {
       "id": "queue-flow",
       "title": "Queue flow",
-      "description": "Jobs accepted and claimed per second, split by queue.",
+      "description": "Tasks accepted and claimed per second, split by queue.",
       "unit": "ops/s",
       "queries": [
         {
-          "metric": "workhorse.jobs.enqueued",
+          "metric": "workhorse.tasks.enqueued",
           "timeAggregation": "rate",
           "spaceAggregation": "sum",
           "groupBy": ["workhorse.queue.name"],
           "legend": "enqueued {{workhorse.queue.name}}"
         },
         {
-          "metric": "workhorse.jobs.claimed",
+          "metric": "workhorse.tasks.claimed",
           "timeAggregation": "rate",
           "spaceAggregation": "sum",
           "groupBy": ["workhorse.queue.name"],
@@ -45,24 +45,24 @@
       ]
     },
     {
-      "id": "live-jobs",
-      "title": "Live jobs",
-      "description": "Current scheduled, ready, and active jobs by queue.",
-      "unit": "{job}",
+      "id": "live-tasks",
+      "title": "Live tasks",
+      "description": "Current scheduled, ready, and active tasks by queue.",
+      "unit": "{task}",
       "queries": [
         {
-          "metric": "workhorse.jobs.count",
+          "metric": "workhorse.tasks.count",
           "timeAggregation": "latest",
           "spaceAggregation": "sum",
-          "groupBy": ["workhorse.queue.name", "workhorse.job.state"],
-          "legend": "{{workhorse.queue.name}} {{workhorse.job.state}}"
+          "groupBy": ["workhorse.queue.name", "workhorse.task.state"],
+          "legend": "{{workhorse.queue.name}} {{workhorse.task.state}}"
         }
       ]
     },
     {
       "id": "oldest-ready-age",
-      "title": "Oldest ready job",
-      "description": "Age of the oldest ready job in each queue.",
+      "title": "Oldest ready task",
+      "description": "Age of the oldest ready task in each queue.",
       "unit": "s",
       "queries": [
         {

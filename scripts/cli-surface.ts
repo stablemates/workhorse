@@ -65,9 +65,9 @@ interface SurfaceModule {
 
 /** One `--json` command and the type its payload is declared as. */
 interface JsonPayload {
-  /** The command an operator types, for example `admin jobs`. */
+  /** The command an operator types, for example `admin tasks`. */
   readonly command: string;
-  /** The declared type, as `surface.ts` writes it, for example `readonly JobWait[] | JobWait`. */
+  /** The declared type, as `surface.ts` writes it, for example `readonly TaskWait[] | TaskWait`. */
   readonly type: string;
 }
 

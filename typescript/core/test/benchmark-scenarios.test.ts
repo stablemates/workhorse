@@ -28,7 +28,7 @@ const unusedPool: Queryable = {
 
 function passingRunner(name: OperationalScenarioName, calls: string[]): OperationalScenarioRunner {
   return async (context) => {
-    calls.push(`${name}:${context.queueName}:${context.options.jobCount}`);
+    calls.push(`${name}:${context.queueName}:${context.options.taskCount}`);
     return {
       name,
       durationMs: 0,
@@ -54,8 +54,8 @@ describe("operational scenario contracts", () => {
   });
 
   it("uses explicit reset and versioned partition-retirement SQL contracts", () => {
-    expect(resetWorkhorseStateSql).toContain("TRUNCATE workhorse.job_event");
-    expect(resetWorkhorseStateSql).toContain("workhorse.job_redrive");
+    expect(resetWorkhorseStateSql).toContain("TRUNCATE workhorse.task_event");
+    expect(resetWorkhorseStateSql).toContain("workhorse.task_redrive");
     expect(resetWorkhorseStateSql).toContain("ALTER SEQUENCE workhorse.fence_token_seq");
     expect(createHistoryDayV1Sql).toContain("workhorse.create_history_day_v1");
     expect(retireHistoryDayV1Sql).toContain("workhorse.retire_history_day_v1");
@@ -68,8 +68,8 @@ describe("operational scenario contracts", () => {
     );
 
     expect(contract).toBeDefined();
-    expect(contract!.invariants.join("\n")).toMatch(/ready and scheduled jobs cancel immediately/);
-    expect(contract!.invariants.join("\n")).toMatch(/waiting job cancels immediately/);
+    expect(contract!.invariants.join("\n")).toMatch(/ready and scheduled tasks cancel immediately/);
+    expect(contract!.invariants.join("\n")).toMatch(/waiting task cancels immediately/);
     expect(contract!.invariants.join("\n")).toMatch(/heartbeat status and AbortSignal/);
     expect(contract!.invariants.join("\n")).toMatch(/lease expiry instead of retrying/);
     expect(contract!.invariants.join("\n")).toMatch(/wrong-fence acknowledgement/);
@@ -130,7 +130,7 @@ describe("operational scenario contracts", () => {
     expect(contract!.invariants.join("\n")).toMatch(/separate from every claim-critical index/);
     expect(contract!.metrics).toEqual(
       expect.arrayContaining([
-        "listedJobs",
+        "listedTasks",
         "listMs",
         "payloadProjectionMs",
         "timelineMs",
@@ -192,11 +192,11 @@ describe("operational scenario contracts", () => {
 
     expect(contract).toBeDefined();
     expect(contract!.invariants.join("\n")).toMatch(/while the worker remains loaded/);
-    expect(contract!.invariants.join("\n")).toMatch(/one durable occurrence and job/);
+    expect(contract!.invariants.join("\n")).toMatch(/one durable occurrence and task/);
     expect(contract!.metrics).toEqual(
       expect.arrayContaining([
         "scheduleSamples",
-        "loadJobsStarted",
+        "loadTasksStarted",
         "maintenanceIntervalMs",
         "fireDelayP50Ms",
         "fireDelayP95Ms",
@@ -220,8 +220,8 @@ describe("operational scenario contracts", () => {
         "baselineClaimP95Ms",
         "mixedClaimP50Ms",
         "mixedClaimP95Ms",
-        "baselineThroughputJobsPerSecond",
-        "mixedThroughputJobsPerSecond",
+        "baselineThroughputTasksPerSecond",
+        "mixedThroughputTasksPerSecond",
         "workerConcurrency",
         "baselineReadyIndexBytes",
         "mixedReadyIndexBytes",
@@ -244,15 +244,15 @@ describe("operational scenario contracts", () => {
     expect(contract).toBeDefined();
     expect(contract!.invariants.join("\n")).toMatch(/full and partial batches/);
     expect(contract!.invariants.join("\n")).toMatch(/mixed outcomes/);
-    expect(contract!.invariants.join("\n")).toMatch(/one slot and one policy admission per job/);
+    expect(contract!.invariants.join("\n")).toMatch(/one slot and one policy admission per task/);
     expect(contract!.invariants.join("\n")).toMatch(/lease recovery and stale fences/);
     expect(contract!.invariants.join("\n")).toMatch(/live ready-index work/);
     expect(contract!.metrics).toEqual(
       expect.arrayContaining([
-        "serialJobsPerSecond",
-        "batchJobsPerSecond",
-        "serialPartialJobsPerSecond",
-        "batchPartialJobsPerSecond",
+        "serialTasksPerSecond",
+        "batchTasksPerSecond",
+        "serialPartialTasksPerSecond",
+        "batchPartialTasksPerSecond",
         "fullBatches",
         "partialBatches",
         "batchSizeP50",
@@ -261,8 +261,8 @@ describe("operational scenario contracts", () => {
         "batchClaimP95Ms",
         "batchMaxActiveSlots",
         "batchTelemetrySeries",
-        "concurrencyPolicyAdmittedJobs",
-        "ratePolicyAdmittedJobs",
+        "concurrencyPolicyAdmittedTasks",
+        "ratePolicyAdmittedTasks",
         "recoveredMembers",
         "claimPlanSharedBlocksBeforeHistory",
         "claimPlanSharedBlocksAfterHistory",
@@ -332,8 +332,8 @@ describe("operational scenario contracts", () => {
         "cancellationResolutionMs",
         "claimPlanSharedBlocksBeforeHistory",
         "claimPlanSharedBlocksAfterHistory",
-        "retainedJobIdentities",
-        "historyJobs",
+        "retainedTaskIdentities",
+        "historyTasks",
         "dependencyReleaseEvents",
       ]),
     );
@@ -344,9 +344,9 @@ describe("resolveOperationalScenarioOptions", () => {
   it("provides smoke-safe defaults and canonical scenario ordering", () => {
     const resolved = resolveOperationalScenarioOptions();
 
-    expect(resolved.jobCount).toBeGreaterThan(0);
-    expect(resolved.jobCount).toBeLessThanOrEqual(20);
-    expect(resolved.heartbeatCount).toBeLessThanOrEqual(resolved.jobCount);
+    expect(resolved.taskCount).toBeGreaterThan(0);
+    expect(resolved.taskCount).toBeLessThanOrEqual(20);
+    expect(resolved.heartbeatCount).toBeLessThanOrEqual(resolved.taskCount);
     expect(resolved.scheduleDelayMs).toBeLessThanOrEqual(100);
     expect(resolved.leaseMs).toBeLessThanOrEqual(100);
     expect(resolved.scheduleSamples).toBeGreaterThanOrEqual(3);
@@ -356,7 +356,7 @@ describe("resolveOperationalScenarioOptions", () => {
   it("normalizes custom counts and preserves contract order for a subset", () => {
     expect(
       resolveOperationalScenarioOptions({
-        jobCount: 3,
+        taskCount: 3,
         heartbeatCount: 2,
         batchSize: 2,
         scheduleDelayMs: 5,
@@ -368,7 +368,7 @@ describe("resolveOperationalScenarioOptions", () => {
         scenarios: ["health-snapshot", "heartbeat-fencing"],
       }),
     ).toEqual({
-      jobCount: 3,
+      taskCount: 3,
       heartbeatCount: 2,
       batchSize: 2,
       scheduleDelayMs: 5,
@@ -382,7 +382,7 @@ describe("resolveOperationalScenarioOptions", () => {
   });
 
   it("rejects unsafe numeric values, blank prefixes, and duplicate scenarios", () => {
-    expect(() => resolveOperationalScenarioOptions({ jobCount: 0 })).toThrow(RangeError);
+    expect(() => resolveOperationalScenarioOptions({ taskCount: 0 })).toThrow(RangeError);
     expect(() => resolveOperationalScenarioOptions({ leaseMs: 1.5 })).toThrow(RangeError);
     expect(() => resolveOperationalScenarioOptions({ queuePrefix: "  " })).toThrow(RangeError);
     expect(() =>
@@ -440,7 +440,7 @@ describe("runOperationalScenarios", () => {
     const ticks = [100, 101, 104, 105, 111, 112];
     const now = () => ticks.shift() ?? 112;
     const report = await runOperationalScenarios(unusedPool, {
-      jobCount: 3,
+      taskCount: 3,
       queuePrefix: "test",
       scenarios: ["health-snapshot", "retry-paths"],
       now,

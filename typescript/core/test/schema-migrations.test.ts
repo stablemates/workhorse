@@ -410,8 +410,8 @@ describe("schema migrations", () => {
       // compared by value afterwards. A count would pass a migration that rewrote a column.
       await seedReleasedSchema(releaseDatabase.pool);
       const states = await releaseDatabase.pool.query<{ state: string }>(
-        `SELECT state FROM workhorse.job_runtime
-         UNION SELECT state FROM workhorse.job_outcome ORDER BY state`,
+        `SELECT state FROM workhorse.task_runtime
+         UNION SELECT state FROM workhorse.task_outcome ORDER BY state`,
       );
       expect(states.rows.map((row) => row.state)).toEqual([
         "active",
@@ -423,7 +423,7 @@ describe("schema migrations", () => {
         "succeeded",
       ]);
       const partitions = await releaseDatabase.pool.query<{ partitions: string }>(
-        "SELECT count(DISTINCT tableoid)::text AS partitions FROM workhorse.job_event",
+        "SELECT count(DISTINCT tableoid)::text AS partitions FROM workhorse.task_event",
       );
       expect(Number(partitions.rows[0]?.partitions)).toBeGreaterThan(1);
       const seeded = await readSeededRows(releaseDatabase.pool);
@@ -435,15 +435,15 @@ describe("schema migrations", () => {
       for (const table of [
         "attempt_history",
         "concurrency_policy",
-        "job",
-        "job_checkpoint",
-        "job_child",
-        "job_dependency",
-        "job_event",
-        "job_outcome",
-        "job_progress",
-        "job_runtime",
-        "job_wait",
+        "task",
+        "task_checkpoint",
+        "task_child",
+        "task_dependency",
+        "task_event",
+        "task_outcome",
+        "task_progress",
+        "task_runtime",
+        "task_wait",
         "queue_control",
         "queue_purge_request",
         "rate_limit_policy",

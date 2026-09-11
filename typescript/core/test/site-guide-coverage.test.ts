@@ -85,7 +85,7 @@ describe("documentation site guide coverage", () => {
     const files = await Promise.all(
       [
         "docs/architecture.md",
-        "docs/guides/010-jobs-and-state.md",
+        "docs/guides/010-tasks-and-state.md",
         "docs/guides/140-deadlines-and-timeouts.md",
         "docs/guides/340-redrive.md",
         "site/content/docs/concepts.mdx",

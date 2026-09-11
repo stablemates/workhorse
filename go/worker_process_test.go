@@ -16,7 +16,7 @@ import (
 	workhorse "github.com/stablemates/workhorse/go"
 )
 
-func TestWorkerProcessDrainsAnInflightJobOnSIGTERM(t *testing.T) {
+func TestWorkerProcessDrainsAnInflightTaskOnSIGTERM(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-process-drain")
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -31,18 +31,18 @@ func TestWorkerProcessDrainsAnInflightJobOnSIGTERM(t *testing.T) {
 
 	queueName := "go-worker-process-drain"
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-	firstJobID, err := queue.Enqueue(ctx, "process.fixture", map[string]any{"sequence": 1}, workhorse.EnqueueOptions{Priority: 100})
+	firstTaskID, err := queue.Enqueue(ctx, "process.fixture", map[string]any{"sequence": 1}, workhorse.EnqueueOptions{Priority: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondJobID, err := queue.Enqueue(ctx, "process.fixture", map[string]any{"sequence": 2})
+	secondTaskID, err := queue.Enqueue(ctx, "process.fixture", map[string]any{"sequence": 2})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	binary := buildProcessWorker(t)
 	process, done, output := startProcessWorker(t, binary, databaseURL, queueName, "drain", "process-drain-worker")
-	waitForProcessInvocations(t, ctx, pool, firstJobID, 1)
+	waitForProcessInvocations(t, ctx, pool, firstTaskID, 1)
 	if err := process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
@@ -59,10 +59,10 @@ func TestWorkerProcessDrainsAnInflightJobOnSIGTERM(t *testing.T) {
 	}
 
 	var firstState, secondState string
-	if err := pool.QueryRow(ctx, "SELECT state FROM workhorse.job_outcome WHERE job_id = $1::uuid", firstJobID).Scan(&firstState); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT state FROM workhorse.task_outcome WHERE task_id = $1::uuid", firstTaskID).Scan(&firstState); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, "SELECT state FROM workhorse.job_runtime WHERE job_id = $1::uuid", secondJobID).Scan(&secondState); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT state FROM workhorse.task_runtime WHERE task_id = $1::uuid", secondTaskID).Scan(&secondState); err != nil {
 		t.Fatal(err)
 	}
 	if firstState != "succeeded" || secondState != "ready" {
@@ -82,7 +82,7 @@ func TestKilledWorkerLeaseIsRecoveredByASecondProcess(t *testing.T) {
 
 	queueName := "go-worker-process-crash"
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-	jobID, err := queue.Enqueue(ctx, "process.fixture", map[string]any{"source": "crashed"}, workhorse.EnqueueOptions{
+	taskID, err := queue.Enqueue(ctx, "process.fixture", map[string]any{"source": "crashed"}, workhorse.EnqueueOptions{
 		MaxAttempts: 2,
 		RetryPolicy: map[string]any{"type": "fixed", "delayMs": 0},
 	})
@@ -92,14 +92,14 @@ func TestKilledWorkerLeaseIsRecoveredByASecondProcess(t *testing.T) {
 
 	binary := buildProcessWorker(t)
 	process, done, output := startProcessWorker(t, binary, databaseURL, queueName, "crash", "process-crash-worker")
-	waitForProcessInvocations(t, ctx, pool, jobID, 1)
+	waitForProcessInvocations(t, ctx, pool, taskID, 1)
 	if err := process.Kill(); err != nil {
 		t.Fatal(err)
 	}
 	if err := waitForProcessExit(t, done, output); err == nil {
 		t.Fatal("SIGKILL worker exited successfully")
 	}
-	waitForProcessLeaseExpiration(t, ctx, pool, jobID)
+	waitForProcessLeaseExpiration(t, ctx, pool, taskID)
 
 	_, recoveryDone, recoveryOutput := startProcessWorker(t, binary, databaseURL, queueName, "recover", "process-recovery-worker")
 	if err := waitForProcessExit(t, recoveryDone, recoveryOutput); err != nil {
@@ -110,10 +110,10 @@ func TestKilledWorkerLeaseIsRecoveredByASecondProcess(t *testing.T) {
 	var attempt, invocations int
 	var resultSource string
 	if err := pool.QueryRow(ctx, `SELECT state, current_attempt, result->'payload'->>'source'
-		FROM workhorse.job_outcome WHERE job_id = $1::uuid`, jobID).Scan(&state, &attempt, &resultSource); err != nil {
+		FROM workhorse.task_outcome WHERE task_id = $1::uuid`, taskID).Scan(&state, &attempt, &resultSource); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM process_fixture_invocation WHERE job_id = $1::uuid", jobID).Scan(&invocations); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM process_fixture_invocation WHERE task_id = $1::uuid", taskID).Scan(&invocations); err != nil {
 		t.Fatal(err)
 	}
 	if state != "succeeded" || attempt != 2 || invocations != 2 || resultSource != "crashed" {
@@ -132,11 +132,11 @@ func TestWorkerRecoversHandlerPanicAndContinues(t *testing.T) {
 
 	queueName := "go-worker-handler-panic"
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-	panicJobID, err := queue.Enqueue(ctx, "process.panic", map[string]any{"kind": "panic"}, workhorse.EnqueueOptions{Priority: 100, MaxAttempts: 1})
+	panicTaskID, err := queue.Enqueue(ctx, "process.panic", map[string]any{"kind": "panic"}, workhorse.EnqueueOptions{Priority: 100, MaxAttempts: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	followingJobID, err := queue.Enqueue(ctx, "process.panic", map[string]any{"kind": "following"})
+	followingTaskID, err := queue.Enqueue(ctx, "process.panic", map[string]any{"kind": "following"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,10 +159,10 @@ func TestWorkerRecoversHandlerPanicAndContinues(t *testing.T) {
 	}
 
 	var panicState, panicMessage, followingState string
-	if err := pool.QueryRow(ctx, "SELECT state, error->>'message' FROM workhorse.job_outcome WHERE job_id = $1::uuid", panicJobID).Scan(&panicState, &panicMessage); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT state, error->>'message' FROM workhorse.task_outcome WHERE task_id = $1::uuid", panicTaskID).Scan(&panicState, &panicMessage); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, "SELECT state FROM workhorse.job_outcome WHERE job_id = $1::uuid", followingJobID).Scan(&followingState); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT state FROM workhorse.task_outcome WHERE task_id = $1::uuid", followingTaskID).Scan(&followingState); err != nil {
 		t.Fatal(err)
 	}
 	if panicState != "failed" || !strings.Contains(panicMessage, "provider exploded") || followingState != "succeeded" {
@@ -210,21 +210,21 @@ func waitForProcessExit(t *testing.T, done <-chan error, output *bytes.Buffer) e
 func createProcessFixtureTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	if _, err := pool.Exec(ctx, `CREATE TABLE process_fixture_invocation (
-		job_id uuid NOT NULL,
+		task_id uuid NOT NULL,
 		worker_id text NOT NULL,
 		attempt integer NOT NULL,
-		PRIMARY KEY (job_id, worker_id, attempt)
+		PRIMARY KEY (task_id, worker_id, attempt)
 	); CREATE TABLE process_fixture_control (name text PRIMARY KEY, released boolean NOT NULL)`); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func waitForProcessInvocations(t *testing.T, ctx context.Context, pool *pgxpool.Pool, jobID string, expected int) {
+func waitForProcessInvocations(t *testing.T, ctx context.Context, pool *pgxpool.Pool, taskID string, expected int) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		var count int
-		if err := pool.QueryRow(ctx, "SELECT count(*) FROM process_fixture_invocation WHERE job_id = $1::uuid", jobID).Scan(&count); err != nil {
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM process_fixture_invocation WHERE task_id = $1::uuid", taskID).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
 		if count >= expected {
@@ -232,15 +232,15 @@ func waitForProcessInvocations(t *testing.T, ctx context.Context, pool *pgxpool.
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("job %s did not reach %d process invocations", jobID, expected)
+	t.Fatalf("task %s did not reach %d process invocations", taskID, expected)
 }
 
-func waitForProcessLeaseExpiration(t *testing.T, ctx context.Context, pool *pgxpool.Pool, jobID string) {
+func waitForProcessLeaseExpiration(t *testing.T, ctx context.Context, pool *pgxpool.Pool, taskID string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		var expired bool
-		if err := pool.QueryRow(ctx, "SELECT expires_at <= clock_timestamp() FROM workhorse.job_runtime WHERE job_id = $1::uuid", jobID).Scan(&expired); err != nil {
+		if err := pool.QueryRow(ctx, "SELECT expires_at <= clock_timestamp() FROM workhorse.task_runtime WHERE task_id = $1::uuid", taskID).Scan(&expired); err != nil {
 			t.Fatal(err)
 		}
 		if expired {
@@ -248,5 +248,5 @@ func waitForProcessLeaseExpiration(t *testing.T, ctx context.Context, pool *pgxp
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("job %s lease did not expire", jobID)
+	t.Fatalf("task %s lease did not expire", taskID)
 }

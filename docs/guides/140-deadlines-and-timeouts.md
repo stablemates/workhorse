@@ -3,13 +3,13 @@
 Workhorse has two ways to say "this has taken too long", and they mean different things.
 Mixing them up is the usual source of confusion.
 
-## A deadline covers the whole job
+## A deadline covers the whole task
 
-`deadline` is a wall-clock moment after which the job is pointless. It is an actual instant,
+`deadline` is a wall-clock moment after which the task is pointless. It is an actual instant,
 such as the cutoff for a delivery run, rather than an execution budget.
 
-The clock never stops. It keeps running while the job is queued, while it's retrying, while
-it's asleep on a timer, and while it's executing. When that moment passes, the job is
+The clock never stops. It keeps running while the task is queued, while it's retrying, while
+it's asleep on a timer, and while it's executing. When that moment passes, the task is
 finished as failed, even if it had attempts left. No new attempt is started.
 
 Use it for work that expires: a reminder that's useless after the event, a price quote that
@@ -18,11 +18,11 @@ goes stale, a batch that must land before a cutoff.
 ## A timeout covers one attempt
 
 `executionTimeoutMs` is a budget for a single attempt's _active execution_. It's about how
-long your handler may run, not about when the job must be done by.
+long your handler may run, not about when the task must be done by.
 
 Only real execution spends the budget. If your handler goes to sleep on a
 [durable wait](130-durable-waits.md), the lease is released and the accounting pauses — a
-job that sleeps for a day hasn't used a day of its execution budget.
+task that sleeps for a day hasn't used a day of its execution budget.
 
 When the budget runs out, the attempt is closed as timed out and the normal retry rules
 apply: another attempt if the budget allows, terminal failure if not. So a timeout usually
@@ -43,7 +43,7 @@ await queue.enqueue(
 ```
 
 Read that as: bound each attempt by the configured execution budget, and abandon the whole
-job at kickoff regardless of how many attempts remain.
+task at kickoff regardless of how many attempts remain.
 
 ## How long should a handler run?
 

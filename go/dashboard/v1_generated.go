@@ -30,7 +30,7 @@ type DashboardCancelStatus string
 
 type DashboardCancelTaskResult struct {
 	Status         DashboardCancelStatus `json:"status"`
-	JobID          string                `json:"jobId"`
+	TaskID         string                `json:"taskId"`
 	State          any                   `json:"state"`
 	CurrentAttempt *float64              `json:"currentAttempt"`
 	RequestedAt    *string               `json:"requestedAt"`
@@ -47,7 +47,7 @@ type DashboardCancellationRequest struct {
 
 type DashboardCompleteHumanWaitResult struct {
 	Status      DashboardHumanWaitCompletionStatus `json:"status"`
-	JobID       string                             `json:"jobId"`
+	TaskID      string                             `json:"taskId"`
 	Name        string                             `json:"name"`
 	Result      any                                `json:"result"`
 	CompletedAt *string                            `json:"completedAt"`
@@ -78,13 +78,13 @@ type DashboardCronPage struct {
 			HistoryRetentionLocalTime      string  `json:"historyRetentionLocalTime"`
 			UpdatedAt                      string  `json:"updatedAt"`
 		} `json:"policy"`
-		Tasks []struct {
-			Task            string  `json:"task"`
+		Routines []struct {
+			Routine         string  `json:"routine"`
 			LastStartedAt   *string `json:"lastStartedAt"`
 			LastCompletedAt *string `json:"lastCompletedAt"`
 			Due             bool    `json:"due"`
 			Incomplete      bool    `json:"incomplete"`
-		} `json:"tasks"`
+		} `json:"routines"`
 	} `json:"maintenance"`
 }
 
@@ -107,7 +107,7 @@ type DashboardDurabilityPlan struct {
 }
 
 type DashboardEnqueueTestResult struct {
-	JobID   string  `json:"jobId"`
+	TaskID  string  `json:"taskId"`
 	Outcome *string `json:"outcome,omitempty"`
 }
 
@@ -119,9 +119,9 @@ type DashboardEventDetail struct {
 	ID           string             `json:"id"`
 	Kind         DashboardEventKind `json:"kind"`
 	RecordID     string             `json:"recordId"`
-	JobID        string             `json:"jobId"`
+	TaskID       string             `json:"taskId"`
 	Queue        *string            `json:"queue"`
-	JobType      *string            `json:"jobType"`
+	TaskType     *string            `json:"taskType"`
 	OccurredAt   string             `json:"occurredAt"`
 	Attempt      *float64           `json:"attempt"`
 	Type         string             `json:"type"`
@@ -138,9 +138,9 @@ type DashboardEventRow struct {
 	ID           string             `json:"id"`
 	Kind         DashboardEventKind `json:"kind"`
 	RecordID     string             `json:"recordId"`
-	JobID        string             `json:"jobId"`
+	TaskID       string             `json:"taskId"`
 	Queue        *string            `json:"queue"`
-	JobType      *string            `json:"jobType"`
+	TaskType     *string            `json:"taskType"`
 	OccurredAt   string             `json:"occurredAt"`
 	Attempt      *float64           `json:"attempt"`
 	Type         string             `json:"type"`
@@ -160,7 +160,7 @@ type DashboardEventsPage struct {
 	PageSize      float64               `json:"pageSize"`
 	Total         float64               `json:"total"`
 	Retention     struct {
-		JobEventDays       *float64 `json:"jobEventDays"`
+		TaskEventDays      *float64 `json:"taskEventDays"`
 		AttemptHistoryDays *float64 `json:"attemptHistoryDays"`
 	} `json:"retention"`
 }
@@ -186,9 +186,9 @@ type DashboardHumanWaitPage struct {
 }
 
 type DashboardHumanWaitRow struct {
-	JobID      string  `json:"jobId"`
+	TaskID     string  `json:"taskId"`
 	Queue      string  `json:"queue"`
-	JobType    string  `json:"jobType"`
+	TaskType   string  `json:"taskType"`
 	Name       string  `json:"name"`
 	Context    any     `json:"context"`
 	Attempt    float64 `json:"attempt"`
@@ -202,25 +202,537 @@ type DashboardHumanWaitSummary struct {
 	DeadlineAt string `json:"deadlineAt"`
 }
 
-type DashboardJobDetail struct {
+type DashboardMaintenanceLoopCadences struct {
+	TickIntervalMs float64 `json:"tickIntervalMs"`
+}
+
+type DashboardMaintenancePolicy struct {
+	Timezone                       string  `json:"timezone"`
+	PartitionPreparationIntervalMs float64 `json:"partitionPreparationIntervalMs"`
+	TerminalCleanupIntervalMs      float64 `json:"terminalCleanupIntervalMs"`
+	HistoryRetentionLocalTime      string  `json:"historyRetentionLocalTime"`
+	StatisticsRollupIntervalMs     float64 `json:"statisticsRollupIntervalMs"`
+	StatisticsGroupLimit           float64 `json:"statisticsGroupLimit"`
+	StatisticsRecomputeBuckets     float64 `json:"statisticsRecomputeBuckets"`
+	Provenance                     struct {
+		Timezone struct {
+			Source             string `json:"source"`
+			ApplicationDefault string `json:"applicationDefault"`
+		} `json:"timezone"`
+		PartitionPreparationIntervalMs struct {
+			Source             string  `json:"source"`
+			ApplicationDefault float64 `json:"applicationDefault"`
+		} `json:"partitionPreparationIntervalMs"`
+		TerminalCleanupIntervalMs struct {
+			Source             string  `json:"source"`
+			ApplicationDefault float64 `json:"applicationDefault"`
+		} `json:"terminalCleanupIntervalMs"`
+		HistoryRetentionLocalTime struct {
+			Source             string `json:"source"`
+			ApplicationDefault string `json:"applicationDefault"`
+		} `json:"historyRetentionLocalTime"`
+		StatisticsRollupIntervalMs struct {
+			Source             string  `json:"source"`
+			ApplicationDefault float64 `json:"applicationDefault"`
+		} `json:"statisticsRollupIntervalMs"`
+		StatisticsGroupLimit struct {
+			Source             string  `json:"source"`
+			ApplicationDefault float64 `json:"applicationDefault"`
+		} `json:"statisticsGroupLimit"`
+		StatisticsRecomputeBuckets struct {
+			Source             string  `json:"source"`
+			ApplicationDefault float64 `json:"applicationDefault"`
+		} `json:"statisticsRecomputeBuckets"`
+	} `json:"provenance"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+type DashboardManagedQueueRow struct {
+	Queue                     string                             `json:"queue"`
+	Paused                    bool                               `json:"paused"`
+	Scheduled                 float64                            `json:"scheduled"`
+	Ready                     float64                            `json:"ready"`
+	Active                    float64                            `json:"active"`
+	Succeeded                 float64                            `json:"succeeded"`
+	Failed                    float64                            `json:"failed"`
+	Canceled                  float64                            `json:"canceled"`
+	TerminalCountsApproximate bool                               `json:"terminalCountsApproximate"`
+	ConcurrencyPolicy         *DashboardConcurrencyPolicySummary `json:"concurrencyPolicy"`
+	RateLimitPolicy           *DashboardRateLimitPolicySummary   `json:"rateLimitPolicy"`
+}
+
+type DashboardQueueHealthReason struct {
+	Code     DashboardQueueHealthReasonCode `json:"code"`
+	Severity string                         `json:"severity"`
+	Observed float64                        `json:"observed"`
+	Budget   float64                        `json:"budget"`
+	Queue    *string                        `json:"queue,omitempty"`
+	Category *string                        `json:"category,omitempty"`
+}
+
+type DashboardQueueHealthReasonCode string
+
+type DashboardQueuesPage struct {
+	CapturedAt                string                     `json:"capturedAt"`
+	Queues                    []DashboardManagedQueueRow `json:"queues"`
+	ConcurrencyPoliciesCapped bool                       `json:"concurrencyPoliciesCapped"`
+	RateLimitPoliciesCapped   bool                       `json:"rateLimitPoliciesCapped"`
+}
+
+type DashboardRateLimitPolicySummary struct {
+	Namespace string `json:"namespace"`
+	Rate      struct {
+		Limit      float64 `json:"limit"`
+		IntervalMs float64 `json:"intervalMs"`
+		Burst      float64 `json:"burst"`
+	} `json:"rate"`
+	PerKey *struct {
+		Limit      float64 `json:"limit"`
+		IntervalMs float64 `json:"intervalMs"`
+		Burst      float64 `json:"burst"`
+	} `json:"perKey"`
+	AvailableTokens float64 `json:"availableTokens"`
+	ThrottledReady  float64 `json:"throttledReady"`
+	ThrottledKeys   float64 `json:"throttledKeys"`
+	NextEligibleAt  *string `json:"nextEligibleAt"`
+}
+
+type DashboardRedriveBatch struct {
+	Results    []DashboardRedriveResult `json:"results"`
+	NextCursor *DashboardRedriveCursor  `json:"nextCursor"`
+}
+
+type DashboardRedriveCursor struct {
+	FinishedAt string `json:"finishedAt"`
+	TaskID     string `json:"taskId"`
+}
+
+type DashboardRedriveResult struct {
+	Status       DashboardRedriveStatus `json:"status"`
+	SourceTaskID string                 `json:"sourceTaskId"`
+	TargetTaskID *string                `json:"targetTaskId"`
+	SourceState  any                    `json:"sourceState"`
+	TargetState  any                    `json:"targetState"`
+	RequestedAt  *string                `json:"requestedAt"`
+}
+
+type DashboardRedriveStatus string
+
+type DashboardRetentionCategory string
+
+type DashboardRetentionCategoryRow struct {
+	Category          DashboardRetentionCategory `json:"category"`
+	RetentionDays     *float64                   `json:"retentionDays"`
+	LagMs             *float64                   `json:"lagMs"`
+	OldestRetainedAt  *string                    `json:"oldestRetainedAt"`
+	PrunedByPartition bool                       `json:"prunedByPartition"`
+}
+
+type DashboardRetentionPolicy struct {
+	TaskIdentityRetentionDays       *float64 `json:"taskIdentityRetentionDays"`
+	TerminalOutcomeRetentionDays    *float64 `json:"terminalOutcomeRetentionDays"`
+	TaskEventRetentionDays          *float64 `json:"taskEventRetentionDays"`
+	AttemptHistoryRetentionDays     *float64 `json:"attemptHistoryRetentionDays"`
+	ScheduleOccurrenceRetentionDays *float64 `json:"scheduleOccurrenceRetentionDays"`
+	StatisticsRetentionDays         *float64 `json:"statisticsRetentionDays"`
+	TerminalTaskPruneLimit          float64  `json:"terminalTaskPruneLimit"`
+	HistoryPartitionsPerPass        float64  `json:"historyPartitionsPerPass"`
+	DefaultPartitionRowsPerPass     float64  `json:"defaultPartitionRowsPerPass"`
+	OccurrenceRowsPerPass           float64  `json:"occurrenceRowsPerPass"`
+	StatisticsRowsPerPass           float64  `json:"statisticsRowsPerPass"`
+	Provenance                      struct {
+		TaskIdentityRetentionDays struct {
+			Source             string   `json:"source"`
+			ApplicationDefault *float64 `json:"applicationDefault"`
+		} `json:"taskIdentityRetentionDays"`
+		TerminalOutcomeRetentionDays struct {
+			Source             string   `json:"source"`
+			ApplicationDefault *float64 `json:"applicationDefault"`
+		} `json:"terminalOutcomeRetentionDays"`
+		TaskEventRetentionDays struct {
+			Source             string   `json:"source"`
+			ApplicationDefault *float64 `json:"applicationDefault"`
+		} `json:"taskEventRetentionDays"`
+		AttemptHistoryRetentionDays struct {
+			Source             string   `json:"source"`
+			ApplicationDefault *float64 `json:"applicationDefault"`
+		} `json:"attemptHistoryRetentionDays"`
+		ScheduleOccurrenceRetentionDays struct {
+			Source             string   `json:"source"`
+			ApplicationDefault *float64 `json:"applicationDefault"`
+		} `json:"scheduleOccurrenceRetentionDays"`
+		StatisticsRetentionDays struct {
+			Source             string   `json:"source"`
+			ApplicationDefault *float64 `json:"applicationDefault"`
+		} `json:"statisticsRetentionDays"`
+		TerminalTaskPruneLimit struct {
+			Source             string  `json:"source"`
+			ApplicationDefault float64 `json:"applicationDefault"`
+		} `json:"terminalTaskPruneLimit"`
+		HistoryPartitionsPerPass struct {
+			Source             string  `json:"source"`
+			ApplicationDefault float64 `json:"applicationDefault"`
+		} `json:"historyPartitionsPerPass"`
+		DefaultPartitionRowsPerPass struct {
+			Source             string  `json:"source"`
+			ApplicationDefault float64 `json:"applicationDefault"`
+		} `json:"defaultPartitionRowsPerPass"`
+		OccurrenceRowsPerPass struct {
+			Source             string  `json:"source"`
+			ApplicationDefault float64 `json:"applicationDefault"`
+		} `json:"occurrenceRowsPerPass"`
+		StatisticsRowsPerPass struct {
+			Source             string  `json:"source"`
+			ApplicationDefault float64 `json:"applicationDefault"`
+		} `json:"statisticsRowsPerPass"`
+	} `json:"provenance"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+type DashboardRetentionPolicyImpact struct {
+	Eligible struct {
+		TerminalTasks       float64 `json:"terminalTasks"`
+		TaskEvents          float64 `json:"taskEvents"`
+		AttemptHistory      float64 `json:"attemptHistory"`
+		ScheduleOccurrences float64 `json:"scheduleOccurrences"`
+		Statistics          float64 `json:"statistics"`
+	} `json:"eligible"`
+	Capped struct {
+		TerminalTasks       bool `json:"terminalTasks"`
+		TaskEvents          bool `json:"taskEvents"`
+		AttemptHistory      bool `json:"attemptHistory"`
+		ScheduleOccurrences bool `json:"scheduleOccurrences"`
+		Statistics          bool `json:"statistics"`
+	} `json:"capped"`
+}
+
+type DashboardRunNowResult struct {
+	Status DashboardRunNowStatus `json:"status"`
+	ID     string                `json:"id"`
+	State  *string               `json:"state"`
+	RunAt  *string               `json:"runAt"`
+}
+
+type DashboardRunNowStatus string
+
+type DashboardScheduleRow struct {
+	Kind     string `json:"kind"`
+	Identity struct {
+		Kind      string `json:"kind"`
+		Namespace string `json:"namespace"`
+		Name      string `json:"name"`
+	} `json:"identity"`
+	Namespace       string  `json:"namespace"`
+	Name            string  `json:"name"`
+	Cron            string  `json:"cron"`
+	Queue           string  `json:"queue"`
+	Type            string  `json:"type"`
+	Priority        float64 `json:"priority"`
+	Enabled         bool    `json:"enabled"`
+	Active          bool    `json:"active"`
+	Revision        string  `json:"revision"`
+	UpdatedAt       string  `json:"updatedAt"`
+	OccurrenceCount float64 `json:"occurrenceCount"`
+	LastFiredAt     *string `json:"lastFiredAt"`
+	EvaluatorCount  float64 `json:"evaluatorCount"`
+}
+
+type DashboardSettingsPage struct {
+	CapturedAt           string                     `json:"capturedAt"`
+	Editable             bool                       `json:"editable"`
+	Maintenance          DashboardMaintenancePolicy `json:"maintenance"`
+	Retention            DashboardRetentionPolicy   `json:"retention"`
+	RecommendationInputs struct {
+		Reasons    []DashboardQueueHealthReason `json:"reasons"`
+		Statistics struct {
+			RolledUpThrough string  `json:"rolledUpThrough"`
+			LagMs           float64 `json:"lagMs"`
+			LastRunAt       *string `json:"lastRunAt"`
+		} `json:"statistics"`
+		DefaultHistoryRows struct {
+			TaskEvents     float64 `json:"taskEvents"`
+			AttemptHistory float64 `json:"attemptHistory"`
+		} `json:"defaultHistoryRows"`
+		DefaultHistoryRowsCapped struct {
+			TaskEvents     bool `json:"taskEvents"`
+			AttemptHistory bool `json:"attemptHistory"`
+		} `json:"defaultHistoryRowsCapped"`
+		EnqueueRate struct {
+			Tasks    float64 `json:"tasks"`
+			WindowMs float64 `json:"windowMs"`
+		} `json:"enqueueRate"`
+	} `json:"recommendationInputs"`
+	Workers []struct {
+		ID                       string   `json:"id"`
+		Queue                    string   `json:"queue"`
+		Queues                   []string `json:"queues"`
+		Concurrency              float64  `json:"concurrency"`
+		LeaseMs                  *float64 `json:"leaseMs"`
+		HeartbeatMs              *float64 `json:"heartbeatMs"`
+		PollMs                   *float64 `json:"pollMs"`
+		MaintenanceIntervalMs    *float64 `json:"maintenanceIntervalMs"`
+		MaintenanceRoutinePollMs *float64 `json:"maintenanceRoutinePollMs"`
+		RegistryIntervalMs       *float64 `json:"registryIntervalMs"`
+		LastSeenAt               string   `json:"lastSeenAt"`
+	} `json:"workers"`
+}
+
+type DashboardSignalDeliveryStatus string
+
+type DashboardSignalTaskResult struct {
+	Status      DashboardSignalDeliveryStatus `json:"status"`
+	TaskID      string                        `json:"taskId"`
+	Name        string                        `json:"name"`
+	Payload     any                           `json:"payload"`
+	DeliveredAt *string                       `json:"deliveredAt"`
+	DeliveredBy *string                       `json:"deliveredBy"`
+}
+
+type DashboardSignalWaitRow struct {
+	TaskID     string  `json:"taskId"`
+	Queue      string  `json:"queue"`
+	TaskType   string  `json:"taskType"`
+	Name       string  `json:"name"`
+	Attempt    float64 `json:"attempt"`
+	CreatedAt  string  `json:"createdAt"`
+	DeadlineAt string  `json:"deadlineAt"`
+}
+
+type DashboardSignalWaitSummary struct {
+	Name       string `json:"name"`
+	DeadlineAt string `json:"deadlineAt"`
+}
+
+type DashboardStorageRelation struct {
+	Relation     string  `json:"relation"`
+	TotalBytes   float64 `json:"totalBytes"`
+	TableBytes   float64 `json:"tableBytes"`
+	IndexBytes   float64 `json:"indexBytes"`
+	Rows         float64 `json:"rows"`
+	DeadRows     float64 `json:"deadRows"`
+	Partitions   float64 `json:"partitions"`
+	LastVacuumAt *string `json:"lastVacuumAt"`
+}
+
+type DashboardSystemFailingType struct {
+	Queue            string  `json:"queue"`
+	Type             string  `json:"type"`
+	Attempts         float64 `json:"attempts"`
+	ErrorRate        float64 `json:"errorRate"`
+	TerminalFailures float64 `json:"terminalFailures"`
+	LastError        *string `json:"lastError"`
+	LastSeenAt       string  `json:"lastSeenAt"`
+}
+
+type DashboardSystemOutcomeBucket struct {
+	BucketStart  string  `json:"bucketStart"`
+	Enqueued     float64 `json:"enqueued"`
+	Succeeded    float64 `json:"succeeded"`
+	Failed       float64 `json:"failed"`
+	Retry        float64 `json:"retry"`
+	LeaseExpired float64 `json:"leaseExpired"`
+	Canceled     float64 `json:"canceled"`
+}
+
+type DashboardSystemPage struct {
+	CapturedAt    string                `json:"capturedAt"`
+	Window        DashboardSystemWindow `json:"window"`
+	WindowSeconds float64               `json:"windowSeconds"`
+	Status        struct {
+		Level   string                       `json:"level"`
+		Reasons []DashboardQueueHealthReason `json:"reasons"`
+	} `json:"status"`
+	PausedQueues []string `json:"pausedQueues"`
+	Kpis         struct {
+		Drain struct {
+			EnqueuedPerMinute  float64 `json:"enqueuedPerMinute"`
+			CompletedPerMinute float64 `json:"completedPerMinute"`
+			NetPerMinute       float64 `json:"netPerMinute"`
+		} `json:"drain"`
+		Backlog struct {
+			Ready         float64  `json:"ready"`
+			OldestReadyMs *float64 `json:"oldestReadyMs"`
+		} `json:"backlog"`
+		ErrorRate struct {
+			Current  float64 `json:"current"`
+			Previous float64 `json:"previous"`
+			Delta    float64 `json:"delta"`
+		} `json:"errorRate"`
+		QueueWait struct {
+			P50Ms *float64 `json:"p50Ms"`
+			P95Ms *float64 `json:"p95Ms"`
+			P99Ms *float64 `json:"p99Ms"`
+		} `json:"queueWait"`
+		Retry struct {
+			Backoff float64                      `json:"backoff"`
+			DueSoon float64                      `json:"dueSoon"`
+			Buckets []DashboardSystemRetryBucket `json:"buckets"`
+		} `json:"retry"`
+		Lease struct {
+			Active       float64 `json:"active"`
+			Expired      float64 `json:"expired"`
+			ExpiringSoon float64 `json:"expiringSoon"`
+			Recovered    float64 `json:"recovered"`
+		} `json:"lease"`
+		Dependencies struct {
+			BlockedTasks          float64 `json:"blockedTasks"`
+			PendingEdges          float64 `json:"pendingEdges"`
+			FailedResolutions     float64 `json:"failedResolutions"`
+			RetentionPruneStarved bool    `json:"retentionPruneStarved"`
+			Capped                bool    `json:"capped"`
+		} `json:"dependencies"`
+		Children struct {
+			WaitingParents  float64 `json:"waitingParents"`
+			PendingChildren float64 `json:"pendingChildren"`
+			UnjoinedResults float64 `json:"unjoinedResults"`
+			FailedParents   float64 `json:"failedParents"`
+			CanceledParents float64 `json:"canceledParents"`
+			Capped          bool    `json:"capped"`
+		} `json:"children"`
+		ExternalWaits struct {
+			PendingSignals        float64  `json:"pendingSignals"`
+			PendingHumanDecisions float64  `json:"pendingHumanDecisions"`
+			Overdue               float64  `json:"overdue"`
+			OldestPendingAgeMs    *float64 `json:"oldestPendingAgeMs"`
+			RejectedDeliveries    float64  `json:"rejectedDeliveries"`
+			Capped                bool     `json:"capped"`
+		} `json:"externalWaits"`
+		Deadline *struct {
+			Pending         float64 `json:"pending"`
+			Overdue         float64 `json:"overdue"`
+			DueWithinMinute float64 `json:"dueWithinMinute"`
+			EarliestAt      *string `json:"earliestAt"`
+			ActiveTimeouts  float64 `json:"activeTimeouts"`
+			OverdueTimeouts float64 `json:"overdueTimeouts"`
+		} `json:"deadline,omitempty"`
+	} `json:"kpis"`
+	Outcomes                  []DashboardSystemOutcomeBucket `json:"outcomes"`
+	Queues                    []DashboardSystemQueueRow      `json:"queues"`
+	ConcurrencyPoliciesCapped bool                           `json:"concurrencyPoliciesCapped"`
+	RateLimitPoliciesCapped   bool                           `json:"rateLimitPoliciesCapped"`
+	RetryStorm                struct {
+		Buckets  []DashboardSystemRetryBucket `json:"buckets"`
+		TopTypes []struct {
+			Queue string  `json:"queue"`
+			Type  string  `json:"type"`
+			Count float64 `json:"count"`
+		} `json:"topTypes"`
+	} `json:"retryStorm"`
+	FailingTypes []DashboardSystemFailingType `json:"failingTypes"`
+	Integrity    struct {
+		DueButUnpromoted float64 `json:"dueButUnpromoted"`
+		Partitions       []struct {
+			Day           string `json:"day"`
+			StartsAt      string `json:"startsAt"`
+			EventExists   bool   `json:"eventExists"`
+			AttemptExists bool   `json:"attemptExists"`
+		} `json:"partitions"`
+		DefaultEventRows   float64                  `json:"defaultEventRows"`
+		DefaultAttemptRows float64                  `json:"defaultAttemptRows"`
+		Retention          DashboardSystemRetention `json:"retention"`
+		Storage            DashboardSystemStorage   `json:"storage"`
+	} `json:"integrity"`
+}
+
+type DashboardSystemQueueRow struct {
+	Queue           string   `json:"queue"`
+	Paused          bool     `json:"paused"`
+	Ready           float64  `json:"ready"`
+	OldestReadyMs   *float64 `json:"oldestReadyMs"`
+	PriorityBacklog []struct {
+		Priority      float64 `json:"priority"`
+		Ready         float64 `json:"ready"`
+		OldestReadyMs float64 `json:"oldestReadyMs"`
+	} `json:"priorityBacklog"`
+	DueSoon            float64                            `json:"dueSoon"`
+	Active             float64                            `json:"active"`
+	Retrying           float64                            `json:"retrying"`
+	EnqueuedPerMinute  float64                            `json:"enqueuedPerMinute"`
+	CompletedPerMinute float64                            `json:"completedPerMinute"`
+	ConcurrencyPolicy  *DashboardConcurrencyPolicySummary `json:"concurrencyPolicy"`
+	RateLimitPolicy    *DashboardRateLimitPolicySummary   `json:"rateLimitPolicy"`
+}
+
+type DashboardSystemRetention struct {
+	PolicyUpdatedAt           string                          `json:"policyUpdatedAt"`
+	Categories                []DashboardRetentionCategoryRow `json:"categories"`
+	MaxLagMs                  *float64                        `json:"maxLagMs"`
+	MaxLagCategory            any                             `json:"maxLagCategory"`
+	OldestRetainedAt          *string                         `json:"oldestRetainedAt"`
+	OldestRetainedCategory    any                             `json:"oldestRetainedCategory"`
+	EligibleHistoryPartitions struct {
+		TaskEvents     float64 `json:"taskEvents"`
+		AttemptHistory float64 `json:"attemptHistory"`
+	} `json:"eligibleHistoryPartitions"`
+	DefaultHistoryRows struct {
+		TaskEvents     float64 `json:"taskEvents"`
+		AttemptHistory float64 `json:"attemptHistory"`
+	} `json:"defaultHistoryRows"`
+	DefaultHistoryRowsCapped struct {
+		TaskEvents     bool `json:"taskEvents"`
+		AttemptHistory bool `json:"attemptHistory"`
+	} `json:"defaultHistoryRowsCapped"`
+}
+
+type DashboardSystemRetryBucket struct {
+	UpperBoundMs *float64 `json:"upperBoundMs"`
+	Count        float64  `json:"count"`
+}
+
+type DashboardSystemStorage struct {
+	Rollup struct {
+		RolledUpThrough string  `json:"rolledUpThrough"`
+		LagMs           float64 `json:"lagMs"`
+		LastRunAt       *string `json:"lastRunAt"`
+		Buckets         float64 `json:"buckets"`
+		OldestBucketAt  *string `json:"oldestBucketAt"`
+		NewestBucketAt  *string `json:"newestBucketAt"`
+		Stalled         bool    `json:"stalled"`
+	} `json:"rollup"`
+	Relations  []DashboardStorageRelation `json:"relations"`
+	TotalBytes float64                    `json:"totalBytes"`
+}
+
+type DashboardSystemWindow string
+
+type DashboardTaskCounts struct {
+	Canceled  float64 `json:"canceled"`
+	Blocked   float64 `json:"blocked"`
+	Scheduled float64 `json:"scheduled"`
+	Completed float64 `json:"completed"`
+	Waiting   float64 `json:"waiting"`
+	Running   float64 `json:"running"`
+	All       float64 `json:"all"`
+	Retried   float64 `json:"retried"`
+	Queued    float64 `json:"queued"`
+	Discarded float64 `json:"discarded"`
+}
+
+type DashboardTaskCursor struct {
+	ID        string  `json:"id"`
+	UpdatedAt string  `json:"updatedAt"`
+	Priority  float64 `json:"priority"`
+}
+
+type DashboardTaskDetail struct {
 	Tags                 []string                   `json:"tags"`
 	HumanWait            *DashboardHumanWaitSummary `json:"humanWait"`
 	CanCompleteHumanWait bool                       `json:"canCompleteHumanWait"`
 	Identity             struct {
-		ID                 string   `json:"id"`
-		Queue              string   `json:"queue"`
-		Type               string   `json:"type"`
-		Priority           float64  `json:"priority"`
-		State              string   `json:"state"`
-		CreatedAt          string   `json:"createdAt"`
-		RetryPolicy        any      `json:"retryPolicy"`
-		MaxAttempts        float64  `json:"maxAttempts"`
-		DeadlineAt         *string  `json:"deadlineAt,omitempty"`
-		ExecutionTimeoutMs *float64 `json:"executionTimeoutMs,omitempty"`
-		ConcurrencyKey     *string  `json:"concurrencyKey"`
-		PrerequisiteJobID  *string  `json:"prerequisiteJobId"`
-		PrerequisiteJobIDs []string `json:"prerequisiteJobIds"`
-		DependencyPolicy   *struct {
+		ID                  string   `json:"id"`
+		Queue               string   `json:"queue"`
+		Type                string   `json:"type"`
+		Priority            float64  `json:"priority"`
+		State               string   `json:"state"`
+		CreatedAt           string   `json:"createdAt"`
+		RetryPolicy         any      `json:"retryPolicy"`
+		MaxAttempts         float64  `json:"maxAttempts"`
+		DeadlineAt          *string  `json:"deadlineAt,omitempty"`
+		ExecutionTimeoutMs  *float64 `json:"executionTimeoutMs,omitempty"`
+		ConcurrencyKey      *string  `json:"concurrencyKey"`
+		PrerequisiteTaskID  *string  `json:"prerequisiteTaskId"`
+		PrerequisiteTaskIDs []string `json:"prerequisiteTaskIds"`
+		DependencyPolicy    *struct {
 			OnSuccess      string `json:"onSuccess"`
 			OnFailure      string `json:"onFailure"`
 			OnCancellation string `json:"onCancellation"`
@@ -230,21 +742,21 @@ type DashboardJobDetail struct {
 	} `json:"identity"`
 	DependencyLineage struct {
 		Records []struct {
-			DependentJobID    string  `json:"dependentJobId"`
-			PrerequisiteJobID string  `json:"prerequisiteJobId"`
-			OnSuccess         string  `json:"onSuccess"`
-			OnFailure         string  `json:"onFailure"`
-			OnCancellation    string  `json:"onCancellation"`
-			CreatedAt         string  `json:"createdAt"`
-			ReleasedAt        *string `json:"releasedAt"`
-			Resolution        any     `json:"resolution"`
+			DependentTaskID    string  `json:"dependentTaskId"`
+			PrerequisiteTaskID string  `json:"prerequisiteTaskId"`
+			OnSuccess          string  `json:"onSuccess"`
+			OnFailure          string  `json:"onFailure"`
+			OnCancellation     string  `json:"onCancellation"`
+			CreatedAt          string  `json:"createdAt"`
+			ReleasedAt         *string `json:"releasedAt"`
+			Resolution         any     `json:"resolution"`
 		} `json:"records"`
 		Truncated bool `json:"truncated"`
 	} `json:"dependencyLineage"`
 	ChildLineage struct {
 		Records []struct {
-			ParentJobID  string  `json:"parentJobId"`
-			ChildJobID   string  `json:"childJobId"`
+			ParentTaskID string  `json:"parentTaskId"`
+			ChildTaskID  string  `json:"childTaskId"`
 			Name         string  `json:"name"`
 			Type         string  `json:"type"`
 			CreatedAt    string  `json:"createdAt"`
@@ -256,8 +768,8 @@ type DashboardJobDetail struct {
 	} `json:"childLineage"`
 	RedriveLineage struct {
 		Records []struct {
-			SourceJobID        string  `json:"sourceJobId"`
-			TargetJobID        string  `json:"targetJobId"`
+			SourceTaskID       string  `json:"sourceTaskId"`
+			TargetTaskID       string  `json:"targetTaskId"`
 			RequestedBy        string  `json:"requestedBy"`
 			Reason             string  `json:"reason"`
 			RequestIDPreview   string  `json:"requestIdPreview"`
@@ -363,31 +875,38 @@ type DashboardJobDetail struct {
 	} `json:"events"`
 }
 
-type DashboardJobRow struct {
-	ID                 string                        `json:"id"`
-	Queue              string                        `json:"queue"`
-	Type               string                        `json:"type"`
-	Priority           float64                       `json:"priority"`
-	State              string                        `json:"state"`
-	BlockedReason      *string                       `json:"blockedReason"`
-	PrerequisiteJobIDs []string                      `json:"prerequisiteJobIds"`
-	Attempt            float64                       `json:"attempt"`
-	MaxAttempts        float64                       `json:"maxAttempts"`
-	RetryPolicy        any                           `json:"retryPolicy"`
-	DeadlineAt         *string                       `json:"deadlineAt,omitempty"`
-	ExecutionTimeoutMs *float64                      `json:"executionTimeoutMs,omitempty"`
-	Tags               []string                      `json:"tags"`
-	Keyed              bool                          `json:"keyed"`
-	EnqueueMode        *any                          `json:"enqueueMode,omitempty"`
-	Cancellation       *DashboardCancellationRequest `json:"cancellation"`
-	RunAt              *string                       `json:"runAt"`
-	WorkerID           *string                       `json:"workerId"`
-	LastWorkerID       *string                       `json:"lastWorkerId"`
-	FinishedAt         *string                       `json:"finishedAt"`
-	ErrorMessage       *string                       `json:"errorMessage"`
-	CreatedAt          string                        `json:"createdAt"`
-	UpdatedAt          string                        `json:"updatedAt"`
-	Durability         *struct {
+type DashboardTaskFacets struct {
+	Queues    []string `json:"queues"`
+	Workers   []string `json:"workers"`
+	TaskTypes []string `json:"taskTypes"`
+	Tags      []string `json:"tags"`
+}
+
+type DashboardTaskRow struct {
+	ID                  string                        `json:"id"`
+	Queue               string                        `json:"queue"`
+	Type                string                        `json:"type"`
+	Priority            float64                       `json:"priority"`
+	State               string                        `json:"state"`
+	BlockedReason       *string                       `json:"blockedReason"`
+	PrerequisiteTaskIDs []string                      `json:"prerequisiteTaskIds"`
+	Attempt             float64                       `json:"attempt"`
+	MaxAttempts         float64                       `json:"maxAttempts"`
+	RetryPolicy         any                           `json:"retryPolicy"`
+	DeadlineAt          *string                       `json:"deadlineAt,omitempty"`
+	ExecutionTimeoutMs  *float64                      `json:"executionTimeoutMs,omitempty"`
+	Tags                []string                      `json:"tags"`
+	Keyed               bool                          `json:"keyed"`
+	EnqueueMode         *any                          `json:"enqueueMode,omitempty"`
+	Cancellation        *DashboardCancellationRequest `json:"cancellation"`
+	RunAt               *string                       `json:"runAt"`
+	WorkerID            *string                       `json:"workerId"`
+	LastWorkerID        *string                       `json:"lastWorkerId"`
+	FinishedAt          *string                       `json:"finishedAt"`
+	ErrorMessage        *string                       `json:"errorMessage"`
+	CreatedAt           string                        `json:"createdAt"`
+	UpdatedAt           string                        `json:"updatedAt"`
+	Durability          *struct {
 		CompletedSteps float64 `json:"completedSteps"`
 		TotalSteps     float64 `json:"totalSteps"`
 	} `json:"durability"`
@@ -402,525 +921,6 @@ type DashboardJobRow struct {
 	HumanWait  *DashboardHumanWaitSummary  `json:"humanWait"`
 }
 
-type DashboardMaintenanceLoopCadences struct {
-	TickIntervalMs float64 `json:"tickIntervalMs"`
-}
-
-type DashboardMaintenancePolicy struct {
-	Timezone                       string  `json:"timezone"`
-	PartitionPreparationIntervalMs float64 `json:"partitionPreparationIntervalMs"`
-	TerminalCleanupIntervalMs      float64 `json:"terminalCleanupIntervalMs"`
-	HistoryRetentionLocalTime      string  `json:"historyRetentionLocalTime"`
-	StatisticsRollupIntervalMs     float64 `json:"statisticsRollupIntervalMs"`
-	StatisticsGroupLimit           float64 `json:"statisticsGroupLimit"`
-	StatisticsRecomputeBuckets     float64 `json:"statisticsRecomputeBuckets"`
-	Provenance                     struct {
-		Timezone struct {
-			Source             string `json:"source"`
-			ApplicationDefault string `json:"applicationDefault"`
-		} `json:"timezone"`
-		PartitionPreparationIntervalMs struct {
-			Source             string  `json:"source"`
-			ApplicationDefault float64 `json:"applicationDefault"`
-		} `json:"partitionPreparationIntervalMs"`
-		TerminalCleanupIntervalMs struct {
-			Source             string  `json:"source"`
-			ApplicationDefault float64 `json:"applicationDefault"`
-		} `json:"terminalCleanupIntervalMs"`
-		HistoryRetentionLocalTime struct {
-			Source             string `json:"source"`
-			ApplicationDefault string `json:"applicationDefault"`
-		} `json:"historyRetentionLocalTime"`
-		StatisticsRollupIntervalMs struct {
-			Source             string  `json:"source"`
-			ApplicationDefault float64 `json:"applicationDefault"`
-		} `json:"statisticsRollupIntervalMs"`
-		StatisticsGroupLimit struct {
-			Source             string  `json:"source"`
-			ApplicationDefault float64 `json:"applicationDefault"`
-		} `json:"statisticsGroupLimit"`
-		StatisticsRecomputeBuckets struct {
-			Source             string  `json:"source"`
-			ApplicationDefault float64 `json:"applicationDefault"`
-		} `json:"statisticsRecomputeBuckets"`
-	} `json:"provenance"`
-	UpdatedAt string `json:"updatedAt"`
-}
-
-type DashboardManagedQueueRow struct {
-	Queue                     string                             `json:"queue"`
-	Paused                    bool                               `json:"paused"`
-	Scheduled                 float64                            `json:"scheduled"`
-	Ready                     float64                            `json:"ready"`
-	Active                    float64                            `json:"active"`
-	Succeeded                 float64                            `json:"succeeded"`
-	Failed                    float64                            `json:"failed"`
-	Canceled                  float64                            `json:"canceled"`
-	TerminalCountsApproximate bool                               `json:"terminalCountsApproximate"`
-	ConcurrencyPolicy         *DashboardConcurrencyPolicySummary `json:"concurrencyPolicy"`
-	RateLimitPolicy           *DashboardRateLimitPolicySummary   `json:"rateLimitPolicy"`
-}
-
-type DashboardQueueHealthReason struct {
-	Code     DashboardQueueHealthReasonCode `json:"code"`
-	Severity string                         `json:"severity"`
-	Observed float64                        `json:"observed"`
-	Budget   float64                        `json:"budget"`
-	Queue    *string                        `json:"queue,omitempty"`
-	Category *string                        `json:"category,omitempty"`
-}
-
-type DashboardQueueHealthReasonCode string
-
-type DashboardQueuesPage struct {
-	CapturedAt                string                     `json:"capturedAt"`
-	Queues                    []DashboardManagedQueueRow `json:"queues"`
-	ConcurrencyPoliciesCapped bool                       `json:"concurrencyPoliciesCapped"`
-	RateLimitPoliciesCapped   bool                       `json:"rateLimitPoliciesCapped"`
-}
-
-type DashboardRateLimitPolicySummary struct {
-	Namespace string `json:"namespace"`
-	Rate      struct {
-		Limit      float64 `json:"limit"`
-		IntervalMs float64 `json:"intervalMs"`
-		Burst      float64 `json:"burst"`
-	} `json:"rate"`
-	PerKey *struct {
-		Limit      float64 `json:"limit"`
-		IntervalMs float64 `json:"intervalMs"`
-		Burst      float64 `json:"burst"`
-	} `json:"perKey"`
-	AvailableTokens float64 `json:"availableTokens"`
-	ThrottledReady  float64 `json:"throttledReady"`
-	ThrottledKeys   float64 `json:"throttledKeys"`
-	NextEligibleAt  *string `json:"nextEligibleAt"`
-}
-
-type DashboardRedriveBatch struct {
-	Results    []DashboardRedriveResult `json:"results"`
-	NextCursor *DashboardRedriveCursor  `json:"nextCursor"`
-}
-
-type DashboardRedriveCursor struct {
-	FinishedAt string `json:"finishedAt"`
-	JobID      string `json:"jobId"`
-}
-
-type DashboardRedriveResult struct {
-	Status      DashboardRedriveStatus `json:"status"`
-	SourceJobID string                 `json:"sourceJobId"`
-	TargetJobID *string                `json:"targetJobId"`
-	SourceState any                    `json:"sourceState"`
-	TargetState any                    `json:"targetState"`
-	RequestedAt *string                `json:"requestedAt"`
-}
-
-type DashboardRedriveStatus string
-
-type DashboardRetentionCategory string
-
-type DashboardRetentionCategoryRow struct {
-	Category          DashboardRetentionCategory `json:"category"`
-	RetentionDays     *float64                   `json:"retentionDays"`
-	LagMs             *float64                   `json:"lagMs"`
-	OldestRetainedAt  *string                    `json:"oldestRetainedAt"`
-	PrunedByPartition bool                       `json:"prunedByPartition"`
-}
-
-type DashboardRetentionPolicy struct {
-	JobIdentityRetentionDays        *float64 `json:"jobIdentityRetentionDays"`
-	TerminalOutcomeRetentionDays    *float64 `json:"terminalOutcomeRetentionDays"`
-	JobEventRetentionDays           *float64 `json:"jobEventRetentionDays"`
-	AttemptHistoryRetentionDays     *float64 `json:"attemptHistoryRetentionDays"`
-	ScheduleOccurrenceRetentionDays *float64 `json:"scheduleOccurrenceRetentionDays"`
-	StatisticsRetentionDays         *float64 `json:"statisticsRetentionDays"`
-	TerminalJobPruneLimit           float64  `json:"terminalJobPruneLimit"`
-	HistoryPartitionsPerPass        float64  `json:"historyPartitionsPerPass"`
-	DefaultPartitionRowsPerPass     float64  `json:"defaultPartitionRowsPerPass"`
-	OccurrenceRowsPerPass           float64  `json:"occurrenceRowsPerPass"`
-	StatisticsRowsPerPass           float64  `json:"statisticsRowsPerPass"`
-	Provenance                      struct {
-		JobIdentityRetentionDays struct {
-			Source             string   `json:"source"`
-			ApplicationDefault *float64 `json:"applicationDefault"`
-		} `json:"jobIdentityRetentionDays"`
-		TerminalOutcomeRetentionDays struct {
-			Source             string   `json:"source"`
-			ApplicationDefault *float64 `json:"applicationDefault"`
-		} `json:"terminalOutcomeRetentionDays"`
-		JobEventRetentionDays struct {
-			Source             string   `json:"source"`
-			ApplicationDefault *float64 `json:"applicationDefault"`
-		} `json:"jobEventRetentionDays"`
-		AttemptHistoryRetentionDays struct {
-			Source             string   `json:"source"`
-			ApplicationDefault *float64 `json:"applicationDefault"`
-		} `json:"attemptHistoryRetentionDays"`
-		ScheduleOccurrenceRetentionDays struct {
-			Source             string   `json:"source"`
-			ApplicationDefault *float64 `json:"applicationDefault"`
-		} `json:"scheduleOccurrenceRetentionDays"`
-		StatisticsRetentionDays struct {
-			Source             string   `json:"source"`
-			ApplicationDefault *float64 `json:"applicationDefault"`
-		} `json:"statisticsRetentionDays"`
-		TerminalJobPruneLimit struct {
-			Source             string  `json:"source"`
-			ApplicationDefault float64 `json:"applicationDefault"`
-		} `json:"terminalJobPruneLimit"`
-		HistoryPartitionsPerPass struct {
-			Source             string  `json:"source"`
-			ApplicationDefault float64 `json:"applicationDefault"`
-		} `json:"historyPartitionsPerPass"`
-		DefaultPartitionRowsPerPass struct {
-			Source             string  `json:"source"`
-			ApplicationDefault float64 `json:"applicationDefault"`
-		} `json:"defaultPartitionRowsPerPass"`
-		OccurrenceRowsPerPass struct {
-			Source             string  `json:"source"`
-			ApplicationDefault float64 `json:"applicationDefault"`
-		} `json:"occurrenceRowsPerPass"`
-		StatisticsRowsPerPass struct {
-			Source             string  `json:"source"`
-			ApplicationDefault float64 `json:"applicationDefault"`
-		} `json:"statisticsRowsPerPass"`
-	} `json:"provenance"`
-	UpdatedAt string `json:"updatedAt"`
-}
-
-type DashboardRetentionPolicyImpact struct {
-	Eligible struct {
-		TerminalJobs        float64 `json:"terminalJobs"`
-		JobEvents           float64 `json:"jobEvents"`
-		AttemptHistory      float64 `json:"attemptHistory"`
-		ScheduleOccurrences float64 `json:"scheduleOccurrences"`
-		Statistics          float64 `json:"statistics"`
-	} `json:"eligible"`
-	Capped struct {
-		TerminalJobs        bool `json:"terminalJobs"`
-		JobEvents           bool `json:"jobEvents"`
-		AttemptHistory      bool `json:"attemptHistory"`
-		ScheduleOccurrences bool `json:"scheduleOccurrences"`
-		Statistics          bool `json:"statistics"`
-	} `json:"capped"`
-}
-
-type DashboardRunNowResult struct {
-	Status DashboardRunNowStatus `json:"status"`
-	ID     string                `json:"id"`
-	State  *string               `json:"state"`
-	RunAt  *string               `json:"runAt"`
-}
-
-type DashboardRunNowStatus string
-
-type DashboardScheduleRow struct {
-	Kind     string `json:"kind"`
-	Identity struct {
-		Kind      string `json:"kind"`
-		Namespace string `json:"namespace"`
-		Name      string `json:"name"`
-	} `json:"identity"`
-	Namespace       string  `json:"namespace"`
-	Name            string  `json:"name"`
-	Cron            string  `json:"cron"`
-	Queue           string  `json:"queue"`
-	Type            string  `json:"type"`
-	Priority        float64 `json:"priority"`
-	Enabled         bool    `json:"enabled"`
-	Active          bool    `json:"active"`
-	Revision        string  `json:"revision"`
-	UpdatedAt       string  `json:"updatedAt"`
-	OccurrenceCount float64 `json:"occurrenceCount"`
-	LastFiredAt     *string `json:"lastFiredAt"`
-	EvaluatorCount  float64 `json:"evaluatorCount"`
-}
-
-type DashboardSettingsPage struct {
-	CapturedAt           string                     `json:"capturedAt"`
-	Editable             bool                       `json:"editable"`
-	Maintenance          DashboardMaintenancePolicy `json:"maintenance"`
-	Retention            DashboardRetentionPolicy   `json:"retention"`
-	RecommendationInputs struct {
-		Reasons    []DashboardQueueHealthReason `json:"reasons"`
-		Statistics struct {
-			RolledUpThrough string  `json:"rolledUpThrough"`
-			LagMs           float64 `json:"lagMs"`
-			LastRunAt       *string `json:"lastRunAt"`
-		} `json:"statistics"`
-		DefaultHistoryRows struct {
-			JobEvents      float64 `json:"jobEvents"`
-			AttemptHistory float64 `json:"attemptHistory"`
-		} `json:"defaultHistoryRows"`
-		DefaultHistoryRowsCapped struct {
-			JobEvents      bool `json:"jobEvents"`
-			AttemptHistory bool `json:"attemptHistory"`
-		} `json:"defaultHistoryRowsCapped"`
-		EnqueueRate struct {
-			Jobs     float64 `json:"jobs"`
-			WindowMs float64 `json:"windowMs"`
-		} `json:"enqueueRate"`
-	} `json:"recommendationInputs"`
-	Workers []struct {
-		ID                    string   `json:"id"`
-		Queue                 string   `json:"queue"`
-		Queues                []string `json:"queues"`
-		Concurrency           float64  `json:"concurrency"`
-		LeaseMs               *float64 `json:"leaseMs"`
-		HeartbeatMs           *float64 `json:"heartbeatMs"`
-		PollMs                *float64 `json:"pollMs"`
-		MaintenanceIntervalMs *float64 `json:"maintenanceIntervalMs"`
-		MaintenanceTaskPollMs *float64 `json:"maintenanceTaskPollMs"`
-		RegistryIntervalMs    *float64 `json:"registryIntervalMs"`
-		LastSeenAt            string   `json:"lastSeenAt"`
-	} `json:"workers"`
-}
-
-type DashboardSignalDeliveryStatus string
-
-type DashboardSignalTaskResult struct {
-	Status      DashboardSignalDeliveryStatus `json:"status"`
-	JobID       string                        `json:"jobId"`
-	Name        string                        `json:"name"`
-	Payload     any                           `json:"payload"`
-	DeliveredAt *string                       `json:"deliveredAt"`
-	DeliveredBy *string                       `json:"deliveredBy"`
-}
-
-type DashboardSignalWaitRow struct {
-	JobID      string  `json:"jobId"`
-	Queue      string  `json:"queue"`
-	JobType    string  `json:"jobType"`
-	Name       string  `json:"name"`
-	Attempt    float64 `json:"attempt"`
-	CreatedAt  string  `json:"createdAt"`
-	DeadlineAt string  `json:"deadlineAt"`
-}
-
-type DashboardSignalWaitSummary struct {
-	Name       string `json:"name"`
-	DeadlineAt string `json:"deadlineAt"`
-}
-
-type DashboardStorageRelation struct {
-	Relation     string  `json:"relation"`
-	TotalBytes   float64 `json:"totalBytes"`
-	TableBytes   float64 `json:"tableBytes"`
-	IndexBytes   float64 `json:"indexBytes"`
-	Rows         float64 `json:"rows"`
-	DeadRows     float64 `json:"deadRows"`
-	Partitions   float64 `json:"partitions"`
-	LastVacuumAt *string `json:"lastVacuumAt"`
-}
-
-type DashboardSystemFailingType struct {
-	Queue            string  `json:"queue"`
-	Type             string  `json:"type"`
-	Attempts         float64 `json:"attempts"`
-	ErrorRate        float64 `json:"errorRate"`
-	TerminalFailures float64 `json:"terminalFailures"`
-	LastError        *string `json:"lastError"`
-	LastSeenAt       string  `json:"lastSeenAt"`
-}
-
-type DashboardSystemOutcomeBucket struct {
-	BucketStart  string  `json:"bucketStart"`
-	Enqueued     float64 `json:"enqueued"`
-	Succeeded    float64 `json:"succeeded"`
-	Failed       float64 `json:"failed"`
-	Retry        float64 `json:"retry"`
-	LeaseExpired float64 `json:"leaseExpired"`
-	Canceled     float64 `json:"canceled"`
-}
-
-type DashboardSystemPage struct {
-	CapturedAt    string                `json:"capturedAt"`
-	Window        DashboardSystemWindow `json:"window"`
-	WindowSeconds float64               `json:"windowSeconds"`
-	Status        struct {
-		Level   string                       `json:"level"`
-		Reasons []DashboardQueueHealthReason `json:"reasons"`
-	} `json:"status"`
-	PausedQueues []string `json:"pausedQueues"`
-	Kpis         struct {
-		Drain struct {
-			EnqueuedPerMinute  float64 `json:"enqueuedPerMinute"`
-			CompletedPerMinute float64 `json:"completedPerMinute"`
-			NetPerMinute       float64 `json:"netPerMinute"`
-		} `json:"drain"`
-		Backlog struct {
-			Ready         float64  `json:"ready"`
-			OldestReadyMs *float64 `json:"oldestReadyMs"`
-		} `json:"backlog"`
-		ErrorRate struct {
-			Current  float64 `json:"current"`
-			Previous float64 `json:"previous"`
-			Delta    float64 `json:"delta"`
-		} `json:"errorRate"`
-		QueueWait struct {
-			P50Ms *float64 `json:"p50Ms"`
-			P95Ms *float64 `json:"p95Ms"`
-			P99Ms *float64 `json:"p99Ms"`
-		} `json:"queueWait"`
-		Retry struct {
-			Backoff float64                      `json:"backoff"`
-			DueSoon float64                      `json:"dueSoon"`
-			Buckets []DashboardSystemRetryBucket `json:"buckets"`
-		} `json:"retry"`
-		Lease struct {
-			Active       float64 `json:"active"`
-			Expired      float64 `json:"expired"`
-			ExpiringSoon float64 `json:"expiringSoon"`
-			Recovered    float64 `json:"recovered"`
-		} `json:"lease"`
-		Dependencies struct {
-			BlockedJobs           float64 `json:"blockedJobs"`
-			PendingEdges          float64 `json:"pendingEdges"`
-			FailedResolutions     float64 `json:"failedResolutions"`
-			RetentionPruneStarved bool    `json:"retentionPruneStarved"`
-			Capped                bool    `json:"capped"`
-		} `json:"dependencies"`
-		Children struct {
-			WaitingParents  float64 `json:"waitingParents"`
-			PendingChildren float64 `json:"pendingChildren"`
-			UnjoinedResults float64 `json:"unjoinedResults"`
-			FailedParents   float64 `json:"failedParents"`
-			CanceledParents float64 `json:"canceledParents"`
-			Capped          bool    `json:"capped"`
-		} `json:"children"`
-		ExternalWaits struct {
-			PendingSignals        float64  `json:"pendingSignals"`
-			PendingHumanDecisions float64  `json:"pendingHumanDecisions"`
-			Overdue               float64  `json:"overdue"`
-			OldestPendingAgeMs    *float64 `json:"oldestPendingAgeMs"`
-			RejectedDeliveries    float64  `json:"rejectedDeliveries"`
-			Capped                bool     `json:"capped"`
-		} `json:"externalWaits"`
-		Deadline *struct {
-			Pending         float64 `json:"pending"`
-			Overdue         float64 `json:"overdue"`
-			DueWithinMinute float64 `json:"dueWithinMinute"`
-			EarliestAt      *string `json:"earliestAt"`
-			ActiveTimeouts  float64 `json:"activeTimeouts"`
-			OverdueTimeouts float64 `json:"overdueTimeouts"`
-		} `json:"deadline,omitempty"`
-	} `json:"kpis"`
-	Outcomes                  []DashboardSystemOutcomeBucket `json:"outcomes"`
-	Queues                    []DashboardSystemQueueRow      `json:"queues"`
-	ConcurrencyPoliciesCapped bool                           `json:"concurrencyPoliciesCapped"`
-	RateLimitPoliciesCapped   bool                           `json:"rateLimitPoliciesCapped"`
-	RetryStorm                struct {
-		Buckets  []DashboardSystemRetryBucket `json:"buckets"`
-		TopTypes []struct {
-			Queue string  `json:"queue"`
-			Type  string  `json:"type"`
-			Count float64 `json:"count"`
-		} `json:"topTypes"`
-	} `json:"retryStorm"`
-	FailingTypes []DashboardSystemFailingType `json:"failingTypes"`
-	Integrity    struct {
-		DueButUnpromoted float64 `json:"dueButUnpromoted"`
-		Partitions       []struct {
-			Day           string `json:"day"`
-			StartsAt      string `json:"startsAt"`
-			EventExists   bool   `json:"eventExists"`
-			AttemptExists bool   `json:"attemptExists"`
-		} `json:"partitions"`
-		DefaultEventRows   float64                  `json:"defaultEventRows"`
-		DefaultAttemptRows float64                  `json:"defaultAttemptRows"`
-		Retention          DashboardSystemRetention `json:"retention"`
-		Storage            DashboardSystemStorage   `json:"storage"`
-	} `json:"integrity"`
-}
-
-type DashboardSystemQueueRow struct {
-	Queue           string   `json:"queue"`
-	Paused          bool     `json:"paused"`
-	Ready           float64  `json:"ready"`
-	OldestReadyMs   *float64 `json:"oldestReadyMs"`
-	PriorityBacklog []struct {
-		Priority      float64 `json:"priority"`
-		Ready         float64 `json:"ready"`
-		OldestReadyMs float64 `json:"oldestReadyMs"`
-	} `json:"priorityBacklog"`
-	DueSoon            float64                            `json:"dueSoon"`
-	Active             float64                            `json:"active"`
-	Retrying           float64                            `json:"retrying"`
-	EnqueuedPerMinute  float64                            `json:"enqueuedPerMinute"`
-	CompletedPerMinute float64                            `json:"completedPerMinute"`
-	ConcurrencyPolicy  *DashboardConcurrencyPolicySummary `json:"concurrencyPolicy"`
-	RateLimitPolicy    *DashboardRateLimitPolicySummary   `json:"rateLimitPolicy"`
-}
-
-type DashboardSystemRetention struct {
-	PolicyUpdatedAt           string                          `json:"policyUpdatedAt"`
-	Categories                []DashboardRetentionCategoryRow `json:"categories"`
-	MaxLagMs                  *float64                        `json:"maxLagMs"`
-	MaxLagCategory            any                             `json:"maxLagCategory"`
-	OldestRetainedAt          *string                         `json:"oldestRetainedAt"`
-	OldestRetainedCategory    any                             `json:"oldestRetainedCategory"`
-	EligibleHistoryPartitions struct {
-		JobEvents      float64 `json:"jobEvents"`
-		AttemptHistory float64 `json:"attemptHistory"`
-	} `json:"eligibleHistoryPartitions"`
-	DefaultHistoryRows struct {
-		JobEvents      float64 `json:"jobEvents"`
-		AttemptHistory float64 `json:"attemptHistory"`
-	} `json:"defaultHistoryRows"`
-	DefaultHistoryRowsCapped struct {
-		JobEvents      bool `json:"jobEvents"`
-		AttemptHistory bool `json:"attemptHistory"`
-	} `json:"defaultHistoryRowsCapped"`
-}
-
-type DashboardSystemRetryBucket struct {
-	UpperBoundMs *float64 `json:"upperBoundMs"`
-	Count        float64  `json:"count"`
-}
-
-type DashboardSystemStorage struct {
-	Rollup struct {
-		RolledUpThrough string  `json:"rolledUpThrough"`
-		LagMs           float64 `json:"lagMs"`
-		LastRunAt       *string `json:"lastRunAt"`
-		Buckets         float64 `json:"buckets"`
-		OldestBucketAt  *string `json:"oldestBucketAt"`
-		NewestBucketAt  *string `json:"newestBucketAt"`
-		Stalled         bool    `json:"stalled"`
-	} `json:"rollup"`
-	Relations  []DashboardStorageRelation `json:"relations"`
-	TotalBytes float64                    `json:"totalBytes"`
-}
-
-type DashboardSystemWindow string
-
-type DashboardTaskCounts struct {
-	Canceled  float64 `json:"canceled"`
-	Blocked   float64 `json:"blocked"`
-	Scheduled float64 `json:"scheduled"`
-	Completed float64 `json:"completed"`
-	Waiting   float64 `json:"waiting"`
-	Running   float64 `json:"running"`
-	All       float64 `json:"all"`
-	Retried   float64 `json:"retried"`
-	Queued    float64 `json:"queued"`
-	Discarded float64 `json:"discarded"`
-}
-
-type DashboardTaskCursor struct {
-	ID        string  `json:"id"`
-	UpdatedAt string  `json:"updatedAt"`
-	Priority  float64 `json:"priority"`
-}
-
-type DashboardTaskFacets struct {
-	Queues   []string `json:"queues"`
-	Workers  []string `json:"workers"`
-	JobTypes []string `json:"jobTypes"`
-	Tags     []string `json:"tags"`
-}
-
 type DashboardTasksCursorPage struct {
 	Total                *float64             `json:"total"`
 	NextCursor           *DashboardTaskCursor `json:"nextCursor"`
@@ -931,30 +931,30 @@ type DashboardTasksCursorPage struct {
 	Sort                 string               `json:"sort"`
 	Filter               string               `json:"filter"`
 	Search               *string              `json:"search"`
-	JobType              *string              `json:"jobType"`
+	TaskType             *string              `json:"taskType"`
 	CapturedAt           string               `json:"capturedAt"`
 	Worker               *string              `json:"worker"`
 	CanCompleteHumanWait bool                 `json:"canCompleteHumanWait"`
 	Page                 float64              `json:"page"`
 	PageSize             float64              `json:"pageSize"`
-	Jobs                 []DashboardJobRow    `json:"jobs"`
+	Tasks                []DashboardTaskRow   `json:"tasks"`
 }
 
 type DashboardTasksPage struct {
-	CapturedAt           string            `json:"capturedAt"`
-	CanCompleteHumanWait bool              `json:"canCompleteHumanWait"`
-	Filter               string            `json:"filter"`
-	Queue                *string           `json:"queue"`
-	Worker               *string           `json:"worker"`
-	JobType              *string           `json:"jobType"`
-	Priority             *float64          `json:"priority"`
-	Sort                 string            `json:"sort"`
-	Tags                 []string          `json:"tags"`
-	Search               *string           `json:"search"`
-	Page                 float64           `json:"page"`
-	PageSize             float64           `json:"pageSize"`
-	Total                float64           `json:"total"`
-	Jobs                 []DashboardJobRow `json:"jobs"`
+	CapturedAt           string             `json:"capturedAt"`
+	CanCompleteHumanWait bool               `json:"canCompleteHumanWait"`
+	Filter               string             `json:"filter"`
+	Queue                *string            `json:"queue"`
+	Worker               *string            `json:"worker"`
+	TaskType             *string            `json:"taskType"`
+	Priority             *float64           `json:"priority"`
+	Sort                 string             `json:"sort"`
+	Tags                 []string           `json:"tags"`
+	Search               *string            `json:"search"`
+	Page                 float64            `json:"page"`
+	PageSize             float64            `json:"pageSize"`
+	Total                float64            `json:"total"`
+	Tasks                []DashboardTaskRow `json:"tasks"`
 }
 
 type DashboardWorkerRow struct {
@@ -963,7 +963,7 @@ type DashboardWorkerRow struct {
 	ScheduleNamespaces []string `json:"scheduleNamespaces"`
 	Hostname           *string  `json:"hostname"`
 	Pid                *float64 `json:"pid"`
-	ActiveJobs         float64  `json:"activeJobs"`
+	ActiveTasks        float64  `json:"activeTasks"`
 	Concurrency        *float64 `json:"concurrency"`
 	ActiveSlots        *float64 `json:"activeSlots"`
 	Draining           bool     `json:"draining"`
@@ -1018,7 +1018,7 @@ type TasksInput struct {
 	Queue    *string   `json:"queue,omitempty"`
 	Page     *int64    `json:"page,omitempty"`
 	Worker   *string   `json:"worker,omitempty"`
-	JobType  *string   `json:"jobType,omitempty"`
+	TaskType *string   `json:"taskType,omitempty"`
 	Priority *int64    `json:"priority,omitempty"`
 	Sort     *string   `json:"sort,omitempty"`
 	Tags     *[]string `json:"tags,omitempty"`
@@ -1032,7 +1032,7 @@ type TasksCursorInput struct {
 	Filter   *string   `json:"filter,omitempty"`
 	Queue    *string   `json:"queue,omitempty"`
 	Worker   *string   `json:"worker,omitempty"`
-	JobType  *string   `json:"jobType,omitempty"`
+	TaskType *string   `json:"taskType,omitempty"`
 	Priority *int64    `json:"priority,omitempty"`
 	Sort     *string   `json:"sort,omitempty"`
 	Tags     *[]string `json:"tags,omitempty"`
@@ -1070,11 +1070,11 @@ type EventsInput struct {
 	PageSize *float64  `json:"pageSize,omitempty"`
 	Kind     *string   `json:"kind,omitempty"`
 	Queue    *string   `json:"queue,omitempty"`
-	JobType  *string   `json:"jobType,omitempty"`
+	TaskType *string   `json:"taskType,omitempty"`
 	Worker   *string   `json:"worker,omitempty"`
 	Search   *string   `json:"search,omitempty"`
 	Types    *[]string `json:"types,omitempty"`
-	JobID    *string   `json:"jobId,omitempty"`
+	TaskID   *string   `json:"taskId,omitempty"`
 }
 
 type EventsOutput DashboardEventsPage
@@ -1109,13 +1109,13 @@ type SettingsOutput DashboardSettingsPage
 
 type PreviewRetentionPolicyInput struct {
 	Definition struct {
-		JobIdentityRetentionDays        *int64 `json:"jobIdentityRetentionDays,omitempty"`
+		TaskIdentityRetentionDays       *int64 `json:"taskIdentityRetentionDays,omitempty"`
 		TerminalOutcomeRetentionDays    *int64 `json:"terminalOutcomeRetentionDays,omitempty"`
-		JobEventRetentionDays           *int64 `json:"jobEventRetentionDays,omitempty"`
+		TaskEventRetentionDays          *int64 `json:"taskEventRetentionDays,omitempty"`
 		AttemptHistoryRetentionDays     *int64 `json:"attemptHistoryRetentionDays,omitempty"`
 		ScheduleOccurrenceRetentionDays *int64 `json:"scheduleOccurrenceRetentionDays,omitempty"`
 		StatisticsRetentionDays         *int64 `json:"statisticsRetentionDays,omitempty"`
-		TerminalJobPruneLimit           *int64 `json:"terminalJobPruneLimit,omitempty"`
+		TerminalTaskPruneLimit          *int64 `json:"terminalTaskPruneLimit,omitempty"`
 		HistoryPartitionsPerPass        *int64 `json:"historyPartitionsPerPass,omitempty"`
 		DefaultPartitionRowsPerPass     *int64 `json:"defaultPartitionRowsPerPass,omitempty"`
 		OccurrenceRowsPerPass           *int64 `json:"occurrenceRowsPerPass,omitempty"`
@@ -1125,11 +1125,11 @@ type PreviewRetentionPolicyInput struct {
 
 type PreviewRetentionPolicyOutput DashboardRetentionPolicyImpact
 
-type JobDetailInput struct {
+type TaskDetailInput struct {
 	ID string `json:"id"`
 }
 
-type JobDetailOutput DashboardJobDetail
+type TaskDetailOutput DashboardTaskDetail
 
 type HumanWaitsInput struct{}
 
@@ -1238,13 +1238,13 @@ type RevertMaintenancePolicyOutput struct{}
 
 type OverrideRetentionPolicyInput struct {
 	Definition struct {
-		JobIdentityRetentionDays        *int64 `json:"jobIdentityRetentionDays,omitempty"`
+		TaskIdentityRetentionDays       *int64 `json:"taskIdentityRetentionDays,omitempty"`
 		TerminalOutcomeRetentionDays    *int64 `json:"terminalOutcomeRetentionDays,omitempty"`
-		JobEventRetentionDays           *int64 `json:"jobEventRetentionDays,omitempty"`
+		TaskEventRetentionDays          *int64 `json:"taskEventRetentionDays,omitempty"`
 		AttemptHistoryRetentionDays     *int64 `json:"attemptHistoryRetentionDays,omitempty"`
 		ScheduleOccurrenceRetentionDays *int64 `json:"scheduleOccurrenceRetentionDays,omitempty"`
 		StatisticsRetentionDays         *int64 `json:"statisticsRetentionDays,omitempty"`
-		TerminalJobPruneLimit           *int64 `json:"terminalJobPruneLimit,omitempty"`
+		TerminalTaskPruneLimit          *int64 `json:"terminalTaskPruneLimit,omitempty"`
 		HistoryPartitionsPerPass        *int64 `json:"historyPartitionsPerPass,omitempty"`
 		DefaultPartitionRowsPerPass     *int64 `json:"defaultPartitionRowsPerPass,omitempty"`
 		OccurrenceRowsPerPass           *int64 `json:"occurrenceRowsPerPass,omitempty"`
@@ -1332,13 +1332,13 @@ type RedriveTaskInput struct {
 type RedriveTaskOutput DashboardRedriveResult
 
 type RedriveDeadLettersInput struct {
-	Queue   *string   `json:"queue,omitempty"`
-	JobType *string   `json:"jobType,omitempty"`
-	Tags    *[]string `json:"tags,omitempty"`
-	Limit   *int64    `json:"limit,omitempty"`
-	Cursor  *struct {
+	Queue    *string   `json:"queue,omitempty"`
+	TaskType *string   `json:"taskType,omitempty"`
+	Tags     *[]string `json:"tags,omitempty"`
+	Limit    *int64    `json:"limit,omitempty"`
+	Cursor   *struct {
 		FinishedAt string `json:"finishedAt"`
-		JobID      string `json:"jobId"`
+		TaskID     string `json:"taskId"`
 	} `json:"cursor,omitempty"`
 	Audit struct {
 		Actor     string `json:"actor"`
@@ -1351,7 +1351,7 @@ type RedriveDeadLettersOutput DashboardRedriveBatch
 
 var inputSchemas = func() map[string]any {
 	var schemas map[string]any
-	if err := json.Unmarshal([]byte("{\"meta\":null,\"taskCounts\":null,\"tasks\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"filter\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"blocked\",\"waiting\",\"scheduled\",\"retried\",\"queued\",\"running\",\"completed\",\"discarded\",\"canceled\"]},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"page\":{\"default\":1,\"type\":\"integer\",\"minimum\":1,\"maximum\":100},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"jobType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"priority\":{\"default\":null,\"anyOf\":[{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},{\"type\":\"null\"}]},\"sort\":{\"default\":\"updated\",\"type\":\"string\",\"enum\":[\"updated\",\"priority\"]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"search\":{\"type\":\"string\",\"maxLength\":200},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]}}},\"tasksCursor\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"filter\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"blocked\",\"waiting\",\"scheduled\",\"retried\",\"queued\",\"running\",\"completed\",\"discarded\",\"canceled\"]},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"jobType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"priority\":{\"default\":null,\"anyOf\":[{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},{\"type\":\"null\"}]},\"sort\":{\"default\":\"updated\",\"type\":\"string\",\"enum\":[\"updated\",\"priority\"]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"search\":{\"type\":\"string\",\"maxLength\":200},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]},\"cursor\":{\"default\":null,\"anyOf\":[{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"updatedAt\":{\"type\":\"string\",\"format\":\"date-time\",\"pattern\":\"^(?:(?:\\\\d\\\\d[2468][048]|\\\\d\\\\d[13579][26]|\\\\d\\\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\\\d|30)|(?:02)-(?:0[1-9]|1\\\\d|2[0-8])))T(?:(?:[01]\\\\d|2[0-3]):[0-5]\\\\d:[0-5]\\\\d\\\\.\\\\d{6}(?:Z))$\"},\"priority\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100}},\"required\":[\"id\",\"updatedAt\",\"priority\"]},{\"type\":\"null\"}]},\"direction\":{\"default\":\"next\",\"type\":\"string\",\"enum\":[\"next\",\"previous\"]},\"count\":{\"default\":\"none\",\"type\":\"string\",\"enum\":[\"none\",\"exact\"]}}},\"taskFacets\":null,\"activity\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"filter\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"blocked\",\"waiting\",\"scheduled\",\"retried\",\"queued\",\"running\",\"completed\",\"discarded\",\"canceled\"]},\"period\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"6h\",\"24h\",\"7d\"]},\"groupBy\":{\"default\":\"task\",\"type\":\"string\",\"enum\":[\"queue\",\"worker\",\"task\",\"status\"]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]}}},\"events\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"window\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"6h\",\"24h\"]},\"page\":{\"default\":1,\"type\":\"integer\",\"minimum\":1,\"maximum\":100},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]},\"kind\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"event\",\"attempt\"]},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"jobType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"search\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"types\":{\"default\":[],\"maxItems\":42,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"enqueued\",\"debounced\",\"debounce_rejected\",\"throttled\",\"claimed\",\"batch_dispatched\",\"batch_failed\",\"succeeded\",\"failed\",\"retry_scheduled\",\"canceled\",\"cancel_requested\",\"promoted\",\"lease_expired\",\"deadline_exceeded\",\"execution_timed_out\",\"redriven\",\"redrive_created\",\"checkpoint_saved\",\"progress_updated\",\"wait_scheduled\",\"wait_elapsed\",\"wait_replayed\",\"signal_waiting\",\"signal_received\",\"signal_replayed\",\"signal_rejected\",\"dependency_blocked\",\"dependency_released\",\"dependency_failed\",\"dependency_canceled\",\"child_created\",\"child_joined\",\"children_created\",\"children_joined\",\"parent_linked\",\"human_wait_created\",\"human_wait_completed\",\"human_wait_replayed\",\"human_wait_rejected\",\"retry\",\"timeout\"]}},\"jobId\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},{\"type\":\"null\"}]}}},\"eventDetail\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"pattern\":\"^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$\"}},\"required\":[\"id\"]},\"cron\":null,\"queues\":null,\"system\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"window\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"24h\"]}}},\"workers\":null,\"settings\":null,\"previewRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"jobIdentityRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalOutcomeRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"jobEventRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"attemptHistoryRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"scheduleOccurrenceRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"statisticsRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalJobPruneLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100000},\"historyPartitionsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":52},\"defaultPartitionRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"occurrenceRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"statisticsRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000}}}},\"required\":[\"definition\"]},\"jobDetail\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"}},\"required\":[\"id\"]},\"humanWaits\":null,\"enqueueTest\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"success\",\"retry\",\"durable\",\"timer\",\"failure\",\"idempotent\",\"long-running\",\"redrive\",\"feature\"]},\"scenario\":{\"type\":\"string\",\"enum\":[\"order-fulfillment\",\"customer-onboarding\",\"report-publication\"]},\"feature\":{\"type\":\"string\",\"enum\":[\"ingress-routing\",\"retry-policies\",\"durable-checkpoints\",\"durable-waits\",\"progress\",\"timing-controls\",\"cancellation\",\"dead-letters-redrive\",\"job-dependencies\",\"child-workflows\",\"signals\",\"human-decisions\",\"keyed-debounce\",\"keyed-throttle\",\"priority-lanes\",\"batch-handlers\",\"payload-contracts\"]},\"priority\":{\"default\":0,\"type\":\"integer\",\"minimum\":0,\"maximum\":100},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"kind\",\"audit\"]},\"setScheduleEnabled\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"user\"},\"namespace\":{\"type\":\"string\",\"minLength\":1},\"name\":{\"type\":\"string\",\"minLength\":1},\"enabled\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"kind\",\"namespace\",\"name\",\"enabled\",\"audit\"]},\"setQueuePaused\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"queue\":{\"type\":\"string\",\"minLength\":1},\"paused\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"queue\",\"paused\",\"audit\"]},\"purgeQueue\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"queue\":{\"type\":\"string\",\"minLength\":1},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"queue\",\"audit\"]},\"setWorkerPaused\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"workerId\":{\"type\":\"string\",\"minLength\":1},\"paused\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"workerId\",\"paused\",\"audit\"]},\"overrideMaintenancePolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"timezone\":{\"type\":\"string\",\"minLength\":1},\"partitionPreparationIntervalMs\":{\"type\":\"integer\",\"minimum\":60000,\"maximum\":604800000},\"terminalCleanupIntervalMs\":{\"type\":\"integer\",\"minimum\":1000,\"maximum\":86400000},\"historyRetentionLocalTime\":{\"type\":\"string\",\"pattern\":\"^(?:[01]\\\\d|2[0-3]):[0-5]\\\\d$\"},\"statisticsRollupIntervalMs\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":86400000},\"statisticsGroupLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":10000},\"statisticsRecomputeBuckets\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":1440}}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"definition\",\"audit\"]},\"revertMaintenancePolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"settings\":{\"minItems\":1,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"timezone\",\"partitionPreparationIntervalMs\",\"terminalCleanupIntervalMs\",\"historyRetentionLocalTime\",\"statisticsRollupIntervalMs\",\"statisticsGroupLimit\",\"statisticsRecomputeBuckets\"]}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"settings\",\"audit\"]},\"overrideRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"jobIdentityRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalOutcomeRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"jobEventRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"attemptHistoryRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"scheduleOccurrenceRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"statisticsRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalJobPruneLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100000},\"historyPartitionsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":52},\"defaultPartitionRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"occurrenceRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"statisticsRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000}}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"definition\",\"audit\"]},\"revertRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"settings\":{\"minItems\":1,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"jobIdentityRetentionDays\",\"terminalOutcomeRetentionDays\",\"jobEventRetentionDays\",\"attemptHistoryRetentionDays\",\"scheduleOccurrenceRetentionDays\",\"statisticsRetentionDays\",\"terminalJobPruneLimit\",\"historyPartitionsPerPass\",\"defaultPartitionRowsPerPass\",\"occurrenceRowsPerPass\",\"statisticsRowsPerPass\"]}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"settings\",\"audit\"]},\"runTaskNow\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]},\"cancelTask\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"anyOf\":[{\"type\":\"string\",\"maxLength\":2000},{\"type\":\"null\"}]},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]},\"signalTask\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},\"payload\":{\"$ref\":\"#/$defs/__schema0\"},\"idempotencyKey\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":512},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"name\",\"payload\",\"idempotencyKey\",\"audit\"],\"$defs\":{\"__schema0\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\"},{\"type\":\"boolean\"},{\"type\":\"null\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/__schema0\"}},{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\"},\"additionalProperties\":{\"$ref\":\"#/$defs/__schema0\"}}]}}},\"completeHumanWait\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},\"result\":{\"$ref\":\"#/$defs/__schema0\"},\"idempotencyKey\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":512},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"name\",\"result\",\"idempotencyKey\",\"audit\"],\"$defs\":{\"__schema0\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\"},{\"type\":\"boolean\"},{\"type\":\"null\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/__schema0\"}},{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\"},\"additionalProperties\":{\"$ref\":\"#/$defs/__schema0\"}}]}}},\"redriveTask\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]},\"redriveDeadLetters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"jobType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"limit\":{\"default\":100,\"type\":\"integer\",\"minimum\":1,\"maximum\":1000},\"cursor\":{\"default\":null,\"anyOf\":[{\"type\":\"object\",\"properties\":{\"finishedAt\":{\"type\":\"string\",\"format\":\"date-time\",\"pattern\":\"^(?:(?:\\\\d\\\\d[2468][048]|\\\\d\\\\d[13579][26]|\\\\d\\\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\\\d|30)|(?:02)-(?:0[1-9]|1\\\\d|2[0-8])))T(?:(?:[01]\\\\d|2[0-3]):[0-5]\\\\d(?::[0-5]\\\\d(?:\\\\.\\\\d+)?)?(?:Z))$\"},\"jobId\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"}},\"required\":[\"finishedAt\",\"jobId\"]},{\"type\":\"null\"}]},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"audit\"]}}"), &schemas); err != nil {
+	if err := json.Unmarshal([]byte("{\"meta\":null,\"taskCounts\":null,\"tasks\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"filter\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"blocked\",\"waiting\",\"scheduled\",\"retried\",\"queued\",\"running\",\"completed\",\"discarded\",\"canceled\"]},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"page\":{\"default\":1,\"type\":\"integer\",\"minimum\":1,\"maximum\":100},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"taskType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"priority\":{\"default\":null,\"anyOf\":[{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},{\"type\":\"null\"}]},\"sort\":{\"default\":\"updated\",\"type\":\"string\",\"enum\":[\"updated\",\"priority\"]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"search\":{\"type\":\"string\",\"maxLength\":200},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]}}},\"tasksCursor\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"filter\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"blocked\",\"waiting\",\"scheduled\",\"retried\",\"queued\",\"running\",\"completed\",\"discarded\",\"canceled\"]},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"taskType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"priority\":{\"default\":null,\"anyOf\":[{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},{\"type\":\"null\"}]},\"sort\":{\"default\":\"updated\",\"type\":\"string\",\"enum\":[\"updated\",\"priority\"]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"search\":{\"type\":\"string\",\"maxLength\":200},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]},\"cursor\":{\"default\":null,\"anyOf\":[{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"updatedAt\":{\"type\":\"string\",\"format\":\"date-time\",\"pattern\":\"^(?:(?:\\\\d\\\\d[2468][048]|\\\\d\\\\d[13579][26]|\\\\d\\\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\\\d|30)|(?:02)-(?:0[1-9]|1\\\\d|2[0-8])))T(?:(?:[01]\\\\d|2[0-3]):[0-5]\\\\d:[0-5]\\\\d\\\\.\\\\d{6}(?:Z))$\"},\"priority\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100}},\"required\":[\"id\",\"updatedAt\",\"priority\"]},{\"type\":\"null\"}]},\"direction\":{\"default\":\"next\",\"type\":\"string\",\"enum\":[\"next\",\"previous\"]},\"count\":{\"default\":\"none\",\"type\":\"string\",\"enum\":[\"none\",\"exact\"]}}},\"taskFacets\":null,\"activity\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"filter\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"blocked\",\"waiting\",\"scheduled\",\"retried\",\"queued\",\"running\",\"completed\",\"discarded\",\"canceled\"]},\"period\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"6h\",\"24h\",\"7d\"]},\"groupBy\":{\"default\":\"task\",\"type\":\"string\",\"enum\":[\"queue\",\"worker\",\"task\",\"status\"]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]}}},\"events\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"window\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"6h\",\"24h\"]},\"page\":{\"default\":1,\"type\":\"integer\",\"minimum\":1,\"maximum\":100},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]},\"kind\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"event\",\"attempt\"]},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"taskType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"search\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"types\":{\"default\":[],\"maxItems\":42,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"enqueued\",\"debounced\",\"debounce_rejected\",\"throttled\",\"claimed\",\"batch_dispatched\",\"batch_failed\",\"succeeded\",\"failed\",\"retry_scheduled\",\"canceled\",\"cancel_requested\",\"promoted\",\"lease_expired\",\"deadline_exceeded\",\"execution_timed_out\",\"redriven\",\"redrive_created\",\"checkpoint_saved\",\"progress_updated\",\"wait_scheduled\",\"wait_elapsed\",\"wait_replayed\",\"signal_waiting\",\"signal_received\",\"signal_replayed\",\"signal_rejected\",\"dependency_blocked\",\"dependency_released\",\"dependency_failed\",\"dependency_canceled\",\"child_created\",\"child_joined\",\"children_created\",\"children_joined\",\"parent_linked\",\"human_wait_created\",\"human_wait_completed\",\"human_wait_replayed\",\"human_wait_rejected\",\"retry\",\"timeout\"]}},\"taskId\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},{\"type\":\"null\"}]}}},\"eventDetail\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"pattern\":\"^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$\"}},\"required\":[\"id\"]},\"cron\":null,\"queues\":null,\"system\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"window\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"24h\"]}}},\"workers\":null,\"settings\":null,\"previewRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"taskIdentityRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalOutcomeRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"taskEventRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"attemptHistoryRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"scheduleOccurrenceRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"statisticsRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalTaskPruneLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100000},\"historyPartitionsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":52},\"defaultPartitionRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"occurrenceRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"statisticsRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000}}}},\"required\":[\"definition\"]},\"taskDetail\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"}},\"required\":[\"id\"]},\"humanWaits\":null,\"enqueueTest\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"success\",\"retry\",\"durable\",\"timer\",\"failure\",\"idempotent\",\"long-running\",\"redrive\",\"feature\"]},\"scenario\":{\"type\":\"string\",\"enum\":[\"order-fulfillment\",\"customer-onboarding\",\"report-publication\"]},\"feature\":{\"type\":\"string\",\"enum\":[\"ingress-routing\",\"retry-policies\",\"durable-checkpoints\",\"durable-waits\",\"progress\",\"timing-controls\",\"cancellation\",\"dead-letters-redrive\",\"task-dependencies\",\"child-workflows\",\"signals\",\"human-decisions\",\"keyed-debounce\",\"keyed-throttle\",\"priority-lanes\",\"batch-handlers\",\"payload-contracts\"]},\"priority\":{\"default\":0,\"type\":\"integer\",\"minimum\":0,\"maximum\":100},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"kind\",\"audit\"]},\"setScheduleEnabled\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"user\"},\"namespace\":{\"type\":\"string\",\"minLength\":1},\"name\":{\"type\":\"string\",\"minLength\":1},\"enabled\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"kind\",\"namespace\",\"name\",\"enabled\",\"audit\"]},\"setQueuePaused\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"queue\":{\"type\":\"string\",\"minLength\":1},\"paused\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"queue\",\"paused\",\"audit\"]},\"purgeQueue\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"queue\":{\"type\":\"string\",\"minLength\":1},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"queue\",\"audit\"]},\"setWorkerPaused\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"workerId\":{\"type\":\"string\",\"minLength\":1},\"paused\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"workerId\",\"paused\",\"audit\"]},\"overrideMaintenancePolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"timezone\":{\"type\":\"string\",\"minLength\":1},\"partitionPreparationIntervalMs\":{\"type\":\"integer\",\"minimum\":60000,\"maximum\":604800000},\"terminalCleanupIntervalMs\":{\"type\":\"integer\",\"minimum\":1000,\"maximum\":86400000},\"historyRetentionLocalTime\":{\"type\":\"string\",\"pattern\":\"^(?:[01]\\\\d|2[0-3]):[0-5]\\\\d$\"},\"statisticsRollupIntervalMs\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":86400000},\"statisticsGroupLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":10000},\"statisticsRecomputeBuckets\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":1440}}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"definition\",\"audit\"]},\"revertMaintenancePolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"settings\":{\"minItems\":1,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"timezone\",\"partitionPreparationIntervalMs\",\"terminalCleanupIntervalMs\",\"historyRetentionLocalTime\",\"statisticsRollupIntervalMs\",\"statisticsGroupLimit\",\"statisticsRecomputeBuckets\"]}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"settings\",\"audit\"]},\"overrideRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"taskIdentityRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalOutcomeRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"taskEventRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"attemptHistoryRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"scheduleOccurrenceRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"statisticsRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalTaskPruneLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100000},\"historyPartitionsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":52},\"defaultPartitionRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"occurrenceRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"statisticsRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000}}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"definition\",\"audit\"]},\"revertRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"settings\":{\"minItems\":1,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"taskIdentityRetentionDays\",\"terminalOutcomeRetentionDays\",\"taskEventRetentionDays\",\"attemptHistoryRetentionDays\",\"scheduleOccurrenceRetentionDays\",\"statisticsRetentionDays\",\"terminalTaskPruneLimit\",\"historyPartitionsPerPass\",\"defaultPartitionRowsPerPass\",\"occurrenceRowsPerPass\",\"statisticsRowsPerPass\"]}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"settings\",\"audit\"]},\"runTaskNow\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]},\"cancelTask\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"anyOf\":[{\"type\":\"string\",\"maxLength\":2000},{\"type\":\"null\"}]},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]},\"signalTask\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},\"payload\":{\"$ref\":\"#/$defs/__schema0\"},\"idempotencyKey\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":512},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"name\",\"payload\",\"idempotencyKey\",\"audit\"],\"$defs\":{\"__schema0\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\"},{\"type\":\"boolean\"},{\"type\":\"null\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/__schema0\"}},{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\"},\"additionalProperties\":{\"$ref\":\"#/$defs/__schema0\"}}]}}},\"completeHumanWait\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},\"result\":{\"$ref\":\"#/$defs/__schema0\"},\"idempotencyKey\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":512},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"name\",\"result\",\"idempotencyKey\",\"audit\"],\"$defs\":{\"__schema0\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\"},{\"type\":\"boolean\"},{\"type\":\"null\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/__schema0\"}},{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\"},\"additionalProperties\":{\"$ref\":\"#/$defs/__schema0\"}}]}}},\"redriveTask\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]},\"redriveDeadLetters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"taskType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"limit\":{\"default\":100,\"type\":\"integer\",\"minimum\":1,\"maximum\":1000},\"cursor\":{\"default\":null,\"anyOf\":[{\"type\":\"object\",\"properties\":{\"finishedAt\":{\"type\":\"string\",\"format\":\"date-time\",\"pattern\":\"^(?:(?:\\\\d\\\\d[2468][048]|\\\\d\\\\d[13579][26]|\\\\d\\\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\\\d|30)|(?:02)-(?:0[1-9]|1\\\\d|2[0-8])))T(?:(?:[01]\\\\d|2[0-3]):[0-5]\\\\d(?::[0-5]\\\\d(?:\\\\.\\\\d+)?)?(?:Z))$\"},\"taskId\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"}},\"required\":[\"finishedAt\",\"taskId\"]},{\"type\":\"null\"}]},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"audit\"]}}"), &schemas); err != nil {
 		panic(err)
 	}
 	return schemas
@@ -1388,7 +1388,7 @@ func ValidateSettingsInput(value any) error    { return ValidateInput("settings"
 func ValidatePreviewRetentionPolicyInput(value any) error {
 	return ValidateInput("previewRetentionPolicy", value)
 }
-func ValidateJobDetailInput(value any) error   { return ValidateInput("jobDetail", value) }
+func ValidateTaskDetailInput(value any) error  { return ValidateInput("taskDetail", value) }
 func ValidateHumanWaitsInput(value any) error  { return ValidateInput("humanWaits", value) }
 func ValidateEnqueueTestInput(value any) error { return ValidateInput("enqueueTest", value) }
 func ValidateSetScheduleEnabledInput(value any) error {

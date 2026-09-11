@@ -2,11 +2,11 @@ import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Pool, PoolClient } from "pg";
 import { Queue, installSchema } from "../src/index.js";
-import type { ClaimedJob, Json } from "../src/types.js";
+import type { ClaimedTask, Json } from "../src/types.js";
 import {
   ConventionalQueue,
   conventionalSchema,
-  type ConventionalClaimedJob,
+  type ConventionalClaimedTask,
 } from "./conventional.js";
 import {
   summarizeLatencies,
@@ -29,7 +29,7 @@ type ComparativeDesign = "conventional" | "hybrid";
 export type JsonSafe = null | boolean | number | string | JsonSafe[] | { [key: string]: JsonSafe };
 
 interface ChurnOptions {
-  targetJobs: number;
+  targetTasks: number;
   targetRatePerSecond: number;
   batchSize: number;
   sampleIntervalMs: number;
@@ -38,7 +38,7 @@ interface ChurnOptions {
 
 export interface ComparativeBenchmarkOptions {
   seed: number;
-  jobsPerRun: number;
+  tasksPerRun: number;
   enqueueBatchSize: number;
   repetitions: number;
   workerConcurrency: number[];
@@ -55,14 +55,14 @@ export type ComparativeBenchmarkOptionsInput = Partial<
 
 const smokeSafeComparativeDefaults: Readonly<ComparativeBenchmarkOptions> = Object.freeze({
   seed: 1,
-  jobsPerRun: 20,
+  tasksPerRun: 20,
   enqueueBatchSize: 10,
   repetitions: 1,
   workerConcurrency: Object.freeze([1, 2]) as unknown as number[],
   queueName: "comparative-v3",
   leaseMs: 30_000,
   churn: Object.freeze({
-    targetJobs: 100,
+    targetTasks: 100,
     targetRatePerSecond: 100,
     batchSize: 10,
     sampleIntervalMs: 250,
@@ -86,17 +86,17 @@ export interface ComparativeRunResult {
   design: ComparativeDesign;
   repetition: number;
   workerConcurrency: number;
-  jobs: number;
+  tasks: number;
   enqueueBatchSize: number;
   enqueueRequests: number;
   enqueueDurationMs: number;
   processingDurationMs: number;
   totalDurationMs: number;
-  enqueueJobsPerSecond: number;
-  processingJobsPerSecond: number;
-  totalJobsPerSecond: number;
+  enqueueTasksPerSecond: number;
+  processingTasksPerSecond: number;
+  totalTasksPerSecond: number;
   throughputPerSecond: number;
-  completedJobs: number;
+  completedTasks: number;
   claimLatencySamplesMs: number[];
   claimLatencyMs: LatencySummary;
   telemetry: RunTelemetry;
@@ -106,8 +106,8 @@ interface ChurnSample {
   elapsedMs: number;
   sampleDurationMs: number;
   batches: number;
-  enqueuedJobs: number;
-  completedJobs: number;
+  enqueuedTasks: number;
+  completedTasks: number;
   relations: JsonSafe;
   schema: JsonSafe;
   activity: JsonSafe;
@@ -116,7 +116,7 @@ interface ChurnSample {
 interface ChurnResult {
   design: ComparativeDesign;
   workloadModel: "concurrent-producer-consumer";
-  targetJobs: number;
+  targetTasks: number;
   targetRatePerSecond: number;
   productionDurationMs: number;
   drainDurationMs: number;
@@ -124,8 +124,8 @@ interface ChurnResult {
   batchSize: number;
   workerConcurrency: number;
   batches: number;
-  enqueuedJobs: number;
-  completedJobs: number;
+  enqueuedTasks: number;
+  completedTasks: number;
   throughputPerSecond: number;
   producerLagSamplesMs: number[];
   producerLagMs: LatencySummary;
@@ -145,7 +145,7 @@ export interface ComparativeGroupSummary {
   processingDurationMs: NumericSummary;
   totalDurationMs: NumericSummary;
   walBytes: NumericSummary;
-  completedJobs: NumericSummary;
+  completedTasks: NumericSummary;
   claimLatencyMs: LatencySummary & {
     samples: NumericSummary;
     perRunP95: NumericSummary;
@@ -188,12 +188,12 @@ interface QueueAdapter {
   schema: string;
   enqueueMany(requests: Array<{ type: string; payload: Json }>): Promise<unknown>;
   claim(workerId: string): Promise<unknown | null>;
-  complete(job: unknown, workerId: string): Promise<boolean>;
+  complete(task: unknown, workerId: string): Promise<boolean>;
   claimSql: string;
 }
 
 interface WorkResult {
-  completedJobs: number;
+  completedTasks: number;
   claimLatencySamplesMs: number[];
 }
 
@@ -248,7 +248,7 @@ export function normalizeComparativeOptions(
   const churnInput = input.churn ?? {};
   return {
     seed: nonNegativeInteger(input.seed ?? defaults.seed, "seed"),
-    jobsPerRun: positiveInteger(input.jobsPerRun ?? defaults.jobsPerRun, "jobsPerRun"),
+    tasksPerRun: positiveInteger(input.tasksPerRun ?? defaults.tasksPerRun, "tasksPerRun"),
     enqueueBatchSize: positiveInteger(
       input.enqueueBatchSize ?? defaults.enqueueBatchSize,
       "enqueueBatchSize",
@@ -258,9 +258,9 @@ export function normalizeComparativeOptions(
     queueName: queueName.trim(),
     leaseMs: positiveInteger(input.leaseMs ?? defaults.leaseMs, "leaseMs"),
     churn: {
-      targetJobs: positiveInteger(
-        churnInput.targetJobs ?? defaults.churn.targetJobs,
-        "churn.targetJobs",
+      targetTasks: positiveInteger(
+        churnInput.targetTasks ?? defaults.churn.targetTasks,
+        "churn.targetTasks",
       ),
       targetRatePerSecond: positiveInteger(
         churnInput.targetRatePerSecond ?? defaults.churn.targetRatePerSecond,
@@ -361,7 +361,7 @@ export function summarizeComparativeRuns(
         processingDurationMs: summarizeNumbers(group.map((run) => run.processingDurationMs)),
         totalDurationMs: summarizeNumbers(group.map((run) => run.totalDurationMs)),
         walBytes: summarizeNumbers(group.map(walBytes)),
-        completedJobs: summarizeNumbers(group.map((run) => run.completedJobs)),
+        completedTasks: summarizeNumbers(group.map((run) => run.completedTasks)),
         claimLatencyMs: {
           ...summarizeLatencies(claimSamples),
           samples: summarizeNumbers(claimSamples),
@@ -439,8 +439,8 @@ async function resetSchemasInTransaction(client: PoolClient): Promise<void> {
     await client.query("SELECT pg_advisory_xact_lock($1)", [resetLockKey]);
     await client.query(`SELECT ${conventionalSchema}.reset_v1()`);
     await client.query(`
-      TRUNCATE workhorse.job,
-               workhorse.job_event,
+      TRUNCATE workhorse.task,
+               workhorse.task_event,
                workhorse.attempt_history
         RESTART IDENTITY CASCADE
     `);
@@ -477,8 +477,8 @@ function createAdapters(pool: Pool, options: ComparativeBenchmarkOptions): Queue
       schema: conventionalSchema,
       enqueueMany: (requests) => conventional.enqueueMany(requests),
       claim: (workerId) => conventional.claim(workerId, { leaseMs: options.leaseMs }),
-      complete: (job, workerId) =>
-        conventional.complete(job as ConventionalClaimedJob<unknown>, workerId, { ok: true }),
+      complete: (task, workerId) =>
+        conventional.complete(task as ConventionalClaimedTask<unknown>, workerId, { ok: true }),
       claimSql: `SELECT * FROM ${conventionalSchema}.claim_v1($1, $2, $3)`,
     },
     {
@@ -486,13 +486,13 @@ function createAdapters(pool: Pool, options: ComparativeBenchmarkOptions): Queue
       schema: "workhorse",
       enqueueMany: (requests) => queue.enqueueMany(requests),
       claim: (workerId) => queue.claim(workerId, { leaseMs: options.leaseMs }),
-      complete: (job, workerId) => queue.complete(job as ClaimedJob, workerId, { ok: true }),
+      complete: (task, workerId) => queue.complete(task as ClaimedTask, workerId, { ok: true }),
       claimSql: "SELECT * FROM workhorse.claim_v1($1, $2, $3)",
     },
   ];
 }
 
-async function enqueueJobs(
+async function enqueueTasks(
   adapter: QueueAdapter,
   count: number,
   batch: number,
@@ -518,25 +518,25 @@ async function runWorkers(
   workerPrefix: string,
 ): Promise<WorkResult> {
   const claimLatencySamplesMs: number[] = [];
-  let completedJobs = 0;
+  let completedTasks = 0;
 
   await Promise.all(
     Array.from({ length: concurrency }, async (_, workerIndex) => {
       const workerId = `${workerPrefix}-${workerIndex + 1}`;
       while (true) {
         const claimStarted = performance.now();
-        const job = await adapter.claim(workerId);
+        const task = await adapter.claim(workerId);
         const claimDurationMs = performance.now() - claimStarted;
-        if (job === null) return;
+        if (task === null) return;
         claimLatencySamplesMs.push(claimDurationMs);
-        const accepted = await adapter.complete(job, workerId);
+        const accepted = await adapter.complete(task, workerId);
         if (!accepted) throw new Error(`${adapter.design} rejected completion for ${workerId}`);
-        completedJobs += 1;
+        completedTasks += 1;
       }
     }),
   );
 
-  return { completedJobs, claimLatencySamplesMs };
+  return { completedTasks, claimLatencySamplesMs };
 }
 
 async function runChurnWorkers(
@@ -550,17 +550,17 @@ async function runChurnWorkers(
       const workerId = `${workerPrefix}-${workerIndex + 1}`;
       while (true) {
         const claimStarted = performance.now();
-        const job = await adapter.claim(workerId);
+        const task = await adapter.claim(workerId);
         const claimDurationMs = performance.now() - claimStarted;
-        if (job === null) {
+        if (task === null) {
           if (!progress.producerRunning) return;
           await delay(1);
           continue;
         }
         progress.claimLatencySamplesMs.push(claimDurationMs);
-        const accepted = await adapter.complete(job, workerId);
+        const accepted = await adapter.complete(task, workerId);
         if (!accepted) throw new Error(`${adapter.design} rejected completion for ${workerId}`);
-        progress.completedJobs += 1;
+        progress.completedTasks += 1;
       }
     }),
   );
@@ -642,9 +642,9 @@ async function prepareExplain(
   options: ComparativeBenchmarkOptions,
 ): Promise<JsonSafe> {
   await resetComparativeSchemas(pool);
-  await enqueueJobs(
+  await enqueueTasks(
     adapter,
-    Math.max(options.jobsPerRun, options.churn.batchSize),
+    Math.max(options.tasksPerRun, options.churn.batchSize),
     -1,
     options.enqueueBatchSize,
   );
@@ -664,9 +664,9 @@ async function runOnce(
   const before = await captureBefore(pool, adapter);
   const totalStarted = performance.now();
   const enqueueStarted = performance.now();
-  const enqueueRequests = await enqueueJobs(
+  const enqueueRequests = await enqueueTasks(
     adapter,
-    options.jobsPerRun,
+    options.tasksPerRun,
     repetition,
     options.enqueueBatchSize,
   );
@@ -689,19 +689,21 @@ async function runOnce(
     design: adapter.design,
     repetition,
     workerConcurrency,
-    jobs: options.jobsPerRun,
+    tasks: options.tasksPerRun,
     enqueueBatchSize: options.enqueueBatchSize,
     enqueueRequests,
     enqueueDurationMs,
     processingDurationMs,
     totalDurationMs,
-    enqueueJobsPerSecond:
-      enqueueDurationMs === 0 ? 0 : (options.jobsPerRun / enqueueDurationMs) * 1_000,
-    processingJobsPerSecond:
-      processingDurationMs === 0 ? 0 : (work.completedJobs / processingDurationMs) * 1_000,
-    totalJobsPerSecond: totalDurationMs === 0 ? 0 : (work.completedJobs / totalDurationMs) * 1_000,
-    throughputPerSecond: totalDurationMs === 0 ? 0 : (work.completedJobs / totalDurationMs) * 1_000,
-    completedJobs: work.completedJobs,
+    enqueueTasksPerSecond:
+      enqueueDurationMs === 0 ? 0 : (options.tasksPerRun / enqueueDurationMs) * 1_000,
+    processingTasksPerSecond:
+      processingDurationMs === 0 ? 0 : (work.completedTasks / processingDurationMs) * 1_000,
+    totalTasksPerSecond:
+      totalDurationMs === 0 ? 0 : (work.completedTasks / totalDurationMs) * 1_000,
+    throughputPerSecond:
+      totalDurationMs === 0 ? 0 : (work.completedTasks / totalDurationMs) * 1_000,
+    completedTasks: work.completedTasks,
     claimLatencySamplesMs,
     claimLatencyMs: summarizeLatencies(claimLatencySamplesMs),
     telemetry,
@@ -713,8 +715,8 @@ async function captureChurnSample(
   adapter: QueueAdapter,
   started: number,
   batches: number,
-  enqueuedJobs: number,
-  completedJobs: number,
+  enqueuedTasks: number,
+  completedTasks: number,
 ): Promise<ChurnSample> {
   const sampleStarted = performance.now();
   const [relations, schema, activity] = await Promise.all([
@@ -726,8 +728,8 @@ async function captureChurnSample(
     elapsedMs: performance.now() - started,
     sampleDurationMs: performance.now() - sampleStarted,
     batches,
-    enqueuedJobs,
-    completedJobs,
+    enqueuedTasks,
+    completedTasks,
     relations: toJsonSafe(relations),
     schema: toJsonSafe(schema),
     activity: toJsonSafe(activity),
@@ -743,11 +745,11 @@ async function runChurn(
   const before = await captureBefore(pool, adapter);
   const started = performance.now();
   let batches = 0;
-  let enqueuedJobs = 0;
+  let enqueuedTasks = 0;
   let maxBacklog = 0;
   const producerLagSamplesMs: number[] = [];
   const progress: ChurnProgress = {
-    completedJobs: 0,
+    completedTasks: 0,
     claimLatencySamplesMs: [],
     producerRunning: true,
   };
@@ -768,8 +770,8 @@ async function runChurn(
       adapter,
       started,
       batches,
-      enqueuedJobs,
-      progress.completedJobs,
+      enqueuedTasks,
+      progress.completedTasks,
     )
       .then((sample) => {
         samples.push(sample);
@@ -781,16 +783,16 @@ async function runChurn(
   }, options.churn.sampleIntervalMs);
 
   try {
-    while (enqueuedJobs < options.churn.targetJobs) {
-      const scheduledAt = started + (enqueuedJobs / options.churn.targetRatePerSecond) * 1_000;
+    while (enqueuedTasks < options.churn.targetTasks) {
+      const scheduledAt = started + (enqueuedTasks / options.churn.targetRatePerSecond) * 1_000;
       const waitMs = scheduledAt - performance.now();
       if (waitMs > 0) await delay(waitMs);
       producerLagSamplesMs.push(Math.max(0, performance.now() - scheduledAt));
-      const count = Math.min(options.churn.batchSize, options.churn.targetJobs - enqueuedJobs);
+      const count = Math.min(options.churn.batchSize, options.churn.targetTasks - enqueuedTasks);
       batches += 1;
-      await enqueueJobs(adapter, count, batches, count);
-      enqueuedJobs += count;
-      maxBacklog = Math.max(maxBacklog, enqueuedJobs - progress.completedJobs);
+      await enqueueTasks(adapter, count, batches, count);
+      enqueuedTasks += count;
+      maxBacklog = Math.max(maxBacklog, enqueuedTasks - progress.completedTasks);
     }
   } finally {
     progress.producerRunning = false;
@@ -803,11 +805,18 @@ async function runChurn(
   clearInterval(sampler);
   await Promise.all(sampleTasks);
   samples.push(
-    await captureChurnSample(pool, adapter, started, batches, enqueuedJobs, progress.completedJobs),
+    await captureChurnSample(
+      pool,
+      adapter,
+      started,
+      batches,
+      enqueuedTasks,
+      progress.completedTasks,
+    ),
   );
-  if (progress.completedJobs !== options.churn.targetJobs) {
+  if (progress.completedTasks !== options.churn.targetTasks) {
     throw new Error(
-      `${adapter.design} completed ${progress.completedJobs} of ${options.churn.targetJobs} churn jobs`,
+      `${adapter.design} completed ${progress.completedTasks} of ${options.churn.targetTasks} churn tasks`,
     );
   }
   const telemetry = await captureAfter(pool, adapter, before, claimExplain);
@@ -822,7 +831,7 @@ async function runChurn(
   return {
     design: adapter.design,
     workloadModel: "concurrent-producer-consumer",
-    targetJobs: options.churn.targetJobs,
+    targetTasks: options.churn.targetTasks,
     targetRatePerSecond: options.churn.targetRatePerSecond,
     productionDurationMs,
     drainDurationMs,
@@ -830,10 +839,10 @@ async function runChurn(
     batchSize: options.churn.batchSize,
     workerConcurrency: options.churn.workerConcurrency,
     batches,
-    enqueuedJobs,
-    completedJobs: progress.completedJobs,
+    enqueuedTasks,
+    completedTasks: progress.completedTasks,
     throughputPerSecond:
-      totalDurationMs === 0 ? 0 : (progress.completedJobs / totalDurationMs) * 1_000,
+      totalDurationMs === 0 ? 0 : (progress.completedTasks / totalDurationMs) * 1_000,
     producerLagSamplesMs: sortedProducerLagSamplesMs,
     producerLagMs: summarizeLatencies(sortedProducerLagSamplesMs),
     maxBacklog,

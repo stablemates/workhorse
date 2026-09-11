@@ -1,18 +1,18 @@
 import type {
-  JobListCursor,
-  JobListQuery,
-  JobPayloadProjection,
-  JobState,
-  JobTimelineCursor,
+  TaskListCursor,
+  TaskListQuery,
+  TaskPayloadProjection,
+  TaskState,
+  TaskTimelineCursor,
 } from "../types.js";
 import {
-  DEFAULT_JOB_QUERY_PAYLOAD_BYTES,
-  MAX_JOB_QUERY_PAGE_SIZE,
-  MAX_JOB_QUERY_PAYLOAD_BYTES,
-  MAX_JOB_QUERY_REDACT_KEYS,
+  DEFAULT_TASK_QUERY_PAYLOAD_BYTES,
+  MAX_TASK_QUERY_PAGE_SIZE,
+  MAX_TASK_QUERY_PAYLOAD_BYTES,
+  MAX_TASK_QUERY_REDACT_KEYS,
 } from "../types.js";
 
-const JOB_LIST_FIELDS = new Set([
+const TASK_LIST_FIELDS = new Set([
   "queue",
   "type",
   "states",
@@ -22,9 +22,9 @@ const JOB_LIST_FIELDS = new Set([
   "cursor",
   "payload",
 ]);
-const JOB_LIST_CURSOR_FIELDS = new Set(["createdAt", "jobId", "signature"]);
+const TASK_LIST_CURSOR_FIELDS = new Set(["createdAt", "taskId", "signature"]);
 const PAYLOAD_PROJECTION_FIELDS = new Set(["include", "maxBytes", "redactKeys"]);
-const JOB_STATES = new Set<JobState>([
+const TASK_STATES = new Set<TaskState>([
   "blocked",
   "scheduled",
   "ready",
@@ -34,10 +34,10 @@ const JOB_STATES = new Set<JobState>([
   "canceled",
 ]);
 
-export interface ValidatedJobListQuery {
+export interface ValidatedTaskListQuery {
   readonly limit: number;
-  readonly cursor: JobListCursor | undefined;
-  readonly payloadProjection: Required<JobPayloadProjection>;
+  readonly cursor: TaskListCursor | undefined;
+  readonly payloadProjection: Required<TaskPayloadProjection>;
 }
 
 function validateFiniteDate(value: Date | undefined, field: string): void {
@@ -80,33 +80,33 @@ export function validatePageLimit(
   return limit;
 }
 
-export function validateJobListQuery(query: JobListQuery): ValidatedJobListQuery {
+export function validateTaskListQuery(query: TaskListQuery): ValidatedTaskListQuery {
   if (typeof query !== "object" || query === null || Array.isArray(query)) {
-    throw new TypeError("listJobs query must be an object");
+    throw new TypeError("listTasks query must be an object");
   }
-  validateKnownFields(query, JOB_LIST_FIELDS, "listJobs query");
+  validateKnownFields(query, TASK_LIST_FIELDS, "listTasks query");
 
-  const limit = validatePageLimit(query.limit, 100, MAX_JOB_QUERY_PAGE_SIZE, "listJobs limit");
-  validateFiniteDate(query.createdAfter, "listJobs createdAfter");
-  validateFiniteDate(query.createdBefore, "listJobs createdBefore");
+  const limit = validatePageLimit(query.limit, 100, MAX_TASK_QUERY_PAGE_SIZE, "listTasks limit");
+  validateFiniteDate(query.createdAfter, "listTasks createdAfter");
+  validateFiniteDate(query.createdBefore, "listTasks createdBefore");
   if (
     query.createdAfter !== undefined &&
     query.createdBefore !== undefined &&
     query.createdAfter.getTime() >= query.createdBefore.getTime()
   ) {
-    throw new RangeError("listJobs createdAfter must be earlier than createdBefore");
+    throw new RangeError("listTasks createdAfter must be earlier than createdBefore");
   }
 
   if (query.states !== undefined) {
     if (!Array.isArray(query.states) || query.states.length === 0) {
-      throw new RangeError("listJobs states must be a non-empty array when supplied");
+      throw new RangeError("listTasks states must be a non-empty array when supplied");
     }
-    const uniqueStates = new Set<JobState>();
+    const uniqueStates = new Set<TaskState>();
     for (const state of query.states) {
-      if (!JOB_STATES.has(state))
-        throw new TypeError(`listJobs state is invalid: ${String(state)}`);
+      if (!TASK_STATES.has(state))
+        throw new TypeError(`listTasks state is invalid: ${String(state)}`);
       if (uniqueStates.has(state)) {
-        throw new RangeError(`listJobs states must be unique: ${state}`);
+        throw new RangeError(`listTasks states must be unique: ${state}`);
       }
       uniqueStates.add(state);
     }
@@ -115,16 +115,16 @@ export function validateJobListQuery(query: JobListQuery): ValidatedJobListQuery
   const cursor = query.cursor;
   if (cursor !== undefined) {
     if (typeof cursor !== "object" || cursor === null) {
-      throw new TypeError("listJobs cursor must be an object");
+      throw new TypeError("listTasks cursor must be an object");
     }
-    validateKnownFields(cursor, JOB_LIST_CURSOR_FIELDS, "listJobs cursor");
+    validateKnownFields(cursor, TASK_LIST_CURSOR_FIELDS, "listTasks cursor");
     validateRequiredStrings(
       [
         ["createdAt", cursor.createdAt],
-        ["jobId", cursor.jobId],
+        ["taskId", cursor.taskId],
         ["signature", cursor.signature],
       ],
-      "listJobs cursor",
+      "listTasks cursor",
     );
   }
 
@@ -132,43 +132,43 @@ export function validateJobListQuery(query: JobListQuery): ValidatedJobListQuery
     query.payload !== undefined &&
     (typeof query.payload !== "object" || query.payload === null || Array.isArray(query.payload))
   ) {
-    throw new TypeError("listJobs payload must be an object");
+    throw new TypeError("listTasks payload must be an object");
   }
   const projection = query.payload ?? {};
-  validateKnownFields(projection, PAYLOAD_PROJECTION_FIELDS, "listJobs payload");
+  validateKnownFields(projection, PAYLOAD_PROJECTION_FIELDS, "listTasks payload");
   if (projection.include !== undefined && typeof projection.include !== "boolean") {
-    throw new TypeError("listJobs payload include must be a boolean");
+    throw new TypeError("listTasks payload include must be a boolean");
   }
   if (
     projection.maxBytes !== undefined &&
     (!Number.isSafeInteger(projection.maxBytes) ||
       projection.maxBytes < 1 ||
-      projection.maxBytes > MAX_JOB_QUERY_PAYLOAD_BYTES)
+      projection.maxBytes > MAX_TASK_QUERY_PAYLOAD_BYTES)
   ) {
     throw new RangeError(
-      `listJobs payload maxBytes must be an integer between 1 and ${MAX_JOB_QUERY_PAYLOAD_BYTES}`,
+      `listTasks payload maxBytes must be an integer between 1 and ${MAX_TASK_QUERY_PAYLOAD_BYTES}`,
     );
   }
   const redactKeys = projection.redactKeys ?? [];
   if (!Array.isArray(redactKeys)) {
-    throw new TypeError("listJobs payload redactKeys must be an array");
+    throw new TypeError("listTasks payload redactKeys must be an array");
   }
-  if (redactKeys.length > MAX_JOB_QUERY_REDACT_KEYS) {
+  if (redactKeys.length > MAX_TASK_QUERY_REDACT_KEYS) {
     throw new RangeError(
-      `listJobs payload redactKeys must contain at most ${MAX_JOB_QUERY_REDACT_KEYS} keys`,
+      `listTasks payload redactKeys must contain at most ${MAX_TASK_QUERY_REDACT_KEYS} keys`,
     );
   }
   const uniqueRedactKeys = new Set<string>();
   for (const key of redactKeys) {
     if (typeof key !== "string") {
-      throw new TypeError("listJobs payload redactKeys must contain only strings");
+      throw new TypeError("listTasks payload redactKeys must contain only strings");
     }
     const length = [...key].length;
     if (length < 1 || length > 200) {
-      throw new RangeError("listJobs payload redactKeys must contain 1 to 200 characters");
+      throw new RangeError("listTasks payload redactKeys must contain 1 to 200 characters");
     }
     if (uniqueRedactKeys.has(key)) {
-      throw new RangeError(`listJobs payload redactKeys must be unique: ${key}`);
+      throw new RangeError(`listTasks payload redactKeys must be unique: ${key}`);
     }
     uniqueRedactKeys.add(key);
   }
@@ -178,33 +178,33 @@ export function validateJobListQuery(query: JobListQuery): ValidatedJobListQuery
     cursor,
     payloadProjection: {
       include: projection.include ?? false,
-      maxBytes: projection.maxBytes ?? DEFAULT_JOB_QUERY_PAYLOAD_BYTES,
+      maxBytes: projection.maxBytes ?? DEFAULT_TASK_QUERY_PAYLOAD_BYTES,
       redactKeys,
     },
   };
 }
 
-export function validateJobTimelineCursor(
-  jobId: string,
-  cursor: JobTimelineCursor | undefined,
-): JobTimelineCursor | undefined {
+export function validateTaskTimelineCursor(
+  taskId: string,
+  cursor: TaskTimelineCursor | undefined,
+): TaskTimelineCursor | undefined {
   if (cursor === undefined) return undefined;
   if (typeof cursor !== "object" || cursor === null) {
-    throw new TypeError("getJobTimeline cursor must be an object");
+    throw new TypeError("getTaskTimeline cursor must be an object");
   }
   validateRequiredStrings(
     [
-      ["jobId", cursor.jobId],
+      ["taskId", cursor.taskId],
       ["occurredAt", cursor.occurredAt],
       ["recordId", cursor.recordId],
     ],
-    "getJobTimeline cursor",
+    "getTaskTimeline cursor",
   );
   if (cursor.kind !== "event" && cursor.kind !== "attempt") {
-    throw new TypeError("getJobTimeline cursor kind must be event or attempt");
+    throw new TypeError("getTaskTimeline cursor kind must be event or attempt");
   }
-  if (cursor.jobId !== jobId) {
-    throw new RangeError("getJobTimeline cursor jobId must match the requested jobId");
+  if (cursor.taskId !== taskId) {
+    throw new RangeError("getTaskTimeline cursor taskId must match the requested taskId");
   }
   return cursor;
 }

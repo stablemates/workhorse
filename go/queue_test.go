@@ -49,8 +49,8 @@ func TestQueueSerializesMinimalRequestsAndReturnsCanonicalResults(t *testing.T) 
 	executor := &queueExecutor{responses: [][]workhorse.Row{
 		{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(1)}},
 		{
-			{"ordinal": int32(1), "job_id": "first", "outcome": "accepted", "reason": nil},
-			{"ordinal": int32(2), "job_id": "second", "outcome": "replayed", "reason": nil},
+			{"ordinal": int32(1), "task_id": "first", "outcome": "accepted", "reason": nil},
+			{"ordinal": int32(2), "task_id": "second", "outcome": "replayed", "reason": nil},
 		},
 	}}
 	queue := workhorse.NewQueue(executor, "go-contract")
@@ -62,8 +62,8 @@ func TestQueueSerializesMinimalRequestsAndReturnsCanonicalResults(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 2 || results[0].JobID != "first" || results[0].Outcome != workhorse.EnqueueAccepted ||
-		results[1].JobID != "second" || results[1].Outcome != workhorse.EnqueueReplayed {
+	if len(results) != 2 || results[0].TaskID != "first" || results[0].Outcome != workhorse.EnqueueAccepted ||
+		results[1].TaskID != "second" || results[1].Outcome != workhorse.EnqueueReplayed {
 		t.Fatalf("unexpected results: %#v", results)
 	}
 	if len(executor.calls) != 2 {
@@ -127,7 +127,7 @@ func TestQueueCancelReturnsPostgreSQLCancellationMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != workhorse.CancelRequested || result.JobID != "00000000-0000-4000-8000-000000000001" ||
+	if result.Status != workhorse.CancelRequested || result.TaskID != "00000000-0000-4000-8000-000000000001" ||
 		result.State == nil || *result.State != "active" || result.CurrentAttempt == nil || *result.CurrentAttempt != 2 ||
 		result.RequestedAt == nil || !result.RequestedAt.Equal(requestedAt) || result.RequestedBy == nil ||
 		*result.RequestedBy != "api" || result.Reason == nil || *result.Reason != "request ended" ||
@@ -180,7 +180,7 @@ func TestQueueSatisfiesSharedRequestFixturesWithinCurrentScope(t *testing.T) {
 		t.Run(fixture.ID, func(t *testing.T) {
 			executor := &queueExecutor{responses: [][]workhorse.Row{
 				{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(1)}},
-				{{"ordinal": int32(1), "job_id": "fixture", "outcome": "accepted", "reason": nil}},
+				{{"ordinal": int32(1), "task_id": "fixture", "outcome": "accepted", "reason": nil}},
 			}}
 			queueName, ok := fixture.Postgres["queue"].(string)
 			if !ok {
@@ -237,7 +237,7 @@ func TestQueueSerializesEverySharedScheduleFixture(t *testing.T) {
 			Schedule string `json:"schedule"`
 			Timezone string `json:"timezone"`
 			Enabled  bool   `json:"enabled"`
-			Job      struct {
+			Task     struct {
 				Type           string         `json:"type"`
 				Payload        any            `json:"payload"`
 				Queue          string         `json:"queue"`
@@ -245,7 +245,7 @@ func TestQueueSerializesEverySharedScheduleFixture(t *testing.T) {
 				ConcurrencyKey string         `json:"concurrencyKey"`
 				MaxAttempts    int            `json:"maxAttempts"`
 				RetryPolicy    map[string]any `json:"retryPolicy"`
-			} `json:"job"`
+			} `json:"task"`
 		} `json:"application"`
 		Postgres any `json:"postgres"`
 	}
@@ -260,10 +260,10 @@ func TestQueueSerializesEverySharedScheduleFixture(t *testing.T) {
 				enabled := definition.Enabled
 				definitions[index] = workhorse.ScheduleDefinition{
 					Name: definition.Name, Schedule: definition.Schedule, Timezone: definition.Timezone, Enabled: &enabled,
-					Job: workhorse.ScheduledJob{
-						Type: definition.Job.Type, Payload: definition.Job.Payload, Queue: definition.Job.Queue,
-						Priority: definition.Job.Priority, ConcurrencyKey: definition.Job.ConcurrencyKey,
-						MaxAttempts: definition.Job.MaxAttempts, RetryPolicy: definition.Job.RetryPolicy,
+					Task: workhorse.ScheduledTask{
+						Type: definition.Task.Type, Payload: definition.Task.Payload, Queue: definition.Task.Queue,
+						Priority: definition.Task.Priority, ConcurrencyKey: definition.Task.ConcurrencyKey,
+						MaxAttempts: definition.Task.MaxAttempts, RetryPolicy: definition.Task.RetryPolicy,
 					},
 				}
 			}
@@ -359,8 +359,8 @@ func goOptions(t *testing.T, input map[string]any) workhorse.EnqueueOptions {
 		case "dependencies":
 			dependency := value.(map[string]any)
 			options.Dependencies = &workhorse.Dependencies{}
-			for _, jobID := range dependency["prerequisiteJobIds"].([]any) {
-				options.Dependencies.PrerequisiteJobIDs = append(options.Dependencies.PrerequisiteJobIDs, jobID.(string))
+			for _, taskID := range dependency["prerequisiteTaskIds"].([]any) {
+				options.Dependencies.PrerequisiteTaskIDs = append(options.Dependencies.PrerequisiteTaskIDs, taskID.(string))
 			}
 			options.Dependencies.OnSuccess = workhorse.DependencyTerminalPolicy(dependency["onSuccess"].(string))
 			options.Dependencies.OnFailure = workhorse.DependencyTerminalPolicy(dependency["onFailure"].(string))
@@ -378,10 +378,10 @@ func TestQueueSerializesDelayedAndDurableOptions(t *testing.T) {
 	executor := &queueExecutor{responses: [][]workhorse.Row{
 		{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(1)}},
 		{
-			{"ordinal": int32(1), "job_id": "delayed", "outcome": "accepted", "reason": nil},
-			{"ordinal": int32(2), "job_id": "debounced", "outcome": "accepted", "reason": nil},
-			{"ordinal": int32(3), "job_id": "throttled", "outcome": "accepted", "reason": nil},
-			{"ordinal": int32(4), "job_id": "dependent", "outcome": "accepted", "reason": nil},
+			{"ordinal": int32(1), "task_id": "delayed", "outcome": "accepted", "reason": nil},
+			{"ordinal": int32(2), "task_id": "debounced", "outcome": "accepted", "reason": nil},
+			{"ordinal": int32(3), "task_id": "throttled", "outcome": "accepted", "reason": nil},
+			{"ordinal": int32(4), "task_id": "dependent", "outcome": "accepted", "reason": nil},
 		},
 	}}
 	queue := workhorse.NewQueue(executor, "default")
@@ -406,8 +406,8 @@ func TestQueueSerializesDelayedAndDurableOptions(t *testing.T) {
 		{
 			Type: "dependent", Payload: nil,
 			Options: workhorse.EnqueueOptions{Dependencies: &workhorse.Dependencies{
-				PrerequisiteJobIDs: []string{"second", "first"},
-				OnSuccess:          workhorse.DependencyRelease, OnFailure: workhorse.DependencyCancel,
+				PrerequisiteTaskIDs: []string{"second", "first"},
+				OnSuccess:           workhorse.DependencyRelease, OnFailure: workhorse.DependencyCancel,
 				OnCancellation: workhorse.DependencyFail,
 			}},
 		},
@@ -430,7 +430,7 @@ func TestQueueSerializesDelayedAndDurableOptions(t *testing.T) {
 		t.Fatalf("throttle must omit runAt and carry its keyed window: %#v", request[2])
 	}
 	dependencies := request[3]["dependencies"].(map[string]any)
-	if fmt.Sprint(dependencies["prerequisiteJobIds"]) != "[first second]" ||
+	if fmt.Sprint(dependencies["prerequisiteTaskIds"]) != "[first second]" ||
 		dependencies["onSuccess"] != "release" || dependencies["onFailure"] != "cancel" ||
 		dependencies["onCancellation"] != "fail" {
 		t.Fatalf("dependencies were not serialized canonically: %#v", dependencies)
@@ -448,9 +448,9 @@ func fixtureInteger(t *testing.T, value any) int {
 
 func TestQueueRejectsInvalidOptionCombinationsBeforeQuery(t *testing.T) {
 	now := time.Now()
-	tooManyDependencies := make([]string, workhorse.MaxJobDependencies+1)
+	tooManyDependencies := make([]string, workhorse.MaxTaskDependencies+1)
 	for index := range tooManyDependencies {
-		tooManyDependencies[index] = fmt.Sprintf("job-%d", index)
+		tooManyDependencies[index] = fmt.Sprintf("task-%d", index)
 	}
 	tests := []struct {
 		name    string
@@ -474,7 +474,7 @@ func TestQueueRejectsInvalidOptionCombinationsBeforeQuery(t *testing.T) {
 			options: workhorse.EnqueueOptions{
 				Throttle: &workhorse.Throttle{Key: "same", WindowMS: 1},
 				Dependencies: &workhorse.Dependencies{
-					PrerequisiteJobIDs: []string{"00000000-0000-4000-8000-000000000001"},
+					PrerequisiteTaskIDs: []string{"00000000-0000-4000-8000-000000000001"},
 				},
 			},
 		},
@@ -482,13 +482,13 @@ func TestQueueRejectsInvalidOptionCombinationsBeforeQuery(t *testing.T) {
 		{
 			name: "duplicate dependencies",
 			options: workhorse.EnqueueOptions{Dependencies: &workhorse.Dependencies{
-				PrerequisiteJobIDs: []string{"same", "same"},
+				PrerequisiteTaskIDs: []string{"same", "same"},
 			}},
 		},
 		{
 			name: "too many dependencies",
 			options: workhorse.EnqueueOptions{Dependencies: &workhorse.Dependencies{
-				PrerequisiteJobIDs: tooManyDependencies,
+				PrerequisiteTaskIDs: tooManyDependencies,
 			}},
 		},
 	}
@@ -512,8 +512,8 @@ func TestQueuePlacesResultsByValidatedOrdinal(t *testing.T) {
 	executor := &queueExecutor{responses: [][]workhorse.Row{
 		{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(1)}},
 		{
-			{"ordinal": int32(2), "job_id": "second", "outcome": "accepted", "reason": nil},
-			{"ordinal": int32(1), "job_id": "first", "outcome": "accepted", "reason": nil},
+			{"ordinal": int32(2), "task_id": "second", "outcome": "accepted", "reason": nil},
+			{"ordinal": int32(1), "task_id": "first", "outcome": "accepted", "reason": nil},
 		},
 	}}
 	queue := workhorse.NewQueue(executor, "default")
@@ -525,7 +525,7 @@ func TestQueuePlacesResultsByValidatedOrdinal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if results[0].JobID != "first" || results[1].JobID != "second" {
+	if results[0].TaskID != "first" || results[1].TaskID != "second" {
 		t.Fatalf("results do not follow request ordinals: %#v", results)
 	}
 }
@@ -583,11 +583,11 @@ func TestQueueTranslatesStructuredPostgreSQLErrors(t *testing.T) {
 		{
 			name:     "dependency cycle",
 			code:     "P1003",
-			detail:   `{"dependentJobId":"dependent","prerequisiteJobId":"prerequisite","cycleJobIds":["dependent","prerequisite"],"truncated":false}`,
+			detail:   `{"dependentTaskId":"dependent","prerequisiteTaskId":"prerequisite","cycleTaskIds":["dependent","prerequisite"],"truncated":false}`,
 			sentinel: workhorse.ErrDependencyCycle,
 			assert: func(t *testing.T, err error) {
 				var cycle *workhorse.DependencyCycleError
-				if !errors.As(err, &cycle) || cycle.Details.PrerequisiteJobID != "prerequisite" {
+				if !errors.As(err, &cycle) || cycle.Details.PrerequisiteTaskID != "prerequisite" {
 					t.Fatalf("structured details were not preserved: %#v", cycle)
 				}
 			},
@@ -595,7 +595,7 @@ func TestQueueTranslatesStructuredPostgreSQLErrors(t *testing.T) {
 		{
 			name:     "dependency limit",
 			code:     "P1005",
-			detail:   `{"jobId":"limited","limit":"dependents","max":100}`,
+			detail:   `{"taskId":"limited","limit":"dependents","max":100}`,
 			sentinel: workhorse.ErrDependencyLimitExceeded,
 			assert: func(t *testing.T, err error) {
 				var limit *workhorse.DependencyLimitExceededError
@@ -631,12 +631,12 @@ func TestQueueEmptyBatchDoesNotQueryPostgreSQL(t *testing.T) {
 	executor := &queueExecutor{}
 	queue := workhorse.NewQueue(executor, "default")
 
-	jobIDs, err := queue.EnqueueMany(context.Background(), nil)
+	taskIDs, err := queue.EnqueueMany(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(jobIDs) != 0 || len(executor.calls) != 0 {
-		t.Fatalf("unexpected empty batch result: ids=%#v calls=%#v", jobIDs, executor.calls)
+	if len(taskIDs) != 0 || len(executor.calls) != 0 {
+		t.Fatalf("unexpected empty batch result: ids=%#v calls=%#v", taskIDs, executor.calls)
 	}
 }
 
@@ -668,15 +668,15 @@ func TestQueueLeavesTransactionCommitAndRollbackWithCaller(t *testing.T) {
 		t.Fatal(err)
 	}
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(transaction), "transactions")
-	jobID, err := queue.Enqueue(ctx, "email.send", map[string]any{"message": "commit"})
+	taskID, err := queue.Enqueue(ctx, "email.send", map[string]any{"message": "commit"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertJobCount(t, pool, jobID, 0)
+	assertTaskCount(t, pool, taskID, 0)
 	if err := transaction.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	assertJobCount(t, pool, jobID, 1)
+	assertTaskCount(t, pool, taskID, 1)
 
 	transaction, err = pool.Begin(ctx)
 	if err != nil {
@@ -690,7 +690,7 @@ func TestQueueLeavesTransactionCommitAndRollbackWithCaller(t *testing.T) {
 	if err := transaction.Rollback(ctx); err != nil {
 		t.Fatal(err)
 	}
-	assertJobCount(t, pool, rolledBackID, 0)
+	assertTaskCount(t, pool, rolledBackID, 0)
 }
 
 func TestQueueSynchronizesSchedulesInsideCallerTransaction(t *testing.T) {
@@ -709,8 +709,8 @@ func TestQueueSynchronizesSchedulesInsideCallerTransaction(t *testing.T) {
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(transaction), "scheduled")
 	enabled := true
 	definitions := []workhorse.ScheduleDefinition{
-		{Name: "daily", Schedule: "0 6 * * *", Job: workhorse.ScheduledJob{Type: "report", Payload: nil}},
-		{Name: "cleanup", Schedule: "0 2 * * 0", Enabled: &enabled, Job: workhorse.ScheduledJob{Type: "cleanup", Payload: nil}},
+		{Name: "daily", Schedule: "0 6 * * *", Task: workhorse.ScheduledTask{Type: "report", Payload: nil}},
+		{Name: "cleanup", Schedule: "0 2 * * 0", Enabled: &enabled, Task: workhorse.ScheduledTask{Type: "cleanup", Payload: nil}},
 	}
 	if err := queue.SyncSchedules(ctx, "go-integration", definitions); err != nil {
 		t.Fatal(err)
@@ -781,15 +781,15 @@ func TestDatabaseSQLQueueUsesCallerOwnedTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	queue := workhorse.NewQueue(workhorse.NewSQLExecutor(transaction), "transactions")
-	jobID, err := queue.Enqueue(ctx, "email.send", map[string]any{"message": "commit"})
+	taskID, err := queue.Enqueue(ctx, "email.send", map[string]any{"message": "commit"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertJobCount(t, pool, jobID, 0)
+	assertTaskCount(t, pool, taskID, 0)
 	if err := transaction.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	assertJobCount(t, pool, jobID, 1)
+	assertTaskCount(t, pool, taskID, 1)
 }
 
 func TestQueueBatchFailureIsAtomic(t *testing.T) {
@@ -812,13 +812,13 @@ func TestQueueBatchFailureIsAtomic(t *testing.T) {
 	var count int
 	if err := pool.QueryRow(
 		ctx,
-		"SELECT count(*)::integer FROM workhorse.job WHERE queue_name = $1",
+		"SELECT count(*)::integer FROM workhorse.task WHERE queue_name = $1",
 		"atomic-batch",
 	).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 0 {
-		t.Fatalf("failed batch inserted %d jobs", count)
+		t.Fatalf("failed batch inserted %d tasks", count)
 	}
 }
 
@@ -867,8 +867,8 @@ func TestQueueReturnsCanonicalKeyedAndDependencyOutcomes(t *testing.T) {
 	}
 	dependent, err := queue.EnqueueWithResult(ctx, "dependent", nil, workhorse.EnqueueOptions{
 		Dependencies: &workhorse.Dependencies{
-			PrerequisiteJobIDs: []string{prerequisite},
-			OnSuccess:          workhorse.DependencyRelease, OnFailure: workhorse.DependencyCancel,
+			PrerequisiteTaskIDs: []string{prerequisite},
+			OnSuccess:           workhorse.DependencyRelease, OnFailure: workhorse.DependencyCancel,
 			OnCancellation: workhorse.DependencyFail,
 		},
 	})
@@ -888,18 +888,18 @@ func TestQueueReturnsCanonicalKeyedAndDependencyOutcomes(t *testing.T) {
 	}
 }
 
-func assertJobCount(t *testing.T, pool *pgxpool.Pool, jobID string, want int) {
+func assertTaskCount(t *testing.T, pool *pgxpool.Pool, taskID string, want int) {
 	t.Helper()
 	var count int
 	if err := pool.QueryRow(
 		context.Background(),
-		"SELECT count(*)::integer FROM workhorse.job WHERE id = $1::uuid",
-		jobID,
+		"SELECT count(*)::integer FROM workhorse.task WHERE id = $1::uuid",
+		taskID,
 	).Scan(&count); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatal(err)
 	}
 	if count != want {
-		t.Fatalf("job %s count: expected %d, received %d", jobID, want, count)
+		t.Fatalf("task %s count: expected %d, received %d", taskID, want, count)
 	}
 }
 

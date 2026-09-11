@@ -1,27 +1,27 @@
 import { UnstyledButton } from "@mantine/core";
 import type { ReactNode } from "react";
 
-export function taskOpenButtonId(jobId: string): string {
-  return `task-open-${jobId}`;
+export function taskOpenButtonId(taskId: string): string {
+  return `task-open-${taskId}`;
 }
 
 /** A real keyboard control for opening a task from an otherwise pointer-clickable table row. */
 export function TaskOpenButton({
-  jobId,
+  taskId,
   taskType,
   onOpen,
   children,
 }: {
-  jobId: string;
+  taskId: string;
   taskType: string;
   onOpen: () => void;
   children: ReactNode;
 }) {
   return (
     <UnstyledButton
-      id={taskOpenButtonId(jobId)}
+      id={taskOpenButtonId(taskId)}
       className="task-table__open"
-      aria-label={`View task ${taskType}, ${jobId}`}
+      aria-label={`View task ${taskType}, ${taskId}`}
       onClick={(event) => {
         event.stopPropagation();
         onOpen();

@@ -14,11 +14,11 @@ func TestWorkerUsesDedicatedAndSharedQueues(t *testing.T) {
 	}
 }
 
-func TestSharedJobIdentifiesGoRuntime(t *testing.T) {
-	result, err := sharedJob(
+func TestSharedTaskIdentifiesGoRuntime(t *testing.T) {
+	result, err := sharedTask(
 		context.Background(),
 		map[string]any{"source": "schedule"},
-		&workhorse.HandlerContext{Job: workhorse.ClaimedJob{Attempt: 3}},
+		&workhorse.HandlerContext{Task: workhorse.ClaimedTask{Attempt: 3}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -32,11 +32,11 @@ func TestSharedJobIdentifiesGoRuntime(t *testing.T) {
 	}
 }
 
-func TestLanguageJobIdentifiesGoRuntime(t *testing.T) {
-	result, err := languageJob(
+func TestLanguageTaskIdentifiesGoRuntime(t *testing.T) {
+	result, err := languageTask(
 		context.Background(),
 		map[string]any{"language": "go"},
-		&workhorse.HandlerContext{Job: workhorse.ClaimedJob{Attempt: 2}},
+		&workhorse.HandlerContext{Task: workhorse.ClaimedTask{Attempt: 2}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -50,8 +50,8 @@ func TestLanguageJobIdentifiesGoRuntime(t *testing.T) {
 	}
 }
 
-func TestLanguageJobRefusesAnotherRuntime(t *testing.T) {
-	_, err := languageJob(
+func TestLanguageTaskRefusesAnotherRuntime(t *testing.T) {
+	_, err := languageTask(
 		context.Background(),
 		map[string]any{"language": "python"},
 		&workhorse.HandlerContext{},

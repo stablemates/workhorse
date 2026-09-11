@@ -9,7 +9,7 @@ import { createIntegrationTestContext } from "./support/integration.js";
 const repository = path.resolve(import.meta.dirname, "../../..");
 const cli = path.join(repository, "typescript/core/src/cli/workhorse.ts");
 const tsxCli = createRequire(import.meta.url).resolve("tsx/cli");
-const { createFailedJob, databaseUrl, queue, admin } = createIntegrationTestContext(
+const { createFailedTask, databaseUrl, queue, admin } = createIntegrationTestContext(
   import.meta.url,
 );
 const databaseName = new URL(databaseUrl).pathname.slice(1);
@@ -30,50 +30,50 @@ function runAdmin(args: readonly string[]) {
 }
 
 describe("admin CLI inspection", () => {
-  it("lists jobs with lifecycle filters as JSON", async () => {
-    const jobId = await queue.enqueue("report.build", { day: "2026-08-18" });
-    const result = runAdmin(["jobs", "--json", "--state", "ready", "--queue", "default"]);
+  it("lists tasks with lifecycle filters as JSON", async () => {
+    const taskId = await queue.enqueue("report.build", { day: "2026-08-18" });
+    const result = runAdmin(["tasks", "--json", "--state", "ready", "--queue", "default"]);
     expect(result.code).toBe(0);
     const page = JSON.parse(result.stdout) as {
       items: Array<{ id: string; state: string; type: string }>;
     };
-    expect(page.items.map((item) => item.id)).toContain(jobId);
-    expect(runAdmin(["jobs", "--json", "--state", "succeeded"]).stdout).not.toContain(jobId);
+    expect(page.items.map((item) => item.id)).toContain(taskId);
+    expect(runAdmin(["tasks", "--json", "--state", "succeeded"]).stdout).not.toContain(taskId);
   });
 
-  it("shows one job snapshot and its timeline", async () => {
-    const jobId = await queue.enqueue("email.send", { to: "operator@example.com" });
-    const detail = runAdmin(["job", jobId, "--json"]);
+  it("shows one task snapshot and its timeline", async () => {
+    const taskId = await queue.enqueue("email.send", { to: "operator@example.com" });
+    const detail = runAdmin(["task", taskId, "--json"]);
     expect(detail.code).toBe(0);
     expect(JSON.parse(detail.stdout)).toMatchObject({
-      id: jobId,
+      id: taskId,
       state: "ready",
       type: "email.send",
     });
-    const human = runAdmin(["job", jobId]);
+    const human = runAdmin(["task", taskId]);
     expect(human.code).toBe(0);
     expect(human.stdout).toContain("email.send");
 
-    const timeline = runAdmin(["timeline", jobId, "--json"]);
+    const timeline = runAdmin(["timeline", taskId, "--json"]);
     expect(timeline.code).toBe(0);
     expect(
       (JSON.parse(timeline.stdout) as { items: Array<{ kind: string }> }).items.length,
     ).toBeGreaterThan(0);
   });
 
-  it("exits 1 for a missing job", () => {
-    const result = runAdmin(["job", "00000000-0000-0000-0000-000000000000"]);
+  it("exits 1 for a missing task", () => {
+    const result = runAdmin(["task", "00000000-0000-0000-0000-000000000000"]);
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("not found");
   });
 
   it("lists dead letters, queues, schedules, workers, and maintenance state", async () => {
-    const failedId = await createFailedJob({ type: "import.run", errorName: "ImportError" });
+    const failedId = await createFailedTask({ type: "import.run", errorName: "ImportError" });
     await queue.syncSchedules("reports", [
       {
         name: "nightly",
         schedule: "0 3 * * *",
-        job: { type: "report.build", payload: {} },
+        task: { type: "report.build", payload: {} },
       },
     ]);
     await queue.registerWorker({
@@ -89,7 +89,7 @@ describe("admin CLI inspection", () => {
     const failures = runAdmin(["failures", "--json"]);
     expect(failures.code).toBe(0);
     expect(JSON.parse(failures.stdout).items[0]).toMatchObject({
-      jobId: failedId,
+      taskId: failedId,
       type: "import.run",
     });
 
@@ -114,86 +114,86 @@ describe("admin CLI inspection", () => {
     expect(maintenance.code).toBe(0);
     expect(JSON.parse(maintenance.stdout)).toMatchObject({
       maintenancePolicy: { timezone: "UTC" },
-      retentionPolicy: { jobIdentityRetentionDays: 14 },
+      retentionPolicy: { taskIdentityRetentionDays: 14 },
     });
   });
 });
 
 describe("admin CLI durable-handler reads", () => {
-  it("lists one job's checkpoints, and one of them by name", async () => {
-    const jobId = await queue.enqueue("checkpointed.import", {});
-    const job = await queue.claim("cli-checkpoint-worker");
-    await queue.saveCheckpoint(job!, "cli-checkpoint-worker", "extracted", { rows: 120 });
-    await queue.saveCheckpoint(job!, "cli-checkpoint-worker", "transformed", { rows: 118 });
+  it("lists one task's checkpoints, and one of them by name", async () => {
+    const taskId = await queue.enqueue("checkpointed.import", {});
+    const task = await queue.claim("cli-checkpoint-worker");
+    await queue.saveCheckpoint(task!, "cli-checkpoint-worker", "extracted", { rows: 120 });
+    await queue.saveCheckpoint(task!, "cli-checkpoint-worker", "transformed", { rows: 118 });
 
-    const list = runAdmin(["checkpoints", jobId, "--json"]);
+    const list = runAdmin(["checkpoints", taskId, "--json"]);
     expect(list.code).toBe(0);
     expect(JSON.parse(list.stdout)).toEqual([
-      expect.objectContaining({ jobId, name: "extracted", value: { rows: 120 } }),
-      expect.objectContaining({ jobId, name: "transformed", value: { rows: 118 } }),
+      expect.objectContaining({ taskId, name: "extracted", value: { rows: 120 } }),
+      expect.objectContaining({ taskId, name: "transformed", value: { rows: 118 } }),
     ]);
 
-    const one = runAdmin(["checkpoints", jobId, "--name", "transformed", "--json"]);
+    const one = runAdmin(["checkpoints", taskId, "--name", "transformed", "--json"]);
     expect(one.code).toBe(0);
     expect(JSON.parse(one.stdout)).toMatchObject({
-      jobId,
+      taskId,
       name: "transformed",
       value: { rows: 118 },
       attempt: 1,
       workerId: "cli-checkpoint-worker",
     });
 
-    const table = runAdmin(["checkpoints", jobId]);
+    const table = runAdmin(["checkpoints", taskId]);
     expect(table.code).toBe(0);
     expect(table.stdout).toContain("extracted");
     expect(table.stdout).toContain("transformed");
   });
 
-  it("lists one job's durable timer waits, and one of them by name", async () => {
-    const jobId = await queue.enqueue("cooling.off", {});
-    const job = await queue.claim("cli-wait-worker", { leaseMs: 10_000 });
-    await queue.scheduleWait(job!, "cli-wait-worker", "provider-cooldown", { durationMs: 5_000 });
+  it("lists one task's durable timer waits, and one of them by name", async () => {
+    const taskId = await queue.enqueue("cooling.off", {});
+    const task = await queue.claim("cli-wait-worker", { leaseMs: 10_000 });
+    await queue.scheduleWait(task!, "cli-wait-worker", "provider-cooldown", { durationMs: 5_000 });
 
-    const list = runAdmin(["waits", jobId, "--json"]);
+    const list = runAdmin(["waits", taskId, "--json"]);
     expect(list.code).toBe(0);
     expect(JSON.parse(list.stdout)).toEqual([
-      expect.objectContaining({ jobId, name: "provider-cooldown", mode: "relative" }),
+      expect.objectContaining({ taskId, name: "provider-cooldown", mode: "relative" }),
     ]);
 
-    const one = runAdmin(["waits", jobId, "--name", "provider-cooldown", "--json"]);
+    const one = runAdmin(["waits", taskId, "--name", "provider-cooldown", "--json"]);
     expect(one.code).toBe(0);
     expect(JSON.parse(one.stdout)).toMatchObject({
-      jobId,
+      taskId,
       name: "provider-cooldown",
       durationMs: 5_000,
       workerId: "cli-wait-worker",
     });
 
-    const table = runAdmin(["waits", jobId]);
+    const table = runAdmin(["waits", taskId]);
     expect(table.code).toBe(0);
     expect(table.stdout).toContain("provider-cooldown");
   });
 
-  it("exits 1 for a checkpoint or wait name the job never recorded", async () => {
-    const jobId = await queue.enqueue("nothing.saved", {});
-    const checkpoint = runAdmin(["checkpoints", jobId, "--name", "missing"]);
+  it("exits 1 for a checkpoint or wait name the task never recorded", async () => {
+    const taskId = await queue.enqueue("nothing.saved", {});
+    const checkpoint = runAdmin(["checkpoints", taskId, "--name", "missing"]);
     expect(checkpoint.code).toBe(1);
     expect(checkpoint.stderr).toContain("no checkpoint named missing");
 
-    const wait = runAdmin(["waits", jobId, "--name", "missing"]);
+    const wait = runAdmin(["waits", taskId, "--name", "missing"]);
     expect(wait.code).toBe(1);
     expect(wait.stderr).toContain("no wait named missing");
   });
 
   it("lists pending human decisions and signal waits across the fleet", async () => {
     const humanId = await queue.enqueue("account.review", {});
-    const humanJob = await queue.claim("cli-human-worker", { leaseMs: 10_000 });
-    await queue.waitForHuman(humanJob!, "cli-human-worker", "approval", {
+    const humanTask = await queue.claim("cli-human-worker", { leaseMs: 10_000 });
+    await queue.waitForHuman(humanTask!, "cli-human-worker", "approval", {
       prompt: "Approve this account?",
     });
     const signalId = await queue.enqueue("webhook.await", {});
-    const signalJob = await queue.claim("cli-signal-worker", { leaseMs: 10_000 });
-    await queue.waitForSignal(signalJob!, "cli-signal-worker", "provider-callback");
+    const signalTask = await queue.claim("cli-signal-worker", { leaseMs: 10_000 });
+    await queue.waitForSignal(signalTask!, "cli-signal-worker", "provider-callback");
 
     const result = runAdmin(["external-waits", "--json"]);
     expect(result.code).toBe(0);
@@ -201,9 +201,9 @@ describe("admin CLI durable-handler reads", () => {
       human: {
         items: [
           expect.objectContaining({
-            jobId: humanId,
+            taskId: humanId,
             name: "approval",
-            jobType: "account.review",
+            taskType: "account.review",
             context: { prompt: "Approve this account?" },
           }),
         ],
@@ -212,9 +212,9 @@ describe("admin CLI durable-handler reads", () => {
       signal: {
         items: [
           expect.objectContaining({
-            jobId: signalId,
+            taskId: signalId,
             name: "provider-callback",
-            jobType: "webhook.await",
+            taskType: "webhook.await",
           }),
         ],
         nextCursor: null,
@@ -231,19 +231,19 @@ describe("admin CLI durable-handler reads", () => {
 
   it("pages external waits with the cursor the dashboard uses", async () => {
     const first = await queue.enqueue("account.review", { order: 1 });
-    const firstJob = await queue.claim("cli-page-worker-1", { leaseMs: 10_000 });
-    await queue.waitForHuman(firstJob!, "cli-page-worker-1", "approval", { order: 1 });
+    const firstTask = await queue.claim("cli-page-worker-1", { leaseMs: 10_000 });
+    await queue.waitForHuman(firstTask!, "cli-page-worker-1", "approval", { order: 1 });
     const second = await queue.enqueue("account.review", { order: 2 });
-    const secondJob = await queue.claim("cli-page-worker-2", { leaseMs: 10_000 });
-    await queue.waitForHuman(secondJob!, "cli-page-worker-2", "approval", { order: 2 });
+    const secondTask = await queue.claim("cli-page-worker-2", { leaseMs: 10_000 });
+    await queue.waitForHuman(secondTask!, "cli-page-worker-2", "approval", { order: 2 });
 
     const page = runAdmin(["external-waits", "--limit", "1", "--json"]);
     expect(page.code).toBe(0);
     const parsed = JSON.parse(page.stdout) as {
-      human: { items: Array<{ jobId: string }>; nextCursor: Record<string, string> };
+      human: { items: Array<{ taskId: string }>; nextCursor: Record<string, string> };
     };
-    expect(parsed.human.items.map((item) => item.jobId)).toEqual([first]);
-    expect(parsed.human.nextCursor).toMatchObject({ jobId: first, name: "approval" });
+    expect(parsed.human.items.map((item) => item.taskId)).toEqual([first]);
+    expect(parsed.human.nextCursor).toMatchObject({ taskId: first, name: "approval" });
 
     const next = runAdmin([
       "external-waits",
@@ -254,12 +254,12 @@ describe("admin CLI durable-handler reads", () => {
       "--json",
     ]);
     expect(next.code).toBe(0);
-    const following = JSON.parse(next.stdout) as { human: { items: Array<{ jobId: string }> } };
-    expect(following.human.items.map((item) => item.jobId)).toEqual([second]);
+    const following = JSON.parse(next.stdout) as { human: { items: Array<{ taskId: string }> } };
+    expect(following.human.items.map((item) => item.taskId)).toEqual([second]);
   });
 
   it("rejects a cursor that is not the printed continuation object", () => {
-    const result = runAdmin(["external-waits", "--human-cursor", '{"jobId":"only"}']);
+    const result = runAdmin(["external-waits", "--human-cursor", '{"taskId":"only"}']);
     expect(result.code).toBe(64);
     expect(result.stderr).toContain("--human-cursor must be a JSON");
   });
@@ -267,34 +267,34 @@ describe("admin CLI durable-handler reads", () => {
 
 describe("admin CLI guarded operations", () => {
   it("requires an explicit --env for every mutation", async () => {
-    const jobId = await queue.enqueue("cancel.me", {});
-    const result = runAdmin(["cancel", jobId, "--yes"]);
+    const taskId = await queue.enqueue("cancel.me", {});
+    const result = runAdmin(["cancel", taskId, "--yes"]);
     expect(result.code).toBe(64);
     expect(result.stderr).toContain("requires --env");
-    expect((await admin.getJob(jobId))?.state).toBe("ready");
+    expect((await admin.getTask(taskId))?.state).toBe("ready");
   });
 
   it("refuses an --env that does not name the connected database", async () => {
-    const jobId = await queue.enqueue("cancel.me", {});
-    const result = runAdmin(["cancel", jobId, "--env", "workhorse_production", "--yes"]);
+    const taskId = await queue.enqueue("cancel.me", {});
+    const result = runAdmin(["cancel", taskId, "--env", "workhorse_production", "--yes"]);
     expect(result.code).toBe(1);
     expect(result.stderr).toContain(`does not match the connected database "${databaseName}"`);
-    expect((await admin.getJob(jobId))?.state).toBe("ready");
+    expect((await admin.getTask(taskId))?.state).toBe("ready");
   });
 
   it("requires --yes when no interactive confirmation is possible", async () => {
-    const jobId = await queue.enqueue("cancel.me", {});
-    const result = runAdmin(["cancel", jobId, "--env", databaseName]);
+    const taskId = await queue.enqueue("cancel.me", {});
+    const result = runAdmin(["cancel", taskId, "--env", databaseName]);
     expect(result.code).toBe(64);
     expect(result.stderr).toContain("requires --yes");
-    expect((await admin.getJob(jobId))?.state).toBe("ready");
+    expect((await admin.getTask(taskId))?.state).toBe("ready");
   });
 
-  it("cancels a job with attribution once confirmed", async () => {
-    const jobId = await queue.enqueue("cancel.me", {});
+  it("cancels a task with attribution once confirmed", async () => {
+    const taskId = await queue.enqueue("cancel.me", {});
     const result = runAdmin([
       "cancel",
-      jobId,
+      taskId,
       "--env",
       databaseName,
       "--yes",
@@ -307,15 +307,15 @@ describe("admin CLI guarded operations", () => {
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({
       status: "canceled",
-      jobId,
+      taskId,
       requestedBy: "oncall",
       reason: "bad payload",
     });
-    expect((await admin.getJob(jobId))?.state).toBe("canceled");
+    expect((await admin.getTask(taskId))?.state).toBe("canceled");
   });
 
-  it("redrives a terminal failure into a new job", async () => {
-    const failedId = await createFailedJob({ type: "import.run" });
+  it("redrives a terminal failure into a new task", async () => {
+    const failedId = await createFailedTask({ type: "import.run" });
     const result = runAdmin([
       "redrive",
       failedId,
@@ -327,16 +327,16 @@ describe("admin CLI guarded operations", () => {
       "--json",
     ]);
     expect(result.code).toBe(0);
-    const redrive = JSON.parse(result.stdout) as { status: string; targetJobId: string };
+    const redrive = JSON.parse(result.stdout) as { status: string; targetTaskId: string };
     expect(redrive.status).toBe("redriven");
-    expect((await admin.getJob(redrive.targetJobId))?.state).toBe("ready");
+    expect((await admin.getTask(redrive.targetTaskId))?.state).toBe("ready");
   });
 
-  it("exits 1 when redriving a job that is not a terminal failure", async () => {
-    const jobId = await queue.enqueue("still.ready", {});
+  it("exits 1 when redriving a task that is not a terminal failure", async () => {
+    const taskId = await queue.enqueue("still.ready", {});
     const result = runAdmin([
       "redrive",
-      jobId,
+      taskId,
       "--env",
       databaseName,
       "--yes",
@@ -396,8 +396,8 @@ describe("admin CLI guarded operations", () => {
     ]);
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({ queue: queueName, deletedCount: 2 });
-    expect(await admin.getJob(first)).toBeNull();
-    expect(await admin.getJob(second)).toBeNull();
+    expect(await admin.getTask(first)).toBeNull();
+    expect(await admin.getTask(second)).toBeNull();
   });
 
   it("refuses a purge that reuses a request identity with a different reason", async () => {
@@ -424,7 +424,7 @@ describe("admin CLI guarded operations", () => {
 
   it("requires --reason and confirmation before purging", async () => {
     const queueName = "cli-purge-guarded";
-    const jobId = await queue.enqueue("purge.me", {}, { queue: queueName });
+    const taskId = await queue.enqueue("purge.me", {}, { queue: queueName });
 
     const noReason = runAdmin(["purge", queueName, "--env", databaseName, "--yes"]);
     expect(noReason.code).toBe(64);
@@ -440,7 +440,7 @@ describe("admin CLI guarded operations", () => {
     ]);
     expect(noConfirmation.code).toBe(64);
     expect(noConfirmation.stderr).toContain("requires --yes");
-    expect((await admin.getJob(jobId))?.state).toBe("ready");
+    expect((await admin.getTask(taskId))?.state).toBe("ready");
   });
 
   it("pauses and resumes one registered worker through the durable registry", async () => {
@@ -561,13 +561,13 @@ describe("tui command", () => {
 });
 
 describe("admin CLI paged investigations", () => {
-  it("walks jobs without skipping identities and rejects a cursor with changed filters", async () => {
+  it("walks tasks without skipping identities and rejects a cursor with changed filters", async () => {
     const ids = await queue.enqueueMany([
       { type: "page.me", payload: {} },
       { type: "page.me", payload: {} },
       { type: "page.me", payload: {} },
     ]);
-    const args = ["jobs", "--type", "page.me", "--limit", "1", "--json"];
+    const args = ["tasks", "--type", "page.me", "--limit", "1", "--json"];
     const seen: string[] = [];
     let cursor: object | null = null;
     let firstCursor: object | null = null;
@@ -581,7 +581,7 @@ describe("admin CLI paged investigations", () => {
       expect(seen.length).toBeLessThanOrEqual(ids.length);
     } while (cursor);
     const wrong = runAdmin([
-      "jobs",
+      "tasks",
       "--type",
       "different",
       "--cursor",
@@ -590,24 +590,24 @@ describe("admin CLI paged investigations", () => {
     ]);
     expect(wrong.code).toBe(1);
     expect(seen.toSorted()).toEqual(ids.toSorted());
-    expect(runAdmin(["jobs", "--limit", "1"]).stdout).toContain("Next cursor");
-    const snapshot = await admin.getJob(ids[0]!);
+    expect(runAdmin(["tasks", "--limit", "1"]).stdout).toContain("Next cursor");
+    const snapshot = await admin.getTask(ids[0]!);
     expect(
       JSON.parse(
-        runAdmin(["jobs", "--created-before", snapshot!.createdAt.toISOString(), "--json"]).stdout,
+        runAdmin(["tasks", "--created-before", snapshot!.createdAt.toISOString(), "--json"]).stdout,
       ).items,
     ).toEqual([]);
   });
 
   it("continues a merged timeline to its final page", async () => {
-    const jobId = await createFailedJob({ type: "timeline.page" });
-    const expected = await admin.getJobTimeline(jobId);
+    const taskId = await createFailedTask({ type: "timeline.page" });
+    const expected = await admin.getTaskTimeline(taskId);
     const seen: object[] = [];
     let cursor: object | null = null;
     do {
       const result = runAdmin([
         "timeline",
-        jobId,
+        taskId,
         "--limit",
         "1",
         "--json",
@@ -631,18 +631,18 @@ describe("admin CLI paged investigations", () => {
 
   it("filters and pages failures with tags, error names, and finish-time bounds", async () => {
     const lower = new Date().toISOString();
-    const first = await createFailedJob({
+    const first = await createFailedTask({
       type: "failed.page",
       tags: ["incident", "billing"],
       errorName: "ProviderError",
     });
-    const second = await createFailedJob({
+    const second = await createFailedTask({
       type: "failed.page",
       tags: ["incident", "billing"],
       errorName: "ProviderError",
     });
-    await createFailedJob({ type: "failed.page", tags: ["incident"], errorName: "ProviderError" });
-    await createFailedJob({
+    await createFailedTask({ type: "failed.page", tags: ["incident"], errorName: "ProviderError" });
+    await createFailedTask({
       type: "failed.page",
       tags: ["incident", "billing"],
       errorName: "OtherError",
@@ -668,18 +668,18 @@ describe("admin CLI paged investigations", () => {
     const firstResult = runAdmin(args);
     expect({ code: firstResult.code, stderr: firstResult.stderr }).toEqual({ code: 0, stderr: "" });
     const page = JSON.parse(firstResult.stdout);
-    expect(page.items.map((item: { jobId: string }) => item.jobId)).toEqual([second]);
+    expect(page.items.map((item: { taskId: string }) => item.taskId)).toEqual([second]);
     const next = runAdmin([...args, "--cursor", JSON.stringify(page.nextCursor)]);
     expect({ code: next.code, stderr: next.stderr }).toEqual({ code: 0, stderr: "" });
-    expect(JSON.parse(next.stdout)).toMatchObject({ items: [{ jobId: first }], nextCursor: null });
+    expect(JSON.parse(next.stdout)).toMatchObject({ items: [{ taskId: first }], nextCursor: null });
   });
 
   it.each([
-    ["jobs", "--cursor", "null"],
-    ["jobs", "--cursor", '{"createdAt":"date","jobId":"id"}'],
+    ["tasks", "--cursor", "null"],
+    ["tasks", "--cursor", '{"createdAt":"date","taskId":"id"}'],
     ["failures", "--cursor", "[]"],
-    ["jobs", "--created-after", "yesterday"],
-    ["jobs", "--created-after", "2026-09-07T12:00:00"],
+    ["tasks", "--created-after", "yesterday"],
+    ["tasks", "--created-after", "2026-09-07T12:00:00"],
     [
       "failures",
       "--finished-after",
@@ -687,10 +687,10 @@ describe("admin CLI paged investigations", () => {
       "--finished-before",
       "2026-09-07T00:00:00Z",
     ],
-    ["jobs", "--limit", "1001"],
+    ["tasks", "--limit", "1001"],
     ["redrive", "unused", "--dry-run"],
     ["redrive-many", "--state", "failed"],
-    ["jobs", "unexpected"],
+    ["tasks", "unexpected"],
   ])("rejects malformed or inapplicable options: %j", (...args) => {
     expect(runAdmin(args).code).toBe(64);
   });
@@ -698,17 +698,17 @@ describe("admin CLI paged investigations", () => {
 
 describe("admin CLI bulk recovery", () => {
   it("previews without writes, executes oldest-first, replays, and continues", async () => {
-    const first = await createFailedJob({
+    const first = await createFailedTask({
       type: "bulk.recover",
       tags: ["incident"],
       errorName: "ProviderError",
     });
-    const second = await createFailedJob({
+    const second = await createFailedTask({
       type: "bulk.recover",
       tags: ["incident"],
       errorName: "ProviderError",
     });
-    const excluded = await createFailedJob({ type: "bulk.recover", errorName: "OtherError" });
+    const excluded = await createFailedTask({ type: "bulk.recover", errorName: "OtherError" });
     const args = [
       "redrive-many",
       "--queue",
@@ -727,35 +727,35 @@ describe("admin CLI bulk recovery", () => {
       "bulk-cli-recovery",
       "--json",
     ];
-    const before = await admin.getJobTimeline(first);
+    const before = await admin.getTaskTimeline(first);
     const preview = runAdmin([...args, "--dry-run"]);
     expect({ code: preview.code, stderr: preview.stderr }).toEqual({ code: 0, stderr: "" });
     expect(JSON.parse(preview.stdout)).toMatchObject({
-      results: [{ sourceJobId: first, targetJobId: null, status: "eligible" }],
+      results: [{ sourceTaskId: first, targetTaskId: null, status: "eligible" }],
     });
     expect((await admin.getRedriveLineage(first)).records).toEqual([]);
-    expect(await admin.getJobTimeline(first)).toEqual(before);
+    expect(await admin.getTaskTimeline(first)).toEqual(before);
     const execute = [...args, "--env", databaseName, "--yes"];
     const result = runAdmin(execute);
     expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
     const page = JSON.parse(result.stdout);
     expect(page.results).toEqual([
-      expect.objectContaining({ sourceJobId: first, status: "redriven" }),
+      expect.objectContaining({ sourceTaskId: first, status: "redriven" }),
     ]);
-    expect((await admin.getJob(page.results[0].targetJobId))?.state).toBe("ready");
+    expect((await admin.getTask(page.results[0].targetTaskId))?.state).toBe("ready");
     const replay = runAdmin(execute);
     expect({ code: replay.code, stderr: replay.stderr }).toEqual({ code: 0, stderr: "" });
     expect(JSON.parse(replay.stdout).results).toEqual([
-      expect.objectContaining({ targetJobId: page.results[0].targetJobId, status: "replayed" }),
+      expect.objectContaining({ targetTaskId: page.results[0].targetTaskId, status: "replayed" }),
     ]);
     const next = runAdmin([...execute, "--cursor", JSON.stringify(page.nextCursor)]);
     expect({ code: next.code, stderr: next.stderr }).toEqual({ code: 0, stderr: "" });
     expect(JSON.parse(next.stdout)).toMatchObject({
-      results: [{ sourceJobId: second, status: "redriven" }],
+      results: [{ sourceTaskId: second, status: "redriven" }],
       nextCursor: null,
     });
     expect((await admin.getRedriveLineage(excluded)).records).toEqual([]);
-    expect((await admin.getJob(first))?.state).toBe("failed");
+    expect((await admin.getTask(first))?.state).toBe("failed");
     const changed = runAdmin(
       execute.map((arg) => (arg === "provider restored" ? "changed reason" : arg)),
     );
@@ -764,7 +764,7 @@ describe("admin CLI bulk recovery", () => {
   });
 
   it("requires a replay identity, environment, and confirmation before bulk writes", async () => {
-    const jobId = await createFailedJob({ type: "guarded.bulk" });
+    const taskId = await createFailedTask({ type: "guarded.bulk" });
     const args = ["redrive-many", "--reason", "recovery"];
     expect(runAdmin([...args, "--env", databaseName, "--yes"]).code).toBe(64);
     expect(runAdmin([...args, "--request-id", "bulk-guard", "--yes"]).code).toBe(64);
@@ -772,22 +772,22 @@ describe("admin CLI bulk recovery", () => {
     expect(
       runAdmin([...args, "--request-id", "bulk-guard", "--env", "wrong-database", "--yes"]).code,
     ).toBe(1);
-    expect((await admin.getRedriveLineage(jobId)).records).toEqual([]);
+    expect((await admin.getRedriveLineage(taskId)).records).toEqual([]);
   });
 });
 
 describe("admin CLI external-wait delivery", () => {
   it("completes a human decision from a JSON file", async () => {
-    const jobId = await queue.enqueue("file.decision", {});
-    const job = await queue.claim("file-worker", { leaseMs: 30_000 });
-    await queue.waitForHuman(job!, "file-worker", "approval", {});
+    const taskId = await queue.enqueue("file.decision", {});
+    const task = await queue.claim("file-worker", { leaseMs: 30_000 });
+    await queue.waitForHuman(task!, "file-worker", "approval", {});
     const directory = await mkdtemp(path.join(tmpdir(), "workhorse-cli-decision-"));
     const file = path.join(directory, "answer.json");
     try {
       await writeFile(file, '{"approved":true,"comment":"reviewed"}');
       const result = runAdmin([
         "complete-human",
-        jobId,
+        taskId,
         "--name",
         "approval",
         "--payload-file",
@@ -812,13 +812,13 @@ describe("admin CLI external-wait delivery", () => {
   it.each(["signal", "complete-human"] as const)(
     "delivers and replays %s with attribution",
     async (command) => {
-      const jobId = await queue.enqueue("await.delivery", {});
-      const job = await queue.claim("delivery-worker", { leaseMs: 30_000 });
-      if (command === "signal") await queue.waitForSignal(job!, "delivery-worker", "answer");
-      else await queue.waitForHuman(job!, "delivery-worker", "answer", { prompt: "Approve?" });
+      const taskId = await queue.enqueue("await.delivery", {});
+      const task = await queue.claim("delivery-worker", { leaseMs: 30_000 });
+      if (command === "signal") await queue.waitForSignal(task!, "delivery-worker", "answer");
+      else await queue.waitForHuman(task!, "delivery-worker", "answer", { prompt: "Approve?" });
       const args = [
         command,
-        jobId,
+        taskId,
         "--name",
         "answer",
         "--payload-json",
@@ -835,7 +835,7 @@ describe("admin CLI external-wait delivery", () => {
       const result = runAdmin(args);
       expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
       expect(JSON.parse(result.stdout)).toMatchObject({
-        jobId,
+        taskId,
         name: "answer",
         payload: false,
         status: command === "signal" ? "delivered" : "completed",
@@ -851,7 +851,7 @@ describe("admin CLI external-wait delivery", () => {
       );
       expect(different.code).toBe(1);
       const resumed = await queue.claim("resumed-worker");
-      expect(resumed?.id).toBe(jobId);
+      expect(resumed?.id).toBe(taskId);
       const answer =
         command === "signal"
           ? await queue.waitForSignal(resumed!, "resumed-worker", "answer")
@@ -866,13 +866,13 @@ describe("admin CLI external-wait delivery", () => {
   it.each(["signal", "complete-human"])(
     "refuses invalid %s delivery without changing the wait",
     async (command) => {
-      const jobId = await queue.enqueue("guard.delivery", {});
-      const job = await queue.claim("guard-worker", { leaseMs: 30_000 });
-      if (command === "signal") await queue.waitForSignal(job!, "guard-worker", "answer");
-      else await queue.waitForHuman(job!, "guard-worker", "answer", {});
+      const taskId = await queue.enqueue("guard.delivery", {});
+      const task = await queue.claim("guard-worker", { leaseMs: 30_000 });
+      if (command === "signal") await queue.waitForSignal(task!, "guard-worker", "answer");
+      else await queue.waitForHuman(task!, "guard-worker", "answer", {});
       const base = [
         command,
-        jobId,
+        taskId,
         "--name",
         "answer",
         "--payload-json",
@@ -896,9 +896,9 @@ describe("admin CLI external-wait delivery", () => {
       ).toBe(64);
       const pending =
         command === "signal" ? await admin.listSignalWaits() : await admin.listHumanWaits();
-      expect(pending.items.map((wait) => wait.jobId)).toEqual([jobId]);
+      expect(pending.items.map((wait) => wait.taskId)).toEqual([taskId]);
       const missing = runAdmin([
-        ...base.map((arg) => (arg === jobId ? "00000000-0000-0000-0000-000000000000" : arg)),
+        ...base.map((arg) => (arg === taskId ? "00000000-0000-0000-0000-000000000000" : arg)),
         "--env",
         databaseName,
         "--yes",

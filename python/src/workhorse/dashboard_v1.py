@@ -35,7 +35,7 @@ type DashboardCancelStatus = Literal["already_terminal", "cancel_requested", "ca
 
 class DashboardCancelTaskResult(TypedDict, total=False):
     status: Required[DashboardCancelStatus]
-    jobId: Required[str]
+    taskId: Required[str]
     state: Required[Literal["active"] | Literal["blocked"] | Literal["canceled"] | Literal["failed"] | Literal["ready"] | Literal["scheduled"] | Literal["succeeded"] | None]
     currentAttempt: Required[float | None]
     requestedAt: Required[str | None]
@@ -52,7 +52,7 @@ class DashboardCancellationRequest(TypedDict, total=False):
 
 class DashboardCompleteHumanWaitResult(TypedDict, total=False):
     status: Required[DashboardHumanWaitCompletionStatus]
-    jobId: Required[str]
+    taskId: Required[str]
     name: Required[str]
     result: Required[DashboardJSON]
     completedAt: Required[str | None]
@@ -79,8 +79,8 @@ class DashboardCronPageMaintenancePolicy(TypedDict, total=False):
     updatedAt: Required[str]
 
 
-class DashboardCronPageMaintenanceTasksItem(TypedDict, total=False):
-    task: Required[Literal["history_partitions", "history_retention", "terminal_storage", "tick"]]
+class DashboardCronPageMaintenanceRoutinesItem(TypedDict, total=False):
+    routine: Required[Literal["history_partitions", "history_retention", "terminal_storage", "tick"]]
     lastStartedAt: Required[str | None]
     lastCompletedAt: Required[str | None]
     due: Required[bool]
@@ -90,7 +90,7 @@ class DashboardCronPageMaintenanceTasksItem(TypedDict, total=False):
 class DashboardCronPageMaintenance(TypedDict, total=False):
     cadences: Required[DashboardMaintenanceLoopCadences]
     policy: Required[DashboardCronPageMaintenancePolicy]
-    tasks: Required[list[DashboardCronPageMaintenanceTasksItem]]
+    routines: Required[list[DashboardCronPageMaintenanceRoutinesItem]]
 
 
 class DashboardCronPage(TypedDict, total=False):
@@ -122,7 +122,7 @@ class DashboardDurabilityPlan(TypedDict, total=False):
 
 
 class DashboardEnqueueTestResult(TypedDict, total=False):
-    jobId: Required[str]
+    taskId: Required[str]
     outcome: NotRequired[Literal["accepted", "replayed"]]
 
 
@@ -134,9 +134,9 @@ class DashboardEventDetail(TypedDict, total=False):
     id: Required[str]
     kind: Required[DashboardEventKind]
     recordId: Required[str]
-    jobId: Required[str]
+    taskId: Required[str]
     queue: Required[str | None]
-    jobType: Required[str | None]
+    taskType: Required[str | None]
     occurredAt: Required[str]
     attempt: Required[float | None]
     type: Required[str]
@@ -154,9 +154,9 @@ class DashboardEventRow(TypedDict, total=False):
     id: Required[str]
     kind: Required[DashboardEventKind]
     recordId: Required[str]
-    jobId: Required[str]
+    taskId: Required[str]
     queue: Required[str | None]
-    jobType: Required[str | None]
+    taskType: Required[str | None]
     occurredAt: Required[str]
     attempt: Required[float | None]
     type: Required[str]
@@ -168,7 +168,7 @@ class DashboardEventRow(TypedDict, total=False):
 
 
 class DashboardEventsPageRetention(TypedDict, total=False):
-    jobEventDays: Required[float | None]
+    taskEventDays: Required[float | None]
     attemptHistoryDays: Required[float | None]
 
 
@@ -208,9 +208,9 @@ class DashboardHumanWaitPage(TypedDict, total=False):
 
 
 class DashboardHumanWaitRow(TypedDict, total=False):
-    jobId: Required[str]
+    taskId: Required[str]
     queue: Required[str]
-    jobType: Required[str]
+    taskType: Required[str]
     name: Required[str]
     context: Required[object]
     attempt: Required[float]
@@ -222,282 +222,6 @@ class DashboardHumanWaitSummary(TypedDict, total=False):
     name: Required[str]
     context: Required[object]
     deadlineAt: Required[str]
-
-
-class DashboardJobDetailIdentityRetryPolicyVariant2(TypedDict, total=False):
-    type: Required[Literal["decorrelated-jitter"]]
-    baseDelayMs: Required[float]
-    maxDelayMs: Required[float]
-
-
-class DashboardJobDetailIdentityRetryPolicyVariant3(TypedDict, total=False):
-    type: Required[Literal["exponential"]]
-    initialDelayMs: Required[float]
-    multiplier: Required[float]
-    maxDelayMs: Required[float]
-
-
-class DashboardJobDetailIdentityRetryPolicyVariant4(TypedDict, total=False):
-    type: Required[Literal["fixed"]]
-    delayMs: Required[float]
-
-
-class DashboardJobDetailIdentityDependencyPolicy(TypedDict, total=False):
-    onSuccess: Required[Literal["cancel", "fail", "release"]]
-    onFailure: Required[Literal["cancel", "fail", "release"]]
-    onCancellation: Required[Literal["cancel", "fail", "release"]]
-
-
-class DashboardJobDetailIdentity(TypedDict, total=False):
-    id: Required[str]
-    queue: Required[str]
-    type: Required[str]
-    priority: Required[float]
-    state: Required[str]
-    createdAt: Required[str]
-    retryPolicy: Required[DashboardJobDetailIdentityRetryPolicyVariant2 | DashboardJobDetailIdentityRetryPolicyVariant3 | DashboardJobDetailIdentityRetryPolicyVariant4 | None]
-    maxAttempts: Required[float]
-    deadlineAt: NotRequired[str | None]
-    executionTimeoutMs: NotRequired[float | None]
-    concurrencyKey: Required[str | None]
-    prerequisiteJobId: Required[str | None]
-    prerequisiteJobIds: Required[list[str]]
-    dependencyPolicy: Required[DashboardJobDetailIdentityDependencyPolicy | None]
-    dependencyReleasedAt: Required[str | None]
-    blockedReason: Required[Literal["prerequisite_pending"] | None]
-
-
-class DashboardJobDetailDependencyLineageRecordsItem(TypedDict, total=False):
-    dependentJobId: Required[str]
-    prerequisiteJobId: Required[str]
-    onSuccess: Required[Literal["cancel", "fail", "release"]]
-    onFailure: Required[Literal["cancel", "fail", "release"]]
-    onCancellation: Required[Literal["cancel", "fail", "release"]]
-    createdAt: Required[str]
-    releasedAt: Required[str | None]
-    resolution: Required[Literal["cancel"] | Literal["fail"] | Literal["release"] | None]
-
-
-class DashboardJobDetailDependencyLineage(TypedDict, total=False):
-    records: Required[list[DashboardJobDetailDependencyLineageRecordsItem]]
-    truncated: Required[bool]
-
-
-class DashboardJobDetailChildLineageRecordsItem(TypedDict, total=False):
-    parentJobId: Required[str]
-    childJobId: Required[str]
-    name: Required[str]
-    type: Required[str]
-    createdAt: Required[str]
-    joinedAt: Required[str | None]
-    outcomeState: Required[Literal["canceled"] | Literal["failed"] | Literal["succeeded"] | None]
-    error: Required[object]
-
-
-class DashboardJobDetailChildLineage(TypedDict, total=False):
-    records: Required[list[DashboardJobDetailChildLineageRecordsItem]]
-    truncated: Required[bool]
-
-
-class DashboardJobDetailRedriveLineageRecordsItem(TypedDict, total=False):
-    sourceJobId: Required[str]
-    targetJobId: Required[str]
-    requestedBy: Required[str]
-    reason: Required[str]
-    requestIdPreview: Required[str]
-    requestIdDigest: Required[str]
-    requestIdLength: Required[float]
-    sourceState: Required[Literal["failed"]]
-    targetInitialState: Required[Literal["ready"]]
-    requestedAt: Required[str]
-
-
-class DashboardJobDetailRedriveLineage(TypedDict, total=False):
-    records: Required[list[DashboardJobDetailRedriveLineageRecordsItem]]
-    truncated: Required[bool]
-
-
-class DashboardJobDetailProgress(TypedDict, total=False):
-    value: Required[object]
-    revision: Required[str]
-    attempt: Required[float]
-    fenceToken: Required[str]
-    workerId: Required[str]
-    createdAt: Required[str]
-    updatedAt: Required[str]
-
-
-class DashboardJobDetailCurrentRuntime(TypedDict, total=False):
-    state: Required[str]
-    attempt: Required[float]
-    runAt: Required[str]
-    readyAt: Required[str | None]
-    workerId: Required[str | None]
-    fenceToken: Required[str]
-    acquiredAt: Required[str | None]
-    heartbeatAt: Required[str | None]
-    expiresAt: Required[str | None]
-    waitName: Required[str | None]
-    attemptStartedAt: Required[str | None]
-    attemptTimeoutAt: NotRequired[str | None]
-    cancellation: Required[DashboardCancellationRequest | None]
-    error: Required[object]
-
-
-class DashboardJobDetailCurrentOutcome(TypedDict, total=False):
-    state: Required[str]
-    attempt: Required[float]
-    finishedAt: Required[str]
-    result: Required[object]
-    error: Required[object]
-
-
-class DashboardJobDetailCurrent(TypedDict, total=False):
-    runtime: Required[DashboardJobDetailCurrentRuntime | None]
-    outcome: Required[DashboardJobDetailCurrentOutcome | None]
-    result: Required[object]
-    error: Required[object]
-
-
-class DashboardJobDetailBatchExecutionsItemMembersItem(TypedDict, total=False):
-    id: Required[str]
-    type: Required[str]
-    attempt: Required[float]
-    outcome: Required[str | None]
-    error: Required[object]
-
-
-class DashboardJobDetailBatchExecutionsItem(TypedDict, total=False):
-    id: Required[str]
-    attempt: Required[float]
-    dispatchedAt: Required[str]
-    batchWideFailure: Required[bool]
-    members: Required[list[DashboardJobDetailBatchExecutionsItemMembersItem]]
-
-
-class DashboardJobDetailAttemptsItem(TypedDict, total=False):
-    attempt: Required[float]
-    workerId: Required[str]
-    outcome: Required[str]
-    startedAt: Required[str]
-    claimedAt: Required[str]
-    finishedAt: Required[str]
-    durationMs: Required[float]
-    executionMs: Required[float]
-    elapsedMs: Required[float]
-    error: Required[object]
-
-
-class DashboardJobDetailCheckpointsItem(TypedDict, total=False):
-    name: Required[str]
-    value: Required[object]
-    attempt: Required[float]
-    fenceToken: Required[str]
-    workerId: Required[str]
-    createdAt: Required[str]
-
-
-class DashboardJobDetailWaitsItem(TypedDict, total=False):
-    name: Required[str]
-    mode: Required[Literal["absolute", "relative"]]
-    durationMs: Required[float | None]
-    requestedWakeAt: Required[str | None]
-    wakeAt: Required[str]
-    attempt: Required[float]
-    fenceToken: Required[str]
-    workerId: Required[str]
-    createdAt: Required[str]
-
-
-class DashboardJobDetailEventsItem(TypedDict, total=False):
-    id: Required[str]
-    attempt: Required[float | None]
-    type: Required[str]
-    details: Required[object]
-    occurredAt: Required[str]
-
-
-class DashboardJobDetail(TypedDict, total=False):
-    tags: Required[list[str]]
-    humanWait: Required[DashboardHumanWaitSummary | None]
-    canCompleteHumanWait: Required[bool]
-    identity: Required[DashboardJobDetailIdentity]
-    dependencyLineage: Required[DashboardJobDetailDependencyLineage]
-    childLineage: Required[DashboardJobDetailChildLineage]
-    redriveLineage: Required[DashboardJobDetailRedriveLineage]
-    concurrencyPolicy: Required[DashboardConcurrencyPolicySummary | None]
-    signalWait: Required[DashboardSignalWaitSummary | None]
-    canSignal: Required[bool]
-    payload: Required[object]
-    progress: Required[DashboardJobDetailProgress | None]
-    durability: Required[DashboardDurabilityPlan | None]
-    current: Required[DashboardJobDetailCurrent]
-    batchExecutions: Required[list[DashboardJobDetailBatchExecutionsItem]]
-    attempts: Required[list[DashboardJobDetailAttemptsItem]]
-    checkpoints: Required[list[DashboardJobDetailCheckpointsItem]]
-    waits: Required[list[DashboardJobDetailWaitsItem]]
-    events: Required[list[DashboardJobDetailEventsItem]]
-
-
-class DashboardJobRowRetryPolicyVariant2(TypedDict, total=False):
-    type: Required[Literal["decorrelated-jitter"]]
-    baseDelayMs: Required[float]
-    maxDelayMs: Required[float]
-
-
-class DashboardJobRowRetryPolicyVariant3(TypedDict, total=False):
-    type: Required[Literal["exponential"]]
-    initialDelayMs: Required[float]
-    multiplier: Required[float]
-    maxDelayMs: Required[float]
-
-
-class DashboardJobRowRetryPolicyVariant4(TypedDict, total=False):
-    type: Required[Literal["fixed"]]
-    delayMs: Required[float]
-
-
-class DashboardJobRowDurability(TypedDict, total=False):
-    completedSteps: Required[float]
-    totalSteps: Required[float]
-
-
-class DashboardJobRowWait(TypedDict, total=False):
-    name: Required[str]
-    wakeAt: Required[str]
-    mode: Required[Literal["absolute", "relative"]]
-
-
-class DashboardJobRow(TypedDict, total=False):
-    id: Required[str]
-    queue: Required[str]
-    type: Required[str]
-    priority: Required[float]
-    state: Required[str]
-    blockedReason: Required[Literal["prerequisite_pending"] | None]
-    prerequisiteJobIds: Required[list[str]]
-    attempt: Required[float]
-    maxAttempts: Required[float]
-    retryPolicy: Required[DashboardJobRowRetryPolicyVariant2 | DashboardJobRowRetryPolicyVariant3 | DashboardJobRowRetryPolicyVariant4 | None]
-    deadlineAt: NotRequired[str | None]
-    executionTimeoutMs: NotRequired[float | None]
-    tags: Required[list[str]]
-    keyed: Required[bool]
-    enqueueMode: NotRequired[Literal["debounce"] | Literal["idempotency"] | Literal["throttle"] | None]
-    cancellation: Required[DashboardCancellationRequest | None]
-    runAt: Required[str | None]
-    workerId: Required[str | None]
-    lastWorkerId: Required[str | None]
-    finishedAt: Required[str | None]
-    errorMessage: Required[str | None]
-    createdAt: Required[str]
-    updatedAt: Required[str]
-    durability: Required[DashboardJobRowDurability | None]
-    waitName: Required[str | None]
-    wakeAt: Required[str | None]
-    wait: Required[DashboardJobRowWait | None]
-    signalWait: Required[DashboardSignalWaitSummary | None]
-    humanWait: Required[DashboardHumanWaitSummary | None]
 
 
 type DashboardJSON = list[DashboardJSON] | bool | float | dict[str, DashboardJSON] | str | None
@@ -584,7 +308,7 @@ class DashboardQueueHealthReason(TypedDict, total=False):
     observed: Required[float]
     budget: Required[float]
     queue: NotRequired[str]
-    category: NotRequired[Literal["attemptHistory", "jobEvents", "jobIdentity", "scheduleOccurrences", "statistics", "terminalOutcome"]]
+    category: NotRequired[Literal["attemptHistory", "scheduleOccurrences", "statistics", "taskEvents", "taskIdentity", "terminalOutcome"]]
 
 
 type DashboardQueueHealthReasonCode = Literal["concurrency-blocked", "default-history-rows", "eligible-history-partitions", "expired-leases", "missing-history-partitions", "overdue-deadlines", "overdue-execution-timeouts", "overdue-external-waits", "rate-limit-throttled", "retention-lag", "rollup-stalled", "stalled-promotion"]
@@ -626,13 +350,13 @@ class DashboardRedriveBatch(TypedDict, total=False):
 
 class DashboardRedriveCursor(TypedDict, total=False):
     finishedAt: Required[str]
-    jobId: Required[str]
+    taskId: Required[str]
 
 
 class DashboardRedriveResult(TypedDict, total=False):
     status: Required[DashboardRedriveStatus]
-    sourceJobId: Required[str]
-    targetJobId: Required[str | None]
+    sourceTaskId: Required[str]
+    targetTaskId: Required[str | None]
     sourceState: Required[Literal["active"] | Literal["blocked"] | Literal["canceled"] | Literal["failed"] | Literal["ready"] | Literal["scheduled"] | Literal["succeeded"] | None]
     targetState: Required[Literal["active"] | Literal["blocked"] | Literal["canceled"] | Literal["failed"] | Literal["ready"] | Literal["scheduled"] | Literal["succeeded"] | None]
     requestedAt: Required[str | None]
@@ -641,7 +365,7 @@ class DashboardRedriveResult(TypedDict, total=False):
 type DashboardRedriveStatus = Literal["eligible", "not_failed", "not_found", "redriven", "replayed"]
 
 
-type DashboardRetentionCategory = Literal["attemptHistory", "jobEvents", "jobIdentity", "scheduleOccurrences", "statistics", "terminalOutcome"]
+type DashboardRetentionCategory = Literal["attemptHistory", "scheduleOccurrences", "statistics", "taskEvents", "taskIdentity", "terminalOutcome"]
 
 
 class DashboardRetentionCategoryRow(TypedDict, total=False):
@@ -652,7 +376,7 @@ class DashboardRetentionCategoryRow(TypedDict, total=False):
     prunedByPartition: Required[bool]
 
 
-class DashboardRetentionPolicyProvenanceJobIdentityRetentionDays(TypedDict, total=False):
+class DashboardRetentionPolicyProvenanceTaskIdentityRetentionDays(TypedDict, total=False):
     source: Required[Literal["application", "operator"]]
     applicationDefault: Required[float | None]
 
@@ -662,7 +386,7 @@ class DashboardRetentionPolicyProvenanceTerminalOutcomeRetentionDays(TypedDict, 
     applicationDefault: Required[float | None]
 
 
-class DashboardRetentionPolicyProvenanceJobEventRetentionDays(TypedDict, total=False):
+class DashboardRetentionPolicyProvenanceTaskEventRetentionDays(TypedDict, total=False):
     source: Required[Literal["application", "operator"]]
     applicationDefault: Required[float | None]
 
@@ -682,7 +406,7 @@ class DashboardRetentionPolicyProvenanceStatisticsRetentionDays(TypedDict, total
     applicationDefault: Required[float | None]
 
 
-class DashboardRetentionPolicyProvenanceTerminalJobPruneLimit(TypedDict, total=False):
+class DashboardRetentionPolicyProvenanceTerminalTaskPruneLimit(TypedDict, total=False):
     source: Required[Literal["application", "operator"]]
     applicationDefault: Required[float]
 
@@ -708,13 +432,13 @@ class DashboardRetentionPolicyProvenanceStatisticsRowsPerPass(TypedDict, total=F
 
 
 class DashboardRetentionPolicyProvenance(TypedDict, total=False):
-    jobIdentityRetentionDays: Required[DashboardRetentionPolicyProvenanceJobIdentityRetentionDays]
+    taskIdentityRetentionDays: Required[DashboardRetentionPolicyProvenanceTaskIdentityRetentionDays]
     terminalOutcomeRetentionDays: Required[DashboardRetentionPolicyProvenanceTerminalOutcomeRetentionDays]
-    jobEventRetentionDays: Required[DashboardRetentionPolicyProvenanceJobEventRetentionDays]
+    taskEventRetentionDays: Required[DashboardRetentionPolicyProvenanceTaskEventRetentionDays]
     attemptHistoryRetentionDays: Required[DashboardRetentionPolicyProvenanceAttemptHistoryRetentionDays]
     scheduleOccurrenceRetentionDays: Required[DashboardRetentionPolicyProvenanceScheduleOccurrenceRetentionDays]
     statisticsRetentionDays: Required[DashboardRetentionPolicyProvenanceStatisticsRetentionDays]
-    terminalJobPruneLimit: Required[DashboardRetentionPolicyProvenanceTerminalJobPruneLimit]
+    terminalTaskPruneLimit: Required[DashboardRetentionPolicyProvenanceTerminalTaskPruneLimit]
     historyPartitionsPerPass: Required[DashboardRetentionPolicyProvenanceHistoryPartitionsPerPass]
     defaultPartitionRowsPerPass: Required[DashboardRetentionPolicyProvenanceDefaultPartitionRowsPerPass]
     occurrenceRowsPerPass: Required[DashboardRetentionPolicyProvenanceOccurrenceRowsPerPass]
@@ -722,13 +446,13 @@ class DashboardRetentionPolicyProvenance(TypedDict, total=False):
 
 
 class DashboardRetentionPolicy(TypedDict, total=False):
-    jobIdentityRetentionDays: Required[float | None]
+    taskIdentityRetentionDays: Required[float | None]
     terminalOutcomeRetentionDays: Required[float | None]
-    jobEventRetentionDays: Required[float | None]
+    taskEventRetentionDays: Required[float | None]
     attemptHistoryRetentionDays: Required[float | None]
     scheduleOccurrenceRetentionDays: Required[float | None]
     statisticsRetentionDays: Required[float | None]
-    terminalJobPruneLimit: Required[float]
+    terminalTaskPruneLimit: Required[float]
     historyPartitionsPerPass: Required[float]
     defaultPartitionRowsPerPass: Required[float]
     occurrenceRowsPerPass: Required[float]
@@ -738,16 +462,16 @@ class DashboardRetentionPolicy(TypedDict, total=False):
 
 
 class DashboardRetentionPolicyImpactEligible(TypedDict, total=False):
-    terminalJobs: Required[float]
-    jobEvents: Required[float]
+    terminalTasks: Required[float]
+    taskEvents: Required[float]
     attemptHistory: Required[float]
     scheduleOccurrences: Required[float]
     statistics: Required[float]
 
 
 class DashboardRetentionPolicyImpactCapped(TypedDict, total=False):
-    terminalJobs: Required[bool]
-    jobEvents: Required[bool]
+    terminalTasks: Required[bool]
+    taskEvents: Required[bool]
     attemptHistory: Required[bool]
     scheduleOccurrences: Required[bool]
     statistics: Required[bool]
@@ -799,17 +523,17 @@ class DashboardSettingsPageRecommendationInputsStatistics(TypedDict, total=False
 
 
 class DashboardSettingsPageRecommendationInputsDefaultHistoryRows(TypedDict, total=False):
-    jobEvents: Required[float]
+    taskEvents: Required[float]
     attemptHistory: Required[float]
 
 
 class DashboardSettingsPageRecommendationInputsDefaultHistoryRowsCapped(TypedDict, total=False):
-    jobEvents: Required[bool]
+    taskEvents: Required[bool]
     attemptHistory: Required[bool]
 
 
 class DashboardSettingsPageRecommendationInputsEnqueueRate(TypedDict, total=False):
-    jobs: Required[float]
+    tasks: Required[float]
     windowMs: Required[float]
 
 
@@ -830,7 +554,7 @@ class DashboardSettingsPageWorkersItem(TypedDict, total=False):
     heartbeatMs: Required[float | None]
     pollMs: Required[float | None]
     maintenanceIntervalMs: Required[float | None]
-    maintenanceTaskPollMs: Required[float | None]
+    maintenanceRoutinePollMs: Required[float | None]
     registryIntervalMs: Required[float | None]
     lastSeenAt: Required[str]
 
@@ -849,7 +573,7 @@ type DashboardSignalDeliveryStatus = Literal["already_delivered", "delivered", "
 
 class DashboardSignalTaskResult(TypedDict, total=False):
     status: Required[DashboardSignalDeliveryStatus]
-    jobId: Required[str]
+    taskId: Required[str]
     name: Required[str]
     payload: Required[DashboardJSON]
     deliveredAt: Required[str | None]
@@ -857,9 +581,9 @@ class DashboardSignalTaskResult(TypedDict, total=False):
 
 
 class DashboardSignalWaitRow(TypedDict, total=False):
-    jobId: Required[str]
+    taskId: Required[str]
     queue: Required[str]
-    jobType: Required[str]
+    taskType: Required[str]
     name: Required[str]
     attempt: Required[float]
     createdAt: Required[str]
@@ -944,7 +668,7 @@ class DashboardSystemPageKpisLease(TypedDict, total=False):
 
 
 class DashboardSystemPageKpisDependencies(TypedDict, total=False):
-    blockedJobs: Required[float]
+    blockedTasks: Required[float]
     pendingEdges: Required[float]
     failedResolutions: Required[float]
     retentionPruneStarved: Required[bool]
@@ -1056,17 +780,17 @@ class DashboardSystemQueueRow(TypedDict, total=False):
 
 
 class DashboardSystemRetentionEligibleHistoryPartitions(TypedDict, total=False):
-    jobEvents: Required[float]
+    taskEvents: Required[float]
     attemptHistory: Required[float]
 
 
 class DashboardSystemRetentionDefaultHistoryRows(TypedDict, total=False):
-    jobEvents: Required[float]
+    taskEvents: Required[float]
     attemptHistory: Required[float]
 
 
 class DashboardSystemRetentionDefaultHistoryRowsCapped(TypedDict, total=False):
-    jobEvents: Required[bool]
+    taskEvents: Required[bool]
     attemptHistory: Required[bool]
 
 
@@ -1074,9 +798,9 @@ class DashboardSystemRetention(TypedDict, total=False):
     policyUpdatedAt: Required[str]
     categories: Required[list[DashboardRetentionCategoryRow]]
     maxLagMs: Required[float | None]
-    maxLagCategory: Required[Literal["attemptHistory"] | Literal["jobEvents"] | Literal["jobIdentity"] | Literal["scheduleOccurrences"] | Literal["statistics"] | Literal["terminalOutcome"] | None]
+    maxLagCategory: Required[Literal["attemptHistory"] | Literal["scheduleOccurrences"] | Literal["statistics"] | Literal["taskEvents"] | Literal["taskIdentity"] | Literal["terminalOutcome"] | None]
     oldestRetainedAt: Required[str | None]
-    oldestRetainedCategory: Required[Literal["attemptHistory"] | Literal["jobEvents"] | Literal["jobIdentity"] | Literal["scheduleOccurrences"] | Literal["statistics"] | Literal["terminalOutcome"] | None]
+    oldestRetainedCategory: Required[Literal["attemptHistory"] | Literal["scheduleOccurrences"] | Literal["statistics"] | Literal["taskEvents"] | Literal["taskIdentity"] | Literal["terminalOutcome"] | None]
     eligibleHistoryPartitions: Required[DashboardSystemRetentionEligibleHistoryPartitions]
     defaultHistoryRows: Required[DashboardSystemRetentionDefaultHistoryRows]
     defaultHistoryRowsCapped: Required[DashboardSystemRetentionDefaultHistoryRowsCapped]
@@ -1125,11 +849,287 @@ class DashboardTaskCursor(TypedDict, total=False):
     priority: Required[float]
 
 
+class DashboardTaskDetailIdentityRetryPolicyVariant2(TypedDict, total=False):
+    type: Required[Literal["decorrelated-jitter"]]
+    baseDelayMs: Required[float]
+    maxDelayMs: Required[float]
+
+
+class DashboardTaskDetailIdentityRetryPolicyVariant3(TypedDict, total=False):
+    type: Required[Literal["exponential"]]
+    initialDelayMs: Required[float]
+    multiplier: Required[float]
+    maxDelayMs: Required[float]
+
+
+class DashboardTaskDetailIdentityRetryPolicyVariant4(TypedDict, total=False):
+    type: Required[Literal["fixed"]]
+    delayMs: Required[float]
+
+
+class DashboardTaskDetailIdentityDependencyPolicy(TypedDict, total=False):
+    onSuccess: Required[Literal["cancel", "fail", "release"]]
+    onFailure: Required[Literal["cancel", "fail", "release"]]
+    onCancellation: Required[Literal["cancel", "fail", "release"]]
+
+
+class DashboardTaskDetailIdentity(TypedDict, total=False):
+    id: Required[str]
+    queue: Required[str]
+    type: Required[str]
+    priority: Required[float]
+    state: Required[str]
+    createdAt: Required[str]
+    retryPolicy: Required[DashboardTaskDetailIdentityRetryPolicyVariant2 | DashboardTaskDetailIdentityRetryPolicyVariant3 | DashboardTaskDetailIdentityRetryPolicyVariant4 | None]
+    maxAttempts: Required[float]
+    deadlineAt: NotRequired[str | None]
+    executionTimeoutMs: NotRequired[float | None]
+    concurrencyKey: Required[str | None]
+    prerequisiteTaskId: Required[str | None]
+    prerequisiteTaskIds: Required[list[str]]
+    dependencyPolicy: Required[DashboardTaskDetailIdentityDependencyPolicy | None]
+    dependencyReleasedAt: Required[str | None]
+    blockedReason: Required[Literal["prerequisite_pending"] | None]
+
+
+class DashboardTaskDetailDependencyLineageRecordsItem(TypedDict, total=False):
+    dependentTaskId: Required[str]
+    prerequisiteTaskId: Required[str]
+    onSuccess: Required[Literal["cancel", "fail", "release"]]
+    onFailure: Required[Literal["cancel", "fail", "release"]]
+    onCancellation: Required[Literal["cancel", "fail", "release"]]
+    createdAt: Required[str]
+    releasedAt: Required[str | None]
+    resolution: Required[Literal["cancel"] | Literal["fail"] | Literal["release"] | None]
+
+
+class DashboardTaskDetailDependencyLineage(TypedDict, total=False):
+    records: Required[list[DashboardTaskDetailDependencyLineageRecordsItem]]
+    truncated: Required[bool]
+
+
+class DashboardTaskDetailChildLineageRecordsItem(TypedDict, total=False):
+    parentTaskId: Required[str]
+    childTaskId: Required[str]
+    name: Required[str]
+    type: Required[str]
+    createdAt: Required[str]
+    joinedAt: Required[str | None]
+    outcomeState: Required[Literal["canceled"] | Literal["failed"] | Literal["succeeded"] | None]
+    error: Required[object]
+
+
+class DashboardTaskDetailChildLineage(TypedDict, total=False):
+    records: Required[list[DashboardTaskDetailChildLineageRecordsItem]]
+    truncated: Required[bool]
+
+
+class DashboardTaskDetailRedriveLineageRecordsItem(TypedDict, total=False):
+    sourceTaskId: Required[str]
+    targetTaskId: Required[str]
+    requestedBy: Required[str]
+    reason: Required[str]
+    requestIdPreview: Required[str]
+    requestIdDigest: Required[str]
+    requestIdLength: Required[float]
+    sourceState: Required[Literal["failed"]]
+    targetInitialState: Required[Literal["ready"]]
+    requestedAt: Required[str]
+
+
+class DashboardTaskDetailRedriveLineage(TypedDict, total=False):
+    records: Required[list[DashboardTaskDetailRedriveLineageRecordsItem]]
+    truncated: Required[bool]
+
+
+class DashboardTaskDetailProgress(TypedDict, total=False):
+    value: Required[object]
+    revision: Required[str]
+    attempt: Required[float]
+    fenceToken: Required[str]
+    workerId: Required[str]
+    createdAt: Required[str]
+    updatedAt: Required[str]
+
+
+class DashboardTaskDetailCurrentRuntime(TypedDict, total=False):
+    state: Required[str]
+    attempt: Required[float]
+    runAt: Required[str]
+    readyAt: Required[str | None]
+    workerId: Required[str | None]
+    fenceToken: Required[str]
+    acquiredAt: Required[str | None]
+    heartbeatAt: Required[str | None]
+    expiresAt: Required[str | None]
+    waitName: Required[str | None]
+    attemptStartedAt: Required[str | None]
+    attemptTimeoutAt: NotRequired[str | None]
+    cancellation: Required[DashboardCancellationRequest | None]
+    error: Required[object]
+
+
+class DashboardTaskDetailCurrentOutcome(TypedDict, total=False):
+    state: Required[str]
+    attempt: Required[float]
+    finishedAt: Required[str]
+    result: Required[object]
+    error: Required[object]
+
+
+class DashboardTaskDetailCurrent(TypedDict, total=False):
+    runtime: Required[DashboardTaskDetailCurrentRuntime | None]
+    outcome: Required[DashboardTaskDetailCurrentOutcome | None]
+    result: Required[object]
+    error: Required[object]
+
+
+class DashboardTaskDetailBatchExecutionsItemMembersItem(TypedDict, total=False):
+    id: Required[str]
+    type: Required[str]
+    attempt: Required[float]
+    outcome: Required[str | None]
+    error: Required[object]
+
+
+class DashboardTaskDetailBatchExecutionsItem(TypedDict, total=False):
+    id: Required[str]
+    attempt: Required[float]
+    dispatchedAt: Required[str]
+    batchWideFailure: Required[bool]
+    members: Required[list[DashboardTaskDetailBatchExecutionsItemMembersItem]]
+
+
+class DashboardTaskDetailAttemptsItem(TypedDict, total=False):
+    attempt: Required[float]
+    workerId: Required[str]
+    outcome: Required[str]
+    startedAt: Required[str]
+    claimedAt: Required[str]
+    finishedAt: Required[str]
+    durationMs: Required[float]
+    executionMs: Required[float]
+    elapsedMs: Required[float]
+    error: Required[object]
+
+
+class DashboardTaskDetailCheckpointsItem(TypedDict, total=False):
+    name: Required[str]
+    value: Required[object]
+    attempt: Required[float]
+    fenceToken: Required[str]
+    workerId: Required[str]
+    createdAt: Required[str]
+
+
+class DashboardTaskDetailWaitsItem(TypedDict, total=False):
+    name: Required[str]
+    mode: Required[Literal["absolute", "relative"]]
+    durationMs: Required[float | None]
+    requestedWakeAt: Required[str | None]
+    wakeAt: Required[str]
+    attempt: Required[float]
+    fenceToken: Required[str]
+    workerId: Required[str]
+    createdAt: Required[str]
+
+
+class DashboardTaskDetailEventsItem(TypedDict, total=False):
+    id: Required[str]
+    attempt: Required[float | None]
+    type: Required[str]
+    details: Required[object]
+    occurredAt: Required[str]
+
+
+class DashboardTaskDetail(TypedDict, total=False):
+    tags: Required[list[str]]
+    humanWait: Required[DashboardHumanWaitSummary | None]
+    canCompleteHumanWait: Required[bool]
+    identity: Required[DashboardTaskDetailIdentity]
+    dependencyLineage: Required[DashboardTaskDetailDependencyLineage]
+    childLineage: Required[DashboardTaskDetailChildLineage]
+    redriveLineage: Required[DashboardTaskDetailRedriveLineage]
+    concurrencyPolicy: Required[DashboardConcurrencyPolicySummary | None]
+    signalWait: Required[DashboardSignalWaitSummary | None]
+    canSignal: Required[bool]
+    payload: Required[object]
+    progress: Required[DashboardTaskDetailProgress | None]
+    durability: Required[DashboardDurabilityPlan | None]
+    current: Required[DashboardTaskDetailCurrent]
+    batchExecutions: Required[list[DashboardTaskDetailBatchExecutionsItem]]
+    attempts: Required[list[DashboardTaskDetailAttemptsItem]]
+    checkpoints: Required[list[DashboardTaskDetailCheckpointsItem]]
+    waits: Required[list[DashboardTaskDetailWaitsItem]]
+    events: Required[list[DashboardTaskDetailEventsItem]]
+
+
 class DashboardTaskFacets(TypedDict, total=False):
     queues: Required[list[str]]
     workers: Required[list[str]]
-    jobTypes: Required[list[str]]
+    taskTypes: Required[list[str]]
     tags: Required[list[str]]
+
+
+class DashboardTaskRowRetryPolicyVariant2(TypedDict, total=False):
+    type: Required[Literal["decorrelated-jitter"]]
+    baseDelayMs: Required[float]
+    maxDelayMs: Required[float]
+
+
+class DashboardTaskRowRetryPolicyVariant3(TypedDict, total=False):
+    type: Required[Literal["exponential"]]
+    initialDelayMs: Required[float]
+    multiplier: Required[float]
+    maxDelayMs: Required[float]
+
+
+class DashboardTaskRowRetryPolicyVariant4(TypedDict, total=False):
+    type: Required[Literal["fixed"]]
+    delayMs: Required[float]
+
+
+class DashboardTaskRowDurability(TypedDict, total=False):
+    completedSteps: Required[float]
+    totalSteps: Required[float]
+
+
+class DashboardTaskRowWait(TypedDict, total=False):
+    name: Required[str]
+    wakeAt: Required[str]
+    mode: Required[Literal["absolute", "relative"]]
+
+
+class DashboardTaskRow(TypedDict, total=False):
+    id: Required[str]
+    queue: Required[str]
+    type: Required[str]
+    priority: Required[float]
+    state: Required[str]
+    blockedReason: Required[Literal["prerequisite_pending"] | None]
+    prerequisiteTaskIds: Required[list[str]]
+    attempt: Required[float]
+    maxAttempts: Required[float]
+    retryPolicy: Required[DashboardTaskRowRetryPolicyVariant2 | DashboardTaskRowRetryPolicyVariant3 | DashboardTaskRowRetryPolicyVariant4 | None]
+    deadlineAt: NotRequired[str | None]
+    executionTimeoutMs: NotRequired[float | None]
+    tags: Required[list[str]]
+    keyed: Required[bool]
+    enqueueMode: NotRequired[Literal["debounce"] | Literal["idempotency"] | Literal["throttle"] | None]
+    cancellation: Required[DashboardCancellationRequest | None]
+    runAt: Required[str | None]
+    workerId: Required[str | None]
+    lastWorkerId: Required[str | None]
+    finishedAt: Required[str | None]
+    errorMessage: Required[str | None]
+    createdAt: Required[str]
+    updatedAt: Required[str]
+    durability: Required[DashboardTaskRowDurability | None]
+    waitName: Required[str | None]
+    wakeAt: Required[str | None]
+    wait: Required[DashboardTaskRowWait | None]
+    signalWait: Required[DashboardSignalWaitSummary | None]
+    humanWait: Required[DashboardHumanWaitSummary | None]
 
 
 class DashboardTasksCursorPage(TypedDict, total=False):
@@ -1142,13 +1142,13 @@ class DashboardTasksCursorPage(TypedDict, total=False):
     sort: Required[Literal["priority", "updated"]]
     filter: Required[Literal["all", "blocked", "canceled", "completed", "discarded", "queued", "retried", "running", "scheduled", "waiting"]]
     search: Required[str | None]
-    jobType: Required[str | None]
+    taskType: Required[str | None]
     capturedAt: Required[str]
     worker: Required[str | None]
     canCompleteHumanWait: Required[bool]
     page: Required[float]
     pageSize: Required[float]
-    jobs: Required[list[DashboardJobRow]]
+    tasks: Required[list[DashboardTaskRow]]
 
 
 class DashboardTasksPage(TypedDict, total=False):
@@ -1157,7 +1157,7 @@ class DashboardTasksPage(TypedDict, total=False):
     filter: Required[Literal["all", "blocked", "canceled", "completed", "discarded", "queued", "retried", "running", "scheduled", "waiting"]]
     queue: Required[str | None]
     worker: Required[str | None]
-    jobType: Required[str | None]
+    taskType: Required[str | None]
     priority: Required[float | None]
     sort: Required[Literal["priority", "updated"]]
     tags: Required[list[str]]
@@ -1165,7 +1165,7 @@ class DashboardTasksPage(TypedDict, total=False):
     page: Required[float]
     pageSize: Required[float]
     total: Required[float]
-    jobs: Required[list[DashboardJobRow]]
+    tasks: Required[list[DashboardTaskRow]]
 
 
 class DashboardWorkerRow(TypedDict, total=False):
@@ -1174,7 +1174,7 @@ class DashboardWorkerRow(TypedDict, total=False):
     scheduleNamespaces: Required[list[str]]
     hostname: Required[str | None]
     pid: Required[float | None]
-    activeJobs: Required[float]
+    activeTasks: Required[float]
     concurrency: Required[float | None]
     activeSlots: Required[float | None]
     draining: Required[bool]
@@ -1236,7 +1236,7 @@ class TasksInput(TypedDict, total=False):
     queue: NotRequired[str | None]
     page: NotRequired[int]
     worker: NotRequired[str | None]
-    jobType: NotRequired[str | None]
+    taskType: NotRequired[str | None]
     priority: NotRequired[int | None]
     sort: NotRequired[Literal["updated", "priority"]]
     tags: NotRequired[list[str]]
@@ -1257,7 +1257,7 @@ class TasksCursorInput(TypedDict, total=False):
     filter: NotRequired[Literal["all", "blocked", "waiting", "scheduled", "retried", "queued", "running", "completed", "discarded", "canceled"]]
     queue: NotRequired[str | None]
     worker: NotRequired[str | None]
-    jobType: NotRequired[str | None]
+    taskType: NotRequired[str | None]
     priority: NotRequired[int | None]
     sort: NotRequired[Literal["updated", "priority"]]
     tags: NotRequired[list[str]]
@@ -1295,11 +1295,11 @@ class EventsInput(TypedDict, total=False):
     pageSize: NotRequired[Literal[25] | Literal[50] | Literal[100]]
     kind: NotRequired[Literal["all", "event", "attempt"]]
     queue: NotRequired[str | None]
-    jobType: NotRequired[str | None]
+    taskType: NotRequired[str | None]
     worker: NotRequired[str | None]
     search: NotRequired[str | None]
     types: NotRequired[list[Literal["enqueued", "debounced", "debounce_rejected", "throttled", "claimed", "batch_dispatched", "batch_failed", "succeeded", "failed", "retry_scheduled", "canceled", "cancel_requested", "promoted", "lease_expired", "deadline_exceeded", "execution_timed_out", "redriven", "redrive_created", "checkpoint_saved", "progress_updated", "wait_scheduled", "wait_elapsed", "wait_replayed", "signal_waiting", "signal_received", "signal_replayed", "signal_rejected", "dependency_blocked", "dependency_released", "dependency_failed", "dependency_canceled", "child_created", "child_joined", "children_created", "children_joined", "parent_linked", "human_wait_created", "human_wait_completed", "human_wait_replayed", "human_wait_rejected", "retry", "timeout"]]]
-    jobId: NotRequired[str | None]
+    taskId: NotRequired[str | None]
 
 
 type EventsOutput = DashboardEventsPage
@@ -1344,13 +1344,13 @@ type SettingsOutput = DashboardSettingsPage
 
 
 class PreviewRetentionPolicyInputDefinition(TypedDict, total=False):
-    jobIdentityRetentionDays: NotRequired[int | None]
+    taskIdentityRetentionDays: NotRequired[int | None]
     terminalOutcomeRetentionDays: NotRequired[int | None]
-    jobEventRetentionDays: NotRequired[int | None]
+    taskEventRetentionDays: NotRequired[int | None]
     attemptHistoryRetentionDays: NotRequired[int | None]
     scheduleOccurrenceRetentionDays: NotRequired[int | None]
     statisticsRetentionDays: NotRequired[int | None]
-    terminalJobPruneLimit: NotRequired[int]
+    terminalTaskPruneLimit: NotRequired[int]
     historyPartitionsPerPass: NotRequired[int]
     defaultPartitionRowsPerPass: NotRequired[int]
     occurrenceRowsPerPass: NotRequired[int]
@@ -1364,11 +1364,11 @@ class PreviewRetentionPolicyInput(TypedDict, total=False):
 type PreviewRetentionPolicyOutput = DashboardRetentionPolicyImpact
 
 
-class JobDetailInput(TypedDict, total=False):
+class TaskDetailInput(TypedDict, total=False):
     id: Required[str]
 
 
-type JobDetailOutput = DashboardJobDetail
+type TaskDetailOutput = DashboardTaskDetail
 
 
 type HumanWaitsInput = None
@@ -1386,7 +1386,7 @@ class EnqueueTestInputAudit(TypedDict, total=False):
 class EnqueueTestInput(TypedDict, total=False):
     kind: Required[Literal["success", "retry", "durable", "timer", "failure", "idempotent", "long-running", "redrive", "feature"]]
     scenario: NotRequired[Literal["order-fulfillment", "customer-onboarding", "report-publication"]]
-    feature: NotRequired[Literal["ingress-routing", "retry-policies", "durable-checkpoints", "durable-waits", "progress", "timing-controls", "cancellation", "dead-letters-redrive", "job-dependencies", "child-workflows", "signals", "human-decisions", "keyed-debounce", "keyed-throttle", "priority-lanes", "batch-handlers", "payload-contracts"]]
+    feature: NotRequired[Literal["ingress-routing", "retry-policies", "durable-checkpoints", "durable-waits", "progress", "timing-controls", "cancellation", "dead-letters-redrive", "task-dependencies", "child-workflows", "signals", "human-decisions", "keyed-debounce", "keyed-throttle", "priority-lanes", "batch-handlers", "payload-contracts"]]
     priority: NotRequired[int]
     audit: Required[EnqueueTestInputAudit]
 
@@ -1498,13 +1498,13 @@ type RevertMaintenancePolicyOutput = None
 
 
 class OverrideRetentionPolicyInputDefinition(TypedDict, total=False):
-    jobIdentityRetentionDays: NotRequired[int | None]
+    taskIdentityRetentionDays: NotRequired[int | None]
     terminalOutcomeRetentionDays: NotRequired[int | None]
-    jobEventRetentionDays: NotRequired[int | None]
+    taskEventRetentionDays: NotRequired[int | None]
     attemptHistoryRetentionDays: NotRequired[int | None]
     scheduleOccurrenceRetentionDays: NotRequired[int | None]
     statisticsRetentionDays: NotRequired[int | None]
-    terminalJobPruneLimit: NotRequired[int]
+    terminalTaskPruneLimit: NotRequired[int]
     historyPartitionsPerPass: NotRequired[int]
     defaultPartitionRowsPerPass: NotRequired[int]
     occurrenceRowsPerPass: NotRequired[int]
@@ -1532,7 +1532,7 @@ class RevertRetentionPolicyInputAudit(TypedDict, total=False):
 
 
 class RevertRetentionPolicyInput(TypedDict, total=False):
-    settings: Required[list[Literal["jobIdentityRetentionDays", "terminalOutcomeRetentionDays", "jobEventRetentionDays", "attemptHistoryRetentionDays", "scheduleOccurrenceRetentionDays", "statisticsRetentionDays", "terminalJobPruneLimit", "historyPartitionsPerPass", "defaultPartitionRowsPerPass", "occurrenceRowsPerPass", "statisticsRowsPerPass"]]]
+    settings: Required[list[Literal["taskIdentityRetentionDays", "terminalOutcomeRetentionDays", "taskEventRetentionDays", "attemptHistoryRetentionDays", "scheduleOccurrenceRetentionDays", "statisticsRetentionDays", "terminalTaskPruneLimit", "historyPartitionsPerPass", "defaultPartitionRowsPerPass", "occurrenceRowsPerPass", "statisticsRowsPerPass"]]]
     audit: Required[RevertRetentionPolicyInputAudit]
 
 
@@ -1617,7 +1617,7 @@ type RedriveTaskOutput = DashboardRedriveResult
 
 class RedriveDeadLettersInputCursor(TypedDict, total=False):
     finishedAt: Required[str]
-    jobId: Required[str]
+    taskId: Required[str]
 
 
 class RedriveDeadLettersInputAudit(TypedDict, total=False):
@@ -1628,7 +1628,7 @@ class RedriveDeadLettersInputAudit(TypedDict, total=False):
 
 class RedriveDeadLettersInput(TypedDict, total=False):
     queue: NotRequired[str | None]
-    jobType: NotRequired[str | None]
+    taskType: NotRequired[str | None]
     tags: NotRequired[list[str]]
     limit: NotRequired[int]
     cursor: NotRequired[RedriveDeadLettersInputCursor | None]
@@ -1638,7 +1638,7 @@ class RedriveDeadLettersInput(TypedDict, total=False):
 type RedriveDeadLettersOutput = DashboardRedriveBatch
 
 
-_INPUT_SCHEMAS: dict[str, object] = json.loads("{\"meta\":null,\"taskCounts\":null,\"tasks\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"filter\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"blocked\",\"waiting\",\"scheduled\",\"retried\",\"queued\",\"running\",\"completed\",\"discarded\",\"canceled\"]},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"page\":{\"default\":1,\"type\":\"integer\",\"minimum\":1,\"maximum\":100},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"jobType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"priority\":{\"default\":null,\"anyOf\":[{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},{\"type\":\"null\"}]},\"sort\":{\"default\":\"updated\",\"type\":\"string\",\"enum\":[\"updated\",\"priority\"]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"search\":{\"type\":\"string\",\"maxLength\":200},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]}}},\"tasksCursor\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"filter\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"blocked\",\"waiting\",\"scheduled\",\"retried\",\"queued\",\"running\",\"completed\",\"discarded\",\"canceled\"]},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"jobType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"priority\":{\"default\":null,\"anyOf\":[{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},{\"type\":\"null\"}]},\"sort\":{\"default\":\"updated\",\"type\":\"string\",\"enum\":[\"updated\",\"priority\"]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"search\":{\"type\":\"string\",\"maxLength\":200},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]},\"cursor\":{\"default\":null,\"anyOf\":[{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"updatedAt\":{\"type\":\"string\",\"format\":\"date-time\",\"pattern\":\"^(?:(?:\\\\d\\\\d[2468][048]|\\\\d\\\\d[13579][26]|\\\\d\\\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\\\d|30)|(?:02)-(?:0[1-9]|1\\\\d|2[0-8])))T(?:(?:[01]\\\\d|2[0-3]):[0-5]\\\\d:[0-5]\\\\d\\\\.\\\\d{6}(?:Z))$\"},\"priority\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100}},\"required\":[\"id\",\"updatedAt\",\"priority\"]},{\"type\":\"null\"}]},\"direction\":{\"default\":\"next\",\"type\":\"string\",\"enum\":[\"next\",\"previous\"]},\"count\":{\"default\":\"none\",\"type\":\"string\",\"enum\":[\"none\",\"exact\"]}}},\"taskFacets\":null,\"activity\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"filter\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"blocked\",\"waiting\",\"scheduled\",\"retried\",\"queued\",\"running\",\"completed\",\"discarded\",\"canceled\"]},\"period\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"6h\",\"24h\",\"7d\"]},\"groupBy\":{\"default\":\"task\",\"type\":\"string\",\"enum\":[\"queue\",\"worker\",\"task\",\"status\"]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]}}},\"events\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"window\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"6h\",\"24h\"]},\"page\":{\"default\":1,\"type\":\"integer\",\"minimum\":1,\"maximum\":100},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]},\"kind\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"event\",\"attempt\"]},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"jobType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"search\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"types\":{\"default\":[],\"maxItems\":42,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"enqueued\",\"debounced\",\"debounce_rejected\",\"throttled\",\"claimed\",\"batch_dispatched\",\"batch_failed\",\"succeeded\",\"failed\",\"retry_scheduled\",\"canceled\",\"cancel_requested\",\"promoted\",\"lease_expired\",\"deadline_exceeded\",\"execution_timed_out\",\"redriven\",\"redrive_created\",\"checkpoint_saved\",\"progress_updated\",\"wait_scheduled\",\"wait_elapsed\",\"wait_replayed\",\"signal_waiting\",\"signal_received\",\"signal_replayed\",\"signal_rejected\",\"dependency_blocked\",\"dependency_released\",\"dependency_failed\",\"dependency_canceled\",\"child_created\",\"child_joined\",\"children_created\",\"children_joined\",\"parent_linked\",\"human_wait_created\",\"human_wait_completed\",\"human_wait_replayed\",\"human_wait_rejected\",\"retry\",\"timeout\"]}},\"jobId\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},{\"type\":\"null\"}]}}},\"eventDetail\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"pattern\":\"^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$\"}},\"required\":[\"id\"]},\"cron\":null,\"queues\":null,\"system\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"window\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"24h\"]}}},\"workers\":null,\"settings\":null,\"previewRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"jobIdentityRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalOutcomeRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"jobEventRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"attemptHistoryRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"scheduleOccurrenceRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"statisticsRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalJobPruneLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100000},\"historyPartitionsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":52},\"defaultPartitionRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"occurrenceRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"statisticsRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000}}}},\"required\":[\"definition\"]},\"jobDetail\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"}},\"required\":[\"id\"]},\"humanWaits\":null,\"enqueueTest\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"success\",\"retry\",\"durable\",\"timer\",\"failure\",\"idempotent\",\"long-running\",\"redrive\",\"feature\"]},\"scenario\":{\"type\":\"string\",\"enum\":[\"order-fulfillment\",\"customer-onboarding\",\"report-publication\"]},\"feature\":{\"type\":\"string\",\"enum\":[\"ingress-routing\",\"retry-policies\",\"durable-checkpoints\",\"durable-waits\",\"progress\",\"timing-controls\",\"cancellation\",\"dead-letters-redrive\",\"job-dependencies\",\"child-workflows\",\"signals\",\"human-decisions\",\"keyed-debounce\",\"keyed-throttle\",\"priority-lanes\",\"batch-handlers\",\"payload-contracts\"]},\"priority\":{\"default\":0,\"type\":\"integer\",\"minimum\":0,\"maximum\":100},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"kind\",\"audit\"]},\"setScheduleEnabled\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"user\"},\"namespace\":{\"type\":\"string\",\"minLength\":1},\"name\":{\"type\":\"string\",\"minLength\":1},\"enabled\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"kind\",\"namespace\",\"name\",\"enabled\",\"audit\"]},\"setQueuePaused\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"queue\":{\"type\":\"string\",\"minLength\":1},\"paused\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"queue\",\"paused\",\"audit\"]},\"purgeQueue\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"queue\":{\"type\":\"string\",\"minLength\":1},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"queue\",\"audit\"]},\"setWorkerPaused\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"workerId\":{\"type\":\"string\",\"minLength\":1},\"paused\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"workerId\",\"paused\",\"audit\"]},\"overrideMaintenancePolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"timezone\":{\"type\":\"string\",\"minLength\":1},\"partitionPreparationIntervalMs\":{\"type\":\"integer\",\"minimum\":60000,\"maximum\":604800000},\"terminalCleanupIntervalMs\":{\"type\":\"integer\",\"minimum\":1000,\"maximum\":86400000},\"historyRetentionLocalTime\":{\"type\":\"string\",\"pattern\":\"^(?:[01]\\\\d|2[0-3]):[0-5]\\\\d$\"},\"statisticsRollupIntervalMs\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":86400000},\"statisticsGroupLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":10000},\"statisticsRecomputeBuckets\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":1440}}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"definition\",\"audit\"]},\"revertMaintenancePolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"settings\":{\"minItems\":1,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"timezone\",\"partitionPreparationIntervalMs\",\"terminalCleanupIntervalMs\",\"historyRetentionLocalTime\",\"statisticsRollupIntervalMs\",\"statisticsGroupLimit\",\"statisticsRecomputeBuckets\"]}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"settings\",\"audit\"]},\"overrideRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"jobIdentityRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalOutcomeRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"jobEventRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"attemptHistoryRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"scheduleOccurrenceRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"statisticsRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalJobPruneLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100000},\"historyPartitionsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":52},\"defaultPartitionRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"occurrenceRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"statisticsRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000}}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"definition\",\"audit\"]},\"revertRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"settings\":{\"minItems\":1,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"jobIdentityRetentionDays\",\"terminalOutcomeRetentionDays\",\"jobEventRetentionDays\",\"attemptHistoryRetentionDays\",\"scheduleOccurrenceRetentionDays\",\"statisticsRetentionDays\",\"terminalJobPruneLimit\",\"historyPartitionsPerPass\",\"defaultPartitionRowsPerPass\",\"occurrenceRowsPerPass\",\"statisticsRowsPerPass\"]}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"settings\",\"audit\"]},\"runTaskNow\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]},\"cancelTask\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"anyOf\":[{\"type\":\"string\",\"maxLength\":2000},{\"type\":\"null\"}]},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]},\"signalTask\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},\"payload\":{\"$ref\":\"#/$defs/__schema0\"},\"idempotencyKey\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":512},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"name\",\"payload\",\"idempotencyKey\",\"audit\"],\"$defs\":{\"__schema0\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\"},{\"type\":\"boolean\"},{\"type\":\"null\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/__schema0\"}},{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\"},\"additionalProperties\":{\"$ref\":\"#/$defs/__schema0\"}}]}}},\"completeHumanWait\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},\"result\":{\"$ref\":\"#/$defs/__schema0\"},\"idempotencyKey\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":512},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"name\",\"result\",\"idempotencyKey\",\"audit\"],\"$defs\":{\"__schema0\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\"},{\"type\":\"boolean\"},{\"type\":\"null\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/__schema0\"}},{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\"},\"additionalProperties\":{\"$ref\":\"#/$defs/__schema0\"}}]}}},\"redriveTask\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]},\"redriveDeadLetters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"jobType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"limit\":{\"default\":100,\"type\":\"integer\",\"minimum\":1,\"maximum\":1000},\"cursor\":{\"default\":null,\"anyOf\":[{\"type\":\"object\",\"properties\":{\"finishedAt\":{\"type\":\"string\",\"format\":\"date-time\",\"pattern\":\"^(?:(?:\\\\d\\\\d[2468][048]|\\\\d\\\\d[13579][26]|\\\\d\\\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\\\d|30)|(?:02)-(?:0[1-9]|1\\\\d|2[0-8])))T(?:(?:[01]\\\\d|2[0-3]):[0-5]\\\\d(?::[0-5]\\\\d(?:\\\\.\\\\d+)?)?(?:Z))$\"},\"jobId\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"}},\"required\":[\"finishedAt\",\"jobId\"]},{\"type\":\"null\"}]},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"audit\"]}}")
+_INPUT_SCHEMAS: dict[str, object] = json.loads("{\"meta\":null,\"taskCounts\":null,\"tasks\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"filter\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"blocked\",\"waiting\",\"scheduled\",\"retried\",\"queued\",\"running\",\"completed\",\"discarded\",\"canceled\"]},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"page\":{\"default\":1,\"type\":\"integer\",\"minimum\":1,\"maximum\":100},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"taskType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"priority\":{\"default\":null,\"anyOf\":[{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},{\"type\":\"null\"}]},\"sort\":{\"default\":\"updated\",\"type\":\"string\",\"enum\":[\"updated\",\"priority\"]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"search\":{\"type\":\"string\",\"maxLength\":200},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]}}},\"tasksCursor\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"filter\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"blocked\",\"waiting\",\"scheduled\",\"retried\",\"queued\",\"running\",\"completed\",\"discarded\",\"canceled\"]},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"taskType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"priority\":{\"default\":null,\"anyOf\":[{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},{\"type\":\"null\"}]},\"sort\":{\"default\":\"updated\",\"type\":\"string\",\"enum\":[\"updated\",\"priority\"]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"search\":{\"type\":\"string\",\"maxLength\":200},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]},\"cursor\":{\"default\":null,\"anyOf\":[{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"updatedAt\":{\"type\":\"string\",\"format\":\"date-time\",\"pattern\":\"^(?:(?:\\\\d\\\\d[2468][048]|\\\\d\\\\d[13579][26]|\\\\d\\\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\\\d|30)|(?:02)-(?:0[1-9]|1\\\\d|2[0-8])))T(?:(?:[01]\\\\d|2[0-3]):[0-5]\\\\d:[0-5]\\\\d\\\\.\\\\d{6}(?:Z))$\"},\"priority\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100}},\"required\":[\"id\",\"updatedAt\",\"priority\"]},{\"type\":\"null\"}]},\"direction\":{\"default\":\"next\",\"type\":\"string\",\"enum\":[\"next\",\"previous\"]},\"count\":{\"default\":\"none\",\"type\":\"string\",\"enum\":[\"none\",\"exact\"]}}},\"taskFacets\":null,\"activity\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"filter\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"blocked\",\"waiting\",\"scheduled\",\"retried\",\"queued\",\"running\",\"completed\",\"discarded\",\"canceled\"]},\"period\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"6h\",\"24h\",\"7d\"]},\"groupBy\":{\"default\":\"task\",\"type\":\"string\",\"enum\":[\"queue\",\"worker\",\"task\",\"status\"]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]}}},\"events\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"window\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"6h\",\"24h\"]},\"page\":{\"default\":1,\"type\":\"integer\",\"minimum\":1,\"maximum\":100},\"pageSize\":{\"default\":50,\"anyOf\":[{\"type\":\"number\",\"const\":25},{\"type\":\"number\",\"const\":50},{\"type\":\"number\",\"const\":100}]},\"kind\":{\"default\":\"all\",\"type\":\"string\",\"enum\":[\"all\",\"event\",\"attempt\"]},\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"taskType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"worker\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"search\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"types\":{\"default\":[],\"maxItems\":42,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"enqueued\",\"debounced\",\"debounce_rejected\",\"throttled\",\"claimed\",\"batch_dispatched\",\"batch_failed\",\"succeeded\",\"failed\",\"retry_scheduled\",\"canceled\",\"cancel_requested\",\"promoted\",\"lease_expired\",\"deadline_exceeded\",\"execution_timed_out\",\"redriven\",\"redrive_created\",\"checkpoint_saved\",\"progress_updated\",\"wait_scheduled\",\"wait_elapsed\",\"wait_replayed\",\"signal_waiting\",\"signal_received\",\"signal_replayed\",\"signal_rejected\",\"dependency_blocked\",\"dependency_released\",\"dependency_failed\",\"dependency_canceled\",\"child_created\",\"child_joined\",\"children_created\",\"children_joined\",\"parent_linked\",\"human_wait_created\",\"human_wait_completed\",\"human_wait_replayed\",\"human_wait_rejected\",\"retry\",\"timeout\"]}},\"taskId\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},{\"type\":\"null\"}]}}},\"eventDetail\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"pattern\":\"^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$\"}},\"required\":[\"id\"]},\"cron\":null,\"queues\":null,\"system\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"window\":{\"default\":\"1h\",\"type\":\"string\",\"enum\":[\"15m\",\"1h\",\"24h\"]}}},\"workers\":null,\"settings\":null,\"previewRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"taskIdentityRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalOutcomeRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"taskEventRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"attemptHistoryRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"scheduleOccurrenceRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"statisticsRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalTaskPruneLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100000},\"historyPartitionsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":52},\"defaultPartitionRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"occurrenceRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"statisticsRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000}}}},\"required\":[\"definition\"]},\"taskDetail\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"}},\"required\":[\"id\"]},\"humanWaits\":null,\"enqueueTest\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"success\",\"retry\",\"durable\",\"timer\",\"failure\",\"idempotent\",\"long-running\",\"redrive\",\"feature\"]},\"scenario\":{\"type\":\"string\",\"enum\":[\"order-fulfillment\",\"customer-onboarding\",\"report-publication\"]},\"feature\":{\"type\":\"string\",\"enum\":[\"ingress-routing\",\"retry-policies\",\"durable-checkpoints\",\"durable-waits\",\"progress\",\"timing-controls\",\"cancellation\",\"dead-letters-redrive\",\"task-dependencies\",\"child-workflows\",\"signals\",\"human-decisions\",\"keyed-debounce\",\"keyed-throttle\",\"priority-lanes\",\"batch-handlers\",\"payload-contracts\"]},\"priority\":{\"default\":0,\"type\":\"integer\",\"minimum\":0,\"maximum\":100},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"kind\",\"audit\"]},\"setScheduleEnabled\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"user\"},\"namespace\":{\"type\":\"string\",\"minLength\":1},\"name\":{\"type\":\"string\",\"minLength\":1},\"enabled\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"kind\",\"namespace\",\"name\",\"enabled\",\"audit\"]},\"setQueuePaused\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"queue\":{\"type\":\"string\",\"minLength\":1},\"paused\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"queue\",\"paused\",\"audit\"]},\"purgeQueue\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"queue\":{\"type\":\"string\",\"minLength\":1},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"queue\",\"audit\"]},\"setWorkerPaused\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"workerId\":{\"type\":\"string\",\"minLength\":1},\"paused\":{\"type\":\"boolean\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"workerId\",\"paused\",\"audit\"]},\"overrideMaintenancePolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"timezone\":{\"type\":\"string\",\"minLength\":1},\"partitionPreparationIntervalMs\":{\"type\":\"integer\",\"minimum\":60000,\"maximum\":604800000},\"terminalCleanupIntervalMs\":{\"type\":\"integer\",\"minimum\":1000,\"maximum\":86400000},\"historyRetentionLocalTime\":{\"type\":\"string\",\"pattern\":\"^(?:[01]\\\\d|2[0-3]):[0-5]\\\\d$\"},\"statisticsRollupIntervalMs\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":86400000},\"statisticsGroupLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":10000},\"statisticsRecomputeBuckets\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":1440}}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"definition\",\"audit\"]},\"revertMaintenancePolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"settings\":{\"minItems\":1,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"timezone\",\"partitionPreparationIntervalMs\",\"terminalCleanupIntervalMs\",\"historyRetentionLocalTime\",\"statisticsRollupIntervalMs\",\"statisticsGroupLimit\",\"statisticsRecomputeBuckets\"]}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"settings\",\"audit\"]},\"overrideRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"definition\":{\"type\":\"object\",\"properties\":{\"taskIdentityRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalOutcomeRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"taskEventRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"attemptHistoryRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"scheduleOccurrenceRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"statisticsRetentionDays\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":36500},{\"type\":\"null\"}]},\"terminalTaskPruneLimit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100000},\"historyPartitionsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":52},\"defaultPartitionRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"occurrenceRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000},\"statisticsRowsPerPass\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000000}}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"definition\",\"audit\"]},\"revertRetentionPolicy\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"settings\":{\"minItems\":1,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"taskIdentityRetentionDays\",\"terminalOutcomeRetentionDays\",\"taskEventRetentionDays\",\"attemptHistoryRetentionDays\",\"scheduleOccurrenceRetentionDays\",\"statisticsRetentionDays\",\"terminalTaskPruneLimit\",\"historyPartitionsPerPass\",\"defaultPartitionRowsPerPass\",\"occurrenceRowsPerPass\",\"statisticsRowsPerPass\"]}},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"settings\",\"audit\"]},\"runTaskNow\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]},\"cancelTask\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"anyOf\":[{\"type\":\"string\",\"maxLength\":2000},{\"type\":\"null\"}]},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]},\"signalTask\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},\"payload\":{\"$ref\":\"#/$defs/__schema0\"},\"idempotencyKey\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":512},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"name\",\"payload\",\"idempotencyKey\",\"audit\"],\"$defs\":{\"__schema0\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\"},{\"type\":\"boolean\"},{\"type\":\"null\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/__schema0\"}},{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\"},\"additionalProperties\":{\"$ref\":\"#/$defs/__schema0\"}}]}}},\"completeHumanWait\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},\"result\":{\"$ref\":\"#/$defs/__schema0\"},\"idempotencyKey\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":512},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"name\",\"result\",\"idempotencyKey\",\"audit\"],\"$defs\":{\"__schema0\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\"},{\"type\":\"boolean\"},{\"type\":\"null\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/__schema0\"}},{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\"},\"additionalProperties\":{\"$ref\":\"#/$defs/__schema0\"}}]}}},\"redriveTask\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"id\",\"audit\"]},\"redriveDeadLetters\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"queue\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"taskType\":{\"default\":null,\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"tags\":{\"default\":[],\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"limit\":{\"default\":100,\"type\":\"integer\",\"minimum\":1,\"maximum\":1000},\"cursor\":{\"default\":null,\"anyOf\":[{\"type\":\"object\",\"properties\":{\"finishedAt\":{\"type\":\"string\",\"format\":\"date-time\",\"pattern\":\"^(?:(?:\\\\d\\\\d[2468][048]|\\\\d\\\\d[13579][26]|\\\\d\\\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\\\d|30)|(?:02)-(?:0[1-9]|1\\\\d|2[0-8])))T(?:(?:[01]\\\\d|2[0-3]):[0-5]\\\\d(?::[0-5]\\\\d(?:\\\\.\\\\d+)?)?(?:Z))$\"},\"taskId\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"}},\"required\":[\"finishedAt\",\"taskId\"]},{\"type\":\"null\"}]},\"audit\":{\"type\":\"object\",\"properties\":{\"actor\":{\"type\":\"string\",\"minLength\":1},\"reason\":{\"type\":\"string\",\"minLength\":1},\"requestId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"actor\",\"reason\",\"requestId\"]}},\"required\":[\"audit\"]}}")
 
 
 class DashboardInputValidationError(ValueError):
@@ -1699,8 +1699,8 @@ def validate_settings_input(value: object) -> None:
 def validate_preview_retention_policy_input(value: object) -> None:
     validate_input("previewRetentionPolicy", value)
 
-def validate_job_detail_input(value: object) -> None:
-    validate_input("jobDetail", value)
+def validate_task_detail_input(value: object) -> None:
+    validate_input("taskDetail", value)
 
 def validate_human_waits_input(value: object) -> None:
     validate_input("humanWaits", value)
@@ -1850,7 +1850,7 @@ __all__ = [
     "DashboardCronPage",
     "DashboardCronPageMaintenance",
     "DashboardCronPageMaintenancePolicy",
-    "DashboardCronPageMaintenanceTasksItem",
+    "DashboardCronPageMaintenanceRoutinesItem",
     "DashboardDurabilityPlan",
     "DashboardDurabilityPlanPersistentFailure",
     "DashboardDurabilityPlanStepsItem",
@@ -1868,34 +1868,6 @@ __all__ = [
     "DashboardHumanWaitSummary",
     "DashboardInputValidationError",
     "DashboardJSON",
-    "DashboardJobDetail",
-    "DashboardJobDetailAttemptsItem",
-    "DashboardJobDetailBatchExecutionsItem",
-    "DashboardJobDetailBatchExecutionsItemMembersItem",
-    "DashboardJobDetailCheckpointsItem",
-    "DashboardJobDetailChildLineage",
-    "DashboardJobDetailChildLineageRecordsItem",
-    "DashboardJobDetailCurrent",
-    "DashboardJobDetailCurrentOutcome",
-    "DashboardJobDetailCurrentRuntime",
-    "DashboardJobDetailDependencyLineage",
-    "DashboardJobDetailDependencyLineageRecordsItem",
-    "DashboardJobDetailEventsItem",
-    "DashboardJobDetailIdentity",
-    "DashboardJobDetailIdentityDependencyPolicy",
-    "DashboardJobDetailIdentityRetryPolicyVariant2",
-    "DashboardJobDetailIdentityRetryPolicyVariant3",
-    "DashboardJobDetailIdentityRetryPolicyVariant4",
-    "DashboardJobDetailProgress",
-    "DashboardJobDetailRedriveLineage",
-    "DashboardJobDetailRedriveLineageRecordsItem",
-    "DashboardJobDetailWaitsItem",
-    "DashboardJobRow",
-    "DashboardJobRowDurability",
-    "DashboardJobRowRetryPolicyVariant2",
-    "DashboardJobRowRetryPolicyVariant3",
-    "DashboardJobRowRetryPolicyVariant4",
-    "DashboardJobRowWait",
     "DashboardMaintenanceLoopCadences",
     "DashboardMaintenancePolicy",
     "DashboardMaintenancePolicyProvenance",
@@ -1927,14 +1899,14 @@ __all__ = [
     "DashboardRetentionPolicyProvenanceAttemptHistoryRetentionDays",
     "DashboardRetentionPolicyProvenanceDefaultPartitionRowsPerPass",
     "DashboardRetentionPolicyProvenanceHistoryPartitionsPerPass",
-    "DashboardRetentionPolicyProvenanceJobEventRetentionDays",
-    "DashboardRetentionPolicyProvenanceJobIdentityRetentionDays",
     "DashboardRetentionPolicyProvenanceOccurrenceRowsPerPass",
     "DashboardRetentionPolicyProvenanceScheduleOccurrenceRetentionDays",
     "DashboardRetentionPolicyProvenanceStatisticsRetentionDays",
     "DashboardRetentionPolicyProvenanceStatisticsRowsPerPass",
-    "DashboardRetentionPolicyProvenanceTerminalJobPruneLimit",
+    "DashboardRetentionPolicyProvenanceTaskEventRetentionDays",
+    "DashboardRetentionPolicyProvenanceTaskIdentityRetentionDays",
     "DashboardRetentionPolicyProvenanceTerminalOutcomeRetentionDays",
+    "DashboardRetentionPolicyProvenanceTerminalTaskPruneLimit",
     "DashboardRunNowResult",
     "DashboardRunNowStatus",
     "DashboardRuntimeConfig",
@@ -1985,7 +1957,35 @@ __all__ = [
     "DashboardSystemWindow",
     "DashboardTaskCounts",
     "DashboardTaskCursor",
+    "DashboardTaskDetail",
+    "DashboardTaskDetailAttemptsItem",
+    "DashboardTaskDetailBatchExecutionsItem",
+    "DashboardTaskDetailBatchExecutionsItemMembersItem",
+    "DashboardTaskDetailCheckpointsItem",
+    "DashboardTaskDetailChildLineage",
+    "DashboardTaskDetailChildLineageRecordsItem",
+    "DashboardTaskDetailCurrent",
+    "DashboardTaskDetailCurrentOutcome",
+    "DashboardTaskDetailCurrentRuntime",
+    "DashboardTaskDetailDependencyLineage",
+    "DashboardTaskDetailDependencyLineageRecordsItem",
+    "DashboardTaskDetailEventsItem",
+    "DashboardTaskDetailIdentity",
+    "DashboardTaskDetailIdentityDependencyPolicy",
+    "DashboardTaskDetailIdentityRetryPolicyVariant2",
+    "DashboardTaskDetailIdentityRetryPolicyVariant3",
+    "DashboardTaskDetailIdentityRetryPolicyVariant4",
+    "DashboardTaskDetailProgress",
+    "DashboardTaskDetailRedriveLineage",
+    "DashboardTaskDetailRedriveLineageRecordsItem",
+    "DashboardTaskDetailWaitsItem",
     "DashboardTaskFacets",
+    "DashboardTaskRow",
+    "DashboardTaskRowDurability",
+    "DashboardTaskRowRetryPolicyVariant2",
+    "DashboardTaskRowRetryPolicyVariant3",
+    "DashboardTaskRowRetryPolicyVariant4",
+    "DashboardTaskRowWait",
     "DashboardTasksCursorPage",
     "DashboardTasksPage",
     "DashboardWorkerRow",
@@ -1999,8 +1999,6 @@ __all__ = [
     "EventsOutput",
     "HumanWaitsInput",
     "HumanWaitsOutput",
-    "JobDetailInput",
-    "JobDetailOutput",
     "MetaInput",
     "MetaOutput",
     "OverrideMaintenancePolicyInput",
@@ -2053,6 +2051,8 @@ __all__ = [
     "SystemOutput",
     "TaskCountsInput",
     "TaskCountsOutput",
+    "TaskDetailInput",
+    "TaskDetailOutput",
     "TaskFacetsInput",
     "TaskFacetsOutput",
     "TasksCursorInput",
@@ -2071,7 +2071,6 @@ __all__ = [
     "validate_events_input",
     "validate_human_waits_input",
     "validate_input",
-    "validate_job_detail_input",
     "validate_meta_input",
     "validate_override_maintenance_policy_input",
     "validate_override_retention_policy_input",
@@ -2090,6 +2089,7 @@ __all__ = [
     "validate_signal_task_input",
     "validate_system_input",
     "validate_task_counts_input",
+    "validate_task_detail_input",
     "validate_task_facets_input",
     "validate_tasks_cursor_input",
     "validate_tasks_input",

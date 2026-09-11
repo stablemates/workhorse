@@ -395,7 +395,7 @@ describe("continuous integration", () => {
     expect(workflow.match(/max-parallel: 2/g)).toHaveLength(3);
     expect(workflow).toContain("pnpm --silent exec tsx scripts/ci-matrix.ts");
     expect(workflow).toContain("pnpm go:test:race");
-    // All three language lines are scanned for advisories in the same job, or one line's tree
+    // All three language lines are scanned for advisories in the same task, or one line's tree
     // silently stops being checked.
     expect(workflow).toContain(
       "- run: pnpm npm:vuln\n      - run: pnpm python:vuln\n      - run: pnpm go:vuln",
@@ -657,7 +657,7 @@ describe("documentation", () => {
     for (const sdkReadme of [coreReadme, pythonReadme, goReadme]) {
       const sections = [
         "## Install",
-        "## Run one job",
+        "## Run one task",
         "## Package boundary",
         "## Next",
         "## License",

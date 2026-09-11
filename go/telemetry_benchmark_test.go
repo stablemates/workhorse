@@ -11,13 +11,13 @@ func BenchmarkWorkerMetricsNoProvider(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	job := ClaimedJob{Queue: "benchmark", Type: "noop"}
+	task := ClaimedTask{Queue: "benchmark", Type: "noop"}
 	ctx := context.Background()
 	duration := time.Millisecond
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		metrics.recordHandler(ctx, job, handlerOutcomeSucceeded, duration)
+		metrics.recordHandler(ctx, task, handlerOutcomeSucceeded, duration)
 	}
 }

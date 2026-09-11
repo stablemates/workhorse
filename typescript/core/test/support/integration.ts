@@ -5,13 +5,13 @@ import { Admin, type Json, Queue, type RetentionPolicyDefinition } from "../../s
 import { createDatabaseTestHarness } from "./db.js";
 
 const defaultRetentionPolicy: RetentionPolicyDefinition = {
-  jobIdentityRetentionDays: 14,
+  taskIdentityRetentionDays: 14,
   terminalOutcomeRetentionDays: 14,
-  jobEventRetentionDays: 14,
+  taskEventRetentionDays: 14,
   attemptHistoryRetentionDays: 14,
   scheduleOccurrenceRetentionDays: 14,
   statisticsRetentionDays: 14,
-  terminalJobPruneLimit: 1_000,
+  terminalTaskPruneLimit: 1_000,
   historyPartitionsPerPass: 4,
   defaultPartitionRowsPerPass: 10_000,
   occurrenceRowsPerPass: 10_000,
@@ -71,7 +71,7 @@ export function createIntegrationTestContext(
   const { databaseUrl, pool } = database;
   const queue = new Queue(pool);
   const admin = new Admin(pool);
-  async function createFailedJob({
+  async function createFailedTask({
     type,
     queueName = "default",
     payload = {},
@@ -98,11 +98,11 @@ export function createIntegrationTestContext(
       executionTimeoutMs,
       retryPolicy,
     });
-    const job = await queue.claim(`fixture-${type}`, { queue: queueName });
-    expect(job?.id).toBe(id);
+    const task = await queue.claim(`fixture-${type}`, { queue: queueName });
+    expect(task?.id).toBe(id);
     const error = new Error(`${type} failed`);
     error.name = errorName;
-    expect(await queue.fail(job!, `fixture-${type}`, error)).toBe("failed");
+    expect(await queue.fail(task!, `fixture-${type}`, error)).toBe("failed");
     return id;
   }
 
@@ -112,7 +112,7 @@ export function createIntegrationTestContext(
 
   beforeEach(async () => {
     await database.reset();
-    await pool.query(`UPDATE workhorse.job_stat_state SET
+    await pool.query(`UPDATE workhorse.task_stat_state SET
       rolled_up_through = date_bin('1 minute', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC'),
       last_run_at = NULL, updated_at = clock_timestamp()`);
     await pool.query("ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1");
@@ -133,7 +133,7 @@ export function createIntegrationTestContext(
       last_started_at = NULL,
       last_completed_at = NULL,
       last_completed_local_date = NULL,
-      history_retained_before = CASE WHEN task_name = 'history_retention'
+      history_retained_before = CASE WHEN routine_name = 'history_retention'
         THEN date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
           - interval '14 days'
         ELSE NULL END,
@@ -147,7 +147,7 @@ export function createIntegrationTestContext(
   return {
     admin,
     adminAudit,
-    createFailedJob,
+    createFailedTask,
     databaseUrl,
     defaultRetentionPolicy,
     deferred,

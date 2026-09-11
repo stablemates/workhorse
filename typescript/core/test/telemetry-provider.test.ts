@@ -80,7 +80,7 @@ describe("WorkhorseTelemetryProvider", () => {
         {
           name: "workhorse.queue.depth",
           value: 2,
-          attributes: { "workhorse.queue.name": "mail", "workhorse.job.state": "ready" },
+          attributes: { "workhorse.queue.name": "mail", "workhorse.task.state": "ready" },
         },
       ]),
     );

@@ -9,7 +9,7 @@ from workhorse import Queue, Worker
 database_url = os.environ["DATABASE_URL"]
 
 with psycopg.connect(database_url) as application_connection:
-    job_id = Queue(application_connection).enqueue("email.welcome", {"to": "ada@example.com"})
+    task_id = Queue(application_connection).enqueue("email.welcome", {"to": "ada@example.com"})
     application_connection.commit()
 
 with psycopg.connect(database_url, autocommit=True) as worker_connection:
@@ -19,4 +19,4 @@ with psycopg.connect(database_url, autocommit=True) as worker_connection:
     )
     assert worker.run_once() is True  # Production worker processes call run().
 
-print(job_id)
+print(task_id)

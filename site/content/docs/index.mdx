@@ -1,13 +1,13 @@
 ---
 title: What is Workhorse?
-description: A durable job queue that lives inside PostgreSQL, so your jobs commit with your data.
+description: A durable task queue that lives inside PostgreSQL, so your tasks commit with your data.
 ---
 
 Every application eventually needs work that outlives a request: send the email, charge the card,
 rebuild the report. The moment that work moves to a separate broker, you have two systems that can
-disagree — an order row without its job, or a job for an order that rolled back.
+disagree — an order row without its task, or a task for an order that rolled back.
 
-Workhorse removes the second system. It is a durable job queue built from PostgreSQL tables and
+Workhorse removes the second system. It is a durable task queue built from PostgreSQL tables and
 versioned SQL functions, with supported SDKs for TypeScript, Python, and Go. There is no broker, no
 Redis, and no PostgreSQL extension — one database owns your business data, your queued work, your
 execution state, and the evidence of what happened.
@@ -15,12 +15,12 @@ execution state, and the evidence of what happened.
 ## Start with your task
 
 If you are new to Workhorse, follow the [quickstart](/docs/quickstart) to install the schema,
-enqueue a job, and run a worker. Choose the TypeScript, Python, or Go example for your application.
+enqueue a task, and run a worker. Choose the TypeScript, Python, or Go example for your application.
 
 | I want to…                   | Read this                              | What you will learn                                                         |
 | ---------------------------- | -------------------------------------- | --------------------------------------------------------------------------- |
-| Run my first job             | [Quickstart](/docs/quickstart)         | Connect a producer and worker to the same database.                         |
-| Commit a job with my data    | [Transactional enqueue](/docs/enqueue) | Use an application transaction so the write and job commit together.        |
+| Run my first task            | [Quickstart](/docs/quickstart)         | Connect a producer and worker to the same database.                         |
+| Commit a task with my data   | [Transactional enqueue](/docs/enqueue) | Use an application transaction so the write and task commit together.       |
 | Make a handler safe to retry | [Core concepts](/docs/concepts)        | Understand delivery guarantees before adding checkpoints or external calls. |
 | Use my existing ORM          | [Integrations](/docs/integrations)     | Choose the adapter for your database client.                                |
 | Operate a worker fleet       | [Operations](/docs/operations)         | Inspect health, monitor queues, and respond to failures.                    |
@@ -29,7 +29,7 @@ enqueue a job, and run a worker. Choose the TypeScript, Python, or Go example fo
 ## The core promise
 
 `Queue.enqueue` accepts your open transaction as its last argument. If the transaction commits, the
-job exists; if it rolls back, PostgreSQL removes the business write and the job together.
+task exists; if it rolls back, PostgreSQL removes the business write and the task together.
 
 ```ts
 import { Pool, Queue } from "@stablemates/workhorse";
@@ -51,9 +51,9 @@ try {
 }
 ```
 
-A `Worker` claims the job and runs the handler you registered with `Worker.handle`. Each claim
+A `Worker` claims the task and runs the handler you registered with `Worker.handle`. Each claim
 grants a temporary lease and a fence token. If the worker dies, the lease expires, another worker
-recovers the job, and the fence token blocks the dead worker from writing stale results.
+recovers the task, and the fence token blocks the dead worker from writing stale results.
 
 Handlers run outside database transactions, so delivery is at least once: a handler can run twice
 after a crash. If a handler restarts, `ctx.checkpoint` replays each completed stage's stored result
@@ -74,9 +74,9 @@ const worker = new Worker(queue).handle("order.fulfill", async (payload, ctx) =>
 await worker.run();
 ```
 
-Beyond checkpoints, jobs get retries with configurable backoff, durable sleeps that release the
+Beyond checkpoints, tasks get retries with configurable backoff, durable sleeps that release the
 worker slot, cron-style schedules, idempotent enqueue, dead letters with redrive, and immutable
-history you can query with `Admin.getJob` and `Admin.getJobTimeline`.
+history you can query with `Admin.getTask` and `Admin.getTaskTimeline`.
 
 ## When to use it
 
@@ -88,7 +88,7 @@ release may change behaviour, so read the changelog before you upgrade. It will 
 recreate your database: migrations are ordered, and inside a major line a migration only adds, so a
 running deployment upgrades in place.
 
-Workhorse supports strict priority, dependency fan-in, child jobs, external signals, and human
+Workhorse supports strict priority, dependency fan-in, child tasks, external signals, and human
 decisions. Orchestration remains application code rather than a separate workflow definition.
 External calls still need provider idempotency keys. If the queue must scale independently of the
 database, use a dedicated broker.
@@ -121,7 +121,7 @@ Check [compatibility](/docs/compatibility) before choosing a release or upgradin
 ## Next
 
 - [Installation](/docs/installation) — add the package and install its schema
-- [Quickstart](/docs/quickstart) — run a job, kill the worker, watch it finish anyway
+- [Quickstart](/docs/quickstart) — run a task, kill the worker, watch it finish anyway
 - [Core concepts](/docs/concepts) — states, ownership, and why a handler can run twice
 
 ---

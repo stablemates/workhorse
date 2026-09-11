@@ -3,15 +3,15 @@ title: Workers
 description: Register handlers, size concurrency, tune the lease, and drain active work safely.
 ---
 
-Jobs sit in PostgreSQL until a process runs them. That process is a `Worker`: a loop that
-claims ready jobs, runs your handlers, and records each result. This page covers everything
+Tasks sit in PostgreSQL until a process runs them. That process is a `Worker`: a loop that
+claims ready tasks, runs your handlers, and records each result. This page covers everything
 between `new Worker(queue)` and a clean shutdown.
 
 ## Register handlers and run
 
-`Worker.handle` binds a job type to an async function. Registration chains, so one worker can
+`Worker.handle` binds a task type to an async function. Registration chains, so one worker can
 serve many types. Each handler receives the payload and a `HandlerContext`, and returns a JSON
-result that becomes the job's durable outcome.
+result that becomes the task's durable outcome.
 
 <Tabs items={["TypeScript", "Python", "Go"]}>
   <Tab value="TypeScript">
@@ -84,9 +84,9 @@ maintenance or worker registration, while bounded polling still covers a lost li
 Workers briefly stagger notification-triggered claims. Workers without an active listener back off
 after consecutive empty checks and reset that delay when a claim succeeds.
 
-The `HandlerContext` carries the claimed job, its `AbortSignal`, checkpoints, durable waits,
+The `HandlerContext` carries the claimed task, its `AbortSignal`, checkpoints, durable waits,
 and progress. Every context method writes under the current fence, so handler code cannot
-accidentally write as a stale owner after the job moves on.
+accidentally write as a stale owner after the task moves on.
 
 ## The options that matter
 
@@ -124,7 +124,7 @@ accidentally write as a stale owner after the job moves on.
   capacity. When the fleet must share one budget, use
   [concurrency policies](/docs/concurrency-policies); for a shared start rate, use
   [rate limits](/docs/rate-limits).
-- **`leaseMs`** is how long a claim owns a job before the database may recover it. One
+- **`leaseMs`** is how long a claim owns a task before the database may recover it. One
   background timer batches every active lease owned by the worker on its configured heartbeat
   cadence. A shorter lease means faster
   recovery after a crash; a longer one tolerates worse network pauses.
@@ -132,7 +132,7 @@ accidentally write as a stale owner after the job moves on.
   guarantees uniqueness: two live workers sharing one identity collide over ownership. The
   default embeds host and pid, so fleet views stay readable.
 - **`retryDelayMs`** overrides the persisted retry policy — a number, or
-  `(attempt, job) => number | undefined`, where `undefined` defers to the database.
+  `(attempt, task) => number | undefined`, where `undefined` defers to the database.
 - **`scheduleNamespaces`** and **`scheduleCatchupLimit`** opt this worker into offering
   [recurring schedules](/docs/schedules).
 
@@ -148,9 +148,9 @@ queues control claims, while schedule namespaces control recurring evaluation.
 Group queues that share handlers and operational policy into one multi-slot worker. Add a second
 worker when work needs a different lease, retry override, schedule namespace, or handler registry.
 
-## Process jobs in batches
+## Process tasks in batches
 
-`Worker.handleBatch` groups claimed jobs of one type when one provider call can process several
+`Worker.handleBatch` groups claimed tasks of one type when one provider call can process several
 payloads efficiently. Every member still occupies one concurrency slot and keeps its own lease,
 fence, cancellation signal, progress, retry budget, and final result.
 
@@ -207,12 +207,12 @@ their own process. `defineWorkerProcess` describes the adapter and workers; the
 The process owns its database resources, worker loops, optional probes, and shutdown. Compile
 the definition before the CLI imports it — the CLI does not install a TypeScript loader.
 
-The first termination signal stops claims and drains active jobs. A second signal or an expired
+The first termination signal stops claims and drains active tasks. A second signal or an expired
 deadline exits immediately, leaving PostgreSQL to recover any active leases.
 
 Go applications create the same boundary with `signal.NotifyContext`, then pass that context to
 `Worker.Run`. A handler panic becomes a recorded attempt failure, so it does not terminate the
-worker process or prevent later jobs from running.
+worker process or prevent later tasks from running.
 
 ## Pause, stop, and drain
 
@@ -249,19 +249,19 @@ recorded as reporting nothing. Producers never register, so the counts are evide
 and not an inventory of everything using the database.
 
 A worker that dies stops refreshing and goes stale in the registry. Automatic maintenance later
-removes that row. Its jobs are not lost: their leases expire and
+removes that row. Its tasks are not lost: their leases expire and
 recovery makes them claimable again.
 
 The protocol names make this lifecycle greppable. `claim_many_v1` applies `claim_v1` to each
-selected job and writes its `job_runtime` lease. `heartbeat_many_v1` submits every active lease
+selected task and writes its `task_runtime` lease. `heartbeat_many_v1` submits every active lease
 and extends the accepted `expires_at` values. `recover_expired_v1` makes abandoned work ready.
-Workers claim from `workhorse_jobs`, TypeScript configures fallback polling with `pollMs`, and
+Workers claim from `workhorse_tasks`, TypeScript configures fallback polling with `pollMs`, and
 processes commonly begin graceful drain after `SIGINT`.
 
 ## Next
 
 - [Deployment and operations](/docs/operations) — supervise and drain the worker process
-- [Batch handlers](/docs/batch-handlers) — share one application call across jobs
+- [Batch handlers](/docs/batch-handlers) — share one application call across tasks
 - [Cancellation](/docs/cancellation) — make handlers stop cooperatively
 - [Schedules](/docs/schedules) — let workers offer recurring namespaces
 

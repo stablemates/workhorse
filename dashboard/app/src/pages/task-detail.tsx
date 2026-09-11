@@ -2,15 +2,15 @@ import { useTaskActions } from "../task-actions.js";
 import { TaskRowActions, TaskTags } from "../components/task-list.js";
 import { taskHref } from "../core.js";
 import type { TaskActionTarget } from "../presentation.js";
-import type { DashboardJobDetail } from "@stablemates/workhorse-dashboard-server/wire";
+import type { DashboardTaskDetail } from "@stablemates/workhorse-dashboard-server/wire";
 import { Badge, Box, Center, Code, Group, Loader, Paper, Stack, Text } from "@mantine/core";
 import { ResizableTaskDrawer } from "../components/resizable-task-drawer.js";
 import { StatusLabel } from "../status-badge.js";
 import { formatClock, formatDuration, formatExact, formatRelative } from "../preferences.js";
 import {
   DrawerSection,
-  JobCheckpoints,
-  JobProgress,
+  TaskCheckpoints,
+  TaskProgress,
   JsonValue,
   MetaRow,
   TaskOutcome,
@@ -52,19 +52,19 @@ export function TaskDetailDrawer({
   taskLinkHref,
 }: TaskDetailDrawerProps) {
   const {
-    selectedJobId,
-    selectedJob,
-    jobDetailError,
-    reloadSelectedJob,
-    inspectJob,
-    closeJobDetail,
+    selectedTaskId,
+    selectedTask,
+    taskDetailError,
+    reloadSelectedTask,
+    inspectTask,
+    closeTaskDetail,
   } = controller;
 
   return (
     <ResizableTaskDrawer
       id="task-detail-drawer"
-      opened={taskDrawerOpened(selectedJobId)}
-      onClose={closeJobDetail}
+      opened={taskDrawerOpened(selectedTaskId)}
+      onClose={closeTaskDetail}
       title={
         <Text component="h2" fw={600} size="lg" my={0}>
           Task details
@@ -80,18 +80,18 @@ export function TaskDetailDrawer({
       {...drawerProps}
       classNames={{ content: "task-drawer__content" }}
     >
-      {jobDetailError ? (
+      {taskDetailError ? (
         <Text c="red" size="sm">
-          {jobDetailError}
+          {taskDetailError}
         </Text>
-      ) : selectedJob ? (
+      ) : selectedTask ? (
         <TaskDetailContent
           auditActor={auditActor}
           controller={controller}
-          job={selectedJob}
+          task={selectedTask}
           taskLinkHref={taskLinkHref}
-          onOpenTask={inspectJob}
-          reload={reloadSelectedJob}
+          onOpenTask={inspectTask}
+          reload={reloadSelectedTask}
         />
       ) : (
         <Center mih={200}>
@@ -105,17 +105,17 @@ export function TaskDetailDrawer({
 function TaskDetailContent({
   controller,
   auditActor,
-  job,
+  task,
   taskLinkHref,
   onOpenTask,
   reload,
 }: {
   auditActor: string;
   controller: DashboardController;
-  job: DashboardJobDetail;
+  task: DashboardTaskDetail;
   taskLinkHref: (taskId: string) => string;
-  onOpenTask: DashboardController["inspectJob"];
-  reload: DashboardController["reloadSelectedJob"];
+  onOpenTask: DashboardController["inspectTask"];
+  reload: DashboardController["reloadSelectedTask"];
 }) {
   return (
     <Stack gap="xl">
@@ -134,78 +134,78 @@ function TaskDetailContent({
                 my={0}
                 style={{ minWidth: 0, overflowWrap: "anywhere" }}
               >
-                {job.identity.type}
+                {task.identity.type}
               </Text>
               <TaskDetailActions
-                key={job.identity.id}
-                job={job}
+                key={task.identity.id}
+                task={task}
                 controller={controller}
                 auditActor={auditActor}
               />
             </Group>
-            <Text c="dimmed" size="xs" title={formatExact(job.identity.createdAt)}>
-              Queue {job.identity.queue} · created {formatRelative(job.identity.createdAt)}
+            <Text c="dimmed" size="xs" title={formatExact(task.identity.createdAt)}>
+              Queue {task.identity.queue} · created {formatRelative(task.identity.createdAt)}
             </Text>
           </Box>
-          <StatusLabel state={job.identity.state} />
+          <StatusLabel state={task.identity.state} />
         </Group>
-        {job.tags && job.tags.length > 0 ? (
+        {task.tags && task.tags.length > 0 ? (
           <Box mt="xs">
-            <TaskTags tags={job.tags} />
+            <TaskTags tags={task.tags} />
           </Box>
         ) : null}
         <Stack gap={6} mt="md">
           <MetaRow label="Task id">
-            <TaskIdChip id={job.identity.id} />
+            <TaskIdChip id={task.identity.id} />
           </MetaRow>
           <MetaRow label="Priority">
             <Badge size="xs" variant="light" color="orange" tt="none">
-              {job.identity.priority}
+              {task.identity.priority}
             </Badge>
             <HelpButton
               label="Priority"
               help="Higher values are claimed first; equal values keep FIFO order."
             />
           </MetaRow>
-          <RetryPolicyLine job={job} />
-          <TimingPolicyLine job={job} />
-          <ConcurrencyPolicyLine job={job} />
-          <DependencyLine job={job} taskLinkHref={taskLinkHref} onOpenTask={onOpenTask} />
-          <ChildLine job={job} taskLinkHref={taskLinkHref} onOpenTask={onOpenTask} />
-          <RedriveLine job={job} taskLinkHref={taskLinkHref} onOpenTask={onOpenTask} />
+          <RetryPolicyLine task={task} />
+          <TimingPolicyLine task={task} />
+          <ConcurrencyPolicyLine task={task} />
+          <DependencyLine task={task} taskLinkHref={taskLinkHref} onOpenTask={onOpenTask} />
+          <ChildLine task={task} taskLinkHref={taskLinkHref} onOpenTask={onOpenTask} />
+          <RedriveLine task={task} taskLinkHref={taskLinkHref} onOpenTask={onOpenTask} />
         </Stack>
       </Box>
-      <BatchExecutions job={job} taskLinkHref={taskLinkHref} onOpenTask={onOpenTask} />
+      <BatchExecutions task={task} taskLinkHref={taskLinkHref} onOpenTask={onOpenTask} />
       <DrawerSection id="task-input-heading" title="Input">
         <JsonValue
           label="Stored payload"
-          value={job.payload}
+          value={task.payload}
           emptyLabel="This task was enqueued without input."
           copyLabel="the task input"
         />
       </DrawerSection>
-      <TaskOutcome job={job} />
-      <TaskEnqueueSection job={job} />
-      <SignalTaskPanel job={job} auditActor={auditActor} reload={reload} />
-      <JobProgress job={job} />
-      <JobCheckpoints job={job} />
-      <DurableWaits job={job} />
+      <TaskOutcome task={task} />
+      <TaskEnqueueSection task={task} />
+      <SignalTaskPanel task={task} auditActor={auditActor} reload={reload} />
+      <TaskProgress task={task} />
+      <TaskCheckpoints task={task} />
+      <DurableWaits task={task} />
       <DrawerSection
         id="attempt-history-heading"
         title="Attempt history"
         aside={
-          <Badge variant="light" color={job.attempts.length > 0 ? "blue" : "gray"}>
-            {job.attempts.length}
+          <Badge variant="light" color={task.attempts.length > 0 ? "blue" : "gray"}>
+            {task.attempts.length}
           </Badge>
         }
       >
-        {job.attempts.length === 0 ? (
+        {task.attempts.length === 0 ? (
           <Text c="dimmed" size="sm">
             No attempt has finished yet.
           </Text>
         ) : (
           <Stack gap="sm">
-            {job.attempts.map((attempt) => (
+            {task.attempts.map((attempt) => (
               <Paper key={attempt.attempt} withBorder p="sm">
                 <Group justify="space-between">
                   <Text fw={600} size="sm">
@@ -236,41 +236,41 @@ function TaskDetailContent({
 }
 
 function TaskDetailActions({
-  job,
+  task,
   controller,
   auditActor,
 }: {
-  job: DashboardJobDetail;
+  task: DashboardTaskDetail;
   controller: DashboardController;
   auditActor: string;
 }) {
-  const runtime = job.current.runtime;
+  const runtime = task.current.runtime;
   const target: TaskActionTarget = {
-    ...job.identity,
-    payload: job.payload,
+    ...task.identity,
+    payload: task.payload,
     workerId: runtime?.workerId ?? null,
     lastWorkerId:
-      job.waits.find((wait) => wait.name === runtime?.waitName)?.workerId ??
-      job.attempts.at(-1)?.workerId ??
+      task.waits.find((wait) => wait.name === runtime?.waitName)?.workerId ??
+      task.attempts.at(-1)?.workerId ??
       null,
     cancellation: runtime?.cancellation ?? null,
     waitName: runtime?.waitName ?? null,
     wait: runtime?.waitName
       ? (() => {
-          const wait = job.waits.find((item) => item.name === runtime.waitName);
+          const wait = task.waits.find((item) => item.name === runtime.waitName);
           return wait ? { name: wait.name, mode: wait.mode, wakeAt: wait.wakeAt } : null;
         })()
       : null,
-    humanWait: job.humanWait ?? null,
+    humanWait: task.humanWait ?? null,
   };
   const actions = useTaskActions({
-    canCompleteHumanWait: job.canCompleteHumanWait ?? false,
-    inspectJob: controller.inspectJob,
+    canCompleteHumanWait: task.canCompleteHumanWait ?? false,
+    inspectTask: controller.inspectTask,
     runTaskNow: controller.runTaskNow,
     auditActor,
     reload: async () => {
       await controller.loadPage();
-      await controller.reloadSelectedJob();
+      await controller.reloadSelectedTask();
     },
     updateLocation: (updates) =>
       controller.navigate(
@@ -289,21 +289,21 @@ function TaskDetailActions({
       {actions.confirmations}
       <Group gap="xs">
         <TaskRowActions
-          job={target}
+          task={target}
           showOpenDetails={false}
           onAction={actions.runRowAction}
           capabilities={{
             runNow: controller.runTaskNow !== null,
-            completeHumanWait: job.canCompleteHumanWait ?? false,
+            completeHumanWait: task.canCompleteHumanWait ?? false,
           }}
           pendingAction={
-            actions.cancelingJobId === job.identity.id
+            actions.cancelingTaskId === task.identity.id
               ? "cancel"
-              : actions.completingHumanWaitJobId === job.identity.id
+              : actions.completingHumanWaitTaskId === task.identity.id
                 ? "complete-human-wait"
-                : actions.redrivingJobId === job.identity.id
+                : actions.redrivingTaskId === task.identity.id
                   ? "redrive"
-                  : actions.runningNowJobId === job.identity.id
+                  : actions.runningNowTaskId === task.identity.id
                     ? "run-now"
                     : null
           }

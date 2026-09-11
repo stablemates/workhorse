@@ -1,18 +1,18 @@
 # What does the demo prove?
 
-The demo proves that a normal TypeScript application can enqueue and inspect jobs which TypeScript,
+The demo proves that a normal TypeScript application can enqueue and inspect tasks which TypeScript,
 Python, and Go workers execute through their public SDKs. It is a product example, not the
 compatibility or performance test suite.
 
 ## Application boundary
 
 The Hono process and three language worker processes share only PostgreSQL. The web process uses
-Drizzle for an application-owned transaction that inserts an order and enqueues its job atomically.
+Drizzle for an application-owned transaction that inserts an order and enqueues its task atomically.
 Each worker owns its own database client and registers itself in `workhorse.worker_registry`, so the
 dashboard discovers the fleet without process-local controller objects.
 
 Each runtime owns a queue for its application handlers. TypeScript, Python, and Go also compete for
-one runtime-neutral job on `demo-shared`, which exercises compatible claim and settlement through
+one runtime-neutral task on `demo-shared`, which exercises compatible claim and settlement through
 every public SDK. The TypeScript worker separately serves the rate-limited `partner-api` queue.
 
 The application mounts the publishable dashboard host. Development supplies the dashboard's Vite
@@ -21,7 +21,7 @@ middleware, while production serves the built browser bundle through the same ho
 
 ## Lifecycle evidence
 
-The startup seed creates a task-visible showcase with one-off jobs and recurring definitions.
+The startup seed creates a task-visible showcase with one-off tasks and recurring definitions.
 [`demo-feature-coverage.md`](demo-feature-coverage.md) owns the family and scenario map.
 
 The examples preserve retry policy, checkpoint output, wait provenance, progress, cancellation,

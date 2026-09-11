@@ -256,8 +256,8 @@ describe.each(providers)("$name provider lifecycle", (provider) => {
     expect((await pool.query("SELECT provider, value FROM public.lifecycle_probe")).rows).toEqual([
       { provider: provider.name, value: "owned" },
     ]);
-    expect((await pool.query("SELECT job_type FROM workhorse.job")).rows).toEqual([
-      { job_type: `${provider.name}.lifecycle.owned` },
+    expect((await pool.query("SELECT task_type FROM workhorse.task")).rows).toEqual([
+      { task_type: `${provider.name}.lifecycle.owned` },
     ]);
   });
 
@@ -278,7 +278,7 @@ describe.each(providers)("$name provider lifecycle", (provider) => {
     expect(failure).toBeInstanceOf(provider.errorType);
     expect(failure).toMatchObject({ code: "25P02" });
     expect((await pool.query("SELECT provider FROM public.lifecycle_probe")).rows).toEqual([]);
-    expect((await pool.query("SELECT job_type FROM workhorse.job")).rows).toEqual([]);
+    expect((await pool.query("SELECT task_type FROM workhorse.task")).rows).toEqual([]);
   });
 
   it("reuses its pooled connection across successive queue operations", async () => {
@@ -296,8 +296,8 @@ describe.each(providers)("$name provider lifecycle", (provider) => {
 
     await provider.shared!.adapter.queue.enqueue(`${provider.name}.lifecycle.survivor`, {});
 
-    expect((await pool.query("SELECT job_type FROM workhorse.job")).rows).toEqual([
-      { job_type: `${provider.name}.lifecycle.survivor` },
+    expect((await pool.query("SELECT task_type FROM workhorse.task")).rows).toEqual([
+      { task_type: `${provider.name}.lifecycle.survivor` },
     ]);
   });
 

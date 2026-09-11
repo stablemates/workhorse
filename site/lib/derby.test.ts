@@ -14,7 +14,7 @@ describe("Derby standings", () => {
     const horses = createHorses();
     const progress = [40, 75, 75, 20];
     horses.forEach((horse, index) => {
-      horse.jobsDone = progress[index]!;
+      horse.tasksDone = progress[index]!;
     });
     const original = structuredClone(horses);
 
@@ -68,8 +68,8 @@ describe("Derby event history", () => {
       for (const horse of next.horses) {
         const previous = race.horses.find((entry) => entry.id === horse.id)!;
         for (const percent of [25, 50, 75]) {
-          const threshold = Math.ceil((horse.jobsTotal * percent) / 100);
-          const crossed = previous.jobsDone < threshold && horse.jobsDone >= threshold;
+          const threshold = Math.ceil((horse.tasksTotal * percent) / 100);
+          const crossed = previous.tasksDone < threshold && horse.tasksDone >= threshold;
           expect(
             milestones.filter((line) => line.text.startsWith(`${horse.id} passed ${percent}%`)),
           ).toHaveLength(crossed ? 1 : 0);
@@ -89,7 +89,7 @@ describe("Derby event history", () => {
     expect(next.horses[0]!.status).toBe("running");
     expect(
       next.log.some(
-        (line) => line.text === `wal-runner resumed after ${status} — processing jobs again`,
+        (line) => line.text === `wal-runner resumed after ${status} — processing tasks again`,
       ),
     ).toBe(true);
     expect(

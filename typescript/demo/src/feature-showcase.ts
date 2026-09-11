@@ -14,7 +14,7 @@ export type DemoFeatureFamily =
   | "timing-controls"
   | "cancellation"
   | "dead-letters-redrive"
-  | "job-dependencies"
+  | "task-dependencies"
   | "child-workflows"
   | "signals"
   | "human-decisions"
@@ -73,7 +73,7 @@ export type DemoFeaturePayload = {
   waitTimeoutMs: number | null;
   /** Child workflows: how many named children the parent fans out. */
   childCount: number | null;
-  /** Job dependencies: which side of the prerequisite edge this job plays. */
+  /** Task dependencies: which side of the prerequisite edge this task plays. */
   role: "prerequisite" | "dependent" | null;
   /** Batch handlers: position inside the seeded member group. */
   memberIndex: number | null;
@@ -83,7 +83,7 @@ export type DemoFeaturePayload = {
   invoiceId: string | null;
 };
 
-/** Prerequisite edges seeded ahead of one dependent showcase job. */
+/** Prerequisite edges seeded ahead of one dependent showcase task. */
 interface DemoFeatureDependencySeed {
   prerequisites: ReadonlyArray<{
     label: string;
@@ -139,7 +139,7 @@ export interface DemoFeatureExample {
 
 export interface DemoFeatureShowcaseFamily {
   key: DemoFeatureFamily;
-  jobType:
+  taskType:
     | "demo.ingress-routing"
     | "demo.retry-policy"
     | "demo.durable-checkpoint"
@@ -148,7 +148,7 @@ export interface DemoFeatureShowcaseFamily {
     | "demo.timing-control"
     | "demo.cancellation"
     | "demo.dead-letter-redrive"
-    | "demo.job-dependency"
+    | "demo.task-dependency"
     | "demo.child-workflow"
     | "demo.signal-wait"
     | "demo.human-decision"
@@ -171,7 +171,7 @@ const fastFixedRetry: RetryPolicy = { type: "fixed", delayMs: 250 };
 export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[] = [
   {
     key: "ingress-routing",
-    jobType: "demo.ingress-routing",
+    taskType: "demo.ingress-routing",
     title: "Ingress and routing",
     description: "Immediate, delayed, tagged, and idempotent acceptance paths.",
     scheduleName: "showcase.ingress-routing",
@@ -203,7 +203,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "retry-policies",
-    jobType: "demo.retry-policy",
+    taskType: "demo.retry-policy",
     title: "Retry policies",
     description: "Fixed, exponential, and decorrelated-jitter outcomes.",
     scheduleName: "showcase.retry-policies",
@@ -244,7 +244,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "durable-checkpoints",
-    jobType: "demo.durable-checkpoint",
+    taskType: "demo.durable-checkpoint",
     title: "Durable checkpoints",
     description: "Single, replayed, and multi-stage restart boundaries.",
     scheduleName: "showcase.durable-checkpoints",
@@ -279,7 +279,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "durable-waits",
-    jobType: "demo.durable-wait",
+    taskType: "demo.durable-wait",
     title: "Durable waits",
     description: "Lease-releasing waits with replay and retry variation.",
     scheduleName: "showcase.durable-waits",
@@ -315,7 +315,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "progress",
-    jobType: "demo.progress-reporting",
+    taskType: "demo.progress-reporting",
     title: "Mutable progress",
     description: "Latest-value progress across success, retry, and failure.",
     scheduleName: "showcase.progress",
@@ -351,7 +351,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "timing-controls",
-    jobType: "demo.timing-control",
+    taskType: "demo.timing-control",
     title: "Deadlines and execution timeouts",
     description: "Expired, timed-out, and comfortably completed work.",
     scheduleName: "showcase.timing-controls",
@@ -390,7 +390,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "cancellation",
-    jobType: "demo.cancellation",
+    taskType: "demo.cancellation",
     title: "Cancellation",
     description: "Immediate ready, future scheduled, and cooperative active cancellation.",
     scheduleName: "showcase.cancellation",
@@ -423,7 +423,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "dead-letters-redrive",
-    jobType: "demo.dead-letter-redrive",
+    taskType: "demo.dead-letter-redrive",
     title: "Dead letters and redrive",
     description: "Unredriven failure, successful redrive, and idempotent redrive replay.",
     scheduleName: "showcase.dead-letters-redrive",
@@ -458,11 +458,11 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
     ],
   },
   {
-    key: "job-dependencies",
-    jobType: "demo.job-dependency",
-    title: "Job dependencies",
+    key: "task-dependencies",
+    taskType: "demo.task-dependency",
+    title: "Task dependencies",
     description: "Prerequisites gate dependents; failures apply the declared terminal policy.",
-    scheduleName: "showcase.job-dependencies",
+    scheduleName: "showcase.task-dependencies",
     schedule: "8-59/17 * * * *",
     recurringMaxAttempts: 1,
     examples: [
@@ -517,7 +517,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "child-workflows",
-    jobType: "demo.child-workflow",
+    taskType: "demo.child-workflow",
     title: "Child workflows",
     description: "Parents fan out named children, suspend, and join retained results.",
     scheduleName: "showcase.child-workflows",
@@ -529,7 +529,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
         label: "Parent awaiting one rendered child",
         behavior: "single-child",
         maxAttempts: 1,
-        tags: ["child-job", "single"],
+        tags: ["child-task", "single"],
       },
       {
         scenario: "fan-out-join",
@@ -537,20 +537,20 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
         behavior: "fan-out-join",
         childCount: 3,
         maxAttempts: 1,
-        tags: ["child-job", "fan-out"],
+        tags: ["child-task", "fan-out"],
       },
       {
         scenario: "child-retry-recovery",
         label: "Child retries before the parent joins",
         behavior: "child-retry",
         maxAttempts: 1,
-        tags: ["child-job", "retry"],
+        tags: ["child-task", "retry"],
       },
     ],
   },
   {
     key: "signals",
-    jobType: "demo.signal-wait",
+    taskType: "demo.signal-wait",
     title: "Signals",
     description: "Suspended handlers resumed by idempotent external signal deliveries.",
     scheduleName: "showcase.signals",
@@ -585,7 +585,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "human-decisions",
-    jobType: "demo.human-decision",
+    taskType: "demo.human-decision",
     title: "Human decisions",
     description: "Suspended handlers waiting for a bounded operator decision.",
     scheduleName: "showcase.human-decisions",
@@ -620,7 +620,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "keyed-debounce",
-    jobType: "demo.keyed-debounce",
+    taskType: "demo.keyed-debounce",
     title: "Keyed debounce",
     description: "PostgreSQL-owned windows replacing still-pending keyed work.",
     scheduleName: "showcase.keyed-debounce",
@@ -655,7 +655,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "keyed-throttle",
-    jobType: "demo.keyed-throttle",
+    taskType: "demo.keyed-throttle",
     title: "Keyed throttle",
     description: "One accepted keyed task per window, with coalesced repeats.",
     scheduleName: "showcase.keyed-throttle",
@@ -690,7 +690,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "priority-lanes",
-    jobType: "demo.priority-lane",
+    taskType: "demo.priority-lane",
     title: "Priority lanes",
     description: "A mixed-priority backlog claimed highest rank first.",
     scheduleName: "showcase.priority-lanes",
@@ -726,9 +726,9 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "batch-handlers",
-    jobType: "demo.batch-digest",
+    taskType: "demo.batch-digest",
     title: "Batch handlers",
-    description: "Compatible jobs delivered to one handler invocation, settled independently.",
+    description: "Compatible tasks delivered to one handler invocation, settled independently.",
     scheduleName: "showcase.batch-handlers",
     schedule: "15-59/17 * * * *",
     recurringMaxAttempts: 1,
@@ -762,7 +762,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "payload-contracts",
-    jobType: "demo.contract-check",
+    taskType: "demo.contract-check",
     title: "Payload contracts",
     description: "Versioned payload and result validation at the acceptance boundary.",
     scheduleName: "showcase.payload-contracts",
@@ -799,7 +799,7 @@ export const DEMO_FEATURE_SHOWCASE_EXAMPLE_COUNT = DEMO_FEATURE_SHOWCASE_FAMILIE
   0,
 );
 
-/** Look one declared family up by key; the catalog is the single owner of job-type names. */
+/** Look one declared family up by key; the catalog is the single owner of task-type names. */
 export function demoFeatureShowcaseFamily(key: DemoFeatureFamily): DemoFeatureShowcaseFamily {
   const family = DEMO_FEATURE_SHOWCASE_FAMILIES.find((candidate) => candidate.key === key);
   if (!family) throw new Error(`Unknown demo feature family ${key}`);
@@ -838,7 +838,7 @@ export const DEMO_FEATURE_MENU_EXAMPLES: Readonly<Record<DemoFeatureFamily, Demo
     maxAttempts: 1,
     tags: ["dead-letter", "operator", "intentionally-failing"],
   },
-  "job-dependencies": {
+  "task-dependencies": {
     scenario: "operator-dependency-chain",
     label: "Driver spawning a prerequisite and its dependent",
     behavior: "rotating",
@@ -873,9 +873,9 @@ export const DEMO_FEATURE_MENU_EXAMPLES: Readonly<Record<DemoFeatureFamily, Demo
   "payload-contracts": declaredExample("payload-contracts", "validated-acceptance"),
 };
 
-/** Stable per-job rotation so each recurring family naturally produces mixed outcomes over time. */
-export function demoFeatureRecurringVariant(jobId: string): 0 | 1 | 2 {
+/** Stable per-task rotation so each recurring family naturally produces mixed outcomes over time. */
+export function demoFeatureRecurringVariant(taskId: string): 0 | 1 | 2 {
   let hash = 0;
-  for (const character of jobId) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  for (const character of taskId) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
   return (hash % 3) as 0 | 1 | 2;
 }

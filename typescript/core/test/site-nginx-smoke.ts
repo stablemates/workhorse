@@ -285,6 +285,15 @@ vectors.push(
     token: "This page does not exist",
   },
   { path: "/nope", accept: "*/*", status: 404, type: "text/html", vary: true },
+  // ADR 0064 renamed two documentation slugs; the old URLs redirect permanently.
+  {
+    path: "/docs/job-dependencies",
+    accept: undefined,
+    status: 301,
+    type: "text/html",
+    vary: false,
+  },
+  { path: "/docs/child-jobs", accept: undefined, status: 301, type: "text/html", vary: false },
   {
     path: "/nope",
     accept: markdownOnly,

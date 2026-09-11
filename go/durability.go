@@ -18,58 +18,58 @@ var errDurableWaitSuspension = errors.New(durableWaitSuspensionMessage)
 
 // CheckpointLeaseLostError identifies a checkpoint rejected under a stale fence.
 type CheckpointLeaseLostError struct {
-	JobID          string
+	TaskID         string
 	CheckpointName string
 }
 
 func (err *CheckpointLeaseLostError) Error() string {
-	return fmt.Sprintf(checkpointLeaseLostErrorFormat, err.CheckpointName, err.JobID)
+	return fmt.Sprintf(checkpointLeaseLostErrorFormat, err.CheckpointName, err.TaskID)
 }
 
 func (err *CheckpointLeaseLostError) Unwrap() error { return ErrLeaseLost }
 
 // CheckpointConflictError identifies an immutable checkpoint name reused with another value.
 type CheckpointConflictError struct {
-	JobID          string
+	TaskID         string
 	CheckpointName string
 }
 
 func (err *CheckpointConflictError) Error() string {
-	return fmt.Sprintf(checkpointConflictErrorFormat, err.CheckpointName, err.JobID)
+	return fmt.Sprintf(checkpointConflictErrorFormat, err.CheckpointName, err.TaskID)
 }
 
 // WaitLeaseLostError identifies a durable wait rejected under a stale fence.
 type WaitLeaseLostError struct {
-	JobID    string
+	TaskID   string
 	WaitName string
 }
 
 func (err *WaitLeaseLostError) Error() string {
-	return fmt.Sprintf(waitLeaseLostErrorFormat, err.WaitName, err.JobID)
+	return fmt.Sprintf(waitLeaseLostErrorFormat, err.WaitName, err.TaskID)
 }
 
 func (err *WaitLeaseLostError) Unwrap() error { return ErrLeaseLost }
 
 // WaitConflictError identifies a durable wait name reused with another target.
 type WaitConflictError struct {
-	JobID    string
+	TaskID   string
 	WaitName string
 }
 
 func (err *WaitConflictError) Error() string {
-	return fmt.Sprintf(waitConflictErrorFormat, err.WaitName, err.JobID)
+	return fmt.Sprintf(waitConflictErrorFormat, err.WaitName, err.TaskID)
 }
 
-// WaitLimitExceededError identifies a job that already owns the supported number of waits.
-type WaitLimitExceededError struct{ JobID string }
+// WaitLimitExceededError identifies a task that already owns the supported number of waits.
+type WaitLimitExceededError struct{ TaskID string }
 
 func (err *WaitLimitExceededError) Error() string {
-	return fmt.Sprintf(waitLimitExceededErrorFormat, err.JobID)
+	return fmt.Sprintf(waitLimitExceededErrorFormat, err.TaskID)
 }
 
-// JobProgress is the latest mutable progress projection for a stable job identity.
-type JobProgress struct {
-	JobID      string
+// TaskProgress is the latest mutable progress projection for a stable task identity.
+type TaskProgress struct {
+	TaskID     string
 	Value      any
 	Revision   int64
 	Attempt    int
@@ -80,22 +80,22 @@ type JobProgress struct {
 }
 
 // ProgressLeaseLostError identifies a progress write rejected under a stale fence.
-type ProgressLeaseLostError struct{ JobID string }
+type ProgressLeaseLostError struct{ TaskID string }
 
 func (err *ProgressLeaseLostError) Error() string {
-	return fmt.Sprintf(progressLeaseLostErrorFormat, err.JobID)
+	return fmt.Sprintf(progressLeaseLostErrorFormat, err.TaskID)
 }
 
 func (err *ProgressLeaseLostError) Unwrap() error { return ErrLeaseLost }
 
 // ProgressRateLimitError reports when this ownership generation may next change progress.
 type ProgressRateLimitError struct {
-	JobID      string
+	TaskID     string
 	RetryAfter time.Duration
 }
 
 func (err *ProgressRateLimitError) Error() string {
-	return fmt.Sprintf(progressRateLimitErrorFormat, err.JobID, err.RetryAfter)
+	return fmt.Sprintf(progressRateLimitErrorFormat, err.TaskID, err.RetryAfter)
 }
 
 type checkpointCall struct {
@@ -116,7 +116,7 @@ type waitRequest struct {
 
 // HandlerContext exposes fenced durable operations for one claimed handler activation.
 type HandlerContext struct {
-	Job ClaimedJob
+	Task ClaimedTask
 
 	context       context.Context
 	cancel        context.CancelCauseFunc
@@ -128,7 +128,7 @@ type HandlerContext struct {
 	waits         map[string]*waitCall
 	progress      sync.Mutex
 	progressRead  bool
-	progressValue *JobProgress
+	progressValue *TaskProgress
 	progressError error
 	signal        sync.Mutex
 	signals       map[string]*externalWaitCall
@@ -142,7 +142,7 @@ type HandlerContext struct {
 }
 
 // GetProgress returns the latest progress observed by this handler activation.
-func (handler *HandlerContext) GetProgress() (*JobProgress, error) {
+func (handler *HandlerContext) GetProgress() (*TaskProgress, error) {
 	handler.progress.Lock()
 	defer handler.progress.Unlock()
 	if handler.progressRead {
@@ -152,7 +152,7 @@ func (handler *HandlerContext) GetProgress() (*JobProgress, error) {
 	rows, err := handler.executor.Query(
 		handler.context,
 		internalStatementRegistry[listProgressStatementName],
-		handler.Job.ID,
+		handler.Task.ID,
 	)
 	if err != nil {
 		handler.progressError = err
@@ -165,12 +165,12 @@ func (handler *HandlerContext) GetProgress() (*JobProgress, error) {
 	if len(rows) == 0 {
 		return nil, nil
 	}
-	handler.progressValue, handler.progressError = progressRecord(handler.Job.ID, rows[0])
+	handler.progressValue, handler.progressError = progressRecord(handler.Task.ID, rows[0])
 	return handler.progressValue, handler.progressError
 }
 
 // SetProgress replaces the latest progress under this handler's fenced lease.
-func (handler *HandlerContext) SetProgress(value any) (*JobProgress, error) {
+func (handler *HandlerContext) SetProgress(value any) (*TaskProgress, error) {
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return nil, err
@@ -183,9 +183,9 @@ func (handler *HandlerContext) SetProgress(value any) (*JobProgress, error) {
 	rows, err := handler.executor.Query(
 		handler.context,
 		protocolStatementRegistry[updateProgressStatementName],
-		handler.Job.ID,
+		handler.Task.ID,
 		handler.workerID,
-		handler.Job.FenceToken,
+		handler.Task.FenceToken,
 		encoded,
 	)
 	if err != nil {
@@ -197,7 +197,7 @@ func (handler *HandlerContext) SetProgress(value any) (*JobProgress, error) {
 	status, _ := rows[0][rowStatusField].(string)
 	switch status {
 	case progressUpdatedValue, progressUnchangedValue:
-		progress, err := progressRecord(handler.Job.ID, rows[0])
+		progress, err := progressRecord(handler.Task.ID, rows[0])
 		if err != nil {
 			return nil, err
 		}
@@ -206,21 +206,21 @@ func (handler *HandlerContext) SetProgress(value any) (*JobProgress, error) {
 		handler.progressError = nil
 		return progress, nil
 	case durableStaleValue:
-		return nil, &ProgressLeaseLostError{JobID: handler.Job.ID}
+		return nil, &ProgressLeaseLostError{TaskID: handler.Task.ID}
 	case progressRateLimitedValue:
 		retryAfterMS, ok := progressInt64(rows[0][rowRetryAfterMSField])
 		if !ok {
 			return nil, errors.New(invalidProgressResultMessage)
 		}
 		return nil, &ProgressRateLimitError{
-			JobID: handler.Job.ID, RetryAfter: time.Duration(retryAfterMS) * time.Millisecond,
+			TaskID: handler.Task.ID, RetryAfter: time.Duration(retryAfterMS) * time.Millisecond,
 		}
 	default:
 		return nil, fmt.Errorf(unknownProgressStatusFormat, status)
 	}
 }
 
-func progressRecord(jobID string, row Row) (*JobProgress, error) {
+func progressRecord(taskID string, row Row) (*TaskProgress, error) {
 	value, err := decodedJSON(row[rowProgressValueField])
 	if err != nil {
 		return nil, err
@@ -234,8 +234,8 @@ func progressRecord(jobID string, row Row) (*JobProgress, error) {
 	if !revisionOK || !attemptOK || !fenceOK || !workerOK || !createdOK || !updatedOK {
 		return nil, errors.New(invalidProgressResultMessage)
 	}
-	return &JobProgress{
-		JobID: jobID, Value: value, Revision: revision, Attempt: attempt,
+	return &TaskProgress{
+		TaskID: taskID, Value: value, Revision: revision, Attempt: attempt,
 		FenceToken: fenceToken, WorkerID: workerID, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}, nil
 }
@@ -290,7 +290,7 @@ func (handler *HandlerContext) runCheckpoint(
 	rows, err := handler.executor.Query(
 		handler.context,
 		internalStatementRegistry[listCheckpointStatementName],
-		handler.Job.ID,
+		handler.Task.ID,
 		name,
 	)
 	if err != nil {
@@ -313,9 +313,9 @@ func (handler *HandlerContext) runCheckpoint(
 	rows, err = handler.executor.Query(
 		handler.context,
 		protocolStatementRegistry[saveCheckpointStatementName],
-		handler.Job.ID,
+		handler.Task.ID,
 		handler.workerID,
-		handler.Job.FenceToken,
+		handler.Task.FenceToken,
 		name,
 		encoded,
 	)
@@ -329,15 +329,15 @@ func (handler *HandlerContext) runCheckpoint(
 	case durableSavedValue, durableExistingValue:
 		return decodedJSON(rows[0][rowCheckpointValueField])
 	case durableStaleValue:
-		return nil, &CheckpointLeaseLostError{JobID: handler.Job.ID, CheckpointName: name}
+		return nil, &CheckpointLeaseLostError{TaskID: handler.Task.ID, CheckpointName: name}
 	case durableConflictValue:
-		return nil, &CheckpointConflictError{JobID: handler.Job.ID, CheckpointName: name}
+		return nil, &CheckpointConflictError{TaskID: handler.Task.ID, CheckpointName: name}
 	default:
 		return nil, fmt.Errorf(unknownCheckpointStatusFormat, status)
 	}
 }
 
-// Sleep suspends the job without consuming its logical attempt until duration elapses.
+// Sleep suspends the task without consuming its logical attempt until duration elapses.
 func (handler *HandlerContext) Sleep(name string, duration time.Duration) error {
 	if duration < time.Millisecond || duration > maximumWaitDuration || duration%time.Millisecond != 0 {
 		return fmt.Errorf(waitDurationRangeFormat, time.Millisecond, maximumWaitDuration)
@@ -346,7 +346,7 @@ func (handler *HandlerContext) Sleep(name string, duration time.Duration) error 
 	return handler.scheduleWait(name, waitRequest{durationMS: &durationMS})
 }
 
-// SleepUntil suspends the job without consuming its logical attempt until wakeAt.
+// SleepUntil suspends the task without consuming its logical attempt until wakeAt.
 func (handler *HandlerContext) SleepUntil(name string, wakeAt time.Time) error {
 	if wakeAt.IsZero() || time.Until(wakeAt) > maximumWaitDuration {
 		return errors.New(waitTargetRangeMessage)
@@ -394,9 +394,9 @@ func (handler *HandlerContext) runWait(name string, request waitRequest) error {
 	rows, err := handler.executor.Query(
 		handler.context,
 		protocolStatementRegistry[scheduleWaitStatementName],
-		handler.Job.ID,
+		handler.Task.ID,
 		handler.workerID,
-		handler.Job.FenceToken,
+		handler.Task.FenceToken,
 		name,
 		durationMS,
 		wakeAt,
@@ -415,11 +415,11 @@ func (handler *HandlerContext) runWait(name string, request waitRequest) error {
 		handler.cancel(errDurableWaitSuspension)
 		return errDurableWaitSuspension
 	case durableStaleValue:
-		return &WaitLeaseLostError{JobID: handler.Job.ID, WaitName: name}
+		return &WaitLeaseLostError{TaskID: handler.Task.ID, WaitName: name}
 	case durableConflictValue:
-		return &WaitConflictError{JobID: handler.Job.ID, WaitName: name}
+		return &WaitConflictError{TaskID: handler.Task.ID, WaitName: name}
 	case durableLimitExceededValue:
-		return &WaitLimitExceededError{JobID: handler.Job.ID}
+		return &WaitLimitExceededError{TaskID: handler.Task.ID}
 	default:
 		return fmt.Errorf(unknownDurableWaitStatusFormat, status)
 	}

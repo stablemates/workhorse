@@ -175,14 +175,14 @@ const basisLabels = {
 const noSnapshotCaveat =
   "Workhorse does not record the limits a task ran under, so these are the queue's limits now and may differ from the limits in force while this task ran.";
 
-export function describeTaskConcurrency(job: {
+export function describeTaskConcurrency(task: {
   identity: { state: string; concurrencyKey?: string | null };
   concurrencyPolicy?: DashboardConcurrencyPolicySummary | null;
   current: { runtime: { state: string } | null };
 }): TaskConcurrencyDisplay | null {
-  const runtimeState = job.current.runtime?.state ?? null;
-  const concurrencyKey = job.identity.concurrencyKey ?? null;
-  const policy = job.concurrencyPolicy ?? null;
+  const runtimeState = task.current.runtime?.state ?? null;
+  const concurrencyKey = task.identity.concurrencyKey ?? null;
+  const policy = task.concurrencyPolicy ?? null;
   if (concurrencyKey === null && policy === null) return null;
   const keyTitle =
     concurrencyKey === null

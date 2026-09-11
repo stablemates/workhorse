@@ -22,183 +22,183 @@ class LifecycleError(WorkhorseError):
 
 
 class StaleLeaseError(LifecycleError):
-    def __init__(self, job_id: str) -> None:
-        self.job_id = job_id
-        super().__init__("Job lease was lost")
+    def __init__(self, task_id: str) -> None:
+        self.task_id = task_id
+        super().__init__("Task lease was lost")
 
 
 class CancellationRequestedError(WorkhorseError):
-    def __init__(self, job_id: str) -> None:
-        self.job_id = job_id
-        super().__init__(f"Cancellation was requested for job {job_id}")
+    def __init__(self, task_id: str) -> None:
+        self.task_id = task_id
+        super().__init__(f"Cancellation was requested for task {task_id}")
 
 
 class DeadlineExceededError(WorkhorseError):
-    def __init__(self, job_id: str) -> None:
-        self.job_id = job_id
-        super().__init__(f"Deadline was exceeded for job {job_id}")
+    def __init__(self, task_id: str) -> None:
+        self.task_id = task_id
+        super().__init__(f"Deadline was exceeded for task {task_id}")
 
 
 class ExecutionTimeoutError(WorkhorseError):
-    def __init__(self, job_id: str, attempt: int) -> None:
-        self.job_id = job_id
+    def __init__(self, task_id: str, attempt: int) -> None:
+        self.task_id = task_id
         self.attempt = attempt
-        super().__init__(f"Execution timeout was exceeded for job {job_id} attempt {attempt}")
+        super().__init__(f"Execution timeout was exceeded for task {task_id} attempt {attempt}")
 
 
 class CheckpointLeaseLostError(LifecycleError):
-    def __init__(self, job_id: str, checkpoint_name: str) -> None:
-        self.job_id = job_id
+    def __init__(self, task_id: str, checkpoint_name: str) -> None:
+        self.task_id = task_id
         self.checkpoint_name = checkpoint_name
         super().__init__(
-            f"Cannot save checkpoint {checkpoint_name} for job {job_id} under a stale lease"
+            f"Cannot save checkpoint {checkpoint_name} for task {task_id} under a stale lease"
         )
 
 
 class CheckpointConflictError(WorkhorseError):
-    def __init__(self, job_id: str, checkpoint_name: str) -> None:
-        self.job_id = job_id
+    def __init__(self, task_id: str, checkpoint_name: str) -> None:
+        self.task_id = task_id
         self.checkpoint_name = checkpoint_name
         super().__init__(
-            f"Checkpoint {checkpoint_name} for job {job_id} already has a different value"
+            f"Checkpoint {checkpoint_name} for task {task_id} already has a different value"
         )
 
 
 class ProgressLeaseLostError(LifecycleError):
-    def __init__(self, job_id: str) -> None:
-        self.job_id = job_id
-        super().__init__(f"Cannot update progress for job {job_id} under a stale lease")
+    def __init__(self, task_id: str) -> None:
+        self.task_id = task_id
+        super().__init__(f"Cannot update progress for task {task_id} under a stale lease")
 
 
 class ProgressRateLimitError(WorkhorseError):
-    def __init__(self, job_id: str, retry_after_ms: int) -> None:
-        self.job_id = job_id
+    def __init__(self, task_id: str, retry_after_ms: int) -> None:
+        self.task_id = task_id
         self.retry_after_ms = retry_after_ms
         super().__init__(
-            f"Cannot update progress for job {job_id} yet; "
+            f"Cannot update progress for task {task_id} yet; "
             f"retry after {retry_after_ms} milliseconds"
         )
 
 
 class ChildLeaseLostError(LifecycleError):
-    def __init__(self, parent_job_id: str) -> None:
-        self.parent_job_id = parent_job_id
+    def __init__(self, parent_task_id: str) -> None:
+        self.parent_task_id = parent_task_id
         super().__init__(
-            f"Cannot create a child for job {parent_job_id} because the lease is stale or expired"
+            f"Cannot create a child for task {parent_task_id} because the lease is stale or expired"
         )
 
 
 class ChildConflictError(WorkhorseError):
-    def __init__(self, parent_job_id: str, child_name: str) -> None:
-        self.parent_job_id = parent_job_id
+    def __init__(self, parent_task_id: str, child_name: str) -> None:
+        self.parent_task_id = parent_task_id
         self.child_name = child_name
         super().__init__(
-            f"Child {child_name} for job {parent_job_id} already exists with a different request"
+            f"Child {child_name} for task {parent_task_id} already exists with a different request"
         )
 
 
 class ChildLimitExceededError(WorkhorseError):
-    def __init__(self, parent_job_id: str) -> None:
-        self.parent_job_id = parent_job_id
-        super().__init__(f"Job {parent_job_id} exceeds the supported child limit")
+    def __init__(self, parent_task_id: str) -> None:
+        self.parent_task_id = parent_task_id
+        super().__init__(f"Task {parent_task_id} exceeds the supported child limit")
 
 
 class ChildResultLimitExceededError(WorkhorseError):
-    def __init__(self, parent_job_id: str, result_bytes: int, result_limit_bytes: int) -> None:
-        self.parent_job_id = parent_job_id
+    def __init__(self, parent_task_id: str, result_bytes: int, result_limit_bytes: int) -> None:
+        self.parent_task_id = parent_task_id
         self.result_bytes = result_bytes
         self.result_limit_bytes = result_limit_bytes
         super().__init__(
-            f"Joined child results for job {parent_job_id} exceed its configured size limit"
+            f"Joined child results for task {parent_task_id} exceed its configured size limit"
         )
 
 
 class WaitLeaseLostError(LifecycleError):
-    def __init__(self, job_id: str, wait_name: str) -> None:
-        self.job_id = job_id
+    def __init__(self, task_id: str, wait_name: str) -> None:
+        self.task_id = task_id
         self.wait_name = wait_name
-        super().__init__(f"Cannot schedule wait {wait_name} for job {job_id} under a stale lease")
+        super().__init__(f"Cannot schedule wait {wait_name} for task {task_id} under a stale lease")
 
 
 class WaitConflictError(WorkhorseError):
-    def __init__(self, job_id: str, wait_name: str) -> None:
-        self.job_id = job_id
+    def __init__(self, task_id: str, wait_name: str) -> None:
+        self.task_id = task_id
         self.wait_name = wait_name
-        super().__init__(f"Wait {wait_name} for job {job_id} has a conflicting target")
+        super().__init__(f"Wait {wait_name} for task {task_id} has a conflicting target")
 
 
 class WaitLimitExceededError(WorkhorseError):
-    def __init__(self, job_id: str) -> None:
-        self.job_id = job_id
-        super().__init__(f"Job {job_id} already has the maximum number of durable waits")
+    def __init__(self, task_id: str) -> None:
+        self.task_id = task_id
+        super().__init__(f"Task {task_id} already has the maximum number of durable waits")
 
 
 class SignalWaitLeaseLostError(LifecycleError):
-    def __init__(self, job_id: str, wait_name: str) -> None:
-        self.job_id = job_id
+    def __init__(self, task_id: str, wait_name: str) -> None:
+        self.task_id = task_id
         self.wait_name = wait_name
         super().__init__(
-            f"Signal wait {wait_name} for job {job_id} cannot be recorded under a stale lease"
+            f"Signal wait {wait_name} for task {task_id} cannot be recorded under a stale lease"
         )
 
 
 class SignalWaitConflictError(WorkhorseError):
-    def __init__(self, job_id: str, wait_name: str) -> None:
-        self.job_id = job_id
+    def __init__(self, task_id: str, wait_name: str) -> None:
+        self.task_id = task_id
         self.wait_name = wait_name
-        super().__init__(f"Signal wait {wait_name} for job {job_id} is already waiting")
+        super().__init__(f"Signal wait {wait_name} for task {task_id} is already waiting")
 
 
 class SignalWaitLimitExceededError(WorkhorseError):
-    def __init__(self, job_id: str) -> None:
-        self.job_id = job_id
-        super().__init__(f"Job {job_id} already has the maximum number of signal waits")
+    def __init__(self, task_id: str) -> None:
+        self.task_id = task_id
+        super().__init__(f"Task {task_id} already has the maximum number of signal waits")
 
 
 class SignalIdempotencyConflictError(WorkhorseError):
-    def __init__(self, job_id: str, wait_name: str) -> None:
-        self.job_id = job_id
+    def __init__(self, task_id: str, wait_name: str) -> None:
+        self.task_id = task_id
         self.wait_name = wait_name
         super().__init__(
-            f"Signal {wait_name} for job {job_id} received a different idempotent request"
+            f"Signal {wait_name} for task {task_id} received a different idempotent request"
         )
 
 
 class HumanWaitLeaseLostError(LifecycleError):
-    def __init__(self, job_id: str, wait_name: str) -> None:
-        self.job_id = job_id
+    def __init__(self, task_id: str, wait_name: str) -> None:
+        self.task_id = task_id
         self.wait_name = wait_name
         super().__init__(
-            f"Human wait {wait_name} for job {job_id} cannot be recorded under a stale lease"
+            f"Human wait {wait_name} for task {task_id} cannot be recorded under a stale lease"
         )
 
 
 class HumanWaitAlreadyWaitingError(WorkhorseError):
-    def __init__(self, job_id: str, wait_name: str) -> None:
-        self.job_id = job_id
+    def __init__(self, task_id: str, wait_name: str) -> None:
+        self.task_id = task_id
         self.wait_name = wait_name
-        super().__init__(f"Human wait {wait_name} for job {job_id} is already waiting")
+        super().__init__(f"Human wait {wait_name} for task {task_id} is already waiting")
 
 
 class HumanWaitLimitExceededError(WorkhorseError):
-    def __init__(self, job_id: str) -> None:
-        self.job_id = job_id
-        super().__init__(f"Job {job_id} already has the maximum number of human waits")
+    def __init__(self, task_id: str) -> None:
+        self.task_id = task_id
+        super().__init__(f"Task {task_id} already has the maximum number of human waits")
 
 
 class HumanWaitConflictError(WorkhorseError):
-    def __init__(self, job_id: str, wait_name: str) -> None:
-        self.job_id = job_id
+    def __init__(self, task_id: str, wait_name: str) -> None:
+        self.task_id = task_id
         self.wait_name = wait_name
-        super().__init__(f"Human wait {wait_name} for job {job_id} has different context")
+        super().__init__(f"Human wait {wait_name} for task {task_id} has different context")
 
 
 class HumanWaitIdempotencyConflictError(WorkhorseError):
-    def __init__(self, job_id: str, wait_name: str) -> None:
-        self.job_id = job_id
+    def __init__(self, task_id: str, wait_name: str) -> None:
+        self.task_id = task_id
         self.wait_name = wait_name
         super().__init__(
-            f"Human wait {wait_name} for job {job_id} received a different idempotent completion"
+            f"Human wait {wait_name} for task {task_id} received a different idempotent completion"
         )
 
 
@@ -208,19 +208,19 @@ class ProtocolCompatibilityError(WorkhorseError):
         super().__init__(f"SQL protocol compatibility check refused mutation: {code}")
 
 
-class JobContractValidationError(WorkhorseError):
-    def __init__(self, job_type: str, version: str, kind: str) -> None:
-        self.job_type = job_type
+class TaskContractValidationError(WorkhorseError):
+    def __init__(self, task_type: str, version: str, kind: str) -> None:
+        self.task_type = task_type
         self.version = version
         self.kind = kind
-        super().__init__(f"{job_type} {kind} does not satisfy contract version {version}")
+        super().__init__(f"{task_type} {kind} does not satisfy contract version {version}")
 
 
-class JobContractUnavailableError(WorkhorseError):
-    def __init__(self, job_type: str, version: str) -> None:
-        self.job_type = job_type
+class TaskContractUnavailableError(WorkhorseError):
+    def __init__(self, task_type: str, version: str) -> None:
+        self.task_type = task_type
         self.version = version
-        super().__init__(f"{job_type} contract version {version} is unavailable")
+        super().__init__(f"{task_type} contract version {version} is unavailable")
 
 
 class EnqueueIdempotencyConflictError(WorkhorseError):
@@ -232,13 +232,13 @@ class EnqueueIdempotencyConflictError(WorkhorseError):
 class DependencyCycleError(WorkhorseError):
     def __init__(self, details: Mapping[str, object]) -> None:
         self.details = details
-        super().__init__("PostgreSQL rejected a cyclic job dependency")
+        super().__init__("PostgreSQL rejected a cyclic task dependency")
 
 
 class DependencyLimitExceededError(WorkhorseError):
     def __init__(self, details: Mapping[str, object]) -> None:
         self.details = details
-        super().__init__("PostgreSQL rejected a job dependency limit")
+        super().__init__("PostgreSQL rejected a task dependency limit")
 
 
 class RedriveIdempotencyConflictError(WorkhorseError):
@@ -295,8 +295,6 @@ __all__ = [
     "HumanWaitIdempotencyConflictError",
     "HumanWaitLeaseLostError",
     "HumanWaitLimitExceededError",
-    "JobContractUnavailableError",
-    "JobContractValidationError",
     "LifecycleError",
     "ProgressLeaseLostError",
     "ProgressRateLimitError",
@@ -308,6 +306,8 @@ __all__ = [
     "SignalWaitLeaseLostError",
     "SignalWaitLimitExceededError",
     "StaleLeaseError",
+    "TaskContractUnavailableError",
+    "TaskContractValidationError",
     "WaitConflictError",
     "WaitLeaseLostError",
     "WaitLimitExceededError",

@@ -13,7 +13,7 @@ export const dashboardRuntimeConfigSchema = z.strictObject({
   auditActor: z.string(),
   /** Built-in authentication routes. Null when the embedding host owns authorization. */
   authentication: z.strictObject({ loginUrl: z.string(), logoutUrl: z.string() }).nullable(),
-  /** Enables the job-seeding menu. Only hosts that intentionally supply fixtures should set it. */
+  /** Enables the task-seeding menu. Only hosts that intentionally supply fixtures should set it. */
   demoTools: z.boolean(),
   /** Every named workspace the host serves, in configuration order. */
   workspaces: z

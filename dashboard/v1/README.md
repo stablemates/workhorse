@@ -90,7 +90,7 @@ A failed call answers the error envelope with a matching HTTP status:
 
 Codes the reference implementation uses: `BAD_REQUEST` (400, malformed envelope or input rejected
 by the request schema), `FORBIDDEN` (403, mutation on a read-only dashboard), `NOT_FOUND` (404,
-`eventDetail`, `jobDetail`, `runTaskNow`, `cancelTask`, `signalTask`, `completeHumanWait`,
+`eventDetail`, `taskDetail`, `runTaskNow`, `cancelTask`, `signalTask`, `completeHumanWait`,
 `redriveTask`),
 `METHOD_NOT_SUPPORTED` (405), and `INTERNAL_SERVER_ERROR` (500). Input constraints beyond JSON
 Schema — for example `enqueueTest` requiring `feature` when `kind` is `"feature"` — are enforced
@@ -172,7 +172,7 @@ The file's `scenarios` run strictly in order against one freshly installed schem
 
 - A `seed` step executes one SQL statement — the same versioned `workhorse.*_v1` functions the
   SQL protocol fixtures pin — asserts its rows when `expect` is present, and can `capture` values
-  (job ids, fence tokens) by row pointer for later `$ref` citations.
+  (task ids, fence tokens) by row pointer for later `$ref` citations.
 - An `exchange` posts one literal oRPC envelope from `request` (after `$ref` resolution) to
   `POST {basePath}/rpc/dashboard/{procedure}` and asserts the exact response `status` and `body`.
   `mode` selects the writable or read-only deployment (default `"writable"`), `origin` sends the
@@ -202,7 +202,7 @@ as `authenticatedActor` (the fixtures pin server-assigned attribution to it), re
 `maintenanceLoops` as given. Two members of the writable deployment have no shared SQL function
 and must be supplied by the harness exactly as the reference harness
 (`typescript/dashboard-server/test/support/conformance-harness.ts`) does: an `enqueueTest`
-operator that enqueues one `conformance.demo-{kind}` job on the `conformance-demo` queue, and a
+operator that enqueues one `conformance.demo-{kind}` task on the `conformance-demo` queue, and a
 `setScheduleEnabled` controller that flips `workhorse.schedule_definition.enabled`.
 
 `pnpm dashboard-conformance:generate` regenerates every exchange's `expect` block by replaying

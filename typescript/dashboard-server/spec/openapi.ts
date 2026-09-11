@@ -89,12 +89,12 @@ export const procedureDocs: Record<ProcedureName, ProcedureDoc> = {
   tasks: {
     summary: "List tasks, filtered and paged",
     description:
-      "Returns one page of jobs matching filter, queue, worker, jobType, priority, tags, and search, sorted by updated or priority. page is 1-based and at most 100; pageSize is 25, 50, or 100. Payloads are never included; read one task with jobDetail. canCompleteHumanWait reports whether this deployment can complete human waits.",
+      "Returns one page of tasks matching filter, queue, worker, taskType, priority, tags, and search, sorted by updated or priority. page is 1-based and at most 100; pageSize is 25, 50, or 100. Payloads are never included; read one task with taskDetail. canCompleteHumanWait reports whether this deployment can complete human waits.",
   },
   taskFacets: {
     summary: "List the values the task filters offer",
     description:
-      "Returns the distinct queues, workers (including configured workers not yet seen), job types, and tags observed in retained jobs. Takes no input.",
+      "Returns the distinct queues, workers (including configured workers not yet seen), task types, and tags observed in retained tasks. Takes no input.",
   },
   activity: {
     summary: "Bucket task activity over a period",
@@ -102,9 +102,9 @@ export const procedureDocs: Record<ProcedureName, ProcedureDoc> = {
       "Returns time-bucketed counts for one task filter over a period of 15m, 1h, 6h, 24h, or 7d, grouped by queue, worker, task type, or status, optionally narrowed by tags, queue, and worker. bucketSeconds gives the width of each bucket.",
   },
   events: {
-    summary: "List job events and attempts in a window",
+    summary: "List task events and attempts in a window",
     description:
-      "Returns one page of job events and attempt outcomes within a window of 15m, 1h, 6h, or 24h, filterable by kind (event, attempt, or all), queue, jobType, event types, and one jobId. retention reports how far back events and attempts are kept.",
+      "Returns one page of task events and attempt outcomes within a window of 15m, 1h, 6h, or 24h, filterable by kind (event, attempt, or all), queue, taskType, event types, and one taskId. retention reports how far back events and attempts are kept.",
   },
   eventDetail: {
     summary: "Read one event or attempt",
@@ -142,7 +142,7 @@ export const procedureDocs: Record<ProcedureName, ProcedureDoc> = {
     description:
       "Returns the rows a retention definition would make eligible for pruning, per category, without applying it. Call it before overrideRetentionPolicy.",
   },
-  jobDetail: {
+  taskDetail: {
     summary: "Read one task",
     description:
       "Returns one task's identity, lineage (dependencies, children, and redrives), concurrency policy, current attempt, attempts, checkpoints, waits, and events. The payload is redacted. canSignal reports whether signalTask is available for it.",
@@ -154,9 +154,9 @@ export const procedureDocs: Record<ProcedureName, ProcedureDoc> = {
       "Returns the tasks waiting on a human decision or a named signal, with diagnostics on pending and rejected deliveries. canComplete and canSignal report whether this deployment can complete a wait or deliver a signal. Takes no input.",
   },
   enqueueTest: {
-    summary: "Enqueue a demonstration job",
+    summary: "Enqueue a demonstration task",
     description:
-      "Enqueues one demonstration job of the given kind on the demo queue and returns its jobId. outcome reports whether the request accepted a new task or replayed an identical earlier request under a retained key; hosts that do not track the distinction may omit it. feature is required when kind is feature. Available only where the host wires a demo operator; other deployments answer FORBIDDEN.",
+      "Enqueues one demonstration task of the given kind on the demo queue and returns its taskId. outcome reports whether the request accepted a new task or replayed an identical earlier request under a retained key; hosts that do not track the distinction may omit it. feature is required when kind is feature. Available only where the host wires a demo operator; other deployments answer FORBIDDEN.",
   },
   setScheduleEnabled: {
     summary: "Enable or disable a schedule",
@@ -170,7 +170,7 @@ export const procedureDocs: Record<ProcedureName, ProcedureDoc> = {
   },
   purgeQueue: {
     summary: "Purge a queue",
-    description: "Deletes the queue's pending jobs and returns deletedCount.",
+    description: "Deletes the queue's pending tasks and returns deletedCount.",
   },
   setWorkerPaused: {
     summary: "Pause or resume a worker",
@@ -229,7 +229,7 @@ export const procedureDocs: Record<ProcedureName, ProcedureDoc> = {
   redriveDeadLetters: {
     summary: "Redrive a page of dead letters",
     description:
-      "Redrives up to limit dead letters matching queue, jobType, and tags, resuming from cursor. Every result is reported, including the sources PostgreSQL refused; nextCursor continues from where this page stopped.",
+      "Redrives up to limit dead letters matching queue, taskType, and tags, resuming from cursor. Every result is reported, including the sources PostgreSQL refused; nextCursor continues from where this page stopped.",
   },
 };
 
@@ -318,9 +318,9 @@ function concreteExample(value: unknown, location: string): unknown {
 }
 
 function capturePlaceholder(name: string, location: string): unknown {
-  if (name.endsWith("Job")) return placeholderUuid;
+  if (name.endsWith("Task")) return placeholderUuid;
   if (name.endsWith("Fence")) return 1;
-  // The one non-job capture is an event id, `event:<uuid>`, taken from the events page.
+  // The one non-task capture is an event id, `event:<uuid>`, taken from the events page.
   if (name === "eventDetailId") return `event:${placeholderUuid}`;
   throw new Error(`${location} cites capture ${name}, whose placeholder is unknown`);
 }
@@ -666,7 +666,7 @@ export function composeDashboardOpenApi({
       summary: "The RPC procedures behind the embedded Workhorse dashboard, contract dashboard/v1.",
       description:
         "This API is served by your own Workhorse deployment at {origin}{basePath}, never by workhorse.run, which publishes only this document. " +
-        "Workhorse's primary protocol is SQL (ADR 0023): applications enqueue and work jobs through PostgreSQL, and these procedures are the operator surface the dashboard consumes, not an ingress API for application traffic. " +
+        "Workhorse's primary protocol is SQL (ADR 0023): applications enqueue and work tasks through PostgreSQL, and these procedures are the operator surface the dashboard consumes, not an ingress API for application traffic. " +
         "Every procedure is one POST with a JSON envelope; the path carries the contract's major version, and a breaking change creates dashboard/v2 instead of moving a package major (ADR 0054). " +
         "Reads go through the versioned dashboard_*_v1 SQL views and mutations through the shared versioned SQL functions, so any backend bound by this contract answers the same shapes. " +
         "The document is generated from the committed dashboard/v1 artifacts (manifest.json, procedures.json, conformance.json) by pnpm dashboard-spec:generate and checked by pnpm dashboard-spec:check, so it cannot drift from the router.",

@@ -10,20 +10,20 @@ const (
 	minimumSchemaVersion   = 1
 	maximumSchemaVersion   = 1
 	// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
-	MaxEnqueueBatchSize     = 1000
-	defaultJobValueMaxBytes = 1048576
+	MaxEnqueueBatchSize      = 1000
+	defaultTaskValueMaxBytes = 1048576
 )
 
 var internalStatementRegistry = map[string]string{
 	"deregister_worker_v1": `SELECT workhorse.deregister_worker_v1($1::text) AS deregistered`,
-	"fire_due_schedules_v1": `SELECT namespace, schedule_name, occurrence_at, job_id
+	"fire_due_schedules_v1": `SELECT namespace, schedule_name, occurrence_at, task_id
   FROM workhorse.fire_due_schedules_v1($1::text[], $2::timestamptz, $3::integer)`,
-	"list_checkpoint":           `SELECT checkpoint_value FROM workhorse.job_checkpoint WHERE job_id = $1::uuid AND checkpoint_name = $2::text`,
+	"list_checkpoint":           `SELECT checkpoint_value FROM workhorse.task_checkpoint WHERE task_id = $1::uuid AND checkpoint_name = $2::text`,
 	"list_concurrency_policies": `SELECT namespace, queue_name, max_active, max_active_per_key, updated_at FROM workhorse.concurrency_policy, (SELECT $1::text[] AS names) AS filter WHERE cardinality(filter.names) = 0 OR queue_name = ANY(filter.names) ORDER BY queue_name`,
 	"list_progress": `SELECT progress_value, revision::text, attempt, fence_token::text,
        worker_id, created_at, updated_at
-  FROM workhorse.job_progress
- WHERE job_id = $1::uuid`,
+  FROM workhorse.task_progress
+ WHERE task_id = $1::uuid`,
 	"list_rate_limit_policies": `SELECT namespace, queue_name, rate_limit, rate_interval_ms, rate_burst, per_key_limit, per_key_interval_ms, per_key_burst, updated_at FROM workhorse.rate_limit_policy, (SELECT $1::text[] AS names) AS filter WHERE cardinality(filter.names) = 0 OR queue_name = ANY(filter.names) ORDER BY queue_name`,
 	"promote_v1":               `SELECT workhorse.promote_v1($1::integer) AS promoted`,
 	"register_worker_v1": `SELECT workhorse.register_worker_v1(
@@ -65,27 +65,27 @@ var internalStatementRegistry = map[string]string{
          FROM workhorse.rate_limit_policy
         WHERE cardinality($1::text[]) = 0 OR queue_name = ANY($1::text[])
         ORDER BY queue_name`,
-	"job_checkpoint": `SELECT job_id, checkpoint_name, checkpoint_value, attempt, fence_token::text,
+	"task_checkpoint": `SELECT task_id, checkpoint_name, checkpoint_value, attempt, fence_token::text,
               worker_id, created_at
-         FROM workhorse.job_checkpoint
-        WHERE job_id = $1::uuid AND checkpoint_name = $2::text`,
-	"job_checkpoint__checkpoints_progress_waits": `SELECT job_id, checkpoint_name, checkpoint_value, attempt, fence_token::text,
+         FROM workhorse.task_checkpoint
+        WHERE task_id = $1::uuid AND checkpoint_name = $2::text`,
+	"task_checkpoint__checkpoints_progress_waits": `SELECT task_id, checkpoint_name, checkpoint_value, attempt, fence_token::text,
               worker_id, created_at
-         FROM workhorse.job_checkpoint
-        WHERE job_id = $1::uuid
+         FROM workhorse.task_checkpoint
+        WHERE task_id = $1::uuid
         ORDER BY created_at, checkpoint_name`,
-	"job_progress": `SELECT job_id, progress_value, revision::text, attempt, fence_token::text,
+	"task_progress": `SELECT task_id, progress_value, revision::text, attempt, fence_token::text,
               worker_id, created_at, updated_at
-         FROM workhorse.job_progress
-        WHERE job_id = $1::uuid`,
-	"job_wait": `SELECT job_id, wait_name, mode, duration_ms::text, requested_wake_at, wake_at,
+         FROM workhorse.task_progress
+        WHERE task_id = $1::uuid`,
+	"task_wait": `SELECT task_id, wait_name, mode, duration_ms::text, requested_wake_at, wake_at,
               attempt, fence_token::text, worker_id, created_at
-         FROM workhorse.job_wait
-        WHERE job_id = $1::uuid AND wait_name = $2::text`,
-	"job_wait__checkpoints_progress_waits": `SELECT job_id, wait_name, mode, duration_ms::text, requested_wake_at, wake_at,
+         FROM workhorse.task_wait
+        WHERE task_id = $1::uuid AND wait_name = $2::text`,
+	"task_wait__checkpoints_progress_waits": `SELECT task_id, wait_name, mode, duration_ms::text, requested_wake_at, wake_at,
               attempt, fence_token::text, worker_id, created_at
-         FROM workhorse.job_wait
-        WHERE job_id = $1::uuid
+         FROM workhorse.task_wait
+        WHERE task_id = $1::uuid
         ORDER BY created_at, wait_name`,
 	"schedule_definition__cron_schedules": `SELECT definition.namespace, definition.schedule_name, definition.cron_expression,
               definition.timezone,
@@ -98,7 +98,7 @@ var internalStatementRegistry = map[string]string{
         WHERE definition.enabled AND definition.namespace = ANY($1::text[])
         GROUP BY definition.namespace, definition.schedule_name, definition.timezone
         ORDER BY definition.namespace, definition.schedule_name`,
-	"fire_schedule_v1": `SELECT workhorse.fire_schedule_v1($1::text, $2::text, $3::bigint, $4::timestamptz) AS job_id`,
+	"fire_schedule_v1": `SELECT workhorse.fire_schedule_v1($1::text, $2::text, $3::bigint, $4::timestamptz) AS task_id`,
 	"rate_limit_policy__operator_read_sql": `WITH observed AS (
     SELECT clock_timestamp() AS now
   ), policies AS MATERIALIZED (
@@ -160,9 +160,9 @@ var internalStatementRegistry = map[string]string{
                  END AS eligible_at
             FROM (
               SELECT runtime.concurrency_key
-                FROM workhorse.job_runtime runtime
+                FROM workhorse.task_runtime runtime
                WHERE runtime.state = 'ready' AND runtime.queue_name = policy.queue_name
-               ORDER BY runtime.sequence, runtime.job_id LIMIT 101
+               ORDER BY runtime.sequence, runtime.task_id LIMIT 101
             ) ready
             CROSS JOIN LATERAL (
               SELECT CASE
@@ -189,13 +189,13 @@ var internalStatementRegistry = map[string]string{
         ) sample
     ) pressure
    ORDER BY policy.queue_name LIMIT 100`,
-	"list_jobs_v1": `SELECT listed.job_id, listed.queue_name, listed.job_type, listed.concurrency_key,
-              listed.priority, listed.tags, listed.state, dependency.prerequisite_job_id,
-              dependency.prerequisite_job_ids, dependency.on_success AS dependency_on_success,
+	"list_tasks_v1": `SELECT listed.task_id, listed.queue_name, listed.task_type, listed.concurrency_key,
+              listed.priority, listed.tags, listed.state, dependency.prerequisite_task_id,
+              dependency.prerequisite_task_ids, dependency.on_success AS dependency_on_success,
               dependency.on_failure AS dependency_on_failure,
               dependency.on_cancellation AS dependency_on_cancellation,
               CASE WHEN listed.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
-              parent_edge.parent_job_id, children.child_job_ids,
+              parent_edge.parent_task_id, children.child_task_ids,
               listed.current_attempt, listed.max_attempts, listed.retry_policy,
               listed.deadline_at,
               listed.execution_timeout_ms::text AS execution_timeout_ms,
@@ -203,64 +203,64 @@ var internalStatementRegistry = map[string]string{
               listed.cancel_reason, listed.created_at, listed.updated_at, listed.payload,
               listed.payload_status, listed.payload_bytes, listed.has_more,
               listed.cursor_created_at::text AS cursor_created_at, listed.cursor_signature
-         FROM workhorse.list_jobs_v1(
+         FROM workhorse.list_tasks_v1(
            $1::jsonb, $2::integer, $3::timestamptz, $4::uuid, $5::text, $6::jsonb
          ) listed
          LEFT JOIN LATERAL (
            SELECT CASE WHEN count(*) = 1
-                    THEN (array_agg(edge.prerequisite_job_id))[1] END AS prerequisite_job_id,
-                  COALESCE(array_agg(edge.prerequisite_job_id ORDER BY edge.prerequisite_job_id)
-                    FILTER (WHERE edge.prerequisite_job_id IS NOT NULL), '{}') AS prerequisite_job_ids,
+                    THEN (array_agg(edge.prerequisite_task_id))[1] END AS prerequisite_task_id,
+                  COALESCE(array_agg(edge.prerequisite_task_id ORDER BY edge.prerequisite_task_id)
+                    FILTER (WHERE edge.prerequisite_task_id IS NOT NULL), '{}') AS prerequisite_task_ids,
                   min(edge.on_success) AS on_success,
                   min(edge.on_failure) AS on_failure,
                   min(edge.on_cancellation) AS on_cancellation
-             FROM workhorse.job_dependency edge
-            WHERE edge.dependent_job_id = listed.job_id
+             FROM workhorse.task_dependency edge
+            WHERE edge.dependent_task_id = listed.task_id
          ) dependency ON true
-         LEFT JOIN workhorse.job_child parent_edge ON parent_edge.child_job_id = listed.job_id
+         LEFT JOIN workhorse.task_child parent_edge ON parent_edge.child_task_id = listed.task_id
          LEFT JOIN LATERAL (
-           SELECT COALESCE(array_agg(edge.child_job_id ORDER BY edge.child_job_id)
-                    FILTER (WHERE edge.child_job_id IS NOT NULL), '{}') AS child_job_ids
-             FROM workhorse.job_child edge WHERE edge.parent_job_id = listed.job_id
+           SELECT COALESCE(array_agg(edge.child_task_id ORDER BY edge.child_task_id)
+                    FILTER (WHERE edge.child_task_id IS NOT NULL), '{}') AS child_task_ids
+             FROM workhorse.task_child edge WHERE edge.parent_task_id = listed.task_id
          ) children ON true`,
-	"list_job_timeline_v1": `SELECT kind, record_id::text AS record_id, priority, attempt, event_type, details,
+	"list_task_timeline_v1": `SELECT kind, record_id::text AS record_id, priority, attempt, event_type, details,
               fence_token::text AS fence_token, worker_id, outcome, started_at, claimed_at,
               finished_at, error, occurred_at, has_more,
               cursor_occurred_at::text AS cursor_occurred_at
-         FROM workhorse.list_job_timeline_v1(
+         FROM workhorse.list_task_timeline_v1(
            $1::uuid, $2::integer, $3::timestamptz, $4::text, $5::uuid
          )`,
 	"list_dead_letters_v1": `SELECT * FROM workhorse.list_dead_letters_v1($1::jsonb, $2::integer, $3::timestamptz, $4::uuid)`,
 	"redrive_v1":           `SELECT * FROM workhorse.redrive_v1($1::uuid, $2::text, $3::text, $4::text)`,
-	"redrive_many_v1":      `SELECT status, source_job_id, target_job_id, source_state, target_state, requested_at, source_finished_at_cursor, has_more FROM workhorse.redrive_many_v1($1::jsonb, $2::integer, $3::boolean, $4::text, $5::text, $6::text, $7::timestamptz, $8::uuid) ORDER BY ordinal`,
+	"redrive_many_v1":      `SELECT status, source_task_id, target_task_id, source_state, target_state, requested_at, source_finished_at_cursor, has_more FROM workhorse.redrive_many_v1($1::jsonb, $2::integer, $3::boolean, $4::text, $5::text, $6::text, $7::timestamptz, $8::uuid) ORDER BY ordinal`,
 	"redrive_lineage_v1":   `SELECT * FROM workhorse.redrive_lineage_v1($1::uuid, $2::integer)`,
-	"job_dependency": `SELECT dependent_job_id, prerequisite_job_id, on_success, on_failure, on_cancellation,
+	"task_dependency": `SELECT dependent_task_id, prerequisite_task_id, on_success, on_failure, on_cancellation,
               created_at, released_at, resolution
-         FROM workhorse.job_dependency
-        WHERE dependent_job_id = $1::uuid OR prerequisite_job_id = $1::uuid
-        ORDER BY dependent_job_id, prerequisite_job_id
+         FROM workhorse.task_dependency
+        WHERE dependent_task_id = $1::uuid OR prerequisite_task_id = $1::uuid
+        ORDER BY dependent_task_id, prerequisite_task_id
         LIMIT $2::integer`,
-	"job_child": `SELECT edge.parent_job_id, edge.child_job_id, edge.child_name,
-              child.job_type AS child_type, edge.created_at, edge.joined_at,
+	"task_child": `SELECT edge.parent_task_id, edge.child_task_id, edge.child_name,
+              child.task_type AS child_type, edge.created_at, edge.joined_at,
               outcome.state AS outcome_state, outcome.error AS outcome_error
-         FROM workhorse.job_child edge
-         JOIN workhorse.job child ON child.id = edge.child_job_id
-         LEFT JOIN workhorse.job_outcome outcome ON outcome.job_id = edge.child_job_id
-        WHERE edge.parent_job_id = $1::uuid OR edge.child_job_id = $1::uuid
-        ORDER BY edge.created_at, edge.parent_job_id, edge.child_job_id
+         FROM workhorse.task_child edge
+         JOIN workhorse.task child ON child.id = edge.child_task_id
+         LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = edge.child_task_id
+        WHERE edge.parent_task_id = $1::uuid OR edge.child_task_id = $1::uuid
+        ORDER BY edge.created_at, edge.parent_task_id, edge.child_task_id
         LIMIT $2::integer`,
-	"redact_top_level_keys_v1": `SELECT j.id, j.queue_name, j.job_type, j.concurrency_key, j.priority,
+	"redact_top_level_keys_v1": `SELECT j.id, j.queue_name, j.task_type, j.concurrency_key, j.priority,
               workhorse.redact_top_level_keys_v1(j.payload, j.payload_redact_keys) AS payload,
               j.contract_version, j.tags, j.retry_policy,
               j.deadline_at, j.execution_timeout_ms::text,
               COALESCE(r.state, o.state) AS state,
-              dependency.prerequisite_job_id,
-              dependency.prerequisite_job_ids,
+              dependency.prerequisite_task_id,
+              dependency.prerequisite_task_ids,
               dependency.on_success AS dependency_on_success,
               dependency.on_failure AS dependency_on_failure,
               dependency.on_cancellation AS dependency_on_cancellation,
               CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
-              parent_edge.parent_job_id, children.child_job_ids,
+              parent_edge.parent_task_id, children.child_task_ids,
               COALESCE(r.current_attempt, o.current_attempt) AS current_attempt,
               j.max_attempts, COALESCE(r.fence_token, o.fence_token) AS version,
               COALESCE(r.run_at, o.run_at) AS run_at,
@@ -272,27 +272,27 @@ var internalStatementRegistry = map[string]string{
               p.worker_id AS progress_worker_id, p.created_at AS progress_created_at,
               p.updated_at AS progress_updated_at, j.created_at,
               COALESCE(r.updated_at, o.updated_at) AS updated_at
-         FROM workhorse.job j
-         LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
-         LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
+         FROM workhorse.task j
+         LEFT JOIN workhorse.task_runtime r ON r.task_id = j.id
+         LEFT JOIN workhorse.task_outcome o ON o.task_id = j.id
          LEFT JOIN LATERAL (
            SELECT CASE WHEN count(*) = 1
-                    THEN (array_agg(edge.prerequisite_job_id))[1] END AS prerequisite_job_id,
-                  COALESCE(array_agg(edge.prerequisite_job_id ORDER BY edge.prerequisite_job_id)
-                    FILTER (WHERE edge.prerequisite_job_id IS NOT NULL), '{}') AS prerequisite_job_ids,
+                    THEN (array_agg(edge.prerequisite_task_id))[1] END AS prerequisite_task_id,
+                  COALESCE(array_agg(edge.prerequisite_task_id ORDER BY edge.prerequisite_task_id)
+                    FILTER (WHERE edge.prerequisite_task_id IS NOT NULL), '{}') AS prerequisite_task_ids,
                   min(edge.on_success) AS on_success,
                   min(edge.on_failure) AS on_failure,
                   min(edge.on_cancellation) AS on_cancellation
-             FROM workhorse.job_dependency edge
-            WHERE edge.dependent_job_id = j.id
+             FROM workhorse.task_dependency edge
+            WHERE edge.dependent_task_id = j.id
          ) dependency ON true
-         LEFT JOIN workhorse.job_child parent_edge ON parent_edge.child_job_id = j.id
+         LEFT JOIN workhorse.task_child parent_edge ON parent_edge.child_task_id = j.id
          LEFT JOIN LATERAL (
-           SELECT COALESCE(array_agg(edge.child_job_id ORDER BY edge.child_job_id)
-                    FILTER (WHERE edge.child_job_id IS NOT NULL), '{}') AS child_job_ids
-             FROM workhorse.job_child edge WHERE edge.parent_job_id = j.id
+           SELECT COALESCE(array_agg(edge.child_task_id ORDER BY edge.child_task_id)
+                    FILTER (WHERE edge.child_task_id IS NOT NULL), '{}') AS child_task_ids
+             FROM workhorse.task_child edge WHERE edge.parent_task_id = j.id
          ) children ON true
-         LEFT JOIN workhorse.job_progress p ON p.job_id = j.id
+         LEFT JOIN workhorse.task_progress p ON p.task_id = j.id
         WHERE j.id = $1::uuid`,
 	"promote_v1__queue_administration":          `SELECT workhorse.promote_v1($1::integer) AS count`,
 	"set_queue_paused_v1":                       `SELECT workhorse.set_queue_paused_v1($1::text, true, $2::text, $3::text, $4::text)`,
@@ -310,19 +310,19 @@ var internalStatementRegistry = map[string]string{
 	"revert_retention_policy_v1":   `SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1::text[]) policy`,
 	"retention_policy_preview": `SELECT
         (SELECT count(*)::integer FROM (
-          SELECT 1 FROM workhorse.job job
-          JOIN workhorse.job_outcome outcome ON outcome.job_id = job.id
+          SELECT 1 FROM workhorse.task task
+          JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
           WHERE $1::integer IS NOT NULL AND $2::integer IS NOT NULL
-            AND job.created_at < clock_timestamp() - make_interval(days => $1)
+            AND task.created_at < clock_timestamp() - make_interval(days => $1)
             AND outcome.finished_at < clock_timestamp() - make_interval(days => $2)
           LIMIT 10001
-        ) rows) AS terminal_jobs,
+        ) rows) AS terminal_tasks,
         (SELECT count(*)::integer FROM (
-          SELECT 1 FROM workhorse.job_event
+          SELECT 1 FROM workhorse.task_event
           WHERE $3::integer IS NOT NULL
             AND occurred_at < clock_timestamp() - make_interval(days => $3)
           LIMIT 10001
-        ) rows) AS job_events,
+        ) rows) AS task_events,
         (SELECT count(*)::integer FROM (
           SELECT 1 FROM workhorse.attempt_history
           WHERE $4::integer IS NOT NULL
@@ -336,15 +336,15 @@ var internalStatementRegistry = map[string]string{
           LIMIT 10001
         ) rows) AS schedule_occurrences,
         (SELECT count(*)::integer FROM (
-          SELECT 1 FROM workhorse.job_stat_bucket
+          SELECT 1 FROM workhorse.task_stat_bucket
           WHERE $6::integer IS NOT NULL
             AND bucket_start < clock_timestamp() - make_interval(days => $6)
           UNION ALL
-          SELECT 1 FROM workhorse.job_stat_bucket_hour
+          SELECT 1 FROM workhorse.task_stat_bucket_hour
           WHERE $6::integer IS NOT NULL
             AND bucket_start < clock_timestamp() - make_interval(days => $6)
           UNION ALL
-          SELECT 1 FROM workhorse.job_stat_bucket_day
+          SELECT 1 FROM workhorse.task_stat_bucket_day
           WHERE $6::integer IS NOT NULL
             AND bucket_start < clock_timestamp() - make_interval(days => $6)
           LIMIT 10001
@@ -381,34 +381,34 @@ var internalStatementRegistry = map[string]string{
            to_regclass('workhorse.schema_version') IS NOT NULL AS version_table_exists,
            EXISTS (
              SELECT 1
-               FROM unnest(ARRAY['job_current', 'ready_job', 'scheduled_job', 'lease'])
+               FROM unnest(ARRAY['task_current', 'ready_task', 'scheduled_task', 'lease'])
                  AS legacy(relation_name)
               WHERE to_regclass(format('workhorse.%I', relation_name)) IS NOT NULL
            ) AS legacy_relation_exists`,
 	"metrics_observer": `
         WITH queue_names AS (
-          SELECT queue_name FROM workhorse.job_runtime
+          SELECT queue_name FROM workhorse.task_runtime
           UNION
           SELECT queue_name FROM workhorse.queue_control
         ), depth AS (
           SELECT names.queue_name,
-         count(runtime.job_id) FILTER (WHERE runtime.state = 'scheduled')::text AS scheduled,
-         count(runtime.job_id) FILTER (WHERE runtime.state = 'ready')::text AS ready,
-         count(runtime.job_id) FILTER (WHERE runtime.state = 'active')::text AS active,
+         count(runtime.task_id) FILTER (WHERE runtime.state = 'scheduled')::text AS scheduled,
+         count(runtime.task_id) FILTER (WHERE runtime.state = 'ready')::text AS ready,
+         count(runtime.task_id) FILTER (WHERE runtime.state = 'active')::text AS active,
          extract(epoch FROM clock_timestamp() - min(runtime.ready_at) FILTER (
        WHERE runtime.state = 'ready'
      )) * 1000 AS oldest_ready_age_ms,
-         count(runtime.job_id) FILTER (
+         count(runtime.task_id) FILTER (
        WHERE runtime.state = 'active' AND runtime.expires_at <= clock_timestamp()
      )::text AS expired,
-         count(runtime.job_id) FILTER (
+         count(runtime.task_id) FILTER (
        WHERE runtime.deadline_at IS NOT NULL AND runtime.deadline_at <= clock_timestamp()
      )::text AS overdue_deadlines,
-         count(runtime.job_id) FILTER (
+         count(runtime.task_id) FILTER (
        WHERE runtime.state = 'active' AND runtime.attempt_timeout_at <= clock_timestamp()
      )::text AS overdue_execution_timeouts
       FROM queue_names names
-      LEFT JOIN workhorse.job_runtime runtime
+      LEFT JOIN workhorse.task_runtime runtime
         ON runtime.queue_name = names.queue_name
      GROUP BY names.queue_name
         )
@@ -421,16 +421,16 @@ var internalStatementRegistry = map[string]string{
           CROSS JOIN LATERAL (
             SELECT
               (SELECT count(*)::text FROM (
-                SELECT 1 FROM workhorse.job_signal_wait signal
-                 JOIN workhorse.job_runtime runtime ON runtime.job_id = signal.job_id
+                SELECT 1 FROM workhorse.task_signal_wait signal
+                 JOIN workhorse.task_runtime runtime ON runtime.task_id = signal.task_id
                 WHERE runtime.queue_name = depth.queue_name
                   AND runtime.state = 'scheduled' AND runtime.wait_name = signal.signal_name
                   AND runtime.current_attempt = signal.attempt AND signal.delivered_at IS NULL
                 LIMIT 10001
               ) sampled) AS pending_signal_waits,
               (SELECT count(*)::text FROM (
-                SELECT 1 FROM workhorse.job_human_wait human_wait
-                 JOIN workhorse.job_runtime runtime ON runtime.job_id = human_wait.job_id
+                SELECT 1 FROM workhorse.task_human_wait human_wait
+                 JOIN workhorse.task_runtime runtime ON runtime.task_id = human_wait.task_id
                 WHERE runtime.queue_name = depth.queue_name
                   AND runtime.state = 'scheduled' AND runtime.wait_name = human_wait.token_name
                   AND runtime.current_attempt = human_wait.attempt
@@ -438,8 +438,8 @@ var internalStatementRegistry = map[string]string{
                 LIMIT 10001
               ) sampled) AS pending_human_waits,
               (SELECT count(*)::text FROM (
-                SELECT 1 FROM workhorse.job_signal_wait signal
-                 JOIN workhorse.job_runtime runtime ON runtime.job_id = signal.job_id
+                SELECT 1 FROM workhorse.task_signal_wait signal
+                 JOIN workhorse.task_runtime runtime ON runtime.task_id = signal.task_id
                 WHERE runtime.queue_name = depth.queue_name
                   AND runtime.state = 'scheduled' AND runtime.wait_name = signal.signal_name
                   AND runtime.current_attempt = signal.attempt AND signal.delivered_at IS NULL
@@ -447,8 +447,8 @@ var internalStatementRegistry = map[string]string{
                 LIMIT 10001
               ) sampled) AS overdue_signal_waits,
               (SELECT count(*)::text FROM (
-                SELECT 1 FROM workhorse.job_human_wait human_wait
-                 JOIN workhorse.job_runtime runtime ON runtime.job_id = human_wait.job_id
+                SELECT 1 FROM workhorse.task_human_wait human_wait
+                 JOIN workhorse.task_runtime runtime ON runtime.task_id = human_wait.task_id
                 WHERE runtime.queue_name = depth.queue_name
                   AND runtime.state = 'scheduled' AND runtime.wait_name = human_wait.token_name
                   AND runtime.current_attempt = human_wait.attempt
@@ -457,16 +457,16 @@ var internalStatementRegistry = map[string]string{
                 LIMIT 10001
               ) sampled) AS overdue_human_waits,
               (SELECT count(*)::text FROM (
-                SELECT 1 FROM workhorse.job_event event
-                 JOIN workhorse.job job ON job.id = event.job_id
-                WHERE job.queue_name = depth.queue_name AND event.event_type = 'signal_rejected'
+                SELECT 1 FROM workhorse.task_event event
+                 JOIN workhorse.task task ON task.id = event.task_id
+                WHERE task.queue_name = depth.queue_name AND event.event_type = 'signal_rejected'
                   AND event.occurred_at >= $1::timestamptz
                 LIMIT 10001
               ) sampled) AS rejected_signals,
               (SELECT count(*)::text FROM (
-                SELECT 1 FROM workhorse.job_event event
-                 JOIN workhorse.job job ON job.id = event.job_id
-                WHERE job.queue_name = depth.queue_name
+                SELECT 1 FROM workhorse.task_event event
+                 JOIN workhorse.task task ON task.id = event.task_id
+                WHERE task.queue_name = depth.queue_name
                   AND event.event_type = 'human_wait_rejected'
                   AND event.occurred_at >= $1::timestamptz
                 LIMIT 10001
@@ -475,41 +475,41 @@ var internalStatementRegistry = map[string]string{
          ORDER BY depth.queue_name`,
 	"queue_metric_snapshot": `WITH queue_names AS (
          SELECT $1::text AS queue_name
-         UNION SELECT queue_name FROM workhorse.job_runtime
+         UNION SELECT queue_name FROM workhorse.task_runtime
          UNION SELECT queue_name FROM workhorse.queue_control
          UNION SELECT queue_name FROM workhorse.concurrency_policy
          UNION SELECT queue_name FROM workhorse.rate_limit_policy
          UNION SELECT unnest(queue_names) FROM workhorse.worker_registry
-         UNION SELECT query.queue_name FROM workhorse.job_query query
-          JOIN workhorse.job_outcome outcome ON outcome.job_id = query.job_id
+         UNION SELECT query.queue_name FROM workhorse.task_query query
+          JOIN workhorse.task_outcome outcome ON outcome.task_id = query.task_id
          WHERE outcome.state = 'failed' AND outcome.error->>'name' = 'DependencyFailed'
-         UNION SELECT query.queue_name FROM workhorse.job_query query
-          JOIN workhorse.job_child edge ON edge.parent_job_id = query.job_id
+         UNION SELECT query.queue_name FROM workhorse.task_query query
+          JOIN workhorse.task_child edge ON edge.parent_task_id = query.task_id
        ), usage AS (
          SELECT names.queue_name,
-         count(runtime.job_id) FILTER (WHERE runtime.state = 'ready')::text AS ready,
-         count(runtime.job_id) FILTER (WHERE runtime.state = 'scheduled')::text AS scheduled,
-         count(runtime.job_id) FILTER (WHERE runtime.state = 'active')::text AS active,
-         count(runtime.job_id) FILTER (
+         count(runtime.task_id) FILTER (WHERE runtime.state = 'ready')::text AS ready,
+         count(runtime.task_id) FILTER (WHERE runtime.state = 'scheduled')::text AS scheduled,
+         count(runtime.task_id) FILTER (WHERE runtime.state = 'active')::text AS active,
+         count(runtime.task_id) FILTER (
        WHERE runtime.state = 'active' AND runtime.expires_at > clock_timestamp()
      )::text AS concurrency_active,
          extract(epoch FROM clock_timestamp() - min(runtime.ready_at) FILTER (
        WHERE runtime.state = 'ready'
      )) * 1000 AS oldest_ready_age_ms
       FROM queue_names names
-      LEFT JOIN workhorse.job_runtime runtime
+      LEFT JOIN workhorse.task_runtime runtime
         ON runtime.queue_name = names.queue_name
      GROUP BY names.queue_name
        )
        SELECT usage.*, policy.max_active,
               COALESCE(blocked.blocked_ready, 0)::text AS blocked_ready,
-              LEAST(dependencies.blocked_jobs, 10000)::text
+              LEAST(dependencies.blocked_tasks, 10000)::text
                 AS dependency_blocked,
               LEAST(dependencies.pending_edges, 10000)::text
                 AS dependency_pending_edges,
               LEAST(dependencies.failed_resolutions, 10000)::text
                AS dependency_failed_resolutions,
-             dependencies.blocked_jobs > 10000
+             dependencies.blocked_tasks > 10000
                OR dependencies.pending_edges > 10000
                OR dependencies.failed_resolutions > 10000
                AS dependency_counts_capped,
@@ -542,35 +542,35 @@ var internalStatementRegistry = map[string]string{
                   )::integer AS blocked_ready
              FROM (
                SELECT ready.concurrency_key,
-                      (SELECT count(*)::integer FROM workhorse.job_runtime active
+                      (SELECT count(*)::integer FROM workhorse.task_runtime active
                         WHERE active.state = 'active'
                           AND active.queue_name = usage.queue_name
                           AND active.concurrency_key = ready.concurrency_key
                           AND active.expires_at > clock_timestamp()) AS key_active
-                 FROM workhorse.job_runtime ready
+                 FROM workhorse.task_runtime ready
                 WHERE ready.state = 'ready' AND ready.queue_name = usage.queue_name
-                ORDER BY ready.sequence, ready.job_id LIMIT 100
+                ORDER BY ready.sequence, ready.task_id LIMIT 100
              ) sample
          ) blocked ON policy.queue_name IS NOT NULL
          CROSS JOIN LATERAL (
            SELECT
              (SELECT count(*) FROM (
-               SELECT 1 FROM workhorse.job_runtime runtime
+               SELECT 1 FROM workhorse.task_runtime runtime
                 WHERE runtime.queue_name = usage.queue_name AND runtime.state = 'blocked'
                 LIMIT 10001
              ) sampled_blocked)
-               AS blocked_jobs,
+               AS blocked_tasks,
              (SELECT count(*) FROM (
-               SELECT 1 FROM workhorse.job_dependency edge
-                JOIN workhorse.job_runtime runtime ON runtime.job_id = edge.dependent_job_id
+               SELECT 1 FROM workhorse.task_dependency edge
+                JOIN workhorse.task_runtime runtime ON runtime.task_id = edge.dependent_task_id
                WHERE runtime.queue_name = usage.queue_name AND runtime.state = 'blocked'
                  AND edge.released_at IS NULL
                LIMIT 10001
              ) sampled_pending)
                AS pending_edges,
              (SELECT count(*) FROM (
-               SELECT 1 FROM workhorse.job_outcome outcome
-                JOIN workhorse.job_query query ON query.job_id = outcome.job_id
+               SELECT 1 FROM workhorse.task_outcome outcome
+                JOIN workhorse.task_query query ON query.task_id = outcome.task_id
                WHERE query.queue_name = usage.queue_name AND outcome.state = 'failed'
                  AND outcome.error->>'name' = 'DependencyFailed'
                LIMIT 10001
@@ -580,46 +580,46 @@ var internalStatementRegistry = map[string]string{
 
     SELECT
       (SELECT count(*) FROM (
-        SELECT 1 FROM workhorse.job_runtime runtime
+        SELECT 1 FROM workhorse.task_runtime runtime
          WHERE runtime.queue_name = usage.queue_name AND runtime.state = 'blocked'
            AND EXISTS (
-             SELECT 1 FROM workhorse.job_child edge WHERE edge.parent_job_id = runtime.job_id
+             SELECT 1 FROM workhorse.task_child edge WHERE edge.parent_task_id = runtime.task_id
            )
          LIMIT 10001
       ) sampled_waiting) AS waiting_parents,
       (SELECT count(*) FROM (
-        SELECT 1 FROM workhorse.job_child edge
-        JOIN workhorse.job_query parent ON parent.job_id = edge.parent_job_id
+        SELECT 1 FROM workhorse.task_child edge
+        JOIN workhorse.task_query parent ON parent.task_id = edge.parent_task_id
          WHERE parent.queue_name = usage.queue_name AND edge.joined_at IS NULL
            AND NOT EXISTS (
-             SELECT 1 FROM workhorse.job_outcome outcome WHERE outcome.job_id = edge.child_job_id
+             SELECT 1 FROM workhorse.task_outcome outcome WHERE outcome.task_id = edge.child_task_id
            )
          LIMIT 10001
       ) sampled_pending) AS pending_children,
       (SELECT count(*) FROM (
-        SELECT 1 FROM workhorse.job_child edge
-        JOIN workhorse.job_query parent ON parent.job_id = edge.parent_job_id
-         JOIN workhorse.job_outcome outcome ON outcome.job_id = edge.child_job_id
+        SELECT 1 FROM workhorse.task_child edge
+        JOIN workhorse.task_query parent ON parent.task_id = edge.parent_task_id
+         JOIN workhorse.task_outcome outcome ON outcome.task_id = edge.child_task_id
         WHERE parent.queue_name = usage.queue_name AND edge.joined_at IS NULL AND outcome.state = 'succeeded'
          LIMIT 10001
       ) sampled_unjoined) AS unjoined_results,
       (SELECT count(*) FROM (
-        SELECT 1 FROM workhorse.job_outcome outcome
-        JOIN workhorse.job_query parent ON parent.job_id = outcome.job_id
+        SELECT 1 FROM workhorse.task_outcome outcome
+        JOIN workhorse.task_query parent ON parent.task_id = outcome.task_id
          WHERE parent.queue_name = usage.queue_name AND outcome.state = 'failed'
            AND outcome.error->>'name' = 'DependencyFailed'
            AND EXISTS (
-             SELECT 1 FROM workhorse.job_child edge WHERE edge.parent_job_id = outcome.job_id
+             SELECT 1 FROM workhorse.task_child edge WHERE edge.parent_task_id = outcome.task_id
            )
          LIMIT 10001
       ) sampled_failed) AS failed_parents,
       (SELECT count(*) FROM (
-        SELECT 1 FROM workhorse.job_outcome outcome
-        JOIN workhorse.job_query parent ON parent.job_id = outcome.job_id
+        SELECT 1 FROM workhorse.task_outcome outcome
+        JOIN workhorse.task_query parent ON parent.task_id = outcome.task_id
          WHERE parent.queue_name = usage.queue_name AND outcome.state = 'canceled'
            AND outcome.error->>'name' = 'DependencyCanceled'
            AND EXISTS (
-             SELECT 1 FROM workhorse.job_child edge WHERE edge.parent_job_id = outcome.job_id
+             SELECT 1 FROM workhorse.task_child edge WHERE edge.parent_task_id = outcome.task_id
            )
          LIMIT 10001
       ) sampled_canceled) AS canceled_parents
@@ -636,15 +636,15 @@ var protocolStatementRegistry = map[string]string{
 	"claim_v1":                     `SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)`,
 	"complete_human_wait_v1":       `SELECT status, result, completed_at, completed_by FROM workhorse.complete_human_wait_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
 	"complete_v1":                  `SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted`,
-	"create_child_v1":              `SELECT status, child_job_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
+	"create_child_v1":              `SELECT status, child_task_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
 	"create_children_v1":           `SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::text)`,
-	"dashboard_human_wait_v1":      `SELECT job_id, queue_name, job_type, token_name AS wait_name, context, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_human_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, job_id, token_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, job_id, token_name LIMIT $1::integer`,
-	"dashboard_signal_wait_v1":     `SELECT job_id, queue_name, job_type, signal_name AS wait_name, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_signal_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, job_id, signal_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, job_id, signal_name LIMIT $1::integer`,
-	"enqueue_many_v1":              `SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal`,
+	"dashboard_human_wait_v1":      `SELECT task_id, queue_name, task_type, token_name AS wait_name, context, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_human_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, task_id, token_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, task_id, token_name LIMIT $1::integer`,
+	"dashboard_signal_wait_v1":     `SELECT task_id, queue_name, task_type, signal_name AS wait_name, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_signal_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, task_id, signal_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, task_id, signal_name LIMIT $1::integer`,
+	"enqueue_many_v1":              `SELECT ordinal, task_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal`,
 	"expire_owned_telemetry_v1":    `SELECT * FROM workhorse.expire_owned_telemetry_v1($1::uuid, $2::text, $3::bigint)`,
 	"fail_v1":                      `SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state`,
 	"get_contract_definition_v1":   `SELECT (definition).* FROM workhorse.get_contract_definition_v1($1::text, $2::text) definition`,
-	"heartbeat_many_v1":            `SELECT job_id::text AS job_id, status FROM workhorse.heartbeat_many_v1($1::text, $2::jsonb) ORDER BY ordinal`,
+	"heartbeat_many_v1":            `SELECT task_id::text AS task_id, status FROM workhorse.heartbeat_many_v1($1::text, $2::jsonb) ORDER BY ordinal`,
 	"heartbeat_v1":                 `SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status`,
 	"queue_health_v1":              `SELECT workhorse.queue_health_v1($1::timestamptz) AS snapshot`,
 	"record_batch_dispatch_v1":     `SELECT workhorse.record_batch_dispatch_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
@@ -661,17 +661,17 @@ var protocolStatementRegistry = map[string]string{
 }
 
 var adminStatementRegistry = map[string]string{
-	"get_checkpoint": `SELECT job_id::text job_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.job_checkpoint WHERE job_id=$1::uuid AND checkpoint_name=$2::text`,
-	"get_job": `SELECT j.id::text AS id, j.queue_name, j.job_type, j.concurrency_key, j.priority,
+	"get_checkpoint": `SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_checkpoint WHERE task_id=$1::uuid AND checkpoint_name=$2::text`,
+	"get_task": `SELECT j.id::text AS id, j.queue_name, j.task_type, j.concurrency_key, j.priority,
               workhorse.redact_top_level_keys_v1(j.payload, j.payload_redact_keys) AS payload,
               j.contract_version, j.tags, j.retry_policy, j.deadline_at,
               j.execution_timeout_ms::text, COALESCE(r.state, o.state) AS state,
-              dependency.prerequisite_job_id, dependency.prerequisite_job_ids,
+              dependency.prerequisite_task_id, dependency.prerequisite_task_ids,
               dependency.on_success AS dependency_on_success,
               dependency.on_failure AS dependency_on_failure,
               dependency.on_cancellation AS dependency_on_cancellation,
               CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
-              parent_edge.parent_job_id, children.child_job_ids,
+              parent_edge.parent_task_id, children.child_task_ids,
               COALESCE(r.current_attempt, o.current_attempt) AS current_attempt, j.max_attempts,
               COALESCE(r.fence_token, o.fence_token)::text AS version,
               COALESCE(r.run_at, o.run_at) AS run_at,
@@ -682,90 +682,90 @@ var adminStatementRegistry = map[string]string{
               p.fence_token::text AS progress_fence_token, p.worker_id AS progress_worker_id,
               p.created_at AS progress_created_at, p.updated_at AS progress_updated_at,
               j.created_at, COALESCE(r.updated_at, o.updated_at) AS updated_at
-         FROM workhorse.job j
-         LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
-         LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
+         FROM workhorse.task j
+         LEFT JOIN workhorse.task_runtime r ON r.task_id = j.id
+         LEFT JOIN workhorse.task_outcome o ON o.task_id = j.id
          LEFT JOIN LATERAL (
-           SELECT CASE WHEN count(*) = 1 THEN (array_agg(edge.prerequisite_job_id))[1] END
-                    AS prerequisite_job_id,
-                  COALESCE(array_agg(edge.prerequisite_job_id ORDER BY edge.prerequisite_job_id)
-                    FILTER (WHERE edge.prerequisite_job_id IS NOT NULL), '{}')
-                    AS prerequisite_job_ids,
+           SELECT CASE WHEN count(*) = 1 THEN (array_agg(edge.prerequisite_task_id))[1] END
+                    AS prerequisite_task_id,
+                  COALESCE(array_agg(edge.prerequisite_task_id ORDER BY edge.prerequisite_task_id)
+                    FILTER (WHERE edge.prerequisite_task_id IS NOT NULL), '{}')
+                    AS prerequisite_task_ids,
                   min(edge.on_success) AS on_success, min(edge.on_failure) AS on_failure,
                   min(edge.on_cancellation) AS on_cancellation
-             FROM workhorse.job_dependency edge WHERE edge.dependent_job_id = j.id
+             FROM workhorse.task_dependency edge WHERE edge.dependent_task_id = j.id
          ) dependency ON true
-         LEFT JOIN workhorse.job_child parent_edge ON parent_edge.child_job_id = j.id
+         LEFT JOIN workhorse.task_child parent_edge ON parent_edge.child_task_id = j.id
          LEFT JOIN LATERAL (
-           SELECT COALESCE(array_agg(edge.child_job_id ORDER BY edge.child_job_id)
-                    FILTER (WHERE edge.child_job_id IS NOT NULL), '{}') AS child_job_ids
-             FROM workhorse.job_child edge WHERE edge.parent_job_id = j.id
+           SELECT COALESCE(array_agg(edge.child_task_id ORDER BY edge.child_task_id)
+                    FILTER (WHERE edge.child_task_id IS NOT NULL), '{}') AS child_task_ids
+             FROM workhorse.task_child edge WHERE edge.parent_task_id = j.id
          ) children ON true
-         LEFT JOIN workhorse.job_progress p ON p.job_id = j.id
+         LEFT JOIN workhorse.task_progress p ON p.task_id = j.id
         WHERE j.id = $1::uuid`,
-	"get_progress":      `SELECT job_id::text job_id,progress_value,revision::text revision,attempt,fence_token::text fence_token,worker_id,created_at,updated_at FROM workhorse.job_progress WHERE job_id=$1::uuid`,
-	"get_wait":          `SELECT job_id::text job_id,wait_name,mode,duration_ms::text duration_ms,requested_wake_at,wake_at,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.job_wait WHERE job_id=$1::uuid AND wait_name=$2::text`,
-	"list_checkpoints":  `SELECT job_id::text job_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.job_checkpoint WHERE job_id=$1::uuid ORDER BY created_at,checkpoint_name`,
-	"list_dead_letters": `SELECT job_id::text job_id,queue_name,job_type,concurrency_key,priority,payload,tags,current_attempt,max_attempts,retry_policy,deadline_at,execution_timeout_ms,error,finished_at,redrive_count,has_more,cursor_finished_at FROM workhorse.list_dead_letters_v1($1::jsonb,$2::integer,$3::timestamptz,$4::uuid)`,
+	"get_progress":      `SELECT task_id::text task_id,progress_value,revision::text revision,attempt,fence_token::text fence_token,worker_id,created_at,updated_at FROM workhorse.task_progress WHERE task_id=$1::uuid`,
+	"get_wait":          `SELECT task_id::text task_id,wait_name,mode,duration_ms::text duration_ms,requested_wake_at,wake_at,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_wait WHERE task_id=$1::uuid AND wait_name=$2::text`,
+	"list_checkpoints":  `SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_checkpoint WHERE task_id=$1::uuid ORDER BY created_at,checkpoint_name`,
+	"list_dead_letters": `SELECT task_id::text task_id,queue_name,task_type,concurrency_key,priority,payload,tags,current_attempt,max_attempts,retry_policy,deadline_at,execution_timeout_ms,error,finished_at,redrive_count,has_more,cursor_finished_at FROM workhorse.list_dead_letters_v1($1::jsonb,$2::integer,$3::timestamptz,$4::uuid)`,
 	"list_human_waits": `WITH parameters AS (
          SELECT $1::integer AS page_limit, $2::timestamptz AS cursor_created_at,
-                $3::uuid AS cursor_job_id, $4::text AS cursor_name
+                $3::uuid AS cursor_task_id, $4::text AS cursor_name
        )
-       SELECT job_id::text AS job_id, queue_name, job_type, token_name AS wait_name, context, attempt,
+       SELECT task_id::text AS task_id, queue_name, task_type, token_name AS wait_name, context, attempt,
               created_at, deadline_at, created_at::text AS cursor_created_at
          FROM workhorse.dashboard_human_wait_v1, parameters
-        WHERE parameters.cursor_created_at IS NULL OR (created_at, job_id, token_name) >
-              (parameters.cursor_created_at, parameters.cursor_job_id, parameters.cursor_name)
-        ORDER BY created_at, job_id, token_name LIMIT (SELECT page_limit FROM parameters)`,
-	"list_job_timeline": `SELECT kind,record_id::text record_id,priority,attempt,event_type,details,fence_token::text fence_token,worker_id,outcome,started_at,claimed_at,finished_at,error,occurred_at,has_more,cursor_occurred_at::text cursor_occurred_at FROM workhorse.list_job_timeline_v1($1::uuid,$2::integer,$3::timestamptz,$4::text,$5::uuid)`,
-	"list_jobs": `SELECT listed.job_id::text AS job_id, listed.queue_name, listed.job_type, listed.concurrency_key,
-              listed.priority, listed.tags, listed.state, dependency.prerequisite_job_id,
-              dependency.prerequisite_job_ids, dependency.on_success AS dependency_on_success,
+        WHERE parameters.cursor_created_at IS NULL OR (created_at, task_id, token_name) >
+              (parameters.cursor_created_at, parameters.cursor_task_id, parameters.cursor_name)
+        ORDER BY created_at, task_id, token_name LIMIT (SELECT page_limit FROM parameters)`,
+	"list_task_timeline": `SELECT kind,record_id::text record_id,priority,attempt,event_type,details,fence_token::text fence_token,worker_id,outcome,started_at,claimed_at,finished_at,error,occurred_at,has_more,cursor_occurred_at::text cursor_occurred_at FROM workhorse.list_task_timeline_v1($1::uuid,$2::integer,$3::timestamptz,$4::text,$5::uuid)`,
+	"list_tasks": `SELECT listed.task_id::text AS task_id, listed.queue_name, listed.task_type, listed.concurrency_key,
+              listed.priority, listed.tags, listed.state, dependency.prerequisite_task_id,
+              dependency.prerequisite_task_ids, dependency.on_success AS dependency_on_success,
               dependency.on_failure AS dependency_on_failure,
               dependency.on_cancellation AS dependency_on_cancellation,
               CASE WHEN listed.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
-              parent_edge.parent_job_id, children.child_job_ids, listed.current_attempt,
+              parent_edge.parent_task_id, children.child_task_ids, listed.current_attempt,
               listed.max_attempts, listed.retry_policy, listed.deadline_at,
               listed.execution_timeout_ms::text AS execution_timeout_ms, listed.run_at,
               listed.cancel_requested_at, listed.cancel_requested_by, listed.cancel_reason,
               listed.created_at, listed.updated_at, listed.payload, listed.payload_status,
               listed.payload_bytes, listed.has_more,
               listed.cursor_created_at::text AS cursor_created_at, listed.cursor_signature
-         FROM workhorse.list_jobs_v1(
+         FROM workhorse.list_tasks_v1(
            $1::jsonb, $2::integer, $3::timestamptz, $4::uuid, $5::text, $6::jsonb
          ) listed
          LEFT JOIN LATERAL (
-           SELECT CASE WHEN count(*) = 1 THEN (array_agg(edge.prerequisite_job_id))[1] END
-                    AS prerequisite_job_id,
-                  COALESCE(array_agg(edge.prerequisite_job_id ORDER BY edge.prerequisite_job_id)
-                    FILTER (WHERE edge.prerequisite_job_id IS NOT NULL), '{}')
-                    AS prerequisite_job_ids,
+           SELECT CASE WHEN count(*) = 1 THEN (array_agg(edge.prerequisite_task_id))[1] END
+                    AS prerequisite_task_id,
+                  COALESCE(array_agg(edge.prerequisite_task_id ORDER BY edge.prerequisite_task_id)
+                    FILTER (WHERE edge.prerequisite_task_id IS NOT NULL), '{}')
+                    AS prerequisite_task_ids,
                   min(edge.on_success) AS on_success, min(edge.on_failure) AS on_failure,
                   min(edge.on_cancellation) AS on_cancellation
-             FROM workhorse.job_dependency edge
-            WHERE edge.dependent_job_id = listed.job_id
+             FROM workhorse.task_dependency edge
+            WHERE edge.dependent_task_id = listed.task_id
          ) dependency ON true
-         LEFT JOIN workhorse.job_child parent_edge ON parent_edge.child_job_id = listed.job_id
+         LEFT JOIN workhorse.task_child parent_edge ON parent_edge.child_task_id = listed.task_id
          LEFT JOIN LATERAL (
-           SELECT COALESCE(array_agg(edge.child_job_id ORDER BY edge.child_job_id)
-                    FILTER (WHERE edge.child_job_id IS NOT NULL), '{}') AS child_job_ids
-             FROM workhorse.job_child edge WHERE edge.parent_job_id = listed.job_id
+           SELECT COALESCE(array_agg(edge.child_task_id ORDER BY edge.child_task_id)
+                    FILTER (WHERE edge.child_task_id IS NOT NULL), '{}') AS child_task_ids
+             FROM workhorse.task_child edge WHERE edge.parent_task_id = listed.task_id
          ) children ON true`,
 	"list_signal_waits": `WITH parameters AS (
          SELECT $1::integer AS page_limit, $2::timestamptz AS cursor_created_at,
-                $3::uuid AS cursor_job_id, $4::text AS cursor_name
+                $3::uuid AS cursor_task_id, $4::text AS cursor_name
        )
-       SELECT job_id::text AS job_id, queue_name, job_type, signal_name AS wait_name, attempt, created_at,
+       SELECT task_id::text AS task_id, queue_name, task_type, signal_name AS wait_name, attempt, created_at,
               deadline_at, created_at::text AS cursor_created_at
          FROM workhorse.dashboard_signal_wait_v1, parameters
-        WHERE parameters.cursor_created_at IS NULL OR (created_at, job_id, signal_name) >
-              (parameters.cursor_created_at, parameters.cursor_job_id, parameters.cursor_name)
-        ORDER BY created_at, job_id, signal_name LIMIT (SELECT page_limit FROM parameters)`,
-	"list_waits":       `SELECT job_id::text job_id,wait_name,mode,duration_ms::text duration_ms,requested_wake_at,wake_at,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.job_wait WHERE job_id=$1::uuid ORDER BY created_at,wait_name`,
+        WHERE parameters.cursor_created_at IS NULL OR (created_at, task_id, signal_name) >
+              (parameters.cursor_created_at, parameters.cursor_task_id, parameters.cursor_name)
+        ORDER BY created_at, task_id, signal_name LIMIT (SELECT page_limit FROM parameters)`,
+	"list_waits":       `SELECT task_id::text task_id,wait_name,mode,duration_ms::text duration_ms,requested_wake_at,wake_at,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_wait WHERE task_id=$1::uuid ORDER BY created_at,wait_name`,
 	"list_workers":     `SELECT worker_id,instance_id,hostname,pid,queue_names,schedule_namespaces,queue_name,concurrency,active_slots,draining,paused,paused_by,paused_reason,paused_at,started_at,last_heartbeat_at FROM workhorse.worker_registry ORDER BY last_heartbeat_at DESC,worker_id`,
 	"purge_queue":      `SELECT deleted_count FROM workhorse.purge_queue_v1($1::text,$2::text,$3::text,$4::text)`,
-	"redrive":          `SELECT status,source_job_id::text source_job_id,target_job_id::text target_job_id,source_state,target_state,requested_at FROM workhorse.redrive_v1($1::uuid,$2::text,$3::text,$4::text)`,
-	"redrive_many":     `SELECT status,source_job_id::text source_job_id,target_job_id::text target_job_id,source_state,target_state,requested_at,source_finished_at_cursor,has_more FROM workhorse.redrive_many_v1($1::jsonb,$2::integer,$3::boolean,$4::text,$5::text,$6::text,$7::timestamptz,$8::uuid) ORDER BY ordinal`,
+	"redrive":          `SELECT status,source_task_id::text source_task_id,target_task_id::text target_task_id,source_state,target_state,requested_at FROM workhorse.redrive_v1($1::uuid,$2::text,$3::text,$4::text)`,
+	"redrive_many":     `SELECT status,source_task_id::text source_task_id,target_task_id::text target_task_id,source_state,target_state,requested_at,source_finished_at_cursor,has_more FROM workhorse.redrive_many_v1($1::jsonb,$2::integer,$3::boolean,$4::text,$5::text,$6::text,$7::timestamptz,$8::uuid) ORDER BY ordinal`,
 	"set_queue_paused": `SELECT workhorse.set_queue_paused_v1($1::text,$2::boolean,$3::text,$4::text,$5::text)`,
 	"set_worker_paused": `SELECT * FROM workhorse.set_worker_paused_v1(
          $1::text, $2::boolean, $3::text, $4::text, $5::text)`,

@@ -4,8 +4,8 @@ description: Request a cooperative stop and let PostgreSQL preserve the winning 
 ---
 
 You cannot forcibly stop running JavaScript — there is no `Thread.kill`. Everything about
-cancellation in Workhorse follows from that fact. A job that is not running can be finished on
-the spot; a job whose handler is executing can only be asked to stop, and your handler decides
+cancellation in Workhorse follows from that fact. A task that is not running can be finished on
+the spot; a task whose handler is executing can only be asked to stop, and your handler decides
 how quickly it listens.
 
 ## Request cancellation
@@ -15,7 +15,7 @@ Call `Queue.cancel` after your application authorizes the actor.
 <Tabs items={["TypeScript", "Python", "Go"]}>
   <Tab value="TypeScript">
     ```ts
-    const result = await queue.cancel(jobId, {
+    const result = await queue.cancel(taskId, {
       requestedBy: actor.email,
       reason: "customer withdrew the order",
     });
@@ -24,7 +24,7 @@ Call `Queue.cancel` after your application authorizes the actor.
   <Tab value="Python">
     ```python
     result = queue.cancel(
-        job_id,
+        task_id,
         requested_by=actor.email,
         reason="customer withdrew the order",
     )
@@ -34,7 +34,7 @@ Call `Queue.cancel` after your application authorizes the actor.
     ```go
     requestedBy := actor.Email
     reason := "customer withdrew the order"
-    result, err := queue.Cancel(ctx, jobID, workhorse.CancellationRequest{
+    result, err := queue.Cancel(ctx, taskID, workhorse.CancellationRequest{
     	RequestedBy: &requestedBy,
     	Reason:      &reason,
     })
@@ -46,10 +46,10 @@ Call `Queue.cancel` after your application authorizes the actor.
 never decides whether the actor had permission — that check belongs in your application,
 before the call.
 
-What happens next depends on where the job is:
+What happens next depends on where the task is:
 
 - **`ready`, `scheduled`, or a [durable wait](/docs/durable-execution)** — no worker holds
-  the job, so PostgreSQL writes the canceled outcome immediately. A job that never started
+  the task, so PostgreSQL writes the canceled outcome immediately. A task that never started
   gets no invented attempt history.
 - **`active`** — PostgreSQL records one durable request. The worker's next heartbeat returns
   `cancel_requested`, and the worker aborts the handler's signal with
@@ -98,7 +98,7 @@ Two honest limits:
 
 - Cancellation does not undo effects that already happened. Keep each effect safe for
   at-least-once execution, and write compensation logic when the domain requires reversal.
-- If a handler ignores the signal, nothing stops it. The job stays active until its lease
+- If a handler ignores the signal, nothing stops it. The task stays active until its lease
   expires; recovery then sees the durable request and materializes the cancellation instead
   of scheduling another attempt. The cancellation always lands — how fast is up to your code.
 
@@ -107,13 +107,13 @@ Two honest limits:
 Suppose a cancellation and a completion commit at almost the same moment. Both need the same
 runtime row lock, so exactly one arrives first, and that one wins:
 
-- Cancel first — the later completion is refused; it cannot resurrect the job.
+- Cancel first — the later completion is refused; it cannot resurrect the task.
 - Complete first — the cancel call reports `already_terminal`.
 
 Either way the answer is consistent. Repeating a cancellation returns the existing request or
 outcome; PostgreSQL never creates duplicate terminal rows or events.
 
-Canceling a job created by a [schedule](/docs/schedules) affects that occurrence only. The
+Canceling a task created by a [schedule](/docs/schedules) affects that occurrence only. The
 schedule definition stays enabled until deployment synchronization changes it.
 
 All clients reach this database-owned transition through `cancel_v1`, even when their public method

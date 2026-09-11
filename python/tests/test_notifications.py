@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from threading import Event
 from time import monotonic
 
-from workhorse._notifications import JobNotificationListener
+from workhorse._notifications import TaskNotificationListener
 
 
 @dataclass
@@ -24,7 +24,7 @@ class _Connection:
         self.closed_event = Event()
 
     def execute(self, query: str) -> None:
-        assert query == "LISTEN workhorse_jobs"
+        assert query == "LISTEN workhorse_tasks"
         self.listened.set()
 
     def notifies(self, *, timeout: float, stop_after: int | None = None) -> Iterator[_Notification]:
@@ -51,7 +51,7 @@ def test_listener_wakes_only_for_matching_queues_and_wildcard() -> None:
         if wake_count == 3:  # connect, matching queue, wildcard
             three_reads.set()
 
-    listener = JobNotificationListener(lambda: connection, ["mail"], wake)
+    listener = TaskNotificationListener(lambda: connection, ["mail"], wake)
     listener.start()
     assert three_reads.wait(timeout=1)
     listener.close()
@@ -75,7 +75,7 @@ def test_listener_wakes_on_reconnect_after_a_read_failure() -> None:
         if wake_count == 3:  # first connect, disconnect, second connect
             reconnected.set()
 
-    listener = JobNotificationListener(lambda: next(connections), ["default"], wake)
+    listener = TaskNotificationListener(lambda: next(connections), ["default"], wake)
     listener.start()
     assert reconnected.wait(timeout=1)
     listener.close()
@@ -95,7 +95,7 @@ def test_listener_close_does_not_wait_for_a_blocked_connection_factory() -> None
         assert release_factory.wait(timeout=5)
         return connection
 
-    listener = JobNotificationListener(blocked_factory, ["default"], lambda: None)
+    listener = TaskNotificationListener(blocked_factory, ["default"], lambda: None)
     listener.start()
     assert factory_started.wait(timeout=1)
 

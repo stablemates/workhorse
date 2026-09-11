@@ -44,7 +44,7 @@ describe("structured logging", () => {
             rows: [
               {
                 ordinal: 1,
-                job_id: "00000000-0000-4000-8000-000000000001",
+                task_id: "00000000-0000-4000-8000-000000000001",
                 outcome: "accepted",
               },
             ],
@@ -70,11 +70,11 @@ describe("structured logging", () => {
     expect(records).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          eventName: "workhorse.job.enqueued",
+          eventName: "workhorse.task.enqueued",
           severityText: "DEBUG",
           attributes: expect.objectContaining({
-            "workhorse.job.id": "00000000-0000-4000-8000-000000000001",
-            "workhorse.job.type": "mail.send",
+            "workhorse.task.id": "00000000-0000-4000-8000-000000000001",
+            "workhorse.task.type": "mail.send",
             "workhorse.queue.name": "mail",
           }),
         }),
@@ -111,7 +111,7 @@ describe("structured logging", () => {
       pollMs: 1_000,
       registryIntervalMs: 100,
       maintenanceIntervalMs: 60_000,
-      maintenanceTaskPollMs: 60_000,
+      maintenanceRoutinePollMs: 60_000,
     });
 
     const running = worker.run();

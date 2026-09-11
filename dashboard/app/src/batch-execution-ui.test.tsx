@@ -1,5 +1,5 @@
 import { MantineProvider } from "@mantine/core";
-import type { DashboardJobDetail } from "@stablemates/workhorse-dashboard-server/wire";
+import type { DashboardTaskDetail } from "@stablemates/workhorse-dashboard-server/wire";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -8,7 +8,7 @@ Object.defineProperty(globalThis, "localStorage", {
   value: { getItem: () => null, setItem: () => undefined },
 });
 
-async function renderBatchExecution(batch: DashboardJobDetail["batchExecutions"][number]) {
+async function renderBatchExecution(batch: DashboardTaskDetail["batchExecutions"][number]) {
   const { BatchExecutionLine } = await import("./dashboard.js");
   return renderToStaticMarkup(
     createElement(
@@ -16,7 +16,7 @@ async function renderBatchExecution(batch: DashboardJobDetail["batchExecutions"]
       null,
       createElement(BatchExecutionLine, {
         batch,
-        selectedJobId: "selected-job",
+        selectedTaskId: "selected-task",
         taskLinkHref: (id: string) => `/tasks?task=${id}`,
       }),
     ),
@@ -32,14 +32,14 @@ describe("batch execution detail", () => {
       batchWideFailure: false,
       members: [
         {
-          id: "selected-job",
+          id: "selected-task",
           attempt: 2,
           type: "email.send",
           outcome: "succeeded",
           error: null,
         },
         {
-          id: "peer-job",
+          id: "peer-task",
           attempt: 1,
           type: "email.send",
           outcome: "succeeded",
@@ -49,8 +49,8 @@ describe("batch execution detail", () => {
     });
 
     expect(html).toContain("Processed in a batch of 2");
-    expect(html).toContain("peer-job");
-    expect(html).toContain('href="/tasks?task=peer-job"');
+    expect(html).toContain("peer-task");
+    expect(html).toContain('href="/tasks?task=peer-task"');
   });
 
   it("labels one shared handler error as a batch-wide failure", async () => {
@@ -61,8 +61,8 @@ describe("batch execution detail", () => {
       dispatchedAt: "2026-08-16T12:00:00.000Z",
       batchWideFailure: true,
       members: [
-        { id: "selected-job", attempt: 1, type: "email.send", outcome: "failed", error },
-        { id: "peer-job", attempt: 1, type: "email.send", outcome: "retry", error },
+        { id: "selected-task", attempt: 1, type: "email.send", outcome: "failed", error },
+        { id: "peer-task", attempt: 1, type: "email.send", outcome: "retry", error },
       ],
     });
 
@@ -78,8 +78,8 @@ describe("batch execution detail", () => {
       dispatchedAt: "2026-08-16T12:00:00.000Z",
       batchWideFailure: false,
       members: [
-        { id: "selected-job", attempt: 1, type: "email.send", outcome: "failed", error },
-        { id: "peer-job", attempt: 1, type: "email.send", outcome: "failed", error },
+        { id: "selected-task", attempt: 1, type: "email.send", outcome: "failed", error },
+        { id: "peer-task", attempt: 1, type: "email.send", outcome: "failed", error },
       ],
     });
 

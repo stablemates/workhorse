@@ -29,7 +29,7 @@
       "executionTimeoutMs": null,
       "maxAttempts": 3,
       "retryPolicy": { "type": "fixed", "delayMs": 25 },
-      "prerequisiteJobId": null,
+      "prerequisiteTaskId": null,
       "dependencies": null,
       "tags": ["conformance"],
       "idempotency": { "scope": "protocol", "key": "serialize", "ttlMs": 60000 }
@@ -58,7 +58,7 @@
       "executionTimeoutMs": null,
       "maxAttempts": 25,
       "retryPolicy": null,
-      "prerequisiteJobId": null,
+      "prerequisiteTaskId": null,
       "dependencies": null,
       "tags": []
     }

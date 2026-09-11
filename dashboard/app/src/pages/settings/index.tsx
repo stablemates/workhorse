@@ -97,13 +97,13 @@ export type RetentionField = {
   suffix: string;
 };
 export const retentionWindowFields: RetentionField[] = [
-  { key: "jobIdentityRetentionDays", label: "Task identity", suffix: " days" },
+  { key: "taskIdentityRetentionDays", label: "Task identity", suffix: " days" },
   {
     key: "terminalOutcomeRetentionDays",
     label: "Finished outcomes",
     suffix: " days",
   },
-  { key: "jobEventRetentionDays", label: "Task events", suffix: " days" },
+  { key: "taskEventRetentionDays", label: "Task events", suffix: " days" },
   {
     key: "attemptHistoryRetentionDays",
     label: "Attempt history",
@@ -122,7 +122,7 @@ export const retentionWindowFields: RetentionField[] = [
 ];
 export const retentionCleanupFields: RetentionField[] = [
   {
-    key: "terminalJobPruneLimit",
+    key: "terminalTaskPruneLimit",
     label: "Finished tasks per cleanup pass",
     suffix: " rows",
   },
@@ -528,7 +528,7 @@ export function SettingsPage({
                       <Table.Td>{formatDuration(worker.heartbeatMs)}</Table.Td>
                       <Table.Td>{formatDuration(worker.pollMs)}</Table.Td>
                       <Table.Td>{formatDuration(worker.maintenanceIntervalMs)}</Table.Td>
-                      <Table.Td>{formatDuration(worker.maintenanceTaskPollMs)}</Table.Td>
+                      <Table.Td>{formatDuration(worker.maintenanceRoutinePollMs)}</Table.Td>
                       <Table.Td>{formatDuration(worker.registryIntervalMs)}</Table.Td>
                     </Table.Tr>
                   ))}

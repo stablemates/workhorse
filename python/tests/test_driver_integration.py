@@ -16,7 +16,7 @@ from workhorse import (
     Idempotency,
     Queue,
     ScheduleDefinition,
-    ScheduledJob,
+    ScheduledTask,
     Throttle,
     assert_schema_compatible,
     assert_schema_compatible_asyncpg,
@@ -27,9 +27,9 @@ from workhorse._statements import MAXIMUM_SCHEMA_VERSION
 pytestmark = pytest.mark.integration
 
 
-def job_count(database_url: str) -> int:
+def task_count(database_url: str) -> int:
     with psycopg.connect(database_url, autocommit=True) as observer:
-        row = observer.execute("SELECT count(*) FROM workhorse.job").fetchone()
+        row = observer.execute("SELECT count(*) FROM workhorse.task").fetchone()
         assert row is not None
         return int(row[0])
 
@@ -37,9 +37,9 @@ def job_count(database_url: str) -> int:
 def test_psycopg_preserves_caller_owned_commit_and_rollback(database_url: str) -> None:
     with psycopg.connect(database_url) as connection:
         with connection.transaction():
-            job_id = Queue(connection).enqueue("email.send", {"message": "committed"})
-            assert job_count(database_url) == 0
-        assert job_count(database_url) == 1
+            task_id = Queue(connection).enqueue("email.send", {"message": "committed"})
+            assert task_count(database_url) == 0
+        assert task_count(database_url) == 1
 
         with (
             pytest.raises(RuntimeError, match="application rollback"),
@@ -48,8 +48,8 @@ def test_psycopg_preserves_caller_owned_commit_and_rollback(database_url: str) -
             Queue(connection).enqueue("email.send", {"message": "rolled back"})
             raise RuntimeError("application rollback")
 
-    assert job_count(database_url) == 1
-    assert job_id
+    assert task_count(database_url) == 1
+    assert task_id
 
 
 def test_psycopg_reads_the_database_health_document(database_url: str) -> None:
@@ -68,9 +68,9 @@ async def test_asyncpg_preserves_a_caller_owned_transaction(database_url: str) -
         transaction = connection.transaction()
         await transaction.start()
         await AsyncQueue.from_asyncpg(connection).enqueue("email.send", {"message": "async"})
-        assert job_count(database_url) == 0
+        assert task_count(database_url) == 0
         await transaction.commit()
-        assert job_count(database_url) == 1
+        assert task_count(database_url) == 1
     finally:
         await connection.close()
 
@@ -93,11 +93,11 @@ async def test_async_psycopg_executes_the_same_protocol(database_url: str) -> No
         await psycopg.AsyncConnection.connect(database_url) as connection,
         connection.transaction(),
     ):
-        job_id = await AsyncQueue.from_psycopg(connection).enqueue(
+        task_id = await AsyncQueue.from_psycopg(connection).enqueue(
             "email.send", {"message": "async psycopg"}
         )
-    assert job_id
-    assert job_count(database_url) == 1
+    assert task_id
+    assert task_count(database_url) == 1
 
 
 def test_enqueue_modes_dependencies_batch_and_schedules(database_url: str) -> None:
@@ -153,14 +153,14 @@ def test_enqueue_modes_dependencies_batch_and_schedules(database_url: str) -> No
             "billing",
             [
                 ScheduleDefinition(
-                    "daily", "0 0 * * *", ScheduledJob("billing.daily", {"active": True})
+                    "daily", "0 0 * * *", ScheduledTask("billing.daily", {"active": True})
                 )
             ],
         )
 
     assert all((delayed, prioritized, dependent, *batch))
     assert (replay_one.outcome, replay_two.outcome) == ("accepted", "replayed")
-    assert replay_one.job_id == replay_two.job_id
+    assert replay_one.task_id == replay_two.task_id
     assert (debounced.outcome, replaced.outcome) == ("accepted", "replaced")
     assert (throttled.outcome, coalesced.outcome) == ("accepted", "coalesced")
     with psycopg.connect(database_url, autocommit=True) as observer:

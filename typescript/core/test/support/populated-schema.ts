@@ -26,7 +26,7 @@ const historyFixtureDay = "2020-01-02";
 /** The occurrence second the fixture schedule fires, fixed so the seeded row never moves. */
 const scheduleOccurrenceAt = "2021-03-04T05:00:00Z";
 
-/** Creates the fixture's history-day partition of `job_event` and `attempt_history`. */
+/** Creates the fixture's history-day partition of `task_event` and `attempt_history`. */
 export async function createHistoryFixtureDay(pool: Pool): Promise<void> {
   await pool.query("SELECT workhorse.create_history_day_v1($1::date)", [historyFixtureDay]);
 }
@@ -41,8 +41,8 @@ export interface SeededTableRows {
 /**
  * Populates a freshly installed released artifact.
  *
- * The seed covers the shapes a migration could damage: a job in every state the schema can hold, a
- * job set whose history spans two partitions, a schedule with its fired occurrence, a checkpoint
+ * The seed covers the shapes a migration could damage: a task in every state the schema can hold, a
+ * task set whose history spans two partitions, a schedule with its fired occurrence, a checkpoint
  * and a wait, audit records, and a concurrency and a rate limit policy.
  */
 export async function seedReleasedSchema(pool: Pool): Promise<void> {
@@ -79,7 +79,7 @@ export async function seedReleasedSchema(pool: Pool): Promise<void> {
   );
 
   // Claims are FIFO within a priority, so enqueue order below is claim order.
-  const runJobs = await enqueueBatch(pool, [
+  const runTasks = await enqueueBatch(pool, [
     { queue: runQueue, type: "fixture.succeed", payload: { step: "succeed" }, maxAttempts: 5 },
     { queue: runQueue, type: "fixture.fail", payload: { step: "fail" }, maxAttempts: 1 },
     { queue: runQueue, type: "fixture.wait", payload: { step: "wait" }, maxAttempts: 5 },
@@ -96,7 +96,7 @@ export async function seedReleasedSchema(pool: Pool): Promise<void> {
 
   const succeeded = await claim(pool, runQueue);
   await pool.query("SELECT workhorse.complete_v1($1::uuid, $2, $3::bigint, $4::jsonb)", [
-    succeeded.job_id,
+    succeeded.task_id,
     fixtureWorker,
     succeeded.fence_token,
     JSON.stringify({ outcome: "ok" }),
@@ -104,7 +104,7 @@ export async function seedReleasedSchema(pool: Pool): Promise<void> {
 
   const failed = await claim(pool, runQueue);
   await pool.query("SELECT workhorse.fail_v1($1::uuid, $2, $3::bigint, $4::jsonb)", [
-    failed.job_id,
+    failed.task_id,
     fixtureWorker,
     failed.fence_token,
     JSON.stringify({ message: "fixture failure" }),
@@ -113,31 +113,31 @@ export async function seedReleasedSchema(pool: Pool): Promise<void> {
   const waiting = await claim(pool, runQueue);
   await pool.query(
     `SELECT workhorse.schedule_wait_v1($1::uuid, $2, $3::bigint, $4, $5::bigint, NULL)`,
-    [waiting.job_id, fixtureWorker, waiting.fence_token, "fixture-wait", 3_600_000],
+    [waiting.task_id, fixtureWorker, waiting.fence_token, "fixture-wait", 3_600_000],
   );
 
   const working = await claim(pool, runQueue);
   await pool.query(`SELECT workhorse.save_checkpoint_v1($1::uuid, $2, $3::bigint, $4, $5::jsonb)`, [
-    working.job_id,
+    working.task_id,
     fixtureWorker,
     working.fence_token,
     "fixture-checkpoint",
     JSON.stringify({ cursor: 42 }),
   ]);
   await pool.query(`SELECT workhorse.update_progress_v1($1::uuid, $2, $3::bigint, $4::jsonb)`, [
-    working.job_id,
+    working.task_id,
     fixtureWorker,
     working.fence_token,
     JSON.stringify({ percent: 50 }),
   ]);
 
-  // A job set leaves its parent blocked on the children it created, so one call reaches the set
-  // edges, the dependency edges, and the only state no other seeded job holds.
+  // A task set leaves its parent blocked on the children it created, so one call reaches the set
+  // edges, the dependency edges, and the only state no other seeded task holds.
   const parent = await claim(pool, runQueue);
   await pool.query(
     `SELECT workhorse.create_children_v1($1::uuid, $2, $3::bigint, $4::jsonb, 'settled')`,
     [
-      parent.job_id,
+      parent.task_id,
       fixtureWorker,
       parent.fence_token,
       JSON.stringify([
@@ -153,7 +153,7 @@ export async function seedReleasedSchema(pool: Pool): Promise<void> {
     ],
   );
 
-  const canceled = runJobs.at(-1);
+  const canceled = runTasks.at(-1);
   await pool.query("SELECT workhorse.cancel_v1($1::uuid, $2, $3)", [
     canceled,
     "fixture-operator",
@@ -219,19 +219,19 @@ export async function seedReleasedSchema(pool: Pool): Promise<void> {
   // one place the seed inserts directly. Every other history row carries the clock's day and stays
   // in the default partition, which is what makes the seed span more than one partition.
   await pool.query(
-    `INSERT INTO workhorse.job_event(job_id, attempt, event_type, details, occurred_at)
+    `INSERT INTO workhorse.task_event(task_id, attempt, event_type, details, occurred_at)
      VALUES ($1::uuid, 1, 'fixture_archived', $2::jsonb, $3::timestamptz)`,
-    [succeeded.job_id, JSON.stringify({ note: "history day" }), `${historyFixtureDay}T04:05:06Z`],
+    [succeeded.task_id, JSON.stringify({ note: "history day" }), `${historyFixtureDay}T04:05:06Z`],
   );
   await pool.query(
     `INSERT INTO workhorse.attempt_history(
-       job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at,
+       task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at,
        occurred_at
      ) VALUES (
        $1::uuid, 1, 1, $2, 'succeeded', $3::timestamptz, $3::timestamptz, $3::timestamptz,
        $3::timestamptz
      )`,
-    [succeeded.job_id, fixtureWorker, `${historyFixtureDay}T04:05:06Z`],
+    [succeeded.task_id, fixtureWorker, `${historyFixtureDay}T04:05:06Z`],
   );
 }
 
@@ -289,22 +289,22 @@ async function seededShape(pool: Pool): Promise<{ table: string; columns: string
 }
 
 async function enqueueBatch(pool: Pool, requests: readonly object[]): Promise<string[]> {
-  const result = await pool.query<{ job_id: string }>(
-    "SELECT job_id FROM workhorse.enqueue_batch_v1($1::jsonb) ORDER BY ordinal",
+  const result = await pool.query<{ task_id: string }>(
+    "SELECT task_id FROM workhorse.enqueue_batch_v1($1::jsonb) ORDER BY ordinal",
     [JSON.stringify(requests)],
   );
-  return result.rows.map((row) => row.job_id);
+  return result.rows.map((row) => row.task_id);
 }
 
 async function claim(
   pool: Pool,
   queueName: string,
-): Promise<{ job_id: string; fence_token: string }> {
-  const result = await pool.query<{ job_id: string; fence_token: string }>(
-    "SELECT job_id, fence_token FROM workhorse.claim_v1($1, $2, 600000)",
+): Promise<{ task_id: string; fence_token: string }> {
+  const result = await pool.query<{ task_id: string; fence_token: string }>(
+    "SELECT task_id, fence_token FROM workhorse.claim_v1($1, $2, 600000)",
     [queueName, fixtureWorker],
   );
   const claimed = result.rows[0];
-  if (claimed === undefined) throw new Error(`the fixture found no ready job on ${queueName}`);
+  if (claimed === undefined) throw new Error(`the fixture found no ready task on ${queueName}`);
   return claimed;
 }

@@ -61,9 +61,9 @@ describe("soak observation collector", () => {
     expect(await queue.claim(workerId)).toMatchObject({ id: lost });
     expect(await queue.claim(workerId)).toMatchObject({ id: survivor });
 
-    // A SIGKILLed worker acknowledges nothing, so recovery reaches its jobs through lease expiry.
+    // A SIGKILLed worker acknowledges nothing, so recovery reaches its tasks through lease expiry.
     await pool.query(
-      "UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 second'",
+      "UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 second'",
     );
     expect(await queue.recoverExpired()).toBe(2);
     const reclaimed = await queue.claim("soak-replacement-worker");
@@ -74,23 +74,23 @@ describe("soak observation collector", () => {
     expect(observation.killRecovery).toMatchObject({
       workerId,
       leaseExpiredAttempts: 2,
-      affectedJobs: 2,
-      jobsSettled: 1,
-      jobsLive: 1,
-      jobsLost: 0,
-      jobsSucceededMoreThanOnce: 0,
+      affectedTasks: 2,
+      tasksSettled: 1,
+      tasksLive: 1,
+      tasksLost: 0,
+      tasksSucceededMoreThanOnce: 0,
     });
   });
 
   it("reports the closed days the daily statistics tier holds", async () => {
-    const jobId = await queue.enqueue("soak-throughput", {});
+    const taskId = await queue.enqueue("soak-throughput", {});
     const claimed = await queue.claim("soak-throughput-worker");
-    expect(claimed?.id).toBe(jobId);
+    expect(claimed?.id).toBe(taskId);
     expect(await queue.complete(claimed!, "soak-throughput-worker", null)).toBe(true);
 
     // Roll the statistics forward past today so today closes into the daily tier.
     await pool.query(
-      `UPDATE workhorse.job_stat_state
+      `UPDATE workhorse.task_stat_state
           SET rolled_up_through = date_bin('1 day', clock_timestamp(),
                 timestamp '2000-01-01' AT TIME ZONE 'UTC'),
               hourly_rolled_up_through = date_bin('1 day', clock_timestamp(),
@@ -108,7 +108,7 @@ describe("soak observation collector", () => {
     const observation = await collectSoakObservation(pool);
 
     const day = observation.throughput.find((entry) => entry.day === today());
-    expect(day).toMatchObject({ enqueued: expect.any(Number), jobSucceeded: expect.any(Number) });
+    expect(day).toMatchObject({ enqueued: expect.any(Number), taskSucceeded: expect.any(Number) });
     expect(day!.enqueued).toBeGreaterThanOrEqual(1);
   });
 

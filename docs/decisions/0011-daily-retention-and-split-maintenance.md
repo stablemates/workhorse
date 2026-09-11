@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-02
+- **Amended by:** [ADR 0064](0064-rename-the-unit-noun-from-job-to-task.md) (maintenance tasks
+  are now routines)
 - **Supersedes:** [ADR 0004](0004-two-cadence-maintenance.md)
 - **Amends:** [ADR 0007](0007-automated-retention.md)
 

@@ -63,7 +63,7 @@ describe("dashboard human waits", () => {
       },
       waits: [
         expect.objectContaining({
-          jobId: id,
+          taskId: id,
           name: "account-review",
           context: {
             prompt: "Approve this account?",
@@ -78,7 +78,7 @@ describe("dashboard human waits", () => {
       client(true).dashboard.tasks({ filter: "waiting", page: 1, pageSize: 25 }),
     ).resolves.toMatchObject({
       canCompleteHumanWait: true,
-      jobs: [
+      tasks: [
         expect.objectContaining({
           id,
           humanWait: {
@@ -108,7 +108,7 @@ describe("dashboard human waits", () => {
     });
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(admin.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getTask(id)).resolves.toMatchObject({
       state: "succeeded",
       result: { approved: true },
     });

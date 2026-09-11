@@ -2,26 +2,26 @@ import { MantineProvider } from "@mantine/core";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { DashboardJobDetail } from "@stablemates/workhorse-dashboard-server/wire";
+import type { DashboardTaskDetail } from "@stablemates/workhorse-dashboard-server/wire";
 
 Object.defineProperty(globalThis, "localStorage", {
   value: { getItem: () => null, setItem: () => undefined },
 });
 
 async function renderDependency(
-  identity: Partial<DashboardJobDetail["identity"]>,
-  dependencyLineage: DashboardJobDetail["dependencyLineage"] = {
+  identity: Partial<DashboardTaskDetail["identity"]>,
+  dependencyLineage: DashboardTaskDetail["dependencyLineage"] = {
     records: [],
     truncated: false,
   },
-  childLineage: DashboardJobDetail["childLineage"] = { records: [], truncated: false },
+  childLineage: DashboardTaskDetail["childLineage"] = { records: [], truncated: false },
 ): Promise<string> {
   const { DependencyLine } = await import("./dashboard.js");
-  const job = {
+  const task = {
     identity: {
-      id: "selected-job",
-      prerequisiteJobId: null,
-      prerequisiteJobIds: [],
+      id: "selected-task",
+      prerequisiteTaskId: null,
+      prerequisiteTaskIds: [],
       dependencyPolicy: null,
       dependencyReleasedAt: null,
       blockedReason: null,
@@ -29,43 +29,43 @@ async function renderDependency(
     },
     dependencyLineage,
     childLineage,
-  } as DashboardJobDetail;
+  } as DashboardTaskDetail;
   return renderToStaticMarkup(
     createElement(
       MantineProvider,
       null,
-      createElement(DependencyLine, { job, taskLinkHref: (id: string) => `/tasks?task=${id}` }),
+      createElement(DependencyLine, { task, taskLinkHref: (id: string) => `/tasks?task=${id}` }),
     ),
   );
 }
 
 async function renderRedrive(
-  redriveLineage: DashboardJobDetail["redriveLineage"],
-  id = "selected-job",
+  redriveLineage: DashboardTaskDetail["redriveLineage"],
+  id = "selected-task",
 ): Promise<string> {
   const { RedriveLine } = await import("./dashboard.js");
-  const job = { identity: { id }, redriveLineage } as DashboardJobDetail;
+  const task = { identity: { id }, redriveLineage } as DashboardTaskDetail;
   return renderToStaticMarkup(
     createElement(
       MantineProvider,
       null,
       createElement(RedriveLine, {
-        job,
+        task,
         taskLinkHref: (taskId: string) => `/tasks?task=${taskId}`,
       }),
     ),
   );
 }
 
-async function renderChild(childLineage: DashboardJobDetail["childLineage"]): Promise<string> {
+async function renderChild(childLineage: DashboardTaskDetail["childLineage"]): Promise<string> {
   const { ChildLine } = await import("./dashboard.js");
-  const job = { identity: { id: "parent-job" }, childLineage } as DashboardJobDetail;
+  const task = { identity: { id: "parent-task" }, childLineage } as DashboardTaskDetail;
   return renderToStaticMarkup(
     createElement(
       MantineProvider,
       null,
       createElement(ChildLine, {
-        job,
+        task,
         taskLinkHref: (taskId: string) => `/tasks?task=${taskId}`,
       }),
     ),
@@ -75,20 +75,20 @@ async function renderChild(childLineage: DashboardJobDetail["childLineage"]): Pr
 describe("task dependency detail", () => {
   it("shows the prerequisite identity and blocked reason", async () => {
     const html = await renderDependency({
-      prerequisiteJobId: "prerequisite-job",
-      prerequisiteJobIds: ["prerequisite-job"],
+      prerequisiteTaskId: "prerequisite-task",
+      prerequisiteTaskIds: ["prerequisite-task"],
       blockedReason: "prerequisite_pending",
     });
-    expect(html).toContain("prerequisite-job");
+    expect(html).toContain("prerequisite-task");
     expect(html).toContain("blocked");
     expect(html).toContain("Blocked until every prerequisite satisfies the dependency policy");
-    expect(html).toContain('href="/tasks?task=prerequisite-job"');
+    expect(html).toContain('href="/tasks?task=prerequisite-task"');
   });
 
   it("shows when PostgreSQL released the dependency", async () => {
     const html = await renderDependency({
-      prerequisiteJobId: "prerequisite-job",
-      prerequisiteJobIds: ["prerequisite-job"],
+      prerequisiteTaskId: "prerequisite-task",
+      prerequisiteTaskIds: ["prerequisite-task"],
       dependencyReleasedAt: "2026-08-14T12:00:00.000Z",
     });
     expect(html).toContain("released");
@@ -101,8 +101,8 @@ describe("task dependency detail", () => {
       {
         records: [
           {
-            dependentJobId: "dependent-job",
-            prerequisiteJobId: "selected-job",
+            dependentTaskId: "dependent-task",
+            prerequisiteTaskId: "selected-task",
             onSuccess: "release",
             onFailure: "fail",
             onCancellation: "cancel",
@@ -111,8 +111,8 @@ describe("task dependency detail", () => {
             resolution: "release",
           },
           {
-            dependentJobId: "other-dependent-job",
-            prerequisiteJobId: "selected-job",
+            dependentTaskId: "other-dependent-task",
+            prerequisiteTaskId: "selected-task",
             onSuccess: "cancel",
             onFailure: "release",
             onCancellation: "fail",
@@ -125,35 +125,35 @@ describe("task dependency detail", () => {
       },
     );
     expect(html).toContain("Dependent");
-    expect(html).toContain("dependent-job");
+    expect(html).toContain("dependent-task");
     expect(html).toContain(
       "If this task succeeds, it can run; if this task fails, it fails; " +
         "if this task is canceled, it is canceled.",
     );
     expect(html).toContain("This task released it");
-    expect(html).toContain("other-dependent-job");
+    expect(html).toContain("other-dependent-task");
     expect(html).toContain(
       "If this task succeeds, it is canceled; if this task fails, it can run; " +
         "if this task is canceled, it fails.",
     );
     expect(html).toContain("Still waiting on this task");
     expect(html).not.toContain("success: release");
-    expect(html).toContain('href="/tasks?task=dependent-job"');
-    expect(html).toContain('href="/tasks?task=other-dependent-job"');
+    expect(html).toContain('href="/tasks?task=dependent-task"');
+    expect(html).toContain('href="/tasks?task=other-dependent-task"');
   });
 
   it("explains the prerequisite policy as a sentence without repeating the identity", async () => {
     const html = await renderDependency(
       {
-        prerequisiteJobId: "prerequisite-job",
-        prerequisiteJobIds: ["prerequisite-job"],
+        prerequisiteTaskId: "prerequisite-task",
+        prerequisiteTaskIds: ["prerequisite-task"],
         blockedReason: "prerequisite_pending",
       },
       {
         records: [
           {
-            dependentJobId: "selected-job",
-            prerequisiteJobId: "prerequisite-job",
+            dependentTaskId: "selected-task",
+            prerequisiteTaskId: "prerequisite-task",
             onSuccess: "release",
             onFailure: "fail",
             onCancellation: "cancel",
@@ -172,7 +172,7 @@ describe("task dependency detail", () => {
     expect(html).not.toContain("success: release");
     // The identity appears exactly once, as the link: its href plus its full-id hover title.
     // The visible text is the shortened eight-character form.
-    expect(html.split("prerequisite-job").length - 1).toBe(2);
+    expect(html.split("prerequisite-task").length - 1).toBe(2);
     expect(html).toContain(">prerequi<");
   });
 
@@ -181,7 +181,7 @@ describe("task dependency detail", () => {
   });
 
   it("hides dependency edges that mirror a parent-child edge", async () => {
-    // Spawning a child inserts both a job_child edge and a job_dependency edge for the same
+    // Spawning a child inserts both a task_child edge and a task_dependency edge for the same
     // pair, so without filtering the child's drawer names its parent twice: once as
     // "Dependent" here and once as "Parent" in ChildLine.
     const html = await renderDependency(
@@ -189,8 +189,8 @@ describe("task dependency detail", () => {
       {
         records: [
           {
-            dependentJobId: "parent-job",
-            prerequisiteJobId: "selected-job",
+            dependentTaskId: "parent-task",
+            prerequisiteTaskId: "selected-task",
             onSuccess: "release",
             onFailure: "fail",
             onCancellation: "cancel",
@@ -204,8 +204,8 @@ describe("task dependency detail", () => {
       {
         records: [
           {
-            parentJobId: "parent-job",
-            childJobId: "selected-job",
+            parentTaskId: "parent-task",
+            childTaskId: "selected-task",
             name: "shard-1",
             type: "demo.child-step",
             createdAt: "2026-08-14T11:00:00.000Z",
@@ -218,17 +218,17 @@ describe("task dependency detail", () => {
       },
     );
     expect(html).not.toContain("Dependent");
-    expect(html).not.toContain("parent-job");
+    expect(html).not.toContain("parent-task");
   });
 
   it("hides the parent's implicit child prerequisites but keeps explicit ones", async () => {
     const html = await renderDependency(
-      { prerequisiteJobIds: ["child-job", "explicit-prerequisite"] },
+      { prerequisiteTaskIds: ["child-task", "explicit-prerequisite"] },
       {
         records: [
           {
-            dependentJobId: "selected-job",
-            prerequisiteJobId: "child-job",
+            dependentTaskId: "selected-task",
+            prerequisiteTaskId: "child-task",
             onSuccess: "release",
             onFailure: "fail",
             onCancellation: "cancel",
@@ -237,8 +237,8 @@ describe("task dependency detail", () => {
             resolution: null,
           },
           {
-            dependentJobId: "selected-job",
-            prerequisiteJobId: "explicit-prerequisite",
+            dependentTaskId: "selected-task",
+            prerequisiteTaskId: "explicit-prerequisite",
             onSuccess: "release",
             onFailure: "fail",
             onCancellation: "cancel",
@@ -252,8 +252,8 @@ describe("task dependency detail", () => {
       {
         records: [
           {
-            parentJobId: "selected-job",
-            childJobId: "child-job",
+            parentTaskId: "selected-task",
+            childTaskId: "child-task",
             name: "shard-1",
             type: "demo.child-step",
             createdAt: "2026-08-14T11:00:00.000Z",
@@ -266,18 +266,18 @@ describe("task dependency detail", () => {
       },
     );
     expect(html).toContain("explicit-prerequisite");
-    expect(html).not.toContain("child-job");
+    expect(html).not.toContain("child-task");
     expect(html).toContain("Prerequisite");
     expect(html).not.toContain("Prerequisites");
   });
 });
 
 describe("task redrive detail", () => {
-  const lineage: DashboardJobDetail["redriveLineage"] = {
+  const lineage: DashboardTaskDetail["redriveLineage"] = {
     records: [
       {
-        sourceJobId: "selected-job",
-        targetJobId: "fresh-job",
+        sourceTaskId: "selected-task",
+        targetTaskId: "fresh-task",
         requestedBy: "operator",
         reason: "dependency repaired",
         requestIdPreview: "request",
@@ -294,17 +294,17 @@ describe("task redrive detail", () => {
   it("shows the fresh identity and operator attribution from the failed source", async () => {
     const html = await renderRedrive(lineage);
     expect(html).toContain("Redrive");
-    expect(html).toContain("fresh-job");
+    expect(html).toContain("fresh-task");
     expect(html).toContain("operator");
     expect(html).toContain("dependency repaired");
-    expect(html).toContain('href="/tasks?task=fresh-job"');
+    expect(html).toContain('href="/tasks?task=fresh-task"');
   });
 
   it("shows the immutable source from the fresh target", async () => {
-    const html = await renderRedrive(lineage, "fresh-job");
+    const html = await renderRedrive(lineage, "fresh-task");
     expect(html).toContain("Redriven from");
-    expect(html).toContain("selected-job");
-    expect(html).toContain('href="/tasks?task=selected-job"');
+    expect(html).toContain("selected-task");
+    expect(html).toContain('href="/tasks?task=selected-task"');
   });
 });
 
@@ -313,8 +313,8 @@ describe("task child detail", () => {
     const html = await renderChild({
       records: [
         {
-          parentJobId: "parent-job",
-          childJobId: "failed-child",
+          parentTaskId: "parent-task",
+          childTaskId: "failed-child",
           name: "charge",
           type: "payments.charge",
           createdAt: "2026-08-15T12:00:00.000Z",
@@ -336,8 +336,8 @@ describe("task child detail", () => {
     const html = await renderChild({
       records: [
         {
-          parentJobId: "parent-job",
-          childJobId: "joined-child",
+          parentTaskId: "parent-task",
+          childTaskId: "joined-child",
           name: "research",
           type: "agent.tool",
           createdAt: "2026-08-15T12:00:00.000Z",
@@ -346,8 +346,8 @@ describe("task child detail", () => {
           error: null,
         },
         {
-          parentJobId: "parent-job",
-          childJobId: "waiting-child",
+          parentTaskId: "parent-task",
+          childTaskId: "waiting-child",
           name: "calculate",
           type: "agent.tool",
           createdAt: "2026-08-15T12:00:00.000Z",

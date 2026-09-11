@@ -52,7 +52,7 @@ describe("signal RPC authentication", () => {
       .fn<NonNullable<DashboardTaskController["signalTask"]>>()
       .mockResolvedValue({
         status: "delivered",
-        jobId: "10000000-0000-4000-8000-000000000001",
+        taskId: "10000000-0000-4000-8000-000000000001",
         name: "approval",
         payload: { approved: true },
         deliveredAt: "2026-08-15T12:00:00.000Z",

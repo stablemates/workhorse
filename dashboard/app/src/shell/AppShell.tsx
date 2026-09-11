@@ -165,7 +165,7 @@ export function DashboardContent({
     taskCounts,
     handleLink,
     content,
-    selectedJobId,
+    selectedTaskId,
     selectedEventId,
     selectedEvent,
     eventDetailError,
@@ -181,16 +181,16 @@ export function DashboardContent({
     closeOnEscape: taskDrawerCloseOnEscape(dropdownOpened),
   };
   useLayoutEffect(() => {
-    const focusChange = taskDrawerFocusChange(previousTaskDrawerId.current, selectedJobId);
-    previousTaskDrawerId.current = selectedJobId;
+    const focusChange = taskDrawerFocusChange(previousTaskDrawerId.current, selectedTaskId);
+    previousTaskDrawerId.current = selectedTaskId;
     if (focusChange === "none") return;
     if (focusChange === "trigger") {
       taskDrawerReturnTarget.current?.focus();
       return;
     }
-    if (selectedJobId === null) return;
+    if (selectedTaskId === null) return;
 
-    const trigger = document.getElementById(taskOpenButtonId(selectedJobId));
+    const trigger = document.getElementById(taskOpenButtonId(selectedTaskId));
     const drawer = document.getElementById("task-detail-drawer");
     const activeElement = document.activeElement;
     if (trigger instanceof HTMLElement) {
@@ -203,7 +203,7 @@ export function DashboardContent({
       taskDrawerReturnTarget.current = activeElement;
     }
     document.getElementById("task-detail-drawer-close")?.focus();
-  }, [selectedJobId]);
+  }, [selectedTaskId]);
   const lineageTaskHref = useCallback(
     (id: string) => mountedHref(basePath, taskHref({ ...location, taskId: id })),
     [basePath, location],

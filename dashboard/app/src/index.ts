@@ -12,7 +12,7 @@ export type {
   DashboardAuditInput,
   DashboardClient,
   DashboardDemoFeature,
-  DashboardDemoJobKind,
+  DashboardDemoTaskKind,
   DashboardDemoScenario,
   DashboardDemoTools,
 } from "@stablemates/workhorse-dashboard-server";

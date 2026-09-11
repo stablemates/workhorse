@@ -1,7 +1,7 @@
 /**
  * Read the governed SQL surface out of `sql/schema/current.sql` without a database.
  *
- * `pnpm sql-catalogues:check` runs in the CI `static` job, which has no PostgreSQL service, so the
+ * `pnpm sql-catalogues:check` runs in the CI `static` task, which has no PostgreSQL service, so the
  * surface is parsed from the committed schema text rather than introspected. The parser only has to
  * understand the statement forms this schema actually uses; `scripts/sql-surface.test.ts` fails when
  * a table, view, or function stops being recognised.

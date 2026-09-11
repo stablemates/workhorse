@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { taskRowActionGroups, type TaskRowAction } from "./presentation.js";
-import type { DashboardJobRow } from "@stablemates/workhorse-dashboard-server/wire";
+import type { DashboardTaskRow } from "@stablemates/workhorse-dashboard-server/wire";
 
-function row(overrides: Partial<DashboardJobRow> = {}): DashboardJobRow {
+function row(overrides: Partial<DashboardTaskRow> = {}): DashboardTaskRow {
   return {
     id: "3f1c0c8e-0000-4000-8000-000000000001",
     queue: "demo",
@@ -30,8 +30,8 @@ function row(overrides: Partial<DashboardJobRow> = {}): DashboardJobRow {
   };
 }
 
-function action(job: DashboardJobRow, id: TaskRowAction["id"]): TaskRowAction {
-  const found = taskRowActionGroups(job)
+function action(task: DashboardTaskRow, id: TaskRowAction["id"]): TaskRowAction {
+  const found = taskRowActionGroups(task)
     .flatMap((group) => group.actions)
     .find((candidate) => candidate.id === id);
   if (!found) throw new Error(`No action ${id} was offered`);

@@ -22,7 +22,7 @@ func TestSignalWaitSuspendsAndReplaysDeliveredPayload(t *testing.T) {
 	t.Cleanup(pool.Close)
 
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-signal-wait")
-	jobID, err := queue.Enqueue(ctx, "signal.approval", nil)
+	taskID, err := queue.Enqueue(ctx, "signal.approval", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,10 +50,10 @@ func TestSignalWaitSuspendsAndReplaysDeliveredPayload(t *testing.T) {
 	if processed, err := worker.RunOnce(ctx); err != nil || !processed {
 		t.Fatalf("suspend signal wait: processed=%t err=%v", processed, err)
 	}
-	deliverSignalFromTypeScript(t, databaseURL, jobID)
+	deliverSignalFromTypeScript(t, databaseURL, taskID)
 	delivery, err := queue.SendSignal(
 		ctx,
-		jobID,
+		taskID,
 		"approval",
 		map[string]any{"approved": true},
 		workhorse.ExternalWaitDelivery{IdempotencyKey: "approval-delivery", RequestedBy: "typescript-billing-service"},
@@ -67,13 +67,13 @@ func TestSignalWaitSuspendsAndReplaysDeliveredPayload(t *testing.T) {
 	}
 	_, err = queue.SendSignal(
 		ctx,
-		jobID,
+		taskID,
 		"approval",
 		map[string]any{"approved": false},
 		workhorse.ExternalWaitDelivery{IdempotencyKey: "approval-delivery", RequestedBy: "typescript-billing-service"},
 	)
 	var signalConflict *workhorse.SignalIdempotencyConflictError
-	if !errors.As(err, &signalConflict) || signalConflict.JobID != jobID || signalConflict.WaitName != "approval" {
+	if !errors.As(err, &signalConflict) || signalConflict.TaskID != taskID || signalConflict.WaitName != "approval" {
 		t.Fatalf("unexpected signal conflict: %#v", err)
 	}
 	if processed, err := worker.RunOnce(ctx); err != nil || !processed {
@@ -87,8 +87,8 @@ func TestSignalWaitSuspendsAndReplaysDeliveredPayload(t *testing.T) {
 	var result any
 	if err := pool.QueryRow(
 		ctx,
-		"SELECT state, result FROM workhorse.job_outcome WHERE job_id = $1",
-		jobID,
+		"SELECT state, result FROM workhorse.task_outcome WHERE task_id = $1",
+		taskID,
 	).Scan(&state, &result); err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestSignalWaitSuspendsAndReplaysDeliveredPayload(t *testing.T) {
 	}
 }
 
-func deliverSignalFromTypeScript(t *testing.T, databaseURL, jobID string) {
+func deliverSignalFromTypeScript(t *testing.T, databaseURL, taskID string) {
 	t.Helper()
 	command := exec.Command(
 		"pnpm",
@@ -107,7 +107,7 @@ func deliverSignalFromTypeScript(t *testing.T, databaseURL, jobID string) {
 		"tsx",
 		"typescript/core/test/go-interop-signal.ts",
 		databaseURL,
-		jobID,
+		taskID,
 	)
 	command.Dir = ".."
 	if output, err := command.CombinedOutput(); err != nil {
@@ -125,7 +125,7 @@ func TestHumanWaitSuspendsAndReplaysCompletedDecision(t *testing.T) {
 	t.Cleanup(pool.Close)
 
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-human-wait")
-	jobID, err := queue.Enqueue(ctx, "account.review", map[string]any{"accountId": "account-42"})
+	taskID, err := queue.Enqueue(ctx, "account.review", map[string]any{"accountId": "account-42"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,10 +157,10 @@ func TestHumanWaitSuspendsAndReplaysCompletedDecision(t *testing.T) {
 	if processed, err := worker.RunOnce(ctx); err != nil || !processed {
 		t.Fatalf("suspend human wait: processed=%t err=%v", processed, err)
 	}
-	completeHumanWaitFromDashboard(t, databaseURL, jobID)
+	completeHumanWaitFromDashboard(t, databaseURL, taskID)
 	completion, err := queue.CompleteHumanWait(
 		ctx,
-		jobID,
+		taskID,
 		"review",
 		map[string]any{"approved": true},
 		workhorse.ExternalWaitDelivery{IdempotencyKey: "review-completion", RequestedBy: "dashboard-go-interop"},
@@ -174,13 +174,13 @@ func TestHumanWaitSuspendsAndReplaysCompletedDecision(t *testing.T) {
 	}
 	_, err = queue.CompleteHumanWait(
 		ctx,
-		jobID,
+		taskID,
 		"review",
 		map[string]any{"approved": false},
 		workhorse.ExternalWaitDelivery{IdempotencyKey: "review-completion", RequestedBy: "dashboard-go-interop"},
 	)
 	var humanConflict *workhorse.HumanWaitIdempotencyConflictError
-	if !errors.As(err, &humanConflict) || humanConflict.JobID != jobID || humanConflict.WaitName != "review" {
+	if !errors.As(err, &humanConflict) || humanConflict.TaskID != taskID || humanConflict.WaitName != "review" {
 		t.Fatalf("unexpected human wait conflict: %#v", err)
 	}
 	if processed, err := worker.RunOnce(ctx); err != nil || !processed {
@@ -194,8 +194,8 @@ func TestHumanWaitSuspendsAndReplaysCompletedDecision(t *testing.T) {
 	var result any
 	if err := pool.QueryRow(
 		ctx,
-		"SELECT state, result FROM workhorse.job_outcome WHERE job_id = $1",
-		jobID,
+		"SELECT state, result FROM workhorse.task_outcome WHERE task_id = $1",
+		taskID,
 	).Scan(&state, &result); err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestHumanWaitSuspendsAndReplaysCompletedDecision(t *testing.T) {
 	}
 }
 
-func completeHumanWaitFromDashboard(t *testing.T, databaseURL, jobID string) {
+func completeHumanWaitFromDashboard(t *testing.T, databaseURL, taskID string) {
 	t.Helper()
 	command := exec.Command(
 		"pnpm",
@@ -215,7 +215,7 @@ func completeHumanWaitFromDashboard(t *testing.T, databaseURL, jobID string) {
 		"--conditions=workhorse-source",
 		"typescript/dashboard-server/test/go-interop-human-dashboard.ts",
 		databaseURL,
-		jobID,
+		taskID,
 	)
 	command.Dir = ".."
 	if output, err := command.CombinedOutput(); err != nil {
@@ -258,7 +258,7 @@ func TestExternalWaitDeadlinesProduceDurableDeadlineOutcome(t *testing.T) {
 
 			queueName := "go-" + test.name + "-timeout"
 			queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-			jobID, err := queue.Enqueue(ctx, test.name+".timeout", nil)
+			taskID, err := queue.Enqueue(ctx, test.name+".timeout", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -287,8 +287,8 @@ func TestExternalWaitDeadlinesProduceDurableDeadlineOutcome(t *testing.T) {
 			var state, errorName string
 			if err := pool.QueryRow(
 				ctx,
-				"SELECT state, error->>'name' FROM workhorse.job_outcome WHERE job_id = $1",
-				jobID,
+				"SELECT state, error->>'name' FROM workhorse.task_outcome WHERE task_id = $1",
+				taskID,
 			).Scan(&state, &errorName); err != nil {
 				t.Fatal(err)
 			}

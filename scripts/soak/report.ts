@@ -60,9 +60,9 @@ export interface Reinstall {
 
 export interface ThroughputTotals {
   enqueued: number;
-  jobSucceeded: number;
-  jobFailed: number;
-  jobCanceled: number;
+  taskSucceeded: number;
+  taskFailed: number;
+  taskCanceled: number;
   attemptSucceeded: number;
   attemptFailed: number;
   attemptRetry: number;
@@ -122,12 +122,12 @@ export interface SoakReport {
  * A kill is recovered when the database can show it happened and show nothing went wrong with it.
  *
  * All three clauses matter. No expired lease means the kill left no trace to reconcile, so the
- * record proves nothing; a lost job means recovery dropped work; a job with two succeeded attempts
+ * record proves nothing; a lost task means recovery dropped work; a task with two succeeded attempts
  * means recovery ran work twice.
  */
 function killRecovered(kill: KillRecovery): boolean {
   return (
-    kill.leaseExpiredAttempts > 0 && kill.jobsLost === 0 && kill.jobsSucceededMoreThanOnce === 0
+    kill.leaseExpiredAttempts > 0 && kill.tasksLost === 0 && kill.tasksSucceededMoreThanOnce === 0
   );
 }
 
@@ -162,14 +162,14 @@ function baselineAppliedAt(observation: SoakObservation): string | null {
 }
 
 function liveBacklog(observation: SoakObservation): number {
-  return Object.values(observation.backlog).reduce((total, jobs) => total + jobs, 0);
+  return Object.values(observation.backlog).reduce((total, tasks) => total + tasks, 0);
 }
 
 const MEASURES = [
   "enqueued",
-  "jobSucceeded",
-  "jobFailed",
-  "jobCanceled",
+  "taskSucceeded",
+  "taskFailed",
+  "taskCanceled",
   "attemptSucceeded",
   "attemptFailed",
   "attemptRetry",
@@ -294,7 +294,7 @@ export function buildSoakReport(observations: SoakObservation[]): SoakReport {
   const migrationsAppliedInWindow = last.installation.migrations.filter(
     (migration) => migration.version > 1 && migration.appliedAt >= first.observedAt,
   );
-  const settled = totals.jobSucceeded + totals.jobFailed + totals.jobCanceled;
+  const settled = totals.taskSucceeded + totals.taskFailed + totals.taskCanceled;
   const spanDays = Math.floor(
     (Date.parse(last.observedAt) - Date.parse(first.observedAt)) / 86_400_000,
   );
@@ -318,7 +318,7 @@ export function buildSoakReport(observations: SoakObservation[]): SoakReport {
       met: passesThatDropped >= REQUIRED_RETENTION_PASSES,
     },
     {
-      bar: `${String(REQUIRED_CLEAN_KILLS)} ungraceful kill recovered with no lost or duplicated job`,
+      bar: `${String(REQUIRED_CLEAN_KILLS)} ungraceful kill recovered with no lost or duplicated task`,
       observed: `${String(cleanKills)} clean of ${String(kills.length)} recorded`,
       met: cleanKills >= REQUIRED_CLEAN_KILLS,
     },
@@ -507,9 +507,9 @@ export function renderSoakReport(report: SoakReport): string {
       report.throughput.days.map((day) => [
         day.day,
         String(day.enqueued),
-        String(day.jobSucceeded),
-        String(day.jobFailed),
-        String(day.jobCanceled),
+        String(day.taskSucceeded),
+        String(day.taskFailed),
+        String(day.taskCanceled),
         String(day.attemptLeaseExpired),
       ]),
     ),
@@ -517,9 +517,9 @@ export function renderSoakReport(report: SoakReport): string {
 
   sections.push(`## Enqueued against settled\n`);
   sections.push(
-    `${String(report.reconciliation.enqueued)} jobs were enqueued in the window and ${String(report.reconciliation.settled)} reached a terminal state, ` +
-      `a residual of ${String(report.reconciliation.residual)}. The live backlog moved from ${String(report.reconciliation.backlogAtStart)} to ${String(report.reconciliation.backlogAtEnd)} jobs. ` +
-      `Work that crosses either edge of the window is counted on one side only, so the residual is context rather than a verdict; the kill reconciliations below are the proof that no job was lost or run twice.\n`,
+    `${String(report.reconciliation.enqueued)} tasks were enqueued in the window and ${String(report.reconciliation.settled)} reached a terminal state, ` +
+      `a residual of ${String(report.reconciliation.residual)}. The live backlog moved from ${String(report.reconciliation.backlogAtStart)} to ${String(report.reconciliation.backlogAtEnd)} tasks. ` +
+      `Work that crosses either edge of the window is counted on one side only, so the residual is context rather than a verdict; the kill reconciliations below are the proof that no task was lost or run twice.\n`,
   );
 
   sections.push(`## Ungraceful kills\n`);
@@ -532,7 +532,7 @@ export function renderSoakReport(report: SoakReport): string {
           "Worker",
           "Killed at",
           "Lease-expired attempts",
-          "Jobs affected",
+          "Tasks affected",
           "Settled",
           "Live",
           "Lost",
@@ -543,11 +543,11 @@ export function renderSoakReport(report: SoakReport): string {
           kill.workerId,
           kill.killedAt,
           String(kill.leaseExpiredAttempts),
-          String(kill.affectedJobs),
-          String(kill.jobsSettled),
-          String(kill.jobsLive),
-          String(kill.jobsLost),
-          String(kill.jobsSucceededMoreThanOnce),
+          String(kill.affectedTasks),
+          String(kill.tasksSettled),
+          String(kill.tasksLive),
+          String(kill.tasksLost),
+          String(kill.tasksSucceededMoreThanOnce),
           kill.clean ? "yes" : "no",
         ]),
       ),

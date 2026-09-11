@@ -1,6 +1,6 @@
 # `github.com/stablemates/workhorse/go`
 
-The Go client, worker runtime, and dashboard handler for the Workhorse durable job queue for
+The Go client, worker runtime, and dashboard handler for the Workhorse durable task queue for
 PostgreSQL.
 
 > **Public beta:** Workhorse is usable for evaluation and early production adoption. A 0.x minor
@@ -34,7 +34,7 @@ Runtime processes verify compatibility instead of changing the schema. Call
 
 Requires Go 1.25 or newer and PostgreSQL 15 through 18. pgx v5.9.2 is the minimum and the tested version.
 
-## Run one job
+## Run one task
 
 ```go
 package main
@@ -57,7 +57,7 @@ func main() {
 	defer pool.Close()
 
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "default")
-	jobID, err := queue.Enqueue(ctx, "email.welcome", map[string]any{"to": "ada@example.com"})
+	taskID, err := queue.Enqueue(ctx, "email.welcome", map[string]any{"to": "ada@example.com"})
 	if err != nil {
 		panic(err)
 	}
@@ -77,7 +77,7 @@ func main() {
 		panic(err)
 	}
 
-	fmt.Println(jobID)
+	fmt.Println(taskID)
 }
 ```
 

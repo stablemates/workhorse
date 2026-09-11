@@ -31,8 +31,8 @@ describe("worker registry", () => {
       queues: [firstQueue, secondQueue],
       concurrency: 2,
       pollMs: 0,
-    }).handle("multi-queue", (_payload, { job }) => {
-      handled.push(job.queue);
+    }).handle("multi-queue", (_payload, { task }) => {
+      handled.push(task.queue);
       return null;
     });
 
@@ -159,7 +159,7 @@ describe("worker registry", () => {
 
   it("subscribes to notifications for every configured queue", async () => {
     const close = vi.fn<() => Promise<void>>(async () => undefined);
-    const subscribe = vi.spyOn(queue, "subscribeToJobNotifications").mockResolvedValue({ close });
+    const subscribe = vi.spyOn(queue, "subscribeToTaskNotifications").mockResolvedValue({ close });
     const worker = new Worker(queue, {
       workerId: "multi-queue-notifications",
       queues: ["mail", "billing"],
@@ -216,7 +216,7 @@ describe("worker registry", () => {
     const close = vi.fn<() => Promise<void>>(async () => {
       throw closeFailure;
     });
-    const subscribe = vi.spyOn(queue, "subscribeToJobNotifications").mockResolvedValue({ close });
+    const subscribe = vi.spyOn(queue, "subscribeToTaskNotifications").mockResolvedValue({ close });
     const worker = new Worker(queue, {
       workerId: "registry-notification-close-failure",
       queue: "default",
@@ -246,7 +246,7 @@ describe("worker registry", () => {
     const closeFailure = new Error("notification close failed");
     const registrationFailure = new Error("draining registration failed");
     let failRegistration = false;
-    const subscribe = vi.fn<Queue["subscribeToJobNotifications"]>(async () => ({
+    const subscribe = vi.fn<Queue["subscribeToTaskNotifications"]>(async () => ({
       close: async () => {
         throw closeFailure;
       },
@@ -259,7 +259,7 @@ describe("worker registry", () => {
             return target.registerWorker(...args);
           };
         }
-        if (property === "subscribeToJobNotifications") {
+        if (property === "subscribeToTaskNotifications") {
           return subscribe;
         }
         return Reflect.get(target, property, receiver);
@@ -512,7 +512,7 @@ describe("worker registry", () => {
     }
   });
 
-  it("serializes public runOnce calls and preserves default single-job compatibility", async () => {
+  it("serializes public runOnce calls and preserves default single-task compatibility", async () => {
     const firstRelease = deferred();
     const secondRelease = deferred();
     const started: number[] = [];
@@ -563,7 +563,7 @@ describe("worker registry", () => {
       worker.pause();
       await vi.waitFor(() => {
         const heartbeatingIds = new Set(
-          heartbeat.mock.calls.flatMap(([jobs]) => jobs.map((job) => job.id)),
+          heartbeat.mock.calls.flatMap(([tasks]) => tasks.map((task) => task.id)),
         );
         expect(heartbeatingIds.size).toBe(2);
         expect([...heartbeatingIds].every((id) => ids.includes(id))).toBe(true);
@@ -573,7 +573,7 @@ describe("worker registry", () => {
       release.resolve();
       await expect(run).resolves.toBe(true);
       expect(await worker.runOnce()).toBe(false);
-      const states = await Promise.all(ids.map(async (id) => (await admin.getJob(id))?.state));
+      const states = await Promise.all(ids.map(async (id) => (await admin.getTask(id))?.state));
       expect(states.filter((state) => state === "ready")).toHaveLength(1);
       expect(states.filter((state) => state === "succeeded")).toHaveLength(2);
     } finally {
@@ -581,7 +581,7 @@ describe("worker registry", () => {
     }
   });
 
-  it("batches per-job heartbeats without overlapping a slow batch", async () => {
+  it("batches per-task heartbeats without overlapping a slow batch", async () => {
     const releaseHandlers = deferred();
     const heartbeatGates: ReturnType<typeof deferred<Map<string, "accepted">>>[] = [];
     let heartbeatCalls = 0;
@@ -589,11 +589,11 @@ describe("worker registry", () => {
     let maxInFlight = 0;
     let latestIds: string[] = [];
     for (const sequence of [1, 2]) await queue.enqueue("slow-heartbeat", { sequence });
-    const heartbeat = vi.spyOn(queue, "heartbeatMany").mockImplementation((jobs) => {
+    const heartbeat = vi.spyOn(queue, "heartbeatMany").mockImplementation((tasks) => {
       heartbeatCalls += 1;
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
-      latestIds = jobs.map((job) => job.id);
+      latestIds = tasks.map((task) => task.id);
       const gate = deferred<Map<string, "accepted">>();
       heartbeatGates.push(gate);
       return gate.promise.finally(() => {
@@ -682,7 +682,7 @@ describe("worker registry", () => {
       remotelyPaused: false,
       draining: false,
     });
-    const states = await Promise.all(ids.map(async (id) => (await admin.getJob(id))?.state));
+    const states = await Promise.all(ids.map(async (id) => (await admin.getTask(id))?.state));
     expect(states.filter((state) => state === "ready")).toHaveLength(1);
     expect(states.filter((state) => state === "succeeded")).toHaveLength(2);
   });
@@ -705,14 +705,14 @@ describe("worker registry", () => {
       leaseMs: 500,
       pollMs: 0,
     }).handle<{ sequence: number }>("signal-abort-drain", async ({ sequence }, context) => {
-      startedIds.push(context.job.id);
+      startedIds.push(context.task.id);
       if (startedIds.length === 2) bothStarted.resolve();
       await releases[sequence]!.promise;
       return { sequence };
     });
 
     const heartbeatCount = (id: string) =>
-      heartbeat.mock.calls.filter(([jobs]) => jobs.some((job) => job.id === id)).length;
+      heartbeat.mock.calls.filter(([tasks]) => tasks.some((task) => task.id === id)).length;
     const running = worker.run(controller.signal);
 
     try {
@@ -728,14 +728,14 @@ describe("worker registry", () => {
         }
       });
       expect(claim).toHaveBeenCalledTimes(1);
-      await expect(admin.getJob(ids[2]!)).resolves.toMatchObject({ state: "ready" });
+      await expect(admin.getTask(ids[2]!)).resolves.toMatchObject({ state: "ready" });
 
       let runSettled = false;
       void running.then(() => {
         runSettled = true;
       });
       releases[0]!.resolve();
-      await vi.waitFor(async () => expect((await admin.getJob(ids[0]!))?.state).toBe("succeeded"));
+      await vi.waitFor(async () => expect((await admin.getTask(ids[0]!))?.state).toBe("succeeded"));
       expect(runSettled).toBe(false);
       expect(worker.runtimeState().activeSlots).toBe(1);
 
@@ -744,15 +744,15 @@ describe("worker registry", () => {
         expect(heartbeatCount(ids[1]!)).toBeGreaterThan(secondCountAfterFirstRelease),
       );
       expect(claim).toHaveBeenCalledTimes(1);
-      await expect(admin.getJob(ids[2]!)).resolves.toMatchObject({ state: "ready" });
+      await expect(admin.getTask(ids[2]!)).resolves.toMatchObject({ state: "ready" });
 
       releases[1]!.resolve();
       await expect(running).resolves.toBeUndefined();
       expect(worker.runtimeState().activeSlots).toBe(0);
-      await expect(Promise.all(ids.slice(0, 2).map((id) => admin.getJob(id)))).resolves.toEqual(
+      await expect(Promise.all(ids.slice(0, 2).map((id) => admin.getTask(id)))).resolves.toEqual(
         ids.slice(0, 2).map((id) => expect.objectContaining({ id, state: "succeeded" })),
       );
-      await expect(admin.getJob(ids[2]!)).resolves.toMatchObject({ state: "ready" });
+      await expect(admin.getTask(ids[2]!)).resolves.toMatchObject({ state: "ready" });
     } finally {
       controller.abort();
       for (const release of releases) release.resolve();
@@ -775,7 +775,7 @@ describe("worker registry", () => {
       worker.stop();
       await expect(running).resolves.toBeUndefined();
       expect(claim).not.toHaveBeenCalled();
-      await expect(admin.getJob(id)).resolves.toMatchObject({ state: "ready" });
+      await expect(admin.getTask(id)).resolves.toMatchObject({ state: "ready" });
     } finally {
       claim.mockRestore();
     }
@@ -806,8 +806,8 @@ describe("worker registry", () => {
       await expect(once).resolves.toBe(true);
       await expect(queuedRun).resolves.toBeUndefined();
       expect(claim).toHaveBeenCalledTimes(1);
-      await expect(admin.getJob(firstId)).resolves.toMatchObject({ state: "succeeded" });
-      await expect(admin.getJob(secondId)).resolves.toMatchObject({ state: "ready" });
+      await expect(admin.getTask(firstId)).resolves.toMatchObject({ state: "succeeded" });
+      await expect(admin.getTask(secondId)).resolves.toMatchObject({ state: "ready" });
     } finally {
       release.resolve();
       claim.mockRestore();
@@ -839,15 +839,15 @@ describe("worker registry", () => {
         leaseMs: 10_000,
         heartbeatMs: 1_000,
         pollMs: 0,
-        failpoint: (point, job) => {
+        failpoint: (point, task) => {
           const shouldCrash =
-            point === "beforeHandler" && (job.payload as { sequence: number }).sequence === 1;
+            point === "beforeHandler" && (task.payload as { sequence: number }).sequence === 1;
           if (shouldCrash) {
             crashedClaim = {
-              id: job.id,
-              attempt: job.attempt,
-              fenceToken: job.fenceToken,
-              leaseExpiresAt: job.leaseExpiresAt,
+              id: task.id,
+              attempt: task.attempt,
+              fenceToken: task.fenceToken,
+              leaseExpiresAt: task.leaseExpiresAt,
             };
             crashObserved.resolve();
           }
@@ -879,7 +879,7 @@ describe("worker registry", () => {
         failpoint: "beforeHandler",
       });
       expect(worker.runtimeState().activeSlots).toBe(0);
-      await expect(Promise.all(siblingIds.map((id) => admin.getJob(id)))).resolves.toEqual(
+      await expect(Promise.all(siblingIds.map((id) => admin.getTask(id)))).resolves.toEqual(
         siblingIds.map((id) => expect.objectContaining({ id, state: "succeeded" })),
       );
 
@@ -891,7 +891,7 @@ describe("worker registry", () => {
         expires_at: Date | null;
       }>(
         `SELECT state, current_attempt, fence_token::text, worker_id, expires_at
-         FROM workhorse.job_runtime WHERE job_id = $1`,
+         FROM workhorse.task_runtime WHERE task_id = $1`,
         [crashedId],
       );
       expect(active.rows[0]).toEqual({
@@ -901,7 +901,7 @@ describe("worker registry", () => {
         worker_id: workerId,
         expires_at: crash.leaseExpiresAt,
       });
-      await expect(admin.getJob(crashedId)).resolves.toMatchObject({
+      await expect(admin.getTask(crashedId)).resolves.toMatchObject({
         state: "active",
         currentAttempt: 1,
         fenceToken: crash.fenceToken,
@@ -911,18 +911,18 @@ describe("worker registry", () => {
       expect(
         (
           await pool.query<{ count: number }>(
-            "SELECT count(*)::integer AS count FROM workhorse.attempt_history WHERE job_id = $1",
+            "SELECT count(*)::integer AS count FROM workhorse.attempt_history WHERE task_id = $1",
             [crashedId],
           )
         ).rows[0]!.count,
       ).toBe(0);
 
       await pool.query(
-        "UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 ms' WHERE job_id = $1",
+        "UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 ms' WHERE task_id = $1",
         [crashedId],
       );
       expect(await queue.recoverExpired(100, 0)).toBe(1);
-      await expect(admin.getJob(crashedId)).resolves.toMatchObject({
+      await expect(admin.getTask(crashedId)).resolves.toMatchObject({
         state: expectedState,
         currentAttempt: expectedAttempt,
         result: null,
@@ -936,7 +936,7 @@ describe("worker registry", () => {
         expires_at: Date | null;
       }>(
         `SELECT state, current_attempt, fence_token::text, worker_id, expires_at
-         FROM workhorse.job_runtime WHERE job_id = $1`,
+         FROM workhorse.task_runtime WHERE task_id = $1`,
         [crashedId],
       );
       const expectedRuntimeRows =
@@ -964,7 +964,7 @@ describe("worker registry", () => {
       heartbeatMs: 50,
       leaseMs: 500,
       maintenanceIntervalMs: 100,
-      maintenanceTaskPollMs: 1_000,
+      maintenanceRoutinePollMs: 1_000,
       pollMs: 1_000,
     }).handle("maintenance-during-handler", async () => {
       await release.promise;
@@ -984,19 +984,19 @@ describe("worker registry", () => {
     }
   });
 
-  it("does not wake maintenance when a job notification wakes dispatch", async () => {
+  it("does not wake maintenance when a task notification wakes dispatch", async () => {
     let notify: (() => void) | undefined;
     const subscribe = vi
-      .spyOn(queue, "subscribeToJobNotifications")
-      .mockImplementation(async (_queueName, onJobsAvailable) => {
-        notify = onJobsAvailable;
+      .spyOn(queue, "subscribeToTaskNotifications")
+      .mockImplementation(async (_queueName, onTasksAvailable) => {
+        notify = onTasksAvailable;
         return { close: async () => undefined };
       });
     const worker = new Worker(queue, {
       workerId: "notification-dispatch-only",
       pollMs: 15_000,
       maintenanceIntervalMs: 100,
-      maintenanceTaskPollMs: 100,
+      maintenanceRoutinePollMs: 100,
       registryIntervalMs: 0,
     });
     const maintenanceTimes: number[] = [];
@@ -1031,8 +1031,8 @@ describe("worker registry", () => {
     }
   });
 
-  it("runs tick and scheduled maintenance tasks on independent cadences with phase telemetry", async () => {
-    const jobId = await queue.enqueue(
+  it("runs tick and scheduled maintenance routines on independent cadences with phase telemetry", async () => {
+    const taskId = await queue.enqueue(
       "scheduled-worker",
       { ok: true },
       { runAt: new Date(Date.now() + 80) },
@@ -1044,25 +1044,25 @@ describe("worker registry", () => {
     const worker = new Worker(queue, {
       workerId: "worker-maintenance",
       maintenanceIntervalMs: 100,
-      maintenanceTaskPollMs: 1_000,
+      maintenanceRoutinePollMs: 1_000,
       onMaintenance: (event) => telemetry.push(event),
     }).handle("scheduled-worker", () => ({ ok: true }));
     expect(await worker.runOnce()).toBe(true);
-    expect((await admin.getJob(jobId))?.state).toBe("succeeded");
+    expect((await admin.getTask(taskId))?.state).toBe("succeeded");
     expect(telemetry.map(({ loop, phase }) => `${loop}:${phase}`)).toEqual([
       "tick:promote",
       "tick:recover",
       // Statistics roll up before retention so the same pass can reclaim the history it summarized.
       "statistics_rollup:stat_rollup",
       "statistics_rollup:stat_retention",
-      "background_tasks:history_partitions",
-      "background_tasks:event_retention",
-      "background_tasks:attempt_retention",
-      "background_tasks:schedule_occurrences",
-      "background_tasks:enqueue_idempotency",
-      "background_tasks:released_dependencies",
-      "background_tasks:terminal_jobs",
-      "background_tasks:worker_registry",
+      "background_routines:history_partitions",
+      "background_routines:event_retention",
+      "background_routines:attempt_retention",
+      "background_routines:schedule_occurrences",
+      "background_routines:enqueue_idempotency",
+      "background_routines:released_dependencies",
+      "background_routines:terminal_tasks",
+      "background_routines:worker_registry",
     ]);
     expect(worker.maintenanceTelemetry()).toEqual(telemetry);
 
@@ -1080,7 +1080,7 @@ describe("worker registry", () => {
     }>(
       `SELECT last_started_at, last_completed_at
          FROM workhorse.maintenance_state
-        WHERE task_name = 'tick'`,
+        WHERE routine_name = 'tick'`,
     );
     expect(tickState.rows).toHaveLength(1);
     expect(tickState.rows[0]?.last_started_at).toBeInstanceOf(Date);
@@ -1140,7 +1140,7 @@ describe("worker registry", () => {
         error: null,
       },
       {
-        phase: "terminal_jobs",
+        phase: "terminal_tasks",
         rowsAffected: 0,
         durationMs: 0,
         skippedLock: false,
@@ -1163,7 +1163,7 @@ describe("worker registry", () => {
         workerId: "idle-cadence",
         pollMs: 15_000,
         maintenanceIntervalMs: 1_000,
-        maintenanceTaskPollMs: 60_000,
+        maintenanceRoutinePollMs: 60_000,
       });
 
       await worker.runOnce();
@@ -1230,7 +1230,7 @@ describe("worker registry", () => {
       pollMs: 15_000,
       registryIntervalMs: 0,
     }).handle("capacity-wake", (_payload, context) => {
-      handled.push(context.job.id);
+      handled.push(context.task.id);
       return null;
     });
 
@@ -1273,7 +1273,7 @@ describe("worker registry", () => {
              FROM pg_stat_activity
             WHERE datname = current_database()
               AND state = 'idle'
-              AND query = 'LISTEN workhorse_jobs'`,
+              AND query = 'LISTEN workhorse_tasks'`,
         );
         expect(listeners.rows[0]?.count).toBeGreaterThan(0);
       });
@@ -1311,7 +1311,7 @@ describe("worker registry", () => {
             WHERE datname = current_database()
               AND pid <> pg_backend_pid()
               AND state = 'idle'
-              AND query = 'LISTEN workhorse_jobs'
+              AND query = 'LISTEN workhorse_tasks'
             ORDER BY backend_start DESC
             LIMIT 1`,
         );
@@ -1430,7 +1430,7 @@ describe("worker registry", () => {
   it("keeps single-connection pools polling-only so LISTEN cannot block claims", async () => {
     const singleConnectionPool = new Pool({ connectionString: databaseUrl, max: 1 });
     try {
-      expect(new Queue(singleConnectionPool).supportsJobNotifications()).toBe(false);
+      expect(new Queue(singleConnectionPool).supportsTaskNotifications()).toBe(false);
     } finally {
       await singleConnectionPool.end();
     }
@@ -1460,7 +1460,7 @@ describe("worker registry", () => {
              FROM pg_stat_activity
             WHERE datname = current_database()
               AND state = 'idle'
-              AND query = 'LISTEN workhorse_jobs'`,
+              AND query = 'LISTEN workhorse_tasks'`,
         );
         expect(listeners.rows[0]?.count).toBeGreaterThan(0);
       });
@@ -1519,7 +1519,7 @@ describe("worker registry", () => {
           WHERE datname = current_database()
             AND pid <> pg_backend_pid()
             AND state = 'idle'
-            AND query = 'LISTEN workhorse_jobs'`,
+            AND query = 'LISTEN workhorse_tasks'`,
       );
 
       expect(listeners.rows).toEqual([{ count: 1 }]);
@@ -1537,7 +1537,7 @@ describe("worker registry", () => {
         WHERE datname = current_database()
           AND pid <> pg_backend_pid()
           AND state = 'idle'
-          AND query = 'LISTEN workhorse_jobs'`,
+          AND query = 'LISTEN workhorse_tasks'`,
     );
     expect(listenersAfterStop.rows).toEqual([{ count: 0 }]);
   });
@@ -1590,7 +1590,7 @@ describe("worker registry", () => {
       { total: number }
     >("sum", ({ a, b }) => ({ total: a + b }));
     expect(await worker.runOnce()).toBe(true);
-    expect((await admin.getJob<{ total: number }>(id))?.result).toEqual({ total: 5 });
+    expect((await admin.getTask<{ total: number }>(id))?.result).toEqual({ total: 5 });
   });
 
   it.each([
@@ -1614,11 +1614,11 @@ describe("worker registry", () => {
 
     await expect(worker.runOnce()).rejects.toBeInstanceOf(InjectedCrashError);
     expect(effects).toBe(expectedEffects);
-    expect((await admin.getJob(id))?.state).toBe(expectedState);
+    expect((await admin.getTask(id))?.state).toBe(expectedState);
 
     if (expectedState === "active") await sleep(130);
     const recovered = await queue.recoverExpired();
-    const stateAfterRecovery = (await admin.getJob(id))?.state;
+    const stateAfterRecovery = (await admin.getTask(id))?.state;
     expect(recovered).toBe(expectedState === "active" ? 1 : 0);
     expect(stateAfterRecovery).toBe(expectedState === "active" ? "ready" : "succeeded");
   });
@@ -1651,7 +1651,7 @@ describe("worker registry", () => {
     }
 
     expect(handledBy).toEqual(["running:1", "running:2", "running:3"]);
-    await expect(Promise.all(initialIds.map((id) => admin.getJob(id)))).resolves.toEqual(
+    await expect(Promise.all(initialIds.map((id) => admin.getTask(id)))).resolves.toEqual(
       initialIds.map((id) => expect.objectContaining({ id, state: "succeeded" })),
     );
 
@@ -1660,10 +1660,10 @@ describe("worker registry", () => {
     expect(pausedWorker.isPaused()).toBe(false);
     expect(await pausedWorker.runOnce()).toBe(true);
     expect(handledBy.at(-1)).toBe("paused:4");
-    await expect(admin.getJob(resumedId)).resolves.toMatchObject({ state: "succeeded" });
+    await expect(admin.getTask(resumedId)).resolves.toMatchObject({ state: "succeeded" });
   });
 
-  it("allows an active job to finish after its worker is paused", async () => {
+  it("allows an active task to finish after its worker is paused", async () => {
     let releaseHandler!: () => void;
     let markStarted!: () => void;
     const started = new Promise<void>((resolve) => {
@@ -1681,7 +1681,7 @@ describe("worker registry", () => {
       await released;
       return { completedWhilePaused: true };
     });
-    const jobId = await queue.enqueue("pause-in-flight", {});
+    const taskId = await queue.enqueue("pause-in-flight", {});
 
     const run = worker.runOnce();
     await started;
@@ -1690,7 +1690,7 @@ describe("worker registry", () => {
 
     await expect(run).resolves.toBe(true);
     expect(worker.isPaused()).toBe(true);
-    await expect(admin.getJob(jobId)).resolves.toMatchObject({
+    await expect(admin.getTask(taskId)).resolves.toMatchObject({
       state: "succeeded",
       result: { completedWhilePaused: true },
     });

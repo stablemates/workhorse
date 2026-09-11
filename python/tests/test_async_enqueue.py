@@ -49,7 +49,7 @@ class AsyncpgConnection:
                     "completed_by": "reviewer",
                 }
             ]
-        return [{"ordinal": 1, "job_id": "asyncpg", "outcome": "accepted", "reason": None}]
+        return [{"ordinal": 1, "task_id": "asyncpg", "outcome": "accepted", "reason": None}]
 
     async def commit(self) -> None:
         raise AssertionError("the Workhorse client must not commit")
@@ -65,7 +65,7 @@ class AsyncPsycopgCursor:
     def __init__(self, connection: AsyncPsycopgConnection) -> None:
         self.connection = connection
         self.sql = ""
-        self.description = [("ordinal",), ("job_id",), ("outcome",), ("reason",)]
+        self.description = [("ordinal",), ("task_id",), ("outcome",), ("reason",)]
 
     async def __aenter__(self) -> AsyncPsycopgCursor:
         return self

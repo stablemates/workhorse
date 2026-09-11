@@ -1,11 +1,11 @@
-# Workers: the processes that actually run your jobs
+# Workers: the processes that actually run your tasks
 
-A worker is a loop. Ask the database for a job, run the handler, record the result, repeat.
+A worker is a loop. Ask the database for a task, run the handler, record the result, repeat.
 Everything else in this guide is detail on top of that.
 
 Python supplies the same core loop through synchronous `Worker` and asynchronous `AsyncWorker`.
 Both rotate across queues, bound concurrent slots, and drain active work after `stop`. Each claimed
-job renews its lease and delivers ownership signals through its context cancellation token.
+task renews its lease and delivers ownership signals through its context cancellation token.
 Both workers can open a dedicated notification connection and offer recurring namespaces for
 PostgreSQL to evaluate.
 `AsyncWorker` uses native Psycopg or asyncpg connections, while its handlers and durable context
@@ -26,14 +26,14 @@ await worker.run()
 
 ## Slots and concurrency
 
-A worker has a fixed number of slots, set by `concurrency`. One slot runs one job. The
+A worker has a fixed number of slots, set by `concurrency`. One slot runs one task. The
 default is conservative, and you can raise it.
 
 Each pass, the worker asks PostgreSQL to fill its free slots in one claim batch. PostgreSQL
-still checks every job independently, so ordering and admission policies apply to each one.
+still checks every task independently, so ordering and admission policies apply to each one.
 The worker stops asking when its slots are full or the queue has nothing left. One worker
 timer submits every running lease in one heartbeat batch. Each accepted result renews its
-job. Every job still has its own abort signal and final write, so cancellation and settlement
+task. Every task still has its own abort signal and final write, so cancellation and settlement
 remain independent.
 
 Concurrency here is per worker. More workers add more process slots. Use a
@@ -51,11 +51,11 @@ const worker = new Worker(queue, {
 ```
 
 Use `queue` for one name or `queues` for several. If you omit both, the worker uses the queue
-client's default. A batch callback still receives jobs from only one queue at a time.
+client's default. A batch callback still receives tasks from only one queue at a time.
 
 ## Waiting without constant polling
 
-An idle worker listens for `workhorse_jobs`, so a committed enqueue can wake it immediately.
+An idle worker listens for `workhorse_tasks`, so a committed enqueue can wake it immediately.
 Workers that share a database pool also share the listener connection, while each worker receives
 only its queue's wake hints. Promotion and recovery notify each affected queue separately, so work
 on one queue does not wake workers assigned to another. A notification wakes dispatch without
@@ -63,7 +63,7 @@ changing the cadence of maintenance or registration.
 
 The notification is only a hint. If PostgreSQL drops the listener or a message is missed, the
 worker reconnects and still checks through `pollMs`. This keeps the database state authoritative:
-a missing notification can delay a claim, but it cannot strand the job.
+a missing notification can delay a claim, but it cannot strand the task.
 
 Workers add a small random delay before a notification-triggered claim, so one enqueue does not
 make every process query at the same instant. Without a listener, consecutive empty checks back off
@@ -80,23 +80,23 @@ number of processes. This also lets a worker restart without taking down web ing
 ## Shutting down cleanly
 
 On `SIGINT` or `SIGTERM`, the process stops claiming new work immediately, then waits for
-the jobs already running to finish. Connections close after the last one settles.
+the tasks already running to finish. Connections close after the last one settles.
 
 Python processes get the same boundary by passing their configured `Worker` to
 `run_worker_process`. Keep the connection context outside that call so it closes after the drain.
 
 Go applications pass a context from `signal.NotifyContext` to `Worker.Run`. A handler panic fails
-that attempt, while the worker stays alive to serve later jobs.
+that attempt, while the worker stays alive to serve later tasks.
 
 A few consequences worth knowing:
 
-- A claim already in flight may still land after shutdown starts. That job gets drained
+- A claim already in flight may still land after shutdown starts. That task gets drained
   properly, not abandoned.
 - There's a configurable drain deadline after which the process exits anyway. A handler
   that ignores its abort signal doesn't get to block a deploy forever.
-- A hard kill leaves jobs marked active. That's fine: their leases expire and
+- A hard kill leaves tasks marked active. That's fine: their leases expire and
   [recovery](020-leases-and-fences.md) picks them up. Nothing is lost, it's just slower.
-- Shutting down does **not** cancel jobs. It stops running them here so something else can.
+- Shutting down does **not** cancel tasks. It stops running them here so something else can.
 
 ## The worker registry
 
@@ -110,10 +110,10 @@ is that one worker behaving differently" is a normal question, and this is where
 older worker may report none of the three, and that is recorded as reporting nothing rather than
 guessed at.
 
-The namespace list answers a different question from the queue list. Queues control which jobs a
+The namespace list answers a different question from the queue list. Queues control which tasks a
 worker can claim. Schedule namespaces control which recurring definitions it can evaluate.
 
-This registry is never read when claiming jobs, so it can't slow dispatch down.
+This registry is never read when claiming tasks, so it can't slow dispatch down.
 
 A worker that's killed stops refreshing and is reported offline once its row goes stale. Automatic
 maintenance eventually cleans up that row. Slot counts are therefore a moment-ago snapshot, not a
@@ -127,7 +127,7 @@ temporary database error cannot silently resume claims that an operator stopped.
 Two different things share the word "pause":
 
 - **Local**: TypeScript and Python code can call `Worker.pause`. Claims stop; running
-  jobs finish.
+  tasks finish.
 - **Operator**: someone pauses the worker from the dashboard, or runs `admin pause-worker` in
   the [terminal](380-admin-cli-and-tui.md). That's stored in the database, and the worker picks
   it up on its next refresh.
@@ -136,7 +136,7 @@ The split matters. A worker cannot clear an operator pause by calling `Worker.re
 pausing a fleet from a dashboard would be undone by the fleet itself. But an operator pause
 only lasts as long as that process does: restart the worker and it starts fresh, unpaused.
 
-Pause is cooperative, like cancellation. Jobs already running run to completion. If you need
+Pause is cooperative, like cancellation. Tasks already running run to completion. If you need
 work to stop _durably_, pause the queue, not the worker.
 
 ## Next

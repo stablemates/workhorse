@@ -16,8 +16,8 @@ Usage:
   pnpm benchmark:dashboard-read-surface -- [options]
 
 Options:
-  --jobs N          Total loaded jobs (default: 100000)
-  --live-jobs N     Jobs with live runtime rows (default: 20000)
+  --tasks N          Total loaded tasks (default: 100000)
+  --live-tasks N     Tasks with live runtime rows (default: 20000)
   --repetitions N   Measured EXPLAIN repetitions per query and strategy (default: 7)
   --warmup N        Discarded EXPLAIN repetitions per query and strategy (default: 2)
   --output PATH     Also write the JSON report to PATH
@@ -51,13 +51,13 @@ if (process.argv.includes("--help")) {
   const pool = new Pool({ connectionString: databaseUrl, max: 8 });
   console.error(`Dashboard read benchmark target: ${databaseName(databaseUrl)}`);
   try {
-    const jobs = integer("--jobs");
-    const liveJobs = integer("--live-jobs");
+    const tasks = integer("--tasks");
+    const liveTasks = integer("--live-tasks");
     const repetitions = integer("--repetitions");
     const warmupRepetitions = integer("--warmup");
     const report = await runDashboardReadSurfaceBenchmark(pool, {
-      ...(jobs === undefined ? {} : { jobs }),
-      ...(liveJobs === undefined ? {} : { liveJobs }),
+      ...(tasks === undefined ? {} : { tasks }),
+      ...(liveTasks === undefined ? {} : { liveTasks }),
       ...(repetitions === undefined ? {} : { repetitions }),
       ...(warmupRepetitions === undefined ? {} : { warmupRepetitions }),
     });

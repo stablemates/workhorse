@@ -12,9 +12,9 @@ Go applications use `Queue.SyncConcurrencyPolicies` through their caller-owned e
 
 Python applications use `Queue.sync_concurrency_policies` or `AsyncQueue.sync_concurrency_policies` through their caller-owned connection. `Queue.list_concurrency_policies` and `AsyncQueue.list_concurrency_policies` return the persisted policy rows.
 
-Each policy limits one queue. It can also limit jobs that share a `concurrencyKey` inside that queue. The same key text in another queue is independent.
+Each policy limits one queue. It can also limit tasks that share a `concurrencyKey` inside that queue. The same key text in another queue is independent.
 
-Keyless jobs consume queue capacity but do not consume keyed capacity. A null per-key limit disables keyed admission while retaining the queue limit.
+Keyless tasks consume queue capacity but do not consume keyed capacity. A null per-key limit disables keyed admission while retaining the queue limit.
 
 ```ts
 const queue = new Queue(pool);
@@ -40,11 +40,11 @@ The namespace owns the queues it synchronizes. PostgreSQL rejects another namesp
 
 ## Capacity follows leases
 
-The policy counts active jobs whose leases have not expired. If a worker disappears, capacity returns when its lease expires even before maintenance recovers the row.
+The policy counts active tasks whose leases have not expired. If a worker disappears, capacity returns when its lease expires even before maintenance recovers the row.
 
 This makes the policy a dispatch budget, not a mutex. A stale handler can overlap its replacement after lease expiry. Fence tokens still prevent that stale generation from recording a result.
 
-When a job releases capacity normally, PostgreSQL wakes workers listening for that queue. Polling remains the correctness fallback if a notification is lost.
+When a task releases capacity normally, PostgreSQL wakes workers listening for that queue. Polling remains the correctness fallback if a notification is lost.
 
 ## Avoiding a blocked queue
 
@@ -52,7 +52,7 @@ If one key is full, `claim_v1` can admit later ready work for another key. It se
 
 `Queue.health()` reports bounded policy summaries, including active capacity, blocked ready work, and saturated-key counts. OpenTelemetry exports queue-level policy gauges without raw key values.
 
-Nothing records the policy a job ran under. A job keeps the `concurrencyKey` it was enqueued with, so that key stays true forever. Its queue's limits can change at any time. The dashboard therefore labels the limits beside a finished task as the queue's current policy rather than as history.
+Nothing records the policy a task ran under. A task keeps the `concurrencyKey` it was enqueued with, so that key stays true forever. Its queue's limits can change at any time. The dashboard therefore labels the limits beside a finished task as the queue's current policy rather than as history.
 
 ## Next
 

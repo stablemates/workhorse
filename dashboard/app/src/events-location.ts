@@ -1,6 +1,6 @@
 import {
   dashboardAttemptOutcomes,
-  dashboardJobEventTypes,
+  dashboardTaskEventTypes,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import type {
   DashboardEventKind,
@@ -18,7 +18,7 @@ export interface EventsLocationState {
   pageSize: EventPageSize;
   kind: EventsKindFilter;
   queue: string | null;
-  jobType: string | null;
+  taskType: string | null;
   worker: string | null;
   search: string | null;
   types: DashboardEventTypeFilter[];
@@ -32,7 +32,7 @@ export const defaultEventsLocation: EventsLocationState = {
   pageSize: 50,
   kind: "all",
   queue: null,
-  jobType: null,
+  taskType: null,
   worker: null,
   search: null,
   types: [],
@@ -41,7 +41,7 @@ export const defaultEventsLocation: EventsLocationState = {
 
 const windows = new Set<DashboardEventsWindow>(["15m", "1h", "6h", "24h"]);
 const kinds = new Set<EventsKindFilter>(["all", "event", "attempt"]);
-const eventTypes = new Set<string>([...dashboardJobEventTypes, ...dashboardAttemptOutcomes]);
+const eventTypes = new Set<string>([...dashboardTaskEventTypes, ...dashboardAttemptOutcomes]);
 const historyIdentity =
   /^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -81,7 +81,7 @@ export function parseEventsLocation(search: string | URLSearchParams): EventsLoc
     window: requestedWindow && windows.has(requestedWindow) ? requestedWindow : "1h",
     kind: requestedKind && kinds.has(requestedKind) ? requestedKind : "all",
     queue: optionalValue(parameters, "queue"),
-    jobType: optionalValue(parameters, "type"),
+    taskType: optionalValue(parameters, "type"),
     worker: optionalValue(parameters, "worker"),
     search: optionalValue(parameters, "q"),
     types,
@@ -98,7 +98,7 @@ export function eventsLocationHref(state: EventsLocationState): string {
   if (state.window !== "1h") parameters.set("window", state.window);
   if (state.kind !== "all") parameters.set("source", state.kind);
   if (state.queue) parameters.set("queue", state.queue);
-  if (state.jobType) parameters.set("type", state.jobType);
+  if (state.taskType) parameters.set("type", state.taskType);
   if (state.worker) parameters.set("worker", state.worker);
   if (state.search) parameters.set("q", state.search);
   if (state.types.length > 0) parameters.set("events", state.types.join(","));
@@ -117,7 +117,7 @@ export function eventsListingKey(state: EventsLocationState): string {
     state.pageSize,
     state.kind,
     state.queue,
-    state.jobType,
+    state.taskType,
     state.types,
     state.worker,
     state.search,

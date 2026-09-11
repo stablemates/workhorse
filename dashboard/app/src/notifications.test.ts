@@ -42,7 +42,7 @@ describe("dashboard notifications", () => {
     notifyFailure("Task not canceled", new Error("Connection lost"), "Unable to cancel the task");
     notifyRunNow(
       {
-        jobId: "job-1",
+        taskId: "task-1",
         status: "waiting",
         described: {
           label: "Suspended at a wait",
@@ -73,7 +73,7 @@ describe("dashboard notifications", () => {
 
   it("reports a transport failure with the cause the server gave", () => {
     notifyRunNow(
-      { jobId: "job-1", status: null, described: null, failure: "Job not found" },
+      { taskId: "task-1", status: null, described: null, failure: "Task not found" },
       { openTask: () => undefined },
     );
     expect(shown()[0]).toMatchObject({ title: "Task not run now", color: "red" });
@@ -82,8 +82,8 @@ describe("dashboard notifications", () => {
   it("says when an enqueue replayed to a retained task instead of claiming a new one", () => {
     // A shared demo can keep a key retained for a visitor who never accepted the original
     // request, so the answer has to name the replay rather than report a task that does not exist.
-    notifyEnqueueTest({ jobId: "job-1", outcome: "accepted" }, { openTask: () => undefined });
-    notifyEnqueueTest({ jobId: "job-1", outcome: "replayed" }, { openTask: () => undefined });
+    notifyEnqueueTest({ taskId: "task-1", outcome: "accepted" }, { openTask: () => undefined });
+    notifyEnqueueTest({ taskId: "task-1", outcome: "replayed" }, { openTask: () => undefined });
 
     const current = shown();
     expect(current).toHaveLength(1);

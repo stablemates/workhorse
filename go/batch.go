@@ -26,7 +26,7 @@ type BatchHandlerOptions struct {
 
 // BatchHandlerContext exposes one member's fence and checkpoint operations without suspension APIs.
 type BatchHandlerContext struct {
-	Job     ClaimedJob
+	Task    ClaimedTask
 	Context context.Context
 
 	handler *HandlerContext
@@ -41,12 +41,12 @@ func (handler *BatchHandlerContext) Checkpoint(
 }
 
 // GetProgress returns the member's latest progress projection.
-func (handler *BatchHandlerContext) GetProgress() (*JobProgress, error) {
+func (handler *BatchHandlerContext) GetProgress() (*TaskProgress, error) {
 	return handler.handler.GetProgress()
 }
 
 // SetProgress replaces the member's latest progress under its fenced lease.
-func (handler *BatchHandlerContext) SetProgress(value any) (*JobProgress, error) {
+func (handler *BatchHandlerContext) SetProgress(value any) (*TaskProgress, error) {
 	return handler.handler.SetProgress(value)
 }
 
@@ -87,23 +87,23 @@ type batchMemberResult struct {
 }
 
 type batchCoordinator struct {
-	worker  *Worker
-	jobType string
-	options BatchHandlerOptions
-	handler BatchHandler
-	mu      sync.Mutex
-	next    int64
-	pending map[string][]*batchMember
+	worker   *Worker
+	taskType string
+	options  BatchHandlerOptions
+	handler  BatchHandler
+	mu       sync.Mutex
+	next     int64
+	pending  map[string][]*batchMember
 }
 
-// HandleBatch registers a process-local batch coordinator for one job type.
+// HandleBatch registers a process-local batch coordinator for one task type.
 func (worker *Worker) HandleBatch(
-	jobType string,
+	taskType string,
 	options BatchHandlerOptions,
 	handler BatchHandler,
 ) *Worker {
-	if jobType == emptyString {
-		panic(emptyWorkerJobTypeMessage)
+	if taskType == emptyString {
+		panic(emptyWorkerTaskTypeMessage)
 	}
 	if handler == nil {
 		panic(nilBatchHandlerMessage)
@@ -118,10 +118,10 @@ func (worker *Worker) HandleBatch(
 		panic(fmt.Sprintf(batchLingerRangeFormat, maximumBatchLinger))
 	}
 	coordinator := &batchCoordinator{
-		worker: worker, jobType: jobType, options: options, handler: handler,
+		worker: worker, taskType: taskType, options: options, handler: handler,
 		pending: make(map[string][]*batchMember),
 	}
-	worker.handlers[jobType] = coordinator.handle
+	worker.handlers[taskType] = coordinator.handle
 	return worker
 }
 
@@ -134,14 +134,14 @@ func (coordinator *batchCoordinator) handle(
 		arrived: time.Now(),
 		item: BatchHandlerItem{
 			Payload: payload,
-			Context: &BatchHandlerContext{Job: handler.Job, Context: ctx, handler: handler},
+			Context: &BatchHandlerContext{Task: handler.Task, Context: ctx, handler: handler},
 		},
 		result: make(chan batchMemberResult, 1),
 	}
 	coordinator.mu.Lock()
 	member.arrival = coordinator.next
 	coordinator.next++
-	queue := handler.Job.Queue
+	queue := handler.Task.Queue
 	coordinator.pending[queue] = append(coordinator.pending[queue], member)
 	firstArrival := coordinator.pending[queue][0].arrived
 	var batch []*batchMember
@@ -200,10 +200,10 @@ func (coordinator *batchCoordinator) take(queue string) []*batchMember {
 		coordinator.pending[queue] = pending[size:]
 	}
 	sort.SliceStable(batch, func(left, right int) bool {
-		leftJob := batch[left].item.Context.Job
-		rightJob := batch[right].item.Context.Job
-		if leftJob.Priority != rightJob.Priority {
-			return leftJob.Priority > rightJob.Priority
+		leftTask := batch[left].item.Context.Task
+		rightTask := batch[right].item.Context.Task
+		if leftTask.Priority != rightTask.Priority {
+			return leftTask.Priority > rightTask.Priority
 		}
 		return batch[left].arrival < batch[right].arrival
 	})
@@ -229,13 +229,13 @@ func (coordinator *batchCoordinator) remove(queue string, target *batchMember) {
 }
 
 func (coordinator *batchCoordinator) dispatch(batch []*batchMember) {
-	queue := batch[0].item.Context.Job.Queue
+	queue := batch[0].item.Context.Task.Queue
 	full := len(batch) == coordinator.options.MaxSize
 	linger := time.Since(batch[0].arrived)
 	if coordinator.worker.metrics.enabled {
 		attributes := metric.WithAttributes(
 			attribute.String(queueNameAttribute, queue),
-			attribute.String(jobTypeAttribute, coordinator.jobType),
+			attribute.String(taskTypeAttribute, coordinator.taskType),
 			attribute.Bool(batchFullAttribute, full),
 		)
 		coordinator.worker.metrics.batchSize.Record(
@@ -256,7 +256,7 @@ func (coordinator *batchCoordinator) dispatch(batch []*batchMember) {
 		batchDispatchedEvent,
 		batchDispatchedLogMessage,
 		slog.String(queueNameAttribute, queue),
-		slog.String(jobTypeAttribute, coordinator.jobType),
+		slog.String(taskTypeAttribute, coordinator.taskType),
 		slog.String(workerIDAttribute, coordinator.worker.workerID),
 		slog.Int(batchSizeAttribute, len(batch)),
 		slog.Float64(batchLingerAttribute, float64(linger)/float64(time.Millisecond)),
@@ -270,10 +270,10 @@ func (coordinator *batchCoordinator) dispatch(batch []*batchMember) {
 	for index, member := range batch {
 		items[index] = member.item
 	}
-	outcomes, err := callBatchHandler(coordinator.jobType, coordinator.handler, items)
+	outcomes, err := callBatchHandler(coordinator.taskType, coordinator.handler, items)
 	var results []batchMemberResult
 	if err == nil {
-		results, err = normalizeBatchOutcomes(coordinator.jobType, outcomes, len(batch))
+		results, err = normalizeBatchOutcomes(coordinator.taskType, outcomes, len(batch))
 	}
 	if err != nil {
 		if hasBatchID {
@@ -295,18 +295,18 @@ func (coordinator *batchCoordinator) record(
 	batchID string,
 	batch []*batchMember,
 ) {
-	jobIDs := make([]string, len(batch))
+	taskIDs := make([]string, len(batch))
 	attempts := make([]int, len(batch))
 	fences := make([]int64, len(batch))
 	for index, member := range batch {
-		job := member.item.Context.Job
-		jobIDs[index], attempts[index], fences[index] = job.ID, job.Attempt, job.FenceToken
+		task := member.item.Context.Task
+		taskIDs[index], attempts[index], fences[index] = task.ID, task.Attempt, task.FenceToken
 	}
 	rows, err := NewPGXExecutor(coordinator.worker.pool).Query(
 		ctx,
 		protocolStatementRegistry[statement],
 		batchID,
-		jobIDs,
+		taskIDs,
 		attempts,
 		fences,
 		coordinator.worker.workerID,
@@ -321,25 +321,25 @@ func (coordinator *batchCoordinator) record(
 }
 
 func callBatchHandler(
-	jobType string,
+	taskType string,
 	handler BatchHandler,
 	items []BatchHandlerItem,
 ) (outcomes []BatchHandlerOutcome, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf(batchHandlerPanicFormat, jobType, recovered)
+			err = fmt.Errorf(batchHandlerPanicFormat, taskType, recovered)
 		}
 	}()
 	return handler(items), nil
 }
 
 func normalizeBatchOutcomes(
-	jobType string,
+	taskType string,
 	outcomes []BatchHandlerOutcome,
 	expected int,
 ) ([]batchMemberResult, error) {
 	if len(outcomes) != expected {
-		return nil, fmt.Errorf(batchOutcomeCountFormat, jobType, len(outcomes), expected)
+		return nil, fmt.Errorf(batchOutcomeCountFormat, taskType, len(outcomes), expected)
 	}
 	results := make([]batchMemberResult, len(outcomes))
 	for index, outcome := range outcomes {
@@ -348,21 +348,21 @@ func normalizeBatchOutcomes(
 			results[index].value = outcome.Result
 		case *BatchSucceeded:
 			if outcome == nil {
-				return nil, fmt.Errorf(invalidBatchOutcomeFormat, jobType, index)
+				return nil, fmt.Errorf(invalidBatchOutcomeFormat, taskType, index)
 			}
 			results[index].value = outcome.Result
 		case BatchFailed:
 			if outcome.Error == nil {
-				return nil, fmt.Errorf(invalidBatchOutcomeFormat, jobType, index)
+				return nil, fmt.Errorf(invalidBatchOutcomeFormat, taskType, index)
 			}
 			results[index].err = outcome.Error
 		case *BatchFailed:
 			if outcome == nil || outcome.Error == nil {
-				return nil, fmt.Errorf(invalidBatchOutcomeFormat, jobType, index)
+				return nil, fmt.Errorf(invalidBatchOutcomeFormat, taskType, index)
 			}
 			results[index].err = outcome.Error
 		default:
-			return nil, fmt.Errorf(invalidBatchOutcomeFormat, jobType, index)
+			return nil, fmt.Errorf(invalidBatchOutcomeFormat, taskType, index)
 		}
 	}
 	return results, nil

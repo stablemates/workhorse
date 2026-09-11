@@ -35,7 +35,7 @@ describe("task location state", () => {
       search: "invoice*",
       queue: "orders",
       worker: "worker-1",
-      jobType: "order.process",
+      taskType: "order.process",
       sort: "priority",
       page: 3,
       pageSize: 100,
@@ -51,7 +51,7 @@ describe("task location state", () => {
         search: null,
         queue: null,
         worker: null,
-        jobType: null,
+        taskType: null,
         sort: "updated",
         page: 1,
         pageSize: 50,
@@ -110,8 +110,8 @@ describe("task location state", () => {
   it("carries the open task detail in the URL beside the listing parameters", () => {
     // A deep link has to restore the same list and the same open task, so the drawer id is
     // parsed alongside the filters rather than instead of them.
-    const state = parseTaskLocation("?filter=running&queue=orders&page=2&task=job-42");
-    expect(state.taskId).toBe("job-42");
+    const state = parseTaskLocation("?filter=running&queue=orders&page=2&task=task-42");
+    expect(state.taskId).toBe("task-42");
     expect(state.filter).toBe("running");
     expect(state.queue).toBe("orders");
     expect(state.page).toBe(2);
@@ -122,7 +122,7 @@ describe("task location state", () => {
     // Closing the drawer is not a change of what the operator is looking at, so every filter,
     // the page, and the chart settings survive it untouched.
     const opened = parseTaskLocation(
-      "?filter=running&tags=billing&per=100&group=queue&task=job-42",
+      "?filter=running&tags=billing&per=100&group=queue&task=task-42",
     );
     expect(taskLocationHref({ ...opened, taskId: null })).toBe(
       "/tasks?filter=running&tags=billing&per=100&group=queue",
@@ -137,11 +137,11 @@ describe("task location state", () => {
   });
 
   it("pushes only when the drawer opens, so Back does not walk every task glanced at", () => {
-    expect(taskDetailNavigation(null, "job-a")).toBe("push");
+    expect(taskDetailNavigation(null, "task-a")).toBe("push");
     // Swapping tasks happens inside a panel that is already open.
-    expect(taskDetailNavigation("job-a", "job-b")).toBe("replace");
+    expect(taskDetailNavigation("task-a", "task-b")).toBe("replace");
     // Closing is a dismissal; Forward must not resurrect the panel.
-    expect(taskDetailNavigation("job-a", null)).toBe("replace");
+    expect(taskDetailNavigation("task-a", null)).toBe("replace");
     expect(taskDetailNavigation(null, null)).toBe("replace");
   });
 
@@ -150,10 +150,10 @@ describe("task location state", () => {
     // clicks from one task to the next, so the drawer id is not part of the listing request.
     const closed = parseTaskLocation("?filter=running&queue=orders&tags=billing&page=2&per=100");
     const opened = parseTaskLocation(
-      "?filter=running&queue=orders&tags=billing&page=2&per=100&task=job-a",
+      "?filter=running&queue=orders&tags=billing&page=2&per=100&task=task-a",
     );
     expect(taskListingKey(opened)).toBe(taskListingKey(closed));
-    expect(taskListingKey({ ...opened, taskId: "job-b" })).toBe(taskListingKey(closed));
+    expect(taskListingKey({ ...opened, taskId: "task-b" })).toBe(taskListingKey(closed));
     // Nor do the activity chart controls, which are served by a separate request.
     expect(taskListingKey({ ...opened, period: "7d", group: "worker" })).toBe(
       taskListingKey(closed),
@@ -172,8 +172,8 @@ describe("task location state", () => {
 
 it("clears sidebar pagination and drawer selection while preserving useful filters", () => {
   const state = {
-    ...parseTaskLocation("?queue=billing&page=3&task=job-1"),
-    cursor: { id: "job-1", updatedAt: "2026-09-10T12:00:00Z", priority: 1 },
+    ...parseTaskLocation("?queue=billing&page=3&task=task-1"),
+    cursor: { id: "task-1", updatedAt: "2026-09-10T12:00:00Z", priority: 1 },
     direction: "previous" as const,
   };
   const selected = parseTaskLocation(taskFilterHref(state, "running").split("?")[1] ?? "");

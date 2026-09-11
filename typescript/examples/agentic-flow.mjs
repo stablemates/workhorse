@@ -71,7 +71,7 @@ export function createAgenticWorkers(queue, effects = defaultEffects(), cooldown
       effects.callModel({
         phase: "plan",
         prompt: payload.prompt,
-        idempotencyKey: `${context.job.id}:plan`,
+        idempotencyKey: `${context.task.id}:plan`,
       }),
     );
     await reportProgress(context, "planned");
@@ -103,7 +103,7 @@ export function createAgenticWorkers(queue, effects = defaultEffects(), cooldown
         phase: "answer",
         prompt: payload.prompt,
         tools: toolResults,
-        idempotencyKey: `${context.job.id}:final-response`,
+        idempotencyKey: `${context.task.id}:final-response`,
       }),
     );
     return { status: "completed", plan, tools: toolResults, response };
@@ -118,7 +118,7 @@ export function createAgenticWorkers(queue, effects = defaultEffects(), cooldown
     const result = await context.checkpoint("tool-call", () =>
       effects.callTool({
         ...payload,
-        idempotencyKey: `${context.job.id}:tool-call`,
+        idempotencyKey: `${context.task.id}:tool-call`,
       }),
     );
     await reportProgress(context, "planned");
@@ -151,7 +151,7 @@ export async function runAgenticFlowExample({
   );
 
   const workers = createAgenticWorkers(queue, effects, cooldownMs);
-  const jobId = await queue.enqueue(
+  const taskId = await queue.enqueue(
     "agent.loop",
     { conversationId, prompt },
     {
@@ -167,7 +167,7 @@ export async function runAgenticFlowExample({
 
     if (!approvalDelivered) {
       const delivery = await queue.sendSignal(
-        jobId,
+        taskId,
         "approval",
         { approved: true },
         {
@@ -178,9 +178,9 @@ export async function runAgenticFlowExample({
       approvalDelivered = delivery.status === "delivered" || delivery.status === "duplicate";
     }
 
-    const snapshot = await admin.getJob(jobId);
+    const snapshot = await admin.getTask(taskId);
     if (snapshot?.state === "succeeded") {
-      return { jobId, result: snapshot.result, progress: snapshot.progress?.value ?? null };
+      return { taskId, result: snapshot.result, progress: snapshot.progress?.value ?? null };
     }
     if (snapshot?.state === "failed" || snapshot?.state === "canceled") {
       throw new Error(`Agentic flow finished in ${snapshot.state} state`);
@@ -188,7 +188,7 @@ export async function runAgenticFlowExample({
     await delay(20);
   }
 
-  throw new Error(`Agentic flow ${jobId} did not finish within the bounded example loop`);
+  throw new Error(`Agentic flow ${taskId} did not finish within the bounded example loop`);
 }
 
 const invokedPath = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : null;

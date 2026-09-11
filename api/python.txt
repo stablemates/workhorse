@@ -8,21 +8,21 @@
 
 class Admin(_AdminOperations)
   def __init__(self, connection: _SyncConnection, default_queue: str = 'default') -> None
-  def get_checkpoint(self, job_id: str, name: str) -> JobCheckpoint | None
-  def get_job(self, job_id: str) -> JobSnapshot | None
-  def get_job_timeline(self, job_id: str, *, limit: int = 100, cursor: JobTimelineCursor | None = None) -> JobTimelinePage
-  def get_progress(self, job_id: str) -> JobProgress | None
-  def get_wait(self, job_id: str, name: str) -> JobWait | None
-  def list_checkpoints(self, job_id: str) -> tuple[JobCheckpoint, ...]
+  def get_checkpoint(self, task_id: str, name: str) -> TaskCheckpoint | None
+  def get_progress(self, task_id: str) -> TaskProgress | None
+  def get_task(self, task_id: str) -> TaskSnapshot | None
+  def get_task_timeline(self, task_id: str, *, limit: int = 100, cursor: TaskTimelineCursor | None = None) -> TaskTimelinePage
+  def get_wait(self, task_id: str, name: str) -> TaskWait | None
+  def list_checkpoints(self, task_id: str) -> tuple[TaskCheckpoint, ...]
   def list_dead_letters(self, query: DeadLetterQuery | None = None) -> DeadLetterPage
   def list_human_waits(self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None) -> HumanWaitPage
-  def list_jobs(self, query: JobListQuery | None = None) -> JobListPage
   def list_signal_waits(self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None) -> ExternalWaitPage
-  def list_waits(self, job_id: str) -> tuple[JobWait, ...]
+  def list_tasks(self, query: TaskListQuery | None = None) -> TaskListPage
+  def list_waits(self, task_id: str) -> tuple[TaskWait, ...]
   def list_workers(self) -> tuple[WorkerRegistryEntry, ...]
   def pause_queue(self, queue_name: str, audit: AdminAudit) -> None
   def purge_queue(self, queue_name: str, audit: AdminAudit) -> int
-  def redrive(self, source_job_id: str, audit: AdminAudit) -> RedriveResult
+  def redrive(self, source_task_id: str, audit: AdminAudit) -> RedriveResult
   def redrive_many(self, filter: DeadLetterFilter, audit: AdminAudit, options: BulkRedriveOptions | None = None) -> BulkRedrivePage
   def resume_queue(self, queue_name: str, audit: AdminAudit) -> None
   def set_worker_paused(self, worker_id: str, paused: bool, audit: AdminAudit) -> WorkerPauseResult | None
@@ -37,21 +37,21 @@ class AsyncAdmin(_AdminOperations)
   def __init__(self, executor: _AsyncPsycopgExecutor | _AsyncpgExecutor, default_queue: str = 'default') -> None
   @classmethod def from_asyncpg(cls, connection: _AsyncpgConnection, default_queue: str = 'default') -> AsyncAdmin
   @classmethod def from_psycopg(cls, connection: _AsyncPsycopgConnectionInput, default_queue: str = 'default') -> AsyncAdmin
-  async def get_checkpoint(self, job_id: str, name: str) -> JobCheckpoint | None
-  async def get_job(self, job_id: str) -> JobSnapshot | None
-  async def get_job_timeline(self, job_id: str, *, limit: int = 100, cursor: JobTimelineCursor | None = None) -> JobTimelinePage
-  async def get_progress(self, job_id: str) -> JobProgress | None
-  async def get_wait(self, job_id: str, name: str) -> JobWait | None
-  async def list_checkpoints(self, job_id: str) -> tuple[JobCheckpoint, ...]
+  async def get_checkpoint(self, task_id: str, name: str) -> TaskCheckpoint | None
+  async def get_progress(self, task_id: str) -> TaskProgress | None
+  async def get_task(self, task_id: str) -> TaskSnapshot | None
+  async def get_task_timeline(self, task_id: str, *, limit: int = 100, cursor: TaskTimelineCursor | None = None) -> TaskTimelinePage
+  async def get_wait(self, task_id: str, name: str) -> TaskWait | None
+  async def list_checkpoints(self, task_id: str) -> tuple[TaskCheckpoint, ...]
   async def list_dead_letters(self, query: DeadLetterQuery | None = None) -> DeadLetterPage
   async def list_human_waits(self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None) -> HumanWaitPage
-  async def list_jobs(self, query: JobListQuery | None = None) -> JobListPage
   async def list_signal_waits(self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None) -> ExternalWaitPage
-  async def list_waits(self, job_id: str) -> tuple[JobWait, ...]
+  async def list_tasks(self, query: TaskListQuery | None = None) -> TaskListPage
+  async def list_waits(self, task_id: str) -> tuple[TaskWait, ...]
   async def list_workers(self) -> tuple[WorkerRegistryEntry, ...]
   async def pause_queue(self, queue_name: str, audit: AdminAudit) -> None
   async def purge_queue(self, queue_name: str, audit: AdminAudit) -> int
-  async def redrive(self, source_job_id: str, audit: AdminAudit) -> RedriveResult
+  async def redrive(self, source_task_id: str, audit: AdminAudit) -> RedriveResult
   async def redrive_many(self, filter: DeadLetterFilter, audit: AdminAudit, options: BulkRedriveOptions | None = None) -> BulkRedrivePage
   async def resume_queue(self, queue_name: str, audit: AdminAudit) -> None
   async def set_worker_paused(self, worker_id: str, paused: bool, audit: AdminAudit) -> WorkerPauseResult | None
@@ -59,13 +59,13 @@ class AsyncAdmin(_AdminOperations)
 type AsyncBatchHandler = Callable[[Sequence[AsyncBatchHandlerItem]], Awaitable[Sequence[BatchHandlerOutcome]]]
 
 class AsyncBatchHandlerContext
-  def __init__(self, job: ClaimedJob, cancellation: AsyncCancellationToken, _get_checkpoint: Callable[[str], Awaitable[JobCheckpoint | None]], _get_progress: Callable[[], Awaitable[JobProgress | None]], _set_progress: Callable[[Json], Awaitable[JobProgress]], _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]]) -> None
+  def __init__(self, task: ClaimedTask, cancellation: AsyncCancellationToken, _get_checkpoint: Callable[[str], Awaitable[TaskCheckpoint | None]], _get_progress: Callable[[], Awaitable[TaskProgress | None]], _set_progress: Callable[[Json], Awaitable[TaskProgress]], _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]]) -> None
   cancellation: AsyncCancellationToken
   async def checkpoint(self, name: str, operation: Callable[[], Awaitable[_TJson]]) -> _TJson
-  async def get_checkpoint(self, name: str) -> JobCheckpoint | None
-  async def get_progress(self) -> JobProgress | None
-  job: ClaimedJob
-  async def set_progress(self, value: Json) -> JobProgress
+  async def get_checkpoint(self, name: str) -> TaskCheckpoint | None
+  async def get_progress(self) -> TaskProgress | None
+  async def set_progress(self, value: Json) -> TaskProgress
+  task: ClaimedTask
 
 class AsyncBatchHandlerItem
   def __init__(self, payload: Json, context: AsyncBatchHandlerContext) -> None
@@ -82,26 +82,26 @@ class AsyncCancellationToken
 type AsyncHandler = Callable[[Any, AsyncHandlerContext], Awaitable[Json]]
 
 class AsyncHandlerContext
-  def __init__(self, job: ClaimedJob, cancellation: AsyncCancellationToken, _get_checkpoint: Callable[[str], Awaitable[JobCheckpoint | None]], _get_wait: Callable[[str], Awaitable[JobWait | None]], _get_progress: Callable[[], Awaitable[JobProgress | None]], _set_progress: Callable[[Json], Awaitable[JobProgress]], _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]], _sleep: Callable[[str, int], Awaitable[None]], _sleep_until: Callable[[str, datetime], Awaitable[None]], _wait_for_signal: Callable[[str, int | None], Awaitable[Json]], _wait_for_human: Callable[[str, Json, int | None], Awaitable[Json]], _run_child: Callable[[str, str, Json, EnqueueOptions], Awaitable[Json]], _run_children: Callable[[Sequence[ChildJobRequest]], Awaitable[dict[str, ChildOutcome]]], _run_children_all: Callable[[Sequence[ChildJobRequest]], Awaitable[dict[str, Json]]]) -> None
+  def __init__(self, task: ClaimedTask, cancellation: AsyncCancellationToken, _get_checkpoint: Callable[[str], Awaitable[TaskCheckpoint | None]], _get_wait: Callable[[str], Awaitable[TaskWait | None]], _get_progress: Callable[[], Awaitable[TaskProgress | None]], _set_progress: Callable[[Json], Awaitable[TaskProgress]], _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]], _sleep: Callable[[str, int], Awaitable[None]], _sleep_until: Callable[[str, datetime], Awaitable[None]], _wait_for_signal: Callable[[str, int | None], Awaitable[Json]], _wait_for_human: Callable[[str, Json, int | None], Awaitable[Json]], _run_child: Callable[[str, str, Json, EnqueueOptions], Awaitable[Json]], _run_children: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, ChildOutcome]]], _run_children_all: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, Json]]]) -> None
   cancellation: AsyncCancellationToken
   async def checkpoint(self, name: str, operation: Callable[[], Awaitable[_TJson]]) -> _TJson
-  async def get_checkpoint(self, name: str) -> JobCheckpoint | None
-  async def get_progress(self) -> JobProgress | None
-  async def get_wait(self, name: str) -> JobWait | None
-  job: ClaimedJob
+  async def get_checkpoint(self, name: str) -> TaskCheckpoint | None
+  async def get_progress(self) -> TaskProgress | None
+  async def get_wait(self, name: str) -> TaskWait | None
   async def run_child(self, name: str, type: str, payload: Json, options: EnqueueOptions | None = None) -> Json
-  async def run_children(self, children: Sequence[ChildJobRequest]) -> dict[str, ChildOutcome]
-  async def run_children_all(self, children: Sequence[ChildJobRequest]) -> dict[str, Json]
-  async def set_progress(self, value: Json) -> JobProgress
+  async def run_children(self, children: Sequence[ChildTaskRequest]) -> dict[str, ChildOutcome]
+  async def run_children_all(self, children: Sequence[ChildTaskRequest]) -> dict[str, Json]
+  async def set_progress(self, value: Json) -> TaskProgress
   async def sleep(self, name: str, duration_ms: int) -> None
   async def sleep_until(self, name: str, wake_at: datetime) -> None
+  task: ClaimedTask
   async def wait_for_human(self, name: str, context: Json, *, timeout_ms: int | None = None) -> Json
   async def wait_for_signal(self, name: str, *, timeout_ms: int | None = None) -> Json
 
 class AsyncQueue
   def __init__(self, executor: _AsyncPsycopgExecutor | _AsyncpgExecutor, default_queue: str = 'default') -> None
-  async def cancel(self, job_id: str, *, requested_by: str | None = None, reason: str | None = None) -> CancelResult
-  async def complete_human_wait(self, job_id: str, name: str, result: Json, *, idempotency_key: str, requested_by: str) -> HumanWaitCompletionResult
+  async def cancel(self, task_id: str, *, requested_by: str | None = None, reason: str | None = None) -> CancelResult
+  async def complete_human_wait(self, task_id: str, name: str, result: Json, *, idempotency_key: str, requested_by: str) -> HumanWaitCompletionResult
   async def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str
   async def enqueue_many(self, requests: Sequence[EnqueueRequest]) -> list[str]
   async def enqueue_many_with_results(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
@@ -111,9 +111,9 @@ class AsyncQueue
   async def health(self) -> QueueHealth
   async def list_concurrency_policies(self, queue_names: Sequence[str] = ()) -> list[ConcurrencyPolicy]
   async def list_rate_limit_policies(self, queue_names: Sequence[str] = ()) -> list[RateLimitPolicy]
-  async def send_signal(self, job_id: str, name: str, payload: Json, *, idempotency_key: str, requested_by: str) -> SignalDeliveryResult
+  async def send_signal(self, task_id: str, name: str, payload: Json, *, idempotency_key: str, requested_by: str) -> SignalDeliveryResult
   async def sync_concurrency_policies(self, namespace: str, definitions: Sequence[ConcurrencyPolicyDefinition], *, prune: bool = True) -> list[ConcurrencyPolicy]
-  async def sync_contracts(self, contracts: Mapping[str, JobTypeContracts]) -> None
+  async def sync_contracts(self, contracts: Mapping[str, TaskTypeContracts]) -> None
   async def sync_rate_limit_policies(self, namespace: str, definitions: Sequence[RateLimitPolicyDefinition], *, prune: bool = True) -> list[RateLimitPolicy]
   async def sync_schedules(self, namespace: str, definitions: Sequence[ScheduleDefinition], *, prune: bool = True) -> None
 
@@ -154,13 +154,13 @@ class BatchFailed(dict)
 type BatchHandler = Callable[[Sequence[BatchHandlerItem]], Sequence[BatchHandlerOutcome]]
 
 class BatchHandlerContext
-  def __init__(self, job: ClaimedJob, cancellation: CancellationToken, _get_checkpoint: Callable[[str], JobCheckpoint | None], _get_progress: Callable[[], JobProgress | None], _set_progress: Callable[[Json], JobProgress], _checkpoint: Callable[[str, Callable[[], Json]], Json]) -> None
+  def __init__(self, task: ClaimedTask, cancellation: CancellationToken, _get_checkpoint: Callable[[str], TaskCheckpoint | None], _get_progress: Callable[[], TaskProgress | None], _set_progress: Callable[[Json], TaskProgress], _checkpoint: Callable[[str, Callable[[], Json]], Json]) -> None
   cancellation: CancellationToken
   def checkpoint(self, name: str, operation: Callable[[], _TJson]) -> _TJson
-  def get_checkpoint(self, name: str) -> JobCheckpoint | None
-  def get_progress(self) -> JobProgress | None
-  job: ClaimedJob
-  def set_progress(self, value: Json) -> JobProgress
+  def get_checkpoint(self, name: str) -> TaskCheckpoint | None
+  def get_progress(self) -> TaskProgress | None
+  def set_progress(self, value: Json) -> TaskProgress
+  task: ClaimedTask
 
 class BatchHandlerItem
   def __init__(self, payload: Json, context: BatchHandlerContext) -> None
@@ -198,20 +198,20 @@ class BulkRedrivePage
   results: tuple[RedriveResult, ...]
 
 class CancelResult
-  def __init__(self, status: CancelStatus, job_id: str, state: JobState | None, current_attempt: int | None, requested_at: datetime | None, requested_by: str | None, reason: str | None, finished_at: datetime | None) -> None
+  def __init__(self, status: CancelStatus, task_id: str, state: TaskState | None, current_attempt: int | None, requested_at: datetime | None, requested_by: str | None, reason: str | None, finished_at: datetime | None) -> None
   current_attempt: int | None
   finished_at: datetime | None
-  job_id: str
   reason: str | None
   requested_at: datetime | None
   requested_by: str | None
-  state: JobState | None
+  state: TaskState | None
   status: CancelStatus
+  task_id: str
 
 type CancelStatus = Literal["canceled", "cancel_requested", "already_terminal", "not_found"]
 
 class CancellationRequestedError(WorkhorseError)
-  def __init__(self, job_id: str) -> None
+  def __init__(self, task_id: str) -> None
 
 class CancellationToken
   def __init__(self) -> None
@@ -221,10 +221,10 @@ class CancellationToken
   def wait(self, timeout: float | None = None) -> bool
 
 class CheckpointConflictError(WorkhorseError)
-  def __init__(self, job_id: str, checkpoint_name: str) -> None
+  def __init__(self, task_id: str, checkpoint_name: str) -> None
 
 class CheckpointLeaseLostError(LifecycleError)
-  def __init__(self, job_id: str, checkpoint_name: str) -> None
+  def __init__(self, task_id: str, checkpoint_name: str) -> None
 
 class ChildCanceled(dict)
   def __init__(self, *args, **kwargs)
@@ -244,7 +244,7 @@ class ChildCanceled(dict)
   def values(...)
 
 class ChildConflictError(WorkhorseError)
-  def __init__(self, parent_job_id: str, child_name: str) -> None
+  def __init__(self, parent_task_id: str, child_name: str) -> None
 
 class ChildFailed(dict)
   def __init__(self, *args, **kwargs)
@@ -263,23 +263,16 @@ class ChildFailed(dict)
   def update(...)
   def values(...)
 
-class ChildJobRequest
-  def __init__(self, name: str, type: str, payload: Json, options: EnqueueOptions = <_HAS_DEFAULT_FACTORY_CLASS>) -> None
-  name: str
-  options: EnqueueOptions
-  payload: Json
-  type: str
-
 class ChildLeaseLostError(LifecycleError)
-  def __init__(self, parent_job_id: str) -> None
+  def __init__(self, parent_task_id: str) -> None
 
 class ChildLimitExceededError(WorkhorseError)
-  def __init__(self, parent_job_id: str) -> None
+  def __init__(self, parent_task_id: str) -> None
 
 type ChildOutcome = ChildSucceeded | ChildFailed | ChildCanceled
 
 class ChildResultLimitExceededError(WorkhorseError)
-  def __init__(self, parent_job_id: str, result_bytes: int, result_limit_bytes: int) -> None
+  def __init__(self, parent_task_id: str, result_bytes: int, result_limit_bytes: int) -> None
 
 class ChildSucceeded(dict)
   def __init__(self, *args, **kwargs)
@@ -298,7 +291,14 @@ class ChildSucceeded(dict)
   def update(...)
   def values(...)
 
-class ClaimedJob
+class ChildTaskRequest
+  def __init__(self, name: str, type: str, payload: Json, options: EnqueueOptions = <_HAS_DEFAULT_FACTORY_CLASS>) -> None
+  name: str
+  options: EnqueueOptions
+  payload: Json
+  type: str
+
+class ClaimedTask
   def __init__(self, id: str, queue: str, type: str, priority: int, payload: Json, contract_version: str | None, result_max_bytes: int, redact_error_details: bool, trace_context: Json, attempt: int, max_attempts: int, retry_policy: RetryPolicy | None, deadline_at: datetime | None, execution_timeout_ms: int | None, attempt_timeout_at: datetime | None, fence_token: int, lease_expires_at: datetime) -> None
   attempt: int
   attempt_timeout_at: datetime | None
@@ -335,14 +335,13 @@ class ConcurrencyPolicyDefinition
   queue: str
 
 class DeadLetter
-  def __init__(self, job_id: str, queue: str, type: str, concurrency_key: str | None, priority: int, payload: Json, tags: tuple[str, ...], current_attempt: int, max_attempts: int, retry_policy: RetryPolicy | None, deadline_at: datetime | None, execution_timeout_ms: int | None, error: Json, finished_at: datetime, redrive_count: int) -> None
+  def __init__(self, task_id: str, queue: str, type: str, concurrency_key: str | None, priority: int, payload: Json, tags: tuple[str, ...], current_attempt: int, max_attempts: int, retry_policy: RetryPolicy | None, deadline_at: datetime | None, execution_timeout_ms: int | None, error: Json, finished_at: datetime, redrive_count: int) -> None
   concurrency_key: str | None
   current_attempt: int
   deadline_at: datetime | None
   error: Json
   execution_timeout_ms: int | None
   finished_at: datetime
-  job_id: str
   max_attempts: int
   payload: Json
   priority: int
@@ -350,12 +349,13 @@ class DeadLetter
   redrive_count: int
   retry_policy: RetryPolicy | None
   tags: tuple[str, ...]
+  task_id: str
   type: str
 
 class DeadLetterCursor
-  def __init__(self, finished_at: str, job_id: str) -> None
+  def __init__(self, finished_at: str, task_id: str) -> None
   finished_at: str
-  job_id: str
+  task_id: str
 
 class DeadLetterFilter
   def __init__(self, queue: str | None = None, type: str | None = None, tags: tuple[str, ...] = (), error_name: str | None = None, finished_after: datetime | None = None, finished_before: datetime | None = None) -> None
@@ -383,7 +383,7 @@ class DeadLetterQuery(DeadLetterFilter)
   type: str | None
 
 class DeadlineExceededError(WorkhorseError)
-  def __init__(self, job_id: str) -> None
+  def __init__(self, task_id: str) -> None
 
 class Debounce
   def __init__(self, key: str, window_ms: int, schedule: Literal['reset', 'preserve'], scope: str = 'default') -> None
@@ -393,11 +393,11 @@ class Debounce
   window_ms: int
 
 class Dependencies
-  def __init__(self, prerequisite_job_ids: Sequence[str], on_success: DependencyTerminalPolicy, on_failure: DependencyTerminalPolicy, on_cancellation: DependencyTerminalPolicy) -> None
+  def __init__(self, prerequisite_task_ids: Sequence[str], on_success: DependencyTerminalPolicy, on_failure: DependencyTerminalPolicy, on_cancellation: DependencyTerminalPolicy) -> None
   on_cancellation: DependencyTerminalPolicy
   on_failure: DependencyTerminalPolicy
   on_success: DependencyTerminalPolicy
-  prerequisite_job_ids: Sequence[str]
+  prerequisite_task_ids: Sequence[str]
 
 class DependencyCycleError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
@@ -445,29 +445,29 @@ class EnqueueRequest
   type: str
 
 class EnqueueResult
-  def __init__(self, job_id: str, outcome: EnqueueOutcome, reason: EnqueueNonReplaceableReason | None = None) -> None
-  job_id: str
+  def __init__(self, task_id: str, outcome: EnqueueOutcome, reason: EnqueueNonReplaceableReason | None = None) -> None
   outcome: EnqueueOutcome
   reason: EnqueueNonReplaceableReason | None = None
+  task_id: str
 
 class ExecutionTimeoutError(WorkhorseError)
-  def __init__(self, job_id: str, attempt: int) -> None
+  def __init__(self, task_id: str, attempt: int) -> None
 
 class ExternalWait
-  def __init__(self, job_id: str, queue: str, job_type: str, name: str, attempt: int, created_at: datetime, deadline_at: datetime) -> None
+  def __init__(self, task_id: str, queue: str, task_type: str, name: str, attempt: int, created_at: datetime, deadline_at: datetime) -> None
   attempt: int
   created_at: datetime
   deadline_at: datetime
-  job_id: str
-  job_type: str
   name: str
   queue: str
+  task_id: str
+  task_type: str
 
 class ExternalWaitCursor
-  def __init__(self, created_at: str, job_id: str, name: str) -> None
+  def __init__(self, created_at: str, task_id: str, name: str) -> None
   created_at: str
-  job_id: str
   name: str
+  task_id: str
 
 class ExternalWaitPage
   def __init__(self, items: tuple[ExternalWait, ...], next_cursor: ExternalWaitCursor | None) -> None
@@ -477,60 +477,60 @@ class ExternalWaitPage
 type Handler = Callable[[Any, HandlerContext], Json]
 
 class HandlerContext
-  def __init__(self, job: ClaimedJob, cancellation: CancellationToken, _get_checkpoint: Callable[[str], JobCheckpoint | None], _get_wait: Callable[[str], JobWait | None], _get_progress: Callable[[], JobProgress | None], _set_progress: Callable[[Json], JobProgress], _checkpoint: Callable[[str, Callable[[], Json]], Json], _sleep: Callable[[str, int], None], _sleep_until: Callable[[str, datetime], None], _wait_for_signal: Callable[[str, int | None], Json], _wait_for_human: Callable[[str, Json, int | None], Json], _run_child: Callable[[str, str, Json, EnqueueOptions], Json], _run_children: Callable[[Sequence[ChildJobRequest]], dict[str, ChildOutcome]], _run_children_all: Callable[[Sequence[ChildJobRequest]], dict[str, Json]]) -> None
+  def __init__(self, task: ClaimedTask, cancellation: CancellationToken, _get_checkpoint: Callable[[str], TaskCheckpoint | None], _get_wait: Callable[[str], TaskWait | None], _get_progress: Callable[[], TaskProgress | None], _set_progress: Callable[[Json], TaskProgress], _checkpoint: Callable[[str, Callable[[], Json]], Json], _sleep: Callable[[str, int], None], _sleep_until: Callable[[str, datetime], None], _wait_for_signal: Callable[[str, int | None], Json], _wait_for_human: Callable[[str, Json, int | None], Json], _run_child: Callable[[str, str, Json, EnqueueOptions], Json], _run_children: Callable[[Sequence[ChildTaskRequest]], dict[str, ChildOutcome]], _run_children_all: Callable[[Sequence[ChildTaskRequest]], dict[str, Json]]) -> None
   cancellation: CancellationToken
   def checkpoint(self, name: str, operation: Callable[[], _TJson]) -> _TJson
-  def get_checkpoint(self, name: str) -> JobCheckpoint | None
-  def get_progress(self) -> JobProgress | None
-  def get_wait(self, name: str) -> JobWait | None
-  job: ClaimedJob
+  def get_checkpoint(self, name: str) -> TaskCheckpoint | None
+  def get_progress(self) -> TaskProgress | None
+  def get_wait(self, name: str) -> TaskWait | None
   def run_child(self, name: str, type: str, payload: Json, options: EnqueueOptions | None = None) -> Json
-  def run_children(self, children: Sequence[ChildJobRequest]) -> dict[str, ChildOutcome]
-  def run_children_all(self, children: Sequence[ChildJobRequest]) -> dict[str, Json]
-  def set_progress(self, value: Json) -> JobProgress
+  def run_children(self, children: Sequence[ChildTaskRequest]) -> dict[str, ChildOutcome]
+  def run_children_all(self, children: Sequence[ChildTaskRequest]) -> dict[str, Json]
+  def set_progress(self, value: Json) -> TaskProgress
   def sleep(self, name: str, duration_ms: int) -> None
   def sleep_until(self, name: str, wake_at: datetime) -> None
+  task: ClaimedTask
   def wait_for_human(self, name: str, context: Json, *, timeout_ms: int | None = None) -> Json
   def wait_for_signal(self, name: str, *, timeout_ms: int | None = None) -> Json
 
 class HumanWait(ExternalWait)
-  def __init__(self, job_id: str, queue: str, job_type: str, name: str, attempt: int, created_at: datetime, deadline_at: datetime, context: Json) -> None
+  def __init__(self, task_id: str, queue: str, task_type: str, name: str, attempt: int, created_at: datetime, deadline_at: datetime, context: Json) -> None
   attempt: int
   context: Json
   created_at: datetime
   deadline_at: datetime
-  job_id: str
-  job_type: str
   name: str
   queue: str
+  task_id: str
+  task_type: str
 
 class HumanWaitAlreadyWaitingError(WorkhorseError)
-  def __init__(self, job_id: str, wait_name: str) -> None
+  def __init__(self, task_id: str, wait_name: str) -> None
 
 class HumanWaitCompletionResult
-  def __init__(self, status: HumanWaitCompletionStatus, job_id: str, name: str, payload: Json, completed_at: datetime | None, completed_by: str | None) -> None
+  def __init__(self, status: HumanWaitCompletionStatus, task_id: str, name: str, payload: Json, completed_at: datetime | None, completed_by: str | None) -> None
   completed_at: datetime | None
   completed_by: str | None
-  job_id: str
   name: str
   payload: Json
   status: HumanWaitCompletionStatus
+  task_id: str
 
 type HumanWaitCompletionStatus = Literal[
     "completed", "duplicate", "not_waiting", "already_completed", "stale", "not_found"
 ]
 
 class HumanWaitConflictError(WorkhorseError)
-  def __init__(self, job_id: str, wait_name: str) -> None
+  def __init__(self, task_id: str, wait_name: str) -> None
 
 class HumanWaitIdempotencyConflictError(WorkhorseError)
-  def __init__(self, job_id: str, wait_name: str) -> None
+  def __init__(self, task_id: str, wait_name: str) -> None
 
 class HumanWaitLeaseLostError(LifecycleError)
-  def __init__(self, job_id: str, wait_name: str) -> None
+  def __init__(self, task_id: str, wait_name: str) -> None
 
 class HumanWaitLimitExceededError(WorkhorseError)
-  def __init__(self, job_id: str) -> None
+  def __init__(self, task_id: str) -> None
 
 class HumanWaitPage
   def __init__(self, items: tuple[HumanWait, ...], next_cursor: ExternalWaitCursor | None) -> None
@@ -543,194 +543,6 @@ class Idempotency
   scope: str = 'default'
   ttl_ms: int = 86400000
 
-class JobCheckpoint
-  def __init__(self, job_id: str, name: str, value: Json, attempt: int, fence_token: int, worker_id: str, created_at: datetime) -> None
-  attempt: int
-  created_at: datetime
-  fence_token: int
-  job_id: str
-  name: str
-  value: Json
-  worker_id: str
-
-class JobContractUnavailableError(WorkhorseError)
-  def __init__(self, job_type: str, version: str) -> None
-
-class JobContractValidationError(WorkhorseError)
-  def __init__(self, job_type: str, version: str, kind: str) -> None
-
-class JobContractVersion
-  def __init__(self, payload_schema: Json = True, result_schema: Json = True, max_payload_bytes: int = 1048576, max_result_bytes: int = 1048576, sensitive_payload_keys: Sequence[str] = <_HAS_DEFAULT_FACTORY_CLASS>, sensitive_result_keys: Sequence[str] = <_HAS_DEFAULT_FACTORY_CLASS>) -> None
-  max_payload_bytes: int = 1048576
-  max_result_bytes: int = 1048576
-  payload_schema: Json = True
-  result_schema: Json = True
-  sensitive_payload_keys: Sequence[str]
-  sensitive_result_keys: Sequence[str]
-
-class JobListCursor
-  def __init__(self, created_at: str, job_id: str, signature: str) -> None
-  created_at: str
-  job_id: str
-  signature: str
-
-class JobListItem
-  def __init__(self, id: str, queue: str, type: str, concurrency_key: str | None, priority: int, tags: tuple[str, ...], state: JobState, prerequisite_job_id: str | None, prerequisite_job_ids: tuple[str, ...], dependency_policy: DependencyPolicy | None, blocked_reason: Literal['prerequisite_pending'] | None, parent_job_id: str | None, child_job_ids: tuple[str, ...], current_attempt: int, max_attempts: int, retry_policy: RetryPolicy | None, deadline_at: datetime | None, execution_timeout_ms: int | None, run_at: datetime, cancel_requested_at: datetime | None, cancel_requested_by: str | None, cancel_reason: str | None, created_at: datetime, updated_at: datetime, payload: Json, payload_status: Literal['omitted', 'included', 'too_large'], payload_bytes: int | None) -> None
-  blocked_reason: Literal['prerequisite_pending'] | None
-  cancel_reason: str | None
-  cancel_requested_at: datetime | None
-  cancel_requested_by: str | None
-  child_job_ids: tuple[str, ...]
-  concurrency_key: str | None
-  created_at: datetime
-  current_attempt: int
-  deadline_at: datetime | None
-  dependency_policy: DependencyPolicy | None
-  execution_timeout_ms: int | None
-  id: str
-  max_attempts: int
-  parent_job_id: str | None
-  payload: Json
-  payload_bytes: int | None
-  payload_status: Literal['omitted', 'included', 'too_large']
-  prerequisite_job_id: str | None
-  prerequisite_job_ids: tuple[str, ...]
-  priority: int
-  queue: str
-  retry_policy: RetryPolicy | None
-  run_at: datetime
-  state: JobState
-  tags: tuple[str, ...]
-  type: str
-  updated_at: datetime
-
-class JobListPage
-  def __init__(self, items: tuple[JobListItem, ...], next_cursor: JobListCursor | None) -> None
-  items: tuple[JobListItem, ...]
-  next_cursor: JobListCursor | None
-
-class JobListQuery
-  def __init__(self, queue: str | None = None, type: str | None = None, states: tuple[JobState, ...] = (), created_after: datetime | None = None, created_before: datetime | None = None, limit: int = 100, cursor: JobListCursor | None = None, payload: JobPayloadProjection = <_HAS_DEFAULT_FACTORY_CLASS>) -> None
-  created_after: datetime | None = None
-  created_before: datetime | None = None
-  cursor: JobListCursor | None = None
-  limit: int = 100
-  payload: JobPayloadProjection
-  queue: str | None = None
-  states: tuple[JobState, ...] = ()
-  type: str | None = None
-
-class JobPayloadProjection
-  def __init__(self, include: bool = False, max_bytes: int = 16384, redact_keys: tuple[str, ...] = ()) -> None
-  include: bool = False
-  max_bytes: int = 16384
-  redact_keys: tuple[str, ...] = ()
-
-class JobProgress
-  def __init__(self, job_id: str, value: Json, revision: int, attempt: int, fence_token: int, worker_id: str, created_at: datetime, updated_at: datetime) -> None
-  attempt: int
-  created_at: datetime
-  fence_token: int
-  job_id: str
-  revision: int
-  updated_at: datetime
-  value: Json
-  worker_id: str
-
-class JobSnapshot
-  def __init__(self, id: str, queue: str, type: str, concurrency_key: str | None, priority: int, payload: Json, contract_version: str | None, tags: tuple[str, ...], state: JobState, prerequisite_job_id: str | None, prerequisite_job_ids: tuple[str, ...], dependency_policy: DependencyPolicy | None, blocked_reason: Literal['prerequisite_pending'] | None, parent_job_id: str | None, child_job_ids: tuple[str, ...], current_attempt: int, max_attempts: int, retry_policy: RetryPolicy | None, deadline_at: datetime | None, execution_timeout_ms: int | None, fence_token: int, run_at: datetime, result: Json, error: Json, cancel_requested_at: datetime | None, cancel_requested_by: str | None, cancel_reason: str | None, progress: JobProgress | None, created_at: datetime, updated_at: datetime) -> None
-  blocked_reason: Literal['prerequisite_pending'] | None
-  cancel_reason: str | None
-  cancel_requested_at: datetime | None
-  cancel_requested_by: str | None
-  child_job_ids: tuple[str, ...]
-  concurrency_key: str | None
-  contract_version: str | None
-  created_at: datetime
-  current_attempt: int
-  deadline_at: datetime | None
-  dependency_policy: DependencyPolicy | None
-  error: Json
-  execution_timeout_ms: int | None
-  fence_token: int
-  id: str
-  max_attempts: int
-  parent_job_id: str | None
-  payload: Json
-  prerequisite_job_id: str | None
-  prerequisite_job_ids: tuple[str, ...]
-  priority: int
-  progress: JobProgress | None
-  queue: str
-  result: Json
-  retry_policy: RetryPolicy | None
-  run_at: datetime
-  state: JobState
-  tags: tuple[str, ...]
-  type: str
-  updated_at: datetime
-
-type JobState = Literal[
-    "blocked", "scheduled", "ready", "active", "succeeded", "failed", "canceled"
-]
-
-class JobTimelineAttempt
-  def __init__(self, kind: Literal['attempt'], record_id: str, priority: int, attempt: int, occurred_at: datetime, fence_token: int, worker_id: str, outcome: str, started_at: datetime, claimed_at: datetime, finished_at: datetime, error: Json) -> None
-  attempt: int
-  claimed_at: datetime
-  error: Json
-  fence_token: int
-  finished_at: datetime
-  kind: Literal['attempt']
-  occurred_at: datetime
-  outcome: str
-  priority: int
-  record_id: str
-  started_at: datetime
-  worker_id: str
-
-class JobTimelineCursor
-  def __init__(self, job_id: str, occurred_at: str, kind: Literal['event', 'attempt'], record_id: str) -> None
-  job_id: str
-  kind: Literal['event', 'attempt']
-  occurred_at: str
-  record_id: str
-
-type JobTimelineEntry = JobTimelineEvent | JobTimelineAttempt
-
-class JobTimelineEvent
-  def __init__(self, kind: Literal['event'], record_id: str, priority: int, attempt: int | None, occurred_at: datetime, event_type: str, details: Json) -> None
-  attempt: int | None
-  details: Json
-  event_type: str
-  kind: Literal['event']
-  occurred_at: datetime
-  priority: int
-  record_id: str
-
-class JobTimelinePage
-  def __init__(self, items: tuple[JobTimelineEntry, ...], next_cursor: JobTimelineCursor | None) -> None
-  items: tuple[JobTimelineEntry, ...]
-  next_cursor: JobTimelineCursor | None
-
-class JobTypeContracts
-  def __init__(self, current_version: str, versions: Mapping[str, JobContractVersion]) -> None
-  current_version: str
-  versions: Mapping[str, JobContractVersion]
-
-class JobWait
-  def __init__(self, job_id: str, name: str, mode: Literal['relative', 'absolute'], duration_ms: int | None, requested_wake_at: datetime | None, wake_at: datetime, attempt: int, fence_token: int, worker_id: str, created_at: datetime) -> None
-  attempt: int
-  created_at: datetime
-  duration_ms: int | None
-  fence_token: int
-  job_id: str
-  mode: Literal['relative', 'absolute']
-  name: str
-  requested_wake_at: datetime | None
-  wake_at: datetime
-  worker_id: str
-
 type Json = bool | int | float | str | list["Json"] | dict[str, "Json"] | None
 
 class LifecycleError(WorkhorseError)
@@ -739,10 +551,10 @@ class LifecycleError(WorkhorseError)
 METRIC_ATTRIBUTE_CARDINALITY_LIMIT: int = 2000
 
 class ProgressLeaseLostError(LifecycleError)
-  def __init__(self, job_id: str) -> None
+  def __init__(self, task_id: str) -> None
 
 class ProgressRateLimitError(WorkhorseError)
-  def __init__(self, job_id: str, retry_after_ms: int) -> None
+  def __init__(self, task_id: str, retry_after_ms: int) -> None
 
 class ProtocolCompatibilityError(WorkhorseError)
   def __init__(self, code: CompatibilityCode) -> None
@@ -752,8 +564,8 @@ class PurgeIdempotencyConflictError(WorkhorseError)
 
 class Queue
   def __init__(self, connection: _SyncConnection, default_queue: str = 'default') -> None
-  def cancel(self, job_id: str, *, requested_by: str | None = None, reason: str | None = None) -> CancelResult
-  def complete_human_wait(self, job_id: str, name: str, result: Json, *, idempotency_key: str, requested_by: str) -> HumanWaitCompletionResult
+  def cancel(self, task_id: str, *, requested_by: str | None = None, reason: str | None = None) -> CancelResult
+  def complete_human_wait(self, task_id: str, name: str, result: Json, *, idempotency_key: str, requested_by: str) -> HumanWaitCompletionResult
   def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str
   def enqueue_many(self, requests: Sequence[EnqueueRequest]) -> list[str]
   def enqueue_many_with_results(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
@@ -761,9 +573,9 @@ class Queue
   def health(self) -> QueueHealth
   def list_concurrency_policies(self, queue_names: Sequence[str] = ()) -> list[ConcurrencyPolicy]
   def list_rate_limit_policies(self, queue_names: Sequence[str] = ()) -> list[RateLimitPolicy]
-  def send_signal(self, job_id: str, name: str, payload: Json, *, idempotency_key: str, requested_by: str) -> SignalDeliveryResult
+  def send_signal(self, task_id: str, name: str, payload: Json, *, idempotency_key: str, requested_by: str) -> SignalDeliveryResult
   def sync_concurrency_policies(self, namespace: str, definitions: Sequence[ConcurrencyPolicyDefinition], *, prune: bool = True) -> list[ConcurrencyPolicy]
-  def sync_contracts(self, contracts: Mapping[str, JobTypeContracts]) -> None
+  def sync_contracts(self, contracts: Mapping[str, TaskTypeContracts]) -> None
   def sync_rate_limit_policies(self, namespace: str, definitions: Sequence[RateLimitPolicyDefinition], *, prune: bool = True) -> list[RateLimitPolicy]
   def sync_schedules(self, namespace: str, definitions: Sequence[ScheduleDefinition], *, prune: bool = True) -> None
 
@@ -793,25 +605,25 @@ class RedriveIdempotencyConflictError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
 
 class RedriveResult
-  def __init__(self, status: Literal['redriven', 'replayed', 'eligible', 'not_found', 'not_failed'], source_job_id: str, target_job_id: str | None, source_state: JobState | None, target_state: JobState | None, requested_at: datetime | None) -> None
+  def __init__(self, status: Literal['redriven', 'replayed', 'eligible', 'not_found', 'not_failed'], source_task_id: str, target_task_id: str | None, source_state: TaskState | None, target_state: TaskState | None, requested_at: datetime | None) -> None
   requested_at: datetime | None
-  source_job_id: str
-  source_state: JobState | None
+  source_state: TaskState | None
+  source_task_id: str
   status: Literal['redriven', 'replayed', 'eligible', 'not_found', 'not_failed']
-  target_job_id: str | None
-  target_state: JobState | None
+  target_state: TaskState | None
+  target_task_id: str | None
 
 type RetryPolicy = Mapping[str, Json]
 
 class ScheduleDefinition
-  def __init__(self, name: str, schedule: str, job: ScheduledJob, timezone: str = 'UTC', enabled: bool = True) -> None
+  def __init__(self, name: str, schedule: str, task: ScheduledTask, timezone: str = 'UTC', enabled: bool = True) -> None
   enabled: bool = True
-  job: ScheduledJob
   name: str
   schedule: str
+  task: ScheduledTask
   timezone: str = 'UTC'
 
-class ScheduledJob
+class ScheduledTask
   def __init__(self, type: str, payload: Json, queue: str | None = None, priority: int = 0, concurrency_key: str | None = None, max_attempts: int = 25, retry_policy: RetryPolicy | None = None) -> None
   concurrency_key: str | None = None
   max_attempts: int = 25
@@ -822,34 +634,222 @@ class ScheduledJob
   type: str
 
 class SignalDeliveryResult
-  def __init__(self, status: SignalDeliveryStatus, job_id: str, name: str, payload: Json, delivered_at: datetime | None, delivered_by: str | None) -> None
+  def __init__(self, status: SignalDeliveryStatus, task_id: str, name: str, payload: Json, delivered_at: datetime | None, delivered_by: str | None) -> None
   delivered_at: datetime | None
   delivered_by: str | None
-  job_id: str
   name: str
   payload: Json
   status: SignalDeliveryStatus
+  task_id: str
 
 type SignalDeliveryStatus = Literal[
     "delivered", "duplicate", "not_waiting", "already_delivered", "stale", "not_found"
 ]
 
 class SignalIdempotencyConflictError(WorkhorseError)
-  def __init__(self, job_id: str, wait_name: str) -> None
+  def __init__(self, task_id: str, wait_name: str) -> None
 
 class SignalWaitConflictError(WorkhorseError)
-  def __init__(self, job_id: str, wait_name: str) -> None
+  def __init__(self, task_id: str, wait_name: str) -> None
 
 class SignalWaitLeaseLostError(LifecycleError)
-  def __init__(self, job_id: str, wait_name: str) -> None
+  def __init__(self, task_id: str, wait_name: str) -> None
 
 class SignalWaitLimitExceededError(WorkhorseError)
-  def __init__(self, job_id: str) -> None
+  def __init__(self, task_id: str) -> None
 
 class StaleLeaseError(LifecycleError)
-  def __init__(self, job_id: str) -> None
+  def __init__(self, task_id: str) -> None
 
 TRACE_ATTRIBUTE_COUNT_LIMIT: int = 8
+
+class TaskCheckpoint
+  def __init__(self, task_id: str, name: str, value: Json, attempt: int, fence_token: int, worker_id: str, created_at: datetime) -> None
+  attempt: int
+  created_at: datetime
+  fence_token: int
+  name: str
+  task_id: str
+  value: Json
+  worker_id: str
+
+class TaskContractUnavailableError(WorkhorseError)
+  def __init__(self, task_type: str, version: str) -> None
+
+class TaskContractValidationError(WorkhorseError)
+  def __init__(self, task_type: str, version: str, kind: str) -> None
+
+class TaskContractVersion
+  def __init__(self, payload_schema: Json = True, result_schema: Json = True, max_payload_bytes: int = 1048576, max_result_bytes: int = 1048576, sensitive_payload_keys: Sequence[str] = <_HAS_DEFAULT_FACTORY_CLASS>, sensitive_result_keys: Sequence[str] = <_HAS_DEFAULT_FACTORY_CLASS>) -> None
+  max_payload_bytes: int = 1048576
+  max_result_bytes: int = 1048576
+  payload_schema: Json = True
+  result_schema: Json = True
+  sensitive_payload_keys: Sequence[str]
+  sensitive_result_keys: Sequence[str]
+
+class TaskListCursor
+  def __init__(self, created_at: str, task_id: str, signature: str) -> None
+  created_at: str
+  signature: str
+  task_id: str
+
+class TaskListItem
+  def __init__(self, id: str, queue: str, type: str, concurrency_key: str | None, priority: int, tags: tuple[str, ...], state: TaskState, prerequisite_task_id: str | None, prerequisite_task_ids: tuple[str, ...], dependency_policy: DependencyPolicy | None, blocked_reason: Literal['prerequisite_pending'] | None, parent_task_id: str | None, child_task_ids: tuple[str, ...], current_attempt: int, max_attempts: int, retry_policy: RetryPolicy | None, deadline_at: datetime | None, execution_timeout_ms: int | None, run_at: datetime, cancel_requested_at: datetime | None, cancel_requested_by: str | None, cancel_reason: str | None, created_at: datetime, updated_at: datetime, payload: Json, payload_status: Literal['omitted', 'included', 'too_large'], payload_bytes: int | None) -> None
+  blocked_reason: Literal['prerequisite_pending'] | None
+  cancel_reason: str | None
+  cancel_requested_at: datetime | None
+  cancel_requested_by: str | None
+  child_task_ids: tuple[str, ...]
+  concurrency_key: str | None
+  created_at: datetime
+  current_attempt: int
+  deadline_at: datetime | None
+  dependency_policy: DependencyPolicy | None
+  execution_timeout_ms: int | None
+  id: str
+  max_attempts: int
+  parent_task_id: str | None
+  payload: Json
+  payload_bytes: int | None
+  payload_status: Literal['omitted', 'included', 'too_large']
+  prerequisite_task_id: str | None
+  prerequisite_task_ids: tuple[str, ...]
+  priority: int
+  queue: str
+  retry_policy: RetryPolicy | None
+  run_at: datetime
+  state: TaskState
+  tags: tuple[str, ...]
+  type: str
+  updated_at: datetime
+
+class TaskListPage
+  def __init__(self, items: tuple[TaskListItem, ...], next_cursor: TaskListCursor | None) -> None
+  items: tuple[TaskListItem, ...]
+  next_cursor: TaskListCursor | None
+
+class TaskListQuery
+  def __init__(self, queue: str | None = None, type: str | None = None, states: tuple[TaskState, ...] = (), created_after: datetime | None = None, created_before: datetime | None = None, limit: int = 100, cursor: TaskListCursor | None = None, payload: TaskPayloadProjection = <_HAS_DEFAULT_FACTORY_CLASS>) -> None
+  created_after: datetime | None = None
+  created_before: datetime | None = None
+  cursor: TaskListCursor | None = None
+  limit: int = 100
+  payload: TaskPayloadProjection
+  queue: str | None = None
+  states: tuple[TaskState, ...] = ()
+  type: str | None = None
+
+class TaskPayloadProjection
+  def __init__(self, include: bool = False, max_bytes: int = 16384, redact_keys: tuple[str, ...] = ()) -> None
+  include: bool = False
+  max_bytes: int = 16384
+  redact_keys: tuple[str, ...] = ()
+
+class TaskProgress
+  def __init__(self, task_id: str, value: Json, revision: int, attempt: int, fence_token: int, worker_id: str, created_at: datetime, updated_at: datetime) -> None
+  attempt: int
+  created_at: datetime
+  fence_token: int
+  revision: int
+  task_id: str
+  updated_at: datetime
+  value: Json
+  worker_id: str
+
+class TaskSnapshot
+  def __init__(self, id: str, queue: str, type: str, concurrency_key: str | None, priority: int, payload: Json, contract_version: str | None, tags: tuple[str, ...], state: TaskState, prerequisite_task_id: str | None, prerequisite_task_ids: tuple[str, ...], dependency_policy: DependencyPolicy | None, blocked_reason: Literal['prerequisite_pending'] | None, parent_task_id: str | None, child_task_ids: tuple[str, ...], current_attempt: int, max_attempts: int, retry_policy: RetryPolicy | None, deadline_at: datetime | None, execution_timeout_ms: int | None, fence_token: int, run_at: datetime, result: Json, error: Json, cancel_requested_at: datetime | None, cancel_requested_by: str | None, cancel_reason: str | None, progress: TaskProgress | None, created_at: datetime, updated_at: datetime) -> None
+  blocked_reason: Literal['prerequisite_pending'] | None
+  cancel_reason: str | None
+  cancel_requested_at: datetime | None
+  cancel_requested_by: str | None
+  child_task_ids: tuple[str, ...]
+  concurrency_key: str | None
+  contract_version: str | None
+  created_at: datetime
+  current_attempt: int
+  deadline_at: datetime | None
+  dependency_policy: DependencyPolicy | None
+  error: Json
+  execution_timeout_ms: int | None
+  fence_token: int
+  id: str
+  max_attempts: int
+  parent_task_id: str | None
+  payload: Json
+  prerequisite_task_id: str | None
+  prerequisite_task_ids: tuple[str, ...]
+  priority: int
+  progress: TaskProgress | None
+  queue: str
+  result: Json
+  retry_policy: RetryPolicy | None
+  run_at: datetime
+  state: TaskState
+  tags: tuple[str, ...]
+  type: str
+  updated_at: datetime
+
+type TaskState = Literal[
+    "blocked", "scheduled", "ready", "active", "succeeded", "failed", "canceled"
+]
+
+class TaskTimelineAttempt
+  def __init__(self, kind: Literal['attempt'], record_id: str, priority: int, attempt: int, occurred_at: datetime, fence_token: int, worker_id: str, outcome: str, started_at: datetime, claimed_at: datetime, finished_at: datetime, error: Json) -> None
+  attempt: int
+  claimed_at: datetime
+  error: Json
+  fence_token: int
+  finished_at: datetime
+  kind: Literal['attempt']
+  occurred_at: datetime
+  outcome: str
+  priority: int
+  record_id: str
+  started_at: datetime
+  worker_id: str
+
+class TaskTimelineCursor
+  def __init__(self, task_id: str, occurred_at: str, kind: Literal['event', 'attempt'], record_id: str) -> None
+  kind: Literal['event', 'attempt']
+  occurred_at: str
+  record_id: str
+  task_id: str
+
+type TaskTimelineEntry = TaskTimelineEvent | TaskTimelineAttempt
+
+class TaskTimelineEvent
+  def __init__(self, kind: Literal['event'], record_id: str, priority: int, attempt: int | None, occurred_at: datetime, event_type: str, details: Json) -> None
+  attempt: int | None
+  details: Json
+  event_type: str
+  kind: Literal['event']
+  occurred_at: datetime
+  priority: int
+  record_id: str
+
+class TaskTimelinePage
+  def __init__(self, items: tuple[TaskTimelineEntry, ...], next_cursor: TaskTimelineCursor | None) -> None
+  items: tuple[TaskTimelineEntry, ...]
+  next_cursor: TaskTimelineCursor | None
+
+class TaskTypeContracts
+  def __init__(self, current_version: str, versions: Mapping[str, TaskContractVersion]) -> None
+  current_version: str
+  versions: Mapping[str, TaskContractVersion]
+
+class TaskWait
+  def __init__(self, task_id: str, name: str, mode: Literal['relative', 'absolute'], duration_ms: int | None, requested_wake_at: datetime | None, wake_at: datetime, attempt: int, fence_token: int, worker_id: str, created_at: datetime) -> None
+  attempt: int
+  created_at: datetime
+  duration_ms: int | None
+  fence_token: int
+  mode: Literal['relative', 'absolute']
+  name: str
+  requested_wake_at: datetime | None
+  task_id: str
+  wake_at: datetime
+  worker_id: str
 
 class Throttle
   def __init__(self, key: str, window_ms: int, scope: str = 'default') -> None
@@ -858,13 +858,13 @@ class Throttle
   window_ms: int
 
 class WaitConflictError(WorkhorseError)
-  def __init__(self, job_id: str, wait_name: str) -> None
+  def __init__(self, task_id: str, wait_name: str) -> None
 
 class WaitLeaseLostError(LifecycleError)
-  def __init__(self, job_id: str, wait_name: str) -> None
+  def __init__(self, task_id: str, wait_name: str) -> None
 
 class WaitLimitExceededError(WorkhorseError)
-  def __init__(self, job_id: str) -> None
+  def __init__(self, task_id: str) -> None
 
 class Worker
   def __init__(self, connection: _SyncConnection, *, queue: str | None = None, queues: Sequence[str] | None = None, worker_id: str | None = None, concurrency: int = 1, poll_ms: int | None = None, lease_ms: int = 30000, heartbeat_ms: int | None = None, maintenance_interval_ms: int = 1000, registry_interval_ms: int = 5000, schedule_namespaces: Sequence[str] = (), schedule_catchup_limit: int = 100, notification_connection_factory: _NotificationConnectionFactory | None = None, on_notification_error: Callable[[BaseException], None] | None = None, on_registration_error: Callable[[BaseException], None] | None = None, _executor: _SyncRowExecutor | None = None) -> None
@@ -919,21 +919,21 @@ def run_worker_process(worker: Worker, *, shutdown_timeout_ms: int = 25000, forc
 
 class Admin(_AdminOperations)
   def __init__(self, connection: _SyncConnection, default_queue: str = 'default') -> None
-  def get_checkpoint(self, job_id: str, name: str) -> JobCheckpoint | None
-  def get_job(self, job_id: str) -> JobSnapshot | None
-  def get_job_timeline(self, job_id: str, *, limit: int = 100, cursor: JobTimelineCursor | None = None) -> JobTimelinePage
-  def get_progress(self, job_id: str) -> JobProgress | None
-  def get_wait(self, job_id: str, name: str) -> JobWait | None
-  def list_checkpoints(self, job_id: str) -> tuple[JobCheckpoint, ...]
+  def get_checkpoint(self, task_id: str, name: str) -> TaskCheckpoint | None
+  def get_progress(self, task_id: str) -> TaskProgress | None
+  def get_task(self, task_id: str) -> TaskSnapshot | None
+  def get_task_timeline(self, task_id: str, *, limit: int = 100, cursor: TaskTimelineCursor | None = None) -> TaskTimelinePage
+  def get_wait(self, task_id: str, name: str) -> TaskWait | None
+  def list_checkpoints(self, task_id: str) -> tuple[TaskCheckpoint, ...]
   def list_dead_letters(self, query: DeadLetterQuery | None = None) -> DeadLetterPage
   def list_human_waits(self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None) -> HumanWaitPage
-  def list_jobs(self, query: JobListQuery | None = None) -> JobListPage
   def list_signal_waits(self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None) -> ExternalWaitPage
-  def list_waits(self, job_id: str) -> tuple[JobWait, ...]
+  def list_tasks(self, query: TaskListQuery | None = None) -> TaskListPage
+  def list_waits(self, task_id: str) -> tuple[TaskWait, ...]
   def list_workers(self) -> tuple[WorkerRegistryEntry, ...]
   def pause_queue(self, queue_name: str, audit: AdminAudit) -> None
   def purge_queue(self, queue_name: str, audit: AdminAudit) -> int
-  def redrive(self, source_job_id: str, audit: AdminAudit) -> RedriveResult
+  def redrive(self, source_task_id: str, audit: AdminAudit) -> RedriveResult
   def redrive_many(self, filter: DeadLetterFilter, audit: AdminAudit, options: BulkRedriveOptions | None = None) -> BulkRedrivePage
   def resume_queue(self, queue_name: str, audit: AdminAudit) -> None
   def set_worker_paused(self, worker_id: str, paused: bool, audit: AdminAudit) -> WorkerPauseResult | None
@@ -948,21 +948,21 @@ class AsyncAdmin(_AdminOperations)
   def __init__(self, executor: _AsyncPsycopgExecutor | _AsyncpgExecutor, default_queue: str = 'default') -> None
   @classmethod def from_asyncpg(cls, connection: _AsyncpgConnection, default_queue: str = 'default') -> AsyncAdmin
   @classmethod def from_psycopg(cls, connection: _AsyncPsycopgConnectionInput, default_queue: str = 'default') -> AsyncAdmin
-  async def get_checkpoint(self, job_id: str, name: str) -> JobCheckpoint | None
-  async def get_job(self, job_id: str) -> JobSnapshot | None
-  async def get_job_timeline(self, job_id: str, *, limit: int = 100, cursor: JobTimelineCursor | None = None) -> JobTimelinePage
-  async def get_progress(self, job_id: str) -> JobProgress | None
-  async def get_wait(self, job_id: str, name: str) -> JobWait | None
-  async def list_checkpoints(self, job_id: str) -> tuple[JobCheckpoint, ...]
+  async def get_checkpoint(self, task_id: str, name: str) -> TaskCheckpoint | None
+  async def get_progress(self, task_id: str) -> TaskProgress | None
+  async def get_task(self, task_id: str) -> TaskSnapshot | None
+  async def get_task_timeline(self, task_id: str, *, limit: int = 100, cursor: TaskTimelineCursor | None = None) -> TaskTimelinePage
+  async def get_wait(self, task_id: str, name: str) -> TaskWait | None
+  async def list_checkpoints(self, task_id: str) -> tuple[TaskCheckpoint, ...]
   async def list_dead_letters(self, query: DeadLetterQuery | None = None) -> DeadLetterPage
   async def list_human_waits(self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None) -> HumanWaitPage
-  async def list_jobs(self, query: JobListQuery | None = None) -> JobListPage
   async def list_signal_waits(self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None) -> ExternalWaitPage
-  async def list_waits(self, job_id: str) -> tuple[JobWait, ...]
+  async def list_tasks(self, query: TaskListQuery | None = None) -> TaskListPage
+  async def list_waits(self, task_id: str) -> tuple[TaskWait, ...]
   async def list_workers(self) -> tuple[WorkerRegistryEntry, ...]
   async def pause_queue(self, queue_name: str, audit: AdminAudit) -> None
   async def purge_queue(self, queue_name: str, audit: AdminAudit) -> int
-  async def redrive(self, source_job_id: str, audit: AdminAudit) -> RedriveResult
+  async def redrive(self, source_task_id: str, audit: AdminAudit) -> RedriveResult
   async def redrive_many(self, filter: DeadLetterFilter, audit: AdminAudit, options: BulkRedriveOptions | None = None) -> BulkRedrivePage
   async def resume_queue(self, queue_name: str, audit: AdminAudit) -> None
   async def set_worker_paused(self, worker_id: str, paused: bool, audit: AdminAudit) -> WorkerPauseResult | None
@@ -979,14 +979,13 @@ class BulkRedrivePage
   results: tuple[RedriveResult, ...]
 
 class DeadLetter
-  def __init__(self, job_id: str, queue: str, type: str, concurrency_key: str | None, priority: int, payload: Json, tags: tuple[str, ...], current_attempt: int, max_attempts: int, retry_policy: RetryPolicy | None, deadline_at: datetime | None, execution_timeout_ms: int | None, error: Json, finished_at: datetime, redrive_count: int) -> None
+  def __init__(self, task_id: str, queue: str, type: str, concurrency_key: str | None, priority: int, payload: Json, tags: tuple[str, ...], current_attempt: int, max_attempts: int, retry_policy: RetryPolicy | None, deadline_at: datetime | None, execution_timeout_ms: int | None, error: Json, finished_at: datetime, redrive_count: int) -> None
   concurrency_key: str | None
   current_attempt: int
   deadline_at: datetime | None
   error: Json
   execution_timeout_ms: int | None
   finished_at: datetime
-  job_id: str
   max_attempts: int
   payload: Json
   priority: int
@@ -994,12 +993,13 @@ class DeadLetter
   redrive_count: int
   retry_policy: RetryPolicy | None
   tags: tuple[str, ...]
+  task_id: str
   type: str
 
 class DeadLetterCursor
-  def __init__(self, finished_at: str, job_id: str) -> None
+  def __init__(self, finished_at: str, task_id: str) -> None
   finished_at: str
-  job_id: str
+  task_id: str
 
 class DeadLetterFilter
   def __init__(self, queue: str | None = None, type: str | None = None, tags: tuple[str, ...] = (), error_name: str | None = None, finished_after: datetime | None = None, finished_before: datetime | None = None) -> None
@@ -1033,20 +1033,20 @@ class DependencyPolicy
   on_success: Literal['release', 'cancel', 'fail']
 
 class ExternalWait
-  def __init__(self, job_id: str, queue: str, job_type: str, name: str, attempt: int, created_at: datetime, deadline_at: datetime) -> None
+  def __init__(self, task_id: str, queue: str, task_type: str, name: str, attempt: int, created_at: datetime, deadline_at: datetime) -> None
   attempt: int
   created_at: datetime
   deadline_at: datetime
-  job_id: str
-  job_type: str
   name: str
   queue: str
+  task_id: str
+  task_type: str
 
 class ExternalWaitCursor
-  def __init__(self, created_at: str, job_id: str, name: str) -> None
+  def __init__(self, created_at: str, task_id: str, name: str) -> None
   created_at: str
-  job_id: str
   name: str
+  task_id: str
 
 class ExternalWaitPage
   def __init__(self, items: tuple[ExternalWait, ...], next_cursor: ExternalWaitCursor | None) -> None
@@ -1054,34 +1054,43 @@ class ExternalWaitPage
   next_cursor: ExternalWaitCursor | None
 
 class HumanWait(ExternalWait)
-  def __init__(self, job_id: str, queue: str, job_type: str, name: str, attempt: int, created_at: datetime, deadline_at: datetime, context: Json) -> None
+  def __init__(self, task_id: str, queue: str, task_type: str, name: str, attempt: int, created_at: datetime, deadline_at: datetime, context: Json) -> None
   attempt: int
   context: Json
   created_at: datetime
   deadline_at: datetime
-  job_id: str
-  job_type: str
   name: str
   queue: str
+  task_id: str
+  task_type: str
 
 class HumanWaitPage
   def __init__(self, items: tuple[HumanWait, ...], next_cursor: ExternalWaitCursor | None) -> None
   items: tuple[HumanWait, ...]
   next_cursor: ExternalWaitCursor | None
 
-class JobListCursor
-  def __init__(self, created_at: str, job_id: str, signature: str) -> None
-  created_at: str
-  job_id: str
-  signature: str
+class RedriveResult
+  def __init__(self, status: Literal['redriven', 'replayed', 'eligible', 'not_found', 'not_failed'], source_task_id: str, target_task_id: str | None, source_state: TaskState | None, target_state: TaskState | None, requested_at: datetime | None) -> None
+  requested_at: datetime | None
+  source_state: TaskState | None
+  source_task_id: str
+  status: Literal['redriven', 'replayed', 'eligible', 'not_found', 'not_failed']
+  target_state: TaskState | None
+  target_task_id: str | None
 
-class JobListItem
-  def __init__(self, id: str, queue: str, type: str, concurrency_key: str | None, priority: int, tags: tuple[str, ...], state: JobState, prerequisite_job_id: str | None, prerequisite_job_ids: tuple[str, ...], dependency_policy: DependencyPolicy | None, blocked_reason: Literal['prerequisite_pending'] | None, parent_job_id: str | None, child_job_ids: tuple[str, ...], current_attempt: int, max_attempts: int, retry_policy: RetryPolicy | None, deadline_at: datetime | None, execution_timeout_ms: int | None, run_at: datetime, cancel_requested_at: datetime | None, cancel_requested_by: str | None, cancel_reason: str | None, created_at: datetime, updated_at: datetime, payload: Json, payload_status: Literal['omitted', 'included', 'too_large'], payload_bytes: int | None) -> None
+class TaskListCursor
+  def __init__(self, created_at: str, task_id: str, signature: str) -> None
+  created_at: str
+  signature: str
+  task_id: str
+
+class TaskListItem
+  def __init__(self, id: str, queue: str, type: str, concurrency_key: str | None, priority: int, tags: tuple[str, ...], state: TaskState, prerequisite_task_id: str | None, prerequisite_task_ids: tuple[str, ...], dependency_policy: DependencyPolicy | None, blocked_reason: Literal['prerequisite_pending'] | None, parent_task_id: str | None, child_task_ids: tuple[str, ...], current_attempt: int, max_attempts: int, retry_policy: RetryPolicy | None, deadline_at: datetime | None, execution_timeout_ms: int | None, run_at: datetime, cancel_requested_at: datetime | None, cancel_requested_by: str | None, cancel_reason: str | None, created_at: datetime, updated_at: datetime, payload: Json, payload_status: Literal['omitted', 'included', 'too_large'], payload_bytes: int | None) -> None
   blocked_reason: Literal['prerequisite_pending'] | None
   cancel_reason: str | None
   cancel_requested_at: datetime | None
   cancel_requested_by: str | None
-  child_job_ids: tuple[str, ...]
+  child_task_ids: tuple[str, ...]
   concurrency_key: str | None
   created_at: datetime
   current_attempt: int
@@ -1090,50 +1099,50 @@ class JobListItem
   execution_timeout_ms: int | None
   id: str
   max_attempts: int
-  parent_job_id: str | None
+  parent_task_id: str | None
   payload: Json
   payload_bytes: int | None
   payload_status: Literal['omitted', 'included', 'too_large']
-  prerequisite_job_id: str | None
-  prerequisite_job_ids: tuple[str, ...]
+  prerequisite_task_id: str | None
+  prerequisite_task_ids: tuple[str, ...]
   priority: int
   queue: str
   retry_policy: RetryPolicy | None
   run_at: datetime
-  state: JobState
+  state: TaskState
   tags: tuple[str, ...]
   type: str
   updated_at: datetime
 
-class JobListPage
-  def __init__(self, items: tuple[JobListItem, ...], next_cursor: JobListCursor | None) -> None
-  items: tuple[JobListItem, ...]
-  next_cursor: JobListCursor | None
+class TaskListPage
+  def __init__(self, items: tuple[TaskListItem, ...], next_cursor: TaskListCursor | None) -> None
+  items: tuple[TaskListItem, ...]
+  next_cursor: TaskListCursor | None
 
-class JobListQuery
-  def __init__(self, queue: str | None = None, type: str | None = None, states: tuple[JobState, ...] = (), created_after: datetime | None = None, created_before: datetime | None = None, limit: int = 100, cursor: JobListCursor | None = None, payload: JobPayloadProjection = <_HAS_DEFAULT_FACTORY_CLASS>) -> None
+class TaskListQuery
+  def __init__(self, queue: str | None = None, type: str | None = None, states: tuple[TaskState, ...] = (), created_after: datetime | None = None, created_before: datetime | None = None, limit: int = 100, cursor: TaskListCursor | None = None, payload: TaskPayloadProjection = <_HAS_DEFAULT_FACTORY_CLASS>) -> None
   created_after: datetime | None = None
   created_before: datetime | None = None
-  cursor: JobListCursor | None = None
+  cursor: TaskListCursor | None = None
   limit: int = 100
-  payload: JobPayloadProjection
+  payload: TaskPayloadProjection
   queue: str | None = None
-  states: tuple[JobState, ...] = ()
+  states: tuple[TaskState, ...] = ()
   type: str | None = None
 
-class JobPayloadProjection
+class TaskPayloadProjection
   def __init__(self, include: bool = False, max_bytes: int = 16384, redact_keys: tuple[str, ...] = ()) -> None
   include: bool = False
   max_bytes: int = 16384
   redact_keys: tuple[str, ...] = ()
 
-class JobSnapshot
-  def __init__(self, id: str, queue: str, type: str, concurrency_key: str | None, priority: int, payload: Json, contract_version: str | None, tags: tuple[str, ...], state: JobState, prerequisite_job_id: str | None, prerequisite_job_ids: tuple[str, ...], dependency_policy: DependencyPolicy | None, blocked_reason: Literal['prerequisite_pending'] | None, parent_job_id: str | None, child_job_ids: tuple[str, ...], current_attempt: int, max_attempts: int, retry_policy: RetryPolicy | None, deadline_at: datetime | None, execution_timeout_ms: int | None, fence_token: int, run_at: datetime, result: Json, error: Json, cancel_requested_at: datetime | None, cancel_requested_by: str | None, cancel_reason: str | None, progress: JobProgress | None, created_at: datetime, updated_at: datetime) -> None
+class TaskSnapshot
+  def __init__(self, id: str, queue: str, type: str, concurrency_key: str | None, priority: int, payload: Json, contract_version: str | None, tags: tuple[str, ...], state: TaskState, prerequisite_task_id: str | None, prerequisite_task_ids: tuple[str, ...], dependency_policy: DependencyPolicy | None, blocked_reason: Literal['prerequisite_pending'] | None, parent_task_id: str | None, child_task_ids: tuple[str, ...], current_attempt: int, max_attempts: int, retry_policy: RetryPolicy | None, deadline_at: datetime | None, execution_timeout_ms: int | None, fence_token: int, run_at: datetime, result: Json, error: Json, cancel_requested_at: datetime | None, cancel_requested_by: str | None, cancel_reason: str | None, progress: TaskProgress | None, created_at: datetime, updated_at: datetime) -> None
   blocked_reason: Literal['prerequisite_pending'] | None
   cancel_reason: str | None
   cancel_requested_at: datetime | None
   cancel_requested_by: str | None
-  child_job_ids: tuple[str, ...]
+  child_task_ids: tuple[str, ...]
   concurrency_key: str | None
   contract_version: str | None
   created_at: datetime
@@ -1145,22 +1154,22 @@ class JobSnapshot
   fence_token: int
   id: str
   max_attempts: int
-  parent_job_id: str | None
+  parent_task_id: str | None
   payload: Json
-  prerequisite_job_id: str | None
-  prerequisite_job_ids: tuple[str, ...]
+  prerequisite_task_id: str | None
+  prerequisite_task_ids: tuple[str, ...]
   priority: int
-  progress: JobProgress | None
+  progress: TaskProgress | None
   queue: str
   result: Json
   retry_policy: RetryPolicy | None
   run_at: datetime
-  state: JobState
+  state: TaskState
   tags: tuple[str, ...]
   type: str
   updated_at: datetime
 
-class JobTimelineAttempt
+class TaskTimelineAttempt
   def __init__(self, kind: Literal['attempt'], record_id: str, priority: int, attempt: int, occurred_at: datetime, fence_token: int, worker_id: str, outcome: str, started_at: datetime, claimed_at: datetime, finished_at: datetime, error: Json) -> None
   attempt: int
   claimed_at: datetime
@@ -1175,16 +1184,16 @@ class JobTimelineAttempt
   started_at: datetime
   worker_id: str
 
-class JobTimelineCursor
-  def __init__(self, job_id: str, occurred_at: str, kind: Literal['event', 'attempt'], record_id: str) -> None
-  job_id: str
+class TaskTimelineCursor
+  def __init__(self, task_id: str, occurred_at: str, kind: Literal['event', 'attempt'], record_id: str) -> None
   kind: Literal['event', 'attempt']
   occurred_at: str
   record_id: str
+  task_id: str
 
-type JobTimelineEntry = JobTimelineEvent | JobTimelineAttempt
+type TaskTimelineEntry = TaskTimelineEvent | TaskTimelineAttempt
 
-class JobTimelineEvent
+class TaskTimelineEvent
   def __init__(self, kind: Literal['event'], record_id: str, priority: int, attempt: int | None, occurred_at: datetime, event_type: str, details: Json) -> None
   attempt: int | None
   details: Json
@@ -1194,19 +1203,10 @@ class JobTimelineEvent
   priority: int
   record_id: str
 
-class JobTimelinePage
-  def __init__(self, items: tuple[JobTimelineEntry, ...], next_cursor: JobTimelineCursor | None) -> None
-  items: tuple[JobTimelineEntry, ...]
-  next_cursor: JobTimelineCursor | None
-
-class RedriveResult
-  def __init__(self, status: Literal['redriven', 'replayed', 'eligible', 'not_found', 'not_failed'], source_job_id: str, target_job_id: str | None, source_state: JobState | None, target_state: JobState | None, requested_at: datetime | None) -> None
-  requested_at: datetime | None
-  source_job_id: str
-  source_state: JobState | None
-  status: Literal['redriven', 'replayed', 'eligible', 'not_found', 'not_failed']
-  target_job_id: str | None
-  target_state: JobState | None
+class TaskTimelinePage
+  def __init__(self, items: tuple[TaskTimelineEntry, ...], next_cursor: TaskTimelineCursor | None) -> None
+  items: tuple[TaskTimelineEntry, ...]
+  next_cursor: TaskTimelineCursor | None
 
 class WorkerPauseResult
   def __init__(self, worker_id: str, paused: bool, paused_by: str | None, reason: str | None, paused_at: datetime | None, last_heartbeat_at: datetime) -> None
@@ -1262,8 +1262,8 @@ class AsyncWorker
 
 class AsyncQueue
   def __init__(self, executor: _AsyncPsycopgExecutor | _AsyncpgExecutor, default_queue: str = 'default') -> None
-  async def cancel(self, job_id: str, *, requested_by: str | None = None, reason: str | None = None) -> CancelResult
-  async def complete_human_wait(self, job_id: str, name: str, result: Json, *, idempotency_key: str, requested_by: str) -> HumanWaitCompletionResult
+  async def cancel(self, task_id: str, *, requested_by: str | None = None, reason: str | None = None) -> CancelResult
+  async def complete_human_wait(self, task_id: str, name: str, result: Json, *, idempotency_key: str, requested_by: str) -> HumanWaitCompletionResult
   async def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str
   async def enqueue_many(self, requests: Sequence[EnqueueRequest]) -> list[str]
   async def enqueue_many_with_results(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
@@ -1273,16 +1273,16 @@ class AsyncQueue
   async def health(self) -> QueueHealth
   async def list_concurrency_policies(self, queue_names: Sequence[str] = ()) -> list[ConcurrencyPolicy]
   async def list_rate_limit_policies(self, queue_names: Sequence[str] = ()) -> list[RateLimitPolicy]
-  async def send_signal(self, job_id: str, name: str, payload: Json, *, idempotency_key: str, requested_by: str) -> SignalDeliveryResult
+  async def send_signal(self, task_id: str, name: str, payload: Json, *, idempotency_key: str, requested_by: str) -> SignalDeliveryResult
   async def sync_concurrency_policies(self, namespace: str, definitions: Sequence[ConcurrencyPolicyDefinition], *, prune: bool = True) -> list[ConcurrencyPolicy]
-  async def sync_contracts(self, contracts: Mapping[str, JobTypeContracts]) -> None
+  async def sync_contracts(self, contracts: Mapping[str, TaskTypeContracts]) -> None
   async def sync_rate_limit_policies(self, namespace: str, definitions: Sequence[RateLimitPolicyDefinition], *, prune: bool = True) -> list[RateLimitPolicy]
   async def sync_schedules(self, namespace: str, definitions: Sequence[ScheduleDefinition], *, prune: bool = True) -> None
 
 class Queue
   def __init__(self, connection: _SyncConnection, default_queue: str = 'default') -> None
-  def cancel(self, job_id: str, *, requested_by: str | None = None, reason: str | None = None) -> CancelResult
-  def complete_human_wait(self, job_id: str, name: str, result: Json, *, idempotency_key: str, requested_by: str) -> HumanWaitCompletionResult
+  def cancel(self, task_id: str, *, requested_by: str | None = None, reason: str | None = None) -> CancelResult
+  def complete_human_wait(self, task_id: str, name: str, result: Json, *, idempotency_key: str, requested_by: str) -> HumanWaitCompletionResult
   def enqueue(self, type: str, payload: Json, options: EnqueueOptions | None = None) -> str
   def enqueue_many(self, requests: Sequence[EnqueueRequest]) -> list[str]
   def enqueue_many_with_results(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]
@@ -1290,9 +1290,9 @@ class Queue
   def health(self) -> QueueHealth
   def list_concurrency_policies(self, queue_names: Sequence[str] = ()) -> list[ConcurrencyPolicy]
   def list_rate_limit_policies(self, queue_names: Sequence[str] = ()) -> list[RateLimitPolicy]
-  def send_signal(self, job_id: str, name: str, payload: Json, *, idempotency_key: str, requested_by: str) -> SignalDeliveryResult
+  def send_signal(self, task_id: str, name: str, payload: Json, *, idempotency_key: str, requested_by: str) -> SignalDeliveryResult
   def sync_concurrency_policies(self, namespace: str, definitions: Sequence[ConcurrencyPolicyDefinition], *, prune: bool = True) -> list[ConcurrencyPolicy]
-  def sync_contracts(self, contracts: Mapping[str, JobTypeContracts]) -> None
+  def sync_contracts(self, contracts: Mapping[str, TaskTypeContracts]) -> None
   def sync_rate_limit_policies(self, namespace: str, definitions: Sequence[RateLimitPolicyDefinition], *, prune: bool = True) -> list[RateLimitPolicy]
   def sync_schedules(self, namespace: str, definitions: Sequence[ScheduleDefinition], *, prune: bool = True) -> None
 
@@ -1489,7 +1489,6 @@ class DashboardCancelTaskResult(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobId: ForwardRef('Required[str]', module='dashboard_v1')
   def keys(...)
   def pop(...)
   def popitem(self)
@@ -1499,6 +1498,7 @@ class DashboardCancelTaskResult(dict)
   def setdefault(self, key, default=None)
   state: ForwardRef("Required[Literal['active'] | Literal['blocked'] | Literal['canceled'] | Literal['failed'] | Literal['ready'] | Literal['scheduled'] | Literal['succeeded'] | None]", module='dashboard_v1')
   status: ForwardRef('Required[DashboardCancelStatus]', module='dashboard_v1')
+  taskId: ForwardRef('Required[str]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -1530,7 +1530,6 @@ class DashboardCompleteHumanWaitResult(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobId: ForwardRef('Required[str]', module='dashboard_v1')
   def keys(...)
   name: ForwardRef('Required[str]', module='dashboard_v1')
   def pop(...)
@@ -1538,6 +1537,7 @@ class DashboardCompleteHumanWaitResult(dict)
   result: ForwardRef('Required[DashboardJSON]', module='dashboard_v1')
   def setdefault(self, key, default=None)
   status: ForwardRef('Required[DashboardHumanWaitCompletionStatus]', module='dashboard_v1')
+  taskId: ForwardRef('Required[str]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -1596,8 +1596,8 @@ class DashboardCronPageMaintenance(dict)
   policy: ForwardRef('Required[DashboardCronPageMaintenancePolicy]', module='dashboard_v1')
   def pop(...)
   def popitem(self)
+  routines: ForwardRef('Required[list[DashboardCronPageMaintenanceRoutinesItem]]', module='dashboard_v1')
   def setdefault(self, key, default=None)
-  tasks: ForwardRef('Required[list[DashboardCronPageMaintenanceTasksItem]]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -1621,7 +1621,7 @@ class DashboardCronPageMaintenancePolicy(dict)
   updatedAt: ForwardRef('Required[str]', module='dashboard_v1')
   def values(...)
 
-class DashboardCronPageMaintenanceTasksItem(dict)
+class DashboardCronPageMaintenanceRoutinesItem(dict)
   def __init__(self, *args, **kwargs)
   def __iter__(self)
   def clear(...)
@@ -1636,8 +1636,8 @@ class DashboardCronPageMaintenanceTasksItem(dict)
   lastStartedAt: ForwardRef('Required[str | None]', module='dashboard_v1')
   def pop(...)
   def popitem(self)
+  routine: ForwardRef("Required[Literal['history_partitions', 'history_retention', 'terminal_storage', 'tick']]", module='dashboard_v1')
   def setdefault(self, key, default=None)
-  task: ForwardRef("Required[Literal['history_partitions', 'history_retention', 'terminal_storage', 'tick']]", module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -1707,12 +1707,12 @@ class DashboardEnqueueTestResult(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobId: ForwardRef('Required[str]', module='dashboard_v1')
   def keys(...)
   outcome: ForwardRef("NotRequired[Literal['accepted', 'replayed']]", module='dashboard_v1')
   def pop(...)
   def popitem(self)
   def setdefault(self, key, default=None)
+  taskId: ForwardRef('Required[str]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -1733,8 +1733,6 @@ class DashboardEventDetail(dict)
   def get(self, key, default=None)
   id: ForwardRef('Required[str]', module='dashboard_v1')
   def items(...)
-  jobId: ForwardRef('Required[str]', module='dashboard_v1')
-  jobType: ForwardRef('Required[str | None]', module='dashboard_v1')
   def keys(...)
   kind: ForwardRef('Required[DashboardEventKind]', module='dashboard_v1')
   occurredAt: ForwardRef('Required[str]', module='dashboard_v1')
@@ -1744,6 +1742,8 @@ class DashboardEventDetail(dict)
   recordId: ForwardRef('Required[str]', module='dashboard_v1')
   def setdefault(self, key, default=None)
   startedAt: ForwardRef('Required[str | None]', module='dashboard_v1')
+  taskId: ForwardRef('Required[str]', module='dashboard_v1')
+  taskType: ForwardRef('Required[str | None]', module='dashboard_v1')
   type: ForwardRef('Required[str]', module='dashboard_v1')
   def update(...)
   def values(...)
@@ -1765,8 +1765,6 @@ class DashboardEventRow(dict)
   def get(self, key, default=None)
   id: ForwardRef('Required[str]', module='dashboard_v1')
   def items(...)
-  jobId: ForwardRef('Required[str]', module='dashboard_v1')
-  jobType: ForwardRef('Required[str | None]', module='dashboard_v1')
   def keys(...)
   kind: ForwardRef('Required[DashboardEventKind]', module='dashboard_v1')
   occurredAt: ForwardRef('Required[str]', module='dashboard_v1')
@@ -1775,6 +1773,8 @@ class DashboardEventRow(dict)
   queue: ForwardRef('Required[str | None]', module='dashboard_v1')
   recordId: ForwardRef('Required[str]', module='dashboard_v1')
   def setdefault(self, key, default=None)
+  taskId: ForwardRef('Required[str]', module='dashboard_v1')
+  taskType: ForwardRef('Required[str | None]', module='dashboard_v1')
   type: ForwardRef('Required[str]', module='dashboard_v1')
   def update(...)
   def values(...)
@@ -1812,11 +1812,11 @@ class DashboardEventsPageRetention(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobEventDays: ForwardRef('Required[float | None]', module='dashboard_v1')
   def keys(...)
   def pop(...)
   def popitem(self)
   def setdefault(self, key, default=None)
+  taskEventDays: ForwardRef('Required[float | None]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -1878,14 +1878,14 @@ class DashboardHumanWaitRow(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobId: ForwardRef('Required[str]', module='dashboard_v1')
-  jobType: ForwardRef('Required[str]', module='dashboard_v1')
   def keys(...)
   name: ForwardRef('Required[str]', module='dashboard_v1')
   def pop(...)
   def popitem(self)
   queue: ForwardRef('Required[str]', module='dashboard_v1')
   def setdefault(self, key, default=None)
+  taskId: ForwardRef('Required[str]', module='dashboard_v1')
+  taskType: ForwardRef('Required[str]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -1911,618 +1911,6 @@ class DashboardInputValidationError(ValueError)
   def __init__(self, *args, **kwargs)
 
 type DashboardJSON = list[DashboardJSON] | bool | float | dict[str, DashboardJSON] | str | None
-
-class DashboardJobDetail(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  attempts: ForwardRef('Required[list[DashboardJobDetailAttemptsItem]]', module='dashboard_v1')
-  batchExecutions: ForwardRef('Required[list[DashboardJobDetailBatchExecutionsItem]]', module='dashboard_v1')
-  canCompleteHumanWait: ForwardRef('Required[bool]', module='dashboard_v1')
-  canSignal: ForwardRef('Required[bool]', module='dashboard_v1')
-  checkpoints: ForwardRef('Required[list[DashboardJobDetailCheckpointsItem]]', module='dashboard_v1')
-  childLineage: ForwardRef('Required[DashboardJobDetailChildLineage]', module='dashboard_v1')
-  def clear(...)
-  concurrencyPolicy: ForwardRef('Required[DashboardConcurrencyPolicySummary | None]', module='dashboard_v1')
-  def copy(...)
-  current: ForwardRef('Required[DashboardJobDetailCurrent]', module='dashboard_v1')
-  dependencyLineage: ForwardRef('Required[DashboardJobDetailDependencyLineage]', module='dashboard_v1')
-  durability: ForwardRef('Required[DashboardDurabilityPlan | None]', module='dashboard_v1')
-  events: ForwardRef('Required[list[DashboardJobDetailEventsItem]]', module='dashboard_v1')
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  humanWait: ForwardRef('Required[DashboardHumanWaitSummary | None]', module='dashboard_v1')
-  identity: ForwardRef('Required[DashboardJobDetailIdentity]', module='dashboard_v1')
-  def items(...)
-  def keys(...)
-  payload: ForwardRef('Required[object]', module='dashboard_v1')
-  def pop(...)
-  def popitem(self)
-  progress: ForwardRef('Required[DashboardJobDetailProgress | None]', module='dashboard_v1')
-  redriveLineage: ForwardRef('Required[DashboardJobDetailRedriveLineage]', module='dashboard_v1')
-  def setdefault(self, key, default=None)
-  signalWait: ForwardRef('Required[DashboardSignalWaitSummary | None]', module='dashboard_v1')
-  tags: ForwardRef('Required[list[str]]', module='dashboard_v1')
-  def update(...)
-  def values(...)
-  waits: ForwardRef('Required[list[DashboardJobDetailWaitsItem]]', module='dashboard_v1')
-
-class DashboardJobDetailAttemptsItem(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  attempt: ForwardRef('Required[float]', module='dashboard_v1')
-  claimedAt: ForwardRef('Required[str]', module='dashboard_v1')
-  def clear(...)
-  def copy(...)
-  durationMs: ForwardRef('Required[float]', module='dashboard_v1')
-  elapsedMs: ForwardRef('Required[float]', module='dashboard_v1')
-  error: ForwardRef('Required[object]', module='dashboard_v1')
-  executionMs: ForwardRef('Required[float]', module='dashboard_v1')
-  finishedAt: ForwardRef('Required[str]', module='dashboard_v1')
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  def keys(...)
-  outcome: ForwardRef('Required[str]', module='dashboard_v1')
-  def pop(...)
-  def popitem(self)
-  def setdefault(self, key, default=None)
-  startedAt: ForwardRef('Required[str]', module='dashboard_v1')
-  def update(...)
-  def values(...)
-  workerId: ForwardRef('Required[str]', module='dashboard_v1')
-
-class DashboardJobDetailBatchExecutionsItem(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  attempt: ForwardRef('Required[float]', module='dashboard_v1')
-  batchWideFailure: ForwardRef('Required[bool]', module='dashboard_v1')
-  def clear(...)
-  def copy(...)
-  dispatchedAt: ForwardRef('Required[str]', module='dashboard_v1')
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  id: ForwardRef('Required[str]', module='dashboard_v1')
-  def items(...)
-  def keys(...)
-  members: ForwardRef('Required[list[DashboardJobDetailBatchExecutionsItemMembersItem]]', module='dashboard_v1')
-  def pop(...)
-  def popitem(self)
-  def setdefault(self, key, default=None)
-  def update(...)
-  def values(...)
-
-class DashboardJobDetailBatchExecutionsItemMembersItem(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  attempt: ForwardRef('Required[float]', module='dashboard_v1')
-  def clear(...)
-  def copy(...)
-  error: ForwardRef('Required[object]', module='dashboard_v1')
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  id: ForwardRef('Required[str]', module='dashboard_v1')
-  def items(...)
-  def keys(...)
-  outcome: ForwardRef('Required[str | None]', module='dashboard_v1')
-  def pop(...)
-  def popitem(self)
-  def setdefault(self, key, default=None)
-  type: ForwardRef('Required[str]', module='dashboard_v1')
-  def update(...)
-  def values(...)
-
-class DashboardJobDetailCheckpointsItem(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  attempt: ForwardRef('Required[float]', module='dashboard_v1')
-  def clear(...)
-  def copy(...)
-  createdAt: ForwardRef('Required[str]', module='dashboard_v1')
-  fenceToken: ForwardRef('Required[str]', module='dashboard_v1')
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  def keys(...)
-  name: ForwardRef('Required[str]', module='dashboard_v1')
-  def pop(...)
-  def popitem(self)
-  def setdefault(self, key, default=None)
-  def update(...)
-  value: ForwardRef('Required[object]', module='dashboard_v1')
-  def values(...)
-  workerId: ForwardRef('Required[str]', module='dashboard_v1')
-
-class DashboardJobDetailChildLineage(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  def clear(...)
-  def copy(...)
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  def keys(...)
-  def pop(...)
-  def popitem(self)
-  records: ForwardRef('Required[list[DashboardJobDetailChildLineageRecordsItem]]', module='dashboard_v1')
-  def setdefault(self, key, default=None)
-  truncated: ForwardRef('Required[bool]', module='dashboard_v1')
-  def update(...)
-  def values(...)
-
-class DashboardJobDetailChildLineageRecordsItem(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  childJobId: ForwardRef('Required[str]', module='dashboard_v1')
-  def clear(...)
-  def copy(...)
-  createdAt: ForwardRef('Required[str]', module='dashboard_v1')
-  error: ForwardRef('Required[object]', module='dashboard_v1')
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  joinedAt: ForwardRef('Required[str | None]', module='dashboard_v1')
-  def keys(...)
-  name: ForwardRef('Required[str]', module='dashboard_v1')
-  outcomeState: ForwardRef("Required[Literal['canceled'] | Literal['failed'] | Literal['succeeded'] | None]", module='dashboard_v1')
-  parentJobId: ForwardRef('Required[str]', module='dashboard_v1')
-  def pop(...)
-  def popitem(self)
-  def setdefault(self, key, default=None)
-  type: ForwardRef('Required[str]', module='dashboard_v1')
-  def update(...)
-  def values(...)
-
-class DashboardJobDetailCurrent(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  def clear(...)
-  def copy(...)
-  error: ForwardRef('Required[object]', module='dashboard_v1')
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  def keys(...)
-  outcome: ForwardRef('Required[DashboardJobDetailCurrentOutcome | None]', module='dashboard_v1')
-  def pop(...)
-  def popitem(self)
-  result: ForwardRef('Required[object]', module='dashboard_v1')
-  runtime: ForwardRef('Required[DashboardJobDetailCurrentRuntime | None]', module='dashboard_v1')
-  def setdefault(self, key, default=None)
-  def update(...)
-  def values(...)
-
-class DashboardJobDetailCurrentOutcome(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  attempt: ForwardRef('Required[float]', module='dashboard_v1')
-  def clear(...)
-  def copy(...)
-  error: ForwardRef('Required[object]', module='dashboard_v1')
-  finishedAt: ForwardRef('Required[str]', module='dashboard_v1')
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  def keys(...)
-  def pop(...)
-  def popitem(self)
-  result: ForwardRef('Required[object]', module='dashboard_v1')
-  def setdefault(self, key, default=None)
-  state: ForwardRef('Required[str]', module='dashboard_v1')
-  def update(...)
-  def values(...)
-
-class DashboardJobDetailCurrentRuntime(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  acquiredAt: ForwardRef('Required[str | None]', module='dashboard_v1')
-  attempt: ForwardRef('Required[float]', module='dashboard_v1')
-  attemptStartedAt: ForwardRef('Required[str | None]', module='dashboard_v1')
-  attemptTimeoutAt: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
-  cancellation: ForwardRef('Required[DashboardCancellationRequest | None]', module='dashboard_v1')
-  def clear(...)
-  def copy(...)
-  error: ForwardRef('Required[object]', module='dashboard_v1')
-  expiresAt: ForwardRef('Required[str | None]', module='dashboard_v1')
-  fenceToken: ForwardRef('Required[str]', module='dashboard_v1')
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  heartbeatAt: ForwardRef('Required[str | None]', module='dashboard_v1')
-  def items(...)
-  def keys(...)
-  def pop(...)
-  def popitem(self)
-  readyAt: ForwardRef('Required[str | None]', module='dashboard_v1')
-  runAt: ForwardRef('Required[str]', module='dashboard_v1')
-  def setdefault(self, key, default=None)
-  state: ForwardRef('Required[str]', module='dashboard_v1')
-  def update(...)
-  def values(...)
-  waitName: ForwardRef('Required[str | None]', module='dashboard_v1')
-  workerId: ForwardRef('Required[str | None]', module='dashboard_v1')
-
-class DashboardJobDetailDependencyLineage(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  def clear(...)
-  def copy(...)
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  def keys(...)
-  def pop(...)
-  def popitem(self)
-  records: ForwardRef('Required[list[DashboardJobDetailDependencyLineageRecordsItem]]', module='dashboard_v1')
-  def setdefault(self, key, default=None)
-  truncated: ForwardRef('Required[bool]', module='dashboard_v1')
-  def update(...)
-  def values(...)
-
-class DashboardJobDetailDependencyLineageRecordsItem(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  def clear(...)
-  def copy(...)
-  createdAt: ForwardRef('Required[str]', module='dashboard_v1')
-  dependentJobId: ForwardRef('Required[str]', module='dashboard_v1')
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  def keys(...)
-  onCancellation: ForwardRef("Required[Literal['cancel', 'fail', 'release']]", module='dashboard_v1')
-  onFailure: ForwardRef("Required[Literal['cancel', 'fail', 'release']]", module='dashboard_v1')
-  onSuccess: ForwardRef("Required[Literal['cancel', 'fail', 'release']]", module='dashboard_v1')
-  def pop(...)
-  def popitem(self)
-  prerequisiteJobId: ForwardRef('Required[str]', module='dashboard_v1')
-  releasedAt: ForwardRef('Required[str | None]', module='dashboard_v1')
-  resolution: ForwardRef("Required[Literal['cancel'] | Literal['fail'] | Literal['release'] | None]", module='dashboard_v1')
-  def setdefault(self, key, default=None)
-  def update(...)
-  def values(...)
-
-class DashboardJobDetailEventsItem(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  attempt: ForwardRef('Required[float | None]', module='dashboard_v1')
-  def clear(...)
-  def copy(...)
-  details: ForwardRef('Required[object]', module='dashboard_v1')
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  id: ForwardRef('Required[str]', module='dashboard_v1')
-  def items(...)
-  def keys(...)
-  occurredAt: ForwardRef('Required[str]', module='dashboard_v1')
-  def pop(...)
-  def popitem(self)
-  def setdefault(self, key, default=None)
-  type: ForwardRef('Required[str]', module='dashboard_v1')
-  def update(...)
-  def values(...)
-
-class DashboardJobDetailIdentity(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  blockedReason: ForwardRef("Required[Literal['prerequisite_pending'] | None]", module='dashboard_v1')
-  def clear(...)
-  concurrencyKey: ForwardRef('Required[str | None]', module='dashboard_v1')
-  def copy(...)
-  createdAt: ForwardRef('Required[str]', module='dashboard_v1')
-  deadlineAt: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
-  dependencyPolicy: ForwardRef('Required[DashboardJobDetailIdentityDependencyPolicy | None]', module='dashboard_v1')
-  dependencyReleasedAt: ForwardRef('Required[str | None]', module='dashboard_v1')
-  executionTimeoutMs: ForwardRef('NotRequired[float | None]', module='dashboard_v1')
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  id: ForwardRef('Required[str]', module='dashboard_v1')
-  def items(...)
-  def keys(...)
-  maxAttempts: ForwardRef('Required[float]', module='dashboard_v1')
-  def pop(...)
-  def popitem(self)
-  prerequisiteJobId: ForwardRef('Required[str | None]', module='dashboard_v1')
-  prerequisiteJobIds: ForwardRef('Required[list[str]]', module='dashboard_v1')
-  priority: ForwardRef('Required[float]', module='dashboard_v1')
-  queue: ForwardRef('Required[str]', module='dashboard_v1')
-  retryPolicy: ForwardRef('Required[DashboardJobDetailIdentityRetryPolicyVariant2 | DashboardJobDetailIdentityRetryPolicyVariant3 | DashboardJobDetailIdentityRetryPolicyVariant4 | None]', module='dashboard_v1')
-  def setdefault(self, key, default=None)
-  state: ForwardRef('Required[str]', module='dashboard_v1')
-  type: ForwardRef('Required[str]', module='dashboard_v1')
-  def update(...)
-  def values(...)
-
-class DashboardJobDetailIdentityDependencyPolicy(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  def clear(...)
-  def copy(...)
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  def keys(...)
-  onCancellation: ForwardRef("Required[Literal['cancel', 'fail', 'release']]", module='dashboard_v1')
-  onFailure: ForwardRef("Required[Literal['cancel', 'fail', 'release']]", module='dashboard_v1')
-  onSuccess: ForwardRef("Required[Literal['cancel', 'fail', 'release']]", module='dashboard_v1')
-  def pop(...)
-  def popitem(self)
-  def setdefault(self, key, default=None)
-  def update(...)
-  def values(...)
-
-class DashboardJobDetailIdentityRetryPolicyVariant2(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  baseDelayMs: ForwardRef('Required[float]', module='dashboard_v1')
-  def clear(...)
-  def copy(...)
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  def keys(...)
-  maxDelayMs: ForwardRef('Required[float]', module='dashboard_v1')
-  def pop(...)
-  def popitem(self)
-  def setdefault(self, key, default=None)
-  type: ForwardRef("Required[Literal['decorrelated-jitter']]", module='dashboard_v1')
-  def update(...)
-  def values(...)
-
-class DashboardJobDetailIdentityRetryPolicyVariant3(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  def clear(...)
-  def copy(...)
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  initialDelayMs: ForwardRef('Required[float]', module='dashboard_v1')
-  def items(...)
-  def keys(...)
-  maxDelayMs: ForwardRef('Required[float]', module='dashboard_v1')
-  multiplier: ForwardRef('Required[float]', module='dashboard_v1')
-  def pop(...)
-  def popitem(self)
-  def setdefault(self, key, default=None)
-  type: ForwardRef("Required[Literal['exponential']]", module='dashboard_v1')
-  def update(...)
-  def values(...)
-
-class DashboardJobDetailIdentityRetryPolicyVariant4(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  def clear(...)
-  def copy(...)
-  delayMs: ForwardRef('Required[float]', module='dashboard_v1')
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  def keys(...)
-  def pop(...)
-  def popitem(self)
-  def setdefault(self, key, default=None)
-  type: ForwardRef("Required[Literal['fixed']]", module='dashboard_v1')
-  def update(...)
-  def values(...)
-
-class DashboardJobDetailProgress(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  attempt: ForwardRef('Required[float]', module='dashboard_v1')
-  def clear(...)
-  def copy(...)
-  createdAt: ForwardRef('Required[str]', module='dashboard_v1')
-  fenceToken: ForwardRef('Required[str]', module='dashboard_v1')
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  def keys(...)
-  def pop(...)
-  def popitem(self)
-  revision: ForwardRef('Required[str]', module='dashboard_v1')
-  def setdefault(self, key, default=None)
-  def update(...)
-  updatedAt: ForwardRef('Required[str]', module='dashboard_v1')
-  value: ForwardRef('Required[object]', module='dashboard_v1')
-  def values(...)
-  workerId: ForwardRef('Required[str]', module='dashboard_v1')
-
-class DashboardJobDetailRedriveLineage(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  def clear(...)
-  def copy(...)
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  def keys(...)
-  def pop(...)
-  def popitem(self)
-  records: ForwardRef('Required[list[DashboardJobDetailRedriveLineageRecordsItem]]', module='dashboard_v1')
-  def setdefault(self, key, default=None)
-  truncated: ForwardRef('Required[bool]', module='dashboard_v1')
-  def update(...)
-  def values(...)
-
-class DashboardJobDetailRedriveLineageRecordsItem(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  def clear(...)
-  def copy(...)
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  def keys(...)
-  def pop(...)
-  def popitem(self)
-  reason: ForwardRef('Required[str]', module='dashboard_v1')
-  requestIdDigest: ForwardRef('Required[str]', module='dashboard_v1')
-  requestIdLength: ForwardRef('Required[float]', module='dashboard_v1')
-  requestIdPreview: ForwardRef('Required[str]', module='dashboard_v1')
-  requestedAt: ForwardRef('Required[str]', module='dashboard_v1')
-  requestedBy: ForwardRef('Required[str]', module='dashboard_v1')
-  def setdefault(self, key, default=None)
-  sourceJobId: ForwardRef('Required[str]', module='dashboard_v1')
-  sourceState: ForwardRef("Required[Literal['failed']]", module='dashboard_v1')
-  targetInitialState: ForwardRef("Required[Literal['ready']]", module='dashboard_v1')
-  targetJobId: ForwardRef('Required[str]', module='dashboard_v1')
-  def update(...)
-  def values(...)
-
-class DashboardJobDetailWaitsItem(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  attempt: ForwardRef('Required[float]', module='dashboard_v1')
-  def clear(...)
-  def copy(...)
-  createdAt: ForwardRef('Required[str]', module='dashboard_v1')
-  durationMs: ForwardRef('Required[float | None]', module='dashboard_v1')
-  fenceToken: ForwardRef('Required[str]', module='dashboard_v1')
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  def keys(...)
-  mode: ForwardRef("Required[Literal['absolute', 'relative']]", module='dashboard_v1')
-  name: ForwardRef('Required[str]', module='dashboard_v1')
-  def pop(...)
-  def popitem(self)
-  requestedWakeAt: ForwardRef('Required[str | None]', module='dashboard_v1')
-  def setdefault(self, key, default=None)
-  def update(...)
-  def values(...)
-  wakeAt: ForwardRef('Required[str]', module='dashboard_v1')
-  workerId: ForwardRef('Required[str]', module='dashboard_v1')
-
-class DashboardJobRow(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  attempt: ForwardRef('Required[float]', module='dashboard_v1')
-  blockedReason: ForwardRef("Required[Literal['prerequisite_pending'] | None]", module='dashboard_v1')
-  cancellation: ForwardRef('Required[DashboardCancellationRequest | None]', module='dashboard_v1')
-  def clear(...)
-  def copy(...)
-  createdAt: ForwardRef('Required[str]', module='dashboard_v1')
-  deadlineAt: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
-  durability: ForwardRef('Required[DashboardJobRowDurability | None]', module='dashboard_v1')
-  enqueueMode: ForwardRef("NotRequired[Literal['debounce'] | Literal['idempotency'] | Literal['throttle'] | None]", module='dashboard_v1')
-  errorMessage: ForwardRef('Required[str | None]', module='dashboard_v1')
-  executionTimeoutMs: ForwardRef('NotRequired[float | None]', module='dashboard_v1')
-  finishedAt: ForwardRef('Required[str | None]', module='dashboard_v1')
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  humanWait: ForwardRef('Required[DashboardHumanWaitSummary | None]', module='dashboard_v1')
-  id: ForwardRef('Required[str]', module='dashboard_v1')
-  def items(...)
-  keyed: ForwardRef('Required[bool]', module='dashboard_v1')
-  def keys(...)
-  lastWorkerId: ForwardRef('Required[str | None]', module='dashboard_v1')
-  maxAttempts: ForwardRef('Required[float]', module='dashboard_v1')
-  def pop(...)
-  def popitem(self)
-  prerequisiteJobIds: ForwardRef('Required[list[str]]', module='dashboard_v1')
-  priority: ForwardRef('Required[float]', module='dashboard_v1')
-  queue: ForwardRef('Required[str]', module='dashboard_v1')
-  retryPolicy: ForwardRef('Required[DashboardJobRowRetryPolicyVariant2 | DashboardJobRowRetryPolicyVariant3 | DashboardJobRowRetryPolicyVariant4 | None]', module='dashboard_v1')
-  runAt: ForwardRef('Required[str | None]', module='dashboard_v1')
-  def setdefault(self, key, default=None)
-  signalWait: ForwardRef('Required[DashboardSignalWaitSummary | None]', module='dashboard_v1')
-  state: ForwardRef('Required[str]', module='dashboard_v1')
-  tags: ForwardRef('Required[list[str]]', module='dashboard_v1')
-  type: ForwardRef('Required[str]', module='dashboard_v1')
-  def update(...)
-  updatedAt: ForwardRef('Required[str]', module='dashboard_v1')
-  def values(...)
-  wait: ForwardRef('Required[DashboardJobRowWait | None]', module='dashboard_v1')
-  waitName: ForwardRef('Required[str | None]', module='dashboard_v1')
-  wakeAt: ForwardRef('Required[str | None]', module='dashboard_v1')
-  workerId: ForwardRef('Required[str | None]', module='dashboard_v1')
-
-class DashboardJobRowDurability(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  def clear(...)
-  completedSteps: ForwardRef('Required[float]', module='dashboard_v1')
-  def copy(...)
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  def keys(...)
-  def pop(...)
-  def popitem(self)
-  def setdefault(self, key, default=None)
-  totalSteps: ForwardRef('Required[float]', module='dashboard_v1')
-  def update(...)
-  def values(...)
-
-class DashboardJobRowRetryPolicyVariant2(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  baseDelayMs: ForwardRef('Required[float]', module='dashboard_v1')
-  def clear(...)
-  def copy(...)
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  def keys(...)
-  maxDelayMs: ForwardRef('Required[float]', module='dashboard_v1')
-  def pop(...)
-  def popitem(self)
-  def setdefault(self, key, default=None)
-  type: ForwardRef("Required[Literal['decorrelated-jitter']]", module='dashboard_v1')
-  def update(...)
-  def values(...)
-
-class DashboardJobRowRetryPolicyVariant3(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  def clear(...)
-  def copy(...)
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  initialDelayMs: ForwardRef('Required[float]', module='dashboard_v1')
-  def items(...)
-  def keys(...)
-  maxDelayMs: ForwardRef('Required[float]', module='dashboard_v1')
-  multiplier: ForwardRef('Required[float]', module='dashboard_v1')
-  def pop(...)
-  def popitem(self)
-  def setdefault(self, key, default=None)
-  type: ForwardRef("Required[Literal['exponential']]", module='dashboard_v1')
-  def update(...)
-  def values(...)
-
-class DashboardJobRowRetryPolicyVariant4(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  def clear(...)
-  def copy(...)
-  delayMs: ForwardRef('Required[float]', module='dashboard_v1')
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  def keys(...)
-  def pop(...)
-  def popitem(self)
-  def setdefault(self, key, default=None)
-  type: ForwardRef("Required[Literal['fixed']]", module='dashboard_v1')
-  def update(...)
-  def values(...)
-
-class DashboardJobRowWait(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  def clear(...)
-  def copy(...)
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  def keys(...)
-  mode: ForwardRef("Required[Literal['absolute', 'relative']]", module='dashboard_v1')
-  name: ForwardRef('Required[str]', module='dashboard_v1')
-  def pop(...)
-  def popitem(self)
-  def setdefault(self, key, default=None)
-  def update(...)
-  def values(...)
-  wakeAt: ForwardRef('Required[str]', module='dashboard_v1')
 
 class DashboardMaintenanceLoopCadences(dict)
   def __init__(self, *args, **kwargs)
@@ -2735,7 +2123,7 @@ class DashboardQueueHealthReason(dict)
   def __init__(self, *args, **kwargs)
   def __iter__(self)
   budget: ForwardRef('Required[float]', module='dashboard_v1')
-  category: ForwardRef("NotRequired[Literal['attemptHistory', 'jobEvents', 'jobIdentity', 'scheduleOccurrences', 'statistics', 'terminalOutcome']]", module='dashboard_v1')
+  category: ForwardRef("NotRequired[Literal['attemptHistory', 'scheduleOccurrences', 'statistics', 'taskEvents', 'taskIdentity', 'terminalOutcome']]", module='dashboard_v1')
   def clear(...)
   code: ForwardRef('Required[DashboardQueueHealthReasonCode]', module='dashboard_v1')
   def copy(...)
@@ -2857,11 +2245,11 @@ class DashboardRedriveCursor(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobId: ForwardRef('Required[str]', module='dashboard_v1')
   def keys(...)
   def pop(...)
   def popitem(self)
   def setdefault(self, key, default=None)
+  taskId: ForwardRef('Required[str]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -2878,17 +2266,17 @@ class DashboardRedriveResult(dict)
   def popitem(self)
   requestedAt: ForwardRef('Required[str | None]', module='dashboard_v1')
   def setdefault(self, key, default=None)
-  sourceJobId: ForwardRef('Required[str]', module='dashboard_v1')
   sourceState: ForwardRef("Required[Literal['active'] | Literal['blocked'] | Literal['canceled'] | Literal['failed'] | Literal['ready'] | Literal['scheduled'] | Literal['succeeded'] | None]", module='dashboard_v1')
+  sourceTaskId: ForwardRef('Required[str]', module='dashboard_v1')
   status: ForwardRef('Required[DashboardRedriveStatus]', module='dashboard_v1')
-  targetJobId: ForwardRef('Required[str | None]', module='dashboard_v1')
   targetState: ForwardRef("Required[Literal['active'] | Literal['blocked'] | Literal['canceled'] | Literal['failed'] | Literal['ready'] | Literal['scheduled'] | Literal['succeeded'] | None]", module='dashboard_v1')
+  targetTaskId: ForwardRef('Required[str | None]', module='dashboard_v1')
   def update(...)
   def values(...)
 
 type DashboardRedriveStatus = Literal["eligible", "not_failed", "not_found", "redriven", "replayed"]
 
-type DashboardRetentionCategory = Literal["attemptHistory", "jobEvents", "jobIdentity", "scheduleOccurrences", "statistics", "terminalOutcome"]
+type DashboardRetentionCategory = Literal["attemptHistory", "scheduleOccurrences", "statistics", "taskEvents", "taskIdentity", "terminalOutcome"]
 
 class DashboardRetentionCategoryRow(dict)
   def __init__(self, *args, **kwargs)
@@ -2921,8 +2309,6 @@ class DashboardRetentionPolicy(dict)
   def get(self, key, default=None)
   historyPartitionsPerPass: ForwardRef('Required[float]', module='dashboard_v1')
   def items(...)
-  jobEventRetentionDays: ForwardRef('Required[float | None]', module='dashboard_v1')
-  jobIdentityRetentionDays: ForwardRef('Required[float | None]', module='dashboard_v1')
   def keys(...)
   occurrenceRowsPerPass: ForwardRef('Required[float]', module='dashboard_v1')
   def pop(...)
@@ -2932,8 +2318,10 @@ class DashboardRetentionPolicy(dict)
   def setdefault(self, key, default=None)
   statisticsRetentionDays: ForwardRef('Required[float | None]', module='dashboard_v1')
   statisticsRowsPerPass: ForwardRef('Required[float]', module='dashboard_v1')
-  terminalJobPruneLimit: ForwardRef('Required[float]', module='dashboard_v1')
+  taskEventRetentionDays: ForwardRef('Required[float | None]', module='dashboard_v1')
+  taskIdentityRetentionDays: ForwardRef('Required[float | None]', module='dashboard_v1')
   terminalOutcomeRetentionDays: ForwardRef('Required[float | None]', module='dashboard_v1')
+  terminalTaskPruneLimit: ForwardRef('Required[float]', module='dashboard_v1')
   def update(...)
   updatedAt: ForwardRef('Required[str]', module='dashboard_v1')
   def values(...)
@@ -2964,14 +2352,14 @@ class DashboardRetentionPolicyImpactCapped(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobEvents: ForwardRef('Required[bool]', module='dashboard_v1')
   def keys(...)
   def pop(...)
   def popitem(self)
   scheduleOccurrences: ForwardRef('Required[bool]', module='dashboard_v1')
   def setdefault(self, key, default=None)
   statistics: ForwardRef('Required[bool]', module='dashboard_v1')
-  terminalJobs: ForwardRef('Required[bool]', module='dashboard_v1')
+  taskEvents: ForwardRef('Required[bool]', module='dashboard_v1')
+  terminalTasks: ForwardRef('Required[bool]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -2984,14 +2372,14 @@ class DashboardRetentionPolicyImpactEligible(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobEvents: ForwardRef('Required[float]', module='dashboard_v1')
   def keys(...)
   def pop(...)
   def popitem(self)
   scheduleOccurrences: ForwardRef('Required[float]', module='dashboard_v1')
   def setdefault(self, key, default=None)
   statistics: ForwardRef('Required[float]', module='dashboard_v1')
-  terminalJobs: ForwardRef('Required[float]', module='dashboard_v1')
+  taskEvents: ForwardRef('Required[float]', module='dashboard_v1')
+  terminalTasks: ForwardRef('Required[float]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -3006,8 +2394,6 @@ class DashboardRetentionPolicyProvenance(dict)
   def get(self, key, default=None)
   historyPartitionsPerPass: ForwardRef('Required[DashboardRetentionPolicyProvenanceHistoryPartitionsPerPass]', module='dashboard_v1')
   def items(...)
-  jobEventRetentionDays: ForwardRef('Required[DashboardRetentionPolicyProvenanceJobEventRetentionDays]', module='dashboard_v1')
-  jobIdentityRetentionDays: ForwardRef('Required[DashboardRetentionPolicyProvenanceJobIdentityRetentionDays]', module='dashboard_v1')
   def keys(...)
   occurrenceRowsPerPass: ForwardRef('Required[DashboardRetentionPolicyProvenanceOccurrenceRowsPerPass]', module='dashboard_v1')
   def pop(...)
@@ -3016,8 +2402,10 @@ class DashboardRetentionPolicyProvenance(dict)
   def setdefault(self, key, default=None)
   statisticsRetentionDays: ForwardRef('Required[DashboardRetentionPolicyProvenanceStatisticsRetentionDays]', module='dashboard_v1')
   statisticsRowsPerPass: ForwardRef('Required[DashboardRetentionPolicyProvenanceStatisticsRowsPerPass]', module='dashboard_v1')
-  terminalJobPruneLimit: ForwardRef('Required[DashboardRetentionPolicyProvenanceTerminalJobPruneLimit]', module='dashboard_v1')
+  taskEventRetentionDays: ForwardRef('Required[DashboardRetentionPolicyProvenanceTaskEventRetentionDays]', module='dashboard_v1')
+  taskIdentityRetentionDays: ForwardRef('Required[DashboardRetentionPolicyProvenanceTaskIdentityRetentionDays]', module='dashboard_v1')
   terminalOutcomeRetentionDays: ForwardRef('Required[DashboardRetentionPolicyProvenanceTerminalOutcomeRetentionDays]', module='dashboard_v1')
+  terminalTaskPruneLimit: ForwardRef('Required[DashboardRetentionPolicyProvenanceTerminalTaskPruneLimit]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -3059,40 +2447,6 @@ class DashboardRetentionPolicyProvenanceHistoryPartitionsPerPass(dict)
   def __init__(self, *args, **kwargs)
   def __iter__(self)
   applicationDefault: ForwardRef('Required[float]', module='dashboard_v1')
-  def clear(...)
-  def copy(...)
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  def keys(...)
-  def pop(...)
-  def popitem(self)
-  def setdefault(self, key, default=None)
-  source: ForwardRef("Required[Literal['application', 'operator']]", module='dashboard_v1')
-  def update(...)
-  def values(...)
-
-class DashboardRetentionPolicyProvenanceJobEventRetentionDays(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  applicationDefault: ForwardRef('Required[float | None]', module='dashboard_v1')
-  def clear(...)
-  def copy(...)
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  def items(...)
-  def keys(...)
-  def pop(...)
-  def popitem(self)
-  def setdefault(self, key, default=None)
-  source: ForwardRef("Required[Literal['application', 'operator']]", module='dashboard_v1')
-  def update(...)
-  def values(...)
-
-class DashboardRetentionPolicyProvenanceJobIdentityRetentionDays(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  applicationDefault: ForwardRef('Required[float | None]', module='dashboard_v1')
   def clear(...)
   def copy(...)
   def fromkeys(type, iterable, value=None)
@@ -3174,10 +2528,27 @@ class DashboardRetentionPolicyProvenanceStatisticsRowsPerPass(dict)
   def update(...)
   def values(...)
 
-class DashboardRetentionPolicyProvenanceTerminalJobPruneLimit(dict)
+class DashboardRetentionPolicyProvenanceTaskEventRetentionDays(dict)
   def __init__(self, *args, **kwargs)
   def __iter__(self)
-  applicationDefault: ForwardRef('Required[float]', module='dashboard_v1')
+  applicationDefault: ForwardRef('Required[float | None]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  source: ForwardRef("Required[Literal['application', 'operator']]", module='dashboard_v1')
+  def update(...)
+  def values(...)
+
+class DashboardRetentionPolicyProvenanceTaskIdentityRetentionDays(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  applicationDefault: ForwardRef('Required[float | None]', module='dashboard_v1')
   def clear(...)
   def copy(...)
   def fromkeys(type, iterable, value=None)
@@ -3195,6 +2566,23 @@ class DashboardRetentionPolicyProvenanceTerminalOutcomeRetentionDays(dict)
   def __init__(self, *args, **kwargs)
   def __iter__(self)
   applicationDefault: ForwardRef('Required[float | None]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  source: ForwardRef("Required[Literal['application', 'operator']]", module='dashboard_v1')
+  def update(...)
+  def values(...)
+
+class DashboardRetentionPolicyProvenanceTerminalTaskPruneLimit(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  applicationDefault: ForwardRef('Required[float]', module='dashboard_v1')
   def clear(...)
   def copy(...)
   def fromkeys(type, iterable, value=None)
@@ -3385,11 +2773,11 @@ class DashboardSettingsPageRecommendationInputsDefaultHistoryRows(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobEvents: ForwardRef('Required[float]', module='dashboard_v1')
   def keys(...)
   def pop(...)
   def popitem(self)
   def setdefault(self, key, default=None)
+  taskEvents: ForwardRef('Required[float]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -3402,11 +2790,11 @@ class DashboardSettingsPageRecommendationInputsDefaultHistoryRowsCapped(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobEvents: ForwardRef('Required[bool]', module='dashboard_v1')
   def keys(...)
   def pop(...)
   def popitem(self)
   def setdefault(self, key, default=None)
+  taskEvents: ForwardRef('Required[bool]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -3418,11 +2806,11 @@ class DashboardSettingsPageRecommendationInputsEnqueueRate(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobs: ForwardRef('Required[float]', module='dashboard_v1')
   def keys(...)
   def pop(...)
   def popitem(self)
   def setdefault(self, key, default=None)
+  tasks: ForwardRef('Required[float]', module='dashboard_v1')
   def update(...)
   def values(...)
   windowMs: ForwardRef('Required[float]', module='dashboard_v1')
@@ -3460,7 +2848,7 @@ class DashboardSettingsPageWorkersItem(dict)
   lastSeenAt: ForwardRef('Required[str]', module='dashboard_v1')
   leaseMs: ForwardRef('Required[float | None]', module='dashboard_v1')
   maintenanceIntervalMs: ForwardRef('Required[float | None]', module='dashboard_v1')
-  maintenanceTaskPollMs: ForwardRef('Required[float | None]', module='dashboard_v1')
+  maintenanceRoutinePollMs: ForwardRef('Required[float | None]', module='dashboard_v1')
   pollMs: ForwardRef('Required[float | None]', module='dashboard_v1')
   def pop(...)
   def popitem(self)
@@ -3483,7 +2871,6 @@ class DashboardSignalTaskResult(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobId: ForwardRef('Required[str]', module='dashboard_v1')
   def keys(...)
   name: ForwardRef('Required[str]', module='dashboard_v1')
   payload: ForwardRef('Required[DashboardJSON]', module='dashboard_v1')
@@ -3491,6 +2878,7 @@ class DashboardSignalTaskResult(dict)
   def popitem(self)
   def setdefault(self, key, default=None)
   status: ForwardRef('Required[DashboardSignalDeliveryStatus]', module='dashboard_v1')
+  taskId: ForwardRef('Required[str]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -3505,14 +2893,14 @@ class DashboardSignalWaitRow(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobId: ForwardRef('Required[str]', module='dashboard_v1')
-  jobType: ForwardRef('Required[str]', module='dashboard_v1')
   def keys(...)
   name: ForwardRef('Required[str]', module='dashboard_v1')
   def pop(...)
   def popitem(self)
   queue: ForwardRef('Required[str]', module='dashboard_v1')
   def setdefault(self, key, default=None)
+  taskId: ForwardRef('Required[str]', module='dashboard_v1')
+  taskType: ForwardRef('Required[str]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -3755,7 +3143,7 @@ class DashboardSystemPageKpisDeadline(dict)
 class DashboardSystemPageKpisDependencies(dict)
   def __init__(self, *args, **kwargs)
   def __iter__(self)
-  blockedJobs: ForwardRef('Required[float]', module='dashboard_v1')
+  blockedTasks: ForwardRef('Required[float]', module='dashboard_v1')
   capped: ForwardRef('Required[bool]', module='dashboard_v1')
   def clear(...)
   def copy(...)
@@ -3993,10 +3381,10 @@ class DashboardSystemRetention(dict)
   def get(self, key, default=None)
   def items(...)
   def keys(...)
-  maxLagCategory: ForwardRef("Required[Literal['attemptHistory'] | Literal['jobEvents'] | Literal['jobIdentity'] | Literal['scheduleOccurrences'] | Literal['statistics'] | Literal['terminalOutcome'] | None]", module='dashboard_v1')
+  maxLagCategory: ForwardRef("Required[Literal['attemptHistory'] | Literal['scheduleOccurrences'] | Literal['statistics'] | Literal['taskEvents'] | Literal['taskIdentity'] | Literal['terminalOutcome'] | None]", module='dashboard_v1')
   maxLagMs: ForwardRef('Required[float | None]', module='dashboard_v1')
   oldestRetainedAt: ForwardRef('Required[str | None]', module='dashboard_v1')
-  oldestRetainedCategory: ForwardRef("Required[Literal['attemptHistory'] | Literal['jobEvents'] | Literal['jobIdentity'] | Literal['scheduleOccurrences'] | Literal['statistics'] | Literal['terminalOutcome'] | None]", module='dashboard_v1')
+  oldestRetainedCategory: ForwardRef("Required[Literal['attemptHistory'] | Literal['scheduleOccurrences'] | Literal['statistics'] | Literal['taskEvents'] | Literal['taskIdentity'] | Literal['terminalOutcome'] | None]", module='dashboard_v1')
   policyUpdatedAt: ForwardRef('Required[str]', module='dashboard_v1')
   def pop(...)
   def popitem(self)
@@ -4013,11 +3401,11 @@ class DashboardSystemRetentionDefaultHistoryRows(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobEvents: ForwardRef('Required[float]', module='dashboard_v1')
   def keys(...)
   def pop(...)
   def popitem(self)
   def setdefault(self, key, default=None)
+  taskEvents: ForwardRef('Required[float]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -4030,11 +3418,11 @@ class DashboardSystemRetentionDefaultHistoryRowsCapped(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobEvents: ForwardRef('Required[bool]', module='dashboard_v1')
   def keys(...)
   def pop(...)
   def popitem(self)
   def setdefault(self, key, default=None)
+  taskEvents: ForwardRef('Required[bool]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -4047,11 +3435,11 @@ class DashboardSystemRetentionEligibleHistoryPartitions(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobEvents: ForwardRef('Required[float]', module='dashboard_v1')
   def keys(...)
   def pop(...)
   def popitem(self)
   def setdefault(self, key, default=None)
+  taskEvents: ForwardRef('Required[float]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -4156,6 +3544,485 @@ class DashboardTaskCursor(dict)
   updatedAt: ForwardRef('Required[str]', module='dashboard_v1')
   def values(...)
 
+class DashboardTaskDetail(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  attempts: ForwardRef('Required[list[DashboardTaskDetailAttemptsItem]]', module='dashboard_v1')
+  batchExecutions: ForwardRef('Required[list[DashboardTaskDetailBatchExecutionsItem]]', module='dashboard_v1')
+  canCompleteHumanWait: ForwardRef('Required[bool]', module='dashboard_v1')
+  canSignal: ForwardRef('Required[bool]', module='dashboard_v1')
+  checkpoints: ForwardRef('Required[list[DashboardTaskDetailCheckpointsItem]]', module='dashboard_v1')
+  childLineage: ForwardRef('Required[DashboardTaskDetailChildLineage]', module='dashboard_v1')
+  def clear(...)
+  concurrencyPolicy: ForwardRef('Required[DashboardConcurrencyPolicySummary | None]', module='dashboard_v1')
+  def copy(...)
+  current: ForwardRef('Required[DashboardTaskDetailCurrent]', module='dashboard_v1')
+  dependencyLineage: ForwardRef('Required[DashboardTaskDetailDependencyLineage]', module='dashboard_v1')
+  durability: ForwardRef('Required[DashboardDurabilityPlan | None]', module='dashboard_v1')
+  events: ForwardRef('Required[list[DashboardTaskDetailEventsItem]]', module='dashboard_v1')
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  humanWait: ForwardRef('Required[DashboardHumanWaitSummary | None]', module='dashboard_v1')
+  identity: ForwardRef('Required[DashboardTaskDetailIdentity]', module='dashboard_v1')
+  def items(...)
+  def keys(...)
+  payload: ForwardRef('Required[object]', module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  progress: ForwardRef('Required[DashboardTaskDetailProgress | None]', module='dashboard_v1')
+  redriveLineage: ForwardRef('Required[DashboardTaskDetailRedriveLineage]', module='dashboard_v1')
+  def setdefault(self, key, default=None)
+  signalWait: ForwardRef('Required[DashboardSignalWaitSummary | None]', module='dashboard_v1')
+  tags: ForwardRef('Required[list[str]]', module='dashboard_v1')
+  def update(...)
+  def values(...)
+  waits: ForwardRef('Required[list[DashboardTaskDetailWaitsItem]]', module='dashboard_v1')
+
+class DashboardTaskDetailAttemptsItem(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  attempt: ForwardRef('Required[float]', module='dashboard_v1')
+  claimedAt: ForwardRef('Required[str]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  durationMs: ForwardRef('Required[float]', module='dashboard_v1')
+  elapsedMs: ForwardRef('Required[float]', module='dashboard_v1')
+  error: ForwardRef('Required[object]', module='dashboard_v1')
+  executionMs: ForwardRef('Required[float]', module='dashboard_v1')
+  finishedAt: ForwardRef('Required[str]', module='dashboard_v1')
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  outcome: ForwardRef('Required[str]', module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  startedAt: ForwardRef('Required[str]', module='dashboard_v1')
+  def update(...)
+  def values(...)
+  workerId: ForwardRef('Required[str]', module='dashboard_v1')
+
+class DashboardTaskDetailBatchExecutionsItem(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  attempt: ForwardRef('Required[float]', module='dashboard_v1')
+  batchWideFailure: ForwardRef('Required[bool]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  dispatchedAt: ForwardRef('Required[str]', module='dashboard_v1')
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  id: ForwardRef('Required[str]', module='dashboard_v1')
+  def items(...)
+  def keys(...)
+  members: ForwardRef('Required[list[DashboardTaskDetailBatchExecutionsItemMembersItem]]', module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  def update(...)
+  def values(...)
+
+class DashboardTaskDetailBatchExecutionsItemMembersItem(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  attempt: ForwardRef('Required[float]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  error: ForwardRef('Required[object]', module='dashboard_v1')
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  id: ForwardRef('Required[str]', module='dashboard_v1')
+  def items(...)
+  def keys(...)
+  outcome: ForwardRef('Required[str | None]', module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  type: ForwardRef('Required[str]', module='dashboard_v1')
+  def update(...)
+  def values(...)
+
+class DashboardTaskDetailCheckpointsItem(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  attempt: ForwardRef('Required[float]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  createdAt: ForwardRef('Required[str]', module='dashboard_v1')
+  fenceToken: ForwardRef('Required[str]', module='dashboard_v1')
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  name: ForwardRef('Required[str]', module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  def update(...)
+  value: ForwardRef('Required[object]', module='dashboard_v1')
+  def values(...)
+  workerId: ForwardRef('Required[str]', module='dashboard_v1')
+
+class DashboardTaskDetailChildLineage(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  def pop(...)
+  def popitem(self)
+  records: ForwardRef('Required[list[DashboardTaskDetailChildLineageRecordsItem]]', module='dashboard_v1')
+  def setdefault(self, key, default=None)
+  truncated: ForwardRef('Required[bool]', module='dashboard_v1')
+  def update(...)
+  def values(...)
+
+class DashboardTaskDetailChildLineageRecordsItem(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  childTaskId: ForwardRef('Required[str]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  createdAt: ForwardRef('Required[str]', module='dashboard_v1')
+  error: ForwardRef('Required[object]', module='dashboard_v1')
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  joinedAt: ForwardRef('Required[str | None]', module='dashboard_v1')
+  def keys(...)
+  name: ForwardRef('Required[str]', module='dashboard_v1')
+  outcomeState: ForwardRef("Required[Literal['canceled'] | Literal['failed'] | Literal['succeeded'] | None]", module='dashboard_v1')
+  parentTaskId: ForwardRef('Required[str]', module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  type: ForwardRef('Required[str]', module='dashboard_v1')
+  def update(...)
+  def values(...)
+
+class DashboardTaskDetailCurrent(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  def clear(...)
+  def copy(...)
+  error: ForwardRef('Required[object]', module='dashboard_v1')
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  outcome: ForwardRef('Required[DashboardTaskDetailCurrentOutcome | None]', module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  result: ForwardRef('Required[object]', module='dashboard_v1')
+  runtime: ForwardRef('Required[DashboardTaskDetailCurrentRuntime | None]', module='dashboard_v1')
+  def setdefault(self, key, default=None)
+  def update(...)
+  def values(...)
+
+class DashboardTaskDetailCurrentOutcome(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  attempt: ForwardRef('Required[float]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  error: ForwardRef('Required[object]', module='dashboard_v1')
+  finishedAt: ForwardRef('Required[str]', module='dashboard_v1')
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  def pop(...)
+  def popitem(self)
+  result: ForwardRef('Required[object]', module='dashboard_v1')
+  def setdefault(self, key, default=None)
+  state: ForwardRef('Required[str]', module='dashboard_v1')
+  def update(...)
+  def values(...)
+
+class DashboardTaskDetailCurrentRuntime(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  acquiredAt: ForwardRef('Required[str | None]', module='dashboard_v1')
+  attempt: ForwardRef('Required[float]', module='dashboard_v1')
+  attemptStartedAt: ForwardRef('Required[str | None]', module='dashboard_v1')
+  attemptTimeoutAt: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
+  cancellation: ForwardRef('Required[DashboardCancellationRequest | None]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  error: ForwardRef('Required[object]', module='dashboard_v1')
+  expiresAt: ForwardRef('Required[str | None]', module='dashboard_v1')
+  fenceToken: ForwardRef('Required[str]', module='dashboard_v1')
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  heartbeatAt: ForwardRef('Required[str | None]', module='dashboard_v1')
+  def items(...)
+  def keys(...)
+  def pop(...)
+  def popitem(self)
+  readyAt: ForwardRef('Required[str | None]', module='dashboard_v1')
+  runAt: ForwardRef('Required[str]', module='dashboard_v1')
+  def setdefault(self, key, default=None)
+  state: ForwardRef('Required[str]', module='dashboard_v1')
+  def update(...)
+  def values(...)
+  waitName: ForwardRef('Required[str | None]', module='dashboard_v1')
+  workerId: ForwardRef('Required[str | None]', module='dashboard_v1')
+
+class DashboardTaskDetailDependencyLineage(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  def pop(...)
+  def popitem(self)
+  records: ForwardRef('Required[list[DashboardTaskDetailDependencyLineageRecordsItem]]', module='dashboard_v1')
+  def setdefault(self, key, default=None)
+  truncated: ForwardRef('Required[bool]', module='dashboard_v1')
+  def update(...)
+  def values(...)
+
+class DashboardTaskDetailDependencyLineageRecordsItem(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  def clear(...)
+  def copy(...)
+  createdAt: ForwardRef('Required[str]', module='dashboard_v1')
+  dependentTaskId: ForwardRef('Required[str]', module='dashboard_v1')
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  onCancellation: ForwardRef("Required[Literal['cancel', 'fail', 'release']]", module='dashboard_v1')
+  onFailure: ForwardRef("Required[Literal['cancel', 'fail', 'release']]", module='dashboard_v1')
+  onSuccess: ForwardRef("Required[Literal['cancel', 'fail', 'release']]", module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  prerequisiteTaskId: ForwardRef('Required[str]', module='dashboard_v1')
+  releasedAt: ForwardRef('Required[str | None]', module='dashboard_v1')
+  resolution: ForwardRef("Required[Literal['cancel'] | Literal['fail'] | Literal['release'] | None]", module='dashboard_v1')
+  def setdefault(self, key, default=None)
+  def update(...)
+  def values(...)
+
+class DashboardTaskDetailEventsItem(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  attempt: ForwardRef('Required[float | None]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  details: ForwardRef('Required[object]', module='dashboard_v1')
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  id: ForwardRef('Required[str]', module='dashboard_v1')
+  def items(...)
+  def keys(...)
+  occurredAt: ForwardRef('Required[str]', module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  type: ForwardRef('Required[str]', module='dashboard_v1')
+  def update(...)
+  def values(...)
+
+class DashboardTaskDetailIdentity(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  blockedReason: ForwardRef("Required[Literal['prerequisite_pending'] | None]", module='dashboard_v1')
+  def clear(...)
+  concurrencyKey: ForwardRef('Required[str | None]', module='dashboard_v1')
+  def copy(...)
+  createdAt: ForwardRef('Required[str]', module='dashboard_v1')
+  deadlineAt: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
+  dependencyPolicy: ForwardRef('Required[DashboardTaskDetailIdentityDependencyPolicy | None]', module='dashboard_v1')
+  dependencyReleasedAt: ForwardRef('Required[str | None]', module='dashboard_v1')
+  executionTimeoutMs: ForwardRef('NotRequired[float | None]', module='dashboard_v1')
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  id: ForwardRef('Required[str]', module='dashboard_v1')
+  def items(...)
+  def keys(...)
+  maxAttempts: ForwardRef('Required[float]', module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  prerequisiteTaskId: ForwardRef('Required[str | None]', module='dashboard_v1')
+  prerequisiteTaskIds: ForwardRef('Required[list[str]]', module='dashboard_v1')
+  priority: ForwardRef('Required[float]', module='dashboard_v1')
+  queue: ForwardRef('Required[str]', module='dashboard_v1')
+  retryPolicy: ForwardRef('Required[DashboardTaskDetailIdentityRetryPolicyVariant2 | DashboardTaskDetailIdentityRetryPolicyVariant3 | DashboardTaskDetailIdentityRetryPolicyVariant4 | None]', module='dashboard_v1')
+  def setdefault(self, key, default=None)
+  state: ForwardRef('Required[str]', module='dashboard_v1')
+  type: ForwardRef('Required[str]', module='dashboard_v1')
+  def update(...)
+  def values(...)
+
+class DashboardTaskDetailIdentityDependencyPolicy(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  onCancellation: ForwardRef("Required[Literal['cancel', 'fail', 'release']]", module='dashboard_v1')
+  onFailure: ForwardRef("Required[Literal['cancel', 'fail', 'release']]", module='dashboard_v1')
+  onSuccess: ForwardRef("Required[Literal['cancel', 'fail', 'release']]", module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  def update(...)
+  def values(...)
+
+class DashboardTaskDetailIdentityRetryPolicyVariant2(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  baseDelayMs: ForwardRef('Required[float]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  maxDelayMs: ForwardRef('Required[float]', module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  type: ForwardRef("Required[Literal['decorrelated-jitter']]", module='dashboard_v1')
+  def update(...)
+  def values(...)
+
+class DashboardTaskDetailIdentityRetryPolicyVariant3(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  initialDelayMs: ForwardRef('Required[float]', module='dashboard_v1')
+  def items(...)
+  def keys(...)
+  maxDelayMs: ForwardRef('Required[float]', module='dashboard_v1')
+  multiplier: ForwardRef('Required[float]', module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  type: ForwardRef("Required[Literal['exponential']]", module='dashboard_v1')
+  def update(...)
+  def values(...)
+
+class DashboardTaskDetailIdentityRetryPolicyVariant4(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  def clear(...)
+  def copy(...)
+  delayMs: ForwardRef('Required[float]', module='dashboard_v1')
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  type: ForwardRef("Required[Literal['fixed']]", module='dashboard_v1')
+  def update(...)
+  def values(...)
+
+class DashboardTaskDetailProgress(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  attempt: ForwardRef('Required[float]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  createdAt: ForwardRef('Required[str]', module='dashboard_v1')
+  fenceToken: ForwardRef('Required[str]', module='dashboard_v1')
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  def pop(...)
+  def popitem(self)
+  revision: ForwardRef('Required[str]', module='dashboard_v1')
+  def setdefault(self, key, default=None)
+  def update(...)
+  updatedAt: ForwardRef('Required[str]', module='dashboard_v1')
+  value: ForwardRef('Required[object]', module='dashboard_v1')
+  def values(...)
+  workerId: ForwardRef('Required[str]', module='dashboard_v1')
+
+class DashboardTaskDetailRedriveLineage(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  def pop(...)
+  def popitem(self)
+  records: ForwardRef('Required[list[DashboardTaskDetailRedriveLineageRecordsItem]]', module='dashboard_v1')
+  def setdefault(self, key, default=None)
+  truncated: ForwardRef('Required[bool]', module='dashboard_v1')
+  def update(...)
+  def values(...)
+
+class DashboardTaskDetailRedriveLineageRecordsItem(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  def pop(...)
+  def popitem(self)
+  reason: ForwardRef('Required[str]', module='dashboard_v1')
+  requestIdDigest: ForwardRef('Required[str]', module='dashboard_v1')
+  requestIdLength: ForwardRef('Required[float]', module='dashboard_v1')
+  requestIdPreview: ForwardRef('Required[str]', module='dashboard_v1')
+  requestedAt: ForwardRef('Required[str]', module='dashboard_v1')
+  requestedBy: ForwardRef('Required[str]', module='dashboard_v1')
+  def setdefault(self, key, default=None)
+  sourceState: ForwardRef("Required[Literal['failed']]", module='dashboard_v1')
+  sourceTaskId: ForwardRef('Required[str]', module='dashboard_v1')
+  targetInitialState: ForwardRef("Required[Literal['ready']]", module='dashboard_v1')
+  targetTaskId: ForwardRef('Required[str]', module='dashboard_v1')
+  def update(...)
+  def values(...)
+
+class DashboardTaskDetailWaitsItem(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  attempt: ForwardRef('Required[float]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  createdAt: ForwardRef('Required[str]', module='dashboard_v1')
+  durationMs: ForwardRef('Required[float | None]', module='dashboard_v1')
+  fenceToken: ForwardRef('Required[str]', module='dashboard_v1')
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  mode: ForwardRef("Required[Literal['absolute', 'relative']]", module='dashboard_v1')
+  name: ForwardRef('Required[str]', module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  requestedWakeAt: ForwardRef('Required[str | None]', module='dashboard_v1')
+  def setdefault(self, key, default=None)
+  def update(...)
+  def values(...)
+  wakeAt: ForwardRef('Required[str]', module='dashboard_v1')
+  workerId: ForwardRef('Required[str]', module='dashboard_v1')
+
 class DashboardTaskFacets(dict)
   def __init__(self, *args, **kwargs)
   def __iter__(self)
@@ -4164,16 +4031,149 @@ class DashboardTaskFacets(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobTypes: ForwardRef('Required[list[str]]', module='dashboard_v1')
   def keys(...)
   def pop(...)
   def popitem(self)
   queues: ForwardRef('Required[list[str]]', module='dashboard_v1')
   def setdefault(self, key, default=None)
   tags: ForwardRef('Required[list[str]]', module='dashboard_v1')
+  taskTypes: ForwardRef('Required[list[str]]', module='dashboard_v1')
   def update(...)
   def values(...)
   workers: ForwardRef('Required[list[str]]', module='dashboard_v1')
+
+class DashboardTaskRow(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  attempt: ForwardRef('Required[float]', module='dashboard_v1')
+  blockedReason: ForwardRef("Required[Literal['prerequisite_pending'] | None]", module='dashboard_v1')
+  cancellation: ForwardRef('Required[DashboardCancellationRequest | None]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  createdAt: ForwardRef('Required[str]', module='dashboard_v1')
+  deadlineAt: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
+  durability: ForwardRef('Required[DashboardTaskRowDurability | None]', module='dashboard_v1')
+  enqueueMode: ForwardRef("NotRequired[Literal['debounce'] | Literal['idempotency'] | Literal['throttle'] | None]", module='dashboard_v1')
+  errorMessage: ForwardRef('Required[str | None]', module='dashboard_v1')
+  executionTimeoutMs: ForwardRef('NotRequired[float | None]', module='dashboard_v1')
+  finishedAt: ForwardRef('Required[str | None]', module='dashboard_v1')
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  humanWait: ForwardRef('Required[DashboardHumanWaitSummary | None]', module='dashboard_v1')
+  id: ForwardRef('Required[str]', module='dashboard_v1')
+  def items(...)
+  keyed: ForwardRef('Required[bool]', module='dashboard_v1')
+  def keys(...)
+  lastWorkerId: ForwardRef('Required[str | None]', module='dashboard_v1')
+  maxAttempts: ForwardRef('Required[float]', module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  prerequisiteTaskIds: ForwardRef('Required[list[str]]', module='dashboard_v1')
+  priority: ForwardRef('Required[float]', module='dashboard_v1')
+  queue: ForwardRef('Required[str]', module='dashboard_v1')
+  retryPolicy: ForwardRef('Required[DashboardTaskRowRetryPolicyVariant2 | DashboardTaskRowRetryPolicyVariant3 | DashboardTaskRowRetryPolicyVariant4 | None]', module='dashboard_v1')
+  runAt: ForwardRef('Required[str | None]', module='dashboard_v1')
+  def setdefault(self, key, default=None)
+  signalWait: ForwardRef('Required[DashboardSignalWaitSummary | None]', module='dashboard_v1')
+  state: ForwardRef('Required[str]', module='dashboard_v1')
+  tags: ForwardRef('Required[list[str]]', module='dashboard_v1')
+  type: ForwardRef('Required[str]', module='dashboard_v1')
+  def update(...)
+  updatedAt: ForwardRef('Required[str]', module='dashboard_v1')
+  def values(...)
+  wait: ForwardRef('Required[DashboardTaskRowWait | None]', module='dashboard_v1')
+  waitName: ForwardRef('Required[str | None]', module='dashboard_v1')
+  wakeAt: ForwardRef('Required[str | None]', module='dashboard_v1')
+  workerId: ForwardRef('Required[str | None]', module='dashboard_v1')
+
+class DashboardTaskRowDurability(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  def clear(...)
+  completedSteps: ForwardRef('Required[float]', module='dashboard_v1')
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  totalSteps: ForwardRef('Required[float]', module='dashboard_v1')
+  def update(...)
+  def values(...)
+
+class DashboardTaskRowRetryPolicyVariant2(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  baseDelayMs: ForwardRef('Required[float]', module='dashboard_v1')
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  maxDelayMs: ForwardRef('Required[float]', module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  type: ForwardRef("Required[Literal['decorrelated-jitter']]", module='dashboard_v1')
+  def update(...)
+  def values(...)
+
+class DashboardTaskRowRetryPolicyVariant3(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  initialDelayMs: ForwardRef('Required[float]', module='dashboard_v1')
+  def items(...)
+  def keys(...)
+  maxDelayMs: ForwardRef('Required[float]', module='dashboard_v1')
+  multiplier: ForwardRef('Required[float]', module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  type: ForwardRef("Required[Literal['exponential']]", module='dashboard_v1')
+  def update(...)
+  def values(...)
+
+class DashboardTaskRowRetryPolicyVariant4(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  def clear(...)
+  def copy(...)
+  delayMs: ForwardRef('Required[float]', module='dashboard_v1')
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  type: ForwardRef("Required[Literal['fixed']]", module='dashboard_v1')
+  def update(...)
+  def values(...)
+
+class DashboardTaskRowWait(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  def items(...)
+  def keys(...)
+  mode: ForwardRef("Required[Literal['absolute', 'relative']]", module='dashboard_v1')
+  name: ForwardRef('Required[str]', module='dashboard_v1')
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  def update(...)
+  def values(...)
+  wakeAt: ForwardRef('Required[str]', module='dashboard_v1')
 
 class DashboardTasksCursorPage(dict)
   def __init__(self, *args, **kwargs)
@@ -4186,8 +4186,6 @@ class DashboardTasksCursorPage(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobType: ForwardRef('Required[str | None]', module='dashboard_v1')
-  jobs: ForwardRef('Required[list[DashboardJobRow]]', module='dashboard_v1')
   def keys(...)
   nextCursor: ForwardRef('Required[DashboardTaskCursor | None]', module='dashboard_v1')
   page: ForwardRef('Required[float]', module='dashboard_v1')
@@ -4201,6 +4199,8 @@ class DashboardTasksCursorPage(dict)
   def setdefault(self, key, default=None)
   sort: ForwardRef("Required[Literal['priority', 'updated']]", module='dashboard_v1')
   tags: ForwardRef('Required[list[str]]', module='dashboard_v1')
+  taskType: ForwardRef('Required[str | None]', module='dashboard_v1')
+  tasks: ForwardRef('Required[list[DashboardTaskRow]]', module='dashboard_v1')
   total: ForwardRef('Required[float | None]', module='dashboard_v1')
   def update(...)
   def values(...)
@@ -4217,8 +4217,6 @@ class DashboardTasksPage(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobType: ForwardRef('Required[str | None]', module='dashboard_v1')
-  jobs: ForwardRef('Required[list[DashboardJobRow]]', module='dashboard_v1')
   def keys(...)
   page: ForwardRef('Required[float]', module='dashboard_v1')
   pageSize: ForwardRef('Required[float]', module='dashboard_v1')
@@ -4230,6 +4228,8 @@ class DashboardTasksPage(dict)
   def setdefault(self, key, default=None)
   sort: ForwardRef("Required[Literal['priority', 'updated']]", module='dashboard_v1')
   tags: ForwardRef('Required[list[str]]', module='dashboard_v1')
+  taskType: ForwardRef('Required[str | None]', module='dashboard_v1')
+  tasks: ForwardRef('Required[list[DashboardTaskRow]]', module='dashboard_v1')
   total: ForwardRef('Required[float]', module='dashboard_v1')
   def update(...)
   def values(...)
@@ -4238,8 +4238,8 @@ class DashboardTasksPage(dict)
 class DashboardWorkerRow(dict)
   def __init__(self, *args, **kwargs)
   def __iter__(self)
-  activeJobs: ForwardRef('Required[float]', module='dashboard_v1')
   activeSlots: ForwardRef('Required[float | None]', module='dashboard_v1')
+  activeTasks: ForwardRef('Required[float]', module='dashboard_v1')
   averageExecutionMs: ForwardRef('Required[float | None]', module='dashboard_v1')
   def clear(...)
   completedAttempts: ForwardRef('Required[float]', module='dashboard_v1')
@@ -4293,7 +4293,7 @@ class EnqueueTestInput(dict)
   audit: ForwardRef('Required[EnqueueTestInputAudit]', module='dashboard_v1')
   def clear(...)
   def copy(...)
-  feature: ForwardRef("NotRequired[Literal['ingress-routing', 'retry-policies', 'durable-checkpoints', 'durable-waits', 'progress', 'timing-controls', 'cancellation', 'dead-letters-redrive', 'job-dependencies', 'child-workflows', 'signals', 'human-decisions', 'keyed-debounce', 'keyed-throttle', 'priority-lanes', 'batch-handlers', 'payload-contracts']]", module='dashboard_v1')
+  feature: ForwardRef("NotRequired[Literal['ingress-routing', 'retry-policies', 'durable-checkpoints', 'durable-waits', 'progress', 'timing-controls', 'cancellation', 'dead-letters-redrive', 'task-dependencies', 'child-workflows', 'signals', 'human-decisions', 'keyed-debounce', 'keyed-throttle', 'priority-lanes', 'batch-handlers', 'payload-contracts']]", module='dashboard_v1')
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
@@ -4353,8 +4353,6 @@ class EventsInput(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobId: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
-  jobType: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
   def keys(...)
   kind: ForwardRef("NotRequired[Literal['all', 'event', 'attempt']]", module='dashboard_v1')
   page: ForwardRef('NotRequired[int]', module='dashboard_v1')
@@ -4364,6 +4362,8 @@ class EventsInput(dict)
   queue: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
   search: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
   def setdefault(self, key, default=None)
+  taskId: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
+  taskType: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
   types: ForwardRef("NotRequired[list[Literal['enqueued', 'debounced', 'debounce_rejected', 'throttled', 'claimed', 'batch_dispatched', 'batch_failed', 'succeeded', 'failed', 'retry_scheduled', 'canceled', 'cancel_requested', 'promoted', 'lease_expired', 'deadline_exceeded', 'execution_timed_out', 'redriven', 'redrive_created', 'checkpoint_saved', 'progress_updated', 'wait_scheduled', 'wait_elapsed', 'wait_replayed', 'signal_waiting', 'signal_received', 'signal_replayed', 'signal_rejected', 'dependency_blocked', 'dependency_released', 'dependency_failed', 'dependency_canceled', 'child_created', 'child_joined', 'children_created', 'children_joined', 'parent_linked', 'human_wait_created', 'human_wait_completed', 'human_wait_replayed', 'human_wait_rejected', 'retry', 'timeout']]]", module='dashboard_v1')
   def update(...)
   def values(...)
@@ -4375,24 +4375,6 @@ type EventsOutput = DashboardEventsPage
 type HumanWaitsInput = None
 
 type HumanWaitsOutput = DashboardHumanWaitPage
-
-class JobDetailInput(dict)
-  def __init__(self, *args, **kwargs)
-  def __iter__(self)
-  def clear(...)
-  def copy(...)
-  def fromkeys(type, iterable, value=None)
-  def get(self, key, default=None)
-  id: ForwardRef('Required[str]', module='dashboard_v1')
-  def items(...)
-  def keys(...)
-  def pop(...)
-  def popitem(self)
-  def setdefault(self, key, default=None)
-  def update(...)
-  def values(...)
-
-type JobDetailOutput = DashboardJobDetail
 
 type MetaInput = None
 
@@ -4517,8 +4499,6 @@ class OverrideRetentionPolicyInputDefinition(dict)
   def get(self, key, default=None)
   historyPartitionsPerPass: ForwardRef('NotRequired[int]', module='dashboard_v1')
   def items(...)
-  jobEventRetentionDays: ForwardRef('NotRequired[int | None]', module='dashboard_v1')
-  jobIdentityRetentionDays: ForwardRef('NotRequired[int | None]', module='dashboard_v1')
   def keys(...)
   occurrenceRowsPerPass: ForwardRef('NotRequired[int]', module='dashboard_v1')
   def pop(...)
@@ -4527,8 +4507,10 @@ class OverrideRetentionPolicyInputDefinition(dict)
   def setdefault(self, key, default=None)
   statisticsRetentionDays: ForwardRef('NotRequired[int | None]', module='dashboard_v1')
   statisticsRowsPerPass: ForwardRef('NotRequired[int]', module='dashboard_v1')
-  terminalJobPruneLimit: ForwardRef('NotRequired[int]', module='dashboard_v1')
+  taskEventRetentionDays: ForwardRef('NotRequired[int | None]', module='dashboard_v1')
+  taskIdentityRetentionDays: ForwardRef('NotRequired[int | None]', module='dashboard_v1')
   terminalOutcomeRetentionDays: ForwardRef('NotRequired[int | None]', module='dashboard_v1')
+  terminalTaskPruneLimit: ForwardRef('NotRequired[int]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -4561,8 +4543,6 @@ class PreviewRetentionPolicyInputDefinition(dict)
   def get(self, key, default=None)
   historyPartitionsPerPass: ForwardRef('NotRequired[int]', module='dashboard_v1')
   def items(...)
-  jobEventRetentionDays: ForwardRef('NotRequired[int | None]', module='dashboard_v1')
-  jobIdentityRetentionDays: ForwardRef('NotRequired[int | None]', module='dashboard_v1')
   def keys(...)
   occurrenceRowsPerPass: ForwardRef('NotRequired[int]', module='dashboard_v1')
   def pop(...)
@@ -4571,8 +4551,10 @@ class PreviewRetentionPolicyInputDefinition(dict)
   def setdefault(self, key, default=None)
   statisticsRetentionDays: ForwardRef('NotRequired[int | None]', module='dashboard_v1')
   statisticsRowsPerPass: ForwardRef('NotRequired[int]', module='dashboard_v1')
-  terminalJobPruneLimit: ForwardRef('NotRequired[int]', module='dashboard_v1')
+  taskEventRetentionDays: ForwardRef('NotRequired[int | None]', module='dashboard_v1')
+  taskIdentityRetentionDays: ForwardRef('NotRequired[int | None]', module='dashboard_v1')
   terminalOutcomeRetentionDays: ForwardRef('NotRequired[int | None]', module='dashboard_v1')
+  terminalTaskPruneLimit: ForwardRef('NotRequired[int]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -4643,7 +4625,6 @@ class RedriveDeadLettersInput(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobType: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
   def keys(...)
   limit: ForwardRef('NotRequired[int]', module='dashboard_v1')
   def pop(...)
@@ -4651,6 +4632,7 @@ class RedriveDeadLettersInput(dict)
   queue: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
   def setdefault(self, key, default=None)
   tags: ForwardRef('NotRequired[list[str]]', module='dashboard_v1')
+  taskType: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -4681,11 +4663,11 @@ class RedriveDeadLettersInputCursor(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobId: ForwardRef('Required[str]', module='dashboard_v1')
   def keys(...)
   def pop(...)
   def popitem(self)
   def setdefault(self, key, default=None)
+  taskId: ForwardRef('Required[str]', module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -4778,7 +4760,7 @@ class RevertRetentionPolicyInput(dict)
   def pop(...)
   def popitem(self)
   def setdefault(self, key, default=None)
-  settings: ForwardRef("Required[list[Literal['jobIdentityRetentionDays', 'terminalOutcomeRetentionDays', 'jobEventRetentionDays', 'attemptHistoryRetentionDays', 'scheduleOccurrenceRetentionDays', 'statisticsRetentionDays', 'terminalJobPruneLimit', 'historyPartitionsPerPass', 'defaultPartitionRowsPerPass', 'occurrenceRowsPerPass', 'statisticsRowsPerPass']]]", module='dashboard_v1')
+  settings: ForwardRef("Required[list[Literal['taskIdentityRetentionDays', 'terminalOutcomeRetentionDays', 'taskEventRetentionDays', 'attemptHistoryRetentionDays', 'scheduleOccurrenceRetentionDays', 'statisticsRetentionDays', 'terminalTaskPruneLimit', 'historyPartitionsPerPass', 'defaultPartitionRowsPerPass', 'occurrenceRowsPerPass', 'statisticsRowsPerPass']]]", module='dashboard_v1')
   def update(...)
   def values(...)
 
@@ -5063,6 +5045,24 @@ type TaskCountsInput = None
 
 type TaskCountsOutput = DashboardTaskCounts
 
+class TaskDetailInput(dict)
+  def __init__(self, *args, **kwargs)
+  def __iter__(self)
+  def clear(...)
+  def copy(...)
+  def fromkeys(type, iterable, value=None)
+  def get(self, key, default=None)
+  id: ForwardRef('Required[str]', module='dashboard_v1')
+  def items(...)
+  def keys(...)
+  def pop(...)
+  def popitem(self)
+  def setdefault(self, key, default=None)
+  def update(...)
+  def values(...)
+
+type TaskDetailOutput = DashboardTaskDetail
+
 type TaskFacetsInput = None
 
 type TaskFacetsOutput = DashboardTaskFacets
@@ -5078,7 +5078,6 @@ class TasksCursorInput(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobType: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
   def keys(...)
   pageSize: ForwardRef('NotRequired[Literal[25] | Literal[50] | Literal[100]]', module='dashboard_v1')
   def pop(...)
@@ -5089,6 +5088,7 @@ class TasksCursorInput(dict)
   def setdefault(self, key, default=None)
   sort: ForwardRef("NotRequired[Literal['updated', 'priority']]", module='dashboard_v1')
   tags: ForwardRef('NotRequired[list[str]]', module='dashboard_v1')
+  taskType: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
   def update(...)
   def values(...)
   worker: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
@@ -5122,7 +5122,6 @@ class TasksInput(dict)
   def fromkeys(type, iterable, value=None)
   def get(self, key, default=None)
   def items(...)
-  jobType: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
   def keys(...)
   page: ForwardRef('NotRequired[int]', module='dashboard_v1')
   pageSize: ForwardRef('NotRequired[Literal[25] | Literal[50] | Literal[100]]', module='dashboard_v1')
@@ -5134,6 +5133,7 @@ class TasksInput(dict)
   def setdefault(self, key, default=None)
   sort: ForwardRef("NotRequired[Literal['updated', 'priority']]", module='dashboard_v1')
   tags: ForwardRef('NotRequired[list[str]]', module='dashboard_v1')
+  taskType: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
   def update(...)
   def values(...)
   worker: ForwardRef('NotRequired[str | None]', module='dashboard_v1')
@@ -5161,8 +5161,6 @@ def validate_events_input(value: object) -> None
 def validate_human_waits_input(value: object) -> None
 
 def validate_input(procedure: str, value: object) -> None
-
-def validate_job_detail_input(value: object) -> None
 
 def validate_meta_input(value: object) -> None
 
@@ -5200,6 +5198,8 @@ def validate_system_input(value: object) -> None
 
 def validate_task_counts_input(value: object) -> None
 
+def validate_task_detail_input(value: object) -> None
+
 def validate_task_facets_input(value: object) -> None
 
 def validate_tasks_cursor_input(value: object) -> None
@@ -5211,30 +5211,30 @@ def validate_workers_input(value: object) -> None
 ## workhorse.errors
 
 class CancellationRequestedError(WorkhorseError)
-  def __init__(self, job_id: str) -> None
+  def __init__(self, task_id: str) -> None
 
 class CheckpointConflictError(WorkhorseError)
-  def __init__(self, job_id: str, checkpoint_name: str) -> None
+  def __init__(self, task_id: str, checkpoint_name: str) -> None
 
 class CheckpointLeaseLostError(LifecycleError)
-  def __init__(self, job_id: str, checkpoint_name: str) -> None
+  def __init__(self, task_id: str, checkpoint_name: str) -> None
 
 class ChildConflictError(WorkhorseError)
-  def __init__(self, parent_job_id: str, child_name: str) -> None
+  def __init__(self, parent_task_id: str, child_name: str) -> None
 
 class ChildLeaseLostError(LifecycleError)
-  def __init__(self, parent_job_id: str) -> None
+  def __init__(self, parent_task_id: str) -> None
 
 class ChildLimitExceededError(WorkhorseError)
-  def __init__(self, parent_job_id: str) -> None
+  def __init__(self, parent_task_id: str) -> None
 
 class ChildResultLimitExceededError(WorkhorseError)
-  def __init__(self, parent_job_id: str, result_bytes: int, result_limit_bytes: int) -> None
+  def __init__(self, parent_task_id: str, result_bytes: int, result_limit_bytes: int) -> None
 
 type CompatibilityCode = Literal['schema-not-installed', 'schema-too-old', 'schema-too-new', 'client-protocol-too-old', 'client-protocol-too-new']
 
 class DeadlineExceededError(WorkhorseError)
-  def __init__(self, job_id: str) -> None
+  def __init__(self, task_id: str) -> None
 
 class DependencyCycleError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
@@ -5246,37 +5246,31 @@ class EnqueueIdempotencyConflictError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
 
 class ExecutionTimeoutError(WorkhorseError)
-  def __init__(self, job_id: str, attempt: int) -> None
+  def __init__(self, task_id: str, attempt: int) -> None
 
 class HumanWaitAlreadyWaitingError(WorkhorseError)
-  def __init__(self, job_id: str, wait_name: str) -> None
+  def __init__(self, task_id: str, wait_name: str) -> None
 
 class HumanWaitConflictError(WorkhorseError)
-  def __init__(self, job_id: str, wait_name: str) -> None
+  def __init__(self, task_id: str, wait_name: str) -> None
 
 class HumanWaitIdempotencyConflictError(WorkhorseError)
-  def __init__(self, job_id: str, wait_name: str) -> None
+  def __init__(self, task_id: str, wait_name: str) -> None
 
 class HumanWaitLeaseLostError(LifecycleError)
-  def __init__(self, job_id: str, wait_name: str) -> None
+  def __init__(self, task_id: str, wait_name: str) -> None
 
 class HumanWaitLimitExceededError(WorkhorseError)
-  def __init__(self, job_id: str) -> None
-
-class JobContractUnavailableError(WorkhorseError)
-  def __init__(self, job_type: str, version: str) -> None
-
-class JobContractValidationError(WorkhorseError)
-  def __init__(self, job_type: str, version: str, kind: str) -> None
+  def __init__(self, task_id: str) -> None
 
 class LifecycleError(WorkhorseError)
   def __init__(self, *args, **kwargs)
 
 class ProgressLeaseLostError(LifecycleError)
-  def __init__(self, job_id: str) -> None
+  def __init__(self, task_id: str) -> None
 
 class ProgressRateLimitError(WorkhorseError)
-  def __init__(self, job_id: str, retry_after_ms: int) -> None
+  def __init__(self, task_id: str, retry_after_ms: int) -> None
 
 class ProtocolCompatibilityError(WorkhorseError)
   def __init__(self, code: CompatibilityCode) -> None
@@ -5288,28 +5282,34 @@ class RedriveIdempotencyConflictError(WorkhorseError)
   def __init__(self, details: Mapping[str, object]) -> None
 
 class SignalIdempotencyConflictError(WorkhorseError)
-  def __init__(self, job_id: str, wait_name: str) -> None
+  def __init__(self, task_id: str, wait_name: str) -> None
 
 class SignalWaitConflictError(WorkhorseError)
-  def __init__(self, job_id: str, wait_name: str) -> None
+  def __init__(self, task_id: str, wait_name: str) -> None
 
 class SignalWaitLeaseLostError(LifecycleError)
-  def __init__(self, job_id: str, wait_name: str) -> None
+  def __init__(self, task_id: str, wait_name: str) -> None
 
 class SignalWaitLimitExceededError(WorkhorseError)
-  def __init__(self, job_id: str) -> None
+  def __init__(self, task_id: str) -> None
 
 class StaleLeaseError(LifecycleError)
-  def __init__(self, job_id: str) -> None
+  def __init__(self, task_id: str) -> None
+
+class TaskContractUnavailableError(WorkhorseError)
+  def __init__(self, task_type: str, version: str) -> None
+
+class TaskContractValidationError(WorkhorseError)
+  def __init__(self, task_type: str, version: str, kind: str) -> None
 
 class WaitConflictError(WorkhorseError)
-  def __init__(self, job_id: str, wait_name: str) -> None
+  def __init__(self, task_id: str, wait_name: str) -> None
 
 class WaitLeaseLostError(LifecycleError)
-  def __init__(self, job_id: str, wait_name: str) -> None
+  def __init__(self, task_id: str, wait_name: str) -> None
 
 class WaitLimitExceededError(WorkhorseError)
-  def __init__(self, job_id: str) -> None
+  def __init__(self, task_id: str) -> None
 
 class WorkhorseError(Exception)
   def __init__(self, *args, **kwargs)
@@ -5317,13 +5317,13 @@ class WorkhorseError(Exception)
 ## workhorse.types
 
 class AsyncBatchHandlerContext
-  def __init__(self, job: ClaimedJob, cancellation: AsyncCancellationToken, _get_checkpoint: Callable[[str], Awaitable[JobCheckpoint | None]], _get_progress: Callable[[], Awaitable[JobProgress | None]], _set_progress: Callable[[Json], Awaitable[JobProgress]], _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]]) -> None
+  def __init__(self, task: ClaimedTask, cancellation: AsyncCancellationToken, _get_checkpoint: Callable[[str], Awaitable[TaskCheckpoint | None]], _get_progress: Callable[[], Awaitable[TaskProgress | None]], _set_progress: Callable[[Json], Awaitable[TaskProgress]], _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]]) -> None
   cancellation: AsyncCancellationToken
   async def checkpoint(self, name: str, operation: Callable[[], Awaitable[_TJson]]) -> _TJson
-  async def get_checkpoint(self, name: str) -> JobCheckpoint | None
-  async def get_progress(self) -> JobProgress | None
-  job: ClaimedJob
-  async def set_progress(self, value: Json) -> JobProgress
+  async def get_checkpoint(self, name: str) -> TaskCheckpoint | None
+  async def get_progress(self) -> TaskProgress | None
+  async def set_progress(self, value: Json) -> TaskProgress
+  task: ClaimedTask
 
 class AsyncBatchHandlerItem
   def __init__(self, payload: Json, context: AsyncBatchHandlerContext) -> None
@@ -5338,19 +5338,19 @@ class AsyncCancellationToken
   async def wait(self, timeout: float | None = None) -> bool
 
 class AsyncHandlerContext
-  def __init__(self, job: ClaimedJob, cancellation: AsyncCancellationToken, _get_checkpoint: Callable[[str], Awaitable[JobCheckpoint | None]], _get_wait: Callable[[str], Awaitable[JobWait | None]], _get_progress: Callable[[], Awaitable[JobProgress | None]], _set_progress: Callable[[Json], Awaitable[JobProgress]], _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]], _sleep: Callable[[str, int], Awaitable[None]], _sleep_until: Callable[[str, datetime], Awaitable[None]], _wait_for_signal: Callable[[str, int | None], Awaitable[Json]], _wait_for_human: Callable[[str, Json, int | None], Awaitable[Json]], _run_child: Callable[[str, str, Json, EnqueueOptions], Awaitable[Json]], _run_children: Callable[[Sequence[ChildJobRequest]], Awaitable[dict[str, ChildOutcome]]], _run_children_all: Callable[[Sequence[ChildJobRequest]], Awaitable[dict[str, Json]]]) -> None
+  def __init__(self, task: ClaimedTask, cancellation: AsyncCancellationToken, _get_checkpoint: Callable[[str], Awaitable[TaskCheckpoint | None]], _get_wait: Callable[[str], Awaitable[TaskWait | None]], _get_progress: Callable[[], Awaitable[TaskProgress | None]], _set_progress: Callable[[Json], Awaitable[TaskProgress]], _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]], _sleep: Callable[[str, int], Awaitable[None]], _sleep_until: Callable[[str, datetime], Awaitable[None]], _wait_for_signal: Callable[[str, int | None], Awaitable[Json]], _wait_for_human: Callable[[str, Json, int | None], Awaitable[Json]], _run_child: Callable[[str, str, Json, EnqueueOptions], Awaitable[Json]], _run_children: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, ChildOutcome]]], _run_children_all: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, Json]]]) -> None
   cancellation: AsyncCancellationToken
   async def checkpoint(self, name: str, operation: Callable[[], Awaitable[_TJson]]) -> _TJson
-  async def get_checkpoint(self, name: str) -> JobCheckpoint | None
-  async def get_progress(self) -> JobProgress | None
-  async def get_wait(self, name: str) -> JobWait | None
-  job: ClaimedJob
+  async def get_checkpoint(self, name: str) -> TaskCheckpoint | None
+  async def get_progress(self) -> TaskProgress | None
+  async def get_wait(self, name: str) -> TaskWait | None
   async def run_child(self, name: str, type: str, payload: Json, options: EnqueueOptions | None = None) -> Json
-  async def run_children(self, children: Sequence[ChildJobRequest]) -> dict[str, ChildOutcome]
-  async def run_children_all(self, children: Sequence[ChildJobRequest]) -> dict[str, Json]
-  async def set_progress(self, value: Json) -> JobProgress
+  async def run_children(self, children: Sequence[ChildTaskRequest]) -> dict[str, ChildOutcome]
+  async def run_children_all(self, children: Sequence[ChildTaskRequest]) -> dict[str, Json]
+  async def set_progress(self, value: Json) -> TaskProgress
   async def sleep(self, name: str, duration_ms: int) -> None
   async def sleep_until(self, name: str, wake_at: datetime) -> None
+  task: ClaimedTask
   async def wait_for_human(self, name: str, context: Json, *, timeout_ms: int | None = None) -> Json
   async def wait_for_signal(self, name: str, *, timeout_ms: int | None = None) -> Json
 
@@ -5372,13 +5372,13 @@ class BatchFailed(dict)
   def values(...)
 
 class BatchHandlerContext
-  def __init__(self, job: ClaimedJob, cancellation: CancellationToken, _get_checkpoint: Callable[[str], JobCheckpoint | None], _get_progress: Callable[[], JobProgress | None], _set_progress: Callable[[Json], JobProgress], _checkpoint: Callable[[str, Callable[[], Json]], Json]) -> None
+  def __init__(self, task: ClaimedTask, cancellation: CancellationToken, _get_checkpoint: Callable[[str], TaskCheckpoint | None], _get_progress: Callable[[], TaskProgress | None], _set_progress: Callable[[Json], TaskProgress], _checkpoint: Callable[[str, Callable[[], Json]], Json]) -> None
   cancellation: CancellationToken
   def checkpoint(self, name: str, operation: Callable[[], _TJson]) -> _TJson
-  def get_checkpoint(self, name: str) -> JobCheckpoint | None
-  def get_progress(self) -> JobProgress | None
-  job: ClaimedJob
-  def set_progress(self, value: Json) -> JobProgress
+  def get_checkpoint(self, name: str) -> TaskCheckpoint | None
+  def get_progress(self) -> TaskProgress | None
+  def set_progress(self, value: Json) -> TaskProgress
+  task: ClaimedTask
 
 class BatchHandlerItem
   def __init__(self, payload: Json, context: BatchHandlerContext) -> None
@@ -5405,15 +5405,15 @@ class BatchSucceeded(dict)
   def values(...)
 
 class CancelResult
-  def __init__(self, status: CancelStatus, job_id: str, state: JobState | None, current_attempt: int | None, requested_at: datetime | None, requested_by: str | None, reason: str | None, finished_at: datetime | None) -> None
+  def __init__(self, status: CancelStatus, task_id: str, state: TaskState | None, current_attempt: int | None, requested_at: datetime | None, requested_by: str | None, reason: str | None, finished_at: datetime | None) -> None
   current_attempt: int | None
   finished_at: datetime | None
-  job_id: str
   reason: str | None
   requested_at: datetime | None
   requested_by: str | None
-  state: JobState | None
+  state: TaskState | None
   status: CancelStatus
+  task_id: str
 
 type CancelStatus = Literal["canceled", "cancel_requested", "already_terminal", "not_found"]
 
@@ -5458,13 +5458,6 @@ class ChildFailed(dict)
   def update(...)
   def values(...)
 
-class ChildJobRequest
-  def __init__(self, name: str, type: str, payload: Json, options: EnqueueOptions = <_HAS_DEFAULT_FACTORY_CLASS>) -> None
-  name: str
-  options: EnqueueOptions
-  payload: Json
-  type: str
-
 type ChildOutcome = ChildSucceeded | ChildFailed | ChildCanceled
 
 class ChildSucceeded(dict)
@@ -5484,7 +5477,14 @@ class ChildSucceeded(dict)
   def update(...)
   def values(...)
 
-class ClaimedJob
+class ChildTaskRequest
+  def __init__(self, name: str, type: str, payload: Json, options: EnqueueOptions = <_HAS_DEFAULT_FACTORY_CLASS>) -> None
+  name: str
+  options: EnqueueOptions
+  payload: Json
+  type: str
+
+class ClaimedTask
   def __init__(self, id: str, queue: str, type: str, priority: int, payload: Json, contract_version: str | None, result_max_bytes: int, redact_error_details: bool, trace_context: Json, attempt: int, max_attempts: int, retry_policy: RetryPolicy | None, deadline_at: datetime | None, execution_timeout_ms: int | None, attempt_timeout_at: datetime | None, fence_token: int, lease_expires_at: datetime) -> None
   attempt: int
   attempt_timeout_at: datetime | None
@@ -5526,11 +5526,11 @@ class Debounce
   window_ms: int
 
 class Dependencies
-  def __init__(self, prerequisite_job_ids: Sequence[str], on_success: DependencyTerminalPolicy, on_failure: DependencyTerminalPolicy, on_cancellation: DependencyTerminalPolicy) -> None
+  def __init__(self, prerequisite_task_ids: Sequence[str], on_success: DependencyTerminalPolicy, on_failure: DependencyTerminalPolicy, on_cancellation: DependencyTerminalPolicy) -> None
   on_cancellation: DependencyTerminalPolicy
   on_failure: DependencyTerminalPolicy
   on_success: DependencyTerminalPolicy
-  prerequisite_job_ids: Sequence[str]
+  prerequisite_task_ids: Sequence[str]
 
 type DependencyTerminalPolicy = Literal["release", "cancel", "fail"]
 
@@ -5563,36 +5563,36 @@ class EnqueueRequest
   type: str
 
 class EnqueueResult
-  def __init__(self, job_id: str, outcome: EnqueueOutcome, reason: EnqueueNonReplaceableReason | None = None) -> None
-  job_id: str
+  def __init__(self, task_id: str, outcome: EnqueueOutcome, reason: EnqueueNonReplaceableReason | None = None) -> None
   outcome: EnqueueOutcome
   reason: EnqueueNonReplaceableReason | None = None
+  task_id: str
 
 class HandlerContext
-  def __init__(self, job: ClaimedJob, cancellation: CancellationToken, _get_checkpoint: Callable[[str], JobCheckpoint | None], _get_wait: Callable[[str], JobWait | None], _get_progress: Callable[[], JobProgress | None], _set_progress: Callable[[Json], JobProgress], _checkpoint: Callable[[str, Callable[[], Json]], Json], _sleep: Callable[[str, int], None], _sleep_until: Callable[[str, datetime], None], _wait_for_signal: Callable[[str, int | None], Json], _wait_for_human: Callable[[str, Json, int | None], Json], _run_child: Callable[[str, str, Json, EnqueueOptions], Json], _run_children: Callable[[Sequence[ChildJobRequest]], dict[str, ChildOutcome]], _run_children_all: Callable[[Sequence[ChildJobRequest]], dict[str, Json]]) -> None
+  def __init__(self, task: ClaimedTask, cancellation: CancellationToken, _get_checkpoint: Callable[[str], TaskCheckpoint | None], _get_wait: Callable[[str], TaskWait | None], _get_progress: Callable[[], TaskProgress | None], _set_progress: Callable[[Json], TaskProgress], _checkpoint: Callable[[str, Callable[[], Json]], Json], _sleep: Callable[[str, int], None], _sleep_until: Callable[[str, datetime], None], _wait_for_signal: Callable[[str, int | None], Json], _wait_for_human: Callable[[str, Json, int | None], Json], _run_child: Callable[[str, str, Json, EnqueueOptions], Json], _run_children: Callable[[Sequence[ChildTaskRequest]], dict[str, ChildOutcome]], _run_children_all: Callable[[Sequence[ChildTaskRequest]], dict[str, Json]]) -> None
   cancellation: CancellationToken
   def checkpoint(self, name: str, operation: Callable[[], _TJson]) -> _TJson
-  def get_checkpoint(self, name: str) -> JobCheckpoint | None
-  def get_progress(self) -> JobProgress | None
-  def get_wait(self, name: str) -> JobWait | None
-  job: ClaimedJob
+  def get_checkpoint(self, name: str) -> TaskCheckpoint | None
+  def get_progress(self) -> TaskProgress | None
+  def get_wait(self, name: str) -> TaskWait | None
   def run_child(self, name: str, type: str, payload: Json, options: EnqueueOptions | None = None) -> Json
-  def run_children(self, children: Sequence[ChildJobRequest]) -> dict[str, ChildOutcome]
-  def run_children_all(self, children: Sequence[ChildJobRequest]) -> dict[str, Json]
-  def set_progress(self, value: Json) -> JobProgress
+  def run_children(self, children: Sequence[ChildTaskRequest]) -> dict[str, ChildOutcome]
+  def run_children_all(self, children: Sequence[ChildTaskRequest]) -> dict[str, Json]
+  def set_progress(self, value: Json) -> TaskProgress
   def sleep(self, name: str, duration_ms: int) -> None
   def sleep_until(self, name: str, wake_at: datetime) -> None
+  task: ClaimedTask
   def wait_for_human(self, name: str, context: Json, *, timeout_ms: int | None = None) -> Json
   def wait_for_signal(self, name: str, *, timeout_ms: int | None = None) -> Json
 
 class HumanWaitCompletionResult
-  def __init__(self, status: HumanWaitCompletionStatus, job_id: str, name: str, payload: Json, completed_at: datetime | None, completed_by: str | None) -> None
+  def __init__(self, status: HumanWaitCompletionStatus, task_id: str, name: str, payload: Json, completed_at: datetime | None, completed_by: str | None) -> None
   completed_at: datetime | None
   completed_by: str | None
-  job_id: str
   name: str
   payload: Json
   status: HumanWaitCompletionStatus
+  task_id: str
 
 type HumanWaitCompletionStatus = Literal[
     "completed", "duplicate", "not_waiting", "already_completed", "stale", "not_found"
@@ -5603,58 +5603,6 @@ class Idempotency
   key: str
   scope: str = 'default'
   ttl_ms: int = 86400000
-
-class JobCheckpoint
-  def __init__(self, job_id: str, name: str, value: Json, attempt: int, fence_token: int, worker_id: str, created_at: datetime) -> None
-  attempt: int
-  created_at: datetime
-  fence_token: int
-  job_id: str
-  name: str
-  value: Json
-  worker_id: str
-
-class JobContractVersion
-  def __init__(self, payload_schema: Json = True, result_schema: Json = True, max_payload_bytes: int = 1048576, max_result_bytes: int = 1048576, sensitive_payload_keys: Sequence[str] = <_HAS_DEFAULT_FACTORY_CLASS>, sensitive_result_keys: Sequence[str] = <_HAS_DEFAULT_FACTORY_CLASS>) -> None
-  max_payload_bytes: int = 1048576
-  max_result_bytes: int = 1048576
-  payload_schema: Json = True
-  result_schema: Json = True
-  sensitive_payload_keys: Sequence[str]
-  sensitive_result_keys: Sequence[str]
-
-class JobProgress
-  def __init__(self, job_id: str, value: Json, revision: int, attempt: int, fence_token: int, worker_id: str, created_at: datetime, updated_at: datetime) -> None
-  attempt: int
-  created_at: datetime
-  fence_token: int
-  job_id: str
-  revision: int
-  updated_at: datetime
-  value: Json
-  worker_id: str
-
-type JobState = Literal[
-    "blocked", "scheduled", "ready", "active", "succeeded", "failed", "canceled"
-]
-
-class JobTypeContracts
-  def __init__(self, current_version: str, versions: Mapping[str, JobContractVersion]) -> None
-  current_version: str
-  versions: Mapping[str, JobContractVersion]
-
-class JobWait
-  def __init__(self, job_id: str, name: str, mode: Literal['relative', 'absolute'], duration_ms: int | None, requested_wake_at: datetime | None, wake_at: datetime, attempt: int, fence_token: int, worker_id: str, created_at: datetime) -> None
-  attempt: int
-  created_at: datetime
-  duration_ms: int | None
-  fence_token: int
-  job_id: str
-  mode: Literal['relative', 'absolute']
-  name: str
-  requested_wake_at: datetime | None
-  wake_at: datetime
-  worker_id: str
 
 type Json = bool | int | float | str | list["Json"] | dict[str, "Json"] | None
 
@@ -5685,14 +5633,14 @@ class RateLimitPolicyDefinition
 type RetryPolicy = Mapping[str, Json]
 
 class ScheduleDefinition
-  def __init__(self, name: str, schedule: str, job: ScheduledJob, timezone: str = 'UTC', enabled: bool = True) -> None
+  def __init__(self, name: str, schedule: str, task: ScheduledTask, timezone: str = 'UTC', enabled: bool = True) -> None
   enabled: bool = True
-  job: ScheduledJob
   name: str
   schedule: str
+  task: ScheduledTask
   timezone: str = 'UTC'
 
-class ScheduledJob
+class ScheduledTask
   def __init__(self, type: str, payload: Json, queue: str | None = None, priority: int = 0, concurrency_key: str | None = None, max_attempts: int = 25, retry_policy: RetryPolicy | None = None) -> None
   concurrency_key: str | None = None
   max_attempts: int = 25
@@ -5703,17 +5651,69 @@ class ScheduledJob
   type: str
 
 class SignalDeliveryResult
-  def __init__(self, status: SignalDeliveryStatus, job_id: str, name: str, payload: Json, delivered_at: datetime | None, delivered_by: str | None) -> None
+  def __init__(self, status: SignalDeliveryStatus, task_id: str, name: str, payload: Json, delivered_at: datetime | None, delivered_by: str | None) -> None
   delivered_at: datetime | None
   delivered_by: str | None
-  job_id: str
   name: str
   payload: Json
   status: SignalDeliveryStatus
+  task_id: str
 
 type SignalDeliveryStatus = Literal[
     "delivered", "duplicate", "not_waiting", "already_delivered", "stale", "not_found"
 ]
+
+class TaskCheckpoint
+  def __init__(self, task_id: str, name: str, value: Json, attempt: int, fence_token: int, worker_id: str, created_at: datetime) -> None
+  attempt: int
+  created_at: datetime
+  fence_token: int
+  name: str
+  task_id: str
+  value: Json
+  worker_id: str
+
+class TaskContractVersion
+  def __init__(self, payload_schema: Json = True, result_schema: Json = True, max_payload_bytes: int = 1048576, max_result_bytes: int = 1048576, sensitive_payload_keys: Sequence[str] = <_HAS_DEFAULT_FACTORY_CLASS>, sensitive_result_keys: Sequence[str] = <_HAS_DEFAULT_FACTORY_CLASS>) -> None
+  max_payload_bytes: int = 1048576
+  max_result_bytes: int = 1048576
+  payload_schema: Json = True
+  result_schema: Json = True
+  sensitive_payload_keys: Sequence[str]
+  sensitive_result_keys: Sequence[str]
+
+class TaskProgress
+  def __init__(self, task_id: str, value: Json, revision: int, attempt: int, fence_token: int, worker_id: str, created_at: datetime, updated_at: datetime) -> None
+  attempt: int
+  created_at: datetime
+  fence_token: int
+  revision: int
+  task_id: str
+  updated_at: datetime
+  value: Json
+  worker_id: str
+
+type TaskState = Literal[
+    "blocked", "scheduled", "ready", "active", "succeeded", "failed", "canceled"
+]
+
+class TaskTypeContracts
+  def __init__(self, current_version: str, versions: Mapping[str, TaskContractVersion]) -> None
+  current_version: str
+  versions: Mapping[str, TaskContractVersion]
+
+class TaskWait
+  def __init__(self, task_id: str, name: str, mode: Literal['relative', 'absolute'], duration_ms: int | None, requested_wake_at: datetime | None, wake_at: datetime, attempt: int, fence_token: int, worker_id: str, created_at: datetime) -> None
+  attempt: int
+  created_at: datetime
+  duration_ms: int | None
+  fence_token: int
+  mode: Literal['relative', 'absolute']
+  name: str
+  requested_wake_at: datetime | None
+  task_id: str
+  wake_at: datetime
+  worker_id: str
 
 type TerminalPolicy = DependencyTerminalPolicy
 

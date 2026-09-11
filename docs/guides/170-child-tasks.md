@@ -1,11 +1,11 @@
-# How do I run and join a child job?
+# How do I run and join a child task?
 
-A child job lets one handler delegate durable work and consume its result later. The parent gives
+A child task lets one handler delegate durable work and consume its result later. The parent gives
 up its lease while waiting, so it does not occupy a worker slot.
 
 ## Run the child from a handler
 
-Call `HandlerContext.runChild` with a stable name, job type, payload, and optional enqueue settings:
+Call `HandlerContext.runChild` with a stable name, task type, payload, and optional enqueue settings:
 
 ```ts
 worker.handle("orders.checkout", async (order, ctx) => {
@@ -27,7 +27,7 @@ The handler stops at `runChild`. When the child succeeds, PostgreSQL releases th
 worker claims it with a new fence. Workhorse restarts the handler from its entry point.
 
 The repeated `runChild` call recognizes the same name and request. It returns the child result
-instead of creating another job.
+instead of creating another task.
 
 Use `HandlerContext.runChildren` when delegated work can run in parallel. It creates the named set
 in one transaction and returns a tagged outcome under each name:
@@ -51,7 +51,7 @@ returns named `ChildResult` values in request order. Each result contains a `Chi
 `ChildFailed`, or `ChildCanceled` outcome, so a type switch covers every terminal state.
 
 ```go
-results, err := handler.RunChildren([]workhorse.ChildJobRequest{
+results, err := handler.RunChildren([]workhorse.ChildTaskRequest{
 	{Name: "fraud", Type: "orders.check-fraud", Payload: order},
 	{Name: "inventory", Type: "orders.reserve", Payload: order},
 })
@@ -94,8 +94,8 @@ Retention keeps the parent-child record while either side still needs it. A live
 terminal parent, and cleanup removes the old tree only after every linked outcome has crossed its
 configured evidence window.
 
-`Admin.getJob` and `Admin.listJobs` expose `parentJobId` and `childJobIds`. Use
-`Admin.getChildLineage(jobId)` for retained edges in either direction. The dashboard task detail
+`Admin.getTask` and `Admin.listTasks` expose `parentTaskId` and `childTaskIds`. Use
+`Admin.getChildLineage(taskId)` for retained edges in either direction. The dashboard task detail
 shows the same parent, child, name, type, and join state. Related ids open that task in the drawer.
 For a parent, the detail also summarizes how many retained child results it has joined.
 
@@ -108,4 +108,4 @@ For a parent, the detail also summarizes how many retained child results it has 
 ---
 
 Exact child schema and lifecycle semantics:
-[`architecture.md`](../architecture.md#job_child).
+[`architecture.md`](../architecture.md#task_child).

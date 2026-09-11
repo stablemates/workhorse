@@ -49,7 +49,7 @@ describe("workhorse CLI parser", () => {
     [["schema", "status", "--unknown"], "--unknown"],
     [["worker", "--unknown"], "--unknown"],
     [["dashboard", "--unknown"], "--unknown"],
-    [["admin", "jobs", "--unknown"], "--unknown"],
+    [["admin", "tasks", "--unknown"], "--unknown"],
     [["tui", "--unknown"], "--unknown"],
     [["health", "--unknown"], "--unknown"],
   ])("rejects an unknown option in %j", (args, flag) => {
@@ -77,7 +77,7 @@ describe("workhorse CLI parser", () => {
     [["dashboard", "--help"], "Usage: workhorse dashboard"],
     [["admin", "--help"], "Usage: workhorse admin"],
     [["admin"], "Usage: workhorse admin"],
-    [["admin", "jobs", "--help"], "Usage: workhorse admin"],
+    [["admin", "tasks", "--help"], "Usage: workhorse admin"],
     [["tui", "--help"], "Usage: workhorse tui"],
     [["health", "--help"], "Usage: workhorse health"],
   ])("prints help without connecting for %j", (args, expected) => {

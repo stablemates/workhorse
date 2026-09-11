@@ -367,7 +367,7 @@ export async function runWorkerProcess<TTransaction = unknown>(
       }
 
       firstSignal = signal;
-      logger.info(`Received ${signal}; stopping claims and draining active jobs`);
+      logger.info(`Received ${signal}; stopping claims and draining active tasks`);
       armDeadline(`Graceful shutdown exceeded ${timeoutMs}ms; exiting immediately`);
       void runtime?.shutdown().catch(() => undefined);
     };

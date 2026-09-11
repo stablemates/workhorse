@@ -41,7 +41,7 @@ func TestGoWorkerMetricsMatchTypeScriptInstrumentCatalog(t *testing.T) {
 	t.Cleanup(pool.Close)
 	queueName := "go-worker-metrics"
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-	if _, err := queue.Enqueue(ctx, "metric-job", nil); err != nil {
+	if _, err := queue.Enqueue(ctx, "metric-task", nil); err != nil {
 		t.Fatal(err)
 	}
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
@@ -50,7 +50,7 @@ func TestGoWorkerMetricsMatchTypeScriptInstrumentCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker.Handle("metric-job", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+	worker.Handle("metric-task", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
 		return nil, nil
 	})
 	if worked, err := worker.RunOnce(ctx); err != nil || !worked {
@@ -212,7 +212,7 @@ func emitGoHeartbeatFailureMetric(t *testing.T, ctx context.Context, pool *pgxpo
 	t.Helper()
 	queueName := "go-worker-catalog-heartbeat"
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-	jobID, err := queue.Enqueue(ctx, "catalog-heartbeat", nil, workhorse.EnqueueOptions{
+	taskID, err := queue.Enqueue(ctx, "catalog-heartbeat", nil, workhorse.EnqueueOptions{
 		MaxAttempts: 2, RetryPolicy: map[string]any{"type": "fixed", "delayMs": 0},
 	})
 	if err != nil {
@@ -243,8 +243,8 @@ func emitGoHeartbeatFailureMetric(t *testing.T, ctx context.Context, pool *pgxpo
 	}
 	if _, err := pool.Exec(
 		ctx,
-		"UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE job_id = $1::uuid",
-		jobID,
+		"UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE task_id = $1::uuid",
+		taskID,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -317,22 +317,22 @@ func TestGoWorkerMetricsDistinguishRetryFromTerminalFailure(t *testing.T) {
 			metrics[instrument.Name] = instrument
 		}
 	}
-	failed := metrics["workhorse.jobs.failed"].Data.(metricdata.Sum[int64])
-	if !hasMetricPoint(failed.DataPoints, "workhorse.job.type", "retry-metric", "workhorse.attempt.outcome", "scheduled") {
+	failed := metrics["workhorse.tasks.failed"].Data.(metricdata.Sum[int64])
+	if !hasMetricPoint(failed.DataPoints, "workhorse.task.type", "retry-metric", "workhorse.attempt.outcome", "scheduled") {
 		t.Errorf("failure counter does not carry retry outcome: %#v", failed.DataPoints)
 	}
-	if !hasMetricPoint(failed.DataPoints, "workhorse.job.type", "failure-metric", "workhorse.attempt.outcome", "failed") {
+	if !hasMetricPoint(failed.DataPoints, "workhorse.task.type", "failure-metric", "workhorse.attempt.outcome", "failed") {
 		t.Errorf("failure counter does not carry terminal outcome: %#v", failed.DataPoints)
 	}
-	retried := metrics["workhorse.jobs.retried"].Data.(metricdata.Sum[int64])
+	retried := metrics["workhorse.tasks.retried"].Data.(metricdata.Sum[int64])
 	if len(retried.DataPoints) != 1 || retried.DataPoints[0].Value != 1 {
-		t.Errorf("retried counter = %#v, expected one retried job", retried.DataPoints)
+		t.Errorf("retried counter = %#v, expected one retried task", retried.DataPoints)
 	}
 	executions := metrics["workhorse.handler.executions"].Data.(metricdata.Sum[int64])
-	if !hasMetricPoint(executions.DataPoints, "workhorse.job.type", "retry-metric", "workhorse.handler.outcome", "retry") {
+	if !hasMetricPoint(executions.DataPoints, "workhorse.task.type", "retry-metric", "workhorse.handler.outcome", "retry") {
 		t.Errorf("handler executions do not carry retry: %#v", executions.DataPoints)
 	}
-	if !hasMetricPoint(executions.DataPoints, "workhorse.job.type", "failure-metric", "workhorse.handler.outcome", "failed") {
+	if !hasMetricPoint(executions.DataPoints, "workhorse.task.type", "failure-metric", "workhorse.handler.outcome", "failed") {
 		t.Errorf("handler executions do not carry terminal failure: %#v", executions.DataPoints)
 	}
 }
@@ -359,7 +359,7 @@ func TestGoWorkerContinuesTypeScriptTraceAndEmitsStructuredLogs(t *testing.T) {
 	t.Cleanup(pool.Close)
 
 	queueName := "go-worker-telemetry"
-	typeScriptEnqueue := enqueueTracedJobFromTypeScript(t, databaseURL, queueName)
+	typeScriptEnqueue := enqueueTracedTaskFromTypeScript(t, databaseURL, queueName)
 
 	var logs lockedBuffer
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
@@ -384,7 +384,7 @@ func TestGoWorkerContinuesTypeScriptTraceAndEmitsStructuredLogs(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !worked {
-		t.Fatal("worker did not claim the traced job")
+		t.Fatal("worker did not claim the traced task")
 	}
 	var handlerSpan tracetest.SpanStub
 	for _, span := range exporter.GetSpans() {
@@ -402,16 +402,16 @@ func TestGoWorkerContinuesTypeScriptTraceAndEmitsStructuredLogs(t *testing.T) {
 	if handlerSpan.SpanContext.TraceID().String() != typeScriptEnqueue.TraceID || handlerSpan.Parent.SpanID().String() != typeScriptEnqueue.SpanID {
 		t.Fatalf("handler span parent is %s/%s, expected %s/%s", handlerSpan.SpanContext.TraceID(), handlerSpan.Parent.SpanID(), typeScriptEnqueue.TraceID, typeScriptEnqueue.SpanID)
 	}
-	assertSpanAttribute(t, handlerSpan.Attributes, "workhorse.job.id", typeScriptEnqueue.JobID)
-	assertSpanAttribute(t, handlerSpan.Attributes, "workhorse.job.type", "telemetry")
+	assertSpanAttribute(t, handlerSpan.Attributes, "workhorse.task.id", typeScriptEnqueue.TaskID)
+	assertSpanAttribute(t, handlerSpan.Attributes, "workhorse.task.type", "telemetry")
 	assertSpanAttribute(t, handlerSpan.Attributes, "workhorse.queue.name", queueName)
 	assertSpanAttribute(t, handlerSpan.Attributes, "workhorse.handler.outcome", "succeeded")
 
 	logOutput := logs.String()
 	for _, event := range []string{
-		"workhorse.job.claimed",
+		"workhorse.task.claimed",
 		"workhorse.handler.started",
-		"workhorse.job.execution_finished",
+		"workhorse.task.execution_finished",
 		"workhorse.handler.finished",
 	} {
 		if !containsJSONLogEvent(logOutput, event) {
@@ -419,17 +419,17 @@ func TestGoWorkerContinuesTypeScriptTraceAndEmitsStructuredLogs(t *testing.T) {
 		}
 	}
 	if containsJSONLogValue(logOutput, "never log this") {
-		t.Fatalf("structured logs contain the job payload: %s", logOutput)
+		t.Fatalf("structured logs contain the task payload: %s", logOutput)
 	}
 }
 
 type typeScriptEnqueueTrace struct {
-	JobID   string `json:"jobId"`
+	TaskID  string `json:"taskId"`
 	TraceID string `json:"traceId"`
 	SpanID  string `json:"spanId"`
 }
 
-func enqueueTracedJobFromTypeScript(t *testing.T, databaseURL, queueName string) typeScriptEnqueueTrace {
+func enqueueTracedTaskFromTypeScript(t *testing.T, databaseURL, queueName string) typeScriptEnqueueTrace {
 	t.Helper()
 	command := exec.Command(
 		"pnpm",
@@ -452,7 +452,7 @@ func enqueueTracedJobFromTypeScript(t *testing.T, databaseURL, queueName string)
 	if err := json.Unmarshal(output, &result); err != nil {
 		t.Fatalf("decode TypeScript enqueue result: %v: %s", err, output)
 	}
-	if result.JobID == "" || result.TraceID == "" || result.SpanID == "" {
+	if result.TaskID == "" || result.TraceID == "" || result.SpanID == "" {
 		t.Fatalf("TypeScript enqueue returned an incomplete trace: %#v", result)
 	}
 	return result

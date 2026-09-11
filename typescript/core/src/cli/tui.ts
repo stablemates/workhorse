@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import readline from "node:readline";
 import { Pool } from "pg";
-import type { DeadLetter, JobListItem, QueueHealth, WorkerRegistryEntry } from "../types.js";
+import type { DeadLetter, TaskListItem, QueueHealth, WorkerRegistryEntry } from "../types.js";
 import type { StoredSchedule } from "../queue/cron-schedules.js";
 import {
   AdminSafetyError,
@@ -11,14 +11,14 @@ import {
 } from "./admin-client.js";
 import {
   FAILURES_TABLE_HEADERS,
-  JOBS_TABLE_HEADERS,
+  TASKS_TABLE_HEADERS,
   QUEUES_TABLE_HEADERS,
   SCHEDULES_TABLE_HEADERS,
   WORKERS_TABLE_HEADERS,
   failuresTableRows,
   formatTable,
   healthLines,
-  jobsTableRows,
+  tasksTableRows,
   queuesTableRows,
   schedulesTableRows,
   workersTableRows,
@@ -28,10 +28,10 @@ const TUI_REFRESH_INTERVAL_MS = 5_000;
 /** Rows fetched per view. Small enough to render on one screen without paging. */
 const TUI_PAGE_SIZE = 50;
 
-export type TuiViewName = "jobs" | "queues" | "schedules" | "failures" | "workers" | "health";
+export type TuiViewName = "tasks" | "queues" | "schedules" | "failures" | "workers" | "health";
 
 export const TUI_VIEW_ORDER: readonly TuiViewName[] = [
-  "jobs",
+  "tasks",
   "queues",
   "schedules",
   "failures",
@@ -50,7 +50,7 @@ export interface TuiState {
   database: string;
   /** Non-null only when the operator confirmed the environment at launch. */
   environment: ConfirmedEnvironment | null;
-  jobs: JobListItem[];
+  tasks: TaskListItem[];
   queues: AdminQueueStatus[];
   schedules: StoredSchedule[];
   failures: DeadLetter[];
@@ -70,7 +70,7 @@ export function createTuiState(
     view: "queues",
     database,
     environment,
-    jobs: [],
+    tasks: [],
     queues: [],
     schedules: [],
     failures: [],
@@ -85,8 +85,8 @@ export function createTuiState(
 
 function viewBody(state: TuiState): string[] {
   switch (state.view) {
-    case "jobs":
-      return formatTable(JOBS_TABLE_HEADERS, jobsTableRows(state.jobs)).split("\n");
+    case "tasks":
+      return formatTable(TASKS_TABLE_HEADERS, tasksTableRows(state.tasks)).split("\n");
     case "queues": {
       const rows = queuesTableRows(state.queues).map((row, index) =>
         [index === state.selectedQueue ? ">" : " "].concat(row),
@@ -108,7 +108,7 @@ function footer(state: TuiState): string {
   if (state.pendingAction !== null) {
     return `${state.pendingAction.kind} queue "${state.pendingAction.queue}"? y to confirm, any other key to cancel`;
   }
-  const keys = "1 jobs  2 queues  3 schedules  4 failures  5 workers  6 health  r refresh  q quit";
+  const keys = "1 tasks  2 queues  3 schedules  4 failures  5 workers  6 health  r refresh  q quit";
   const queueKeys =
     state.view === "queues"
       ? state.environment === null
@@ -178,8 +178,8 @@ export function handleTuiKey(
 
 async function refreshTuiState(client: WorkhorseAdminClient, state: TuiState): Promise<void> {
   switch (state.view) {
-    case "jobs":
-      state.jobs = (await client.listJobs({ limit: TUI_PAGE_SIZE })).items;
+    case "tasks":
+      state.tasks = (await client.listTasks({ limit: TUI_PAGE_SIZE })).items;
       break;
     case "queues":
       state.queues = await client.queues();

@@ -4,10 +4,10 @@ import { Pool } from "pg";
 import { PurgeIdempotencyConflictError } from "../admin.js";
 import {
   MAX_EXTERNAL_WAIT_LIST_SIZE,
-  MAX_JOB_QUERY_PAGE_SIZE,
+  MAX_TASK_QUERY_PAGE_SIZE,
   MAX_REDRIVE_BATCH_SIZE,
 } from "../types.js";
-import type { DeadLetterFilter, JobListQuery, JobState } from "../types.js";
+import type { DeadLetterFilter, TaskListQuery, TaskState } from "../types.js";
 import type { ExternalWaitCursor } from "../queue/external-waits.js";
 import { CliUsageError, parseCommandArgs, resolveDatabaseUrl } from "./arguments.js";
 import {
@@ -19,7 +19,7 @@ import {
   CHECKPOINTS_TABLE_HEADERS,
   EXTERNAL_WAITS_TABLE_HEADERS,
   FAILURES_TABLE_HEADERS,
-  JOBS_TABLE_HEADERS,
+  TASKS_TABLE_HEADERS,
   QUEUES_TABLE_HEADERS,
   SCHEDULES_TABLE_HEADERS,
   TIMELINE_TABLE_HEADERS,
@@ -30,8 +30,8 @@ import {
   externalWaitsTableRows,
   failuresTableRows,
   formatTable,
-  jobDetailLines,
-  jobsTableRows,
+  taskDetailLines,
+  tasksTableRows,
   maintenanceLines,
   queuesTableRows,
   schedulesTableRows,
@@ -57,14 +57,14 @@ import { ADMIN_COMMANDS, CLI_OPTIONS } from "./surface.js";
 const ADMIN_HELP = `Usage: workhorse admin <command> [options]
 
 Inspection commands (safe, read-only):
-  jobs         List jobs newest-first with lifecycle filters.
-  job <id>     Show one job snapshot.
+  tasks         List tasks newest-first with lifecycle filters.
+  task <id>     Show one task snapshot.
   timeline <id>
-               Show one job's merged event and attempt timeline.
-  checkpoints <job-id>
-               List one job's restart-boundary checkpoints, or one of them with --name.
-  waits <job-id>
-               List one job's durable timer waits, or one of them with --name.
+               Show one task's merged event and attempt timeline.
+  checkpoints <task-id>
+               List one task's restart-boundary checkpoints, or one of them with --name.
+  waits <task-id>
+               List one task's durable timer waits, or one of them with --name.
   external-waits
                List every pending human decision and signal wait across the fleet.
   failures     List terminal failures (dead letters).
@@ -74,15 +74,15 @@ Inspection commands (safe, read-only):
   maintenance  Show the maintenance and retention policies with provenance.
 
 Guarded commands (mutate; require --env and confirmation):
-  cancel <job-id>     Request cooperative cancellation of one job.
-  redrive <job-id>    Redrive one terminal failure as a new job.
+  cancel <task-id>     Request cooperative cancellation of one task.
+  redrive <task-id>    Redrive one terminal failure as a new task.
   redrive-many       Recover one oldest-first page of failures; --dry-run previews without writes.
-  signal <job-id>    Deliver JSON to the signal wait selected by --name.
-  complete-human <job-id>
+  signal <task-id>    Deliver JSON to the signal wait selected by --name.
+  complete-human <task-id>
                      Answer the human decision selected by --name.
   pause <queue>       Pause claiming for one queue.
   resume <queue>      Resume claiming for one queue.
-  purge <queue>       Delete one queue's non-active jobs.
+  purge <queue>       Delete one queue's non-active tasks.
   pause-worker <worker-id>
                       Stop one registered worker from claiming.
   resume-worker <worker-id>
@@ -110,13 +110,13 @@ Guarded-command options:
 
 Listing options:
   --queue <name>     Filter by queue.
-  --type <type>      Filter by job type.
-  --state <state>    Filter jobs by lifecycle state; repeatable or comma-separated.
-  --limit <count>    Page size, at most 1000 for jobs, timeline, failures, and redrive-many.
-  --cursor <json>   Continue jobs, timeline, failures, or redrive-many from its own nextCursor.
+  --type <type>      Filter by task type.
+  --state <state>    Filter tasks by lifecycle state; repeatable or comma-separated.
+  --limit <count>    Page size, at most 1000 for tasks, timeline, failures, and redrive-many.
+  --cursor <json>   Continue tasks, timeline, failures, or redrive-many from its own nextCursor.
                      Keep filters unchanged; failure listings descend and bulk recovery ascends.
   --created-after <timestamp>, --created-before <timestamp>
-                     Filter jobs by creation time (inclusive lower, exclusive upper bound).
+                     Filter tasks by creation time (inclusive lower, exclusive upper bound).
   --finished-after <timestamp>, --finished-before <timestamp>
                      Filter failures or redrive-many by finish time (same bounds).
                      Timestamps must include a timezone.
@@ -134,7 +134,7 @@ The fallback database URL order is WORKHORSE_DATABASE_URL, then DATABASE_URL. Gu
 exit 1 when they refuse or when the target does not exist; malformed usage exits 64.
 `;
 
-const JOB_STATES: readonly JobState[] = [
+const TASK_STATES: readonly TaskState[] = [
   "blocked",
   "scheduled",
   "ready",
@@ -188,17 +188,17 @@ function splitRepeatable(values: readonly string[] | undefined): string[] {
   return (values ?? []).flatMap((value) => value.split(",")).filter((value) => value.length > 0);
 }
 
-function parseStates(values: readonly string[] | undefined): JobState[] | undefined {
+function parseStates(values: readonly string[] | undefined): TaskState[] | undefined {
   const states = splitRepeatable(values);
   if (states.length === 0) return undefined;
   for (const state of states) {
-    if (!JOB_STATES.includes(state as JobState)) {
+    if (!TASK_STATES.includes(state as TaskState)) {
       throw new CliUsageError(
-        `Unknown job state: ${state}. Known states: ${JOB_STATES.join(", ")}`,
+        `Unknown task state: ${state}. Known states: ${TASK_STATES.join(", ")}`,
       );
     }
   }
-  return [...new Set(states)] as JobState[];
+  return [...new Set(states)] as TaskState[];
 }
 
 /**
@@ -213,7 +213,7 @@ function parseExternalWaitCursor(
 ): ExternalWaitCursor | undefined {
   if (value === undefined) return undefined;
   const malformed = new CliUsageError(
-    `${flag} must be a JSON "nextCursor" object with string createdAt, jobId, and name fields`,
+    `${flag} must be a JSON "nextCursor" object with string createdAt, taskId, and name fields`,
   );
   let parsed: unknown;
   try {
@@ -223,7 +223,7 @@ function parseExternalWaitCursor(
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw malformed;
   const cursor = parsed as Record<string, unknown>;
-  const fields = ["createdAt", "jobId", "name"] as const;
+  const fields = ["createdAt", "taskId", "name"] as const;
   if (Object.keys(cursor).length !== fields.length) throw malformed;
   for (const field of fields) {
     if (typeof cursor[field] !== "string" || cursor[field] === "") throw malformed;
@@ -299,9 +299,9 @@ export async function runAdminCommand(
   }
   // Never silently ignore a preview or selection flag on a mutating command.
   const scopedOptions: Record<string, readonly string[]> = {
-    cursor: ["jobs", "timeline", "failures", "redrive-many"],
-    "created-after": ["jobs"],
-    "created-before": ["jobs"],
+    cursor: ["tasks", "timeline", "failures", "redrive-many"],
+    "created-after": ["tasks"],
+    "created-before": ["tasks"],
     "finished-after": ["failures", "redrive-many"],
     "finished-before": ["failures", "redrive-many"],
     tag: ["failures", "redrive-many"],
@@ -309,11 +309,11 @@ export async function runAdminCommand(
     "dry-run": ["redrive-many"],
     "payload-json": ["signal", "complete-human"],
     "payload-file": ["signal", "complete-human"],
-    state: ["jobs"],
+    state: ["tasks"],
     namespace: ["schedules"],
-    limit: ["jobs", "timeline", "failures", "redrive-many", "external-waits"],
-    queue: ["jobs", "failures", "redrive-many"],
-    type: ["jobs", "failures", "redrive-many"],
+    limit: ["tasks", "timeline", "failures", "redrive-many", "external-waits"],
+    queue: ["tasks", "failures", "redrive-many"],
+    type: ["tasks", "failures", "redrive-many"],
     name: ["checkpoints", "waits", "signal", "complete-human"],
     "human-cursor": ["external-waits"],
     "signal-cursor": ["external-waits"],
@@ -334,7 +334,7 @@ export async function runAdminCommand(
       ? MAX_EXTERNAL_WAIT_LIST_SIZE
       : command === "redrive-many"
         ? MAX_REDRIVE_BATCH_SIZE
-        : MAX_JOB_QUERY_PAGE_SIZE;
+        : MAX_TASK_QUERY_PAGE_SIZE;
   if (limit !== undefined && limit > maximum) {
     throw new CliUsageError(`admin ${command} --limit must be at most ${maximum}`);
   }
@@ -360,47 +360,47 @@ export async function runAdminCommand(
   const pool = new Pool({ connectionString: resolveDatabaseUrl(values) });
   const client = new WorkhorseAdminClient(pool);
   try {
-    if (command === "jobs") {
-      const query: JobListQuery = {
+    if (command === "tasks") {
+      const query: TaskListQuery = {
         queue: values.queue,
         type: values.type,
         states: parseStates(values.state),
         createdAfter,
         createdBefore,
-        cursor: parseCursor(values.cursor, ["createdAt", "jobId", "signature"]),
+        cursor: parseCursor(values.cursor, ["createdAt", "taskId", "signature"]),
         limit,
       };
-      const page = await client.listJobs(query);
+      const page = await client.listTasks(query);
       io.out(
         json
-          ? toAdminJson("admin jobs", page)
-          : `${formatTable(JOBS_TABLE_HEADERS, jobsTableRows(page.items))}\n${continuationHint(page.nextCursor)}`,
+          ? toAdminJson("admin tasks", page)
+          : `${formatTable(TASKS_TABLE_HEADERS, tasksTableRows(page.items))}\n${continuationHint(page.nextCursor)}`,
       );
       return;
     }
-    if (command === "job") {
-      const jobId = requirePositional(positionals, command, "job-id");
-      const snapshot = await client.getJob(jobId);
+    if (command === "task") {
+      const taskId = requirePositional(positionals, command, "task-id");
+      const snapshot = await client.getTask(taskId);
       if (snapshot === null) {
-        io.error(`Job ${jobId} was not found.\n`);
+        io.error(`Task ${taskId} was not found.\n`);
         process.exitCode = 1;
         return;
       }
       io.out(
-        json ? toAdminJson("admin job", snapshot) : `${jobDetailLines(snapshot).join("\n")}\n`,
+        json ? toAdminJson("admin task", snapshot) : `${taskDetailLines(snapshot).join("\n")}\n`,
       );
       return;
     }
     if (command === "timeline") {
-      const jobId = requirePositional(positionals, command, "job-id");
-      const cursor = parseCursor(values.cursor, ["jobId", "occurredAt", "kind", "recordId"]);
+      const taskId = requirePositional(positionals, command, "task-id");
+      const cursor = parseCursor(values.cursor, ["taskId", "occurredAt", "kind", "recordId"]);
       if (
         cursor !== undefined &&
-        (cursor.jobId !== jobId || (cursor.kind !== "event" && cursor.kind !== "attempt"))
+        (cursor.taskId !== taskId || (cursor.kind !== "event" && cursor.kind !== "attempt"))
       ) {
-        throw new CliUsageError("--cursor must belong to this job and have kind event or attempt");
+        throw new CliUsageError("--cursor must belong to this task and have kind event or attempt");
       }
-      const page = await client.getJobTimeline(jobId, {
+      const page = await client.getTaskTimeline(taskId, {
         limit,
         cursor:
           cursor === undefined
@@ -415,11 +415,11 @@ export async function runAdminCommand(
       return;
     }
     if (command === "checkpoints") {
-      const jobId = requirePositional(positionals, command, "job-id");
+      const taskId = requirePositional(positionals, command, "task-id");
       if (values.name !== undefined) {
-        const checkpoint = await client.getCheckpoint(jobId, values.name);
+        const checkpoint = await client.getCheckpoint(taskId, values.name);
         if (checkpoint === null) {
-          io.error(`Job ${jobId} has no checkpoint named ${values.name}.\n`);
+          io.error(`Task ${taskId} has no checkpoint named ${values.name}.\n`);
           process.exitCode = 1;
           return;
         }
@@ -430,7 +430,7 @@ export async function runAdminCommand(
         );
         return;
       }
-      const checkpoints = await client.listCheckpoints(jobId);
+      const checkpoints = await client.listCheckpoints(taskId);
       io.out(
         json
           ? toAdminJson("admin checkpoints", checkpoints)
@@ -439,18 +439,18 @@ export async function runAdminCommand(
       return;
     }
     if (command === "waits") {
-      const jobId = requirePositional(positionals, command, "job-id");
+      const taskId = requirePositional(positionals, command, "task-id");
       if (values.name !== undefined) {
-        const wait = await client.getWait(jobId, values.name);
+        const wait = await client.getWait(taskId, values.name);
         if (wait === null) {
-          io.error(`Job ${jobId} has no wait named ${values.name}.\n`);
+          io.error(`Task ${taskId} has no wait named ${values.name}.\n`);
           process.exitCode = 1;
           return;
         }
         io.out(json ? toAdminJson("admin waits", wait) : `${waitDetailLines(wait).join("\n")}\n`);
         return;
       }
-      const waits = await client.listWaits(jobId);
+      const waits = await client.listWaits(taskId);
       io.out(
         json
           ? toAdminJson("admin waits", waits)
@@ -475,7 +475,7 @@ export async function runAdminCommand(
       const page = await client.listDeadLetters({
         ...failureFilter,
         limit,
-        cursor: parseCursor(values.cursor, ["finishedAt", "jobId"]),
+        cursor: parseCursor(values.cursor, ["finishedAt", "taskId"]),
       });
       io.out(
         json
@@ -535,7 +535,7 @@ export async function runAdminCommand(
         reason: values.reason,
         requestId: values["request-id"] ?? "workhorse-admin-preview",
       };
-      const options = { limit, cursor: parseCursor(values.cursor, ["finishedAt", "jobId"]) };
+      const options = { limit, cursor: parseCursor(values.cursor, ["finishedAt", "taskId"]) };
       const environment = values["dry-run"]
         ? null
         : await confirmMutation(client, io, values, command, values.queue ?? "all queues");
@@ -550,8 +550,8 @@ export async function runAdminCommand(
           : `${formatTable(
               ["SOURCE", "TARGET", "STATUS"],
               page.results.map((result) => [
-                result.sourceJobId,
-                result.targetJobId ?? "-",
+                result.sourceTaskId,
+                result.targetTaskId ?? "-",
                 result.status,
               ]),
             )}\n${continuationHint(page.nextCursor)}`,
@@ -565,7 +565,7 @@ export async function runAdminCommand(
       return;
     }
     if (command === "signal" || command === "complete-human") {
-      const jobId = requirePositional(positionals, command, "job-id");
+      const taskId = requirePositional(positionals, command, "task-id");
       if (!values.name) throw new CliUsageError(`admin ${command} requires --name <name>`);
       if (!values["request-id"]?.trim())
         throw new CliUsageError(`admin ${command} requires --request-id <id>`);
@@ -580,12 +580,12 @@ export async function runAdminCommand(
           throw new CliUsageError(error.message);
         throw error;
       }
-      const environment = await confirmMutation(client, io, values, command, jobId);
+      const environment = await confirmMutation(client, io, values, command, taskId);
       if (environment === null) return;
       const result =
         command === "signal"
-          ? await client.sendSignal(environment, jobId, values.name, payload, request)
-          : await client.completeHumanWait(environment, jobId, values.name, payload, request);
+          ? await client.sendSignal(environment, taskId, values.name, payload, request)
+          : await client.completeHumanWait(environment, taskId, values.name, payload, request);
       const accepted =
         result.status === "delivered" ||
         result.status === "completed" ||
@@ -594,7 +594,7 @@ export async function runAdminCommand(
         if ("deliveredAt" in result) io.out(toAdminJson("admin signal", result));
         else io.out(toAdminJson("admin complete-human", result));
       } else {
-        const message = `${command} ${jobId} / ${values.name}: ${result.status}.\n`;
+        const message = `${command} ${taskId} / ${values.name}: ${result.status}.\n`;
         if (accepted) io.out(message);
         else io.error(message);
       }
@@ -602,43 +602,45 @@ export async function runAdminCommand(
       return;
     }
     if (command === "cancel") {
-      const jobId = requirePositional(positionals, command, "job-id");
-      const environment = await confirmMutation(client, io, values, "cancel", jobId);
+      const taskId = requirePositional(positionals, command, "task-id");
+      const environment = await confirmMutation(client, io, values, "cancel", taskId);
       if (environment === null) return;
-      const result = await client.cancel(environment, jobId, {
+      const result = await client.cancel(environment, taskId, {
         requestedBy: actor,
         reason: values.reason,
       });
       if (json) io.out(toAdminJson("admin cancel", result));
-      else if (result.status === "canceled") io.out(`Canceled job ${jobId}.\n`);
+      else if (result.status === "canceled") io.out(`Canceled task ${taskId}.\n`);
       else if (result.status === "cancel_requested") {
-        io.out(`Requested cooperative cancellation of active job ${jobId}.\n`);
+        io.out(`Requested cooperative cancellation of active task ${taskId}.\n`);
       } else if (result.status === "already_terminal") {
-        io.out(`Job ${jobId} is already terminal (${result.state ?? "unknown"}).\n`);
-      } else io.error(`Job ${jobId} was not found.\n`);
+        io.out(`Task ${taskId} is already terminal (${result.state ?? "unknown"}).\n`);
+      } else io.error(`Task ${taskId} was not found.\n`);
       if (result.status === "already_terminal" || result.status === "not_found") {
         process.exitCode = 1;
       }
       return;
     }
     if (command === "redrive") {
-      const jobId = requirePositional(positionals, command, "job-id");
+      const taskId = requirePositional(positionals, command, "task-id");
       if (!values.reason) throw new CliUsageError("admin redrive requires --reason <text>");
-      const environment = await confirmMutation(client, io, values, "redrive", jobId);
+      const environment = await confirmMutation(client, io, values, "redrive", taskId);
       if (environment === null) return;
-      const result = await client.redrive(environment, jobId, {
+      const result = await client.redrive(environment, taskId, {
         requestedBy: actor,
         reason: values.reason,
         requestId: values["request-id"] ?? randomUUID(),
       });
       if (json) io.out(toAdminJson("admin redrive", result));
       else if (result.status === "redriven" || result.status === "replayed") {
-        io.out(`Redrove job ${jobId} as ${result.targetJobId ?? "unknown"} (${result.status}).\n`);
+        io.out(
+          `Redrove task ${taskId} as ${result.targetTaskId ?? "unknown"} (${result.status}).\n`,
+        );
       } else if (result.status === "not_failed") {
         io.error(
-          `Job ${jobId} is not a terminal failure (state ${result.sourceState ?? "unknown"}).\n`,
+          `Task ${taskId} is not a terminal failure (state ${result.sourceState ?? "unknown"}).\n`,
         );
-      } else io.error(`Job ${jobId} was not found.\n`);
+      } else io.error(`Task ${taskId} was not found.\n`);
       if (result.status === "not_found" || result.status === "not_failed") process.exitCode = 1;
       return;
     }
@@ -677,7 +679,7 @@ export async function runAdminCommand(
     if (command === "purge") {
       const deletedCount = await client.purgeQueue(environment, queueName, request);
       if (json) io.out(toAdminJson("admin purge", { queue: queueName, deletedCount }));
-      else io.out(`Purged ${deletedCount} job(s) from queue ${queueName}.\n`);
+      else io.out(`Purged ${deletedCount} task(s) from queue ${queueName}.\n`);
       return;
     }
     if (command === "pause") await client.pauseQueue(environment, queueName, request);

@@ -1,10 +1,10 @@
 # How do I limit duplicate work during a busy window?
 
-A digest sender may receive many equivalent triggers close together. It needs one accepted job for
+A digest sender may receive many equivalent triggers close together. It needs one accepted task for
 that period, while later triggers should reuse the same durable identity.
 
-Keyed throttle keeps the acceptance window in PostgreSQL. The first request creates the job. An
-equivalent request before the window closes returns that job with a `coalesced` outcome.
+Keyed throttle keeps the acceptance window in PostgreSQL. The first request creates the task. An
+equivalent request before the window closes returns that task with a `coalesced` outcome.
 
 The dashboard records safe throttle evidence on the surviving task. Its detail view shows the
 scope, a key digest, the window, and how many requests were absorbed without exposing the raw key.
@@ -23,25 +23,25 @@ const result = await queue.enqueueWithResult(
 );
 ```
 
-The retained job may be waiting, active, or finished. Throttle controls whether PostgreSQL accepts
+The retained task may be waiting, active, or finished. Throttle controls whether PostgreSQL accepts
 another identity, so execution state does not reopen the window.
 
 The repeated request must remain equivalent. A changed payload, queue, priority, schedule, retry
 policy, or window is a conflict because silently dropping changed work would hide caller intent.
 
-After the window closes, the same key can accept a new job. Purging pending work also releases its
+After the window closes, the same key can accept a new task. Purging pending work also releases its
 key. One request cannot combine throttle with
 [enqueue idempotency](210-enqueue-idempotency.md) or [debounce](215-debounce.md), because each mode
 gives a repeated key a different meaning.
 
-A throttled job cannot declare the deprecated `prerequisiteJobId` or `dependencies`. Use a regular
-[dependent job](160-job-dependencies.md) when dispatch must wait for other work.
+A throttled task cannot declare the deprecated `prerequisiteTaskId` or `dependencies`. Use a regular
+[dependent task](160-task-dependencies.md) when dispatch must wait for other work.
 
 ## Next
 
 - [210-enqueue-idempotency.md](210-enqueue-idempotency.md) — replaying an identical request safely
 - [215-debounce.md](215-debounce.md) — replacing pending work while updates keep arriving
-- [250-rate-limits.md](250-rate-limits.md) — controlling how quickly accepted jobs may start
+- [250-rate-limits.md](250-rate-limits.md) — controlling how quickly accepted tasks may start
 
 ---
 

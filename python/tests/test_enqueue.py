@@ -56,7 +56,7 @@ def test_serializes_every_shared_request_fixture_and_returns_the_canonical_resul
                 [
                     {
                         "ordinal": 1,
-                        "job_id": "00000000-0000-4000-8000-000000000001",
+                        "task_id": "00000000-0000-4000-8000-000000000001",
                         "outcome": "accepted",
                         "reason": None,
                     }
@@ -88,7 +88,7 @@ def test_serializes_every_shared_request_fixture_and_returns_the_canonical_resul
             ),
         )
 
-        assert result.job_id == "00000000-0000-4000-8000-000000000001"
+        assert result.task_id == "00000000-0000-4000-8000-000000000001"
         assert result.outcome == "accepted"
         serialized = json.loads(connection.calls[1][1][0])
         assert_value([fixture["postgres"]], serialized, {}, fixture["id"])
@@ -165,8 +165,8 @@ def test_batch_preserves_result_order() -> None:
                 {"kind": "protocol", "version": 1},
             ],
             [
-                {"ordinal": 1, "job_id": "one", "outcome": "accepted", "reason": None},
-                {"ordinal": 2, "job_id": "two", "outcome": "replayed", "reason": None},
+                {"ordinal": 1, "task_id": "one", "outcome": "accepted", "reason": None},
+                {"ordinal": 2, "task_id": "two", "outcome": "replayed", "reason": None},
             ],
         ]
     )
@@ -178,7 +178,7 @@ def test_batch_preserves_result_order() -> None:
         ]
     )
 
-    assert [(result.job_id, result.outcome) for result in results] == [
+    assert [(result.task_id, result.outcome) for result in results] == [
         ("one", "accepted"),
         ("two", "replayed"),
     ]

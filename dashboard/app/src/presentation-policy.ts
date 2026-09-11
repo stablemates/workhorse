@@ -32,9 +32,9 @@ export interface DashboardSettingsRecommendation {
 }
 
 const retentionCategorySettings: Readonly<Record<string, string[]>> = {
-  jobIdentity: ["terminalCleanupIntervalMs", "terminalJobPruneLimit"],
-  terminalOutcome: ["terminalCleanupIntervalMs", "terminalJobPruneLimit"],
-  jobEvents: ["historyRetentionLocalTime"],
+  taskIdentity: ["terminalCleanupIntervalMs", "terminalTaskPruneLimit"],
+  terminalOutcome: ["terminalCleanupIntervalMs", "terminalTaskPruneLimit"],
+  taskEvents: ["historyRetentionLocalTime"],
   attemptHistory: ["historyRetentionLocalTime"],
   scheduleOccurrences: ["occurrenceRowsPerPass"],
   statistics: ["statisticsRowsPerPass"],
@@ -53,27 +53,27 @@ export function deriveSettingsRecommendations(
 
   if (
     retention.terminalOutcomeRetentionDays !== null &&
-    enqueueRate.jobs > 0 &&
+    enqueueRate.tasks > 0 &&
     enqueueRate.windowMs > 0
   ) {
     const passesPerDay = DAY_MS / maintenance.terminalCleanupIntervalMs;
-    const ceilingPerDay = Math.round(retention.terminalJobPruneLimit * passesPerDay);
-    const measuredPerDay = Math.round((enqueueRate.jobs / enqueueRate.windowMs) * DAY_MS);
+    const ceilingPerDay = Math.round(retention.terminalTaskPruneLimit * passesPerDay);
+    const measuredPerDay = Math.round((enqueueRate.tasks / enqueueRate.windowMs) * DAY_MS);
     if (measuredPerDay > ceilingPerDay * CEILING_PRESSURE) {
       recommendations.push({
         id: "terminal-cleanup-ceiling",
         severity: "warning",
-        settings: ["terminalCleanupIntervalMs", "terminalJobPruneLimit"],
+        settings: ["terminalCleanupIntervalMs", "terminalTaskPruneLimit"],
         summary:
-          `Jobs arrive at roughly ${measuredPerDay.toLocaleString("en-US")} per day, but ` +
+          `Tasks arrive at roughly ${measuredPerDay.toLocaleString("en-US")} per day, but ` +
           `terminal cleanup can delete at most ${ceilingPerDay.toLocaleString("en-US")} per day ` +
-          `(${retention.terminalJobPruneLimit.toLocaleString("en-US")} rows every ` +
+          `(${retention.terminalTaskPruneLimit.toLocaleString("en-US")} rows every ` +
           `${Math.round(maintenance.terminalCleanupIntervalMs / 1000)}s). If the rate holds, ` +
           `completed history accumulates: raise the prune limit or shorten the cleanup interval.`,
         measured: {
           enqueuedPerDay: measuredPerDay,
           cleanupCeilingPerDay: ceilingPerDay,
-          terminalJobPruneLimit: retention.terminalJobPruneLimit,
+          terminalTaskPruneLimit: retention.terminalTaskPruneLimit,
           terminalCleanupIntervalMs: maintenance.terminalCleanupIntervalMs,
           windowMs: enqueueRate.windowMs,
         },
@@ -121,7 +121,7 @@ export function deriveSettingsRecommendations(
     });
   } else if (
     maintenance.statisticsRollupIntervalMs === 0 &&
-    (retention.jobEventRetentionDays !== null || retention.attemptHistoryRetentionDays !== null)
+    (retention.taskEventRetentionDays !== null || retention.attemptHistoryRetentionDays !== null)
   ) {
     recommendations.push({
       id: "statistics-disabled",
@@ -138,10 +138,10 @@ export function deriveSettingsRecommendations(
     });
   }
 
-  const spill = input.defaultHistoryRows.jobEvents + input.defaultHistoryRows.attemptHistory;
+  const spill = input.defaultHistoryRows.taskEvents + input.defaultHistoryRows.attemptHistory;
   if (spill > 0) {
     const capped =
-      input.defaultHistoryRowsCapped.jobEvents || input.defaultHistoryRowsCapped.attemptHistory;
+      input.defaultHistoryRowsCapped.taskEvents || input.defaultHistoryRowsCapped.attemptHistory;
     recommendations.push({
       id: "partition-spill",
       severity: "warning",
@@ -151,7 +151,7 @@ export function deriveSettingsRecommendations(
         `default partition because no daily partition covered them. Those rows are deleted row by ` +
         `row instead of dropped with their day: prepare partitions more frequently.`,
       measured: {
-        jobEventRows: input.defaultHistoryRows.jobEvents,
+        taskEventRows: input.defaultHistoryRows.taskEvents,
         attemptHistoryRows: input.defaultHistoryRows.attemptHistory,
         capped,
       },
@@ -162,9 +162,9 @@ export function deriveSettingsRecommendations(
 }
 
 export const retentionCategoryLabels: Record<DashboardRetentionCategory, string> = {
-  jobIdentity: "Task records",
+  taskIdentity: "Task records",
   terminalOutcome: "Finished results",
-  jobEvents: "Task events",
+  taskEvents: "Task events",
   attemptHistory: "Attempt history",
   scheduleOccurrences: "Schedule runs",
   statistics: "Rolled-up statistics",
@@ -312,16 +312,16 @@ const storageRelationPresentation: Record<
   string,
   { label: string; group: "tasks" | "history" | "statistics" }
 > = {
-  job: { label: "Task records", group: "tasks" },
-  job_outcome: { label: "Finished results", group: "tasks" },
-  job_runtime: { label: "Active task state", group: "tasks" },
-  job_query: { label: "Dashboard task view", group: "tasks" },
-  job_event: { label: "Task events", group: "history" },
+  task: { label: "Task records", group: "tasks" },
+  task_outcome: { label: "Finished results", group: "tasks" },
+  task_runtime: { label: "Active task state", group: "tasks" },
+  task_query: { label: "Dashboard task view", group: "tasks" },
+  task_event: { label: "Task events", group: "history" },
   attempt_history: { label: "Attempt history", group: "history" },
   schedule_occurrence: { label: "Schedule runs", group: "history" },
-  job_stat_bucket: { label: "Minute summaries", group: "statistics" },
-  job_stat_bucket_hour: { label: "Hourly summaries", group: "statistics" },
-  job_stat_bucket_day: { label: "Daily summaries", group: "statistics" },
+  task_stat_bucket: { label: "Minute summaries", group: "statistics" },
+  task_stat_bucket_hour: { label: "Hourly summaries", group: "statistics" },
+  task_stat_bucket_day: { label: "Daily summaries", group: "statistics" },
 };
 
 export function presentStorageRelation(row: DashboardStorageRelation): DashboardStorageRelation & {
@@ -354,7 +354,7 @@ export function workerStatus(
   worker: DashboardWorkerRow,
   capturedAt: string,
 ): "active" | "idle" | "recent" | "offline" {
-  if (worker.activeJobs > 0) return "active";
+  if (worker.activeTasks > 0) return "active";
   const capturedAtMs = Date.parse(capturedAt);
   const heartbeatAtMs = worker.lastHeartbeatAt ? Date.parse(worker.lastHeartbeatAt) : Number.NaN;
   if (
@@ -451,14 +451,14 @@ const scheduleDescriptions: Record<string, string> = {
 };
 
 export function presentSchedules(page: DashboardCronPage): PresentedScheduleRow[] {
-  const { cadences, policy, tasks } = page.maintenance;
-  const state = new Map(tasks.map((task) => [task.task, task]));
+  const { cadences, policy, routines } = page.maintenance;
+  const state = new Map(routines.map((routine) => [routine.routine, routine]));
   const maintenance = (
-    task: "tick" | "history_partitions" | "history_retention" | "terminal_storage",
+    routine: "tick" | "history_partitions" | "history_retention" | "terminal_storage",
     intervalMs: number,
     phases: string[],
   ): PresentedScheduleRow["maintenance"] => {
-    const row = state.get(task);
+    const row = state.get(routine);
     return {
       intervalMs,
       phases,
@@ -527,7 +527,7 @@ export function presentSchedules(page: DashboardCronPage): PresentedScheduleRow[
       state.get("terminal_storage")?.lastCompletedAt ?? null,
       maintenance("terminal_storage", policy.terminalCleanupIntervalMs, [
         "enqueue_idempotency",
-        "terminal_jobs",
+        "terminal_tasks",
       ]),
     ),
     ...page.schedules.map((schedule) => ({

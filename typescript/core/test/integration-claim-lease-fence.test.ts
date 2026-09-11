@@ -21,33 +21,33 @@ describe("claim lease fence", () => {
     const ids = await queue.enqueueMany(
       ["first", "second"].map((name) => ({ type: `heartbeat-${name}`, payload: null })),
     );
-    const jobs = await Promise.all(ids.map(() => queue.claim(workerId, { leaseMs: 5_000 })));
-    expect(jobs.every((job) => job !== null)).toBe(true);
+    const tasks = await Promise.all(ids.map(() => queue.claim(workerId, { leaseMs: 5_000 })));
+    expect(tasks.every((task) => task !== null)).toBe(true);
 
     await pool.query("SELECT pg_stat_force_next_flush()");
     const before = await pool.query<{ hot_updates: string }>(
       `SELECT n_tup_hot_upd::text AS hot_updates
          FROM pg_stat_user_tables
-        WHERE schemaname = 'workhorse' AND relname = 'job_runtime'`,
+        WHERE schemaname = 'workhorse' AND relname = 'task_runtime'`,
     );
     const hotUpdatesBefore = Number(before.rows[0]?.hot_updates ?? 0);
     await expect(
-      queue.heartbeatMany(jobs as NonNullable<(typeof jobs)[number]>[], workerId, 5_000),
+      queue.heartbeatMany(tasks as NonNullable<(typeof tasks)[number]>[], workerId, 5_000),
     ).resolves.toEqual(new Map(ids.map((id) => [id, "accepted"])));
     await pool.query("SELECT pg_stat_force_next_flush()");
     await waitForDatabaseCondition(async () => {
       const result = await pool.query<{ hot_updates: string }>(
         `SELECT n_tup_hot_upd::text AS hot_updates
            FROM pg_stat_user_tables
-          WHERE schemaname = 'workhorse' AND relname = 'job_runtime'`,
+          WHERE schemaname = 'workhorse' AND relname = 'task_runtime'`,
       );
-      return Number(result.rows[0]?.hot_updates ?? 0) - hotUpdatesBefore >= jobs.length;
+      return Number(result.rows[0]?.hot_updates ?? 0) - hotUpdatesBefore >= tasks.length;
     });
 
-    const stale = { ...jobs[1]!, fenceToken: jobs[1]!.fenceToken + 1n };
-    await expect(queue.heartbeatMany([jobs[0]!, stale], workerId, 5_000)).resolves.toEqual(
+    const stale = { ...tasks[1]!, fenceToken: tasks[1]!.fenceToken + 1n };
+    await expect(queue.heartbeatMany([tasks[0]!, stale], workerId, 5_000)).resolves.toEqual(
       new Map([
-        [jobs[0]!.id, "accepted"],
+        [tasks[0]!.id, "accepted"],
         [stale.id, "stale"],
       ]),
     );
@@ -69,7 +69,7 @@ describe("claim lease fence", () => {
     expect(await queue.fail(promoted!, "priority-promoted", new Error("retry priority"), 0)).toBe(
       "ready",
     );
-    await expect(admin.getJob(scheduledHigh)).resolves.toMatchObject({
+    await expect(admin.getTask(scheduledHigh)).resolves.toMatchObject({
       state: "ready",
       priority: 90,
     });
@@ -94,10 +94,10 @@ describe("claim lease fence", () => {
       expect.arrayContaining([elevatedPeer, highPeers[0]]),
     );
     expect(claims.every((claim) => claim !== null && claim.priority >= 80)).toBe(true);
-    await expect(admin.getJob(low)).resolves.toMatchObject({ state: "ready", priority: 10 });
+    await expect(admin.getTask(low)).resolves.toMatchObject({ state: "ready", priority: 10 });
   });
 
-  it("validates cancellation metadata and idempotently cancels never-started jobs", async () => {
+  it("validates cancellation metadata and idempotently cancels never-started tasks", async () => {
     const readyId = await queue.enqueue("cancel-ready", { value: 1 });
     await expect(queue.cancel(readyId, { requestedBy: "" })).rejects.toThrow(
       "requested_by must contain between 1 and 200 characters",
@@ -118,7 +118,7 @@ describe("claim lease fence", () => {
     });
     expect(first).toMatchObject({
       status: "canceled",
-      jobId: readyId,
+      taskId: readyId,
       state: "canceled",
       currentAttempt: 1,
       requestedBy: "integration-test",
@@ -132,13 +132,13 @@ describe("claim lease fence", () => {
       reason: "ignored retry metadata",
     });
     expect(repeated).toEqual(first);
-    expect(await admin.getJob(readyId)).toMatchObject({
+    expect(await admin.getTask(readyId)).toMatchObject({
       state: "canceled",
       currentAttempt: 1,
       fenceToken: 0n,
       error: {
         name: "CancellationRequested",
-        message: "job cancellation was requested",
+        message: "task cancellation was requested",
         requested_by: "integration-test",
         reason: "no longer needed",
       },
@@ -148,27 +148,27 @@ describe("claim lease fence", () => {
       runAt: new Date(Date.now() + 60_000),
     });
     expect((await queue.cancel(scheduledId)).status).toBe("canceled");
-    const neverStarted = await pool.query<{ job_id: string; attempts: number; events: number }>(
-      `SELECT job.id AS job_id,
+    const neverStarted = await pool.query<{ task_id: string; attempts: number; events: number }>(
+      `SELECT task.id AS task_id,
               (SELECT count(*)::integer FROM workhorse.attempt_history history
-                WHERE history.job_id = job.id) AS attempts,
-              (SELECT count(*)::integer FROM workhorse.job_event event
-                WHERE event.job_id = job.id AND event.event_type = 'canceled') AS events
-         FROM workhorse.job job WHERE job.id = ANY($1::uuid[]) ORDER BY job.id`,
+                WHERE history.task_id = task.id) AS attempts,
+              (SELECT count(*)::integer FROM workhorse.task_event event
+                WHERE event.task_id = task.id AND event.event_type = 'canceled') AS events
+         FROM workhorse.task task WHERE task.id = ANY($1::uuid[]) ORDER BY task.id`,
       [[readyId, scheduledId]],
     );
     expect(neverStarted.rows).toHaveLength(2);
     expect(neverStarted.rows).toEqual(
       expect.arrayContaining([
-        { job_id: readyId, attempts: 0, events: 1 },
-        { job_id: scheduledId, attempts: 0, events: 1 },
+        { task_id: readyId, attempts: 0, events: 1 },
+        { task_id: scheduledId, attempts: 0, events: 1 },
       ]),
     );
 
     const missing = await queue.cancel("00000000-0000-4000-8000-000000000001");
     expect(missing).toEqual({
       status: "not_found",
-      jobId: "00000000-0000-4000-8000-000000000001",
+      taskId: "00000000-0000-4000-8000-000000000001",
       state: null,
       currentAttempt: null,
       requestedAt: null,
@@ -194,7 +194,7 @@ describe("claim lease fence", () => {
     const firstClaim = await queue.claim("wait-cancel-worker-1", { leaseMs: 5_000 });
     expect(firstClaim?.id).toBe(id);
     const originalClaim = await pool.query<{ attempt_started_at: Date; acquired_at: Date }>(
-      `SELECT attempt_started_at, acquired_at FROM workhorse.job_runtime WHERE job_id = $1`,
+      `SELECT attempt_started_at, acquired_at FROM workhorse.task_runtime WHERE task_id = $1`,
       [id],
     );
     expect(
@@ -207,7 +207,7 @@ describe("claim lease fence", () => {
     const continuation = await queue.claim("wait-cancel-worker-2", { leaseMs: 5_000 });
     expect(continuation?.id).toBe(id);
     const latestClaim = await pool.query<{ acquired_at: Date }>(
-      `SELECT acquired_at FROM workhorse.job_runtime WHERE job_id = $1`,
+      `SELECT acquired_at FROM workhorse.task_runtime WHERE task_id = $1`,
       [id],
     );
     const scheduled = await queue.scheduleWait(
@@ -235,7 +235,7 @@ describe("claim lease fence", () => {
       claimed_at: Date;
     }>(
       `SELECT attempt, fence_token::text, worker_id, outcome, started_at, claimed_at
-         FROM workhorse.attempt_history WHERE job_id = $1`,
+         FROM workhorse.attempt_history WHERE task_id = $1`,
       [id],
     );
     expect(history.rows).toEqual([
@@ -267,7 +267,7 @@ describe("claim lease fence", () => {
     expect(await queue.cancel(id, { requestedBy: "operator-8", reason: "duplicate" })).toEqual(
       first,
     );
-    expect(await admin.getJob(id)).toMatchObject({
+    expect(await admin.getTask(id)).toMatchObject({
       state: "active",
       cancelRequestedAt: first.requestedAt,
       cancelRequestedBy: "operator-7",
@@ -289,14 +289,14 @@ describe("claim lease fence", () => {
     ).rejects.toThrow("stale or expired");
 
     const requestEvents = await pool.query<{ count: number }>(
-      `SELECT count(*)::integer AS count FROM workhorse.job_event
-        WHERE job_id = $1 AND event_type = 'cancel_requested'`,
+      `SELECT count(*)::integer AS count FROM workhorse.task_event
+        WHERE task_id = $1 AND event_type = 'cancel_requested'`,
       [id],
     );
     expect(requestEvents.rows[0]?.count).toBe(1);
     expect(await queue.acknowledgeCancel(claimed!, "active-cancel-worker")).toBe(true);
     expect(await queue.acknowledgeCancel(claimed!, "active-cancel-worker")).toBe(false);
-    expect(await admin.getJob(id)).toMatchObject({
+    expect(await admin.getTask(id)).toMatchObject({
       state: "canceled",
       cancelRequestedAt: null,
       cancelRequestedBy: null,
@@ -307,10 +307,10 @@ describe("claim lease fence", () => {
     expect(await queue.fail(claimed!, "active-cancel-worker", new Error("stale"), 0)).toBe("stale");
     const terminalRows = await pool.query<{ events: number; attempts: number }>(
       `SELECT
-        (SELECT count(*)::integer FROM workhorse.job_event
-          WHERE job_id = $1 AND event_type = 'canceled') AS events,
+        (SELECT count(*)::integer FROM workhorse.task_event
+          WHERE task_id = $1 AND event_type = 'canceled') AS events,
         (SELECT count(*)::integer FROM workhorse.attempt_history
-          WHERE job_id = $1 AND outcome = 'canceled') AS attempts`,
+          WHERE task_id = $1 AND outcome = 'canceled') AS attempts`,
       [id],
     );
     expect(terminalRows.rows[0]).toEqual({ events: 1, attempts: 1 });
@@ -325,7 +325,7 @@ describe("claim lease fence", () => {
       leaseMs: 5_000,
       heartbeatMs: 100,
       maintenanceIntervalMs: 100,
-      maintenanceTaskPollMs: 100,
+      maintenanceRoutinePollMs: 100,
     }).handle("cooperative-cancel", async (_payload, context) => {
       started.resolve();
       await new Promise<void>((_resolve, reject) => {
@@ -344,7 +344,7 @@ describe("claim lease fence", () => {
     expect((await queue.cancel(id)).status).toBe("cancel_requested");
     expect(await aborted.promise).toBeInstanceOf(CancellationRequestedError);
     await execution;
-    expect(await admin.getJob(id)).toMatchObject({ state: "canceled" });
+    expect(await admin.getTask(id)).toMatchObject({ state: "canceled" });
   });
 
   it("acknowledges cancellation after a default-concurrency handler ignores AbortSignal", async () => {
@@ -357,7 +357,7 @@ describe("claim lease fence", () => {
       leaseMs: 5_000,
       heartbeatMs: 100,
       maintenanceIntervalMs: 100,
-      maintenanceTaskPollMs: 100,
+      maintenanceRoutinePollMs: 100,
     }).handle("ignore-cancel", async (_payload, context) => {
       expect(worker.concurrency).toBe(1);
       started.resolve();
@@ -372,10 +372,10 @@ describe("claim lease fence", () => {
     await started.promise;
     await queue.cancel(id);
     expect(await aborted.promise).toBeInstanceOf(CancellationRequestedError);
-    expect(await admin.getJob(id)).toMatchObject({ state: "active" });
+    expect(await admin.getTask(id)).toMatchObject({ state: "active" });
     release.resolve();
     await execution;
-    expect(await admin.getJob(id)).toMatchObject({ state: "canceled", result: null });
+    expect(await admin.getTask(id)).toMatchObject({ state: "canceled", result: null });
   });
 
   it("materializes cancellation while a handler is scheduling a durable wait", async () => {
@@ -412,7 +412,7 @@ describe("claim lease fence", () => {
       await execution.catch(() => undefined);
     }
 
-    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "canceled", result: null });
+    await expect(admin.getTask(id)).resolves.toMatchObject({ state: "canceled", result: null });
     await expect(admin.listWaits(id)).resolves.toEqual([]);
   });
 
@@ -427,11 +427,11 @@ describe("claim lease fence", () => {
     const releaseSibling = deferred();
     const handler = async (
       _payload: unknown,
-      context: { job: { id: string }; signal: AbortSignal },
+      context: { task: { id: string }; signal: AbortSignal },
     ) => {
-      started.add(context.job.id);
+      started.add(context.task.id);
       if (started.size === 2) bothStarted.resolve();
-      if (context.job.id === ids[0]) {
+      if (context.task.id === ids[0]) {
         await new Promise<void>((_resolve, reject) => {
           context.signal.addEventListener(
             "abort",
@@ -452,14 +452,14 @@ describe("claim lease fence", () => {
       leaseMs: 5_000,
       heartbeatMs: 100,
       maintenanceIntervalMs: 100,
-      maintenanceTaskPollMs: 100,
+      maintenanceRoutinePollMs: 100,
     }).handle("concurrent-worker-cancel", handler);
     const secondWorker = new Worker(queue, {
       workerId: "concurrent-cancel-b",
       leaseMs: 5_000,
       heartbeatMs: 100,
       maintenanceIntervalMs: 100,
-      maintenanceTaskPollMs: 100,
+      maintenanceRoutinePollMs: 100,
     }).handle("concurrent-worker-cancel", handler);
 
     expect(firstWorker.concurrency).toBe(1);
@@ -471,7 +471,7 @@ describe("claim lease fence", () => {
       expect(await canceledSignal.promise).toBeInstanceOf(CancellationRequestedError);
       releaseSibling.resolve();
       await running;
-      expect(await Promise.all(ids.map((id) => admin.getJob(id)))).toEqual([
+      expect(await Promise.all(ids.map((id) => admin.getTask(id)))).toEqual([
         expect.objectContaining({ id: ids[0], state: "canceled" }),
         expect.objectContaining({ id: ids[1], state: "succeeded" }),
       ]);
@@ -488,18 +488,18 @@ describe("claim lease fence", () => {
     expect(claimed?.id).toBe(id);
     expect((await queue.cancel(id)).status).toBe("cancel_requested");
     await pool.query(
-      `UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 second'
-        WHERE job_id = $1`,
+      `UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 second'
+        WHERE task_id = $1`,
       [id],
     );
     expect(await queue.acknowledgeCancel(claimed!, "recover-cancel-worker")).toBe(false);
     expect(await queue.recoverExpired()).toBe(1);
-    expect(await admin.getJob(id)).toMatchObject({ state: "canceled", currentAttempt: 1 });
+    expect(await admin.getTask(id)).toMatchObject({ state: "canceled", currentAttempt: 1 });
     expect(await queue.heartbeatStatus(claimed!, "recover-cancel-worker", 5_000)).toBe("stale");
     expect(await queue.complete(claimed!, "recover-cancel-worker", null)).toBe(false);
     expect(await queue.fail(claimed!, "recover-cancel-worker", new Error("late"), 0)).toBe("stale");
     const history = await pool.query<{ attempt: number; outcome: string }>(
-      "SELECT attempt, outcome FROM workhorse.attempt_history WHERE job_id = $1",
+      "SELECT attempt, outcome FROM workhorse.attempt_history WHERE task_id = $1",
       [id],
     );
     expect(history.rows).toEqual([{ attempt: 1, outcome: "canceled" }]);
@@ -514,7 +514,7 @@ describe("claim lease fence", () => {
     } as const;
     const first = await queue.enqueue("deadline-definition", { value: 1 }, options);
     expect(await queue.enqueue("deadline-definition", { value: 1 }, options)).toBe(first);
-    expect(await admin.getJob(first)).toMatchObject({
+    expect(await admin.getTask(first)).toMatchObject({
       deadlineAt: deadline,
       executionTimeoutMs: 2_500,
     });
@@ -560,7 +560,7 @@ describe("claim lease fence", () => {
     expect(
       await queue.claim("expired-deadline-worker", { queue: "expired-deadline-only" }),
     ).toBeNull();
-    expect(await admin.getJob(expired)).toMatchObject({
+    expect(await admin.getTask(expired)).toMatchObject({
       state: "failed",
       currentAttempt: 1,
       fenceToken: 0n,
@@ -568,9 +568,9 @@ describe("claim lease fence", () => {
     });
     const evidence = await pool.query<{ event_type: string; outcome: string | null }>(
       `SELECT event.event_type, history.outcome
-         FROM workhorse.job_event event
-         LEFT JOIN workhorse.attempt_history history ON history.job_id = event.job_id
-        WHERE event.job_id = $1 AND event.event_type = 'deadline_exceeded'`,
+         FROM workhorse.task_event event
+         LEFT JOIN workhorse.attempt_history history ON history.task_id = event.task_id
+        WHERE event.task_id = $1 AND event.event_type = 'deadline_exceeded'`,
       [expired],
     );
     expect(evidence.rows).toEqual([{ event_type: "deadline_exceeded", outcome: null }]);
@@ -600,8 +600,8 @@ describe("claim lease fence", () => {
     const execution = worker.runOnce();
     await started.promise;
     expect(await aborted.promise).toBeInstanceOf(DeadlineExceededError);
-    await waitForDatabaseCondition(async () => (await admin.getJob(id))?.state === "failed");
-    expect(await admin.getJob(id)).toMatchObject({
+    await waitForDatabaseCondition(async () => (await admin.getTask(id))?.state === "failed");
+    expect(await admin.getTask(id)).toMatchObject({
       state: "failed",
       currentAttempt: 1,
       result: null,
@@ -611,10 +611,10 @@ describe("claim lease fence", () => {
     await execution;
     const evidence = await pool.query<{ event_type: string; outcome: string }>(
       `SELECT event.event_type, history.outcome
-         FROM workhorse.job_event event
+         FROM workhorse.task_event event
          JOIN workhorse.attempt_history history
-           ON history.job_id = event.job_id AND history.attempt = event.attempt
-        WHERE event.job_id = $1 AND event.event_type = 'deadline_exceeded'`,
+           ON history.task_id = event.task_id AND history.attempt = event.attempt
+        WHERE event.task_id = $1 AND event.event_type = 'deadline_exceeded'`,
       [id],
     );
     expect(evidence.rows).toEqual([
@@ -647,12 +647,12 @@ describe("claim lease fence", () => {
     });
 
     expect(await worker.runOnce()).toBe(true);
-    expect(await admin.getJob(id)).toMatchObject({ state: "ready", currentAttempt: 2 });
+    expect(await admin.getTask(id)).toMatchObject({ state: "ready", currentAttempt: 2 });
     expect(await worker.runOnce()).toBe(true);
     expect(reasons).toHaveLength(2);
     expect(reasons.every((reason) => reason instanceof ExecutionTimeoutError)).toBe(true);
-    await waitForDatabaseCondition(async () => (await admin.getJob(id))?.state === "failed");
-    expect(await admin.getJob(id)).toMatchObject({
+    await waitForDatabaseCondition(async () => (await admin.getTask(id))?.state === "failed");
+    expect(await admin.getTask(id)).toMatchObject({
       state: "failed",
       currentAttempt: 2,
       error: { name: "ExecutionTimeout" },
@@ -660,10 +660,10 @@ describe("claim lease fence", () => {
     const evidence = await pool.query<{ outcome: string; source: string }>(
       `SELECT history.outcome, event.details->>'retry_delay_source' AS source
          FROM workhorse.attempt_history history
-         JOIN workhorse.job_event event
-           ON event.job_id = history.job_id AND event.attempt = history.attempt
+         JOIN workhorse.task_event event
+           ON event.task_id = history.task_id AND event.attempt = history.attempt
           AND event.event_type = 'execution_timed_out'
-        WHERE history.job_id = $1 ORDER BY history.attempt`,
+        WHERE history.task_id = $1 ORDER BY history.attempt`,
       [id],
     );
     expect(evidence.rows).toEqual([
@@ -716,11 +716,11 @@ describe("claim lease fence", () => {
     });
 
     expect(await worker.runOnce()).toBe(true);
-    expect(await admin.getJob(id)).toMatchObject({ state: "ready", currentAttempt: 2 });
+    expect(await admin.getTask(id)).toMatchObject({ state: "ready", currentAttempt: 2 });
     expect(await worker.runOnce()).toBe(true);
     expect(reasons).toHaveLength(2);
     expect(reasons.every((reason) => reason instanceof ExecutionTimeoutError)).toBe(true);
-    expect(await admin.getJob(id)).toMatchObject({
+    expect(await admin.getTask(id)).toMatchObject({
       state: "failed",
       currentAttempt: 2,
       error: { name: "ExecutionTimeout" },
@@ -826,10 +826,10 @@ describe("claim lease fence", () => {
     try {
       await expirationStarted.promise;
       await pool.query(
-        `UPDATE workhorse.job_runtime
+        `UPDATE workhorse.task_runtime
             SET expires_at = clock_timestamp() - interval '1 ms',
                 attempt_timeout_at = clock_timestamp() + interval '1 second'
-          WHERE job_id = $1`,
+          WHERE task_id = $1`,
         [id],
       );
       expect(await queue.recoverExpired(100, 0)).toBe(1);
@@ -841,9 +841,9 @@ describe("claim lease fence", () => {
     }
 
     expect(reasons).toEqual([expect.any(ExecutionTimeoutError)]);
-    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "ready", currentAttempt: 2 });
+    await expect(admin.getTask(id)).resolves.toMatchObject({ state: "ready", currentAttempt: 2 });
     const history = await pool.query<{ outcome: string }>(
-      "SELECT outcome FROM workhorse.attempt_history WHERE job_id = $1",
+      "SELECT outcome FROM workhorse.attempt_history WHERE task_id = $1",
       [id],
     );
     expect(history.rows).toEqual([{ outcome: "lease_expired" }]);
@@ -859,16 +859,16 @@ describe("claim lease fence", () => {
     expect((await queue.cancel(id, { reason: "operator won" })).status).toBe("cancel_requested");
     await sleep(140);
     expect(await queue.recoverExpired()).toBe(1);
-    expect(await admin.getJob(id)).toMatchObject({
+    expect(await admin.getTask(id)).toMatchObject({
       state: "canceled",
       error: { name: "CancellationRequested", reason: "operator won" },
     });
     const evidence = await pool.query<{ outcome: string; source: string }>(
       `SELECT history.outcome, event.details->>'source' AS source
          FROM workhorse.attempt_history history
-         JOIN workhorse.job_event event ON event.job_id = history.job_id
+         JOIN workhorse.task_event event ON event.task_id = history.task_id
           AND event.attempt = history.attempt AND event.event_type = 'canceled'
-        WHERE history.job_id = $1`,
+        WHERE history.task_id = $1`,
       [id],
     );
     expect(evidence.rows).toEqual([{ outcome: "canceled", source: "deadline_reaper" }]);
@@ -883,25 +883,25 @@ describe("claim lease fence", () => {
     const timeoutFirst = await queue.claim("timeout-before-deadline-worker", { leaseMs: 5_000 });
     expect(timeoutFirst?.id).toBe(timeoutFirstId);
     await pool.query(
-      `UPDATE workhorse.job SET deadline_at = clock_timestamp() - interval '1 second'
+      `UPDATE workhorse.task SET deadline_at = clock_timestamp() - interval '1 second'
         WHERE id = $1`,
       [timeoutFirstId],
     );
     await pool.query(
-      `UPDATE workhorse.job_runtime
+      `UPDATE workhorse.task_runtime
           SET deadline_at = clock_timestamp() - interval '1 second',
               attempt_timeout_at = clock_timestamp() - interval '2 seconds'
-        WHERE job_id = $1`,
+        WHERE task_id = $1`,
       [timeoutFirstId],
     );
     expect(await queue.recoverExpired()).toBe(1);
-    expect(await admin.getJob(timeoutFirstId)).toMatchObject({
+    expect(await admin.getTask(timeoutFirstId)).toMatchObject({
       state: "ready",
       currentAttempt: 2,
       error: { name: "ExecutionTimeout" },
     });
     expect(await queue.recoverExpired()).toBe(1);
-    expect(await admin.getJob(timeoutFirstId)).toMatchObject({
+    expect(await admin.getTask(timeoutFirstId)).toMatchObject({
       state: "failed",
       currentAttempt: 2,
       error: { name: "DeadlineExceeded" },
@@ -915,34 +915,34 @@ describe("claim lease fence", () => {
     const deadlineFirst = await queue.claim("deadline-before-timeout-worker", { leaseMs: 5_000 });
     expect(deadlineFirst?.id).toBe(deadlineFirstId);
     await pool.query(
-      `UPDATE workhorse.job SET deadline_at = clock_timestamp() - interval '2 seconds'
+      `UPDATE workhorse.task SET deadline_at = clock_timestamp() - interval '2 seconds'
         WHERE id = $1`,
       [deadlineFirstId],
     );
     await pool.query(
-      `UPDATE workhorse.job_runtime
+      `UPDATE workhorse.task_runtime
           SET deadline_at = clock_timestamp() - interval '2 seconds',
               attempt_timeout_at = clock_timestamp() - interval '1 second'
-        WHERE job_id = $1`,
+        WHERE task_id = $1`,
       [deadlineFirstId],
     );
     expect(await queue.expireOwned(deadlineFirst!, "deadline-before-timeout-worker")).toBe(
       "deadline_exceeded",
     );
-    expect(await admin.getJob(deadlineFirstId)).toMatchObject({
+    expect(await admin.getTask(deadlineFirstId)).toMatchObject({
       state: "failed",
       currentAttempt: 1,
       error: { name: "DeadlineExceeded" },
     });
-    const outcomes = await pool.query<{ job_id: string; outcome: string }>(
-      `SELECT job_id::text, outcome FROM workhorse.attempt_history
-        WHERE job_id = ANY($1::uuid[]) ORDER BY job_id, attempt`,
+    const outcomes = await pool.query<{ task_id: string; outcome: string }>(
+      `SELECT task_id::text, outcome FROM workhorse.attempt_history
+        WHERE task_id = ANY($1::uuid[]) ORDER BY task_id, attempt`,
       [[timeoutFirstId, deadlineFirstId]],
     );
     expect(outcomes.rows).toEqual(
       expect.arrayContaining([
-        { job_id: timeoutFirstId, outcome: "timeout" },
-        { job_id: deadlineFirstId, outcome: "deadline_exceeded" },
+        { task_id: timeoutFirstId, outcome: "timeout" },
+        { task_id: deadlineFirstId, outcome: "deadline_exceeded" },
       ]),
     );
   });
@@ -954,13 +954,13 @@ describe("claim lease fence", () => {
     const claimed = await queue.claim("expire-cancel-race-worker", { leaseMs: 5_000 });
     expect(claimed?.id).toBe(id);
     await pool.query(
-      `UPDATE workhorse.job SET deadline_at = clock_timestamp() - interval '1 second'
+      `UPDATE workhorse.task SET deadline_at = clock_timestamp() - interval '1 second'
         WHERE id = $1`,
       [id],
     );
     await pool.query(
-      `UPDATE workhorse.job_runtime SET deadline_at = clock_timestamp() - interval '1 second'
-        WHERE job_id = $1`,
+      `UPDATE workhorse.task_runtime SET deadline_at = clock_timestamp() - interval '1 second'
+        WHERE task_id = $1`,
       [id],
     );
 
@@ -980,7 +980,7 @@ describe("claim lease fence", () => {
       cancelClient.release();
     }
     expect(await queue.acknowledgeCancel(claimed!, "expire-cancel-race-worker")).toBe(true);
-    expect(await admin.getJob(id)).toMatchObject({
+    expect(await admin.getTask(id)).toMatchObject({
       state: "canceled",
       error: { name: "CancellationRequested", reason: "cancel won row lock" },
     });
@@ -1004,7 +1004,7 @@ describe("claim lease fence", () => {
     await sleep(200);
     await queue.promote();
     expect(await timeoutWorker.runOnce()).toBe(true);
-    expect(await admin.getJob(timeoutId)).toMatchObject({
+    expect(await admin.getTask(timeoutId)).toMatchObject({
       state: "succeeded",
       currentAttempt: 1,
       result: { activations: 2 },
@@ -1023,17 +1023,17 @@ describe("claim lease fence", () => {
       return null;
     });
     expect(await deadlineWorker.runOnce()).toBe(true);
-    expect(await admin.getJob(deadlineId)).toMatchObject({ state: "scheduled" });
-    // The deadline has to expire while the job is suspended. A real 120 ms deadline raced this
+    expect(await admin.getTask(deadlineId)).toMatchObject({ state: "scheduled" });
+    // The deadline has to expire while the task is suspended. A real 120 ms deadline raced this
     // setup on a loaded runner: the handler saw it pass and failed the attempt itself, leaving
     // recovery nothing to reclaim. Expiring it here keeps the assertion on recovery.
     await pool.query(
-      `UPDATE workhorse.job_runtime SET deadline_at = clock_timestamp() - interval '1 second'
-        WHERE job_id = $1`,
+      `UPDATE workhorse.task_runtime SET deadline_at = clock_timestamp() - interval '1 second'
+        WHERE task_id = $1`,
       [deadlineId],
     );
     expect(await queue.recoverExpired()).toBe(1);
-    expect(await admin.getJob(deadlineId)).toMatchObject({
+    expect(await admin.getTask(deadlineId)).toMatchObject({
       state: "failed",
       currentAttempt: 1,
       error: { name: "DeadlineExceeded" },
@@ -1059,16 +1059,16 @@ describe("claim lease fence", () => {
     const indexes = await pool.query<{ indexname: string; indexdef: string }>(
       `SELECT indexname, indexdef FROM pg_indexes
         WHERE schemaname = 'workhorse'
-          AND indexname IN ('job_runtime_deadline_idx', 'job_runtime_timeout_idx')
+          AND indexname IN ('task_runtime_deadline_idx', 'task_runtime_timeout_idx')
         ORDER BY indexname`,
     );
     expect(indexes.rows).toEqual([
       expect.objectContaining({
-        indexname: "job_runtime_deadline_idx",
+        indexname: "task_runtime_deadline_idx",
         indexdef: expect.stringContaining("WHERE (deadline_at IS NOT NULL)"),
       }),
       expect.objectContaining({
-        indexname: "job_runtime_timeout_idx",
+        indexname: "task_runtime_timeout_idx",
         indexdef: expect.stringContaining(
           "WHERE ((state = 'active'::text) AND (attempt_timeout_at IS NOT NULL))",
         ),
@@ -1176,13 +1176,13 @@ describe("claim lease fence", () => {
     expect(await queue.claim("worker-b", { leaseMs: 100 })).toBeNull();
     await sleep(130);
     expect(await queue.recoverExpired()).toBe(1);
-    expect((await admin.getJob(id))?.fenceToken).toBe(0n);
+    expect((await admin.getTask(id))?.fenceToken).toBe(0n);
     const second = await queue.claim("worker-b", { leaseMs: 1_000 });
     expect(second?.attempt).toBe(2);
     expect(second!.fenceToken).toBeGreaterThan(first!.fenceToken);
     expect(await queue.complete(first!, "worker-a", { stale: true })).toBe(false);
     expect(await queue.complete(second!, "worker-b", { delivered: true })).toBe(true);
-    expect((await admin.getJob<{ delivered: boolean }>(id))?.result).toEqual({ delivered: true });
+    expect((await admin.getTask<{ delivered: boolean }>(id))?.result).toEqual({ delivered: true });
   });
 
   it("enforces queue concurrency atomically across competing claims", async () => {
@@ -1224,7 +1224,7 @@ describe("claim lease fence", () => {
       );
       await deployment.query("COMMIT");
 
-      const admitted = (await claims).filter((job) => job !== null);
+      const admitted = (await claims).filter((task) => task !== null);
       expect(admitted).toHaveLength(1);
       await expect(queue.claim("activation-worker-c", { queue: queueName })).resolves.toBeNull();
     } finally {
@@ -1318,7 +1318,7 @@ describe("claim lease fence", () => {
     });
   });
 
-  it("synchronizes token-bucket policies and limits starts across completed jobs", async () => {
+  it("synchronizes token-bucket policies and limits starts across completed tasks", async () => {
     const queueName = `rate-limit-total-${randomUUID()}`;
     await expect(
       queue.syncRateLimitPolicies("test", [
@@ -1587,34 +1587,34 @@ describe("claim lease fence", () => {
       const activePlan = (
         await client.query<{ "QUERY PLAN": string }>(`EXPLAIN (COSTS OFF)
           SELECT count(*)
-            FROM workhorse.job_runtime active
+            FROM workhorse.task_runtime active
            WHERE active.state = 'active'
              AND active.queue_name = 'concurrency-plan'
              AND active.expires_at > clock_timestamp()`)
       ).rows
         .map((row) => row["QUERY PLAN"])
         .join("\n");
-      expect(activePlan).toContain("job_runtime_active_queue_key_expiry_idx");
+      expect(activePlan).toContain("task_runtime_active_queue_key_expiry_idx");
 
       const readyPlan = (
         await client.query<{ "QUERY PLAN": string }>(`EXPLAIN (COSTS OFF)
-          SELECT runtime.job_id, runtime.concurrency_key, runtime.priority, runtime.sequence
-            FROM workhorse.job_runtime runtime
-            JOIN workhorse.job job ON job.id = runtime.job_id
+          SELECT runtime.task_id, runtime.concurrency_key, runtime.priority, runtime.sequence
+            FROM workhorse.task_runtime runtime
+            JOIN workhorse.task task ON task.id = runtime.task_id
            WHERE runtime.state = 'ready'
              AND runtime.queue_name = 'concurrency-plan'
              AND (runtime.deadline_at IS NULL OR runtime.deadline_at > clock_timestamp())
-             AND (job.execution_timeout_ms IS NULL
-               OR runtime.execution_used_ms < job.execution_timeout_ms)
-           ORDER BY runtime.priority DESC, runtime.sequence, runtime.job_id
+             AND (task.execution_timeout_ms IS NULL
+               OR runtime.execution_used_ms < task.execution_timeout_ms)
+           ORDER BY runtime.priority DESC, runtime.sequence, runtime.task_id
            LIMIT 100
            FOR UPDATE OF runtime SKIP LOCKED`)
       ).rows
         .map((row) => row["QUERY PLAN"])
         .join("\n");
-      expect(readyPlan).toContain("job_runtime_ready_idx");
+      expect(readyPlan).toContain("task_runtime_ready_idx");
       expect(`${activePlan}\n${readyPlan}`).not.toMatch(
-        /job_outcome|job_event|attempt_history|job_query/,
+        /task_outcome|task_event|attempt_history|task_query/,
       );
     } finally {
       await client.query("ROLLBACK").catch(() => undefined);
@@ -1627,43 +1627,43 @@ describe("claim lease fence", () => {
     await queue.claim("worker-a", { leaseMs: 100 });
     await sleep(130);
     expect(await queue.recoverExpired()).toBe(1);
-    expect((await admin.getJob(id))?.state).toBe("failed");
+    expect((await admin.getTask(id))?.state).toBe("failed");
     expect(
       (
         await pool.query(
-          "SELECT count(*)::integer AS count FROM workhorse.job_runtime WHERE job_id = $1",
+          "SELECT count(*)::integer AS count FROM workhorse.task_runtime WHERE task_id = $1",
           [id],
         )
       ).rows[0].count,
     ).toBe(0);
     expect(
-      (await pool.query("SELECT state FROM workhorse.job_outcome WHERE job_id = $1", [id])).rows[0]
-        .state,
+      (await pool.query("SELECT state FROM workhorse.task_outcome WHERE task_id = $1", [id]))
+        .rows[0].state,
     ).toBe("failed");
   });
 
   it("heartbeats only the current fenced lease", async () => {
     await queue.enqueue("email", { to: "a@example.com" });
-    const job = await queue.claim("worker-a", { leaseMs: 1_000 });
-    expect(await queue.heartbeat(job!, "worker-a", 1_000)).toBe(true);
+    const task = await queue.claim("worker-a", { leaseMs: 1_000 });
+    expect(await queue.heartbeat(task!, "worker-a", 1_000)).toBe(true);
     expect(
-      await queue.heartbeat({ ...job!, fenceToken: job!.fenceToken + 1n }, "worker-a", 1_000),
+      await queue.heartbeat({ ...task!, fenceToken: task!.fenceToken + 1n }, "worker-a", 1_000),
     ).toBe(false);
-    expect(await queue.heartbeat(job!, "worker-b", 1_000)).toBe(false);
+    expect(await queue.heartbeat(task!, "worker-b", 1_000)).toBe(false);
   });
   it("persists bounded trace context separately from the payload and returns it on claim", async () => {
     const traceContext = {
       traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
       tracestate: "vendor=value",
     };
-    const enqueued = await pool.query<{ job_id: string }>(
-      "SELECT job_id FROM workhorse.enqueue_batch_v1($1::jsonb)",
+    const enqueued = await pool.query<{ task_id: string }>(
+      "SELECT task_id FROM workhorse.enqueue_batch_v1($1::jsonb)",
       [JSON.stringify([{ queue: "default", type: "traced", payload: { value: 1 }, traceContext }])],
     );
 
     const stored = await pool.query<{ payload: Json; trace_context: Json }>(
-      "SELECT payload, trace_context FROM workhorse.job WHERE id = $1",
-      [enqueued.rows[0]!.job_id],
+      "SELECT payload, trace_context FROM workhorse.task WHERE id = $1",
+      [enqueued.rows[0]!.task_id],
     );
     expect(stored.rows[0]).toEqual({ payload: { value: 1 }, trace_context: traceContext });
     expect((await queue.claim("trace-worker"))?.traceContext).toEqual(traceContext);

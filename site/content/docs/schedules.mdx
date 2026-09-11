@@ -7,7 +7,7 @@ Some work runs on a clock: a nightly report, an hourly sync, a weekly cleanup. T
 a separate scheduler process to deploy and keep alive, and a duplicate-firing problem the moment
 you run more than one of them. Workhorse has neither. Schedules are cron definitions stored and
 evaluated in PostgreSQL, declared by your deployment, and offered by the workers you already run.
-Any number can offer the same namespace while PostgreSQL still creates exactly one job.
+Any number can offer the same namespace while PostgreSQL still creates exactly one task.
 
 ## Synchronize the namespace
 
@@ -22,7 +22,7 @@ with pruning enabled — the default — definitions you dropped from the list a
       name: "invoice-run",
       schedule: nightlyCron,
       timezone: "America/New_York",
-      job: { type: "invoice.generate", queue: "billing", payload: { scope: "due" } },
+      task: { type: "invoice.generate", queue: "billing", payload: { scope: "due" } },
     }]);
     ```
   </Tab>
@@ -34,7 +34,7 @@ with pruning enabled — the default — definitions you dropped from the list a
             name="invoice-run",
             schedule=nightly_cron,
             timezone="America/New_York",
-            job=ScheduledJob(
+            task=ScheduledTask(
                 type="invoice.generate", queue="billing", payload={"scope": "due"}
             ),
         )],
@@ -45,7 +45,7 @@ with pruning enabled — the default — definitions you dropped from the list a
     ```go
     err := queue.SyncSchedules(ctx, "billing-production", []workhorse.ScheduleDefinition{{
     	Name: "invoice-run", Schedule: nightlyCron, Timezone: "America/New_York",
-    	Job: workhorse.ScheduledJob{
+    	Task: workhorse.ScheduledTask{
     		Type: "invoice.generate", Queue: "billing", Payload: map[string]any{"scope": "due"},
     	},
     }}, workhorse.SyncSchedulesOptions{Prune: true})
@@ -53,11 +53,11 @@ with pruning enabled — the default — definitions you dropped from the list a
   </Tab>
 </Tabs>
 
-Disabled, not deleted: the old definition stays, so jobs it fired in the past still have something
+Disabled, not deleted: the old definition stays, so tasks it fired in the past still have something
 to point at.
 
 Each `ScheduleDefinition` names the occurrence (`name`, `schedule`, optional `timezone` and `enabled`) and
-describes the job every occurrence creates — its `type`, `payload`, and optionally `queue`,
+describes the task every occurrence creates — its `type`, `payload`, and optionally `queue`,
 `concurrencyKey`, `maxAttempts`, and `retryPolicy`.
 
 The namespace keeps one service's schedules apart from another's, so two deployments sharing a
@@ -101,7 +101,7 @@ definitions, so workers that offer the same namespace evaluate the same desired 
 Schedules page reports how many live workers offer each namespace.
 
 The page also lists Workhorse maintenance beside application schedules. Maintenance runs directly
-in PostgreSQL instead of creating a job, and its last-run value records that direct execution.
+in PostgreSQL instead of creating a task, and its last-run value records that direct execution.
 
 The synchronous Python `Worker` provides the same participation through `schedule_namespaces` and
 `schedule_catchup_limit`. Go uses `WorkerOptions.ScheduleNamespaces` and
@@ -109,12 +109,12 @@ The synchronous Python `Worker` provides the same participation through `schedul
 maintenance cadence. PostgreSQL coordinates each namespace, so workers with different namespace
 sets do not depend on the same maintenance-tick winner.
 
-## Why competing workers create one job
+## Why competing workers create one task
 
 Several workers notice the same occurrence is due. Each firing writes a durable key built from
 the namespace, schedule name, and planned occurrence time. The first worker claims the key; every
-other call converges on the job that already exists. No leader election, no single scheduler — any
-number of workers can race and the outcome is one job.
+other call converges on the task that already exists. No leader election, no single scheduler — any
+number of workers can race and the outcome is one task.
 
 Rolling deployments are covered the same way. Every definition carries a revision that increments
 on change. PostgreSQL reads that revision while evaluating the namespace, then requires the same
@@ -130,16 +130,16 @@ same occurrence. If several cron fields land on one instant, Workhorse creates o
 
 ## What happens after firing
 
-The occurrence creates an ordinary job with the definition's queue, payload, attempt budget, and
+The occurrence creates an ordinary task with the definition's queue, payload, attempt budget, and
 retry policy. From there the usual rules apply — at-least-once delivery, retries, cancellation.
-Canceling one fired job does not disable its definition; tomorrow's occurrence still runs. Disable
+Canceling one fired task does not disable its definition; tomorrow's occurrence still runs. Disable
 future occurrences through the next synchronization.
 
 Three related calls round out the API:
 
 - `Admin.schedules` reads stored definitions and their last occurrence, for operator
   tools.
-- `Admin.runTaskNow` releases one scheduled job immediately with the actor, reason,
+- `Admin.runTaskNow` releases one scheduled task immediately with the actor, reason,
   and request identity used by operator controls.
 - `Queue.fireSchedule` exposes the revision-fenced firing
   operation itself, for tests and controlled integrations.
@@ -147,7 +147,7 @@ Three related calls round out the API:
 ## Next
 
 - [Workers](/docs/workers) — run the process that offers schedule namespaces
-- [Retries](/docs/retries) — control failures of each fired job
+- [Retries](/docs/retries) — control failures of each fired task
 - [Cancellation](/docs/cancellation) — stop one occurrence without changing the schedule
 
 ---

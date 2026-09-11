@@ -1,12 +1,12 @@
-# How do I run a job after other jobs finish?
+# How do I run a task after other tasks finish?
 
 Dependencies keep work out of dispatch until every prerequisite satisfies its declared policy.
 Use them when downstream work would be invalid or wasteful before its inputs finish.
 
 ## Declare the prerequisite
 
-First enqueue the prerequisite and keep its stable job id. Put that id in
-`EnqueueOptions.dependencies` when you enqueue the dependent. The older `prerequisiteJobId`
+First enqueue the prerequisite and keep its stable task id. Put that id in
+`EnqueueOptions.dependencies` when you enqueue the dependent. The older `prerequisiteTaskId`
 shorthand is deprecated because it hides the terminal policies:
 
 ```ts
@@ -17,7 +17,7 @@ const notifyId = await queue.enqueue(
   { importId },
   {
     dependencies: {
-      prerequisiteJobIds: [importId],
+      prerequisiteTaskIds: [importId],
       onSuccess: "release",
       onFailure: "fail",
       onCancellation: "cancel",
@@ -26,8 +26,8 @@ const notifyId = await queue.enqueue(
 );
 ```
 
-PostgreSQL validates both jobs and creates the dependency inside the enqueue transaction. If the
-transaction rolls back, the job and its dependency both disappear.
+PostgreSQL validates both tasks and creates the dependency inside the enqueue transaction. If the
+transaction rolls back, the task and its dependency both disappear.
 
 For fan-in, pass a `dependencies` object with every stable prerequisite id and policies for failed
 and canceled prerequisites:
@@ -41,7 +41,7 @@ await queue.enqueue(
   { release },
   {
     dependencies: {
-      prerequisiteJobIds: [publishId, indexId],
+      prerequisiteTaskIds: [publishId, indexId],
       onSuccess: "release",
       onFailure: "fail",
       onCancellation: "cancel",
@@ -52,15 +52,15 @@ await queue.enqueue(
 
 ## While the prerequisite is running
 
-The dependent has the `blocked` state. It has a durable `job_runtime` row, but claim and promotion
+The dependent has the `blocked` state. It has a durable `task_runtime` row, but claim and promotion
 cannot see it because blocked work is absent from their indexes.
 
-`Admin.getJob` and `Admin.listJobs` return its `prerequisiteJobIds` and `dependencyPolicy`. They also return
+`Admin.getTask` and `Admin.listTasks` return its `prerequisiteTaskIds` and `dependencyPolicy`. They also return
 `blockedReason: "prerequisite_pending"` while it remains blocked.
 
-Use `Admin.getDependencyLineage(jobId)` when you need both directions. It returns edges where the
-job is a prerequisite or a dependent, including each policy, resolution, and release time. The
-result says when more edges exist beyond a caller-selected response limit. Each job accepts a
+Use `Admin.getDependencyLineage(taskId)` when you need both directions. It returns edges where the
+task is a prerequisite or a dependent, including each policy, resolution, and release time. The
+result says when more edges exist beyond a caller-selected response limit. Each task accepts a
 bounded number of prerequisites and dependents, so the default response covers its complete direct
 lineage without a continuation cursor.
 
@@ -102,15 +102,15 @@ evidence. This lets an operator explain why work remains blocked or why PostgreS
 canceled, or failed it.
 
 The dashboard's `Blocked` filter lists blocked tasks with `blockedReason` and unresolved
-`prerequisiteJobIds`. Related ids in the task detail open that task without closing the drawer.
+`prerequisiteTaskIds`. Related ids in the task detail open that task without closing the drawer.
 
-`Queue.health()` reports blocked jobs, pending edges, retained failures, and whether dependency
-edges stopped the latest retention pass from deleting jobs. OpenTelemetry exports queue pressure
-without job ids, prerequisite ids, or other unbounded labels.
+`Queue.health()` reports blocked tasks, pending edges, retained failures, and whether dependency
+edges stopped the latest retention pass from deleting tasks. OpenTelemetry exports queue pressure
+without task ids, prerequisite ids, or other unbounded labels.
 
 Retention keeps a prerequisite identity while a dependent edge still controls dispatch. Once that
-edge resolves and the dependent finishes, maintenance removes the edge before pruning eligible job
-identities. The dependency lineage can therefore disappear while either terminal job remains.
+edge resolves and the dependent finishes, maintenance removes the edge before pruning eligible task
+identities. The dependency lineage can therefore disappear while either terminal task remains.
 
 If an edge would create a cycle or exceed a graph bound, `Queue` throws `DependencyCycleError` or
 `DependencyLimitExceededError`. Callers can handle those failures without matching database text.
@@ -118,10 +118,10 @@ If an edge would create a cycle or exceed a graph bound, `Queue` throws `Depende
 ## Next
 
 - [150-priority.md](150-priority.md) — how released work competes for dispatch
-- [170-child-jobs.md](170-child-jobs.md) — how a handler delegates and joins durable work
+- [170-child-tasks.md](170-child-tasks.md) — how a handler delegates and joins durable work
 - [210-enqueue-idempotency.md](210-enqueue-idempotency.md) — how repeated enqueue requests behave
 
 ---
 
 Exact dependency schema and lifecycle semantics:
-[`architecture.md`](../architecture.md#job_dependency).
+[`architecture.md`](../architecture.md#task_dependency).

@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// MaxJobDependencies is PostgreSQL's prerequisite fan-in limit for one job.
-const MaxJobDependencies = 100
+// MaxTaskDependencies is PostgreSQL's prerequisite fan-in limit for one task.
+const MaxTaskDependencies = 100
 
 const (
 	defaultMaxAttempts      = 25
@@ -43,7 +43,7 @@ const (
 	EnqueueCoalesced      EnqueueOutcome = enqueueCoalescedValue
 )
 
-// EnqueueNonReplaceableReason explains why PostgreSQL retained a debounced job.
+// EnqueueNonReplaceableReason explains why PostgreSQL retained a debounced task.
 type EnqueueNonReplaceableReason string
 
 const (
@@ -76,7 +76,7 @@ type Idempotency struct {
 	TTLMS int    `json:"ttlMs"`
 }
 
-// Debounce replaces a pending keyed job during a PostgreSQL-owned window.
+// Debounce replaces a pending keyed task during a PostgreSQL-owned window.
 type Debounce struct {
 	Key      string           `json:"key"`
 	Scope    string           `json:"scope"`
@@ -84,22 +84,22 @@ type Debounce struct {
 	Schedule DebounceSchedule `json:"schedule"`
 }
 
-// Throttle accepts at most one equivalent keyed job during a PostgreSQL-owned window.
+// Throttle accepts at most one equivalent keyed task during a PostgreSQL-owned window.
 type Throttle struct {
 	Key      string `json:"key"`
 	Scope    string `json:"scope"`
 	WindowMS int    `json:"windowMs"`
 }
 
-// Dependencies declares prerequisite jobs and the terminal outcomes accepted from each.
+// Dependencies declares prerequisite tasks and the terminal outcomes accepted from each.
 type Dependencies struct {
-	PrerequisiteJobIDs []string                 `json:"prerequisiteJobIds"`
-	OnSuccess          DependencyTerminalPolicy `json:"onSuccess"`
-	OnFailure          DependencyTerminalPolicy `json:"onFailure"`
-	OnCancellation     DependencyTerminalPolicy `json:"onCancellation"`
+	PrerequisiteTaskIDs []string                 `json:"prerequisiteTaskIds"`
+	OnSuccess           DependencyTerminalPolicy `json:"onSuccess"`
+	OnFailure           DependencyTerminalPolicy `json:"onFailure"`
+	OnCancellation      DependencyTerminalPolicy `json:"onCancellation"`
 }
 
-// EnqueueOptions controls a job's initial dispatch and durable acceptance behavior.
+// EnqueueOptions controls a task's initial dispatch and durable acceptance behavior.
 // Zero values select PostgreSQL-compatible client defaults or omit optional values.
 type EnqueueOptions struct {
 	Queue              string
@@ -117,15 +117,15 @@ type EnqueueOptions struct {
 	Dependencies       *Dependencies
 }
 
-// EnqueueRequest is one job submitted through an atomic enqueue batch.
+// EnqueueRequest is one task submitted through an atomic enqueue batch.
 type EnqueueRequest struct {
 	Type    string
 	Payload any
 	Options EnqueueOptions
 }
 
-// ScheduledJob describes the job created for each recurring occurrence.
-type ScheduledJob struct {
+// ScheduledTask describes the task created for each recurring occurrence.
+type ScheduledTask struct {
 	Type           string
 	Payload        any
 	Queue          string
@@ -141,7 +141,7 @@ type ScheduleDefinition struct {
 	Name     string
 	Schedule string
 	Timezone string
-	Job      ScheduledJob
+	Task     ScheduledTask
 	Enabled  *bool
 }
 
@@ -150,14 +150,14 @@ type SyncSchedulesOptions struct {
 	Prune bool
 }
 
-// EnqueueResult contains a job's stable identity and durable enqueue disposition.
+// EnqueueResult contains a task's stable identity and durable enqueue disposition.
 type EnqueueResult struct {
-	JobID   string
+	TaskID  string
 	Outcome EnqueueOutcome
 	Reason  *EnqueueNonReplaceableReason
 }
 
-// Queue enqueues jobs through a caller-owned executor.
+// Queue enqueues tasks through a caller-owned executor.
 type Queue struct {
 	executor     Executor
 	defaultQueue string
@@ -185,24 +185,24 @@ const (
 	CancelNotFound        CancelStatus = notFoundValue
 )
 
-// JobState is PostgreSQL's durable lifecycle state for a job.
-type JobState string
+// TaskState is PostgreSQL's durable lifecycle state for a task.
+type TaskState string
 
 const (
-	JobBlocked   JobState = jobBlockedValue
-	JobScheduled JobState = jobScheduledValue
-	JobReady     JobState = jobReadyValue
-	JobActive    JobState = jobActiveValue
-	JobSucceeded JobState = jobSucceededValue
-	JobFailed    JobState = jobFailedValue
-	JobCanceled  JobState = jobCanceledValue
+	TaskBlocked   TaskState = taskBlockedValue
+	TaskScheduled TaskState = taskScheduledValue
+	TaskReady     TaskState = taskReadyValue
+	TaskActive    TaskState = taskActiveValue
+	TaskSucceeded TaskState = taskSucceededValue
+	TaskFailed    TaskState = taskFailedValue
+	TaskCanceled  TaskState = taskCanceledValue
 )
 
 // CancelResult contains safe lifecycle metadata and omits payload and worker ownership.
 type CancelResult struct {
 	Status         CancelStatus
-	JobID          string
-	State          *JobState
+	TaskID         string
+	State          *TaskState
 	CurrentAttempt *int
 	RequestedAt    *time.Time
 	RequestedBy    *string
@@ -237,7 +237,7 @@ func (queue *Queue) Health(ctx context.Context) (QueueHealth, error) {
 // Cancel requests cooperative cancellation with optional audit attribution.
 func (queue *Queue) Cancel(
 	ctx context.Context,
-	jobID string,
+	taskID string,
 	request CancellationRequest,
 ) (CancelResult, error) {
 	if err := AssertSchemaCompatible(ctx, queue.executor); err != nil {
@@ -246,7 +246,7 @@ func (queue *Queue) Cancel(
 	rows, err := queue.executor.Query(
 		ctx,
 		protocolStatementRegistry[cancelStatementName],
-		jobID,
+		taskID,
 		optionalStringArgument(request.RequestedBy),
 		optionalStringArgument(request.Reason),
 	)
@@ -256,22 +256,22 @@ func (queue *Queue) Cancel(
 	if len(rows) != 1 {
 		return CancelResult{}, fmt.Errorf(invalidCancelRowCountMessage, len(rows))
 	}
-	return cancelResult(rows[0], jobID)
+	return cancelResult(rows[0], taskID)
 }
 
-func cancelResult(row Row, jobID string) (CancelResult, error) {
+func cancelResult(row Row, taskID string) (CancelResult, error) {
 	status, ok := row[rowStatusField].(string)
 	if !ok {
 		return CancelResult{}, errors.New(invalidCancelStatusMessage)
 	}
-	result := CancelResult{Status: CancelStatus(status), JobID: jobID}
+	result := CancelResult{Status: CancelStatus(status), TaskID: taskID}
 	switch result.Status {
 	case CancelCanceled, CancelRequested, CancelAlreadyTerminal, CancelNotFound:
 	default:
 		return CancelResult{}, fmt.Errorf(unknownCancelStatusFormat, status)
 	}
 	var valid bool
-	if result.State, valid = optionalJobState(row[rowStateField]); !valid {
+	if result.State, valid = optionalTaskState(row[rowStateField]); !valid {
 		return CancelResult{}, errors.New(invalidCancelStateMessage)
 	}
 	if result.CurrentAttempt, valid = optionalInteger(row[rowCurrentAttemptField]); !valid {
@@ -307,7 +307,7 @@ func optionalStringArgument(value *string) any {
 	return *value
 }
 
-func optionalJobState(value any) (*JobState, bool) {
+func optionalTaskState(value any) (*TaskState, bool) {
 	if value == nil {
 		return nil, true
 	}
@@ -315,9 +315,9 @@ func optionalJobState(value any) (*JobState, bool) {
 	if !ok {
 		return nil, false
 	}
-	result := JobState(state)
+	result := TaskState(state)
 	switch result {
-	case JobBlocked, JobScheduled, JobReady, JobActive, JobSucceeded, JobFailed, JobCanceled:
+	case TaskBlocked, TaskScheduled, TaskReady, TaskActive, TaskSucceeded, TaskFailed, TaskCanceled:
 		return &result, true
 	default:
 		return nil, false
@@ -360,31 +360,31 @@ func decodeQueueHealth(value any) (QueueHealth, error) {
 	return document, nil
 }
 
-// Enqueue submits one job and returns its stable identifier.
+// Enqueue submits one task and returns its stable identifier.
 func (queue *Queue) Enqueue(
 	ctx context.Context,
-	jobType string,
+	taskType string,
 	payload any,
 	options ...EnqueueOptions,
 ) (string, error) {
-	result, err := queue.EnqueueWithResult(ctx, jobType, payload, options...)
+	result, err := queue.EnqueueWithResult(ctx, taskType, payload, options...)
 	if err != nil {
 		return emptyString, err
 	}
-	return result.JobID, nil
+	return result.TaskID, nil
 }
 
-// EnqueueWithResult submits one job and returns PostgreSQL's canonical result.
+// EnqueueWithResult submits one task and returns PostgreSQL's canonical result.
 func (queue *Queue) EnqueueWithResult(
 	ctx context.Context,
-	jobType string,
+	taskType string,
 	payload any,
 	options ...EnqueueOptions,
 ) (EnqueueResult, error) {
 	if len(options) > 1 {
 		return EnqueueResult{}, fmt.Errorf(tooManyEnqueueOptionsMessage, ErrInvalidEnqueueOptions)
 	}
-	request := EnqueueRequest{Type: jobType, Payload: payload}
+	request := EnqueueRequest{Type: taskType, Payload: payload}
 	if len(options) == 1 {
 		request.Options = options[0]
 	}
@@ -395,17 +395,17 @@ func (queue *Queue) EnqueueWithResult(
 	return results[0], nil
 }
 
-// EnqueueMany submits one atomic batch and returns the stable job identifiers in request order.
+// EnqueueMany submits one atomic batch and returns the stable task identifiers in request order.
 func (queue *Queue) EnqueueMany(ctx context.Context, requests []EnqueueRequest) ([]string, error) {
 	results, err := queue.EnqueueManyWithResults(ctx, requests)
 	if err != nil {
 		return nil, err
 	}
-	jobIDs := make([]string, len(results))
+	taskIDs := make([]string, len(results))
 	for index, result := range results {
-		jobIDs[index] = result.JobID
+		taskIDs[index] = result.TaskID
 	}
-	return jobIDs, nil
+	return taskIDs, nil
 }
 
 // EnqueueManyWithResults submits one atomic batch and returns canonical results in request order.
@@ -508,10 +508,10 @@ func (queue *Queue) applyPayloadContracts(
 			return nil, err
 		}
 		if err := validator.Validate(values[index][rowPayloadField]); err != nil {
-			return nil, &JobContractValidationError{
-				JobType: request.Type,
-				Version: version,
-				Kind:    contractPayloadKind,
+			return nil, &TaskContractValidationError{
+				TaskType: request.Type,
+				Version:  version,
+				Kind:     contractPayloadKind,
 			}
 		}
 		values[index][contractVersionJSONField] = version
@@ -577,18 +577,18 @@ type scheduleInput struct {
 func serializeScheduleDefinitions(definitions []ScheduleDefinition, defaultQueue string) ([]byte, error) {
 	input := make([]scheduleInput, len(definitions))
 	for index, definition := range definitions {
-		if definition.Job.Priority < 0 || definition.Job.Priority > 100 {
+		if definition.Task.Priority < 0 || definition.Task.Priority > 100 {
 			return nil, fmt.Errorf(
 				scheduleDefinitionErrorFormat,
 				index+1,
 				fmt.Errorf(priorityRangeMessage, ErrInvalidScheduleDefinition),
 			)
 		}
-		queueName := definition.Job.Queue
+		queueName := definition.Task.Queue
 		if queueName == emptyString {
 			queueName = defaultQueue
 		}
-		maxAttempts := definition.Job.MaxAttempts
+		maxAttempts := definition.Task.MaxAttempts
 		if maxAttempts == 0 {
 			maxAttempts = defaultMaxAttempts
 		}
@@ -602,11 +602,11 @@ func serializeScheduleDefinitions(definitions []ScheduleDefinition, defaultQueue
 		}
 		input[index] = scheduleInput{
 			Name: definition.Name, Schedule: definition.Schedule, Timezone: timezone, Enabled: enabled,
-			Queue: queueName, Priority: definition.Job.Priority,
-			ConcurrencyKey: nilIfEmpty(definition.Job.ConcurrencyKey), Type: definition.Job.Type,
-			Payload: definition.Job.Payload, MaxAttempts: maxAttempts,
-			RetryPolicy: definition.Job.RetryPolicy, PayloadMaxBytes: defaultJobValueMaxBytes,
-			ResultMaxBytes: defaultJobValueMaxBytes, SensitivePayloadKeys: []string{},
+			Queue: queueName, Priority: definition.Task.Priority,
+			ConcurrencyKey: nilIfEmpty(definition.Task.ConcurrencyKey), Type: definition.Task.Type,
+			Payload: definition.Task.Payload, MaxAttempts: maxAttempts,
+			RetryPolicy: definition.Task.RetryPolicy, PayloadMaxBytes: defaultTaskValueMaxBytes,
+			ResultMaxBytes: defaultTaskValueMaxBytes, SensitivePayloadKeys: []string{},
 			SensitiveResultKeys: []string{},
 		}
 	}
@@ -629,7 +629,7 @@ type enqueueInput struct {
 	ExecutionTimeoutMS   any               `json:"executionTimeoutMs"`
 	MaxAttempts          int               `json:"maxAttempts"`
 	RetryPolicy          any               `json:"retryPolicy"`
-	PrerequisiteJobID    any               `json:"prerequisiteJobId"`
+	PrerequisiteTaskID   any               `json:"prerequisiteTaskId"`
 	Dependencies         *Dependencies     `json:"dependencies"`
 	Tags                 []string          `json:"tags"`
 	Idempotency          *Idempotency      `json:"idempotency,omitempty"`
@@ -675,8 +675,8 @@ func serializeEnqueueRequest(request EnqueueRequest, defaultQueue string, now ti
 		Type:                 request.Type,
 		Payload:              request.Payload,
 		Priority:             options.Priority,
-		PayloadMaxBytes:      defaultJobValueMaxBytes,
-		ResultMaxBytes:       defaultJobValueMaxBytes,
+		PayloadMaxBytes:      defaultTaskValueMaxBytes,
+		ResultMaxBytes:       defaultTaskValueMaxBytes,
 		SensitivePayloadKeys: []string{},
 		SensitiveResultKeys:  []string{},
 		ConcurrencyKey:       nilIfEmpty(options.ConcurrencyKey),
@@ -690,10 +690,10 @@ func serializeEnqueueRequest(request EnqueueRequest, defaultQueue string, now ti
 		value.Deadline = &formatted
 	}
 	if options.Dependencies != nil {
-		jobIDs := append([]string{}, options.Dependencies.PrerequisiteJobIDs...)
-		slices.Sort(jobIDs)
+		taskIDs := append([]string{}, options.Dependencies.PrerequisiteTaskIDs...)
+		slices.Sort(taskIDs)
 		dependencies := *options.Dependencies
-		dependencies.PrerequisiteJobIDs = jobIDs
+		dependencies.PrerequisiteTaskIDs = taskIDs
 		value.Dependencies = &dependencies
 	}
 	keyed := options.Idempotency != nil || options.Debounce != nil || options.Throttle != nil
@@ -751,15 +751,15 @@ func validateEnqueueOptions(options EnqueueOptions) error {
 		return fmt.Errorf(keyedDependenciesMessage, ErrInvalidEnqueueOptions)
 	}
 	if options.Dependencies != nil {
-		seen := make(map[string]struct{}, len(options.Dependencies.PrerequisiteJobIDs))
-		for _, jobID := range options.Dependencies.PrerequisiteJobIDs {
-			seen[jobID] = struct{}{}
+		seen := make(map[string]struct{}, len(options.Dependencies.PrerequisiteTaskIDs))
+		for _, taskID := range options.Dependencies.PrerequisiteTaskIDs {
+			seen[taskID] = struct{}{}
 		}
-		if len(seen) == 0 || len(seen) != len(options.Dependencies.PrerequisiteJobIDs) {
+		if len(seen) == 0 || len(seen) != len(options.Dependencies.PrerequisiteTaskIDs) {
 			return fmt.Errorf(uniqueDependenciesMessage, ErrInvalidEnqueueOptions)
 		}
-		if len(seen) > MaxJobDependencies {
-			return fmt.Errorf(dependencyCountMessage, ErrInvalidEnqueueOptions, MaxJobDependencies)
+		if len(seen) > MaxTaskDependencies {
+			return fmt.Errorf(dependencyCountMessage, ErrInvalidEnqueueOptions, MaxTaskDependencies)
 		}
 	}
 	return nil
@@ -791,7 +791,7 @@ func formatTimestamp(value time.Time) string {
 }
 
 func enqueueResult(row Row) (EnqueueResult, error) {
-	jobID, ok := uuidString(row[rowJobIDField])
+	taskID, ok := uuidString(row[rowTaskIDField])
 	if !ok {
 		return EnqueueResult{}, ErrInvalidEnqueueResult
 	}
@@ -799,7 +799,7 @@ func enqueueResult(row Row) (EnqueueResult, error) {
 	if !ok {
 		return EnqueueResult{}, ErrInvalidEnqueueResult
 	}
-	result := EnqueueResult{JobID: jobID, Outcome: EnqueueOutcome(outcome)}
+	result := EnqueueResult{TaskID: taskID, Outcome: EnqueueOutcome(outcome)}
 	switch result.Outcome {
 	case EnqueueAccepted, EnqueueReplayed, EnqueueReplaced, EnqueueCoalesced:
 		if row[rowReasonField] != nil {
@@ -872,7 +872,7 @@ type EnqueueIdempotencyConflictDetails struct {
 	KeyPreview            string   `json:"keyPreview"`
 	KeyDigest             string   `json:"keyDigest"`
 	KeyLength             int      `json:"keyLength"`
-	ExistingJobID         string   `json:"existingJobId"`
+	ExistingTaskID        string   `json:"existingTaskId"`
 	Ordinal               int      `json:"ordinal"`
 	ConflictingFields     []string `json:"conflictingFields"`
 	StoredRequestDigest   string   `json:"storedRequestDigest"`
@@ -887,10 +887,10 @@ type EnqueueIdempotencyConflictError struct {
 
 // DependencyCycleDetails is PostgreSQL's bounded description of a rejected cycle.
 type DependencyCycleDetails struct {
-	DependentJobID    string   `json:"dependentJobId"`
-	PrerequisiteJobID string   `json:"prerequisiteJobId"`
-	CycleJobIDs       []string `json:"cycleJobIds"`
-	Truncated         bool     `json:"truncated"`
+	DependentTaskID    string   `json:"dependentTaskId"`
+	PrerequisiteTaskID string   `json:"prerequisiteTaskId"`
+	CycleTaskIDs       []string `json:"cycleTaskIds"`
+	Truncated          bool     `json:"truncated"`
 }
 
 // DependencyCycleError contains PostgreSQL's structured cycle details.
@@ -910,9 +910,9 @@ const (
 
 // DependencyLimitDetails is PostgreSQL's dependency limit diagnosis.
 type DependencyLimitDetails struct {
-	JobID string          `json:"jobId"`
-	Limit DependencyLimit `json:"limit"`
-	Max   int             `json:"max"`
+	TaskID string          `json:"taskId"`
+	Limit  DependencyLimit `json:"limit"`
+	Max    int             `json:"max"`
 }
 
 // DependencyLimitExceededError contains PostgreSQL's structured limit details.

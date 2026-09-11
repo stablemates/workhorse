@@ -13,7 +13,7 @@
 export const OBSERVATION_FORMAT = 1;
 
 /** The two daily-partitioned history parents. */
-export const HISTORY_PARENTS = ["job_event", "attempt_history"] as const;
+export const HISTORY_PARENTS = ["task_event", "attempt_history"] as const;
 
 export type HistoryParent = (typeof HISTORY_PARENTS)[number];
 
@@ -50,7 +50,7 @@ export interface PartitionFacts {
 }
 
 export interface RetentionFacts {
-  jobEventRetentionDays: number | null;
+  taskEventRetentionDays: number | null;
   attemptHistoryRetentionDays: number | null;
   statisticsRetentionDays: number | null;
   historyPartitionsPerPass: number;
@@ -65,9 +65,9 @@ export interface RetentionFacts {
 export interface ThroughputDay {
   day: string;
   enqueued: number;
-  jobSucceeded: number;
-  jobFailed: number;
-  jobCanceled: number;
+  taskSucceeded: number;
+  taskFailed: number;
+  taskCanceled: number;
   attemptSucceeded: number;
   attemptFailed: number;
   attemptRetry: number;
@@ -88,7 +88,7 @@ export interface WorkerFacts {
 /**
  * What the database can still prove about one ungraceful kill.
  *
- * A `SIGKILL`ed worker acknowledges nothing, so its held jobs are recovered when their leases
+ * A `SIGKILL`ed worker acknowledges nothing, so its held tasks are recovered when their leases
  * expire. Every one of them must end up somewhere — terminal, or live and moving — and none may
  * have succeeded twice.
  */
@@ -98,16 +98,16 @@ export interface KillRecovery {
   windowEnd: string;
   /** Attempts the killed worker lost to lease expiry inside the window. */
   leaseExpiredAttempts: number;
-  /** Distinct jobs behind those attempts. This is the enqueued side of the reconciliation. */
-  affectedJobs: number;
-  /** Of the affected jobs, those that reached a terminal outcome. */
-  jobsSettled: number;
-  /** Of the affected jobs, those still live in the runtime. */
-  jobsLive: number;
-  /** Of the affected jobs, those in neither relation. A lost job. Must be zero. */
-  jobsLost: number;
-  /** Affected jobs holding more than one succeeded attempt. A duplicate. Must be zero. */
-  jobsSucceededMoreThanOnce: number;
+  /** Distinct tasks behind those attempts. This is the enqueued side of the reconciliation. */
+  affectedTasks: number;
+  /** Of the affected tasks, those that reached a terminal outcome. */
+  tasksSettled: number;
+  /** Of the affected tasks, those still live in the runtime. */
+  tasksLive: number;
+  /** Of the affected tasks, those in neither relation. A lost task. Must be zero. */
+  tasksLost: number;
+  /** Affected tasks holding more than one succeeded attempt. A duplicate. Must be zero. */
+  tasksSucceededMoreThanOnce: number;
 }
 
 export interface SoakObservation {
@@ -120,7 +120,7 @@ export interface SoakObservation {
   retention: RetentionFacts;
   /** Every closed day the daily statistics tier still holds, oldest first. */
   throughput: ThroughputDay[];
-  /** Live jobs by runtime state. Terminal work is counted by the statistics tier instead. */
+  /** Live tasks by runtime state. Terminal work is counted by the statistics tier instead. */
   backlog: Record<string, number>;
   workers: WorkerFacts[];
   /** The `workhorse.queue_health_v1()` document, verbatim. */

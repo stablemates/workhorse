@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   CancellationRequestedError,
-  JobContractValidationError,
-  JobValueSizeLimitError,
+  TaskContractValidationError,
+  TaskValueSizeLimitError,
   MIN_PROGRESS_UPDATE_INTERVAL_MS,
-  type ChildJobRequest,
+  type ChildTaskRequest,
   type EnqueueRequest,
   type Handler,
   type Json,
@@ -14,7 +14,7 @@ import {
 } from "@stablemates/workhorse";
 import { and, eq } from "drizzle-orm";
 import {
-  DURABLE_DEMO_JOB_TYPE,
+  DURABLE_DEMO_TASK_TYPE,
   type DurableDemoPayload,
   type DurableDemoScenario,
   durableDemoScenarios,
@@ -31,9 +31,9 @@ import {
   type DemoFeatureFamily,
   type DemoFeaturePayload,
 } from "./feature-showcase.js";
-import { DEMO_CONTRACT_JOB_TYPE } from "./contracts.js";
+import { DEMO_CONTRACT_TASK_TYPE } from "./contracts.js";
 import {
-  CHILD_STEP_JOB_TYPE,
+  CHILD_STEP_TASK_TYPE,
   DEMO_BATCH_LINGER_MS,
   DEMO_BATCH_MAX_SIZE,
   DEMO_DURABLE_STEP_MS,
@@ -43,21 +43,21 @@ import {
   DEMO_RECURRING_WAIT_TIMEOUT_MS,
   DEMO_SIGNAL_NAME,
   DEMO_SIGNAL_SENDER_DELAY_MS,
-  DURABLE_TIMER_JOB_TYPE,
+  DURABLE_TIMER_TASK_TYPE,
   DURABLE_TIMER_PREPARE_CHECKPOINT,
   DURABLE_TIMER_PUBLISH_CHECKPOINT,
   DURABLE_TIMER_WAIT_NAME,
-  FAILURE_JOB_TYPE,
-  LONG_RUNNING_JOB_TYPE,
-  LANGUAGE_WORKER_JOB_TYPE,
-  ORDER_JOB_TYPE,
-  RECURRING_JOB_TYPE,
-  REPORT_JOB_TYPE,
+  FAILURE_TASK_TYPE,
+  LONG_RUNNING_TASK_TYPE,
+  LANGUAGE_WORKER_TASK_TYPE,
+  ORDER_TASK_TYPE,
+  RECURRING_TASK_TYPE,
+  REPORT_TASK_TYPE,
   RETRY_CHECKPOINT_NAME,
-  RETRY_JOB_TYPE,
-  SIGNAL_SENDER_JOB_TYPE,
-  SHARED_WORKER_JOB_TYPE,
-  TIMING_JOB_TYPE,
+  RETRY_TASK_TYPE,
+  SIGNAL_SENDER_TASK_TYPE,
+  SHARED_WORKER_TASK_TYPE,
+  TIMING_TASK_TYPE,
 } from "./constants.js";
 import type { DemoDatabase } from "./database.js";
 
@@ -78,12 +78,12 @@ export interface DemoHandlerDependencies {
   queue: Queue;
   /**
    * Ceiling for one `demo.batch-digest` invocation. The caller clamps it to the worker's declared
-   * job concurrency because a batch cannot hold more members than the worker has slots.
+   * task concurrency because a batch cannot hold more members than the worker has slots.
    */
   batchMaxSize?: number;
   durableStepMs?: number;
   durableTimerWaitMs?: number;
-  longRunningJobMs?: number;
+  longRunningTaskMs?: number;
   onDurableStepOperation?: (
     scenario: DurableDemoScenario,
     stepName: string,
@@ -97,7 +97,7 @@ export interface DemoHandlerDependencies {
 }
 
 /** Execute the runtime-neutral handler shared by all three demo SDKs. */
-export function sharedWorkerJob(payload: Json, attempt: number) {
+export function sharedWorkerTask(payload: Json, attempt: number) {
   if (
     typeof payload !== "object" ||
     payload === null ||
@@ -137,13 +137,13 @@ function recurringPayload(
   };
 }
 
-/** Register every demo job handler on one worker. */
+/** Register every demo task handler on one worker. */
 export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependencies): Worker {
   const { database, queue } = deps;
   const durableStepMs = deps.durableStepMs ?? DEMO_DURABLE_STEP_MS;
   const durableTimerWaitMs = deps.durableTimerWaitMs ?? DEMO_DURABLE_TIMER_WAIT_MS;
 
-  worker.handle<{ orderId: string }>(ORDER_JOB_TYPE, async ({ orderId }) => {
+  worker.handle<{ orderId: string }>(ORDER_TASK_TYPE, async ({ orderId }) => {
     const updated = await database
       .update(orders)
       .set({ status: "processed", processedAt: new Date() })
@@ -154,29 +154,29 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
     return { orderId, processed: true };
   });
   worker.handle<{ label: string; failUntilAttempt?: number }>(
-    RETRY_JOB_TYPE,
-    async ({ label, failUntilAttempt }, { checkpoint, job }) => {
+    RETRY_TASK_TYPE,
+    async ({ label, failUntilAttempt }, { checkpoint, task }) => {
       const failuresBefore = failUntilAttempt ?? 1;
       const reservation = await checkpoint(RETRY_CHECKPOINT_NAME, () => ({
         reservationId: randomUUID(),
         reservedAt: new Date().toISOString(),
-        reservedOnAttempt: job.attempt,
+        reservedOnAttempt: task.attempt,
       }));
-      if (job.attempt <= failuresBefore) {
-        throw new Error(`Intentional demo failure ${job.attempt}/${failuresBefore}`);
+      if (task.attempt <= failuresBefore) {
+        throw new Error(`Intentional demo failure ${task.attempt}/${failuresBefore}`);
       }
       return {
         label,
         recovered: true,
-        attempt: job.attempt,
-        checkpointReused: reservation.reservedOnAttempt < job.attempt,
+        attempt: task.attempt,
+        checkpointReused: reservation.reservedOnAttempt < task.attempt,
         reservation,
       };
     },
   );
   worker.handle<DurableDemoPayload>(
-    DURABLE_DEMO_JOB_TYPE,
-    async ({ scenario: scenarioInput, failureMode }, { checkpoint, job, signal }) => {
+    DURABLE_DEMO_TASK_TYPE,
+    async ({ scenario: scenarioInput, failureMode }, { checkpoint, task, signal }) => {
       const scenario = parseDurableDemoScenario(scenarioInput);
       if (!scenario) throw new Error(`Unknown durable demo scenario ${String(scenarioInput)}`);
       const definition = durableDemoScenarios[scenario];
@@ -194,12 +194,12 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
 
       for (const [stepIndex, step] of definition.steps.entries()) {
         const artifact = await checkpoint(step.name, async () => {
-          deps.onDurableStepOperation?.(scenario, step.name, job.attempt);
+          deps.onDurableStepOperation?.(scenario, step.name, task.attempt);
           await sleep(operationDelayMs, undefined, { signal });
           return {
             operationId: randomUUID(),
             completedAt: new Date().toISOString(),
-            completedOnAttempt: job.attempt,
+            completedOnAttempt: task.attempt,
             output: `${step.label} completed`,
           };
         });
@@ -216,7 +216,7 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
 
         if (
           failureMode !== "continuous" &&
-          job.attempt === 1 &&
+          task.attempt === 1 &&
           stepIndex === definition.failAfterStep
         ) {
           throw new Error(`Intentional crash after durable step ${step.name}`);
@@ -226,22 +226,22 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
       return {
         scenario,
         completed: true,
-        attempt: job.attempt,
+        attempt: task.attempt,
         reusedCheckpoints: definition.steps
-          .filter((step) => artifacts[step.name]!.completedOnAttempt < job.attempt)
+          .filter((step) => artifacts[step.name]!.completedOnAttempt < task.attempt)
           .map((step) => step.name),
         artifacts,
       };
     },
   );
-  worker.handle<{ source: string }>(DURABLE_TIMER_JOB_TYPE, async ({ source }, context) => {
-    const currentFence = context.job.fenceToken.toString();
+  worker.handle<{ source: string }>(DURABLE_TIMER_TASK_TYPE, async ({ source }, context) => {
+    const currentFence = context.task.fenceToken.toString();
     const prepared = await context.checkpoint(DURABLE_TIMER_PREPARE_CHECKPOINT, () => {
-      deps.onDurableTimerOperation?.("prepare", context.job.attempt, context.job.fenceToken);
+      deps.onDurableTimerOperation?.("prepare", context.task.attempt, context.task.fenceToken);
       return {
         artifactId: randomUUID(),
         preparedAt: new Date().toISOString(),
-        preparedOnAttempt: context.job.attempt,
+        preparedOnAttempt: context.task.attempt,
         preparedOnFence: currentFence,
       };
     });
@@ -252,11 +252,11 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
     if (!durableWait) throw new Error("Durable timer wait was not replayed");
 
     const publication = await context.checkpoint(DURABLE_TIMER_PUBLISH_CHECKPOINT, () => {
-      deps.onDurableTimerOperation?.("publish", context.job.attempt, context.job.fenceToken);
+      deps.onDurableTimerOperation?.("publish", context.task.attempt, context.task.fenceToken);
       return {
         publicationId: randomUUID(),
         publishedAt: new Date().toISOString(),
-        publishedOnAttempt: context.job.attempt,
+        publishedOnAttempt: context.task.attempt,
         publishedOnFence: currentFence,
       };
     });
@@ -264,7 +264,7 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
     return {
       source,
       completed: true,
-      attempt: context.job.attempt,
+      attempt: context.task.attempt,
       prepareCheckpointReused: prepared.preparedOnFence !== currentFence,
       waitReplayed: existingWait !== null,
       wait: {
@@ -276,21 +276,21 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
       publication,
     };
   });
-  worker.handle<{ source: string }>(RECURRING_JOB_TYPE, async ({ source }, { job }) => {
-    return { source, recurring: true, attempt: job.attempt };
+  worker.handle<{ source: string }>(RECURRING_TASK_TYPE, async ({ source }, { task }) => {
+    return { source, recurring: true, attempt: task.attempt };
   });
-  worker.handle<{ language: string }>(LANGUAGE_WORKER_JOB_TYPE, async ({ language }, { job }) => {
+  worker.handle<{ language: string }>(LANGUAGE_WORKER_TASK_TYPE, async ({ language }, { task }) => {
     if (language !== "typescript") {
-      throw new Error(`TypeScript worker received language job for ${language}`);
+      throw new Error(`TypeScript worker received language task for ${language}`);
     }
-    return { language, runtime: "node", attempt: job.attempt };
+    return { language, runtime: "node", attempt: task.attempt };
   });
-  worker.handle(SHARED_WORKER_JOB_TYPE, async (payload, { job }) => {
-    return sharedWorkerJob(payload, job.attempt);
+  worker.handle(SHARED_WORKER_TASK_TYPE, async (payload, { task }) => {
+    return sharedWorkerTask(payload, task.attempt);
   });
   const featureShowcaseHandler: Handler<DemoFeaturePayload> = async (payload, context) => {
     const variant =
-      payload.behavior === "rotating" ? demoFeatureRecurringVariant(context.job.id) : null;
+      payload.behavior === "rotating" ? demoFeatureRecurringVariant(context.task.id) : null;
     const behavior: DemoFeatureBehavior =
       variant === null
         ? payload.behavior
@@ -310,7 +310,7 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
         await context.checkpoint(`${payload.scenario}:stage-${index}`, () => ({
           artifactId: randomUUID(),
           stage: index,
-          createdOnAttempt: context.job.attempt,
+          createdOnAttempt: context.task.attempt,
         }));
       }
     }
@@ -339,11 +339,11 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
     }
 
     if (behavior === "self-cancel") {
-      await queue.cancel(context.job.id, {
+      await queue.cancel(context.task.id, {
         requestedBy: "demo-showcase",
         reason: `Cooperative cancellation for ${scenario}`,
       });
-      throw new CancellationRequestedError(context.job.id);
+      throw new CancellationRequestedError(context.task.id);
     }
 
     const shouldRetry =
@@ -351,8 +351,8 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
         behavior === "checkpoint-retry" ||
         behavior === "wait-retry" ||
         behavior === "progress-retry") &&
-      context.job.attempt === 1;
-    const shouldRetryTwice = behavior === "retry-twice" && context.job.attempt <= 2;
+      context.task.attempt === 1;
+    const shouldRetryTwice = behavior === "retry-twice" && context.task.attempt <= 2;
     if (
       shouldRetry ||
       shouldRetryTwice ||
@@ -360,7 +360,7 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
       behavior === "progress-fail"
     ) {
       throw new Error(
-        `Intentional showcase outcome for ${scenario} on attempt ${context.job.attempt}`,
+        `Intentional showcase outcome for ${scenario} on attempt ${context.task.attempt}`,
       );
     }
 
@@ -368,8 +368,8 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
       family: payload.family,
       scenario,
       variant,
-      outcome: context.job.attempt > 1 ? "recovered" : "succeeded",
-      attempt: context.job.attempt,
+      outcome: context.task.attempt > 1 ? "recovered" : "succeeded",
+      attempt: context.task.attempt,
     };
   };
   // The original outcome-shaped families share one generic handler; the families added for
@@ -386,20 +386,20 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
     "dead-letters-redrive",
   ]);
   for (const family of DEMO_FEATURE_SHOWCASE_FAMILIES) {
-    if (genericFamilies.has(family.key)) worker.handle(family.jobType, featureShowcaseHandler);
+    if (genericFamilies.has(family.key)) worker.handle(family.taskType, featureShowcaseHandler);
   }
 
-  const dependencyFamily = demoFeatureShowcaseFamily("job-dependencies");
+  const dependencyFamily = demoFeatureShowcaseFamily("task-dependencies");
   worker.handle<DemoFeaturePayload>(
-    dependencyFamily.jobType,
+    dependencyFamily.taskType,
     async (payload, context): Promise<Json> => {
       // Each recurring occurrence drives a fresh prerequisite-to-dependent chain, so the
       // dependency lineage keeps growing while the dashboard is open.
       if (payload.behavior === "rotating") {
-        const prerequisiteJobId = await queue.enqueue(
-          dependencyFamily.jobType,
+        const prerequisiteTaskId = await queue.enqueue(
+          dependencyFamily.taskType,
           recurringPayload(
-            "job-dependencies",
+            "task-dependencies",
             "recurring-chain",
             "success",
             "Recurring chain prerequisite",
@@ -407,10 +407,10 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
           ),
           { maxAttempts: 1, tags: ["dependency", "recurring", "prerequisite"] },
         );
-        const dependentJobId = await queue.enqueue(
-          dependencyFamily.jobType,
+        const dependentTaskId = await queue.enqueue(
+          dependencyFamily.taskType,
           recurringPayload(
-            "job-dependencies",
+            "task-dependencies",
             "recurring-chain",
             "success",
             "Recurring chain dependent",
@@ -419,7 +419,7 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
           {
             maxAttempts: 1,
             dependencies: {
-              prerequisiteJobIds: [prerequisiteJobId],
+              prerequisiteTaskIds: [prerequisiteTaskId],
               onSuccess: "release",
               onFailure: "fail",
               onCancellation: "cancel",
@@ -427,7 +427,7 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
             tags: ["dependency", "recurring", "dependent"],
           },
         );
-        return { scenario: payload.scenario, prerequisiteJobId, dependentJobId };
+        return { scenario: payload.scenario, prerequisiteTaskId, dependentTaskId };
       }
       if (payload.behavior === "always-fail") {
         throw new Error(`Intentional prerequisite failure for ${payload.scenario}`);
@@ -436,23 +436,23 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
         scenario: payload.scenario,
         role: payload.role ?? null,
         outcome: "succeeded",
-        attempt: context.job.attempt,
+        attempt: context.task.attempt,
       };
     },
   );
 
   const childFamily = demoFeatureShowcaseFamily("child-workflows");
   worker.handle<DemoFeaturePayload>(
-    childFamily.jobType,
+    childFamily.taskType,
     async (payload, context): Promise<Json> => {
-      const childRequest = (name: string, failUntilAttempt: number): ChildJobRequest => ({
+      const childRequest = (name: string, failUntilAttempt: number): ChildTaskRequest => ({
         name,
-        type: CHILD_STEP_JOB_TYPE,
+        type: CHILD_STEP_TASK_TYPE,
         payload: { scenario: payload.scenario, step: name, failUntilAttempt },
         options: {
           maxAttempts: failUntilAttempt + 1,
           ...(failUntilAttempt > 0 ? { retryPolicy: { type: "fixed", delayMs: 250 } } : {}),
-          tags: ["child-job", "child", payload.scenario],
+          tags: ["child-task", "child", payload.scenario],
         },
       });
       if (payload.behavior === "single-child" || payload.behavior === "child-retry") {
@@ -466,7 +466,7 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
         return { scenario: payload.scenario, child };
       }
       const variant =
-        payload.behavior === "rotating" ? demoFeatureRecurringVariant(context.job.id) : null;
+        payload.behavior === "rotating" ? demoFeatureRecurringVariant(context.task.id) : null;
       const childCount = payload.childCount ?? (variant === null ? 3 : variant + 1);
       const children = await context.runChildren(
         Array.from({ length: childCount }, (_, index) => childRequest(`shard-${index + 1}`, 0)),
@@ -475,21 +475,21 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
     },
   );
   worker.handle<{ scenario: string; step: string; failUntilAttempt: number }>(
-    CHILD_STEP_JOB_TYPE,
-    async ({ scenario, step, failUntilAttempt }, { job }) => {
-      if (job.attempt <= failUntilAttempt) {
-        throw new Error(`Intentional child retry for ${scenario}:${step} attempt ${job.attempt}`);
+    CHILD_STEP_TASK_TYPE,
+    async ({ scenario, step, failUntilAttempt }, { task }) => {
+      if (task.attempt <= failUntilAttempt) {
+        throw new Error(`Intentional child retry for ${scenario}:${step} attempt ${task.attempt}`);
       }
-      return { scenario, step, completedOnAttempt: job.attempt };
+      return { scenario, step, completedOnAttempt: task.attempt };
     },
   );
 
   const signalFamily = demoFeatureShowcaseFamily("signals");
   worker.handle<DemoFeaturePayload>(
-    signalFamily.jobType,
+    signalFamily.taskType,
     async (payload, context): Promise<Json> => {
       const variant =
-        payload.behavior === "rotating" ? demoFeatureRecurringVariant(context.job.id) : null;
+        payload.behavior === "rotating" ? demoFeatureRecurringVariant(context.task.id) : null;
       const behavior: DemoFeatureBehavior =
         variant === null
           ? payload.behavior
@@ -505,8 +505,8 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
         // The checkpoint keeps the sender enqueue exactly-once across the wait's replay.
         await context.checkpoint("enqueue-signal-sender", () =>
           queue.enqueue(
-            SIGNAL_SENDER_JOB_TYPE,
-            { targetJobId: context.job.id, scenario: payload.scenario },
+            SIGNAL_SENDER_TASK_TYPE,
+            { targetTaskId: context.task.id, scenario: payload.scenario },
             {
               runAt: new Date(Date.now() + DEMO_SIGNAL_SENDER_DELAY_MS),
               maxAttempts: 5,
@@ -520,30 +520,30 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
       return { scenario: payload.scenario, behavior, signal };
     },
   );
-  worker.handle<{ targetJobId: string; scenario: string }>(
-    SIGNAL_SENDER_JOB_TYPE,
-    async ({ targetJobId, scenario }, { job }) => {
+  worker.handle<{ targetTaskId: string; scenario: string }>(
+    SIGNAL_SENDER_TASK_TYPE,
+    async ({ targetTaskId, scenario }, { task }) => {
       const result = await queue.sendSignal(
-        targetJobId,
+        targetTaskId,
         DEMO_SIGNAL_NAME,
-        { scenario, sentBy: "showcase-sender", sentOnAttempt: job.attempt },
-        { idempotencyKey: `signal-sender:${job.id}`, requestedBy: "demo-signal-sender" },
+        { scenario, sentBy: "showcase-sender", sentOnAttempt: task.attempt },
+        { idempotencyKey: `signal-sender:${task.id}`, requestedBy: "demo-signal-sender" },
       );
       // The waiter may not have suspended yet; retry until the wait exists. Any delivered or
       // already-answered status is a success for the sender.
       if (result.status === "not_waiting" || result.status === "stale") {
-        throw new Error(`Signal target ${targetJobId} is not waiting yet (${result.status})`);
+        throw new Error(`Signal target ${targetTaskId} is not waiting yet (${result.status})`);
       }
-      return { targetJobId, scenario, status: result.status };
+      return { targetTaskId, scenario, status: result.status };
     },
   );
 
   const humanFamily = demoFeatureShowcaseFamily("human-decisions");
   worker.handle<DemoFeaturePayload>(
-    humanFamily.jobType,
+    humanFamily.taskType,
     async (payload, context): Promise<Json> => {
       const variant =
-        payload.behavior === "rotating" ? demoFeatureRecurringVariant(context.job.id) : null;
+        payload.behavior === "rotating" ? demoFeatureRecurringVariant(context.task.id) : null;
       const behavior: DemoFeatureBehavior =
         variant === null ? payload.behavior : variant === 2 ? "human-expiring" : "human-pending";
       const timeoutMs =
@@ -566,19 +566,19 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
 
   const debounceFamily = demoFeatureShowcaseFamily("keyed-debounce");
   worker.handle<DemoFeaturePayload>(
-    debounceFamily.jobType,
+    debounceFamily.taskType,
     async (payload, context): Promise<Json> => {
       // The recurring occurrence is a driver: it performs a keyed enqueue and one replacement and
       // returns both durable dispositions, so coalescing outcomes are visible as a task result.
       if (payload.behavior === "rotating") {
         const debounce = {
-          key: `showcase-debounce-${context.job.id}`,
+          key: `showcase-debounce-${context.task.id}`,
           windowMs: 5_000,
           schedule: "reset",
         } as const;
         const enqueuePass = (pass: number) =>
           queue.enqueueWithResult(
-            debounceFamily.jobType,
+            debounceFamily.taskType,
             recurringPayload(
               "keyed-debounce",
               "recurring-window",
@@ -592,26 +592,26 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
         return {
           scenario: payload.scenario,
           outcomes: [first, replacement].map((result) => ({
-            jobId: result.jobId,
+            taskId: result.taskId,
             outcome: result.outcome,
             reason: result.reason ?? null,
           })),
         };
       }
-      return { scenario: payload.scenario, outcome: "succeeded", attempt: context.job.attempt };
+      return { scenario: payload.scenario, outcome: "succeeded", attempt: context.task.attempt };
     },
   );
 
   const throttleFamily = demoFeatureShowcaseFamily("keyed-throttle");
   worker.handle<DemoFeaturePayload>(
-    throttleFamily.jobType,
+    throttleFamily.taskType,
     async (payload, context): Promise<Json> => {
       if (payload.behavior === "rotating") {
-        const throttle = { key: `showcase-throttle-${context.job.id}`, windowMs: 5_000 };
+        const throttle = { key: `showcase-throttle-${context.task.id}`, windowMs: 5_000 };
         // Throttled repeats coalesce only when they are equivalent, so all three requests are
         // identical; a differing repeat would be refused as a conflict instead of coalescing.
         const request: EnqueueRequest = {
-          type: throttleFamily.jobType,
+          type: throttleFamily.taskType,
           payload: recurringPayload(
             "keyed-throttle",
             "recurring-window",
@@ -624,19 +624,19 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
         return {
           scenario: payload.scenario,
           outcomes: outcomes.map((result) => ({
-            jobId: result.jobId,
+            taskId: result.taskId,
             outcome: result.outcome,
             reason: result.reason ?? null,
           })),
         };
       }
-      return { scenario: payload.scenario, outcome: "succeeded", attempt: context.job.attempt };
+      return { scenario: payload.scenario, outcome: "succeeded", attempt: context.task.attempt };
     },
   );
 
   const priorityFamily = demoFeatureShowcaseFamily("priority-lanes");
   worker.handle<DemoFeaturePayload>(
-    priorityFamily.jobType,
+    priorityFamily.taskType,
     async (payload, context): Promise<Json> => {
       if (payload.behavior === "rotating") {
         const lanes = [
@@ -644,9 +644,9 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
           { priority: 50, label: "Recurring standard lane" },
           { priority: 10, label: "Recurring bulk lane" },
         ];
-        const jobIds = await queue.enqueueMany(
+        const taskIds = await queue.enqueueMany(
           lanes.map((lane) => ({
-            type: priorityFamily.jobType,
+            type: priorityFamily.taskType,
             payload: recurringPayload("priority-lanes", "recurring-lanes", "success", lane.label),
             options: {
               priority: lane.priority,
@@ -655,13 +655,13 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
             },
           })),
         );
-        return { scenario: payload.scenario, jobIds };
+        return { scenario: payload.scenario, taskIds };
       }
       return {
         scenario: payload.scenario,
-        priority: context.job.priority,
+        priority: context.task.priority,
         outcome: "succeeded",
-        attempt: context.job.attempt,
+        attempt: context.task.attempt,
       };
     },
   );
@@ -669,7 +669,7 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
   const batchFamily = demoFeatureShowcaseFamily("batch-handlers");
   const batchMaxSize = Math.max(1, deps.batchMaxSize ?? DEMO_BATCH_MAX_SIZE);
   worker.handleBatch<DemoFeaturePayload>(
-    batchFamily.jobType,
+    batchFamily.taskType,
     { maxSize: batchMaxSize, lingerMs: DEMO_BATCH_LINGER_MS },
     (items) => {
       const digestId = randomUUID();
@@ -686,7 +686,7 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
                 digestId,
                 batchSize: items.length,
                 memberIndex: payload.memberIndex ?? null,
-                attempt: context.job.attempt,
+                attempt: context.task.attempt,
               },
             },
       );
@@ -694,14 +694,14 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
   );
 
   worker.handle<DemoFeaturePayload>(
-    DEMO_CONTRACT_JOB_TYPE,
+    DEMO_CONTRACT_TASK_TYPE,
     async (payload, context): Promise<Json> => {
       if (payload.behavior === "contract-payload-probe") {
         // A real rejection, surfaced honestly: the probe enqueues a payload the v1 contract
         // refuses and returns the refusal as its own result.
         try {
           await queue.enqueue(
-            DEMO_CONTRACT_JOB_TYPE,
+            DEMO_CONTRACT_TASK_TYPE,
             recurringPayload(
               "payload-contracts",
               "recurring-probe",
@@ -712,8 +712,8 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
           throw new Error("Expected the v1 contract to refuse a payload without invoiceId");
         } catch (error) {
           if (
-            !(error instanceof JobContractValidationError) &&
-            !(error instanceof JobValueSizeLimitError)
+            !(error instanceof TaskContractValidationError) &&
+            !(error instanceof TaskValueSizeLimitError)
           ) {
             throw error;
           }
@@ -733,18 +733,18 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
         approved: true,
         scenario: payload.scenario,
         invoiceId: payload.invoiceId ?? null,
-        contractVersion: context.job.contractVersion,
+        contractVersion: context.task.contractVersion,
       };
     },
   );
-  worker.handle<{ report: string; source: string }>(REPORT_JOB_TYPE, async (payload) => {
+  worker.handle<{ report: string; source: string }>(REPORT_TASK_TYPE, async (payload) => {
     return { ...payload, generated: true };
   });
-  worker.handle(FAILURE_JOB_TYPE, () => {
+  worker.handle(FAILURE_TASK_TYPE, () => {
     throw new Error("Intentional terminal demo failure");
   });
-  worker.handle(LONG_RUNNING_JOB_TYPE, async (_payload, context) => {
-    const durationMs = deps.longRunningJobMs ?? DEMO_LONG_RUNNING_MS;
+  worker.handle(LONG_RUNNING_TASK_TYPE, async (_payload, context) => {
+    const durationMs = deps.longRunningTaskMs ?? DEMO_LONG_RUNNING_MS;
     if (durationMs >= MIN_PROGRESS_UPDATE_INTERVAL_MS * 2) {
       await context.setProgress({ phase: "running", completed: 0, total: durationMs });
     }
@@ -757,7 +757,7 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
     return { completed: true, durationMs };
   });
   worker.handle<{ durationMs: number; source: string }>(
-    TIMING_JOB_TYPE,
+    TIMING_TASK_TYPE,
     async ({ durationMs, source }, { signal }) => {
       await sleep(durationMs, undefined, { signal });
       return { completed: true, durationMs, source };

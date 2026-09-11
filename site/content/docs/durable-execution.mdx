@@ -72,15 +72,15 @@ JSON value and an error. Replay returns the stored value without invoking either
 
 ## Release the worker slot with a durable wait
 
-Some jobs need to pause before a reminder or until a known time. Sleeping inside the handler
-wastes a worker slot for the whole wait. A durable wait releases the job instead:
+Some tasks need to pause before a reminder or until a known time. Sleeping inside the handler
+wastes a worker slot for the whole wait. A durable wait releases the task instead:
 
 - `HandlerContext.sleep` stores a named relative timer.
 - `HandlerContext.sleepUntil` stores a named absolute target.
 
 Python names the absolute form `context.sleep_until`; its relative form is `context.sleep`.
 
-The wait drops the lease, frees the worker slot, and places the job in `scheduled`. It does
+The wait drops the lease, frees the worker slot, and places the task in `scheduled`. It does
 **not** consume an attempt — waiting is normal work, not failure. Repeated sleeps remain part
 of the same logical attempt.
 
@@ -112,7 +112,7 @@ of the same logical attempt.
   </Tab>
 </Tabs>
 
-When the timer is due, promotion makes the job ready and some worker — not necessarily the
+When the timer is due, promotion makes the task ready and some worker — not necessarily the
 original — calls the handler from the top. The stored `welcome` checkpoint replays, execution
 reaches the elapsed `follow-up-window` wait and continues straight past it, and only then does
 the follow-up send. Everything before a wait runs at least twice, so checkpoint it or make it
@@ -123,15 +123,15 @@ interval and a worker must be free, so do not build precise timing on top of it.
 
 ## Treat names as immutable program state
 
-Checkpoint and wait names are the job's durable control flow. The name is how a later
+Checkpoint and wait names are the task's durable control flow. The name is how a later
 activation recognizes a boundary it already passed, so keep names stable across deploys —
-renaming one creates a different boundary, and in-flight jobs will rerun the stage.
+renaming one creates a different boundary, and in-flight tasks will rerun the stage.
 
 The database defends these rules explicitly:
 
 - A repeated relative wait keeps its original duration and wake target. Changing an absolute
   wait's target — or switching a name between modes — raises `WaitConflictError`.
-- Checkpoint values are size-capped, and one job's open waits are bounded; exceeding the wait
+- Checkpoint values are size-capped, and one task's open waits are bounded; exceeding the wait
   bound raises `WaitLimitExceededError`.
 
 For inspection, `HandlerContext.getCheckpoint` and `getWait` read one boundary from inside a
@@ -169,7 +169,7 @@ JSON value:
 Both calls store a named boundary, release the lease, and restart the handler after delivery.
 Applications deliver signals through `Queue.sendSignal`; authenticated operator surfaces complete
 human waits through `Queue.completeHumanWait`. Each delivery is idempotent and retained, so a
-network retry cannot resume the job twice. Read [Signals](/docs/signals) and
+network retry cannot resume the task twice. Read [Signals](/docs/signals) and
 [Human waits](/docs/human-waits) for timeout and authorization rules.
 
 TypeScript handlers use `ctx.sleep` for a relative timer and `ctx.sleepUntil` for a fixed wake
@@ -182,7 +182,7 @@ when its timer or delivery wins.
 - [Signals](/docs/signals) — resume from another process
 - [Human waits](/docs/human-waits) — pause for an operator decision
 - [Retries](/docs/retries) — understand why the handler starts again
-- [Cancellation](/docs/cancellation) — stop a job during execution or a durable wait
+- [Cancellation](/docs/cancellation) — stop a task during execution or a durable wait
 
 ---
 

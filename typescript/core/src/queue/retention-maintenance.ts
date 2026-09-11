@@ -27,7 +27,7 @@ export type MaintenancePhase =
   | "schedule_occurrences"
   | "enqueue_idempotency"
   | "released_dependencies"
-  | "terminal_jobs";
+  | "terminal_tasks";
 
 export interface MaintenancePhaseResult {
   phase: MaintenancePhase;
@@ -49,24 +49,24 @@ type MaintenancePhaseRow = {
 };
 
 export type RetentionPolicyRow = {
-  job_identity_retention_days: number | null;
+  task_identity_retention_days: number | null;
   terminal_outcome_retention_days: number | null;
-  job_event_retention_days: number | null;
+  task_event_retention_days: number | null;
   attempt_history_retention_days: number | null;
   schedule_occurrence_retention_days: number | null;
   statistics_retention_days: number | null;
-  terminal_job_prune_limit: number;
+  terminal_task_prune_limit: number;
   history_partitions_per_pass: number;
   default_partition_rows_per_pass: number;
   occurrence_rows_per_pass: number;
   statistics_rows_per_pass: number;
-  application_job_identity_retention_days: number | null;
+  application_task_identity_retention_days: number | null;
   application_terminal_outcome_retention_days: number | null;
-  application_job_event_retention_days: number | null;
+  application_task_event_retention_days: number | null;
   application_attempt_history_retention_days: number | null;
   application_schedule_occurrence_retention_days: number | null;
   application_statistics_retention_days: number | null;
-  application_terminal_job_prune_limit: number;
+  application_terminal_task_prune_limit: number;
   application_history_partitions_per_pass: number;
   application_default_partition_rows_per_pass: number;
   application_occurrence_rows_per_pass: number;
@@ -95,13 +95,13 @@ type MaintenancePolicyRow = {
 };
 
 const RETENTION_POLICY_COLUMNS: Readonly<Record<RetentionPolicySetting, string>> = {
-  jobIdentityRetentionDays: "job_identity_retention_days",
+  taskIdentityRetentionDays: "task_identity_retention_days",
   terminalOutcomeRetentionDays: "terminal_outcome_retention_days",
-  jobEventRetentionDays: "job_event_retention_days",
+  taskEventRetentionDays: "task_event_retention_days",
   attemptHistoryRetentionDays: "attempt_history_retention_days",
   scheduleOccurrenceRetentionDays: "schedule_occurrence_retention_days",
   statisticsRetentionDays: "statistics_retention_days",
-  terminalJobPruneLimit: "terminal_job_prune_limit",
+  terminalTaskPruneLimit: "terminal_task_prune_limit",
   historyPartitionsPerPass: "history_partitions_per_pass",
   defaultPartitionRowsPerPass: "default_partition_rows_per_pass",
   occurrenceRowsPerPass: "occurrence_rows_per_pass",
@@ -146,13 +146,13 @@ function policyColumnNames<TSetting extends string>(
 
 export function retentionPolicy(row: RetentionPolicyRow): RetentionPolicy {
   return {
-    jobIdentityRetentionDays: row.job_identity_retention_days,
+    taskIdentityRetentionDays: row.task_identity_retention_days,
     terminalOutcomeRetentionDays: row.terminal_outcome_retention_days,
-    jobEventRetentionDays: row.job_event_retention_days,
+    taskEventRetentionDays: row.task_event_retention_days,
     attemptHistoryRetentionDays: row.attempt_history_retention_days,
     scheduleOccurrenceRetentionDays: row.schedule_occurrence_retention_days,
     statisticsRetentionDays: row.statistics_retention_days,
-    terminalJobPruneLimit: row.terminal_job_prune_limit,
+    terminalTaskPruneLimit: row.terminal_task_prune_limit,
     historyPartitionsPerPass: row.history_partitions_per_pass,
     defaultPartitionRowsPerPass: row.default_partition_rows_per_pass,
     occurrenceRowsPerPass: row.occurrence_rows_per_pass,
@@ -220,7 +220,7 @@ export class RetentionMaintenanceModule extends QueueModule {
   }
 
   async runMaintenance(options: { now?: Date } = {}): Promise<MaintenancePhaseResult[]> {
-    return this.maintenanceSpan("background_tasks", async () => {
+    return this.maintenanceSpan("background_routines", async () => {
       const result = await this.context.database.query<MaintenancePhaseRow>(RUN_MAINTENANCE_SQL, [
         options.now ?? new Date(),
       ]);
@@ -283,13 +283,13 @@ export class RetentionMaintenanceModule extends QueueModule {
     const result = await this.context.database.query<RetentionPolicyRow>(
       SQL_STATEMENTS["sync_retention_policy_v1"],
       [
-        definition.jobIdentityRetentionDays,
+        definition.taskIdentityRetentionDays,
         definition.terminalOutcomeRetentionDays,
-        definition.jobEventRetentionDays,
+        definition.taskEventRetentionDays,
         definition.attemptHistoryRetentionDays,
         definition.scheduleOccurrenceRetentionDays,
         definition.statisticsRetentionDays,
-        definition.terminalJobPruneLimit ?? null,
+        definition.terminalTaskPruneLimit ?? null,
         definition.historyPartitionsPerPass ?? null,
         definition.defaultPartitionRowsPerPass ?? null,
         definition.occurrenceRowsPerPass ?? null,
@@ -333,23 +333,23 @@ export class RetentionMaintenanceModule extends QueueModule {
     const current = await this.getRetentionPolicy();
     const candidate = { ...current, ...definition };
     const result = await this.context.database.query<{
-      terminal_jobs: number;
-      job_events: number;
+      terminal_tasks: number;
+      task_events: number;
       attempt_history: number;
       schedule_occurrences: number;
       statistics: number;
     }>(SQL_STATEMENTS["retention_policy_preview"], [
-      candidate.jobIdentityRetentionDays,
+      candidate.taskIdentityRetentionDays,
       candidate.terminalOutcomeRetentionDays,
-      candidate.jobEventRetentionDays,
+      candidate.taskEventRetentionDays,
       candidate.attemptHistoryRetentionDays,
       candidate.scheduleOccurrenceRetentionDays,
       candidate.statisticsRetentionDays,
     ]);
     const row = expectOneRow(result, "the retention policy preview");
     const sampled = {
-      terminalJobs: Number(row.terminal_jobs),
-      jobEvents: Number(row.job_events),
+      terminalTasks: Number(row.terminal_tasks),
+      taskEvents: Number(row.task_events),
       attemptHistory: Number(row.attempt_history),
       scheduleOccurrences: Number(row.schedule_occurrences),
       statistics: Number(row.statistics),

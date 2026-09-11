@@ -104,11 +104,11 @@ const QUALIFIED = /workhorse\.([a-z_][a-z0-9_]*)/g;
  * They are governed whether or not this repository's own backends still read them. ADR 0039 moved
  * the dashboard's reads into SQL procedures, which left the views read only from inside the schema,
  * but it did not withdraw the published contract a backend in any language builds against.
- * `dashboard_job_result_v1` belongs to the same list and is a function rather than a view column
+ * `dashboard_task_result_v1` belongs to the same list and is a function rather than a view column
  * only because ADR 0027 keeps the redaction keys off the projection.
  */
 function publishedReadSurface(name: string, kind: "table" | "view" | "function"): boolean {
-  if (name === "dashboard_job_result_v1") return kind === "function";
+  if (name === "dashboard_task_result_v1") return kind === "function";
   return kind === "view" && name.startsWith("dashboard_") && name.endsWith("_v1");
 }
 

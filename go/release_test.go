@@ -65,7 +65,7 @@ pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL_TEST"))
 	if _, err := queue.ListRateLimitPolicies(ctx, []string{"module-consumer"}); err != nil {
 		panic(err)
 	}
-	jobID, err := queue.Enqueue(ctx, "consumer.enqueue", map[string]any{"source": "external-module"})
+	taskID, err := queue.Enqueue(ctx, "consumer.enqueue", map[string]any{"source": "external-module"})
 	if err != nil {
 		panic(err)
 	}
@@ -73,7 +73,7 @@ pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL_TEST"))
 		panic(err)
 	}
 	admin := workhorse.NewAdmin(workhorse.NewPGXExecutor(pool))
-	if _, err := admin.GetJob(ctx, jobID); err != nil {
+	if _, err := admin.GetTask(ctx, taskID); err != nil {
 		panic(err)
 	}
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
@@ -92,9 +92,9 @@ pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL_TEST"))
 		panic(err)
 	}
 	if !processed {
-		panic("external worker did not process its job")
+		panic("external worker did not process its task")
 	}
-	fmt.Print(jobID)
+	fmt.Print(taskID)
 }
 `
 	if err := os.WriteFile(filepath.Join(consumerRoot, "go.mod"), []byte(goMod), 0o600); err != nil {
@@ -111,9 +111,9 @@ pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL_TEST"))
 	if err != nil {
 		t.Fatalf("run external module: %v\n%s", err, output)
 	}
-	jobID := strings.TrimSpace(string(output))
-	if jobID == "" {
-		t.Fatal("external module returned an empty job identifier")
+	taskID := strings.TrimSpace(string(output))
+	if taskID == "" {
+		t.Fatal("external module returned an empty task identifier")
 	}
 
 	pool, err := pgxpool.New(context.Background(), databaseURL)
@@ -121,11 +121,11 @@ pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL_TEST"))
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	assertJobCount(t, pool, jobID, 1)
+	assertTaskCount(t, pool, taskID, 1)
 	var state string
 	var externalWorker bool
 	if err := pool.QueryRow(context.Background(), `SELECT state, (result->>'externalWorker')::boolean
-		FROM workhorse.job_outcome WHERE job_id = $1::uuid`, jobID).Scan(&state, &externalWorker); err != nil {
+		FROM workhorse.task_outcome WHERE task_id = $1::uuid`, taskID).Scan(&state, &externalWorker); err != nil {
 		t.Fatal(err)
 	}
 	if state != "succeeded" || !externalWorker {
@@ -178,9 +178,9 @@ func TestExamplesCompileAsExternalConsumers(t *testing.T) {
 
 func TestReadmeExampleMatchesReleaseTestedExample(t *testing.T) {
 	readme := readRepositoryFile(t, "go", "README.md")
-	match := regexp.MustCompile(`(?s)## Run one job\n\n\x60\x60\x60go\n(.*?)\n\x60\x60\x60`).FindStringSubmatch(readme)
+	match := regexp.MustCompile(`(?s)## Run one task\n\n\x60\x60\x60go\n(.*?)\n\x60\x60\x60`).FindStringSubmatch(readme)
 	if len(match) != 2 {
-		t.Fatal("go/README.md does not contain one Go example under Run one job")
+		t.Fatal("go/README.md does not contain one Go example under Run one task")
 	}
 	example := strings.TrimSpace(readRepositoryFile(t, "go", "examples", "quickstart", "main.go"))
 	if match[1] != example {

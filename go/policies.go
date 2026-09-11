@@ -19,7 +19,7 @@ type SyncPolicyOptions struct {
 	Prune bool
 }
 
-// ConcurrencyPolicyDefinition is one queue's deployment-synchronized active-job budget.
+// ConcurrencyPolicyDefinition is one queue's deployment-synchronized active-task budget.
 type ConcurrencyPolicyDefinition struct {
 	Queue           string `json:"queue"`
 	MaxActive       int    `json:"maxActive"`

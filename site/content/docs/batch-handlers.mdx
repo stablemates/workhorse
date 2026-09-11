@@ -1,10 +1,10 @@
 ---
 title: Batch handlers
-description: Process several jobs of one type through a shared application call while preserving per-job outcomes.
+description: Process several tasks of one type through a shared application call while preserving per-task outcomes.
 ---
 
 Use TypeScript's `Worker.handleBatch`, Go's `Worker.HandleBatch`, or Python's
-`Worker.handle_batch` when one application call can process several jobs more efficiently. Each
+`Worker.handle_batch` when one application call can process several tasks more efficiently. Each
 member keeps its own durable identity, lease, fence, retry budget, checkpoints, progress, and
 cancellation.
 
@@ -57,7 +57,7 @@ pass through normal priority, queue, concurrency, keyed, and rate-limit admissio
 remain partial until its linger ends.
 
 The callback returns one ordered outcome per member. If it throws or returns an invalid list,
-Workhorse submits the failure for every member, then each job applies its own retry policy.
+Workhorse submits the failure for every member, then each task applies its own retry policy.
 
 Python passes `max_size` and `linger_ms` as keyword arguments. Its callback returns mappings with
 the same `succeeded` and `failed` statuses. Each item carries a `BatchHandlerContext` with
@@ -72,12 +72,12 @@ batch size and links the other members. If the shared callback fails, the drawer
 failure across the group instead of guessing from the individual task errors.
 
 Batch contexts omit timers, signals, human waits, and child joins because one member cannot suspend
-and replay independently inside a shared invocation. Register an ordinary handler when a job needs
+and replay independently inside a shared invocation. Register an ordinary handler when a task needs
 those boundaries.
 
 TypeScript configures grouping with `BatchHandlerOptions.maxSize` and
 `BatchHandlerOptions.lingerMs`; each option changes assembly of the batch without changing an
-individual job's lifecycle.
+individual task's lifecycle.
 
 ## Next
 

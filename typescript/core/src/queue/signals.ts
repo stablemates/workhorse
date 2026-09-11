@@ -1,7 +1,7 @@
 import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { expectOneRow, WorkhorseError } from "../errors.js";
 import { logInfo } from "../telemetry.js";
-import { MAX_EXTERNAL_WAITS_PER_JOB, type ClaimedJob, type Json } from "../types.js";
+import { MAX_EXTERNAL_WAITS_PER_TASK, type ClaimedTask, type Json } from "../types.js";
 import {
   encodeExternalWaitValue,
   externalWaitCursor,
@@ -38,7 +38,7 @@ export type SignalDeliveryStatus =
 
 export interface SignalDeliveryResult<TPayload extends Json = Json> {
   status: SignalDeliveryStatus;
-  jobId: string;
+  taskId: string;
   name: string;
   payload: TPayload | null;
   deliveredAt: Date | null;
@@ -72,11 +72,11 @@ type SendSignalRow = {
 
 export class SignalWaitLeaseLostError extends WorkhorseError {
   constructor(
-    readonly jobId: string,
+    readonly taskId: string,
     readonly waitName: string,
   ) {
     super(
-      `Signal wait ${waitName} for job ${jobId} cannot be recorded because the lease is stale or expired`,
+      `Signal wait ${waitName} for task ${taskId} cannot be recorded because the lease is stale or expired`,
     );
     this.name = "SignalWaitLeaseLostError";
   }
@@ -84,28 +84,28 @@ export class SignalWaitLeaseLostError extends WorkhorseError {
 
 export class SignalWaitConflictError extends WorkhorseError {
   constructor(
-    readonly jobId: string,
+    readonly taskId: string,
     readonly waitName: string,
   ) {
-    super(`Signal wait ${waitName} for job ${jobId} is already waiting for delivery`);
+    super(`Signal wait ${waitName} for task ${taskId} is already waiting for delivery`);
     this.name = "SignalWaitConflictError";
   }
 }
 
 export class SignalWaitLimitExceededError extends WorkhorseError {
-  constructor(readonly jobId: string) {
-    super(`Job ${jobId} already has the maximum of ${MAX_EXTERNAL_WAITS_PER_JOB} signal waits`);
+  constructor(readonly taskId: string) {
+    super(`Task ${taskId} already has the maximum of ${MAX_EXTERNAL_WAITS_PER_TASK} signal waits`);
     this.name = "SignalWaitLimitExceededError";
   }
 }
 
 export class SignalIdempotencyConflictError extends WorkhorseError {
   constructor(
-    readonly jobId: string,
+    readonly taskId: string,
     readonly waitName: string,
   ) {
     super(
-      `Signal ${waitName} for job ${jobId} received a different request for a retained idempotency key`,
+      `Signal ${waitName} for task ${taskId} received a different request for a retained idempotency key`,
     );
     this.name = "SignalIdempotencyConflictError";
   }
@@ -117,7 +117,7 @@ export class SignalsModule extends QueueModule {
     const { limit, cursor } = validateExternalWaitListOptions(options);
     const result = await this.context.database.query<ExternalWaitRow>(
       SQL_STATEMENTS["dashboard_signal_wait_v1"],
-      [limit + 1, cursor?.createdAt ?? null, cursor?.jobId ?? null, cursor?.name ?? null],
+      [limit + 1, cursor?.createdAt ?? null, cursor?.taskId ?? null, cursor?.name ?? null],
     );
     const pageRows = result.rows.slice(0, limit);
     return {
@@ -128,7 +128,7 @@ export class SignalsModule extends QueueModule {
   }
 
   async waitForSignal<TPayload extends Json = Json>(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     name: string,
     options: ExternalWaitOptions = {},
@@ -139,12 +139,12 @@ export class SignalsModule extends QueueModule {
     }
     const result = await this.context.database.query<WaitForSignalRow>(
       SQL_STATEMENTS["wait_for_signal_v1"],
-      [job.id, workerId, job.fenceToken.toString(), name, validateExternalWaitOptions(options)],
+      [task.id, workerId, task.fenceToken.toString(), name, validateExternalWaitOptions(options)],
     );
     const row = expectOneRow(result, "workhorse.wait_for_signal_v1");
-    if (row.status === "already_waiting") throw new SignalWaitConflictError(job.id, name);
-    if (row.status === "stale") throw new SignalWaitLeaseLostError(job.id, name);
-    if (row.status === "limit_exceeded") throw new SignalWaitLimitExceededError(job.id);
+    if (row.status === "already_waiting") throw new SignalWaitConflictError(task.id, name);
+    if (row.status === "stale") throw new SignalWaitLeaseLostError(task.id, name);
+    if (row.status === "limit_exceeded") throw new SignalWaitLimitExceededError(task.id);
     if (row.status !== "waiting" && row.status !== "delivered") {
       throw new Error(`Unexpected signal wait status: ${String(row.status)}`);
     }
@@ -152,7 +152,7 @@ export class SignalsModule extends QueueModule {
   }
 
   async sendSignal<TPayload extends Json>(
-    jobId: string,
+    taskId: string,
     name: string,
     payload: TPayload,
     request: SendSignalRequest,
@@ -162,18 +162,18 @@ export class SignalsModule extends QueueModule {
     const encodedPayload = encodeExternalWaitValue(payload, "Signal payload");
     const result = await this.context.database.query<SendSignalRow>(
       SQL_STATEMENTS["send_signal_v1"],
-      [jobId, name, encodedPayload, request.idempotencyKey, request.requestedBy],
+      [taskId, name, encodedPayload, request.idempotencyKey, request.requestedBy],
     );
     const row = expectOneRow(result, "workhorse.send_signal_v1");
-    if (row.status === "conflict") throw new SignalIdempotencyConflictError(jobId, name);
-    logInfo("workhorse.job.signal_processed", "Job signal processed", {
-      "workhorse.job.id": jobId,
+    if (row.status === "conflict") throw new SignalIdempotencyConflictError(taskId, name);
+    logInfo("workhorse.task.signal_processed", "Task signal processed", {
+      "workhorse.task.id": taskId,
       "workhorse.signal.name": name,
       "workhorse.signal.status": row.status,
     });
     return {
       status: row.status,
-      jobId,
+      taskId,
       name,
       payload: row.payload as TPayload | null,
       deliveredAt: row.delivered_at === null ? null : new Date(row.delivered_at),

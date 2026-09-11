@@ -147,7 +147,7 @@ export function EnqueueDiagram() {
           <p className="flex items-center gap-2.5 text-[13px]">
             <Pip tone="good" />
             <span className="font-mono font-medium tracking-tight">COMMIT</span>
-            <span className="text-fd-muted-foreground">the order and its job appear together</span>
+            <span className="text-fd-muted-foreground">the order and its task appear together</span>
           </p>
           <p className="flex items-center gap-2.5 text-[13px]">
             <Pip tone="off" />
@@ -168,7 +168,7 @@ const crashSteps: readonly StepperStep[] = [
   {
     title: 'checkpoint("charge")',
     tone: "run",
-    detail: "runs, and the result commits with the job",
+    detail: "runs, and the result commits with the task",
   },
   { title: "process killed", tone: "off", detail: "lease expires; nothing rolls back" },
   {
@@ -181,7 +181,7 @@ const crashSteps: readonly StepperStep[] = [
 
 export function CrashDiagram() {
   return (
-    <Diagram label="the same job, through a crash">
+    <Diagram label="the same task, through a crash">
       <Stepper steps={crashSteps} />
     </Diagram>
   );
@@ -269,8 +269,8 @@ export function IdempotencyDiagram() {
   return (
     <Diagram label='key "capture:inv-1" · scope "tenant-42"'>
       <div className="flex min-w-[24rem] flex-col gap-2.5">
-        <IdempotencyRow cause="first enqueue" effect="job created" tone="good" />
-        <IdempotencyRow cause="webhook retried" effect="same jobId returned" tone="good" />
+        <IdempotencyRow cause="first enqueue" effect="task created" tone="good" />
+        <IdempotencyRow cause="webhook retried" effect="same taskId returned" tone="good" />
         <IdempotencyRow
           cause="replayed with a changed payload"
           effect="EnqueueIdempotencyConflictError"
@@ -309,7 +309,7 @@ export function SchedulesDiagram() {
 
 /* ---------- 07 · flow control ---------- */
 
-/** A slot inside a tenant's cap: filled while a job is active. */
+/** A slot inside a tenant's cap: filled while a task is active. */
 function Slot({ filled = false }: { filled?: boolean }) {
   return (
     <span
@@ -319,7 +319,7 @@ function Slot({ filled = false }: { filled?: boolean }) {
   );
 }
 
-/** A job waiting on the queue side of the admission gate. */
+/** A task waiting on the queue side of the admission gate. */
 function WaitingDot() {
   return (
     <span
@@ -330,7 +330,7 @@ function WaitingDot() {
 }
 
 /**
- * The admission gate, drawn as one dashed vertical rule: jobs queue on the
+ * The admission gate, drawn as one dashed vertical rule: tasks queue on the
  * left, the per-key slots sit on the right, and nothing crosses while the
  * key's slots are full. Rows keep zero vertical gap so the gate is unbroken.
  */
@@ -353,7 +353,7 @@ export function FlowControlDiagram() {
             <Slot filled />
             <Slot filled />
             <span className="pl-1.5 text-[12.5px] text-fd-muted-foreground">
-              full, so two jobs hold at the gate
+              full, so two tasks hold at the gate
             </span>
           </span>
 
@@ -465,7 +465,7 @@ export function DebounceDiagram() {
         </div>
         <Wire className="mx-4 w-10" arrow />
         <div className="shrink-0">
-          <Chip tone="good">one pending job · latest payload</Chip>
+          <Chip tone="good">one pending task · latest payload</Chip>
           <p className="mt-2 font-mono text-[12.5px] text-fd-muted-foreground">
             outcome: &quot;accepted&quot;, then &quot;replaced&quot;
           </p>
@@ -481,7 +481,7 @@ const waitSteps: readonly StepperStep[] = [
   {
     title: 'waitForSignal("security-scan")',
     tone: "wait",
-    detail: "lease released, so the job holds nothing",
+    detail: "lease released, so the task holds nothing",
   },
   {
     title: "scan delivered once",
@@ -511,18 +511,18 @@ export function BatchDiagram() {
     <Diagram label="one provider call, four leases">
       <div className="flex items-center gap-0">
         <div className="flex shrink-0 flex-col gap-1.5">
-          {[1, 2, 3, 4].map((job) => (
-            <Chip key={job}>email.send #{job}</Chip>
+          {[1, 2, 3, 4].map((task) => (
+            <Chip key={task}>email.send #{task}</Chip>
           ))}
         </div>
         <Wire className="mx-3 w-8" arrow />
         <Chip tone="accent">provider.sendMany(…)</Chip>
         <Wire className="mx-3 w-8" arrow />
         <div className="flex shrink-0 flex-col gap-2">
-          {[1, 2, 3].map((job) => (
-            <p key={job} className="flex items-center gap-2 text-[13px]">
+          {[1, 2, 3].map((task) => (
+            <p key={task} className="flex items-center gap-2 text-[13px]">
               <Pip tone="good" />
-              <span className="font-mono tracking-tight">#{job} succeeded</span>
+              <span className="font-mono tracking-tight">#{task} succeeded</span>
             </p>
           ))}
           <p className="flex items-center gap-2 text-[13px]">
@@ -540,7 +540,7 @@ export function BatchDiagram() {
 
 const cancelSteps: readonly StepperStep[] = [
   {
-    title: "queue.cancel(jobId)",
+    title: "queue.cancel(taskId)",
     tone: "run",
     detail: "requestedBy and reason are recorded",
   },
@@ -552,7 +552,7 @@ const cancelSteps: readonly StepperStep[] = [
   {
     title: "upload stops mid-request",
     tone: "good",
-    detail: "fetch aborts; the job ends as canceled",
+    detail: "fetch aborts; the task ends as canceled",
   },
 ];
 
@@ -582,7 +582,7 @@ export function DeadLettersDiagram() {
             <Wire className="mt-1 w-56" />
           </div>
           <Wire className="w-4" arrow />
-          <Chip tone="good">new job · lineage kept</Chip>
+          <Chip tone="good">new task · lineage kept</Chip>
         </div>
       </div>
     </Diagram>

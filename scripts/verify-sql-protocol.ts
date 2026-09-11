@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { JobAttemptOutcome, JobState, Queryable } from "../typescript/core/src/types.js";
+import type { TaskAttemptOutcome, TaskState, Queryable } from "../typescript/core/src/types.js";
 
 type JsonScalar = boolean | number | string | null;
 export type JsonValue = JsonScalar | JsonValue[] | { [key: string]: JsonValue };
@@ -67,7 +67,7 @@ interface SqlScenario {
 interface RuntimeFixtureBase {
   id: string;
   covers: string[];
-  jobType: string;
+  taskType: string;
 }
 
 type RuntimeAbortReason =
@@ -86,7 +86,7 @@ export type RuntimeWriteOperation =
   | "runChildren";
 
 interface ExpectedRuntimeState {
-  state: JobState;
+  state: TaskState;
   attempt: number;
   errorName?: "DeadlineExceeded" | "ExecutionTimeout";
 }
@@ -95,7 +95,7 @@ export interface BatchRuntimeFixture extends RuntimeFixtureBase {
   kind: "batch";
   concurrency: number;
   batchMaxSize: number;
-  jobs: { key: string; priority: number; maxAttempts: number; outcome: string }[];
+  tasks: { key: string; priority: number; maxAttempts: number; outcome: string }[];
   expectedHandlerOrder: string[];
   expectedAfterFirstRun: Record<string, { state: string; attempt: number }>;
   expectedAfterSecondRun: Record<string, { state: string; attempt: number }>;
@@ -103,7 +103,7 @@ export interface BatchRuntimeFixture extends RuntimeFixtureBase {
 
 export interface SuspensionReplayRuntimeFixture extends RuntimeFixtureBase {
   kind: "suspension-replay";
-  followingJobType: string;
+  followingTaskType: string;
   checkpointName: string;
   waitName: string;
   waitMs: number;
@@ -124,7 +124,7 @@ export interface CooperativeCancellationRuntimeFixture extends RuntimeFixtureBas
   cancelReason: string;
   expectedAbortReason: RuntimeAbortReason;
   expectedState: ExpectedRuntimeState;
-  expectedAttemptOutcome: JobAttemptOutcome;
+  expectedAttemptOutcome: TaskAttemptOutcome;
 }
 
 export interface ExpirationRuntimeFixture extends RuntimeFixtureBase {
@@ -137,7 +137,7 @@ export interface ExpirationRuntimeFixture extends RuntimeFixtureBase {
   maxAttempts: number;
   expectedAbortReasons: RuntimeAbortReason[];
   expectedAfterRuns: ExpectedRuntimeState[];
-  expectedAttemptOutcomes: JobAttemptOutcome[];
+  expectedAttemptOutcomes: TaskAttemptOutcome[];
 }
 
 export interface LeaseLossRuntimeFixture extends RuntimeFixtureBase {
@@ -150,7 +150,7 @@ export interface LeaseLossRuntimeFixture extends RuntimeFixtureBase {
   portableRejectedWrites: RuntimeWriteOperation[];
   expectedRejectedWriteError: string;
   expectedState: ExpectedRuntimeState;
-  expectedAttemptOutcome: JobAttemptOutcome;
+  expectedAttemptOutcome: TaskAttemptOutcome;
 }
 
 export interface HeartbeatCadenceRuntimeFixture extends RuntimeFixtureBase {
@@ -174,7 +174,7 @@ export interface PollCadenceRuntimeFixture extends RuntimeFixtureBase {
 export interface GracefulDrainRuntimeFixture extends RuntimeFixtureBase {
   kind: "graceful-drain";
   concurrency: number;
-  jobCount: number;
+  taskCount: number;
   settleCheckMs: number;
   expectedActiveAtStop: number;
   expectedSucceeded: number;
@@ -212,7 +212,7 @@ export interface ScheduleFixture {
     schedule: string;
     timezone: string;
     enabled: boolean;
-    job: {
+    task: {
       type: string;
       payload: JsonValue;
       queue?: string;

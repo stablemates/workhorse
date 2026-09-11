@@ -122,7 +122,7 @@ func executeWorkerTracePropagationFixture(t *testing.T, fixture workerRuntimeFix
 	queueName := "runtime-" + fixture.ID
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
 	traceCtx, caller := provider.Tracer("runtime-fixture").Start(ctx, "caller")
-	jobID, err := queue.Enqueue(traceCtx, fixture.JobType, map[string]any{})
+	taskID, err := queue.Enqueue(traceCtx, fixture.TaskType, map[string]any{})
 	caller.End()
 	if err != nil {
 		t.Fatal(err)
@@ -130,8 +130,8 @@ func executeWorkerTracePropagationFixture(t *testing.T, fixture workerRuntimeFix
 	var stored []byte
 	if err := pool.QueryRow(
 		ctx,
-		"SELECT trace_context FROM workhorse.job WHERE id = $1::uuid",
-		jobID,
+		"SELECT trace_context FROM workhorse.task WHERE id = $1::uuid",
+		taskID,
 	).Scan(&stored); err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func executeWorkerTracePropagationFixture(t *testing.T, fixture workerRuntimeFix
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker.Handle(fixture.JobType, func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+	worker.Handle(fixture.TaskType, func(context.Context, any, *workhorse.HandlerContext) (any, error) {
 		return nil, nil
 	})
 	worked, err := worker.RunOnce(ctx)
@@ -204,7 +204,7 @@ func executeWorkerPollCadenceFixture(t *testing.T, fixture workerRuntimeFixture)
 		t.Fatal(err)
 	}
 	handled := make(chan time.Time, 1)
-	worker.Handle(fixture.JobType, func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
+	worker.Handle(fixture.TaskType, func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
 		handled <- time.Now()
 		return nil, nil
 	})
@@ -212,7 +212,7 @@ func executeWorkerPollCadenceFixture(t *testing.T, fixture workerRuntimeFixture)
 	runResult := make(chan error, 1)
 	go func() { runResult <- worker.Run(runContext) }()
 	// The worker is held at the end of every empty poll, so the enqueue happens against a
-	// known backoff step and no further poll can advance it. The job is committed before the
+	// known backoff step and no further poll can advance it. The task is committed before the
 	// last poll is released, and the delay is measured from that commit.
 	pollTimeout := time.Duration(fixture.ExpectedMaximumDelayMS+1000) * time.Millisecond
 	var enqueuedAt time.Time
@@ -227,7 +227,7 @@ func executeWorkerPollCadenceFixture(t *testing.T, fixture workerRuntimeFixture)
 			// A stall longer than one backoff step. A held worker cannot advance past the
 			// pinned step, so this changes nothing; an unheld one fails on every run.
 			time.Sleep(time.Duration(fixture.EnqueueStallMS) * time.Millisecond)
-			if _, err := queue.Enqueue(ctx, fixture.JobType, map[string]any{}); err != nil {
+			if _, err := queue.Enqueue(ctx, fixture.TaskType, map[string]any{}); err != nil {
 				stop()
 				t.Fatal(err)
 			}
@@ -283,13 +283,13 @@ func executeWorkerGracefulDrainFixture(t *testing.T, fixture workerRuntimeFixtur
 
 	queueName := "runtime-" + fixture.ID
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-	jobIDs := make([]string, 0, fixture.JobCount)
-	for sequence := range fixture.JobCount {
-		jobID, err := queue.Enqueue(ctx, fixture.JobType, map[string]any{"sequence": sequence})
+	taskIDs := make([]string, 0, fixture.TaskCount)
+	for sequence := range fixture.TaskCount {
+		taskID, err := queue.Enqueue(ctx, fixture.TaskType, map[string]any{"sequence": sequence})
 		if err != nil {
 			t.Fatal(err)
 		}
-		jobIDs = append(jobIDs, jobID)
+		taskIDs = append(taskIDs, taskID)
 	}
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
 		Queue: queueName, WorkerID: "go-" + fixture.ID, Concurrency: fixture.Concurrency,
@@ -299,9 +299,9 @@ func executeWorkerGracefulDrainFixture(t *testing.T, fixture workerRuntimeFixtur
 	if err != nil {
 		t.Fatal(err)
 	}
-	started := make(chan struct{}, fixture.JobCount)
+	started := make(chan struct{}, fixture.TaskCount)
 	release := make(chan struct{})
-	worker.Handle(fixture.JobType, func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
+	worker.Handle(fixture.TaskType, func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
 		started <- struct{}{}
 		<-release
 		return nil, nil
@@ -327,8 +327,8 @@ func executeWorkerGracefulDrainFixture(t *testing.T, fixture workerRuntimeFixtur
 		t.Fatal(err)
 	}
 	states := map[string]int{}
-	for _, jobID := range jobIDs {
-		state := workerFixtureJobStateFor(t, ctx, pool, jobID)
+	for _, taskID := range taskIDs {
+		state := workerFixtureTaskStateFor(t, ctx, pool, taskID)
 		states[state.State]++
 	}
 	if states["succeeded"] != fixture.ExpectedSucceeded || states["ready"] != fixture.ExpectedReady {
@@ -336,34 +336,34 @@ func executeWorkerGracefulDrainFixture(t *testing.T, fixture workerRuntimeFixtur
 	}
 }
 
-func assertWorkerFixtureJobState(
+func assertWorkerFixtureTaskState(
 	t *testing.T,
 	ctx context.Context,
 	pool *pgxpool.Pool,
-	jobID string,
-	expected workerFixtureJobState,
+	taskID string,
+	expected workerFixtureTaskState,
 ) {
 	t.Helper()
-	actual := workerFixtureJobStateFor(t, ctx, pool, jobID)
+	actual := workerFixtureTaskStateFor(t, ctx, pool, taskID)
 	if actual.State != expected.State || actual.Attempt != expected.Attempt ||
 		(expected.ErrorName != "" && actual.ErrorName != expected.ErrorName) {
-		t.Fatalf("expected job state %#v, received %#v", expected, actual)
+		t.Fatalf("expected task state %#v, received %#v", expected, actual)
 	}
 }
 
-func workerFixtureJobStateFor(
+func workerFixtureTaskStateFor(
 	t *testing.T,
 	ctx context.Context,
 	pool *pgxpool.Pool,
-	jobID string,
-) workerFixtureJobState {
+	taskID string,
+) workerFixtureTaskState {
 	t.Helper()
-	var state workerFixtureJobState
+	var state workerFixtureTaskState
 	if err := pool.QueryRow(ctx, `SELECT state, current_attempt, coalesce(error->>'name', '')
-		FROM workhorse.job_runtime WHERE job_id = $1::uuid
+		FROM workhorse.task_runtime WHERE task_id = $1::uuid
 		UNION ALL
 		SELECT state, current_attempt, coalesce(error->>'name', '')
-		FROM workhorse.job_outcome WHERE job_id = $1::uuid`, jobID).Scan(
+		FROM workhorse.task_outcome WHERE task_id = $1::uuid`, taskID).Scan(
 		&state.State,
 		&state.Attempt,
 		&state.ErrorName,
@@ -377,12 +377,12 @@ func assertWorkerFixtureAttemptOutcomes(
 	t *testing.T,
 	ctx context.Context,
 	pool *pgxpool.Pool,
-	jobID string,
+	taskID string,
 	expected []string,
 ) {
 	t.Helper()
 	rows, err := pool.Query(ctx, `SELECT outcome FROM workhorse.attempt_history
-		WHERE job_id = $1::uuid ORDER BY attempt`, jobID)
+		WHERE task_id = $1::uuid ORDER BY attempt`, taskID)
 	if err != nil {
 		t.Fatal(err)
 	}

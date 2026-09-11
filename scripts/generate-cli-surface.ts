@@ -5,7 +5,7 @@ import { renderCliSurface } from "./cli-surface.js";
  * Write or verify `api/cli.txt`.
  *
  * The snapshot is read from the built CLI declaration, so `pnpm build:runtime:dev` must have run in
- * this checkout first. CI's `static` job builds before it checks for the same reason.
+ * this checkout first. CI's `static` task builds before it checks for the same reason.
  */
 
 const header = [

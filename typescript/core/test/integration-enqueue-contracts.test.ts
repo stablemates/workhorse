@@ -12,7 +12,7 @@ import {
   MAX_IDEMPOTENCY_SCOPE_BYTES,
   MAX_IDEMPOTENCY_TTL_MS,
   MAX_THROTTLE_WINDOW_MS,
-  JobContractValidationError,
+  TaskContractValidationError,
   Queue,
   type Queryable,
   Worker,
@@ -24,24 +24,24 @@ const { pool, queue, safeKeyDigest, safeKeyPreview, admin, adminAudit } =
   createIntegrationTestContext(import.meta.url);
 
 const dependencyCoalescingCases = [
-  ["debounce", "prerequisiteJobId"],
+  ["debounce", "prerequisiteTaskId"],
   ["debounce", "dependencies"],
-  ["throttle", "prerequisiteJobId"],
+  ["throttle", "prerequisiteTaskId"],
   ["throttle", "dependencies"],
 ] as const;
 
 function dependencyBearingCoalescingOptions(
   coalescingMode: (typeof dependencyCoalescingCases)[number][0],
   dependencyOption: (typeof dependencyCoalescingCases)[number][1],
-  prerequisiteJobId: string,
+  prerequisiteTaskId: string,
   scope: string,
 ): EnqueueOptions {
   const dependency =
-    dependencyOption === "prerequisiteJobId"
-      ? { prerequisiteJobId }
+    dependencyOption === "prerequisiteTaskId"
+      ? { prerequisiteTaskId }
       : {
           dependencies: {
-            prerequisiteJobIds: [prerequisiteJobId],
+            prerequisiteTaskIds: [prerequisiteTaskId],
             onSuccess: "release" as const,
             onFailure: "fail" as const,
             onCancellation: "cancel" as const,
@@ -101,7 +101,7 @@ describe("enqueue contracts", () => {
           rows: [
             {
               ordinal: 1,
-              job_id: "123e4567-e89b-42d3-a456-426614174000",
+              task_id: "123e4567-e89b-42d3-a456-426614174000",
               outcome: "accepted",
               reason: null,
               contract_mismatch: null,
@@ -118,15 +118,15 @@ describe("enqueue contracts", () => {
   });
 
   it("serializes a completion result once before sending it", async () => {
-    const jobId = await queue.enqueue("serialize-result-once", {});
+    const taskId = await queue.enqueue("serialize-result-once", {});
     const claimed = await queue.claim("serialize-result-worker");
-    expect(claimed?.id).toBe(jobId);
+    expect(claimed?.id).toBe(taskId);
     const toJSON = vi.fn<() => { value: number }>(() => ({ value: 1 }));
 
     await queue.complete(claimed!, "serialize-result-worker", { toJSON } as unknown as Json);
 
     expect(toJSON).toHaveBeenCalledOnce();
-    await expect(admin.getJob(jobId)).resolves.toMatchObject({ result: { value: 1 } });
+    await expect(admin.getTask(taskId)).resolves.toMatchObject({ result: { value: 1 } });
   });
 
   it("makes keyed ingress modes and dependency forms mutually exclusive in EnqueueOptions", () => {
@@ -139,7 +139,7 @@ describe("enqueue contracts", () => {
     type DebounceWithDependencies = {
       debounce: { key: string; windowMs: number; schedule: "reset" };
       dependencies: {
-        prerequisiteJobIds: readonly string[];
+        prerequisiteTaskIds: readonly string[];
         onSuccess: "release";
         onFailure: "fail";
         onCancellation: "cancel";
@@ -148,9 +148,9 @@ describe("enqueue contracts", () => {
       ? true
       : false;
     type DualDependencyForms = {
-      prerequisiteJobId: string;
+      prerequisiteTaskId: string;
       dependencies: {
-        prerequisiteJobIds: readonly string[];
+        prerequisiteTaskIds: readonly string[];
         onSuccess: "release";
         onFailure: "fail";
         onCancellation: "cancel";
@@ -164,7 +164,7 @@ describe("enqueue contracts", () => {
     expectTypeOf<DualDependencyForms>().toEqualTypeOf<false>();
   });
 
-  it("rejects invalid and oversized payloads before accepting a durable job", async () => {
+  it("rejects invalid and oversized payloads before accepting a durable task", async () => {
     const contractedQueue = new Queue(pool, "default", {
       contracts: {
         "mail.send": {
@@ -184,13 +184,13 @@ describe("enqueue contracts", () => {
     });
 
     await expect(contractedQueue.enqueue("mail.send", { recipient: 42 })).rejects.toBeInstanceOf(
-      JobContractValidationError,
+      TaskContractValidationError,
     );
     await expect(
       contractedQueue.enqueue("mail.send", { recipient: `${"a".repeat(80)}@example.test` }),
     ).rejects.toThrow(/payload exceeds its configured size limit/);
     await expect(
-      pool.query("SELECT count(*)::integer AS count FROM workhorse.job"),
+      pool.query("SELECT count(*)::integer AS count FROM workhorse.task"),
     ).resolves.toMatchObject({ rows: [{ count: 0 }] });
 
     await expect(
@@ -203,11 +203,11 @@ describe("enqueue contracts", () => {
       ),
     ).rejects.toThrow(/payload exceeds its configured size limit/);
     await expect(
-      pool.query("SELECT count(*)::integer AS count FROM workhorse.job"),
+      pool.query("SELECT count(*)::integer AS count FROM workhorse.task"),
     ).resolves.toMatchObject({ rows: [{ count: 0 }] });
 
     const id = await contractedQueue.enqueue("mail.send", { recipient: "a@example.test" });
-    await expect(admin.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getTask(id)).resolves.toMatchObject({
       id,
       contractVersion: "2026-08-10",
       payload: { recipient: "a@example.test" },
@@ -248,7 +248,7 @@ describe("enqueue contracts", () => {
     ).resolves.toMatchObject({ rows: [{ payload_max_bytes: 512, result_max_bytes: 768 }] });
     await pool.query("SELECT workhorse.override_contract_version_v1('contract.policy', 'two')");
     await expect(first.enqueue("contract.policy", { one: true })).rejects.toBeInstanceOf(
-      JobContractValidationError,
+      TaskContractValidationError,
     );
     await expect(first.enqueue("contract.policy", { two: true })).resolves.toBeTypeOf("string");
 
@@ -279,10 +279,10 @@ describe("enqueue contracts", () => {
     });
     await nextDeploy.syncContracts();
     await expect(nextDeploy.enqueue("contract.policy", { one: true })).rejects.toBeInstanceOf(
-      JobContractValidationError,
+      TaskContractValidationError,
     );
     const id = await nextDeploy.enqueue("contract.policy", { two: true });
-    await expect(admin.getJob(id)).resolves.toMatchObject({ contractVersion: "two" });
+    await expect(admin.getTask(id)).resolves.toMatchObject({ contractVersion: "two" });
 
     const changedDocument = new Queue(pool, "default", {
       contracts: {
@@ -297,12 +297,12 @@ describe("enqueue contracts", () => {
     );
     await expect(
       pool.query(
-        "UPDATE workhorse.contract_definition SET source = 'operator' WHERE job_type = 'contract.policy' AND version = 'one'",
+        "UPDATE workhorse.contract_definition SET source = 'operator' WHERE task_type = 'contract.policy' AND version = 'one'",
       ),
     ).rejects.toThrow(/contract documents are immutable/);
     await expect(
       pool.query(
-        "DELETE FROM workhorse.contract_definition WHERE job_type = 'contract.policy' AND version = 'one'",
+        "DELETE FROM workhorse.contract_definition WHERE task_type = 'contract.policy' AND version = 'one'",
       ),
     ).rejects.toThrow(/contract documents are immutable/);
   });
@@ -331,7 +331,7 @@ describe("enqueue contracts", () => {
     const worker = new Worker(contractedQueue, { workerId: "contract-result-worker" }).handle(
       "invoice.total",
       async (_payload, context): Promise<Json> => {
-        if (context.job.id === invalidId) return { amount: 10 };
+        if (context.task.id === invalidId) return { amount: 10 };
         return { total: 10, note: "x".repeat(40) };
       },
     );
@@ -339,14 +339,14 @@ describe("enqueue contracts", () => {
     await worker.runOnce();
     await worker.runOnce();
 
-    await expect(admin.getJob(invalidId)).resolves.toMatchObject({
+    await expect(admin.getTask(invalidId)).resolves.toMatchObject({
       state: "failed",
-      error: { name: "JobContractValidationError" },
+      error: { name: "TaskContractValidationError" },
       result: null,
     });
-    await expect(admin.getJob(oversizedId)).resolves.toMatchObject({
+    await expect(admin.getTask(oversizedId)).resolves.toMatchObject({
       state: "failed",
-      error: { name: "JobValueSizeLimitError" },
+      error: { name: "TaskValueSizeLimitError" },
       result: null,
     });
 
@@ -360,7 +360,7 @@ describe("enqueue contracts", () => {
         JSON.stringify({ total: 10, note: "x".repeat(40) }),
       ]),
     ).rejects.toThrow(/result exceeds its configured size limit/);
-    await expect(admin.getJob(sqlLimitedId)).resolves.toMatchObject({
+    await expect(admin.getTask(sqlLimitedId)).resolves.toMatchObject({
       state: "active",
       result: null,
     });
@@ -389,8 +389,8 @@ describe("enqueue contracts", () => {
       JSON.stringify({ name: "Error", message: `could not use ${secret}`, stack: secret }),
     ]);
 
-    const snapshot = await admin.getJob(id);
-    const timeline = await admin.getJobTimeline(id);
+    const snapshot = await admin.getTask(id);
+    const timeline = await admin.getTaskTimeline(id);
     const deadLetters = await admin.listDeadLetters({ type: "contract.failure" });
     expect(
       JSON.stringify({ snapshot, timeline, deadLetters }, (_key, value) =>
@@ -398,8 +398,8 @@ describe("enqueue contracts", () => {
       ),
     ).not.toContain(secret);
     expect(snapshot?.error).toEqual({
-      name: "RedactedJobError",
-      message: "Job handler failed; details redacted",
+      name: "RedactedTaskError",
+      message: "Task handler failed; details redacted",
     });
   });
 
@@ -455,13 +455,13 @@ describe("enqueue contracts", () => {
       }),
     ).toBe(true);
 
-    const snapshot = await admin.getJob(id);
+    const snapshot = await admin.getTask(id);
     expect(snapshot).toMatchObject({
       contractVersion: "1",
       payload: { revision: 1, visible: "payload-visible" },
       result: { ok: true, visible: "result-visible" },
     });
-    const listed = await admin.listJobs({
+    const listed = await admin.listTasks({
       type: "contract.versioned",
       payload: { include: true },
     });
@@ -474,7 +474,7 @@ describe("enqueue contracts", () => {
     expect(listed.items[0]?.payload).not.toHaveProperty("token");
   });
 
-  it("captures the current contract when synchronizing and firing a recurring job", async () => {
+  it("captures the current contract when synchronizing and firing a recurring task", async () => {
     const contractedQueue = new Queue(pool, "default", {
       contracts: {
         "contract.scheduled": {
@@ -496,7 +496,7 @@ describe("enqueue contracts", () => {
       {
         name: "scheduled-contract",
         schedule: "0 * * * *",
-        job: {
+        task: {
           type: "contract.scheduled",
           priority: 75,
           payload: { kind: "scheduled", token: "schedule-secret" },
@@ -517,11 +517,11 @@ describe("enqueue contracts", () => {
       priority: 75,
       payload: { kind: "scheduled", token: "schedule-secret" },
     });
-    await expect(admin.getJob(id!)).resolves.toMatchObject({
+    await expect(admin.getTask(id!)).resolves.toMatchObject({
       priority: 75,
       payload: { kind: "scheduled" },
     });
-    expect((await admin.getJob(id!))?.payload).not.toHaveProperty("token");
+    expect((await admin.getTask(id!))?.payload).not.toHaveProperty("token");
   });
 
   it("refuses to turn an existing v1 schema into a mixed installation", async () => {
@@ -531,7 +531,7 @@ describe("enqueue contracts", () => {
         CREATE SCHEMA workhorse;
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
-        CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
+        CREATE TABLE workhorse.task_current (id uuid PRIMARY KEY)`);
       await expect(installSchema(pool)).rejects.toThrow(
         new RegExp(`non-v${WORKHORSE_SCHEMA_VERSION} or mixed workhorse schema`),
       );
@@ -540,7 +540,7 @@ describe("enqueue contracts", () => {
       );
       expect(version.rows).toEqual([{ version: 1 }]);
       expect(
-        (await pool.query("SELECT to_regclass('workhorse.job_runtime') AS relation")).rows[0],
+        (await pool.query("SELECT to_regclass('workhorse.task_runtime') AS relation")).rows[0],
       ).toEqual({ relation: null });
     } finally {
       await pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
@@ -557,16 +557,16 @@ describe("enqueue contracts", () => {
     ]);
 
     expect(ids).toHaveLength(3);
-    expect((await admin.getJob(ids[0]!))?.type).toBe("first");
-    expect((await admin.getJob(ids[1]!))?.state).toBe("scheduled");
-    expect((await admin.getJob(ids[2]!))?.maxAttempts).toBe(5);
+    expect((await admin.getTask(ids[0]!))?.type).toBe("first");
+    expect((await admin.getTask(ids[1]!))?.state).toBe("scheduled");
+    expect((await admin.getTask(ids[2]!))?.maxAttempts).toBe(5);
     expect((await queue.claim("worker-a"))?.id).toBe(ids[0]);
     expect((await queue.claim("worker-b"))?.id).toBe(ids[2]);
 
-    const events = await pool.query<{ job_id: string; event_type: string }>(
-      "SELECT job_id, event_type FROM workhorse.job_event WHERE event_type = 'enqueued' ORDER BY occurred_at, event_id",
+    const events = await pool.query<{ task_id: string; event_type: string }>(
+      "SELECT task_id, event_type FROM workhorse.task_event WHERE event_type = 'enqueued' ORDER BY occurred_at, event_id",
     );
-    expect(events.rows).toEqual(ids.map((jobId) => ({ job_id: jobId, event_type: "enqueued" })));
+    expect(events.rows).toEqual(ids.map((taskId) => ({ task_id: taskId, event_type: "enqueued" })));
   });
 
   it("persists bounded priority and claims higher priorities before FIFO peers", async () => {
@@ -577,8 +577,8 @@ describe("enqueue contracts", () => {
       { type: "background", payload: { order: 4 }, options: { priority: 1 } },
     ]);
 
-    await expect(admin.getJob(ids[1]!)).resolves.toMatchObject({ priority: 100 });
-    await expect(admin.listJobs({ limit: 10 })).resolves.toMatchObject({
+    await expect(admin.getTask(ids[1]!)).resolves.toMatchObject({ priority: 100 });
+    await expect(admin.listTasks({ limit: 10 })).resolves.toMatchObject({
       items: expect.arrayContaining([
         expect.objectContaining({ id: ids[0], priority: 0 }),
         expect.objectContaining({ id: ids[1], priority: 100 }),
@@ -612,7 +612,7 @@ describe("enqueue contracts", () => {
     ).rejects.toThrow("priority must be an integer between 0 and 100");
   });
 
-  it("replays an equivalent scoped key without duplicate job, event, FIFO, or notify effects", async () => {
+  it("replays an equivalent scoped key without duplicate task, event, FIFO, or notify effects", async () => {
     const queueName = "idempotency-replay";
     const rawKey = "sensitive-request-key-that-must-never-leak";
     const scope = "tenant-a";
@@ -620,7 +620,7 @@ describe("enqueue contracts", () => {
     const notifications: string[] = [];
     listener.on("notification", (message) => notifications.push(message.payload ?? ""));
     try {
-      await listener.query("LISTEN workhorse_jobs");
+      await listener.query("LISTEN workhorse_tasks");
       const options = {
         queue: queueName,
         tags: ["durable"],
@@ -629,7 +629,7 @@ describe("enqueue contracts", () => {
       };
       const first = await queue.enqueue("invoice.capture", { invoiceId: "inv-1" }, options);
       const firstRuntime = await pool.query<{ sequence: string }>(
-        "SELECT sequence::text FROM workhorse.job_runtime WHERE job_id = $1",
+        "SELECT sequence::text FROM workhorse.task_runtime WHERE task_id = $1",
         [first],
       );
       const firstSequenceState = await pool.query<{ last_value: string; is_called: boolean }>(
@@ -643,15 +643,15 @@ describe("enqueue contracts", () => {
       expect(
         (
           await pool.query(`SELECT
-            (SELECT count(*)::integer FROM workhorse.job) AS jobs,
-            (SELECT count(*)::integer FROM workhorse.job_event) AS events,
-            (SELECT count(*)::integer FROM workhorse.job_runtime) AS runtimes`)
+            (SELECT count(*)::integer FROM workhorse.task) AS tasks,
+            (SELECT count(*)::integer FROM workhorse.task_event) AS events,
+            (SELECT count(*)::integer FROM workhorse.task_runtime) AS runtimes`)
         ).rows[0],
-      ).toEqual({ jobs: 1, events: 1, runtimes: 1 });
+      ).toEqual({ tasks: 1, events: 1, runtimes: 1 });
       expect(
         (
           await pool.query<{ sequence: string }>(
-            "SELECT sequence::text FROM workhorse.job_runtime WHERE job_id = $1",
+            "SELECT sequence::text FROM workhorse.task_runtime WHERE task_id = $1",
             [first],
           )
         ).rows,
@@ -665,12 +665,12 @@ describe("enqueue contracts", () => {
       ).toEqual(firstSequenceState.rows);
       expect(notifications.filter((payload) => payload === queueName)).toHaveLength(1);
       const event = await pool.query<{ details: Record<string, unknown> }>(
-        "SELECT details FROM workhorse.job_event WHERE job_id = $1 AND event_type = 'enqueued'",
+        "SELECT details FROM workhorse.task_event WHERE task_id = $1 AND event_type = 'enqueued'",
         [first],
       );
       const storedDigest = await pool.query<{ request_digest: string }>(
         `SELECT workhorse.sha256_hex_v1(request_fingerprint::text) AS request_digest
-           FROM workhorse.enqueue_idempotency WHERE job_id = $1`,
+           FROM workhorse.enqueue_idempotency WHERE task_id = $1`,
         [first],
       );
       expect(event.rows[0]?.details).toMatchObject({
@@ -686,7 +686,7 @@ describe("enqueue contracts", () => {
       });
       expect(JSON.stringify(event.rows[0]?.details)).not.toContain(rawKey);
     } finally {
-      await listener.query("UNLISTEN workhorse_jobs");
+      await listener.query("UNLISTEN workhorse_tasks");
       listener.release();
     }
   });
@@ -717,13 +717,13 @@ describe("enqueue contracts", () => {
     expect(
       (
         await pool.query(
-          `SELECT idempotency_scope, job_id
+          `SELECT idempotency_scope, task_id
              FROM workhorse.enqueue_idempotency ORDER BY idempotency_scope`,
         )
       ).rows,
     ).toEqual([
-      { idempotency_scope: "default", job_id: first },
-      { idempotency_scope: "other", job_id: otherScope },
+      { idempotency_scope: "default", task_id: first },
+      { idempotency_scope: "other", task_id: otherScope },
     ]);
   });
 
@@ -756,7 +756,7 @@ describe("enqueue contracts", () => {
       keyPreview: safeKeyPreview(rawKey),
       keyDigest: safeKeyDigest(scope, rawKey),
       keyLength: [...rawKey].length,
-      existingJobId: first,
+      existingTaskId: first,
       ordinal: 1,
       conflictingFields: ["payload"],
       storedRequestDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
@@ -773,7 +773,7 @@ describe("enqueue contracts", () => {
               workhorse.sha256_hex_v1(
                 jsonb_set(request_fingerprint, '{payload}', '{"version": 2}'::jsonb)::text
               ) AS rejected_request_digest
-         FROM workhorse.enqueue_idempotency WHERE job_id = $1`,
+         FROM workhorse.enqueue_idempotency WHERE task_id = $1`,
       [first],
     );
     expect(conflict).toMatchObject({
@@ -810,7 +810,7 @@ describe("enqueue contracts", () => {
       ),
     ).rejects.toMatchObject({ conflictingFields: ["ttlMs"] });
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0],
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.task")).rows[0],
     ).toEqual({ count: 1 });
   });
 
@@ -828,10 +828,10 @@ describe("enqueue contracts", () => {
     await expect(
       queue.enqueue("keyed", { version: 1 }, { concurrencyKey: "tenant-b", idempotency }),
     ).rejects.toMatchObject({ conflictingFields: ["concurrencyKey"] });
-    await expect(admin.getJob(first)).resolves.toMatchObject({ concurrencyKey: "tenant-a" });
+    await expect(admin.getTask(first)).resolves.toMatchObject({ concurrencyKey: "tenant-a" });
   });
 
-  it("treats tags as a set for replay while preserving the first job's stored tag order", async () => {
+  it("treats tags as a set for replay while preserving the first task's stored tag order", async () => {
     const first = await queue.enqueue(
       "tag-equivalence",
       {},
@@ -849,7 +849,7 @@ describe("enqueue contracts", () => {
       },
     );
     expect(replay).toBe(first);
-    expect((await admin.getJob(first))?.tags).toEqual(["zeta", "alpha", "zeta"]);
+    expect((await admin.getTask(first))?.tags).toEqual(["zeta", "alpha", "zeta"]);
   });
 
   it("keeps omitted keyed runAt replayable but treats explicit runAt as material", async () => {
@@ -893,8 +893,8 @@ describe("enqueue contracts", () => {
         serialized = JSON.parse(String(arguments[1]?.[0])) as Array<Record<string, unknown>>;
         return {
           rows: [
-            { ordinal: 1, job_id: "unkeyed", outcome: "accepted" },
-            { ordinal: 2, job_id: "keyed", outcome: "replayed" },
+            { ordinal: 1, task_id: "unkeyed", outcome: "accepted" },
+            { ordinal: 2, task_id: "keyed", outcome: "replayed" },
           ],
         } as never;
       },
@@ -926,7 +926,7 @@ describe("enqueue contracts", () => {
         keyPreview: "unknown",
         keyDigest: "000000000000",
         keyLength: 0,
-        existingJobId: "unknown",
+        existingTaskId: "unknown",
         ordinal: 0,
         conflictingFields: [],
         storedRequestDigest: "0".repeat(64),
@@ -942,7 +942,7 @@ describe("enqueue contracts", () => {
       keyPreview: "wrapped-key",
       keyDigest: "0123456789ab",
       keyLength: 11,
-      existingJobId: "123e4567-e89b-42d3-a456-426614174000",
+      existingTaskId: "123e4567-e89b-42d3-a456-426614174000",
       ordinal: 2,
       conflictingFields: ["payload", "ttlMs"],
       storedRequestDigest: "a".repeat(64),
@@ -1023,14 +1023,14 @@ describe("enqueue contracts", () => {
     ).rejects.toThrow(/requires a string key/);
   });
 
-  it("replaces a pending debounced job and explicitly resets or preserves its run time", async () => {
+  it("replaces a pending debounced task and explicitly resets or preserves its run time", async () => {
     const reset = { key: "reset", scope: "debounce", windowMs: 60_000, schedule: "reset" } as const;
     const accepted = await queue.enqueueWithResult(
       "debounced-reset",
       { revision: 1 },
       { debounce: reset },
     );
-    const acceptedSnapshot = await admin.getJob(accepted.jobId);
+    const acceptedSnapshot = await admin.getTask(accepted.taskId);
 
     await sleep(10);
     const equivalent = await queue.enqueueWithResult(
@@ -1038,7 +1038,7 @@ describe("enqueue contracts", () => {
       { revision: 1 },
       { debounce: reset },
     );
-    const equivalentSnapshot = await admin.getJob(equivalent.jobId);
+    const equivalentSnapshot = await admin.getTask(equivalent.taskId);
 
     await sleep(10);
     const replaced = await queue.enqueueWithResult(
@@ -1052,18 +1052,18 @@ describe("enqueue contracts", () => {
         tags: ["material-change"],
       },
     );
-    const replacedSnapshot = await admin.getJob(replaced.jobId);
+    const replacedSnapshot = await admin.getTask(replaced.taskId);
 
     expect(accepted).toMatchObject({ outcome: "accepted" });
-    expect(equivalent).toEqual({ jobId: accepted.jobId, outcome: "replaced" });
+    expect(equivalent).toEqual({ taskId: accepted.taskId, outcome: "replaced" });
     expect(equivalentSnapshot).toMatchObject({
-      id: accepted.jobId,
+      id: accepted.taskId,
       payload: { revision: 1 },
     });
     expect(equivalentSnapshot!.runAt.getTime()).toBeGreaterThan(acceptedSnapshot!.runAt.getTime());
-    expect(replaced).toEqual({ jobId: accepted.jobId, outcome: "replaced" });
+    expect(replaced).toEqual({ taskId: accepted.taskId, outcome: "replaced" });
     expect(replacedSnapshot).toMatchObject({
-      id: accepted.jobId,
+      id: accepted.taskId,
       state: "scheduled",
       payload: { revision: 2 },
       maxAttempts: 4,
@@ -1072,8 +1072,8 @@ describe("enqueue contracts", () => {
     });
     expect(replacedSnapshot!.runAt.getTime()).toBeGreaterThan(equivalentSnapshot!.runAt.getTime());
     await expect(
-      admin.listJobs({ queue: "debounce-updated", type: "debounced-reset-v2" }),
-    ).resolves.toMatchObject({ items: [expect.objectContaining({ id: accepted.jobId })] });
+      admin.listTasks({ queue: "debounce-updated", type: "debounced-reset-v2" }),
+    ).resolves.toMatchObject({ items: [expect.objectContaining({ id: accepted.taskId })] });
 
     const preserve = {
       key: "preserve",
@@ -1086,7 +1086,7 @@ describe("enqueue contracts", () => {
       { revision: 1 },
       { debounce: preserve },
     );
-    const originalRunAt = (await admin.getJob(preservedAccepted.jobId))!.runAt;
+    const originalRunAt = (await admin.getTask(preservedAccepted.taskId))!.runAt;
     await sleep(10);
     const preservedReplacement = await queue.enqueueWithResult(
       "debounced-preserve",
@@ -1095,11 +1095,11 @@ describe("enqueue contracts", () => {
     );
 
     expect(preservedReplacement).toEqual({
-      jobId: preservedAccepted.jobId,
+      taskId: preservedAccepted.taskId,
       outcome: "replaced",
     });
-    expect((await admin.getJob(preservedAccepted.jobId))!.runAt).toEqual(originalRunAt);
-    const timeline = await admin.getJobTimeline(accepted.jobId);
+    expect((await admin.getTask(preservedAccepted.taskId))!.runAt).toEqual(originalRunAt);
+    const timeline = await admin.getTaskTimeline(accepted.taskId);
     expect(
       timeline.items.filter((item) => item.kind === "event" && item.eventType === "debounced"),
     ).toHaveLength(2);
@@ -1108,7 +1108,7 @@ describe("enqueue contracts", () => {
     );
   });
 
-  it("returns non-replaceable outcomes for active, terminal, and elapsed pending jobs", async () => {
+  it("returns non-replaceable outcomes for active, terminal, and elapsed pending tasks", async () => {
     const debounce = {
       key: "lifecycle",
       scope: "debounce",
@@ -1121,15 +1121,15 @@ describe("enqueue contracts", () => {
       { debounce },
     );
     await expect(
-      admin.runTaskNow(accepted.jobId, adminAudit("run contract job")),
+      admin.runTaskNow(accepted.taskId, adminAudit("run contract task")),
     ).resolves.toMatchObject({ status: "released" });
     const claimed = await queue.claim("debounce-lifecycle-worker");
-    expect(claimed).toMatchObject({ id: accepted.jobId, payload: { revision: 1 } });
+    expect(claimed).toMatchObject({ id: accepted.taskId, payload: { revision: 1 } });
 
     await expect(
       queue.enqueueWithResult("debounce-lifecycle", { revision: 2 }, { debounce }),
     ).resolves.toEqual({
-      jobId: accepted.jobId,
+      taskId: accepted.taskId,
       outcome: "non_replaceable",
       reason: "not_pending",
     });
@@ -1139,11 +1139,11 @@ describe("enqueue contracts", () => {
     await expect(
       queue.enqueueWithResult("debounce-lifecycle", { revision: 3 }, { debounce }),
     ).resolves.toEqual({
-      jobId: accepted.jobId,
+      taskId: accepted.taskId,
       outcome: "non_replaceable",
       reason: "not_pending",
     });
-    await expect(admin.getJob(accepted.jobId)).resolves.toMatchObject({
+    await expect(admin.getTask(accepted.taskId)).resolves.toMatchObject({
       state: "succeeded",
       payload: { revision: 1 },
     });
@@ -1163,7 +1163,7 @@ describe("enqueue contracts", () => {
     await expect(
       queue.enqueueWithResult("debounce-elapsed", { revision: 2 }, { debounce: elapsed }),
     ).resolves.toEqual({
-      jobId: elapsedAccepted.jobId,
+      taskId: elapsedAccepted.taskId,
       outcome: "non_replaceable",
       reason: "window_elapsed_pending",
     });
@@ -1188,13 +1188,13 @@ describe("enqueue contracts", () => {
         },
       ),
     ).resolves.toEqual({
-      jobId: incompatibleAccepted.jobId,
+      taskId: incompatibleAccepted.taskId,
       outcome: "non_replaceable",
       reason: "incompatible_key_mode",
     });
   });
 
-  it("accepts a fresh debounced job after the retained job is purged", async () => {
+  it("accepts a fresh debounced task after the retained task is purged", async () => {
     const queueName = "debounce-purge";
     const debounce = { key: "purged", windowMs: 60_000, schedule: "reset" } as const;
     const first = await queue.enqueueWithResult(
@@ -1209,11 +1209,11 @@ describe("enqueue contracts", () => {
       { queue: queueName, debounce },
     );
     expect(second).toMatchObject({ outcome: "accepted" });
-    expect(second.jobId).not.toBe(first.jobId);
+    expect(second.taskId).not.toBe(first.taskId);
   });
 
   it.each(["active", "terminal"] as const)(
-    "accepts a fresh debounced job after an expired %s identity",
+    "accepts a fresh debounced task after an expired %s identity",
     async (lifecycle) => {
       const debounce = {
         key: lifecycle,
@@ -1227,12 +1227,12 @@ describe("enqueue contracts", () => {
         { debounce },
       );
       await expect(
-        admin.runTaskNow(first.jobId, adminAudit("run coalesced job")),
+        admin.runTaskNow(first.taskId, adminAudit("run coalesced task")),
       ).resolves.toMatchObject({
         status: expect.stringMatching(/^(released|already_ready)$/),
       });
       const claimed = await queue.claim(`debounce-expired-${lifecycle}-worker`);
-      expect(claimed).toMatchObject({ id: first.jobId });
+      expect(claimed).toMatchObject({ id: first.taskId });
       let completed: boolean | undefined;
       if (lifecycle === "terminal") {
         completed = await queue.complete(claimed!, `debounce-expired-${lifecycle}-worker`, {
@@ -1249,12 +1249,12 @@ describe("enqueue contracts", () => {
       );
 
       expect(second).toMatchObject({ outcome: "accepted" });
-      expect(second.jobId).not.toBe(first.jobId);
+      expect(second.taskId).not.toBe(first.taskId);
     },
   );
 
   it.each(["claim", "cancel"] as const)(
-    "serializes a concurrent %s before deciding whether a pending job is replaceable",
+    "serializes a concurrent %s before deciding whether a pending task is replaceable",
     async (transition) => {
       const debounce = {
         key: transition,
@@ -1268,15 +1268,15 @@ describe("enqueue contracts", () => {
         { debounce },
       );
       if (transition === "claim") {
-        await admin.runTaskNow(accepted.jobId, adminAudit("run accepted job"));
+        await admin.runTaskNow(accepted.taskId, adminAudit("run accepted task"));
       }
 
       const transitionClient = await pool.connect();
       try {
         await transitionClient.query("BEGIN");
         await transitionClient.query(
-          "SELECT 1 FROM workhorse.job_runtime WHERE job_id = $1 FOR UPDATE",
-          [accepted.jobId],
+          "SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE",
+          [accepted.taskId],
         );
         const replacement = queue.enqueueWithResult(
           "debounce-transition-race",
@@ -1286,18 +1286,18 @@ describe("enqueue contracts", () => {
         await sleep(25);
         if (transition === "claim") {
           await transitionClient.query(
-            "SELECT job_id FROM workhorse.claim_v1('default', 'debounce-race-worker', 30000)",
+            "SELECT task_id FROM workhorse.claim_v1('default', 'debounce-race-worker', 30000)",
           );
         } else {
           await transitionClient.query(
             "SELECT status FROM workhorse.cancel_v1($1::uuid, NULL, 'debounce race')",
-            [accepted.jobId],
+            [accepted.taskId],
           );
         }
         await transitionClient.query("COMMIT");
 
         await expect(replacement).resolves.toEqual({
-          jobId: accepted.jobId,
+          taskId: accepted.taskId,
           outcome: "non_replaceable",
           reason: "not_pending",
         });
@@ -1306,7 +1306,7 @@ describe("enqueue contracts", () => {
         transitionClient.release();
       }
 
-      await expect(admin.getJob(accepted.jobId)).resolves.toMatchObject({
+      await expect(admin.getTask(accepted.taskId)).resolves.toMatchObject({
         state: transition === "claim" ? "active" : "canceled",
         payload: { revision: 1 },
       });
@@ -1325,10 +1325,10 @@ describe("enqueue contracts", () => {
         queue.enqueueWithResult("debounce-race", { revision }, { debounce }),
       ),
     );
-    expect(new Set(results.map((result) => result.jobId)).size).toBe(1);
+    expect(new Set(results.map((result) => result.taskId)).size).toBe(1);
     expect(results.filter((result) => result.outcome === "accepted")).toHaveLength(1);
     expect(results.filter((result) => result.outcome === "replaced")).toHaveLength(11);
-    await expect(admin.getJob(results[0]!.jobId)).resolves.toMatchObject({ state: "scheduled" });
+    await expect(admin.getTask(results[0]!.taskId)).resolves.toMatchObject({ state: "scheduled" });
   });
 
   it("validates debounce bounds and keeps mixed batches atomic", async () => {
@@ -1357,7 +1357,7 @@ describe("enqueue contracts", () => {
     ).rejects.toThrow(/cannot combine/);
 
     const before = await pool.query<{ count: number }>(
-      "SELECT count(*)::integer AS count FROM workhorse.job",
+      "SELECT count(*)::integer AS count FROM workhorse.task",
     );
     await expect(
       queue.enqueueManyWithResults([
@@ -1372,23 +1372,23 @@ describe("enqueue contracts", () => {
       ]),
     ).rejects.toThrow(/non-empty queue\/type/);
     await expect(
-      pool.query<{ count: number }>("SELECT count(*)::integer AS count FROM workhorse.job"),
+      pool.query<{ count: number }>("SELECT count(*)::integer AS count FROM workhorse.task"),
     ).resolves.toMatchObject({ rows: before.rows });
   });
 
   it.each(dependencyCoalescingCases)(
     "rejects %s combined with %s",
     async (coalescingMode, dependencyOption) => {
-      const prerequisiteJobId = await queue.enqueue("coalescing-prerequisite", {});
+      const prerequisiteTaskId = await queue.enqueue("coalescing-prerequisite", {});
       const options = dependencyBearingCoalescingOptions(
         coalescingMode,
         dependencyOption,
-        prerequisiteJobId,
+        prerequisiteTaskId,
         "coalescing-dependencies",
       );
 
       await expect(queue.enqueueWithResult("coalescing-dependent", {}, options)).rejects.toThrow(
-        /cannot combine debounce or throttle with prerequisiteJobId or dependencies/,
+        /cannot combine debounce or throttle with prerequisiteTaskId or dependencies/,
       );
     },
   );
@@ -1396,11 +1396,11 @@ describe("enqueue contracts", () => {
   it.each(dependencyCoalescingCases)(
     "rejects direct SQL %s combined with %s",
     async (coalescingMode, dependencyOption) => {
-      const prerequisiteJobId = await queue.enqueue("direct-coalescing-prerequisite", {});
+      const prerequisiteTaskId = await queue.enqueue("direct-coalescing-prerequisite", {});
       const options = dependencyBearingCoalescingOptions(
         coalescingMode,
         dependencyOption,
-        prerequisiteJobId,
+        prerequisiteTaskId,
         "direct-coalescing-dependencies",
       );
 
@@ -1416,28 +1416,28 @@ describe("enqueue contracts", () => {
           ]),
         ]),
       ).rejects.toThrow(
-        /cannot combine debounce or throttle with prerequisiteJobId or dependencies/,
+        /cannot combine debounce or throttle with prerequisiteTaskId or dependencies/,
       );
     },
   );
 
-  it("coalesces an equivalent throttled request into one accepted job with audit evidence", async () => {
+  it("coalesces an equivalent throttled request into one accepted task with audit evidence", async () => {
     const throttle = { key: "account-42", scope: "email-digest", windowMs: 60_000 };
 
     const accepted = await queue.enqueueWithResult("digest.send", { accountId: 42 }, { throttle });
     const coalesced = await queue.enqueueWithResult("digest.send", { accountId: 42 }, { throttle });
 
     expect(accepted).toMatchObject({ outcome: "accepted" });
-    expect(coalesced).toEqual({ jobId: accepted.jobId, outcome: "coalesced" });
+    expect(coalesced).toEqual({ taskId: accepted.taskId, outcome: "coalesced" });
     await expect(
-      pool.query<{ jobs: number; events: number; enqueued_events: number }>(
+      pool.query<{ tasks: number; events: number; enqueued_events: number }>(
         `SELECT
-           (SELECT count(*)::integer FROM workhorse.job) AS jobs,
-           (SELECT count(*)::integer FROM workhorse.job_event) AS events,
-           (SELECT count(*)::integer FROM workhorse.job_event WHERE event_type = 'enqueued')
+           (SELECT count(*)::integer FROM workhorse.task) AS tasks,
+           (SELECT count(*)::integer FROM workhorse.task_event) AS events,
+           (SELECT count(*)::integer FROM workhorse.task_event WHERE event_type = 'enqueued')
              AS enqueued_events`,
       ),
-    ).resolves.toMatchObject({ rows: [{ jobs: 1, events: 2, enqueued_events: 1 }] });
+    ).resolves.toMatchObject({ rows: [{ tasks: 1, events: 2, enqueued_events: 1 }] });
   });
 
   it("coalesces throttled work without another FIFO placement or notification", async () => {
@@ -1447,28 +1447,28 @@ describe("enqueue contracts", () => {
     const notifications: string[] = [];
     listener.on("notification", (message) => notifications.push(message.payload ?? ""));
     try {
-      await listener.query("LISTEN workhorse_jobs");
+      await listener.query("LISTEN workhorse_tasks");
       const accepted = await queue.enqueueWithResult(
         "throttle-effects",
         {},
         { queue: queueName, throttle },
       );
       const sequence = await pool.query<{ sequence: string }>(
-        "SELECT sequence::text FROM workhorse.job_runtime WHERE job_id = $1",
-        [accepted.jobId],
+        "SELECT sequence::text FROM workhorse.task_runtime WHERE task_id = $1",
+        [accepted.taskId],
       );
       const sequenceState = await pool.query<{ last_value: string; is_called: boolean }>(
         "SELECT last_value::text, is_called FROM workhorse.ready_sequence_seq",
       );
       await expect(
         queue.enqueueWithResult("throttle-effects", {}, { queue: queueName, throttle }),
-      ).resolves.toEqual({ jobId: accepted.jobId, outcome: "coalesced" });
+      ).resolves.toEqual({ taskId: accepted.taskId, outcome: "coalesced" });
       await sleep(50);
 
       await expect(
         pool.query<{ sequence: string }>(
-          "SELECT sequence::text FROM workhorse.job_runtime WHERE job_id = $1",
-          [accepted.jobId],
+          "SELECT sequence::text FROM workhorse.task_runtime WHERE task_id = $1",
+          [accepted.taskId],
         ),
       ).resolves.toMatchObject({ rows: sequence.rows });
       await expect(
@@ -1478,7 +1478,7 @@ describe("enqueue contracts", () => {
       ).resolves.toMatchObject({ rows: sequenceState.rows });
       expect(notifications.filter((payload) => payload === queueName)).toHaveLength(1);
     } finally {
-      await listener.query("UNLISTEN workhorse_jobs");
+      await listener.query("UNLISTEN workhorse_tasks");
       listener.release();
     }
   });
@@ -1494,27 +1494,27 @@ describe("enqueue contracts", () => {
     await expect(
       queue.enqueueWithResult("throttle-material", { revision: 2 }, { priority: 25, throttle }),
     ).rejects.toMatchObject({
-      existingJobId: accepted.jobId,
+      existingTaskId: accepted.taskId,
       conflictingFields: ["payload"],
     });
-    await expect(admin.getJob(accepted.jobId)).resolves.toMatchObject({
+    await expect(admin.getTask(accepted.taskId)).resolves.toMatchObject({
       payload: { revision: 1 },
       priority: 25,
     });
   });
 
-  it("coalesces active and terminal jobs until the throttle window expires", async () => {
+  it("coalesces active and terminal tasks until the throttle window expires", async () => {
     const throttle = { key: "lifecycle", scope: "throttle", windowMs: 60_000 };
     const accepted = await queue.enqueueWithResult("throttle-lifecycle", {}, { throttle });
     const claimed = await queue.claim("throttle-lifecycle-worker");
-    expect(claimed).toMatchObject({ id: accepted.jobId });
+    expect(claimed).toMatchObject({ id: accepted.taskId });
     await expect(queue.enqueueWithResult("throttle-lifecycle", {}, { throttle })).resolves.toEqual({
-      jobId: accepted.jobId,
+      taskId: accepted.taskId,
       outcome: "coalesced",
     });
     await expect(queue.complete(claimed!, "throttle-lifecycle-worker", null)).resolves.toBe(true);
     await expect(queue.enqueueWithResult("throttle-lifecycle", {}, { throttle })).resolves.toEqual({
-      jobId: accepted.jobId,
+      taskId: accepted.taskId,
       outcome: "coalesced",
     });
   });
@@ -1533,7 +1533,7 @@ describe("enqueue contracts", () => {
       { throttle: expiredThrottle },
     );
     expect(expiredSecond).toMatchObject({ outcome: "accepted" });
-    expect(expiredSecond.jobId).not.toBe(expiredFirst.jobId);
+    expect(expiredSecond.taskId).not.toBe(expiredFirst.taskId);
 
     const queueName = "throttle-purge";
     const purgeThrottle = { key: "purged", scope: "throttle", windowMs: 60_000 };
@@ -1549,7 +1549,7 @@ describe("enqueue contracts", () => {
       { queue: queueName, throttle: purgeThrottle },
     );
     expect(purgedSecond).toMatchObject({ outcome: "accepted" });
-    expect(purgedSecond.jobId).not.toBe(purgedFirst.jobId);
+    expect(purgedSecond.taskId).not.toBe(purgedFirst.taskId);
   });
 
   it("keeps throttled batches and caller-owned transactions atomic", async () => {
@@ -1560,11 +1560,11 @@ describe("enqueue contracts", () => {
       { type: "ordinary-batch", payload: {} },
     ]);
     expect(results).toEqual([
-      { jobId: results[0]!.jobId, outcome: "accepted" },
-      { jobId: results[0]!.jobId, outcome: "coalesced" },
-      { jobId: results[2]!.jobId, outcome: "accepted" },
+      { taskId: results[0]!.taskId, outcome: "accepted" },
+      { taskId: results[0]!.taskId, outcome: "coalesced" },
+      { taskId: results[2]!.taskId, outcome: "accepted" },
     ]);
-    const throttleTimeline = await admin.getJobTimeline(results[0]!.jobId);
+    const throttleTimeline = await admin.getTaskTimeline(results[0]!.taskId);
     expect(throttleTimeline.items).toContainEqual(
       expect.objectContaining({
         kind: "event",
@@ -1604,13 +1604,13 @@ describe("enqueue contracts", () => {
         client,
       );
       await client.query("ROLLBACK");
-      await expect(admin.getJob(rolledBack.jobId)).resolves.toBeNull();
+      await expect(admin.getTask(rolledBack.taskId)).resolves.toBeNull();
     } finally {
       client.release();
     }
 
     const before = await pool.query<{ count: number }>(
-      "SELECT count(*)::integer AS count FROM workhorse.job",
+      "SELECT count(*)::integer AS count FROM workhorse.task",
     );
     await expect(
       queue.enqueueManyWithResults([
@@ -1625,7 +1625,7 @@ describe("enqueue contracts", () => {
       ]),
     ).rejects.toThrow(/non-empty queue\/type/);
     await expect(
-      pool.query<{ count: number }>("SELECT count(*)::integer AS count FROM workhorse.job"),
+      pool.query<{ count: number }>("SELECT count(*)::integer AS count FROM workhorse.task"),
     ).resolves.toMatchObject({ rows: before.rows });
 
     const crossModeKey = "batch-cross-mode";
@@ -1648,7 +1648,7 @@ describe("enqueue contracts", () => {
       ]),
     ).rejects.toThrow(/incompatible coalescing modes/);
     await expect(
-      pool.query<{ count: number }>("SELECT count(*)::integer AS count FROM workhorse.job"),
+      pool.query<{ count: number }>("SELECT count(*)::integer AS count FROM workhorse.task"),
     ).resolves.toMatchObject({ rows: before.rows });
   });
 
@@ -1659,7 +1659,7 @@ describe("enqueue contracts", () => {
         queue.enqueueWithResult("throttle-race", { stable: true }, { throttle }),
       ),
     );
-    expect(new Set(results.map((result) => result.jobId)).size).toBe(1);
+    expect(new Set(results.map((result) => result.taskId)).size).toBe(1);
     expect(results.filter((result) => result.outcome === "accepted")).toHaveLength(1);
     expect(results.filter((result) => result.outcome === "coalesced")).toHaveLength(11);
   });
@@ -1807,11 +1807,11 @@ describe("enqueue contracts", () => {
     expect(
       (
         await pool.query(`SELECT
-          (SELECT count(*)::integer FROM workhorse.job) AS jobs,
+          (SELECT count(*)::integer FROM workhorse.task) AS tasks,
           (SELECT count(*)::integer FROM workhorse.enqueue_idempotency) AS keys,
-          (SELECT count(*)::integer FROM workhorse.job_event) AS events`)
+          (SELECT count(*)::integer FROM workhorse.task_event) AS events`)
       ).rows[0],
-    ).toEqual({ jobs: 1, keys: 1, events: 1 });
+    ).toEqual({ tasks: 1, keys: 1, events: 1 });
   });
 
   it("prevents reverse-order overlapping keyed batches from deadlocking", async () => {
@@ -1869,7 +1869,7 @@ describe("enqueue contracts", () => {
     expect(
       (
         await pool.query(
-          "SELECT count(*)::integer AS count FROM workhorse.enqueue_idempotency WHERE job_id IN (SELECT id FROM workhorse.job WHERE job_type IN ('before', 'same'))",
+          "SELECT count(*)::integer AS count FROM workhorse.enqueue_idempotency WHERE task_id IN (SELECT id FROM workhorse.task WHERE task_type IN ('before', 'same'))",
         )
       ).rows[0],
     ).toEqual({ count: 0 });
@@ -1905,8 +1905,8 @@ describe("enqueue contracts", () => {
       },
     );
     expect(reused).not.toBe(first);
-    expect((await admin.getJob(first))?.payload).toEqual({ version: 1 });
-    expect((await admin.getJob(reused))?.payload).toEqual({ version: 2 });
+    expect((await admin.getTask(first))?.payload).toEqual({ version: 1 });
+    expect((await admin.getTask(reused))?.payload).toEqual({ version: 2 });
   });
 
   it("keeps omitted-key enqueue behavior fully non-deduplicating", async () => {
@@ -1914,14 +1914,14 @@ describe("enqueue contracts", () => {
     const second = await queue.enqueue("ordinary", { same: true });
     expect(second).not.toBe(first);
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0],
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.task")).rows[0],
     ).toEqual({ count: 2 });
     expect(
       (await pool.query("SELECT count(*)::integer AS count FROM workhorse.enqueue_idempotency"))
         .rows[0],
     ).toEqual({ count: 0 });
     const events = await pool.query<{ details: Record<string, unknown> }>(
-      "SELECT details FROM workhorse.job_event ORDER BY occurred_at, event_id",
+      "SELECT details FROM workhorse.task_event ORDER BY occurred_at, event_id",
     );
     expect(events.rows).toHaveLength(2);
     expect(events.rows.every((row) => !("idempotency" in row.details))).toBe(true);
@@ -1940,16 +1940,16 @@ describe("enqueue contracts", () => {
       ])
     )[0]!;
 
-    await expect(admin.getJob(billingId)).resolves.toMatchObject({
+    await expect(admin.getTask(billingId)).resolves.toMatchObject({
       id: billingId,
       tags: ["billing", "priority"],
     });
-    await expect(admin.getJob(reportId)).resolves.toMatchObject({
+    await expect(admin.getTask(reportId)).resolves.toMatchObject({
       id: reportId,
       tags: ["reports", "weekly"],
     });
     const tagged = await pool.query<{ id: string }>(
-      "SELECT id FROM workhorse.job WHERE tags && $1::text[] ORDER BY id",
+      "SELECT id FROM workhorse.task WHERE tags && $1::text[] ORDER BY id",
       [["billing", "weekly"]],
     );
     expect(new Set(tagged.rows.map((row) => row.id))).toEqual(new Set([billingId, reportId]));
@@ -1988,7 +1988,7 @@ describe("enqueue contracts", () => {
       })),
     );
     const states = await pool.query<{ state: string }>(
-      "SELECT DISTINCT state FROM workhorse.job_runtime WHERE job_id = ANY($1::uuid[])",
+      "SELECT DISTINCT state FROM workhorse.task_runtime WHERE task_id = ANY($1::uuid[])",
       [ids],
     );
     expect(states.rows).toHaveLength(1);
@@ -2002,7 +2002,7 @@ describe("enqueue contracts", () => {
       ]),
     ).rejects.toThrow("each request requires");
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0].count,
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.task")).rows[0].count,
     ).toBe(0);
 
     const client = await pool.connect();
@@ -2014,18 +2014,18 @@ describe("enqueue contracts", () => {
       client.release();
     }
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0].count,
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.task")).rows[0].count,
     ).toBe(0);
   });
 
-  it("notifies once per distinct queue containing ready jobs", async () => {
+  it("notifies once per distinct queue containing ready tasks", async () => {
     const alpha = "enqueue-many-integration-alpha";
     const beta = "enqueue-many-integration-beta";
     const listener = await pool.connect();
     const notifications: string[] = [];
     listener.on("notification", (message) => notifications.push(message.payload ?? ""));
     try {
-      await listener.query("LISTEN workhorse_jobs");
+      await listener.query("LISTEN workhorse_tasks");
       await queue.enqueueMany([
         { type: "a", payload: {}, options: { queue: alpha } },
         { type: "b", payload: {}, options: { queue: alpha } },
@@ -2041,7 +2041,7 @@ describe("enqueue contracts", () => {
       expect(relevant).toHaveLength(2);
       expect(new Set(relevant)).toEqual(new Set([alpha, beta]));
     } finally {
-      await listener.query("UNLISTEN workhorse_jobs");
+      await listener.query("UNLISTEN workhorse_tasks");
       listener.release();
     }
   });
@@ -2056,17 +2056,17 @@ describe("enqueue contracts", () => {
       client.release();
     }
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0].count,
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.task")).rows[0].count,
     ).toBe(0);
   });
 
-  it("defaults enqueued jobs to 25 attempts in both client and SQL entry points", async () => {
+  it("defaults enqueued tasks to 25 attempts in both client and SQL entry points", async () => {
     const clientId = await queue.enqueue("client-default", {});
-    const sqlResult = await pool.query<{ job_id: string }>(
-      "SELECT workhorse.enqueue_v1('default', 'sql-default', '{}'::jsonb) AS job_id",
+    const sqlResult = await pool.query<{ task_id: string }>(
+      "SELECT workhorse.enqueue_v1('default', 'sql-default', '{}'::jsonb) AS task_id",
     );
-    const batchResult = await pool.query<{ job_id: string }>(
-      "SELECT job_id FROM workhorse.enqueue_batch_v1($1::jsonb)",
+    const batchResult = await pool.query<{ task_id: string }>(
+      "SELECT task_id FROM workhorse.enqueue_batch_v1($1::jsonb)",
       [
         JSON.stringify([
           {
@@ -2079,14 +2079,14 @@ describe("enqueue contracts", () => {
       ],
     );
 
-    const attempts = await pool.query<{ job_type: string; max_attempts: number }>(
-      "SELECT job_type, max_attempts FROM workhorse.job WHERE id = ANY($1::uuid[]) ORDER BY job_type",
-      [[clientId, sqlResult.rows[0]!.job_id, batchResult.rows[0]!.job_id]],
+    const attempts = await pool.query<{ task_type: string; max_attempts: number }>(
+      "SELECT task_type, max_attempts FROM workhorse.task WHERE id = ANY($1::uuid[]) ORDER BY task_type",
+      [[clientId, sqlResult.rows[0]!.task_id, batchResult.rows[0]!.task_id]],
     );
     expect(attempts.rows).toEqual([
-      { job_type: "batch-default", max_attempts: 25 },
-      { job_type: "client-default", max_attempts: 25 },
-      { job_type: "sql-default", max_attempts: 25 },
+      { task_type: "batch-default", max_attempts: 25 },
+      { task_type: "client-default", max_attempts: 25 },
+      { task_type: "sql-default", max_attempts: 25 },
     ]);
   });
 
@@ -2096,11 +2096,11 @@ describe("enqueue contracts", () => {
       { to: "a@example.com" },
       { runAt: new Date(Date.now() + 120) },
     );
-    expect((await admin.getJob(id))?.state).toBe("scheduled");
+    expect((await admin.getTask(id))?.state).toBe("scheduled");
     expect(await queue.claim("worker-a")).toBeNull();
     await sleep(150);
     expect(await queue.promote()).toBe(1);
-    expect((await admin.getJob(id))?.state).toBe("ready");
+    expect((await admin.getTask(id))?.state).toBe("ready");
     expect((await queue.claim("worker-a"))?.id).toBe(id);
   });
 });

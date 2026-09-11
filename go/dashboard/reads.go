@@ -65,7 +65,7 @@ func (service *backend) eventDetail(ctx context.Context, input any, _ string) (a
 func (service *backend) tasks(ctx context.Context, input any, _ string) (any, error) {
 	value, _ := document(input)
 	defaults := map[string]any{
-		"filter": "all", "queue": nil, "page": 1, "worker": nil, "jobType": nil,
+		"filter": "all", "queue": nil, "page": 1, "worker": nil, "taskType": nil,
 		"priority": nil, "sort": "updated", "tags": []any{}, "search": nil, "pageSize": 50,
 	}
 	for key, defaultValue := range defaults {
@@ -96,7 +96,7 @@ func (service *backend) previewRetentionPolicy(ctx context.Context, input any, _
 	if err != nil {
 		return nil, err
 	}
-	names := []string{"jobIdentityRetentionDays", "terminalOutcomeRetentionDays", "jobEventRetentionDays", "attemptHistoryRetentionDays", "scheduleOccurrenceRetentionDays", "statisticsRetentionDays"}
+	names := []string{"taskIdentityRetentionDays", "terminalOutcomeRetentionDays", "taskEventRetentionDays", "attemptHistoryRetentionDays", "scheduleOccurrenceRetentionDays", "statisticsRetentionDays"}
 	values := make([]any, len(names))
 	for index, name := range names {
 		values[index] = definition[name]
@@ -104,16 +104,16 @@ func (service *backend) previewRetentionPolicy(ctx context.Context, input any, _
 			values[index] = rows[0][snake(name)]
 		}
 	}
-	return service.jsonQuery(ctx, `SELECT jsonb_build_object('eligible',jsonb_build_object('terminalJobs',LEAST(terminal_jobs,10000),'jobEvents',LEAST(job_events,10000),'attemptHistory',LEAST(attempt_history,10000),'scheduleOccurrences',LEAST(schedule_occurrences,10000),'statistics',LEAST(statistics,10000)),'capped',jsonb_build_object('terminalJobs',terminal_jobs>10000,'jobEvents',job_events>10000,'attemptHistory',attempt_history>10000,'scheduleOccurrences',schedule_occurrences>10000,'statistics',statistics>10000)) result FROM(SELECT (SELECT count(*) FROM(SELECT 1 FROM workhorse.job j JOIN workhorse.job_outcome o ON o.job_id=j.id WHERE $1::integer IS NOT NULL AND $2::integer IS NOT NULL AND j.created_at<clock_timestamp()-make_interval(days=>$1) AND o.finished_at<clock_timestamp()-make_interval(days=>$2) LIMIT 10001)x)terminal_jobs,(SELECT count(*) FROM(SELECT 1 FROM workhorse.job_event WHERE $3::integer IS NOT NULL AND occurred_at<clock_timestamp()-make_interval(days=>$3) LIMIT 10001)x)job_events,(SELECT count(*) FROM(SELECT 1 FROM workhorse.attempt_history WHERE $4::integer IS NOT NULL AND occurred_at<clock_timestamp()-make_interval(days=>$4) LIMIT 10001)x)attempt_history,(SELECT count(*) FROM(SELECT 1 FROM workhorse.schedule_occurrence WHERE $5::integer IS NOT NULL AND occurrence_at<clock_timestamp()-make_interval(days=>$5) LIMIT 10001)x)schedule_occurrences,(SELECT count(*) FROM(SELECT 1 FROM workhorse.job_stat_bucket WHERE $6::integer IS NOT NULL AND bucket_start<clock_timestamp()-make_interval(days=>$6) UNION ALL SELECT 1 FROM workhorse.job_stat_bucket_hour WHERE $6::integer IS NOT NULL AND bucket_start<clock_timestamp()-make_interval(days=>$6) UNION ALL SELECT 1 FROM workhorse.job_stat_bucket_day WHERE $6::integer IS NOT NULL AND bucket_start<clock_timestamp()-make_interval(days=>$6) LIMIT 10001)x)statistics)s`, values...)
+	return service.jsonQuery(ctx, `SELECT jsonb_build_object('eligible',jsonb_build_object('terminalTasks',LEAST(terminal_tasks,10000),'taskEvents',LEAST(task_events,10000),'attemptHistory',LEAST(attempt_history,10000),'scheduleOccurrences',LEAST(schedule_occurrences,10000),'statistics',LEAST(statistics,10000)),'capped',jsonb_build_object('terminalTasks',terminal_tasks>10000,'taskEvents',task_events>10000,'attemptHistory',attempt_history>10000,'scheduleOccurrences',schedule_occurrences>10000,'statistics',statistics>10000)) result FROM(SELECT (SELECT count(*) FROM(SELECT 1 FROM workhorse.task j JOIN workhorse.task_outcome o ON o.task_id=j.id WHERE $1::integer IS NOT NULL AND $2::integer IS NOT NULL AND j.created_at<clock_timestamp()-make_interval(days=>$1) AND o.finished_at<clock_timestamp()-make_interval(days=>$2) LIMIT 10001)x)terminal_tasks,(SELECT count(*) FROM(SELECT 1 FROM workhorse.task_event WHERE $3::integer IS NOT NULL AND occurred_at<clock_timestamp()-make_interval(days=>$3) LIMIT 10001)x)task_events,(SELECT count(*) FROM(SELECT 1 FROM workhorse.attempt_history WHERE $4::integer IS NOT NULL AND occurred_at<clock_timestamp()-make_interval(days=>$4) LIMIT 10001)x)attempt_history,(SELECT count(*) FROM(SELECT 1 FROM workhorse.schedule_occurrence WHERE $5::integer IS NOT NULL AND occurrence_at<clock_timestamp()-make_interval(days=>$5) LIMIT 10001)x)schedule_occurrences,(SELECT count(*) FROM(SELECT 1 FROM workhorse.task_stat_bucket WHERE $6::integer IS NOT NULL AND bucket_start<clock_timestamp()-make_interval(days=>$6) UNION ALL SELECT 1 FROM workhorse.task_stat_bucket_hour WHERE $6::integer IS NOT NULL AND bucket_start<clock_timestamp()-make_interval(days=>$6) UNION ALL SELECT 1 FROM workhorse.task_stat_bucket_day WHERE $6::integer IS NOT NULL AND bucket_start<clock_timestamp()-make_interval(days=>$6) LIMIT 10001)x)statistics)s`, values...)
 }
 
-func (service *backend) jobDetail(ctx context.Context, input any, _ string) (any, error) {
+func (service *backend) taskDetail(ctx context.Context, input any, _ string) (any, error) {
 	value, _ := document(input)
 	value["canSignal"] = !service.readOnly
 	value["canCompleteHumanWait"] = !service.readOnly
 	result, err := service.jsonQuery(
 		ctx,
-		"SELECT workhorse.dashboard_job_detail_v1($1::jsonb) AS result",
+		"SELECT workhorse.dashboard_task_detail_v1($1::jsonb) AS result",
 		string(mustJSON(value)),
 	)
 	if err != nil {

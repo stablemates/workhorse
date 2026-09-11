@@ -11,9 +11,9 @@ import {
 
 function wait(name: string, deadlineAt: string): DashboardHumanWaitRow {
   return {
-    jobId: `job-${name}`,
+    taskId: `task-${name}`,
     queue: "default",
-    jobType: "approval",
+    taskType: "approval",
     name,
     context: null,
     attempt: 1,

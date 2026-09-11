@@ -11,11 +11,11 @@ export async function runQuickstart(databaseUrl) {
       "welcome.send",
       async (payload) => ({ message: `Welcome, ${payload.name}!` }),
     );
-    const jobId = await queue.enqueue("welcome.send", { name: "Ada" });
+    const taskId = await queue.enqueue("welcome.send", { name: "Ada" });
     await worker.runOnce();
-    const job = await admin.getJob(jobId);
-    if (job?.state !== "succeeded") throw new Error(`Quickstart job finished in ${job?.state}`);
-    return { jobId, result: job.result };
+    const task = await admin.getTask(taskId);
+    if (task?.state !== "succeeded") throw new Error(`Quickstart task finished in ${task?.state}`);
+    return { taskId, result: task.result };
   } finally {
     await pool.end();
   }

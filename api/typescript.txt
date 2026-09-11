@@ -28,15 +28,15 @@ class CancellationRequestedError
 class CheckpointConflictError
 class CheckpointLeaseLostError
 class ChildConflictError
-interface ChildJob
-interface ChildJobRequest
 class ChildLeaseLostError
 class ChildLimitExceededError
 interface ChildLineage
 type ChildOutcome
 type ChildOutcomes
 class ChildResultLimitExceededError
-interface ClaimedJob
+interface ChildTask
+interface ChildTaskRequest
+interface ClaimedTask
 type CompleteHumanWaitRequest
 type CompleteHumanWaitResult
 type CompleteHumanWaitStatus
@@ -47,8 +47,8 @@ type CreateChildResult
 type CreateChildrenResult
 const DEFAULT_IDEMPOTENCY_SCOPE
 const DEFAULT_IDEMPOTENCY_TTL_MS
-const DEFAULT_JOB_QUERY_PAYLOAD_BYTES
-const DEFAULT_JOB_VALUE_MAX_BYTES
+const DEFAULT_TASK_QUERY_PAYLOAD_BYTES
+const DEFAULT_TASK_VALUE_MAX_BYTES
 const DEPENDENCY_OPERATIONS_SCAN_LIMIT
 interface DeadLetter
 interface DeadLetterCursor
@@ -97,31 +97,6 @@ class HumanWaitLeaseLostError
 class HumanWaitLimitExceededError
 interface HumanWaitPage
 interface Idempotency
-type JobAttemptOutcome
-interface JobCheckpoint
-class JobContractUnavailableError
-class JobContractValidationError
-interface JobContractVersion
-type JobDependencies
-interface JobListCursor
-interface JobListFilter
-interface JobListItem
-interface JobListPage
-interface JobListQuery
-interface JobPayloadProjection
-type JobPayloadStatus
-interface JobProgress
-interface JobSnapshot
-type JobState
-interface JobTimelineAttempt
-interface JobTimelineCursor
-type JobTimelineEntry
-interface JobTimelineEvent
-interface JobTimelinePage
-interface JobTimelineQuery
-interface JobTypeContracts
-class JobValueSizeLimitError
-interface JobWait
 type Json
 const MAXIMUM_PROTOCOL_VERSION
 const MAXIMUM_SCHEMA_VERSION
@@ -131,7 +106,7 @@ const MAX_CHECKPOINT_VALUE_BYTES
 const MAX_DEBOUNCE_WINDOW_MS
 const MAX_ENQUEUE_BATCH_SIZE
 const MAX_EXECUTION_TIMEOUT_MS
-const MAX_EXTERNAL_WAITS_PER_JOB
+const MAX_EXTERNAL_WAITS_PER_TASK
 const MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS
 const MAX_EXTERNAL_WAIT_IDEMPOTENCY_KEY_BYTES
 const MAX_EXTERNAL_WAIT_LIST_SIZE
@@ -141,17 +116,17 @@ const MAX_EXTERNAL_WAIT_VALUE_BYTES
 const MAX_IDEMPOTENCY_KEY_BYTES
 const MAX_IDEMPOTENCY_SCOPE_BYTES
 const MAX_IDEMPOTENCY_TTL_MS
-const MAX_JOB_CONTRACT_SENSITIVE_KEYS
-const MAX_JOB_DEPENDENCIES
-const MAX_JOB_DEPENDENTS
-const MAX_JOB_PRIORITY
-const MAX_JOB_QUERY_PAGE_SIZE
-const MAX_JOB_QUERY_PAYLOAD_BYTES
-const MAX_JOB_QUERY_REDACT_KEYS
-const MAX_JOB_VALUE_MAX_BYTES
 const MAX_PROGRESS_VALUE_BYTES
 const MAX_REDRIVE_BATCH_SIZE
 const MAX_REDRIVE_REQUEST_ID_BYTES
+const MAX_TASK_CONTRACT_SENSITIVE_KEYS
+const MAX_TASK_DEPENDENCIES
+const MAX_TASK_DEPENDENTS
+const MAX_TASK_PRIORITY
+const MAX_TASK_QUERY_PAGE_SIZE
+const MAX_TASK_QUERY_PAYLOAD_BYTES
+const MAX_TASK_QUERY_REDACT_KEYS
+const MAX_TASK_VALUE_MAX_BYTES
 const MAX_THROTTLE_WINDOW_MS
 const MAX_TRACE_CONTEXT_BYTES
 const MAX_WAIT_DURATION_MS
@@ -217,10 +192,10 @@ const SCHEMA_MIGRATION_LOCK_TIMEOUT_MS
 const SUPPORTED_NODE_MAJORS
 const SUPPORTED_POSTGRES_MAJORS
 interface ScheduleDefinition
-type ScheduleJobDefinition
+type ScheduleTaskDefinition
 type ScheduleWaitRequest
 interface ScheduleWaitResult
-interface ScheduledJob
+interface ScheduledTask
 type SchemaCompatibilityCode
 class SchemaCompatibilityError
 interface SchemaCompatibilityVersions
@@ -239,6 +214,31 @@ interface SignalWaitPage
 interface StartedWorkerProcess
 interface StoredSchedule
 const TRACE_ATTRIBUTE_COUNT_LIMIT
+type TaskAttemptOutcome
+interface TaskCheckpoint
+class TaskContractUnavailableError
+class TaskContractValidationError
+interface TaskContractVersion
+type TaskDependencies
+interface TaskListCursor
+interface TaskListFilter
+interface TaskListItem
+interface TaskListPage
+interface TaskListQuery
+interface TaskPayloadProjection
+type TaskPayloadStatus
+interface TaskProgress
+interface TaskSnapshot
+type TaskState
+interface TaskTimelineAttempt
+interface TaskTimelineCursor
+type TaskTimelineEntry
+interface TaskTimelineEvent
+interface TaskTimelinePage
+interface TaskTimelineQuery
+interface TaskTypeContracts
+class TaskValueSizeLimitError
+interface TaskWait
 type TelemetryAttributeValue
 type TelemetryAttributes
 type TelemetryContext
@@ -317,8 +317,8 @@ type DashboardAuditInput
 type DashboardClient
 type DashboardColorScheme
 type DashboardDemoFeature
-type DashboardDemoJobKind
 type DashboardDemoScenario
+type DashboardDemoTaskKind
 type DashboardDemoTools
 interface DashboardNotification
 function DashboardNotifications
@@ -351,8 +351,8 @@ type DashboardChildHealth
 interface DashboardConcurrencyPolicySummary
 interface DashboardCronPage
 type DashboardDemoFeature
-type DashboardDemoJobKind
 type DashboardDemoScenario
+type DashboardDemoTaskKind
 type DashboardDependencyHealth
 interface DashboardDurabilityPlan
 interface DashboardEventDetail
@@ -367,9 +367,6 @@ interface DashboardHumanWaitPage
 interface DashboardHumanWaitRow
 interface DashboardHumanWaitSummary
 interface DashboardIdempotencyEvidence
-interface DashboardJobDetail
-type DashboardJobEventType
-interface DashboardJobRow
 type DashboardLifecycleState
 interface DashboardMaintenanceLoopCadences
 type DashboardMaintenancePolicy
@@ -399,8 +396,11 @@ interface DashboardSystemStorage
 type DashboardSystemWindow
 type DashboardTaskCounts
 interface DashboardTaskCursor
+interface DashboardTaskDetail
+type DashboardTaskEventType
 interface DashboardTaskFacets
 type DashboardTaskFilter
+interface DashboardTaskRow
 type DashboardTaskSort
 interface DashboardTasksCursorPage
 interface DashboardTasksPage
@@ -412,10 +412,10 @@ type MaintenanceLoopCadences
 const dashboardAttemptOutcomes
 function dashboardConcurrencyPolicySummary
 const dashboardIdempotencyEventDetailKeys
-const dashboardJobEventTypes
 function dashboardRateLimitPolicySummary
 const dashboardRedriveBatchDefault
 const dashboardRedriveBatchMax
+const dashboardTaskEventTypes
 const dashboardTaskFilters
 const dashboardTaskPriorityMax
 const dashboardTaskSorts
@@ -449,8 +449,8 @@ interface TaskRowActionGroup
 type TaskRowActionId
 function cancelOutcomeTone
 const dashboardDemoFeatureExamples
-const dashboardDemoJobKinds
 const dashboardDemoScenarios
+const dashboardDemoTaskKinds
 function describeCancelOutcome
 function describeCancellationRequest
 function describeDurableBoundary
@@ -556,8 +556,8 @@ interface RunningDashboard
 type DashboardAuditInput
 type DashboardClient
 type DashboardDemoFeature
-type DashboardDemoJobKind
 type DashboardDemoScenario
+type DashboardDemoTaskKind
 type DashboardDemoTools
 
 ### @stablemates/workhorse-dashboard-server ./wire
@@ -573,8 +573,8 @@ type DashboardChildHealth
 interface DashboardConcurrencyPolicySummary
 interface DashboardCronPage
 type DashboardDemoFeature
-type DashboardDemoJobKind
 type DashboardDemoScenario
+type DashboardDemoTaskKind
 type DashboardDependencyHealth
 interface DashboardDurabilityPlan
 interface DashboardEventDetail
@@ -589,9 +589,6 @@ interface DashboardHumanWaitPage
 interface DashboardHumanWaitRow
 interface DashboardHumanWaitSummary
 interface DashboardIdempotencyEvidence
-interface DashboardJobDetail
-type DashboardJobEventType
-interface DashboardJobRow
 type DashboardLifecycleState
 interface DashboardMaintenanceLoopCadences
 type DashboardMaintenancePolicy
@@ -621,8 +618,11 @@ interface DashboardSystemStorage
 type DashboardSystemWindow
 type DashboardTaskCounts
 interface DashboardTaskCursor
+interface DashboardTaskDetail
+type DashboardTaskEventType
 interface DashboardTaskFacets
 type DashboardTaskFilter
+interface DashboardTaskRow
 type DashboardTaskSort
 interface DashboardTasksCursorPage
 interface DashboardTasksPage
@@ -634,10 +634,10 @@ type MaintenanceLoopCadences
 const dashboardAttemptOutcomes
 function dashboardConcurrencyPolicySummary
 const dashboardIdempotencyEventDetailKeys
-const dashboardJobEventTypes
 function dashboardRateLimitPolicySummary
 const dashboardRedriveBatchDefault
 const dashboardRedriveBatchMax
+const dashboardTaskEventTypes
 const dashboardTaskFilters
 const dashboardTaskPriorityMax
 const dashboardTaskSorts
@@ -754,25 +754,25 @@ interface AdapterNotificationPool extends Queryable {
 class Admin {
   readonly defaultQueue: string;
   constructor(database: Queryable, defaultQueue?: string, options?: QueueOptions);
-  listJobs(query?: JobListQuery): Promise<JobListPage>;
-  getJob<TResult extends Json = Json>(id: string): Promise<JobSnapshot<TResult> | null>;
-  getJobTimeline(jobId: string, query?: JobTimelineQuery): Promise<JobTimelinePage>;
+  listTasks(query?: TaskListQuery): Promise<TaskListPage>;
+  getTask<TResult extends Json = Json>(id: string): Promise<TaskSnapshot<TResult> | null>;
+  getTaskTimeline(taskId: string, query?: TaskTimelineQuery): Promise<TaskTimelinePage>;
   listDeadLetters(query?: DeadLetterQuery): Promise<DeadLetterPage>;
-  redrive(sourceJobId: string, audit: AdminAudit): Promise<RedriveResult>;
+  redrive(sourceTaskId: string, audit: AdminAudit): Promise<RedriveResult>;
   redriveMany(filter: DeadLetterFilter, audit: AdminAudit, options?: BulkRedriveOptions): Promise<BulkRedrivePage>;
-  getRedriveLineage(jobId: string, limit?: number): Promise<RedriveLineage>;
-  getDependencyLineage(jobId: string, limit?: number): Promise<DependencyLineage>;
-  getChildLineage(jobId: string, limit?: number): Promise<ChildLineage>;
-  getCheckpoint<TValue extends Json = Json>(jobId: string, name: string): Promise<JobCheckpoint<TValue> | null>;
-  listCheckpoints<TValue extends Json = Json>(jobId: string): Promise<JobCheckpoint<TValue>[]>;
-  getProgress<TValue extends Json = Json>(jobId: string): Promise<JobProgress<TValue> | null>;
-  getWait(jobId: string, name: string): Promise<JobWait | null>;
-  listWaits(jobId: string): Promise<JobWait[]>;
+  getRedriveLineage(taskId: string, limit?: number): Promise<RedriveLineage>;
+  getDependencyLineage(taskId: string, limit?: number): Promise<DependencyLineage>;
+  getChildLineage(taskId: string, limit?: number): Promise<ChildLineage>;
+  getCheckpoint<TValue extends Json = Json>(taskId: string, name: string): Promise<TaskCheckpoint<TValue> | null>;
+  listCheckpoints<TValue extends Json = Json>(taskId: string): Promise<TaskCheckpoint<TValue>[]>;
+  getProgress<TValue extends Json = Json>(taskId: string): Promise<TaskProgress<TValue> | null>;
+  getWait(taskId: string, name: string): Promise<TaskWait | null>;
+  listWaits(taskId: string): Promise<TaskWait[]>;
   listSignalWaits(options?: ExternalWaitQuery): Promise<SignalWaitPage>;
   listHumanWaits<TContext extends Json = Json>(options?: ExternalWaitQuery): Promise<HumanWaitPage<TContext>>;
   listWorkers(): Promise<WorkerRegistryEntry[]>;
   setWorkerPaused(workerId: string, paused: boolean, audit: AdminAudit): Promise<WorkerPauseResult | null>;
-  runTaskNow(jobId: string, audit: AdminAudit): Promise<RunTaskNowResult>;
+  runTaskNow(taskId: string, audit: AdminAudit): Promise<RunTaskNowResult>;
   pauseQueue(queueName: string, audit: AdminAudit): Promise<void>;
   resumeQueue(queueName: string, audit: AdminAudit): Promise<void>;
   purgeQueue(queueName: string, audit: AdminAudit): Promise<number>;
@@ -795,7 +795,7 @@ interface AdminAudit {
 
 interface BatchExecutionRecord {
   batchId: string;
-  jobs: readonly ClaimedJob[];
+  tasks: readonly ClaimedTask[];
   workerId: string;
 }
 
@@ -809,7 +809,7 @@ interface BatchHandlerItem<TPayload extends Json = Json> {
 }
 
 interface BatchHandlerOptions {
-  /** Maximum jobs delivered in one invocation. It cannot exceed the worker's job concurrency. */
+  /** Maximum tasks delivered in one invocation. It cannot exceed the worker's task concurrency. */
   maxSize: number;
   /** Maximum time after the first member arrives before a partial batch dispatches. */
   lingerMs: number;
@@ -846,8 +846,8 @@ interface CancelOutcomeDescription {
 
 interface CancelResult {
   status: CancelStatus;
-  jobId: string;
-  state: JobState | null;
+  taskId: string;
+  state: TaskState | null;
   currentAttempt: number | null;
   requestedAt: Date | null;
   /** Caller-provided attribution only. This does not claim that the caller was authorized. */
@@ -864,55 +864,36 @@ interface CancellationRequest {
 }
 
 class CancellationRequestedError extends WorkhorseError {
-  readonly jobId: string;
-  constructor(jobId: string);
+  readonly taskId: string;
+  constructor(taskId: string);
 }
 
 class CheckpointConflictError extends WorkhorseError {
-  constructor(jobId: string, checkpointName: string);
+  constructor(taskId: string, checkpointName: string);
 }
 
 class CheckpointLeaseLostError extends WorkhorseError {
-  constructor(jobId: string, checkpointName: string);
+  constructor(taskId: string, checkpointName: string);
 }
 
 class ChildConflictError extends WorkhorseError {
-  readonly parentJobId: string;
+  readonly parentTaskId: string;
   readonly childName: string;
-  constructor(parentJobId: string, childName: string);
-}
-
-interface ChildJob<TResult extends Json = Json> {
-  parentJobId: string;
-  childJobId: string;
-  name: string;
-  type: string;
-  createdAt: Date;
-  joinedAt: Date | null;
-  result: TResult | null;
-}
-
-type ChildJobOptions = Omit<EnqueueOptions, "idempotency" | "debounce" | "throttle" | "prerequisiteJobId" | "dependencies">;
-
-interface ChildJobRequest<TPayload extends Json = Json> {
-  name: string;
-  type: string;
-  payload: TPayload;
-  options?: ChildJobOptions;
+  constructor(parentTaskId: string, childName: string);
 }
 
 class ChildLeaseLostError extends WorkhorseError {
-  readonly parentJobId: string;
-  constructor(parentJobId: string);
+  readonly parentTaskId: string;
+  constructor(parentTaskId: string);
 }
 
 class ChildLimitExceededError extends WorkhorseError {
-  readonly parentJobId: string;
-  constructor(parentJobId: string);
+  readonly parentTaskId: string;
+  constructor(parentTaskId: string);
 }
 
 interface ChildLineage {
-  records: Array<Omit<ChildJob, "result"> & {
+  records: Array<Omit<ChildTask, "result"> & {
     outcomeState: "succeeded" | "failed" | "canceled" | null;
     error: Json | null;
   }>;
@@ -935,14 +916,33 @@ type ChildOutcomes<TResult extends Record<string, Json> = Record<string, Json>> 
 };
 
 class ChildResultLimitExceededError extends WorkhorseError {
-  readonly parentJobId: string;
+  readonly parentTaskId: string;
   readonly resultBytes: number;
   readonly resultLimitBytes: number;
-  constructor(parentJobId: string, resultBytes: number, resultLimitBytes: number);
+  constructor(parentTaskId: string, resultBytes: number, resultLimitBytes: number);
 }
 
-interface ClaimedJob<TPayload extends Json = Json> {
-  /** Stable job identity across all attempts. */
+interface ChildTask<TResult extends Json = Json> {
+  parentTaskId: string;
+  childTaskId: string;
+  name: string;
+  type: string;
+  createdAt: Date;
+  joinedAt: Date | null;
+  result: TResult | null;
+}
+
+type ChildTaskOptions = Omit<EnqueueOptions, "idempotency" | "debounce" | "throttle" | "prerequisiteTaskId" | "dependencies">;
+
+interface ChildTaskRequest<TPayload extends Json = Json> {
+  name: string;
+  type: string;
+  payload: TPayload;
+  options?: ChildTaskOptions;
+}
+
+interface ClaimedTask<TPayload extends Json = Json> {
+  /** Stable task identity across all attempts. */
   id: string;
   /** Queue from which PostgreSQL granted this attempt. */
   queue: string;
@@ -950,19 +950,19 @@ interface ClaimedJob<TPayload extends Json = Json> {
   /** Immutable dispatch rank. Higher values are claimed first. */
   priority: number;
   payload: TPayload;
-  /** Contract version captured when PostgreSQL accepted this job, or null for an uncontracted job. */
+  /** Contract version captured when PostgreSQL accepted this task, or null for an uncontracted task. */
   contractVersion: string | null;
   /** Immutable PostgreSQL-canonical JSON size limit for the terminal result. */
   resultMaxBytes: number;
   /** Whether handler error details must be removed before telemetry or persistence. */
   redactErrorDetails: boolean;
-  /** W3C parent context captured when PostgreSQL first accepted this stable job identity. */
+  /** W3C parent context captured when PostgreSQL first accepted this stable task identity. */
   traceContext: TraceContext | null;
   /** One-based attempt number. Recovery and retry always create the next number. */
   attempt: number;
   maxAttempts: number;
   retryPolicy: RetryPolicy | null;
-  /** Immutable absolute job deadline, or null when the job has no deadline. */
+  /** Immutable absolute task deadline, or null when the task has no deadline. */
   deadlineAt: Date | null;
   /** Persisted active-execution budget for each logical attempt. */
   executionTimeoutMs: number | null;
@@ -993,7 +993,7 @@ interface ConcurrencyPolicy {
 interface ConcurrencyPolicyDefinition {
   queue: string;
   maxActive: number;
-  /** Uniform active-job budget for each non-null concurrency key. Null disables the keyed budget. */
+  /** Uniform active-task budget for each non-null concurrency key. Null disables the keyed budget. */
   maxActivePerKey?: number | null;
 }
 
@@ -1010,18 +1010,18 @@ interface ContractSchemaOptions {
 
 type CreateChildResult<TResult extends Json = Json> = {
   status: "created";
-  child: ChildJob<TResult>;
+  child: ChildTask<TResult>;
 } | {
   status: "completed";
-  child: ChildJob<TResult>;
+  child: ChildTask<TResult>;
 };
 
 type CreateChildrenResult<TResult extends Record<string, Json> = Record<string, Json>> = {
   status: "created";
-  children: ChildJob[];
+  children: ChildTask[];
 } | {
   status: "completed";
-  children: ChildJob[];
+  children: ChildTask[];
   results: TResult;
 };
 
@@ -1033,9 +1033,9 @@ const DEFAULT_IDEMPOTENCY_SCOPE = "default";
 
 const DEFAULT_IDEMPOTENCY_TTL_MS = 86400000;
 
-const DEFAULT_JOB_QUERY_PAYLOAD_BYTES = 16384;
+const DEFAULT_TASK_QUERY_PAYLOAD_BYTES = 16384;
 
-const DEFAULT_JOB_VALUE_MAX_BYTES = 1048576;
+const DEFAULT_TASK_VALUE_MAX_BYTES = 1048576;
 
 const DEPENDENCY_OPERATIONS_SCAN_LIMIT = 10000;
 
@@ -1080,8 +1080,8 @@ type DashboardCancelStatus = CancelStatus;
 
 interface DashboardCancelTaskResult {
   status: CancelStatus;
-  jobId: string;
-  state: JobState | null;
+  taskId: string;
+  state: TaskState | null;
   currentAttempt: number | null;
   requestedAt: string | null;
   requestedBy: string | null;
@@ -1128,7 +1128,7 @@ interface DashboardCommandOptions {
 
 interface DashboardCompleteHumanWaitResult {
   status: HumanWaitCompletionStatus;
-  jobId: string;
+  taskId: string;
   name: string;
   result: Json | null;
   completedAt: string | null;
@@ -1168,8 +1168,8 @@ interface DashboardCronPage {
       historyRetentionLocalTime: string;
       updatedAt: string;
     };
-    tasks: Array<{
-      task: "tick" | "history_partitions" | "history_retention" | "terminal_storage";
+    routines: Array<{
+      routine: "tick" | "history_partitions" | "history_retention" | "terminal_storage";
       lastStartedAt: string | null;
       lastCompletedAt: string | null;
       due: boolean;
@@ -1184,11 +1184,11 @@ interface DashboardDatabase {
   }>;
 }
 
-type DashboardDemoFeature = "ingress-routing" | "retry-policies" | "durable-checkpoints" | "durable-waits" | "progress" | "timing-controls" | "cancellation" | "dead-letters-redrive" | "job-dependencies" | "child-workflows" | "signals" | "human-decisions" | "keyed-debounce" | "keyed-throttle" | "priority-lanes" | "batch-handlers" | "payload-contracts";
-
-type DashboardDemoJobKind = "success" | "retry" | "durable" | "timer" | "failure" | "idempotent" | "long-running" | "redrive" | "feature";
+type DashboardDemoFeature = "ingress-routing" | "retry-policies" | "durable-checkpoints" | "durable-waits" | "progress" | "timing-controls" | "cancellation" | "dead-letters-redrive" | "task-dependencies" | "child-workflows" | "signals" | "human-decisions" | "keyed-debounce" | "keyed-throttle" | "priority-lanes" | "batch-handlers" | "payload-contracts";
 
 type DashboardDemoScenario = "order-fulfillment" | "customer-onboarding" | "report-publication";
+
+type DashboardDemoTaskKind = "success" | "retry" | "durable" | "timer" | "failure" | "idempotent" | "long-running" | "redrive" | "feature";
 
 type DashboardDemoTools = Required<Pick<DashboardProcedures, "enqueueTest">>;
 
@@ -1237,7 +1237,7 @@ type DashboardDurabilityProjector = (type: string, payload: unknown) => Dashboar
 type DashboardEnqueueTestOutcome = "accepted" | "replayed";
 
 interface DashboardEnqueueTestResult {
-  jobId: string;
+  taskId: string;
   outcome?: DashboardEnqueueTestOutcome;
 }
 
@@ -1262,15 +1262,15 @@ interface DashboardEventRow {
   id: string;
   kind: DashboardEventKind;
   recordId: string;
-  jobId: string;
+  taskId: string;
   /**
-  * Queue and type of the job this row belongs to, or null once that job has been retained away.
+  * Queue and type of the task this row belongs to, or null once that task has been retained away.
   *
-  * History outlives the `job` row it describes, so the feed reports the orphan rather than
-  * dropping it: a deleted job is exactly the case an operator is trying to see.
+  * History outlives the `task` row it describes, so the feed reports the orphan rather than
+  * dropping it: a deleted task is exactly the case an operator is trying to see.
   */
   queue: string | null;
-  jobType: string | null;
+  taskType: string | null;
   occurredAt: string;
   attempt: number | null;
   /** Lifecycle event name for `event` rows; the attempt outcome for `attempt` rows. */
@@ -1284,7 +1284,7 @@ interface DashboardEventRow {
   errorMessage: string | null;
 }
 
-type DashboardEventTypeFilter = DashboardJobEventType | DashboardAttemptOutcome;
+type DashboardEventTypeFilter = DashboardTaskEventType | DashboardAttemptOutcome;
 
 interface DashboardEventsPage {
   capturedAt: string;
@@ -1303,7 +1303,7 @@ interface DashboardEventsPage {
   * shown rather than left for an operator to infer from a feed that simply stops.
   */
   retention: {
-    jobEventDays: number | null;
+    taskEventDays: number | null;
     attemptHistoryDays: number | null;
   };
 }
@@ -1407,9 +1407,9 @@ interface DashboardHumanWaitPage {
 }
 
 interface DashboardHumanWaitRow {
-  jobId: string;
+  taskId: string;
   queue: string;
-  jobType: string;
+  taskType: string;
   name: string;
   context: unknown;
   attempt: number;
@@ -1431,240 +1431,6 @@ interface DashboardIdempotencyEvidence {
   ttlMs: number;
   expiresAt: string | null;
   requestDigest: string;
-}
-
-interface DashboardJobDetail {
-  tags: string[];
-  humanWait: DashboardHumanWaitSummary | null;
-  canCompleteHumanWait: boolean;
-  identity: {
-    id: string;
-    queue: string;
-    type: string;
-    priority: number;
-    state: string;
-    createdAt: string;
-    /** Retry scheduling persisted with the job identity. Null means the default SQL-owned backoff. */
-    retryPolicy: RetryPolicy | null;
-    maxAttempts: number;
-    deadlineAt?: string | null;
-    executionTimeoutMs?: number | null;
-    /**
-    * Raw admission key this task was enqueued with. Immutable, so it stays true after the task
-    * finishes. Deliberately available only in task detail identity.
-    */
-    concurrencyKey: string | null;
-    /** Stable prerequisite identity, or null when this task has no dependency. */
-    prerequisiteJobId: string | null;
-    /** Stable prerequisite identities in deterministic order. */
-    prerequisiteJobIds: string[];
-    /** Terminal outcome policy shared by every prerequisite edge. */
-    dependencyPolicy: {
-      onSuccess: "release" | "cancel" | "fail";
-      onFailure: "release" | "cancel" | "fail";
-      onCancellation: "release" | "cancel" | "fail";
-    } | null;
-    /** When PostgreSQL satisfied the final dependency edge. */
-    dependencyReleasedAt: string | null;
-    /** Why this task remains blocked. Null after release and for independent tasks. */
-    blockedReason: "prerequisite_pending" | null;
-  };
-  dependencyLineage: {
-    records: Array<{
-      dependentJobId: string;
-      prerequisiteJobId: string;
-      onSuccess: "release" | "cancel" | "fail";
-      onFailure: "release" | "cancel" | "fail";
-      onCancellation: "release" | "cancel" | "fail";
-      createdAt: string;
-      releasedAt: string | null;
-      resolution: "release" | "cancel" | "fail" | null;
-    }>;
-    truncated: boolean;
-  };
-  childLineage: {
-    records: Array<{
-      parentJobId: string;
-      childJobId: string;
-      name: string;
-      type: string;
-      createdAt: string;
-      joinedAt: string | null;
-      outcomeState: "succeeded" | "failed" | "canceled" | null;
-      error: unknown;
-    }>;
-    truncated: boolean;
-  };
-  redriveLineage: {
-    records: Array<{
-      sourceJobId: string;
-      targetJobId: string;
-      requestedBy: string;
-      reason: string;
-      requestIdPreview: string;
-      requestIdDigest: string;
-      requestIdLength: number;
-      sourceState: "failed";
-      targetInitialState: "ready";
-      requestedAt: string;
-    }>;
-    truncated: boolean;
-  };
-  /**
-  * The queue's admission budget as it stands now, not a snapshot of the policy this task ran
-  * under. Workhorse stores no per-task snapshot, so a finished task's line must be read as
-  * current queue context. Null when the queue has no policy.
-  */
-  concurrencyPolicy: DashboardConcurrencyPolicySummary | null;
-  /** The actionable signal boundary which currently owns this task's suspension. */
-  signalWait: DashboardSignalWaitSummary | null;
-  canSignal: boolean;
-  payload: unknown;
-  progress: {
-    value: unknown;
-    revision: string;
-    attempt: number;
-    fenceToken: string;
-    workerId: string;
-    createdAt: string;
-    updatedAt: string;
-  } | null;
-  durability: DashboardDurabilityPlan | null;
-  current: {
-    runtime: {
-      state: string;
-      attempt: number;
-      runAt: string;
-      readyAt: string | null;
-      workerId: string | null;
-      fenceToken: string;
-      acquiredAt: string | null;
-      heartbeatAt: string | null;
-      expiresAt: string | null;
-      waitName: string | null;
-      attemptStartedAt: string | null;
-      attemptTimeoutAt?: string | null;
-      /** Cooperative cancellation requested against this live runtime, if any. */
-      cancellation: DashboardCancellationRequest | null;
-      error: unknown;
-    } | null;
-    outcome: {
-      state: string;
-      attempt: number;
-      finishedAt: string;
-      result: unknown;
-      error: unknown;
-    } | null;
-    result: unknown;
-    error: unknown;
-  };
-  batchExecutions: Array<{
-    id: string;
-    /** Attempt of the selected task that joined this execution. */
-    attempt: number;
-    dispatchedAt: string;
-    /** True only when the shared callback threw or returned an invalid outcome list. */
-    batchWideFailure: boolean;
-    members: Array<{
-      id: string;
-      type: string;
-      attempt: number;
-      /** Matching closed-attempt outcome, or null while that member is still active. */
-      outcome: string | null;
-      error: unknown;
-    }>;
-  }>;
-  attempts: Array<{
-    attempt: number;
-    workerId: string;
-    outcome: string;
-    startedAt: string;
-    claimedAt: string;
-    finishedAt: string;
-    durationMs: number;
-    executionMs: number;
-    elapsedMs: number;
-    error: unknown;
-  }>;
-  checkpoints: Array<{
-    name: string;
-    value: unknown;
-    attempt: number;
-    fenceToken: string;
-    workerId: string;
-    createdAt: string;
-  }>;
-  waits: Array<{
-    name: string;
-    mode: "relative" | "absolute";
-    durationMs: number | null;
-    requestedWakeAt: string | null;
-    wakeAt: string;
-    attempt: number;
-    fenceToken: string;
-    workerId: string;
-    createdAt: string;
-  }>;
-  events: Array<{
-    id: string;
-    attempt: number | null;
-    type: string;
-    details: unknown;
-    occurredAt: string;
-  }>;
-}
-
-type DashboardJobEventType = (typeof dashboardJobEventTypes)[number];
-
-interface DashboardJobRow extends Record<string, unknown> {
-  id: string;
-  queue: string;
-  type: string;
-  priority: number;
-  state: string;
-  /** Why this live task cannot enter dispatch. Null for every non-blocked task. */
-  blockedReason: "prerequisite_pending" | null;
-  /** Unresolved prerequisite identities which currently keep this task blocked. */
-  prerequisiteJobIds: string[];
-  attempt: number;
-  maxAttempts: number;
-  /** Retry scheduling persisted with the job identity. Null means the default SQL-owned backoff. */
-  retryPolicy: RetryPolicy | null;
-  deadlineAt?: string | null;
-  executionTimeoutMs?: number | null;
-  tags: string[];
-  /**
-  * True when the accepted enqueue recorded deduplication evidence. Derived only from the safe
-  * metadata on the initial `enqueued` event, so an unkeyed task stays exactly as it was.
-  */
-  keyed: boolean;
-  /** Accepted mode from the initial enqueue event; absent on older dashboard hosts. */
-  enqueueMode?: "idempotency" | "debounce" | "throttle" | null;
-  /**
-  * Cooperative cancellation recorded against this live task, or null when none was requested.
-  * A canceled task carries its request on the terminal outcome instead and reports null here.
-  */
-  cancellation: DashboardCancellationRequest | null;
-  runAt: string | null;
-  workerId: string | null;
-  lastWorkerId: string | null;
-  finishedAt: string | null;
-  errorMessage: string | null;
-  createdAt: string;
-  updatedAt: string;
-  durability: {
-    completedSteps: number;
-    totalSteps: number;
-  } | null;
-  waitName: string | null;
-  wakeAt: string | null;
-  wait: {
-    name: string;
-    wakeAt: string;
-    mode: "relative" | "absolute";
-  } | null;
-  signalWait: DashboardSignalWaitSummary | null;
-  humanWait: DashboardHumanWaitSummary | null;
 }
 
 type DashboardLifecycleState = "scheduled" | "ready" | "active" | DashboardTerminalState | "unknown";
@@ -1733,7 +1499,7 @@ function DashboardNotifications(): import("react").JSX.Element;
 
 interface DashboardOperator {
   mode: "read-only" | "writable";
-  enqueueTest?: (kind: DashboardDemoJobKind, audit: DashboardAuditContext, scenario?: DashboardDemoScenario, priority?: number, feature?: DashboardDemoFeature) => Promise<DashboardEnqueueTestResult>;
+  enqueueTest?: (kind: DashboardDemoTaskKind, audit: DashboardAuditContext, scenario?: DashboardDemoScenario, priority?: number, feature?: DashboardDemoFeature) => Promise<DashboardEnqueueTestResult>;
 }
 
 type DashboardOperatorAction = {
@@ -1747,29 +1513,29 @@ type DashboardOperatorAction = {
   audit: DashboardAuditContext;
 } | {
   kind: "runTaskNow";
-  jobId: string;
+  taskId: string;
   audit: DashboardAuditContext;
 } | {
   kind: "cancelTask";
-  jobId: string;
+  taskId: string;
   audit: DashboardCancellationAuditContext;
 } | {
   kind: "signalTask";
-  jobId: string;
+  taskId: string;
   name: string;
   payload: Json;
   idempotencyKey: string;
   audit: DashboardAuditContext;
 } | {
   kind: "completeHumanWait";
-  jobId: string;
+  taskId: string;
   name: string;
   result: Json;
   idempotencyKey: string;
   audit: DashboardAuditContext;
 } | {
   kind: "redriveTask";
-  jobId: string;
+  taskId: string;
   audit: DashboardAuditContext;
 } | {
   kind: "redriveDeadLetters";
@@ -1821,7 +1587,7 @@ interface DashboardProps {
   client: DashboardClient;
   /** Actor stored in audit metadata for mutations initiated by this dashboard. */
   auditActor?: string;
-  /** Optional demo job seeding controls. Omit this in normal application dashboards. */
+  /** Optional demo task seeding controls. Omit this in normal application dashboards. */
   demoTools?: DashboardDemoTools;
   /** URL namespace where the dashboard is mounted, for example `/workhorse`. */
   basePath?: string;
@@ -1892,21 +1658,21 @@ interface DashboardRedriveBatch {
 
 interface DashboardRedriveCursor {
   finishedAt: string;
-  jobId: string;
+  taskId: string;
 }
 
 interface DashboardRedriveFilter {
   queue: string | null;
-  jobType: string | null;
+  taskType: string | null;
   tags: readonly string[];
 }
 
 interface DashboardRedriveResult {
   status: DashboardRedriveStatus;
-  sourceJobId: string;
-  targetJobId: string | null;
-  sourceState: JobState | null;
-  targetState: JobState | null;
+  sourceTaskId: string;
+  targetTaskId: string | null;
+  sourceState: TaskState | null;
+  targetState: TaskState | null;
   requestedAt: string | null;
 }
 
@@ -1914,7 +1680,7 @@ type DashboardRedriveStatus = RedriveStatus;
 
 type DashboardResultTone = "neutral" | "success" | "failure";
 
-type DashboardRetentionCategory = "jobIdentity" | "terminalOutcome" | "jobEvents" | "attemptHistory" | "scheduleOccurrences" | "statistics";
+type DashboardRetentionCategory = "taskIdentity" | "terminalOutcome" | "taskEvents" | "attemptHistory" | "scheduleOccurrences" | "statistics";
 
 interface DashboardRetentionCategoryRow {
   category: DashboardRetentionCategory;
@@ -2013,15 +1779,15 @@ interface DashboardSettingsPage {
       lastRunAt: string | null;
     };
     defaultHistoryRows: {
-      jobEvents: number;
+      taskEvents: number;
       attemptHistory: number;
     };
     defaultHistoryRowsCapped: {
-      jobEvents: boolean;
+      taskEvents: boolean;
       attemptHistory: boolean;
     };
     enqueueRate: {
-      jobs: number;
+      tasks: number;
       windowMs: number;
     };
   };
@@ -2035,7 +1801,7 @@ interface DashboardSettingsPage {
     heartbeatMs: number | null;
     pollMs: number | null;
     maintenanceIntervalMs: number | null;
-    maintenanceTaskPollMs: number | null;
+    maintenanceRoutinePollMs: number | null;
     registryIntervalMs: number | null;
     lastSeenAt: string;
   }>;
@@ -2043,7 +1809,7 @@ interface DashboardSettingsPage {
 
 interface DashboardSignalTaskResult {
   status: SignalDeliveryStatus;
-  jobId: string;
+  taskId: string;
   name: string;
   payload: Json | null;
   deliveredAt: string | null;
@@ -2051,9 +1817,9 @@ interface DashboardSignalTaskResult {
 }
 
 interface DashboardSignalWaitRow {
-  jobId: string;
+  taskId: string;
   queue: string;
-  jobType: string;
+  taskType: string;
   name: string;
   attempt: number;
   createdAt: string;
@@ -2243,16 +2009,16 @@ interface DashboardSystemRetention {
   oldestRetainedCategory: DashboardRetentionCategory | null;
   /** Daily history partitions already past their cutoff but not yet dropped. */
   eligibleHistoryPartitions: {
-    jobEvents: number;
+    taskEvents: number;
     attemptHistory: number;
   };
   /** Cumulative rows that landed in the catch-all partitions; never window-scoped. */
   defaultHistoryRows: {
-    jobEvents: number;
+    taskEvents: number;
     attemptHistory: number;
   };
   defaultHistoryRowsCapped: {
-    jobEvents: boolean;
+    taskEvents: boolean;
     attemptHistory: boolean;
   };
 }
@@ -2282,17 +2048,17 @@ interface DashboardSystemStorage {
 type DashboardSystemWindow = "15m" | "1h" | "24h";
 
 interface DashboardTaskController {
-  runTaskNow?: (jobId: string, audit: DashboardAuditContext) => Promise<DashboardRunNowResult>;
-  cancelTask?: (jobId: string, audit: DashboardCancellationAuditContext) => Promise<DashboardCancelTaskResult>;
-  signalTask?: (jobId: string, name: string, payload: Json, idempotencyKey: string, audit: DashboardAuditContext) => Promise<DashboardSignalTaskResult>;
-  completeHumanWait?: (jobId: string, name: string, result: Json, idempotencyKey: string, audit: DashboardAuditContext) => Promise<DashboardCompleteHumanWaitResult>;
+  runTaskNow?: (taskId: string, audit: DashboardAuditContext) => Promise<DashboardRunNowResult>;
+  cancelTask?: (taskId: string, audit: DashboardCancellationAuditContext) => Promise<DashboardCancelTaskResult>;
+  signalTask?: (taskId: string, name: string, payload: Json, idempotencyKey: string, audit: DashboardAuditContext) => Promise<DashboardSignalTaskResult>;
+  completeHumanWait?: (taskId: string, name: string, result: Json, idempotencyKey: string, audit: DashboardAuditContext) => Promise<DashboardCompleteHumanWaitResult>;
   /**
   * Enqueue one retained terminal failure again as a fresh task.
   *
   * The source failure is never edited, so the result names both identities and the operator can
   * follow the audited lineage edge PostgreSQL wrote between them.
   */
-  redriveTask?: (jobId: string, audit: DashboardAuditContext) => Promise<DashboardRedriveResult>;
+  redriveTask?: (taskId: string, audit: DashboardAuditContext) => Promise<DashboardRedriveResult>;
   /** Redrive a bounded page of the dead letters one filter selects. */
   redriveDeadLetters?: (filter: DashboardRedriveFilter, limit: number, cursor: DashboardRedriveCursor | null, audit: DashboardAuditContext) => Promise<DashboardRedriveBatch>;
 }
@@ -2305,14 +2071,248 @@ interface DashboardTaskCursor {
   priority: number;
 }
 
+interface DashboardTaskDetail {
+  tags: string[];
+  humanWait: DashboardHumanWaitSummary | null;
+  canCompleteHumanWait: boolean;
+  identity: {
+    id: string;
+    queue: string;
+    type: string;
+    priority: number;
+    state: string;
+    createdAt: string;
+    /** Retry scheduling persisted with the task identity. Null means the default SQL-owned backoff. */
+    retryPolicy: RetryPolicy | null;
+    maxAttempts: number;
+    deadlineAt?: string | null;
+    executionTimeoutMs?: number | null;
+    /**
+    * Raw admission key this task was enqueued with. Immutable, so it stays true after the task
+    * finishes. Deliberately available only in task detail identity.
+    */
+    concurrencyKey: string | null;
+    /** Stable prerequisite identity, or null when this task has no dependency. */
+    prerequisiteTaskId: string | null;
+    /** Stable prerequisite identities in deterministic order. */
+    prerequisiteTaskIds: string[];
+    /** Terminal outcome policy shared by every prerequisite edge. */
+    dependencyPolicy: {
+      onSuccess: "release" | "cancel" | "fail";
+      onFailure: "release" | "cancel" | "fail";
+      onCancellation: "release" | "cancel" | "fail";
+    } | null;
+    /** When PostgreSQL satisfied the final dependency edge. */
+    dependencyReleasedAt: string | null;
+    /** Why this task remains blocked. Null after release and for independent tasks. */
+    blockedReason: "prerequisite_pending" | null;
+  };
+  dependencyLineage: {
+    records: Array<{
+      dependentTaskId: string;
+      prerequisiteTaskId: string;
+      onSuccess: "release" | "cancel" | "fail";
+      onFailure: "release" | "cancel" | "fail";
+      onCancellation: "release" | "cancel" | "fail";
+      createdAt: string;
+      releasedAt: string | null;
+      resolution: "release" | "cancel" | "fail" | null;
+    }>;
+    truncated: boolean;
+  };
+  childLineage: {
+    records: Array<{
+      parentTaskId: string;
+      childTaskId: string;
+      name: string;
+      type: string;
+      createdAt: string;
+      joinedAt: string | null;
+      outcomeState: "succeeded" | "failed" | "canceled" | null;
+      error: unknown;
+    }>;
+    truncated: boolean;
+  };
+  redriveLineage: {
+    records: Array<{
+      sourceTaskId: string;
+      targetTaskId: string;
+      requestedBy: string;
+      reason: string;
+      requestIdPreview: string;
+      requestIdDigest: string;
+      requestIdLength: number;
+      sourceState: "failed";
+      targetInitialState: "ready";
+      requestedAt: string;
+    }>;
+    truncated: boolean;
+  };
+  /**
+  * The queue's admission budget as it stands now, not a snapshot of the policy this task ran
+  * under. Workhorse stores no per-task snapshot, so a finished task's line must be read as
+  * current queue context. Null when the queue has no policy.
+  */
+  concurrencyPolicy: DashboardConcurrencyPolicySummary | null;
+  /** The actionable signal boundary which currently owns this task's suspension. */
+  signalWait: DashboardSignalWaitSummary | null;
+  canSignal: boolean;
+  payload: unknown;
+  progress: {
+    value: unknown;
+    revision: string;
+    attempt: number;
+    fenceToken: string;
+    workerId: string;
+    createdAt: string;
+    updatedAt: string;
+  } | null;
+  durability: DashboardDurabilityPlan | null;
+  current: {
+    runtime: {
+      state: string;
+      attempt: number;
+      runAt: string;
+      readyAt: string | null;
+      workerId: string | null;
+      fenceToken: string;
+      acquiredAt: string | null;
+      heartbeatAt: string | null;
+      expiresAt: string | null;
+      waitName: string | null;
+      attemptStartedAt: string | null;
+      attemptTimeoutAt?: string | null;
+      /** Cooperative cancellation requested against this live runtime, if any. */
+      cancellation: DashboardCancellationRequest | null;
+      error: unknown;
+    } | null;
+    outcome: {
+      state: string;
+      attempt: number;
+      finishedAt: string;
+      result: unknown;
+      error: unknown;
+    } | null;
+    result: unknown;
+    error: unknown;
+  };
+  batchExecutions: Array<{
+    id: string;
+    /** Attempt of the selected task that joined this execution. */
+    attempt: number;
+    dispatchedAt: string;
+    /** True only when the shared callback threw or returned an invalid outcome list. */
+    batchWideFailure: boolean;
+    members: Array<{
+      id: string;
+      type: string;
+      attempt: number;
+      /** Matching closed-attempt outcome, or null while that member is still active. */
+      outcome: string | null;
+      error: unknown;
+    }>;
+  }>;
+  attempts: Array<{
+    attempt: number;
+    workerId: string;
+    outcome: string;
+    startedAt: string;
+    claimedAt: string;
+    finishedAt: string;
+    durationMs: number;
+    executionMs: number;
+    elapsedMs: number;
+    error: unknown;
+  }>;
+  checkpoints: Array<{
+    name: string;
+    value: unknown;
+    attempt: number;
+    fenceToken: string;
+    workerId: string;
+    createdAt: string;
+  }>;
+  waits: Array<{
+    name: string;
+    mode: "relative" | "absolute";
+    durationMs: number | null;
+    requestedWakeAt: string | null;
+    wakeAt: string;
+    attempt: number;
+    fenceToken: string;
+    workerId: string;
+    createdAt: string;
+  }>;
+  events: Array<{
+    id: string;
+    attempt: number | null;
+    type: string;
+    details: unknown;
+    occurredAt: string;
+  }>;
+}
+
+type DashboardTaskEventType = (typeof dashboardTaskEventTypes)[number];
+
 interface DashboardTaskFacets {
   queues: string[];
   workers: string[];
-  jobTypes: string[];
+  taskTypes: string[];
   tags: string[];
 }
 
 type DashboardTaskFilter = (typeof dashboardTaskFilters)[number];
+
+interface DashboardTaskRow extends Record<string, unknown> {
+  id: string;
+  queue: string;
+  type: string;
+  priority: number;
+  state: string;
+  /** Why this live task cannot enter dispatch. Null for every non-blocked task. */
+  blockedReason: "prerequisite_pending" | null;
+  /** Unresolved prerequisite identities which currently keep this task blocked. */
+  prerequisiteTaskIds: string[];
+  attempt: number;
+  maxAttempts: number;
+  /** Retry scheduling persisted with the task identity. Null means the default SQL-owned backoff. */
+  retryPolicy: RetryPolicy | null;
+  deadlineAt?: string | null;
+  executionTimeoutMs?: number | null;
+  tags: string[];
+  /**
+  * True when the accepted enqueue recorded deduplication evidence. Derived only from the safe
+  * metadata on the initial `enqueued` event, so an unkeyed task stays exactly as it was.
+  */
+  keyed: boolean;
+  /** Accepted mode from the initial enqueue event; absent on older dashboard hosts. */
+  enqueueMode?: "idempotency" | "debounce" | "throttle" | null;
+  /**
+  * Cooperative cancellation recorded against this live task, or null when none was requested.
+  * A canceled task carries its request on the terminal outcome instead and reports null here.
+  */
+  cancellation: DashboardCancellationRequest | null;
+  runAt: string | null;
+  workerId: string | null;
+  lastWorkerId: string | null;
+  finishedAt: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+  durability: {
+    completedSteps: number;
+    totalSteps: number;
+  } | null;
+  waitName: string | null;
+  wakeAt: string | null;
+  wait: {
+    name: string;
+    wakeAt: string;
+    mode: "relative" | "absolute";
+  } | null;
+  signalWait: DashboardSignalWaitSummary | null;
+  humanWait: DashboardHumanWaitSummary | null;
+}
 
 type DashboardTaskSort = (typeof dashboardTaskSorts)[number];
 
@@ -2328,7 +2328,7 @@ interface DashboardTasksPage {
   filter: DashboardTaskFilter;
   queue: string | null;
   worker: string | null;
-  jobType: string | null;
+  taskType: string | null;
   priority: number | null;
   sort: DashboardTaskSort;
   tags: string[];
@@ -2336,7 +2336,7 @@ interface DashboardTasksPage {
   page: number;
   pageSize: number;
   total: number;
-  jobs: DashboardJobRow[];
+  tasks: DashboardTaskRow[];
 }
 
 type DashboardTerminalState = "succeeded" | "failed" | "canceled";
@@ -2363,10 +2363,10 @@ interface DashboardWorkerRow {
   hostname: string | null;
   pid: number | null;
   /**
-  * Jobs PostgreSQL currently reports as active for this worker. It is observed durable state and
+  * Tasks PostgreSQL currently reports as active for this worker. It is observed durable state and
   * can briefly differ from `activeSlots`, which is the in-process handler count.
   */
-  activeJobs: number;
+  activeTasks: number;
   /** Declared execution slots, or null when the worker has no durable registration. */
   concurrency: number | null;
   /** Handlers the worker reported executing at its last registration refresh. */
@@ -2438,7 +2438,7 @@ interface DashboardWorkspaceOptions {
 }
 
 interface DeadLetter {
-  jobId: string;
+  taskId: string;
   queue: string;
   type: string;
   concurrencyKey: string | null;
@@ -2458,7 +2458,7 @@ interface DeadLetter {
 interface DeadLetterCursor {
   /** Exact PostgreSQL UTC timestamp text. Treat as opaque continuation state. */
   finishedAt: string;
-  jobId: string;
+  taskId: string;
 }
 
 interface DeadLetterFilter {
@@ -2482,8 +2482,8 @@ interface DeadLetterQuery extends DeadLetterFilter {
 }
 
 class DeadlineExceededError extends WorkhorseError {
-  readonly jobId: string;
-  constructor(jobId: string);
+  readonly taskId: string;
+  constructor(taskId: string);
 }
 
 interface Debounce {
@@ -2493,40 +2493,40 @@ interface Debounce {
   scope?: string;
   /** Delay and replacement window measured from PostgreSQL's clock. */
   windowMs: number;
-  /** Whether a replacement starts a fresh window or keeps the retained job's run time. */
+  /** Whether a replacement starts a fresh window or keeps the retained task's run time. */
   schedule: "reset" | "preserve";
 }
 
 interface Dependencies {
-  prerequisiteJobIds: readonly string[];
+  prerequisiteTaskIds: readonly string[];
   onSuccess: DependencyTerminalPolicy;
   onFailure: DependencyTerminalPolicy;
   onCancellation: DependencyTerminalPolicy;
 }
 
 interface DependencyCycleDetails {
-  readonly dependentJobId: string;
-  readonly prerequisiteJobId: string;
-  readonly cycleJobIds: readonly string[];
+  readonly dependentTaskId: string;
+  readonly prerequisiteTaskId: string;
+  readonly cycleTaskIds: readonly string[];
   readonly truncated: boolean;
 }
 
 class DependencyCycleError extends WorkhorseError {
   readonly details: DependencyCycleDetails;
   constructor(details: DependencyCycleDetails);
-  get dependentJobId(): string;
-  get prerequisiteJobId(): string;
-  get cycleJobIds(): readonly string[];
+  get dependentTaskId(): string;
+  get prerequisiteTaskId(): string;
+  get cycleTaskIds(): readonly string[];
   get truncated(): boolean;
 }
 
 type DependencyLimit = "prerequisites" | "dependents" | "unresolved_dependents" | "unknown";
 
 class DependencyLimitExceededError extends WorkhorseError {
-  readonly jobId: string;
+  readonly taskId: string;
   readonly limit: DependencyLimit;
   readonly max: number;
-  constructor(jobId: string, limit: DependencyLimit, max: number);
+  constructor(taskId: string, limit: DependencyLimit, max: number);
 }
 
 interface DependencyLineage {
@@ -2535,8 +2535,8 @@ interface DependencyLineage {
 }
 
 interface DependencyLineageRecord {
-  dependentJobId: string;
-  prerequisiteJobId: string;
+  dependentTaskId: string;
+  prerequisiteTaskId: string;
   onSuccess: DependencyTerminalPolicy;
   onFailure: DependencyTerminalPolicy;
   onCancellation: DependencyTerminalPolicy;
@@ -2589,10 +2589,10 @@ type EnqueueDebounce = Debounce;
 
 type EnqueueDependencyOptions = {
   /** @deprecated Use `dependencies` with one prerequisite and explicit terminal policies. */
-  prerequisiteJobId: string;
+  prerequisiteTaskId: string;
   dependencies?: never;
 } | {
-  prerequisiteJobId?: never;
+  prerequisiteTaskId?: never;
   /** Bounded fan-in and the terminal outcomes accepted from each prerequisite. */
   dependencies?: Dependencies;
 };
@@ -2604,7 +2604,7 @@ interface EnqueueIdempotencyConflictDetails {
   keyPreview: string;
   keyDigest: string;
   keyLength: number;
-  existingJobId: string;
+  existingTaskId: string;
   ordinal: number;
   conflictingFields: EnqueueIdempotencyConflictField[];
   storedRequestDigest: string;
@@ -2618,14 +2618,14 @@ class EnqueueIdempotencyConflictError extends WorkhorseError {
   get keyPreview(): string;
   get keyDigest(): string;
   get keyLength(): number;
-  get existingJobId(): string;
+  get existingTaskId(): string;
   get ordinal(): number;
   get conflictingFields(): EnqueueIdempotencyConflictField[];
   get storedRequestDigest(): string;
   get rejectedRequestDigest(): string;
 }
 
-type EnqueueIdempotencyConflictField = "queue" | "type" | "payload" | "priority" | "concurrencyKey" | "contractVersion" | "payloadMaxBytes" | "resultMaxBytes" | "sensitivePayloadKeys" | "sensitiveResultKeys" | "tags" | "runAt" | "deadline" | "executionTimeoutMs" | "maxAttempts" | "retryPolicy" | "prerequisiteJobId" | "dependencies" | "ttlMs";
+type EnqueueIdempotencyConflictField = "queue" | "type" | "payload" | "priority" | "concurrencyKey" | "contractVersion" | "payloadMaxBytes" | "resultMaxBytes" | "sensitivePayloadKeys" | "sensitiveResultKeys" | "tags" | "runAt" | "deadline" | "executionTimeoutMs" | "maxAttempts" | "retryPolicy" | "prerequisiteTaskId" | "dependencies" | "ttlMs";
 
 type EnqueueNonReplaceableReason = "incompatible_key_mode" | "not_pending" | "window_elapsed_pending";
 
@@ -2635,17 +2635,17 @@ type EnqueueOptions = EnqueueBaseOptions & ((EnqueueDependencyOptions & {
   throttle?: never;
 }) | {
   idempotency?: never;
-  /** Replace one still-pending keyed job during a PostgreSQL-owned window. */
+  /** Replace one still-pending keyed task during a PostgreSQL-owned window. */
   debounce: Debounce;
   throttle?: never;
-  prerequisiteJobId?: never;
+  prerequisiteTaskId?: never;
   dependencies?: never;
 } | {
   idempotency?: never;
   debounce?: never;
-  /** Accept at most one equivalent job per PostgreSQL-owned window. */
+  /** Accept at most one equivalent task per PostgreSQL-owned window. */
   throttle: Throttle;
-  prerequisiteJobId?: never;
+  prerequisiteTaskId?: never;
   dependencies?: never;
 });
 
@@ -2659,11 +2659,11 @@ interface EnqueueRequest<TPayload extends Json = Json> {
 }
 
 type EnqueueResult = {
-  jobId: string;
+  taskId: string;
   outcome: Exclude<EnqueueOutcome, "non_replaceable">;
   reason?: never;
 } | {
-  jobId: string;
+  taskId: string;
   outcome: "non_replaceable";
   reason: EnqueueNonReplaceableReason;
 };
@@ -2671,9 +2671,9 @@ type EnqueueResult = {
 type EnqueueThrottle = Throttle;
 
 class ExecutionTimeoutError extends WorkhorseError {
-  readonly jobId: string;
+  readonly taskId: string;
   readonly attempt: number;
-  constructor(jobId: string, attempt: number);
+  constructor(taskId: string, attempt: number);
 }
 
 type ExpireOwnedStatus = "not_due" | "cancel_requested" | "deadline_exceeded" | "timeout_exceeded" | "stale";
@@ -2681,7 +2681,7 @@ type ExpireOwnedStatus = "not_due" | "cancel_requested" | "deadline_exceeded" | 
 interface ExternalWaitCursor {
   /** Exact PostgreSQL UTC timestamp text. Treat as opaque continuation state. */
   createdAt: string;
-  jobId: string;
+  taskId: string;
   name: string;
 }
 
@@ -2692,8 +2692,8 @@ interface ExternalWaitDeliveryRequest {
 
 interface ExternalWaitIdentity {
   name: string;
-  jobId: string;
-  jobType: string;
+  taskId: string;
+  taskType: string;
   queue: string;
   deadlineAt: string;
 }
@@ -2701,7 +2701,7 @@ interface ExternalWaitIdentity {
 type ExternalWaitListOptions = ExternalWaitQuery;
 
 interface ExternalWaitOptions {
-  /** Fail the job if the boundary remains unanswered for this many milliseconds. */
+  /** Fail the task if the boundary remains unanswered for this many milliseconds. */
   timeoutMs?: number;
 }
 
@@ -2713,9 +2713,9 @@ interface ExternalWaitQuery {
 }
 
 interface ExternalWaitRecord {
-  jobId: string;
+  taskId: string;
   queue: string;
-  jobType: string;
+  taskType: string;
   name: string;
   attempt: number;
   createdAt: Date;
@@ -2729,35 +2729,35 @@ const HEALTH_HISTORY_SCAN_LIMIT = 100000;
 type Handler<TPayload extends Json = Json, TResult extends Json = Json> = (payload: TPayload, context: HandlerContext<TPayload>) => Promise<TResult> | TResult;
 
 interface HandlerContext<TPayload extends Json = Json> {
-  job: ClaimedJob<TPayload>;
+  task: ClaimedTask<TPayload>;
   signal: AbortSignal;
   /** Read a previously persisted restart boundary without executing user code. */
-  getCheckpoint<TValue extends Json = Json>(name: string): Promise<JobCheckpoint<TValue> | null>;
+  getCheckpoint<TValue extends Json = Json>(name: string): Promise<TaskCheckpoint<TValue> | null>;
   /** Read an immutable named durable wait from the current handler activation's snapshot. */
-  getWait(name: string): Promise<JobWait | null>;
+  getWait(name: string): Promise<TaskWait | null>;
   /** Read the latest mutable progress observed by this handler activation. */
-  getProgress<TValue extends Json = Json>(): Promise<JobProgress<TValue> | null>;
+  getProgress<TValue extends Json = Json>(): Promise<TaskProgress<TValue> | null>;
   /** Replace the latest mutable progress under the current fenced lease. */
-  setProgress<TValue extends Json>(value: TValue): Promise<JobProgress<TValue>>;
+  setProgress<TValue extends Json>(value: TValue): Promise<TaskProgress<TValue>>;
   /**
   * Return the persisted value when this name already exists. Otherwise run the operation and
   * immutably persist its JSON result under the current fenced lease.
   */
   checkpoint<TValue extends Json>(name: string, operation: () => Promise<TValue> | TValue): Promise<TValue>;
-  /** Suspend this job without consuming its logical attempt until the relative timer is due. */
+  /** Suspend this task without consuming its logical attempt until the relative timer is due. */
   sleep(name: string, durationMs: number): Promise<void>;
-  /** Suspend this job without consuming its logical attempt until the absolute target is due. */
+  /** Suspend this task without consuming its logical attempt until the absolute target is due. */
   sleepUntil(name: string, wakeAt: Date): Promise<void>;
   /** Suspend until one idempotent external delivery supplies this named signal payload. */
   waitForSignal<TPayload extends Json = Json>(name: string, options?: ExternalWaitOptions): Promise<TPayload>;
   /** Suspend until an operator completes this named human decision with a bounded result. */
   waitForHuman<TContext extends Json, TResult extends Json = Json>(name: string, context: TContext, options?: ExternalWaitOptions): Promise<TResult>;
   /** Create or replay one named child and return its retained successful result after resumption. */
-  runChild<TChildPayload extends Json, TResult extends Json = Json>(name: string, type: string, payload: TChildPayload, options?: ChildJobOptions): Promise<TResult>;
+  runChild<TChildPayload extends Json, TResult extends Json = Json>(name: string, type: string, payload: TChildPayload, options?: ChildTaskOptions): Promise<TResult>;
   /** Create or replay a bounded named child set and return every terminal outcome by name. */
-  runChildren<TResult extends Record<string, Json> = Record<string, Json>>(children: readonly ChildJobRequest[]): Promise<ChildOutcomes<TResult>>;
+  runChildren<TResult extends Record<string, Json> = Record<string, Json>>(children: readonly ChildTaskRequest[]): Promise<ChildOutcomes<TResult>>;
   /** Join a bounded child set only when every child succeeds. */
-  runChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(children: readonly ChildJobRequest[]): Promise<TResult>;
+  runChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(children: readonly ChildTaskRequest[]): Promise<TResult>;
 }
 
 type HeartbeatStatus = "accepted" | "cancel_requested" | "deadline_exceeded" | "timeout_exceeded" | "stale";
@@ -2767,14 +2767,14 @@ interface HumanWait<TContext extends Json = Json> extends ExternalWaitRecord {
 }
 
 class HumanWaitAlreadyWaitingError extends WorkhorseError {
-  readonly jobId: string;
+  readonly taskId: string;
   readonly waitName: string;
-  constructor(jobId: string, waitName: string);
+  constructor(taskId: string, waitName: string);
 }
 
 interface HumanWaitCompletionResult<TResult extends Json = Json> {
   status: HumanWaitCompletionStatus;
-  jobId: string;
+  taskId: string;
   name: string;
   payload: TResult | null;
   completedAt: Date | null;
@@ -2784,26 +2784,26 @@ interface HumanWaitCompletionResult<TResult extends Json = Json> {
 type HumanWaitCompletionStatus = "completed" | "duplicate" | "not_waiting" | "already_completed" | "stale" | "not_found";
 
 class HumanWaitConflictError extends WorkhorseError {
-  readonly jobId: string;
+  readonly taskId: string;
   readonly waitName: string;
-  constructor(jobId: string, waitName: string);
+  constructor(taskId: string, waitName: string);
 }
 
 class HumanWaitIdempotencyConflictError extends WorkhorseError {
-  readonly jobId: string;
+  readonly taskId: string;
   readonly waitName: string;
-  constructor(jobId: string, waitName: string);
+  constructor(taskId: string, waitName: string);
 }
 
 class HumanWaitLeaseLostError extends WorkhorseError {
-  readonly jobId: string;
+  readonly taskId: string;
   readonly waitName: string;
-  constructor(jobId: string, waitName: string);
+  constructor(taskId: string, waitName: string);
 }
 
 class HumanWaitLimitExceededError extends WorkhorseError {
-  readonly jobId: string;
-  constructor(jobId: string);
+  readonly taskId: string;
+  constructor(taskId: string);
 }
 
 interface HumanWaitPage<TContext extends Json = Json> {
@@ -2833,246 +2833,6 @@ interface IdempotencyDescription {
 }
 
 type IdempotencyEvidence = DashboardIdempotencyEvidence;
-
-type JobAttemptOutcome = "succeeded" | "failed" | "retry" | "lease_expired" | "canceled" | "deadline_exceeded" | "timeout";
-
-interface JobCheckpoint<TValue extends Json = Json> {
-  jobId: string;
-  name: string;
-  value: TValue;
-  /** Attempt that first persisted this checkpoint. */
-  attempt: number;
-  /** Ownership generation that authorized the checkpoint write. */
-  fenceToken: bigint;
-  workerId: string;
-  createdAt: Date;
-}
-
-class JobContractUnavailableError extends WorkhorseError {
-  readonly jobType: string;
-  readonly contractVersion: string;
-  constructor(jobType: string, contractVersion: string);
-}
-
-class JobContractValidationError extends WorkhorseError {
-  readonly jobType: string;
-  readonly contractVersion: string;
-  readonly valueKind: "payload" | "result";
-  constructor(jobType: string, contractVersion: string, valueKind: "payload" | "result");
-}
-
-interface JobContractVersion {
-  payloadSchema?: Json;
-  resultSchema?: Json;
-  maxPayloadBytes?: number;
-  maxResultBytes?: number;
-  /** Top-level object keys removed from operator payload views. */
-  sensitivePayloadKeys?: readonly string[];
-  /** Top-level object keys removed from operator result views. */
-  sensitiveResultKeys?: readonly string[];
-}
-
-type JobDependencies = Dependencies;
-
-interface JobListCursor {
-  /** Exact PostgreSQL timestamp text. Treat as opaque continuation state. */
-  createdAt: string;
-  jobId: string;
-  signature: string;
-}
-
-interface JobListFilter {
-  queue?: string;
-  type?: string;
-  states?: JobState[];
-  createdAfter?: Date;
-  createdBefore?: Date;
-}
-
-interface JobListItem {
-  id: string;
-  queue: string;
-  type: string;
-  concurrencyKey: string | null;
-  priority: number;
-  tags: string[];
-  state: JobState;
-  prerequisiteJobId: string | null;
-  prerequisiteJobIds: string[];
-  dependencyPolicy: Omit<Dependencies, "prerequisiteJobIds"> | null;
-  blockedReason: "prerequisite_pending" | null;
-  parentJobId: string | null;
-  childJobIds: string[];
-  currentAttempt: number;
-  maxAttempts: number;
-  retryPolicy: RetryPolicy | null;
-  deadlineAt: Date | null;
-  executionTimeoutMs: number | null;
-  runAt: Date;
-  cancelRequestedAt: Date | null;
-  /** Caller-provided attribution only. This does not claim that the caller was authorized. */
-  cancelRequestedBy: string | null;
-  cancelReason: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-  payload: Json | null;
-  payloadStatus: JobPayloadStatus;
-  payloadBytes: number | null;
-}
-
-interface JobListPage {
-  items: JobListItem[];
-  nextCursor: JobListCursor | null;
-}
-
-interface JobListQuery extends JobListFilter {
-  limit?: number;
-  cursor?: JobListCursor;
-  payload?: JobPayloadProjection;
-}
-
-interface JobNotificationSubscription {
-  isListening?(): boolean;
-  close(): Promise<void>;
-}
-
-interface JobPayloadProjection {
-  include?: boolean;
-  maxBytes?: number;
-  redactKeys?: string[];
-}
-
-type JobPayloadStatus = "omitted" | "included" | "too_large";
-
-interface JobProgress<TValue extends Json = Json> {
-  jobId: string;
-  value: TValue;
-  /** Monotonic accepted-change revision for this job. */
-  revision: bigint;
-  /** Attempt that wrote the latest value. */
-  attempt: number;
-  /** Ownership generation that authorized the latest value. */
-  fenceToken: bigint;
-  workerId: string;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-interface JobSnapshot<TResult extends Json = Json> {
-  id: string;
-  queue: string;
-  type: string;
-  concurrencyKey: string | null;
-  priority: number;
-  payload: Json;
-  contractVersion: string | null;
-  tags: string[];
-  state: JobState;
-  prerequisiteJobId: string | null;
-  prerequisiteJobIds: string[];
-  dependencyPolicy: Omit<Dependencies, "prerequisiteJobIds"> | null;
-  blockedReason: "prerequisite_pending" | null;
-  parentJobId: string | null;
-  childJobIds: string[];
-  currentAttempt: number;
-  maxAttempts: number;
-  retryPolicy: RetryPolicy | null;
-  deadlineAt: Date | null;
-  executionTimeoutMs: number | null;
-  /** Current ownership generation, or zero before the first claim. */
-  fenceToken: bigint;
-  runAt: Date;
-  result: TResult | null;
-  error: Json | null;
-  cancelRequestedAt: Date | null;
-  /** Caller-provided attribution only. This does not claim that the caller was authorized. */
-  cancelRequestedBy: string | null;
-  cancelReason: string | null;
-  /** Latest bounded mutable progress, retained across retries and terminal materialization. */
-  progress: JobProgress | null;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-type JobState = "blocked" | "scheduled" | "ready" | "active" | "succeeded" | "failed" | "canceled";
-
-interface JobTimelineAttempt extends JobTimelineEntryBase {
-  kind: "attempt";
-  attempt: number;
-  fenceToken: bigint;
-  workerId: string;
-  outcome: JobAttemptOutcome;
-  startedAt: Date;
-  claimedAt: Date;
-  finishedAt: Date;
-  error: Json | null;
-}
-
-interface JobTimelineCursor {
-  jobId: string;
-  /** Exact PostgreSQL timestamp text. Treat as opaque continuation state. */
-  occurredAt: string;
-  kind: "event" | "attempt";
-  /** UUIDv7 historical record identity. Treat as opaque continuation state. */
-  recordId: string;
-}
-
-type JobTimelineEntry = JobTimelineEvent | JobTimelineAttempt;
-
-interface JobTimelineEntryBase {
-  recordId: string;
-  priority: number;
-  attempt: number | null;
-  occurredAt: Date;
-}
-
-interface JobTimelineEvent extends JobTimelineEntryBase {
-  kind: "event";
-  eventType: string;
-  details: Json;
-}
-
-interface JobTimelinePage {
-  /** Merged events and attempts ordered latest-first. */
-  items: JobTimelineEntry[];
-  nextCursor: JobTimelineCursor | null;
-}
-
-interface JobTimelineQuery {
-  limit?: number;
-  cursor?: JobTimelineCursor;
-}
-
-interface JobTypeContracts {
-  currentVersion: string;
-  versions: Readonly<Record<string, JobContractVersion>>;
-}
-
-class JobValueSizeLimitError extends WorkhorseError {
-  readonly jobType: string;
-  readonly valueKind: "payload" | "result";
-  readonly actualBytes: number;
-  readonly maxBytes: number;
-  constructor(jobType: string, valueKind: "payload" | "result", actualBytes: number, maxBytes: number);
-}
-
-interface JobWait {
-  jobId: string;
-  name: string;
-  mode: "relative" | "absolute";
-  /** First committed relative duration. Later relative arguments for this name are ignored. */
-  durationMs: number | null;
-  /** Exact caller target for an absolute wait, or null for a relative wait. */
-  requestedWakeAt: Date | null;
-  /** PostgreSQL-computed durable target used by promotion. */
-  wakeAt: Date;
-  /** Logical attempt that first persisted this wait. */
-  attempt: number;
-  /** Ownership generation that authorized the first write. */
-  fenceToken: bigint;
-  workerId: string;
-  createdAt: Date;
-}
 
 type Json = null | boolean | number | string | Json[] | {
   [key: string]: Json;
@@ -3114,7 +2874,7 @@ const MAX_ENQUEUE_BATCH_SIZE = 1000;
 
 const MAX_EXECUTION_TIMEOUT_MS = 31536000000;
 
-const MAX_EXTERNAL_WAITS_PER_JOB = 1000;
+const MAX_EXTERNAL_WAITS_PER_TASK = 1000;
 
 const MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS = 200;
 
@@ -3134,27 +2894,27 @@ const MAX_IDEMPOTENCY_SCOPE_BYTES = 256;
 
 const MAX_IDEMPOTENCY_TTL_MS = 31536000000;
 
-const MAX_JOB_CONTRACT_SENSITIVE_KEYS = 50;
-
-const MAX_JOB_DEPENDENCIES = 100;
-
-const MAX_JOB_DEPENDENTS = 100;
-
-const MAX_JOB_PRIORITY = 100;
-
-const MAX_JOB_QUERY_PAGE_SIZE = 1000;
-
-const MAX_JOB_QUERY_PAYLOAD_BYTES = 1048576;
-
-const MAX_JOB_QUERY_REDACT_KEYS = 50;
-
-const MAX_JOB_VALUE_MAX_BYTES = 16777216;
-
 const MAX_PROGRESS_VALUE_BYTES = 65536;
 
 const MAX_REDRIVE_BATCH_SIZE = 1000;
 
 const MAX_REDRIVE_REQUEST_ID_BYTES = 512;
+
+const MAX_TASK_CONTRACT_SENSITIVE_KEYS = 50;
+
+const MAX_TASK_DEPENDENCIES = 100;
+
+const MAX_TASK_DEPENDENTS = 100;
+
+const MAX_TASK_PRIORITY = 100;
+
+const MAX_TASK_QUERY_PAGE_SIZE = 1000;
+
+const MAX_TASK_QUERY_PAYLOAD_BYTES = 1048576;
+
+const MAX_TASK_QUERY_REDACT_KEYS = 50;
+
+const MAX_TASK_VALUE_MAX_BYTES = 16777216;
 
 const MAX_THROTTLE_WINDOW_MS = 31536000000;
 
@@ -3176,7 +2936,7 @@ const MIN_PROGRESS_UPDATE_INTERVAL_MS = 100;
 
 type MaintenanceLoopCadences = DashboardMaintenanceLoopCadences;
 
-type MaintenancePhase = "promote" | "recover" | "history_partitions" | "stat_rollup" | "stat_retention" | "event_retention" | "attempt_retention" | "schedule_occurrences" | "enqueue_idempotency" | "released_dependencies" | "terminal_jobs";
+type MaintenancePhase = "promote" | "recover" | "history_partitions" | "stat_rollup" | "stat_retention" | "event_retention" | "attempt_retention" | "schedule_occurrences" | "enqueue_idempotency" | "released_dependencies" | "terminal_tasks";
 
 interface MaintenancePhaseResult {
   phase: MaintenancePhase;
@@ -3211,7 +2971,7 @@ interface MaintenancePolicyDefinition {
   * at the current rollup watermark.
   */
   statisticsRollupIntervalMs?: number;
-  /** Distinct (queue, job type) groups kept per statistics bucket before folding into overflow. */
+  /** Distinct (queue, task type) groups kept per statistics bucket before folding into overflow. */
   statisticsGroupLimit?: number;
   /** Closed minutes re-derived behind the rollup watermark to absorb late-committing history. */
   statisticsRecomputeBuckets?: number;
@@ -3283,13 +3043,13 @@ class PrismaQueryError extends QueryError {
 }
 
 class ProgressLeaseLostError extends WorkhorseError {
-  constructor(jobId: string);
+  constructor(taskId: string);
 }
 
 class ProgressRateLimitError extends WorkhorseError {
-  readonly jobId: string;
+  readonly taskId: string;
   readonly retryAfterMs: number;
-  constructor(jobId: string, retryAfterMs: number);
+  constructor(taskId: string, retryAfterMs: number);
 }
 
 interface ProviderAdapterDefinition<TExecutor> extends ProviderAdapterOptions {
@@ -3442,36 +3202,36 @@ class Queue {
   schedules(namespaces: readonly string[]): Promise<StoredSchedule[]>;
   fireSchedule(namespace: string, name: string, revision: bigint, occurrenceAt: Date): Promise<string | null>;
   fireDueSchedules(namespaces: readonly string[], now: Date, catchupLimit: number): Promise<void>;
-  cancel(jobId: string, request?: CancellationRequest): Promise<CancelResult>;
+  cancel(taskId: string, request?: CancellationRequest): Promise<CancelResult>;
   claim<TPayload extends Json = Json>(workerId: string, options?: {
     queue?: string;
     leaseMs?: number;
-  }): Promise<ClaimedJob<TPayload> | null>;
+  }): Promise<ClaimedTask<TPayload> | null>;
   claimMany<TPayload extends Json = Json>(workerId: string, limit: number, options?: {
     queue?: string;
     leaseMs?: number;
-  }): Promise<ClaimedJob<TPayload>[]>;
-  heartbeat(job: ClaimedJob, workerId: string, leaseMs?: number): Promise<boolean>;
-  heartbeatStatus(job: ClaimedJob, workerId: string, leaseMs?: number): Promise<HeartbeatStatus>;
-  expireOwned(job: ClaimedJob, workerId: string): Promise<ExpireOwnedStatus>;
-  acknowledgeCancel(job: ClaimedJob, workerId: string): Promise<boolean>;
-  [workerCheckpointsRead]<TValue extends Json = Json>(jobId: string): Promise<JobCheckpoint<TValue>[]>;
-  saveCheckpoint<TValue extends Json>(job: ClaimedJob, workerId: string, name: string, value: TValue): Promise<JobCheckpoint<TValue>>;
-  [workerProgressRead]<TValue extends Json = Json>(jobId: string): Promise<JobProgress<TValue> | null>;
-  updateProgress<TValue extends Json>(job: ClaimedJob, workerId: string, value: TValue): Promise<JobProgress<TValue>>;
-  [workerWaitsRead](jobId: string): Promise<JobWait[]>;
-  scheduleWait(job: ClaimedJob, workerId: string, name: string, request: ScheduleWaitRequest): Promise<ScheduleWaitResult>;
-  waitForSignal<TPayload extends Json = Json>(job: ClaimedJob, workerId: string, name: string, options?: ExternalWaitOptions): Promise<WaitForSignalResult<TPayload>>;
-  sendSignal<TPayload extends Json>(jobId: string, name: string, payload: TPayload, request: SendSignalRequest): Promise<SignalDeliveryResult<TPayload>>;
-  waitForHuman<TContext extends Json, TResult extends Json = Json>(job: ClaimedJob, workerId: string, name: string, context: TContext, options?: ExternalWaitOptions): Promise<WaitForHumanResult<TResult>>;
-  completeHumanWait<TResult extends Json>(jobId: string, name: string, result: TResult, request: CompleteHumanWaitRequest): Promise<HumanWaitCompletionResult<TResult>>;
-  createChild<TPayload extends Json, TResult extends Json = Json>(parent: ClaimedJob, workerId: string, name: string, type: string, payload: TPayload, options?: ChildJobOptions): Promise<CreateChildResult<TResult>>;
-  createChildren<TResult extends Record<string, Json> = Record<string, Json>>(parent: ClaimedJob, workerId: string, children: readonly ChildJobRequest[]): Promise<CreateChildrenResult<ChildOutcomes<TResult>>>;
-  createChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(parent: ClaimedJob, workerId: string, children: readonly ChildJobRequest[]): Promise<CreateChildrenResult<TResult>>;
-  complete<TResult extends Json>(job: ClaimedJob, workerId: string, result: TResult): Promise<boolean>;
+  }): Promise<ClaimedTask<TPayload>[]>;
+  heartbeat(task: ClaimedTask, workerId: string, leaseMs?: number): Promise<boolean>;
+  heartbeatStatus(task: ClaimedTask, workerId: string, leaseMs?: number): Promise<HeartbeatStatus>;
+  expireOwned(task: ClaimedTask, workerId: string): Promise<ExpireOwnedStatus>;
+  acknowledgeCancel(task: ClaimedTask, workerId: string): Promise<boolean>;
+  [workerCheckpointsRead]<TValue extends Json = Json>(taskId: string): Promise<TaskCheckpoint<TValue>[]>;
+  saveCheckpoint<TValue extends Json>(task: ClaimedTask, workerId: string, name: string, value: TValue): Promise<TaskCheckpoint<TValue>>;
+  [workerProgressRead]<TValue extends Json = Json>(taskId: string): Promise<TaskProgress<TValue> | null>;
+  updateProgress<TValue extends Json>(task: ClaimedTask, workerId: string, value: TValue): Promise<TaskProgress<TValue>>;
+  [workerWaitsRead](taskId: string): Promise<TaskWait[]>;
+  scheduleWait(task: ClaimedTask, workerId: string, name: string, request: ScheduleWaitRequest): Promise<ScheduleWaitResult>;
+  waitForSignal<TPayload extends Json = Json>(task: ClaimedTask, workerId: string, name: string, options?: ExternalWaitOptions): Promise<WaitForSignalResult<TPayload>>;
+  sendSignal<TPayload extends Json>(taskId: string, name: string, payload: TPayload, request: SendSignalRequest): Promise<SignalDeliveryResult<TPayload>>;
+  waitForHuman<TContext extends Json, TResult extends Json = Json>(task: ClaimedTask, workerId: string, name: string, context: TContext, options?: ExternalWaitOptions): Promise<WaitForHumanResult<TResult>>;
+  completeHumanWait<TResult extends Json>(taskId: string, name: string, result: TResult, request: CompleteHumanWaitRequest): Promise<HumanWaitCompletionResult<TResult>>;
+  createChild<TPayload extends Json, TResult extends Json = Json>(parent: ClaimedTask, workerId: string, name: string, type: string, payload: TPayload, options?: ChildTaskOptions): Promise<CreateChildResult<TResult>>;
+  createChildren<TResult extends Record<string, Json> = Record<string, Json>>(parent: ClaimedTask, workerId: string, children: readonly ChildTaskRequest[]): Promise<CreateChildrenResult<ChildOutcomes<TResult>>>;
+  createChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(parent: ClaimedTask, workerId: string, children: readonly ChildTaskRequest[]): Promise<CreateChildrenResult<TResult>>;
+  complete<TResult extends Json>(task: ClaimedTask, workerId: string, result: TResult): Promise<boolean>;
   /** Seed immutable JSON Schema contracts and the application-selected current versions. */
   syncContracts(): Promise<void>;
-  fail(job: ClaimedJob, workerId: string, error: unknown, retryDelayMs?: number): Promise<"ready" | "scheduled" | "failed" | "cancel_requested" | "deadline_exceeded" | "timeout_exceeded" | "stale">;
+  fail(task: ClaimedTask, workerId: string, error: unknown, retryDelayMs?: number): Promise<"ready" | "scheduled" | "failed" | "cancel_requested" | "deadline_exceeded" | "timeout_exceeded" | "stale">;
   recoverExpired(limit?: number, retryDelayMs?: number): Promise<number>;
   health(): Promise<QueueHealth>;
   /** Read the per-queue live pressure used by OpenTelemetry observable instruments. */
@@ -3492,7 +3252,7 @@ interface QueueHealth {
   budgets: QueueHealthBudgets;
   /** Canonical schema protocol version installed in this database. */
   schemaVersion: number | null;
-  counts: Record<JobState, number>;
+  counts: Record<TaskState, number>;
   /**
   * True when terminal counts hit the bounded history scan cap and are lower bounds.
   * Live-state counts are always exact; only succeeded, failed, and canceled can cap.
@@ -3501,7 +3261,7 @@ interface QueueHealth {
   readyDepth: number;
   scheduledDepth: number;
   /** Scheduled runtimes currently suspended at a named durable timer boundary. */
-  sleepingJobs: number;
+  sleepingTasks: number;
   /** Durable timer runtimes whose not-before target has passed but remain unpromoted. */
   overdueWaits: number;
   /** Earliest not-before target among currently suspended durable timers. */
@@ -3510,7 +3270,7 @@ interface QueueHealth {
   expiredLeases: number;
   /** Dependency pressure and retained policy-selected failure outcomes. */
   dependencies: {
-    blockedJobs: number;
+    blockedTasks: number;
     pendingEdges: number;
     failedResolutions: number;
     /** The last terminal prune deleted nothing while its candidate window contained dependency pins. */
@@ -3528,7 +3288,7 @@ interface QueueHealth {
     /** True when at least one value is a lower bound at the operations scan limit. */
     capped: boolean;
   };
-  /** Bounded signal and human-decision lifecycle diagnostics without job or wait-name labels. */
+  /** Bounded signal and human-decision lifecycle diagnostics without task or wait-name labels. */
   externalWaits: {
     pendingSignals: number;
     pendingHumanDecisions: number;
@@ -3599,16 +3359,16 @@ interface QueueHealth {
   /** Oldest retained timestamp used to compute category lag. */
   oldestRetainedAt: RetentionCategoryValues<Date | null>;
   eligibleHistoryPartitions: {
-    jobEvents: number;
+    taskEvents: number;
     attemptHistory: number;
   };
   defaultHistoryRows: {
-    jobEvents: number;
+    taskEvents: number;
     attemptHistory: number;
   };
   /** True when the corresponding fallback-row count hit the 10,001-row health scan cap. */
   defaultHistoryRowsCapped: {
-    jobEvents: boolean;
+    taskEvents: boolean;
     attemptHistory: boolean;
   };
   /**
@@ -3619,7 +3379,7 @@ interface QueueHealth {
     /** UTC day in `YYYYMMDD` form, matching the partition name suffix. */
     day: string;
     startsAt: Date;
-    hasJobEvents: boolean;
+    hasTaskEvents: boolean;
     hasAttemptHistory: boolean;
   }>;
   /** Budget evaluation of this snapshot. Budgets are caller-overridable per call. */
@@ -3719,7 +3479,7 @@ interface QueueMetricSource {
 }
 
 interface QueueOptions {
-  contracts?: Readonly<Record<string, JobTypeContracts>>;
+  contracts?: Readonly<Record<string, TaskTypeContracts>>;
   defaultMaxPayloadBytes?: number;
   defaultMaxResultBytes?: number;
 }
@@ -3727,7 +3487,7 @@ interface QueueOptions {
 type QueueRateLimitPolicy = Awaited<ReturnType<Queue["health"]>>["rateLimitPolicies"]["policies"][number];
 
 interface RateLimit {
-  /** Tokens added during each interval. One token admits one job start. */
+  /** Tokens added during each interval. One token admits one task start. */
   limit: number;
   intervalMs: number;
   /** Maximum tokens retained after idle time. */
@@ -3763,8 +3523,8 @@ interface RedriveBatchDescription extends RedriveOutcomeDescription {
 }
 
 interface RedriveIdempotencyConflictDetails {
-  sourceJobId: string;
-  existingTargetJobId: string;
+  sourceTaskId: string;
+  existingTargetTaskId: string;
   requestIdPreview: string;
   requestIdDigest: string;
   requestIdLength: number;
@@ -3786,8 +3546,8 @@ interface RedriveLineage {
 }
 
 interface RedriveLineageRecord {
-  sourceJobId: string;
-  targetJobId: string;
+  sourceTaskId: string;
+  targetTaskId: string;
   requestedBy: string;
   reason: string;
   requestIdPreview: string;
@@ -3815,16 +3575,16 @@ interface RedriveRequest {
 
 interface RedriveResult {
   status: RedriveStatus;
-  sourceJobId: string;
-  targetJobId: string | null;
-  sourceState: JobState | null;
-  targetState: JobState | null;
+  sourceTaskId: string;
+  targetTaskId: string | null;
+  sourceState: TaskState | null;
+  targetState: TaskState | null;
   requestedAt: Date | null;
 }
 
 interface RedriveSelection {
   queue: string | null;
-  jobType: string | null;
+  taskType: string | null;
   tags: string[];
   /** What the request would select, as one phrase naming every filter it applies. */
   selected: string;
@@ -3841,9 +3601,9 @@ interface RenderDashboardHtmlOptions {
 }
 
 interface RetentionCategoryValues<T> {
-  jobIdentity: T;
+  taskIdentity: T;
   terminalOutcome: T;
-  jobEvents: T;
+  taskEvents: T;
   attemptHistory: T;
   scheduleOccurrences: T;
   statistics: T;
@@ -3851,13 +3611,13 @@ interface RetentionCategoryValues<T> {
 
 interface RetentionPolicy extends Required<RetentionPolicyDefinition> {
   provenance: {
-    jobIdentityRetentionDays: PolicyValueProvenance<number | null>;
+    taskIdentityRetentionDays: PolicyValueProvenance<number | null>;
     terminalOutcomeRetentionDays: PolicyValueProvenance<number | null>;
-    jobEventRetentionDays: PolicyValueProvenance<number | null>;
+    taskEventRetentionDays: PolicyValueProvenance<number | null>;
     attemptHistoryRetentionDays: PolicyValueProvenance<number | null>;
     scheduleOccurrenceRetentionDays: PolicyValueProvenance<number | null>;
     statisticsRetentionDays: PolicyValueProvenance<number | null>;
-    terminalJobPruneLimit: PolicyValueProvenance<number>;
+    terminalTaskPruneLimit: PolicyValueProvenance<number>;
     historyPartitionsPerPass: PolicyValueProvenance<number>;
     defaultPartitionRowsPerPass: PolicyValueProvenance<number>;
     occurrenceRowsPerPass: PolicyValueProvenance<number>;
@@ -3867,20 +3627,20 @@ interface RetentionPolicy extends Required<RetentionPolicyDefinition> {
 }
 
 interface RetentionPolicyDefinition {
-  jobIdentityRetentionDays: number | null;
+  taskIdentityRetentionDays: number | null;
   terminalOutcomeRetentionDays: number | null;
-  jobEventRetentionDays: number | null;
+  taskEventRetentionDays: number | null;
   attemptHistoryRetentionDays: number | null;
   scheduleOccurrenceRetentionDays: number | null;
   /**
   * How long derived per-minute statistics are kept.
   *
-  * Deliberately independent of every window above rather than bounded by job identity. A bucket
-  * summarizes jobs, it does not attribute one, so keeping aggregates long after the history they
+  * Deliberately independent of every window above rather than bounded by task identity. A bucket
+  * summarizes tasks, it does not attribute one, so keeping aggregates long after the history they
   * came from has been deleted is the intended use rather than a violation. Null keeps them forever.
   */
   statisticsRetentionDays: number | null;
-  terminalJobPruneLimit?: number;
+  terminalTaskPruneLimit?: number;
   historyPartitionsPerPass?: number;
   defaultPartitionRowsPerPass?: number;
   occurrenceRowsPerPass?: number;
@@ -3889,15 +3649,15 @@ interface RetentionPolicyDefinition {
 
 interface RetentionPolicyImpact {
   eligible: {
-    terminalJobs: number;
-    jobEvents: number;
+    terminalTasks: number;
+    taskEvents: number;
     attemptHistory: number;
     scheduleOccurrences: number;
     statistics: number;
   };
   capped: {
-    terminalJobs: boolean;
-    jobEvents: boolean;
+    terminalTasks: boolean;
+    taskEvents: boolean;
     attemptHistory: boolean;
     scheduleOccurrences: boolean;
     statistics: boolean;
@@ -3937,7 +3697,7 @@ interface RunNowOutcomeDescription {
 
 interface RunTaskNowResult {
   status: RunTaskNowStatus;
-  jobId: string;
+  taskId: string;
   state: string | null;
   runAt: Date | null;
 }
@@ -3970,10 +3730,10 @@ interface ScheduleDefinition {
   /** IANA timezone used to interpret cron wall-clock fields. */
   timezone?: string;
   enabled?: boolean;
-  job: ScheduledJob;
+  task: ScheduledTask;
 }
 
-type ScheduleJobDefinition = ScheduledJob;
+type ScheduleTaskDefinition = ScheduledTask;
 
 type ScheduleWaitRequest = {
   durationMs: number;
@@ -3985,10 +3745,10 @@ type ScheduleWaitRequest = {
 
 interface ScheduleWaitResult {
   status: "scheduled" | "elapsed";
-  wait: JobWait;
+  wait: TaskWait;
 }
 
-interface ScheduledJob {
+interface ScheduledTask {
   type: string;
   payload: Json;
   queue?: string;
@@ -4055,7 +3815,7 @@ type SendSignalStatus = SignalDeliveryStatus;
 
 interface SignalDeliveryResult<TPayload extends Json = Json> {
   status: SignalDeliveryStatus;
-  jobId: string;
+  taskId: string;
   name: string;
   payload: TPayload | null;
   deliveredAt: Date | null;
@@ -4065,28 +3825,28 @@ interface SignalDeliveryResult<TPayload extends Json = Json> {
 type SignalDeliveryStatus = "delivered" | "duplicate" | "not_waiting" | "already_delivered" | "stale" | "not_found";
 
 class SignalIdempotencyConflictError extends WorkhorseError {
-  readonly jobId: string;
+  readonly taskId: string;
   readonly waitName: string;
-  constructor(jobId: string, waitName: string);
+  constructor(taskId: string, waitName: string);
 }
 
 type SignalWait = ExternalWaitRecord;
 
 class SignalWaitConflictError extends WorkhorseError {
-  readonly jobId: string;
+  readonly taskId: string;
   readonly waitName: string;
-  constructor(jobId: string, waitName: string);
+  constructor(taskId: string, waitName: string);
 }
 
 class SignalWaitLeaseLostError extends WorkhorseError {
-  readonly jobId: string;
+  readonly taskId: string;
   readonly waitName: string;
-  constructor(jobId: string, waitName: string);
+  constructor(taskId: string, waitName: string);
 }
 
 class SignalWaitLimitExceededError extends WorkhorseError {
-  readonly jobId: string;
-  constructor(jobId: string);
+  readonly taskId: string;
+  constructor(taskId: string);
 }
 
 interface SignalWaitPage {
@@ -4117,7 +3877,7 @@ interface StoredSchedule {
 
 const TRACE_ATTRIBUTE_COUNT_LIMIT = 8;
 
-type TaskActionTarget = Pick<DashboardJobRow, "id" | "type" | "queue" | "state" | "workerId" | "lastWorkerId" | "cancellation" | "waitName" | "wait" | "humanWait"> & {
+type TaskActionTarget = Pick<DashboardTaskRow, "id" | "type" | "queue" | "state" | "workerId" | "lastWorkerId" | "cancellation" | "waitName" | "wait" | "humanWait"> & {
   payload?: unknown;
 };
 
@@ -4125,13 +3885,110 @@ type TaskActivityGroup = "queue" | "worker" | "task" | "status";
 
 type TaskActivityPeriod = "15m" | "1h" | "6h" | "24h" | "7d";
 
+type TaskAttemptOutcome = "succeeded" | "failed" | "retry" | "lease_expired" | "canceled" | "deadline_exceeded" | "timeout";
+
+interface TaskCheckpoint<TValue extends Json = Json> {
+  taskId: string;
+  name: string;
+  value: TValue;
+  /** Attempt that first persisted this checkpoint. */
+  attempt: number;
+  /** Ownership generation that authorized the checkpoint write. */
+  fenceToken: bigint;
+  workerId: string;
+  createdAt: Date;
+}
+
+class TaskContractUnavailableError extends WorkhorseError {
+  readonly taskType: string;
+  readonly contractVersion: string;
+  constructor(taskType: string, contractVersion: string);
+}
+
+class TaskContractValidationError extends WorkhorseError {
+  readonly taskType: string;
+  readonly contractVersion: string;
+  readonly valueKind: "payload" | "result";
+  constructor(taskType: string, contractVersion: string, valueKind: "payload" | "result");
+}
+
+interface TaskContractVersion {
+  payloadSchema?: Json;
+  resultSchema?: Json;
+  maxPayloadBytes?: number;
+  maxResultBytes?: number;
+  /** Top-level object keys removed from operator payload views. */
+  sensitivePayloadKeys?: readonly string[];
+  /** Top-level object keys removed from operator result views. */
+  sensitiveResultKeys?: readonly string[];
+}
+
+type TaskDependencies = Dependencies;
+
 type TaskDetailNavigation = "push" | "replace";
+
+interface TaskListCursor {
+  /** Exact PostgreSQL timestamp text. Treat as opaque continuation state. */
+  createdAt: string;
+  taskId: string;
+  signature: string;
+}
+
+interface TaskListFilter {
+  queue?: string;
+  type?: string;
+  states?: TaskState[];
+  createdAfter?: Date;
+  createdBefore?: Date;
+}
+
+interface TaskListItem {
+  id: string;
+  queue: string;
+  type: string;
+  concurrencyKey: string | null;
+  priority: number;
+  tags: string[];
+  state: TaskState;
+  prerequisiteTaskId: string | null;
+  prerequisiteTaskIds: string[];
+  dependencyPolicy: Omit<Dependencies, "prerequisiteTaskIds"> | null;
+  blockedReason: "prerequisite_pending" | null;
+  parentTaskId: string | null;
+  childTaskIds: string[];
+  currentAttempt: number;
+  maxAttempts: number;
+  retryPolicy: RetryPolicy | null;
+  deadlineAt: Date | null;
+  executionTimeoutMs: number | null;
+  runAt: Date;
+  cancelRequestedAt: Date | null;
+  /** Caller-provided attribution only. This does not claim that the caller was authorized. */
+  cancelRequestedBy: string | null;
+  cancelReason: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  payload: Json | null;
+  payloadStatus: TaskPayloadStatus;
+  payloadBytes: number | null;
+}
+
+interface TaskListPage {
+  items: TaskListItem[];
+  nextCursor: TaskListCursor | null;
+}
+
+interface TaskListQuery extends TaskListFilter {
+  limit?: number;
+  cursor?: TaskListCursor;
+  payload?: TaskPayloadProjection;
+}
 
 interface TaskLocationState {
   filter: DashboardTaskFilter;
   queue: string | null;
   worker: string | null;
-  jobType: string | null;
+  taskType: string | null;
   sort: DashboardTaskSort;
   tags: string[];
   search: string | null;
@@ -4151,7 +4008,34 @@ interface TaskLocationState {
   taskId: string | null;
 }
 
+interface TaskNotificationSubscription {
+  isListening?(): boolean;
+  close(): Promise<void>;
+}
+
 type TaskPageSize = (typeof taskPageSizes)[number];
+
+interface TaskPayloadProjection {
+  include?: boolean;
+  maxBytes?: number;
+  redactKeys?: string[];
+}
+
+type TaskPayloadStatus = "omitted" | "included" | "too_large";
+
+interface TaskProgress<TValue extends Json = Json> {
+  taskId: string;
+  value: TValue;
+  /** Monotonic accepted-change revision for this task. */
+  revision: bigint;
+  /** Attempt that wrote the latest value. */
+  attempt: number;
+  /** Ownership generation that authorized the latest value. */
+  fenceToken: bigint;
+  workerId: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
 interface TaskResultDescription {
   state: TaskResultState;
@@ -4198,6 +4082,122 @@ interface TaskRowActionGroup {
 }
 
 type TaskRowActionId = "inspect" | "copy-id" | "copy-args" | "filter-type" | "filter-queue" | "filter-worker" | "complete-human-wait" | "run-now" | "redrive" | "cancel";
+
+interface TaskSnapshot<TResult extends Json = Json> {
+  id: string;
+  queue: string;
+  type: string;
+  concurrencyKey: string | null;
+  priority: number;
+  payload: Json;
+  contractVersion: string | null;
+  tags: string[];
+  state: TaskState;
+  prerequisiteTaskId: string | null;
+  prerequisiteTaskIds: string[];
+  dependencyPolicy: Omit<Dependencies, "prerequisiteTaskIds"> | null;
+  blockedReason: "prerequisite_pending" | null;
+  parentTaskId: string | null;
+  childTaskIds: string[];
+  currentAttempt: number;
+  maxAttempts: number;
+  retryPolicy: RetryPolicy | null;
+  deadlineAt: Date | null;
+  executionTimeoutMs: number | null;
+  /** Current ownership generation, or zero before the first claim. */
+  fenceToken: bigint;
+  runAt: Date;
+  result: TResult | null;
+  error: Json | null;
+  cancelRequestedAt: Date | null;
+  /** Caller-provided attribution only. This does not claim that the caller was authorized. */
+  cancelRequestedBy: string | null;
+  cancelReason: string | null;
+  /** Latest bounded mutable progress, retained across retries and terminal materialization. */
+  progress: TaskProgress | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+type TaskState = "blocked" | "scheduled" | "ready" | "active" | "succeeded" | "failed" | "canceled";
+
+interface TaskTimelineAttempt extends TaskTimelineEntryBase {
+  kind: "attempt";
+  attempt: number;
+  fenceToken: bigint;
+  workerId: string;
+  outcome: TaskAttemptOutcome;
+  startedAt: Date;
+  claimedAt: Date;
+  finishedAt: Date;
+  error: Json | null;
+}
+
+interface TaskTimelineCursor {
+  taskId: string;
+  /** Exact PostgreSQL timestamp text. Treat as opaque continuation state. */
+  occurredAt: string;
+  kind: "event" | "attempt";
+  /** UUIDv7 historical record identity. Treat as opaque continuation state. */
+  recordId: string;
+}
+
+type TaskTimelineEntry = TaskTimelineEvent | TaskTimelineAttempt;
+
+interface TaskTimelineEntryBase {
+  recordId: string;
+  priority: number;
+  attempt: number | null;
+  occurredAt: Date;
+}
+
+interface TaskTimelineEvent extends TaskTimelineEntryBase {
+  kind: "event";
+  eventType: string;
+  details: Json;
+}
+
+interface TaskTimelinePage {
+  /** Merged events and attempts ordered latest-first. */
+  items: TaskTimelineEntry[];
+  nextCursor: TaskTimelineCursor | null;
+}
+
+interface TaskTimelineQuery {
+  limit?: number;
+  cursor?: TaskTimelineCursor;
+}
+
+interface TaskTypeContracts {
+  currentVersion: string;
+  versions: Readonly<Record<string, TaskContractVersion>>;
+}
+
+class TaskValueSizeLimitError extends WorkhorseError {
+  readonly taskType: string;
+  readonly valueKind: "payload" | "result";
+  readonly actualBytes: number;
+  readonly maxBytes: number;
+  constructor(taskType: string, valueKind: "payload" | "result", actualBytes: number, maxBytes: number);
+}
+
+interface TaskWait {
+  taskId: string;
+  name: string;
+  mode: "relative" | "absolute";
+  /** First committed relative duration. Later relative arguments for this name are ignored. */
+  durationMs: number | null;
+  /** Exact caller target for an absolute wait, or null for a relative wait. */
+  requestedWakeAt: Date | null;
+  /** PostgreSQL-computed durable target used by promotion. */
+  wakeAt: Date;
+  /** Logical attempt that first persisted this wait. */
+  attempt: number;
+  /** Ownership generation that authorized the first write. */
+  fenceToken: bigint;
+  workerId: string;
+  createdAt: Date;
+}
 
 type TelemetryAttributeValue = string | number | boolean | readonly string[] | readonly number[] | readonly boolean[];
 
@@ -4267,10 +4267,10 @@ const WORKHORSE_SCHEMA_VERSION = 1;
 const WORKHORSE_VERSION = "0.1.3";
 
 class WaitConflictError extends WorkhorseError {
-  readonly jobId: string;
+  readonly taskId: string;
   readonly waitName: string;
-  readonly existing: JobWait;
-  constructor(jobId: string, waitName: string, existing: JobWait);
+  readonly existing: TaskWait;
+  constructor(taskId: string, waitName: string, existing: TaskWait);
 }
 
 interface WaitForHumanResult<TResult extends Json = Json> {
@@ -4288,14 +4288,14 @@ interface WaitForSignalResult<TPayload extends Json = Json> {
 type WaitForSignalStatus = "waiting" | "delivered";
 
 class WaitLeaseLostError extends WorkhorseError {
-  readonly jobId: string;
+  readonly taskId: string;
   readonly waitName: string;
-  constructor(jobId: string, waitName: string);
+  constructor(taskId: string, waitName: string);
 }
 
 class WaitLimitExceededError extends WorkhorseError {
-  readonly jobId: string;
-  constructor(jobId: string);
+  readonly taskId: string;
+  constructor(taskId: string);
 }
 
 class Worker {
@@ -4318,7 +4318,7 @@ class Worker {
   * A local `pause()` call and an operator pause recorded in PostgreSQL are independent. Either one
   * stops claims, and a local `resume()` cannot override an operator pause that is still in effect.
   */
-  /** Stop claiming new jobs while leaving maintenance and any in-flight handler running. */
+  /** Stop claiming new tasks while leaving maintenance and any in-flight handler running. */
   pause(): void;
   /** Resume claims immediately instead of waiting for the previous idle poll deadline. */
   resume(): void;
@@ -4353,7 +4353,7 @@ interface WorkerClientProtocol {
   readonly workers: number;
 }
 
-type WorkerMaintenanceLoop = "tick" | "statistics_rollup" | "background_tasks";
+type WorkerMaintenanceLoop = "tick" | "statistics_rollup" | "background_routines";
 
 interface WorkerMaintenanceTelemetry extends MaintenancePhaseResult {
   loop: WorkerMaintenanceLoop;
@@ -4373,7 +4373,7 @@ interface WorkerOptions {
   * scoped to a running process rather than to this name.
   */
   workerId?: string;
-  /** Maximum number of jobs this worker may execute concurrently. */
+  /** Maximum number of tasks this worker may execute concurrently. */
   concurrency?: number;
   /** Ownership duration granted by claim and every accepted heartbeat. */
   leaseMs?: number;
@@ -4387,11 +4387,11 @@ interface WorkerOptions {
   /** Minimum delay between worker-owned maintenance and recurring schedule passes. */
   maintenanceIntervalMs?: number;
   /**
-  * Minimum delay between checks for database-scheduled background maintenance tasks, including
+  * Minimum delay between checks for database-scheduled background maintenance routines, including
   * the rolling-statistics rollup. Each task's real cadence is maintenance policy read from
   * PostgreSQL; this option only bounds how often this process offers to run them.
   */
-  maintenanceTaskPollMs?: number;
+  maintenanceRoutinePollMs?: number;
   /**
   * Minimum delay between durable worker-registry refreshes.
   *
@@ -4417,9 +4417,9 @@ interface WorkerOptions {
   scheduleNamespaces?: readonly string[];
   /** Maximum missed occurrences fired for one schedule in one maintenance pass. */
   scheduleCatchupLimit?: number;
-  /** Override SQL-owned retry backoff, either fixed or derived from the attempt and claimed job. */
-  /** Return undefined to defer to the job's persisted policy or SQL compatibility default. */
-  retryDelayMs?: number | ((attempt: number, job: ClaimedJob) => number | undefined);
+  /** Override SQL-owned retry backoff, either fixed or derived from the attempt and claimed task. */
+  /** Return undefined to defer to the task's persisted policy or SQL compatibility default. */
+  retryDelayMs?: number | ((attempt: number, task: ClaimedTask) => number | undefined);
 }
 
 interface WorkerPauseResult {
@@ -4474,35 +4474,35 @@ interface WorkerProcessWorkerDefinition {
 
 interface WorkerQueueApi {
   readonly defaultQueue: string;
-  supportsJobNotifications?(): boolean;
-  subscribeToJobNotifications?(queueName: string, wake: () => void, error: (error: unknown) => void): Promise<JobNotificationSubscription | null>;
+  supportsTaskNotifications?(): boolean;
+  subscribeToTaskNotifications?(queueName: string, wake: () => void, error: (error: unknown) => void): Promise<TaskNotificationSubscription | null>;
   claim(workerId: string, options?: {
     queue?: string;
     leaseMs?: number;
-  }): Promise<ClaimedJob | null>;
+  }): Promise<ClaimedTask | null>;
   claimMany?(workerId: string, limit: number, options?: {
     queue?: string;
     leaseMs?: number;
-  }): Promise<ClaimedJob[]>;
+  }): Promise<ClaimedTask[]>;
   recordBatchDispatch?(batch: BatchExecutionRecord): Promise<void>;
   recordBatchFailure?(batch: BatchExecutionRecord): Promise<void>;
-  heartbeatStatus(job: ClaimedJob, workerId: string, leaseMs?: number): Promise<HeartbeatStatus>;
-  heartbeatMany?(jobs: readonly ClaimedJob[], workerId: string, leaseMs?: number): Promise<Map<string, HeartbeatStatus>>;
-  expireOwned(job: ClaimedJob, workerId: string): Promise<ExpireOwnedStatus>;
-  acknowledgeCancel(job: ClaimedJob, workerId: string): Promise<boolean>;
-  listCheckpoints(jobId: string): Promise<JobCheckpoint[]>;
-  saveCheckpoint<TValue extends Json>(job: ClaimedJob, workerId: string, name: string, value: TValue): Promise<JobCheckpoint<TValue>>;
-  getProgress(jobId: string): Promise<JobProgress | null>;
-  updateProgress<TValue extends Json>(job: ClaimedJob, workerId: string, value: TValue): Promise<JobProgress<TValue>>;
-  listWaits(jobId: string): Promise<JobWait[]>;
-  scheduleWait(job: ClaimedJob, workerId: string, name: string, request: ScheduleWaitRequest): Promise<ScheduleWaitResult>;
-  waitForSignal<TPayload extends Json = Json>(job: ClaimedJob, workerId: string, name: string, options?: ExternalWaitOptions): Promise<WaitForSignalResult<TPayload>>;
-  waitForHuman<TContext extends Json, TResult extends Json = Json>(job: ClaimedJob, workerId: string, name: string, context: TContext, options?: ExternalWaitOptions): Promise<import("./queue/human-waits.js").WaitForHumanResult<TResult>>;
-  createChild<TPayload extends Json, TResult extends Json = Json>(parent: ClaimedJob, workerId: string, name: string, type: string, payload: TPayload, options?: ChildJobOptions): Promise<CreateChildResult<TResult>>;
-  createChildren<TResult extends Record<string, Json> = Record<string, Json>>(parent: ClaimedJob, workerId: string, children: readonly ChildJobRequest[]): Promise<CreateChildrenResult<ChildOutcomes<TResult>>>;
-  createChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(parent: ClaimedJob, workerId: string, children: readonly ChildJobRequest[]): Promise<CreateChildrenResult<TResult>>;
-  complete<TResult extends Json>(job: ClaimedJob, workerId: string, result: TResult): Promise<boolean>;
-  fail(job: ClaimedJob, workerId: string, error: unknown, retryDelayMs?: number): Promise<FailureStatus>;
+  heartbeatStatus(task: ClaimedTask, workerId: string, leaseMs?: number): Promise<HeartbeatStatus>;
+  heartbeatMany?(tasks: readonly ClaimedTask[], workerId: string, leaseMs?: number): Promise<Map<string, HeartbeatStatus>>;
+  expireOwned(task: ClaimedTask, workerId: string): Promise<ExpireOwnedStatus>;
+  acknowledgeCancel(task: ClaimedTask, workerId: string): Promise<boolean>;
+  listCheckpoints(taskId: string): Promise<TaskCheckpoint[]>;
+  saveCheckpoint<TValue extends Json>(task: ClaimedTask, workerId: string, name: string, value: TValue): Promise<TaskCheckpoint<TValue>>;
+  getProgress(taskId: string): Promise<TaskProgress | null>;
+  updateProgress<TValue extends Json>(task: ClaimedTask, workerId: string, value: TValue): Promise<TaskProgress<TValue>>;
+  listWaits(taskId: string): Promise<TaskWait[]>;
+  scheduleWait(task: ClaimedTask, workerId: string, name: string, request: ScheduleWaitRequest): Promise<ScheduleWaitResult>;
+  waitForSignal<TPayload extends Json = Json>(task: ClaimedTask, workerId: string, name: string, options?: ExternalWaitOptions): Promise<WaitForSignalResult<TPayload>>;
+  waitForHuman<TContext extends Json, TResult extends Json = Json>(task: ClaimedTask, workerId: string, name: string, context: TContext, options?: ExternalWaitOptions): Promise<import("./queue/human-waits.js").WaitForHumanResult<TResult>>;
+  createChild<TPayload extends Json, TResult extends Json = Json>(parent: ClaimedTask, workerId: string, name: string, type: string, payload: TPayload, options?: ChildTaskOptions): Promise<CreateChildResult<TResult>>;
+  createChildren<TResult extends Record<string, Json> = Record<string, Json>>(parent: ClaimedTask, workerId: string, children: readonly ChildTaskRequest[]): Promise<CreateChildrenResult<ChildOutcomes<TResult>>>;
+  createChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(parent: ClaimedTask, workerId: string, children: readonly ChildTaskRequest[]): Promise<CreateChildrenResult<TResult>>;
+  complete<TResult extends Json>(task: ClaimedTask, workerId: string, result: TResult): Promise<boolean>;
+  fail(task: ClaimedTask, workerId: string, error: unknown, retryDelayMs?: number): Promise<FailureStatus>;
   tick(options?: {
     promoteLimit?: number;
     recoverLimit?: number;
@@ -4544,7 +4544,7 @@ interface WorkerRegistration {
   heartbeatMs?: number;
   pollMs?: number;
   maintenanceIntervalMs?: number;
-  maintenanceTaskPollMs?: number;
+  maintenanceRoutinePollMs?: number;
   registryIntervalMs?: number;
   activeSlots: number;
   draining: boolean;
@@ -4600,7 +4600,7 @@ class WorkhorseError extends Error {
   constructor(message: string, options?: ErrorOptions);
 }
 
-type WorkhorseLogEvent = "workhorse.handler.batch_dispatched" | "workhorse.handler.batch_evidence_failed" | "workhorse.handler.finished" | "workhorse.handler.registered" | "workhorse.handler.signal_swallowed" | "workhorse.handler.started" | "workhorse.job.cancellation_acknowledged" | "workhorse.job.cancellation_processed" | "workhorse.job.checkpoint_saved" | "workhorse.job.child_processed" | "workhorse.job.debounce_rejected" | "workhorse.job.debounced" | "workhorse.job.claimed" | "workhorse.job.completed" | "workhorse.job.completion_rejected" | "workhorse.job.enqueue_replayed" | "workhorse.job.enqueued" | "workhorse.job.throttled" | "workhorse.job.execution_finished" | "workhorse.job.failure_processed" | "workhorse.job.heartbeat_accepted" | "workhorse.job.heartbeat_rejected" | "workhorse.job.ownership_expired" | "workhorse.job.progress_updated" | "workhorse.job.redrive_processed" | "workhorse.job.run_now_requested" | "workhorse.job.signal_processed" | "workhorse.job.human_wait_processed" | "workhorse.job.wait_processed" | "workhorse.jobs.promoted" | "workhorse.jobs.redrive_processed" | "workhorse.leases.recovered" | "workhorse.maintenance.completed" | "workhorse.maintenance_policy.synchronized" | "workhorse.queue.paused" | "workhorse.queue.purged" | "workhorse.queue.resumed" | "workhorse.retention_policy.synchronized" | "workhorse.schedule.fire_replayed" | "workhorse.schedule.fired" | "workhorse.schedules.synchronized" | "workhorse.worker.deregistered" | "workhorse.worker.paused" | "workhorse.worker.registered" | "workhorse.worker.registration_failed" | "workhorse.worker.resumed" | "workhorse.worker.started" | "workhorse.worker.stop_requested" | "workhorse.worker.stopped" | "workhorse.worker_registry.pruned";
+type WorkhorseLogEvent = "workhorse.handler.batch_dispatched" | "workhorse.handler.batch_evidence_failed" | "workhorse.handler.finished" | "workhorse.handler.registered" | "workhorse.handler.signal_swallowed" | "workhorse.handler.started" | "workhorse.task.cancellation_acknowledged" | "workhorse.task.cancellation_processed" | "workhorse.task.checkpoint_saved" | "workhorse.task.child_processed" | "workhorse.task.debounce_rejected" | "workhorse.task.debounced" | "workhorse.task.claimed" | "workhorse.task.completed" | "workhorse.task.completion_rejected" | "workhorse.task.enqueue_replayed" | "workhorse.task.enqueued" | "workhorse.task.throttled" | "workhorse.task.execution_finished" | "workhorse.task.failure_processed" | "workhorse.task.heartbeat_accepted" | "workhorse.task.heartbeat_rejected" | "workhorse.task.ownership_expired" | "workhorse.task.progress_updated" | "workhorse.task.redrive_processed" | "workhorse.task.run_now_requested" | "workhorse.task.signal_processed" | "workhorse.task.human_wait_processed" | "workhorse.task.wait_processed" | "workhorse.tasks.promoted" | "workhorse.tasks.redrive_processed" | "workhorse.leases.recovered" | "workhorse.maintenance.completed" | "workhorse.maintenance_policy.synchronized" | "workhorse.queue.paused" | "workhorse.queue.purged" | "workhorse.queue.resumed" | "workhorse.retention_policy.synchronized" | "workhorse.schedule.fire_replayed" | "workhorse.schedule.fired" | "workhorse.schedules.synchronized" | "workhorse.worker.deregistered" | "workhorse.worker.paused" | "workhorse.worker.registered" | "workhorse.worker.registration_failed" | "workhorse.worker.resumed" | "workhorse.worker.started" | "workhorse.worker.stop_requested" | "workhorse.worker.stopped" | "workhorse.worker_registry.pruned";
 
 class WorkhorseMetricsObserver {
   constructor(database: Queryable, options?: {
@@ -4687,13 +4687,11 @@ const dashboardDemoFeatureExamples: ReadonlyArray<{
   label: string;
 }>;
 
-const dashboardDemoJobKinds: CompleteDashboardOptions<DashboardDemoJobKind, typeof demoJobKinds>;
-
 const dashboardDemoScenarios: CompleteDashboardOptions<DashboardDemoScenario, typeof demoScenarios>;
 
-const dashboardIdempotencyEventDetailKeys: readonly string[];
+const dashboardDemoTaskKinds: CompleteDashboardOptions<DashboardDemoTaskKind, typeof demoTaskKinds>;
 
-const dashboardJobEventTypes: readonly ["enqueued", "debounced", "debounce_rejected", "throttled", "claimed", "batch_dispatched", "batch_failed", "succeeded", "failed", "retry_scheduled", "canceled", "cancel_requested", "promoted", "lease_expired", "deadline_exceeded", "execution_timed_out", "redriven", "redrive_created", "checkpoint_saved", "progress_updated", "wait_scheduled", "wait_elapsed", "wait_replayed", "signal_waiting", "signal_received", "signal_replayed", "signal_rejected", "dependency_blocked", "dependency_released", "dependency_failed", "dependency_canceled", "child_created", "child_joined", "children_created", "children_joined", "parent_linked", "human_wait_created", "human_wait_completed", "human_wait_replayed", "human_wait_rejected"];
+const dashboardIdempotencyEventDetailKeys: readonly string[];
 
 function dashboardNodeMiddleware(host: DashboardHost, options?: DashboardNodeMiddlewareOptions): DashboardNodeMiddleware;
 
@@ -4729,7 +4727,7 @@ const dashboardRouter: {
       queue: z.ZodDefault<z.ZodNullable<z.ZodString>>;
       page: z.ZodDefault<z.ZodNumber>;
       worker: z.ZodDefault<z.ZodNullable<z.ZodString>>;
-      jobType: z.ZodDefault<z.ZodNullable<z.ZodString>>;
+      taskType: z.ZodDefault<z.ZodNullable<z.ZodString>>;
       priority: z.ZodDefault<z.ZodNullable<z.ZodNumber>>;
       sort: z.ZodDefault<z.ZodEnum<{
         priority: "priority";
@@ -4756,7 +4754,7 @@ const dashboardRouter: {
         completed: "completed";
         discarded: "discarded";
       }>>;
-      jobType: z.ZodDefault<z.ZodNullable<z.ZodString>>;
+      taskType: z.ZodDefault<z.ZodNullable<z.ZodString>>;
       sort: z.ZodDefault<z.ZodEnum<{
         priority: "priority";
         updated: "updated";
@@ -4823,7 +4821,7 @@ const dashboardRouter: {
         event: "event";
       }>>;
       queue: z.ZodDefault<z.ZodNullable<z.ZodString>>;
-      jobType: z.ZodDefault<z.ZodNullable<z.ZodString>>;
+      taskType: z.ZodDefault<z.ZodNullable<z.ZodString>>;
       worker: z.ZodDefault<z.ZodNullable<z.ZodString>>;
       search: z.ZodDefault<z.ZodNullable<z.ZodString>>;
       types: z.ZodDefault<z.ZodArray<z.ZodEnum<{
@@ -4870,7 +4868,7 @@ const dashboardRouter: {
         retry: "retry";
         timeout: "timeout";
       }>>>;
-      jobId: z.ZodDefault<z.ZodNullable<z.ZodUUID>>;
+      taskId: z.ZodDefault<z.ZodNullable<z.ZodUUID>>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardEventsPage, import("../wire.js").DashboardEventsPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     eventDetail: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
       id: z.ZodString;
@@ -4888,22 +4886,22 @@ const dashboardRouter: {
     settings: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardSettingsPage, import("../wire.js").DashboardSettingsPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     previewRetentionPolicy: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
       definition: z.ZodObject<{
-        jobIdentityRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
+        taskIdentityRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
         terminalOutcomeRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
-        jobEventRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
+        taskEventRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
         attemptHistoryRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
         scheduleOccurrenceRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
         statisticsRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
-        terminalJobPruneLimit: z.ZodOptional<z.ZodNumber>;
+        terminalTaskPruneLimit: z.ZodOptional<z.ZodNumber>;
         historyPartitionsPerPass: z.ZodOptional<z.ZodNumber>;
         defaultPartitionRowsPerPass: z.ZodOptional<z.ZodNumber>;
         occurrenceRowsPerPass: z.ZodOptional<z.ZodNumber>;
         statisticsRowsPerPass: z.ZodOptional<z.ZodNumber>;
       }, z.core.$strip>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("@stablemates/workhorse").RetentionPolicyImpact, import("@stablemates/workhorse").RetentionPolicyImpact>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    jobDetail: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    taskDetail: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
       id: z.ZodUUID;
-    }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardJobDetail, import("../wire.js").DashboardJobDetail>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
+    }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardTaskDetail, import("../wire.js").DashboardTaskDetail>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     humanWaits: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardHumanWaitPage, import("../wire.js").DashboardHumanWaitPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     enqueueTest: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
       kind: z.ZodEnum<{
@@ -4931,7 +4929,7 @@ const dashboardRouter: {
         progress: "progress";
         "timing-controls": "timing-controls";
         "dead-letters-redrive": "dead-letters-redrive";
-        "job-dependencies": "job-dependencies";
+        "task-dependencies": "task-dependencies";
         "child-workflows": "child-workflows";
         signals: "signals";
         "human-decisions": "human-decisions";
@@ -5035,13 +5033,13 @@ const dashboardRouter: {
     }, z.core.$strip>, import("@orpc/server").Schema<void, void>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     overrideRetentionPolicy: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
       definition: z.ZodObject<{
-        jobIdentityRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
+        taskIdentityRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
         terminalOutcomeRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
-        jobEventRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
+        taskEventRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
         attemptHistoryRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
         scheduleOccurrenceRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
         statisticsRetentionDays: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
-        terminalJobPruneLimit: z.ZodOptional<z.ZodNumber>;
+        terminalTaskPruneLimit: z.ZodOptional<z.ZodNumber>;
         historyPartitionsPerPass: z.ZodOptional<z.ZodNumber>;
         defaultPartitionRowsPerPass: z.ZodOptional<z.ZodNumber>;
         occurrenceRowsPerPass: z.ZodOptional<z.ZodNumber>;
@@ -5055,13 +5053,13 @@ const dashboardRouter: {
     }, z.core.$strip>, import("@orpc/server").Schema<void, void>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     revertRetentionPolicy: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
       settings: z.ZodArray<z.ZodEnum<{
-        jobIdentityRetentionDays: "jobIdentityRetentionDays";
+        taskIdentityRetentionDays: "taskIdentityRetentionDays";
         terminalOutcomeRetentionDays: "terminalOutcomeRetentionDays";
-        jobEventRetentionDays: "jobEventRetentionDays";
+        taskEventRetentionDays: "taskEventRetentionDays";
         attemptHistoryRetentionDays: "attemptHistoryRetentionDays";
         scheduleOccurrenceRetentionDays: "scheduleOccurrenceRetentionDays";
         statisticsRetentionDays: "statisticsRetentionDays";
-        terminalJobPruneLimit: "terminalJobPruneLimit";
+        terminalTaskPruneLimit: "terminalTaskPruneLimit";
         historyPartitionsPerPass: "historyPartitionsPerPass";
         defaultPartitionRowsPerPass: "defaultPartitionRowsPerPass";
         occurrenceRowsPerPass: "occurrenceRowsPerPass";
@@ -5139,12 +5137,12 @@ const dashboardRouter: {
     */
     redriveDeadLetters: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
       queue: z.ZodDefault<z.ZodNullable<z.ZodString>>;
-      jobType: z.ZodDefault<z.ZodNullable<z.ZodString>>;
+      taskType: z.ZodDefault<z.ZodNullable<z.ZodString>>;
       tags: z.ZodDefault<z.ZodArray<z.ZodString>>;
       limit: z.ZodDefault<z.ZodNumber>;
       cursor: z.ZodDefault<z.ZodNullable<z.ZodObject<{
         finishedAt: z.ZodISODateTime;
-        jobId: z.ZodUUID;
+        taskId: z.ZodUUID;
       }, z.core.$strip>>>;
       audit: z.ZodObject<{
         actor: z.ZodString;
@@ -5173,6 +5171,8 @@ const dashboardRuntimeConfigSchema: z.ZodObject<{
   workspace: z.ZodNullable<z.ZodString>;
 }, z.core.$strict>;
 
+const dashboardTaskEventTypes: readonly ["enqueued", "debounced", "debounce_rejected", "throttled", "claimed", "batch_dispatched", "batch_failed", "succeeded", "failed", "retry_scheduled", "canceled", "cancel_requested", "promoted", "lease_expired", "deadline_exceeded", "execution_timed_out", "redriven", "redrive_created", "checkpoint_saved", "progress_updated", "wait_scheduled", "wait_elapsed", "wait_replayed", "signal_waiting", "signal_received", "signal_replayed", "signal_rejected", "dependency_blocked", "dependency_released", "dependency_failed", "dependency_canceled", "child_created", "child_joined", "children_created", "children_joined", "parent_linked", "human_wait_created", "human_wait_completed", "human_wait_replayed", "human_wait_rejected"];
+
 const dashboardTaskFilters: readonly ["all", "blocked", "waiting", "scheduled", "retried", "queued", "running", "completed", "discarded", "canceled"];
 
 const dashboardTaskPriorityMax = 100;
@@ -5183,9 +5183,9 @@ function databaseErrorCode(error: unknown): string | undefined;
 
 function defineWorkerProcess<TTransaction = unknown>(definition: WorkerProcessDefinition<TTransaction>): WorkerProcessDefinition<TTransaction>;
 
-const demoJobKinds: readonly ["success", "retry", "durable", "timer", "failure", "idempotent", "long-running", "redrive", "feature"];
-
 const demoScenarios: readonly ["order-fulfillment", "customer-onboarding", "report-publication"];
+
+const demoTaskKinds: readonly ["success", "retry", "durable", "timer", "failure", "idempotent", "long-running", "redrive", "feature"];
 
 function describeCancelOutcome(status: DashboardCancelStatus, context?: {
   state?: string | null;
@@ -5214,7 +5214,7 @@ function describeRedriveOutcome(status: DashboardRedriveStatus, context?: {
 function describeRedriveSelection(view: {
   filter: DashboardTaskFilter;
   queue: string | null;
-  jobType: string | null;
+  taskType: string | null;
   worker: string | null;
   priority: number | null;
   search: string | null;
@@ -5365,7 +5365,7 @@ function taskLocationHref(state: TaskLocationState): string;
 
 const taskPageSizes: readonly [25, 50, 100];
 
-function taskRowActionGroups(job: TaskActionTarget, capabilities?: TaskRowActionCapabilities): TaskRowActionGroup[];
+function taskRowActionGroups(task: TaskActionTarget, capabilities?: TaskRowActionCapabilities): TaskRowActionGroup[];
 
 function typeOrmQueryable(executor: TypeOrmExecutor, notificationPool?: AdapterNotificationPool): Queryable;
 

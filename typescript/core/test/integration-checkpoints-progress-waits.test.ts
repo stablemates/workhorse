@@ -33,41 +33,41 @@ afterAll(() => {
 describe("checkpoints progress waits", () => {
   it("persists immutable checkpoints with ownership provenance", async () => {
     const id = await queue.enqueue("checkpointed", { orderId: "order-1" });
-    const job = await queue.claim("worker-a");
+    const task = await queue.claim("worker-a");
 
-    const saved = await queue.saveCheckpoint(job!, "worker-a", "payment-authorized", {
+    const saved = await queue.saveCheckpoint(task!, "worker-a", "payment-authorized", {
       authorizationId: "auth-1",
     });
     expect(saved).toMatchObject({
-      jobId: id,
+      taskId: id,
       name: "payment-authorized",
       value: { authorizationId: "auth-1" },
       attempt: 1,
-      fenceToken: job!.fenceToken,
+      fenceToken: task!.fenceToken,
       workerId: "worker-a",
     });
     await expect(admin.getCheckpoint(id, "payment-authorized")).resolves.toEqual(saved);
     await expect(
-      queue.saveCheckpoint(job!, "worker-a", "nullable-result", null),
+      queue.saveCheckpoint(task!, "worker-a", "nullable-result", null),
     ).resolves.toMatchObject({
       name: "nullable-result",
       value: null,
     });
 
-    const repeated = await queue.saveCheckpoint(job!, "worker-a", "payment-authorized", {
+    const repeated = await queue.saveCheckpoint(task!, "worker-a", "payment-authorized", {
       authorizationId: "auth-1",
     });
     expect(repeated).toEqual(saved);
     await expect(
-      queue.saveCheckpoint(job!, "worker-a", "payment-authorized", {
+      queue.saveCheckpoint(task!, "worker-a", "payment-authorized", {
         authorizationId: "auth-2",
       }),
     ).rejects.toThrow(/different value/);
 
-    expect(await queue.complete(job!, "worker-a", { ok: true })).toBe(true);
+    expect(await queue.complete(task!, "worker-a", { ok: true })).toBe(true);
     await expect(admin.getCheckpoint(id, "payment-authorized")).resolves.toEqual(saved);
     const events = await pool.query<{ event_type: string }>(
-      "SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY occurred_at, event_id",
+      "SELECT event_type FROM workhorse.task_event WHERE task_id = $1 ORDER BY occurred_at, event_id",
       [id],
     );
     expect(events.rows.map((row) => row.event_type)).toEqual([
@@ -81,10 +81,10 @@ describe("checkpoints progress waits", () => {
 
   it("bounds checkpoint values before durable writes", async () => {
     const id = await queue.enqueue("checkpoint-size", {});
-    const job = await queue.claim("worker-a");
+    const task = await queue.claim("worker-a");
 
     await expect(
-      queue.saveCheckpoint(job!, "worker-a", "oversized", {
+      queue.saveCheckpoint(task!, "worker-a", "oversized", {
         data: "x".repeat(MAX_CHECKPOINT_VALUE_BYTES + 1),
       }),
     ).rejects.toThrow(/at most 1048576 bytes/);
@@ -93,7 +93,7 @@ describe("checkpoints progress waits", () => {
         `SELECT * FROM workhorse.save_checkpoint_v1(
           $1, $2, $3, 'oversized-sql', to_jsonb(repeat('x', $4))
         )`,
-        [id, "worker-a", job!.fenceToken.toString(), MAX_CHECKPOINT_VALUE_BYTES + 1],
+        [id, "worker-a", task!.fenceToken.toString(), MAX_CHECKPOINT_VALUE_BYTES + 1],
       ),
     ).rejects.toThrow(/at most 1048576 bytes/);
     await expect(admin.getCheckpoint(id, "oversized")).resolves.toBeNull();
@@ -118,15 +118,15 @@ describe("checkpoints progress waits", () => {
 
   it("serializes checkpoint writes against a concurrent retry transition", async () => {
     const id = await queue.enqueue("checkpoint-race", {}, { maxAttempts: 2 });
-    const job = await queue.claim("worker-a");
+    const task = await queue.claim("worker-a");
     const transition = await pool.connect();
 
     try {
       await transition.query("BEGIN");
-      await transition.query("SELECT 1 FROM workhorse.job_runtime WHERE job_id = $1 FOR UPDATE", [
+      await transition.query("SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", [
         id,
       ]);
-      const saving = queue.saveCheckpoint(job!, "worker-a", "racing-step", { persisted: true });
+      const saving = queue.saveCheckpoint(task!, "worker-a", "racing-step", { persisted: true });
       const rejection = saving.then(
         () => null,
         (error: unknown) => error,
@@ -135,7 +135,7 @@ describe("checkpoints progress waits", () => {
       await transition.query("SELECT workhorse.fail_v1($1, $2, $3, $4::jsonb, 0) AS state", [
         id,
         "worker-a",
-        job!.fenceToken.toString(),
+        task!.fenceToken.toString(),
         JSON.stringify({ message: "retry" }),
       ]);
       await transition.query("COMMIT");
@@ -145,7 +145,7 @@ describe("checkpoints progress waits", () => {
         message: expect.stringMatching(/lease is stale or expired/),
       });
       await expect(admin.getCheckpoint(id, "racing-step")).resolves.toBeNull();
-      await expect(admin.getJob(id)).resolves.toMatchObject({ state: "ready", currentAttempt: 2 });
+      await expect(admin.getTask(id)).resolves.toMatchObject({ state: "ready", currentAttempt: 2 });
     } finally {
       await transition.query("ROLLBACK").catch(() => undefined);
       transition.release();
@@ -154,16 +154,16 @@ describe("checkpoints progress waits", () => {
 
   it("serializes checkpoint writes against concurrent terminal completion", async () => {
     const id = await queue.enqueue("checkpoint-complete-race", {});
-    const job = await queue.claim("worker-a");
+    const task = await queue.claim("worker-a");
     const transition = await pool.connect();
 
     try {
       await transition.query("BEGIN");
-      await transition.query("SELECT 1 FROM workhorse.job_runtime WHERE job_id = $1 FOR UPDATE", [
+      await transition.query("SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", [
         id,
       ]);
       const rejection = queue
-        .saveCheckpoint(job!, "worker-a", "too-late", { persisted: true })
+        .saveCheckpoint(task!, "worker-a", "too-late", { persisted: true })
         .then(
           () => null,
           (error: unknown) => error,
@@ -172,14 +172,14 @@ describe("checkpoints progress waits", () => {
       await transition.query("SELECT workhorse.complete_v1($1, $2, $3, $4::jsonb) AS accepted", [
         id,
         "worker-a",
-        job!.fenceToken.toString(),
+        task!.fenceToken.toString(),
         JSON.stringify({ completed: true }),
       ]);
       await transition.query("COMMIT");
 
       await expect(rejection).resolves.toMatchObject({ name: "CheckpointLeaseLostError" });
       await expect(admin.getCheckpoint(id, "too-late")).resolves.toBeNull();
-      await expect(admin.getJob(id)).resolves.toMatchObject({
+      await expect(admin.getTask(id)).resolves.toMatchObject({
         state: "succeeded",
         result: { completed: true },
       });
@@ -191,25 +191,27 @@ describe("checkpoints progress waits", () => {
 
   it("retains checkpoints after terminal failure", async () => {
     const id = await queue.enqueue("checkpoint-failure", {}, { maxAttempts: 1 });
-    const job = await queue.claim("worker-a");
-    const checkpoint = await queue.saveCheckpoint(job!, "worker-a", "before-failure", {
+    const task = await queue.claim("worker-a");
+    const checkpoint = await queue.saveCheckpoint(task!, "worker-a", "before-failure", {
       prepared: true,
     });
 
-    expect(await queue.fail(job!, "worker-a", new Error("terminal"))).toBe("failed");
+    expect(await queue.fail(task!, "worker-a", new Error("terminal"))).toBe("failed");
     await expect(admin.getCheckpoint(id, "before-failure")).resolves.toEqual(checkpoint);
-    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "failed" });
+    await expect(admin.getTask(id)).resolves.toMatchObject({ state: "failed" });
   });
 
   it("rechecks checkpoint lease expiry after waiting for the runtime lock", async () => {
     const id = await queue.enqueue("checkpoint-lock-expiry", {});
-    const job = await queue.claim("worker-a", { leaseMs: 100 });
+    const task = await queue.claim("worker-a", { leaseMs: 100 });
     const blocker = await pool.connect();
 
     try {
       await blocker.query("BEGIN");
-      await blocker.query("SELECT 1 FROM workhorse.job_runtime WHERE job_id = $1 FOR UPDATE", [id]);
-      const saving = queue.saveCheckpoint(job!, "worker-a", "expired-while-waiting", {
+      await blocker.query("SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", [
+        id,
+      ]);
+      const saving = queue.saveCheckpoint(task!, "worker-a", "expired-while-waiting", {
         persisted: true,
       });
       const rejection = saving.then(
@@ -224,7 +226,7 @@ describe("checkpoints progress waits", () => {
         message: expect.stringMatching(/lease is stale or expired/),
       });
       await expect(admin.getCheckpoint(id, "expired-while-waiting")).resolves.toBeNull();
-      await expect(admin.getJob(id)).resolves.toMatchObject({ state: "active" });
+      await expect(admin.getTask(id)).resolves.toMatchObject({ state: "active" });
     } finally {
       await blocker.query("ROLLBACK").catch(() => undefined);
       blocker.release();
@@ -233,25 +235,25 @@ describe("checkpoints progress waits", () => {
 
   it("updates bounded mutable progress with fenced provenance and lookup visibility", async () => {
     const id = await queue.enqueue("progress", { batch: "import-1" });
-    const job = await queue.claim("progress-worker");
+    const task = await queue.claim("progress-worker");
 
-    const first = await queue.updateProgress(job!, "progress-worker", {
+    const first = await queue.updateProgress(task!, "progress-worker", {
       completed: 2,
       total: 10,
       phase: "reading",
     });
     expect(first).toMatchObject({
-      jobId: id,
+      taskId: id,
       value: { completed: 2, total: 10, phase: "reading" },
       revision: 1n,
       attempt: 1,
-      fenceToken: job!.fenceToken,
+      fenceToken: task!.fenceToken,
       workerId: "progress-worker",
     });
     await expect(admin.getProgress(id)).resolves.toEqual(first);
-    await expect(admin.getJob(id)).resolves.toMatchObject({ progress: first });
+    await expect(admin.getTask(id)).resolves.toMatchObject({ progress: first });
 
-    const unchanged = await queue.updateProgress(job!, "progress-worker", {
+    const unchanged = await queue.updateProgress(task!, "progress-worker", {
       completed: 2,
       total: 10,
       phase: "reading",
@@ -263,19 +265,19 @@ describe("checkpoints progress waits", () => {
     // four round trips ago, which is what let a loaded runner spend the whole window before the
     // call under test and see the update accepted.
     await pool.query(
-      `UPDATE workhorse.job_progress SET updated_at = clock_timestamp() WHERE job_id = $1`,
+      `UPDATE workhorse.task_progress SET updated_at = clock_timestamp() WHERE task_id = $1`,
       [id],
     );
     await expect(
-      queue.updateProgress(job!, "progress-worker", { completed: 3, total: 10 }),
+      queue.updateProgress(task!, "progress-worker", { completed: 3, total: 10 }),
     ).rejects.toMatchObject({
       name: "ProgressRateLimitError",
-      jobId: id,
+      taskId: id,
       retryAfterMs: expect.any(Number),
     });
 
     await sleep(110);
-    const second = await queue.updateProgress(job!, "progress-worker", {
+    const second = await queue.updateProgress(task!, "progress-worker", {
       completed: 3,
       total: 10,
       phase: "writing",
@@ -284,11 +286,14 @@ describe("checkpoints progress waits", () => {
     expect(second.createdAt).toEqual(first.createdAt);
     expect(second.updatedAt.getTime()).toBeGreaterThan(first.updatedAt.getTime());
 
-    expect(await queue.complete(job!, "progress-worker", { imported: 10 })).toBe(true);
-    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "succeeded", progress: second });
+    expect(await queue.complete(task!, "progress-worker", { imported: 10 })).toBe(true);
+    await expect(admin.getTask(id)).resolves.toMatchObject({
+      state: "succeeded",
+      progress: second,
+    });
     const events = await pool.query<{ event_type: string; details: Record<string, unknown> }>(
-      `SELECT event_type, details FROM workhorse.job_event
-        WHERE job_id = $1 AND event_type = 'progress_updated' ORDER BY occurred_at, event_id`,
+      `SELECT event_type, details FROM workhorse.task_event
+        WHERE task_id = $1 AND event_type = 'progress_updated' ORDER BY occurred_at, event_id`,
       [id],
     );
     expect(events.rows).toEqual([
@@ -319,14 +324,16 @@ describe("checkpoints progress waits", () => {
 
   it("rechecks progress lease expiry after waiting for the runtime lock", async () => {
     const id = await queue.enqueue("progress-lock-expiry", {});
-    const job = await queue.claim("progress-lock-worker", { leaseMs: 100 });
+    const task = await queue.claim("progress-lock-worker", { leaseMs: 100 });
     const blocker = await pool.connect();
 
     try {
       await blocker.query("BEGIN");
-      await blocker.query("SELECT 1 FROM workhorse.job_runtime WHERE job_id = $1 FOR UPDATE", [id]);
+      await blocker.query("SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", [
+        id,
+      ]);
       const updating = queue
-        .updateProgress(job!, "progress-lock-worker", { shouldNotPersist: true })
+        .updateProgress(task!, "progress-lock-worker", { shouldNotPersist: true })
         .then(
           () => null,
           (error: unknown) => error,
@@ -358,9 +365,9 @@ describe("checkpoints progress waits", () => {
     expect(await worker.runOnce()).toBe(true);
     expect(observed).toEqual([
       null,
-      expect.objectContaining({ jobId: id, value: { percent: 50, label: "halfway" } }),
+      expect.objectContaining({ taskId: id, value: { percent: 50, label: "halfway" } }),
     ]);
-    await expect(admin.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getTask(id)).resolves.toMatchObject({
       state: "succeeded",
       result: { revision: "1" },
       progress: { value: { percent: 50, label: "halfway" } },
@@ -369,29 +376,29 @@ describe("checkpoints progress waits", () => {
 
   it("schedules the first named wait with immutable ownership provenance", async () => {
     const id = await queue.enqueue("wait-first", {});
-    const job = await queue.claim("wait-worker", { leaseMs: 10_000 });
+    const task = await queue.claim("wait-worker", { leaseMs: 10_000 });
     const active = await pool.query<{ attempt_started_at: Date; acquired_at: Date }>(
       `SELECT attempt_started_at, acquired_at
-         FROM workhorse.job_runtime
-        WHERE job_id = $1`,
+         FROM workhorse.task_runtime
+        WHERE task_id = $1`,
       [id],
     );
     const before = Date.now();
 
-    const result = await queue.scheduleWait(job!, "wait-worker", "provider-cooldown", {
+    const result = await queue.scheduleWait(task!, "wait-worker", "provider-cooldown", {
       durationMs: 5_000,
     });
     const after = Date.now();
 
     expect(result.status).toBe("scheduled");
     expect(result.wait).toMatchObject({
-      jobId: id,
+      taskId: id,
       name: "provider-cooldown",
       mode: "relative",
       durationMs: 5_000,
       requestedWakeAt: null,
       attempt: 1,
-      fenceToken: job!.fenceToken,
+      fenceToken: task!.fenceToken,
       workerId: "wait-worker",
     });
     expect(result.wait.wakeAt.getTime()).toBeGreaterThanOrEqual(before + 5_000);
@@ -411,8 +418,8 @@ describe("checkpoints progress waits", () => {
     }>(
       `SELECT state, run_at, current_attempt, fence_token::text, worker_id, expires_at,
               wait_name, attempt_started_at
-         FROM workhorse.job_runtime
-        WHERE job_id = $1`,
+         FROM workhorse.task_runtime
+        WHERE task_id = $1`,
       [id],
     );
     expect(runtime.rows[0]).toEqual({
@@ -429,13 +436,13 @@ describe("checkpoints progress waits", () => {
     expect(
       (
         await pool.query(
-          "SELECT count(*)::integer AS count FROM workhorse.attempt_history WHERE job_id = $1",
+          "SELECT count(*)::integer AS count FROM workhorse.attempt_history WHERE task_id = $1",
           [id],
         )
       ).rows[0].count,
     ).toBe(0);
-    expect(await queue.complete(job!, "wait-worker", { tooLate: true })).toBe(false);
-    expect(await queue.fail(job!, "wait-worker", new Error("too late"))).toBe("stale");
+    expect(await queue.complete(task!, "wait-worker", { tooLate: true })).toBe(false);
+    expect(await queue.fail(task!, "wait-worker", new Error("too late"))).toBe("stale");
   });
 
   it("replays relative waits first-write-wins despite duration drift", async () => {
@@ -453,14 +460,14 @@ describe("checkpoints progress waits", () => {
     });
 
     expect(replay).toEqual({ status: "elapsed", wait: first.wait });
-    await expect(admin.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getTask(id)).resolves.toMatchObject({
       state: "active",
       currentAttempt: 1,
       fenceToken: continuation!.fenceToken,
     });
     const event = await pool.query<{ details: Record<string, unknown> }>(
-      `SELECT details FROM workhorse.job_event
-        WHERE job_id = $1 AND event_type = 'wait_replayed'`,
+      `SELECT details FROM workhorse.task_event
+        WHERE task_id = $1 AND event_type = 'wait_replayed'`,
       [id],
     );
     expect(event.rows[0]!.details).toMatchObject({
@@ -482,7 +489,7 @@ describe("checkpoints progress waits", () => {
       wakeAt: target,
     });
     expect(first.wait).toMatchObject({
-      jobId: id,
+      taskId: id,
       name: "embargo",
       mode: "absolute",
       durationMs: null,
@@ -502,14 +509,14 @@ describe("checkpoints progress waits", () => {
       queue.scheduleWait(continuation!, "conflict-worker", "embargo", { durationMs: 1 }),
     ).rejects.toMatchObject({ name: "WaitConflictError", existing: first.wait });
     await expect(admin.getWait(id, "embargo")).resolves.toEqual(first.wait);
-    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "active", currentAttempt: 1 });
+    await expect(admin.getTask(id)).resolves.toMatchObject({ state: "active", currentAttempt: 1 });
   });
 
   it("bounds wait names, relative durations, and absolute timestamps", async () => {
     const id = await queue.enqueue("wait-bounds", {});
-    const job = await queue.claim("bounds-worker");
+    const task = await queue.claim("bounds-worker");
     const schedule = (name: string, options: { durationMs: number } | { wakeAt: Date }) =>
-      queue.scheduleWait(job!, "bounds-worker", name, options);
+      queue.scheduleWait(task!, "bounds-worker", name, options);
 
     await expect(schedule("", { durationMs: 1 })).rejects.toThrow(/between 1 and 200/);
     await expect(schedule("x".repeat(201), { durationMs: 1 })).rejects.toThrow(/between 1 and 200/);
@@ -526,7 +533,7 @@ describe("checkpoints progress waits", () => {
       pool.query(`SELECT * FROM workhorse.schedule_wait_v1($1, $2, $3, 'neither', NULL, NULL)`, [
         id,
         "bounds-worker",
-        job!.fenceToken.toString(),
+        task!.fenceToken.toString(),
       ]),
     ).rejects.toThrow(/exactly one/);
     await expect(
@@ -534,13 +541,13 @@ describe("checkpoints progress waits", () => {
         `SELECT * FROM workhorse.schedule_wait_v1(
           $1, $2, $3, 'both', 1, clock_timestamp() + interval '1 second'
         )`,
-        [id, "bounds-worker", job!.fenceToken.toString()],
+        [id, "bounds-worker", task!.fenceToken.toString()],
       ),
     ).rejects.toThrow(/exactly one/);
     await expect(
       pool.query(
         `SELECT * FROM workhorse.schedule_wait_v1($1, $2, $3, 'infinite', NULL, 'infinity')`,
-        [id, "bounds-worker", job!.fenceToken.toString()],
+        [id, "bounds-worker", task!.fenceToken.toString()],
       ),
     ).rejects.toThrow(/finite/);
     await expect(admin.getWait(id, "too-far")).resolves.toBeNull();
@@ -552,39 +559,39 @@ describe("checkpoints progress waits", () => {
 
   it("returns limit_exceeded after 1,000 retained wait names", async () => {
     const id = await queue.enqueue("wait-limit", {});
-    const job = await queue.claim("limit-worker");
+    const task = await queue.claim("limit-worker");
     await pool.query(
-      `INSERT INTO workhorse.job_wait(
-         job_id, wait_name, mode, duration_ms, wake_at, attempt, fence_token, worker_id, claimed_at
+      `INSERT INTO workhorse.task_wait(
+         task_id, wait_name, mode, duration_ms, wake_at, attempt, fence_token, worker_id, claimed_at
        )
        SELECT $1, 'seed-' || value, 'relative', 1,
               clock_timestamp() + interval '1 millisecond', 1, $2, $3,
-              (SELECT acquired_at FROM workhorse.job_runtime WHERE job_id = $1)
+              (SELECT acquired_at FROM workhorse.task_runtime WHERE task_id = $1)
          FROM generate_series(1, 1000) AS value`,
-      [id, job!.fenceToken.toString(), "limit-worker"],
+      [id, task!.fenceToken.toString(), "limit-worker"],
     );
 
     await expect(
-      queue.scheduleWait(job!, "limit-worker", "overflow", { durationMs: 1 }),
+      queue.scheduleWait(task!, "limit-worker", "overflow", { durationMs: 1 }),
     ).rejects.toMatchObject({ name: "WaitLimitExceededError" });
     expect(
       (
         await pool.query(
-          "SELECT count(*)::integer AS count FROM workhorse.job_wait WHERE job_id = $1",
+          "SELECT count(*)::integer AS count FROM workhorse.task_wait WHERE task_id = $1",
           [id],
         )
       ).rows[0].count,
     ).toBe(1_000);
     await expect(admin.getWait(id, "overflow")).resolves.toBeNull();
-    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "active" });
+    await expect(admin.getTask(id)).resolves.toMatchObject({ state: "active" });
   });
 
   it("records a past-due first target without releasing active ownership", async () => {
     const id = await queue.enqueue("wait-past-due", {});
-    const job = await queue.claim("past-due-worker");
+    const task = await queue.claim("past-due-worker");
     const target = new Date(Date.now() - 1_000);
 
-    const result = await queue.scheduleWait(job!, "past-due-worker", "already-open", {
+    const result = await queue.scheduleWait(task!, "past-due-worker", "already-open", {
       wakeAt: target,
     });
 
@@ -592,13 +599,13 @@ describe("checkpoints progress waits", () => {
       status: "elapsed",
       wait: { name: "already-open", requestedWakeAt: target, wakeAt: target },
     });
-    await expect(admin.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getTask(id)).resolves.toMatchObject({
       state: "active",
-      fenceToken: job!.fenceToken,
+      fenceToken: task!.fenceToken,
     });
     const event = await pool.query<{ details: Record<string, unknown> }>(
-      `SELECT details FROM workhorse.job_event
-        WHERE job_id = $1 AND event_type = 'wait_elapsed'`,
+      `SELECT details FROM workhorse.task_event
+        WHERE task_id = $1 AND event_type = 'wait_elapsed'`,
       [id],
     );
     expect(event.rows[0]!.details).toMatchObject({
@@ -648,8 +655,8 @@ describe("checkpoints progress waits", () => {
     expect(
       (
         await pool.query(
-          `SELECT count(*)::integer AS count FROM workhorse.job_wait
-            WHERE job_id = ANY($1::uuid[])`,
+          `SELECT count(*)::integer AS count FROM workhorse.task_wait
+            WHERE task_id = ANY($1::uuid[])`,
           [[recoveredId, scheduledId, terminalId]],
         )
       ).rows[0].count,
@@ -658,14 +665,16 @@ describe("checkpoints progress waits", () => {
 
   it("rechecks wait lease expiry after waiting for the runtime lock", async () => {
     const id = await queue.enqueue("wait-lock-expiry", {});
-    const job = await queue.claim("wait-lock-worker", { leaseMs: 100 });
+    const task = await queue.claim("wait-lock-worker", { leaseMs: 100 });
     const blocker = await pool.connect();
 
     try {
       await blocker.query("BEGIN");
-      await blocker.query("SELECT 1 FROM workhorse.job_runtime WHERE job_id = $1 FOR UPDATE", [id]);
+      await blocker.query("SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE", [
+        id,
+      ]);
       const scheduling = queue
-        .scheduleWait(job!, "wait-lock-worker", "expired-while-blocked", { durationMs: 1_000 })
+        .scheduleWait(task!, "wait-lock-worker", "expired-while-blocked", { durationMs: 1_000 })
         .then(
           () => null,
           (error: unknown) => error,
@@ -675,7 +684,7 @@ describe("checkpoints progress waits", () => {
 
       await expect(scheduling).resolves.toMatchObject({ name: "WaitLeaseLostError" });
       await expect(admin.getWait(id, "expired-while-blocked")).resolves.toBeNull();
-      await expect(admin.getJob(id)).resolves.toMatchObject({ state: "active" });
+      await expect(admin.getTask(id)).resolves.toMatchObject({ state: "active" });
     } finally {
       await blocker.query("ROLLBACK").catch(() => undefined);
       blocker.release();
@@ -684,7 +693,7 @@ describe("checkpoints progress waits", () => {
 
   it("returns typed stale when the wait lease expires during the suspension transition", async () => {
     const id = await queue.enqueue("wait-transition-expiry", {});
-    const job = await queue.claim("wait-transition-worker", { leaseMs: 250 });
+    const task = await queue.claim("wait-transition-worker", { leaseMs: 250 });
 
     await pool.query(`
       CREATE OR REPLACE FUNCTION workhorse.test_delay_wait_insert()
@@ -697,21 +706,21 @@ describe("checkpoints progress waits", () => {
       END;
       $$;
       CREATE TRIGGER test_delay_wait_insert
-      BEFORE INSERT ON workhorse.job_wait
+      BEFORE INSERT ON workhorse.task_wait
       FOR EACH ROW EXECUTE FUNCTION workhorse.test_delay_wait_insert();
     `);
 
     try {
       await expect(
-        queue.scheduleWait(job!, "wait-transition-worker", "expired-during-transition", {
+        queue.scheduleWait(task!, "wait-transition-worker", "expired-during-transition", {
           durationMs: 1_000,
         }),
       ).rejects.toMatchObject({ name: "WaitLeaseLostError" });
       await expect(admin.getWait(id, "expired-during-transition")).resolves.toBeNull();
-      await expect(admin.getJob(id)).resolves.toMatchObject({ state: "active" });
+      await expect(admin.getTask(id)).resolves.toMatchObject({ state: "active" });
     } finally {
       await pool.query(`
-        DROP TRIGGER IF EXISTS test_delay_wait_insert ON workhorse.job_wait;
+        DROP TRIGGER IF EXISTS test_delay_wait_insert ON workhorse.task_wait;
         DROP FUNCTION IF EXISTS workhorse.test_delay_wait_insert();
       `);
     }
@@ -722,16 +731,17 @@ describe("checkpoints progress waits", () => {
     async (transitionKind) => {
       const id = await queue.enqueue(`wait-race-${transitionKind}`, {}, { maxAttempts: 2 });
       const leaseMs = transitionKind === "recover" ? 100 : 10_000;
-      const job = await queue.claim("race-worker", { leaseMs });
+      const task = await queue.claim("race-worker", { leaseMs });
       const transition = await pool.connect();
 
       try {
         await transition.query("BEGIN");
-        await transition.query("SELECT 1 FROM workhorse.job_runtime WHERE job_id = $1 FOR UPDATE", [
-          id,
-        ]);
+        await transition.query(
+          "SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE",
+          [id],
+        );
         const scheduling = queue
-          .scheduleWait(job!, "race-worker", "racing-wait", { durationMs: 1_000 })
+          .scheduleWait(task!, "race-worker", "racing-wait", { durationMs: 1_000 })
           .then(
             () => null,
             (error: unknown) => error,
@@ -742,13 +752,13 @@ describe("checkpoints progress waits", () => {
           await transition.query("SELECT workhorse.complete_v1($1, $2, $3, '{}'::jsonb)", [
             id,
             "race-worker",
-            job!.fenceToken.toString(),
+            task!.fenceToken.toString(),
           ]);
         } else if (transitionKind === "fail") {
           await transition.query("SELECT workhorse.fail_v1($1, $2, $3, $4::jsonb, 0)", [
             id,
             "race-worker",
-            job!.fenceToken.toString(),
+            task!.fenceToken.toString(),
             JSON.stringify({ message: "retry" }),
           ]);
         } else {
@@ -759,7 +769,7 @@ describe("checkpoints progress waits", () => {
 
         await expect(scheduling).resolves.toMatchObject({ name: "WaitLeaseLostError" });
         await expect(admin.getWait(id, "racing-wait")).resolves.toBeNull();
-        await expect(admin.getJob(id)).resolves.toMatchObject({
+        await expect(admin.getTask(id)).resolves.toMatchObject({
           state: transitionKind === "complete" ? "succeeded" : "ready",
         });
       } finally {
@@ -771,8 +781,8 @@ describe("checkpoints progress waits", () => {
 
   it("carries the wait marker through due promotion and emits lifecycle events", async () => {
     const id = await queue.enqueue("wait-promotion", {});
-    const job = await queue.claim("promotion-worker");
-    const scheduled = await queue.scheduleWait(job!, "promotion-worker", "promotion-boundary", {
+    const task = await queue.claim("promotion-worker");
+    const scheduled = await queue.scheduleWait(task!, "promotion-worker", "promotion-boundary", {
       durationMs: 30,
     });
     await sleep(50);
@@ -782,9 +792,10 @@ describe("checkpoints progress waits", () => {
       state: string;
       wait_name: string | null;
       attempt_started_at: Date;
-    }>("SELECT state, wait_name, attempt_started_at FROM workhorse.job_runtime WHERE job_id = $1", [
-      id,
-    ]);
+    }>(
+      "SELECT state, wait_name, attempt_started_at FROM workhorse.task_runtime WHERE task_id = $1",
+      [id],
+    );
     expect(runtime.rows[0]).toMatchObject({
       state: "ready",
       wait_name: null,
@@ -792,8 +803,8 @@ describe("checkpoints progress waits", () => {
     });
 
     const events = await pool.query<{ event_type: string; details: Record<string, unknown> }>(
-      `SELECT event_type, details FROM workhorse.job_event
-        WHERE job_id = $1 AND event_type IN ('wait_scheduled', 'wait_elapsed')
+      `SELECT event_type, details FROM workhorse.task_event
+        WHERE task_id = $1 AND event_type IN ('wait_scheduled', 'wait_elapsed')
         ORDER BY occurred_at, event_id`,
       [id],
     );
@@ -834,13 +845,13 @@ describe("checkpoints progress waits", () => {
 
     expect(await worker.runOnce()).toBe(true);
     const suspended = await pool.query<{ attempt_started_at: Date }>(
-      "SELECT attempt_started_at FROM workhorse.job_runtime WHERE job_id = $1",
+      "SELECT attempt_started_at FROM workhorse.task_runtime WHERE task_id = $1",
       [id],
     );
     await sleep(110);
     expect(await worker.runOnce()).toBe(true);
 
-    await expect(admin.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getTask(id)).resolves.toMatchObject({
       state: "succeeded",
       currentAttempt: 1,
       result: { handlerRuns: 2 },
@@ -853,7 +864,7 @@ describe("checkpoints progress waits", () => {
     }>(
       `SELECT attempt, outcome, started_at, claimed_at
          FROM workhorse.attempt_history
-        WHERE job_id = $1`,
+        WHERE task_id = $1`,
       [id],
     );
     expect(attempts.rows).toHaveLength(1);
@@ -863,8 +874,8 @@ describe("checkpoints progress waits", () => {
       attempts.rows[0]!.started_at.getTime(),
     );
     const claims = await pool.query<{ count: number }>(
-      `SELECT count(*)::integer AS count FROM workhorse.job_event
-        WHERE job_id = $1 AND event_type = 'claimed'`,
+      `SELECT count(*)::integer AS count FROM workhorse.task_event
+        WHERE task_id = $1 AND event_type = 'claimed'`,
       [id],
     );
     expect(claims.rows[0]!.count).toBe(2);
@@ -886,10 +897,10 @@ describe("checkpoints progress waits", () => {
     await sleep(110);
     expect(await worker.runOnce()).toBe(true);
 
-    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "failed", currentAttempt: 1 });
+    await expect(admin.getTask(id)).resolves.toMatchObject({ state: "failed", currentAttempt: 1 });
     expect(handlerRuns).toBe(2);
     const attempts = await pool.query(
-      "SELECT attempt, outcome FROM workhorse.attempt_history WHERE job_id = $1",
+      "SELECT attempt, outcome FROM workhorse.attempt_history WHERE task_id = $1",
       [id],
     );
     expect(attempts.rows).toEqual([{ attempt: 1, outcome: "failed" }]);
@@ -918,7 +929,7 @@ describe("checkpoints progress waits", () => {
     await sleep(110);
     expect(await worker.runOnce()).toBe(true);
 
-    await expect(admin.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getTask(id)).resolves.toMatchObject({
       state: "succeeded",
       currentAttempt: 1,
       result: { handlerRuns: 3 },
@@ -932,24 +943,24 @@ describe("checkpoints progress waits", () => {
     expect(
       (
         await pool.query(
-          "SELECT count(*)::integer AS count FROM workhorse.attempt_history WHERE job_id = $1",
+          "SELECT count(*)::integer AS count FROM workhorse.attempt_history WHERE task_id = $1",
           [id],
         )
       ).rows[0].count,
     ).toBe(1);
   });
 
-  it("retains waits through terminal outcome and cascades them with the parent job", async () => {
+  it("retains waits through terminal outcome and cascades them with the parent task", async () => {
     const id = await queue.enqueue("wait-retention", {});
-    const job = await queue.claim("retention-worker");
-    const wait = await queue.scheduleWait(job!, "retention-worker", "past", {
+    const task = await queue.claim("retention-worker");
+    const wait = await queue.scheduleWait(task!, "retention-worker", "past", {
       wakeAt: new Date(Date.now() - 1),
     });
-    expect(await queue.complete(job!, "retention-worker", { ok: true })).toBe(true);
+    expect(await queue.complete(task!, "retention-worker", { ok: true })).toBe(true);
 
     await expect(admin.getWait(id, "past")).resolves.toEqual(wait.wait);
     await expect(admin.listWaits(id)).resolves.toEqual([wait.wait]);
-    await pool.query("DELETE FROM workhorse.job WHERE id = $1", [id]);
+    await pool.query("DELETE FROM workhorse.task WHERE id = $1", [id]);
     await expect(admin.getWait(id, "past")).resolves.toBeNull();
     await expect(admin.listWaits(id)).resolves.toEqual([]);
   });
@@ -970,9 +981,9 @@ describe("checkpoints progress waits", () => {
       });
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(admin.getJob(waitingId)).resolves.toMatchObject({ state: "scheduled" });
+    await expect(admin.getTask(waitingId)).resolves.toMatchObject({ state: "scheduled" });
     expect(await worker.runOnce()).toBe(true);
-    await expect(admin.getJob(followingId)).resolves.toMatchObject({ state: "succeeded" });
+    await expect(admin.getTask(followingId)).resolves.toMatchObject({ state: "succeeded" });
     expect(handled).toEqual(["waiting", "following"]);
   });
 
@@ -999,7 +1010,7 @@ describe("checkpoints progress waits", () => {
 
     expect(handlerRuns).toBe(2);
     expect(expensiveOperations).toBe(1);
-    await expect(admin.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getTask(id)).resolves.toMatchObject({
       state: "succeeded",
       result: { prepared: { operation: 1 }, handlerRuns: 2 },
     });
@@ -1026,9 +1037,9 @@ describe("checkpoints progress waits", () => {
     expect(await worker.runOnce()).toBe(true);
     expect(caught).toBe(true);
     expect(codeAfterCatch).toBe(true);
-    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "scheduled" });
+    await expect(admin.getTask(id)).resolves.toMatchObject({ state: "scheduled" });
     const events = await pool.query<{ event_type: string }>(
-      "SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY occurred_at, event_id",
+      "SELECT event_type FROM workhorse.task_event WHERE task_id = $1 ORDER BY occurred_at, event_id",
       [id],
     );
     expect(events.rows.map((row) => row.event_type)).toEqual([
@@ -1039,7 +1050,7 @@ describe("checkpoints progress waits", () => {
     expect(
       (
         await pool.query(
-          "SELECT count(*)::integer AS count FROM workhorse.attempt_history WHERE job_id = $1",
+          "SELECT count(*)::integer AS count FROM workhorse.attempt_history WHERE task_id = $1",
           [id],
         )
       ).rows[0].count,
@@ -1050,7 +1061,7 @@ describe("checkpoints progress waits", () => {
           eventName: "workhorse.handler.signal_swallowed",
           severityText: "WARN",
           attributes: expect.objectContaining({
-            "workhorse.job.id": id,
+            "workhorse.task.id": id,
             "workhorse.handler.outcome": "suspended",
           }),
         }),
@@ -1076,9 +1087,9 @@ describe("checkpoints progress waits", () => {
 
     expect(await worker.runOnce()).toBe(true);
     expect(caught).toBeDefined();
-    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "scheduled" });
+    await expect(admin.getTask(id)).resolves.toMatchObject({ state: "scheduled" });
     const events = await pool.query<{ event_type: string }>(
-      "SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY occurred_at, event_id",
+      "SELECT event_type FROM workhorse.task_event WHERE task_id = $1 ORDER BY occurred_at, event_id",
       [id],
     );
     expect(events.rows.map((row) => row.event_type)).toEqual([
@@ -1092,7 +1103,7 @@ describe("checkpoints progress waits", () => {
     const durabilityQueries: string[] = [];
     const countingDatabase: Queryable = {
       query(text, values) {
-        if (/workhorse\.job_(?:checkpoint|wait)\b/.test(text)) durabilityQueries.push(text);
+        if (/workhorse\.task_(?:checkpoint|wait)\b/.test(text)) durabilityQueries.push(text);
         return pool.query(text, values ? [...values] : undefined);
       },
     };
@@ -1104,7 +1115,7 @@ describe("checkpoints progress waits", () => {
     >("ordinary-handler", ({ value }) => ({ value }));
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(admin.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getTask(id)).resolves.toMatchObject({
       state: "succeeded",
       result: { value: 42 },
     });
@@ -1115,7 +1126,7 @@ describe("checkpoints progress waits", () => {
     const durabilityQueries: string[] = [];
     const countingDatabase: Queryable = {
       query(text, values) {
-        if (/workhorse\.job_(?:checkpoint|wait)\b/.test(text)) durabilityQueries.push(text);
+        if (/workhorse\.task_(?:checkpoint|wait)\b/.test(text)) durabilityQueries.push(text);
         return pool.query(text, values ? [...values] : undefined);
       },
     };
@@ -1135,8 +1146,8 @@ describe("checkpoints progress waits", () => {
     );
 
     expect(await worker.runOnce()).toBe(true);
-    expect(durabilityQueries.filter((query) => query.includes("job_checkpoint"))).toHaveLength(1);
-    expect(durabilityQueries.filter((query) => query.includes("job_wait"))).toHaveLength(1);
+    expect(durabilityQueries.filter((query) => query.includes("task_checkpoint"))).toHaveLength(1);
+    expect(durabilityQueries.filter((query) => query.includes("task_wait"))).toHaveLength(1);
   });
 
   it("reuses a completed checkpoint when a later attempt restarts the handler", async () => {
@@ -1150,16 +1161,16 @@ describe("checkpoints progress waits", () => {
         externalEffects += 1;
         return { authorizationId: `auth-${externalEffects}` };
       });
-      if (context.job.attempt === 1) throw new Error("crash after durable checkpoint");
+      if (context.task.attempt === 1) throw new Error("crash after durable checkpoint");
       return authorization;
     });
 
     expect(await worker.runOnce()).toBe(true);
-    expect((await admin.getJob(id))?.state).toBe("ready");
+    expect((await admin.getTask(id))?.state).toBe("ready");
     expect(await worker.runOnce()).toBe(true);
 
     expect(externalEffects).toBe(1);
-    await expect(admin.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getTask(id)).resolves.toMatchObject({
       state: "succeeded",
       result: { authorizationId: "auth-1" },
     });
@@ -1191,7 +1202,7 @@ describe("checkpoints progress waits", () => {
 
     expect(await worker.runOnce()).toBe(true);
     expect(operations).toBe(1);
-    await expect(admin.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getTask(id)).resolves.toMatchObject({
       result: {
         first: { operation: 1 },
         second: { operation: 1 },

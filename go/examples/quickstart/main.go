@@ -18,7 +18,7 @@ func main() {
 	defer pool.Close()
 
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "default")
-	jobID, err := queue.Enqueue(ctx, "email.welcome", map[string]any{"to": "ada@example.com"})
+	taskID, err := queue.Enqueue(ctx, "email.welcome", map[string]any{"to": "ada@example.com"})
 	if err != nil {
 		panic(err)
 	}
@@ -38,5 +38,5 @@ func main() {
 		panic(err)
 	}
 
-	fmt.Println(jobID)
+	fmt.Println(taskID)
 }

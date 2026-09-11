@@ -125,13 +125,13 @@ const counterOptions: MetricOptions = {
 };
 
 /**
- * Attributes matching a real core emission: `recordClaimedJob` and `telemetryMetrics.claimed`
- * both carry a queue name and a job type.
+ * Attributes matching a real core emission: `recordClaimedTask` and `telemetryMetrics.claimed`
+ * both carry a queue name and a task type.
  */
 function emissionAttributes(iteration: number): Attributes {
   return {
     "workhorse.queue.name": iteration % 2 === 0 ? "default" : "priority",
-    "workhorse.job.type": "benchmark.emit",
+    "workhorse.task.type": "benchmark.emit",
   };
 }
 

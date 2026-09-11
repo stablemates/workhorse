@@ -18,7 +18,7 @@ import type {
  * and expose a writable deployment whose controllers execute through the shared versioned SQL
  * surface — plus a second, read-only deployment of the same backend. The `enqueueTest` operator
  * and `setScheduleEnabled` controller have no shared SQL function; the harness supplies the
- * minimal implementations the fixtures assume (enqueue one `conformance.demo-{kind}` job on the
+ * minimal implementations the fixtures assume (enqueue one `conformance.demo-{kind}` task on the
  * `conformance-demo` queue; flip `workhorse.schedule_definition.enabled`).
  */
 export function createDashboardConformanceTransport(
@@ -73,7 +73,7 @@ export function createDashboardConformanceTransport(
     operator: {
       mode: "writable",
       enqueueTest: async (kind) => ({
-        jobId: await queue.enqueue(`conformance.demo-${kind}`, {}, { queue: "conformance-demo" }),
+        taskId: await queue.enqueue(`conformance.demo-${kind}`, {}, { queue: "conformance-demo" }),
       }),
     },
     scheduleController,

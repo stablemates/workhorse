@@ -10,13 +10,13 @@ import type {
   CancelResult,
   DeadLetterPage,
   DeadLetterQuery,
-  JobCheckpoint,
-  JobListPage,
-  JobListQuery,
-  JobSnapshot,
-  JobTimelinePage,
-  JobTimelineQuery,
-  JobWait,
+  TaskCheckpoint,
+  TaskListPage,
+  TaskListQuery,
+  TaskSnapshot,
+  TaskTimelinePage,
+  TaskTimelineQuery,
+  TaskWait,
   MaintenancePolicy,
   QueueHealth,
   RedriveResult,
@@ -142,36 +142,36 @@ export class WorkhorseAdminClient {
     return { database };
   }
 
-  listJobs(query: JobListQuery = {}): Promise<JobListPage> {
-    return this.admin.listJobs(query);
+  listTasks(query: TaskListQuery = {}): Promise<TaskListPage> {
+    return this.admin.listTasks(query);
   }
 
-  getJob(jobId: string): Promise<JobSnapshot | null> {
-    return this.admin.getJob(jobId);
+  getTask(taskId: string): Promise<TaskSnapshot | null> {
+    return this.admin.getTask(taskId);
   }
 
-  getJobTimeline(jobId: string, query: JobTimelineQuery = {}): Promise<JobTimelinePage> {
-    return this.admin.getJobTimeline(jobId, query);
+  getTaskTimeline(taskId: string, query: TaskTimelineQuery = {}): Promise<TaskTimelinePage> {
+    return this.admin.getTaskTimeline(taskId, query);
   }
 
   listDeadLetters(query: DeadLetterQuery = {}): Promise<DeadLetterPage> {
     return this.admin.listDeadLetters(query);
   }
 
-  listCheckpoints(jobId: string): Promise<JobCheckpoint[]> {
-    return this.admin.listCheckpoints(jobId);
+  listCheckpoints(taskId: string): Promise<TaskCheckpoint[]> {
+    return this.admin.listCheckpoints(taskId);
   }
 
-  getCheckpoint(jobId: string, name: string): Promise<JobCheckpoint | null> {
-    return this.admin.getCheckpoint(jobId, name);
+  getCheckpoint(taskId: string, name: string): Promise<TaskCheckpoint | null> {
+    return this.admin.getCheckpoint(taskId, name);
   }
 
-  listWaits(jobId: string): Promise<JobWait[]> {
-    return this.admin.listWaits(jobId);
+  listWaits(taskId: string): Promise<TaskWait[]> {
+    return this.admin.listWaits(taskId);
   }
 
-  getWait(jobId: string, name: string): Promise<JobWait | null> {
-    return this.admin.getWait(jobId, name);
+  getWait(taskId: string, name: string): Promise<TaskWait | null> {
+    return this.admin.getWait(taskId, name);
   }
 
   /**
@@ -191,7 +191,7 @@ export class WorkhorseAdminClient {
   /**
    * Per-queue dispatch pressure merged with the durable pause flag.
    *
-   * A paused queue with no live jobs still appears, so an operator can always see and release an
+   * A paused queue with no live tasks still appears, so an operator can always see and release an
    * old pause.
    */
   async queues(): Promise<AdminQueueStatus[]> {
@@ -268,20 +268,20 @@ export class WorkhorseAdminClient {
 
   cancel(
     environment: ConfirmedEnvironment,
-    jobId: string,
+    taskId: string,
     request: AdminCancelRequest,
   ): Promise<CancelResult> {
     void environment;
-    return this.queue.cancel(jobId, request);
+    return this.queue.cancel(taskId, request);
   }
 
   redrive(
     environment: ConfirmedEnvironment,
-    jobId: string,
+    taskId: string,
     request: AdminRedriveRequest,
   ): Promise<RedriveResult> {
     void environment;
-    return this.admin.redrive(jobId, {
+    return this.admin.redrive(taskId, {
       actor: request.requestedBy,
       reason: request.reason,
       requestId: request.requestId,
@@ -324,24 +324,24 @@ export class WorkhorseAdminClient {
 
   sendSignal(
     environment: ConfirmedEnvironment,
-    jobId: string,
+    taskId: string,
     name: string,
     payload: Json,
     request: ExternalWaitDeliveryRequest,
   ): Promise<SignalDeliveryResult> {
     void environment;
-    return this.queue.sendSignal(jobId, name, payload, request);
+    return this.queue.sendSignal(taskId, name, payload, request);
   }
 
   completeHumanWait(
     environment: ConfirmedEnvironment,
-    jobId: string,
+    taskId: string,
     name: string,
     payload: Json,
     request: ExternalWaitDeliveryRequest,
   ): Promise<HumanWaitCompletionResult> {
     void environment;
-    return this.queue.completeHumanWait(jobId, name, payload, request);
+    return this.queue.completeHumanWait(taskId, name, payload, request);
   }
 
   async pauseQueue(
@@ -370,7 +370,7 @@ export class WorkhorseAdminClient {
     });
   }
 
-  /** Deletes one queue's non-active jobs and answers how many rows went. */
+  /** Deletes one queue's non-active tasks and answers how many rows went. */
   purgeQueue(
     environment: ConfirmedEnvironment,
     queueName: string,

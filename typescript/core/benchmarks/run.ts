@@ -138,13 +138,13 @@ export const benchmarkProfiles: Readonly<Record<BenchmarkProfileName, BenchmarkP
   smoke: {
     comparative: {
       seed: 1,
-      jobsPerRun: 12,
+      tasksPerRun: 12,
       enqueueBatchSize: 4,
       repetitions: 2,
       workerConcurrency: [1, 2],
       leaseMs: 5_000,
       churn: {
-        targetJobs: 20,
+        targetTasks: 20,
         targetRatePerSecond: 40,
         batchSize: 4,
         sampleIntervalMs: 100,
@@ -152,7 +152,7 @@ export const benchmarkProfiles: Readonly<Record<BenchmarkProfileName, BenchmarkP
       },
     },
     operational: {
-      jobCount: 6,
+      taskCount: 6,
       heartbeatCount: 3,
       batchSize: 3,
       scheduleDelayMs: 30,
@@ -165,13 +165,13 @@ export const benchmarkProfiles: Readonly<Record<BenchmarkProfileName, BenchmarkP
   default: {
     comparative: {
       seed: 1,
-      jobsPerRun: 100,
+      tasksPerRun: 100,
       enqueueBatchSize: 25,
       repetitions: 3,
       workerConcurrency: [1, 4, 8],
       leaseMs: 30_000,
       churn: {
-        targetJobs: 500,
+        targetTasks: 500,
         targetRatePerSecond: 100,
         batchSize: 25,
         sampleIntervalMs: 500,
@@ -179,7 +179,7 @@ export const benchmarkProfiles: Readonly<Record<BenchmarkProfileName, BenchmarkP
       },
     },
     operational: {
-      jobCount: 24,
+      taskCount: 24,
       heartbeatCount: 8,
       batchSize: 8,
       scheduleDelayMs: 75,
@@ -192,13 +192,13 @@ export const benchmarkProfiles: Readonly<Record<BenchmarkProfileName, BenchmarkP
   full: {
     comparative: {
       seed: 1,
-      jobsPerRun: 1_000,
+      tasksPerRun: 1_000,
       enqueueBatchSize: 100,
       repetitions: 5,
       workerConcurrency: [1, 4, 16, 32],
       leaseMs: 30_000,
       churn: {
-        targetJobs: 6_000,
+        targetTasks: 6_000,
         targetRatePerSecond: 100,
         batchSize: 100,
         sampleIntervalMs: 1_000,
@@ -206,7 +206,7 @@ export const benchmarkProfiles: Readonly<Record<BenchmarkProfileName, BenchmarkP
       },
     },
     operational: {
-      jobCount: 100,
+      taskCount: 100,
       heartbeatCount: 32,
       batchSize: 25,
       scheduleDelayMs: 100,

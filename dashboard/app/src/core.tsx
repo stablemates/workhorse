@@ -143,7 +143,7 @@ export type PageRoute =
   | "/system"
   | "/workers"
   | "/settings";
-export type DemoJobKind =
+export type DemoTaskKind =
   | "success"
   | "retry"
   | "durable"

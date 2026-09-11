@@ -3,7 +3,7 @@ title: Dashboard
 description: Mount the operator interface behind application authorization, or run it standalone with a built-in administrator login.
 ---
 
-Workhorse gives your operators one shared interface — jobs, attempts, checkpoints, schedules,
+Workhorse gives your operators one shared interface — tasks, attempts, checkpoints, schedules,
 queues, workers, failures, health — without you building an admin page. TypeScript, Python, and Go
 can each embed the same packaged React application in their native HTTP server. Every backend reads
 PostgreSQL through the versioned `dashboard/v1` contract, so the interface can observe workers on
@@ -12,13 +12,13 @@ machines it has never met.
 ## What it shows
 
 Every view comes from the same read models as [Queries and timelines](/docs/queries): payload-free
-job listings, per-job timelines with redacted payloads, dead letters, the worker registry, and the
-health verdict with its reasons. With host-authorized controllers wired in, it can also cancel jobs,
+task listings, per-task timelines with redacted payloads, dead letters, the worker registry, and the
+health verdict with its reasons. With host-authorized controllers wired in, it can also cancel tasks,
 run schedules now, pause queues and workers, and edit maintenance and retention policy.
 
 Task browsing uses Previous and Next controls, so opening a page does not require counting every
-matching historical job. Sidebar task links start a fresh page; browser Back restores the saved
-position. Filters and navigation cursors remain in the URL for sharing and browser history. Older links with a page number still work. Jobs can move between pages as their state changes.
+matching historical task. Sidebar task links start a fresh page; browser Back restores the saved
+position. Filters and navigation cursors remain in the URL for sharing and browser history. Older links with a page number still work. Tasks can move between pages as their state changes.
 
 When a page refresh is still loading, automatic refresh waits rather than starting the same read
 again. After an operator action, the dashboard fetches its committed result.
@@ -232,7 +232,7 @@ into domain-specific step names without touching stored queue data.
 
 ## Refresh model
 
-The browser polls only the active page at the selected cadence, so job volume never multiplies
+The browser polls only the active page at the selected cadence, so task volume never multiplies
 browser requests; manual refresh covers the rest. Remember what you are looking at: an operator
 view, not a transactional snapshot. PostgreSQL statistics and worker registry rows can lag the
 processes behind them by design.

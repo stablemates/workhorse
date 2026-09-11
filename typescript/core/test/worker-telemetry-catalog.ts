@@ -8,7 +8,7 @@ import {
 } from "@opentelemetry/sdk-metrics";
 
 import {
-  jobMetricAttributes,
+  taskMetricAttributes,
   recordHandlerExecution,
   recordHeartbeatFailure,
   telemetryMetrics,
@@ -27,32 +27,32 @@ const provider = new MeterProvider({
 });
 metrics.setGlobalMeterProvider(provider);
 
-const job = { queue: "typescript-catalog", type: "catalog-job" };
-const jobAttributes = jobMetricAttributes(job);
+const task = { queue: "typescript-catalog", type: "catalog-task" };
+const taskAttributes = taskMetricAttributes(task);
 const handlerAttributes = {
-  ...jobAttributes,
+  ...taskAttributes,
   "workhorse.handler.outcome": "succeeded",
 };
 const batchAttributes = {
-  ...jobAttributes,
+  ...taskAttributes,
   "workhorse.handler.batch.full": true,
 };
 
-telemetryMetrics.claimed.add(1, jobAttributes);
-telemetryMetrics.completed.add(1, jobAttributes);
+telemetryMetrics.claimed.add(1, taskAttributes);
+telemetryMetrics.completed.add(1, taskAttributes);
 telemetryMetrics.failed.add(1, {
-  ...jobAttributes,
+  ...taskAttributes,
   "workhorse.attempt.outcome": "failed",
 });
-telemetryMetrics.retried.add(1, jobAttributes);
+telemetryMetrics.retried.add(1, taskAttributes);
 telemetryMetrics.expiredLeases.add(1);
 telemetryMetrics.claimDuration.record(1, {
-  "workhorse.queue.name": job.queue,
+  "workhorse.queue.name": task.queue,
   "workhorse.claim.result": "claimed",
 });
 telemetryMetrics.handlerDuration.record(1, handlerAttributes);
-telemetryMetrics.handlerRuntime.add(1, jobAttributes);
-recordHandlerExecution(job.queue, job.type, "succeeded");
+telemetryMetrics.handlerRuntime.add(1, taskAttributes);
+recordHandlerExecution(task.queue, task.type, "succeeded");
 telemetryMetrics.handlerBatchSize.record(1, batchAttributes);
 telemetryMetrics.handlerBatchLinger.record(1, batchAttributes);
 recordHeartbeatFailure("stale");

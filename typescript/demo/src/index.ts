@@ -115,7 +115,7 @@ if (stagingPool && stagingDatabase) {
 }
 if (stagingPool) {
   await syncStagingSchedules(stagingPool);
-  // Apply admission policies to jobs retained from the older shared seed, too.
+  // Apply admission policies to tasks retained from the older shared seed, too.
   await syncDemoConcurrencyPolicies(stagingPool);
   await syncDemoRateLimitPolicies(stagingPool);
 }
@@ -173,8 +173,8 @@ if (process.env.SEED_DEMO_DATA !== "false") {
     seed.seeded ? "workhorse.demo.seeded" : "workhorse.demo.seed_reused",
     seed.seeded ? "Seeded demo data" : "Live showcase and historical demo data already exist",
     {
-      "workhorse.demo.live_job_count": seed.jobIds.length,
-      "workhorse.demo.historical_job_count": seed.historicalJobCount,
+      "workhorse.demo.live_task_count": seed.taskIds.length,
+      "workhorse.demo.historical_task_count": seed.historicalTaskCount,
     },
   );
   if (stagingDatabase) {

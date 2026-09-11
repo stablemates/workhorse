@@ -45,7 +45,7 @@ function sessionPool(timezone: string): Pool {
   return session;
 }
 
-async function completeOneJob(type: string): Promise<void> {
+async function completeOneTask(type: string): Promise<void> {
   const id = await queue.enqueue(type, {});
   const claimed = await queue.claim(`${type}-worker`);
   expect(claimed?.id).toBe(id);
@@ -60,7 +60,7 @@ async function completeOneJob(type: string): Promise<void> {
  */
 async function rollUpThroughTomorrow(session: Pool): Promise<void> {
   await session.query(
-    `UPDATE workhorse.job_stat_state
+    `UPDATE workhorse.task_stat_state
         SET rolled_up_through = date_bin('1 day', clock_timestamp(),
               timestamp '2000-01-01' AT TIME ZONE 'UTC'),
             hourly_rolled_up_through = date_bin('1 day', clock_timestamp(),
@@ -78,9 +78,9 @@ async function rollUpThroughTomorrow(session: Pool): Promise<void> {
 /** Every stored hour and day boundary, as one reader sees it. */
 async function boundaries(reader: Pool): Promise<{ tier: string; bucket_start: Date }[]> {
   const { rows } = await reader.query<{ tier: string; bucket_start: Date }>(
-    `SELECT 'hour' AS tier, bucket_start FROM workhorse.job_stat_bucket_hour
+    `SELECT 'hour' AS tier, bucket_start FROM workhorse.task_stat_bucket_hour
      UNION ALL
-     SELECT 'day' AS tier, bucket_start FROM workhorse.job_stat_bucket_day
+     SELECT 'day' AS tier, bucket_start FROM workhorse.task_stat_bucket_day
       ORDER BY 1, 2`,
   );
   return rows;
@@ -90,7 +90,7 @@ describe("statistics buckets under a non-UTC database timezone", () => {
   for (const timezone of timezones) {
     it(`bins the daily tier on UTC midnight in ${timezone}`, async () => {
       const session = sessionPool(timezone);
-      await completeOneJob("tz-day");
+      await completeOneTask("tz-day");
       await rollUpThroughTomorrow(session);
 
       // The day tier must agree with the history day partitions, which pin UTC explicitly. Reading
@@ -99,7 +99,7 @@ describe("statistics buckets under a non-UTC database timezone", () => {
         `SELECT DISTINCT bucket.bucket_start,
                 date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
                   AS partition_day
-           FROM workhorse.job_stat_bucket_day bucket`,
+           FROM workhorse.task_stat_bucket_day bucket`,
       );
 
       expect(rows).toHaveLength(1);
@@ -108,21 +108,21 @@ describe("statistics buckets under a non-UTC database timezone", () => {
 
     it(`bins the hourly tier on UTC hour boundaries in ${timezone}`, async () => {
       const session = sessionPool(timezone);
-      await completeOneJob("tz-hour");
+      await completeOneTask("tz-hour");
       await rollUpThroughTomorrow(session);
 
       // A whole-hour offset leaves hour bins aligned by luck. Asia/Kolkata (+05:30) and
       // Asia/Kathmandu (+05:45) are the zones where a session-resolved origin misaligns them.
       const { rows } = await session.query<{ misaligned: string }>(
         `SELECT count(*)::text AS misaligned
-           FROM workhorse.job_stat_bucket_hour bucket
+           FROM workhorse.task_stat_bucket_hour bucket
           WHERE bucket.bucket_start <> date_trunc('hour', bucket.bucket_start AT TIME ZONE 'UTC')
                   AT TIME ZONE 'UTC'`,
       );
 
       expect(rows[0]!.misaligned).toBe("0");
       const { rows: present } = await session.query<{ hours: string }>(
-        "SELECT count(*)::text AS hours FROM workhorse.job_stat_bucket_hour",
+        "SELECT count(*)::text AS hours FROM workhorse.task_stat_bucket_hour",
       );
       expect(Number(present[0]!.hours)).toBeGreaterThan(0);
     });
@@ -184,7 +184,7 @@ describe("statistics buckets under a non-UTC database timezone", () => {
   }
 
   it("agrees with the UTC session about every bucket boundary", async () => {
-    await completeOneJob("tz-agreement");
+    await completeOneTask("tz-agreement");
     const kolkata = sessionPool("Asia/Kolkata");
     await rollUpThroughTomorrow(kolkata);
 

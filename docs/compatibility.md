@@ -123,7 +123,7 @@ names, so no equivalent exists on the TypeScript or Python lines.
 
 Each language line fails its build on an advisory in its own dependency tree. `pnpm npm:vuln`
 covers npm, `pnpm python:vuln` covers PyPI, and `pnpm go:vuln` covers the Go module. `pnpm check`
-runs all three, and so does the `static` job in `.github/workflows/ci.yml`.
+runs all three, and so does the `static` task in `.github/workflows/ci.yml`.
 
 `pnpm npm:vuln` runs `pnpm audit --prod` and fails on every advisory it reports, whatever the
 severity. Severity describes the advisory rather than this repository's exposure to it, so a
@@ -154,7 +154,7 @@ Node.js is the only supported runtime. Bun and Deno sit in a deliberately weaker
 `typescript/core/test/runtime-smoke.ts` — `installSchema`, then an enqueue, claim, and complete
 round-trip through the built `@stablemates/workhorse` entry point — against the newest supported
 PostgreSQL, under the latest release of each runtime. A green lane proves the driver connects, the
-schema installs, and one job completes there. It proves nothing else: the full vitest suites run
+schema installs, and one task completes there. It proves nothing else: the full vitest suites run
 under Node.js only, so this tier carries no correctness claim beyond the round-trip.
 
 What the validation runs recorded:
@@ -171,12 +171,12 @@ What the validation runs recorded:
   The failures say nothing about the built package, which is plain ESM.
 - **Node.js (2026-09-09, Node.js 24.15.0).** Benchmark baseline on the same machine and
   PostgreSQL 18.4, run as `pnpm benchmark` (`suite=all`, `profile=default`). Conventional design at
-  worker concurrency 8: throughput ~3,295 jobs/s, claim p50 ~0.91 ms, p99 ~8.35 ms.
-  Concurrent producer-consumer churn: throughput ~105 jobs/s, claim p50 ~0.91 ms, p99 ~2.94 ms.
+  worker concurrency 8: throughput ~3,295 tasks/s, claim p50 ~0.91 ms, p99 ~8.35 ms.
+  Concurrent producer-consumer churn: throughput ~105 tasks/s, claim p50 ~0.91 ms, p99 ~2.94 ms.
 - **Bun (2026-09-09, Bun 1.2.17).** The full `pnpm benchmark` suite (`suite=all`,
   `profile=default`) passes on the same PostgreSQL 18.4 and the same machine as the Node.js 24
-  baseline. Conventional design at worker concurrency 8: throughput ~3,158 jobs/s, claim p50
-  ~0.91 ms, p99 ~7.85 ms. Concurrent producer-consumer churn: throughput ~105 jobs/s, claim p50
+  baseline. Conventional design at worker concurrency 8: throughput ~3,158 tasks/s, claim p50
+  ~0.91 ms, p99 ~7.85 ms. Concurrent producer-consumer churn: throughput ~105 tasks/s, claim p50
   ~0.89 ms, p99 ~1.77 ms. Vitest 4 under Bun runs the unit suites: 1,299 of 1,324 tests passed,
   20 skipped. The 5 failures are test-harness issues: one supervisor test spawns
   `process.execPath` and gets a different descendant count under Bun; four demo telemetry tests
@@ -231,7 +231,7 @@ the pooled lanes as skipped. `pnpm test:pooling` provisions the same fixture loc
 | Transactional enqueue inside a caller-owned transaction             | Yes    | Yes               | Yes                                                                              | Yes                                                                       | Yes               |
 | `installSchema`, `migrateSchema`, `contractSchema`                  | Yes    | Yes               | Yes; each step is one `BEGIN`…`COMMIT` script                                    | Yes                                                                       | Yes               |
 | Maintenance tick and every SQL `pg_(try_)advisory_xact_lock`        | Yes    | Yes               | Yes; the locks are transaction-scoped                                            | Yes                                                                       | Yes               |
-| `LISTEN`/`NOTIFY` wake hints on `workhorse_jobs`                    | Yes    | Yes               | `LISTEN` succeeds but no notification is ever delivered; the fallback poll works | Relayed only with the client's next query; an idle listener hears nothing | Same              |
+| `LISTEN`/`NOTIFY` wake hints on `workhorse_tasks`                   | Yes    | Yes               | `LISTEN` succeeds but no notification is ever delivered; the fallback poll works | Relayed only with the client's next query; an idle listener hears nothing | Same              |
 | Session-level `pg_advisory_lock`/`pg_advisory_unlock`               | Yes    | Yes               | Unsafe; a grant pins to a pooled backend and a second client can take the key    | Yes                                                                       | Unsafe            |
 | Session state (`SET`, SQL `PREPARE`/`DEALLOCATE`, temporary tables) | Yes    | Yes               | Unsafe; state lands on a server session the client does not own                  | Yes                                                                       | Unsafe            |
 
@@ -240,7 +240,7 @@ Verified on 2026-09-11 against PgBouncer 1.25.2, PgCat 1.2.0, and PostgreSQL 18.
 Two consequences matter operationally. Wake hints are dead wherever a notification cannot reach
 the listener — PgBouncer in transaction mode accepts `LISTEN` then releases the server connection,
 and PgCat buffers a notification until the client sends another query — while
-`Queue.supportsJobNotifications()` and the subscription's `isListening()` still report capability.
+`Queue.supportsTaskNotifications()` and the subscription's `isListening()` still report capability.
 Dispatch runs entirely on the fallback poll, which is correct but slower; point an adapter's
 `notificationPool` at a session-pooled PgBouncer or direct pool to restore hints. And every leaked
 session grant or `SET` lands on a pooled backend that outlives the client that created it, so a
@@ -321,7 +321,7 @@ The Python package releases from its own `python/vX.Y.Z` tag. The tag must match
 `python/pyproject.toml` and a heading in `python/CHANGELOG.md`. `.github/workflows/release-python.yml`
 runs `pnpm check`, then uv builds a source distribution and universal wheel. A separate `pypi`
 environment publishes those artifacts through PyPI trusted publishing with `id-token: write`.
-Before publication, the publish job generates a PEP 740 attestation beside each distribution.
+Before publication, the publish task generates a PEP 740 attestation beside each distribution.
 
 The Go module releases from its own `go/vX.Y.Z` tag. `scripts/release-go.sh X.Y.Z` requires
 a clean worktree and a matching `go/CHANGELOG.md` heading. It resets the test database, runs
@@ -346,7 +346,7 @@ any release. [ADR 0054](decisions/0054-define-what-1-0-0-promises.md) records th
 
 The right-hand column is Gate 1 of
 [ADR 0056](decisions/0056-set-the-1-0-0-exit-criteria.md): every governed surface holds a mechanical
-check in the CI `required` job, so no promise rests on review alone. Five of them read the committed
+check in the CI `required` task, so no promise rests on review alone. Five of them read the committed
 snapshots in [`api/`](../api/README.md), which that directory's own README explains. Each has a
 generator, so a legitimate addition costs one command: `pnpm typescript-api:generate`,
 `pnpm python-api:generate`, `pnpm go-api:generate`, `pnpm cli-surface:generate`, or
@@ -395,6 +395,10 @@ generator has recorded it, which needs no hand edit. Taking a break deliberately
 means creating `dashboard/v2` instead, and for SQL it means narrowing
 `workhorse.protocol_version`.
 
+[ADR 0064](decisions/0064-rename-the-unit-noun-from-job-to-task.md) took one exception before any
+consumer outside this repository spoke the contract: the unit-noun rename rewrote `dashboard/v1`
+in place rather than creating `dashboard/v2`.
+
 ### The governed SQL surface
 
 The governed set is what a supported release reads, which is not what `protocol/v1/manifest.json`
@@ -411,7 +415,7 @@ so a new read governs its target on the next generate:
   and the Python binding check keep it the only source of SDK statements.
 - The three dashboard backends, `typescript/dashboard-server/src/server`, `go/dashboard`, and
   `python/src/workhorse/dashboard`, each of which builds its own SQL.
-- Every `dashboard_*_v1` view, plus `dashboard_job_result_v1`, whose exact columns
+- Every `dashboard_*_v1` view, plus `dashboard_task_result_v1`, whose exact columns
   [`architecture.md`](architecture.md) publishes as core's relational read contract. They are
   governed whether or not this repository's own backends still read them.
 
@@ -496,7 +500,7 @@ dashboard release inside a major line.
 Six gates hold the tag, and each is met with evidence rather than with an assertion
 ([ADR 0056](decisions/0056-set-the-1-0-0-exit-criteria.md)):
 
-1. Every governed surface above has a mechanical check in the CI `required` job. Seven checks, one
+1. Every governed surface above has a mechanical check in the CI `required` task. Seven checks, one
    per surface. None of them exists yet.
 2. Six weeks and two published 0.x minors separate the last non-additive change to a governed
    surface from the tag, and no outside-filed defect against a governed surface is open and
@@ -540,7 +544,7 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
 - **Correctness-sensitive transitions stay in versioned SQL functions.** Claim, completion, retry,
   cancellation, deadline, and maintenance transitions are owned by SQL. A client that speaks the
   same schema version speaks the same protocol, whatever language it is written in.
-- **Job payloads are caller-owned JSON.** Workhorse stores and returns them unchanged. Trace context
+- **Task payloads are caller-owned JSON.** Workhorse stores and returns them unchanged. Trace context
   and other Workhorse metadata are kept beside the payload, never merged into it.
 - **The dashboard wire contract is versioned separately.** `dashboard/v1` pins the oRPC envelopes,
   HTML placeholders, request order, and procedure schemas used by the TypeScript, Python, and Go
@@ -607,9 +611,9 @@ those commits.
    behavior. It builds every tarball once, then installs and exercises those exact files in clean
    consumers against PostgreSQL.
 4. The build job uploads the unchanged tarballs without publication credentials. It runs on Depot
-   like the rest of CI; the publish job that follows does not. npm verifies the Sigstore provenance
+   like the rest of CI; the publish task that follows does not. npm verifies the Sigstore provenance
    bundle against the runner environment and rejects anything it reads as `self-hosted`, which is
-   how it classifies a Depot runner, so the publish job runs GitHub-hosted. That is the only job in
+   how it classifies a Depot runner, so the publish task runs GitHub-hosted. That is the only task in
    the repository that does.
 5. The protected `npm` environment requires approval. `scripts/publish-npm.ts` then verifies the
    credential and every target version against the registry before it writes anything, and
@@ -656,10 +660,10 @@ expiry date, and an expired token stops every release. So a maintainer records t
 exposure, under the rules in [`SECURITY.md`](../SECURITY.md).
 
 An expired token used to fail in the worst possible place. npm answers an unauthorized write to a
-scoped package with `404 Not Found`, so the job blamed a missing package rather than a dead
+scoped package with `404 Not Found`, so the task blamed a missing package rather than a dead
 credential, and it had already signed a public provenance attestation by then.
 `scripts/publish-npm.ts` now asks the registry who the token is, and which `@stablemates` packages
-it may write, before it publishes anything. A refused credential fails the job by name.
+it may write, before it publishes anything. A refused credential fails the task by name.
 
 PyPI publication stores no credential. The `pypi` environment mints a short-lived token through
 trusted publishing, and PyPI issues that token only for this repository, this workflow file, and
@@ -681,7 +685,7 @@ publish can never carry this version number. Unpublishing is available only with
 only while nothing depends on the version, so it is not a recovery plan.
 
 The publish step reports the split. It names every package that reached the registry, every package
-it never attempted, and the version each one carries. The report goes to the job log and to the run
+it never attempted, and the version each one carries. The report goes to the task log and to the run
 summary. Read that report. Do not infer registry state from whichever npm command logged last.
 
 Recover by re-cutting the whole train at the next patch version.

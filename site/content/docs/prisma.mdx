@@ -1,11 +1,11 @@
 ---
 title: Prisma
-description: Adapt a Prisma client and enqueue jobs inside caller-owned interactive transactions.
+description: Adapt a Prisma client and enqueue tasks inside caller-owned interactive transactions.
 ---
 
 Your application already writes through Prisma. When a request creates an account and enqueues a
-follow-up job, those two writes must commit together — a job for a row that rolled back is a bug,
-and a committed row with no job is a silent gap. `@stablemates/workhorse-prisma` closes that gap: it converts
+follow-up task, those two writes must commit together — a task for a row that rolled back is a bug,
+and a committed row with no task is a silent gap. `@stablemates/workhorse-prisma` closes that gap: it converts
 Prisma clients and interactive transaction clients into the core `Queryable` protocol, so
 `Queue.enqueue` runs inside the same transaction as your Prisma writes.
 
@@ -40,7 +40,7 @@ operator tools, and worker processes.
 ## Enqueue inside an interactive transaction
 
 This is the pattern the adapter exists for. Call `forTransaction` with the callback's transaction
-client. The queue sends its SQL through that client, so the job follows the surrounding commit or
+client. The queue sends its SQL through that client, so the task follows the surrounding commit or
 rollback.
 
 ```ts
@@ -60,7 +60,7 @@ enqueues that stand alone.
 
 Prisma does not expose a stable node-postgres pool. Supply a separate caller-owned pool as
 `notificationPool` when workers should reserve a connection for `LISTEN/NOTIFY` and pick up new
-jobs immediately. Without it, workers use bounded polling and keep the same durable behavior — jobs
+tasks immediately. Without it, workers use bounded polling and keep the same durable behavior — tasks
 still run, just on the polling cadence.
 
 Database execution failures become `PrismaQueryError`, which retains the statement, original cause,

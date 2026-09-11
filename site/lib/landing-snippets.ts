@@ -123,7 +123,7 @@ try {
     [orderId, total],
   );
 
-  // Same transaction: the job exists exactly when the order does.
+  // Same transaction: the task exists exactly when the order does.
   await queue.enqueue("order.confirm", { orderId }, {}, client);
 
   await client.query("COMMIT");
@@ -361,7 +361,7 @@ func enqueueReminder(ctx context.Context, queue *workhorse.Queue, matchID string
 	})
 }`,
 
-  idempotency: `const jobId = await queue.enqueue(
+  idempotency: `const taskId = await queue.enqueue(
   "invoice.capture",
   { invoiceId: "inv-1" },
   {
@@ -375,7 +375,7 @@ func enqueueReminder(ctx context.Context, queue *workhorse.Queue, matchID string
 );
 
 // The retried webhook, the double-clicked button, the replayed
-// message: all of them get the same jobId back.`,
+// message: all of them get the same taskId back.`,
 
   idempotencyPython: `from workhorse import EnqueueOptions, Idempotency, Queue
 
@@ -420,7 +420,7 @@ await queue.syncSchedules(
     {
       name: "nightly-invoice-run",
       schedule: "0 2 * * *",
-      job: { type: "invoices.generate", payload: {} },
+      task: { type: "invoices.generate", payload: {} },
     },
   ],
   { prune: true }, // names not in the list are disabled
@@ -438,7 +438,7 @@ from workhorse import (
     Json,
     Queue,
     ScheduleDefinition,
-    ScheduledJob,
+    ScheduledTask,
     Worker,
 )
 
@@ -451,7 +451,7 @@ def run_billing(database_url: str) -> None:
                 ScheduleDefinition(
                     name="nightly-invoice-run",
                     schedule="0 2 * * *",
-                    job=ScheduledJob(type="invoices.generate", payload={}),
+                    task=ScheduledTask(type="invoices.generate", payload={}),
                 ),
             ),
         )
@@ -480,7 +480,7 @@ func runBilling(ctx context.Context, pool *pgxpool.Pool) error {
 		{
 			Name:     "nightly-invoice-run",
 			Schedule: "0 2 * * *",
-			Job: workhorse.ScheduledJob{
+			Task: workhorse.ScheduledTask{
 				Type: "invoices.generate", Payload: map[string]any{},
 			},
 		},
@@ -502,7 +502,7 @@ func runBilling(ctx context.Context, pool *pgxpool.Pool) error {
 }`,
 
   flowControl: `await queue.syncConcurrencyPolicies("workers", [
-  // At most 20 mail jobs active; at most 2 per tenant.
+  // At most 20 mail tasks active; at most 2 per tenant.
   { queue: "mail", maxActive: 20, maxActivePerKey: 2 },
 ]);
 
@@ -598,7 +598,7 @@ await queue.enqueue(
   { orderId },
   {
     dependencies: {
-      prerequisiteJobIds: [inventoryId],
+      prerequisiteTaskIds: [inventoryId],
       onSuccess: "release",
       onFailure: "cancel",
       onCancellation: "cancel",
@@ -626,7 +626,7 @@ def configure_checkout(queue: Queue, worker: Worker, order_id: str) -> None:
         {"orderId": order_id},
         EnqueueOptions(
             dependencies=Dependencies(
-                prerequisite_job_ids=(inventory_id,),
+                prerequisite_task_ids=(inventory_id,),
                 on_success="release",
                 on_failure="cancel",
                 on_cancellation="cancel",
@@ -657,10 +657,10 @@ func configureCheckout(ctx context.Context, queue *workhorse.Queue, worker *work
 	if _, err := queue.Enqueue(ctx, "order.confirm", map[string]any{
 		"orderId": orderID,
 	}, workhorse.EnqueueOptions{Dependencies: &workhorse.Dependencies{
-		PrerequisiteJobIDs: []string{inventoryID},
-		OnSuccess:          workhorse.DependencyRelease,
-		OnFailure:          workhorse.DependencyCancel,
-		OnCancellation:     workhorse.DependencyCancel,
+		PrerequisiteTaskIDs: []string{inventoryID},
+		OnSuccess:           workhorse.DependencyRelease,
+		OnFailure:           workhorse.DependencyCancel,
+		OnCancellation:      workhorse.DependencyCancel,
 	}}); err != nil {
 		return err
 	}
@@ -694,7 +694,7 @@ const latest = await queue.enqueueWithResult(
 );
 
 logger.info(first.outcome, latest.outcome);
-// accepted, then replaced while the job remains pending`,
+// accepted, then replaced while the task remains pending`,
 
   coalescingPython: `from workhorse import Debounce, EnqueueOptions, Queue
 
@@ -760,7 +760,7 @@ func reindex(ctx context.Context, queue *workhorse.Queue, documentID string, qui
   return { published: review.approved };
 });
 
-await queue.sendSignal(jobId, "security-scan", scanResult, {
+await queue.sendSignal(taskId, "security-scan", scanResult, {
   idempotencyKey: scanResult.deliveryId,
   requestedBy: "security-scanner",
 });`,
@@ -782,9 +782,9 @@ def configure_release(worker: Worker) -> None:
     worker.handle("release.publish", publish)
 
 
-def deliver_scan(queue: Queue, job_id: str, result: Json, delivery_id: str) -> None:
+def deliver_scan(queue: Queue, task_id: str, result: Json, delivery_id: str) -> None:
     queue.send_signal(
-        job_id,
+        task_id,
         "security-scan",
         result,
         idempotency_key=delivery_id,
@@ -826,8 +826,8 @@ func configureRelease(worker *workhorse.Worker) {
 	})
 }
 
-func deliverScan(ctx context.Context, queue *workhorse.Queue, jobID string, result any, deliveryID string) error {
-	_, err := queue.SendSignal(ctx, jobID, "security-scan", result, workhorse.ExternalWaitDelivery{
+func deliverScan(ctx context.Context, queue *workhorse.Queue, taskID string, result any, deliveryID string) error {
+	_, err := queue.SendSignal(ctx, taskID, "security-scan", result, workhorse.ExternalWaitDelivery{
 		IdempotencyKey: deliveryID, RequestedBy: "security-scanner",
 	})
 	return err
@@ -897,7 +897,7 @@ func registerEmailBatch(worker *workhorse.Worker, batchSize int, linger time.Dur
 });
 
 // From an API route, a CLI, an operator script:
-await queue.cancel(jobId, {
+await queue.cancel(taskId, {
   requestedBy: "operator@example.com",
   reason: "customer withdrew the request",
 });`,
@@ -905,7 +905,7 @@ await queue.cancel(jobId, {
   cancellationPython: `from workhorse import HandlerContext, Json, Queue, Worker
 
 
-def configure_export(queue: Queue, worker: Worker, job_id: str) -> None:
+def configure_export(queue: Queue, worker: Worker, task_id: str) -> None:
     def export(payload: object, context: HandlerContext) -> dict[str, Json]:
         assert isinstance(payload, dict) and isinstance(payload["rows"], list)
         for row in payload["rows"]:
@@ -915,7 +915,7 @@ def configure_export(queue: Queue, worker: Worker, job_id: str) -> None:
 
     worker.handle("rows.export", export)
     queue.cancel(
-        job_id,
+        task_id,
         requested_by="operator@example.com",
         reason="customer withdrew the request",
     )`,
@@ -929,7 +929,7 @@ import (
 	workhorse "github.com/stablemates/workhorse/go"
 )
 
-func configureExport(ctx context.Context, queue *workhorse.Queue, worker *workhorse.Worker, jobID string) error {
+func configureExport(ctx context.Context, queue *workhorse.Queue, worker *workhorse.Worker, taskID string) error {
 	worker.Handle("rows.export", func(
 		handlerContext context.Context, payload any, _ *workhorse.HandlerContext,
 	) (any, error) {
@@ -940,7 +940,7 @@ func configureExport(ctx context.Context, queue *workhorse.Queue, worker *workho
 		return map[string]any{"stopped": false}, nil
 	})
 	requestedBy, reason := "operator@example.com", "customer withdrew the request"
-	_, err := queue.Cancel(ctx, jobID, workhorse.CancellationRequest{
+	_, err := queue.Cancel(ctx, taskID, workhorse.CancellationRequest{
 		RequestedBy: &requestedBy, Reason: &reason,
 	})
 	return err
@@ -953,10 +953,10 @@ const page = await admin.listDeadLetters({
 });
 
 for (const failure of page.items) {
-  await admin.redrive(failure.jobId, {
+  await admin.redrive(failure.taskId, {
     actor: "operator@example.com",
     reason: "provider incident resolved",
-    requestId: \`incident-2026-08-03:\${failure.jobId}\`,
+    requestId: \`incident-2026-08-03:\${failure.taskId}\`,
   });
 }`,
 
@@ -972,11 +972,11 @@ def redrive_billing(admin: Admin) -> None:
     )
     for failure in page.items:
         admin.redrive(
-            failure.job_id,
+            failure.task_id,
             AdminAudit(
                 actor="operator@example.com",
                 reason="provider incident resolved",
-                request_id=f"incident-2026-08-03:{failure.job_id}",
+                request_id=f"incident-2026-08-03:{failure.task_id}",
             ),
         )`,
 
@@ -998,10 +998,10 @@ func redriveBilling(ctx context.Context, admin *workhorse.Admin) error {
 		return err
 	}
 	for _, failure := range page.Items {
-		if _, err := admin.Redrive(ctx, failure.JobID, workhorse.AdminAudit{
+		if _, err := admin.Redrive(ctx, failure.TaskID, workhorse.AdminAudit{
 			Actor:     "operator@example.com",
 			Reason:    "provider incident resolved",
-			RequestID: "incident-2026-08-03:" + failure.JobID,
+			RequestID: "incident-2026-08-03:" + failure.TaskID,
 		}); err != nil {
 			return err
 		}
@@ -1084,14 +1084,14 @@ if (health.status.level !== "healthy") {
 
 // Cross-state listing on a dedicated projection: reading it
 // never slows dispatch down.
-const live = await admin.listJobs({
+const live = await admin.listTasks({
   states: ["active", "scheduled"],
   limit: 100,
 });`,
 
   operateHealthPython: `import psycopg
 
-from workhorse import Admin, JobListQuery, Queue
+from workhorse import Admin, TaskListQuery, Queue
 
 
 def inspect(database_url: str) -> None:
@@ -1099,8 +1099,8 @@ def inspect(database_url: str) -> None:
         health = Queue(connection).health()
         print(health["status"])
 
-        live = Admin(connection).list_jobs(
-            JobListQuery(
+        live = Admin(connection).list_tasks(
+            TaskListQuery(
                 states=("active", "scheduled"),
                 limit=100,
             )
@@ -1125,8 +1125,8 @@ func inspect(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 	fmt.Println(health["status"])
 
-	live, err := admin.ListJobs(ctx, workhorse.JobListQuery{
-		States: []workhorse.JobState{"active", "scheduled"}, Limit: 100,
+	live, err := admin.ListTasks(ctx, workhorse.TaskListQuery{
+		States: []workhorse.TaskState{"active", "scheduled"}, Limit: 100,
 	})
 	if err != nil {
 		return err
@@ -1252,7 +1252,7 @@ await database.transaction().execute(async (tx) => {
 
   deploy: `// workhorse.worker.ts. Run with: workhorse worker --config ./dist/worker.js
 import { createWorkhorseAdapter, defineWorkerProcess, Pool } from "@stablemates/workhorse";
-import { generateReport, sendEmail } from "./jobs.js";
+import { generateReport, sendEmail } from "./tasks.js";
 
 export default defineWorkerProcess({
   adapter() {

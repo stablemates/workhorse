@@ -10,23 +10,23 @@
     {
       "id": "execution-latency",
       "title": "Execution latency p95",
-      "description": "The slow end of handler execution time by job type.",
+      "description": "The slow end of handler execution time by task type.",
       "unit": "ms",
       "queries": [
         {
           "metric": "workhorse.handler.duration.bucket",
           "timeAggregation": "rate",
           "spaceAggregation": "p95",
-          "groupBy": ["workhorse.job.type"],
-          "legend": "{{workhorse.job.type}}"
+          "groupBy": ["workhorse.task.type"],
+          "legend": "{{workhorse.task.type}}"
         }
       ]
     },
     {
       "id": "deadline-pressure",
       "title": "Overdue work",
-      "description": "Expired leases and jobs beyond deadline or execution timeout.",
-      "unit": "{job}",
+      "description": "Expired leases and tasks beyond deadline or execution timeout.",
+      "unit": "{task}",
       "queries": [
         {
           "metric": "workhorse.lease.expired",
@@ -131,7 +131,7 @@
       "unit": "ops/s",
       "queries": [
         {
-          "metric": "workhorse.jobs.cancellation",
+          "metric": "workhorse.tasks.cancellation",
           "timeAggregation": "rate",
           "spaceAggregation": "sum",
           "groupBy": ["workhorse.cancellation.status"],
@@ -146,7 +146,7 @@
       "unit": "ops/s",
       "queries": [
         {
-          "metric": "workhorse.jobs.redrive",
+          "metric": "workhorse.tasks.redrive",
           "timeAggregation": "rate",
           "spaceAggregation": "sum",
           "groupBy": ["workhorse.redrive.status"],

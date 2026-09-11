@@ -1,10 +1,10 @@
 ---
 title: Priority
-description: Run urgent ready jobs before ordinary work while preserving FIFO order among peers.
+description: Run urgent ready tasks before ordinary work while preserving FIFO order among peers.
 ---
 
-Set `EnqueueOptions.priority` when jobs in one queue should not all compete at the same rank.
-PostgreSQL claims higher values first, then keeps FIFO order among jobs with the same value.
+Set `EnqueueOptions.priority` when tasks in one queue should not all compete at the same rank.
+PostgreSQL claims higher values first, then keeps FIFO order among tasks with the same value.
 
 <Tabs items={["TypeScript", "Python", "Go"]}>
   <Tab value="TypeScript">
@@ -28,17 +28,17 @@ PostgreSQL claims higher values first, then keeps FIFO order among jobs with the
   </Tab>
 </Tabs>
 
-Priority is strict. A steady stream of urgent jobs can delay lower-priority work because Workhorse
-does not age jobs or reserve capacity between priority classes. Put work that must always progress
+Priority is strict. A steady stream of urgent tasks can delay lower-priority work because Workhorse
+does not age tasks or reserve capacity between priority classes. Put work that must always progress
 on a separate queue with its own capacity.
 
-## Priority follows the job
+## Priority follows the task
 
 Retries, durable waits, delays, and manual promotion keep the stored priority because they continue
-the same job. Redrive creates a fresh job but copies the source priority, so urgent failed work does
+the same task. Redrive creates a fresh task but copies the source priority, so urgent failed work does
 not silently become ordinary work.
 
-Schedule definitions accept `priority` on their job definition. Priority orders only work that is
+Schedule definitions accept `priority` on their task definition. Priority orders only work that is
 otherwise admissible; it does not bypass queue pauses, concurrency policies, rate limits, or a
 future `runAt`.
 
@@ -46,12 +46,12 @@ The dashboard sorts the task list with higher priority first and shows the store
 details. The System page groups ready work by priority and shows the oldest task in each group, so
 operators can see lower-priority work waiting behind urgent arrivals.
 
-In TypeScript, `ScheduledJob` stores the recurring job's priority before `fireSchedule`
+In TypeScript, `ScheduledTask` stores the recurring task's priority before `fireSchedule`
 creates an occurrence, so scheduled work enters the ordinary priority order.
 
 ## Next
 
-- [Job dependencies](/docs/job-dependencies) — release blocked work into priority dispatch
+- [Task dependencies](/docs/task-dependencies) — release blocked work into priority dispatch
 - [Concurrency policies](/docs/concurrency-policies) — reserve capacity with separate queues
 - [Retries](/docs/retries) — run another attempt without changing rank
 

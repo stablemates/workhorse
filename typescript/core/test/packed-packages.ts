@@ -558,11 +558,11 @@ const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
 const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60000 })] });
 metrics.setGlobalMeterProvider(provider);
 const unregister = registerOpenTelemetry();
-const queue = new Queue({ query: async () => ({ rows: [{ ordinal: 1, job_id: "job-1", outcome: "accepted" }] }) });
+const queue = new Queue({ query: async () => ({ rows: [{ ordinal: 1, task_id: "task-1", outcome: "accepted" }] }) });
 await queue.enqueue("packed.telemetry", null);
 await provider.forceFlush();
 const names = exporter.getMetrics().flatMap((resource) => resource.scopeMetrics).flatMap((scope) => scope.metrics).map((metric) => metric.descriptor.name);
-assert.ok(names.includes("workhorse.jobs.enqueued"));
+assert.ok(names.includes("workhorse.tasks.enqueued"));
 unregister();
 await provider.shutdown();
 metrics.disable();
@@ -776,7 +776,7 @@ try {
   await run("node", ["otel-smoke.mjs"], consumer);
   await run("node", ["dashboard-development.mjs"], consumer);
   for (const example of typescriptExamples) {
-    // Examples are independent published-consumer entry points. Reset between them so a ready job
+    // Examples are independent published-consumer entry points. Reset between them so a ready task
     // left by one example cannot be claimed by the next example's default-queue worker.
     await run("pnpm", ["db:reset:test-packed"]);
     const verify = ["dedicated-worker", "demo-worker"].includes(example.scenario)

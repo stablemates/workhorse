@@ -2,13 +2,13 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 /**
- * The public demo executes anonymous, operator-admitted jobs inside a container that also holds
+ * The public demo executes anonymous, operator-admitted tasks inside a container that also holds
  * the demo databases' credentials. The claim that demo work can reach neither those credentials
  * nor an external service rests on one property: every handler is fixed code compiled into the
- * image, and nothing in the job path imports a network or process primitive, reads the
+ * image, and nothing in the task path imports a network or process primitive, reads the
  * environment, or evaluates payload text as code. These assertions keep that property true.
  */
-const TYPESCRIPT_JOB_SOURCES = [
+const TYPESCRIPT_TASK_SOURCES = [
   "handlers.ts",
   "durable-demo.ts",
   "feature-showcase.ts",
@@ -46,9 +46,9 @@ function violations(source: string, patterns: readonly RegExp[]): string[] {
   return patterns.filter((pattern) => pattern.test(source)).map(String);
 }
 
-describe("demo job isolation", () => {
-  it("keeps TypeScript job code free of network, process, and credential access", async () => {
-    for (const file of TYPESCRIPT_JOB_SOURCES) {
+describe("demo task isolation", () => {
+  it("keeps TypeScript task code free of network, process, and credential access", async () => {
+    for (const file of TYPESCRIPT_TASK_SOURCES) {
       const source = await readFile(new URL(`./${file}`, import.meta.url), "utf8");
       expect(
         violations(source, [...FORBIDDEN_NETWORK_OR_PROCESS, ...FORBIDDEN_ENVIRONMENT]),

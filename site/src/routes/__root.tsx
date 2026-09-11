@@ -22,9 +22,9 @@ export const Route = createRootRoute({
       {
         name: "keywords",
         content: [
-          "postgresql job queue",
+          "postgresql task queue",
           "durable execution",
-          "background jobs",
+          "background tasks",
           "typescript queue",
           "transactional outbox",
           "dead letter redrive",

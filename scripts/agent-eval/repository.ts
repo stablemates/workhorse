@@ -2,7 +2,7 @@
  * The scratch repository a task E session starts in.
  *
  * SM-704 measures the start point a packaged skill exists for: an agent working inside an
- * application that already depends on the SDK, asked to add a job, and handed no URL. The
+ * application that already depends on the SDK, asked to add a task, and handed no URL. The
  * repository is small and real. It has a `package.json` that depends on `@stablemates/workhorse`
  * and `pg`, one module that inserts the order row the task text describes, and a README that
  * points nowhere. `npm install` runs for real, so `node_modules/@stablemates/workhorse/README.md`

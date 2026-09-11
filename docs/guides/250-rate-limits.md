@@ -41,7 +41,7 @@ await queue.syncRateLimitPolicies("billing-workers", [
 ```
 
 Use the same queue name when you enqueue, and use `concurrencyKey` for the caller whose traffic
-needs an independent budget. The key remains part of the accepted job identity and also participates
+needs an independent budget. The key remains part of the accepted task identity and also participates
 in concurrency admission when that policy is enabled.
 
 Workers do not refund tokens when a task succeeds, fails, waits, or loses its lease. The budget

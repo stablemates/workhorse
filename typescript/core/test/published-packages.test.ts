@@ -98,9 +98,9 @@ describe("published package manifests", () => {
     const queueDeclaration = await read("typescript/core/dist/src/queue.d.ts");
     const adminDeclaration = await read("typescript/core/dist/src/admin.d.ts");
     const operatorMethods = [
-      "getJob",
-      "listJobs",
-      "getJobTimeline",
+      "getTask",
+      "listTasks",
+      "getTaskTimeline",
       "listDeadLetters",
       "redrive",
       "redriveMany",

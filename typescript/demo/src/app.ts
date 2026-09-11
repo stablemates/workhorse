@@ -16,7 +16,7 @@ import {
   Queue,
   type CancelStatus,
   type Json,
-  type JobState,
+  type TaskState,
   type MaintenancePolicyDefinition,
   type MaintenancePolicySetting,
   type RetentionPolicyDefinition,
@@ -25,9 +25,9 @@ import {
 } from "@stablemates/workhorse";
 import type { Pool } from "pg";
 import {
-  DURABLE_DEMO_JOB_TYPE,
+  DURABLE_DEMO_TASK_TYPE,
   type DurableDemoScenario,
-  durableDemoPlanForJob,
+  durableDemoPlanForTask,
   durableDemoScenarios,
 } from "./durable-demo.js";
 import {
@@ -52,7 +52,7 @@ import {
   DEMO_CONCURRENCY_POLICY_NAMESPACE,
   DEMO_IDEMPOTENCY_TTL_MS,
   DEMO_LONG_RUNNING_SEED_DELAY_MS,
-  DEMO_LONG_RUNNING_SEED_JOBS,
+  DEMO_LONG_RUNNING_SEED_TASKS,
   DEMO_MAINTENANCE_INTERVAL_MS,
   DEMO_OPERATOR_IDEMPOTENCY_KEY,
   DEMO_OPERATOR_IDEMPOTENCY_SCOPE,
@@ -65,7 +65,7 @@ import {
   DEMO_RATE_LIMIT_PER_KEY,
   DEMO_RATE_LIMIT_POLICY_NAMESPACE,
   DEMO_RATE_LIMIT_QUEUE,
-  DEMO_RATE_LIMIT_SEED_JOBS,
+  DEMO_RATE_LIMIT_SEED_TASKS,
   DEMO_RATE_LIMIT_SEED_NAME,
   DEMO_RECOVERABLE_RETRY_POLICY,
   DEMO_SCHEDULE_NAMESPACE,
@@ -75,27 +75,27 @@ import {
   DEMO_TIMING_HANDLER_MS,
   DEMO_TIMING_POLICY_TIMEOUT_MS,
   DEMO_TIMING_TIMEOUT_MS,
-  DURABLE_TIMER_JOB_TYPE,
-  FAILURE_JOB_TYPE,
+  DURABLE_TIMER_TASK_TYPE,
+  FAILURE_TASK_TYPE,
   HEARTBEAT_SCHEDULE_NAME,
   GO_WORKER_SCHEDULE_NAME,
-  HISTORICAL_JOB_COUNT,
+  HISTORICAL_TASK_COUNT,
   HISTORICAL_SEED_NAME,
   HISTORICAL_WORKER_IDS,
-  LONG_RUNNING_JOB_TYPE,
-  LANGUAGE_WORKER_JOB_TYPE,
+  LONG_RUNNING_TASK_TYPE,
+  LANGUAGE_WORKER_TASK_TYPE,
   LONG_RUNNING_SCHEDULE_NAME,
   LONG_RUNNING_SEED_NAME,
-  ORDER_JOB_TYPE,
+  ORDER_TASK_TYPE,
   PYTHON_WORKER_SCHEDULE_NAME,
-  RECURRING_JOB_TYPE,
-  REPORT_JOB_TYPE,
+  RECURRING_TASK_TYPE,
+  REPORT_TASK_TYPE,
   REPORT_SCHEDULE_NAME,
   REPRESENTATIVE_SEED_NAME,
-  RETRY_JOB_TYPE,
-  SHARED_WORKER_JOB_TYPE,
+  RETRY_TASK_TYPE,
+  SHARED_WORKER_TASK_TYPE,
   SHARED_WORKER_SCHEDULE_NAME,
-  TIMING_JOB_TYPE,
+  TIMING_TASK_TYPE,
   TYPESCRIPT_WORKER_SCHEDULE_NAME,
 } from "./constants.js";
 import { orders } from "./schema.js";
@@ -103,19 +103,19 @@ import { orders } from "./schema.js";
 export * from "./constants.js";
 
 /**
- * The ceiling on demo jobs ready to run or running when a public operator admission arrives.
+ * The ceiling on demo tasks ready to run or running when a public operator admission arrives.
  *
  * The operator surface is unauthenticated, so admission is bounded by the work itself rather
- * than by the caller: once this many jobs compete for the demo's worker slots, admissions refuse
- * until the backlog drains. Scheduled, blocked, and terminal jobs do not count — only work the
+ * than by the caller: once this many tasks compete for the demo's worker slots, admissions refuse
+ * until the backlog drains. Scheduled, blocked, and terminal tasks do not count — only work the
  * fleet could claim right now.
  */
-export const DEMO_OPERATOR_MAX_PENDING_JOBS = 50;
+export const DEMO_OPERATOR_MAX_PENDING_TASKS = 50;
 
 /**
- * Refuse a new operator-admitted job while the demo's pending-work budget is saturated.
+ * Refuse a new operator-admitted task while the demo's pending-work budget is saturated.
  *
- * Every RPC that creates jobs — `enqueueTest`, `redriveTask`, and `redriveDeadLetters` — checks
+ * Every RPC that creates tasks — `enqueueTest`, `redriveTask`, and `redriveDeadLetters` — checks
  * the same ceiling. The count is approximate under concurrency, and the HTTP-layer mutation
  * guard bounds how far a wave can overshoot it.
  */
@@ -124,10 +124,10 @@ async function assertDemoOperatorWorkBudget(
 ): Promise<void> {
   const result = await executor.execute<{ pending: number }>(sql`
     SELECT count(*)::integer AS pending
-      FROM workhorse.job_runtime
+      FROM workhorse.task_runtime
      WHERE state IN ('ready', 'active')
   `);
-  if ((result.rows[0]?.pending ?? 0) >= DEMO_OPERATOR_MAX_PENDING_JOBS) {
+  if ((result.rows[0]?.pending ?? 0) >= DEMO_OPERATOR_MAX_PENDING_TASKS) {
     throw new ORPCError("TOO_MANY_REQUESTS", {
       message:
         "The demo is already running its limit of operator-admitted work; try again once the backlog drains",
@@ -243,7 +243,7 @@ export interface DashboardOperator {
     scenario?: DurableDemoScenario,
     priority?: number,
     feature?: DemoFeatureFamily,
-  ) => Promise<{ jobId: string; outcome?: "accepted" | "replayed" }>;
+  ) => Promise<{ taskId: string; outcome?: "accepted" | "replayed" }>;
 }
 
 export interface ScheduleController {
@@ -292,8 +292,8 @@ export interface SettingsController {
  */
 interface DemoCancelTaskResult {
   status: CancelStatus;
-  jobId: string;
-  state: JobState | null;
+  taskId: string;
+  state: TaskState | null;
   currentAttempt: number | null;
   requestedAt: string | null;
   requestedBy: string | null;
@@ -303,7 +303,7 @@ interface DemoCancelTaskResult {
 
 interface TaskController {
   runTaskNow?: (
-    jobId: string,
+    taskId: string,
     audit: AuditContext,
   ) => Promise<{
     status: "released" | "already_ready" | "not_scheduled" | "waiting" | "not_found";
@@ -311,7 +311,7 @@ interface TaskController {
     state: string | null;
     runAt: string | null;
   }>;
-  cancelTask?: (jobId: string, audit: CancellationAuditContext) => Promise<DemoCancelTaskResult>;
+  cancelTask?: (taskId: string, audit: CancellationAuditContext) => Promise<DemoCancelTaskResult>;
 }
 
 interface WorkerController {
@@ -325,10 +325,10 @@ interface WorkerController {
 export { createDemoDatabase } from "./database.js";
 export type { DemoDatabase } from "./database.js";
 
-interface HistoricalJob {
+interface HistoricalTask {
   id: string;
   queueName: string;
-  jobType: string;
+  taskType: string;
   payload: Json;
   tags: string[];
   maxAttempts: number;
@@ -409,27 +409,27 @@ function historicalTimestamps(now: Date, random: () => number): Date[] {
   }
 
   // Early UTC startup can leave today's business-hours baseline in the future. Fill to a stable size.
-  while (timestamps.length < HISTORICAL_JOB_COUNT) {
+  while (timestamps.length < HISTORICAL_TASK_COUNT) {
     const ageMinutes = 24 * 60 + random() * 5.5 * 24 * 60;
     timestamps.push(new Date(now.getTime() - ageMinutes * 60 * 1_000));
   }
   return (
     timestamps
-      .slice(0, HISTORICAL_JOB_COUNT)
+      .slice(0, HISTORICAL_TASK_COUNT)
       // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
       .sort((left, right) => left.getTime() - right.getTime())
   );
 }
 
-function buildHistoricalJobs(now = new Date()): HistoricalJob[] {
+function buildHistoricalTasks(now = new Date()): HistoricalTask[] {
   const random = createHistoricalRandom();
   const taskChoices = [
-    { queueName: "demo", jobType: RECURRING_JOB_TYPE },
-    { queueName: "demo", jobType: REPORT_JOB_TYPE },
-    { queueName: "orders", jobType: ORDER_JOB_TYPE },
-    { queueName: "orders", jobType: "order.refund" },
-    { queueName: "emails", jobType: "email.send" },
-    { queueName: "emails", jobType: "email.digest" },
+    { queueName: "demo", taskType: RECURRING_TASK_TYPE },
+    { queueName: "demo", taskType: REPORT_TASK_TYPE },
+    { queueName: "orders", taskType: ORDER_TASK_TYPE },
+    { queueName: "orders", taskType: "order.refund" },
+    { queueName: "emails", taskType: "email.send" },
+    { queueName: "emails", taskType: "email.digest" },
   ] as const;
   const errors = [
     { name: "SMTPError", message: "upstream mail provider returned 451", code: "SMTP_451" },
@@ -449,7 +449,7 @@ function buildHistoricalJobs(now = new Date()): HistoricalJob[] {
     const maxAttempts = failed ? currentAttempt : retried ? 3 : 1;
     const runAt = new Date(createdAt.getTime() + (200 + random() * 8_000));
     const durationMs =
-      task.jobType === REPORT_JOB_TYPE
+      task.taskType === REPORT_TASK_TYPE
         ? 8_000 + random() * 38_000
         : task.queueName === "emails"
           ? 300 + random() * 4_500
@@ -465,7 +465,7 @@ function buildHistoricalJobs(now = new Date()): HistoricalJob[] {
       task.queueName === "emails"
         ? {
             recipient: `${customer}.${index + 1}@example.com`,
-            template: task.jobType === "email.digest" ? "weekly-activity" : "order-confirmation",
+            template: task.taskType === "email.digest" ? "weekly-activity" : "order-confirmation",
             campaign: `autumn-${customer}`,
           }
         : task.queueName === "orders"
@@ -474,12 +474,12 @@ function buildHistoricalJobs(now = new Date()): HistoricalJob[] {
               customer,
               amountCents: 1_500 + Math.floor(random() * 45_000),
               currency: "USD",
-              ...(task.jobType === "order.refund"
+              ...(task.taskType === "order.refund"
                 ? { reason: "returned-item" }
                 : { items: 1 + (index % 5) }),
             }
           : {
-              report: task.jobType === REPORT_JOB_TYPE ? "queue-health" : "dependency-health",
+              report: task.taskType === REPORT_TASK_TYPE ? "queue-health" : "dependency-health",
               region: ["us-east", "eu-west", "ap-south"][index % 3]!,
               customer,
             };
@@ -513,7 +513,7 @@ function buildHistoricalJobs(now = new Date()): HistoricalJob[] {
     return {
       id: randomUUID(),
       queueName: task.queueName,
-      jobType: task.jobType,
+      taskType: task.taskType,
       payload: {
         demoSeed: HISTORICAL_SEED_NAME,
         sequence: index + 1,
@@ -525,7 +525,7 @@ function buildHistoricalJobs(now = new Date()): HistoricalJob[] {
           ? index % 2 === 0
             ? ["email", "transactional"]
             : ["email", "campaign"]
-          : task.jobType === REPORT_JOB_TYPE
+          : task.taskType === REPORT_TASK_TYPE
             ? ["reports", "weekly"]
             : task.queueName === "orders"
               ? ["billing"]
@@ -546,7 +546,7 @@ function buildHistoricalJobs(now = new Date()): HistoricalJob[] {
             ...(task.queueName === "emails"
               ? { provider: "demo-mail", delivered: 1 }
               : task.queueName === "orders"
-                ? { customer, action: task.jobType === "order.refund" ? "refunded" : "fulfilled" }
+                ? { customer, action: task.taskType === "order.refund" ? "refunded" : "fulfilled" }
                 : {
                     rowsProcessed: 100 + index * 13,
                     region: ["us-east", "eu-west", "ap-south"][index % 3]!,
@@ -565,8 +565,8 @@ function heartbeatSchedule(enabled = true) {
     name: HEARTBEAT_SCHEDULE_NAME,
     schedule: "* * * * *",
     enabled,
-    job: {
-      type: RECURRING_JOB_TYPE,
+    task: {
+      type: RECURRING_TASK_TYPE,
       queue: DEMO_QUEUE,
       payload: { source: "worker" },
     },
@@ -584,8 +584,8 @@ function languageWorkerSchedule(
     name,
     schedule,
     enabled,
-    job: {
-      type: LANGUAGE_WORKER_JOB_TYPE,
+    task: {
+      type: LANGUAGE_WORKER_TASK_TYPE,
       queue,
       payload: { language },
       maxAttempts: 1,
@@ -599,8 +599,8 @@ function sharedWorkerSchedule(enabled = true) {
     name: SHARED_WORKER_SCHEDULE_NAME,
     schedule: "* * * * *",
     enabled,
-    job: {
-      type: SHARED_WORKER_JOB_TYPE,
+    task: {
+      type: SHARED_WORKER_TASK_TYPE,
       queue: DEMO_SHARED_QUEUE,
       payload: { source: "schedule" },
       tags: ["shared-worker"],
@@ -613,8 +613,8 @@ function reportSchedule(enabled = true) {
     name: REPORT_SCHEDULE_NAME,
     schedule: "*/5 * * * *",
     enabled,
-    job: {
-      type: REPORT_JOB_TYPE,
+    task: {
+      type: REPORT_TASK_TYPE,
       queue: DEMO_QUEUE,
       payload: { report: "queue-health", source: "schedule" },
     },
@@ -626,8 +626,8 @@ function longRunningSchedule(enabled = true) {
     name: LONG_RUNNING_SCHEDULE_NAME,
     schedule: "* * * * *",
     enabled,
-    job: {
-      type: LONG_RUNNING_JOB_TYPE,
+    task: {
+      type: LONG_RUNNING_TASK_TYPE,
       queue: DEMO_QUEUE,
       payload: { source: "schedule", label: "recurring-lightweight-maintenance" },
       maxAttempts: 1,
@@ -640,8 +640,8 @@ function featureShowcaseSchedules(enabledByName: ReadonlyMap<string, boolean>) {
     name: family.scheduleName,
     schedule: family.schedule,
     enabled: enabledByName.get(family.scheduleName) ?? true,
-    job: {
-      type: family.jobType,
+    task: {
+      type: family.taskType,
       queue: DEMO_QUEUE,
       payload: {
         source: DEMO_FEATURE_RECURRING_SOURCE,
@@ -666,23 +666,23 @@ function featureShowcaseSchedules(enabledByName: ReadonlyMap<string, boolean>) {
   }));
 }
 
-async function migrateLegacyFeatureShowcaseJobTypes(database: DemoDatabase): Promise<void> {
-  const featureJobTypeByFamilyJson = JSON.stringify(
+async function migrateLegacyFeatureShowcaseTaskTypes(database: DemoDatabase): Promise<void> {
+  const featureTaskTypeByFamilyJson = JSON.stringify(
     Object.fromEntries(
-      DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) => [family.key, family.jobType]),
+      DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) => [family.key, family.taskType]),
     ),
   );
   await database.execute(sql`
-    UPDATE workhorse.job AS job
-       SET job_type = mapping.replacement_type
-      FROM jsonb_each_text(${featureJobTypeByFamilyJson}::jsonb)
+    UPDATE workhorse.task AS task
+       SET task_type = mapping.replacement_type
+      FROM jsonb_each_text(${featureTaskTypeByFamilyJson}::jsonb)
         AS mapping(family, replacement_type)
-     WHERE job.job_type = 'demo.feature-showcase'
-       AND job.payload->>'source' IN (
+     WHERE task.task_type = 'demo.feature-showcase'
+       AND task.payload->>'source' IN (
          ${DEMO_FEATURE_SHOWCASE_SOURCE},
          ${DEMO_FEATURE_RECURRING_SOURCE}
        )
-       AND job.payload->>'family' = mapping.family
+       AND task.payload->>'family' = mapping.family
   `);
 }
 
@@ -790,7 +790,7 @@ export async function installDemoSchema(database: DemoDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS workhorse_demo_audit_occurred_at_idx
     ON public.workhorse_demo_audit (occurred_at, id)
   `);
-  await migrateLegacyFeatureShowcaseJobTypes(database);
+  await migrateLegacyFeatureShowcaseTaskTypes(database);
   await database.execute(sql`
     CREATE TABLE IF NOT EXISTS public.workhorse_demo_schema_version (
       singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
@@ -843,7 +843,7 @@ export async function syncDemoSchedules(database: Pool): Promise<void> {
   ]);
 }
 
-/** Synchronize the fleet-wide dispatch budget showcased by the seeded long-running jobs. */
+/** Synchronize the fleet-wide dispatch budget showcased by the seeded long-running tasks. */
 export async function syncDemoConcurrencyPolicies(database: Pool): Promise<void> {
   const queue = new Queue(database, DEMO_QUEUE);
   await queue.syncConcurrencyPolicies(DEMO_CONCURRENCY_POLICY_NAMESPACE, [
@@ -871,7 +871,7 @@ function createReadOnlyOperator(): DashboardOperator {
   return { mode: "read-only" };
 }
 
-function demoTestJob(
+function demoTestTask(
   kind: Parameters<NonNullable<DashboardOperator["enqueueTest"]>>[0],
   scenarioInput?: DurableDemoScenario,
 ): {
@@ -883,7 +883,7 @@ function demoTestJob(
 } {
   if (kind === "success") {
     return {
-      type: RECURRING_JOB_TYPE,
+      type: RECURRING_TASK_TYPE,
       payload: { source: "operator" },
       tags: ["demo-test"],
     };
@@ -894,7 +894,7 @@ function demoTestJob(
     // The key is deliberately shared across operators — the dashboard reports the replay through
     // the response's `outcome`, which is what makes the reuse visible rather than a silent no-op.
     return {
-      type: RECURRING_JOB_TYPE,
+      type: RECURRING_TASK_TYPE,
       payload: { source: "operator-idempotent" },
       tags: ["demo-test", "idempotent"],
       idempotency: {
@@ -906,7 +906,7 @@ function demoTestJob(
   }
   if (kind === "retry") {
     return {
-      type: RETRY_JOB_TYPE,
+      type: RETRY_TASK_TYPE,
       payload: { label: "operator-retry", failUntilAttempt: 1 },
       maxAttempts: 3,
       tags: ["demo-test", "durable-checkpoint"],
@@ -915,7 +915,7 @@ function demoTestJob(
   if (kind === "durable") {
     const scenario = scenarioInput ?? "order-fulfillment";
     return {
-      type: DURABLE_DEMO_JOB_TYPE,
+      type: DURABLE_DEMO_TASK_TYPE,
       payload: { scenario },
       maxAttempts: 2,
       tags: ["demo-test", "durable-checkpoint", scenario],
@@ -923,7 +923,7 @@ function demoTestJob(
   }
   if (kind === "timer") {
     return {
-      type: DURABLE_TIMER_JOB_TYPE,
+      type: DURABLE_TIMER_TASK_TYPE,
       payload: { source: "operator" },
       maxAttempts: 1,
       tags: ["demo-test", "durable-checkpoint", "durable-timer"],
@@ -931,14 +931,14 @@ function demoTestJob(
   }
   if (kind === "failure") {
     return {
-      type: FAILURE_JOB_TYPE,
+      type: FAILURE_TASK_TYPE,
       payload: { label: "operator-failure" },
       maxAttempts: 1,
       tags: ["demo-test"],
     };
   }
   return {
-    type: LONG_RUNNING_JOB_TYPE,
+    type: LONG_RUNNING_TASK_TYPE,
     payload: { label: "operator-long-running" },
     tags: ["demo-test"],
   };
@@ -954,7 +954,7 @@ function demoTestJob(
 async function redriveLatestDeadLetter(
   database: DemoDatabase,
   audit: AuditContext,
-): Promise<{ jobId: string }> {
+): Promise<{ taskId: string }> {
   return database.transaction(async (transaction) => {
     const workhorse = createDrizzleAdapter(transaction, {
       defaultQueue: DEMO_QUEUE,
@@ -965,13 +965,13 @@ async function redriveLatestDeadLetter(
     if (!candidate) {
       throw new Error("No demo dead letter is awaiting redrive; enqueue a terminal failure first");
     }
-    const result = await workhorse.admin.redrive(candidate.jobId, {
+    const result = await workhorse.admin.redrive(candidate.taskId, {
       actor: audit.actor,
       reason: audit.reason,
       requestId: audit.requestId,
     });
-    if (!result.targetJobId) {
-      throw new Error(`Redrive of ${candidate.jobId} was refused: ${result.status}`);
+    if (!result.targetTaskId) {
+      throw new Error(`Redrive of ${candidate.taskId} was refused: ${result.status}`);
     }
     await transaction.execute(sql`
       INSERT INTO public.workhorse_demo_audit
@@ -979,11 +979,11 @@ async function redriveLatestDeadLetter(
       VALUES
         (${audit.actor}, ${audit.reason}, ${audit.requestId},
          ${audit.occurredAt ?? new Date().toISOString()}, 'redriveDeadLetter',
-         ${`job:${candidate.jobId}`}, ${JSON.stringify({ state: "failed" })}::jsonb,
-         ${JSON.stringify({ status: result.status, targetJobId: result.targetJobId })}::jsonb,
+         ${`task:${candidate.taskId}`}, ${JSON.stringify({ state: "failed" })}::jsonb,
+         ${JSON.stringify({ status: result.status, targetTaskId: result.targetTaskId })}::jsonb,
          'succeeded')
     `);
-    return { jobId: result.targetJobId };
+    return { taskId: result.targetTaskId };
   });
 }
 
@@ -999,7 +999,7 @@ async function enqueueFeatureMenuExample(
   queue: Queue,
   feature: DemoFeatureFamily | undefined,
   priority: number,
-): Promise<{ jobId: string; outcome: "accepted" | "replayed"; record: unknown }> {
+): Promise<{ taskId: string; outcome: "accepted" | "replayed"; record: unknown }> {
   if (feature === undefined) throw new Error("The feature demo kind requires a feature family");
   const family = demoFeatureShowcaseFamily(feature);
   const example = DEMO_FEATURE_MENU_EXAMPLES[feature];
@@ -1021,36 +1021,36 @@ async function enqueueFeatureMenuExample(
   const memberCount = example.seedCount ?? 1;
   const results =
     memberCount === 1
-      ? [await queue.enqueueWithResult(family.jobType, payload, options)]
+      ? [await queue.enqueueWithResult(family.taskType, payload, options)]
       : await queue.enqueueManyWithResults(
           Array.from({ length: memberCount }, (_, index) => ({
-            type: family.jobType,
+            type: family.taskType,
             payload: { ...payload, memberIndex: index + 1 },
             options,
           })),
         );
   const first = results[0]!;
   return {
-    jobId: first.jobId,
+    taskId: first.taskId,
     outcome: first.outcome === "replayed" ? ("replayed" as const) : ("accepted" as const),
     record: {
-      jobId: first.jobId,
+      taskId: first.taskId,
       family: feature,
       scenario: example.scenario,
-      type: family.jobType,
+      type: family.taskType,
       priority: example.priority ?? priority,
       memberCount,
     },
   };
 }
 
-async function enqueueOutcomeTestJob(
+async function enqueueOutcomeTestTask(
   queue: Queue,
-  kind: Parameters<typeof demoTestJob>[0],
+  kind: Parameters<typeof demoTestTask>[0],
   scenario: DurableDemoScenario | undefined,
   priority: number,
-): Promise<{ jobId: string; outcome: "accepted" | "replayed"; record: unknown }> {
-  const definition = demoTestJob(kind, scenario);
+): Promise<{ taskId: string; outcome: "accepted" | "replayed"; record: unknown }> {
+  const definition = demoTestTask(kind, scenario);
   const result = await queue.enqueueWithResult(definition.type, definition.payload, {
     ...(definition.maxAttempts === undefined ? {} : { maxAttempts: definition.maxAttempts }),
     ...(definition.idempotency === undefined ? {} : { idempotency: definition.idempotency }),
@@ -1059,9 +1059,9 @@ async function enqueueOutcomeTestJob(
   });
   const outcome = result.outcome === "replayed" ? ("replayed" as const) : ("accepted" as const);
   return {
-    jobId: result.jobId,
+    taskId: result.taskId,
     outcome,
-    record: { jobId: result.jobId, ...definition, priority, outcome },
+    record: { taskId: result.taskId, ...definition, priority, outcome },
   };
 }
 
@@ -1071,16 +1071,16 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
     async enqueueTest(kind, audit, scenario, priority = 0, feature) {
       await assertDemoOperatorWorkBudget(database);
       if (kind === "redrive") return redriveLatestDeadLetter(database, audit);
-      const target = kind === "feature" ? `job:feature:${feature}` : `job:${kind}`;
+      const target = kind === "feature" ? `task:feature:${feature}` : `task:${kind}`;
       return database.transaction(async (transaction) => {
         const workhorse = createDrizzleAdapter(transaction, {
           defaultQueue: DEMO_QUEUE,
           queueOptions: DEMO_QUEUE_OPTIONS,
         });
-        const { jobId, outcome, record } =
+        const { taskId, outcome, record } =
           kind === "feature"
             ? await enqueueFeatureMenuExample(workhorse.queue, feature, priority)
-            : await enqueueOutcomeTestJob(workhorse.queue, kind, scenario, priority);
+            : await enqueueOutcomeTestTask(workhorse.queue, kind, scenario, priority);
         await transaction.execute(sql`
           INSERT INTO public.workhorse_demo_audit
             (actor, reason, request_id, occurred_at, action, target, before, after, status)
@@ -1089,7 +1089,7 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
              ${audit.occurredAt ?? new Date().toISOString()}, 'enqueueTest', ${target},
              NULL, ${JSON.stringify(record)}::jsonb, 'succeeded')
         `);
-        return { jobId, outcome };
+        return { taskId, outcome };
       });
     },
   };
@@ -1157,7 +1157,7 @@ export function createLocalOperatorControllers(database: DemoDatabase) {
   return createDashboardOperatorControllers({
     run: (action, operation) =>
       database.transaction(async (transaction) => {
-        // Redrives are the only controller actions that admit new jobs; the rest act on existing
+        // Redrives are the only controller actions that admit new tasks; the rest act on existing
         // ones, so they stay available while the budget is saturated (canceling even drains it).
         if (action.kind === "redriveTask" || action.kind === "redriveDeadLetters") {
           await assertDemoOperatorWorkBudget(transaction);
@@ -1175,12 +1175,12 @@ export function createLocalOperatorControllers(database: DemoDatabase) {
             break;
           }
           case "purgeQueue": {
-            const rows = await transaction.execute<{ purgeable_jobs: number }>(sql`
-              SELECT count(*)::integer AS purgeable_jobs
-                FROM workhorse.job_runtime
+            const rows = await transaction.execute<{ purgeable_tasks: number }>(sql`
+              SELECT count(*)::integer AS purgeable_tasks
+                FROM workhorse.task_runtime
                WHERE queue_name = ${action.queueName} AND state IN ('ready', 'scheduled')
             `);
-            before = rows.rows[0] ?? { purgeable_jobs: 0 };
+            before = rows.rows[0] ?? { purgeable_tasks: 0 };
             target = `queue:${action.queueName}`;
             break;
           }
@@ -1193,10 +1193,10 @@ export function createLocalOperatorControllers(database: DemoDatabase) {
               SELECT COALESCE(r.state, o.state) AS state,
                      COALESCE(r.run_at, o.run_at) AS run_at,
                      r.wait_name
-                FROM workhorse.job j
-                LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
-                LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
-               WHERE j.id = ${action.jobId}
+                FROM workhorse.task j
+                LEFT JOIN workhorse.task_runtime r ON r.task_id = j.id
+                LEFT JOIN workhorse.task_outcome o ON o.task_id = j.id
+               WHERE j.id = ${action.taskId}
             `);
             const row = rows.rows[0];
             before = {
@@ -1204,56 +1204,56 @@ export function createLocalOperatorControllers(database: DemoDatabase) {
               runAt: isoTimestamp(row?.run_at ?? null),
               waitName: row?.wait_name ?? null,
             };
-            target = `job:${action.jobId}`;
+            target = `task:${action.taskId}`;
             break;
           }
           case "cancelTask": {
             const rows = await transaction.execute<{ state: string | null }>(sql`
               SELECT COALESCE(r.state, o.state) AS state
-                FROM workhorse.job j
-                LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
-                LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
-               WHERE j.id = ${action.jobId}
+                FROM workhorse.task j
+                LEFT JOIN workhorse.task_runtime r ON r.task_id = j.id
+                LEFT JOIN workhorse.task_outcome o ON o.task_id = j.id
+               WHERE j.id = ${action.taskId}
             `);
             before = { state: rows.rows[0]?.state ?? null };
-            target = `job:${action.jobId}`;
+            target = `task:${action.taskId}`;
             break;
           }
           case "signalTask":
           case "completeHumanWait": {
             const rows = await transaction.execute<{ state: string | null }>(sql`
               SELECT COALESCE(r.state, o.state) AS state
-                FROM workhorse.job j
-                LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
-                LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
-               WHERE j.id = ${action.jobId}
+                FROM workhorse.task j
+                LEFT JOIN workhorse.task_runtime r ON r.task_id = j.id
+                LEFT JOIN workhorse.task_outcome o ON o.task_id = j.id
+               WHERE j.id = ${action.taskId}
             `);
             before = { state: rows.rows[0]?.state ?? null, name: action.name };
-            target = `job:${action.jobId}`;
+            target = `task:${action.taskId}`;
             break;
           }
           case "redriveTask": {
             const rows = await transaction.execute<{ state: string | null }>(sql`
               SELECT COALESCE(r.state, o.state) AS state
-                FROM workhorse.job j
-                LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
-                LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
-               WHERE j.id = ${action.jobId}
+                FROM workhorse.task j
+                LEFT JOIN workhorse.task_runtime r ON r.task_id = j.id
+                LEFT JOIN workhorse.task_outcome o ON o.task_id = j.id
+               WHERE j.id = ${action.taskId}
             `);
             before = { state: rows.rows[0]?.state ?? null };
-            target = `job:${action.jobId}`;
+            target = `task:${action.taskId}`;
             break;
           }
           case "redriveDeadLetters": {
-            const { queue, jobType, tags } = action.filter;
+            const { queue, taskType, tags } = action.filter;
             const selectedTags = [...tags];
             const rows = await transaction.execute<{ dead_letters: number }>(sql`
               SELECT count(*)::integer AS dead_letters
-                FROM workhorse.job_outcome o
-                JOIN workhorse.job j ON j.id = o.job_id
+                FROM workhorse.task_outcome o
+                JOIN workhorse.task j ON j.id = o.task_id
                WHERE o.state = 'failed'
                  AND (${queue}::text IS NULL OR j.queue_name = ${queue})
-                 AND (${jobType}::text IS NULL OR j.job_type = ${jobType})
+                 AND (${taskType}::text IS NULL OR j.task_type = ${taskType})
                  AND (cardinality(${selectedTags}::text[]) = 0
                       OR j.tags @> ${selectedTags}::text[])
             `);
@@ -1264,7 +1264,7 @@ export function createLocalOperatorControllers(database: DemoDatabase) {
               limit: action.limit,
               continued: action.cursor !== null,
             };
-            target = `dead-letters:${queue ?? "*"}/${jobType ?? "*"}`;
+            target = `dead-letters:${queue ?? "*"}/${taskType ?? "*"}`;
             break;
           }
           case "setWorkerPaused": {
@@ -1440,7 +1440,7 @@ export function createDemoApplication(
           }
         : production),
       maintenanceLoops: { tickIntervalMs: maintenanceIntervalMs },
-      projectDurability: durableDemoPlanForJob,
+      projectDurability: durableDemoPlanForTask,
       // Visitors can intentionally fail tasks, so task details must not reveal container paths.
       redactErrorStacks: true,
       auditActor: "local-demo",
@@ -1492,29 +1492,29 @@ async function seedHistoricalDemoData(database: DemoDatabase): Promise<number> {
     `);
     if (marker.rows.length === 0) return 0;
 
-    const jobs = buildHistoricalJobs();
+    const tasks = buildHistoricalTasks();
     await transaction.execute(sql`
-      INSERT INTO workhorse.job
-        (id, queue_name, job_type, payload, tags, max_attempts, created_at)
+      INSERT INTO workhorse.task
+        (id, queue_name, task_type, payload, tags, max_attempts, created_at)
       VALUES ${sql.join(
-        jobs.map(
-          (job) => sql`(
-            ${job.id}, ${job.queueName}, ${job.jobType}, ${JSON.stringify(job.payload)}::jsonb,
-            ${textArrayValue(job.tags)},
-            ${job.maxAttempts}, ${job.createdAt}
+        tasks.map(
+          (task) => sql`(
+            ${task.id}, ${task.queueName}, ${task.taskType}, ${JSON.stringify(task.payload)}::jsonb,
+            ${textArrayValue(task.tags)},
+            ${task.maxAttempts}, ${task.createdAt}
           )`,
         ),
         sql`, `,
       )}
     `);
     await transaction.execute(sql`
-      INSERT INTO workhorse.job_outcome
-        (job_id, state, current_attempt, fence_token, run_at, result, error, finished_at, updated_at)
+      INSERT INTO workhorse.task_outcome
+        (task_id, state, current_attempt, fence_token, run_at, result, error, finished_at, updated_at)
       VALUES ${sql.join(
-        jobs.map(
-          (job) => sql`(
-            ${job.id}, ${job.state}, ${job.currentAttempt}, ${job.fenceToken}, ${job.runAt},
-            ${jsonbValue(job.result)}, ${jsonbValue(job.error)}, ${job.finishedAt}, ${job.finishedAt}
+        tasks.map(
+          (task) => sql`(
+            ${task.id}, ${task.state}, ${task.currentAttempt}, ${task.fenceToken}, ${task.runAt},
+            ${jsonbValue(task.result)}, ${jsonbValue(task.error)}, ${task.finishedAt}, ${task.finishedAt}
           )`,
         ),
         sql`, `,
@@ -1522,13 +1522,13 @@ async function seedHistoricalDemoData(database: DemoDatabase): Promise<number> {
     `);
     await transaction.execute(sql`
       INSERT INTO workhorse.attempt_history
-        (job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at,
+        (task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at,
          finished_at, error, occurred_at)
       VALUES ${sql.join(
-        jobs.flatMap((job) =>
-          job.attempts.map(
+        tasks.flatMap((task) =>
+          task.attempts.map(
             (attempt) => sql`(
-              ${job.id}, ${attempt.attempt}, ${attempt.fenceToken}, ${attempt.workerId},
+              ${task.id}, ${attempt.attempt}, ${attempt.fenceToken}, ${attempt.workerId},
               ${attempt.outcome}, ${attempt.startedAt}, ${attempt.startedAt}, ${attempt.finishedAt},
               ${jsonbValue(attempt.error)}, ${attempt.finishedAt}
             )`,
@@ -1537,7 +1537,7 @@ async function seedHistoricalDemoData(database: DemoDatabase): Promise<number> {
         sql`, `,
       )}
     `);
-    return jobs.length;
+    return tasks.length;
   });
 }
 
@@ -1555,15 +1555,15 @@ async function seedLongRunningDemoData(database: DemoDatabase): Promise<string[]
       defaultQueue: DEMO_QUEUE,
       queueOptions: DEMO_QUEUE_OPTIONS,
     });
-    const jobIds: string[] = [];
+    const taskIds: string[] = [];
     const runAt = new Date(Date.now() + DEMO_LONG_RUNNING_SEED_DELAY_MS);
-    for (const job of DEMO_LONG_RUNNING_SEED_JOBS) {
-      jobIds.push(
+    for (const task of DEMO_LONG_RUNNING_SEED_TASKS) {
+      taskIds.push(
         await workhorse.queue.enqueue(
-          LONG_RUNNING_JOB_TYPE,
-          { source: "long-running-seed", label: job.label },
+          LONG_RUNNING_TASK_TYPE,
+          { source: "long-running-seed", label: task.label },
           {
-            concurrencyKey: job.concurrencyKey,
+            concurrencyKey: task.concurrencyKey,
             maxAttempts: 1,
             runAt,
             tags: ["demo-test", "long-running", "low-resource", "concurrency-policy"],
@@ -1571,7 +1571,7 @@ async function seedLongRunningDemoData(database: DemoDatabase): Promise<string[]
         ),
       );
     }
-    return jobIds;
+    return taskIds;
   });
 }
 
@@ -1596,14 +1596,14 @@ async function seedRateLimitDemoData(database: DemoDatabase): Promise<string[]> 
     `);
     if (marker.rows.length === 0) return [];
 
-    const jobIds: string[] = [];
-    for (const job of DEMO_RATE_LIMIT_SEED_JOBS) {
-      jobIds.push(
+    const taskIds: string[] = [];
+    for (const task of DEMO_RATE_LIMIT_SEED_TASKS) {
+      taskIds.push(
         await workhorse.queue.enqueue(
-          RECURRING_JOB_TYPE,
-          { source: "rate-limit-seed", label: job.label },
+          RECURRING_TASK_TYPE,
+          { source: "rate-limit-seed", label: task.label },
           {
-            concurrencyKey: job.concurrencyKey,
+            concurrencyKey: task.concurrencyKey,
             maxAttempts: 1,
             tags: ["demo-test", "rate-limit", "partner-api"],
           },
@@ -1618,7 +1618,7 @@ async function seedRateLimitDemoData(database: DemoDatabase): Promise<string[]> 
       if (!claimed) throw new Error("Expected the demo rate-limit burst to admit two tasks");
       await workhorse.queue.complete(claimed, workerId, { seeded: true });
     }
-    return jobIds;
+    return taskIds;
   });
 }
 
@@ -1655,11 +1655,11 @@ async function seedDependencyChain(
   payload: DemoFeaturePayload,
 ): Promise<string[]> {
   const spec = example.seedDependency!;
-  const prerequisiteJobIds: string[] = [];
+  const prerequisiteTaskIds: string[] = [];
   for (const prerequisite of spec.prerequisites) {
-    prerequisiteJobIds.push(
+    prerequisiteTaskIds.push(
       await queue.enqueue(
-        family.jobType,
+        family.taskType,
         {
           ...payload,
           behavior: prerequisite.behavior,
@@ -1674,24 +1674,24 @@ async function seedDependencyChain(
       ),
     );
   }
-  const dependentJobId = await queue.enqueue(
-    family.jobType,
+  const dependentTaskId = await queue.enqueue(
+    family.taskType,
     { ...payload, role: "dependent" },
     {
       maxAttempts: example.maxAttempts,
       tags: [...example.tags, "dependent"],
       dependencies: {
-        prerequisiteJobIds,
+        prerequisiteTaskIds,
         onSuccess: "release",
         onFailure: spec.onFailure,
         onCancellation: spec.onCancellation,
       },
     },
   );
-  return [...prerequisiteJobIds, dependentJobId];
+  return [...prerequisiteTaskIds, dependentTaskId];
 }
 
-/** One keyed debounce acceptance plus its declared replacements; one retained job survives. */
+/** One keyed debounce acceptance plus its declared replacements; one retained task survives. */
 async function seedDebouncedScenario(
   queue: Queue,
   family: DemoFeatureShowcaseFamily,
@@ -1705,7 +1705,7 @@ async function seedDebouncedScenario(
     windowMs: spec.windowMs,
     schedule: spec.schedule,
   };
-  const first = await queue.enqueueWithResult(family.jobType, payload, {
+  const first = await queue.enqueueWithResult(family.taskType, payload, {
     maxAttempts: example.maxAttempts,
     tags: example.tags,
     debounce,
@@ -1715,15 +1715,15 @@ async function seedDebouncedScenario(
   }
   for (let replacement = 1; replacement <= spec.replacements; replacement += 1) {
     const replaced = await queue.enqueueWithResult(
-      family.jobType,
+      family.taskType,
       { ...payload, label: `${example.label} (replacement ${replacement})` },
       { maxAttempts: example.maxAttempts, tags: example.tags, debounce },
     );
-    if (replaced.outcome !== "replaced" || replaced.jobId !== first.jobId) {
+    if (replaced.outcome !== "replaced" || replaced.taskId !== first.taskId) {
       throw new Error(`Expected ${example.scenario} replacement, got ${replaced.outcome}`);
     }
   }
-  return first.jobId;
+  return first.taskId;
 }
 
 /** Seed one keyed throttle shape and assert the coalesced dispositions PostgreSQL reports. */
@@ -1741,19 +1741,19 @@ async function seedThrottledScenario(
     throttle: { key, scope, windowMs: spec.windowMs },
   });
   if (spec.shape === "per-key") {
-    const jobIds: string[] = [];
+    const taskIds: string[] = [];
     for (const lane of ["lane-a", "lane-b"]) {
       const result = await queue.enqueueWithResult(
-        family.jobType,
+        family.taskType,
         { ...payload, label: `${example.label} (${lane})` },
         options(`showcase-${example.scenario}-${lane}`),
       );
       if (result.outcome !== "accepted") {
         throw new Error(`Expected independent ${lane} acceptance, got ${result.outcome}`);
       }
-      jobIds.push(result.jobId);
+      taskIds.push(result.taskId);
     }
-    return jobIds;
+    return taskIds;
   }
   const key = `showcase-${example.scenario}`;
   if (spec.shape === "burst") {
@@ -1761,7 +1761,7 @@ async function seedThrottledScenario(
     // the identical payload; a differing repeat would be a conflict, not a coalescence.
     const results = await queue.enqueueManyWithResults(
       Array.from({ length: 3 }, () => ({
-        type: family.jobType,
+        type: family.taskType,
         payload,
         options: options(key),
       })),
@@ -1770,25 +1770,25 @@ async function seedThrottledScenario(
     if (accepted!.outcome !== "accepted" || coalesced.some((r) => r.outcome !== "coalesced")) {
       throw new Error(`Expected one accepted burst member for ${example.scenario}`);
     }
-    return [accepted!.jobId];
+    return [accepted!.taskId];
   }
-  const first = await queue.enqueueWithResult(family.jobType, payload, options(key));
+  const first = await queue.enqueueWithResult(family.taskType, payload, options(key));
   if (first.outcome !== "accepted") {
     throw new Error(`Expected ${example.scenario} acceptance, got ${first.outcome}`);
   }
-  const repeat = await queue.enqueueWithResult(family.jobType, payload, options(key));
-  if (repeat.outcome !== "coalesced" || repeat.jobId !== first.jobId) {
+  const repeat = await queue.enqueueWithResult(family.taskType, payload, options(key));
+  if (repeat.outcome !== "coalesced" || repeat.taskId !== first.taskId) {
     throw new Error(`Expected ${example.scenario} repeat to coalesce, got ${repeat.outcome}`);
   }
-  return [first.jobId];
+  return [first.taskId];
 }
 
 export async function seedDemoData(database: DemoDatabase) {
-  const rateLimitJobIds = await seedRateLimitDemoData(database);
-  // These jobs are inserted first but start after a short grace period, so startup work is never
+  const rateLimitTaskIds = await seedRateLimitDemoData(database);
+  // These tasks are inserted first but start after a short grace period, so startup work is never
   // starved. Their handler only awaits a Node timer, occupying slots without burning CPU or memory.
-  const longRunningJobIds = await seedLongRunningDemoData(database);
-  const featureShowcaseJobIds = await database.transaction(async (transaction) => {
+  const longRunningTaskIds = await seedLongRunningDemoData(database);
+  const featureShowcaseTaskIds = await database.transaction(async (transaction) => {
     const marker = await transaction.execute<{ name: string }>(sql`
       INSERT INTO public.workhorse_demo_seed (name)
       VALUES (${DEMO_FEATURE_SHOWCASE_SEED_NAME})
@@ -1801,7 +1801,7 @@ export async function seedDemoData(database: DemoDatabase) {
       defaultQueue: DEMO_QUEUE,
       queueOptions: DEMO_QUEUE_OPTIONS,
     });
-    const jobIds: string[] = [];
+    const taskIds: string[] = [];
     for (const family of DEMO_FEATURE_SHOWCASE_FAMILIES) {
       for (const example of family.examples) {
         const payload = showcaseSeedPayload(family, example);
@@ -1837,11 +1837,15 @@ export async function seedDemoData(database: DemoDatabase) {
             defaultQueue: queue,
             queueOptions: DEMO_QUEUE_OPTIONS,
           });
-          const sourceJobId = await isolated.queue.enqueue(family.jobType, payload, enqueueOptions);
-          jobIds.push(sourceJobId);
+          const sourceTaskId = await isolated.queue.enqueue(
+            family.taskType,
+            payload,
+            enqueueOptions,
+          );
+          taskIds.push(sourceTaskId);
           const workerId = `showcase-seed-${example.scenario}`;
           const claimed = await isolated.queue.claim(workerId, { queue });
-          if (!claimed || claimed.id !== sourceJobId) {
+          if (!claimed || claimed.id !== sourceTaskId) {
             throw new Error(`Could not claim showcase dead letter ${example.scenario}`);
           }
           const failedState = await isolated.queue.fail(
@@ -1858,17 +1862,18 @@ export async function seedDemoData(database: DemoDatabase) {
               reason: `Show redrive lineage for ${example.scenario}`,
               requestId: `feature-showcase:${example.scenario}`,
             };
-            const redrive = await isolated.admin.redrive(sourceJobId, request);
-            if (!redrive.targetJobId) throw new Error(`Redrive did not create ${example.scenario}`);
-            jobIds.push(redrive.targetJobId);
+            const redrive = await isolated.admin.redrive(sourceTaskId, request);
+            if (!redrive.targetTaskId)
+              throw new Error(`Redrive did not create ${example.scenario}`);
+            taskIds.push(redrive.targetTaskId);
             if (example.seedTransition === "fail-and-redrive-replay") {
-              const replay = await isolated.admin.redrive(sourceJobId, request);
-              if (replay.status !== "replayed" || replay.targetJobId !== redrive.targetJobId) {
+              const replay = await isolated.admin.redrive(sourceTaskId, request);
+              if (replay.status !== "replayed" || replay.targetTaskId !== redrive.targetTaskId) {
                 throw new Error("Expected idempotent showcase redrive replay");
               }
             }
             const target = await isolated.queue.claim(workerId, { queue });
-            if (!target || target.id !== redrive.targetJobId) {
+            if (!target || target.id !== redrive.targetTaskId) {
               throw new Error(`Could not claim redrive target ${example.scenario}`);
             }
             await isolated.queue.complete(target, workerId, {
@@ -1881,23 +1886,23 @@ export async function seedDemoData(database: DemoDatabase) {
         }
 
         if (example.seedDependency) {
-          jobIds.push(...(await seedDependencyChain(workhorse.queue, family, example, payload)));
+          taskIds.push(...(await seedDependencyChain(workhorse.queue, family, example, payload)));
           continue;
         }
         if (example.seedDebounce) {
-          jobIds.push(await seedDebouncedScenario(workhorse.queue, family, example, payload));
+          taskIds.push(await seedDebouncedScenario(workhorse.queue, family, example, payload));
           continue;
         }
         if (example.seedThrottle) {
-          jobIds.push(...(await seedThrottledScenario(workhorse.queue, family, example, payload)));
+          taskIds.push(...(await seedThrottledScenario(workhorse.queue, family, example, payload)));
           continue;
         }
         if (example.seedCount !== undefined) {
           const memberCount = example.seedCount;
-          jobIds.push(
+          taskIds.push(
             ...(await workhorse.queue.enqueueMany(
               Array.from({ length: memberCount }, (_, index) => ({
-                type: family.jobType,
+                type: family.taskType,
                 payload: {
                   ...payload,
                   memberIndex: index + 1,
@@ -1912,25 +1917,25 @@ export async function seedDemoData(database: DemoDatabase) {
           continue;
         }
 
-        const jobId = await workhorse.queue.enqueue(family.jobType, payload, enqueueOptions);
-        jobIds.push(jobId);
+        const taskId = await workhorse.queue.enqueue(family.taskType, payload, enqueueOptions);
+        taskIds.push(taskId);
         if (example.idempotencyKey) {
-          const replayedJobId = await workhorse.queue.enqueue(
-            family.jobType,
+          const replayedTaskId = await workhorse.queue.enqueue(
+            family.taskType,
             payload,
             enqueueOptions,
           );
-          if (replayedJobId !== jobId) throw new Error("Expected showcase enqueue replay");
+          if (replayedTaskId !== taskId) throw new Error("Expected showcase enqueue replay");
         }
         if (example.afterEnqueue === "cancel") {
-          await workhorse.queue.cancel(jobId, {
+          await workhorse.queue.cancel(taskId, {
             requestedBy: "demo-seed",
             reason: `Seeded ${example.scenario} cancellation`,
           });
         }
       }
     }
-    return jobIds;
+    return taskIds;
   });
   const representativeSeed = await database.transaction(async (transaction) => {
     const marker = await transaction.execute<{ name: string }>(sql`
@@ -1940,14 +1945,14 @@ export async function seedDemoData(database: DemoDatabase) {
       RETURNING name
     `);
     if (marker.rows.length === 0) {
-      return { expiredDeadlineId: null, jobIds: [] as string[] };
+      return { expiredDeadlineId: null, taskIds: [] as string[] };
     }
 
     const workhorse = createDrizzleAdapter(transaction, {
       defaultQueue: DEMO_QUEUE,
       queueOptions: DEMO_QUEUE_OPTIONS,
     });
-    const seededJobIds: string[] = [];
+    const seededTaskIds: string[] = [];
     const orderId = randomUUID();
     await transaction.insert(orders).values({
       id: orderId,
@@ -1955,19 +1960,19 @@ export async function seedDemoData(database: DemoDatabase) {
       description: "Inspect a successful transactional order",
       status: "queued",
     });
-    seededJobIds.push(
-      await workhorse.queue.enqueue(ORDER_JOB_TYPE, { orderId }, { tags: ["billing"] }),
+    seededTaskIds.push(
+      await workhorse.queue.enqueue(ORDER_TASK_TYPE, { orderId }, { tags: ["billing"] }),
     );
-    seededJobIds.push(
+    seededTaskIds.push(
       await workhorse.queue.enqueue(
-        DURABLE_TIMER_JOB_TYPE,
+        DURABLE_TIMER_TASK_TYPE,
         { source: "representative-seed" },
         { maxAttempts: 1, tags: ["demo-test", "durable-checkpoint", "durable-timer"] },
       ),
     );
-    seededJobIds.push(
+    seededTaskIds.push(
       await workhorse.queue.enqueue(
-        RETRY_JOB_TYPE,
+        RETRY_TASK_TYPE,
         { label: "recover-with-durable-checkpoint", failUntilAttempt: 1 },
         {
           maxAttempts: 3,
@@ -1978,9 +1983,9 @@ export async function seedDemoData(database: DemoDatabase) {
         },
       ),
     );
-    seededJobIds.push(
+    seededTaskIds.push(
       await workhorse.queue.enqueue(
-        FAILURE_JOB_TYPE,
+        FAILURE_TASK_TYPE,
         { label: "terminal-failure" },
         { maxAttempts: 1, tags: ["demo-test"] },
       ),
@@ -1988,9 +1993,9 @@ export async function seedDemoData(database: DemoDatabase) {
     // One representative keyed task so a fresh dashboard shows the deduplication surface without
     // an operator having to act first. It stays an ordinary successful task; nothing about the
     // seed pretends a conflict or a degraded state occurred.
-    seededJobIds.push(
+    seededTaskIds.push(
       await workhorse.queue.enqueue(
-        RECURRING_JOB_TYPE,
+        RECURRING_TASK_TYPE,
         { source: "keyed-seed" },
         {
           tags: ["demo-test", "idempotent"],
@@ -2003,7 +2008,7 @@ export async function seedDemoData(database: DemoDatabase) {
       ),
     );
     const expiredDeadlineId = await workhorse.queue.enqueue(
-      TIMING_JOB_TYPE,
+      TIMING_TASK_TYPE,
       { durationMs: 0, source: "expired-deadline-seed" },
       {
         deadline: new Date(Date.now() - 1_000),
@@ -2011,10 +2016,10 @@ export async function seedDemoData(database: DemoDatabase) {
         tags: ["demo-test", "deadline", "intentionally-expired"],
       },
     );
-    seededJobIds.push(expiredDeadlineId);
-    seededJobIds.push(
+    seededTaskIds.push(expiredDeadlineId);
+    seededTaskIds.push(
       await workhorse.queue.enqueue(
-        TIMING_JOB_TYPE,
+        TIMING_TASK_TYPE,
         { durationMs: DEMO_TIMING_HANDLER_MS, source: "execution-timeout-seed" },
         {
           executionTimeoutMs: DEMO_TIMING_TIMEOUT_MS,
@@ -2024,9 +2029,9 @@ export async function seedDemoData(database: DemoDatabase) {
       ),
     );
     const timingPolicyRunAt = new Date(Date.now() + 24 * 60 * 60 * 1_000);
-    seededJobIds.push(
+    seededTaskIds.push(
       await workhorse.queue.enqueue(
-        TIMING_JOB_TYPE,
+        TIMING_TASK_TYPE,
         { durationMs: 10, source: "timing-policy-seed" },
         {
           runAt: timingPolicyRunAt,
@@ -2038,9 +2043,9 @@ export async function seedDemoData(database: DemoDatabase) {
       ),
     );
     for (const scenario of Object.keys(durableDemoScenarios) as DurableDemoScenario[]) {
-      seededJobIds.push(
+      seededTaskIds.push(
         await workhorse.queue.enqueue(
-          DURABLE_DEMO_JOB_TYPE,
+          DURABLE_DEMO_TASK_TYPE,
           { scenario },
           { maxAttempts: 2, tags: ["demo-test", "durable-checkpoint", scenario] },
         ),
@@ -2051,9 +2056,9 @@ export async function seedDemoData(database: DemoDatabase) {
     ).entries()) {
       const retryDelayMs = DEMO_PERSISTENT_RETRY_DELAYS_MS[index]!;
       const retryPolicy = DEMO_PERSISTENT_RETRY_POLICIES[index]!;
-      seededJobIds.push(
+      seededTaskIds.push(
         await workhorse.queue.enqueue(
-          DURABLE_DEMO_JOB_TYPE,
+          DURABLE_DEMO_TASK_TYPE,
           {
             scenario,
             failureMode: "continuous",
@@ -2073,14 +2078,14 @@ export async function seedDemoData(database: DemoDatabase) {
         ),
       );
     }
-    seededJobIds.push(
+    seededTaskIds.push(
       await workhorse.queue.enqueue(
-        RECURRING_JOB_TYPE,
+        RECURRING_TASK_TYPE,
         { source: "scheduled-seed" },
         { runAt: new Date(Date.now() + 24 * 60 * 60 * 1_000), tags: ["reports", "weekly"] },
       ),
     );
-    return { expiredDeadlineId, jobIds: seededJobIds };
+    return { expiredDeadlineId, taskIds: seededTaskIds };
   });
 
   if (representativeSeed.expiredDeadlineId !== null) {
@@ -2089,22 +2094,22 @@ export async function seedDemoData(database: DemoDatabase) {
       queueOptions: DEMO_QUEUE_OPTIONS,
     });
     await workhorse.queue.recoverExpired();
-    const expiredDeadline = await workhorse.admin.getJob(representativeSeed.expiredDeadlineId);
+    const expiredDeadline = await workhorse.admin.getTask(representativeSeed.expiredDeadlineId);
     if (expiredDeadline?.state !== "failed") {
       throw new Error("Expected the representative expired deadline to be materialized");
     }
   }
 
-  const historicalJobCount = await seedHistoricalDemoData(database);
-  const jobIds = [
-    ...rateLimitJobIds,
-    ...longRunningJobIds,
-    ...featureShowcaseJobIds,
-    ...representativeSeed.jobIds,
+  const historicalTaskCount = await seedHistoricalDemoData(database);
+  const taskIds = [
+    ...rateLimitTaskIds,
+    ...longRunningTaskIds,
+    ...featureShowcaseTaskIds,
+    ...representativeSeed.taskIds,
   ];
   return {
-    seeded: jobIds.length > 0 || historicalJobCount > 0,
-    jobIds,
-    historicalJobCount,
+    seeded: taskIds.length > 0 || historicalTaskCount > 0,
+    taskIds,
+    historicalTaskCount,
   };
 }

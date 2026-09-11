@@ -2,7 +2,7 @@ import type { Queue, WorkerProcessWorkerDefinition } from "@stablemates/workhors
 import {
   DEMO_BATCH_MAX_SIZE,
   DEMO_MAINTENANCE_INTERVAL_MS,
-  DEMO_MAINTENANCE_TASK_POLL_MS,
+  DEMO_MAINTENANCE_ROUTINE_POLL_MS,
   DEMO_QUEUE,
   DEMO_REGISTRY_INTERVAL_MS,
   DEMO_SCHEDULE_NAMESPACE,
@@ -23,7 +23,7 @@ export interface DemoWorkerDefinitionOptions extends Omit<
   pollMs?: number;
   registryIntervalMs?: number;
   maintenanceIntervalMs?: number;
-  maintenanceTaskPollMs?: number;
+  maintenanceRoutinePollMs?: number;
   onRegistrationError?: (error: unknown) => void;
 }
 
@@ -41,9 +41,10 @@ export function createDemoWorkerDefinition(
       concurrency: options.concurrency,
       workerId: options.workerId,
       maintenanceIntervalMs: options.maintenanceIntervalMs ?? DEMO_MAINTENANCE_INTERVAL_MS,
-      maintenanceTaskPollMs: options.maintenanceTaskPollMs ?? DEMO_MAINTENANCE_TASK_POLL_MS,
+      maintenanceRoutinePollMs:
+        options.maintenanceRoutinePollMs ?? DEMO_MAINTENANCE_ROUTINE_POLL_MS,
       registryIntervalMs: options.registryIntervalMs ?? DEMO_REGISTRY_INTERVAL_MS,
-      retryDelayMs: (attempt, job) => (job.retryPolicy === null ? attempt * 100 : undefined),
+      retryDelayMs: (attempt, task) => (task.retryPolicy === null ? attempt * 100 : undefined),
       onRegistrationError: options.onRegistrationError,
     },
     configure(worker) {
@@ -54,7 +55,7 @@ export function createDemoWorkerDefinition(
         batchMaxSize: Math.min(DEMO_BATCH_MAX_SIZE, options.concurrency),
         durableStepMs: options.durableStepMs,
         durableTimerWaitMs: options.durableTimerWaitMs,
-        longRunningJobMs: options.longRunningJobMs,
+        longRunningTaskMs: options.longRunningTaskMs,
         onDurableStepOperation: options.onDurableStepOperation,
         onDurableTimerOperation: options.onDurableTimerOperation,
       });

@@ -48,15 +48,15 @@ describe("task listing identity", () => {
   it("uses a named button to open task details from the table", async () => {
     const { TaskOpenButton } = await import("./task-table-ui.js");
     const html = render(TaskOpenButton, {
-      jobId: "job-123",
+      taskId: "task-123",
       taskType: "billing.invoice",
       onOpen: () => undefined,
       children: "Invoice",
     });
 
     expect(html).toContain("<button");
-    expect(html).toContain('id="task-open-job-123"');
-    expect(html).toContain('aria-label="View task billing.invoice, job-123"');
+    expect(html).toContain('id="task-open-task-123"');
+    expect(html).toContain('aria-label="View task billing.invoice, task-123"');
   });
 
   it("places ordering after task type and omits the priority filter", async () => {
@@ -67,12 +67,12 @@ describe("task listing identity", () => {
         sort: "updated",
         queue: null,
         worker: null,
-        jobType: null,
+        taskType: null,
       },
       searchInput: "",
       setSearchInput: () => undefined,
       taskFacets: {
-        facets: { queues: [], workers: [], jobTypes: [], tags: [] },
+        facets: { queues: [], workers: [], taskTypes: [], tags: [] },
         loading: false,
         error: null,
         load: () => undefined,

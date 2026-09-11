@@ -4,26 +4,26 @@ import type { RetryPolicy } from "@stablemates/workhorse";
  * Shared demo constants.
  *
  * The dedicated worker process and the web tier are separate programs that must agree on queue
- * names, job types, schedule names, and worker identities, so those values live here rather than
+ * names, task types, schedule names, and worker identities, so those values live here rather than
  * inside either one.
  */
 
-export const ORDER_JOB_TYPE = "order.process";
-export const RETRY_JOB_TYPE = "demo.retry";
+export const ORDER_TASK_TYPE = "order.process";
+export const RETRY_TASK_TYPE = "demo.retry";
 export const RETRY_CHECKPOINT_NAME = "reserve-capacity";
-export const FAILURE_JOB_TYPE = "demo.failure";
-export const LONG_RUNNING_JOB_TYPE = "demo.long-running";
-export const TIMING_JOB_TYPE = "demo.timing-policy";
-export const DURABLE_TIMER_JOB_TYPE = "demo.durable-timer";
+export const FAILURE_TASK_TYPE = "demo.failure";
+export const LONG_RUNNING_TASK_TYPE = "demo.long-running";
+export const TIMING_TASK_TYPE = "demo.timing-policy";
+export const DURABLE_TIMER_TASK_TYPE = "demo.durable-timer";
 export const DURABLE_TIMER_PREPARE_CHECKPOINT = "prepare-publication";
 export const DURABLE_TIMER_WAIT_NAME = "publication-delay";
 export const DURABLE_TIMER_PUBLISH_CHECKPOINT = "publish-after-wait";
-export const RECURRING_JOB_TYPE = "demo.recurring";
-export const LANGUAGE_WORKER_JOB_TYPE = "demo.language-worker";
-export const SHARED_WORKER_JOB_TYPE = "demo.shared-worker";
-export const REPORT_JOB_TYPE = "demo.report";
-export const CHILD_STEP_JOB_TYPE = "demo.child-step";
-export const SIGNAL_SENDER_JOB_TYPE = "demo.signal-sender";
+export const RECURRING_TASK_TYPE = "demo.recurring";
+export const LANGUAGE_WORKER_TASK_TYPE = "demo.language-worker";
+export const SHARED_WORKER_TASK_TYPE = "demo.shared-worker";
+export const REPORT_TASK_TYPE = "demo.report";
+export const CHILD_STEP_TASK_TYPE = "demo.child-step";
+export const SIGNAL_SENDER_TASK_TYPE = "demo.signal-sender";
 /** One shared boundary name keeps the signal showcase greppable across sender and waiter. */
 export const DEMO_SIGNAL_NAME = "partner-callback";
 export const DEMO_HUMAN_WAIT_NAME = "operator-decision";
@@ -36,7 +36,7 @@ export const DEMO_SIGNAL_SENDER_DELAY_MS = 3_000;
 export const DEMO_RECURRING_WAIT_TIMEOUT_MS = 10 * 60_000;
 /**
  * The declared batch ceiling for `demo.batch-digest`. Each demo worker clamps it to its
- * declared job concurrency and groups up to three compatible members per invocation.
+ * declared task concurrency and groups up to three compatible members per invocation.
  */
 export const DEMO_BATCH_MAX_SIZE = 3;
 export const DEMO_BATCH_LINGER_MS = 2_000;
@@ -47,7 +47,7 @@ export const DEMO_SHARED_QUEUE = "demo-shared";
 export const REPRESENTATIVE_SEED_NAME = "default-dashboard-v8";
 export const LONG_RUNNING_SEED_NAME = "long-running-dashboard-v2";
 export const HISTORICAL_SEED_NAME = "historical-dashboard-v1";
-export const HISTORICAL_JOB_COUNT = 362;
+export const HISTORICAL_TASK_COUNT = 362;
 export const DEMO_WORKER_POLL_MS = 15_000;
 /**
  * Declared execution slots for the demo workers.
@@ -81,7 +81,7 @@ export const DEMO_MAINTENANCE_INTERVAL_MS = 1_000;
  * defaults are deliberately slower.
  */
 export const DEMO_REGISTRY_INTERVAL_MS = 250;
-export const DEMO_MAINTENANCE_TASK_POLL_MS = 60_000;
+export const DEMO_MAINTENANCE_ROUTINE_POLL_MS = 60_000;
 export const DEMO_LONG_RUNNING_MS = 20_000;
 export const DEMO_LONG_RUNNING_SEED_DELAY_MS = 10_000;
 export const DEMO_TIMING_TIMEOUT_MS = 1_000;
@@ -95,7 +95,7 @@ export const DEMO_RATE_LIMIT_POLICY_NAMESPACE = "workhorse-demo-rate-limits";
 export const DEMO_RATE_LIMIT_SEED_NAME = "rate-limit-dashboard-v1";
 export const DEMO_RATE_LIMIT = { limit: 2, intervalMs: 60 * 60_000, burst: 2 } as const;
 export const DEMO_RATE_LIMIT_PER_KEY = { limit: 1, intervalMs: 60 * 60_000, burst: 1 } as const;
-export const DEMO_RATE_LIMIT_SEED_JOBS = [
+export const DEMO_RATE_LIMIT_SEED_TASKS = [
   { label: "acme-catalog-page-1", concurrencyKey: "customer-acme" },
   { label: "acme-catalog-page-2", concurrencyKey: "customer-acme" },
   { label: "acme-catalog-page-3", concurrencyKey: "customer-acme" },
@@ -103,12 +103,12 @@ export const DEMO_RATE_LIMIT_SEED_JOBS = [
   { label: "globex-catalog-page-2", concurrencyKey: "customer-globex" },
 ] as const;
 /**
- * Three long-running jobs make both policy levels visible.
+ * Three long-running tasks make both policy levels visible.
  *
  * The first two share a customer key, so PostgreSQL admits them one at a time. The third uses a
- * different key and can overlap while every active demo job still consumes the shared queue budget.
+ * different key and can overlap while every active demo task still consumes the shared queue budget.
  */
-export const DEMO_LONG_RUNNING_SEED_JOBS = [
+export const DEMO_LONG_RUNNING_SEED_TASKS = [
   { label: "archive-validation", concurrencyKey: "customer-acme" },
   { label: "partner-catalog-sync", concurrencyKey: "customer-acme" },
   { label: "quarterly-report-export", concurrencyKey: "customer-globex" },

@@ -144,7 +144,7 @@ describe("conventional benchmark SQL", () => {
     expect(claimed?.id).toBe(first);
     expect(claimed?.payload).toEqual({ order: 1 });
     expect(await queue.complete(claimed!, "worker-a", { ok: true })).toBe(true);
-    expect((await queue.getJob<{ ok: boolean }>(first))?.result).toEqual({ ok: true });
+    expect((await queue.getTask<{ ok: boolean }>(first))?.result).toEqual({ ok: true });
   });
 
   it("rejects a heartbeat from a stale fence generation", async () => {

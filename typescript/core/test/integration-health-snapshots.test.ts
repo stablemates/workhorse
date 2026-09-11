@@ -22,14 +22,14 @@ const { defaultRetentionPolicy, pool, queue, admin, adminAudit } = createIntegra
 
 describe("health snapshots", () => {
   it("counts only recent external-wait rejections through the partial event index", async () => {
-    const jobId = await queue.enqueue("rejection-health", {});
+    const taskId = await queue.enqueue("rejection-health", {});
     const oldDay = "2016-01-04";
     await pool.query("SELECT workhorse.create_history_day_v1($1)", [oldDay]);
     await pool.query(
-      `INSERT INTO workhorse.job_event(job_id, event_type, occurred_at)
+      `INSERT INTO workhorse.task_event(task_id, event_type, occurred_at)
        VALUES ($1, 'signal_rejected', $2::date),
               ($1, 'human_wait_rejected', clock_timestamp())`,
-      [jobId, oldDay],
+      [taskId, oldDay],
     );
 
     await expect(queue.health()).resolves.toMatchObject({
@@ -46,14 +46,14 @@ describe("health snapshots", () => {
              FROM pg_class parent
              JOIN pg_inherits inheritance ON inheritance.inhparent = parent.oid
              JOIN pg_class child ON child.oid = inheritance.inhrelid
-            WHERE parent.oid = 'workhorse.job_event_rejected_delivery_idx'::regclass`,
+            WHERE parent.oid = 'workhorse.task_event_rejected_delivery_idx'::regclass`,
         )
       ).rows.map((row) => row.index_name);
       const plan = (
         await client.query<{ "QUERY PLAN": string }>(
           `EXPLAIN (COSTS OFF)
           SELECT 1
-            FROM workhorse.job_event
+            FROM workhorse.task_event
            WHERE event_type IN ('signal_rejected', 'human_wait_rejected')
              AND occurred_at >= $1::timestamptz
            ORDER BY occurred_at DESC, event_id DESC
@@ -66,7 +66,7 @@ describe("health snapshots", () => {
 
       expect(indexNames.length).toBeGreaterThan(0);
       expect(indexNames.some((indexName) => plan.includes(indexName))).toBe(true);
-      expect(plan).not.toContain("job_event_20160104");
+      expect(plan).not.toContain("task_event_20160104");
       await client.query("ROLLBACK");
     } finally {
       await client.query("ROLLBACK").catch(() => undefined);
@@ -81,9 +81,9 @@ describe("health snapshots", () => {
     expect((await queue.claim("telemetry-retry-worker", { leaseMs: 100 }))?.id).toBe(retryId);
     expect((await queue.claim("telemetry-terminal-worker", { leaseMs: 100 }))?.id).toBe(terminalId);
     await pool.query(
-      `UPDATE workhorse.job_runtime
+      `UPDATE workhorse.task_runtime
           SET expires_at = clock_timestamp() - interval '1 second'
-        WHERE job_id = ANY($1::uuid[])`,
+        WHERE task_id = ANY($1::uuid[])`,
       [[retryId, terminalId]],
     );
 
@@ -98,8 +98,8 @@ describe("health snapshots", () => {
 
     expect(recovery).toMatchObject({ rows_affected: 2, expired_leases: 2, retried: 1 });
     expect(recovery?.retry_dimensions).toEqual([{ queue: "default", type: "telemetry-retry" }]);
-    expect((await admin.getJob(retryId))?.state).toBe("ready");
-    expect((await admin.getJob(terminalId))?.state).toBe("failed");
+    expect((await admin.getTask(retryId))?.state).toBe("ready");
+    expect((await admin.getTask(terminalId))?.state).toBe("failed");
   });
 
   it("returns per-phase tick and background maintenance telemetry", async () => {
@@ -111,7 +111,7 @@ describe("health snapshots", () => {
     await sleep(100);
     await pool.query(
       `INSERT INTO workhorse.schedule_definition(
-         namespace, schedule_name, cron_expression, queue_name, job_type, payload, max_attempts
+         namespace, schedule_name, cron_expression, queue_name, task_type, payload, max_attempts
        ) VALUES ('integration', 'retention', '0 * * * *', 'default', 'retention', '{}'::jsonb, 3)`,
     );
     await pool.query(
@@ -136,7 +136,7 @@ describe("health snapshots", () => {
         error: null,
       },
     ]);
-    expect((await admin.getJob(scheduledId))?.state).toBe("ready");
+    expect((await admin.getTask(scheduledId))?.state).toBe("ready");
 
     await queue.syncRetentionPolicy({ ...defaultRetentionPolicy, occurrenceRowsPerPass: 1 });
     expect([
@@ -187,7 +187,7 @@ describe("health snapshots", () => {
         error: null,
       },
       {
-        phase: "terminal_jobs",
+        phase: "terminal_tasks",
         rowsAffected: 0,
         durationMs: expect.any(Number),
         skippedLock: false,
@@ -272,7 +272,7 @@ describe("health snapshots", () => {
           error: null,
         },
         {
-          phase: "terminal_jobs",
+          phase: "terminal_tasks",
           rowsAffected: 0,
           durationMs: 0,
           skippedLock: true,
@@ -298,7 +298,7 @@ describe("health snapshots", () => {
     expect(health.schemaVersion).toBe(WORKHORSE_SCHEMA_VERSION);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(2);
-    expect(health.sleepingJobs).toBe(1);
+    expect(health.sleepingTasks).toBe(1);
     expect(health.overdueWaits).toBe(0);
     expect(health.nextWakeAt).toEqual(scheduledWait.wait.wakeAt);
     expect(health.capturedAt.getTime()).toBeLessThanOrEqual(Date.now());
@@ -306,7 +306,7 @@ describe("health snapshots", () => {
     expect(health.statistics.bucketsCapped).toBe(false);
     expect(health.historyPartitionDays).toHaveLength(4);
     expect(
-      health.observations.relations.some((relation) => relation.relation === "job_runtime"),
+      health.observations.relations.some((relation) => relation.relation === "task_runtime"),
     ).toBe(true);
     expect(health.observations.lockWaitCount).toBeGreaterThanOrEqual(0);
     expect(health.observations.notificationQueueUsage).toBeGreaterThanOrEqual(0);
@@ -341,13 +341,13 @@ describe("health snapshots", () => {
   it("observes the same live depth through the metrics observer", async () => {
     // health(), queueMetricSnapshot(), and the observer share one depth read, so this asserts the
     // observer's gauges against the health snapshot taken from the same rows. A paused queue with
-    // no jobs is included because only the observer reports it, and it must report zeroes.
+    // no tasks is included because only the observer reports it, and it must report zeroes.
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const claimed = await queue.claim("observer-worker");
     expect(claimed).not.toBeNull();
     await pool.query(
-      `INSERT INTO workhorse.job_event(job_id, event_type, occurred_at)
+      `INSERT INTO workhorse.task_event(task_id, event_type, occurred_at)
        VALUES ($1, 'signal_rejected', clock_timestamp() - interval '25 hours'),
               ($1, 'signal_rejected', clock_timestamp() - interval '23 hours')`,
       [claimed!.id],
@@ -372,13 +372,13 @@ describe("health snapshots", () => {
       .getMetrics()
       .flatMap((resource) => resource.scopeMetrics)
       .flatMap((scope) => scope.metrics)
-      .find((candidate) => candidate.descriptor.name === "workhorse.jobs.count")?.dataPoints ??
+      .find((candidate) => candidate.descriptor.name === "workhorse.tasks.count")?.dataPoints ??
       []) as DataPoint<number>[];
     const depth = (queueName: string, state: string) =>
       points.find(
         (point) =>
           point.attributes["workhorse.queue.name"] === queueName &&
-          point.attributes["workhorse.job.state"] === state,
+          point.attributes["workhorse.task.state"] === state,
       )?.value;
     const health = await queue.health();
     expect(depth("default", "ready")).toBe(health.readyDepth);
@@ -406,7 +406,7 @@ describe("health snapshots", () => {
     await queue.prepareHistoryPartitions();
     const baseline = await queue.health();
     expect(
-      baseline.historyPartitionDays.every((day) => day.hasJobEvents && day.hasAttemptHistory),
+      baseline.historyPartitionDays.every((day) => day.hasTaskEvents && day.hasAttemptHistory),
     ).toBe(true);
     expect(baseline.status.reasons.map((reason) => reason.code)).not.toContain(
       "missing-history-partitions",
@@ -440,9 +440,9 @@ describe("health snapshots", () => {
     const claimed = await queue.claim("health-budget-worker");
     expect(claimed).not.toBeNull();
     await pool.query(
-      `UPDATE workhorse.job_runtime
+      `UPDATE workhorse.task_runtime
           SET expires_at = clock_timestamp() - interval '1 second'
-        WHERE job_id = $1 AND state = 'active'`,
+        WHERE task_id = $1 AND state = 'active'`,
       [claimed!.id],
     );
     const critical = await queue.health();

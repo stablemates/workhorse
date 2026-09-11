@@ -49,11 +49,11 @@ interface Group {
  */
 const sidebarLabels: Readonly<Record<string, string>> = {
   integrations: "Overview",
-  enqueue: "Enqueue a job",
+  enqueue: "Enqueue a task",
   contracts: "Validate payloads",
   idempotency: "Avoid duplicates",
   priority: "Run order",
-  "job-dependencies": "Wait for other jobs",
+  "task-dependencies": "Wait for other tasks",
   "concurrency-policies": "Limit how many run",
   debounce: "Debounce",
   throttle: "Throttle",
@@ -61,7 +61,7 @@ const sidebarLabels: Readonly<Record<string, string>> = {
   deadlines: "Deadlines",
   "durable-execution": "Checkpoints",
   "human-waits": "Human approval",
-  queries: "Query jobs",
+  queries: "Query tasks",
   "dead-letters": "Dead letters",
   maintenance: "Retention",
   "agentic-flow": "Agent workflows",

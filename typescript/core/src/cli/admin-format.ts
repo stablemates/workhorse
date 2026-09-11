@@ -1,10 +1,10 @@
 import type {
   DeadLetter,
-  JobCheckpoint,
-  JobListItem,
-  JobSnapshot,
-  JobTimelineEntry,
-  JobWait,
+  TaskCheckpoint,
+  TaskListItem,
+  TaskSnapshot,
+  TaskTimelineEntry,
+  TaskWait,
   QueueHealth,
   WorkerRegistryEntry,
 } from "../types.js";
@@ -57,7 +57,7 @@ function formatTimestamp(value: Date | null): string {
   return value === null ? "-" : value.toISOString();
 }
 
-/** Compact duration for operator tables, such as the age of the oldest ready job. */
+/** Compact duration for operator tables, such as the age of the oldest ready task. */
 export function formatDurationMs(value: number | null): string {
   if (value === null) return "-";
   if (value < 1_000) return `${Math.round(value)}ms`;
@@ -88,9 +88,17 @@ function errorName(error: unknown): string {
   return "-";
 }
 
-export const JOBS_TABLE_HEADERS = ["JOB", "STATE", "QUEUE", "TYPE", "ATTEMPT", "RUN AT", "CREATED"];
+export const TASKS_TABLE_HEADERS = [
+  "TASK",
+  "STATE",
+  "QUEUE",
+  "TYPE",
+  "ATTEMPT",
+  "RUN AT",
+  "CREATED",
+];
 
-export function jobsTableRows(items: readonly JobListItem[]): string[][] {
+export function tasksTableRows(items: readonly TaskListItem[]): string[][] {
   return items.map((item) => [
     item.id,
     item.state,
@@ -144,7 +152,7 @@ export function schedulesTableRows(schedules: readonly StoredSchedule[]): string
 }
 
 export const FAILURES_TABLE_HEADERS = [
-  "JOB",
+  "TASK",
   "QUEUE",
   "TYPE",
   "ATTEMPTS",
@@ -155,7 +163,7 @@ export const FAILURES_TABLE_HEADERS = [
 
 export function failuresTableRows(items: readonly DeadLetter[]): string[][] {
   return items.map((item) => [
-    item.jobId,
+    item.taskId,
     item.queue,
     truncate(item.type, 32),
     `${item.currentAttempt}/${item.maxAttempts}`,
@@ -191,7 +199,7 @@ export function workersTableRows(workers: readonly WorkerRegistryEntry[]): strin
 
 export const TIMELINE_TABLE_HEADERS = ["AT", "KIND", "ATTEMPT", "WHAT"];
 
-export function timelineTableRows(entries: readonly JobTimelineEntry[]): string[][] {
+export function timelineTableRows(entries: readonly TaskTimelineEntry[]): string[][] {
   return entries.map((entry) => [
     formatTimestamp(entry.occurredAt),
     entry.kind,
@@ -204,7 +212,7 @@ export function timelineTableRows(entries: readonly JobTimelineEntry[]): string[
 
 export const CHECKPOINTS_TABLE_HEADERS = ["NAME", "ATTEMPT", "WORKER", "CREATED", "VALUE"];
 
-export function checkpointsTableRows(checkpoints: readonly JobCheckpoint[]): string[][] {
+export function checkpointsTableRows(checkpoints: readonly TaskCheckpoint[]): string[][] {
   return checkpoints.map((checkpoint) => [
     checkpoint.name,
     String(checkpoint.attempt),
@@ -214,10 +222,10 @@ export function checkpointsTableRows(checkpoints: readonly JobCheckpoint[]): str
   ]);
 }
 
-/** One checkpoint in full. The value stays JSON, as a job snapshot's payload does. */
-export function checkpointDetailLines(checkpoint: JobCheckpoint): string[] {
+/** One checkpoint in full. The value stays JSON, as a task snapshot's payload does. */
+export function checkpointDetailLines(checkpoint: TaskCheckpoint): string[] {
   return keyValueLines([
-    ["job", checkpoint.jobId],
+    ["task", checkpoint.taskId],
     ["name", checkpoint.name],
     ["attempt", String(checkpoint.attempt)],
     ["fence token", checkpoint.fenceToken.toString()],
@@ -237,7 +245,7 @@ export const WAITS_TABLE_HEADERS = [
   "CREATED",
 ];
 
-export function waitsTableRows(waits: readonly JobWait[]): string[][] {
+export function waitsTableRows(waits: readonly TaskWait[]): string[][] {
   return waits.map((wait) => [
     wait.name,
     wait.mode,
@@ -250,9 +258,9 @@ export function waitsTableRows(waits: readonly JobWait[]): string[][] {
 }
 
 /** One durable timer wait in full, including the caller target an absolute wait asked for. */
-export function waitDetailLines(wait: JobWait): string[] {
+export function waitDetailLines(wait: TaskWait): string[] {
   return keyValueLines([
-    ["job", wait.jobId],
+    ["task", wait.taskId],
     ["name", wait.name],
     ["mode", wait.mode],
     ["duration", formatDurationMs(wait.durationMs)],
@@ -267,7 +275,7 @@ export function waitDetailLines(wait: JobWait): string[] {
 
 export const EXTERNAL_WAITS_TABLE_HEADERS = [
   "KIND",
-  "JOB",
+  "TASK",
   "QUEUE",
   "TYPE",
   "NAME",
@@ -296,9 +304,9 @@ export function externalWaitsTableRows(waits: AdminExternalWaits): string[][] {
     .toSorted((left, right) => left.record.createdAt.getTime() - right.record.createdAt.getTime())
     .map(({ kind, record, context }) => [
       kind,
-      record.jobId,
+      record.taskId,
       record.queue,
-      truncate(record.jobType, 32),
+      truncate(record.taskType, 32),
       record.name,
       String(record.attempt),
       formatTimestamp(record.createdAt),
@@ -319,8 +327,8 @@ export function healthLines(health: QueueHealth): string[] {
   return lines;
 }
 
-/** Full job snapshot as aligned key/value lines. Payload and result stay JSON. */
-export function jobDetailLines(snapshot: JobSnapshot): string[] {
+/** Full task snapshot as aligned key/value lines. Payload and result stay JSON. */
+export function taskDetailLines(snapshot: TaskSnapshot): string[] {
   const entries: Array<[string, string]> = [
     ["id", snapshot.id],
     ["state", snapshot.state],
@@ -377,13 +385,13 @@ export function maintenanceLines(state: AdminMaintenanceState): string[] {
   ];
   const retentionEntries: Array<[string, string, string]> = (
     [
-      "jobIdentityRetentionDays",
+      "taskIdentityRetentionDays",
       "terminalOutcomeRetentionDays",
-      "jobEventRetentionDays",
+      "taskEventRetentionDays",
       "attemptHistoryRetentionDays",
       "scheduleOccurrenceRetentionDays",
       "statisticsRetentionDays",
-      "terminalJobPruneLimit",
+      "terminalTaskPruneLimit",
       "historyPartitionsPerPass",
       "defaultPartitionRowsPerPass",
       "occurrenceRowsPerPass",

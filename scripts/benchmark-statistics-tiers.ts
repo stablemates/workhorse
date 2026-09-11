@@ -30,13 +30,13 @@ assertLocalDatabasePurpose(databaseUrl, "bench");
 const pool = new Pool({ connectionString: databaseUrl, max: 8 });
 console.error(`Statistics tier benchmark target: ${databaseName(databaseUrl)}`);
 try {
-  const jobs = integer("--jobs");
+  const tasks = integer("--tasks");
   const days = integer("--days");
   const payloadBytes = integer("--payload-bytes");
   const repetitions = integer("--repetitions");
   const warmupRepetitions = integer("--warmup");
   const report = await runStatisticsTiersBenchmark(pool, {
-    ...(jobs === undefined ? {} : { jobs }),
+    ...(tasks === undefined ? {} : { tasks }),
     ...(days === undefined ? {} : { days }),
     ...(payloadBytes === undefined ? {} : { payloadBytes }),
     ...(repetitions === undefined ? {} : { repetitions }),

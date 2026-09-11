@@ -34,7 +34,7 @@ describe("dashboard read RPC input bounds", () => {
     ["tasks", { search: "x".repeat(201) }],
     ["tasks", { queue: "x".repeat(201) }],
     ["activity", { worker: "x".repeat(201) }],
-    ["events", { jobType: "x".repeat(201) }],
+    ["events", { taskType: "x".repeat(201) }],
   ] as const)("rejects an oversized %s filter before querying", async (rpc, input) => {
     const rpcContext = context();
     const client = createRouterClient(dashboardRouter, { context: rpcContext });

@@ -4,7 +4,7 @@ import { installSchema } from "../src/schema.js";
 import { summarizeNumbers, type NumericSummary } from "./statistics.js";
 
 export interface StatisticsTiersOptions {
-  jobs?: number;
+  tasks?: number;
   days?: number;
   payloadBytes?: number;
   repetitions?: number;
@@ -12,7 +12,7 @@ export interface StatisticsTiersOptions {
 }
 
 interface ResolvedStatisticsTiersOptions {
-  jobs: number;
+  tasks: number;
   days: number;
   payloadBytes: number;
   repetitions: number;
@@ -20,7 +20,7 @@ interface ResolvedStatisticsTiersOptions {
 }
 
 const defaults: ResolvedStatisticsTiersOptions = {
-  jobs: 200_000,
+  tasks: 200_000,
   days: 120,
   payloadBytes: 2_048,
   repetitions: 5,
@@ -87,9 +87,9 @@ export async function runStatisticsTiersBenchmark(
             (i - 1)::numeric * ($2::integer * 86400) / $1::integer
           )::double precision) AS enqueued_at
     FROM generate_series(1, $1::integer) series(i)`;
-  const loadParameters = [resolved.jobs, resolved.days];
+  const loadParameters = [resolved.tasks, resolved.days];
   await pool.query(
-    `INSERT INTO workhorse.job(id, queue_name, job_type, payload, tags, max_attempts, created_at)
+    `INSERT INTO workhorse.task(id, queue_name, task_type, payload, tags, max_attempts, created_at)
      SELECT id, 'queue-' || (i % 16), 'task-' || (i % 128),
             jsonb_build_object('sequence', i, 'body', repeat('x', $3::integer)),
             ARRAY[
@@ -102,8 +102,8 @@ export async function runStatisticsTiersBenchmark(
     [...loadParameters, resolved.payloadBytes],
   );
   await pool.query(
-    `INSERT INTO workhorse.job_outcome(
-       job_id, state, current_attempt, fence_token, run_at, result,
+    `INSERT INTO workhorse.task_outcome(
+       task_id, state, current_attempt, fence_token, run_at, result,
        finished_at, history_through_at, updated_at
      )
      SELECT id, 'succeeded', 1, 1, enqueued_at, jsonb_build_object('sequence', i),
@@ -118,7 +118,7 @@ export async function runStatisticsTiersBenchmark(
     loadParameters,
   );
   await pool.query(
-    `INSERT INTO workhorse.job_event(job_id, attempt, event_type, details, occurred_at)
+    `INSERT INTO workhorse.task_event(task_id, attempt, event_type, details, occurred_at)
      SELECT id, NULL, 'enqueued', jsonb_build_object('source', 'statistics-benchmark'), enqueued_at
        FROM (${source}) source
      UNION ALL
@@ -133,7 +133,7 @@ export async function runStatisticsTiersBenchmark(
   );
   await pool.query(
     `INSERT INTO workhorse.attempt_history(
-       job_id, attempt, fence_token, worker_id, outcome,
+       task_id, attempt, fence_token, worker_id, outcome,
        started_at, claimed_at, finished_at, occurred_at
      )
      SELECT id, 1, 1,
@@ -156,7 +156,7 @@ export async function runStatisticsTiersBenchmark(
   const loadMs = performance.now() - loadStarted;
 
   await pool.query(
-    `UPDATE workhorse.job_stat_state
+    `UPDATE workhorse.task_stat_state
         SET rolled_up_through = date_bin('1 day', clock_timestamp(),
               timestamp '2000-01-01' AT TIME ZONE 'UTC') - make_interval(days => $1),
             hourly_rolled_up_through = date_bin('1 day', clock_timestamp(),
@@ -171,7 +171,7 @@ export async function runStatisticsTiersBenchmark(
     const state = await pool.query<{ caught_up: boolean }>(
       `SELECT rolled_up_through >= date_bin('1 minute', clock_timestamp(),
                 timestamp '2000-01-01' AT TIME ZONE 'UTC') AS caught_up
-         FROM workhorse.job_stat_state WHERE singleton`,
+         FROM workhorse.task_stat_state WHERE singleton`,
     );
     if (state.rows[0]!.caught_up) break;
     const started = performance.now();
@@ -191,9 +191,9 @@ export async function runStatisticsTiersBenchmark(
     retentionDrainMs.push(performance.now() - started);
     if (result.rows.find(({ phase }) => phase === "stat_retention")?.rows_affected === 0) break;
   }
-  await pool.query(`ANALYZE workhorse.job_stat_bucket;
-                    ANALYZE workhorse.job_stat_bucket_hour;
-                    ANALYZE workhorse.job_stat_bucket_day`);
+  await pool.query(`ANALYZE workhorse.task_stat_bucket;
+                    ANALYZE workhorse.task_stat_bucket_hour;
+                    ANALYZE workhorse.task_stat_bucket_day`);
 
   const windows = [1, 30, resolved.days].filter(
     (value, index, values) => value <= resolved.days && values.indexOf(value) === index,
@@ -208,8 +208,8 @@ export async function runStatisticsTiersBenchmark(
     const rawSql = `SELECT percentile_cont(0.95) WITHIN GROUP (
       ORDER BY extract(epoch FROM claimed.occurred_at - enqueued.occurred_at) * 1000
     ) AS p95
-      FROM workhorse.job_event claimed
-      JOIN workhorse.job_event enqueued ON enqueued.job_id = claimed.job_id
+      FROM workhorse.task_event claimed
+      JOIN workhorse.task_event enqueued ON enqueued.task_id = claimed.task_id
        AND enqueued.event_type = 'enqueued'
      WHERE claimed.event_type = 'claimed' AND claimed.attempt = 1
        AND claimed.occurred_at >= ${from}
@@ -243,33 +243,33 @@ export async function runStatisticsTiersBenchmark(
     await pool.query(`DROP TABLE IF EXISTS public.${table}`);
   }
   await pool.query(`CREATE UNLOGGED TABLE public.${benchmarkTables.baseline} AS
-    SELECT 'minute'::text AS tier, bucket_start, queue_name, job_type,
+    SELECT 'minute'::text AS tier, bucket_start, queue_name, task_type,
            '__baseline__'::text AS dimension_value, enqueued, wait_sketch
-      FROM workhorse.job_stat_bucket
+      FROM workhorse.task_stat_bucket
     UNION ALL
-    SELECT 'hour', bucket_start, queue_name, job_type, '__baseline__', enqueued, wait_sketch
-      FROM workhorse.job_stat_bucket_hour
+    SELECT 'hour', bucket_start, queue_name, task_type, '__baseline__', enqueued, wait_sketch
+      FROM workhorse.task_stat_bucket_hour
     UNION ALL
-    SELECT 'day', bucket_start, queue_name, job_type, '__baseline__', enqueued, wait_sketch
-      FROM workhorse.job_stat_bucket_day`);
+    SELECT 'day', bucket_start, queue_name, task_type, '__baseline__', enqueued, wait_sketch
+      FROM workhorse.task_stat_bucket_day`);
 
   const dimensionSources = {
     worker: "CROSS JOIN LATERAL (SELECT claimed.details ->> 'worker' AS dimension_value) dimension",
-    tag: "CROSS JOIN LATERAL unnest(job.tags) AS dimension(dimension_value)",
+    tag: "CROSS JOIN LATERAL unnest(task.tags) AS dimension(dimension_value)",
   } as const;
   for (const [dimensionName, sourceJoin] of Object.entries(dimensionSources)) {
     const table = benchmarkTables[dimensionName as keyof typeof dimensionSources];
     await pool.query(`CREATE UNLOGGED TABLE public.${table} AS
       WITH samples AS (
         SELECT grain.tier, grain.bucket_start,
-               job.queue_name, job.job_type, dimension.dimension_value,
+               task.queue_name, task.task_type, dimension.dimension_value,
                workhorse.stat_sketch_index_v1(
                  extract(epoch FROM claimed.occurred_at - enqueued.occurred_at) * 1000
                ) AS bin
-          FROM workhorse.job_event claimed
-          JOIN workhorse.job_event enqueued ON enqueued.job_id = claimed.job_id
+          FROM workhorse.task_event claimed
+          JOIN workhorse.task_event enqueued ON enqueued.task_id = claimed.task_id
            AND enqueued.event_type = 'enqueued'
-          JOIN workhorse.job ON job.id = claimed.job_id
+          JOIN workhorse.task ON task.id = claimed.task_id
           ${sourceJoin}
           CROSS JOIN LATERAL (
             VALUES
@@ -290,19 +290,19 @@ export async function runStatisticsTiersBenchmark(
          WHERE claimed.event_type = 'claimed' AND claimed.attempt = 1
            AND grain.retained
       ), bins AS (
-        SELECT tier, bucket_start, queue_name, job_type, dimension_value, bin, count(*) AS samples
+        SELECT tier, bucket_start, queue_name, task_type, dimension_value, bin, count(*) AS samples
           FROM samples
-         GROUP BY tier, bucket_start, queue_name, job_type, dimension_value, bin
+         GROUP BY tier, bucket_start, queue_name, task_type, dimension_value, bin
       )
-      SELECT tier, bucket_start, queue_name, job_type, dimension_value,
+      SELECT tier, bucket_start, queue_name, task_type, dimension_value,
              sum(samples)::bigint AS enqueued,
              jsonb_object_agg(bin::text, samples ORDER BY bin) AS wait_sketch
         FROM bins
-       GROUP BY tier, bucket_start, queue_name, job_type, dimension_value`);
+       GROUP BY tier, bucket_start, queue_name, task_type, dimension_value`);
   }
   for (const table of Object.values(benchmarkTables)) {
     await pool.query(
-      `CREATE INDEX ON public.${table}(bucket_start, queue_name, job_type, dimension_value);
+      `CREATE INDEX ON public.${table}(bucket_start, queue_name, task_type, dimension_value);
        ANALYZE public.${table}`,
     );
   }
@@ -311,7 +311,7 @@ export async function runStatisticsTiersBenchmark(
     string,
     {
       rows: number;
-      rowsPerJob: number;
+      rowsPerTask: number;
       rowMultiplier: number;
       bytes: number;
       byteMultiplier: number;
@@ -341,7 +341,7 @@ export async function runStatisticsTiersBenchmark(
       ) - make_interval(days => $1)`;
     dimensions[dimensionName] = {
       rows,
-      rowsPerJob: rows / resolved.jobs,
+      rowsPerTask: rows / resolved.tasks,
       rowMultiplier: rows / baselineRows,
       bytes,
       byteMultiplier: bytes / baselineBytes,
@@ -363,18 +363,18 @@ export async function runStatisticsTiersBenchmark(
     raw_bytes: string;
     rollup_bytes: string;
   }>(`SELECT
-        (SELECT count(*) FROM workhorse.job_event)
+        (SELECT count(*) FROM workhorse.task_event)
           + (SELECT count(*) FROM workhorse.attempt_history) AS raw_rows,
-        (SELECT count(*) FROM workhorse.job_stat_bucket) AS minute_rows,
-        (SELECT count(*) FROM workhorse.job_stat_bucket_hour) AS hour_rows,
-        (SELECT count(*) FROM workhorse.job_stat_bucket_day) AS day_rows,
+        (SELECT count(*) FROM workhorse.task_stat_bucket) AS minute_rows,
+        (SELECT count(*) FROM workhorse.task_stat_bucket_hour) AS hour_rows,
+        (SELECT count(*) FROM workhorse.task_stat_bucket_day) AS day_rows,
         (SELECT sum(pg_total_relation_size(relid))
-           FROM pg_partition_tree('workhorse.job_event'))
+           FROM pg_partition_tree('workhorse.task_event'))
           + (SELECT sum(pg_total_relation_size(relid))
                FROM pg_partition_tree('workhorse.attempt_history')) AS raw_bytes,
-        pg_total_relation_size('workhorse.job_stat_bucket')
-          + pg_total_relation_size('workhorse.job_stat_bucket_hour')
-          + pg_total_relation_size('workhorse.job_stat_bucket_day') AS rollup_bytes`);
+        pg_total_relation_size('workhorse.task_stat_bucket')
+          + pg_total_relation_size('workhorse.task_stat_bucket_hour')
+          + pg_total_relation_size('workhorse.task_stat_bucket_day') AS rollup_bytes`);
   const stored = storage.rows[0]!;
   const rollupRows =
     Number(stored.minute_rows) + Number(stored.hour_rows) + Number(stored.day_rows);
@@ -394,8 +394,8 @@ export async function runStatisticsTiersBenchmark(
       dayRows: Number(stored.day_rows),
       rawBytes: Number(stored.raw_bytes),
       rollupBytes: Number(stored.rollup_bytes),
-      retainedRowsPerJob: rollupRows / resolved.jobs,
-      rowsWrittenPerJob: rollupRowsWritten / resolved.jobs,
+      retainedRowsPerTask: rollupRows / resolved.tasks,
+      rowsWrittenPerTask: rollupRowsWritten / resolved.tasks,
       bytesPerRawHistoryByte: Number(stored.rollup_bytes) / Number(stored.raw_bytes),
     },
   };

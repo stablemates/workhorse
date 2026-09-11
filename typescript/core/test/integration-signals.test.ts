@@ -69,21 +69,21 @@ describe("signals", () => {
     expect(firstPage).toEqual({
       items: [
         {
-          jobId: id,
+          taskId: id,
           queue: "default",
-          jobType: "signal-list",
+          taskType: "signal-list",
           name: "approval",
           attempt: 1,
           createdAt: expect.any(Date),
           deadlineAt: expect.any(Date),
         },
       ],
-      nextCursor: { createdAt: expect.any(String), jobId: id, name: "approval" },
+      nextCursor: { createdAt: expect.any(String), taskId: id, name: "approval" },
     });
     await expect(
       admin.listSignalWaits({ limit: 1, cursor: firstPage.nextCursor! }),
     ).resolves.toEqual({
-      items: [expect.objectContaining({ jobId: secondId, name: "approval" })],
+      items: [expect.objectContaining({ taskId: secondId, name: "approval" })],
       nextCursor: null,
     });
 
@@ -113,7 +113,7 @@ describe("signals", () => {
     );
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "scheduled" });
+    await expect(admin.getTask(id)).resolves.toMatchObject({ state: "scheduled" });
 
     await expect(
       queue.sendSignal(
@@ -128,7 +128,7 @@ describe("signals", () => {
     ).resolves.toMatchObject({ status: "delivered", payload: { approved: true } });
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(admin.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getTask(id)).resolves.toMatchObject({
       state: "succeeded",
       result: { signal: { approved: true } },
     });
@@ -150,7 +150,7 @@ describe("signals", () => {
     });
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(admin.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getTask(id)).resolves.toMatchObject({
       state: "succeeded",
       result: { approved: true },
     });
@@ -223,9 +223,9 @@ describe("signals", () => {
     }>(
       `SELECT signal.timeout_at, runtime.deadline_at AS runtime_deadline_at,
               extract(epoch FROM signal.timeout_at - signal.created_at) * 1000 AS timeout_ms
-         FROM workhorse.job_signal_wait signal
-         JOIN workhorse.job_runtime runtime ON runtime.job_id = signal.job_id
-        WHERE signal.job_id = $1 AND signal.signal_name = 'approval'`,
+         FROM workhorse.task_signal_wait signal
+         JOIN workhorse.task_runtime runtime ON runtime.task_id = signal.task_id
+        WHERE signal.task_id = $1 AND signal.signal_name = 'approval'`,
       [id],
     );
     expect(timeout.rows[0]?.timeout_at).toEqual(timeout.rows[0]?.runtime_deadline_at);
@@ -283,7 +283,7 @@ describe("signals", () => {
     await expect(
       queue.waitForSignal(stale!, "signal-stale-worker", "approval"),
     ).rejects.toMatchObject({ name: "SignalWaitLeaseLostError" });
-    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "ready", currentAttempt: 2 });
+    await expect(admin.getTask(id)).resolves.toMatchObject({ state: "ready", currentAttempt: 2 });
   });
 
   it("rejects delivery after cancellation closes the pending wait", async () => {
@@ -330,7 +330,7 @@ describe("signals", () => {
       ),
     ).rejects.toThrow(/at most 65536 bytes/);
     await expect(queue.health()).resolves.toMatchObject({
-      sleepingJobs: 0,
+      sleepingTasks: 0,
       overdueWaits: 0,
       nextWakeAt: null,
     });
@@ -343,7 +343,7 @@ describe("signals", () => {
       retryDelayMs: 0,
     }).handle("signal-retry", async (_payload, context) => {
       const received = await context.waitForSignal<{ approved: boolean }>("approval");
-      if (context.job.attempt === 1) throw new Error("fail after delivery");
+      if (context.task.attempt === 1) throw new Error("fail after delivery");
       return received;
     });
     expect(await worker.runOnce()).toBe(true);
@@ -358,7 +358,7 @@ describe("signals", () => {
     );
     expect(await worker.runOnce()).toBe(true);
     expect(await worker.runOnce()).toBe(true);
-    await expect(admin.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getTask(id)).resolves.toMatchObject({
       state: "succeeded",
       currentAttempt: 2,
       result: { approved: true },
@@ -371,7 +371,7 @@ describe("signals", () => {
       "signal-redrive",
       async (_payload, context) => {
         const received = await context.waitForSignal<{ approved: boolean }>("approval");
-        if (context.job.id === sourceId) throw new Error("fail after source delivery");
+        if (context.task.id === sourceId) throw new Error("fail after source delivery");
         return received;
       },
     );
@@ -384,7 +384,7 @@ describe("signals", () => {
       { idempotencyKey: "signal-redrive-source", requestedBy: "approval-service" },
     );
     await expect(worker.runOnce()).resolves.toBe(true);
-    await expect(admin.getJob(sourceId)).resolves.toMatchObject({ state: "failed" });
+    await expect(admin.getTask(sourceId)).resolves.toMatchObject({ state: "failed" });
 
     const redrive = await admin.redrive(sourceId, {
       actor: "signal-test",
@@ -392,10 +392,10 @@ describe("signals", () => {
       requestId: `signal-redrive-${sourceId}`,
     });
     expect(redrive.status).toBe("redriven");
-    const targetId = redrive.targetJobId!;
+    const targetId = redrive.targetTaskId!;
 
     await expect(worker.runOnce()).resolves.toBe(true);
-    await expect(admin.getJob(targetId)).resolves.toMatchObject({ state: "scheduled" });
+    await expect(admin.getTask(targetId)).resolves.toMatchObject({ state: "scheduled" });
     await queue.sendSignal(
       targetId,
       "approval",
@@ -403,7 +403,7 @@ describe("signals", () => {
       { idempotencyKey: "signal-redrive-target", requestedBy: "approval-service" },
     );
     await expect(worker.runOnce()).resolves.toBe(true);
-    await expect(admin.getJob(targetId)).resolves.toMatchObject({
+    await expect(admin.getTask(targetId)).resolves.toMatchObject({
       state: "succeeded",
       result: { approved: false },
     });
@@ -435,7 +435,7 @@ describe("signals", () => {
       },
     );
 
-    const timeline = await admin.getJobTimeline(id);
+    const timeline = await admin.getTaskTimeline(id);
     const events = timeline.items.filter((item) => item.kind === "event");
     expect(events).toEqual(
       expect.arrayContaining([
@@ -456,7 +456,7 @@ describe("signals", () => {
     expect(JSON.stringify(events)).not.toContain('accepted"');
   });
 
-  it("uses the PostgreSQL job deadline as the signal timeout", async () => {
+  it("uses the PostgreSQL task deadline as the signal timeout", async () => {
     const deadline = new Date(Date.now() + 30_000);
     const id = await queue.enqueue("signal-timeout", {}, { deadline });
     const worker = new Worker(queue, { workerId: "signal-timeout-worker" }).handle(
@@ -466,9 +466,9 @@ describe("signals", () => {
     expect(await worker.runOnce()).toBe(true);
     const stored = await pool.query<{ deadline_at: Date; timeout_at: Date }>(
       `SELECT runtime.deadline_at, signal.timeout_at
-         FROM workhorse.job_runtime runtime
-         JOIN workhorse.job_signal_wait signal ON signal.job_id = runtime.job_id
-        WHERE runtime.job_id = $1`,
+         FROM workhorse.task_runtime runtime
+         JOIN workhorse.task_signal_wait signal ON signal.task_id = runtime.task_id
+        WHERE runtime.task_id = $1`,
       [id],
     );
     expect(stored.rows).toEqual([{ deadline_at: deadline, timeout_at: deadline }]);
@@ -476,14 +476,14 @@ describe("signals", () => {
     // Move the durable PostgreSQL deadline rather than waiting on a narrow wall-clock window. The
     // equality above is the contract under test; this update only makes the timeout due now.
     await pool.query(
-      `UPDATE workhorse.job_runtime
+      `UPDATE workhorse.task_runtime
           SET deadline_at = clock_timestamp() - interval '1 millisecond'
-        WHERE job_id = $1`,
+        WHERE task_id = $1`,
       [id],
     );
     await queue.tick();
 
-    await expect(admin.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getTask(id)).resolves.toMatchObject({
       state: "failed",
       error: expect.objectContaining({ name: "DeadlineExceeded" }),
     });
@@ -507,7 +507,7 @@ describe("signals", () => {
     await sleep(130);
     await queue.tick();
 
-    await expect(admin.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getTask(id)).resolves.toMatchObject({
       state: "failed",
       error: expect.objectContaining({ name: "DeadlineExceeded" }),
     });
@@ -532,6 +532,6 @@ describe("signals", () => {
     ]);
     expect(cancellation.status).toBe("canceled");
     expect(["delivered", "stale"]).toContain(delivery.status);
-    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "canceled" });
+    await expect(admin.getTask(id)).resolves.toMatchObject({ state: "canceled" });
   });
 });

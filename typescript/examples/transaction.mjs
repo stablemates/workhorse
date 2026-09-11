@@ -7,7 +7,7 @@ export async function enqueueInTransaction(databaseUrl) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const jobId = await new Queue(client, "orders").enqueue(
+    const taskId = await new Queue(client, "orders").enqueue(
       "order.accepted",
       { orderId: "order-42" },
       {
@@ -21,7 +21,7 @@ export async function enqueueInTransaction(databaseUrl) {
       },
     );
     await client.query("COMMIT");
-    return jobId;
+    return taskId;
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;

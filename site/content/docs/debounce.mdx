@@ -3,8 +3,8 @@ title: Keyed debounce
 description: Replace pending work under a stable key while updates continue arriving.
 ---
 
-Debounce keeps one pending job with the latest accepted payload. PostgreSQL serializes concurrent
-replacements, so every caller observes one stable job identity.
+Debounce keeps one pending task with the latest accepted payload. PostgreSQL serializes concurrent
+replacements, so every caller observes one stable task identity.
 
 <Tabs items={["TypeScript", "Python", "Go"]}>
   <Tab value="TypeScript">
@@ -39,24 +39,24 @@ replacements, so every caller observes one stable job identity.
 Choose `reset` to start a fresh quiet period after every replacement. Choose `preserve` when the
 first request fixes the run time and later requests should update only the payload.
 
-`result.outcome` is `accepted` for a new job and `replaced` for a pending update. Once a worker owns
-the job, it becomes terminal, or its window elapses, PostgreSQL returns `non_replaceable` and keeps
+`result.outcome` is `accepted` for a new task and `replaced` for a pending update. Once a worker owns
+the task, it becomes terminal, or its window elapses, PostgreSQL returns `non_replaceable` and keeps
 the accepted payload unchanged.
 
-Only `scheduled` or `ready` jobs can be replaced. A refused replacement includes a stable `reason`
+Only `scheduled` or `ready` tasks can be replaced. A refused replacement includes a stable `reason`
 so callers can distinguish lifecycle movement from an incompatible request.
 
 Debounce cannot share a request with idempotency, throttle, or dependencies because each mechanism
 assigns a different meaning to a repeated key or immutable edge.
 
-The result's `jobId` identifies the retained pending job. When replacement depends on earlier work,
-`prerequisiteJobId` identifies that immutable dependency instead of the debounce candidate.
+The result's `taskId` identifies the retained pending task. When replacement depends on earlier work,
+`prerequisiteTaskId` identifies that immutable dependency instead of the debounce candidate.
 
 ## Next
 
 - [Throttle](/docs/throttle) — reuse equivalent work without replacing it
 - [Idempotent enqueue](/docs/idempotency) — replay an identical request
-- [Job dependencies](/docs/job-dependencies) — keep accepted work blocked
+- [Task dependencies](/docs/task-dependencies) — keep accepted work blocked
 
 ---
 

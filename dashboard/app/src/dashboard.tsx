@@ -32,7 +32,7 @@ export interface DashboardProps {
   client: DashboardClient;
   /** Actor stored in audit metadata for mutations initiated by this dashboard. */
   auditActor?: string;
-  /** Optional demo job seeding controls. Omit this in normal application dashboards. */
+  /** Optional demo task seeding controls. Omit this in normal application dashboards. */
   demoTools?: DashboardDemoTools;
   /** URL namespace where the dashboard is mounted, for example `/workhorse`. */
   basePath?: string;

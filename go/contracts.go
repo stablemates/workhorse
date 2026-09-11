@@ -12,7 +12,7 @@ import (
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-type JobContractVersion struct {
+type TaskContractVersion struct {
 	PayloadSchema        any
 	ResultSchema         any
 	MaxPayloadBytes      int
@@ -21,28 +21,28 @@ type JobContractVersion struct {
 	SensitiveResultKeys  []string
 }
 
-type JobTypeContracts struct {
+type TaskTypeContracts struct {
 	CurrentVersion string
-	Versions       map[string]JobContractVersion
+	Versions       map[string]TaskContractVersion
 }
 
-type JobContractValidationError struct {
-	JobType string
-	Version string
-	Kind    string
+type TaskContractValidationError struct {
+	TaskType string
+	Version  string
+	Kind     string
 }
 
-func (err *JobContractValidationError) Error() string {
-	return fmt.Sprintf(contractValidationErrorFormat, err.JobType, err.Kind, err.Version)
+func (err *TaskContractValidationError) Error() string {
+	return fmt.Sprintf(contractValidationErrorFormat, err.TaskType, err.Kind, err.Version)
 }
 
-type JobContractUnavailableError struct {
-	JobType string
-	Version string
+type TaskContractUnavailableError struct {
+	TaskType string
+	Version  string
 }
 
-func (err *JobContractUnavailableError) Error() string {
-	return fmt.Sprintf(contractUnavailableErrorFormat, err.JobType, err.Version)
+func (err *TaskContractUnavailableError) Error() string {
+	return fmt.Sprintf(contractUnavailableErrorFormat, err.TaskType, err.Version)
 }
 
 type contractCache struct {
@@ -149,9 +149,9 @@ func (cache *contractCache) validator(key string, schema any) (*jsonschema.Schem
 	return compiled, nil
 }
 
-func (queue *Queue) SyncContracts(ctx context.Context, contracts map[string]JobTypeContracts) error {
+func (queue *Queue) SyncContracts(ctx context.Context, contracts map[string]TaskTypeContracts) error {
 	definitions := make([]map[string]any, 0, len(contracts))
-	for jobType, typeContracts := range contracts {
+	for taskType, typeContracts := range contracts {
 		versions := make(map[string]any, len(typeContracts.Versions))
 		for version, contract := range typeContracts.Versions {
 			payloadSchema := contract.PayloadSchema
@@ -176,7 +176,7 @@ func (queue *Queue) SyncContracts(ctx context.Context, contracts map[string]JobT
 				contractSensitiveResultJSONField:  contractStrings(contract.SensitiveResultKeys),
 			}
 		}
-		definitions = append(definitions, map[string]any{contractJobTypeJSONField: jobType, contractCurrentVersionJSONField: typeContracts.CurrentVersion, contractVersionsJSONField: versions})
+		definitions = append(definitions, map[string]any{contractTaskTypeJSONField: taskType, contractCurrentVersionJSONField: typeContracts.CurrentVersion, contractVersionsJSONField: versions})
 	}
 	payload, err := json.Marshal(definitions)
 	if err != nil {
@@ -203,7 +203,7 @@ func contractStrings(values []string) []string {
 
 func defaultContractLimit(value int) int {
 	if value == 0 {
-		return defaultJobValueMaxBytes
+		return defaultTaskValueMaxBytes
 	}
 	return value
 }
