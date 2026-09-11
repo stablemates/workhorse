@@ -42,6 +42,7 @@ type CompleteHumanWaitResult
 type CompleteHumanWaitStatus
 interface ConcurrencyPolicy
 interface ConcurrencyPolicyDefinition
+interface ContractSchemaOptions
 type CreateChildResult
 type CreateChildrenResult
 const DEFAULT_IDEMPOTENCY_SCOPE
@@ -166,6 +167,7 @@ interface MaintenancePolicy
 interface MaintenancePolicyDefinition
 type MaintenancePolicySetting
 interface MigrateSchemaOptions
+interface MigrateSchemaResult
 class MissingRowError
 const PROTOCOL_VERSION
 interface PolicyValueProvenance
@@ -222,6 +224,7 @@ interface ScheduledJob
 type SchemaCompatibilityCode
 class SchemaCompatibilityError
 interface SchemaCompatibilityVersions
+type SchemaContractOutcome
 type SendSignalRequest
 type SendSignalResult
 type SendSignalStatus
@@ -282,6 +285,7 @@ interface WorkhorseTelemetrySpan
 function assertSchemaCompatible
 function assertSupportedPostgres
 function attachNotificationPool
+function contractSchema
 function createProviderAdapter
 function createProviderQueryable
 function createWorkhorseAdapter
@@ -987,6 +991,17 @@ interface ConcurrencyPolicyDefinition {
   maxActive: number;
   /** Uniform active-job budget for each non-null concurrency key. Null disables the keyed budget. */
   maxActivePerKey?: number | null;
+}
+
+interface ContractSchemaOptions {
+  /**
+  * The explicit confirmation the command requires. Without it the outcome is `unconfirmed` and
+  * nothing is applied; with it the step applies even while the gate still sees workers on a
+  * retiring protocol, because the registry is evidence and never proof.
+  */
+  confirmed?: boolean;
+  /** Same bound {@link MigrateSchemaOptions.lockTimeoutMs} gives the additive path. */
+  lockTimeoutMs?: number;
 }
 
 type CreateChildResult<TResult extends Json = Json> = {
@@ -3065,6 +3080,15 @@ class KyselyQueryError extends QueryError {
   constructor(statement: string, cause: unknown);
 }
 
+interface LiveProtocolWorker {
+  readonly workerId: string;
+  readonly hostname: string | null;
+  readonly clientProtocolVersion: number | null;
+  readonly sdkLanguage: string | null;
+  readonly sdkVersion: string | null;
+  readonly lastHeartbeatAt: Date;
+}
+
 const MAXIMUM_PROTOCOL_VERSION = 1;
 
 const MAXIMUM_SCHEMA_VERSION = 1;
@@ -3194,6 +3218,18 @@ interface MigrateSchemaOptions {
   * `SCHEMA_MIGRATION_LOCK_TIMEOUT_MS`. Waiting for another migrator is separate and unbounded.
   */
   lockTimeoutMs?: number;
+}
+
+interface MigrateSchemaResult {
+  /** The installed schema version after the run. */
+  readonly finishedVersion: number;
+  /**
+  * The contract step the run stopped before, when one was next in the chain.
+  *
+  * A stop is not a failure: the schema still serves every protocol it served, so the deployment
+  * proceeds and the operator applies the step later with `workhorse schema contract`.
+  */
+  readonly contractStop: SchemaMigrationStep | null;
 }
 
 class MissingRowError extends WorkhorseError {
@@ -3970,6 +4006,38 @@ interface SchemaCompatibilityVersions {
   readonly expectedVersion: number;
 }
 
+type SchemaContractOutcome = {
+  readonly kind: "none";
+} | {
+  readonly kind: "additive-pending";
+  readonly step: SchemaMigrationStep;
+} | {
+  readonly kind: "unconfirmed";
+  readonly step: SchemaMigrationStep;
+  readonly workers: readonly LiveProtocolWorker[];
+} | {
+  readonly kind: "applied";
+  readonly step: SchemaMigrationStep;
+  readonly workers: readonly LiveProtocolWorker[];
+};
+
+type SchemaMigrationKind = "additive" | "contract";
+
+interface SchemaMigrationStep {
+  fromVersion: number;
+  toVersion: number;
+  file: string;
+  description: string;
+  readonly kind: SchemaMigrationKind;
+  /**
+  * The client protocol versions a contract step stops serving.
+  *
+  * Required and non-empty on a contract step, because the refusal gate needs to know which
+  * workers the step would stop. Forbidden on an additive step, which narrows nothing.
+  */
+  readonly retiresProtocolVersions?: readonly number[];
+}
+
 type SendSignalRequest = ExternalWaitDeliveryRequest;
 
 type SendSignalResult<TPayload extends Json = Json> = SignalDeliveryResult<TPayload>;
@@ -4572,6 +4640,8 @@ function attachNotificationPool(queryable: Queryable, pool: AdapterNotificationP
 function cancelOutcomeTone(status: DashboardCancelStatus): DashboardResultTone;
 
 function clearDashboardNotifications(): void;
+
+function contractSchema(database: Queryable, options?: ContractSchemaOptions): Promise<SchemaContractOutcome>;
 
 function createDashboardClient(rpcUrl: string, options?: DashboardClientOptions): DashboardClient;
 
@@ -5209,7 +5279,7 @@ function isTerminalTaskState(state: string): boolean;
 
 function kyselyQueryable(executor: KyselyExecutor, notificationPool?: AdapterNotificationPool): Queryable;
 
-function migrateSchema(database: Queryable, options?: MigrateSchemaOptions): Promise<void>;
+function migrateSchema(database: Queryable, options?: MigrateSchemaOptions): Promise<MigrateSchemaResult>;
 
 function normalizeDashboardPath(input: string): string;
 

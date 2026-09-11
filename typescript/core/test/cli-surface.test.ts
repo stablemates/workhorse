@@ -64,11 +64,12 @@ type JsonKeysNameCommands = keyof CliJsonPayloads extends
 const jsonKeysNameCommands: JsonKeysNameCommands = true;
 
 describe("the declared CLI surface", () => {
-  it("declares the nine commands ADR 0054 governs", () => {
+  it("declares the ten commands ADR 0054 governs", () => {
     expect(CLI_COMMANDS.map((command) => command.name)).toEqual([
       "init",
       "schema install",
       "schema migrate",
+      "schema contract",
       "schema status",
       "worker",
       "dashboard",

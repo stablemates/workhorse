@@ -5,13 +5,19 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { verifySqlProtocolFixtures } from "../../../scripts/verify-sql-protocol.js";
+import { randomUUID } from "node:crypto";
 import {
   migrateSchema,
   readWorkerClientProtocols,
+  SCHEMA_MIGRATIONS,
   WORKHORSE_SCHEMA_BASELINE_VERSION,
   WORKHORSE_SCHEMA_VERSION,
-} from "../src/index.js";
-import { applySchemaMigrationPlan } from "../src/schema-migrations.js";
+} from "../src/schema.js";
+import {
+  applySchemaMigrationPlan,
+  parseSchemaMigrationMetadata,
+  planSchemaContract,
+} from "../src/schema-migrations.js";
 import { createDatabaseTestHarness } from "./support/db.js";
 import {
   createHistoryFixtureDay,
@@ -33,6 +39,9 @@ const releaseDatabase = createDatabaseTestHarness(new URL("?release", import.met
   schemaProvisioning: "install",
 });
 const lockDatabase = createDatabaseTestHarness(new URL("?lock", import.meta.url).href, {
+  schemaProvisioning: "install",
+});
+const contractDatabase = createDatabaseTestHarness(new URL("?contract", import.meta.url).href, {
   schemaProvisioning: "install",
 });
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -77,6 +86,7 @@ describe("schema migrations", () => {
       fixtureCleanDatabase.setup(),
       releaseDatabase.setup(),
       lockDatabase.setup(),
+      contractDatabase.setup(),
     ]);
     await Promise.all([
       fixtureDatabase.pool.query("DROP SCHEMA workhorse CASCADE"),
@@ -95,6 +105,7 @@ describe("schema migrations", () => {
       fixtureCleanDatabase.teardown(),
       releaseDatabase.teardown(),
       lockDatabase.teardown(),
+      contractDatabase.teardown(),
     ]);
   });
 
@@ -116,12 +127,19 @@ describe("schema migrations", () => {
       baselineVersion: 1,
       currentVersion: 3,
       steps: [
-        { fromVersion: 1, toVersion: 2, file: "0002-add-name.sql", description: "add name" },
+        {
+          fromVersion: 1,
+          toVersion: 2,
+          file: "0002-add-name.sql",
+          description: "add name",
+          kind: "additive",
+        },
         {
           fromVersion: 2,
           toVersion: 3,
           file: "0003-add-created-at.sql",
           description: "add created_at",
+          kind: "additive",
         },
       ],
       readStep: (file) => readFile(path.join(directory, file), "utf8"),
@@ -148,7 +166,15 @@ describe("schema migrations", () => {
         applySchemaMigrationPlan(fixtureDatabase.pool, {
           baselineVersion: 1,
           currentVersion: 3,
-          steps: [{ fromVersion: 2, toVersion: 3, file: "unused.sql", description: "unused" }],
+          steps: [
+            {
+              fromVersion: 2,
+              toVersion: 3,
+              file: "unused.sql",
+              description: "unused",
+              kind: "additive",
+            },
+          ],
           readStep: () => Promise.reject(new Error("a missing step must fail before reading SQL")),
         }),
       ).rejects.toThrow("No Workhorse schema migration starts at version 1");
@@ -164,8 +190,19 @@ describe("schema migrations", () => {
         {
           baselineVersion: 1,
           currentVersion: 4,
-          steps: [{ fromVersion: 3, toVersion: 4, file: "0004.sql", description: "self commit" }],
-          readStep: () => Promise.resolve("COMMIT;\nALTER TABLE workhorse.example ADD y integer;"),
+          steps: [
+            {
+              fromVersion: 3,
+              toVersion: 4,
+              file: "0004.sql",
+              description: "self commit",
+              kind: "additive",
+            },
+          ],
+          readStep: () =>
+            Promise.resolve(
+              '-- workhorse-migration: {"kind":"additive"}\nCOMMIT;\nALTER TABLE workhorse.example ADD y integer;',
+            ),
         },
         3,
       ),
@@ -179,9 +216,19 @@ describe("schema migrations", () => {
         {
           baselineVersion: 1,
           currentVersion: 4,
-          steps: [{ fromVersion: 3, toVersion: 4, file: "0004.sql", description: "broken" }],
+          steps: [
+            {
+              fromVersion: 3,
+              toVersion: 4,
+              file: "0004.sql",
+              description: "broken",
+              kind: "additive",
+            },
+          ],
           readStep: () =>
-            Promise.resolve("CREATE TABLE workhorse.should_not_exist (id integer);\nSELECT 1 / 0;"),
+            Promise.resolve(
+              '-- workhorse-migration: {"kind":"additive"}\nCREATE TABLE workhorse.should_not_exist (id integer);\nSELECT 1 / 0;',
+            ),
         },
         3,
       ),
@@ -215,10 +262,13 @@ describe("schema migrations", () => {
                 toVersion: WORKHORSE_SCHEMA_VERSION + 1,
                 file: "blocked.sql",
                 description: "blocked",
+                kind: "additive",
               },
             ],
             readStep: () =>
-              Promise.resolve("ALTER TABLE workhorse.protocol_version ADD COLUMN probe integer;"),
+              Promise.resolve(
+                '-- workhorse-migration: {"kind":"additive"}\nALTER TABLE workhorse.protocol_version ADD COLUMN probe integer;',
+              ),
             lockTimeoutMs: 250,
           },
           WORKHORSE_SCHEMA_VERSION,
@@ -257,9 +307,10 @@ describe("schema migrations", () => {
               toVersion: WORKHORSE_SCHEMA_VERSION + 1,
               file: "queued.sql",
               description: "queued",
+              kind: "additive",
             },
           ],
-          readStep: () => Promise.resolve("SELECT 1;"),
+          readStep: () => Promise.resolve('-- workhorse-migration: {"kind":"additive"}\nSELECT 1;'),
           lockTimeoutMs: 250,
         },
         WORKHORSE_SCHEMA_VERSION,
@@ -292,8 +343,9 @@ describe("schema migrations", () => {
 
   it("ships no migration that removes or renames a released object", async () => {
     // ADR 0053: inside a major line a migration only adds, which is what lets a client accept a
-    // schema newer than the one it was built against. A removal belongs to a major release, so it
-    // must not reach `sql/migrations/`. The loop starts enforcing itself with the first step.
+    // schema newer than the one it was built against. A removal belongs to a contract step, which
+    // the file's first line declares and SCHEMA_MIGRATIONS repeats — the two must agree for the
+    // released record to mean anything, so this checks the declaration before it checks the body.
     const migrations = (await readdir(path.join(repository, "sql", "migrations")))
       .filter((file) => file.endsWith(".sql"))
       // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
@@ -304,6 +356,25 @@ describe("schema migrations", () => {
     const offenders: string[] = [];
     for (const file of migrations) {
       const body = await readFile(path.join(repository, "sql", "migrations", file), "utf8");
+      const step = SCHEMA_MIGRATIONS.find((candidate) => candidate.file === file);
+      let declared;
+      try {
+        declared = parseSchemaMigrationMetadata(file, body);
+      } catch {
+        offenders.push(`${file}: missing or malformed -- workhorse-migration declaration`);
+        continue;
+      }
+      if (step === undefined) {
+        offenders.push(`${file}: has no SCHEMA_MIGRATIONS entry`);
+        continue;
+      }
+      if (declared.kind !== step.kind) {
+        offenders.push(
+          `${file}: declares "${declared.kind}" but SCHEMA_MIGRATIONS says "${step.kind}"`,
+        );
+        continue;
+      }
+      if (declared.kind === "contract") continue;
       // A dollar-quoted body is data, not statements: a plpgsql function may legitimately contain
       // DROP inside the code it defines, and only statements outside those quotes change the shape.
       const statements = body.replaceAll(/\$([A-Za-z_]\w*)?\$[\s\S]*?\$\1\$/g, "''");
@@ -437,6 +508,282 @@ describe("schema migrations", () => {
         ),
       ),
     );
+  });
+
+  // The contract-step machinery is exercised against the installed schema itself: the refusal
+  // gate reads workhorse.worker_registry, which only the real baseline carries. Every test leaves
+  // schema_version at 1 and an empty registry behind for the next one.
+  describe("contract steps", () => {
+    async function registerContractWorker(
+      workerId: string,
+      clientProtocolVersion: number | null,
+    ): Promise<void> {
+      await contractDatabase.pool.query(
+        `SELECT workhorse.register_worker_v1(
+           $1::text, $2::uuid, 'contract-host', 4242, ARRAY['contract']::text[], ARRAY[]::text[],
+           1, 30000, 10000, 250, 1000, 60000, 5000, 0, false, $3::integer, 'fixture', '9.9.9')`,
+        [workerId, randomUUID(), clientProtocolVersion],
+      );
+    }
+
+    async function deregisterContractWorker(workerId: string): Promise<void> {
+      await contractDatabase.pool.query(`SELECT workhorse.deregister_worker_v1($1)`, [workerId]);
+    }
+
+    async function setSchemaVersion(version: number): Promise<void> {
+      await contractDatabase.pool.query("UPDATE workhorse.schema_version SET version = $1", [
+        version,
+      ]);
+    }
+
+    // A two-step chain whose second step is a contract step, so one forward run can stop before
+    // it and one contract run can apply it.
+    const stopPlan = {
+      baselineVersion: 1,
+      currentVersion: 3,
+      steps: [
+        {
+          fromVersion: 1,
+          toVersion: 2,
+          file: "0002-add-probe.sql",
+          description: "add probe table",
+          kind: "additive" as const,
+        },
+        {
+          fromVersion: 2,
+          toVersion: 3,
+          file: "0003-retire-probe.sql",
+          description: "drop the probe table",
+          kind: "contract" as const,
+          retiresProtocolVersions: [1],
+        },
+      ],
+      readStep: (file: string) =>
+        Promise.resolve(
+          file === "0002-add-probe.sql"
+            ? '-- workhorse-migration: {"kind":"additive"}\nCREATE TABLE workhorse.contract_probe (id integer);'
+            : '-- workhorse-migration: {"kind":"contract","retiresProtocolVersions":[1]}\nDROP TABLE workhorse.contract_probe;',
+        ),
+    };
+
+    it("stops a forward migration before a contract step and reports it", async () => {
+      try {
+        const result = await applySchemaMigrationPlan(contractDatabase.pool, stopPlan);
+
+        expect(result.finishedVersion).toBe(2);
+        expect(result.contractStop?.file).toBe("0003-retire-probe.sql");
+        const state = await contractDatabase.pool.query<{ version: number; probe: string | null }>(
+          `SELECT version, to_regclass('workhorse.contract_probe')::text AS probe
+             FROM workhorse.schema_version`,
+        );
+        // The additive step committed and the contract step never ran.
+        expect(state.rows).toEqual([{ version: 2, probe: "contract_probe" }]);
+      } finally {
+        await contractDatabase.pool.query("DROP TABLE IF EXISTS workhorse.contract_probe");
+        await contractDatabase.pool.query(
+          "DELETE FROM workhorse.schema_migration WHERE version > 1",
+        );
+        await setSchemaVersion(1);
+      }
+    });
+
+    it("applies exactly one pending contract step once confirmed", async () => {
+      try {
+        await applySchemaMigrationPlan(contractDatabase.pool, stopPlan);
+
+        const outcome = await planSchemaContract(contractDatabase.pool, stopPlan, {
+          confirmed: true,
+        });
+
+        expect(outcome.kind).toBe("applied");
+        if (outcome.kind === "applied") expect(outcome.step.file).toBe("0003-retire-probe.sql");
+        const state = await contractDatabase.pool.query<{
+          version: number;
+          probe: string | null;
+          recorded: string | null;
+        }>(
+          `SELECT version, to_regclass('workhorse.contract_probe')::text AS probe,
+                  (SELECT description FROM workhorse.schema_migration WHERE version = 3) AS recorded
+             FROM workhorse.schema_version`,
+        );
+        expect(state.rows).toEqual([{ version: 3, probe: null, recorded: "drop the probe table" }]);
+      } finally {
+        await contractDatabase.pool.query("DROP TABLE IF EXISTS workhorse.contract_probe");
+        await contractDatabase.pool.query(
+          "DELETE FROM workhorse.schema_migration WHERE version > 1",
+        );
+        await setSchemaVersion(1);
+      }
+    });
+
+    it("refuses an unconfirmed contract step, naming the workers it would stop", async () => {
+      const retiring = `contract-live-${randomUUID()}`;
+      const surviving = `contract-surviving-${randomUUID()}`;
+      const lapsed = `contract-lapsed-${randomUUID()}`;
+      const plan = {
+        baselineVersion: 1,
+        currentVersion: 2,
+        steps: [
+          {
+            fromVersion: 1,
+            toVersion: 2,
+            file: "0002-retire-v1.sql",
+            description: "retire protocol v1",
+            kind: "contract" as const,
+            retiresProtocolVersions: [1],
+          },
+        ],
+        readStep: () =>
+          Promise.resolve(
+            '-- workhorse-migration: {"kind":"contract","retiresProtocolVersions":[1]}\nDELETE FROM workhorse.protocol_version WHERE version = 1;',
+          ),
+      };
+      try {
+        await registerContractWorker(retiring, 1);
+        await registerContractWorker(surviving, 2);
+        await registerContractWorker(lapsed, 1);
+        await contractDatabase.pool.query(
+          `UPDATE workhorse.worker_registry
+              SET last_heartbeat_at = clock_timestamp() - interval '1 hour'
+            WHERE worker_id = $1`,
+          [lapsed],
+        );
+
+        const outcome = await planSchemaContract(contractDatabase.pool, plan);
+
+        expect(outcome.kind).toBe("unconfirmed");
+        if (outcome.kind === "unconfirmed") {
+          // The live worker on the retiring protocol is named; the one outside its lease and the
+          // one on a surviving protocol are not.
+          expect(outcome.workers.map((worker) => worker.workerId)).toEqual([retiring]);
+        }
+        expect(
+          await contractDatabase.pool
+            .query<{ version: number }>("SELECT version FROM workhorse.schema_version")
+            .then((result) => result.rows[0]?.version),
+        ).toBe(1);
+      } finally {
+        for (const workerId of [retiring, surviving, lapsed]) {
+          await deregisterContractWorker(workerId);
+        }
+      }
+    });
+
+    it("applies a contract step past live workers once confirmed", async () => {
+      const retiring = `contract-live-${randomUUID()}`;
+      const plan = {
+        baselineVersion: 1,
+        currentVersion: 2,
+        steps: [
+          {
+            fromVersion: 1,
+            toVersion: 2,
+            file: "0002-retire-v1.sql",
+            description: "retire protocol v1",
+            kind: "contract" as const,
+            retiresProtocolVersions: [1],
+          },
+        ],
+        readStep: () =>
+          Promise.resolve(
+            '-- workhorse-migration: {"kind":"contract","retiresProtocolVersions":[1]}\nDELETE FROM workhorse.protocol_version WHERE version = 1;',
+          ),
+      };
+      try {
+        await registerContractWorker(retiring, 1);
+
+        const outcome = await planSchemaContract(contractDatabase.pool, plan, {
+          confirmed: true,
+        });
+
+        expect(outcome.kind).toBe("applied");
+        if (outcome.kind === "applied") {
+          // The workers the step was applied past are still reported, not silently ignored.
+          expect(outcome.workers.map((worker) => worker.workerId)).toEqual([retiring]);
+        }
+      } finally {
+        await deregisterContractWorker(retiring);
+        await contractDatabase.pool.query(
+          "INSERT INTO workhorse.protocol_version (version) VALUES (1) ON CONFLICT DO NOTHING",
+        );
+        await contractDatabase.pool.query(
+          "DELETE FROM workhorse.schema_migration WHERE version > 1",
+        );
+        await setSchemaVersion(1);
+      }
+    });
+
+    it("rolls a failed contract step back atomically", async () => {
+      const plan = {
+        baselineVersion: 1,
+        currentVersion: 2,
+        steps: [
+          {
+            fromVersion: 1,
+            toVersion: 2,
+            file: "0002-broken.sql",
+            description: "broken contract step",
+            kind: "contract" as const,
+            retiresProtocolVersions: [1],
+          },
+        ],
+        readStep: () =>
+          Promise.resolve(
+            '-- workhorse-migration: {"kind":"contract","retiresProtocolVersions":[1]}\nCREATE TABLE workhorse.contract_leak (id integer);\nSELECT 1 / 0;',
+          ),
+      };
+
+      await expect(
+        planSchemaContract(contractDatabase.pool, plan, { confirmed: true }),
+      ).rejects.toThrow("Workhorse migration 0002-broken.sql failed and was rolled back");
+
+      const state = await contractDatabase.pool.query<{ version: number; leaked: string | null }>(
+        `SELECT version, to_regclass('workhorse.contract_leak')::text AS leaked
+           FROM workhorse.schema_version`,
+      );
+      expect(state.rows).toEqual([{ version: 1, leaked: null }]);
+    });
+
+    it("requires a migration file's own declaration to match its SCHEMA_MIGRATIONS entry", async () => {
+      const undeclared = {
+        baselineVersion: 1,
+        currentVersion: 2,
+        steps: [
+          {
+            fromVersion: 1,
+            toVersion: 2,
+            file: "0002-undeclared.sql",
+            description: "undeclared",
+            kind: "additive" as const,
+          },
+        ],
+        readStep: () => Promise.resolve("SELECT 1;"),
+      };
+      await expect(applySchemaMigrationPlan(contractDatabase.pool, undeclared)).rejects.toThrow(
+        "must open with a '-- workhorse-migration:",
+      );
+
+      const mislabeled = {
+        baselineVersion: 1,
+        currentVersion: 2,
+        steps: [
+          {
+            fromVersion: 1,
+            toVersion: 2,
+            file: "0002-mislabeled.sql",
+            description: "mislabeled",
+            kind: "additive" as const,
+          },
+        ],
+        readStep: () =>
+          Promise.resolve(
+            '-- workhorse-migration: {"kind":"contract","retiresProtocolVersions":[1]}\nSELECT 1;',
+          ),
+      };
+      await expect(applySchemaMigrationPlan(contractDatabase.pool, mislabeled)).rejects.toThrow(
+        'declares "contract" but SCHEMA_MIGRATIONS says "additive"',
+      );
+    });
   });
 
   it("leaves an already-current schema unchanged", async () => {

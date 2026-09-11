@@ -45,6 +45,7 @@ describe("workhorse CLI parser", () => {
     [["schema", "--unknown"], "--unknown"],
     [["schema", "install", "--unknown"], "--unknown"],
     [["schema", "migrate", "--unknown"], "--unknown"],
+    [["schema", "contract", "--unknown"], "--unknown"],
     [["schema", "status", "--unknown"], "--unknown"],
     [["worker", "--unknown"], "--unknown"],
     [["dashboard", "--unknown"], "--unknown"],
@@ -70,6 +71,7 @@ describe("workhorse CLI parser", () => {
     [["schema", "--help"], "workhorse schema install"],
     [["schema", "install", "--help"], "Usage: workhorse schema install"],
     [["schema", "migrate", "--help"], "Usage: workhorse schema migrate"],
+    [["schema", "contract", "--help"], "Usage: workhorse schema contract"],
     [["schema", "status", "--help"], "Usage: workhorse schema status"],
     [["worker", "--help"], "Usage: workhorse worker"],
     [["dashboard", "--help"], "Usage: workhorse dashboard"],
@@ -250,6 +252,7 @@ describe("schema status JSON", () => {
         minimumVersion: MINIMUM_SCHEMA_VERSION,
         clientProtocolVersion: PROTOCOL_VERSION,
         installedProtocolVersions: [PROTOCOL_VERSION],
+        pendingContractSteps: [],
         state: "behind",
         compatible: false,
         refusal: expect.stringContaining("below the minimum"),
@@ -265,6 +268,44 @@ describe("schema status JSON", () => {
         level: "supported-tested",
       },
     });
+  });
+
+  // A deployment gate reads "state" to place the schema; a contract step must never reach it as an
+  // ordinary pending migration, so the report names it in its own field instead.
+  it("reports pending contract steps in their own field", () => {
+    const report = createSchemaStatusReport(
+      WORKHORSE_SCHEMA_VERSION - 1,
+      [PROTOCOL_VERSION],
+      supportedPostgres,
+      [],
+      [
+        {
+          fromVersion: WORKHORSE_SCHEMA_VERSION - 1,
+          toVersion: WORKHORSE_SCHEMA_VERSION,
+          file: "0009-retire-v1.sql",
+          description: "retire protocol v1",
+          kind: "contract",
+          retiresProtocolVersions: [1],
+        },
+        {
+          fromVersion: WORKHORSE_SCHEMA_VERSION - 2,
+          toVersion: WORKHORSE_SCHEMA_VERSION - 1,
+          file: "0008-already-applied.sql",
+          description: "applied contract step",
+          kind: "contract",
+          retiresProtocolVersions: [1],
+        },
+      ],
+    );
+
+    expect(report.schema.pendingContractSteps).toEqual([
+      {
+        file: "0009-retire-v1.sql",
+        fromVersion: WORKHORSE_SCHEMA_VERSION - 1,
+        toVersion: WORKHORSE_SCHEMA_VERSION,
+        retiresProtocolVersions: [1],
+      },
+    ]);
   });
 
   // The whole point of the additive rule: a node still running the old release meets a schema the

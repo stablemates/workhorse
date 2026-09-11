@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { expectOneRow, SchemaCompatibilityError, type SchemaCompatibilityCode } from "./errors.js";
 import {
   applySchemaMigrationPlan,
+  planSchemaContract,
   SCHEMA_MIGRATION_LOCK_TIMEOUT_MS,
   isMissingDatabaseFunctionError,
   isMissingDatabaseRelationError,
@@ -21,6 +22,8 @@ import {
   readProtocolVersions,
   readSchemaVersion,
   type CompatibilityState,
+  type SchemaContractOutcome,
+  type SchemaMigrationPlan,
   type SchemaMigrationStep,
 } from "./schema-migrations.js";
 import { assertSupportedPostgres } from "./support.js";
@@ -37,8 +40,19 @@ export {
 };
 
 // Version 1 is the permanent baseline, installed whole from sql/schema.sql; every later version
-// arrives as one ordered, immutable step here.
-const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [];
+// arrives as one ordered, immutable step here. Each step declares its kind in this list and in
+// the file's own first line, and the runner refuses a step whose two declarations disagree.
+export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [];
+
+function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {
+  return {
+    baselineVersion: WORKHORSE_SCHEMA_BASELINE_VERSION,
+    currentVersion: WORKHORSE_SCHEMA_VERSION,
+    steps: SCHEMA_MIGRATIONS,
+    readStep: async (file) => readFile(sqlAsset(`migrations/${file}`), "utf8"),
+    lockTimeoutMs,
+  };
+}
 
 function sqlAsset(relativePath: string): URL {
   const packaged = new URL(`../sql/${relativePath}`, import.meta.url);
@@ -209,11 +223,29 @@ export interface MigrateSchemaOptions {
   lockTimeoutMs?: number;
 }
 
-/** Apply the immutable forward-only steps from the supported baseline to the current schema. */
+/** Where a `migrateSchema` run finished. */
+export interface MigrateSchemaResult {
+  /** The installed schema version after the run. */
+  readonly finishedVersion: number;
+  /**
+   * The contract step the run stopped before, when one was next in the chain.
+   *
+   * A stop is not a failure: the schema still serves every protocol it served, so the deployment
+   * proceeds and the operator applies the step later with `workhorse schema contract`.
+   */
+  readonly contractStop: SchemaMigrationStep | null;
+}
+
+/**
+ * Apply the immutable forward-only steps from the supported baseline to the current schema.
+ *
+ * The run applies additive steps and stops before the first contract step, which only
+ * {@link contractSchema} applies.
+ */
 export async function migrateSchema(
   database: Queryable,
   options: MigrateSchemaOptions = {},
-): Promise<void> {
+): Promise<MigrateSchemaResult> {
   await assertSupportedPostgres(database);
 
   let version: number | null;
@@ -228,17 +260,52 @@ export async function migrateSchema(
     );
   }
 
-  await applySchemaMigrationPlan(
-    database,
-    {
-      baselineVersion: WORKHORSE_SCHEMA_BASELINE_VERSION,
-      currentVersion: WORKHORSE_SCHEMA_VERSION,
-      steps: SCHEMA_MIGRATIONS,
-      readStep: async (file) => readFile(sqlAsset(`migrations/${file}`), "utf8"),
-      lockTimeoutMs: options.lockTimeoutMs,
-    },
-    version,
-  );
+  return applySchemaMigrationPlan(database, schemaMigrationPlan(options.lockTimeoutMs), version);
+}
+
+export interface ContractSchemaOptions {
+  /**
+   * The explicit confirmation the command requires. Without it the outcome is `unconfirmed` and
+   * nothing is applied; with it the step applies even while the gate still sees workers on a
+   * retiring protocol, because the registry is evidence and never proof.
+   */
+  confirmed?: boolean;
+  /** Same bound {@link MigrateSchemaOptions.lockTimeoutMs} gives the additive path. */
+  lockTimeoutMs?: number;
+}
+
+export type { SchemaContractOutcome };
+
+/**
+ * Apply the one contract step pending at the installed version, on the operator's schedule.
+ *
+ * The gate is the registry: the step refuses to apply unconfirmed while
+ * `workhorse.worker_registry` can name a worker on a retiring protocol heartbeating inside its
+ * lease. Producers never register, so the evidence can never prove no caller remains —
+ * confirmation is required either way.
+ */
+export async function contractSchema(
+  database: Queryable,
+  options: ContractSchemaOptions = {},
+): Promise<SchemaContractOutcome> {
+  await assertSupportedPostgres(database);
+
+  let version: number | null;
+  try {
+    version = await readSchemaVersion(database);
+  } catch (error) {
+    throw new Error(
+      isMissingDatabaseRelationError(error)
+        ? "Workhorse schema is not installed. Run installSchema for a fresh database."
+        : "Unable to read the Workhorse schema version before applying a contract step.",
+      { cause: error },
+    );
+  }
+
+  return planSchemaContract(database, schemaMigrationPlan(options.lockTimeoutMs), {
+    confirmed: options.confirmed,
+    installedVersion: version,
+  });
 }
 
 export async function installSchema(database: Queryable): Promise<void> {

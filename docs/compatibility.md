@@ -433,12 +433,14 @@ else — no backports and no second implementation to maintain — which is why 
 **A major release removes nothing.** Its migrations add, and it keeps serving every protocol its
 predecessor served, so a major upgrade is an ordinary rolling deployment. Removal is a separate
 **contract step** the new major line ships and the operator applies with `workhorse schema contract`
-once their fleet is entirely on the new major. `workhorse schema migrate` never applies it. The
-command refuses while `workhorse.worker_registry` shows a worker on the retiring protocol
-heartbeating inside its lease; producers do not register, so it names what it can see and requires
-explicit confirmation. Every worker reports its client protocol version, SDK language, and SDK
+once their fleet is entirely on the new major. `workhorse schema migrate` stops before it and names
+the step it stopped before. `workhorse schema contract` applies nothing without `--yes`: it names
+every worker on a retiring protocol that heartbeated inside its lease in
+`workhorse.worker_registry`; producers do not register, so that evidence is never proof that no
+caller remains, and confirmation is required either way. Every worker reports its client protocol
+version, SDK language, and SDK
 version at registration, and `workhorse schema status --json` shows the resulting counts under
-`fleet`.
+`fleet` and the pending step under `schema.pendingContractSteps`.
 
 Two consequences are worth stating plainly. `workhorse.protocol_version` is operator state rather
 than release state, so two databases at the same schema version may serve different protocol sets.

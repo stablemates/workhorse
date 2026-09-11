@@ -32,7 +32,9 @@ for (const target of resolveDemoSchemaTargets()) {
     const result = await prepareSchema({
       readVersion: () => readSchemaVersion(pool),
       install: () => installSchema(pool),
-      migrate: () => migrateSchema(pool),
+      migrate: async () => {
+        await migrateSchema(pool);
+      },
       installDemo: () => installDemoSchema(createDemoDatabase(pool)),
     });
     // Verify what was just written with the same checks the application makes at startup. A

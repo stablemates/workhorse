@@ -136,6 +136,8 @@ const cliCommandPurposes: Readonly<Record<string, string>> = {
   init: "write a starter configuration file for the worker process.",
   "schema install": "install the Workhorse schema into a PostgreSQL database; a deployment step.",
   "schema migrate": "apply pending schema migrations; a deployment step.",
+  "schema contract":
+    "apply the one pending contract step, retiring the protocols it names; an operator step that requires `--yes`.",
   "schema status":
     "report the installed schema version and whether this client is compatible (`--json` for machines).",
   worker:

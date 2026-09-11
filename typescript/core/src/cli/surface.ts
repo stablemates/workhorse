@@ -56,6 +56,7 @@ export const CLI_OPTIONS = {
   schema: HELP_OPTION,
   "schema install": { ...DATABASE_OPTIONS, ...HELP_OPTION },
   "schema migrate": { ...DATABASE_OPTIONS, ...HELP_OPTION },
+  "schema contract": { ...DATABASE_OPTIONS, yes: { type: "boolean" }, ...HELP_OPTION },
   "schema status": { ...DATABASE_OPTIONS, json: { type: "boolean" }, ...HELP_OPTION },
   worker: {
     config: { type: "string" },
@@ -125,7 +126,7 @@ export interface CliCommand {
 }
 
 /**
- * The nine commands an operator runs.
+ * The ten commands an operator runs.
  *
  * `workhorse` alone and `workhorse schema` alone print help and run nothing, so neither is a
  * command. Each `schema` action is its own command because each takes its own options.
@@ -134,6 +135,7 @@ export const CLI_COMMANDS = [
   { name: "init", positionals: [] },
   { name: "schema install", positionals: [] },
   { name: "schema migrate", positionals: [] },
+  { name: "schema contract", positionals: [] },
   { name: "schema status", positionals: [] },
   { name: "worker", positionals: [] },
   { name: "dashboard", positionals: [] },
@@ -142,11 +144,11 @@ export const CLI_COMMANDS = [
   { name: "health", positionals: [] },
 ] as const satisfies readonly CliCommand[];
 
-/** One of the nine names {@link CLI_COMMANDS} declares. */
+/** One of the names {@link CLI_COMMANDS} declares. */
 export type CliCommandName = (typeof CLI_COMMANDS)[number]["name"];
 
-/** The three `schema` actions, in the order the group's help lists them. */
-export const SCHEMA_ACTIONS = ["install", "migrate", "status"] as const;
+/** The four `schema` actions, in the order the group's help lists them. */
+export const SCHEMA_ACTIONS = ["install", "migrate", "contract", "status"] as const;
 export type SchemaAction = (typeof SCHEMA_ACTIONS)[number];
 
 export interface AdminCommand {

@@ -38,6 +38,7 @@ describe("database CLI output", () => {
         expectedVersion: WORKHORSE_SCHEMA_VERSION,
         state: "current",
         installedProtocolVersions: [1],
+        pendingContractSteps: [],
       },
       postgres: {
         supported: true,
@@ -91,6 +92,12 @@ describe("database CLI output", () => {
         },
       });
     });
+  });
+
+  it("reports no pending contract step on a current schema", () => {
+    const result = runCli(["schema", "contract", `--database-url=${databaseUrl}`]);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("no contract step is pending");
   });
 
   it("emits the QueueHealth shape with --json", () => {
