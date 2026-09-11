@@ -1234,7 +1234,7 @@ export interface WorkerRegistration {
   heartbeatMs?: number;
   pollMs?: number;
   maintenanceIntervalMs?: number;
-  maintenanceTaskPollMs?: number;
+  maintenanceRoutinePollMs?: number;
   registryIntervalMs?: number;
   activeSlots: number;
   draining: boolean;

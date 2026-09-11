@@ -38,9 +38,9 @@ const page: DashboardCronPage = {
       historyRetentionLocalTime: "03:00",
       updatedAt: "2026-08-26T12:00:00.000Z",
     },
-    tasks: [
+    routines: [
       {
-        task: "tick",
+        routine: "tick",
         lastStartedAt: "2026-08-26T11:59:59.000Z",
         lastCompletedAt: "2026-08-26T11:59:59.010Z",
         due: false,

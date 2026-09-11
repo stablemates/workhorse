@@ -79,8 +79,8 @@ class DashboardCronPageMaintenancePolicy(TypedDict, total=False):
     updatedAt: Required[str]
 
 
-class DashboardCronPageMaintenanceTasksItem(TypedDict, total=False):
-    task: Required[Literal["history_partitions", "history_retention", "terminal_storage", "tick"]]
+class DashboardCronPageMaintenanceRoutinesItem(TypedDict, total=False):
+    routine: Required[Literal["history_partitions", "history_retention", "terminal_storage", "tick"]]
     lastStartedAt: Required[str | None]
     lastCompletedAt: Required[str | None]
     due: Required[bool]
@@ -90,7 +90,7 @@ class DashboardCronPageMaintenanceTasksItem(TypedDict, total=False):
 class DashboardCronPageMaintenance(TypedDict, total=False):
     cadences: Required[DashboardMaintenanceLoopCadences]
     policy: Required[DashboardCronPageMaintenancePolicy]
-    tasks: Required[list[DashboardCronPageMaintenanceTasksItem]]
+    routines: Required[list[DashboardCronPageMaintenanceRoutinesItem]]
 
 
 class DashboardCronPage(TypedDict, total=False):
@@ -830,7 +830,7 @@ class DashboardSettingsPageWorkersItem(TypedDict, total=False):
     heartbeatMs: Required[float | None]
     pollMs: Required[float | None]
     maintenanceIntervalMs: Required[float | None]
-    maintenanceTaskPollMs: Required[float | None]
+    maintenanceRoutinePollMs: Required[float | None]
     registryIntervalMs: Required[float | None]
     lastSeenAt: Required[str]
 
@@ -1850,7 +1850,7 @@ __all__ = [
     "DashboardCronPage",
     "DashboardCronPageMaintenance",
     "DashboardCronPageMaintenancePolicy",
-    "DashboardCronPageMaintenanceTasksItem",
+    "DashboardCronPageMaintenanceRoutinesItem",
     "DashboardDurabilityPlan",
     "DashboardDurabilityPlanPersistentFailure",
     "DashboardDurabilityPlanStepsItem",

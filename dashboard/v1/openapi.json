@@ -1954,36 +1954,6 @@
                         ],
                         "capturedAt": "2026-01-01T00:00:00.000Z",
                         "maintenance": {
-                          "tasks": [
-                            {
-                              "due": false,
-                              "task": "history_partitions",
-                              "incomplete": false,
-                              "lastStartedAt": null,
-                              "lastCompletedAt": null
-                            },
-                            {
-                              "due": false,
-                              "task": "history_retention",
-                              "incomplete": false,
-                              "lastStartedAt": null,
-                              "lastCompletedAt": null
-                            },
-                            {
-                              "due": false,
-                              "task": "terminal_storage",
-                              "incomplete": false,
-                              "lastStartedAt": null,
-                              "lastCompletedAt": null
-                            },
-                            {
-                              "due": false,
-                              "task": "tick",
-                              "incomplete": false,
-                              "lastStartedAt": null,
-                              "lastCompletedAt": null
-                            }
-                          ],
                           "policy": {
                             "timezone": "UTC",
                             "updatedAt": "2026-01-01T00:00:00.000Z",
@@ -1993,7 +1963,37 @@
                           },
                           "cadences": {
                             "tickIntervalMs": 1000
-                          }
+                          },
+                          "routines": [
+                            {
+                              "due": true,
+                              "routine": "history_partitions",
+                              "incomplete": false,
+                              "lastStartedAt": null,
+                              "lastCompletedAt": null
+                            },
+                            {
+                              "due": true,
+                              "routine": "history_retention",
+                              "incomplete": false,
+                              "lastStartedAt": null,
+                              "lastCompletedAt": null
+                            },
+                            {
+                              "due": true,
+                              "routine": "terminal_storage",
+                              "incomplete": false,
+                              "lastStartedAt": null,
+                              "lastCompletedAt": null
+                            },
+                            {
+                              "due": true,
+                              "routine": "tick",
+                              "incomplete": false,
+                              "lastStartedAt": null,
+                              "lastCompletedAt": null
+                            }
+                          ]
                         }
                       }
                     }
@@ -3393,7 +3393,7 @@
                             "heartbeatMs": 10000,
                             "registryIntervalMs": 5000,
                             "maintenanceIntervalMs": 1000,
-                            "maintenanceTaskPollMs": 60000
+                            "maintenanceRoutinePollMs": 60000
                           }
                         ],
                         "editable": true,
@@ -6810,12 +6810,12 @@
                   "updatedAt"
                 ]
               },
-              "tasks": {
+              "routines": {
                 "type": "array",
                 "items": {
                   "type": "object",
                   "properties": {
-                    "task": {
+                    "routine": {
                       "enum": [
                         "history_partitions",
                         "history_retention",
@@ -6851,7 +6851,7 @@
                     }
                   },
                   "required": [
-                    "task",
+                    "routine",
                     "lastStartedAt",
                     "lastCompletedAt",
                     "due",
@@ -6863,7 +6863,7 @@
             "required": [
               "cadences",
               "policy",
-              "tasks"
+              "routines"
             ]
           }
         },
@@ -10106,7 +10106,7 @@
                     }
                   ]
                 },
-                "maintenanceTaskPollMs": {
+                "maintenanceRoutinePollMs": {
                   "anyOf": [
                     {
                       "type": "null"
@@ -10139,7 +10139,7 @@
                 "heartbeatMs",
                 "pollMs",
                 "maintenanceIntervalMs",
-                "maintenanceTaskPollMs",
+                "maintenanceRoutinePollMs",
                 "registryIntervalMs",
                 "lastSeenAt"
               ]

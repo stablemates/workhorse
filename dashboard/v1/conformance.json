@@ -2434,44 +2434,6 @@
                   "$type": "timestamp"
                 },
                 "maintenance": {
-                  "tasks": [
-                    {
-                      "due": {
-                        "$type": "boolean"
-                      },
-                      "task": "history_partitions",
-                      "incomplete": false,
-                      "lastStartedAt": null,
-                      "lastCompletedAt": null
-                    },
-                    {
-                      "due": {
-                        "$type": "boolean"
-                      },
-                      "task": "history_retention",
-                      "incomplete": false,
-                      "lastStartedAt": null,
-                      "lastCompletedAt": null
-                    },
-                    {
-                      "due": {
-                        "$type": "boolean"
-                      },
-                      "task": "terminal_storage",
-                      "incomplete": false,
-                      "lastStartedAt": null,
-                      "lastCompletedAt": null
-                    },
-                    {
-                      "due": {
-                        "$type": "boolean"
-                      },
-                      "task": "tick",
-                      "incomplete": false,
-                      "lastStartedAt": null,
-                      "lastCompletedAt": null
-                    }
-                  ],
                   "policy": {
                     "timezone": "UTC",
                     "updatedAt": {
@@ -2483,7 +2445,37 @@
                   },
                   "cadences": {
                     "tickIntervalMs": 1000
-                  }
+                  },
+                  "routines": [
+                    {
+                      "due": true,
+                      "routine": "history_partitions",
+                      "incomplete": false,
+                      "lastStartedAt": null,
+                      "lastCompletedAt": null
+                    },
+                    {
+                      "due": true,
+                      "routine": "history_retention",
+                      "incomplete": false,
+                      "lastStartedAt": null,
+                      "lastCompletedAt": null
+                    },
+                    {
+                      "due": true,
+                      "routine": "terminal_storage",
+                      "incomplete": false,
+                      "lastStartedAt": null,
+                      "lastCompletedAt": null
+                    },
+                    {
+                      "due": true,
+                      "routine": "tick",
+                      "incomplete": false,
+                      "lastStartedAt": null,
+                      "lastCompletedAt": null
+                    }
+                  ]
                 }
               }
             }
@@ -4632,7 +4624,7 @@
                     "heartbeatMs": 10000,
                     "registryIntervalMs": 5000,
                     "maintenanceIntervalMs": 1000,
-                    "maintenanceTaskPollMs": 60000
+                    "maintenanceRoutinePollMs": 60000
                   }
                 ],
                 "editable": true,
@@ -6897,7 +6889,7 @@
                     "heartbeatMs": 10000,
                     "registryIntervalMs": 5000,
                     "maintenanceIntervalMs": 1000,
-                    "maintenanceTaskPollMs": 60000
+                    "maintenanceRoutinePollMs": 60000
                   }
                 ],
                 "editable": false,

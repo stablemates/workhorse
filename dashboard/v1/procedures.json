@@ -2339,12 +2339,12 @@
                 "updatedAt"
               ]
             },
-            "tasks": {
+            "routines": {
               "type": "array",
               "items": {
                 "type": "object",
                 "properties": {
-                  "task": {
+                  "routine": {
                     "enum": [
                       "history_partitions",
                       "history_retention",
@@ -2380,7 +2380,7 @@
                   }
                 },
                 "required": [
-                  "task",
+                  "routine",
                   "lastStartedAt",
                   "lastCompletedAt",
                   "due",
@@ -2392,7 +2392,7 @@
           "required": [
             "cadences",
             "policy",
-            "tasks"
+            "routines"
           ]
         }
       },
@@ -5635,7 +5635,7 @@
                   }
                 ]
               },
-              "maintenanceTaskPollMs": {
+              "maintenanceRoutinePollMs": {
                 "anyOf": [
                   {
                     "type": "null"
@@ -5668,7 +5668,7 @@
               "heartbeatMs",
               "pollMs",
               "maintenanceIntervalMs",
-              "maintenanceTaskPollMs",
+              "maintenanceRoutinePollMs",
               "registryIntervalMs",
               "lastSeenAt"
             ]

@@ -377,7 +377,7 @@ CREATE TABLE IF NOT EXISTS workhorse.worker_registry (
   heartbeat_ms integer NOT NULL CHECK (heartbeat_ms > 0 AND heartbeat_ms < lease_ms),
   poll_ms integer NOT NULL CHECK (poll_ms >= 0),
   maintenance_interval_ms integer NOT NULL CHECK (maintenance_interval_ms >= 100),
-  maintenance_task_poll_ms integer NOT NULL CHECK (maintenance_task_poll_ms >= 100),
+  maintenance_routine_poll_ms integer NOT NULL CHECK (maintenance_routine_poll_ms >= 100),
   registry_interval_ms integer NOT NULL CHECK (registry_interval_ms >= 100),
   active_slots integer NOT NULL DEFAULT 0 CHECK (active_slots >= 0),
   draining boolean NOT NULL DEFAULT false,
@@ -1231,7 +1231,7 @@ CREATE INDEX IF NOT EXISTS attempt_history_identity_idx
   ON workhorse.attempt_history (attempt_id);
 
 -- One database-owned schedule coordinates low-frequency maintenance across every worker process.
--- The IANA timezone and local time control the daily history-retention boundary; interval tasks remain
+-- The IANA timezone and local time control the daily history-retention boundary; interval routines remain
 -- elapsed-time based so daylight-saving transitions cannot duplicate or suppress them.
 CREATE TABLE IF NOT EXISTS workhorse.maintenance_policy (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
@@ -1340,8 +1340,8 @@ INSERT INTO workhorse.queue_health_policy(
 ON CONFLICT (singleton) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS workhorse.maintenance_state (
-  task_name text PRIMARY KEY CHECK (
-    task_name IN ('tick', 'history_partitions', 'history_retention', 'terminal_storage')
+  routine_name text PRIMARY KEY CHECK (
+    routine_name IN ('tick', 'history_partitions', 'history_retention', 'terminal_storage')
   ),
   last_started_at timestamptz,
   last_completed_at timestamptz,
@@ -1350,20 +1350,20 @@ CREATE TABLE IF NOT EXISTS workhorse.maintenance_state (
   terminal_prune_dependency_starved boolean NOT NULL DEFAULT false,
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   CHECK (
-    (task_name = 'history_retention')
+    (routine_name = 'history_retention')
     OR (last_completed_local_date IS NULL AND history_retained_before IS NULL)
   ),
-  CHECK (task_name = 'terminal_storage' OR NOT terminal_prune_dependency_starved)
+  CHECK (routine_name = 'terminal_storage' OR NOT terminal_prune_dependency_starved)
 );
 INSERT INTO workhorse.maintenance_state(
-  task_name, history_retained_before
+  routine_name, history_retained_before
 ) VALUES
   ('tick', NULL),
   ('history_partitions', NULL),
   ('history_retention', date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC')
     AT TIME ZONE 'UTC' - interval '14 days'),
   ('terminal_storage', NULL)
-ON CONFLICT (task_name) DO NOTHING;
+ON CONFLICT (routine_name) DO NOTHING;
 
 -- Rolling statistics. Operator time windows are answered from bounded per-minute aggregates rather
 -- than from scans over retained history: one row per closed minute per (queue, task type) instead
@@ -2239,7 +2239,7 @@ BEGIN
                    AS dependency_failed_resolutions,
                  (SELECT terminal_prune_dependency_starved
                     FROM workhorse.maintenance_state
-                   WHERE task_name = 'terminal_storage') AS dependency_retention_prune_starved,
+                   WHERE routine_name = 'terminal_storage') AS dependency_retention_prune_starved,
                  blocked_jobs > 10000
                    OR pending_edges > 10000
                    OR failed_resolutions > 10000
@@ -2779,7 +2779,7 @@ BEGIN
            END,
            last_completed_local_date = NULL,
            updated_at = clock_timestamp()
-     WHERE state.task_name = 'history_retention';
+     WHERE state.routine_name = 'history_retention';
   END IF;
   RETURN v_policy;
 END;
@@ -2877,7 +2877,7 @@ BEGIN
            END,
            last_completed_local_date = NULL,
            updated_at = clock_timestamp()
-     WHERE state.task_name = 'history_retention';
+     WHERE state.routine_name = 'history_retention';
   END IF;
   RETURN v_policy;
 END;
@@ -2938,7 +2938,7 @@ BEGIN
   RETURNING * INTO v_policy;
   UPDATE workhorse.maintenance_state
      SET last_completed_local_date = NULL, updated_at = clock_timestamp()
-   WHERE task_name = 'history_retention'
+   WHERE routine_name = 'history_retention'
      AND p_settings && ARRAY[
        'job_event_retention_days', 'attempt_history_retention_days',
        'schedule_occurrence_retention_days'
@@ -3054,7 +3054,7 @@ BEGIN
      OR v_previous.history_retention_local_time IS DISTINCT FROM v_policy.history_retention_local_time THEN
     UPDATE workhorse.maintenance_state
        SET last_completed_local_date = NULL, updated_at = clock_timestamp()
-     WHERE task_name = 'history_retention';
+     WHERE routine_name = 'history_retention';
   END IF;
   RETURN v_policy;
 END;
@@ -3135,7 +3135,7 @@ BEGIN
      OR v_previous.history_retention_local_time IS DISTINCT FROM v_policy.history_retention_local_time THEN
     UPDATE workhorse.maintenance_state
        SET last_completed_local_date = NULL, updated_at = clock_timestamp()
-     WHERE task_name = 'history_retention';
+     WHERE routine_name = 'history_retention';
   END IF;
   RETURN v_policy;
 END;
@@ -3194,7 +3194,7 @@ BEGIN
      OR v_previous.history_retention_local_time IS DISTINCT FROM v_policy.history_retention_local_time THEN
     UPDATE workhorse.maintenance_state
        SET last_completed_local_date = NULL, updated_at = clock_timestamp()
-     WHERE task_name = 'history_retention';
+     WHERE routine_name = 'history_retention';
   END IF;
   RETURN v_policy;
 END;
@@ -6016,7 +6016,7 @@ CREATE OR REPLACE FUNCTION workhorse.register_worker_v1(
   p_heartbeat_ms integer,
   p_poll_ms integer,
   p_maintenance_interval_ms integer,
-  p_maintenance_task_poll_ms integer,
+  p_maintenance_routine_poll_ms integer,
   p_registry_interval_ms integer,
   p_active_slots integer,
   p_draining boolean,
@@ -6071,12 +6071,12 @@ BEGIN
   INSERT INTO workhorse.worker_registry AS registry
     (worker_id, instance_id, hostname, pid, queue_names, schedule_namespaces, queue_name,
      concurrency, lease_ms, heartbeat_ms,
-     poll_ms, maintenance_interval_ms, maintenance_task_poll_ms, registry_interval_ms,
+     poll_ms, maintenance_interval_ms, maintenance_routine_poll_ms, registry_interval_ms,
      active_slots, draining, client_protocol_version, sdk_language, sdk_version)
   VALUES (p_worker_id, p_instance_id, p_hostname, p_pid, p_queue_names, p_schedule_namespaces,
           p_queue_names[1], p_concurrency,
           p_lease_ms, p_heartbeat_ms, p_poll_ms, p_maintenance_interval_ms,
-          p_maintenance_task_poll_ms, p_registry_interval_ms,
+          p_maintenance_routine_poll_ms, p_registry_interval_ms,
           COALESCE(p_active_slots, 0), COALESCE(p_draining, false),
           p_client_protocol_version, p_sdk_language, p_sdk_version)
   ON CONFLICT (worker_id) DO UPDATE
@@ -6091,7 +6091,7 @@ BEGIN
         heartbeat_ms = EXCLUDED.heartbeat_ms,
         poll_ms = EXCLUDED.poll_ms,
         maintenance_interval_ms = EXCLUDED.maintenance_interval_ms,
-        maintenance_task_poll_ms = EXCLUDED.maintenance_task_poll_ms,
+        maintenance_routine_poll_ms = EXCLUDED.maintenance_routine_poll_ms,
         registry_interval_ms = EXCLUDED.registry_interval_ms,
         active_slots = EXCLUDED.active_slots,
         draining = EXCLUDED.draining,
@@ -9008,7 +9008,7 @@ BEGIN
   v_tick_started_at := clock_timestamp();
   UPDATE workhorse.maintenance_state
      SET last_started_at = v_tick_started_at, updated_at = v_tick_started_at
-   WHERE task_name = 'tick';
+   WHERE routine_name = 'tick';
 
   phase := 'promote';
   rows_affected := 0;
@@ -9050,7 +9050,7 @@ BEGIN
   IF NOT v_had_error THEN
     UPDATE workhorse.maintenance_state
        SET last_completed_at = clock_timestamp(), updated_at = clock_timestamp()
-     WHERE task_name = 'tick';
+     WHERE routine_name = 'tick';
   END IF;
 END;
 $$;
@@ -9238,7 +9238,7 @@ BEGIN
        SET terminal_prune_dependency_starved = result.dependency_starved,
            updated_at = clock_timestamp()
       FROM result
-     WHERE state.task_name = 'terminal_storage'
+     WHERE state.routine_name = 'terminal_storage'
     RETURNING result.pruned
   )
   SELECT pruned INTO STRICT v_count FROM recorded;
@@ -9386,7 +9386,7 @@ BEGIN
   END IF;
   SELECT * INTO STRICT v_policy FROM workhorse.maintenance_policy WHERE singleton;
   SELECT * INTO STRICT v_state FROM workhorse.maintenance_state
-   WHERE task_name = 'history_partitions' FOR UPDATE;
+   WHERE routine_name = 'history_partitions' FOR UPDATE;
   IF NOT p_force AND v_state.last_completed_at IS NOT NULL
      AND v_state.last_completed_at > p_now - make_interval(
        secs => v_policy.partition_preparation_interval_ms / 1000.0
@@ -9394,7 +9394,7 @@ BEGIN
     RETURN;
   END IF;
   UPDATE workhorse.maintenance_state SET last_started_at = p_now, updated_at = clock_timestamp()
-   WHERE task_name = 'history_partitions';
+   WHERE routine_name = 'history_partitions';
 
   phase := 'history_partitions';
   rows_affected := 0;
@@ -9420,7 +9420,7 @@ BEGIN
   IF error IS NULL THEN
     UPDATE workhorse.maintenance_state
        SET last_completed_at = p_now, updated_at = clock_timestamp()
-     WHERE task_name = 'history_partitions';
+     WHERE routine_name = 'history_partitions';
   END IF;
   RETURN NEXT;
 END;
@@ -10061,7 +10061,7 @@ BEGIN
   SELECT * INTO STRICT v_policy FROM workhorse.retention_policy WHERE singleton;
   SELECT * INTO STRICT v_maintenance FROM workhorse.maintenance_policy WHERE singleton;
   SELECT * INTO STRICT v_state FROM workhorse.maintenance_state
-   WHERE task_name = 'history_retention' FOR UPDATE;
+   WHERE routine_name = 'history_retention' FOR UPDATE;
   v_local_now := p_now AT TIME ZONE v_maintenance.timezone;
   IF NOT p_force AND (
     v_local_now::time(0) < v_maintenance.history_retention_local_time
@@ -10070,7 +10070,7 @@ BEGIN
     RETURN;
   END IF;
   UPDATE workhorse.maintenance_state SET last_started_at = p_now, updated_at = clock_timestamp()
-   WHERE task_name = 'history_retention';
+   WHERE routine_name = 'history_retention';
   v_event_before := date_trunc('day', p_now AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
     - make_interval(days => COALESCE(v_policy.job_event_retention_days, 0));
   v_attempt_before := date_trunc('day', p_now AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
@@ -10174,7 +10174,7 @@ BEGIN
              last_completed_local_date = v_local_now::date,
              history_retained_before = GREATEST(history_retained_before, v_safe_before),
              updated_at = clock_timestamp()
-       WHERE task_name = 'history_retention';
+       WHERE routine_name = 'history_retention';
     END IF;
   END IF;
 END;
@@ -10210,7 +10210,7 @@ BEGIN
   SELECT * INTO STRICT v_policy FROM workhorse.retention_policy WHERE singleton;
   SELECT * INTO STRICT v_maintenance FROM workhorse.maintenance_policy WHERE singleton;
   SELECT * INTO STRICT v_state FROM workhorse.maintenance_state
-   WHERE task_name = 'terminal_storage' FOR UPDATE;
+   WHERE routine_name = 'terminal_storage' FOR UPDATE;
   IF NOT p_force AND v_state.last_completed_at IS NOT NULL
      AND v_state.last_completed_at > p_now - make_interval(
        secs => v_maintenance.terminal_cleanup_interval_ms / 1000.0
@@ -10218,9 +10218,9 @@ BEGIN
     RETURN;
   END IF;
   SELECT history_retained_before INTO v_history_before
-    FROM workhorse.maintenance_state WHERE task_name = 'history_retention';
+    FROM workhorse.maintenance_state WHERE routine_name = 'history_retention';
   UPDATE workhorse.maintenance_state SET last_started_at = p_now, updated_at = clock_timestamp()
-   WHERE task_name = 'terminal_storage';
+   WHERE routine_name = 'terminal_storage';
 
   phase := 'enqueue_idempotency';
   rows_affected := 0;
@@ -10275,7 +10275,7 @@ BEGIN
       UPDATE workhorse.maintenance_state
          SET terminal_prune_dependency_starved = false,
              updated_at = clock_timestamp()
-       WHERE task_name = 'terminal_storage';
+       WHERE routine_name = 'terminal_storage';
     END IF;
   EXCEPTION WHEN OTHERS THEN
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
@@ -10287,13 +10287,13 @@ BEGIN
   IF v_success THEN
     UPDATE workhorse.maintenance_state
        SET last_completed_at = p_now, updated_at = clock_timestamp()
-     WHERE task_name = 'terminal_storage';
+     WHERE routine_name = 'terminal_storage';
   END IF;
   RETURN NEXT;
 END;
 $$;
 
--- Run every slow maintenance task in one database-owned order so each language worker participates
+-- Run every slow maintenance routine in one database-owned order so each language worker participates
 -- in the same housekeeping contract. The individual functions retain their own cadence gates and
 -- advisory locks, and report their expected per-phase failures as telemetry rows. Registry pruning
 -- remains best-effort so its failure cannot reject an otherwise successful maintenance pass.
@@ -11450,7 +11450,7 @@ CREATE OR REPLACE VIEW workhorse.dashboard_maintenance_policy_v1 AS
          history_retention_local_time, statistics_rollup_interval_ms, statistics_group_limit,
          statistics_recompute_buckets, updated_at FROM workhorse.maintenance_policy;
 CREATE OR REPLACE VIEW workhorse.dashboard_maintenance_state_v1 AS
-  SELECT task_name, last_started_at, last_completed_at, last_completed_local_date
+  SELECT routine_name, last_started_at, last_completed_at, last_completed_local_date
     FROM workhorse.maintenance_state;
 CREATE OR REPLACE VIEW workhorse.dashboard_queue_control_v1 AS
   SELECT queue_name, paused FROM workhorse.queue_control;
@@ -11466,7 +11466,7 @@ CREATE OR REPLACE VIEW workhorse.dashboard_schedule_occurrence_v1 AS
   SELECT namespace, schedule_name, occurrence_at, fired_at FROM workhorse.schedule_occurrence;
 CREATE OR REPLACE VIEW workhorse.dashboard_worker_registry_v1 AS
   SELECT worker_id, hostname, pid, queue_name, concurrency, lease_ms, heartbeat_ms, poll_ms,
-         maintenance_interval_ms, maintenance_task_poll_ms, registry_interval_ms, active_slots,
+         maintenance_interval_ms, maintenance_routine_poll_ms, registry_interval_ms, active_slots,
          draining, paused, started_at, last_heartbeat_at, queue_names, schedule_namespaces,
          client_protocol_version, sdk_language, sdk_version
     FROM workhorse.worker_registry;
@@ -12250,12 +12250,12 @@ AS $$
     ) ORDER BY namespace, schedule_name), '[]'::jsonb) AS value FROM schedule_rows
   ), policy AS (
     SELECT * FROM workhorse.dashboard_maintenance_policy_v1 WHERE singleton
-  ), tasks AS (
+  ), routines AS (
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
-      'task', state.task_name,
+      'routine', state.routine_name,
       'lastStartedAt', workhorse.dashboard_iso_v1(state.last_started_at),
       'lastCompletedAt', workhorse.dashboard_iso_v1(state.last_completed_at),
-      'due', CASE state.task_name
+      'due', CASE state.routine_name
         WHEN 'tick' THEN state.last_completed_at IS NULL
           OR state.last_completed_at <= clock_timestamp()
             - make_interval(secs => COALESCE(
@@ -12278,10 +12278,10 @@ AS $$
       'incomplete', state.last_started_at IS NOT NULL
         AND (state.last_completed_at IS NULL
           OR state.last_started_at > state.last_completed_at)
-    ) ORDER BY state.task_name), '[]'::jsonb) AS value
+    ) ORDER BY state.routine_name), '[]'::jsonb) AS value
       FROM workhorse.dashboard_maintenance_state_v1 state
       CROSS JOIN policy
-     WHERE state.task_name IN ('tick', 'history_partitions', 'history_retention', 'terminal_storage')
+     WHERE state.routine_name IN ('tick', 'history_partitions', 'history_retention', 'terminal_storage')
   )
   SELECT jsonb_build_object(
     'capturedAt', workhorse.dashboard_iso_v1(clock_timestamp()),
@@ -12294,8 +12294,8 @@ AS $$
         'terminalCleanupIntervalMs', policy.terminal_cleanup_interval_ms,
         'historyRetentionLocalTime', left(policy.history_retention_local_time::text, 5),
         'updatedAt', workhorse.dashboard_iso_v1(policy.updated_at)),
-      'tasks', tasks.value))
-    FROM policy CROSS JOIN schedules CROSS JOIN tasks;
+      'routines', routines.value))
+    FROM policy CROSS JOIN schedules CROSS JOIN routines;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.dashboard_queues_v1(p_input jsonb)
@@ -12869,7 +12869,7 @@ AS $$
              'heartbeatMs', heartbeat_ms,
              'pollMs', poll_ms,
              'maintenanceIntervalMs', maintenance_interval_ms,
-             'maintenanceTaskPollMs', maintenance_task_poll_ms,
+             'maintenanceRoutinePollMs', maintenance_routine_poll_ms,
              'registryIntervalMs', registry_interval_ms,
              'lastSeenAt', workhorse.dashboard_iso_v1(last_heartbeat_at)
            ) ORDER BY worker_id), '[]'::jsonb) AS document

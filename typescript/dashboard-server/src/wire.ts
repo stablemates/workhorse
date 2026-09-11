@@ -47,7 +47,7 @@ export interface DashboardSettingsPage {
     heartbeatMs: number | null;
     pollMs: number | null;
     maintenanceIntervalMs: number | null;
-    maintenanceTaskPollMs: number | null;
+    maintenanceRoutinePollMs: number | null;
     registryIntervalMs: number | null;
     lastSeenAt: string;
   }>;
@@ -575,8 +575,8 @@ export interface DashboardCronPage {
       historyRetentionLocalTime: string;
       updatedAt: string;
     };
-    tasks: Array<{
-      task: "tick" | "history_partitions" | "history_retention" | "terminal_storage";
+    routines: Array<{
+      routine: "tick" | "history_partitions" | "history_retention" | "terminal_storage";
       lastStartedAt: string | null;
       lastCompletedAt: string | null;
       due: boolean;

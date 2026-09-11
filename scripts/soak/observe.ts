@@ -181,20 +181,20 @@ async function readRetention(client: PoolClient): Promise<SoakObservation["reten
        FROM workhorse.retention_policy WHERE singleton`,
   );
   const state = await client.query<{
-    task_name: string;
+    routine_name: string;
     last_completed_at: Date | null;
     last_completed_local_date: string | null;
     history_retained_before: Date | null;
   }>(
     // The local date is read as text. A DATE arrives as local midnight, and reserializing that
     // through UTC moves the day for anyone west of Greenwich.
-    `SELECT task_name, last_completed_at, history_retained_before,
+    `SELECT routine_name, last_completed_at, history_retained_before,
             to_char(last_completed_local_date, 'YYYY-MM-DD') AS last_completed_local_date
        FROM workhorse.maintenance_state
-      WHERE task_name IN ('history_retention', 'history_partitions')`,
+      WHERE routine_name IN ('history_retention', 'history_partitions')`,
   );
-  const retention = state.rows.find((row) => row.task_name === "history_retention");
-  const partitions = state.rows.find((row) => row.task_name === "history_partitions");
+  const retention = state.rows.find((row) => row.routine_name === "history_retention");
+  const partitions = state.rows.find((row) => row.routine_name === "history_partitions");
   const row = policy.rows[0]!;
   return {
     jobEventRetentionDays: row.job_event_retention_days,

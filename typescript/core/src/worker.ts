@@ -192,7 +192,7 @@ export interface BatchHandlerOptions {
   lingerMs: number;
 }
 
-export type WorkerMaintenanceLoop = "tick" | "statistics_rollup" | "background_tasks";
+export type WorkerMaintenanceLoop = "tick" | "statistics_rollup" | "background_routines";
 
 export interface WorkerMaintenanceTelemetry extends MaintenancePhaseResult {
   loop: WorkerMaintenanceLoop;
@@ -377,11 +377,11 @@ export interface WorkerOptions {
   /** Minimum delay between worker-owned maintenance and recurring schedule passes. */
   maintenanceIntervalMs?: number;
   /**
-   * Minimum delay between checks for database-scheduled background maintenance tasks, including
+   * Minimum delay between checks for database-scheduled background maintenance routines, including
    * the rolling-statistics rollup. Each task's real cadence is maintenance policy read from
    * PostgreSQL; this option only bounds how often this process offers to run them.
    */
-  maintenanceTaskPollMs?: number;
+  maintenanceRoutinePollMs?: number;
   /**
    * Minimum delay between durable worker-registry refreshes.
    *
@@ -478,13 +478,13 @@ export class Worker {
   private readonly dispatchPollMs: number;
   private readonly supportsNotifications: boolean;
   private readonly maintenanceIntervalMs: number;
-  private readonly maintenanceTaskPollMs: number;
+  private readonly maintenanceRoutinePollMs: number;
   private readonly registryIntervalMs: number;
   private readonly scheduleNamespaces: readonly string[];
   private readonly scheduleCatchupLimit: number;
   public readonly concurrency: number;
   private lastTickAt = Number.NEGATIVE_INFINITY;
-  private lastMaintenanceTaskPollAt = Number.NEGATIVE_INFINITY;
+  private lastMaintenanceRoutinePollAt = Number.NEGATIVE_INFINITY;
   /**
    * Identifies this Worker instance to the durable registry.
    *
@@ -611,7 +611,7 @@ export class Worker {
       options.pollMs ??
       (this.supportsNotifications ? DEFAULT_NOTIFICATION_FALLBACK_POLL_MS : DEFAULT_POLL_MS);
     this.maintenanceIntervalMs = options.maintenanceIntervalMs ?? 1_000;
-    this.maintenanceTaskPollMs = options.maintenanceTaskPollMs ?? 60_000;
+    this.maintenanceRoutinePollMs = options.maintenanceRoutinePollMs ?? 60_000;
     this.registryIntervalMs = options.registryIntervalMs ?? 5_000;
     this.scheduleNamespaces = [...new Set(options.scheduleNamespaces ?? [])];
     this.scheduleCatchupLimit = options.scheduleCatchupLimit ?? 100;
@@ -620,8 +620,8 @@ export class Worker {
     if (this.heartbeatMs >= this.leaseMs) throw new Error("heartbeatMs must be less than leaseMs");
     if (this.maintenanceIntervalMs < 100)
       throw new Error("maintenanceIntervalMs must be at least 100");
-    if (this.maintenanceTaskPollMs < 100)
-      throw new Error("maintenanceTaskPollMs must be at least 100");
+    if (this.maintenanceRoutinePollMs < 100)
+      throw new Error("maintenanceRoutinePollMs must be at least 100");
     if (this.registryIntervalMs !== 0 && this.registryIntervalMs < 100)
       throw new Error("registryIntervalMs must be 0 or at least 100");
     if (this.scheduleCatchupLimit < 1 || this.scheduleCatchupLimit > 10_000)
@@ -1598,7 +1598,7 @@ export class Worker {
         heartbeatMs: this.heartbeatMs,
         pollMs: this.pollMs,
         maintenanceIntervalMs: this.maintenanceIntervalMs,
-        maintenanceTaskPollMs: this.maintenanceTaskPollMs,
+        maintenanceRoutinePollMs: this.maintenanceRoutinePollMs,
         registryIntervalMs: this.registryIntervalMs,
         activeSlots: this.activeSlots,
         draining: this.draining,
@@ -1687,20 +1687,20 @@ export class Worker {
       }
     }
 
-    if (nowMs - this.lastMaintenanceTaskPollAt >= this.maintenanceTaskPollMs) {
+    if (nowMs - this.lastMaintenanceRoutinePollAt >= this.maintenanceRoutinePollMs) {
       this.recordMaintenanceDrift(
         nowMs,
-        this.lastMaintenanceTaskPollAt,
-        this.maintenanceTaskPollMs,
-        "background_tasks",
+        this.lastMaintenanceRoutinePollAt,
+        this.maintenanceRoutinePollMs,
+        "background_routines",
       );
       for (const result of await this.queue.runMaintenance()) {
         this.recordMaintenance(
-          result.phase.startsWith("stat_") ? "statistics_rollup" : "background_tasks",
+          result.phase.startsWith("stat_") ? "statistics_rollup" : "background_routines",
           result,
         );
       }
-      this.lastMaintenanceTaskPollAt = nowMs;
+      this.lastMaintenanceRoutinePollAt = nowMs;
     }
   }
 
@@ -1829,7 +1829,7 @@ export class Worker {
   }
 
   private async maintenanceLoop(shouldStop: () => boolean, signal?: AbortSignal): Promise<void> {
-    const intervalMs = Math.min(this.maintenanceIntervalMs, this.maintenanceTaskPollMs);
+    const intervalMs = Math.min(this.maintenanceIntervalMs, this.maintenanceRoutinePollMs);
     while (!shouldStop()) {
       await this.waitForWake(intervalMs, signal);
       if (shouldStop()) break;

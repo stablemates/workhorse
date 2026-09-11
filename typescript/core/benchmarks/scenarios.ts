@@ -1046,7 +1046,7 @@ async function scheduleCadenceJitter(
     heartbeatMs: 1_000,
     pollMs: 10,
     maintenanceIntervalMs,
-    maintenanceTaskPollMs: 60_000,
+    maintenanceRoutinePollMs: 60_000,
     registryIntervalMs: 0,
     scheduleNamespaces: [namespace],
     scheduleCatchupLimit: context.options.scheduleSamples,
@@ -3960,7 +3960,7 @@ async function workerConcurrency(
       heartbeatMs,
       pollMs,
       maintenanceIntervalMs: 100,
-      maintenanceTaskPollMs: 100,
+      maintenanceRoutinePollMs: 100,
     });
     let activeHandlers = 0;
     let maxHandlerOverlap = 0;
@@ -4168,7 +4168,7 @@ async function workerConcurrency(
           heartbeatMs,
           pollMs,
           maintenanceIntervalMs: 60_000,
-          maintenanceTaskPollMs: 60_000,
+          maintenanceRoutinePollMs: 60_000,
         }).handle("concurrency-topology", async () => {
           startLatencies.push(Math.max(0, context.now() - processingStartedAt));
           activeHandlers += 1;
@@ -4253,7 +4253,7 @@ async function workerConcurrency(
     heartbeatMs,
     pollMs: 1,
     maintenanceIntervalMs: 100,
-    maintenanceTaskPollMs: 100,
+    maintenanceRoutinePollMs: 100,
   });
   let firstNullHandled = 0;
   firstNullWorker.handle("first-null", () => {
@@ -4288,7 +4288,7 @@ async function workerConcurrency(
     heartbeatMs,
     pollMs: 1,
     maintenanceIntervalMs: 100,
-    maintenanceTaskPollMs: 100,
+    maintenanceRoutinePollMs: 100,
   });
   pauseWorker.handle("pause-guard", () => ({ ok: true }));
   pauseWorker.pause();
@@ -4322,7 +4322,7 @@ async function workerConcurrency(
     heartbeatMs,
     pollMs: 1,
     maintenanceIntervalMs: 100,
-    maintenanceTaskPollMs: 100,
+    maintenanceRoutinePollMs: 100,
   });
   let shutdownActive = 0;
   let releaseShutdown!: () => void;

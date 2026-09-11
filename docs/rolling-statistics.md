@@ -174,7 +174,7 @@ await queue.rollupStatistics({ force, now, maxBuckets });
 const { rolledUpThrough, lagMs, lastRunAt } = (await queue.health()).statistics;
 ```
 
-Workers offer the pass on `WorkerOptions.maintenanceTaskPollMs` (default `60_000`), alongside the other database-scheduled maintenance tasks. The real cadence is `maintenance_policy.statistics_rollup_interval_ms`:
+Workers offer the pass on `WorkerOptions.maintenanceRoutinePollMs` (default `60_000`), alongside the other database-scheduled maintenance routines. The real cadence is `maintenance_policy.statistics_rollup_interval_ms`:
 
 - Default `60_000`, matching the bucket width. Passing more often only rewrites the same closed minutes; passing less often makes windows derive a longer live tail.
 - Minimum `1_000`. `0` opts the whole fleet out — windows stay fully derived and history retention holds at the current watermark.

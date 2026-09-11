@@ -916,7 +916,7 @@
         "last_completed_at": "timestamptz",
         "last_completed_local_date": "date",
         "last_started_at": "timestamptz",
-        "task_name": "text"
+        "routine_name": "text"
       }
     },
     "dashboard_queue_control_v1": {
@@ -988,7 +988,7 @@
         "last_heartbeat_at": "timestamptz",
         "lease_ms": "integer",
         "maintenance_interval_ms": "integer",
-        "maintenance_task_poll_ms": "integer",
+        "maintenance_routine_poll_ms": "integer",
         "paused": "boolean",
         "pid": "integer",
         "poll_ms": "integer",

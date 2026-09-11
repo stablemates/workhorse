@@ -278,7 +278,7 @@ describe("schema installation", () => {
         "updated_at",
       ],
       dashboard_maintenance_state_v1: [
-        "task_name",
+        "routine_name",
         "last_started_at",
         "last_completed_at",
         "last_completed_local_date",
@@ -313,7 +313,7 @@ describe("schema installation", () => {
         "heartbeat_ms",
         "poll_ms",
         "maintenance_interval_ms",
-        "maintenance_task_poll_ms",
+        "maintenance_routine_poll_ms",
         "registry_interval_ms",
         "active_slots",
         "draining",

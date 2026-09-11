@@ -451,14 +451,14 @@ const scheduleDescriptions: Record<string, string> = {
 };
 
 export function presentSchedules(page: DashboardCronPage): PresentedScheduleRow[] {
-  const { cadences, policy, tasks } = page.maintenance;
-  const state = new Map(tasks.map((task) => [task.task, task]));
+  const { cadences, policy, routines } = page.maintenance;
+  const state = new Map(routines.map((routine) => [routine.routine, routine]));
   const maintenance = (
-    task: "tick" | "history_partitions" | "history_retention" | "terminal_storage",
+    routine: "tick" | "history_partitions" | "history_retention" | "terminal_storage",
     intervalMs: number,
     phases: string[],
   ): PresentedScheduleRow["maintenance"] => {
-    const row = state.get(task);
+    const row = state.get(routine);
     return {
       intervalMs,
       phases,

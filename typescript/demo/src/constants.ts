@@ -81,7 +81,7 @@ export const DEMO_MAINTENANCE_INTERVAL_MS = 1_000;
  * defaults are deliberately slower.
  */
 export const DEMO_REGISTRY_INTERVAL_MS = 250;
-export const DEMO_MAINTENANCE_TASK_POLL_MS = 60_000;
+export const DEMO_MAINTENANCE_ROUTINE_POLL_MS = 60_000;
 export const DEMO_LONG_RUNNING_MS = 20_000;
 export const DEMO_LONG_RUNNING_SEED_DELAY_MS = 10_000;
 export const DEMO_TIMING_TIMEOUT_MS = 1_000;

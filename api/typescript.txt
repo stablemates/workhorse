@@ -1168,8 +1168,8 @@ interface DashboardCronPage {
       historyRetentionLocalTime: string;
       updatedAt: string;
     };
-    tasks: Array<{
-      task: "tick" | "history_partitions" | "history_retention" | "terminal_storage";
+    routines: Array<{
+      routine: "tick" | "history_partitions" | "history_retention" | "terminal_storage";
       lastStartedAt: string | null;
       lastCompletedAt: string | null;
       due: boolean;
@@ -2035,7 +2035,7 @@ interface DashboardSettingsPage {
     heartbeatMs: number | null;
     pollMs: number | null;
     maintenanceIntervalMs: number | null;
-    maintenanceTaskPollMs: number | null;
+    maintenanceRoutinePollMs: number | null;
     registryIntervalMs: number | null;
     lastSeenAt: string;
   }>;
@@ -4353,7 +4353,7 @@ interface WorkerClientProtocol {
   readonly workers: number;
 }
 
-type WorkerMaintenanceLoop = "tick" | "statistics_rollup" | "background_tasks";
+type WorkerMaintenanceLoop = "tick" | "statistics_rollup" | "background_routines";
 
 interface WorkerMaintenanceTelemetry extends MaintenancePhaseResult {
   loop: WorkerMaintenanceLoop;
@@ -4387,11 +4387,11 @@ interface WorkerOptions {
   /** Minimum delay between worker-owned maintenance and recurring schedule passes. */
   maintenanceIntervalMs?: number;
   /**
-  * Minimum delay between checks for database-scheduled background maintenance tasks, including
+  * Minimum delay between checks for database-scheduled background maintenance routines, including
   * the rolling-statistics rollup. Each task's real cadence is maintenance policy read from
   * PostgreSQL; this option only bounds how often this process offers to run them.
   */
-  maintenanceTaskPollMs?: number;
+  maintenanceRoutinePollMs?: number;
   /**
   * Minimum delay between durable worker-registry refreshes.
   *
@@ -4544,7 +4544,7 @@ interface WorkerRegistration {
   heartbeatMs?: number;
   pollMs?: number;
   maintenanceIntervalMs?: number;
-  maintenanceTaskPollMs?: number;
+  maintenanceRoutinePollMs?: number;
   registryIntervalMs?: number;
   activeSlots: number;
   draining: boolean;

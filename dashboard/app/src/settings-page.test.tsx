@@ -87,7 +87,7 @@ const data: DashboardSettingsPage = {
       heartbeatMs: 10_000,
       pollMs: 250,
       maintenanceIntervalMs: 1_000,
-      maintenanceTaskPollMs: 60_000,
+      maintenanceRoutinePollMs: 60_000,
       registryIntervalMs: 5_000,
       lastSeenAt: "2026-08-10T12:00:00.000Z",
     },

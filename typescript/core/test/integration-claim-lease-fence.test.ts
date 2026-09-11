@@ -325,7 +325,7 @@ describe("claim lease fence", () => {
       leaseMs: 5_000,
       heartbeatMs: 100,
       maintenanceIntervalMs: 100,
-      maintenanceTaskPollMs: 100,
+      maintenanceRoutinePollMs: 100,
     }).handle("cooperative-cancel", async (_payload, context) => {
       started.resolve();
       await new Promise<void>((_resolve, reject) => {
@@ -357,7 +357,7 @@ describe("claim lease fence", () => {
       leaseMs: 5_000,
       heartbeatMs: 100,
       maintenanceIntervalMs: 100,
-      maintenanceTaskPollMs: 100,
+      maintenanceRoutinePollMs: 100,
     }).handle("ignore-cancel", async (_payload, context) => {
       expect(worker.concurrency).toBe(1);
       started.resolve();
@@ -452,14 +452,14 @@ describe("claim lease fence", () => {
       leaseMs: 5_000,
       heartbeatMs: 100,
       maintenanceIntervalMs: 100,
-      maintenanceTaskPollMs: 100,
+      maintenanceRoutinePollMs: 100,
     }).handle("concurrent-worker-cancel", handler);
     const secondWorker = new Worker(queue, {
       workerId: "concurrent-cancel-b",
       leaseMs: 5_000,
       heartbeatMs: 100,
       maintenanceIntervalMs: 100,
-      maintenanceTaskPollMs: 100,
+      maintenanceRoutinePollMs: 100,
     }).handle("concurrent-worker-cancel", handler);
 
     expect(firstWorker.concurrency).toBe(1);

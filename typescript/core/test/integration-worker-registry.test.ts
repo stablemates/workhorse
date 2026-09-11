@@ -964,7 +964,7 @@ describe("worker registry", () => {
       heartbeatMs: 50,
       leaseMs: 500,
       maintenanceIntervalMs: 100,
-      maintenanceTaskPollMs: 1_000,
+      maintenanceRoutinePollMs: 1_000,
       pollMs: 1_000,
     }).handle("maintenance-during-handler", async () => {
       await release.promise;
@@ -996,7 +996,7 @@ describe("worker registry", () => {
       workerId: "notification-dispatch-only",
       pollMs: 15_000,
       maintenanceIntervalMs: 100,
-      maintenanceTaskPollMs: 100,
+      maintenanceRoutinePollMs: 100,
       registryIntervalMs: 0,
     });
     const maintenanceTimes: number[] = [];
@@ -1031,7 +1031,7 @@ describe("worker registry", () => {
     }
   });
 
-  it("runs tick and scheduled maintenance tasks on independent cadences with phase telemetry", async () => {
+  it("runs tick and scheduled maintenance routines on independent cadences with phase telemetry", async () => {
     const jobId = await queue.enqueue(
       "scheduled-worker",
       { ok: true },
@@ -1044,7 +1044,7 @@ describe("worker registry", () => {
     const worker = new Worker(queue, {
       workerId: "worker-maintenance",
       maintenanceIntervalMs: 100,
-      maintenanceTaskPollMs: 1_000,
+      maintenanceRoutinePollMs: 1_000,
       onMaintenance: (event) => telemetry.push(event),
     }).handle("scheduled-worker", () => ({ ok: true }));
     expect(await worker.runOnce()).toBe(true);
@@ -1055,14 +1055,14 @@ describe("worker registry", () => {
       // Statistics roll up before retention so the same pass can reclaim the history it summarized.
       "statistics_rollup:stat_rollup",
       "statistics_rollup:stat_retention",
-      "background_tasks:history_partitions",
-      "background_tasks:event_retention",
-      "background_tasks:attempt_retention",
-      "background_tasks:schedule_occurrences",
-      "background_tasks:enqueue_idempotency",
-      "background_tasks:released_dependencies",
-      "background_tasks:terminal_jobs",
-      "background_tasks:worker_registry",
+      "background_routines:history_partitions",
+      "background_routines:event_retention",
+      "background_routines:attempt_retention",
+      "background_routines:schedule_occurrences",
+      "background_routines:enqueue_idempotency",
+      "background_routines:released_dependencies",
+      "background_routines:terminal_jobs",
+      "background_routines:worker_registry",
     ]);
     expect(worker.maintenanceTelemetry()).toEqual(telemetry);
 
@@ -1080,7 +1080,7 @@ describe("worker registry", () => {
     }>(
       `SELECT last_started_at, last_completed_at
          FROM workhorse.maintenance_state
-        WHERE task_name = 'tick'`,
+        WHERE routine_name = 'tick'`,
     );
     expect(tickState.rows).toHaveLength(1);
     expect(tickState.rows[0]?.last_started_at).toBeInstanceOf(Date);
@@ -1163,7 +1163,7 @@ describe("worker registry", () => {
         workerId: "idle-cadence",
         pollMs: 15_000,
         maintenanceIntervalMs: 1_000,
-        maintenanceTaskPollMs: 60_000,
+        maintenanceRoutinePollMs: 60_000,
       });
 
       await worker.runOnce();

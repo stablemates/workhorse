@@ -30,7 +30,7 @@ import {
   DEMO_LONG_RUNNING_MS,
   DEMO_LONG_RUNNING_SEED_JOBS,
   DEMO_MAINTENANCE_INTERVAL_MS,
-  DEMO_MAINTENANCE_TASK_POLL_MS,
+  DEMO_MAINTENANCE_ROUTINE_POLL_MS,
   DEMO_PERSISTENT_RETRY_DELAYS_MS,
   DEMO_PERSISTENT_RETRY_POLICIES,
   DEMO_GO_QUEUE,
@@ -159,7 +159,7 @@ interface DemoTestRuntimeOptions {
   onWorkerError?: (error: unknown) => void;
   workerPollMs?: number;
   registryIntervalMs?: number;
-  maintenanceTaskPollMs?: number;
+  maintenanceRoutinePollMs?: number;
   longRunningJobMs?: number;
   durableStepMs?: number;
   durableTimerWaitMs?: number;
@@ -202,7 +202,8 @@ function createTestWorkerRuntime(options: DemoTestRuntimeOptions) {
             concurrency,
             pollMs: options.workerPollMs ?? DEMO_WORKER_POLL_MS,
             maintenanceIntervalMs: options.maintenanceIntervalMs ?? DEMO_MAINTENANCE_INTERVAL_MS,
-            maintenanceTaskPollMs: options.maintenanceTaskPollMs ?? DEMO_MAINTENANCE_TASK_POLL_MS,
+            maintenanceRoutinePollMs:
+              options.maintenanceRoutinePollMs ?? DEMO_MAINTENANCE_ROUTINE_POLL_MS,
             registryIntervalMs: options.registryIntervalMs,
             durableStepMs: options.durableStepMs,
             durableTimerWaitMs: options.durableTimerWaitMs,
@@ -3532,10 +3533,10 @@ describe("Workhorse demo", () => {
         terminalCleanupIntervalMs: 300_000,
         historyRetentionLocalTime: "03:00",
       },
-      tasks: expect.arrayContaining([
-        expect.objectContaining({ task: "history_partitions" }),
-        expect.objectContaining({ task: "history_retention" }),
-        expect.objectContaining({ task: "terminal_storage" }),
+      routines: expect.arrayContaining([
+        expect.objectContaining({ routine: "history_partitions" }),
+        expect.objectContaining({ routine: "history_retention" }),
+        expect.objectContaining({ routine: "terminal_storage" }),
       ]),
     });
     expect(cron.schedules).toEqual(

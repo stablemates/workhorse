@@ -158,7 +158,7 @@ describe("retention maintenance", () => {
     expect(
       (
         await pool.query(
-          "SELECT last_completed_local_date::text AS last_completed_local_date FROM workhorse.maintenance_state WHERE task_name = 'history_retention'",
+          "SELECT last_completed_local_date::text AS last_completed_local_date FROM workhorse.maintenance_state WHERE routine_name = 'history_retention'",
         )
       ).rows,
     ).toEqual([{ last_completed_local_date: "2026-03-08" }]);
@@ -189,7 +189,7 @@ describe("retention maintenance", () => {
     expect(third).toEqual([]);
   });
 
-  it("globally rate-limits interval maintenance tasks while allowing explicit forced runs", async () => {
+  it("globally rate-limits interval maintenance routines while allowing explicit forced runs", async () => {
     const now = new Date("2026-08-02T12:00:00.000Z");
     expect(await queue.prepareHistoryPartitions({ now })).toHaveLength(1);
     expect(await queue.prepareHistoryPartitions({ now: new Date(now.getTime() + 1_000) })).toEqual(
@@ -793,7 +793,7 @@ describe("retention maintenance", () => {
     await pool.query(`
       UPDATE workhorse.maintenance_state
          SET last_completed_local_date = '2026-08-02'
-       WHERE task_name = 'history_retention'`);
+       WHERE routine_name = 'history_retention'`);
 
     await queue.syncRetentionPolicy(defaultRetentionPolicy);
     expect(
@@ -801,7 +801,7 @@ describe("retention maintenance", () => {
         await pool.query<{ completed: string | null }>(`
           SELECT last_completed_local_date::text AS completed
             FROM workhorse.maintenance_state
-           WHERE task_name = 'history_retention'`)
+           WHERE routine_name = 'history_retention'`)
       ).rows[0]?.completed,
     ).toBe("2026-08-02");
 
@@ -814,7 +814,7 @@ describe("retention maintenance", () => {
         await pool.query<{ completed: string | null }>(`
           SELECT last_completed_local_date::text AS completed
             FROM workhorse.maintenance_state
-           WHERE task_name = 'history_retention'`)
+           WHERE routine_name = 'history_retention'`)
       ).rows[0]?.completed,
     ).toBeNull();
   });

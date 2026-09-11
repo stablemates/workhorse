@@ -528,7 +528,7 @@ export function SettingsPage({
                       <Table.Td>{formatDuration(worker.heartbeatMs)}</Table.Td>
                       <Table.Td>{formatDuration(worker.pollMs)}</Table.Td>
                       <Table.Td>{formatDuration(worker.maintenanceIntervalMs)}</Table.Td>
-                      <Table.Td>{formatDuration(worker.maintenanceTaskPollMs)}</Table.Td>
+                      <Table.Td>{formatDuration(worker.maintenanceRoutinePollMs)}</Table.Td>
                       <Table.Td>{formatDuration(worker.registryIntervalMs)}</Table.Td>
                     </Table.Tr>
                   ))}

@@ -88,7 +88,7 @@ terminal failures. `listWorkers` and `setWorkerPaused` inspect and steer worker 
 
 `WorkerOptions` covers identity and capacity (`queue`, `workerId`, `concurrency`), ownership timing
 (`leaseMs`, `heartbeatMs`, `pollMs`), maintenance polling (`maintenanceIntervalMs`,
-`maintenanceTaskPollMs`, `registryIntervalMs`), schedule evaluation (`scheduleNamespaces`,
+`maintenanceRoutinePollMs`, `registryIntervalMs`), schedule evaluation (`scheduleNamespaces`,
 `scheduleCatchupLimit`), retry shaping (`retryDelayMs`), and error callbacks
 (`onRegistrationError`, `onNotificationError`, `onMaintenance`).
 

@@ -7,7 +7,7 @@ Retention deletes the old ones. Doing that safely is more subtle than a nightly 
 
 Every worker runtime offers the same slow maintenance pass through `run_maintenance_v1`.
 PostgreSQL orders statistics, partition preparation, retention, terminal cleanup, and registry
-cleanup, while each task keeps its own due check and lock. A fleet that runs only Python or Go
+cleanup, while each routine keeps its own due check and lock. A fleet that runs only Python or Go
 therefore keeps the same evidence and partition guarantees as a TypeScript fleet.
 
 ## Windows are minimums, not deadlines

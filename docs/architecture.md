@@ -760,7 +760,7 @@ health reasons, rollup measurements, fallback-partition counts, and the measured
 `system.status.reasons` returns the database verdict inputs without English checks.
 Retry buckets use `upperBoundMs`; worker rows use `lastHeartbeatAt`; activity returns every group;
 system queue rows retain database order. `cron.maintenance` returns the maintenance policy,
-cadences, and task state instead of fabricated schedule rows. Retention categories and storage
+cadences, and routine state instead of fabricated schedule rows. Retention categories and storage
 relations carry identifiers and measurements without labels or groups.
 `dashboard/app/src/presentation-policy.ts` owns the exact presentation policy. Its
 `deriveSettingsRecommendations` function warns about cleanup pressure when the measured daily
@@ -776,7 +776,7 @@ milliseconds old, and `offline` otherwise. `sortQueuesByRisk` orders descending 
 most 10 legend groups; when more exist, it keeps the nine highest-count groups and combines the
 rest as `other`. `presentSchedules` adds the `workhorse:tick`, `workhorse:history-partitions`,
 `workhorse:history-retention`, and `workhorse:terminal-storage` rows and derives their descriptions
-and maintenance state from the raw policy, cadence, and task state.
+and maintenance state from the raw policy, cadence, and routine state.
 
 ## Design objective
 
@@ -801,7 +801,7 @@ flowchart LR
   Worker[TypeScript Worker] -->|claim_many_v1 / heartbeat_many_v1 / acknowledge_cancel_v1| PG
   Operator[Authorized application or operator layer] -->|cancel_v1 with attribution| PG
   Operator -->|list_dead_letters_v1 / redrive_v1 / redrive_many_v1| PG
-  Worker -->|fire_due_schedules_v1 / tick_v1 / split maintenance tasks| PG
+  Worker -->|fire_due_schedules_v1 / tick_v1 / split maintenance routines| PG
   Worker -->|register_worker_v1| PG
   PG -->|payload + attempt + fence| Worker
   PG -->|operator pause flag| Worker
@@ -1713,7 +1713,7 @@ One row per live worker process, keyed by the durable `worker_id` used for lease
 the first member for readers that show one queue.
 `schedule_namespaces` stores the ordered set that the worker offers to `fire_due_schedules_v1`.
 `register_worker_v1` is a single round trip that publishes `queue_names`, `schedule_namespaces`, `concurrency`, `lease_ms`,
-`heartbeat_ms`, `poll_ms`, `maintenance_interval_ms`, `maintenance_task_poll_ms`,
+`heartbeat_ms`, `poll_ms`, `maintenance_interval_ms`, `maintenance_routine_poll_ms`,
 `registry_interval_ms`, `active_slots`, `draining`, `client_protocol_version`, `sdk_language`, and
 `sdk_version`, then returns the PostgreSQL-owned `paused`
 flag. TypeScript uses `WorkerOptions.registryIntervalMs`, Python uses `registry_interval_ms`, and Go
@@ -1774,7 +1774,7 @@ current local date. Maintenance state stores `last_started_at` and `last_complet
 watermark. `maintenance_state.terminal_prune_dependency_starved` records whether
 the last `prune_terminal_jobs_v1` call deleted nothing from its exact locked candidate window while
 that window contained a prerequisite protected by a dependency edge. Workers poll all four
-database-scheduled tasks — the statistics rollup included — every minute by default, while
+database-scheduled routines — the statistics rollup included — every minute by default, while
 PostgreSQL performs the global due check and advisory-lock coordination.
 
 ### Declarative schedules
@@ -1861,11 +1861,11 @@ Production maintenance is worker-owned and split by cadence and failure domain.
 
 Each worker calls `tick_v1` at most once per configured `maintenanceIntervalMs` (default one second). Under the transaction-scoped `workhorse:tick` advisory lock it records `maintenance_state.last_started_at`, performs bounded promotion and bounded expired-lease recovery, then records `last_completed_at` if both phases avoid an error. Concurrent callers return immediately with `skipped_lock = true` and do not change the state. The same cadence drives in-process schedule evaluation.
 
-Every TypeScript, Python, and Go worker calls `run_maintenance_v1(p_now)` from its slow maintenance cycle. The function calls `rollup_stats_v1`, `prepare_history_partitions_v1`, `retain_history_v1`, `prune_terminal_storage_v1`, then `prune_worker_registry_v1`. TypeScript offers it on `maintenanceTaskPollMs`, which defaults to 60 seconds. Python offers it on `maintenance_interval_ms`, which defaults to 1,000 milliseconds. Go offers it on `WorkerOptions.MaintenanceInterval`, which defaults to one second. PostgreSQL checks persisted due state under each task's advisory lock, so extra offers remain no-ops. The statistics rollup defaults to every minute. Partition preparation defaults to every six hours. Terminal storage cleanup defaults to every five minutes. History retention runs once per local date at or after `maintenance_policy.history_retention_local_time` in `maintenance_policy.timezone`. None shares the promotion advisory lock. Partition retirement abandons a DDL lock attempt after 250 ms rather than waiting indefinitely behind dispatch. Each maintenance function keeps its existing phase exception subtransactions, so a reported phase error does not roll back successful sibling phases. An unexpected top-level failure from the first four functions still rejects the pass. Registry pruning alone is caught by the orchestrator and reported as `worker_registry` after the other phases. Terminal storage reports `enqueue_idempotency`, `released_dependencies`, then `terminal_jobs`; released-edge compaction runs first so the same pass can prune a newly unpinned prerequisite.
+Every TypeScript, Python, and Go worker calls `run_maintenance_v1(p_now)` from its slow maintenance cycle. The function calls `rollup_stats_v1`, `prepare_history_partitions_v1`, `retain_history_v1`, `prune_terminal_storage_v1`, then `prune_worker_registry_v1`. TypeScript offers it on `maintenanceRoutinePollMs`, which defaults to 60 seconds. Python offers it on `maintenance_interval_ms`, which defaults to 1,000 milliseconds. Go offers it on `WorkerOptions.MaintenanceInterval`, which defaults to one second. PostgreSQL checks persisted due state under each routine's advisory lock, so extra offers remain no-ops. The statistics rollup defaults to every minute. Partition preparation defaults to every six hours. Terminal storage cleanup defaults to every five minutes. History retention runs once per local date at or after `maintenance_policy.history_retention_local_time` in `maintenance_policy.timezone`. None shares the promotion advisory lock. Partition retirement abandons a DDL lock attempt after 250 ms rather than waiting indefinitely behind dispatch. Each maintenance function keeps its existing phase exception subtransactions, so a reported phase error does not roll back successful sibling phases. An unexpected top-level failure from the first four functions still rejects the pass. Registry pruning alone is caught by the orchestrator and reported as `worker_registry` after the other phases. Terminal storage reports `enqueue_idempotency`, `released_dependencies`, then `terminal_jobs`; released-edge compaction runs first so the same pass can prune a newly unpinned prerequisite.
 
 Terminal-job pruning selects a bounded candidate window of identities with outcomes, both minimum windows elapsed, no live runtime, no retained schedule occurrence, and history boundaries behind the global retained-through watermark. The bounded delete cascades outcome, checkpoints, and waits. History insert triggers serialize with parent deletion and move the watermark backward for late old history, while queue purge explicitly removes history before identity.
 
-All maintenance functions return one row per phase, `(phase, rows_affected, duration_ms, skipped_lock, error)`. `WorkerMaintenanceLoop` is the shared `tick | statistics_rollup | background_tasks` taxonomy for phase telemetry and drift metrics. The worker exposes the latest phase rows through `worker.maintenanceTelemetry()` and forwards each row to the optional `onMaintenance` callback. Between passes a worker issues only the claim query.
+All maintenance functions return one row per phase, `(phase, rows_affected, duration_ms, skipped_lock, error)`. `WorkerMaintenanceLoop` is the shared `tick | statistics_rollup | background_routines` taxonomy for phase telemetry and drift metrics. The worker exposes the latest phase rows through `worker.maintenanceTelemetry()` and forwards each row to the optional `onMaintenance` callback. Between passes a worker issues only the claim query.
 
 ## OpenTelemetry metrics
 
@@ -2223,14 +2223,14 @@ Core owns the dashboard's relational read contract. The version 1 views expose t
 - `dashboard_job_v1`: `id`, `queue_name`, `job_type`, `concurrency_key`, `payload`, `payload_redact_keys`, `result_redact_keys`, `tags`, `max_attempts`, `retry_policy`, `deadline_at`, `execution_timeout_ms`, `created_at`, `priority`. `payload` is `redact_top_level_keys_v1(payload, payload_redact_keys)`; the key arrays are projected so a reader can report how many keys were withheld.
 - `dashboard_job_wait_v1`: `job_id`, `wait_name`, `mode`, `duration_ms`, `requested_wake_at`, `wake_at`, `attempt`, `fence_token`, `worker_id`, `created_at`.
 - `dashboard_maintenance_policy_v1`: `singleton`, `timezone`, `partition_preparation_interval_ms`, `terminal_cleanup_interval_ms`, `history_retention_local_time`, `statistics_rollup_interval_ms`, `statistics_group_limit`, `statistics_recompute_buckets`, `updated_at`.
-- `dashboard_maintenance_state_v1`: `task_name`, `last_started_at`, `last_completed_at`, `last_completed_local_date`.
+- `dashboard_maintenance_state_v1`: `routine_name`, `last_started_at`, `last_completed_at`, `last_completed_local_date`.
 - `dashboard_queue_control_v1`: `queue_name`, `paused`.
 - `dashboard_rate_limit_policy_v1`: `queue_name`.
 - `dashboard_retention_policy_v1`: `singleton`, `job_event_retention_days`, `attempt_history_retention_days`.
 - `dashboard_schedule_definition_v1`: `namespace`, `schedule_name`, `cron_expression`, `timezone`, `queue_name`, `job_type`, `enabled`, `revision`, `updated_at`.
 - `dashboard_schedule_occurrence_v1`: `namespace`, `schedule_name`, `occurrence_at`, `fired_at`.
 - `dashboard_signal_wait_v1`: `job_id`, `queue_name`, `job_type`, `signal_name`, `attempt`, `created_at`, `deadline_at`.
-- `dashboard_worker_registry_v1`: `worker_id`, `hostname`, `pid`, `queue_name`, `concurrency`, `lease_ms`, `heartbeat_ms`, `poll_ms`, `maintenance_interval_ms`, `maintenance_task_poll_ms`, `registry_interval_ms`, `active_slots`, `draining`, `paused`, `started_at`, `last_heartbeat_at`, `queue_names`, `schedule_namespaces`.
+- `dashboard_worker_registry_v1`: `worker_id`, `hostname`, `pid`, `queue_name`, `concurrency`, `lease_ms`, `heartbeat_ms`, `poll_ms`, `maintenance_interval_ms`, `maintenance_routine_poll_ms`, `registry_interval_ms`, `active_slots`, `draining`, `paused`, `started_at`, `last_heartbeat_at`, `queue_names`, `schedule_namespaces`.
 
 `dashboard_job_result_v1(p_job_id uuid)` returns one job's terminal result with the operator-declared
 `result_redact_keys` removed. It is a function rather than a view column because the redaction keys

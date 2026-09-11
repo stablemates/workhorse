@@ -78,13 +78,13 @@ type DashboardCronPage struct {
 			HistoryRetentionLocalTime      string  `json:"historyRetentionLocalTime"`
 			UpdatedAt                      string  `json:"updatedAt"`
 		} `json:"policy"`
-		Tasks []struct {
-			Task            string  `json:"task"`
+		Routines []struct {
+			Routine         string  `json:"routine"`
 			LastStartedAt   *string `json:"lastStartedAt"`
 			LastCompletedAt *string `json:"lastCompletedAt"`
 			Due             bool    `json:"due"`
 			Incomplete      bool    `json:"incomplete"`
-		} `json:"tasks"`
+		} `json:"routines"`
 	} `json:"maintenance"`
 }
 
@@ -663,17 +663,17 @@ type DashboardSettingsPage struct {
 		} `json:"enqueueRate"`
 	} `json:"recommendationInputs"`
 	Workers []struct {
-		ID                    string   `json:"id"`
-		Queue                 string   `json:"queue"`
-		Queues                []string `json:"queues"`
-		Concurrency           float64  `json:"concurrency"`
-		LeaseMs               *float64 `json:"leaseMs"`
-		HeartbeatMs           *float64 `json:"heartbeatMs"`
-		PollMs                *float64 `json:"pollMs"`
-		MaintenanceIntervalMs *float64 `json:"maintenanceIntervalMs"`
-		MaintenanceTaskPollMs *float64 `json:"maintenanceTaskPollMs"`
-		RegistryIntervalMs    *float64 `json:"registryIntervalMs"`
-		LastSeenAt            string   `json:"lastSeenAt"`
+		ID                       string   `json:"id"`
+		Queue                    string   `json:"queue"`
+		Queues                   []string `json:"queues"`
+		Concurrency              float64  `json:"concurrency"`
+		LeaseMs                  *float64 `json:"leaseMs"`
+		HeartbeatMs              *float64 `json:"heartbeatMs"`
+		PollMs                   *float64 `json:"pollMs"`
+		MaintenanceIntervalMs    *float64 `json:"maintenanceIntervalMs"`
+		MaintenanceRoutinePollMs *float64 `json:"maintenanceRoutinePollMs"`
+		RegistryIntervalMs       *float64 `json:"registryIntervalMs"`
+		LastSeenAt               string   `json:"lastSeenAt"`
 	} `json:"workers"`
 }
 

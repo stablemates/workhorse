@@ -133,7 +133,7 @@ export function createIntegrationTestContext(
       last_started_at = NULL,
       last_completed_at = NULL,
       last_completed_local_date = NULL,
-      history_retained_before = CASE WHEN task_name = 'history_retention'
+      history_retained_before = CASE WHEN routine_name = 'history_retention'
         THEN date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
           - interval '14 days'
         ELSE NULL END,

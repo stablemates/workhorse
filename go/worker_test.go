@@ -1966,7 +1966,7 @@ func TestWorkerParticipatesInSlowMaintenance(t *testing.T) {
 	t.Cleanup(pool.Close)
 	if _, err := pool.Exec(
 		ctx,
-		"UPDATE workhorse.maintenance_state SET last_completed_at = NULL WHERE task_name = 'terminal_storage'",
+		"UPDATE workhorse.maintenance_state SET last_completed_at = NULL WHERE routine_name = 'terminal_storage'",
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -1982,7 +1982,7 @@ func TestWorkerParticipatesInSlowMaintenance(t *testing.T) {
 	var completedAt *time.Time
 	if err := pool.QueryRow(
 		ctx,
-		"SELECT last_completed_at FROM workhorse.maintenance_state WHERE task_name = 'terminal_storage'",
+		"SELECT last_completed_at FROM workhorse.maintenance_state WHERE routine_name = 'terminal_storage'",
 	).Scan(&completedAt); err != nil {
 		t.Fatal(err)
 	}

@@ -175,7 +175,7 @@ describe("dashboard presentation policy", () => {
           historyRetentionLocalTime: "03:00",
           updatedAt: "2026-08-17T12:00:00.000Z",
         },
-        tasks: [],
+        routines: [],
       },
     } as DashboardCronPage);
     expect(schedules.map(({ name }) => name)).toEqual([

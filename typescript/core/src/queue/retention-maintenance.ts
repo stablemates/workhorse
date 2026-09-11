@@ -220,7 +220,7 @@ export class RetentionMaintenanceModule extends QueueModule {
   }
 
   async runMaintenance(options: { now?: Date } = {}): Promise<MaintenancePhaseResult[]> {
-    return this.maintenanceSpan("background_tasks", async () => {
+    return this.maintenanceSpan("background_routines", async () => {
       const result = await this.context.database.query<MaintenancePhaseRow>(RUN_MAINTENANCE_SQL, [
         options.now ?? new Date(),
       ]);

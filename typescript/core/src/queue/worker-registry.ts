@@ -33,7 +33,7 @@ export class WorkerRegistryModule extends QueueModule {
         registration.heartbeatMs ?? 10_000,
         registration.pollMs ?? 250,
         registration.maintenanceIntervalMs ?? 1_000,
-        registration.maintenanceTaskPollMs ?? 60_000,
+        registration.maintenanceRoutinePollMs ?? 60_000,
         registration.registryIntervalMs ?? 5_000,
         registration.activeSlots,
         registration.draining,

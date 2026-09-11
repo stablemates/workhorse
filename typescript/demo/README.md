@@ -188,7 +188,7 @@ long-running schedule, and the staggered feature-family definitions through `Que
 All three workers evaluate due schedules in-process with advisory-lock coordination and SQL-level
 occurrence deduplication. The Schedules view reports the live evaluator count for each namespace.
 Its maintenance rows use `Maintenance` as the destination because workers call those PostgreSQL
-functions directly; they are not jobs sent to a queue. The view distinguishes the application heartbeat from four worker-owned maintenance entries: the fast tick, partition preparation, daily history retention at the configured local time, and terminal/idempotency cleanup. PostgreSQL stores the global IANA maintenance timezone, local retention time, and task due state. The heartbeat's
+functions directly; they are not jobs sent to a queue. The view distinguishes the application heartbeat from four worker-owned maintenance entries: the fast tick, partition preparation, daily history retention at the configured local time, and terminal/idempotency cleanup. PostgreSQL stores the global IANA maintenance timezone, local retention time, and routine due state. The heartbeat's
 audited control updates the durable schedule definition, and Jobs and Workers show each resulting
 execution.
 

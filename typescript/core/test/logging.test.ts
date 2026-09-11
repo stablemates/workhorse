@@ -111,7 +111,7 @@ describe("structured logging", () => {
       pollMs: 1_000,
       registryIntervalMs: 100,
       maintenanceIntervalMs: 60_000,
-      maintenanceTaskPollMs: 60_000,
+      maintenanceRoutinePollMs: 60_000,
     });
 
     const running = worker.run();

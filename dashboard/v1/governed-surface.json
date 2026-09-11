@@ -278,25 +278,25 @@
         "maintenance.policy.updatedAt": {
           "type": "string"
         },
-        "maintenance.tasks": {
+        "maintenance.routines": {
           "type": "array"
         },
-        "maintenance.tasks[]": {
+        "maintenance.routines[]": {
           "type": "object"
         },
-        "maintenance.tasks[].due": {
+        "maintenance.routines[].due": {
           "type": "boolean"
         },
-        "maintenance.tasks[].incomplete": {
+        "maintenance.routines[].incomplete": {
           "type": "boolean"
         },
-        "maintenance.tasks[].lastCompletedAt": {
+        "maintenance.routines[].lastCompletedAt": {
           "type": "null|string"
         },
-        "maintenance.tasks[].lastStartedAt": {
+        "maintenance.routines[].lastStartedAt": {
           "type": "null|string"
         },
-        "maintenance.tasks[].task": {
+        "maintenance.routines[].routine": {
           "type": "enum",
           "enum": [
             "history_partitions",
@@ -2627,7 +2627,7 @@
         "workers[].maintenanceIntervalMs": {
           "type": "null|number"
         },
-        "workers[].maintenanceTaskPollMs": {
+        "workers[].maintenanceRoutinePollMs": {
           "type": "null|number"
         },
         "workers[].pollMs": {
