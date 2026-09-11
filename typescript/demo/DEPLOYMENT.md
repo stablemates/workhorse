@@ -140,15 +140,43 @@ before the new container starts.
 If the deployment tool runs one hooks directory per application, name it explicitly. A directory
 shared between the site and the demo runs the demo's schema step during a site deploy.
 
-### The first installation needs one manual schema step
+### The first installation supplies the role env file once
 
-A deployment tool that writes the role's secret environment file to the host when it boots a
-container, and runs pre-deploy hooks before that, cannot run this step on the very first deploy: the
-file does not exist yet, so the hook's container cannot start.
+The documented deployment uses Kamal. Kamal uploads a role's secret env file to the host only when
+it boots a container, and the pre-deploy hook runs before that. The hook's `kamal app exec` passes
+the file to `docker run --env-file`, so on the very first deploy it names a file that does not exist
+and the deploy stops before booting anything. Every later deploy uses the file the previous boot
+wrote.
 
-Install the schema once from the host before the first deploy, using the same image and the same
-command, with the database URLs supplied however your installation supplies secrets to a one-off
-container. Every deploy after that is the pipeline step alone.
+Place the file once, then let the first deploy run the schema step itself. On each host the file is
+`~/.kamal/apps/<service>/env/roles/<role>.env` under the deployment's SSH user, where `<service>` and
+`<role>` come from the deploy configuration. It holds one `NAME=value` line per `secret:` entry in
+that configuration — here, the two database URLs. Write it through standard input so no credential
+appears on a command line:
+
+```sh
+ssh <host> 'install -d -m 700 .kamal/apps/<service>/env/roles'
+env | grep -E '^(DATABASE_URL_PRIMARY|DATABASE_URL_SECONDARY)=' \
+  | ssh <host> 'umask 077; cat > .kamal/apps/<service>/env/roles/<role>.env'
+```
+
+The hook's container also joins the `kamal` Docker network, which Kamal creates during `proxy boot`,
+a step that runs after the pre-deploy hook. When no earlier application deploy created the network —
+a host whose first application is the demo is the common case — create it once:
+
+```sh
+ssh <host> 'docker network inspect kamal >/dev/null 2>&1 || docker network create kamal'
+```
+
+Then run the first deploy:
+
+```sh
+kamal deploy --config-file <deploy.yml>
+```
+
+The pre-deploy hook runs `node dist/prepare-schema.js` through the same `kamal app exec` every
+deploy uses, and the first boot rewrites the env file from the deployment's own secrets. Nothing in
+this procedure repeats.
 
 ## The soak window forbids a database reinstall
 
