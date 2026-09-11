@@ -7,7 +7,11 @@ The current schema version and migration baseline are 1 (`WORKHORSE_SCHEMA_BASEL
 
 `installSchema` reads `sql/schema.sql` and accepts a fresh database or an already-current schema.
 `migrateSchema` applies `SCHEMA_MIGRATIONS` from `sql/migrations/` through the same path as
-`workhorse schema migrate`. The current migration plan is empty.
+`workhorse schema migrate`, stopping before the first step whose `kind` is `contract` and
+reporting that step in `MigrateSchemaResult.contractStop`. `contractSchema` applies the one
+contract step pending at the installed version through `workhorse schema contract`, which requires
+`--yes` and first names every worker still live on a retiring protocol. The current migration plan
+is empty.
 
 A clean installation records `(1, 'baseline')` in `workhorse.schema_migration`.
 `workhorse.protocol_version` records the served
@@ -15,7 +19,11 @@ SQL protocol versions (currently 1) independently of that history; `readProtocol
 and returns null when that table is absent. `migrateSchema` delegates ordered execution to the internal
 `applySchemaMigrationPlan` function. Its `SchemaMigrationPlan` has `baselineVersion`,
 `currentVersion`, `steps`, and `readStep` fields. Each `SchemaMigrationStep` has `fromVersion`,
-`toVersion`, `file`, and `description` fields.
+`toVersion`, `file`, `description`, `kind`, and `retiresProtocolVersions` fields. `kind` is
+`additive` or `contract`; `retiresProtocolVersions` is required on a contract step and forbidden on
+an additive one. Every migration file opens with a
+`-- workhorse-migration: {"kind": ...}` declaration that the runner requires to agree with its
+`SCHEMA_MIGRATIONS` entry.
 
 `isMissingDatabaseRelationError` unwraps database errors through `databaseErrorCode` and returns
 true only for PostgreSQL SQLSTATE `3F000` (invalid schema name) or `42P01` (undefined table).
@@ -1698,7 +1706,10 @@ refresh overwrites all three rather than merging, so a downgraded worker stops c
 no longer runs. `worker_client_protocols_v1()` returns one row per distinct
 `client_protocol_version`, counting only workers whose `last_heartbeat_at` falls within their own
 `lease_ms`, with the NULL group last. `workhorse schema status --json` reports it as `fleet`, and
-`workhorse schema contract` gates on it ([ADR 0057](decisions/0057-retain-superseded-functions-and-contract-on-the-operators-schedule.md)).
+`workhorse schema contract` names the workers themselves through the `live_workers_on_protocols`
+catalogue statement, which selects registry rows whose `client_protocol_version` is null or falls in
+the step's retiring set and whose `last_heartbeat_at` is inside `lease_ms`
+([ADR 0057](decisions/0057-retain-superseded-functions-and-contract-on-the-operators-schedule.md)).
 Producers never register, so it is worker evidence and not a process inventory.
 
 The relation exists because process-local memory cannot answer "which workers exist" once workers are deployed independently of the web tier. It is what allows an operator surface to report and control a fleet it does not host. It is never read by the claim path and holds one row per worker, so it cannot affect dispatch cost.

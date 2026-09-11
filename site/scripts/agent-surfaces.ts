@@ -136,6 +136,8 @@ const cliCommandPurposes: Readonly<Record<string, string>> = {
   init: "write a starter configuration file for the worker process.",
   "schema install": "install the Workhorse schema into a PostgreSQL database; a deployment step.",
   "schema migrate": "apply pending schema migrations; a deployment step.",
+  "schema contract":
+    "apply the one pending contract step, retiring the protocols it names; an operator step that requires `--yes`.",
   "schema status":
     "report the installed schema version and whether this client is compatible (`--json` for machines).",
   worker:
@@ -154,7 +156,11 @@ const cliCommandPurposes: Readonly<Record<string, string>> = {
  */
 export function renderCliSection(
   site: AgentSurfaceSite,
-  pages: { readonly api: AgentSurfaceLink; readonly operations: AgentSurfaceLink },
+  pages: {
+    readonly api: AgentSurfaceLink;
+    readonly installation: AgentSurfaceLink;
+    readonly operations: AgentSurfaceLink;
+  },
 ): string {
   const names: readonly string[] = CLI_COMMANDS.map((command) => command.name);
   const listed = Object.keys(cliCommandPurposes);
@@ -170,6 +176,8 @@ export function renderCliSection(
     "## Command line",
     "",
     "The `workhorse` command ships inside the npm package `@stablemates/workhorse` and nowhere else: there is no Homebrew formula and no PyPI script. Python and Go applications run it through Node for the schema step.",
+    "",
+    `For a database step without Node, every GitHub release attaches the clean-install \`schema.sql\`: download it and apply it with \`psql\`, as [${pages.installation.title}](${site.base}${pages.installation.url}.md) describes.`,
     "",
     "```sh",
     "npm install @stablemates/workhorse",

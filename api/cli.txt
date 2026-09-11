@@ -11,6 +11,7 @@
 init
 schema install
 schema migrate
+schema contract
 schema status
 worker
 dashboard
@@ -105,6 +106,12 @@ resume-worker <worker-id>  mutates
 ### schema
 
 --help, -h
+
+### schema contract
+
+--database-url <string>
+--help, -h
+--yes
 
 ### schema install
 
@@ -839,6 +846,19 @@ interface SchemaStatusReport {
     readonly minimumVersion: number;
     readonly clientProtocolVersion: number;
     readonly installedProtocolVersions: readonly number[] | null;
+    /**
+    * Contract steps still ahead of the installed version.
+    *
+    * Distinct from `state` on purpose: "behind" on a contract step is the operator's own
+    * schedule, not a pending pipeline migration, so a deployment gate must never read one as
+    * the other. Each entry names the step and the client protocols it retires.
+    */
+    readonly pendingContractSteps: readonly {
+      readonly file: string;
+      readonly fromVersion: number;
+      readonly toVersion: number;
+      readonly retiresProtocolVersions: readonly number[];
+    }[];
     /** Where the installed version sits relative to this build. Says nothing about acceptance. */
     readonly state: "not-installed" | "behind" | "current" | "ahead";
     /** Whether this build would start against the installed schema. */

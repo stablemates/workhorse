@@ -1285,6 +1285,7 @@
         "hostname": "text",
         "instance_id": "uuid",
         "last_heartbeat_at": "timestamptz",
+        "lease_ms": "integer",
         "paused": "boolean",
         "paused_at": "timestamptz",
         "paused_by": "text",
@@ -1293,6 +1294,8 @@
         "queue_name": "text",
         "queue_names": "text[]",
         "schedule_namespaces": "text[]",
+        "sdk_language": "text",
+        "sdk_version": "text",
         "started_at": "timestamptz",
         "worker_id": "text"
       }

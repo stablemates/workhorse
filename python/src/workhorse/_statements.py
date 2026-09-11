@@ -439,6 +439,10 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
         "SELECT client_protocol_version, workers FROM workhorse.worker_client_protocols_v1()",
         "SELECT client_protocol_version, workers FROM workhorse.worker_client_protocols_v1()",
     ),
+    "live_workers_on_protocols": (
+        "SELECT worker_id, hostname, client_protocol_version, sdk_language, sdk_version, last_heartbeat_at\n         FROM workhorse.worker_registry registry\n         WHERE (registry.client_protocol_version = ANY(%s::integer[])\n                OR registry.client_protocol_version IS NULL)\n           AND registry.last_heartbeat_at >= clock_timestamp() - make_interval(secs => registry.lease_ms / 1000.0)\n         ORDER BY worker_id",
+        "SELECT worker_id, hostname, client_protocol_version, sdk_language, sdk_version, last_heartbeat_at\n         FROM workhorse.worker_registry registry\n         WHERE (registry.client_protocol_version = ANY($1::integer[])\n                OR registry.client_protocol_version IS NULL)\n           AND registry.last_heartbeat_at >= clock_timestamp() - make_interval(secs => registry.lease_ms / 1000.0)\n         ORDER BY worker_id",
+    ),
     "protocol_version": (
         "SELECT version FROM workhorse.protocol_version ORDER BY version",
         "SELECT version FROM workhorse.protocol_version ORDER BY version",

@@ -23,12 +23,16 @@ schema only grew.
 
 Every schema change ships as an ordered, immutable step:
 
-1. Add `sql/migrations/<NNNN>-<slug>.sql` containing only the schema change body. The runtime
-   supplies the transaction, the advisory lock, the starting-version validation, and the version
-   bookkeeping; a body that contains its own `BEGIN`, `COMMIT`, `ROLLBACK`, or `START TRANSACTION`
-   is rejected before execution.
+1. Add `sql/migrations/<NNNN>-<slug>.sql`. Its first line declares the step's kind, for example
+   `-- workhorse-migration: {"kind":"additive"}`; a contract step writes
+   `-- workhorse-migration: {"kind":"contract","retiresProtocolVersions":[<vN>]}`. The rest of the
+   file is only the schema change body. The runtime supplies the transaction, the advisory lock,
+   the starting-version validation, and the version bookkeeping; a body that contains its own
+   `BEGIN`, `COMMIT`, `ROLLBACK`, or `START TRANSACTION` is rejected before execution.
 2. Apply the same change to `sql/schema/current.sql`, increment `WORKHORSE_SCHEMA_VERSION`, and add
-   the step to `SCHEMA_MIGRATIONS` in `typescript/core/src/schema.ts` with its description. Clean
+   the step to `SCHEMA_MIGRATIONS` in `typescript/core/src/schema.ts` with its description and
+   kind. The file's declaration and the entry must agree, and the runner refuses a step whose two
+   declarations disagree. Clean
    installation inserts one `workhorse.schema_migration` row per lineage version, so both paths
    record the identical baseline-to-current history.
 3. Advance the compatibility manifest (`protocol/v1/manifest.json`,
@@ -145,7 +149,8 @@ refuse the installed schema, and reports `schema.compatible`, `schema.refusal`, 
 `schema.refusalCode` for a deployment gate to read. The code is the one
 `SchemaCompatibilityError.code` would carry, so a gate and the process that starts after it name
 the same refusal. `schema.state` reporting `ahead` is not a failure; it is what a rollout in progress
-looks like.
+looks like. Pending contract steps report under `schema.pendingContractSteps`, a separate field, so
+a gate never mistakes the operator's own schedule for a pending pipeline migration.
 
 A migration fails in two shapes, and they recover differently. Tell them apart before acting: ask
 whether the migrating command reported an error, or whether the process running it died.
@@ -232,8 +237,11 @@ released versions receive fixes, and `docs/compatibility.md` records the range e
 
 A database may lag arbitrarily far behind. The migration chain is never pruned, so every released
 step stays in `sql/migrations/` and in `SCHEMA_MIGRATIONS` and a database at any released version
-migrates forward in one `workhorse schema migrate` run. There is no version below which a database
-is stranded, and an operator never skips a step: the runner applies every intervening step in order.
+migrates forward with `workhorse schema migrate` — up to the first contract step, where the run
+stops and reports the step it stopped before. Crossing that step takes one
+`workhorse schema contract` run, after which `migrate` continues. There is no version below which a
+database is stranded, and an operator never skips a step: the runner applies every intervening step
+in order.
 
 ## The 1.0.0 boundary
 
@@ -272,11 +280,17 @@ and it keeps serving every protocol its predecessor served, so a major upgrade i
 rolling deployment and a fleet on the previous major keeps running while the new one rolls out.
 
 Removal is a **contract step**: a separate migration, shipped by the new major line, that drops
-superseded functions and narrows `workhorse.protocol_version`. `workhorse schema migrate` never
-applies it. The operator applies it with `workhorse schema contract`, once their own fleet is
-entirely on the new major. That command refuses while `workhorse.worker_registry` shows a worker on
-the retiring protocol heartbeating inside its lease, names the workers it can see, states that it
-cannot see producers, and requires explicit confirmation.
+superseded functions and narrows `workhorse.protocol_version`. Its `SCHEMA_MIGRATIONS` entry and
+the file's first line both declare `kind: "contract"` and name the retiring protocol versions, and
+`workhorse schema migrate` stops before it and reports the step rather than applying it.
+
+The operator applies it with `workhorse schema contract --yes`, once their own fleet is entirely on
+the new major. The command applies exactly one pending contract step under the same advisory lock,
+starting-version guard, and atomic rollback as every other step. Before `--yes` it applies nothing:
+it reports the step, names every worker on a retiring protocol that heartbeated inside its lease —
+including workers whose SDK predates the reporting columns and names no protocol — and states that
+producers never register, so the registry is evidence and never proof that no caller remains. When
+the pending step is additive instead, it says to run `workhorse schema migrate`.
 
 The evidence is three nullable `workhorse.worker_registry` columns carried by the schema baseline:
 `client_protocol_version`, `sdk_language`, and `sdk_version`. Each SDK stamps its own values at

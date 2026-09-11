@@ -81,7 +81,8 @@ runtime; CommonJS loading is outside the supported package format.
 ## Schema tooling ships in the TypeScript package
 
 Every SDK reads and writes the schema, but only `@stablemates/workhorse` installs and migrates it.
-`workhorse schema install`, `workhorse schema migrate`, and `workhorse schema status` are commands
+`workhorse schema install`, `workhorse schema migrate`, `workhorse schema contract`, and
+`workhorse schema status` are commands
 of that package, and a Python or Go deployment runs them with `npx` at the SDK version its
 application depends on. That is why the machine running your deployment needs Node.js even when your
 application does not.

@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { DashboardSingleAdminOptions } from "@stablemates/workhorse-dashboard-contract";
 import { Pool } from "pg";
 import {
+  contractSchema,
   installSchema,
   isMissingDatabaseRelationError,
   migrateSchema,
@@ -26,7 +27,7 @@ import { describeDatabaseFailure } from "./database-failure.js";
 import { startDashboardServer } from "./dashboard.js";
 import { runHealthCommand } from "./health.js";
 import { initializeProject } from "./init.js";
-import { createSchemaStatusReport } from "./schema-status.js";
+import { createSchemaStatusReport, FLEET_EVIDENCE_NOTE } from "./schema-status.js";
 import {
   CLI_COMMANDS,
   CLI_EXIT_CODES,
@@ -74,11 +75,13 @@ Options:
 const SCHEMA_HELP = `Usage:
   workhorse schema install [options]
   workhorse schema migrate [options]
+  workhorse schema contract [options]
   workhorse schema status [options]
 
 Commands:
   install  Install the Workhorse schema into a clean database.
   migrate  Apply the ordered forward-only migrations to an installed schema.
+  contract Apply the pending contract step, retiring the protocols it names.
   status   Report the installed schema version and PostgreSQL support separately.
 
 Use "workhorse schema <command> --help" for command options.
@@ -103,6 +106,25 @@ ${DATABASE_HELP}  --help, -h              Show this help.
 Run this from a deployment step before processes from the new release start. Each migration commits
 one version step in its own transaction behind the workhorse:schema-migration advisory lock. An
 already-current schema is left unchanged.
+
+The run applies additive steps and stops before a contract step, which only "schema contract"
+applies. The stop is reported, not an error: the schema still serves every protocol it served.
+`;
+
+const SCHEMA_CONTRACT_HELP = `Usage: workhorse schema contract [options]
+
+Options:
+${DATABASE_HELP}  --yes                   Apply the pending contract step.
+  --help, -h              Show this help.
+
+A contract step drops superseded functions and narrows workhorse.protocol_version, so it is never
+part of "schema migrate": the operator applies it deliberately, once their own fleet has moved.
+Without --yes the command reports the pending step and the workers it would stop, and applies
+nothing.
+
+The command refuses to stay silent about its evidence: it names every worker on a retiring protocol
+that heartbeated inside its lease. Producers never register, so a quiet registry cannot prove no
+caller remains — that caveat is why confirmation is required at all.
 `;
 
 const SCHEMA_STATUS_HELP = `Usage: workhorse schema status [options]
@@ -293,18 +315,19 @@ function isSchemaAction(value: string | undefined): value is SchemaAction {
   return SCHEMA_ACTIONS.includes(value as SchemaAction);
 }
 
-/** What the three `schema` actions share once their own option sets have been parsed. */
+/** What the four `schema` actions share once their own option sets have been parsed. */
 interface SchemaCommandOptions {
   readonly help?: boolean;
   readonly "database-url"?: string;
   readonly json?: boolean;
+  readonly yes?: boolean;
 }
 
 /**
  * Parse one `schema` action against its own declared options.
  *
- * The three are parsed apart rather than together because only `status` accepts `--json`, and a
- * shared option set would quietly accept it everywhere.
+ * The four are parsed apart rather than together because only `status` accepts `--json` and only
+ * `contract` accepts `--yes`, and a shared option set would quietly accept both everywhere.
  */
 function parseSchemaOptions(action: SchemaAction, args: readonly string[]): SchemaCommandOptions {
   if (action === "install") {
@@ -319,6 +342,14 @@ function parseSchemaOptions(action: SchemaAction, args: readonly string[]): Sche
     return parseCommandArgs("schema migrate", {
       args,
       options: CLI_OPTIONS["schema migrate"],
+      strict: true,
+      allowPositionals: false,
+    }).values;
+  }
+  if (action === "contract") {
+    return parseCommandArgs("schema contract", {
+      args,
+      options: CLI_OPTIONS["schema contract"],
       strict: true,
       allowPositionals: false,
     }).values;
@@ -355,7 +386,9 @@ async function runSchemaCommand(args: readonly string[]): Promise<void> {
         ? SCHEMA_INSTALL_HELP
         : action === "migrate"
           ? SCHEMA_MIGRATE_HELP
-          : SCHEMA_STATUS_HELP,
+          : action === "contract"
+            ? SCHEMA_CONTRACT_HELP
+            : SCHEMA_STATUS_HELP,
     );
     return;
   }
@@ -429,13 +462,71 @@ async function runSchemaCommand(args: readonly string[]): Promise<void> {
       if (!report.schema.compatible || !support.supported) process.exitCode = 1;
       return;
     }
+    if (action === "contract") {
+      const outcome = await contractSchema(pool, { confirmed: values.yes === true });
+      if (outcome.kind === "none") {
+        process.stdout.write("Workhorse schema is current; no contract step is pending.\n");
+        return;
+      }
+      if (outcome.kind === "additive-pending") {
+        process.stdout.write(
+          `Pending Workhorse migration ${outcome.step.file} is additive; apply it with "workhorse schema migrate".\n`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const { step, workers } = outcome;
+      const retiring = (step.retiresProtocolVersions ?? [])
+        .map((version) => `v${version}`)
+        .join(", ");
+      process.stdout.write(
+        `Contract step ${step.file} (schema v${step.fromVersion} to v${step.toVersion}) retires SQL protocol ${retiring}: ${step.description}\n`,
+      );
+      process.stdout.write(
+        workers.length === 0
+          ? "No worker heartbeating inside its lease reports a retiring protocol.\n"
+          : `${workers.length === 1 ? "One worker heartbeates" : `${workers.length} workers heartbeat`} inside its lease on a protocol this step retires:\n${workers
+              .map(
+                (worker) =>
+                  `  ${worker.workerId} (${worker.hostname ?? "unknown host"}, ` +
+                  `${worker.sdkLanguage === null ? "unknown SDK" : `${worker.sdkLanguage} ${worker.sdkVersion ?? ""}`.trimEnd()}, ` +
+                  `${worker.clientProtocolVersion === null ? "unreported protocol" : `protocol v${worker.clientProtocolVersion}`})`,
+              )
+              .join("\n")}\n`,
+      );
+      process.stdout.write(`${FLEET_EVIDENCE_NOTE}\n`);
+      if (outcome.kind === "unconfirmed") {
+        process.stdout.write(`Rerun with --yes to apply ${step.file}.\n`);
+        process.exitCode = 1;
+        return;
+      }
+      process.stdout.write(
+        workers.length === 0
+          ? `Applied contract step ${step.file}; Workhorse schema is now v${step.toVersion}.\n`
+          : `Applied contract step ${step.file} past ${workers.length} live ${workers.length === 1 ? "worker" : "workers"}; Workhorse schema is now v${step.toVersion}.\n`,
+      );
+      return;
+    }
     if (action === "migrate") {
       const before = await readSchemaVersion(pool).catch(() => null);
-      await migrateSchema(pool);
+      const result = await migrateSchema(pool);
+      if (result.contractStop !== null) {
+        const retiring = (result.contractStop.retiresProtocolVersions ?? [])
+          .map((version) => `v${version}`)
+          .join(", ");
+        process.stdout.write(
+          (before === result.finishedVersion
+            ? `Workhorse schema v${result.finishedVersion} applied no step. `
+            : `Migrated Workhorse schema v${String(before)} to v${result.finishedVersion}. `) +
+            `Stopped before ${result.contractStop.file}: a contract step retires SQL protocol ${retiring}; ` +
+            `run "workhorse schema contract" when the fleet has moved.\n`,
+        );
+        return;
+      }
       process.stdout.write(
         before === WORKHORSE_SCHEMA_VERSION
           ? `Workhorse schema v${WORKHORSE_SCHEMA_VERSION} is already current.\n`
-          : `Migrated Workhorse schema v${String(before)} to v${WORKHORSE_SCHEMA_VERSION}.\n`,
+          : `Migrated Workhorse schema v${String(before)} to v${result.finishedVersion}.\n`,
       );
       return;
     }

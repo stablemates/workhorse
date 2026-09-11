@@ -1,10 +1,12 @@
 import {
   MINIMUM_SCHEMA_VERSION,
   PROTOCOL_VERSION,
+  SCHEMA_MIGRATIONS,
   schemaCompatibilityRefusal,
   WORKHORSE_SCHEMA_VERSION,
   type WorkerClientProtocol,
 } from "../schema.js";
+import { pendingContractSteps, type SchemaMigrationStep } from "../schema-migrations.js";
 import { MINIMUM_POSTGRES_MAJOR, type PostgresSupport } from "../support.js";
 import type { SchemaCompatibilityCode } from "../errors.js";
 
@@ -25,6 +27,19 @@ export interface SchemaStatusReport {
     readonly minimumVersion: number;
     readonly clientProtocolVersion: number;
     readonly installedProtocolVersions: readonly number[] | null;
+    /**
+     * Contract steps still ahead of the installed version.
+     *
+     * Distinct from `state` on purpose: "behind" on a contract step is the operator's own
+     * schedule, not a pending pipeline migration, so a deployment gate must never read one as
+     * the other. Each entry names the step and the client protocols it retires.
+     */
+    readonly pendingContractSteps: readonly {
+      readonly file: string;
+      readonly fromVersion: number;
+      readonly toVersion: number;
+      readonly retiresProtocolVersions: readonly number[];
+    }[];
     /** Where the installed version sits relative to this build. Says nothing about acceptance. */
     readonly state: "not-installed" | "behind" | "current" | "ahead";
     /** Whether this build would start against the installed schema. */
@@ -69,6 +84,7 @@ export function createSchemaStatusReport(
   installedProtocolVersions: readonly number[] | null,
   support: PostgresSupport,
   workerClientProtocols: readonly WorkerClientProtocol[] | null,
+  migrations: readonly SchemaMigrationStep[] = SCHEMA_MIGRATIONS,
 ): SchemaStatusReport {
   // A missing schema reaches the CLI as a missing relation rather than an ambiguous row, so it
   // gets the sentence that names the step an operator has not run yet.
@@ -90,6 +106,12 @@ export function createSchemaStatusReport(
       minimumVersion: MINIMUM_SCHEMA_VERSION,
       clientProtocolVersion: PROTOCOL_VERSION,
       installedProtocolVersions,
+      pendingContractSteps: pendingContractSteps(migrations, installedVersion).map((step) => ({
+        file: step.file,
+        fromVersion: step.fromVersion,
+        toVersion: step.toVersion,
+        retiresProtocolVersions: step.retiresProtocolVersions ?? [],
+      })),
       state:
         installedVersion === null
           ? "not-installed"

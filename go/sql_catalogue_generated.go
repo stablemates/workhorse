@@ -366,7 +366,13 @@ var internalStatementRegistry = map[string]string{
         ORDER BY last_heartbeat_at DESC, worker_id`,
 	"prune_worker_registry_v1":   `SELECT workhorse.prune_worker_registry_v1(make_interval(secs => $1::double precision)) AS count`,
 	"worker_client_protocols_v1": `SELECT client_protocol_version, workers FROM workhorse.worker_client_protocols_v1()`,
-	"protocol_version":           `SELECT version FROM workhorse.protocol_version ORDER BY version`,
+	"live_workers_on_protocols": `SELECT worker_id, hostname, client_protocol_version, sdk_language, sdk_version, last_heartbeat_at
+         FROM workhorse.worker_registry registry
+         WHERE (registry.client_protocol_version = ANY($1::integer[])
+                OR registry.client_protocol_version IS NULL)
+           AND registry.last_heartbeat_at >= clock_timestamp() - make_interval(secs => registry.lease_ms / 1000.0)
+         ORDER BY worker_id`,
+	"protocol_version": `SELECT version FROM workhorse.protocol_version ORDER BY version`,
 	"compatibility_state": `SELECT 'protocol' AS kind, version FROM workhorse.protocol_version
             UNION ALL
            SELECT 'schema' AS kind, version FROM workhorse.schema_version

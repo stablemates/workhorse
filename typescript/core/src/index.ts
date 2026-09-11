@@ -24,9 +24,16 @@ export type {
   WorkhorseAdapter,
   WorkhorseAdapterOptions,
 } from "./adapter.js";
-export type { MigrateSchemaOptions, WorkerClientProtocol } from "./schema.js";
+export type {
+  ContractSchemaOptions,
+  MigrateSchemaOptions,
+  MigrateSchemaResult,
+  SchemaContractOutcome,
+  WorkerClientProtocol,
+} from "./schema.js";
 export {
   assertSchemaCompatible,
+  contractSchema,
   installSchema,
   isMissingDatabaseRelationError,
   MAXIMUM_PROTOCOL_VERSION,
