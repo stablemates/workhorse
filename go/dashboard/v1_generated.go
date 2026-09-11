@@ -106,6 +106,11 @@ type DashboardDurabilityPlan struct {
 	} `json:"persistentFailure"`
 }
 
+type DashboardEnqueueTestResult struct {
+	JobID   string  `json:"jobId"`
+	Outcome *string `json:"outcome,omitempty"`
+}
+
 type DashboardEventDetail struct {
 	StartedAt    *string            `json:"startedAt"`
 	ClaimedAt    *string            `json:"claimedAt"`
@@ -1142,9 +1147,7 @@ type EnqueueTestInput struct {
 	} `json:"audit"`
 }
 
-type EnqueueTestOutput struct {
-	JobID string `json:"jobId"`
-}
+type EnqueueTestOutput DashboardEnqueueTestResult
 
 type SetScheduleEnabledInput struct {
 	Kind      string `json:"kind"`

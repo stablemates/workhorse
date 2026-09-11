@@ -447,6 +447,13 @@
       "response": {
         "jobId": {
           "type": "string"
+        },
+        "outcome": {
+          "type": "enum",
+          "enum": [
+            "accepted",
+            "replayed"
+          ]
         }
       }
     },

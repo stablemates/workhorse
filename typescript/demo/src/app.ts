@@ -209,7 +209,7 @@ export interface DashboardOperator {
     scenario?: DurableDemoScenario,
     priority?: number,
     feature?: DemoFeatureFamily,
-  ) => Promise<{ jobId: string }>;
+  ) => Promise<{ jobId: string; outcome?: "accepted" | "replayed" }>;
 }
 
 export interface ScheduleController {
@@ -857,6 +857,8 @@ function demoTestJob(
   if (kind === "idempotent") {
     // A fixed key and a payload with no timestamp or random field keep every repeat of this menu
     // action byte-identical, so PostgreSQL returns the first task instead of accepting another.
+    // The key is deliberately shared across operators — the dashboard reports the replay through
+    // the response's `outcome`, which is what makes the reuse visible rather than a silent no-op.
     return {
       type: RECURRING_JOB_TYPE,
       payload: { source: "operator-idempotent" },
@@ -963,7 +965,7 @@ async function enqueueFeatureMenuExample(
   queue: Queue,
   feature: DemoFeatureFamily | undefined,
   priority: number,
-): Promise<{ jobId: string; record: unknown }> {
+): Promise<{ jobId: string; outcome: "accepted" | "replayed"; record: unknown }> {
   if (feature === undefined) throw new Error("The feature demo kind requires a feature family");
   const family = demoFeatureShowcaseFamily(feature);
   const example = DEMO_FEATURE_MENU_EXAMPLES[feature];
@@ -983,21 +985,22 @@ async function enqueueFeatureMenuExample(
       : { executionTimeoutMs: example.executionTimeoutMs }),
   };
   const memberCount = example.seedCount ?? 1;
-  const jobIds =
+  const results =
     memberCount === 1
-      ? [await queue.enqueue(family.jobType, payload, options)]
-      : await queue.enqueueMany(
+      ? [await queue.enqueueWithResult(family.jobType, payload, options)]
+      : await queue.enqueueManyWithResults(
           Array.from({ length: memberCount }, (_, index) => ({
             type: family.jobType,
             payload: { ...payload, memberIndex: index + 1 },
             options,
           })),
         );
-  const jobId = jobIds[0]!;
+  const first = results[0]!;
   return {
-    jobId,
+    jobId: first.jobId,
+    outcome: first.outcome === "replayed" ? ("replayed" as const) : ("accepted" as const),
     record: {
-      jobId,
+      jobId: first.jobId,
       family: feature,
       scenario: example.scenario,
       type: family.jobType,
@@ -1012,15 +1015,20 @@ async function enqueueOutcomeTestJob(
   kind: Parameters<typeof demoTestJob>[0],
   scenario: DurableDemoScenario | undefined,
   priority: number,
-): Promise<{ jobId: string; record: unknown }> {
+): Promise<{ jobId: string; outcome: "accepted" | "replayed"; record: unknown }> {
   const definition = demoTestJob(kind, scenario);
-  const jobId = await queue.enqueue(definition.type, definition.payload, {
+  const result = await queue.enqueueWithResult(definition.type, definition.payload, {
     ...(definition.maxAttempts === undefined ? {} : { maxAttempts: definition.maxAttempts }),
     ...(definition.idempotency === undefined ? {} : { idempotency: definition.idempotency }),
     priority,
     tags: definition.tags,
   });
-  return { jobId, record: { jobId, ...definition, priority } };
+  const outcome = result.outcome === "replayed" ? ("replayed" as const) : ("accepted" as const);
+  return {
+    jobId: result.jobId,
+    outcome,
+    record: { jobId: result.jobId, ...definition, priority, outcome },
+  };
 }
 
 export function createLocalOperator(database: DemoDatabase): DashboardOperator {
@@ -1034,7 +1042,7 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
           defaultQueue: DEMO_QUEUE,
           queueOptions: DEMO_QUEUE_OPTIONS,
         });
-        const { jobId, record } =
+        const { jobId, outcome, record } =
           kind === "feature"
             ? await enqueueFeatureMenuExample(workhorse.queue, feature, priority)
             : await enqueueOutcomeTestJob(workhorse.queue, kind, scenario, priority);
@@ -1046,7 +1054,7 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
              ${audit.occurredAt ?? new Date().toISOString()}, 'enqueueTest', ${target},
              NULL, ${JSON.stringify(record)}::jsonb, 'succeeded')
         `);
-        return { jobId };
+        return { jobId, outcome };
       });
     },
   };

@@ -36,6 +36,8 @@ export type {
   DashboardCancelTaskResult,
   DashboardCompleteHumanWaitResult,
   DashboardDurabilityProjector,
+  DashboardEnqueueTestOutcome,
+  DashboardEnqueueTestResult,
   DashboardOperator,
   DashboardQueueController,
   DashboardRedriveBatch,

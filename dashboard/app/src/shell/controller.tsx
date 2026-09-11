@@ -42,7 +42,7 @@ import {
   type EventsLocationState,
 } from "../events-location.js";
 import { taskDetailNavigation, taskListingKey } from "../task-location.js";
-import { notifyDashboard, notifyFailure } from "../notifications.js";
+import { notifyDashboard, notifyEnqueueTest, notifyFailure } from "../notifications.js";
 import type { MaintenancePolicyDefinition, MaintenancePolicySetting } from "@stablemates/workhorse";
 import { requestRunNow, type RunNowFeedback } from "../run-now.js";
 import { Button, Center, Loader, Stack, Text } from "@mantine/core";
@@ -381,34 +381,6 @@ export function useDashboardController(
     [client, shouldDiscardBackgroundRefresh, refreshRequests],
   );
 
-  const runDemoJob = useCallback(
-    async (kind: DemoJobKind, options: DemoJobOptions = {}) => {
-      const { scenario, feature } = options;
-      setRunningDemoJob(kind);
-      try {
-        if (!demoTools) return;
-        await demoTools.enqueueTest({
-          kind,
-          ...(scenario ? { scenario } : {}),
-          ...(feature ? { feature } : {}),
-          priority: 0,
-          audit: {
-            actor: auditActor,
-            reason: `Demonstrate the ${feature ?? scenario ?? kind} execution path`,
-            requestId: crypto.randomUUID(),
-          },
-        });
-        if (location.filter !== "all" || location.page !== 1) navigate("/tasks");
-        await loadPage();
-      } catch (cause) {
-        notifyFailure("Demo task not enqueued", cause, "Workhorse could not enqueue the demo task");
-      } finally {
-        setRunningDemoJob(null);
-      }
-    },
-    [auditActor, demoTools, loadPage, location.filter, location.page, navigate],
-  );
-
   const toggleSchedule = useCallback(
     async (namespace: string, name: string, enabled: boolean) => {
       const scheduleKey = `${namespace}:${name}`;
@@ -654,6 +626,37 @@ export function useDashboardController(
 
   const inspectJob = useCallback((id: string) => selectTask(id), [selectTask]);
   const closeJobDetail = useCallback(() => selectTask(null), [selectTask]);
+
+  const runDemoJob = useCallback(
+    async (kind: DemoJobKind, options: DemoJobOptions = {}) => {
+      const { scenario, feature } = options;
+      setRunningDemoJob(kind);
+      try {
+        if (!demoTools) return;
+        const enqueued = await demoTools.enqueueTest({
+          kind,
+          ...(scenario ? { scenario } : {}),
+          ...(feature ? { feature } : {}),
+          priority: 0,
+          audit: {
+            actor: auditActor,
+            reason: `Demonstrate the ${feature ?? scenario ?? kind} execution path`,
+            requestId: crypto.randomUUID(),
+          },
+        });
+        // A keyed kind may replay to a task that predates this click, so the answer names what
+        // happened and offers the task it resolved to rather than only refreshing the listing.
+        notifyEnqueueTest(enqueued, { openTask: inspectJob });
+        if (location.filter !== "all" || location.page !== 1) navigate("/tasks");
+        await loadPage();
+      } catch (cause) {
+        notifyFailure("Demo task not enqueued", cause, "Workhorse could not enqueue the demo task");
+      } finally {
+        setRunningDemoJob(null);
+      }
+    },
+    [auditActor, demoTools, inspectJob, loadPage, location.filter, location.page, navigate],
+  );
   const inspectEvent = useCallback(
     (event: DashboardEventRow) => {
       const next = { ...location.events, eventId: event.id };

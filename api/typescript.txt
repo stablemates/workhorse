@@ -484,6 +484,8 @@ interface DashboardCancellationAuditContext
 interface DashboardCompleteHumanWaitResult
 interface DashboardDatabase
 type DashboardDurabilityProjector
+type DashboardEnqueueTestOutcome
+interface DashboardEnqueueTestResult
 interface DashboardHost
 interface DashboardHostOptions
 type DashboardNodeMiddleware
@@ -651,6 +653,8 @@ interface DashboardCancellationAuditContext
 interface DashboardCompleteHumanWaitResult
 interface DashboardDatabase
 type DashboardDurabilityProjector
+type DashboardEnqueueTestOutcome
+interface DashboardEnqueueTestResult
 interface DashboardHost
 interface DashboardHostOptions
 type DashboardNodeMiddleware
@@ -1215,6 +1219,13 @@ interface DashboardDurabilityPlan {
 
 type DashboardDurabilityProjector = (type: string, payload: unknown) => DashboardDurabilityPlan | null;
 
+type DashboardEnqueueTestOutcome = "accepted" | "replayed";
+
+interface DashboardEnqueueTestResult {
+  jobId: string;
+  outcome?: DashboardEnqueueTestOutcome;
+}
+
 interface DashboardEventDetail extends DashboardEventRow {
   /** Attempt timing evidence. Always null for lifecycle event rows. */
   startedAt: string | null;
@@ -1707,9 +1718,7 @@ function DashboardNotifications(): import("react").JSX.Element;
 
 interface DashboardOperator {
   mode: "read-only" | "writable";
-  enqueueTest?: (kind: DashboardDemoJobKind, audit: DashboardAuditContext, scenario?: DashboardDemoScenario, priority?: number, feature?: DashboardDemoFeature) => Promise<{
-    jobId: string;
-  }>;
+  enqueueTest?: (kind: DashboardDemoJobKind, audit: DashboardAuditContext, scenario?: DashboardDemoScenario, priority?: number, feature?: DashboardDemoFeature) => Promise<DashboardEnqueueTestResult>;
 }
 
 type DashboardOperatorAction = {
@@ -4868,11 +4877,7 @@ const dashboardRouter: {
         reason: z.ZodString;
         requestId: z.ZodString;
       }, z.core.$strip>;
-    }, z.core.$strip>, import("@orpc/server").Schema<{
-      jobId: string;
-    }, {
-      jobId: string;
-    }>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
+    }, z.core.$strip>, import("@orpc/server").Schema<import("./types.js").DashboardEnqueueTestResult, import("./types.js").DashboardEnqueueTestResult>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     setScheduleEnabled: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
       kind: z.ZodLiteral<"user">;
       namespace: z.ZodString;

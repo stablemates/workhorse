@@ -121,6 +121,11 @@ class DashboardDurabilityPlan(TypedDict, total=False):
     persistentFailure: Required[DashboardDurabilityPlanPersistentFailure | None]
 
 
+class DashboardEnqueueTestResult(TypedDict, total=False):
+    jobId: Required[str]
+    outcome: NotRequired[Literal["accepted", "replayed"]]
+
+
 class DashboardEventDetail(TypedDict, total=False):
     startedAt: Required[str | None]
     claimedAt: Required[str | None]
@@ -1386,8 +1391,7 @@ class EnqueueTestInput(TypedDict, total=False):
     audit: Required[EnqueueTestInputAudit]
 
 
-class EnqueueTestOutput(TypedDict, total=False):
-    jobId: Required[str]
+type EnqueueTestOutput = DashboardEnqueueTestResult
 
 
 class SetScheduleEnabledInputAudit(TypedDict, total=False):
@@ -1850,6 +1854,7 @@ __all__ = [
     "DashboardDurabilityPlan",
     "DashboardDurabilityPlanPersistentFailure",
     "DashboardDurabilityPlanStepsItem",
+    "DashboardEnqueueTestResult",
     "DashboardEventDetail",
     "DashboardEventKind",
     "DashboardEventRow",

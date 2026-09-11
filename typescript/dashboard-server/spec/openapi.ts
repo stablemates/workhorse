@@ -156,7 +156,7 @@ export const procedureDocs: Record<ProcedureName, ProcedureDoc> = {
   enqueueTest: {
     summary: "Enqueue a demonstration job",
     description:
-      "Enqueues one demonstration job of the given kind on the demo queue and returns its jobId. feature is required when kind is feature. Available only where the host wires a demo operator; other deployments answer FORBIDDEN.",
+      "Enqueues one demonstration job of the given kind on the demo queue and returns its jobId. outcome reports whether the request accepted a new task or replayed an identical earlier request under a retained key; hosts that do not track the distinction may omit it. feature is required when kind is feature. Available only where the host wires a demo operator; other deployments answer FORBIDDEN.",
   },
   setScheduleEnabled: {
     summary: "Enable or disable a schedule",

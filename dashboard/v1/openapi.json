@@ -4103,7 +4103,7 @@
       "post": {
         "operationId": "dashboard_enqueueTest",
         "summary": "Enqueue a demonstration job",
-        "description": "Enqueues one demonstration job of the given kind on the demo queue and returns its jobId. feature is required when kind is feature. Available only where the host wires a demo operator; other deployments answer FORBIDDEN.",
+        "description": "Enqueues one demonstration job of the given kind on the demo queue and returns its jobId. outcome reports whether the request accepted a new task or replayed an identical earlier request under a retained key; hosts that do not track the distinction may omit it. feature is required when kind is feature. Available only where the host wires a demo operator; other deployments answer FORBIDDEN.",
         "tags": [
           "mutations"
         ],
@@ -4230,15 +4230,7 @@
                   "type": "object",
                   "properties": {
                     "json": {
-                      "type": "object",
-                      "properties": {
-                        "jobId": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "jobId"
-                      ]
+                      "$ref": "#/components/schemas/DashboardEnqueueTestResult"
                     }
                   },
                   "required": [
@@ -6956,6 +6948,23 @@
           "description",
           "steps",
           "persistentFailure"
+        ]
+      },
+      "DashboardEnqueueTestResult": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "accepted",
+              "replayed"
+            ]
+          }
+        },
+        "required": [
+          "jobId"
         ]
       },
       "DashboardEventDetail": {

@@ -211,6 +211,31 @@ export function notifyRedrive(
   });
 }
 
+/**
+ * Report what one test-task enqueue did.
+ *
+ * The task the request resolved to is what the operator now wants to watch, so it is offered
+ * directly. A request replayed under a retained key creates no task, so the message says what
+ * actually happened instead of claiming an acceptance that never occurred.
+ */
+export function notifyEnqueueTest(
+  result: { jobId: string; outcome?: "accepted" | "replayed" },
+  options: { openTask: (id: string) => void },
+): string {
+  const replayed = result.outcome === "replayed";
+  return notifyDashboard({
+    // One id, so repeating a menu action replaces the previous answer instead of stacking it.
+    id: "workhorse-enqueue-test",
+    title: replayed ? "Existing task reused" : "Test task enqueued",
+    message: replayed
+      ? "The retained idempotency key already resolved to one task, so this request returned " +
+        "it instead of enqueuing a duplicate."
+      : "The demonstration task was accepted and is queued to run.",
+    tone: "success",
+    action: { label: "Open task", onClick: () => options.openTask(result.jobId) },
+  });
+}
+
 /** Report what one filtered redrive did, as a whole rather than one notification per task. */
 export function notifyRedriveBatch(batch: {
   results: readonly { status: DashboardRedriveStatus }[];

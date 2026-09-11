@@ -895,15 +895,7 @@
         ]
       },
       "output": {
-        "type": "object",
-        "properties": {
-          "jobId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "jobId"
-        ]
+        "$ref": "#/$defs/DashboardEnqueueTestResult"
       }
     },
     "setScheduleEnabled": {
@@ -2485,6 +2477,23 @@
         "description",
         "steps",
         "persistentFailure"
+      ]
+    },
+    "DashboardEnqueueTestResult": {
+      "type": "object",
+      "properties": {
+        "jobId": {
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "accepted",
+            "replayed"
+          ]
+        }
+      },
+      "required": [
+        "jobId"
       ]
     },
     "DashboardEventDetail": {

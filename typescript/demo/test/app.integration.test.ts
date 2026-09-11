@@ -3700,7 +3700,8 @@ describe("Workhorse demo", () => {
       kind: "idempotent",
       audit: { actor: "operator", reason: "show deduplication", requestId: "audit-idempotent-2" },
     });
-    expect(second.jobId).toBe(first.jobId);
+    expect(first).toMatchObject({ outcome: "accepted" });
+    expect(second).toMatchObject({ jobId: first.jobId, outcome: "replayed" });
     expect(
       (await pool.query(`SELECT count(*)::integer AS count FROM workhorse.job`)).rows[0],
     ).toEqual({ count: 1 });

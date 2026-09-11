@@ -1239,6 +1239,9 @@ descending. `DashboardTasksPage` returns the effective `priority` and `sort`.
 `enqueueTestInput.priority` is an integer from 0 through 100 and defaults to 0. The router passes it
 to `DashboardOperator.enqueueTest`, and the demo operator supplies it to `Queue.enqueue`. The
 `redrive` test action ignores this input because `redrive_v1` copies the source priority.
+`DashboardEnqueueTestResult.outcome` is an optional `accepted` or `replayed`: the demo operator
+fills it from `Queue.enqueueWithResult` so the dashboard can say when a retained key returned an
+existing task instead of a new one.
 
 `Queue.health().dependencies` reports blocked jobs, pending edges, retained `DependencyFailed` outcomes, and `retentionPruneStarved`. The last field records that the latest terminal prune deleted no identities while its bounded candidate window contained a prerequisite protected by a dependency edge. A later successful prune or a zero-deletion pass without dependency pins clears it. The three counts scan at most 10,001 matching rows, return at most 10,000, and set `capped` when any value is a lower bound. `job_runtime_blocked_queue_idx` supports global and per-queue blocked counts. `job_dependency_dependent_pending_idx` supports pending-edge joins from live runtimes. `job_outcome_dependency_failed_idx` supports failure counts. These diagnostic indexes keep the health query from scanning unrelated runtime or history rows. The partial indexes exclude ready, scheduled, and active rows from their predicates, so claim does not use them. `Queue.queueMetricSnapshot()` splits the dispatch-pressure facts by queue and exposes `dependencyCountsCapped`. `registerQueueMetrics()` exports them as `workhorse.queue.dependencies.blocked`, `workhorse.queue.dependencies.pending_edges`, `workhorse.queue.dependencies.failed_resolutions`, and `workhorse.queue.dependencies.capped`; the only attribute is `workhorse.queue.name`.
 

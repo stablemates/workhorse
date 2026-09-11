@@ -30,6 +30,20 @@ export interface DashboardCancellationAuditContext extends Omit<DashboardAuditCo
   reason: string | null;
 }
 
+/**
+ * What PostgreSQL did with one demonstration enqueue.
+ *
+ * `accepted` means a new task identity was inserted; `replayed` means a retained coalescing key
+ * resolved the request to the task an identical earlier request accepted, so no new task exists.
+ * A host that does not track the distinction may omit it.
+ */
+export type DashboardEnqueueTestOutcome = "accepted" | "replayed";
+
+export interface DashboardEnqueueTestResult {
+  jobId: string;
+  outcome?: DashboardEnqueueTestOutcome;
+}
+
 export interface DashboardOperator {
   mode: "read-only" | "writable";
   enqueueTest?: (
@@ -38,7 +52,7 @@ export interface DashboardOperator {
     scenario?: DashboardDemoScenario,
     priority?: number,
     feature?: DashboardDemoFeature,
-  ) => Promise<{ jobId: string }>;
+  ) => Promise<DashboardEnqueueTestResult>;
 }
 
 export interface DashboardScheduleController {
