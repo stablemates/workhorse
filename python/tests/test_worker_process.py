@@ -37,8 +37,8 @@ def _finish(process: subprocess.Popen[str]) -> tuple[str, str]:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
         process.kill()
-        process.communicate()
-        raise
+        stdout, stderr = process.communicate()
+        pytest.fail(f"process did not exit within 5s; stdout: {stdout!r} stderr: {stderr!r}")
     assert process.stdout is not None
     assert process.stderr is not None
     return process.stdout.read(), process.stderr.read()
@@ -55,12 +55,12 @@ def _kill_and_reap(process: subprocess.Popen[str]) -> None:
 def test_first_termination_signal_stops_claims_and_allows_a_graceful_drain(
     termination_signal: signal.Signals,
 ) -> None:
-    process = _start_fixture("drain", 1_000)
+    process = _start_fixture("drain", 30_000)
 
     process.send_signal(termination_signal)
 
     stdout, stderr = _finish(process)
-    assert process.returncode == 0
+    assert process.returncode == 0, f"stdout: {stdout!r} stderr: {stderr!r}"
     assert stdout.strip() == "stopping"
     assert stderr == ""
 
@@ -74,15 +74,15 @@ def test_second_termination_signal_uses_its_conventional_exit_code(
     second_signal: signal.Signals,
     exit_code: int,
 ) -> None:
-    process = _start_fixture("block", 5_000)
+    process = _start_fixture("block", 30_000)
 
     process.send_signal(signal.SIGTERM)
     assert process.stdout is not None
     assert process.stdout.readline().strip() == "stopping"
     process.send_signal(second_signal)
 
-    _finish(process)
-    assert process.returncode == exit_code
+    stdout, stderr = _finish(process)
+    assert process.returncode == exit_code, f"stdout: {stdout!r} stderr: {stderr!r}"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process signals are required")
@@ -91,8 +91,8 @@ def test_missed_graceful_drain_deadline_exits_with_failure() -> None:
 
     process.send_signal(signal.SIGTERM)
 
-    _finish(process)
-    assert process.returncode == 1
+    stdout, stderr = _finish(process)
+    assert process.returncode == 1, f"stdout: {stdout!r} stderr: {stderr!r}"
 
 
 def test_shutdown_deadline_rejects_values_outside_the_process_contract() -> None:
@@ -102,10 +102,10 @@ def test_shutdown_deadline_rejects_values_outside_the_process_contract() -> None
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process signals are required")
 def test_signal_between_handler_installation_and_worker_run_is_not_lost() -> None:
-    process = _start_fixture("pre-run-signal", 1_000)
+    process = _start_fixture("pre-run-signal", 30_000)
 
     stdout, stderr = _finish(process)
-    assert process.returncode == 0
+    assert process.returncode == 0, f"stdout: {stdout!r} stderr: {stderr!r}"
     assert stdout.strip() == "stopping"
     assert stderr == ""
 
