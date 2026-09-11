@@ -4,8 +4,8 @@
     "node": "npm install @stablemates/workhorse",
     "python": "pip install stablemates-workhorse",
     "schema": "npm exec --no -- workhorse schema install",
-    "schemaDownload": "curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.1.3/schema.sql",
-    "schemaPinned": "npx --package @stablemates/workhorse@0.1.3 workhorse schema install"
+    "schemaDownload": "curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.1.4/schema.sql",
+    "schemaPinned": "npx --package @stablemates/workhorse@0.1.4 workhorse schema install"
   },
   "support": {
     "go": {

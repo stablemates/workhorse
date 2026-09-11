@@ -156,6 +156,7 @@ baseline github.com/stablemates/workhorse/go@v0.1.3 (tag go/v0.1.3)
 - SignalWaitLeaseLostError.JobID: removed
 - SignalWaitLimitExceededError.JobID: removed
 - StaleLeaseError.JobID: removed
+- Version: value changed from "0.1.3" to "0.1.4"
 - WaitConflictError.JobID: removed
 - WaitLeaseLostError.JobID: removed
 - WaitLimitExceededError.JobID: removed

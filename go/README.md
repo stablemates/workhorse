@@ -19,7 +19,7 @@ go get github.com/stablemates/workhorse/go
 Install the schema once, as a deployment step. The application never installs or migrates it.
 
 ```bash
-npx --package @stablemates/workhorse@0.1.3 workhorse schema install
+npx --package @stablemates/workhorse@0.1.4 workhorse schema install
 ```
 
 The machine that runs that deployment step needs Node.js 22 or newer. The application itself needs
