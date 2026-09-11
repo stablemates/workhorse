@@ -16,6 +16,11 @@
       "question": "I already have a web framework. What changes?"
     },
     {
+      "id": "poolers",
+      "title": "Connection poolers",
+      "question": "Can PostgreSQL sit behind a connection pooler?"
+    },
+    {
       "id": "operator-surfaces",
       "title": "Operator surfaces",
       "question": "How do I give my operators a view of the queue?"
@@ -91,6 +96,15 @@
       "summary": "Wires Workhorse into an application that already has a web framework.",
       "boundary": "Workhorse publishes no framework package, and a web process never owns a worker.",
       "verifiedOn": "2026-09-02"
+    },
+    {
+      "slug": "pgbouncer",
+      "name": "PgBouncer",
+      "category": "poolers",
+      "tier": "documented",
+      "summary": "Runs Workhorse over session- or transaction-pooled connections.",
+      "boundary": "Transaction pooling keeps full queue semantics, but LISTEN wake hints and session-level locks do not survive it.",
+      "verifiedOn": "2026-09-11"
     },
     {
       "slug": "dashboard",

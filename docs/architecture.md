@@ -888,6 +888,29 @@ guarantees.
 6. **Resource ownership.** An adapter closes nothing it did not create. `WorkhorseAdapter.close()`
    invokes the configured `close` callback at most once, however many times it is called.
 
+### Connection poolers
+
+Every production statement is self-contained: no code path issues `SET`, holds a cursor, or takes
+a session-level advisory lock, so `pool_mode = transaction` serves every queue operation. Two
+kinds of session state are the exceptions, and `integration-pooling.test.ts` runs each pool mode
+as a separate lane to prove the boundary.
+
+- `LISTEN workhorse_jobs` is session state. Session-mode pooling delivers `NOTIFY` normally.
+  PgBouncer in transaction mode accepts `LISTEN`, returns success, then releases the server
+  connection, so no notification is ever delivered and no error reaches `onNotificationError`:
+  the subscription reports listening while the `Worker.run()` fallback poll carries dispatch.
+  Restoring wake hints takes a listener connection outside transaction pooling — the adapters'
+  `notificationPool`, or a `Queue` whose queryable has no `connect()` so it stays polling-only.
+- Session advisory locks (`pg_advisory_lock`, `pg_advisory_unlock`, `pg_try_advisory_lock`) pin to
+  whichever server session ran them and outlive the client checkout, so under transaction pooling
+  a second client can acquire a held key and grants leak onto pooled backends. Every Workhorse
+  advisory lock is transaction-scoped (`pg_advisory_xact_lock`, `pg_try_advisory_xact_lock`,
+  `pg_advisory_xact_lock_shared`), including the schema-migration lock, so no production path is
+  affected; the session forms exist only in test harnesses.
+- Schema operations run under transaction pooling: `installSchema` sends `schema.sql` as one
+  multi-statement simple query, and each migration step is one `BEGIN`…`COMMIT` script that takes
+  its transaction-scoped lock behind `SET LOCAL lock_timeout`.
+
 ### Queue module seams
 
 `Queue` is the application and worker facade. `Admin` is the operator facade. Both constructors
@@ -3103,6 +3126,9 @@ interactive stdin and stdout is refused with exit 1.
   `$client.options.max`. The Prisma, TypeORM, and Kysely adapters forward `connect()` from their
   optional `notificationPool`, use that pool as `notificationConnectionIdentity`, and read capacity
   from `notificationPool.options.max`. Without those capabilities, an adapter remains polling-only.
+  The capability check sees the pool's shape, not its pooling mode: a transaction-mode pooler
+  accepts `LISTEN` without ever delivering a notification, so capability stays reported while the
+  fallback poll does the work (see [Connection poolers](#connection-poolers)).
   A pool whose capacity is 1 also remains polling-only, which prevents its sole connection from being
   held away from claims. Queue-name payloads wake matching subscribers and `*` wakes all subscribers.
   `promote_v1`, `run_task_now_v1`, `recover_expired_v1`,

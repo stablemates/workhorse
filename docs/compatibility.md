@@ -216,6 +216,40 @@ boundaries and confirms that Vercel Edge omits the Node.js networking APIs requi
 The published [serverless guide](https://workhorse.run/docs/serverless) links each provider source
 and explains where to deploy workers when the web tier is serverless.
 
+## PostgreSQL connection poolers
+
+A connection pooler between a Workhorse process and PostgreSQL changes which connection semantics
+a client can rely on. `typescript/core/test/integration-pooling.test.ts` exercises each mode as a
+separate lane: direct against PostgreSQL, `pool_mode = session`, and `pool_mode = transaction`.
+The TypeScript CI job runs all three against the `pgbouncer/pgbouncer` service containers on every
+supported PostgreSQL version; a checkout without a pooler runs the direct lane and reports the
+pooled lanes as skipped. `pnpm test:pooling` provisions the same fixture locally.
+
+| Operation                                                           | Direct | Session pool | Transaction pool                                                                 |
+| ------------------------------------------------------------------- | ------ | ------------ | -------------------------------------------------------------------------------- |
+| Enqueue, claim, settle, heartbeat, operator reads                   | Yes    | Yes          | Yes                                                                              |
+| Transactional enqueue inside a caller-owned transaction             | Yes    | Yes          | Yes                                                                              |
+| `installSchema`, `migrateSchema`, `contractSchema`                  | Yes    | Yes          | Yes; each step is one `BEGIN`…`COMMIT` script                                    |
+| Maintenance tick and every SQL `pg_(try_)advisory_xact_lock`        | Yes    | Yes          | Yes; the locks are transaction-scoped                                            |
+| `LISTEN`/`NOTIFY` wake hints on `workhorse_jobs`                    | Yes    | Yes          | `LISTEN` succeeds but no notification is ever delivered; the fallback poll works |
+| Session-level `pg_advisory_lock`/`pg_advisory_unlock`               | Yes    | Yes          | Unsafe; a grant pins to a pooled backend and a second client can take the key    |
+| Session state (`SET`, SQL `PREPARE`/`DEALLOCATE`, temporary tables) | Yes    | Yes          | Unsafe; state lands on a server session the client does not own                  |
+
+Verified on 2026-09-11 against PgBouncer 1.25.2 and PostgreSQL 18.6.
+
+Two consequences matter operationally. The silent `LISTEN` acceptance means
+`Queue.supportsJobNotifications()` and the subscription's `isListening()` report capability while
+wake hints are dead, so dispatch runs entirely on the fallback poll — correct but slower; point an
+adapter's `notificationPool` at a session-pooled or direct pool to restore hints. And every leaked
+session grant or `SET` lands on a pooled backend that outlives the client that created it, so a
+transaction-mode pool must never serve a code path that leaves session state behind.
+
+Connection budget: a notification-capable pool reserves one client connection for the listener no
+matter how many `Queue` or `Worker` objects share it, so a worker pool needs at least two
+connections for listening plus claims; a pool limited to one stays polling-only. Behind a
+transaction-mode pooler that listener slot is held without delivering anything, which is wasted
+budget on both the client pool and the pooler's `max_client_conn`.
+
 ## Packages and versioning
 
 Ten packages ship from this repository. `@stablemates/workhorse` is the TypeScript durable queue;

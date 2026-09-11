@@ -33,6 +33,7 @@
     "370-dashboard-authentication": "dashboard",
     "380-admin-cli-and-tui": "operations",
     "385-agent-integration": "for-ai-agents",
+    "390-connection-pooling": "pgbouncer",
     "395-serverless-web-tiers": "serverless"
   },
   "exclusions": {}

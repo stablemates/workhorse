@@ -98,6 +98,28 @@ export function createDatabaseTestHarness(
   };
 }
 
+/**
+ * Create a second empty database beside the harness one, for tests that need a clean database
+ * after setup — schema installation only runs on one. The name must keep the test-purpose marker.
+ */
+export async function createEmptyTestDatabase(sourceUrl: string, name: string): Promise<void> {
+  const target = new URL(sourceUrl);
+  target.pathname = `/${name}`;
+  assertLocalDatabasePurpose(target.toString(), "test");
+  const admin = adminPool(sourceUrl);
+  try {
+    await dropDatabaseWithAdmin(admin, name);
+    await admin.query(`CREATE DATABASE ${identifier(name)}`);
+  } finally {
+    await admin.end();
+  }
+}
+
+/** Drop a database previously created by {@link createEmptyTestDatabase}. */
+export async function dropTestDatabase(sourceUrl: string, name: string): Promise<void> {
+  await dropDatabase(sourceUrl, name);
+}
+
 async function prepareCurrentHistoryPartitions(pool: Pool): Promise<void> {
   await pool.query(
     `SELECT workhorse.create_history_day_v1(

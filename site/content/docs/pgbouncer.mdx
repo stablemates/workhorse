@@ -1,0 +1,56 @@
+---
+title: Can I run Workhorse behind PgBouncer?
+description: Which Workhorse operations survive each PgBouncer pool mode, and which need a dedicated session.
+---
+
+Yes, in every pool mode — with one caveat that costs latency rather than correctness. Enqueue,
+claim, heartbeat, settle, schema installation, and migration all work through `pool_mode =
+session` and `pool_mode = transaction`, because every statement Workhorse sends is self-contained
+and every advisory lock the schema takes is transaction-scoped. The exception is the worker's
+wake-hint listener, which needs a dedicated session.
+
+## The pool-mode matrix
+
+| Operation                                              | Direct | Session pool | Transaction pool                   |
+| ------------------------------------------------------ | ------ | ------------ | ---------------------------------- |
+| Enqueue, claim, settle, heartbeat, operator reads      | Yes    | Yes          | Yes                                |
+| Transactional enqueue in your own transaction          | Yes    | Yes          | Yes                                |
+| Schema install and migrate                             | Yes    | Yes          | Yes                                |
+| Maintenance tick and transaction-scoped advisory locks | Yes    | Yes          | Yes                                |
+| `LISTEN`/`NOTIFY` wake hints                           | Yes    | Yes          | Accepted but never delivered       |
+| Session-level advisory locks                           | Yes    | Yes          | Unsafe — no exclusion, grants leak |
+| Session state (`SET`, `PREPARE`, temporary tables)     | Yes    | Yes          | Unsafe — leaks between clients     |
+
+The conformance suite runs each mode as a separate lane in CI. The matrix above is the verified
+result, not a reading of the PgBouncer manual.
+
+## The silent `LISTEN` failure
+
+Transaction-mode PgBouncer accepts `LISTEN workhorse_jobs` and returns success, then releases the
+server connection when the statement ends. The notification is never delivered, and nothing
+errors — the worker believes it is listening while dispatch runs entirely on its fallback poll.
+That fallback is the correctness mechanism, so jobs still run; wake-up is just slower.
+
+To keep wake hints, give the listener a connection outside transaction pooling:
+
+- The Drizzle adapter forwards its node-postgres pool for listening; point that pool at a
+  session-mode alias.
+- The Prisma, TypeORM, and Kysely adapters take a `notificationPool` for exactly this. Give it a
+  session-pooled or direct pool.
+- A `Queue` built on a queryable without `connect()` stays polling-only by design.
+
+## Connection budgets
+
+A notification-capable pool holds one connection for the listener no matter how many `Queue` or
+`Worker` objects share it, so a listening pool needs room for the listener plus claims. A pool
+capped at one connection polls instead of listening. Behind a transaction-mode pooler the
+listener slot is held without delivering anything — budget for it on both sides, or drop the
+capability.
+
+## What is unsafe
+
+Two configurations fail quietly. Pointing `notificationPool` at a transaction-mode pooler accepts
+`LISTEN` and delivers nothing. And session-level advisory locks — `pg_advisory_lock`, not the
+transaction-scoped forms Workhorse uses — stop excluding across clients, because each statement
+may land on a different server session and a grant outlives the client that took it. Any `SET`
+left behind lands on the next client to borrow that backend.

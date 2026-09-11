@@ -122,8 +122,36 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      # The pooling conformance lanes in integration-pooling.test.ts. The wildcard databases entry
+      # forwards whatever database name a test rewrites into the URL, and auth_type=any accepts the
+      # client credential while DATABASES_* carries the server one. No health-cmd exists in the
+      # image; the test retries its first connection instead.
+      pgbouncer-session:
+        image: pgbouncer/pgbouncer:1.25.2
+        env:
+          DATABASES_HOST: postgres
+          DATABASES_PORT: 5432
+          DATABASES_USER: workhorse
+          DATABASES_PASSWORD: workhorse
+          PGBOUNCER_POOL_MODE: session
+          PGBOUNCER_LISTEN_PORT: 6432
+        ports:
+          - 6432:6432
+      pgbouncer-transaction:
+        image: pgbouncer/pgbouncer:1.25.2
+        env:
+          DATABASES_HOST: postgres
+          DATABASES_PORT: 5432
+          DATABASES_USER: workhorse
+          DATABASES_PASSWORD: workhorse
+          PGBOUNCER_POOL_MODE: transaction
+          PGBOUNCER_LISTEN_PORT: 6433
+        ports:
+          - 6433:6433
     env:
       DATABASE_URL_TEST: postgres://workhorse:workhorse@localhost:5432/workhorse_test
+      WORKHORSE_TEST_SESSION_POOL_URL: postgres://workhorse:workhorse@localhost:6432/workhorse_test
+      WORKHORSE_TEST_TRANSACTION_POOL_URL: postgres://workhorse:workhorse@localhost:6433/workhorse_test
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
