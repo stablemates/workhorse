@@ -596,7 +596,8 @@ describe("schema migrations", () => {
         });
 
         expect(outcome.kind).toBe("applied");
-        if (outcome.kind === "applied") expect(outcome.step.file).toBe("0003-retire-probe.sql");
+        if (outcome.kind !== "applied") throw new Error("expected the contract step to be applied");
+        expect(outcome.step.file).toBe("0003-retire-probe.sql");
         const state = await contractDatabase.pool.query<{
           version: number;
           probe: string | null;
@@ -652,11 +653,12 @@ describe("schema migrations", () => {
         const outcome = await planSchemaContract(contractDatabase.pool, plan);
 
         expect(outcome.kind).toBe("unconfirmed");
-        if (outcome.kind === "unconfirmed") {
-          // The live worker on the retiring protocol is named; the one outside its lease and the
-          // one on a surviving protocol are not.
-          expect(outcome.workers.map((worker) => worker.workerId)).toEqual([retiring]);
+        if (outcome.kind !== "unconfirmed") {
+          throw new Error("expected the contract step to be refused");
         }
+        // The live worker on the retiring protocol is named; the one outside its lease and the
+        // one on a surviving protocol are not.
+        expect(outcome.workers.map((worker) => worker.workerId)).toEqual([retiring]);
         expect(
           await contractDatabase.pool
             .query<{ version: number }>("SELECT version FROM workhorse.schema_version")
@@ -697,10 +699,11 @@ describe("schema migrations", () => {
         });
 
         expect(outcome.kind).toBe("applied");
-        if (outcome.kind === "applied") {
-          // The workers the step was applied past are still reported, not silently ignored.
-          expect(outcome.workers.map((worker) => worker.workerId)).toEqual([retiring]);
+        if (outcome.kind !== "applied") {
+          throw new Error("expected the contract step to be applied");
         }
+        // The workers the step was applied past are still reported, not silently ignored.
+        expect(outcome.workers.map((worker) => worker.workerId)).toEqual([retiring]);
       } finally {
         await deregisterContractWorker(retiring);
         await contractDatabase.pool.query(
