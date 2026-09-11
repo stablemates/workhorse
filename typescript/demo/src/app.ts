@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { ORPCError } from "@orpc/server";
 import { createDrizzleAdapter } from "@stablemates/workhorse-drizzle";
 import {
   createDashboardHost,
@@ -100,6 +101,39 @@ import {
 import { orders } from "./schema.js";
 
 export * from "./constants.js";
+
+/**
+ * The ceiling on demo jobs ready to run or running when a public operator admission arrives.
+ *
+ * The operator surface is unauthenticated, so admission is bounded by the work itself rather
+ * than by the caller: once this many jobs compete for the demo's worker slots, admissions refuse
+ * until the backlog drains. Scheduled, blocked, and terminal jobs do not count — only work the
+ * fleet could claim right now.
+ */
+export const DEMO_OPERATOR_MAX_PENDING_JOBS = 50;
+
+/**
+ * Refuse a new operator-admitted job while the demo's pending-work budget is saturated.
+ *
+ * Every RPC that creates jobs — `enqueueTest`, `redriveTask`, and `redriveDeadLetters` — checks
+ * the same ceiling. The count is approximate under concurrency, and the HTTP-layer mutation
+ * guard bounds how far a wave can overshoot it.
+ */
+async function assertDemoOperatorWorkBudget(
+  executor: Pick<DemoDatabase, "execute">,
+): Promise<void> {
+  const result = await executor.execute<{ pending: number }>(sql`
+    SELECT count(*)::integer AS pending
+      FROM workhorse.job_runtime
+     WHERE state IN ('ready', 'active')
+  `);
+  if ((result.rows[0]?.pending ?? 0) >= DEMO_OPERATOR_MAX_PENDING_JOBS) {
+    throw new ORPCError("TOO_MANY_REQUESTS", {
+      message:
+        "The demo is already running its limit of operator-admitted work; try again once the backlog drains",
+    });
+  }
+}
 
 const GOOGLE_ANALYTICS_TAG = `<script async src="https://www.googletagmanager.com/gtag/js?id=G-9NC8FKZPVB"></script>
 <script>
@@ -1027,6 +1061,7 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
   return {
     mode: "writable",
     async enqueueTest(kind, audit, scenario, priority = 0, feature) {
+      await assertDemoOperatorWorkBudget(database);
       if (kind === "redrive") return redriveLatestDeadLetter(database, audit);
       const target = kind === "feature" ? `job:feature:${feature}` : `job:${kind}`;
       return database.transaction(async (transaction) => {
@@ -1114,6 +1149,11 @@ export function createLocalOperatorControllers(database: DemoDatabase) {
   return createDashboardOperatorControllers({
     run: (action, operation) =>
       database.transaction(async (transaction) => {
+        // Redrives are the only controller actions that admit new jobs; the rest act on existing
+        // ones, so they stay available while the budget is saturated (canceling even drains it).
+        if (action.kind === "redriveTask" || action.kind === "redriveDeadLetters") {
+          await assertDemoOperatorWorkBudget(transaction);
+        }
         let before: Json;
         let target: string;
         switch (action.kind) {

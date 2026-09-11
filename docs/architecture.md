@@ -2754,6 +2754,16 @@ bucket above that bound. Rejected requests return `429`, `Retry-After`, and `Cac
 no-store` before they reach the dashboard host or append an audit row. Reads, assets, login routes,
 and `/up` do not spend tokens.
 
+The demo server applies three further bounds before a request reaches the application. A request
+whose declared `Content-Length` exceeds 131,072 bytes is refused with `413`; a `POST`, `PUT`, or
+`PATCH` that arrives with `Transfer-Encoding` but no declared length is refused with `411`. At most
+four operator mutations may execute concurrently; admissions beyond that answer `503` with
+`Retry-After`. `server.requestTimeout` is set to 60,000 milliseconds, which also bounds how slowly
+an in-limit body may arrive. Independently of the HTTP layer, every RPC that creates jobs —
+`enqueueTest`, `redriveTask`, and `redriveDeadLetters` — refuses with `TOO_MANY_REQUESTS` once 50
+jobs in the demo database are in `ready` or `active` state. Scheduled and blocked jobs do not
+count, and mutations that act on existing jobs stay available under saturation.
+
 `public.workhorse_demo_audit` retains rows for seven days. The demo server deletes the oldest 1,000
 expired rows once at startup and once per minute, using the `(occurred_at, id)` index. One pass can
 therefore reclaim more rows than the rate limiter can admit between passes. A failed periodic pass
