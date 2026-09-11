@@ -892,14 +892,16 @@ guarantees.
 
 Every production statement is self-contained: no code path issues `SET`, holds a cursor, or takes
 a session-level advisory lock, so `pool_mode = transaction` serves every queue operation. Two
-kinds of session state are the exceptions, and `integration-pooling.test.ts` runs each pool mode
-as a separate lane to prove the boundary.
+kinds of session state are the exceptions, and `integration-pooling.test.ts` runs each pooler and
+pool mode as a separate lane to prove the boundary.
 
-- `LISTEN workhorse_jobs` is session state. Session-mode pooling delivers `NOTIFY` normally.
+- `LISTEN workhorse_jobs` is session state. PgBouncer session mode delivers `NOTIFY` normally.
   PgBouncer in transaction mode accepts `LISTEN`, returns success, then releases the server
   connection, so no notification is ever delivered and no error reaches `onNotificationError`:
   the subscription reports listening while the `Worker.run()` fallback poll carries dispatch.
-  Restoring wake hints takes a listener connection outside transaction pooling — the adapters'
+  PgCat fails differently: it relays a buffered notification only with the client's next query
+  result, so an idle `LISTEN`ing worker hears nothing in either pool mode. Restoring wake hints
+  takes a listener connection that reaches PostgreSQL without those poolers — the adapters'
   `notificationPool`, or a `Queue` whose queryable has no `connect()` so it stays polling-only.
 - Session advisory locks (`pg_advisory_lock`, `pg_advisory_unlock`, `pg_try_advisory_lock`) pin to
   whichever server session ran them and outlive the client checkout, so under transaction pooling

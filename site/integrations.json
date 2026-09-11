@@ -107,6 +107,15 @@
       "verifiedOn": "2026-09-11"
     },
     {
+      "slug": "pgcat",
+      "name": "PgCat",
+      "category": "poolers",
+      "tier": "documented",
+      "summary": "Runs Workhorse over session- or transaction-pooled connections.",
+      "boundary": "PgCat relays a notification only with the client's next query, so LISTEN wake hints are dead in every pool mode; pools are named statically in pgcat.toml.",
+      "verifiedOn": "2026-09-11"
+    },
+    {
       "slug": "dashboard",
       "name": "Dashboard",
       "category": "operator-surfaces",

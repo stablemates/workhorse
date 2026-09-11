@@ -17,28 +17,33 @@ normally, so [transactional enqueue](200-transactional-enqueue.md) is unaffected
 
 ## What does the listener need?
 
-A worker holds one dedicated connection for `LISTEN workhorse_jobs`. Session pooling delivers
-notifications normally. Transaction pooling accepts the `LISTEN` and then detaches the server
-session, so the hint is accepted and never delivered — nothing errors, and the worker keeps
-dispatching on its fallback poll.
+A worker holds one dedicated connection for `LISTEN workhorse_jobs`. The pooler decides whether a
+notification can reach it. Session-mode PgBouncer delivers normally. Transaction-mode PgBouncer
+accepts the `LISTEN` and then detaches the server session, so the hint is accepted and never
+delivered — nothing errors, and the worker keeps dispatching on its fallback poll. PgCat fails in
+every mode: it holds a notification until the client sends another query, which an idle listener
+never does.
 
-To keep wake hints, give the listener a connection outside transaction pooling. The ORM adapters
-take a `notificationPool` for exactly this. A `Queue` built on a queryable without `connect()`
-stays polling-only.
+To keep wake hints, give the listener a connection that reaches PostgreSQL without those poolers —
+direct, or session-mode PgBouncer. The ORM adapters take a `notificationPool` for exactly this.
+A `Queue` built on a queryable without `connect()` stays polling-only.
 
 ## How do I budget connections?
 
 A notification-capable pool holds one connection for the listener no matter how many workers share
 it, so a listening pool needs room for the listener plus claims. A pool capped at one connection
-polls instead of listening. Behind a transaction-mode pooler the listener slot is held without
-delivering anything, which is budget spent on both the client pool and the pooler's client cap.
+polls instead of listening. Behind any pooler that cannot deliver notifications the listener slot
+is held without delivering anything, which is budget spent on both the client pool and the
+pooler's client cap.
 
 ## What is unsafe?
 
-Pointing `notificationPool` at a transaction-mode pooler, because the hints die silently.
-Session-level advisory locks, because exclusion stops holding between clients and grants leak onto
-pooled backends. Any session state a client leaves behind, because the next client to borrow that
-backend inherits it.
+Pointing `notificationPool` at a transaction-mode pooler or at PgCat, because the hints die
+silently. Session-level advisory locks under transaction pooling, because exclusion stops holding
+between clients and grants leak onto pooled backends. Any session state a client leaves behind,
+because the next client to borrow that backend inherits it. One PgCat-only detail: its
+configuration names each pool, so a client can only reach a database the pooler was configured
+for.
 
 ## Next
 

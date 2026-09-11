@@ -1,56 +1,63 @@
 ---
-title: Can I run Workhorse behind PgBouncer?
-description: Which Workhorse operations survive each PgBouncer pool mode, and which need a dedicated session.
+title: Can I run Workhorse behind a connection pooler?
+description: Which Workhorse operations survive each PgBouncer and PgCat pool mode, and which need a dedicated session.
 ---
 
 Yes, in every pool mode — with one caveat that costs latency rather than correctness. Enqueue,
 claim, heartbeat, settle, schema installation, and migration all work through `pool_mode =
-session` and `pool_mode = transaction`, because every statement Workhorse sends is self-contained
-and every advisory lock the schema takes is transaction-scoped. The exception is the worker's
-wake-hint listener, which needs a dedicated session.
+session` and `pool_mode = transaction` on both PgBouncer and PgCat, because every statement
+Workhorse sends is self-contained and every advisory lock the schema takes is transaction-scoped.
+The exception is the worker's wake-hint listener, which needs a dedicated session — and a pooler
+that actually relays notifications.
 
 ## The pool-mode matrix
 
-| Operation                                              | Direct | Session pool | Transaction pool                   |
-| ------------------------------------------------------ | ------ | ------------ | ---------------------------------- |
-| Enqueue, claim, settle, heartbeat, operator reads      | Yes    | Yes          | Yes                                |
-| Transactional enqueue in your own transaction          | Yes    | Yes          | Yes                                |
-| Schema install and migrate                             | Yes    | Yes          | Yes                                |
-| Maintenance tick and transaction-scoped advisory locks | Yes    | Yes          | Yes                                |
-| `LISTEN`/`NOTIFY` wake hints                           | Yes    | Yes          | Accepted but never delivered       |
-| Session-level advisory locks                           | Yes    | Yes          | Unsafe — no exclusion, grants leak |
-| Session state (`SET`, `PREPARE`, temporary tables)     | Yes    | Yes          | Unsafe — leaks between clients     |
+| Operation                                              | Direct | PgBouncer session | PgBouncer transaction          | PgCat session                 | PgCat transaction              |
+| ------------------------------------------------------ | ------ | ----------------- | ------------------------------ | ----------------------------- | ------------------------------ |
+| Enqueue, claim, settle, heartbeat, operator reads      | Yes    | Yes               | Yes                            | Yes                           | Yes                            |
+| Transactional enqueue in your own transaction          | Yes    | Yes               | Yes                            | Yes                           | Yes                            |
+| Schema install and migrate                             | Yes    | Yes               | Yes                            | Yes                           | Yes                            |
+| Maintenance tick and transaction-scoped advisory locks | Yes    | Yes               | Yes                            | Yes                           | Yes                            |
+| `LISTEN`/`NOTIFY` wake hints                           | Yes    | Yes               | Accepted but never delivered   | Buffered until the next query | Buffered until the next query  |
+| Session-level advisory locks                           | Yes    | Yes               | Unsafe — no exclusion, leaks   | Yes                           | Unsafe — no exclusion, leaks   |
+| Session state (`SET`, `PREPARE`, temporary tables)     | Yes    | Yes               | Unsafe — leaks between clients | Yes                           | Unsafe — leaks between clients |
 
-The conformance suite runs each mode as a separate lane in CI. The matrix above is the verified
-result, not a reading of the PgBouncer manual.
+The conformance suite runs each pooler and mode as a separate lane in CI. The matrix above is the
+verified result, not a reading of either manual.
 
 ## The silent `LISTEN` failure
 
 Transaction-mode PgBouncer accepts `LISTEN workhorse_jobs` and returns success, then releases the
-server connection when the statement ends. The notification is never delivered, and nothing
-errors — the worker believes it is listening while dispatch runs entirely on its fallback poll.
-That fallback is the correctness mechanism, so jobs still run; wake-up is just slower.
+server connection when the statement ends. PgCat accepts it in every mode, then holds the
+notification until the client sends another query — which an idle listener never does. Either way
+nothing errors: the worker believes it is listening while dispatch runs entirely on its fallback
+poll. That fallback is the correctness mechanism, so jobs still run; wake-up is just slower.
 
-To keep wake hints, give the listener a connection outside transaction pooling:
+To keep wake hints, give the listener a connection that reaches PostgreSQL directly or through
+session-mode PgBouncer:
 
 - The Drizzle adapter forwards its node-postgres pool for listening; point that pool at a
   session-mode alias.
 - The Prisma, TypeORM, and Kysely adapters take a `notificationPool` for exactly this. Give it a
-  session-pooled or direct pool.
+  session-pooled PgBouncer or direct pool.
 - A `Queue` built on a queryable without `connect()` stays polling-only by design.
 
 ## Connection budgets
 
 A notification-capable pool holds one connection for the listener no matter how many `Queue` or
 `Worker` objects share it, so a listening pool needs room for the listener plus claims. A pool
-capped at one connection polls instead of listening. Behind a transaction-mode pooler the
-listener slot is held without delivering anything — budget for it on both sides, or drop the
-capability.
+capped at one connection polls instead of listening. Behind any pooler that cannot deliver
+notifications the listener slot is held without delivering anything — budget for it on both
+sides, or drop the capability.
 
 ## What is unsafe
 
-Two configurations fail quietly. Pointing `notificationPool` at a transaction-mode pooler accepts
-`LISTEN` and delivers nothing. And session-level advisory locks — `pg_advisory_lock`, not the
-transaction-scoped forms Workhorse uses — stop excluding across clients, because each statement
-may land on a different server session and a grant outlives the client that took it. Any `SET`
-left behind lands on the next client to borrow that backend.
+Two configurations fail quietly. Pointing `notificationPool` at transaction-mode PgBouncer or at
+PgCat accepts `LISTEN` and delivers nothing. And session-level advisory locks — `pg_advisory_lock`,
+not the transaction-scoped forms Workhorse uses — stop excluding across clients under transaction
+pooling, because each statement may land on a different server session and a grant outlives the
+client that took it. Any `SET` left behind lands on the next client to borrow that backend.
+
+One PgCat-only detail: `pgcat.toml` names each pool statically, so a client URL's database name
+must match a configured pool — a PgCat deployment cannot forward a database it was not configured
+for, unlike PgBouncer's wildcard entries.

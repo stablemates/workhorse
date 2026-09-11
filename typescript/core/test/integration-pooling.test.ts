@@ -14,24 +14,29 @@ import {
 import { databaseName } from "../src/local-database.js";
 import {
   createDatabaseTestHarness,
-  createEmptyTestDatabase,
   dropTestDatabase,
+  ensureTestDatabase,
+  poolingScratchName,
 } from "./support/db.js";
 
 /**
- * Pooling-mode conformance: direct, session-pooled, and transaction-pooled connections.
+ * Pooling-mode conformance: direct connections and both pool modes of each supported pooler.
  *
- * The pooled lanes point at a PgBouncer fixture rather than at PostgreSQL. Each lane's
- * environment variable carries a URL template whose database name this file rewrites to its
- * isolated database, so the pooler needs a wildcard `[databases]` entry. Without the variable the
- * lane reports itself skipped, which keeps `pnpm test:database` green on a checkout with no
- * pooler; `pnpm test:pooling` starts the fixture and runs every lane.
+ * The pooled lanes point at the PgBouncer or PgCat fixtures rather than at PostgreSQL. Every
+ * pooled lane's environment variable carries a URL template whose database name this file
+ * rewrites to its fixed pooling database: PgBouncer's wildcard `[databases]` entry forwards any
+ * name, while PgCat routes on the pool name configured in its `pgcat.toml`, so the fixtures and
+ * this file must agree on the name up front. Without a lane's variable the lane reports itself
+ * skipped, which keeps `pnpm test:database` green on a checkout with no pooler;
+ * `pnpm test:pooling` starts every fixture and runs every lane.
  */
 const SESSION_POOL_URL = process.env.WORKHORSE_TEST_SESSION_POOL_URL;
 const TRANSACTION_POOL_URL = process.env.WORKHORSE_TEST_TRANSACTION_POOL_URL;
+const PGCAT_SESSION_POOL_URL = process.env.WORKHORSE_TEST_PGCAT_SESSION_POOL_URL;
+const PGCAT_TRANSACTION_POOL_URL = process.env.WORKHORSE_TEST_PGCAT_TRANSACTION_POOL_URL;
 
 interface PoolingLane {
-  readonly name: "direct" | "session" | "transaction";
+  readonly name: string;
   /** URL template carrying pooler host, port, and credentials; the database name is rewritten. */
   readonly template: string | undefined;
   /** The environment variable a lane needs, for its skip label. */
@@ -45,14 +50,14 @@ interface PoolingLane {
 const lanes: readonly PoolingLane[] = [
   { name: "direct", template: undefined, notifyDelivers: true, sessionLocksExclude: true },
   {
-    name: "session",
+    name: "pgbouncer-session",
     template: SESSION_POOL_URL,
     envVar: "WORKHORSE_TEST_SESSION_POOL_URL",
     notifyDelivers: true,
     sessionLocksExclude: true,
   },
   {
-    name: "transaction",
+    name: "pgbouncer-transaction",
     template: TRANSACTION_POOL_URL,
     envVar: "WORKHORSE_TEST_TRANSACTION_POOL_URL",
     // PgBouncer accepts LISTEN in transaction mode but detaches the client from the server
@@ -62,11 +67,30 @@ const lanes: readonly PoolingLane[] = [
     // so another client can acquire the same key.
     sessionLocksExclude: false,
   },
+  {
+    name: "pgcat-session",
+    template: PGCAT_SESSION_POOL_URL,
+    envVar: "WORKHORSE_TEST_PGCAT_SESSION_POOL_URL",
+    // PgCat relays a notification only with the client's next query, so an idle LISTENing client
+    // hears nothing in either pool mode — the wake hint is dead on PgCat outright.
+    notifyDelivers: false,
+    sessionLocksExclude: true,
+  },
+  {
+    name: "pgcat-transaction",
+    template: PGCAT_TRANSACTION_POOL_URL,
+    envVar: "WORKHORSE_TEST_PGCAT_TRANSACTION_POOL_URL",
+    notifyDelivers: false,
+    sessionLocksExclude: false,
+  },
 ];
 
+// A fixed name, not the per-process digest: PgCat routes on a pool name written into its
+// configuration before the run, so the pooled lanes cannot use a pid-derived database.
 const database = createDatabaseTestHarness(import.meta.url, {
   max: 8,
   extraSchemas: ["public"],
+  nameSuffix: "pooling",
 });
 const isolatedName = databaseName(database.databaseUrl);
 
@@ -106,6 +130,7 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
+  await dropTestDatabase(database.databaseUrl, poolingScratchName(isolatedName));
   await database.teardown();
 });
 
@@ -133,10 +158,14 @@ for (const lane of lanes) {
       });
 
       it("installs the schema and reports a no-op migration through the lane", async () => {
-        const schemaName = `${isolatedName.slice(0, 46)}_pl_${lane.name}`;
-        await createEmptyTestDatabase(database.databaseUrl, schemaName);
+        // One fixed scratch database for every lane: PgCat routes on the pool name and holds
+        // server connections to it, so the lane cannot drop or rename the database — resetting
+        // drops the schema itself through the lane.
+        const schemaName = poolingScratchName(isolatedName);
+        await ensureTestDatabase(database.databaseUrl, schemaName);
         const schemaPool = new Pool({ connectionString: laneUrl(url!, schemaName), max: 2 });
         try {
+          await schemaPool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
           await installSchema(schemaPool);
 
           expect(await readSchemaVersion(schemaPool)).toBe(WORKHORSE_SCHEMA_VERSION);
@@ -146,7 +175,6 @@ for (const lane of lanes) {
           });
         } finally {
           await schemaPool.end();
-          await dropTestDatabase(database.databaseUrl, schemaName);
         }
       });
 

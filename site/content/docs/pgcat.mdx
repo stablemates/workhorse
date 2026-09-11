@@ -1,0 +1,47 @@
+---
+title: Can I run Workhorse behind PgCat?
+description: PgCat carries every Workhorse operation in both pool modes, but never delivers LISTEN notifications asynchronously.
+---
+
+Yes — Workhorse is correct behind PgCat in `pool_mode = "session"` and `pool_mode =
+"transaction"`, because every statement is self-contained and every lock is transaction-scoped.
+Two PgCat behaviors shape the deployment: notifications are never pushed asynchronously, and pools
+are named statically in `pgcat.toml`.
+
+## The matrix
+
+| Operation                                              | Session mode                  | Transaction mode               |
+| ------------------------------------------------------ | ----------------------------- | ------------------------------ |
+| Enqueue, claim, settle, heartbeat, operator reads      | Yes                           | Yes                            |
+| Transactional enqueue in your own transaction          | Yes                           | Yes                            |
+| Schema install and migrate                             | Yes                           | Yes                            |
+| Maintenance tick and transaction-scoped advisory locks | Yes                           | Yes                            |
+| `LISTEN`/`NOTIFY` wake hints                           | Buffered until the next query | Buffered until the next query  |
+| Session-level advisory locks                           | Yes                           | Unsafe — no exclusion, leaks   |
+| Session state (`SET`, `PREPARE`, temporary tables)     | Yes                           | Unsafe — leaks between clients |
+
+## Wake hints never arrive on their own
+
+PgCat accepts `LISTEN workhorse_jobs` in both modes, then buffers the notification until the
+listening client sends another query — which an idle worker never does. The wake hint is dead in
+every PgCat mode, not just transaction mode, and nothing errors: the worker believes it is
+listening while dispatch runs on the fallback poll. Polling is the correctness mechanism, so jobs
+still run; wake-up is slower.
+
+To keep wake hints, give the listener a connection that reaches PostgreSQL directly or through
+session-mode PgBouncer — the ORM adapters take a `notificationPool` for exactly this.
+
+## Static pool names
+
+PgCat routes on the pool name in `pgcat.toml`, not on the real database name alone. A client URL's
+database name must match a configured `[pools.<name>]` entry, and each entry names the database it
+routes to — PgCat cannot forward a database it was not configured for, unlike PgBouncer's wildcard
+entries. Name the pool after the database it serves.
+
+## What is unsafe
+
+Session-level advisory locks — `pg_advisory_lock`, not the transaction-scoped forms Workhorse uses —
+stop excluding across clients under transaction pooling, because each statement may land on a
+different server session and a grant outlives the client that took it. Any `SET` left behind lands
+on the next client to borrow that backend. And the dead-listener slot is spent budget on both the
+client pool and PgCat's client cap.
