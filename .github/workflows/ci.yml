@@ -143,10 +143,19 @@ jobs:
           echo "/usr/lib/postgresql/${{ matrix.postgres }}/bin" >> "$GITHUB_PATH"
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:runtime:dev
+      # The pooling conformance lanes in integration-pooling.test.ts. PgBouncer configures from
+      # the environment but PgCat needs a generated pgcat.toml mounted into the container, which
+      # service containers cannot carry, so the fixture script provisions both poolers and writes
+      # the lane URLs into GITHUB_ENV.
+      - name: Start the pooling fixture
+        run: pnpm pooling:up
       - run: pnpm db:reset:test
       - run: pnpm test:database:typescript
         env:
           WORKHORSE_TEST_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+      - name: Stop the pooling fixture
+        if: always()
+        run: pnpm pooling:down
 
   python:
     name: Python ${{ matrix.python }} (postgres ${{ matrix.postgres }})

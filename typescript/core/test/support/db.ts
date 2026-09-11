@@ -7,6 +7,7 @@ import {
   assertLocalDatabasePurpose,
   databaseName,
   localDatabaseUrl,
+  namedTestDatabaseUrl,
 } from "../../src/local-database.js";
 import { schemaTemplateName } from "./schema-template.js";
 
@@ -27,6 +28,11 @@ export function createDatabaseTestHarness(
     extraSchemas?: readonly string[];
     poolOwner?: "harness" | "caller";
     schemaProvisioning?: "install" | "template";
+    /**
+     * Replaces the per-process digest with a fixed suffix, so a resource outside the test run —
+     * a pooler's configured pool name, for example — can name the database ahead of time.
+     */
+    nameSuffix?: string;
   } = {},
 ): {
   databaseUrl: string;
@@ -37,7 +43,10 @@ export function createDatabaseTestHarness(
 } {
   const sourceUrl = localDatabaseUrl("test");
   assertLocalDatabasePurpose(sourceUrl, "test");
-  const isolatedUrl = isolatedDatabaseUrl(sourceUrl, fileUrl);
+  const isolatedUrl =
+    options.nameSuffix === undefined
+      ? isolatedDatabaseUrl(sourceUrl, fileUrl)
+      : namedTestDatabaseUrl(sourceUrl, options.nameSuffix);
   const isolatedName = databaseName(isolatedUrl);
   const pool = new Pool({ connectionString: isolatedUrl, max: options.max });
 
@@ -97,6 +106,47 @@ export function createDatabaseTestHarness(
     },
   };
 }
+
+/**
+ * Create a second empty database beside the harness one, for tests that need a clean database
+ * after setup — schema installation only runs on one. The name must keep the test-purpose marker.
+ */
+export async function createEmptyTestDatabase(sourceUrl: string, name: string): Promise<void> {
+  const target = new URL(sourceUrl);
+  target.pathname = `/${name}`;
+  assertLocalDatabasePurpose(target.toString(), "test");
+  const admin = adminPool(sourceUrl);
+  try {
+    await dropDatabaseWithAdmin(admin, name);
+    await admin.query(`CREATE DATABASE ${identifier(name)}`);
+  } finally {
+    await admin.end();
+  }
+}
+
+/** Drop a database previously created by {@link createEmptyTestDatabase}. */
+export async function dropTestDatabase(sourceUrl: string, name: string): Promise<void> {
+  await dropDatabase(sourceUrl, name);
+}
+
+/**
+ * Create a database only if it is missing. Poolers hold server connections to configured
+ * databases, so a scratch database behind a pooler must not be dropped out from under it.
+ */
+export async function ensureTestDatabase(sourceUrl: string, name: string): Promise<void> {
+  const target = new URL(sourceUrl);
+  target.pathname = `/${name}`;
+  assertLocalDatabasePurpose(target.toString(), "test");
+  const admin = adminPool(sourceUrl);
+  try {
+    const exists = await admin.query("SELECT 1 FROM pg_database WHERE datname = $1", [name]);
+    if (exists.rowCount === 0) await admin.query(`CREATE DATABASE ${identifier(name)}`);
+  } finally {
+    await admin.end();
+  }
+}
+
+export { namedTestDatabaseUrl, poolingScratchName } from "../../src/local-database.js";
 
 async function prepareCurrentHistoryPartitions(pool: Pool): Promise<void> {
   await pool.query(

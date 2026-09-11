@@ -113,6 +113,26 @@ export function worktreeDatabaseUrl(
   return url.toString();
 }
 
+/**
+ * A deterministic test database URL carrying the purpose marker but no per-process digest, for
+ * fixtures that configure resources — a pooler's static pool name — ahead of the run.
+ */
+export function namedTestDatabaseUrl(databaseUrl: string, suffix: string): string {
+  assertLocalDatabasePurpose(databaseUrl, "test");
+  const sourceName = databaseName(databaseUrl);
+  const url = new URL(databaseUrl);
+  url.pathname = `/${sourceName.slice(0, POSTGRES_IDENTIFIER_LIMIT - 2 - suffix.length)}_${suffix}`;
+  return url.toString();
+}
+
+/**
+ * The empty scratch database a pooling lane installs the schema into. Fixed like the pooling
+ * database so a pooler with a static routing table can carry it; the pool name equals the name.
+ */
+export function poolingScratchName(poolingName: string): string {
+  return `${poolingName.slice(0, POSTGRES_IDENTIFIER_LIMIT - 7)}_schema`;
+}
+
 export function isLocalDatabasePurpose(value: string): value is LocalDatabasePurpose {
   return (localDatabasePurposes as readonly string[]).includes(value);
 }
