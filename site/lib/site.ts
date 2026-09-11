@@ -2,9 +2,9 @@ const siteUrl = (import.meta.env?.VITE_SITE_URL ?? "https://workhorse.run").repl
 
 export const siteConfig = {
   name: "Workhorse",
-  tagline: "A durable job queue for PostgreSQL",
+  tagline: "A durable task queue for PostgreSQL",
   description:
-    "A durable job queue for PostgreSQL, with TypeScript, Python, and Go workers on one SQL protocol.",
+    "A durable task queue for PostgreSQL, with TypeScript, Python, and Go workers on one SQL protocol.",
   url: siteUrl,
   socialImage: `${siteUrl}/brand/workhorse-mark.png`,
   github: "https://github.com/stablemates/workhorse",

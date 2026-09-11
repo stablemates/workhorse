@@ -64,33 +64,33 @@ func newWorkerMetrics() (*workerMetrics, error) {
 	}
 	meter := otel.Meter(telemetryInstrumentationName)
 	claimed, err := meter.Int64Counter(
-		jobsClaimedInstrument,
-		otelmetric.WithDescription(jobsClaimedDescription),
-		otelmetric.WithUnit(telemetryJobUnit),
+		tasksClaimedInstrument,
+		otelmetric.WithDescription(tasksClaimedDescription),
+		otelmetric.WithUnit(telemetryTaskUnit),
 	)
 	if err != nil {
 		return nil, err
 	}
 	completed, err := meter.Int64Counter(
-		jobsCompletedInstrument,
-		otelmetric.WithDescription(jobsCompletedDescription),
-		otelmetric.WithUnit(telemetryJobUnit),
+		tasksCompletedInstrument,
+		otelmetric.WithDescription(tasksCompletedDescription),
+		otelmetric.WithUnit(telemetryTaskUnit),
 	)
 	if err != nil {
 		return nil, err
 	}
 	failed, err := meter.Int64Counter(
-		jobsFailedInstrument,
-		otelmetric.WithDescription(jobsFailedDescription),
-		otelmetric.WithUnit(telemetryJobUnit),
+		tasksFailedInstrument,
+		otelmetric.WithDescription(tasksFailedDescription),
+		otelmetric.WithUnit(telemetryTaskUnit),
 	)
 	if err != nil {
 		return nil, err
 	}
 	retried, err := meter.Int64Counter(
-		jobsRetriedInstrument,
-		otelmetric.WithDescription(jobsRetriedDescription),
-		otelmetric.WithUnit(telemetryJobUnit),
+		tasksRetriedInstrument,
+		otelmetric.WithDescription(tasksRetriedDescription),
+		otelmetric.WithUnit(telemetryTaskUnit),
 	)
 	if err != nil {
 		return nil, err
@@ -138,7 +138,7 @@ func newWorkerMetrics() (*workerMetrics, error) {
 	batchSize, err := meter.Int64Histogram(
 		handlerBatchSizeInstrument,
 		otelmetric.WithDescription(handlerBatchSizeDescription),
-		otelmetric.WithUnit(telemetryJobUnit),
+		otelmetric.WithUnit(telemetryTaskUnit),
 	)
 	if err != nil {
 		return nil, err
@@ -168,16 +168,16 @@ func newWorkerMetrics() (*workerMetrics, error) {
 	}, nil
 }
 
-func jobMetricOptions(job ClaimedJob) otelmetric.MeasurementOption {
+func taskMetricOptions(task ClaimedTask) otelmetric.MeasurementOption {
 	return otelmetric.WithAttributes(
-		attribute.String(queueNameAttribute, job.Queue),
-		attribute.String(jobTypeAttribute, job.Type),
+		attribute.String(queueNameAttribute, task.Queue),
+		attribute.String(taskTypeAttribute, task.Type),
 	)
 }
 
 func (metrics *workerMetrics) recordHandler(
 	ctx context.Context,
-	job ClaimedJob,
+	task ClaimedTask,
 	outcome handlerOutcome,
 	duration time.Duration,
 ) {
@@ -186,13 +186,13 @@ func (metrics *workerMetrics) recordHandler(
 	}
 	durationMS := float64(duration) / float64(time.Millisecond)
 	attributes := otelmetric.WithAttributes(
-		attribute.String(queueNameAttribute, job.Queue),
-		attribute.String(jobTypeAttribute, job.Type),
+		attribute.String(queueNameAttribute, task.Queue),
+		attribute.String(taskTypeAttribute, task.Type),
 		attribute.String(handlerOutcomeAttribute, string(outcome)),
 	)
 	metrics.handlerExecutions.Add(ctx, 1, attributes)
 	metrics.handlerDuration.Record(ctx, durationMS, attributes)
-	metrics.handlerRuntime.Add(ctx, durationMS, jobMetricOptions(job))
+	metrics.handlerRuntime.Add(ctx, durationMS, taskMetricOptions(task))
 }
 
 type handlerOutcome string
@@ -209,20 +209,20 @@ const (
 	handlerOutcomeUnknown          handlerOutcome = telemetryUnknownValue
 )
 
-func startHandlerSpan(ctx context.Context, job ClaimedJob) (context.Context, trace.Span) {
+func startHandlerSpan(ctx context.Context, task ClaimedTask) (context.Context, trace.Span) {
 	if otel.GetTracerProvider() == initialTracerProvider {
 		return ctx, trace.SpanFromContext(ctx)
 	}
-	parent := extractTraceContext(ctx, job.TraceContext)
+	parent := extractTraceContext(ctx, task.TraceContext)
 	return otel.Tracer(telemetryInstrumentationName).Start(
 		parent,
 		handlerSpanName,
 		trace.WithSpanKind(trace.SpanKindConsumer),
 		trace.WithAttributes(
-			attribute.String(queueNameAttribute, job.Queue),
-			attribute.String(jobIDAttribute, job.ID),
-			attribute.String(jobTypeAttribute, job.Type),
-			attribute.Int(jobAttemptAttribute, job.Attempt),
+			attribute.String(queueNameAttribute, task.Queue),
+			attribute.String(taskIDAttribute, task.ID),
+			attribute.String(taskTypeAttribute, task.Type),
+			attribute.Int(taskAttemptAttribute, task.Attempt),
 		),
 	)
 }
@@ -269,12 +269,12 @@ func handlerTelemetryError(err error, redact bool) error {
 	return errors.New(redactedHandlerErrorNameValue)
 }
 
-func jobLogAttributes(job ClaimedJob, workerID string) []any {
+func taskLogAttributes(task ClaimedTask, workerID string) []any {
 	return []any{
-		slog.String(jobIDAttribute, job.ID),
-		slog.String(jobTypeAttribute, job.Type),
-		slog.Int(jobAttemptAttribute, job.Attempt),
-		slog.String(queueNameAttribute, job.Queue),
+		slog.String(taskIDAttribute, task.ID),
+		slog.String(taskTypeAttribute, task.Type),
+		slog.Int(taskAttemptAttribute, task.Attempt),
+		slog.String(queueNameAttribute, task.Queue),
 		slog.String(workerIDAttribute, workerID),
 	}
 }

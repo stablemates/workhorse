@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { DatabaseNotification, NotificationClient, Queryable } from "./types.js";
 
-const CHANNEL = "workhorse_jobs";
+const CHANNEL = "workhorse_tasks";
 const RECONNECT_INITIAL_MS = 100;
 const RECONNECT_MAX_MS = 5_000;
 
@@ -15,7 +15,7 @@ interface NotificationSubscriber {
   error: (error: unknown) => void;
 }
 
-export interface JobNotificationSubscription {
+export interface TaskNotificationSubscription {
   isListening?(): boolean;
   close(): Promise<void>;
 }
@@ -95,7 +95,7 @@ async function listenUntilAbort(client: NotificationClient, signal: AbortSignal)
   return listening;
 }
 
-class JobNotificationHub {
+class TaskNotificationHub {
   private readonly subscribers = new Map<number, NotificationSubscriber>();
   private nextSubscriberId = 0;
   private controller: AbortController | null = null;
@@ -104,7 +104,7 @@ class JobNotificationHub {
 
   constructor(private readonly database: NotificationDatabase) {}
 
-  async subscribe(subscriber: NotificationSubscriber): Promise<JobNotificationSubscription> {
+  async subscribe(subscriber: NotificationSubscriber): Promise<TaskNotificationSubscription> {
     if (this.controller?.signal.aborted && this.running) await this.running;
 
     const subscriberId = this.nextSubscriberId;
@@ -216,21 +216,21 @@ class JobNotificationHub {
   }
 }
 
-const hubs = new WeakMap<object, JobNotificationHub>();
+const hubs = new WeakMap<object, TaskNotificationHub>();
 
-export function supportsJobNotifications(database: Queryable): boolean {
+export function supportsTaskNotifications(database: Queryable): boolean {
   return canListen(database);
 }
 
-export function subscribeToJobNotifications(
+export function subscribeToTaskNotifications(
   database: Queryable,
   subscriber: NotificationSubscriber,
-): Promise<JobNotificationSubscription | null> {
+): Promise<TaskNotificationSubscription | null> {
   if (!canListen(database)) return Promise.resolve(null);
   const identity = (database as NotificationDatabase).notificationConnectionIdentity ?? database;
   let hub = hubs.get(identity);
   if (!hub) {
-    hub = new JobNotificationHub(database);
+    hub = new TaskNotificationHub(database);
     hubs.set(identity, hub);
   }
   return hub.subscribe(subscriber);

@@ -15,24 +15,24 @@ describe("benchmark v3 profiles", () => {
       enqueueBatchSize: 25,
       repetitions: 3,
       workerConcurrency: [1, 4, 8],
-      churn: { targetJobs: 500, targetRatePerSecond: 100 },
+      churn: { targetTasks: 500, targetRatePerSecond: 100 },
     });
-    expect(resolved.operational.jobCount).toBe(24);
+    expect(resolved.operational.taskCount).toBe(24);
   });
 
   it("provides bounded smoke and full profiles", () => {
     const smoke = resolveBenchmarkRunOptions({ profile: "smoke" });
     const full = resolveBenchmarkRunOptions({ profile: "full" });
     expect(smoke.comparative).toMatchObject({
-      jobsPerRun: 12,
+      tasksPerRun: 12,
       enqueueBatchSize: 4,
       repetitions: 2,
-      churn: { targetJobs: 20, targetRatePerSecond: 40 },
+      churn: { targetTasks: 20, targetRatePerSecond: 40 },
     });
     expect(full.comparative).toMatchObject({
-      jobsPerRun: 1_000,
+      tasksPerRun: 1_000,
       enqueueBatchSize: 100,
-      churn: { targetJobs: 6_000, targetRatePerSecond: 100 },
+      churn: { targetTasks: 6_000, targetRatePerSecond: 100 },
     });
     expect(smoke.operational.leaseMs).toBe(100);
   });
@@ -44,12 +44,12 @@ describe("benchmark v3 profiles", () => {
       comparative: {
         seed: 99,
         enqueueBatchSize: 7,
-        churn: { targetJobs: 25, targetRatePerSecond: 50 },
+        churn: { targetTasks: 25, targetRatePerSecond: 50 },
       },
     });
     expect(resolved.comparative.churn).toEqual({
       ...benchmarkProfiles.smoke.comparative.churn,
-      targetJobs: 25,
+      targetTasks: 25,
       targetRatePerSecond: 50,
     });
     expect(resolved.comparative.seed).toBe(99);

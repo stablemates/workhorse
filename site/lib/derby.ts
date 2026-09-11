@@ -1,6 +1,6 @@
 /*
  * The Derby: a deterministic terminal horse race for the landing page. Each
- * lane is a worker draining a job queue, and the scripted incidents (retry
+ * lane is a worker draining a task queue, and the scripted incidents (retry
  * backoff, a throttle window, one dead-letter with a redrive) recap real
  * product mechanics. Pure data and transitions: no React, no `window`, no
  * wall clock. Every random draw advances `prngState` inside `RaceState`, so
@@ -11,8 +11,8 @@ export type HorseStatus = "ready" | "running" | "backoff" | "throttled" | "dead-
 
 export interface HorseState {
   id: string;
-  jobsDone: number;
-  jobsTotal: number;
+  tasksDone: number;
+  tasksTotal: number;
   status: HorseStatus;
   stallTicksLeft: number;
   attempt: number;
@@ -39,7 +39,7 @@ interface DeadLetterEvent {
   startTick: number;
   stallTicks: number;
   horseId: string;
-  jobNumber: string;
+  taskNumber: string;
   fired: boolean;
 }
 
@@ -60,13 +60,13 @@ export interface RaceState {
 const DERBY_HORSES = ["wal-runner", "foal-tolerant", "hot-standby", "furlong-poll"] as const;
 
 export const DERBY_TUNING = {
-  jobsTotal: 120,
+  tasksTotal: 120,
   /** UI tick interval; 120ms reads as a live readout, not an animation. */
   tickMs: 120,
   /** The race clock runs at a nominal 8 ticks per second. */
   ticksPerSecond: 8,
-  /** Chance a running horse completes 2 jobs instead of 1 (mean ~1.15/tick). */
-  doubleJobChance: 0.15,
+  /** Chance a running horse completes 2 tasks instead of 1 (mean ~1.15/tick). */
+  doubleTaskChance: 0.15,
   /** Chance per running tick of a retry stall. */
   stallChance: 0.012,
   backoffMinTicks: 6,
@@ -103,8 +103,8 @@ function formatSeconds(ticks: number): string {
 export function createHorses(): HorseState[] {
   return DERBY_HORSES.map((id) => ({
     id,
-    jobsDone: 0,
-    jobsTotal: DERBY_TUNING.jobsTotal,
+    tasksDone: 0,
+    tasksTotal: DERBY_TUNING.tasksTotal,
     status: "ready" as const,
     stallTicksLeft: 0,
     attempt: 0,
@@ -113,12 +113,12 @@ export function createHorses(): HorseState[] {
 
 /** Shared places for ties; keep lanes in their original order on the track. */
 export function raceStandings(horses: readonly HorseState[]) {
-  const ordered = horses.toSorted((a, b) => b.jobsDone - a.jobsDone);
-  const leadingJobs = ordered[0]?.jobsDone ?? 0;
+  const ordered = horses.toSorted((a, b) => b.tasksDone - a.tasksDone);
+  const leadingTasks = ordered[0]?.tasksDone ?? 0;
   return ordered.map((horse) => ({
     horse,
-    rank: 1 + ordered.filter((other) => other.jobsDone > horse.jobsDone).length,
-    behind: leadingJobs - horse.jobsDone,
+    rank: 1 + ordered.filter((other) => other.tasksDone > horse.tasksDone).length,
+    behind: leadingTasks - horse.tasksDone,
   }));
 }
 
@@ -141,7 +141,7 @@ export function createRace(seed: number): RaceState {
     DERBY_TUNING.deadLetterEarliestTick +
     Math.floor(rand() * (DERBY_TUNING.deadLetterLatestTick - DERBY_TUNING.deadLetterEarliestTick));
   const deadLetterHorse = Math.floor(rand() * DERBY_HORSES.length);
-  const jobNumber = String(Math.floor(rand() * 10_000)).padStart(4, "0");
+  const taskNumber = String(Math.floor(rand() * 10_000)).padStart(4, "0");
 
   const horses = createHorses();
   for (const horse of horses) horse.status = "running";
@@ -153,7 +153,7 @@ export function createRace(seed: number): RaceState {
     log: [
       {
         t: 0,
-        text: `race started — ${DERBY_HORSES.length} workers × ${DERBY_TUNING.jobsTotal} jobs`,
+        text: `race started — ${DERBY_HORSES.length} workers × ${DERBY_TUNING.tasksTotal} tasks`,
         tone: "muted",
       },
     ],
@@ -169,7 +169,7 @@ export function createRace(seed: number): RaceState {
       startTick: deadLetterStart,
       stallTicks: DERBY_TUNING.deadLetterStallTicks,
       horseId: DERBY_HORSES[deadLetterHorse]!,
-      jobNumber,
+      taskNumber,
       fired: false,
     },
   };
@@ -218,7 +218,7 @@ export function stepRace(state: RaceState): RaceState {
       horse.stallTicksLeft = deadLetter.stallTicks;
       log.push({
         t: tick,
-        text: `${horse.id} job#${deadLetter.jobNumber} → dead_letter (attempts exhausted)`,
+        text: `${horse.id} task#${deadLetter.taskNumber} → dead_letter (attempts exhausted)`,
         tone: "alert",
       });
     }
@@ -237,7 +237,7 @@ export function stepRace(state: RaceState): RaceState {
       if (horse.status === "dead-letter") {
         log.push({
           t: tick,
-          text: `redrive job#${deadLetter.jobNumber} actor=you reason="derby" — reinstated`,
+          text: `redrive task#${deadLetter.taskNumber} actor=you reason="derby" — reinstated`,
           tone: "good",
         });
       } else if (horse.status === "throttled" && !throttle.released) {
@@ -247,7 +247,7 @@ export function stepRace(state: RaceState): RaceState {
       if (horse.status === "backoff" || horse.status === "throttled") {
         log.push({
           t: tick,
-          text: `${horse.id} resumed after ${horse.status} — processing jobs again`,
+          text: `${horse.id} resumed after ${horse.status} — processing tasks again`,
           tone: "good",
         });
       }
@@ -265,34 +265,34 @@ export function stepRace(state: RaceState): RaceState {
       horse.attempt += 1;
       horse.status = "backoff";
       horse.stallTicksLeft = stall;
-      const job = String(Math.floor(rand() * 10_000)).padStart(4, "0");
+      const task = String(Math.floor(rand() * 10_000)).padStart(4, "0");
       log.push({
         t: tick,
-        text: `${horse.id} job#${job} failed (attempt ${horse.attempt}) — retry in ${formatSeconds(stall)}`,
+        text: `${horse.id} task#${task} failed (attempt ${horse.attempt}) — retry in ${formatSeconds(stall)}`,
         tone: "alert",
       });
       continue;
     }
 
-    const completed = 1 + (rand() < DERBY_TUNING.doubleJobChance ? 1 : 0);
-    const previousDone = horse.jobsDone;
-    horse.jobsDone = Math.min(horse.jobsTotal, horse.jobsDone + completed);
+    const completed = 1 + (rand() < DERBY_TUNING.doubleTaskChance ? 1 : 0);
+    const previousDone = horse.tasksDone;
+    horse.tasksDone = Math.min(horse.tasksTotal, horse.tasksDone + completed);
     for (const percent of [25, 50, 75]) {
-      const milestone = Math.ceil((horse.jobsTotal * percent) / 100);
-      if (previousDone < milestone && horse.jobsDone >= milestone) {
+      const milestone = Math.ceil((horse.tasksTotal * percent) / 100);
+      if (previousDone < milestone && horse.tasksDone >= milestone) {
         log.push({
           t: tick,
-          text: `${horse.id} passed ${percent}% — ${horse.jobsDone}/${horse.jobsTotal} jobs completed`,
+          text: `${horse.id} passed ${percent}% — ${horse.tasksDone}/${horse.tasksTotal} tasks completed`,
           tone: "muted",
         });
       }
     }
-    if (horse.jobsDone >= horse.jobsTotal) {
+    if (horse.tasksDone >= horse.tasksTotal) {
       horse.status = "drained";
       winnerId = horse.id;
       log.push({
         t: tick,
-        text: `${horse.id} drained ${horse.jobsTotal}/${horse.jobsTotal} — queue empty`,
+        text: `${horse.id} drained ${horse.tasksTotal}/${horse.tasksTotal} — queue empty`,
         tone: "good",
       });
       break;

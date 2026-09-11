@@ -28,13 +28,13 @@ import {
   EnqueueIdempotencyConflictError,
   ExecutionTimeoutError,
   MAX_ENQUEUE_BATCH_SIZE,
-  MAX_JOB_DEPENDENTS,
+  MAX_TASK_DEPENDENTS,
   ProgressLeaseLostError,
   ProgressRateLimitError,
   Queue,
   Worker,
 } from "../src/index.js";
-import type { ClaimedJob, Queryable, QueueHealth, QueueOptions } from "../src/index.js";
+import type { ClaimedTask, Queryable, QueueHealth, QueueOptions } from "../src/index.js";
 // The crash harness is worker test support, not published API, so it comes from the source module.
 import { InjectedCrashError, type Failpoint } from "../src/worker.js";
 
@@ -117,9 +117,9 @@ export interface OperationalScenarioReport {
 }
 
 export interface OperationalScenarioOptions {
-  /** Ready/scheduled jobs used by backlog and health scenarios. */
-  jobCount?: number;
-  /** Jobs sampled by the heartbeat scenario. */
+  /** Ready/scheduled tasks used by backlog and health scenarios. */
+  taskCount?: number;
+  /** Tasks sampled by the heartbeat scenario. */
   heartbeatCount?: number;
   /** Maximum rows promoted or recovered by one maintenance call. */
   batchSize?: number;
@@ -131,7 +131,7 @@ export interface OperationalScenarioOptions {
   leaseMs?: number;
   /** Delayed retry interval. */
   retryDelayMs?: number;
-  /** Upper bound on terminal jobs seeded for the weekly retirement scenario. */
+  /** Upper bound on terminal tasks seeded for the weekly retirement scenario. */
   pruneLimit?: number;
   /** Queue prefix. Every scenario appends its stable scenario name. */
   queuePrefix?: string;
@@ -146,7 +146,7 @@ export interface OperationalScenarioOptions {
 }
 
 export interface ResolvedOperationalScenarioOptions {
-  jobCount: number;
+  taskCount: number;
   heartbeatCount: number;
   batchSize: number;
   scheduleDelayMs: number;
@@ -176,25 +176,25 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
     name: "scheduled-promotion-drift",
     purpose: "Measure bounded promotion of a due scheduled backlog and observed due-time drift.",
     invariants: [
-      "all seeded jobs begin scheduled",
-      "all due jobs are promoted in bounded batches",
+      "all seeded tasks begin scheduled",
+      "all due tasks are promoted in bounded batches",
       "scheduled depth reaches zero and ready depth equals the seed count",
     ],
-    metrics: ["jobs", "promotionBatches", "promoted", "driftP50Ms", "driftP95Ms", "driftMaxMs"],
+    metrics: ["tasks", "promotionBatches", "promoted", "driftP50Ms", "driftP95Ms", "driftMaxMs"],
   },
   {
     name: "schedule-cadence-jitter",
     purpose:
-      "Measure recurring-schedule fire delay while a real Worker continuously executes queued jobs.",
+      "Measure recurring-schedule fire delay while a real Worker continuously executes queued tasks.",
     invariants: [
       "every planned sample fires while the worker remains loaded",
-      "every planned second creates one durable occurrence and job",
+      "every planned second creates one durable occurrence and task",
       "all observed fire delays are finite and non-negative",
     ],
     metrics: [
       "scheduleSamples",
-      "loadJobsStarted",
-      "loadJobsCompleted",
+      "loadTasksStarted",
+      "loadTasksCompleted",
       "maintenanceIntervalMs",
       "fireDelayP50Ms",
       "fireDelayP95Ms",
@@ -225,19 +225,19 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
     purpose:
       "Compare strict-priority claims with a FIFO baseline, exercise starvation, and bound claim-path work after retained history grows.",
     invariants: [
-      "mixed priorities dispatch in strict order while equal-priority jobs retain FIFO order",
+      "mixed priorities dispatch in strict order while equal-priority tasks retain FIFO order",
       "lower-priority work remains ready while sustained higher-priority arrivals replenish the queue",
       "lifetime history stays outside the live runtime relation and actual claim buffer work remains bounded at fixed ready depth",
     ],
     metrics: [
-      "jobsPerCohort",
+      "tasksPerCohort",
       "workerConcurrency",
       "baselineClaimP50Ms",
       "baselineClaimP95Ms",
       "mixedClaimP50Ms",
       "mixedClaimP95Ms",
-      "baselineThroughputJobsPerSecond",
-      "mixedThroughputJobsPerSecond",
+      "baselineThroughputTasksPerSecond",
+      "mixedThroughputTasksPerSecond",
       "baselineReadyIndexBytes",
       "mixedReadyIndexBytes",
       "readyIndexBytesBeforeHistory",
@@ -246,7 +246,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "claimPlanExecutionMsAfterHistory",
       "claimPlanSharedBlocksBeforeHistory",
       "claimPlanSharedBlocksAfterHistory",
-      "retainedJobIdentities",
+      "retainedTaskIdentities",
       "liveRuntimeRows",
       "lowPriorityFloodWaitMs",
     ],
@@ -256,8 +256,8 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
     purpose:
       "Exercise immediate, cooperative, expired-lease, race, attempt-history, and recurring-occurrence cancellation semantics.",
     invariants: [
-      "ready and scheduled jobs cancel immediately without inventing attempt history",
-      "a waiting job cancels immediately and records history only because its logical attempt started",
+      "ready and scheduled tasks cancel immediately without inventing attempt history",
+      "a waiting task cancels immediately and records history only because its logical attempt started",
       "active cancellation is delivered through heartbeat status and AbortSignal then acknowledged by the exact fence",
       "an ignored active cancellation materializes as canceled at lease expiry instead of retrying",
       "completion, failure, heartbeat, and wrong-fence acknowledgement cannot overwrite cancellation",
@@ -285,7 +285,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
     purpose:
       "Exercise pre-claim deadline exclusion, active cooperative expiry, timeout retry, stale-write fencing, and health pressure.",
     invariants: [
-      "a ready job past its absolute deadline is never newly claimed and becomes terminal without invented attempt history",
+      "a ready task past its absolute deadline is never newly claimed and becomes terminal without invented attempt history",
       "an active deadline is delivered through AbortSignal and fences late completion",
       "an execution timeout closes distinct attempt history and uses remaining retry budget",
       "deadline and timeout pressure are visible in the canonical health snapshot",
@@ -305,7 +305,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "Exercise bounded failure listing, non-mutating preview, audited redrive, exact replay, and immutable source outcomes.",
     invariants: [
       "terminal failures page through the cold outcome relation without entering live dispatch",
-      "bulk dry-run returns eligible sources without creating jobs, events, or lineage",
+      "bulk dry-run returns eligible sources without creating tasks, events, or lineage",
       "redrive creates fresh ready identities while every source outcome remains unchanged",
       "an exact repeated request returns the original target without duplicate lineage",
       "bounded bulk redrive records complete audited lineage for every created target",
@@ -335,7 +335,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "operator indexes remain separate from every claim-critical index",
     ],
     metrics: [
-      "listedJobs",
+      "listedTasks",
       "listMs",
       "payloadProjectionMs",
       "timelineMs",
@@ -394,7 +394,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "positive-delay failure returns scheduled and later promotes",
       "persisted retry policies record their PostgreSQL-selected delay and provenance",
       "decorrelated jitter replays deterministically from persisted inputs",
-      "a job at its attempt budget enters failed",
+      "a task at its attempt budget enters failed",
       "a versioned contract validates and completes while operator reads redact configured fields",
     ],
     metrics: [
@@ -419,10 +419,10 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
     purpose:
       "Exercise scoped enqueue replay, conflict rollback, batch duplicates, expiry reuse, and full transition timings.",
     invariants: [
-      "an equivalent keyed replay returns the original job without duplicate durable or FIFO effects",
-      "a material conflict rolls back the whole batch and reports the retained job and request ordinal",
+      "an equivalent keyed replay returns the original task without duplicate durable or FIFO effects",
+      "a material conflict rolls back the whole batch and reports the retained task and request ordinal",
       "equivalent duplicate keys inside one batch preserve result order while unkeyed ingress remains distinct",
-      "an expired scoped binding can be reused for a materially different request and a new job identity",
+      "an expired scoped binding can be reused for a materially different request and a new task identity",
     ],
     metrics: [
       "firstAcceptMs",
@@ -431,7 +431,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "batchDuplicatesMs",
       "expiryFirstAcceptMs",
       "expiryReuseMs",
-      "jobs",
+      "tasks",
       "bindings",
       "events",
       "runtimes",
@@ -444,9 +444,9 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
     invariants: [
       "debounce replacement covers reset and preserve scheduling with one pending identity per key",
       "concurrent acceptance races, replacements, and replays return the expected structured outcome for every request",
-      "structured outcomes and lifecycle events agree with the retained job definition and runtime",
+      "structured outcomes and lifecycle events agree with the retained task definition and runtime",
       "coalesced work adds no duplicate notification and FIFO effects",
-      "purge removes every retained key and pending job after each cohort",
+      "purge removes every retained key and pending task after each cohort",
     ],
     metrics: [
       "requestsPerCohort",
@@ -500,8 +500,8 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "claimPlanExecutionMsAfterHistory",
       "claimPlanSharedBlocksBeforeHistory",
       "claimPlanSharedBlocksAfterHistory",
-      "retainedJobIdentities",
-      "historyJobs",
+      "retainedTaskIdentities",
+      "historyTasks",
       "dependencyReleaseEvents",
       "dependencyFailedResolutions",
     ],
@@ -510,11 +510,11 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
     name: "retention-pruning",
     purpose: "Measure completed-week history retirement through the versioned partition protocol.",
     invariants: [
-      "seeded terminal jobs create event and attempt history in a completed week",
+      "seeded terminal tasks create event and attempt history in a completed week",
       "retiring the completed week removes its history partitions",
-      "history retirement does not delete current job identity",
+      "history retirement does not delete current task identity",
     ],
-    metrics: ["seededJobs", "historyBefore", "pruned", "historyAfter", "retainedJobs"],
+    metrics: ["seededTasks", "historyBefore", "pruned", "historyAfter", "retainedTasks"],
   },
   {
     name: "health-snapshot",
@@ -546,14 +546,14 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "claims remain serial, never exceed free slots, and are all included in timed execution",
       "after backlog exhaustion, serial null-claim pressure is bounded by elapsed polling windows rather than configured concurrency",
       "single, balanced, and distributed worker topologies preserve the same total handler-capacity bound",
-      "immediate and I/O-like topology profiles complete every job without leaving active or expired leases",
-      "each active job retains an independent heartbeat and completes without an expired lease",
+      "immediate and I/O-like topology profiles complete every task without leaving active or expired leases",
+      "each active task retains an independent heartbeat and completes without an expired lease",
       "pause prevents claims and stop prevents new claims while draining active handlers",
     ],
     metrics: [
       "concurrencyLevels",
-      "jobsPerLevel",
-      "throughput timing and jobs per second by level",
+      "tasksPerLevel",
+      "throughput timing and tasks per second by level",
       "maximum handler, slot, query, and claim overlap by level",
       "claim attempts, null claims, polling-window bounds, and heartbeat calls by level",
       "maximum null claims per polling window across concurrency levels",
@@ -565,22 +565,22 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
   {
     name: "batch-dispatch",
     purpose:
-      "Compare serial and batched handler dispatch with the same per-job durable lifecycle and record bounded operational evidence.",
+      "Compare serial and batched handler dispatch with the same per-task durable lifecycle and record bounded operational evidence.",
     invariants: [
-      "the batched cohort dispatches full and partial batches while completing the same job count as serial handlers",
+      "the batched cohort dispatches full and partial batches while completing the same task count as serial handlers",
       "mixed outcomes settle independently without changing successful peers",
-      "every admitted member consumes one slot and one policy admission per job",
+      "every admitted member consumes one slot and one policy admission per task",
       "lease recovery and stale fences isolate one lost member from its batch peers",
       "serial and batched cohorts record claim cost through the same claim path over live ready-index work",
     ],
     metrics: [
-      "jobsPerCohort",
-      "partialJobsPerCohort",
+      "tasksPerCohort",
+      "partialTasksPerCohort",
       "batchMaxSize",
-      "serialJobsPerSecond",
-      "batchJobsPerSecond",
-      "serialPartialJobsPerSecond",
-      "batchPartialJobsPerSecond",
+      "serialTasksPerSecond",
+      "batchTasksPerSecond",
+      "serialPartialTasksPerSecond",
+      "batchPartialTasksPerSecond",
       "fullBatches",
       "partialBatches",
       "batchSizeP50",
@@ -591,8 +591,8 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "batchClaimCalls",
       "batchMaxActiveSlots",
       "batchTelemetrySeries",
-      "concurrencyPolicyAdmittedJobs",
-      "ratePolicyAdmittedJobs",
+      "concurrencyPolicyAdmittedTasks",
+      "ratePolicyAdmittedTasks",
       "recoveredMembers",
       "claimPlanSharedBlocksBeforeHistory",
       "claimPlanSharedBlocksAfterHistory",
@@ -621,7 +621,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
     purpose:
       "Compare idle claim pressure and enqueue-to-claim latency between polling-only and notification-assisted workers.",
     invariants: [
-      "both dispatch modes execute the committed job",
+      "both dispatch modes execute the committed task",
       "notification-assisted idle dispatch issues fewer empty claims than polling-only dispatch",
       "notification-assisted dispatch retains a bounded polling fallback",
     ],
@@ -642,14 +642,14 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
     purpose:
       "Compare enqueue and claiming timings with the OpenTelemetry SDK disabled and enabled, without making a performance claim.",
     invariants: [
-      "instrumented and baseline batches accept and complete the same number of jobs",
+      "instrumented and baseline batches accept and complete the same number of tasks",
       "trace metadata remains separate from an unchanged application payload",
       "only instrumented claims return a W3C parent context",
       "the active SDK exports spans and metrics for the instrumented cohort",
       "trace metadata adds no dispatch index",
     ],
     metrics: [
-      "jobsPerCohort",
+      "tasksPerCohort",
       "baselineEnqueueMs",
       "instrumentedEnqueueMs",
       "baselineClaimMs",
@@ -661,19 +661,19 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
   },
 ] as const;
 
-export const resetWorkhorseStateSql = `TRUNCATE workhorse.job_event, workhorse.attempt_history,
-  workhorse.job_redrive, workhorse.queue_purge_request, workhorse.job_query,
+export const resetWorkhorseStateSql = `TRUNCATE workhorse.task_event, workhorse.attempt_history,
+  workhorse.task_redrive, workhorse.queue_purge_request, workhorse.task_query,
   workhorse.rate_limit_bucket, workhorse.rate_limit_policy, workhorse.concurrency_policy,
-  workhorse.enqueue_idempotency, workhorse.job_outcome, workhorse.job_runtime, workhorse.job RESTART IDENTITY CASCADE;
+  workhorse.enqueue_idempotency, workhorse.task_outcome, workhorse.task_runtime, workhorse.task RESTART IDENTITY CASCADE;
 ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1;
 ALTER SEQUENCE workhorse.ready_sequence_seq RESTART WITH 1;
 UPDATE workhorse.retention_policy
-   SET job_identity_retention_days = NULL,
+   SET task_identity_retention_days = NULL,
        terminal_outcome_retention_days = NULL,
-       job_event_retention_days = NULL,
+       task_event_retention_days = NULL,
        attempt_history_retention_days = NULL,
        schedule_occurrence_retention_days = 30,
-       terminal_job_prune_limit = 1000,
+       terminal_task_prune_limit = 1000,
        history_partitions_per_pass = 4,
        default_partition_rows_per_pass = 10000,
        occurrence_rows_per_pass = 10000,
@@ -684,7 +684,7 @@ export const createHistoryDayV1Sql = "SELECT workhorse.create_history_day_v1($1:
 export const retireHistoryDayV1Sql = "SELECT workhorse.retire_history_day_v1($1::date)";
 
 const defaults: ResolvedOperationalScenarioOptions = {
-  jobCount: 12,
+  taskCount: 12,
   heartbeatCount: 5,
   batchSize: 5,
   scheduleDelayMs: 40,
@@ -718,7 +718,7 @@ export function resolveOperationalScenarioOptions(
   if (queuePrefix.length === 0) throw new RangeError("queuePrefix must not be empty");
 
   return {
-    jobCount: positiveInteger("jobCount", options.jobCount ?? defaults.jobCount),
+    taskCount: positiveInteger("taskCount", options.taskCount ?? defaults.taskCount),
     heartbeatCount: positiveInteger(
       "heartbeatCount",
       options.heartbeatCount ?? defaults.heartbeatCount,
@@ -758,12 +758,12 @@ export function mean(samples: readonly number[]): number | null {
 }
 
 export function pollingClaimUpperBound(
-  jobCount: number,
+  taskCount: number,
   durationMs: number,
   pollMs: number,
   schedulingSlack = 2,
 ): number {
-  return jobCount + Math.ceil(durationMs / pollMs) + schedulingSlack;
+  return taskCount + Math.ceil(durationMs / pollMs) + schedulingSlack;
 }
 
 function canonicalJson(value: unknown): string {
@@ -815,11 +815,11 @@ async function measured<T>(now: () => number, operation: () => Promise<T>): Prom
   return [result, Math.max(0, now() - started)];
 }
 
-async function rowCount(pool: Queryable, relation: string, jobId?: string): Promise<number> {
-  const where = jobId === undefined ? "" : " WHERE job_id = $1";
+async function rowCount(pool: Queryable, relation: string, taskId?: string): Promise<number> {
+  const where = taskId === undefined ? "" : " WHERE task_id = $1";
   const result = await pool.query<{ count: string }>(
     `SELECT count(*)::text AS count FROM workhorse.${relation}${where}`,
-    jobId === undefined ? [] : [jobId],
+    taskId === undefined ? [] : [taskId],
   );
   return Number(result.rows[0]?.count ?? 0);
 }
@@ -827,10 +827,10 @@ async function rowCount(pool: Queryable, relation: string, jobId?: string): Prom
 interface QueryPressureSnapshot {
   queries: number;
   claimCalls: number;
-  claimedJobs: number;
+  claimedTasks: number;
   emptyClaimCalls: number;
   heartbeatCalls: number;
-  heartbeatJobs: number;
+  heartbeatTasks: number;
   maxConcurrentQueries: number;
   maxConcurrentClaims: number;
   claimsWithoutFreeSlot: number;
@@ -844,10 +844,10 @@ class QueryPressureProbe implements Queryable {
   private activeClaims = 0;
   private queries = 0;
   private claimCalls = 0;
-  private claimedJobs = 0;
+  private claimedTasks = 0;
   private emptyClaimCalls = 0;
   private heartbeatCalls = 0;
-  private heartbeatJobs = 0;
+  private heartbeatTasks = 0;
   private maxConcurrentQueries = 0;
   private maxConcurrentClaims = 0;
   private claimsWithoutFreeSlot = 0;
@@ -884,11 +884,11 @@ class QueryPressureProbe implements Queryable {
     }
     try {
       const result = await this.target.query<R>(text, values);
-      if (heartbeat) this.heartbeatJobs += result.rows.length;
+      if (heartbeat) this.heartbeatTasks += result.rows.length;
       if (claim) {
         this.claimDurationsMs.push(Math.max(0, performance.now() - claimStartedAt));
         if (result.rows.length > 0) {
-          this.claimedJobs += result.rows.length;
+          this.claimedTasks += result.rows.length;
           this.lastSuccessfulClaimAt = performance.now();
           this.successfulClaimTimes.push(this.lastSuccessfulClaimAt);
         } else {
@@ -906,10 +906,10 @@ class QueryPressureProbe implements Queryable {
     return {
       queries: this.queries,
       claimCalls: this.claimCalls,
-      claimedJobs: this.claimedJobs,
+      claimedTasks: this.claimedTasks,
       emptyClaimCalls: this.emptyClaimCalls,
       heartbeatCalls: this.heartbeatCalls,
-      heartbeatJobs: this.heartbeatJobs,
+      heartbeatTasks: this.heartbeatTasks,
       maxConcurrentQueries: this.maxConcurrentQueries,
       maxConcurrentClaims: this.maxConcurrentClaims,
       claimsWithoutFreeSlot: this.claimsWithoutFreeSlot,
@@ -939,21 +939,21 @@ async function scheduledPromotionDrift(
   const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
   const runAt = new Date(Date.now() + context.options.scheduleDelayMs);
-  for (let index = 0; index < context.options.jobCount; index += 1) {
+  for (let index = 0; index < context.options.taskCount; index += 1) {
     await queue.enqueue("scheduled-drift", { index }, { runAt });
   }
   const seeded = await queue.health();
   recordInvariant(
     assertions,
-    "all jobs seeded as scheduled",
+    "all tasks seeded as scheduled",
     seeded.scheduledDepth,
-    context.options.jobCount,
+    context.options.taskCount,
   );
 
   await context.sleep(context.options.scheduleDelayMs + 5);
   let promoted = 0;
   let promotionBatches = 0;
-  while (promoted < context.options.jobCount) {
+  while (promoted < context.options.taskCount) {
     const count = await queue.promote(context.options.batchSize);
     promotionBatches += 1;
     promoted += count;
@@ -961,25 +961,25 @@ async function scheduledPromotionDrift(
   }
   const driftRows = await context.pool.query<{ drift_ms: number }>(
     `SELECT extract(epoch FROM (r.ready_at - r.run_at)) * 1000 AS drift_ms
-       FROM workhorse.job_runtime r
+       FROM workhorse.task_runtime r
       WHERE r.queue_name = $1 AND r.state = 'ready' ORDER BY r.sequence`,
     [context.queueName],
   );
   const drifts = driftRows.rows.map((row) => Math.max(0, Number(row.drift_ms)));
   const health = await queue.health();
-  recordInvariant(assertions, "all due jobs promoted", promoted, context.options.jobCount);
+  recordInvariant(assertions, "all due tasks promoted", promoted, context.options.taskCount);
   recordInvariant(assertions, "scheduled backlog drained", health.scheduledDepth, 0);
   recordInvariant(
     assertions,
     "ready depth equals seed",
     health.readyDepth,
-    context.options.jobCount,
+    context.options.taskCount,
   );
   recordInvariant(
     assertions,
     "promotion remained bounded",
     promotionBatches,
-    Math.ceil(context.options.jobCount / context.options.batchSize),
+    Math.ceil(context.options.taskCount / context.options.batchSize),
     (actual, expected) => Number(actual) <= Number(expected),
   );
 
@@ -987,7 +987,7 @@ async function scheduledPromotionDrift(
     name: "scheduled-promotion-drift",
     durationMs: 0,
     metrics: {
-      jobs: context.options.jobCount,
+      tasks: context.options.taskCount,
       promotionBatches,
       promoted,
       driftP50Ms: percentile(drifts, 0.5),
@@ -1014,7 +1014,7 @@ async function scheduleCadenceJitter(
     {
       name: "every-second",
       schedule: "* * * * * *",
-      job: {
+      task: {
         type: scheduleType,
         payload: null,
         queue: context.queueName,
@@ -1023,21 +1023,21 @@ async function scheduleCadenceJitter(
   ]);
   const [definition] = await queue.schedules([namespace]);
   recordInvariant(assertions, "schedule definition synchronized", definition !== undefined, true);
-  const baselineJobId = await queue.fireSchedule(
+  const baselineTaskId = await queue.fireSchedule(
     namespace,
     definition!.name,
     definition!.revision,
     baselineOccurrence,
   );
-  recordInvariant(assertions, "baseline occurrence reserved", baselineJobId !== null, true);
+  recordInvariant(assertions, "baseline occurrence reserved", baselineTaskId !== null, true);
 
-  for (let index = 0; index < context.options.jobCount; index += 1) {
+  for (let index = 0; index < context.options.taskCount; index += 1) {
     await queue.enqueue(loadType, { index });
   }
 
   let keepLoaded = true;
-  let loadJobsStarted = 0;
-  let loadJobsCompleted = 0;
+  let loadTasksStarted = 0;
+  let loadTasksCompleted = 0;
   const worker = new Worker(queue, {
     workerId: `${context.queueName}-worker`,
     queue: context.queueName,
@@ -1052,10 +1052,10 @@ async function scheduleCadenceJitter(
     scheduleCatchupLimit: context.options.scheduleSamples,
   })
     .handle(loadType, async () => {
-      loadJobsStarted += 1;
+      loadTasksStarted += 1;
       await context.sleep(10);
       if (keepLoaded) await queue.enqueue(loadType, null);
-      loadJobsCompleted += 1;
+      loadTasksCompleted += 1;
       return null;
     })
     .handle(scheduleType, () => null);
@@ -1084,9 +1084,9 @@ async function scheduleCadenceJitter(
 
   const occurrenceRows = await context.pool.query<{
     fire_delay_ms: string;
-    job_id: string | null;
+    task_id: string | null;
   }>(
-    `SELECT extract(epoch FROM (fired_at - occurrence_at)) * 1000 AS fire_delay_ms, job_id
+    `SELECT extract(epoch FROM (fired_at - occurrence_at)) * 1000 AS fire_delay_ms, task_id
        FROM workhorse.schedule_occurrence
       WHERE namespace = $1 AND schedule_name = $2 AND occurrence_at > $3
       ORDER BY occurrence_at
@@ -1103,14 +1103,14 @@ async function scheduleCadenceJitter(
   );
   recordInvariant(
     assertions,
-    "every occurrence owns one job",
-    occurrenceRows.rows.every((row) => row.job_id !== null),
+    "every occurrence owns one task",
+    occurrenceRows.rows.every((row) => row.task_id !== null),
     true,
   );
   recordInvariant(
     assertions,
     "worker remained loaded while schedules fired",
-    loadJobsStarted >= context.options.scheduleSamples,
+    loadTasksStarted >= context.options.scheduleSamples,
     true,
   );
   recordInvariant(
@@ -1125,8 +1125,8 @@ async function scheduleCadenceJitter(
     durationMs: 0,
     metrics: {
       scheduleSamples: context.options.scheduleSamples,
-      loadJobsStarted,
-      loadJobsCompleted,
+      loadTasksStarted,
+      loadTasksCompleted,
       maintenanceIntervalMs,
       fireDelayP50Ms: percentile(fireDelays, 0.5),
       fireDelayP95Ms: percentile(fireDelays, 0.95),
@@ -1146,37 +1146,37 @@ async function heartbeatFencing(
   const workerId = "heartbeat-benchmark-worker";
   const leaseMs = 30_000;
   const heartbeatIntervalMs = leaseMs / 3;
-  const jobs: ClaimedJob[] = [];
+  const tasks: ClaimedTask[] = [];
   for (let index = 0; index < concurrency; index += 1) {
     await queue.enqueue("heartbeat", { index });
-    const job = await queue.claim(workerId, {
+    const task = await queue.claim(workerId, {
       leaseMs,
     });
-    if (job !== null) jobs.push(job);
+    if (task !== null) tasks.push(task);
   }
-  recordInvariant(assertions, "claimed 100 concurrent leases", jobs.length, concurrency);
+  recordInvariant(assertions, "claimed 100 concurrent leases", tasks.length, concurrency);
   await context.pool.query("SELECT pg_stat_force_next_flush()");
   const beforeStats = await context.pool.query<{ hot_updates: string }>(
     `SELECT n_tup_hot_upd::text AS hot_updates FROM pg_stat_user_tables
-      WHERE schemaname = 'workhorse' AND relname = 'job_runtime'`,
+      WHERE schemaname = 'workhorse' AND relname = 'task_runtime'`,
   );
   const hotBefore = Number(beforeStats.rows[0]?.hot_updates ?? 0);
   const [individualStatuses, beforeDurationMs] = await measured(context.now, () =>
-    Promise.all(jobs.map((job) => queue.heartbeatStatus(job, workerId, leaseMs))),
+    Promise.all(tasks.map((task) => queue.heartbeatStatus(task, workerId, leaseMs))),
   );
   const [batchStatuses, afterDurationMs] = await measured(context.now, () =>
-    queue.heartbeatMany(jobs, workerId, leaseMs),
+    queue.heartbeatMany(tasks, workerId, leaseMs),
   );
   for (let sample = 1; sample < 5; sample += 1) {
-    await queue.heartbeatMany(jobs, workerId, leaseMs);
+    await queue.heartbeatMany(tasks, workerId, leaseMs);
   }
-  const stale = { ...jobs[0]!, fenceToken: jobs[0]!.fenceToken + 1n };
+  const stale = { ...tasks[0]!, fenceToken: tasks[0]!.fenceToken + 1n };
   const staleStatuses = await queue.heartbeatMany([stale], workerId, leaseMs);
   await delay(1_100);
   await context.pool.query("SELECT pg_stat_force_next_flush()");
   const afterStats = await context.pool.query<{ hot_updates: string }>(
     `SELECT n_tup_hot_upd::text AS hot_updates FROM pg_stat_user_tables
-      WHERE schemaname = 'workhorse' AND relname = 'job_runtime'`,
+      WHERE schemaname = 'workhorse' AND relname = 'task_runtime'`,
   );
   const hotUpdates = Number(afterStats.rows[0]?.hot_updates ?? 0) - hotBefore;
   recordInvariant(
@@ -1193,7 +1193,7 @@ async function heartbeatFencing(
   );
   recordInvariant(assertions, "stale fence rejected", staleStatuses.get(stale.id), "stale");
   recordInvariant(assertions, "heartbeat updates were HOT", hotUpdates > 0, true);
-  for (const job of jobs) await queue.complete(job, workerId, { ok: true });
+  for (const task of tasks) await queue.complete(task, workerId, { ok: true });
   return {
     name: "heartbeat-fencing",
     durationMs: 0,
@@ -1263,8 +1263,8 @@ async function priorityDispatch(
 ): Promise<OperationalScenarioResult> {
   await reset(context.pool);
   const assertions: ScenarioAssertion[] = [];
-  const jobsPerCohort = Math.max(5, context.options.jobCount * 5);
-  const historyJobs = jobsPerCohort * 4;
+  const tasksPerCohort = Math.max(5, context.options.taskCount * 5);
+  const historyTasks = tasksPerCohort * 4;
   const priorityWorkerConcurrency = 4;
 
   const runCohort = async (
@@ -1272,9 +1272,9 @@ async function priorityDispatch(
     priorities: readonly number[],
     cohortWorkerConcurrency: number,
   ): Promise<{
-    claims: ClaimedJob[];
+    claims: ClaimedTask[];
     claimDurations: number[];
-    throughputJobsPerSecond: number;
+    throughputTasksPerSecond: number;
     readyIndexBytes: number;
   }> => {
     const queue = operationalQueue(context.pool, cohortQueueName);
@@ -1287,8 +1287,8 @@ async function priorityDispatch(
         })),
       );
     }
-    const readyIndexBytes = await relationBytes(context.pool, "workhorse.job_runtime_ready_idx");
-    const claims: ClaimedJob[] = [];
+    const readyIndexBytes = await relationBytes(context.pool, "workhorse.task_runtime_ready_idx");
+    const claims: ClaimedTask[] = [];
     const claimDurations: number[] = [];
     const started = context.now();
     let nextClaim = 0;
@@ -1314,12 +1314,12 @@ async function priorityDispatch(
     return {
       claims,
       claimDurations,
-      throughputJobsPerSecond: priorities.length / (durationMs / 1_000),
+      throughputTasksPerSecond: priorities.length / (durationMs / 1_000),
       readyIndexBytes,
     };
   };
 
-  const mixedPriorities = Array.from({ length: jobsPerCohort }, (_unused, index) =>
+  const mixedPriorities = Array.from({ length: tasksPerCohort }, (_unused, index) =>
     index % 20 === 19 ? 100 : index % 20 >= 16 ? 50 : 0,
   );
   const ordering = await runCohort(`${context.queueName}-ordering`, mixedPriorities, 1);
@@ -1339,7 +1339,7 @@ async function priorityDispatch(
   );
 
   await reset(context.pool);
-  const baselinePriorities = Array.from({ length: jobsPerCohort }, () => 0);
+  const baselinePriorities = Array.from({ length: tasksPerCohort }, () => 0);
   const baseline = await runCohort(
     `${context.queueName}-baseline`,
     baselinePriorities,
@@ -1358,7 +1358,7 @@ async function priorityDispatch(
   const seedLiveReady = async (): Promise<void> => {
     const liveQueue = operationalQueue(context.pool, liveQueueName);
     await liveQueue.enqueueMany(
-      Array.from({ length: jobsPerCohort }, (_unused, index) => ({
+      Array.from({ length: tasksPerCohort }, (_unused, index) => ({
         type: "priority-live",
         payload: { index },
         options: { priority: index % 2 === 0 ? 100 : 0 },
@@ -1368,7 +1368,7 @@ async function priorityDispatch(
   await seedLiveReady();
   const readyIndexBytesBeforeHistory = await relationBytes(
     context.pool,
-    "workhorse.job_runtime_ready_idx",
+    "workhorse.task_runtime_ready_idx",
   );
   const planBeforeHistory = await claimPlan(
     context.pool,
@@ -1379,32 +1379,32 @@ async function priorityDispatch(
   await seedLiveReady();
   await runCohort(
     `${context.queueName}-history`,
-    Array.from({ length: historyJobs }, () => 0),
+    Array.from({ length: historyTasks }, () => 0),
     priorityWorkerConcurrency,
   );
-  await context.pool.query("VACUUM (ANALYZE) workhorse.job_runtime");
+  await context.pool.query("VACUUM (ANALYZE) workhorse.task_runtime");
   const readyIndexBytesAfterHistory = await relationBytes(
     context.pool,
-    "workhorse.job_runtime_ready_idx",
+    "workhorse.task_runtime_ready_idx",
   );
   const planAfterHistory = await claimPlan(
     context.pool,
     liveQueueName,
     "priority-plan-after-history",
   );
-  const retainedJobIdentities = await rowCount(context.pool, "job");
-  const liveRuntimeRows = await rowCount(context.pool, "job_runtime");
+  const retainedTaskIdentities = await rowCount(context.pool, "task");
+  const liveRuntimeRows = await rowCount(context.pool, "task_runtime");
   recordInvariant(
     assertions,
     "terminal history is absent from the live runtime relation",
     liveRuntimeRows,
-    jobsPerCohort,
+    tasksPerCohort,
   );
   recordInvariant(
     assertions,
     "retained identities exceed live claim rows",
-    retainedJobIdentities,
-    jobsPerCohort + historyJobs,
+    retainedTaskIdentities,
+    tasksPerCohort + historyTasks,
   );
   recordInvariant(
     assertions,
@@ -1424,7 +1424,7 @@ async function priorityDispatch(
   await floodQueue.enqueue("low-priority", null, { priority: 0 });
   const floodStarted = context.now();
   let highPriorityClaims = 0;
-  for (let index = 0; index < jobsPerCohort; index += 1) {
+  for (let index = 0; index < tasksPerCohort; index += 1) {
     await floodQueue.enqueue("high-priority", { index }, { priority: 100 });
     const workerId = `priority-flood-worker-${index}`;
     const claim = await floodQueue.claim(workerId);
@@ -1433,7 +1433,7 @@ async function priorityDispatch(
   }
   const lowDuringFlood = await context.pool.query<{ count: string }>(
     `SELECT count(*)::text AS count
-       FROM workhorse.job_runtime
+       FROM workhorse.task_runtime
       WHERE queue_name = $1 AND state = 'ready' AND priority = 0`,
     [`${context.queueName}-starvation`],
   );
@@ -1442,7 +1442,7 @@ async function priorityDispatch(
     assertions,
     "every replenished flood claim selects high priority",
     highPriorityClaims,
-    jobsPerCohort,
+    tasksPerCohort,
   );
   recordInvariant(
     assertions,
@@ -1458,14 +1458,14 @@ async function priorityDispatch(
     name: "priority-dispatch",
     durationMs: 0,
     metrics: {
-      jobsPerCohort,
+      tasksPerCohort,
       workerConcurrency: priorityWorkerConcurrency,
       baselineClaimP50Ms: percentile(baseline.claimDurations, 0.5),
       baselineClaimP95Ms: percentile(baseline.claimDurations, 0.95),
       mixedClaimP50Ms: percentile(mixed.claimDurations, 0.5),
       mixedClaimP95Ms: percentile(mixed.claimDurations, 0.95),
-      baselineThroughputJobsPerSecond: baseline.throughputJobsPerSecond,
-      mixedThroughputJobsPerSecond: mixed.throughputJobsPerSecond,
+      baselineThroughputTasksPerSecond: baseline.throughputTasksPerSecond,
+      mixedThroughputTasksPerSecond: mixed.throughputTasksPerSecond,
       baselineReadyIndexBytes: baseline.readyIndexBytes,
       mixedReadyIndexBytes: mixed.readyIndexBytes,
       readyIndexBytesBeforeHistory,
@@ -1474,7 +1474,7 @@ async function priorityDispatch(
       claimPlanExecutionMsAfterHistory: planAfterHistory.executionTimeMs,
       claimPlanSharedBlocksBeforeHistory: planBeforeHistory.sharedBlocks,
       claimPlanSharedBlocksAfterHistory: planAfterHistory.sharedBlocks,
-      retainedJobIdentities,
+      retainedTaskIdentities,
       liveRuntimeRows,
       floodHighPriorityClaims: highPriorityClaims,
       lowPriorityFloodWaitMs,
@@ -1492,26 +1492,26 @@ async function cancellationLifecycle(
   const metrics: Record<string, ScenarioMetric> = {};
   const request = { requestedBy: "benchmark-operator", reason: "deterministic lifecycle proof" };
 
-  const readyJobId = await queue.enqueue("cancel-ready", {});
+  const readyTaskId = await queue.enqueue("cancel-ready", {});
   const [readyCancel, readyCancelMs] = await measured(context.now, () =>
-    queue.cancel(readyJobId, request),
+    queue.cancel(readyTaskId, request),
   );
   metrics.readyCancelMs = readyCancelMs;
   recordInvariant(assertions, "ready cancellation is immediate", readyCancel.status, "canceled");
   recordInvariant(
     assertions,
     "ready cancellation creates no attempt history",
-    await rowCount(context.pool, "attempt_history", readyJobId),
+    await rowCount(context.pool, "attempt_history", readyTaskId),
     0,
   );
 
-  const scheduledJobId = await queue.enqueue(
+  const scheduledTaskId = await queue.enqueue(
     "cancel-scheduled",
     {},
     { runAt: new Date(Date.now() + 60_000) },
   );
   const [scheduledCancel, scheduledCancelMs] = await measured(context.now, () =>
-    queue.cancel(scheduledJobId, request),
+    queue.cancel(scheduledTaskId, request),
   );
   metrics.scheduledCancelMs = scheduledCancelMs;
   recordInvariant(
@@ -1523,19 +1523,19 @@ async function cancellationLifecycle(
   recordInvariant(
     assertions,
     "scheduled cancellation creates no attempt history",
-    await rowCount(context.pool, "attempt_history", scheduledJobId),
+    await rowCount(context.pool, "attempt_history", scheduledTaskId),
     0,
   );
 
-  const waitingJobId = await queue.enqueue("cancel-waiting", {});
+  const waitingTaskId = await queue.enqueue("cancel-waiting", {});
   const waitingClaim = await queue.claim("waiting-worker", { leaseMs: 1_000 });
-  recordInvariant(assertions, "waiting seed claimed", waitingClaim?.id, waitingJobId);
+  recordInvariant(assertions, "waiting seed claimed", waitingClaim?.id, waitingTaskId);
   const wait = await queue.scheduleWait(waitingClaim!, "waiting-worker", "benchmark-wait", {
     durationMs: 60_000,
   });
   recordInvariant(assertions, "waiting seed suspended", wait.status, "scheduled");
   const [waitingCancel, waitingCancelMs] = await measured(context.now, () =>
-    queue.cancel(waitingJobId, request),
+    queue.cancel(waitingTaskId, request),
   );
   metrics.waitingCancelMs = waitingCancelMs;
   recordInvariant(
@@ -1547,11 +1547,11 @@ async function cancellationLifecycle(
   recordInvariant(
     assertions,
     "waiting cancellation closes its started logical attempt",
-    await rowCount(context.pool, "attempt_history", waitingJobId),
+    await rowCount(context.pool, "attempt_history", waitingTaskId),
     1,
   );
 
-  let activeJob: ClaimedJob | undefined;
+  let activeTask: ClaimedTask | undefined;
   let observedSignal: AbortSignal | undefined;
   let handlerStartedResolve!: () => void;
   const handlerStarted = new Promise<void>((resolve) => {
@@ -1564,7 +1564,7 @@ async function cancellationLifecycle(
     heartbeatMs: 20,
     pollMs: 1,
   }).handle("cancel-active", async (_payload, handlerContext) => {
-    activeJob = handlerContext.job;
+    activeTask = handlerContext.task;
     observedSignal = handlerContext.signal;
     handlerStartedResolve();
     if (!handlerContext.signal.aborted) {
@@ -1574,14 +1574,14 @@ async function cancellationLifecycle(
     }
     throw handlerContext.signal.reason;
   });
-  const activeJobId = await queue.enqueue("cancel-active", {});
+  const activeTaskId = await queue.enqueue("cancel-active", {});
   const activeExecution = activeWorker.runOnce();
   await handlerStarted;
   const [activeRequest, activeRequestMs] = await measured(context.now, () =>
-    queue.cancel(activeJobId, request),
+    queue.cancel(activeTaskId, request),
   );
   const [activeRepeat, activeRepeatRequestMs] = await measured(context.now, () =>
-    queue.cancel(activeJobId, { requestedBy: "ignored-repeat", reason: "ignored-repeat" }),
+    queue.cancel(activeTaskId, { requestedBy: "ignored-repeat", reason: "ignored-repeat" }),
   );
   metrics.activeRequestMs = activeRequestMs;
   metrics.activeRepeatRequestMs = activeRepeatRequestMs;
@@ -1607,7 +1607,7 @@ async function cancellationLifecycle(
     assertions,
     "wrong fence cannot acknowledge cancellation",
     await queue.acknowledgeCancel(
-      { ...activeJob!, fenceToken: activeJob!.fenceToken + 1n },
+      { ...activeTask!, fenceToken: activeTask!.fenceToken + 1n },
       "cancel-active-worker",
     ),
     false,
@@ -1625,47 +1625,47 @@ async function cancellationLifecycle(
   recordInvariant(
     assertions,
     "exact fence materializes canceled",
-    (await context.admin.getJob(activeJobId))?.state,
+    (await context.admin.getTask(activeTaskId))?.state,
     "canceled",
   );
   recordInvariant(
     assertions,
     "active cancellation records one attempt",
-    await rowCount(context.pool, "attempt_history", activeJobId),
+    await rowCount(context.pool, "attempt_history", activeTaskId),
     1,
   );
   recordInvariant(
     assertions,
     "stale completion cannot overwrite cancellation",
-    await queue.complete(activeJob!, "cancel-active-worker", { stale: true }),
+    await queue.complete(activeTask!, "cancel-active-worker", { stale: true }),
     false,
   );
   recordInvariant(
     assertions,
     "stale failure cannot overwrite cancellation",
-    await queue.fail(activeJob!, "cancel-active-worker", new Error("stale"), 0),
+    await queue.fail(activeTask!, "cancel-active-worker", new Error("stale"), 0),
     "stale",
   );
   recordInvariant(
     assertions,
     "stale heartbeat status cannot overwrite cancellation",
-    await queue.heartbeatStatus(activeJob!, "cancel-active-worker", 200),
+    await queue.heartbeatStatus(activeTask!, "cancel-active-worker", 200),
     "stale",
   );
   recordInvariant(
     assertions,
     "heartbeat_v1 compatibility rejects canceled ownership",
-    await queue.heartbeat(activeJob!, "cancel-active-worker", 200),
+    await queue.heartbeat(activeTask!, "cancel-active-worker", 200),
     false,
   );
 
-  const ignoredJobId = await queue.enqueue("cancel-ignored", {}, { maxAttempts: 3 });
+  const ignoredTaskId = await queue.enqueue("cancel-ignored", {}, { maxAttempts: 3 });
   const ignoredClaim = await queue.claim("cancel-ignored-worker", {
     leaseMs: Math.max(100, context.options.leaseMs),
   });
-  recordInvariant(assertions, "ignored-signal seed claimed", ignoredClaim?.id, ignoredJobId);
+  recordInvariant(assertions, "ignored-signal seed claimed", ignoredClaim?.id, ignoredTaskId);
   const [ignoredRequest, ignoredRequestMs] = await measured(context.now, () =>
-    queue.cancel(ignoredJobId, request),
+    queue.cancel(ignoredTaskId, request),
   );
   metrics.ignoredRequestMs = ignoredRequestMs;
   recordInvariant(
@@ -1683,24 +1683,24 @@ async function cancellationLifecycle(
   recordInvariant(
     assertions,
     "expired request becomes canceled",
-    (await context.admin.getJob(ignoredJobId))?.state,
+    (await context.admin.getTask(ignoredTaskId))?.state,
     "canceled",
   );
   recordInvariant(
     assertions,
     "expired requested lease does not create a retry attempt",
-    (await context.admin.getJob(ignoredJobId))?.currentAttempt,
+    (await context.admin.getTask(ignoredTaskId))?.currentAttempt,
     1,
   );
   recordInvariant(
     assertions,
     "expired requested lease closes one canceled attempt",
-    await rowCount(context.pool, "attempt_history", ignoredJobId),
+    await rowCount(context.pool, "attempt_history", ignoredTaskId),
     1,
   );
 
   const [terminalReplay, terminalReplayMs] = await measured(context.now, () =>
-    queue.cancel(activeJobId, { requestedBy: "ignored-terminal-repeat" }),
+    queue.cancel(activeTaskId, { requestedBy: "ignored-terminal-repeat" }),
   );
   metrics.terminalReplayMs = terminalReplayMs;
   recordInvariant(
@@ -1712,10 +1712,10 @@ async function cancellationLifecycle(
   const [activeEventRows, eventQueryMs] = await measured(context.now, () =>
     context.pool.query<{ event_type: string; count: string }>(
       `SELECT event_type, count(*)::text AS count
-         FROM workhorse.job_event
-        WHERE job_id = $1 AND event_type IN ('cancel_requested', 'canceled')
+         FROM workhorse.task_event
+        WHERE task_id = $1 AND event_type IN ('cancel_requested', 'canceled')
         GROUP BY event_type ORDER BY event_type`,
-      [activeJobId],
+      [activeTaskId],
     ),
   );
   metrics.eventQueryMs = eventQueryMs;
@@ -1737,7 +1737,7 @@ async function cancellationLifecycle(
   recordInvariant(
     assertions,
     "repeated requests retain one terminal outcome",
-    await rowCount(context.pool, "job_outcome", activeJobId),
+    await rowCount(context.pool, "task_outcome", activeTaskId),
     1,
   );
 
@@ -1789,7 +1789,7 @@ async function cancellationLifecycle(
     {
       name: "cancel-one-occurrence",
       schedule: "* * * * *",
-      job: { type: "recurring-cancel", payload: { source: "schedule" }, queue: context.queueName },
+      task: { type: "recurring-cancel", payload: { source: "schedule" }, queue: context.queueName },
     },
   ]);
   const schedule = (await queue.schedules([scheduleNamespace]))[0]!;
@@ -1828,7 +1828,7 @@ async function cancellationLifecycle(
   recordInvariant(
     assertions,
     "next recurring occurrence remains ready",
-    (await context.admin.getJob(nextOccurrenceId!))?.state,
+    (await context.admin.getTask(nextOccurrenceId!))?.state,
     "ready",
   );
   const enabledSchedule = await context.pool.query<{ enabled: boolean }>(
@@ -1846,7 +1846,7 @@ async function cancellationLifecycle(
   const [stateRows, stateQueryMs] = await measured(context.now, () =>
     context.pool.query<{ state: string; count: string }>(
       `SELECT state, count(*)::text AS count
-         FROM workhorse.job_outcome
+         FROM workhorse.task_outcome
         GROUP BY state ORDER BY state`,
     ),
   );
@@ -1854,7 +1854,7 @@ async function cancellationLifecycle(
   metrics.canceledOutcomes = Number(
     stateRows.rows.find((row) => row.state === "canceled")?.count ?? 0,
   );
-  metrics.jobsExercised = 9;
+  metrics.tasksExercised = 9;
 
   return { name: "cancellation-lifecycle", durationMs: 0, metrics, assertions };
 }
@@ -1873,18 +1873,18 @@ async function deadlineTimeoutLifecycle(
     { deadline: new Date(Date.now() + 60_000) },
   );
   await context.pool.query(
-    `UPDATE workhorse.job SET deadline_at = clock_timestamp() - interval '1 millisecond'
+    `UPDATE workhorse.task SET deadline_at = clock_timestamp() - interval '1 millisecond'
       WHERE id = $1`,
     [readyDeadlineId],
   );
   await context.pool.query(
-    `UPDATE workhorse.job_runtime SET deadline_at = clock_timestamp() - interval '1 millisecond'
-      WHERE job_id = $1`,
+    `UPDATE workhorse.task_runtime SET deadline_at = clock_timestamp() - interval '1 millisecond'
+      WHERE task_id = $1`,
     [readyDeadlineId],
   );
   recordInvariant(
     assertions,
-    "expired ready job cannot be newly claimed",
+    "expired ready task cannot be newly claimed",
     await queue.claim("deadline-ready-worker"),
     null,
   );
@@ -1896,7 +1896,7 @@ async function deadlineTimeoutLifecycle(
   recordInvariant(
     assertions,
     "never-started deadline becomes terminal failure",
-    (await context.admin.getJob(readyDeadlineId))?.state,
+    (await context.admin.getTask(readyDeadlineId))?.state,
     "failed",
   );
   recordInvariant(
@@ -1907,7 +1907,7 @@ async function deadlineTimeoutLifecycle(
   );
 
   let deadlineReason: unknown;
-  let deadlineClaim: ClaimedJob | undefined;
+  let deadlineClaim: ClaimedTask | undefined;
   const deadlineWorkerId = "deadline-active-worker";
   const deadlineWorker = new Worker(queue, {
     queue: context.queueName,
@@ -1916,7 +1916,7 @@ async function deadlineTimeoutLifecycle(
     heartbeatMs: 20,
     pollMs: 1,
   }).handle("deadline-active", async (_payload, handlerContext) => {
-    deadlineClaim = handlerContext.job;
+    deadlineClaim = handlerContext.task;
     if (!handlerContext.signal.aborted) {
       await new Promise<void>((resolve) => {
         handlerContext.signal.addEventListener("abort", () => resolve(), { once: true });
@@ -1942,7 +1942,7 @@ async function deadlineTimeoutLifecycle(
   recordInvariant(
     assertions,
     "active deadline is terminal despite retry budget",
-    (await context.admin.getJob(activeDeadlineId))?.state,
+    (await context.admin.getTask(activeDeadlineId))?.state,
     "failed",
   );
   if (!deadlineClaim) throw new Error("deadline handler did not expose its claim");
@@ -1961,7 +1961,7 @@ async function deadlineTimeoutLifecycle(
     heartbeatMs: 20,
     pollMs: 1,
   }).handle("timeout-retry", async (_payload, handlerContext) => {
-    if (handlerContext.job.attempt === 2) return { attempt: 2 };
+    if (handlerContext.task.attempt === 2) return { attempt: 2 };
     if (!handlerContext.signal.aborted) {
       await new Promise<void>((resolve) => {
         handlerContext.signal.addEventListener("abort", () => resolve(), { once: true });
@@ -1991,18 +1991,18 @@ async function deadlineTimeoutLifecycle(
   recordInvariant(
     assertions,
     "execution timeout uses remaining retry budget",
-    (await context.admin.getJob(timeoutId))?.currentAttempt,
+    (await context.admin.getTask(timeoutId))?.currentAttempt,
     2,
   );
   await timeoutWorker.runOnce();
   recordInvariant(
     assertions,
     "retry after timeout can succeed",
-    (await context.admin.getJob(timeoutId))?.state,
+    (await context.admin.getTask(timeoutId))?.state,
     "succeeded",
   );
   const timeoutHistory = await context.pool.query<{ outcome: string }>(
-    `SELECT outcome FROM workhorse.attempt_history WHERE job_id = $1 ORDER BY attempt, attempt_id`,
+    `SELECT outcome FROM workhorse.attempt_history WHERE task_id = $1 ORDER BY attempt, attempt_id`,
     [timeoutId],
   );
   recordInvariant(
@@ -2042,7 +2042,7 @@ async function deadlineTimeoutLifecycle(
   recordInvariant(
     assertions,
     "health timeout seed remains active",
-    (await context.admin.getJob(healthTimeoutId))?.state,
+    (await context.admin.getTask(healthTimeoutId))?.state,
     "active",
   );
 
@@ -2071,7 +2071,7 @@ async function deadLetterRedriveLifecycle(
     );
     const workerId = `redrive-source-worker-${index}`;
     const claimed = await queue.claim(workerId);
-    if (!claimed) throw new Error("redrive scenario could not claim its source job");
+    if (!claimed) throw new Error("redrive scenario could not claim its source task");
     await queue.fail(claimed, workerId, new Error(`terminal source ${index}`));
     sourceIds.push(sourceId);
   }
@@ -2091,7 +2091,7 @@ async function deadLetterRedriveLifecycle(
     limit: 2,
     ...(firstPage.nextCursor === null ? {} : { cursor: firstPage.nextCursor }),
   });
-  const listedIds = [...firstPage.items, ...secondPage.items].map((item) => item.jobId);
+  const listedIds = [...firstPage.items, ...secondPage.items].map((item) => item.taskId);
   metrics.deadLetters = listedIds.length;
   metrics.listMs = listMs;
   recordInvariant(assertions, "failure cursor lists every source once", new Set(listedIds).size, 3);
@@ -2103,9 +2103,9 @@ async function deadLetterRedriveLifecycle(
   );
 
   const beforeDryRun = {
-    jobs: await rowCount(context.pool, "job"),
-    events: await rowCount(context.pool, "job_event"),
-    lineage: await rowCount(context.pool, "job_redrive"),
+    tasks: await rowCount(context.pool, "task"),
+    events: await rowCount(context.pool, "task_event"),
+    lineage: await rowCount(context.pool, "task_redrive"),
   };
   const [previewPage, dryRunMs] = await measured(context.now, () =>
     context.admin.redriveMany(
@@ -2120,9 +2120,9 @@ async function deadLetterRedriveLifecycle(
   );
   const preview = previewPage.results;
   const afterDryRun = {
-    jobs: await rowCount(context.pool, "job"),
-    events: await rowCount(context.pool, "job_event"),
-    lineage: await rowCount(context.pool, "job_redrive"),
+    tasks: await rowCount(context.pool, "task"),
+    events: await rowCount(context.pool, "task_event"),
+    lineage: await rowCount(context.pool, "task_redrive"),
   };
   metrics.dryRunMs = dryRunMs;
   metrics.previewed = preview.length;
@@ -2141,17 +2141,17 @@ async function deadLetterRedriveLifecycle(
     jsonEquivalent,
   );
 
-  const sourceJobId = firstPage.items[0]!.jobId;
+  const sourceTaskId = firstPage.items[0]!.taskId;
   const request = {
     actor: "operational-scenario",
     reason: "retry one inspected terminal failure",
     requestId: "dead-letter-single",
   };
   const [single, singleRedriveMs] = await measured(context.now, () =>
-    context.admin.redrive(sourceJobId, request),
+    context.admin.redrive(sourceTaskId, request),
   );
   const [replay, replayMs] = await measured(context.now, () =>
-    context.admin.redrive(sourceJobId, request),
+    context.admin.redrive(sourceTaskId, request),
   );
   metrics.singleRedriveMs = singleRedriveMs;
   metrics.replayMs = replayMs;
@@ -2164,8 +2164,8 @@ async function deadLetterRedriveLifecycle(
   recordInvariant(
     assertions,
     "exact replay returns the original target",
-    replay.targetJobId,
-    single.targetJobId,
+    replay.targetTaskId,
+    single.targetTaskId,
   );
   recordInvariant(assertions, "exact replay is classified distinctly", replay.status, "replayed");
 
@@ -2218,8 +2218,8 @@ async function deadLetterRedriveLifecycle(
   );
 
   const sourceOutcome = await context.pool.query<{ count: string }>(
-    `SELECT count(*)::text AS count FROM workhorse.job_outcome
-      WHERE job_id = ANY($1::uuid[]) AND state = 'failed'`,
+    `SELECT count(*)::text AS count FROM workhorse.task_outcome
+      WHERE task_id = ANY($1::uuid[]) AND state = 'failed'`,
     [sourceIds],
   );
   recordInvariant(
@@ -2230,9 +2230,9 @@ async function deadLetterRedriveLifecycle(
   );
   const targets = await context.pool.query<{ count: string }>(
     `SELECT count(*)::text AS count
-       FROM workhorse.job_redrive edge
-       JOIN workhorse.job target ON target.id = edge.target_job_id
-       JOIN workhorse.job_runtime runtime ON runtime.job_id = target.id
+       FROM workhorse.task_redrive edge
+       JOIN workhorse.task target ON target.id = edge.target_task_id
+       JOIN workhorse.task_runtime runtime ON runtime.task_id = target.id
       WHERE runtime.state = 'ready' AND target.deadline_at IS NULL
         AND target.execution_timeout_ms = 5000`,
   );
@@ -2242,8 +2242,8 @@ async function deadLetterRedriveLifecycle(
     Number(targets.rows[0]?.count ?? 0),
     4,
   );
-  const lineage = await context.admin.getRedriveLineage(sourceJobId);
-  metrics.lineageEdges = await rowCount(context.pool, "job_redrive");
+  const lineage = await context.admin.getRedriveLineage(sourceTaskId);
+  metrics.lineageEdges = await rowCount(context.pool, "task_redrive");
   recordInvariant(
     assertions,
     "lineage query retains the inspected source",
@@ -2285,65 +2285,70 @@ async function queryListingLifecycle(
       options: { queue: context.queueName, tags: ["query", "delta"] },
     },
   ]);
-  const projectionBeforeLifecycle = await context.pool.query<{ job_id: string; xmin: string }>(
-    "SELECT job_id, xmin::text AS xmin FROM workhorse.job_query WHERE job_id = ANY($1::uuid[])",
+  const projectionBeforeLifecycle = await context.pool.query<{ task_id: string; xmin: string }>(
+    "SELECT task_id, xmin::text AS xmin FROM workhorse.task_query WHERE task_id = ANY($1::uuid[])",
     [ids],
   );
   const completed = await queue.claim("query-listing-complete", { queue: context.queueName });
-  if (!completed) throw new Error("query listing scenario could not claim its completed job");
+  if (!completed) throw new Error("query listing scenario could not claim its completed task");
   await queue.complete(completed, "query-listing-complete", { ok: true });
   const active = await queue.claim("query-listing-active", { queue: context.queueName });
-  if (!active) throw new Error("query listing scenario could not claim its active job");
+  if (!active) throw new Error("query listing scenario could not claim its active task");
 
   await queue.heartbeat(active, "query-listing-active", 30_000);
-  const projectionAfterLifecycle = await context.pool.query<{ job_id: string; xmin: string }>(
-    "SELECT job_id, xmin::text AS xmin FROM workhorse.job_query WHERE job_id = ANY($1::uuid[])",
+  const projectionAfterLifecycle = await context.pool.query<{ task_id: string; xmin: string }>(
+    "SELECT task_id, xmin::text AS xmin FROM workhorse.task_query WHERE task_id = ANY($1::uuid[])",
     [ids],
   );
   recordInvariant(
     assertions,
     "lifecycle transitions leave operator routing rows unchanged",
-    new Map(projectionAfterLifecycle.rows.map((row) => [row.job_id, row.xmin])),
-    new Map(projectionBeforeLifecycle.rows.map((row) => [row.job_id, row.xmin])),
+    new Map(projectionAfterLifecycle.rows.map((row) => [row.task_id, row.xmin])),
+    new Map(projectionBeforeLifecycle.rows.map((row) => [row.task_id, row.xmin])),
     (actual, expected) =>
       actual instanceof Map &&
       expected instanceof Map &&
       actual.size === expected.size &&
-      [...expected].every(([jobId, xmin]) => actual.get(jobId) === xmin),
+      [...expected].every(([taskId, xmin]) => actual.get(taskId) === xmin),
   );
 
   const [firstPage, listMs] = await measured(context.now, () =>
-    context.admin.listJobs({ queue: context.queueName, limit: 2 }),
+    context.admin.listTasks({ queue: context.queueName, limit: 2 }),
   );
   const secondPage =
     firstPage.nextCursor === null
       ? { items: [], nextCursor: null }
-      : await context.admin.listJobs({
+      : await context.admin.listTasks({
           queue: context.queueName,
           limit: 2,
           cursor: firstPage.nextCursor,
         });
   const listed = [...firstPage.items, ...secondPage.items];
   metrics.listMs = listMs;
-  metrics.listedJobs = listed.length;
-  recordInvariant(assertions, "cross-state cursor lists every job once", listed.length, ids.length);
+  metrics.listedTasks = listed.length;
+  recordInvariant(
+    assertions,
+    "cross-state cursor lists every task once",
+    listed.length,
+    ids.length,
+  );
   recordInvariant(
     assertions,
     "cross-state cursor contains no duplicates",
-    new Set(listed.map((job) => job.id)).size,
+    new Set(listed.map((task) => task.id)).size,
     ids.length,
   );
   recordInvariant(
     assertions,
     "default listing omits every payload",
-    listed.every((job) => job.payload === null && job.payloadStatus === "omitted"),
+    listed.every((task) => task.payload === null && task.payloadStatus === "omitted"),
     true,
   );
   recordInvariant(assertions, "final page has no continuation cursor", secondPage.nextCursor, null);
 
-  const createdTimes = listed.map((job) => job.createdAt.getTime());
+  const createdTimes = listed.map((task) => task.createdAt.getTime());
   const [projected, payloadProjectionMs] = await measured(context.now, () =>
-    context.admin.listJobs({
+    context.admin.listTasks({
       queue: context.queueName,
       type: "query-listing-a",
       states: ["ready", "succeeded"],
@@ -2353,23 +2358,23 @@ async function queryListingLifecycle(
     }),
   );
   metrics.payloadProjectionMs = payloadProjectionMs;
-  recordInvariant(assertions, "combined filters select two jobs", projected.items.length, 2);
+  recordInvariant(assertions, "combined filters select two tasks", projected.items.length, 2);
   recordInvariant(
     assertions,
     "redaction occurs before bounded payload return",
     projected.items.every(
-      (job) =>
-        job.payloadStatus === "included" &&
-        job.payload !== null &&
-        typeof job.payload === "object" &&
-        !Array.isArray(job.payload) &&
-        !("secret" in job.payload),
+      (task) =>
+        task.payloadStatus === "included" &&
+        task.payload !== null &&
+        typeof task.payload === "object" &&
+        !Array.isArray(task.payload) &&
+        !("secret" in task.payload),
     ),
     true,
   );
 
   const [timeline, timelineMs] = await measured(context.now, () =>
-    context.admin.getJobTimeline(completed.id, { limit: 100 }),
+    context.admin.getTaskTimeline(completed.id, { limit: 100 }),
   );
   metrics.timelineMs = timelineMs;
   metrics.timelineEntries = timeline.items.length;
@@ -2385,7 +2390,7 @@ async function queryListingLifecycle(
   );
   recordInvariant(assertions, "small retained timeline is complete", timeline.nextCursor, null);
 
-  metrics.projectionRows = await rowCount(context.pool, "job_query");
+  metrics.projectionRows = await rowCount(context.pool, "task_query");
   recordInvariant(
     assertions,
     "projection has one row per identity",
@@ -2395,7 +2400,7 @@ async function queryListingLifecycle(
   const indexStorage = await context.pool.query<{ bytes: string }>(`
     SELECT COALESCE(sum(pg_relation_size(indexrelid)), 0)::text AS bytes
       FROM pg_index
-     WHERE indrelid = 'workhorse.job_query'::regclass`);
+     WHERE indrelid = 'workhorse.task_query'::regclass`);
   metrics.operatorIndexBytes = Number(indexStorage.rows[0]?.bytes ?? 0);
   recordInvariant(
     assertions,
@@ -2461,7 +2466,7 @@ async function crashBeforeCompletion(
   let completedCrashes = 0;
 
   for (const boundary of boundaries) {
-    const jobId = await queue.enqueue(
+    const taskId = await queue.enqueue(
       "crash",
       { failpoint: boundary.failpoint },
       { maxAttempts: 2 },
@@ -2486,9 +2491,9 @@ async function crashBeforeCompletion(
     } catch (error) {
       crash = error;
     }
-    const snapshot = await context.admin.getJob(jobId);
-    const leases = await rowCount(context.pool, "job_runtime", jobId);
-    const attemptHistoryRows = await rowCount(context.pool, "attempt_history", jobId);
+    const snapshot = await context.admin.getTask(taskId);
+    const leases = await rowCount(context.pool, "task_runtime", taskId);
+    const attemptHistoryRows = await rowCount(context.pool, "attempt_history", taskId);
     recordInvariant(
       assertions,
       `${boundary.failpoint} crash was injected`,
@@ -2542,9 +2547,9 @@ async function leaseExpiryRecovery(
   await reset(context.pool);
   const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
-  const jobId = await queue.enqueue("recover", {}, { maxAttempts: 2 });
+  const taskId = await queue.enqueue("recover", {}, { maxAttempts: 2 });
   const first = await queue.claim("expired-worker", { leaseMs: context.options.leaseMs });
-  recordInvariant(assertions, "first attempt claimed", first?.id, jobId);
+  recordInvariant(assertions, "first attempt claimed", first?.id, taskId);
   await context.sleep(context.options.leaseMs + 5);
   const [recovered, recoveryMs] = await measured(context.now, () =>
     queue.recoverExpired(context.options.batchSize),
@@ -2596,16 +2601,16 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
     retry_delay_source: string;
   };
 
-  const retryEvent = async (jobId: string): Promise<RetryEventRow> => {
+  const retryEvent = async (taskId: string): Promise<RetryEventRow> => {
     const result = await context.pool.query<RetryEventRow>(
       `SELECT details->'retry_policy' AS retry_policy,
               details->>'retry_delay_ms' AS retry_delay_ms,
               details->>'retry_delay_source' AS retry_delay_source
-         FROM workhorse.job_event
-        WHERE job_id = $1 AND event_type = 'retry_scheduled'
+         FROM workhorse.task_event
+        WHERE task_id = $1 AND event_type = 'retry_scheduled'
         ORDER BY event_id DESC
         LIMIT 1`,
-      [jobId],
+      [taskId],
     );
     return result.rows[0]!;
   };
@@ -2774,7 +2779,7 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
   recordInvariant(
     assertions,
     "queue recreation preserves persisted jitter policy",
-    (await context.admin.getJob(jitterId))?.retryPolicy,
+    (await context.admin.getTask(jitterId))?.retryPolicy,
     jitterPolicy,
     jsonEquivalent,
   );
@@ -2803,8 +2808,8 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
   );
   recordInvariant(
     assertions,
-    "exhausted job snapshot is failed",
-    (await context.admin.getJob(exhaustedId))?.state,
+    "exhausted task snapshot is failed",
+    (await context.admin.getTask(exhaustedId))?.state,
     "failed",
   );
 
@@ -2826,16 +2831,16 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
   const [contractId, contractEnqueueMs] = await measured(context.now, () =>
     contractQueue.enqueue("retry-contracted", { token: "benchmark-secret", value: 1 }),
   );
-  const [contractJob, contractClaimMs] = await measured(context.now, () =>
+  const [contractTask, contractClaimMs] = await measured(context.now, () =>
     contractQueue.claim("retry-worker"),
   );
   const [contractCompleted, contractCompleteMs] = await measured(context.now, () =>
-    contractQueue.complete(contractJob!, "retry-worker", {
+    contractQueue.complete(contractTask!, "retry-worker", {
       receipt: "benchmark-secret",
       ok: true,
     }),
   );
-  const contractSnapshot = await context.admin.getJob(contractId);
+  const contractSnapshot = await context.admin.getTask(contractId);
   recordInvariant(assertions, "contracted completion is accepted", contractCompleted, true);
   recordInvariant(
     assertions,
@@ -2862,8 +2867,8 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
     name: "retry-paths",
     durationMs: 0,
     metrics: {
-      immediateAttempts: (await context.admin.getJob(immediateId))?.currentAttempt ?? null,
-      delayedAttempts: (await context.admin.getJob(delayedId))?.currentAttempt ?? null,
+      immediateAttempts: (await context.admin.getTask(immediateId))?.currentAttempt ?? null,
+      delayedAttempts: (await context.admin.getTask(delayedId))?.currentAttempt ?? null,
       delayedPromoted,
       fixedDelayMs: Number(fixedEvent.retry_delay_ms),
       fixedSelectionMs,
@@ -2872,7 +2877,7 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
       jitterDelayMs,
       jitterSelectionMs,
       policySelectionTotalMs: fixedSelectionMs + exponentialSelectionMs + jitterSelectionMs,
-      exhaustedAttempts: (await context.admin.getJob(exhaustedId))?.currentAttempt ?? null,
+      exhaustedAttempts: (await context.admin.getTask(exhaustedId))?.currentAttempt ?? null,
       contractEnqueueMs,
       contractClaimMs,
       contractCompleteMs,
@@ -2890,17 +2895,17 @@ async function idempotentIngress(
   const state = async () =>
     (
       await context.pool.query<{
-        jobs: number;
+        tasks: number;
         bindings: number;
         events: number;
         runtimes: number;
         sequence_last_value: string;
         sequence_is_called: boolean;
       }>(`SELECT
-        (SELECT count(*)::integer FROM workhorse.job) AS jobs,
+        (SELECT count(*)::integer FROM workhorse.task) AS tasks,
         (SELECT count(*)::integer FROM workhorse.enqueue_idempotency) AS bindings,
-        (SELECT count(*)::integer FROM workhorse.job_event) AS events,
-        (SELECT count(*)::integer FROM workhorse.job_runtime) AS runtimes,
+        (SELECT count(*)::integer FROM workhorse.task_event) AS events,
+        (SELECT count(*)::integer FROM workhorse.task_runtime) AS runtimes,
         (SELECT last_value::text FROM workhorse.ready_sequence_seq) AS sequence_last_value,
         (SELECT is_called FROM workhorse.ready_sequence_seq) AS sequence_is_called`)
     ).rows[0]!;
@@ -2924,10 +2929,10 @@ async function idempotentIngress(
     ),
   );
   const afterReplay = await state();
-  recordInvariant(assertions, "exact replay returns original job", replayedId, firstId);
+  recordInvariant(assertions, "exact replay returns original task", replayedId, firstId);
   recordInvariant(
     assertions,
-    "exact replay adds no job, binding, event, runtime, or FIFO state",
+    "exact replay adds no task, binding, event, runtime, or FIFO state",
     afterReplay,
     afterFirst,
     jsonEquivalent,
@@ -2965,8 +2970,8 @@ async function idempotentIngress(
   );
   recordInvariant(
     assertions,
-    "conflict identifies retained job",
-    conflict instanceof EnqueueIdempotencyConflictError ? conflict.existingJobId : null,
+    "conflict identifies retained task",
+    conflict instanceof EnqueueIdempotencyConflictError ? conflict.existingTaskId : null,
     firstId,
   );
   recordInvariant(
@@ -2979,13 +2984,13 @@ async function idempotentIngress(
     assertions,
     "conflict rolls back whole batch",
     {
-      jobs: afterConflict.jobs,
+      tasks: afterConflict.tasks,
       bindings: afterConflict.bindings,
       events: afterConflict.events,
       runtimes: afterConflict.runtimes,
     },
     {
-      jobs: beforeConflict.jobs,
+      tasks: beforeConflict.tasks,
       bindings: beforeConflict.bindings,
       events: beforeConflict.events,
       runtimes: beforeConflict.runtimes,
@@ -3032,7 +3037,7 @@ async function idempotentIngress(
     batchIds[2] === batchIds[0],
     false,
   );
-  recordInvariant(assertions, "batch returns two unique jobs", new Set(batchIds).size, 2);
+  recordInvariant(assertions, "batch returns two unique tasks", new Set(batchIds).size, 2);
 
   const expiryOptions = {
     queue: context.queueName,
@@ -3051,34 +3056,39 @@ async function idempotentIngress(
     expiryReusedId === expiryFirstId,
     false,
   );
-  const originalExpiryJob = await context.pool.query<{ count: number }>(
-    "SELECT count(*)::integer AS count FROM workhorse.job WHERE id = $1",
+  const originalExpiryTask = await context.pool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM workhorse.task WHERE id = $1",
     [expiryFirstId],
   );
   recordInvariant(
     assertions,
-    "expired binding leaves original job intact",
-    originalExpiryJob.rows[0]?.count,
+    "expired binding leaves original task intact",
+    originalExpiryTask.rows[0]?.count,
     1,
   );
-  const activeExpiryBinding = await context.pool.query<{ job_id: string }>(
-    "SELECT job_id FROM workhorse.enqueue_idempotency WHERE job_id = $1",
+  const activeExpiryBinding = await context.pool.query<{ task_id: string }>(
+    "SELECT task_id FROM workhorse.enqueue_idempotency WHERE task_id = $1",
     [expiryReusedId],
   );
   recordInvariant(
     assertions,
     "expiry reuse transfers scoped ownership",
-    activeExpiryBinding.rows[0]?.job_id,
+    activeExpiryBinding.rows[0]?.task_id,
     expiryReusedId,
   );
 
   const finalState = await state();
-  recordInvariant(assertions, "scenario accepted expected jobs", finalState.jobs, 5);
+  recordInvariant(assertions, "scenario accepted expected tasks", finalState.tasks, 5);
   recordInvariant(assertions, "scenario retained expected bindings", finalState.bindings, 3);
-  recordInvariant(assertions, "scenario appended one event per accepted job", finalState.events, 5);
   recordInvariant(
     assertions,
-    "scenario retained one runtime per accepted job",
+    "scenario appended one event per accepted task",
+    finalState.events,
+    5,
+  );
+  recordInvariant(
+    assertions,
+    "scenario retained one runtime per accepted task",
     finalState.runtimes,
     5,
   );
@@ -3093,7 +3103,7 @@ async function idempotentIngress(
       batchDuplicatesMs,
       expiryFirstAcceptMs,
       expiryReuseMs,
-      jobs: finalState.jobs,
+      tasks: finalState.tasks,
       bindings: finalState.bindings,
       events: finalState.events,
       runtimes: finalState.runtimes,
@@ -3107,8 +3117,8 @@ async function coalescingIngress(
 ): Promise<OperationalScenarioResult> {
   const assertions: ScenarioAssertion[] = [];
   const metrics: Record<string, ScenarioMetric> = {};
-  const keysPerCohort = Math.max(2, Math.min(context.options.batchSize, context.options.jobCount));
-  const repeatsPerKey = Math.max(2, Math.ceil(context.options.jobCount / keysPerCohort));
+  const keysPerCohort = Math.max(2, Math.min(context.options.batchSize, context.options.taskCount));
+  const repeatsPerKey = Math.max(2, Math.ceil(context.options.taskCount / keysPerCohort));
   const requestsPerCohort = keysPerCohort * (repeatsPerKey + 1);
   type CohortMode = "debounce-preserve" | "debounce-reset" | "idempotent" | "throttle";
 
@@ -3126,7 +3136,7 @@ async function coalescingIngress(
       if (message.payload === cohortQueueName) notifications.push(message.payload);
     };
     listener.on("notification", onNotification);
-    await listener.query("LISTEN workhorse_jobs");
+    await listener.query("LISTEN workhorse_tasks");
 
     const enqueue = (keyIndex: number, revision: number) => {
       const key = `key-${keyIndex}`;
@@ -3180,7 +3190,7 @@ async function coalescingIngress(
         throw new Error(`${mode} acceptance race did not retain one seed per key`);
       }
       const finalSnapshots = await Promise.all(
-        accepted.map((request) => context.admin.getJob(request!.result.jobId)),
+        accepted.map((request) => context.admin.getTask(request!.result.taskId)),
       );
       const state = (
         await context.pool.query<{
@@ -3188,28 +3198,28 @@ async function coalescingIngress(
           debounced_events: number;
           enqueued_events: number;
           fifo_placements: number;
-          jobs: number;
+          tasks: number;
           runtimes: number;
         }>(
           `SELECT
-             (SELECT count(*)::integer FROM workhorse.job WHERE queue_name = $1) AS jobs,
-             (SELECT count(*)::integer FROM workhorse.job_runtime WHERE queue_name = $1)
+             (SELECT count(*)::integer FROM workhorse.task WHERE queue_name = $1) AS tasks,
+             (SELECT count(*)::integer FROM workhorse.task_runtime WHERE queue_name = $1)
                AS runtimes,
              (SELECT count(*)::integer
                 FROM workhorse.enqueue_idempotency identity
-                JOIN workhorse.job ON job.id = identity.job_id
-               WHERE job.queue_name = $1) AS bindings,
+                JOIN workhorse.task ON task.id = identity.task_id
+               WHERE task.queue_name = $1) AS bindings,
              (SELECT count(*)::integer
-                FROM workhorse.job_runtime
+                FROM workhorse.task_runtime
                WHERE queue_name = $1 AND sequence IS NOT NULL) AS fifo_placements,
              (SELECT count(*)::integer
-                FROM workhorse.job_event event
-                JOIN workhorse.job ON job.id = event.job_id
-               WHERE job.queue_name = $1 AND event.event_type = 'enqueued') AS enqueued_events,
+                FROM workhorse.task_event event
+                JOIN workhorse.task ON task.id = event.task_id
+               WHERE task.queue_name = $1 AND event.event_type = 'enqueued') AS enqueued_events,
              (SELECT count(*)::integer
-                FROM workhorse.job_event event
-                JOIN workhorse.job ON job.id = event.job_id
-               WHERE job.queue_name = $1 AND event.event_type = 'debounced') AS debounced_events`,
+                FROM workhorse.task_event event
+                JOIN workhorse.task ON task.id = event.task_id
+               WHERE task.queue_name = $1 AND event.event_type = 'debounced') AS debounced_events`,
           [cohortQueueName],
         )
       ).rows[0]!;
@@ -3217,24 +3227,24 @@ async function coalescingIngress(
         "SELECT pg_indexes_size('workhorse.enqueue_idempotency'::regclass)::text AS bytes",
       );
       const debounceEvents = await context.pool.query<{
-        job_id: string;
+        task_id: string;
         request_digest: string;
         stored_request_digest: string;
       }>(
-        `SELECT event.job_id, event.details->>'stored_request_digest' AS stored_request_digest,
+        `SELECT event.task_id, event.details->>'stored_request_digest' AS stored_request_digest,
                 event.details->>'request_digest' AS request_digest
-           FROM workhorse.job_event event
-           JOIN workhorse.job ON job.id = event.job_id
-          WHERE job.queue_name = $1 AND event.event_type = 'debounced'
+           FROM workhorse.task_event event
+           JOIN workhorse.task ON task.id = event.task_id
+          WHERE task.queue_name = $1 AND event.event_type = 'debounced'
           ORDER BY event.event_id`,
         [cohortQueueName],
       );
-      const retainedDigests = await context.pool.query<{ job_id: string; request_digest: string }>(
-        `SELECT identity.job_id,
+      const retainedDigests = await context.pool.query<{ task_id: string; request_digest: string }>(
+        `SELECT identity.task_id,
                 workhorse.sha256_hex_v1(identity.request_fingerprint::text) AS request_digest
            FROM workhorse.enqueue_idempotency identity
-           JOIN workhorse.job ON job.id = identity.job_id
-          WHERE job.queue_name = $1`,
+           JOIN workhorse.task ON task.id = identity.task_id
+          WHERE task.queue_name = $1`,
         [cohortQueueName],
       );
       const expectedRepeatOutcome =
@@ -3245,7 +3255,7 @@ async function coalescingIngress(
       if (expectedNotifications > 0) {
         await waitFor(
           () => notifications.length === expectedNotifications,
-          `${mode} accepted-job notifications`,
+          `${mode} accepted-task notifications`,
         );
       }
       const retainedPayloadsValid = finalSnapshots.every((snapshot, keyIndex) => {
@@ -3259,11 +3269,11 @@ async function coalescingIngress(
           : payload.revision === undefined;
       });
       const resultsStayOnAcceptedIdentity = requests.every(
-        ({ keyIndex, result }) => result.jobId === accepted[keyIndex]!.result.jobId,
+        ({ keyIndex, result }) => result.taskId === accepted[keyIndex]!.result.taskId,
       );
       const eventDigestChainsMatch = accepted.every((request) => {
         const events = debounceEvents.rows.filter(
-          (event) => event.job_id === request!.result.jobId,
+          (event) => event.task_id === request!.result.taskId,
         );
         if (!mode.startsWith("debounce")) return events.length === 0;
         if (events.length !== repeatsPerKey) return false;
@@ -3273,7 +3283,7 @@ async function coalescingIngress(
           }
         }
         const retained = retainedDigests.rows.find(
-          (digest) => digest.job_id === request!.result.jobId,
+          (digest) => digest.task_id === request!.result.taskId,
         );
         return retained?.request_digest === events.at(-1)?.request_digest;
       });
@@ -3298,8 +3308,8 @@ async function coalescingIngress(
       );
       recordInvariant(
         assertions,
-        `${mode} keeps one durable job per key`,
-        state.jobs,
+        `${mode} keeps one durable task per key`,
+        state.tasks,
         keysPerCohort,
       );
       recordInvariant(
@@ -3358,30 +3368,35 @@ async function coalescingIngress(
         }),
       );
       const cleanupState = (
-        await context.pool.query<{ bindings: number; jobs: number }>(
+        await context.pool.query<{ bindings: number; tasks: number }>(
           `SELECT
-             (SELECT count(*)::integer FROM workhorse.job WHERE queue_name = $1) AS jobs,
+             (SELECT count(*)::integer FROM workhorse.task WHERE queue_name = $1) AS tasks,
              (SELECT count(*)::integer
                 FROM workhorse.enqueue_idempotency
-               WHERE job_id = ANY($2::uuid[])) AS bindings`,
-          [cohortQueueName, accepted.map((request) => request!.result.jobId)],
+               WHERE task_id = ANY($2::uuid[])) AS bindings`,
+          [cohortQueueName, accepted.map((request) => request!.result.taskId)],
         )
       ).rows[0]!;
-      recordInvariant(assertions, `${mode} purge removes every pending job`, purged, keysPerCohort);
       recordInvariant(
         assertions,
-        `${mode} purge leaves no job or retained key`,
+        `${mode} purge removes every pending task`,
+        purged,
+        keysPerCohort,
+      );
+      recordInvariant(
+        assertions,
+        `${mode} purge leaves no task or retained key`,
         cleanupState,
-        { bindings: 0, jobs: 0 },
+        { bindings: 0, tasks: 0 },
         jsonEquivalent,
       );
 
       if (mode.startsWith("debounce")) {
         const scheduleAccepted = await enqueue(0, 0);
-        const initialRunAt = (await context.admin.getJob(scheduleAccepted.jobId))!.runAt;
+        const initialRunAt = (await context.admin.getTask(scheduleAccepted.taskId))!.runAt;
         await context.sleep(1);
         await enqueue(0, 1);
-        const replacedRunAt = (await context.admin.getJob(scheduleAccepted.jobId))!.runAt;
+        const replacedRunAt = (await context.admin.getTask(scheduleAccepted.taskId))!.runAt;
         recordInvariant(
           assertions,
           `${mode} ${mode === "debounce-reset" ? "resets" : "preserves"} its schedule`,
@@ -3411,7 +3426,7 @@ async function coalescingIngress(
         notifications: notifications.length,
       };
     } finally {
-      await listener.query("UNLISTEN workhorse_jobs");
+      await listener.query("UNLISTEN workhorse_tasks");
       listener.off("notification", onNotification);
       listener.release();
     }
@@ -3442,7 +3457,7 @@ async function dependencyOperations(
   await reset(context.pool);
   const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
-  const fanIn = Math.max(2, Math.min(context.options.jobCount, 100));
+  const fanIn = Math.max(2, Math.min(context.options.taskCount, 100));
   const prerequisiteIds = await queue.enqueueMany(
     Array.from({ length: fanIn }, (_, index) => ({
       type: "dependency-prerequisite",
@@ -3451,7 +3466,7 @@ async function dependencyOperations(
   );
   const dependentId = await queue.enqueue("dependency-dependent", null, {
     dependencies: {
-      prerequisiteJobIds: prerequisiteIds,
+      prerequisiteTaskIds: prerequisiteIds,
       onSuccess: "release",
       onFailure: "fail",
       onCancellation: "cancel",
@@ -3468,41 +3483,41 @@ async function dependencyOperations(
   recordInvariant(
     assertions,
     "fan-in releases once after every prerequisite resolves",
-    (await context.admin.getJob(dependentId))?.state,
+    (await context.admin.getTask(dependentId))?.state,
     "ready",
   );
-  const dependencyReleaseEvents = (await context.admin.getJobTimeline(dependentId)).items.filter(
+  const dependencyReleaseEvents = (await context.admin.getTaskTimeline(dependentId)).items.filter(
     (entry) => entry.kind === "event" && entry.eventType === "dependency_released",
   ).length;
   recordInvariant(assertions, "fan-in records one release transition", dependencyReleaseEvents, 1);
 
-  const fanOut = MAX_JOB_DEPENDENTS;
+  const fanOut = MAX_TASK_DEPENDENTS;
   const fanOutQueue = operationalQueue(context.pool, `${context.queueName}-fan-out`);
   const fanOutPrerequisiteId = await fanOutQueue.enqueue("dependency-fan-out-prerequisite", null);
   const fanOutDependentIds = await fanOutQueue.enqueueMany(
     Array.from({ length: fanOut }, (_unused, index) => ({
       type: "dependency-fan-out-dependent",
       payload: { index },
-      options: { prerequisiteJobId: fanOutPrerequisiteId },
+      options: { prerequisiteTaskId: fanOutPrerequisiteId },
     })),
   );
   const [, fanOutSettlementMs] = await measured(context.now, () =>
     fanOutQueue.cancel(fanOutPrerequisiteId, { requestedBy: "dependency-operations" }),
   );
   const fanOutStates = await Promise.all(
-    fanOutDependentIds.map((jobId) => context.admin.getJob(jobId)),
+    fanOutDependentIds.map((taskId) => context.admin.getTask(taskId)),
   );
   recordInvariant(
     assertions,
     "wide fan-out terminal settlement cancels every dependent at the configured bound",
-    fanOutStates.filter((job) => job?.state === "canceled").length,
+    fanOutStates.filter((task) => task?.state === "canceled").length,
     fanOut,
   );
 
   const contentionQueue = operationalQueue(context.pool, `${context.queueName}-contention`);
   const concurrentDependencyEnqueues = Math.max(
     2,
-    Math.min(context.options.jobCount, MAX_JOB_DEPENDENTS),
+    Math.min(context.options.taskCount, MAX_TASK_DEPENDENTS),
   );
   const contentionPrerequisiteIds = await contentionQueue.enqueueMany(
     Array.from({ length: concurrentDependencyEnqueues }, (_unused, index) => ({
@@ -3513,23 +3528,23 @@ async function dependencyOperations(
   const contentionStarted = context.now();
   const contentionRequests = await Promise.all(
     Array.from({ length: concurrentDependencyEnqueues }, async (_unused, index) => {
-      const [jobId, durationMs] = await measured(context.now, () =>
+      const [taskId, durationMs] = await measured(context.now, () =>
         contentionQueue.enqueue(
           "dependency-contention-dependent",
           { index },
           {
-            prerequisiteJobId: contentionPrerequisiteIds[index]!,
+            prerequisiteTaskId: contentionPrerequisiteIds[index]!,
           },
         ),
       );
-      return { jobId, durationMs };
+      return { taskId, durationMs };
     }),
   );
   const concurrentDependencyEnqueueTotalMs = Math.max(0.001, context.now() - contentionStarted);
   recordInvariant(
     assertions,
     "concurrent disconnected dependency enqueue creates every requested edge without cross-component lock contention",
-    new Set(contentionRequests.map((request) => request.jobId)).size,
+    new Set(contentionRequests.map((request) => request.taskId)).size,
     concurrentDependencyEnqueues,
   );
   await Promise.all(
@@ -3541,7 +3556,7 @@ async function dependencyOperations(
   const cancellationPrerequisiteId = await queue.enqueue("dependency-cancel-prerequisite", null);
   const canceledDependentId = await queue.enqueue("dependency-cancel-dependent", null, {
     dependencies: {
-      prerequisiteJobIds: [cancellationPrerequisiteId],
+      prerequisiteTaskIds: [cancellationPrerequisiteId],
       onSuccess: "release",
       onFailure: "fail",
       onCancellation: "cancel",
@@ -3553,41 +3568,41 @@ async function dependencyOperations(
   recordInvariant(
     assertions,
     "cancellation applies its declared terminal dependency policy",
-    (await context.admin.getJob(canceledDependentId))?.state,
+    (await context.admin.getTask(canceledDependentId))?.state,
     "canceled",
   );
 
   const beforeQueueName = `${context.queueName}-plan-before`;
   const beforeQueue = operationalQueue(context.pool, beforeQueueName);
   await beforeQueue.enqueue("dependency-plan-ready", null);
-  await context.pool.query("VACUUM (ANALYZE) workhorse.job_runtime");
+  await context.pool.query("VACUUM (ANALYZE) workhorse.task_runtime");
   const claimPlanBeforeHistory = await claimPlan(
     context.pool,
     beforeQueueName,
     "dependency-plan-before",
   );
 
-  const historyJobs = Math.max(1_000, context.options.jobCount * 100);
+  const historyTasks = Math.max(1_000, context.options.taskCount * 100);
   const historyQueueName = `${context.queueName}-history`;
   const historyQueue = operationalQueue(context.pool, historyQueueName);
-  const historyRequests = Array.from({ length: historyJobs }, (_, index) => ({
+  const historyRequests = Array.from({ length: historyTasks }, (_, index) => ({
     type: "dependency-plan-history",
     payload: { index },
   }));
   for (let offset = 0; offset < historyRequests.length; offset += MAX_ENQUEUE_BATCH_SIZE) {
     await historyQueue.enqueueMany(historyRequests.slice(offset, offset + MAX_ENQUEUE_BATCH_SIZE));
   }
-  for (let index = 0; index < historyJobs; index += 1) {
+  for (let index = 0; index < historyTasks; index += 1) {
     const workerId = `dependency-history-${index}`;
-    const job = await historyQueue.claim(workerId);
-    if (job === null) throw new Error("dependency claim-plan history exhausted early");
-    await historyQueue.complete(job, workerId, null);
+    const task = await historyQueue.claim(workerId);
+    if (task === null) throw new Error("dependency claim-plan history exhausted early");
+    await historyQueue.complete(task, workerId, null);
   }
 
   const afterQueueName = `${context.queueName}-plan-after`;
   const afterQueue = operationalQueue(context.pool, afterQueueName);
   await afterQueue.enqueue("dependency-plan-ready", null);
-  await context.pool.query("VACUUM (ANALYZE) workhorse.job_runtime");
+  await context.pool.query("VACUUM (ANALYZE) workhorse.task_runtime");
   const claimPlanAfterHistory = await claimPlan(
     context.pool,
     afterQueueName,
@@ -3604,10 +3619,10 @@ async function dependencyOperations(
   recordInvariant(
     assertions,
     "health reports no blocked dependency after every cohort settles",
-    health.dependencies.blockedJobs,
+    health.dependencies.blockedTasks,
     0,
   );
-  const retainedJobIdentities = await rowCount(context.pool, "job");
+  const retainedTaskIdentities = await rowCount(context.pool, "task");
   return {
     name: "dependency-operations",
     durationMs: 0,
@@ -3633,8 +3648,8 @@ async function dependencyOperations(
       claimPlanExecutionMsAfterHistory: claimPlanAfterHistory.executionTimeMs,
       claimPlanSharedBlocksBeforeHistory: claimPlanBeforeHistory.sharedBlocks,
       claimPlanSharedBlocksAfterHistory: claimPlanAfterHistory.sharedBlocks,
-      retainedJobIdentities,
-      historyJobs,
+      retainedTaskIdentities,
+      historyTasks,
       dependencyReleaseEvents,
       dependencyFailedResolutions: health.dependencies.failedResolutions,
     },
@@ -3648,11 +3663,11 @@ async function retentionPruning(
   await reset(context.pool);
   const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
-  const seededJobs = Math.min(context.options.jobCount, context.options.pruneLimit, 10);
-  for (let index = 0; index < seededJobs; index += 1) {
+  const seededTasks = Math.min(context.options.taskCount, context.options.pruneLimit, 10);
+  for (let index = 0; index < seededTasks; index += 1) {
     await queue.enqueue("retention", { index });
-    const job = await queue.claim(`retention-worker-${index}`);
-    await queue.complete(job!, `retention-worker-${index}`, { ok: true });
+    const task = await queue.claim(`retention-worker-${index}`);
+    await queue.complete(task!, `retention-worker-${index}`, { ok: true });
   }
   const retiredDay = new Date();
   retiredDay.setUTCHours(12, 0, 0, 0);
@@ -3661,34 +3676,36 @@ async function retentionPruning(
   const historicalTimestamp = new Date(`${retiredDayDate}T12:00:00.000Z`);
   await context.pool.query(createHistoryDayV1Sql, [retiredDayDate]);
   await context.pool.query(
-    `UPDATE workhorse.job_event e SET occurred_at = $1
-      FROM workhorse.job j WHERE j.id = e.job_id AND j.queue_name = $2`,
+    `UPDATE workhorse.task_event e SET occurred_at = $1
+      FROM workhorse.task j WHERE j.id = e.task_id AND j.queue_name = $2`,
     [historicalTimestamp, context.queueName],
   );
   await context.pool.query(
     `UPDATE workhorse.attempt_history h SET occurred_at = $1, finished_at = $1
-      FROM workhorse.job j WHERE j.id = h.job_id AND j.queue_name = $2`,
+      FROM workhorse.task j WHERE j.id = h.task_id AND j.queue_name = $2`,
     [historicalTimestamp, context.queueName],
   );
   const historyBefore =
-    (await rowCount(context.pool, "job_event")) + (await rowCount(context.pool, "attempt_history"));
+    (await rowCount(context.pool, "task_event")) +
+    (await rowCount(context.pool, "attempt_history"));
   await queue.syncRetentionPolicy({
-    jobIdentityRetentionDays: null,
+    taskIdentityRetentionDays: null,
     terminalOutcomeRetentionDays: null,
-    jobEventRetentionDays: 7,
+    taskEventRetentionDays: 7,
     attemptHistoryRetentionDays: 7,
     scheduleOccurrenceRetentionDays: 30,
     statisticsRetentionDays: 30,
-    terminalJobPruneLimit: context.options.pruneLimit,
+    terminalTaskPruneLimit: context.options.pruneLimit,
     historyPartitionsPerPass: 2,
     defaultPartitionRowsPerPass: context.options.pruneLimit,
     occurrenceRowsPerPass: context.options.pruneLimit,
   });
   const historyRetention = await queue.retainHistory({ force: true });
   const historyAfter =
-    (await rowCount(context.pool, "job_event")) + (await rowCount(context.pool, "attempt_history"));
+    (await rowCount(context.pool, "task_event")) +
+    (await rowCount(context.pool, "attempt_history"));
   const pruned = historyBefore - historyAfter;
-  const retainedJobs = await rowCount(context.pool, "job");
+  const retainedTasks = await rowCount(context.pool, "task");
   const health = await queue.health();
   recordInvariant(assertions, "terminal history was seeded", historyBefore > 0, true);
   recordInvariant(
@@ -3698,7 +3715,7 @@ async function retentionPruning(
     pruned,
   );
   recordInvariant(assertions, "old history was removed", historyAfter, 0);
-  recordInvariant(assertions, "current job identity is retained", retainedJobs, seededJobs);
+  recordInvariant(assertions, "current task identity is retained", retainedTasks, seededTasks);
   recordInvariant(
     assertions,
     "event retention task ran",
@@ -3714,7 +3731,7 @@ async function retentionPruning(
   recordInvariant(
     assertions,
     "retention health reports no expired event partitions",
-    health.eligibleHistoryPartitions.jobEvents,
+    health.eligibleHistoryPartitions.taskEvents,
     0,
   );
   recordInvariant(
@@ -3728,11 +3745,11 @@ async function retentionPruning(
     name: "retention-pruning",
     durationMs: 0,
     metrics: {
-      seededJobs,
+      seededTasks,
       historyBefore,
       pruned,
       historyAfter,
-      retainedJobs,
+      retainedTasks,
       eventRetentionUnits:
         historyRetention.find((phase) => phase.phase === "event_retention")?.rowsAffected ?? 0,
       attemptRetentionUnits:
@@ -3786,8 +3803,8 @@ async function healthSnapshot(
   await reset(context.pool);
   const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
-  const readyCount = Math.max(1, Math.floor(context.options.jobCount / 2));
-  const scheduledCount = Math.max(1, context.options.jobCount - readyCount);
+  const readyCount = Math.max(1, Math.floor(context.options.taskCount / 2));
+  const scheduledCount = Math.max(1, context.options.taskCount - readyCount);
   for (let index = 0; index < readyCount + 1; index += 1) {
     await queue.enqueue("health-ready", { index });
   }
@@ -3797,9 +3814,9 @@ async function healthSnapshot(
   const expired = await queue.claim("health-expired", { leaseMs: context.options.leaseMs * 4 });
   recordInvariant(assertions, "health expired seed claimed", expired !== null, true);
   await context.pool.query(
-    `UPDATE workhorse.job_runtime
+    `UPDATE workhorse.task_runtime
         SET expires_at = clock_timestamp() - interval '1 millisecond'
-      WHERE job_id = $1 AND state = 'active'`,
+      WHERE task_id = $1 AND state = 'active'`,
     [expired!.id],
   );
   const [health, snapshotMs] = await measured(context.now, () => queue.health());
@@ -3829,20 +3846,20 @@ async function progressLifecycle(
   const queue = operationalQueue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
   const id = await queue.enqueue("progress-lifecycle", { source: "benchmark" });
-  const job = await queue.claim("benchmark-progress", { leaseMs: 5_000 });
-  if (!job) throw new Error("progress lifecycle failed to claim its seeded job");
+  const task = await queue.claim("benchmark-progress", { leaseMs: 5_000 });
+  if (!task) throw new Error("progress lifecycle failed to claim its seeded task");
 
   const [first, firstUpdateMs] = await measured(context.now, () =>
-    queue.updateProgress(job, "benchmark-progress", { completed: 1, total: 2 }),
+    queue.updateProgress(task, "benchmark-progress", { completed: 1, total: 2 }),
   );
   const [unchanged, unchangedUpdateMs] = await measured(context.now, () =>
-    queue.updateProgress(job, "benchmark-progress", { completed: 1, total: 2 }),
+    queue.updateProgress(task, "benchmark-progress", { completed: 1, total: 2 }),
   );
 
   const rateStarted = context.now();
   let rateLimited = false;
   try {
-    await queue.updateProgress(job, "benchmark-progress", { completed: 2, total: 2 });
+    await queue.updateProgress(task, "benchmark-progress", { completed: 2, total: 2 });
   } catch (error) {
     rateLimited = error instanceof ProgressRateLimitError;
     if (!rateLimited) throw error;
@@ -3851,9 +3868,13 @@ async function progressLifecycle(
 
   let staleRejected = false;
   try {
-    await queue.updateProgress({ ...job, fenceToken: job.fenceToken + 1n }, "benchmark-progress", {
-      invalid: true,
-    });
+    await queue.updateProgress(
+      { ...task, fenceToken: task.fenceToken + 1n },
+      "benchmark-progress",
+      {
+        invalid: true,
+      },
+    );
   } catch (error) {
     staleRejected = error instanceof ProgressLeaseLostError;
     if (!staleRejected) throw error;
@@ -3861,14 +3882,14 @@ async function progressLifecycle(
 
   await context.sleep(110);
   const [second, secondUpdateMs] = await measured(context.now, () =>
-    queue.updateProgress(job, "benchmark-progress", { completed: 2, total: 2 }),
+    queue.updateProgress(task, "benchmark-progress", { completed: 2, total: 2 }),
   );
-  const [snapshot, lookupMs] = await measured(context.now, () => context.admin.getJob(id));
-  const completed = await queue.complete(job, "benchmark-progress", { ok: true });
-  const terminal = await context.admin.getJob(id);
+  const [snapshot, lookupMs] = await measured(context.now, () => context.admin.getTask(id));
+  const completed = await queue.complete(task, "benchmark-progress", { ok: true });
+  const terminal = await context.admin.getTask(id);
   const eventResult = await context.pool.query<{ count: string }>(
-    `SELECT count(*)::text AS count FROM workhorse.job_event
-      WHERE job_id = $1 AND event_type = 'progress_updated'`,
+    `SELECT count(*)::text AS count FROM workhorse.task_event
+      WHERE task_id = $1 AND event_type = 'progress_updated'`,
     [id],
   );
   const progressEvents = Number(eventResult.rows[0]!.count);
@@ -3891,7 +3912,7 @@ async function progressLifecycle(
       jsonEquivalent(snapshot?.progress?.value, second.value),
     true,
   );
-  recordInvariant(assertions, "progress job completes", completed, true);
+  recordInvariant(assertions, "progress task completes", completed, true);
   recordInvariant(
     assertions,
     "terminal lookup retains latest progress",
@@ -3930,21 +3951,21 @@ async function workerConcurrency(
   const pollingSchedulingSlack = 2;
   const nullClaimRates: number[] = [];
   const pollingPressureChecks: boolean[] = [];
-  const july2026ClaimStatementsPerCompletedJob = 1;
+  const july2026ClaimStatementsPerCompletedTask = 1;
 
   metrics.concurrencyLevels = concurrencyLevels.join(",");
-  metrics.jobsPerLevel = context.options.jobCount;
+  metrics.tasksPerLevel = context.options.taskCount;
   metrics.handlerDelayMs = handlerDelayMs;
   metrics.leaseMs = leaseMs;
   metrics.heartbeatMs = heartbeatMs;
   metrics.pollMs = pollMs;
   metrics.pollingSchedulingSlack = pollingSchedulingSlack;
-  metrics.july2026ClaimStatementsPerCompletedJob = july2026ClaimStatementsPerCompletedJob;
+  metrics.july2026ClaimStatementsPerCompletedTask = july2026ClaimStatementsPerCompletedTask;
 
   for (const concurrency of concurrencyLevels) {
     await reset(context.pool);
     const seedQueue = operationalQueue(context.pool, context.queueName);
-    for (let index = 0; index < context.options.jobCount; index += 1) {
+    for (let index = 0; index < context.options.taskCount; index += 1) {
       await seedQueue.enqueue("concurrency-throughput", { index });
     }
 
@@ -3973,7 +3994,7 @@ async function workerConcurrency(
       await context.sleep(handlerDelayMs);
       activeHandlers -= 1;
       completedHandlers += 1;
-      if (completedHandlers === context.options.jobCount) worker.stop();
+      if (completedHandlers === context.options.taskCount) worker.stop();
       return { ok: true };
     });
 
@@ -3992,7 +4013,7 @@ async function workerConcurrency(
     const afterTiming = probe.snapshot();
     await context.sleep(heartbeatMs);
     const afterWindow = probe.snapshot();
-    const succeeded = await rowCount(context.pool, "job_outcome");
+    const succeeded = await rowCount(context.pool, "task_outcome");
     const health = await seedQueue.health();
     const runtimeState = worker.runtimeState();
     const prefix = `concurrency${concurrency}`;
@@ -4000,7 +4021,7 @@ async function workerConcurrency(
     const nullClaimCalls = afterTiming.emptyClaimCalls - beforeTiming.emptyClaimCalls;
     const elapsedPollingWindows = Math.ceil(durationMs / pollMs);
     const claimCallUpperBound = pollingClaimUpperBound(
-      context.options.jobCount,
+      context.options.taskCount,
       durationMs,
       pollMs,
       pollingSchedulingSlack,
@@ -4010,13 +4031,13 @@ async function workerConcurrency(
     pollingPressureChecks.push(claimCalls <= claimCallUpperBound);
 
     metrics[`${prefix}DurationMs`] = durationMs;
-    metrics[`${prefix}JobsPerSecond`] =
-      durationMs === 0 ? null : (context.options.jobCount * 1_000) / durationMs;
+    metrics[`${prefix}TasksPerSecond`] =
+      durationMs === 0 ? null : (context.options.taskCount * 1_000) / durationMs;
     metrics[`${prefix}MaxHandlerOverlap`] = maxHandlerOverlap;
     metrics[`${prefix}MaxActiveSlots`] = maxActiveSlots;
     metrics[`${prefix}QueryCalls`] = afterTiming.queries - beforeTiming.queries;
     metrics[`${prefix}ClaimCalls`] = claimCalls;
-    metrics[`${prefix}ClaimStatementsPerCompletedJob`] = claimCalls / context.options.jobCount;
+    metrics[`${prefix}ClaimStatementsPerCompletedTask`] = claimCalls / context.options.taskCount;
     metrics[`${prefix}NullClaimCalls`] = nullClaimCalls;
     metrics[`${prefix}ElapsedPollingWindows`] = elapsedPollingWindows;
     metrics[`${prefix}ClaimCallUpperBound`] = claimCallUpperBound;
@@ -4041,13 +4062,13 @@ async function workerConcurrency(
       assertions,
       `${prefix} completes all handlers`,
       completedHandlers,
-      context.options.jobCount,
+      context.options.taskCount,
     );
     recordInvariant(
       assertions,
       `${prefix} persists all outcomes`,
       succeeded,
-      context.options.jobCount,
+      context.options.taskCount,
     );
     recordInvariant(assertions, `${prefix} leaves no active leases`, health.activeLeases, 0);
     recordInvariant(assertions, `${prefix} leaves no expired leases`, health.expiredLeases, 0);
@@ -4055,7 +4076,7 @@ async function workerConcurrency(
       assertions,
       `${prefix} handler overlap respects slots`,
       maxHandlerOverlap,
-      Math.min(concurrency, context.options.jobCount),
+      Math.min(concurrency, context.options.taskCount),
       (actual, expected) => Number(actual) <= Number(expected) && Number(actual) >= 1,
     );
     recordInvariant(
@@ -4083,8 +4104,8 @@ async function workerConcurrency(
       recordInvariant(
         assertions,
         `${prefix} improves on the 2026-07-22 claim-statement baseline`,
-        claimCalls / context.options.jobCount,
-        july2026ClaimStatementsPerCompletedJob,
+        claimCalls / context.options.taskCount,
+        july2026ClaimStatementsPerCompletedTask,
         (actual, expected) => Number(actual) < Number(expected),
       );
     }
@@ -4097,9 +4118,9 @@ async function workerConcurrency(
     );
     recordInvariant(
       assertions,
-      `${prefix} every job receives a heartbeat`,
-      afterTiming.heartbeatJobs - beforeTiming.heartbeatJobs,
-      context.options.jobCount,
+      `${prefix} every task receives a heartbeat`,
+      afterTiming.heartbeatTasks - beforeTiming.heartbeatTasks,
+      context.options.taskCount,
       (actual, expected) => Number(actual) >= Number(expected),
     );
     recordInvariant(
@@ -4119,7 +4140,7 @@ async function workerConcurrency(
     true,
   );
 
-  const topologyCapacity = Math.min(8, context.options.jobCount);
+  const topologyCapacity = Math.min(8, context.options.taskCount);
   const topologyProfiles = [
     { name: "immediate", delayMs: 0 },
     { name: "io", delayMs: handlerDelayMs },
@@ -4146,7 +4167,7 @@ async function workerConcurrency(
       await reset(context.pool);
       const queue = operationalQueue(context.pool, context.queueName);
       await queue.enqueueMany(
-        Array.from({ length: context.options.jobCount }, (_, index) => ({
+        Array.from({ length: context.options.taskCount }, (_, index) => ({
           type: "concurrency-topology",
           payload: { index },
         })),
@@ -4176,7 +4197,7 @@ async function workerConcurrency(
           if (profile.delayMs > 0) await context.sleep(profile.delayMs);
           activeHandlers -= 1;
           completedHandlers += 1;
-          if (completedHandlers === context.options.jobCount) {
+          if (completedHandlers === context.options.taskCount) {
             for (const activeWorker of workers) activeWorker.stop();
           }
           return { ok: true };
@@ -4191,7 +4212,7 @@ async function workerConcurrency(
       const durationMs = Math.max(0, context.now() - processingStartedAt);
       const after = probe.snapshot();
       const health = await queue.health();
-      const outcomes = await rowCount(context.pool, "job_outcome");
+      const outcomes = await rowCount(context.pool, "task_outcome");
       const prefix = `topology${profile.name}${shape.name}`;
       const totalConfiguredSlots = shape.workerCount * shape.concurrency;
 
@@ -4199,8 +4220,8 @@ async function workerConcurrency(
       metrics[`${prefix}ConcurrencyPerWorker`] = shape.concurrency;
       metrics[`${prefix}TotalConfiguredSlots`] = totalConfiguredSlots;
       metrics[`${prefix}DurationMs`] = durationMs;
-      metrics[`${prefix}JobsPerSecond`] =
-        durationMs === 0 ? null : (context.options.jobCount * 1_000) / durationMs;
+      metrics[`${prefix}TasksPerSecond`] =
+        durationMs === 0 ? null : (context.options.taskCount * 1_000) / durationMs;
       metrics[`${prefix}StartLatencyP50Ms`] = percentile(startLatencies, 0.5);
       metrics[`${prefix}StartLatencyP95Ms`] = percentile(startLatencies, 0.95);
       metrics[`${prefix}StartLatencyMaxMs`] = percentile(startLatencies, 1);
@@ -4215,13 +4236,13 @@ async function workerConcurrency(
         assertions,
         `${prefix} completes all handlers`,
         completedHandlers,
-        context.options.jobCount,
+        context.options.taskCount,
       );
       recordInvariant(
         assertions,
         `${prefix} persists all outcomes`,
         outcomes,
-        context.options.jobCount,
+        context.options.taskCount,
       );
       recordInvariant(assertions, `${prefix} leaves no ready work`, health.readyDepth, 0);
       recordInvariant(assertions, `${prefix} leaves no active leases`, health.activeLeases, 0);
@@ -4237,7 +4258,7 @@ async function workerConcurrency(
         assertions,
         `${prefix} records every handler start`,
         startLatencies.length,
-        context.options.jobCount,
+        context.options.taskCount,
       );
     }
   }
@@ -4263,10 +4284,10 @@ async function workerConcurrency(
   await firstNullWorker.runOnce();
   const firstNullPressure = firstNullProbe.snapshot();
   metrics.firstNullClaimCalls = firstNullPressure.claimCalls;
-  recordInvariant(assertions, "first-null run handles one job", firstNullHandled, 1);
+  recordInvariant(assertions, "first-null run handles one task", firstNullHandled, 1);
   recordInvariant(
     assertions,
-    "first-null run batches the job and empty result",
+    "first-null run batches the task and empty result",
     firstNullPressure.claimCalls,
     1,
   );
@@ -4309,9 +4330,9 @@ async function workerConcurrency(
 
   await reset(context.pool);
   const shutdownConcurrency = 4;
-  const shutdownJobs = shutdownConcurrency + 2;
+  const shutdownTasks = shutdownConcurrency + 2;
   const shutdownQueue = operationalQueue(context.pool, context.queueName);
-  for (let index = 0; index < shutdownJobs; index += 1) {
+  for (let index = 0; index < shutdownTasks; index += 1) {
     await shutdownQueue.enqueue("shutdown-drain", { index });
   }
   const shutdownProbe = new QueryPressureProbe(context.pool);
@@ -4347,7 +4368,7 @@ async function workerConcurrency(
   await shutdownRun;
   const claimsAfterDrain = shutdownProbe.snapshot().claimCalls;
   const shutdownHealth = await shutdownQueue.health();
-  const shutdownSucceeded = await rowCount(context.pool, "job_outcome");
+  const shutdownSucceeded = await rowCount(context.pool, "task_outcome");
   const drainedState = shutdownWorker.runtimeState();
   metrics.shutdownClaimsAtStop = claimsAtStop;
   metrics.shutdownClaimsAfterDrain = claimsAfterDrain;
@@ -4366,8 +4387,13 @@ async function workerConcurrency(
     claimsAfterDrain,
     claimsAtStop,
   );
-  recordInvariant(assertions, "stop completes active jobs", shutdownSucceeded, shutdownConcurrency);
-  recordInvariant(assertions, "stop leaves unclaimed jobs ready", shutdownHealth.readyDepth, 2);
+  recordInvariant(
+    assertions,
+    "stop completes active tasks",
+    shutdownSucceeded,
+    shutdownConcurrency,
+  );
+  recordInvariant(assertions, "stop leaves unclaimed tasks ready", shutdownHealth.readyDepth, 2);
   recordInvariant(assertions, "stop finishes with no active slots", drainedState.activeSlots, 0);
   recordInvariant(assertions, "stop leaves no active leases", shutdownHealth.activeLeases, 0);
   recordInvariant(assertions, "stop leaves no expired leases", shutdownHealth.expiredLeases, 0);
@@ -4387,26 +4413,26 @@ async function batchDispatch(
   const meterProvider = new MeterProvider({ readers: [metricReader] });
   const metricSdkInstalled = otelMetrics.setGlobalMeterProvider(meterProvider);
   const batchMaxSize = Math.max(2, Math.min(8, context.options.batchSize));
-  const jobsPerCohort = Math.max(
+  const tasksPerCohort = Math.max(
     batchMaxSize,
-    Math.ceil(context.options.jobCount / batchMaxSize) * batchMaxSize,
+    Math.ceil(context.options.taskCount / batchMaxSize) * batchMaxSize,
   );
-  const partialJobsPerCohort = batchMaxSize - 1;
+  const partialTasksPerCohort = batchMaxSize - 1;
   const leaseMs = Math.max(1_000, context.options.leaseMs * 4);
   const heartbeatMs = Math.max(50, Math.floor(leaseMs / 3));
 
   const runCohort = async (
     mode: "batch" | "serial",
     cohort: "full" | "mixed" | "partial",
-    cohortJobs: number,
+    cohortTasks: number,
     lingerMs: number,
   ) => {
     const mixedOutcomes = cohort === "mixed";
     await reset(context.pool);
     const cohortQueueName = `${context.queueName}-${mode}-${cohort}`;
     const seedQueue = operationalQueue(context.pool, cohortQueueName);
-    const jobIds = await seedQueue.enqueueMany(
-      Array.from({ length: cohortJobs }, (_, index) => ({
+    const taskIds = await seedQueue.enqueueMany(
+      Array.from({ length: cohortTasks }, (_, index) => ({
         type: "batch-dispatch",
         payload: { index },
         options: { maxAttempts: 1 },
@@ -4435,7 +4461,7 @@ async function batchDispatch(
       worker.handle<{ index: number }, { ok: boolean }>("batch-dispatch", ({ index }) => {
         completedMembers += 1;
         maxActiveSlots = Math.max(maxActiveSlots, worker.runtimeState().activeSlots);
-        if (completedMembers === cohortJobs) worker.stop();
+        if (completedMembers === cohortTasks) worker.stop();
         if (mixedOutcomes && index === 1) throw new Error("expected mixed failure");
         return { ok: true };
       });
@@ -4453,7 +4479,7 @@ async function batchDispatch(
           batchSizes.push(items.length);
           completedMembers += items.length;
           maxActiveSlots = Math.max(maxActiveSlots, worker.runtimeState().activeSlots);
-          if (completedMembers === cohortJobs) worker.stop();
+          if (completedMembers === cohortTasks) worker.stop();
           return items.map(({ payload }) =>
             mixedOutcomes && payload.index === 1
               ? { status: "failed" as const, error: new Error("expected mixed failure") }
@@ -4469,31 +4495,31 @@ async function batchDispatch(
     const durationMs = Math.max(0.001, context.now() - started);
     const after = probe.snapshot();
     const health = await seedQueue.health();
-    const outcomes = await rowCount(context.pool, "job_outcome");
-    const states = await Promise.all(jobIds.map((id) => context.admin.getJob(id)));
+    const outcomes = await rowCount(context.pool, "task_outcome");
+    const states = await Promise.all(taskIds.map((id) => context.admin.getTask(id)));
     return {
       durationMs,
-      jobsPerSecond: (cohortJobs * 1_000) / durationMs,
+      tasksPerSecond: (cohortTasks * 1_000) / durationMs,
       completedMembers,
       outcomes,
-      succeeded: states.filter((job) => job?.state === "succeeded").length,
-      failed: states.filter((job) => job?.state === "failed").length,
+      succeeded: states.filter((task) => task?.state === "succeeded").length,
+      failed: states.filter((task) => task?.state === "failed").length,
       health,
       maxActiveSlots,
       batchSizes,
       batchLingerMs,
       claimCalls: after.claimCalls - before.claimCalls,
       claimDurationsMs: after.claimDurationsMs.slice(before.claimDurationsMs.length),
-      claimedJobs: after.claimedJobs - before.claimedJobs,
+      claimedTasks: after.claimedTasks - before.claimedTasks,
       maxConcurrentClaims: after.maxConcurrentClaims,
       claimsWithoutFreeSlot: after.claimsWithoutFreeSlot - before.claimsWithoutFreeSlot,
     };
   };
 
-  const serial = await runCohort("serial", "full", jobsPerCohort, 60_000);
-  const batched = await runCohort("batch", "full", jobsPerCohort, 60_000);
-  const serialPartial = await runCohort("serial", "partial", partialJobsPerCohort, 20);
-  const batchedPartial = await runCohort("batch", "partial", partialJobsPerCohort, 20);
+  const serial = await runCohort("serial", "full", tasksPerCohort, 60_000);
+  const batched = await runCohort("batch", "full", tasksPerCohort, 60_000);
+  const serialPartial = await runCohort("serial", "partial", partialTasksPerCohort, 20);
+  const batchedPartial = await runCohort("batch", "partial", partialTasksPerCohort, 20);
   const fullBatches = batched.batchSizes.filter((size) => size === batchMaxSize).length;
   const partialBatches = batchedPartial.batchSizes.filter((size) => size < batchMaxSize).length;
 
@@ -4505,15 +4531,20 @@ async function batchDispatch(
       assertions,
       `${name} cohort completes every member`,
       cohort.completedMembers,
-      jobsPerCohort,
+      tasksPerCohort,
     );
     recordInvariant(
       assertions,
       `${name} cohort persists every outcome`,
       cohort.outcomes,
-      jobsPerCohort,
+      tasksPerCohort,
     );
-    recordInvariant(assertions, `${name} cohort leaves no ready jobs`, cohort.health.readyDepth, 0);
+    recordInvariant(
+      assertions,
+      `${name} cohort leaves no ready tasks`,
+      cohort.health.readyDepth,
+      0,
+    );
     recordInvariant(
       assertions,
       `${name} cohort leaves no active leases`,
@@ -4540,9 +4571,9 @@ async function batchDispatch(
     );
     recordInvariant(
       assertions,
-      `${name} cohort claimed job count matches jobs`,
-      cohort.claimedJobs,
-      jobsPerCohort,
+      `${name} cohort claimed task count matches tasks`,
+      cohort.claimedTasks,
+      tasksPerCohort,
     );
     recordInvariant(
       assertions,
@@ -4556,11 +4587,11 @@ async function batchDispatch(
   recordInvariant(assertions, "batch cohort dispatches a full batch", fullBatches > 0, true);
   recordInvariant(
     assertions,
-    "serial and batch partial cohorts complete the same jobs",
-    serialPartial.completedMembers === partialJobsPerCohort &&
-      batchedPartial.completedMembers === partialJobsPerCohort &&
-      serialPartial.outcomes === partialJobsPerCohort &&
-      batchedPartial.outcomes === partialJobsPerCohort,
+    "serial and batch partial cohorts complete the same tasks",
+    serialPartial.completedMembers === partialTasksPerCohort &&
+      batchedPartial.completedMembers === partialTasksPerCohort &&
+      serialPartial.outcomes === partialTasksPerCohort &&
+      batchedPartial.outcomes === partialTasksPerCohort,
     true,
   );
   recordInvariant(assertions, "batch partial cohort dispatches one group", partialBatches, 1);
@@ -4578,15 +4609,15 @@ async function batchDispatch(
     (actual, expected) => Number(actual) > 0 && Number(actual) <= Number(expected),
   );
 
-  const serialMixed = await runCohort("serial", "mixed", jobsPerCohort, 60_000);
-  const batchedMixed = await runCohort("batch", "mixed", jobsPerCohort, 60_000);
+  const serialMixed = await runCohort("serial", "mixed", tasksPerCohort, 60_000);
+  const batchedMixed = await runCohort("batch", "mixed", tasksPerCohort, 60_000);
   recordInvariant(
     assertions,
     "serial and batch mixed cohorts isolate one failure equally",
     serialMixed.failed === 1 &&
       batchedMixed.failed === 1 &&
-      serialMixed.succeeded === jobsPerCohort - 1 &&
-      batchedMixed.succeeded === jobsPerCohort - 1,
+      serialMixed.succeeded === tasksPerCohort - 1 &&
+      batchedMixed.succeeded === tasksPerCohort - 1,
     true,
   );
 
@@ -4609,7 +4640,7 @@ async function batchDispatch(
         payload: { index },
       })),
     );
-    let admittedJobs = 0;
+    let admittedTasks = 0;
     let maxActiveSlots = 0;
     let policyWorker!: Worker;
     policyWorker = new Worker(policyQueue, {
@@ -4623,14 +4654,14 @@ async function batchDispatch(
       "batch-policy",
       { maxSize: batchMaxSize, lingerMs: 20 },
       (items) => {
-        admittedJobs += items.length;
+        admittedTasks += items.length;
         maxActiveSlots = Math.max(maxActiveSlots, policyWorker.runtimeState().activeSlots);
         return items.map(() => ({ status: "succeeded", result: null }));
       },
     );
     await policyWorker.runOnce();
     return {
-      admittedJobs,
+      admittedTasks,
       maxActiveSlots,
       health: await policyQueue.health(),
       rateStatus:
@@ -4643,7 +4674,7 @@ async function batchDispatch(
   recordInvariant(
     assertions,
     "concurrency policy admits one member for each active count",
-    concurrencyPolicy.admittedJobs,
+    concurrencyPolicy.admittedTasks,
     2,
   );
   recordInvariant(
@@ -4661,7 +4692,7 @@ async function batchDispatch(
   recordInvariant(
     assertions,
     "rate policy admits one member for each available token",
-    ratePolicy.admittedJobs,
+    ratePolicy.admittedTasks,
     2,
   );
   recordInvariant(
@@ -4681,7 +4712,7 @@ async function batchDispatch(
   );
   const peerId = await recoveryQueue.enqueue("batch-recovery", { member: "peer" });
   const recoveryWorkerId = "benchmark-batch-recovery";
-  let staleClaim: ClaimedJob | undefined;
+  let staleClaim: ClaimedTask | undefined;
   let recoveredMembers = 0;
   let replacementFenceAdvanced = false;
   const recoveryWorker = new Worker(recoveryQueue, {
@@ -4695,11 +4726,11 @@ async function batchDispatch(
     "batch-recovery",
     { maxSize: 2, lingerMs: 20 },
     async (items) => {
-      staleClaim = items.find(({ payload }) => payload.member === "stale")!.context.job;
+      staleClaim = items.find(({ payload }) => payload.member === "stale")!.context.task;
       await context.pool.query(
-        `UPDATE workhorse.job_runtime
+        `UPDATE workhorse.task_runtime
             SET expires_at = clock_timestamp() - interval '1 millisecond'
-          WHERE job_id = $1 AND state = 'active'`,
+          WHERE task_id = $1 AND state = 'active'`,
         [staleId],
       );
       recoveredMembers = await recoveryQueue.recoverExpired(100, 0);
@@ -4720,9 +4751,9 @@ async function batchDispatch(
   const staleCompletionAccepted = await recoveryQueue.complete(staleClaim!, recoveryWorkerId, {
     source: "stale",
   });
-  const [recoveredJob, peerJob, recoveryHealth] = await Promise.all([
-    context.admin.getJob<{ source: string }>(staleId),
-    context.admin.getJob<{ source: string }>(peerId),
+  const [recoveredTask, peerTask, recoveryHealth] = await Promise.all([
+    context.admin.getTask<{ source: string }>(staleId),
+    context.admin.getTask<{ source: string }>(peerId),
     recoveryQueue.health(),
   ]);
   recordInvariant(
@@ -4740,23 +4771,23 @@ async function batchDispatch(
   recordInvariant(
     assertions,
     "recovery preserves the peer outcome",
-    recoveredJob?.state === "succeeded" &&
-      recoveredJob.currentAttempt === 2 &&
-      recoveredJob.result?.source === "recovered" &&
-      peerJob?.state === "succeeded" &&
-      peerJob.currentAttempt === 1 &&
-      peerJob.result?.source === "handler",
+    recoveredTask?.state === "succeeded" &&
+      recoveredTask.currentAttempt === 2 &&
+      recoveredTask.result?.source === "recovered" &&
+      peerTask?.state === "succeeded" &&
+      peerTask.currentAttempt === 1 &&
+      peerTask.result?.source === "handler",
     true,
   );
   recordInvariant(assertions, "recovery leaves no active leases", recoveryHealth.activeLeases, 0);
   recordInvariant(assertions, "recovery leaves no expired leases", recoveryHealth.expiredLeases, 0);
 
-  const planLiveJobs = jobsPerCohort;
-  const historyJobs = jobsPerCohort * 4;
+  const planLiveTasks = tasksPerCohort;
+  const historyTasks = tasksPerCohort * 4;
   const seedPlanReady = async (targetQueueName: string) => {
     const targetQueue = operationalQueue(context.pool, targetQueueName);
     await targetQueue.enqueueMany(
-      Array.from({ length: planLiveJobs }, (_, index) => ({
+      Array.from({ length: planLiveTasks }, (_, index) => ({
         type: "batch-plan-live",
         payload: { index },
       })),
@@ -4776,26 +4807,26 @@ async function batchDispatch(
   const historyQueueName = `${context.queueName}-history`;
   const historyQueue = operationalQueue(context.pool, historyQueueName);
   await historyQueue.enqueueMany(
-    Array.from({ length: historyJobs }, (_, index) => ({
+    Array.from({ length: historyTasks }, (_, index) => ({
       type: "batch-plan-history",
       payload: { index },
     })),
   );
-  for (let index = 0; index < historyJobs; index += 1) {
+  for (let index = 0; index < historyTasks; index += 1) {
     const workerId = `benchmark-batch-history-${index}`;
-    const job = await historyQueue.claim(workerId);
-    if (job === null) throw new Error("batch claim-plan history exhausted early");
-    await historyQueue.complete(job, workerId, null);
+    const task = await historyQueue.claim(workerId);
+    if (task === null) throw new Error("batch claim-plan history exhausted early");
+    await historyQueue.complete(task, workerId, null);
   }
   await seedPlanReady(planQueueName);
-  await context.pool.query("VACUUM (ANALYZE) workhorse.job_runtime");
+  await context.pool.query("VACUUM (ANALYZE) workhorse.task_runtime");
   const claimPlanAfterHistory = await claimPlan(
     context.pool,
     planQueueName,
     "benchmark-batch-plan-after-history",
   );
-  const retainedJobIdentities = await rowCount(context.pool, "job");
-  const liveRuntimeRows = await rowCount(context.pool, "job_runtime");
+  const retainedTaskIdentities = await rowCount(context.pool, "task");
+  const liveRuntimeRows = await rowCount(context.pool, "task_runtime");
   recordInvariant(
     assertions,
     "batch claim plans record shared buffer work",
@@ -4808,12 +4839,17 @@ async function batchDispatch(
     claimPlanAfterHistory.sharedBlocks <= claimPlanBeforeHistory.sharedBlocks * 2,
     true,
   );
-  recordInvariant(assertions, "claim-plan live runtime stays fixed", liveRuntimeRows, planLiveJobs);
+  recordInvariant(
+    assertions,
+    "claim-plan live runtime stays fixed",
+    liveRuntimeRows,
+    planLiveTasks,
+  );
   recordInvariant(
     assertions,
     "claim-plan history remains outside live runtime",
-    retainedJobIdentities,
-    historyJobs + planLiveJobs,
+    retainedTaskIdentities,
+    historyTasks + planLiveTasks,
   );
 
   await meterProvider.forceFlush();
@@ -4829,7 +4865,7 @@ async function batchDispatch(
       ?.dataPoints ?? [];
   const expectedBatchAttributeNames = [
     "workhorse.handler.batch.full",
-    "workhorse.job.type",
+    "workhorse.task.type",
     "workhorse.queue.name",
   ];
   const boundedBatchAttributes = batchSizePoints.every((point) =>
@@ -4869,11 +4905,11 @@ async function batchDispatch(
     name: "batch-dispatch",
     durationMs: 0,
     metrics: {
-      jobsPerCohort,
-      partialJobsPerCohort,
+      tasksPerCohort,
+      partialTasksPerCohort,
       batchMaxSize,
-      serialJobsPerSecond: serial.jobsPerSecond,
-      batchJobsPerSecond: batched.jobsPerSecond,
+      serialTasksPerSecond: serial.tasksPerSecond,
+      batchTasksPerSecond: batched.tasksPerSecond,
       fullBatches,
       partialBatches,
       batchSizeP50: percentile([...batched.batchSizes, ...batchedPartial.batchSizes], 0.5),
@@ -4885,15 +4921,15 @@ async function batchDispatch(
       batchClaimP95Ms: percentile(batched.claimDurationsMs, 0.95),
       serialClaimCalls: serial.claimCalls,
       batchClaimCalls: batched.claimCalls,
-      serialPartialJobsPerSecond: serialPartial.jobsPerSecond,
-      batchPartialJobsPerSecond: batchedPartial.jobsPerSecond,
+      serialPartialTasksPerSecond: serialPartial.tasksPerSecond,
+      batchPartialTasksPerSecond: batchedPartial.tasksPerSecond,
       batchMaxActiveSlots: batched.maxActiveSlots,
       batchTelemetrySeries,
       batchTelemetryAttributeCount: expectedBatchAttributeNames.length,
-      concurrencyPolicyAdmittedJobs: concurrencyPolicy.admittedJobs,
+      concurrencyPolicyAdmittedTasks: concurrencyPolicy.admittedTasks,
       concurrencyPolicyMaxActiveSlots: concurrencyPolicy.maxActiveSlots,
       concurrencyPolicyReady: concurrencyPolicy.health.readyDepth,
-      ratePolicyAdmittedJobs: ratePolicy.admittedJobs,
+      ratePolicyAdmittedTasks: ratePolicy.admittedTasks,
       ratePolicyThrottledReady: ratePolicy.rateStatus!.throttledReady,
       serialMixedSucceeded: serialMixed.succeeded,
       serialMixedFailed: serialMixed.failed,
@@ -4905,7 +4941,7 @@ async function batchDispatch(
       claimPlanExecutionMsAfterHistory: claimPlanAfterHistory.executionTimeMs,
       claimPlanSharedBlocksBeforeHistory: claimPlanBeforeHistory.sharedBlocks,
       claimPlanSharedBlocksAfterHistory: claimPlanAfterHistory.sharedBlocks,
-      retainedJobIdentities,
+      retainedTaskIdentities,
       liveRuntimeRows,
     },
     assertions,
@@ -4942,7 +4978,7 @@ async function rateLimiting(
     (status.nextEligibleAt?.getTime() ?? Date.now()) - Date.now(),
   );
   recordInvariant(assertions, "burst admits exactly its capacity", burstClaims, burst);
-  recordInvariant(assertions, "empty bucket leaves one ready job", status.throttledReady, 1);
+  recordInvariant(assertions, "empty bucket leaves one ready task", status.throttledReady, 1);
   recordInvariant(
     assertions,
     "throttling reports future eligibility",
@@ -5035,10 +5071,10 @@ async function notificationDispatch(
 
   const polling = await runCohort(false);
   const notification = await runCohort(true);
-  recordInvariant(assertions, "polling-only dispatch executes the job", polling.handled, true);
+  recordInvariant(assertions, "polling-only dispatch executes the task", polling.handled, true);
   recordInvariant(
     assertions,
-    "notification-assisted dispatch executes the job",
+    "notification-assisted dispatch executes the task",
     notification.handled,
     true,
   );
@@ -5076,13 +5112,13 @@ async function notificationDispatch(
 async function drainTelemetryContextQueue(
   queue: Queue,
   workerId: string,
-): Promise<ClaimedJob<{ index: number }>[]> {
-  const claimed: ClaimedJob<{ index: number }>[] = [];
+): Promise<ClaimedTask<{ index: number }>[]> {
+  const claimed: ClaimedTask<{ index: number }>[] = [];
   while (true) {
-    const job = await queue.claim<{ index: number }>(workerId);
-    if (job === null) return claimed;
-    claimed.push(job);
-    await queue.complete(job, workerId, { ok: true });
+    const task = await queue.claim<{ index: number }>(workerId);
+    if (task === null) return claimed;
+    claimed.push(task);
+    await queue.complete(task, workerId, { ok: true });
   }
 }
 
@@ -5091,12 +5127,12 @@ async function telemetryContext(
 ): Promise<OperationalScenarioResult> {
   await reset(context.pool);
   const assertions: ScenarioAssertion[] = [];
-  const jobsPerCohort = context.options.jobCount;
+  const tasksPerCohort = context.options.taskCount;
   const baselineQueue = `${context.queueName}-baseline`;
   const instrumentedQueue = `${context.queueName}-instrumented`;
   const baseline = operationalQueue(context.pool, baselineQueue);
   const instrumented = operationalQueue(context.pool, instrumentedQueue);
-  const requests = Array.from({ length: jobsPerCohort }, (_, index) => ({
+  const requests = Array.from({ length: tasksPerCohort }, (_, index) => ({
     type: "telemetry-context",
     payload: { index },
   }));
@@ -5156,30 +5192,30 @@ async function telemetryContext(
   );
   const traceContextIndexes = Number(indexes.rows[0]?.count ?? 0);
 
-  recordInvariant(assertions, "baseline cohort accepted", baselineIds.length, jobsPerCohort);
+  recordInvariant(assertions, "baseline cohort accepted", baselineIds.length, tasksPerCohort);
   recordInvariant(
     assertions,
     "instrumented cohort accepted",
     instrumentedIds.length,
-    jobsPerCohort,
+    tasksPerCohort,
   );
-  recordInvariant(assertions, "baseline cohort completed", baselineClaims.length, jobsPerCohort);
+  recordInvariant(assertions, "baseline cohort completed", baselineClaims.length, tasksPerCohort);
   recordInvariant(
     assertions,
     "instrumented cohort completed",
     instrumentedClaims.length,
-    jobsPerCohort,
+    tasksPerCohort,
   );
   recordInvariant(
     assertions,
     "baseline claims omit trace context",
-    baselineClaims.every((job) => job.traceContext === null),
+    baselineClaims.every((task) => task.traceContext === null),
     true,
   );
   recordInvariant(
     assertions,
     "instrumented claims retain trace context",
-    instrumentedClaims.every((job) => job.traceContext?.traceparent !== undefined),
+    instrumentedClaims.every((task) => task.traceContext?.traceparent !== undefined),
     true,
   );
   recordInvariant(assertions, "OpenTelemetry SDK installed", sdkInstalled, true);
@@ -5188,7 +5224,7 @@ async function telemetryContext(
   recordInvariant(
     assertions,
     "payloads remain unchanged",
-    instrumentedClaims.every((job, index) => job.payload.index === index),
+    instrumentedClaims.every((task, index) => task.payload.index === index),
     true,
   );
   recordInvariant(assertions, "trace context adds no index", traceContextIndexes, 0);
@@ -5197,7 +5233,7 @@ async function telemetryContext(
     name: "telemetry-context",
     durationMs: 0,
     metrics: {
-      jobsPerCohort,
+      tasksPerCohort,
       baselineEnqueueMs,
       instrumentedEnqueueMs,
       baselineClaimMs,

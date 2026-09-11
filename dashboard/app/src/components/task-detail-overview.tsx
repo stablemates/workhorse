@@ -19,7 +19,7 @@ import {
   readTaskResultEvidence,
   type TaskResultState,
 } from "../presentation.js";
-import type { DashboardJobDetail } from "@stablemates/workhorse-dashboard-server/wire";
+import type { DashboardTaskDetail } from "@stablemates/workhorse-dashboard-server/wire";
 import {
   checkpointOutput,
   formatExact,
@@ -186,14 +186,14 @@ const outcomeStateColor: Record<TaskResultState, string> = {
  * so instead of showing an empty result, and a retrying task's latest error is labelled as an
  * attempt error so it is never mistaken for a terminal one.
  */
-export function TaskOutcome({ job }: { job: DashboardJobDetail }) {
-  const outcome = job.current.outcome;
+export function TaskOutcome({ task }: { task: DashboardTaskDetail }) {
+  const outcome = task.current.outcome;
   const evidence = readTaskResultEvidence({
-    state: job.identity.state,
+    state: task.identity.state,
     outcome,
-    runtimeError: job.current.runtime?.error,
-    currentError: job.current.error,
-    blockedByPersistentFailure: job.durability?.persistentFailure != null,
+    runtimeError: task.current.runtime?.error,
+    currentError: task.current.error,
+    blockedByPersistentFailure: task.durability?.persistentFailure != null,
   });
   const described = evidence.description;
   return (
@@ -229,15 +229,15 @@ export function TaskOutcome({ job }: { job: DashboardJobDetail }) {
   );
 }
 function plannedStepDescription(
-  job: DashboardJobDetail,
-  checkpoint: DashboardJobDetail["checkpoints"][number] | undefined,
+  task: DashboardTaskDetail,
+  checkpoint: DashboardTaskDetail["checkpoints"][number] | undefined,
   stepIndex: number,
   activeStep: number,
 ) {
   const boundary = describeDurableBoundary({
     stepIndex,
     hasCheckpoint: checkpoint !== undefined,
-    persistentFailureAfterStepIndex: job.durability?.persistentFailure?.afterStepIndex ?? null,
+    persistentFailureAfterStepIndex: task.durability?.persistentFailure?.afterStepIndex ?? null,
   });
   if (checkpoint) {
     return (
@@ -260,20 +260,20 @@ function plannedStepDescription(
   // reached rather than as waiting its turn.
   if (boundary.state === "not-reached") return `${boundary.label}. ${boundary.summary}`;
   if (stepIndex !== activeStep) return "An earlier stage must finish first";
-  if (job.identity.state === "active")
+  if (task.identity.state === "active")
     return "The stage is running, but Workhorse has not saved a checkpoint yet";
-  if (job.identity.state === "ready") return "The task is ready for a worker";
-  if (job.identity.state === "scheduled")
+  if (task.identity.state === "ready") return "The task is ready for a worker";
+  if (task.identity.state === "scheduled")
     return "The task is scheduled, so this stage has not started";
-  if (job.identity.state === "failed") return "The task failed before it reached this stage";
+  if (task.identity.state === "failed") return "The task failed before it reached this stage";
   return "Workhorse did not record a checkpoint";
 }
-function PlannedDurability({ job }: { job: DashboardJobDetail }) {
-  const plan = job.durability!;
-  const checkpoints = new Map(job.checkpoints.map((checkpoint) => [checkpoint.name, checkpoint]));
+function PlannedDurability({ task }: { task: DashboardTaskDetail }) {
+  const plan = task.durability!;
+  const checkpoints = new Map(task.checkpoints.map((checkpoint) => [checkpoint.name, checkpoint]));
   const planNames = new Set(plan.steps.map((step) => step.name));
   const completedPlanSteps = plan.steps.filter((step) => checkpoints.has(step.name)).length;
-  const unmatchedCheckpoints = job.checkpoints.filter(
+  const unmatchedCheckpoints = task.checkpoints.filter(
     (checkpoint) => !planNames.has(checkpoint.name),
   );
   const activeStep = plan.steps.findIndex((step) => !checkpoints.has(step.name));
@@ -347,10 +347,10 @@ function PlannedDurability({ job }: { job: DashboardJobDetail }) {
             <Stepper.Step
               key={step.name}
               label={step.label}
-              description={plannedStepDescription(job, checkpoint, stepIndex, resolvedActiveStep)}
+              description={plannedStepDescription(task, checkpoint, stepIndex, resolvedActiveStep)}
               loading={
                 !persistentFailure &&
-                job.identity.state === "active" &&
+                task.identity.state === "active" &&
                 stepIndex === resolvedActiveStep
               }
               allowStepSelect={false}
@@ -366,12 +366,12 @@ function PlannedDurability({ job }: { job: DashboardJobDetail }) {
             </Text>
           ) : (
             <Text
-              c={job.identity.state === "succeeded" ? "teal" : "violet"}
+              c={task.identity.state === "succeeded" ? "teal" : "violet"}
               fw={600}
               size="sm"
               mt="xs"
             >
-              {job.identity.state === "succeeded"
+              {task.identity.state === "succeeded"
                 ? "Workhorse saved every declared boundary, and the task finished."
                 : "Workhorse saved every declared boundary, but the current attempt is still running."}
             </Text>
@@ -405,15 +405,15 @@ function PlannedDurability({ job }: { job: DashboardJobDetail }) {
     </Box>
   );
 }
-export function JobCheckpoints({ job }: { job: DashboardJobDetail }) {
-  const currentAttempt = job.current.outcome?.attempt ?? job.current.runtime?.attempt ?? 1;
+export function TaskCheckpoints({ task }: { task: DashboardTaskDetail }) {
+  const currentAttempt = task.current.outcome?.attempt ?? task.current.runtime?.attempt ?? 1;
   return (
     <DrawerSection
       id="interim-results-heading"
       title="Interim results"
       aside={
-        <Badge variant="light" color={job.checkpoints.length > 0 ? "teal" : "gray"}>
-          {job.checkpoints.length}
+        <Badge variant="light" color={task.checkpoints.length > 0 ? "teal" : "gray"}>
+          {task.checkpoints.length}
         </Badge>
       }
     >
@@ -422,15 +422,15 @@ export function JobCheckpoints({ job }: { job: DashboardJobDetail }) {
         Interim results show completed work rather than current progress. Workhorse saves each
         result at a named restart boundary, and later attempts reuse it.
       </Text>
-      {job.durability ? (
-        <PlannedDurability job={job} />
-      ) : job.checkpoints.length === 0 ? (
+      {task.durability ? (
+        <PlannedDurability task={task} />
+      ) : task.checkpoints.length === 0 ? (
         <Text c="dimmed" size="sm">
           This task has not reached a named restart boundary.
         </Text>
       ) : (
         <Stack gap="sm">
-          {job.checkpoints.map((checkpoint) => {
+          {task.checkpoints.map((checkpoint) => {
             const persistedAcrossRetry = currentAttempt > checkpoint.attempt;
             return (
               <Paper key={checkpoint.name} withBorder p="sm">
@@ -466,11 +466,11 @@ export function JobCheckpoints({ job }: { job: DashboardJobDetail }) {
     </DrawerSection>
   );
 }
-export function JobProgress({ job }: { job: DashboardJobDetail }) {
-  const progress = job.progress;
+export function TaskProgress({ task }: { task: DashboardTaskDetail }) {
+  const progress = task.progress;
   return (
     <DrawerSection
-      id="job-progress-heading"
+      id="task-progress-heading"
       title="Latest progress"
       aside={
         <Badge variant="light" color={progress ? "blue" : "gray"}>
@@ -499,8 +499,8 @@ export function JobProgress({ job }: { job: DashboardJobDetail }) {
     </DrawerSection>
   );
 }
-export type DurableWait = DashboardJobDetail["waits"][number];
-export type JobEvent = DashboardJobDetail["events"][number];
+export type DurableWait = DashboardTaskDetail["waits"][number];
+export type TaskEvent = DashboardTaskDetail["events"][number];
 export type WaitPhase = "sleeping" | "waking" | "resumed";
 export const waitPhaseLabel: Record<WaitPhase, string> = {
   sleeping: "Sleeping",
@@ -519,12 +519,16 @@ export const waitReplayWording =
  * Phase of one stored wait. Only the runtime row currently marked with this wait
  * name is still suspended; anything else means the handler already restarted.
  */
-export function waitPhaseFor(job: DashboardJobDetail, wait: DurableWait, nowMs: number): WaitPhase {
-  const runtime = job.current.runtime;
+export function waitPhaseFor(
+  task: DashboardTaskDetail,
+  wait: DurableWait,
+  nowMs: number,
+): WaitPhase {
+  const runtime = task.current.runtime;
   if (!runtime || runtime.waitName !== wait.name) return "resumed";
   return new Date(wait.wakeAt).getTime() > nowMs ? "sleeping" : "waking";
 }
-export function eventDetail(event: JobEvent, key: string): string | null {
+export function eventDetail(event: TaskEvent, key: string): string | null {
   const details = event.details;
   if (!details || typeof details !== "object") return null;
   const value = (details as Record<string, unknown>)[key];
@@ -588,9 +592,9 @@ export interface CoalescingEvidence {
   absorbed: number;
   rejected: number;
 }
-export function coalescingEvidenceFor(job: DashboardJobDetail): CoalescingEvidence | null {
+export function coalescingEvidenceFor(task: DashboardTaskDetail): CoalescingEvidence | null {
   let latest: { type: string; occurredAt: string; evidence: CoalescingEvidence } | null = null;
-  for (const event of job.events) {
+  for (const event of task.events) {
     // Rejected submissions describe a proposal, not the task's accepted configuration.
     if (!["enqueued", "debounced", "throttled"].includes(event.type)) continue;
     if (!event.details || typeof event.details !== "object") continue;
@@ -627,12 +631,12 @@ export function coalescingEvidenceFor(job: DashboardJobDetail): CoalescingEviden
   const evidence = latest.evidence;
   return {
     ...evidence,
-    absorbed: job.events.filter((event) =>
+    absorbed: task.events.filter((event) =>
       evidence.mode === "debounce" ? event.type === "debounced" : event.type === "throttled",
     ).length,
     rejected:
       evidence.mode === "debounce"
-        ? job.events.filter((event) => event.type === "debounce_rejected").length
+        ? task.events.filter((event) => event.type === "debounce_rejected").length
         : 0,
   };
 }

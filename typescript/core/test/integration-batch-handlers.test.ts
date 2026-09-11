@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import { type BatchHandlerItem, type ClaimedJob, Worker } from "../src/index.js";
+import { type BatchHandlerItem, type ClaimedTask, Worker } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { deferred, pool, queue, admin } = createIntegrationTestContext(import.meta.url);
@@ -20,7 +20,7 @@ describe("batch handlers", () => {
       queues: [firstQueue, secondQueue],
       concurrency: 4,
     }).handleBatch("batch-multi-queue", { maxSize: 2, lingerMs: 100 }, (items) => {
-      seen.push(items.map(({ context }) => context.job.queue));
+      seen.push(items.map(({ context }) => context.task.queue));
       return items.map(() => ({ status: "succeeded" as const, result: null }));
     });
 
@@ -52,7 +52,7 @@ describe("batch handlers", () => {
   it("delivers one full priority-ordered batch through the public worker API", async () => {
     const queueName = `batch-full-${randomUUID()}`;
     const seen: number[][] = [];
-    const jobs = await Promise.all([
+    const tasks = await Promise.all([
       queue.enqueue("batch-full", { value: 1 }, { queue: queueName, priority: 10 }),
       queue.enqueue("batch-full", { value: 2 }, { queue: queueName, priority: 90 }),
       queue.enqueue("batch-full", { value: 3 }, { queue: queueName, priority: 50 }),
@@ -75,8 +75,8 @@ describe("batch handlers", () => {
 
     await expect(worker.runOnce()).resolves.toBe(true);
     expect(seen).toEqual([[2, 3, 1]]);
-    await expect(Promise.all(jobs.map((id) => admin.getJob(id)))).resolves.toEqual(
-      jobs.map((id) => expect.objectContaining({ id, state: "succeeded" })),
+    await expect(Promise.all(tasks.map((id) => admin.getTask(id)))).resolves.toEqual(
+      tasks.map((id) => expect.objectContaining({ id, state: "succeeded" })),
     );
   });
 
@@ -107,52 +107,52 @@ describe("batch handlers", () => {
       { maxSize: 3, lingerMs: 100 },
       (items) =>
         items.map(({ payload, context }) =>
-          payload.outcome === "succeed" || context.job.attempt > 1
+          payload.outcome === "succeed" || context.task.attempt > 1
             ? {
                 status: "succeeded" as const,
-                result: { attempt: context.job.attempt },
+                result: { attempt: context.task.attempt },
               }
             : {
                 status: "failed" as const,
-                error: new Error(`${payload.outcome} on attempt ${context.job.attempt}`),
+                error: new Error(`${payload.outcome} on attempt ${context.task.attempt}`),
               },
         ),
     );
 
     await expect(worker.runOnce()).resolves.toBe(true);
-    await expect(admin.getJob<{ attempt: number }>(succeededId)).resolves.toMatchObject({
+    await expect(admin.getTask<{ attempt: number }>(succeededId)).resolves.toMatchObject({
       state: "succeeded",
       currentAttempt: 1,
       result: { attempt: 1 },
     });
-    await expect(admin.getJob(retriedId)).resolves.toMatchObject({
+    await expect(admin.getTask(retriedId)).resolves.toMatchObject({
       state: "ready",
       currentAttempt: 2,
     });
-    await expect(admin.getJob(failedId)).resolves.toMatchObject({
+    await expect(admin.getTask(failedId)).resolves.toMatchObject({
       state: "failed",
       currentAttempt: 1,
     });
 
     await expect(worker.runOnce()).resolves.toBe(true);
-    await expect(admin.getJob<{ attempt: number }>(retriedId)).resolves.toMatchObject({
+    await expect(admin.getTask<{ attempt: number }>(retriedId)).resolves.toMatchObject({
       state: "succeeded",
       currentAttempt: 2,
       result: { attempt: 2 },
     });
-    await expect(admin.getJob(failedId)).resolves.toMatchObject({
+    await expect(admin.getTask(failedId)).resolves.toMatchObject({
       state: "failed",
       currentAttempt: 1,
     });
-    const attemptCounts = await pool.query<{ job_id: string; attempt_count: string }>(
-      `SELECT job_id, count(*)::text AS attempt_count
+    const attemptCounts = await pool.query<{ task_id: string; attempt_count: string }>(
+      `SELECT task_id, count(*)::text AS attempt_count
          FROM workhorse.attempt_history
-        WHERE job_id = ANY($1::uuid[])
-        GROUP BY job_id`,
+        WHERE task_id = ANY($1::uuid[])
+        GROUP BY task_id`,
       [[succeededId, retriedId, failedId]],
     );
     expect(
-      Object.fromEntries(attemptCounts.rows.map((row) => [row.job_id, row.attempt_count])),
+      Object.fromEntries(attemptCounts.rows.map((row) => [row.task_id, row.attempt_count])),
     ).toEqual({
       [succeededId]: "1",
       [retriedId]: "2",
@@ -162,7 +162,7 @@ describe("batch handlers", () => {
 
   it("applies a batch-level handler failure to every member independently", async () => {
     const queueName = `batch-handler-failure-${randomUUID()}`;
-    const jobIds = await Promise.all(
+    const taskIds = await Promise.all(
       [1, 2].map((value) =>
         queue.enqueue("batch-handler-failure", { value }, { queue: queueName, maxAttempts: 1 }),
       ),
@@ -176,8 +176,8 @@ describe("batch handlers", () => {
     });
 
     await expect(worker.runOnce()).resolves.toBe(true);
-    await expect(Promise.all(jobIds.map((id) => admin.getJob(id)))).resolves.toEqual(
-      jobIds.map(() =>
+    await expect(Promise.all(taskIds.map((id) => admin.getTask(id)))).resolves.toEqual(
+      taskIds.map(() =>
         expect.objectContaining({
           state: "failed",
           currentAttempt: 1,
@@ -187,29 +187,29 @@ describe("batch handlers", () => {
     );
 
     const dispatches = await pool.query<{
-      job_id: string;
+      task_id: string;
       attempt: number;
       batch_id: string;
       batch_size: number;
-      members: Array<{ job_id: string; attempt: number }>;
+      members: Array<{ task_id: string; attempt: number }>;
     }>(
-      `SELECT job_id::text, attempt, details->>'batch_id' AS batch_id,
+      `SELECT task_id::text, attempt, details->>'batch_id' AS batch_id,
               (details->>'size')::integer AS batch_size, details->'members' AS members
-         FROM workhorse.job_event
-        WHERE job_id = ANY($1::uuid[]) AND event_type = 'batch_dispatched'
-        ORDER BY job_id`,
-      [jobIds],
+         FROM workhorse.task_event
+        WHERE task_id = ANY($1::uuid[]) AND event_type = 'batch_dispatched'
+        ORDER BY task_id`,
+      [taskIds],
     );
     expect(dispatches.rows).toHaveLength(2);
     expect(new Set(dispatches.rows.map((row) => row.batch_id)).size).toBe(1);
     const orderedMembers = dispatches.rows[0]!.members;
-    expect(new Set(orderedMembers.map((member) => member.job_id))).toEqual(new Set(jobIds));
+    expect(new Set(orderedMembers.map((member) => member.task_id))).toEqual(new Set(taskIds));
     expect(orderedMembers.map((member) => member.attempt)).toEqual([1, 1]);
     expect(dispatches.rows).toEqual(
       expect.arrayContaining(
-        jobIds.map((jobId) =>
+        taskIds.map((taskId) =>
           expect.objectContaining({
-            job_id: jobId,
+            task_id: taskId,
             attempt: 1,
             batch_size: 2,
             members: orderedMembers,
@@ -217,21 +217,21 @@ describe("batch handlers", () => {
         ),
       ),
     );
-    const failures = await pool.query<{ job_id: string; batch_id: string }>(
-      `SELECT job_id::text, details->>'batch_id' AS batch_id
-         FROM workhorse.job_event
-        WHERE job_id = ANY($1::uuid[]) AND event_type = 'batch_failed'
-        ORDER BY job_id`,
-      [jobIds],
+    const failures = await pool.query<{ task_id: string; batch_id: string }>(
+      `SELECT task_id::text, details->>'batch_id' AS batch_id
+         FROM workhorse.task_event
+        WHERE task_id = ANY($1::uuid[]) AND event_type = 'batch_failed'
+        ORDER BY task_id`,
+      [taskIds],
     );
     expect(failures.rows).toEqual(
-      dispatches.rows.map(({ job_id, batch_id }) => ({ job_id, batch_id })),
+      dispatches.rows.map(({ task_id, batch_id }) => ({ task_id, batch_id })),
     );
   });
 
   it("runs the shared callback when dispatch evidence cannot be persisted", async () => {
     const queueName = `batch-evidence-failure-${randomUUID()}`;
-    const jobIds = await Promise.all(
+    const taskIds = await Promise.all(
       [1, 2].map((value) =>
         queue.enqueue("batch-evidence-failure", { value }, { queue: queueName }),
       ),
@@ -251,8 +251,8 @@ describe("batch handlers", () => {
     try {
       await expect(worker.runOnce()).resolves.toBe(true);
       expect(handler).toHaveBeenCalledOnce();
-      await expect(Promise.all(jobIds.map((id) => admin.getJob(id)))).resolves.toEqual(
-        jobIds.map(() => expect.objectContaining({ state: "succeeded" })),
+      await expect(Promise.all(taskIds.map((id) => admin.getTask(id)))).resolves.toEqual(
+        taskIds.map(() => expect.objectContaining({ state: "succeeded" })),
       );
     } finally {
       evidence.mockRestore();
@@ -261,7 +261,7 @@ describe("batch handlers", () => {
 
   it("records a dispatched member from its retained claim after ownership changes", async () => {
     const queueName = `batch-retained-claim-${randomUUID()}`;
-    const jobId = await queue.enqueue(
+    const taskId = await queue.enqueue(
       "batch-retained-claim",
       {},
       { queue: queueName, maxAttempts: 2 },
@@ -277,15 +277,15 @@ describe("batch handlers", () => {
     await expect(
       queue.recordBatchDispatch({
         batchId: randomUUID(),
-        jobs: [claimed!],
+        tasks: [claimed!],
         workerId: "batch-retained-claim-worker",
       }),
     ).resolves.toBeUndefined();
     await expect(
       pool.query(
-        `SELECT 1 FROM workhorse.job_event
-          WHERE job_id = $1 AND attempt = 1 AND event_type = 'batch_dispatched'`,
-        [jobId],
+        `SELECT 1 FROM workhorse.task_event
+          WHERE task_id = $1 AND attempt = 1 AND event_type = 'batch_dispatched'`,
+        [taskId],
       ),
     ).resolves.toMatchObject({ rowCount: 1 });
   });
@@ -297,29 +297,29 @@ describe("batch handlers", () => {
         queue.enqueue("batch-evidence-retry", { value }, { queue: queueName }),
       ),
     );
-    const jobs = await Promise.all([
+    const tasks = await Promise.all([
       queue.claim("batch-evidence-retry-worker", { queue: queueName }),
       queue.claim("batch-evidence-retry-worker", { queue: queueName }),
       queue.claim("batch-evidence-retry-worker", { queue: queueName }),
     ]);
-    expect(jobs).not.toContain(null);
+    expect(tasks).not.toContain(null);
     const batch = {
       batchId: randomUUID(),
-      jobs: [jobs[0]!, jobs[1]!] as [ClaimedJob, ClaimedJob],
+      tasks: [tasks[0]!, tasks[1]!] as [ClaimedTask, ClaimedTask],
       workerId: "batch-evidence-retry-worker",
     };
 
     await queue.recordBatchDispatch(batch);
     await queue.recordBatchDispatch(batch);
     await expect(
-      queue.recordBatchFailure({ ...batch, jobs: [jobs[0]!, jobs[2]!] }),
+      queue.recordBatchFailure({ ...batch, tasks: [tasks[0]!, tasks[2]!] }),
     ).rejects.toThrow("batch id already records different evidence");
     await queue.recordBatchFailure(batch);
     await queue.recordBatchFailure(batch);
 
     const evidence = await pool.query<{ event_type: string; event_count: number }>(
       `SELECT event_type, count(*)::integer AS event_count
-         FROM workhorse.job_event
+         FROM workhorse.task_event
         WHERE details->>'batch_id' = $1
         GROUP BY event_type
         ORDER BY event_type`,
@@ -333,7 +333,7 @@ describe("batch handlers", () => {
 
   it("rejects every member when the handler omits an outcome payload", async () => {
     const queueName = `batch-invalid-outcome-${randomUUID()}`;
-    const jobIds = await Promise.all(
+    const taskIds = await Promise.all(
       [1, 2].map((value) =>
         queue.enqueue("batch-invalid-outcome", { value }, { queue: queueName, maxAttempts: 1 }),
       ),
@@ -349,8 +349,8 @@ describe("batch handlers", () => {
     );
 
     await expect(worker.runOnce()).resolves.toBe(true);
-    await expect(Promise.all(jobIds.map((id) => admin.getJob(id)))).resolves.toEqual(
-      jobIds.map(() =>
+    await expect(Promise.all(taskIds.map((id) => admin.getTask(id)))).resolves.toEqual(
+      taskIds.map(() =>
         expect.objectContaining({
           state: "failed",
           error: expect.objectContaining({ message: expect.stringContaining("invalid outcome") }),
@@ -375,8 +375,8 @@ describe("batch handlers", () => {
     const heartbeatMany = queue.heartbeatMany.bind(queue);
     const heartbeat = vi
       .spyOn(queue, "heartbeatMany")
-      .mockImplementation(async (jobs, owner, leaseMs) => {
-        const renewable = jobs.filter((job) => job.id !== staleId);
+      .mockImplementation(async (tasks, owner, leaseMs) => {
+        const renewable = tasks.filter((task) => task.id !== staleId);
         const statuses =
           renewable.length === 0
             ? new Map<string, "accepted">()
@@ -396,7 +396,7 @@ describe("batch handlers", () => {
       async (items) => {
         const stale = items.find(({ payload }) => payload.outcome === "stale")!;
         await pool.query(
-          "UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE job_id = $1",
+          "UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE task_id = $1",
           [staleId],
         );
         await expect(queue.recoverExpired(100, 0)).resolves.toBe(1);
@@ -405,7 +405,7 @@ describe("batch handlers", () => {
           leaseMs: 1_000,
         });
         expect(reclaimed).toMatchObject({ id: staleId, attempt: 2 });
-        expect(reclaimed!.fenceToken).toBeGreaterThan(stale.context.job.fenceToken);
+        expect(reclaimed!.fenceToken).toBeGreaterThan(stale.context.task.fenceToken);
         await expect(
           queue.complete(reclaimed!, "batch-isolation-reclaimer", { source: "reclaimed" }),
         ).resolves.toBe(true);
@@ -418,12 +418,12 @@ describe("batch handlers", () => {
 
     try {
       await expect(worker.runOnce()).resolves.toBe(true);
-      await expect(admin.getJob<{ source: string }>(staleId)).resolves.toMatchObject({
+      await expect(admin.getTask<{ source: string }>(staleId)).resolves.toMatchObject({
         state: "succeeded",
         currentAttempt: 2,
         result: { source: "reclaimed" },
       });
-      await expect(admin.getJob<{ source: string }>(succeededId)).resolves.toMatchObject({
+      await expect(admin.getTask<{ source: string }>(succeededId)).resolves.toMatchObject({
         state: "succeeded",
         currentAttempt: 1,
         result: { source: "handler" },
@@ -457,15 +457,15 @@ describe("batch handlers", () => {
       { maxSize: 2, lingerMs: 100 },
       async (items) => {
         const canceled = items.find(({ payload }) => payload.outcome === "cancel")!;
-        await queue.cancel(canceled.context.job.id, { requestedBy: "batch-test" });
+        await queue.cancel(canceled.context.task.id, { requestedBy: "batch-test" });
         await vi.waitFor(() => expect(canceled.context.signal.aborted).toBe(true));
         return items.map(() => ({ status: "succeeded", result: null }));
       },
     );
 
     await expect(worker.runOnce()).resolves.toBe(true);
-    await expect(admin.getJob(canceledId)).resolves.toMatchObject({ state: "canceled" });
-    await expect(admin.getJob(succeededId)).resolves.toMatchObject({
+    await expect(admin.getTask(canceledId)).resolves.toMatchObject({ state: "canceled" });
+    await expect(admin.getTask(succeededId)).resolves.toMatchObject({
       state: "succeeded",
       error: null,
     });
@@ -497,8 +497,8 @@ describe("batch handlers", () => {
     );
 
     await expect(worker.runOnce()).resolves.toBe(true);
-    await expect(admin.getJob(timedOutId)).resolves.toMatchObject({ state: "failed" });
-    await expect(admin.getJob(succeededId)).resolves.toMatchObject({ state: "succeeded" });
+    await expect(admin.getTask(timedOutId)).resolves.toMatchObject({ state: "failed" });
+    await expect(admin.getTask(succeededId)).resolves.toMatchObject({ state: "succeeded" });
   });
 
   it("expires one batch member's deadline without failing its peer", async () => {
@@ -527,14 +527,14 @@ describe("batch handlers", () => {
     );
 
     await expect(worker.runOnce()).resolves.toBe(true);
-    await expect(admin.getJob(deadlineId)).resolves.toMatchObject({
+    await expect(admin.getTask(deadlineId)).resolves.toMatchObject({
       state: "failed",
       error: expect.objectContaining({ name: "DeadlineExceeded" }),
     });
-    await expect(admin.getJob(succeededId)).resolves.toMatchObject({ state: "succeeded" });
+    await expect(admin.getTask(succeededId)).resolves.toMatchObject({ state: "succeeded" });
   });
 
-  it("admits and accounts for policy-limited batch members one job at a time", async () => {
+  it("admits and accounts for policy-limited batch members one task at a time", async () => {
     const queueName = `batch-policy-${randomUUID()}`;
     await queue.syncConcurrencyPolicies("batch-policy-test", [
       { queue: queueName, maxActive: 2, maxActivePerKey: 1 },
@@ -590,7 +590,7 @@ describe("batch handlers", () => {
 
   it("drains an active batch without claiming another member", async () => {
     const queueName = `batch-drain-${randomUUID()}`;
-    const jobIds = await Promise.all(
+    const taskIds = await Promise.all(
       [1, 2, 3].map((value) => queue.enqueue("batch-drain", { value }, { queue: queueName })),
     );
     const entered = deferred();
@@ -618,8 +618,8 @@ describe("batch handlers", () => {
     release.resolve();
     await running;
 
-    const states = (await Promise.all(jobIds.map((id) => admin.getJob(id)))).map(
-      (job) => job?.state,
+    const states = (await Promise.all(taskIds.map((id) => admin.getTask(id)))).map(
+      (task) => task?.state,
     );
     expect(states.filter((state) => state === "succeeded")).toHaveLength(2);
     expect(states.filter((state) => state === "ready")).toHaveLength(1);
@@ -649,7 +649,7 @@ describe("batch handlers", () => {
     expect(batches).toEqual([[1, 2]]);
   });
 
-  it("keeps job types separate while filling batch handlers", async () => {
+  it("keeps task types separate while filling batch handlers", async () => {
     const queueName = `batch-types-${randomUUID()}`;
     const batches: string[][] = [];
     for (const [type, value] of [
@@ -684,7 +684,7 @@ describe("batch handlers", () => {
   it("does not duplicate batch members under competing workers", async () => {
     const queueName = `batch-competing-${randomUUID()}`;
     const handled: number[] = [];
-    const jobIds = await Promise.all(
+    const taskIds = await Promise.all(
       Array.from({ length: 8 }, (_, value) =>
         queue.enqueue("batch-competing", { value }, { queue: queueName }),
       ),
@@ -706,8 +706,8 @@ describe("batch handlers", () => {
     ).resolves.toEqual([true, true]);
     expect(handled).toHaveLength(8);
     expect(new Set(handled)).toEqual(new Set(Array.from({ length: 8 }, (_, value) => value)));
-    await expect(Promise.all(jobIds.map((id) => admin.getJob(id)))).resolves.toEqual(
-      jobIds.map((id) => expect.objectContaining({ id, state: "succeeded" })),
+    await expect(Promise.all(taskIds.map((id) => admin.getTask(id)))).resolves.toEqual(
+      taskIds.map((id) => expect.objectContaining({ id, state: "succeeded" })),
     );
   });
 

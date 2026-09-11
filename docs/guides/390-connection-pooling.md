@@ -17,7 +17,7 @@ normally, so [transactional enqueue](200-transactional-enqueue.md) is unaffected
 
 ## What does the listener need?
 
-A worker holds one dedicated connection for `LISTEN workhorse_jobs`. The pooler decides whether a
+A worker holds one dedicated connection for `LISTEN workhorse_tasks`. The pooler decides whether a
 notification can reach it. Session-mode PgBouncer delivers normally. Transaction-mode PgBouncer
 accepts the `LISTEN` and then detaches the server session, so the hint is accepted and never
 delivered — nothing errors, and the worker keeps dispatching on its fallback poll. PgCat fails in
@@ -49,7 +49,7 @@ for.
 
 - [How do I run workers?](310-workers.md)
 - [How does enqueue stay transactional?](200-transactional-enqueue.md)
-- [Who owns a job right now?](020-leases-and-fences.md)
+- [Who owns a task right now?](020-leases-and-fences.md)
 
 Exact lock names, listener behavior, and lane coverage:
 [architecture reference](../architecture.md#connection-poolers).

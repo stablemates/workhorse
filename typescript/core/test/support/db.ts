@@ -89,7 +89,7 @@ export function createDatabaseTestHarness(
             "maintenance_policy",
             "queue_health_policy",
             "maintenance_state",
-            "job_stat_state",
+            "task_stat_state",
             "retention_policy",
           ],
         ],

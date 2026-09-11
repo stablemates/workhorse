@@ -32,8 +32,8 @@ from ._external_waits import (
     validate_wait_timeout as _validate_wait_timeout,
 )
 from ._notifications import (
-    JobNotificationListener as _JobNotificationListener,
     NotificationConnectionFactory as _NotificationConnectionFactory,
+    TaskNotificationListener as _TaskNotificationListener,
 )
 from ._protocol import serialize_child_request as _serialize_child_request
 from ._statements import (
@@ -42,10 +42,9 @@ from ._statements import (
     DriverStatement as _DriverStatement,
 )
 from ._telemetry import (
-    JobExecutionOutcome as _JobExecutionOutcome,
+    TaskExecutionOutcome as _TaskExecutionOutcome,
     current_context as _current_context,
     emit_log as _emit_log,
-    job_span_attributes as _job_span_attributes,
     record_batch as _record_batch_metrics,
     record_claim as _record_claim,
     record_completion as _record_completion,
@@ -58,6 +57,7 @@ from ._telemetry import (
     record_schedule_fired as _record_schedule_fired,
     record_span_error as _record_span_error,
     start_span as _start_span,
+    task_span_attributes as _task_span_attributes,
 )
 from ._version import WORKHORSE_VERSION as _WORKHORSE_VERSION
 from .errors import (
@@ -74,14 +74,14 @@ from .errors import (
     HumanWaitConflictError,
     HumanWaitLeaseLostError,
     HumanWaitLimitExceededError,
-    JobContractUnavailableError,
-    JobContractValidationError,
     ProgressLeaseLostError,
     ProgressRateLimitError,
     SignalWaitConflictError,
     SignalWaitLeaseLostError,
     SignalWaitLimitExceededError,
     StaleLeaseError,
+    TaskContractUnavailableError,
+    TaskContractValidationError,
     WaitConflictError,
     WaitLeaseLostError,
     WaitLimitExceededError,
@@ -90,15 +90,15 @@ from .types import (
     BatchHandlerItem,
     BatchHandlerOutcome,
     CancellationToken,
-    ChildJobRequest,
     ChildOutcome,
-    ClaimedJob,
+    ChildTaskRequest,
+    ClaimedTask,
     EnqueueOptions,
     HandlerContext,
-    JobCheckpoint,
-    JobProgress,
-    JobWait,
     Json,
+    TaskCheckpoint,
+    TaskProgress,
+    TaskWait,
 )
 
 if TYPE_CHECKING:
@@ -121,13 +121,13 @@ class _PendingBatchMember:
 
 
 def _batch_member_order(member: _PendingBatchMember) -> tuple[int, int]:
-    """Rank one waiting member by descending job priority, then worker claim order."""
-    return (-member.item.context.job.priority, member.arrival_order)
+    """Rank one waiting member by descending task priority, then worker claim order."""
+    return (-member.item.context.task.priority, member.arrival_order)
 
 
 @dataclass(eq=False, slots=True)
 class _HeartbeatMember:
-    job: ClaimedJob
+    task: ClaimedTask
     deliver_status: Callable[[object], bool]
     cancellation: CancellationToken
     errors: list[BaseException]
@@ -138,8 +138,8 @@ class _HeartbeatMember:
 # reads it to decide whether any worker still speaks a protocol they are about to retire.
 _SDK_LANGUAGE = "python"
 
-_REDACTED_ERROR_NAME = "RedactedJobError"
-_REDACTED_ERROR_MESSAGE = "Job handler failed; details redacted"
+_REDACTED_ERROR_NAME = "RedactedTaskError"
+_REDACTED_ERROR_MESSAGE = "Task handler failed; details redacted"
 _AttemptOutcome = Literal[
     "completed",
     "failed",
@@ -189,24 +189,24 @@ class _HandlerDurability:
     def __init__(
         self,
         executor: _SyncRowExecutor,
-        job: ClaimedJob,
+        task: ClaimedTask,
         worker_id: str,
         cancellation: CancellationToken,
         arbiter: _AttemptOutcomeArbiter,
     ) -> None:
         self._executor = executor
-        self._job = job
+        self._task = task
         self._worker_id = worker_id
         self._cancellation = cancellation
         self._arbiter = arbiter
         self._lock = Lock()
-        self._checkpoints: dict[str, JobCheckpoint] | None = None
+        self._checkpoints: dict[str, TaskCheckpoint] | None = None
         self._checkpoints_load_error: BaseException | None = None
         self._checkpoints_load_attempted = False
-        self._waits: dict[str, JobWait] | None = None
+        self._waits: dict[str, TaskWait] | None = None
         self._waits_load_error: BaseException | None = None
         self._waits_load_attempted = False
-        self._progress: JobProgress | None = None
+        self._progress: TaskProgress | None = None
         self._progress_load_error: BaseException | None = None
         self._progress_load_attempted = False
         self._checkpoint_calls: dict[str, Future[Json]] = {}
@@ -218,7 +218,7 @@ class _HandlerDurability:
 
     def context(self) -> HandlerContext:
         return HandlerContext(
-            self._job,
+            self._task,
             self._cancellation,
             self.get_checkpoint,
             self.get_wait,
@@ -234,14 +234,14 @@ class _HandlerDurability:
             self.run_children_all,
         )
 
-    def _load_checkpoints(self) -> dict[str, JobCheckpoint]:
+    def _load_checkpoints(self) -> dict[str, TaskCheckpoint]:
         with self._lock:
             if not self._checkpoints_load_attempted:
                 self._checkpoints_load_attempted = True
                 try:
-                    rows = self._executor.rows(_STATEMENTS.list_checkpoints, (self._job.id,))
+                    rows = self._executor.rows(_STATEMENTS.list_checkpoints, (self._task.id,))
                     self._checkpoints = {
-                        str(row["checkpoint_name"]): _checkpoint_record(self._job.id, row)
+                        str(row["checkpoint_name"]): _checkpoint_record(self._task.id, row)
                         for row in rows
                     }
                 except BaseException as error:
@@ -251,14 +251,14 @@ class _HandlerDurability:
             assert self._checkpoints is not None
             return self._checkpoints
 
-    def _load_waits(self) -> dict[str, JobWait]:
+    def _load_waits(self) -> dict[str, TaskWait]:
         with self._lock:
             if not self._waits_load_attempted:
                 self._waits_load_attempted = True
                 try:
-                    rows = self._executor.rows(_STATEMENTS.list_waits, (self._job.id,))
+                    rows = self._executor.rows(_STATEMENTS.list_waits, (self._task.id,))
                     self._waits = {
-                        str(row["wait_name"]): _wait_record(self._job.id, row) for row in rows
+                        str(row["wait_name"]): _wait_record(self._task.id, row) for row in rows
                     }
                 except BaseException as error:
                     self._waits_load_error = error
@@ -267,54 +267,54 @@ class _HandlerDurability:
             assert self._waits is not None
             return self._waits
 
-    def get_checkpoint(self, name: str) -> JobCheckpoint | None:
+    def get_checkpoint(self, name: str) -> TaskCheckpoint | None:
         return self._load_checkpoints().get(name)
 
-    def get_wait(self, name: str) -> JobWait | None:
+    def get_wait(self, name: str) -> TaskWait | None:
         return self._load_waits().get(name)
 
-    def get_progress(self) -> JobProgress | None:
+    def get_progress(self) -> TaskProgress | None:
         with self._lock:
             if not self._progress_load_attempted:
                 self._progress_load_attempted = True
                 try:
-                    rows = self._executor.rows(_STATEMENTS.list_progress, (self._job.id,))
+                    rows = self._executor.rows(_STATEMENTS.list_progress, (self._task.id,))
                     if len(rows) > 1:
                         raise RuntimeError("PostgreSQL returned an invalid progress result")
-                    self._progress = None if not rows else _progress_record(self._job.id, rows[0])
+                    self._progress = None if not rows else _progress_record(self._task.id, rows[0])
                 except BaseException as error:
                     self._progress_load_error = error
             if self._progress_load_error is not None:
                 raise self._progress_load_error
             return self._progress
 
-    def set_progress(self, value: Json) -> JobProgress:
+    def set_progress(self, value: Json) -> TaskProgress:
         encoded = json.dumps(value, separators=(",", ":"), allow_nan=False)
         self._cancellation.raise_if_cancelled()
         row = _require_lifecycle_row(
             self._executor.rows(
                 _STATEMENTS.update_progress,
-                (self._job.id, self._worker_id, self._job.fence_token, encoded),
+                (self._task.id, self._worker_id, self._task.fence_token, encoded),
             )
         )
         status = row["status"]
         if status == "stale":
-            raise ProgressLeaseLostError(self._job.id)
+            raise ProgressLeaseLostError(self._task.id)
         if status == "rate_limited":
-            raise ProgressRateLimitError(self._job.id, int(cast(int | str, row["retry_after_ms"])))
+            raise ProgressRateLimitError(self._task.id, int(cast(int | str, row["retry_after_ms"])))
         if status not in {"updated", "unchanged"}:
             raise RuntimeError(f"Unexpected progress status: {status}")
-        progress = _progress_record(self._job.id, row)
+        progress = _progress_record(self._task.id, row)
         with self._lock:
             self._progress_load_attempted = True
             self._progress_load_error = None
             self._progress = progress
         _emit_log(
             "DEBUG",
-            "workhorse.job.progress_updated",
-            "Job progress persisted",
+            "workhorse.task.progress_updated",
+            "Task progress persisted",
             {
-                **_job_span_attributes(self._job),
+                **_task_span_attributes(self._task),
                 "workhorse.progress.status": str(status),
                 "workhorse.worker.id": self._worker_id,
             },
@@ -344,9 +344,9 @@ class _HandlerDurability:
                     self._executor.rows(
                         _STATEMENTS.save_checkpoint,
                         (
-                            self._job.id,
+                            self._task.id,
                             self._worker_id,
-                            self._job.fence_token,
+                            self._task.fence_token,
                             name,
                             encoded,
                         ),
@@ -354,23 +354,23 @@ class _HandlerDurability:
                 )
                 status = row["status"]
                 if status == "stale":
-                    raise CheckpointLeaseLostError(self._job.id, name)
+                    raise CheckpointLeaseLostError(self._task.id, name)
                 if status == "conflict":
-                    raise CheckpointConflictError(self._job.id, name)
+                    raise CheckpointConflictError(self._task.id, name)
                 if status not in {"saved", "existing"}:
                     raise RuntimeError(f"Unexpected checkpoint status: {status}")
                 _emit_log(
                     "DEBUG",
-                    "workhorse.job.checkpoint_saved",
-                    "Job checkpoint persisted",
+                    "workhorse.task.checkpoint_saved",
+                    "Task checkpoint persisted",
                     {
-                        **_job_span_attributes(self._job),
+                        **_task_span_attributes(self._task),
                         "workhorse.checkpoint.name": name,
                         "workhorse.checkpoint.status": str(status),
                         "workhorse.worker.id": self._worker_id,
                     },
                 )
-                saved = _checkpoint_record(self._job.id, row, name=name)
+                saved = _checkpoint_record(self._task.id, row, name=name)
                 with self._lock:
                     assert self._checkpoints is not None
                     self._checkpoints[name] = saved
@@ -426,9 +426,9 @@ class _HandlerDurability:
                 self._executor.rows(
                     _STATEMENTS.schedule_wait,
                     (
-                        self._job.id,
+                        self._task.id,
                         self._worker_id,
-                        self._job.fence_token,
+                        self._task.fence_token,
                         name,
                         duration_ms,
                         wake_at,
@@ -437,25 +437,25 @@ class _HandlerDurability:
             )
             status = row["status"]
             if status == "stale":
-                raise WaitLeaseLostError(self._job.id, name)
+                raise WaitLeaseLostError(self._task.id, name)
             if status == "conflict":
-                raise WaitConflictError(self._job.id, name)
+                raise WaitConflictError(self._task.id, name)
             if status == "limit_exceeded":
-                raise WaitLimitExceededError(self._job.id)
+                raise WaitLimitExceededError(self._task.id)
             if status not in {"scheduled", "elapsed"}:
                 raise RuntimeError(f"Unexpected wait status: {status}")
             _emit_log(
                 "INFO",
-                "workhorse.job.wait_processed",
-                "Durable job wait processed",
+                "workhorse.task.wait_processed",
+                "Durable task wait processed",
                 {
-                    **_job_span_attributes(self._job),
+                    **_task_span_attributes(self._task),
                     "workhorse.wait.name": name,
                     "workhorse.wait.status": str(status),
                     "workhorse.worker.id": self._worker_id,
                 },
             )
-            wait = _wait_record(self._job.id, row, name=name)
+            wait = _wait_record(self._task.id, row, name=name)
             with self._lock:
                 if self._waits is not None:
                     self._waits[name] = wait
@@ -490,9 +490,9 @@ class _HandlerDurability:
                 self._executor.rows(
                     _STATEMENTS.wait_for_signal,
                     (
-                        self._job.id,
+                        self._task.id,
                         self._worker_id,
-                        self._job.fence_token,
+                        self._task.fence_token,
                         name,
                         timeout_ms,
                     ),
@@ -500,11 +500,11 @@ class _HandlerDurability:
             )
             status = row["status"]
             if status == "stale":
-                raise SignalWaitLeaseLostError(self._job.id, name)
+                raise SignalWaitLeaseLostError(self._task.id, name)
             if status == "already_waiting":
-                raise SignalWaitConflictError(self._job.id, name)
+                raise SignalWaitConflictError(self._task.id, name)
             if status == "limit_exceeded":
-                raise SignalWaitLimitExceededError(self._job.id)
+                raise SignalWaitLimitExceededError(self._task.id)
             if status == "waiting":
                 if self._arbiter.submit("suspended_for_wait"):
                     self._cancellation._cancel(_DURABLE_WAIT_SUSPENSION)
@@ -535,7 +535,7 @@ class _HandlerDurability:
             else:
                 pending_context, pending = current
                 if pending_context != encoded_context:
-                    raise HumanWaitConflictError(self._job.id, name)
+                    raise HumanWaitConflictError(self._task.id, name)
                 owns_call = False
         if not owns_call:
             return pending.result()
@@ -545,9 +545,9 @@ class _HandlerDurability:
                 self._executor.rows(
                     _STATEMENTS.wait_for_human,
                     (
-                        self._job.id,
+                        self._task.id,
                         self._worker_id,
-                        self._job.fence_token,
+                        self._task.fence_token,
                         name,
                         encoded_context,
                         timeout_ms,
@@ -556,13 +556,13 @@ class _HandlerDurability:
             )
             status = row["status"]
             if status == "stale":
-                raise HumanWaitLeaseLostError(self._job.id, name)
+                raise HumanWaitLeaseLostError(self._task.id, name)
             if status == "already_waiting":
-                raise HumanWaitAlreadyWaitingError(self._job.id, name)
+                raise HumanWaitAlreadyWaitingError(self._task.id, name)
             if status == "limit_exceeded":
-                raise HumanWaitLimitExceededError(self._job.id)
+                raise HumanWaitLimitExceededError(self._task.id)
             if status == "conflict":
-                raise HumanWaitConflictError(self._job.id, name)
+                raise HumanWaitConflictError(self._task.id, name)
             if status == "waiting":
                 if self._arbiter.submit("suspended_for_wait"):
                     self._cancellation._cancel(_DURABLE_WAIT_SUSPENSION)
@@ -590,7 +590,7 @@ class _HandlerDurability:
     ) -> Json:
         if not isinstance(name, str) or not 1 <= len(name) <= 200:
             raise ValueError("Child name must contain between 1 and 200 characters")
-        request = _serialize_child_request(self._job, type, payload, options, "default")
+        request = _serialize_child_request(self._task, type, payload, options, "default")
         encoded = json.dumps(request, separators=(",", ":"), allow_nan=False, sort_keys=True)
         with self._lock:
             current = self._child_calls.get(name)
@@ -601,7 +601,7 @@ class _HandlerDurability:
             else:
                 pending_request, pending = current
                 if pending_request != encoded:
-                    raise ChildConflictError(self._job.id, name)
+                    raise ChildConflictError(self._task.id, name)
                 owns_call = False
         if not owns_call:
             return pending.result()
@@ -610,23 +610,23 @@ class _HandlerDurability:
             row = _require_lifecycle_row(
                 self._executor.rows(
                     _STATEMENTS.create_child,
-                    (self._job.id, self._worker_id, self._job.fence_token, name, encoded),
+                    (self._task.id, self._worker_id, self._task.fence_token, name, encoded),
                 )
             )
             status = row["status"]
             if status == "stale":
-                raise ChildLeaseLostError(self._job.id)
+                raise ChildLeaseLostError(self._task.id)
             if status == "conflict":
-                raise ChildConflictError(self._job.id, name)
+                raise ChildConflictError(self._task.id, name)
             if status == "limit_exceeded":
-                raise ChildLimitExceededError(self._job.id)
+                raise ChildLimitExceededError(self._task.id)
             if status in {"created", "completed"}:
                 _emit_log(
                     "INFO",
-                    "workhorse.job.child_processed",
-                    "Child job processed",
+                    "workhorse.task.child_processed",
+                    "Child task processed",
                     {
-                        "workhorse.job.id": self._job.id,
+                        "workhorse.task.id": self._task.id,
                         "workhorse.child.name": name,
                         "workhorse.child.status": str(status),
                         "workhorse.worker.id": self._worker_id,
@@ -650,24 +650,24 @@ class _HandlerDurability:
                 if current is not None and current[1] is pending:
                     del self._child_calls[name]
 
-    def run_children(self, children: Sequence[ChildJobRequest]) -> dict[str, ChildOutcome]:
+    def run_children(self, children: Sequence[ChildTaskRequest]) -> dict[str, ChildOutcome]:
         return cast(dict[str, ChildOutcome], self._run_child_set(children, "settled"))
 
-    def run_children_all(self, children: Sequence[ChildJobRequest]) -> dict[str, Json]:
+    def run_children_all(self, children: Sequence[ChildTaskRequest]) -> dict[str, Json]:
         return self._run_child_set(children, "all_success")
 
     def _run_child_set(
-        self, children: Sequence[ChildJobRequest], mode: Literal["settled", "all_success"]
+        self, children: Sequence[ChildTaskRequest], mode: Literal["settled", "all_success"]
     ) -> dict[str, Json]:
         if isinstance(children, (str, bytes)) or not isinstance(children, Sequence):
             raise TypeError("Children must be a sequence")
         if len(children) > 100:
-            raise ChildLimitExceededError(self._job.id)
+            raise ChildLimitExceededError(self._task.id)
         names: set[str] = set()
         requests: list[dict[str, Json]] = []
         for child in children:
-            if not isinstance(child, ChildJobRequest):
-                raise TypeError("Each child must be a ChildJobRequest")
+            if not isinstance(child, ChildTaskRequest):
+                raise TypeError("Each child must be a ChildTaskRequest")
             if not isinstance(child.name, str) or not 1 <= len(child.name) <= 200:
                 raise ValueError("Child name must contain between 1 and 200 characters")
             if child.name in names:
@@ -677,7 +677,7 @@ class _HandlerDurability:
                 {
                     "name": child.name,
                     "request": _serialize_child_request(
-                        self._job,
+                        self._task,
                         child.type,
                         child.payload,
                         child.options,
@@ -696,7 +696,7 @@ class _HandlerDurability:
             else:
                 pending_request, pending = current
                 if pending_request != call_key:
-                    raise ChildConflictError(self._job.id, "child set")
+                    raise ChildConflictError(self._task.id, "child set")
                 owns_call = False
         if not owns_call:
             return pending.result()
@@ -705,29 +705,29 @@ class _HandlerDurability:
             row = _require_lifecycle_row(
                 self._executor.rows(
                     _STATEMENTS.create_children,
-                    (self._job.id, self._worker_id, self._job.fence_token, encoded, mode),
+                    (self._task.id, self._worker_id, self._task.fence_token, encoded, mode),
                 )
             )
             status = row["status"]
             if status == "stale":
-                raise ChildLeaseLostError(self._job.id)
+                raise ChildLeaseLostError(self._task.id)
             if status == "conflict":
-                raise ChildConflictError(self._job.id, "child set")
+                raise ChildConflictError(self._task.id, "child set")
             if status == "limit_exceeded":
-                raise ChildLimitExceededError(self._job.id)
+                raise ChildLimitExceededError(self._task.id)
             if status == "result_too_large":
                 raise ChildResultLimitExceededError(
-                    self._job.id,
+                    self._task.id,
                     int(cast(int, row["result_bytes"] or 0)),
                     int(cast(int, row["result_limit_bytes"] or 0)),
                 )
             if status in {"created", "completed"}:
                 _emit_log(
                     "INFO",
-                    "workhorse.job.child_processed",
+                    "workhorse.task.child_processed",
                     "Child set processed",
                     {
-                        "workhorse.job.id": self._job.id,
+                        "workhorse.task.id": self._task.id,
                         "workhorse.child.count": len(children),
                         "workhorse.child.status": str(status),
                         "workhorse.worker.id": self._worker_id,
@@ -870,15 +870,15 @@ class Worker:
 
     def _register_heartbeat(
         self,
-        job: ClaimedJob,
+        task: ClaimedTask,
         deliver_status: Callable[[object], bool],
         cancellation: CancellationToken,
         errors: list[BaseException],
         parent_context: object,
     ) -> Callable[[], None]:
-        member = _HeartbeatMember(job, deliver_status, cancellation, errors, parent_context)
+        member = _HeartbeatMember(task, deliver_status, cancellation, errors, parent_context)
         with self._heartbeat_lock:
-            self._heartbeat_members[job.id] = member
+            self._heartbeat_members[task.id] = member
             if self._heartbeat_thread is None or not self._heartbeat_thread.is_alive():
                 self._heartbeat_wake.clear()
                 self._heartbeat_thread = Thread(
@@ -890,8 +890,8 @@ class Worker:
 
         def unregister() -> None:
             with self._heartbeat_lock:
-                if self._heartbeat_members.get(job.id) is member:
-                    del self._heartbeat_members[job.id]
+                if self._heartbeat_members.get(task.id) is member:
+                    del self._heartbeat_members[task.id]
                 if not self._heartbeat_members:
                     self._heartbeat_wake.set()
 
@@ -909,61 +909,61 @@ class Worker:
             try:
                 leases = [
                     {
-                        "jobId": job.id,
-                        "fenceToken": str(job.fence_token),
+                        "taskId": task.id,
+                        "fenceToken": str(task.fence_token),
                         "leaseMs": self.lease_ms,
                     }
-                    for job in (member.job for member in members)
+                    for task in (member.task for member in members)
                 ]
                 rows = self._executor.rows(
                     _STATEMENTS.heartbeat_many,
                     (self.worker_id, json.dumps(leases, separators=(",", ":"))),
                 )
-                statuses = {str(row["job_id"]): row["status"] for row in rows}
+                statuses = {str(row["task_id"]): row["status"] for row in rows}
                 for member in members:
-                    job = member.job
+                    task = member.task
                     with self._heartbeat_lock:
-                        if self._heartbeat_members.get(job.id) is not member:
+                        if self._heartbeat_members.get(task.id) is not member:
                             continue
-                    status = statuses.get(job.id, "stale")
+                    status = statuses.get(task.id, "stale")
                     if status == "accepted":
                         _emit_log(
                             "DEBUG",
-                            "workhorse.job.heartbeat_accepted",
-                            "Job heartbeat accepted",
-                            {**_job_span_attributes(job), "workhorse.worker.id": self.worker_id},
+                            "workhorse.task.heartbeat_accepted",
+                            "Task heartbeat accepted",
+                            {**_task_span_attributes(task), "workhorse.worker.id": self.worker_id},
                         )
                     else:
                         _record_heartbeat_failure(str(status))
                         _emit_log(
                             "INFO",
-                            "workhorse.job.heartbeat_rejected",
-                            "Job heartbeat rejected",
+                            "workhorse.task.heartbeat_rejected",
+                            "Task heartbeat rejected",
                             {
-                                **_job_span_attributes(job),
+                                **_task_span_attributes(task),
                                 "workhorse.heartbeat.status": str(status),
                                 "workhorse.worker.id": self.worker_id,
                             },
                         )
                     if status in {"deadline_exceeded", "timeout_exceeded"}:
-                        status = self._expire_owned_job(job, member.parent_context)
+                        status = self._expire_owned_task(task, member.parent_context)
                         if status == "not_due":
                             continue
                     member.deliver_status(status)
             except BaseException as error:
                 for member in members:
-                    job = member.job
+                    task = member.task
                     with self._heartbeat_lock:
-                        if self._heartbeat_members.get(job.id) is not member:
+                        if self._heartbeat_members.get(task.id) is not member:
                             continue
                     member.errors.append(error)
                     member.cancellation._cancel(error)
 
-    def _expire_owned_job(self, job: ClaimedJob, parent_context: object) -> object:
+    def _expire_owned_task(self, task: ClaimedTask, parent_context: object) -> object:
         expiration = _require_lifecycle_row(
             self._executor.rows(
                 _STATEMENTS.expire_owned,
-                (job.id, self.worker_id, job.fence_token),
+                (task.id, self.worker_id, task.fence_token),
             )
         )
         status = expiration["status"]
@@ -973,17 +973,17 @@ class Worker:
         if retry_state is not None:
             with _start_span(
                 "workhorse.retry",
-                _job_span_attributes(job),
+                _task_span_attributes(task),
                 parent_context=parent_context,
             ) as retry_span:
                 retry_span.set_attribute("workhorse.retry.outcome", str(retry_state))
-                _record_retry(job)
+                _record_retry(task)
         _emit_log(
             "INFO",
-            "workhorse.job.ownership_expired",
-            "Owned job lease expired",
+            "workhorse.task.ownership_expired",
+            "Owned task lease expired",
             {
-                **_job_span_attributes(job),
+                **_task_span_attributes(task),
                 "workhorse.expiration.status": str(status),
                 "workhorse.worker.id": self.worker_id,
             },
@@ -995,32 +995,32 @@ class Worker:
         _emit_log(
             "DEBUG",
             "workhorse.handler.registered",
-            "Job handler registered",
-            {"workhorse.job.type": type, "workhorse.worker.id": self.worker_id},
+            "Task handler registered",
+            {"workhorse.task.type": type, "workhorse.worker.id": self.worker_id},
         )
         return self
 
-    def _validate_result_contract(self, job: ClaimedJob, result: Json) -> None:
-        version = job.contract_version
+    def _validate_result_contract(self, task: ClaimedTask, result: Json) -> None:
+        version = task.contract_version
         if version is None:
             return
-        key = (job.type, version)
+        key = (task.type, version)
         with self._state_lock:
             validator = self._contract_validators.get(key)
         if validator is None:
-            rows = self._executor.rows(_STATEMENTS.get_contract, (job.type, version))
+            rows = self._executor.rows(_STATEMENTS.get_contract, (task.type, version))
             if len(rows) != 1:
-                raise JobContractUnavailableError(job.type, version)
+                raise TaskContractUnavailableError(task.type, version)
             document = rows[0].get("schema")
             if isinstance(document, str):
                 document = json.loads(document)
             if not isinstance(document, Mapping) or "result" not in document:
-                raise JobContractUnavailableError(job.type, version)
+                raise TaskContractUnavailableError(task.type, version)
             validator = _compile_contract_schema(cast(Json, document["result"]))
             with self._state_lock:
                 self._contract_validators[key] = validator
         if not validator.is_valid(result):
-            raise JobContractValidationError(job.type, version, "result")
+            raise TaskContractValidationError(task.type, version, "result")
 
     def handle_batch(
         self,
@@ -1061,16 +1061,16 @@ class Worker:
             batch_id: str,
             batch: Sequence[_PendingBatchMember],
         ) -> None:
-            jobs = [member.item.context.job for member in batch]
+            tasks = [member.item.context.task for member in batch]
             try:
                 row = _require_lifecycle_row(
                     self._executor.rows(
                         statement,
                         (
                             batch_id,
-                            [job.id for job in jobs],
-                            [job.attempt for job in jobs],
-                            [job.fence_token for job in jobs],
+                            [task.id for task in tasks],
+                            [task.attempt for task in tasks],
+                            [task.fence_token for task in tasks],
                             self.worker_id,
                         ),
                     )
@@ -1078,14 +1078,14 @@ class Worker:
                 if int(cast(int, row["recorded"])) != len(batch):
                     raise RuntimeError("PostgreSQL did not record every batch member")
             except Exception as error:
-                jobs = [member.item.context.job for member in batch]
+                tasks = [member.item.context.task for member in batch]
                 _emit_log(
                     "WARN",
                     "workhorse.handler.batch_evidence_failed",
                     "Batch execution evidence could not be persisted",
                     {
-                        "workhorse.queue.name": jobs[0].queue,
-                        "workhorse.job.type": type,
+                        "workhorse.queue.name": tasks[0].queue,
+                        "workhorse.task.type": type,
                         "workhorse.handler.batch.full": len(batch) == max_size,
                         "workhorse.handler.batch.size": len(batch),
                         "workhorse.handler.batch.evidence_phase": (
@@ -1103,16 +1103,16 @@ class Worker:
             batch_id = str(uuid4())
             first_arrived_at = min(member.arrived_at for member in batch)
             actual_linger_ms = max(0.0, (monotonic() - first_arrived_at) * 1_000)
-            queue_name = batch[0].item.context.job.queue
+            queue_name = batch[0].item.context.task.queue
             full = len(batch) == max_size
             _record_batch_metrics(queue_name, type, len(batch), actual_linger_ms, full)
             _emit_log(
                 "INFO",
                 "workhorse.handler.batch_dispatched",
-                "Job batch dispatched",
+                "Task batch dispatched",
                 {
                     "workhorse.queue.name": queue_name,
-                    "workhorse.job.type": type,
+                    "workhorse.task.type": type,
                     "workhorse.handler.batch.full": full,
                     "workhorse.handler.batch.size": len(batch),
                     "workhorse.handler.batch.linger_ms": actual_linger_ms,
@@ -1143,15 +1143,15 @@ class Worker:
 
         def batch_member_handler(payload: Any, context: HandlerContext) -> Json:
             member = _PendingBatchMember(
-                arrival_order=self._claim_order(context.job),
+                arrival_order=self._claim_order(context.task),
                 arrived_at=monotonic(),
                 item=BatchHandlerItem(cast(Json, payload), context._as_batch_context()),
                 result=Future(),
             )
             with pending_lock:
-                pending = pending_queues.setdefault(context.job.queue, [])
+                pending = pending_queues.setdefault(context.task.queue, [])
                 insort(pending, member, key=_batch_member_order)
-                batch = take_batch(context.job.queue) if len(pending) >= max_size else []
+                batch = take_batch(context.task.queue) if len(pending) >= max_size else []
                 first_arrived_at = (
                     min(waiting.arrived_at for waiting in pending) if pending else member.arrived_at
                 )
@@ -1159,7 +1159,7 @@ class Worker:
                 dispatch(batch)
             elif linger_ms == 0:
                 with pending_lock:
-                    batch = take_batch(context.job.queue)
+                    batch = take_batch(context.task.queue)
                 if batch:
                     dispatch(batch)
             else:
@@ -1168,7 +1168,7 @@ class Worker:
                     return member.result.result(timeout=remaining)
                 except FutureTimeoutError:
                     with pending_lock:
-                        batch = take_batch(context.job.queue)
+                        batch = take_batch(context.task.queue)
                     if batch:
                         dispatch(batch)
             return member.result.result()
@@ -1177,9 +1177,9 @@ class Worker:
         _emit_log(
             "DEBUG",
             "workhorse.handler.registered",
-            "Batch job handler registered",
+            "Batch task handler registered",
             {
-                "workhorse.job.type": type,
+                "workhorse.task.type": type,
                 "workhorse.handler.batch.max_size": max_size,
                 "workhorse.handler.batch.linger_ms": linger_ms,
                 "workhorse.worker.id": self.worker_id,
@@ -1188,7 +1188,7 @@ class Worker:
         return self
 
     def run_once(self) -> bool:
-        """Fill available slots until one empty queue sweep, then drain the claimed jobs."""
+        """Fill available slots until one empty queue sweep, then drain the claimed tasks."""
         requested_stop_version = self._stop_version_snapshot()
         with self._execution_lock:
             return self._run_loop(
@@ -1197,7 +1197,7 @@ class Worker:
             )
 
     def run(self) -> None:
-        """Run until stopped, then return after every claimed job has settled."""
+        """Run until stopped, then return after every claimed task has settled."""
         requested_stop_version = self._stop_version_snapshot()
         self._run_continuously(requested_stop_version)
 
@@ -1337,14 +1337,14 @@ class Worker:
                             _STATEMENTS.claim_many,
                             (queue_name, self.worker_id, free_slots, self.lease_ms),
                         )
-                        claimed_jobs = tuple(_claimed_job(row, queue_name) for row in rows)
+                        claimed_tasks = tuple(_claimed_task(row, queue_name) for row in rows)
                         _record_claim(
                             queue_name,
                             (monotonic() - claim_started_at) * 1_000,
-                            claimed_jobs,
+                            claimed_tasks,
                         )
                         if rows:
-                            for key, value in _job_span_attributes(claimed_jobs[0]).items():
+                            for key, value in _task_span_attributes(claimed_tasks[0]).items():
                                 claim_span.set_attribute(key, value)
                     if not rows:
                         empty_attempts += 1
@@ -1352,18 +1352,18 @@ class Worker:
                     empty_attempts = 0
                     consecutive_empty_claims = 0
                     claimed_any = True
-                    for job in claimed_jobs:
+                    for task in claimed_tasks:
                         _emit_log(
                             "DEBUG",
-                            "workhorse.job.claimed",
-                            "Job claimed",
+                            "workhorse.task.claimed",
+                            "Task claimed",
                             {
-                                **_job_span_attributes(job),
+                                **_task_span_attributes(task),
                                 "workhorse.queue.name": queue_name,
                                 "workhorse.worker.id": self.worker_id,
                             },
                         )
-                        self._start_claimed_job(job)
+                        self._start_claimed_task(task)
 
                 state = self._dispatch_state()
                 if state == "stopping":
@@ -1503,12 +1503,12 @@ class Worker:
         )
         for fired in fired_occurrences:
             occurrence = cast(datetime, fired["occurrence_at"])
-            job_id = fired["job_id"]
+            task_id = fired["task_id"]
             schedule_attributes = {
                 "workhorse.schedule.namespace": str(fired["namespace"]),
                 "workhorse.schedule.name": str(fired["schedule_name"]),
             }
-            if job_id is None:
+            if task_id is None:
                 _emit_log(
                     "DEBUG",
                     "workhorse.schedule.fire_replayed",
@@ -1525,7 +1525,7 @@ class Worker:
                     "INFO",
                     "workhorse.schedule.fired",
                     "Recurring schedule fired",
-                    {**schedule_attributes, "workhorse.job.id": str(job_id)},
+                    {**schedule_attributes, "workhorse.task.id": str(task_id)},
                 )
         return True
 
@@ -1634,7 +1634,7 @@ class Worker:
                 )
 
     def _dispatch_wait_seconds(
-        self, listener: _JobNotificationListener | None, consecutive_empty_claims: int = 0
+        self, listener: _TaskNotificationListener | None, consecutive_empty_claims: int = 0
     ) -> float:
         listening = self._notification_listening.is_set() or (
             listener is not None and listener.is_listening()
@@ -1662,10 +1662,10 @@ class Worker:
         else:
             self._notification_listening.clear()
 
-    def _start_notification_listener(self) -> _JobNotificationListener | None:
+    def _start_notification_listener(self) -> _TaskNotificationListener | None:
         if self._notification_connection_factory is None:
             return None
-        listener = _JobNotificationListener(
+        listener = _TaskNotificationListener(
             self._notification_connection_factory,
             self.queues,
             self._wake_from_notification,
@@ -1675,28 +1675,28 @@ class Worker:
         listener.start()
         return listener
 
-    def _start_claimed_job(self, job: ClaimedJob) -> None:
+    def _start_claimed_task(self, task: ClaimedTask) -> None:
         thread = Thread(
-            target=self._run_claimed_job,
-            args=(job,),
-            name=f"workhorse-handler-{job.id}",
+            target=self._run_claimed_task,
+            args=(task,),
+            name=f"workhorse-handler-{task.id}",
         )
         with self._state_lock:
             # The dispatcher assigns this on the claiming thread, in claim order. A batch
             # coordinator cannot read arrival order off its own lock instead, because handler
             # threads start concurrently and reach that lock in scheduler order, not claim order.
-            self._dispatch_order[job.id] = self._dispatch_sequence
+            self._dispatch_order[task.id] = self._dispatch_sequence
             self._dispatch_sequence += 1
             self._active_threads.add(thread)
         thread.start()
 
-    def _claim_order(self, job: ClaimedJob) -> int:
+    def _claim_order(self, task: ClaimedTask) -> int:
         with self._state_lock:
-            return self._dispatch_order.get(job.id, self._dispatch_sequence)
+            return self._dispatch_order.get(task.id, self._dispatch_sequence)
 
-    def _run_claimed_job(self, job: ClaimedJob) -> None:
+    def _run_claimed_task(self, task: ClaimedTask) -> None:
         try:
-            self._execute_claimed_job(job)
+            self._execute_claimed_task(task)
         except BaseException as error:
             with self._state_lock:
                 self._run_errors.append(error)
@@ -1704,7 +1704,7 @@ class Worker:
         finally:
             with self._state_lock:
                 self._active_threads.discard(current_thread())
-                self._dispatch_order.pop(job.id, None)
+                self._dispatch_order.pop(task.id, None)
             self._wake.set()
 
     def _drain_active_threads(self) -> None:
@@ -1716,26 +1716,26 @@ class Worker:
             for thread in active:
                 thread.join()
 
-    def _execute_claimed_job(self, job: ClaimedJob) -> None:
+    def _execute_claimed_task(self, task: ClaimedTask) -> None:
         arbiter = _AttemptOutcomeArbiter()
         span_outcome = {"value": "unknown"}
         span_errors: list[str] = []
         started_at = monotonic()
-        attributes = {"workhorse.queue.name": job.queue, **_job_span_attributes(job)}
+        attributes = {"workhorse.queue.name": task.queue, **_task_span_attributes(task)}
         with _start_span(
             "workhorse.handler",
             attributes,
-            trace_context=job.trace_context,
+            trace_context=task.trace_context,
             consumer=True,
         ) as handler_span:
             _emit_log(
                 "DEBUG",
                 "workhorse.handler.started",
-                "Job handler started",
+                "Task handler started",
                 {**attributes, "workhorse.worker.id": self.worker_id},
             )
             try:
-                self._execute_claimed_job_within_span(job, arbiter, span_outcome, span_errors)
+                self._execute_claimed_task_within_span(task, arbiter, span_outcome, span_errors)
             except BaseException as error:
                 _record_span_error(handler_span, error.__class__.__name__)
                 raise
@@ -1750,11 +1750,11 @@ class Worker:
                 )
                 if span_errors:
                     _record_span_error(handler_span, span_errors[0])
-                _record_handler_execution(job, outcome, duration_ms)
+                _record_handler_execution(task, outcome, duration_ms)
                 _emit_log(
                     "DEBUG",
                     "workhorse.handler.finished",
-                    "Job handler finished",
+                    "Task handler finished",
                     {
                         **attributes,
                         "workhorse.worker.id": self.worker_id,
@@ -1763,8 +1763,8 @@ class Worker:
                 )
                 _emit_log(
                     "INFO",
-                    "workhorse.job.execution_finished",
-                    "Job execution finished",
+                    "workhorse.task.execution_finished",
+                    "Task execution finished",
                     {
                         **attributes,
                         "workhorse.worker.id": self.worker_id,
@@ -1772,20 +1772,20 @@ class Worker:
                     },
                 )
 
-    def _execute_claimed_job_within_span(
+    def _execute_claimed_task_within_span(
         self,
-        job: ClaimedJob,
+        task: ClaimedTask,
         arbiter: _AttemptOutcomeArbiter,
         span_outcome: dict[str, str],
         span_errors: list[str],
     ) -> None:
-        handler = self._handlers.get(job.type)
+        handler = self._handlers.get(task.type)
         if handler is None:
-            error = RuntimeError(f"No handler registered for {job.type}")
-            failure_outcome, failure_state = self._settle_failure(job, error)
+            error = RuntimeError(f"No handler registered for {task.type}")
+            failure_outcome, failure_state = self._settle_failure(task, error)
             span_outcome["value"] = failure_state
             span_errors.append(
-                _REDACTED_ERROR_NAME if job.redact_error_details else type(error).__name__
+                _REDACTED_ERROR_NAME if task.redact_error_details else type(error).__name__
             )
             arbiter.submit(failure_outcome)
             return
@@ -1800,17 +1800,17 @@ class Worker:
                 return False
             arbiter.submit(outcome)
             if outcome == "cancelled":
-                cancellation._cancel(CancellationRequestedError(job.id))
+                cancellation._cancel(CancellationRequestedError(task.id))
             elif outcome == "deadline_exceeded":
-                cancellation._cancel(DeadlineExceededError(job.id))
+                cancellation._cancel(DeadlineExceededError(task.id))
             elif outcome == "attempt_timeout":
-                cancellation._cancel(ExecutionTimeoutError(job.id, job.attempt))
+                cancellation._cancel(ExecutionTimeoutError(task.id, task.attempt))
             else:
-                cancellation._cancel(StaleLeaseError(job.id))
+                cancellation._cancel(StaleLeaseError(task.id))
             return True
 
         def watch_expiration() -> None:
-            expiration_at = _earliest_expiration(job)
+            expiration_at = _earliest_expiration(task)
             expiration_retry_at: float | None = None
             while True:
                 expiration_delay = _expiration_delay(expiration_at, expiration_retry_at)
@@ -1821,7 +1821,7 @@ class Worker:
                 if heartbeat_stop.wait(wait_seconds):
                     return
                 try:
-                    status = self._expire_owned_job(job, handler_parent_context)
+                    status = self._expire_owned_task(task, handler_parent_context)
                     if status == "not_due":
                         expiration_retry_at = monotonic() + 0.005
                         continue
@@ -1833,13 +1833,13 @@ class Worker:
                     return
 
         unregister_heartbeat = self._register_heartbeat(
-            job, deliver_status, cancellation, heartbeat_error, handler_parent_context
+            task, deliver_status, cancellation, heartbeat_error, handler_parent_context
         )
-        expiration_thread = Thread(target=watch_expiration, name=f"workhorse-expiration-{job.id}")
+        expiration_thread = Thread(target=watch_expiration, name=f"workhorse-expiration-{task.id}")
         expiration_thread.start()
         durability = _HandlerDurability(
             self._executor,
-            job,
+            task,
             self.worker_id,
             cancellation,
             arbiter,
@@ -1849,7 +1849,7 @@ class Worker:
             unregister_heartbeat()
             heartbeat_stop.set()
             expiration_thread.join()
-            if self._finish_lifecycle_outcome(job, arbiter.outcome):
+            if self._finish_lifecycle_outcome(task, arbiter.outcome):
                 return True
             if heartbeat_error:
                 if cause is None:
@@ -1858,8 +1858,8 @@ class Worker:
             return False
 
         try:
-            result = handler(job.payload, durability.context())
-            self._validate_result_contract(job, result)
+            result = handler(task.payload, durability.context())
+            self._validate_result_contract(task, result)
             encoded_result = json.dumps(result, separators=(",", ":"))
         except _DurableWaitSuspension:
             if finish_ownership_lifecycle():
@@ -1868,10 +1868,10 @@ class Worker:
         except Exception as error:
             if finish_ownership_lifecycle(error):
                 return
-            failure_outcome, failure_state = self._settle_failure(job, error)
+            failure_outcome, failure_state = self._settle_failure(task, error)
             span_outcome["value"] = failure_state
             span_errors.append(
-                _REDACTED_ERROR_NAME if job.redact_error_details else type(error).__name__
+                _REDACTED_ERROR_NAME if task.redact_error_details else type(error).__name__
             )
             arbiter.submit(failure_outcome)
             return
@@ -1880,97 +1880,97 @@ class Worker:
                 _emit_log(
                     "WARN",
                     "workhorse.handler.signal_swallowed",
-                    "Job handler swallowed its suspension signal",
+                    "Task handler swallowed its suspension signal",
                     {
-                        **_job_span_attributes(job),
-                        "workhorse.queue.name": job.queue,
+                        **_task_span_attributes(task),
+                        "workhorse.queue.name": task.queue,
                         "workhorse.worker.id": self.worker_id,
                         "workhorse.handler.outcome": "suspended",
                     },
                 )
             return
-        with _start_span("workhorse.complete", _job_span_attributes(job)) as completion_span:
+        with _start_span("workhorse.complete", _task_span_attributes(task)) as completion_span:
             accepted = _require_lifecycle_row(
                 self._executor.rows(
                     _STATEMENTS.complete,
-                    (job.id, self.worker_id, job.fence_token, encoded_result),
+                    (task.id, self.worker_id, task.fence_token, encoded_result),
                 )
             )["accepted"]
             completion_span.set_attribute("workhorse.complete.accepted", accepted is True)
             _emit_log(
                 "INFO",
-                "workhorse.job.completed"
+                "workhorse.task.completed"
                 if accepted is True
-                else "workhorse.job.completion_rejected",
-                "Job completed" if accepted is True else "Stale job completion rejected",
+                else "workhorse.task.completion_rejected",
+                "Task completed" if accepted is True else "Stale task completion rejected",
                 {
-                    **_job_span_attributes(job),
+                    **_task_span_attributes(task),
                     "workhorse.complete.accepted": accepted is True,
                     "workhorse.worker.id": self.worker_id,
                 },
             )
         if accepted is not True:
-            if self._acknowledge_cancel(job):
+            if self._acknowledge_cancel(task):
                 arbiter.submit("cancelled")
                 return
             arbiter.submit("lease_expired")
-            raise StaleLeaseError(job.id)
-        _record_completion(job)
+            raise StaleLeaseError(task.id)
+        _record_completion(task)
         arbiter.submit("completed")
 
-    def _finish_lifecycle_outcome(self, job: ClaimedJob, outcome: _AttemptOutcome | None) -> bool:
+    def _finish_lifecycle_outcome(self, task: ClaimedTask, outcome: _AttemptOutcome | None) -> bool:
         if outcome in {"suspended_for_wait", "suspended_for_child"}:
             return True
         if outcome == "cancelled":
-            if not self._acknowledge_cancel(job):
-                raise StaleLeaseError(job.id)
+            if not self._acknowledge_cancel(task):
+                raise StaleLeaseError(task.id)
             return True
         if outcome in {"deadline_exceeded", "attempt_timeout"}:
             return True
         if outcome == "lease_expired":
-            raise StaleLeaseError(job.id)
+            raise StaleLeaseError(task.id)
         return False
 
-    def _acknowledge_cancel(self, job: ClaimedJob) -> bool:
+    def _acknowledge_cancel(self, task: ClaimedTask) -> bool:
         accepted = (
             _require_lifecycle_row(
                 self._executor.rows(
                     _STATEMENTS.acknowledge_cancel,
-                    (job.id, self.worker_id, job.fence_token),
+                    (task.id, self.worker_id, task.fence_token),
                 )
             )["accepted"]
             is True
         )
         _emit_log(
             "INFO",
-            "workhorse.job.cancellation_acknowledged",
-            "Job cancellation acknowledged",
+            "workhorse.task.cancellation_acknowledged",
+            "Task cancellation acknowledged",
             {
-                **_job_span_attributes(job),
+                **_task_span_attributes(task),
                 "workhorse.cancel.accepted": accepted,
                 "workhorse.worker.id": self.worker_id,
             },
         )
         return accepted
 
-    def _settle_failure(self, job: ClaimedJob, error: Exception) -> tuple[_AttemptOutcome, str]:
-        envelope = _error_envelope(error, job.redact_error_details)
-        with _start_span("workhorse.retry", _job_span_attributes(job)) as retry_span:
+    def _settle_failure(self, task: ClaimedTask, error: Exception) -> tuple[_AttemptOutcome, str]:
+        envelope = _error_envelope(error, task.redact_error_details)
+        with _start_span("workhorse.retry", _task_span_attributes(task)) as retry_span:
             state = _require_lifecycle_row(
                 self._executor.rows(
                     _STATEMENTS.fail,
-                    (job.id, self.worker_id, job.fence_token, json.dumps(envelope), None),
+                    (task.id, self.worker_id, task.fence_token, json.dumps(envelope), None),
                 )
             )["state"]
             state_text = str(state)
             retry_span.set_attribute("workhorse.retry.outcome", state_text)
-            _record_failure(job, state_text)
+            _record_failure(task, state_text)
             _emit_log(
                 "INFO",
-                "workhorse.job.failure_processed",
-                "Job attempt failure processed",
+                "workhorse.task.failure_processed",
+                "Task attempt failure processed",
                 {
-                    **_job_span_attributes(job),
+                    **_task_span_attributes(task),
                     "workhorse.attempt.outcome": state_text,
                     "workhorse.worker.id": self.worker_id,
                 },
@@ -1984,19 +1984,19 @@ class Worker:
         if outcome is None:
             return "failed", state_text
         if outcome == "cancelled":
-            if not self._acknowledge_cancel(job):
-                raise StaleLeaseError(job.id) from error
+            if not self._acknowledge_cancel(task):
+                raise StaleLeaseError(task.id) from error
             return "cancelled", state_text
         if outcome == "lease_expired":
-            raise StaleLeaseError(job.id) from error
+            raise StaleLeaseError(task.id) from error
         return outcome, state_text
 
 
-def _claimed_job(row: _Row, queue: str) -> ClaimedJob:
-    return ClaimedJob(
-        id=str(row["job_id"]),
+def _claimed_task(row: _Row, queue: str) -> ClaimedTask:
+    return ClaimedTask(
+        id=str(row["task_id"]),
         queue=queue,
-        type=str(row["job_type"]),
+        type=str(row["task_type"]),
         priority=int(cast(int, row["priority"])),
         payload=cast(Json, row["payload"]),
         contract_version=cast(str | None, row["contract_version"]),
@@ -2027,7 +2027,7 @@ def _validate_batch_outcomes(
         raise RuntimeError(f"Batch handler for {type} returned a non-sequence outcome value")
     if len(outcomes) != expected:
         raise RuntimeError(
-            f"Batch handler for {type} returned {len(outcomes)} outcomes for {expected} jobs"
+            f"Batch handler for {type} returned {len(outcomes)} outcomes for {expected} tasks"
         )
     validated: list[BatchHandlerOutcome] = []
     for index, outcome in enumerate(outcomes):
@@ -2049,9 +2049,9 @@ def _validate_batch_outcomes(
     return validated
 
 
-def _checkpoint_record(job_id: str, row: _Row, *, name: str | None = None) -> JobCheckpoint:
-    return JobCheckpoint(
-        job_id=job_id,
+def _checkpoint_record(task_id: str, row: _Row, *, name: str | None = None) -> TaskCheckpoint:
+    return TaskCheckpoint(
+        task_id=task_id,
         name=name or str(row["checkpoint_name"]),
         value=cast(Json, row["checkpoint_value"]),
         attempt=int(cast(int, row["attempt"])),
@@ -2061,9 +2061,9 @@ def _checkpoint_record(job_id: str, row: _Row, *, name: str | None = None) -> Jo
     )
 
 
-def _progress_record(job_id: str, row: _Row) -> JobProgress:
-    return JobProgress(
-        job_id=job_id,
+def _progress_record(task_id: str, row: _Row) -> TaskProgress:
+    return TaskProgress(
+        task_id=task_id,
         value=cast(Json, row["progress_value"]),
         revision=int(cast(int | str, row["revision"])),
         attempt=int(cast(int, row["attempt"])),
@@ -2074,12 +2074,12 @@ def _progress_record(job_id: str, row: _Row) -> JobProgress:
     )
 
 
-def _wait_record(job_id: str, row: _Row, *, name: str | None = None) -> JobWait:
+def _wait_record(task_id: str, row: _Row, *, name: str | None = None) -> TaskWait:
     mode = str(row["mode"])
     if mode not in {"relative", "absolute"}:
         raise RuntimeError(f"Unexpected durable wait mode: {mode}")
-    return JobWait(
-        job_id=job_id,
+    return TaskWait(
+        task_id=task_id,
         name=name or str(row["wait_name"]),
         mode=cast(Literal["relative", "absolute"], mode),
         duration_ms=(
@@ -2113,8 +2113,8 @@ def _outcome_for_status(status: object, *, neutral: frozenset[str]) -> _AttemptO
 
 def _telemetry_outcome(
     outcome: _AttemptOutcome | None,
-) -> _JobExecutionOutcome:
-    outcomes: dict[_AttemptOutcome | None, _JobExecutionOutcome] = {
+) -> _TaskExecutionOutcome:
+    outcomes: dict[_AttemptOutcome | None, _TaskExecutionOutcome] = {
         "completed": "succeeded",
         "failed": "failed",
         "retry": "retry",
@@ -2145,8 +2145,10 @@ def _handler_span_outcome(outcome: _AttemptOutcome | None) -> str:
     return outcomes[outcome]
 
 
-def _earliest_expiration(job: ClaimedJob) -> datetime | None:
-    candidates = [value for value in (job.deadline_at, job.attempt_timeout_at) if value is not None]
+def _earliest_expiration(task: ClaimedTask) -> datetime | None:
+    candidates = [
+        value for value in (task.deadline_at, task.attempt_timeout_at) if value is not None
+    ]
     return min(candidates) if candidates else None
 
 

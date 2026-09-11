@@ -66,7 +66,7 @@ class DashboardBackend:
             "humanWaits": self.human_waits,
             "events": self.events,
             "eventDetail": self.event_detail,
-            "jobDetail": self.job_detail,
+            "taskDetail": self.task_detail,
             "settings": self.settings,
             "system": self.system,
             "previewRetentionPolicy": self.preview_retention_policy,
@@ -105,7 +105,7 @@ class DashboardBackend:
             "queue": None,
             "page": 1,
             "worker": None,
-            "jobType": None,
+            "taskType": None,
             "priority": None,
             "sort": "updated",
             "tags": [],
@@ -178,10 +178,10 @@ class DashboardBackend:
             raise DashboardRPCError(404, "NOT_FOUND", "Event not found")
         return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
-    def job_detail(self, input: object, _actor: str) -> object:
+    def task_detail(self, input: object, _actor: str) -> object:
         supplied = cast(Mapping[str, object], input)
         value = self._rows(
-            "SELECT workhorse.dashboard_job_detail_v1(%s::jsonb) AS result",
+            "SELECT workhorse.dashboard_task_detail_v1(%s::jsonb) AS result",
             (
                 json.dumps(
                     {
@@ -221,9 +221,9 @@ class DashboardBackend:
         definition = cast(Mapping[str, object], document["definition"])
         current = self._rows("SELECT (policy).* FROM workhorse.get_retention_policy_v1() policy")[0]
         names = (
-            "jobIdentityRetentionDays",
+            "taskIdentityRetentionDays",
             "terminalOutcomeRetentionDays",
-            "jobEventRetentionDays",
+            "taskEventRetentionDays",
             "attemptHistoryRetentionDays",
             "scheduleOccurrenceRetentionDays",
             "statisticsRetentionDays",
@@ -237,17 +237,17 @@ class DashboardBackend:
             """
             SELECT
               (SELECT count(*)::integer FROM (
-                SELECT 1 FROM workhorse.job job
-                JOIN workhorse.job_outcome outcome ON outcome.job_id = job.id
+                SELECT 1 FROM workhorse.task task
+                JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
                 WHERE %s::integer IS NOT NULL AND %s::integer IS NOT NULL
-                  AND job.created_at < clock_timestamp() - make_interval(days => %s)
+                  AND task.created_at < clock_timestamp() - make_interval(days => %s)
                   AND outcome.finished_at < clock_timestamp() - make_interval(days => %s)
                 LIMIT 10001
-              ) rows) AS terminal_jobs,
+              ) rows) AS terminal_tasks,
               (SELECT count(*)::integer FROM (
-                SELECT 1 FROM workhorse.job_event WHERE %s::integer IS NOT NULL
+                SELECT 1 FROM workhorse.task_event WHERE %s::integer IS NOT NULL
                   AND occurred_at < clock_timestamp() - make_interval(days => %s) LIMIT 10001
-              ) rows) AS job_events,
+              ) rows) AS task_events,
               (SELECT count(*)::integer FROM (
                 SELECT 1 FROM workhorse.attempt_history WHERE %s::integer IS NOT NULL
                   AND occurred_at < clock_timestamp() - make_interval(days => %s) LIMIT 10001
@@ -257,11 +257,12 @@ class DashboardBackend:
                   AND occurrence_at < clock_timestamp() - make_interval(days => %s) LIMIT 10001
               ) rows) AS schedule_occurrences,
               (SELECT count(*)::integer FROM (
-                SELECT 1 FROM workhorse.job_stat_bucket WHERE %s::integer IS NOT NULL
+                SELECT 1 FROM workhorse.task_stat_bucket WHERE %s::integer IS NOT NULL
                   AND bucket_start < clock_timestamp() - make_interval(days => %s)
-                UNION ALL SELECT 1 FROM workhorse.job_stat_bucket_hour WHERE %s::integer IS NOT NULL
+                UNION ALL SELECT 1 FROM workhorse.task_stat_bucket_hour
+                  WHERE %s::integer IS NOT NULL
                   AND bucket_start < clock_timestamp() - make_interval(days => %s)
-                UNION ALL SELECT 1 FROM workhorse.job_stat_bucket_day WHERE %s::integer IS NOT NULL
+                UNION ALL SELECT 1 FROM workhorse.task_stat_bucket_day WHERE %s::integer IS NOT NULL
                   AND bucket_start < clock_timestamp() - make_interval(days => %s) LIMIT 10001
               ) rows) AS statistics
             """,
@@ -285,8 +286,8 @@ class DashboardBackend:
             ),
         )[0]
         sampled = {
-            "terminalJobs": int(cast(int, row["terminal_jobs"])),
-            "jobEvents": int(cast(int, row["job_events"])),
+            "terminalTasks": int(cast(int, row["terminal_tasks"])),
+            "taskEvents": int(cast(int, row["task_events"])),
             "attemptHistory": int(cast(int, row["attempt_history"])),
             "scheduleOccurrences": int(cast(int, row["schedule_occurrences"])),
             "statistics": int(cast(int, row["statistics"])),
@@ -366,19 +367,19 @@ class DashboardBackend:
     def run_task_now(self, input: object, actor: str) -> object:
         value = cast(Mapping[str, object], input)
         audit = cast(Mapping[str, object], value["audit"])
-        job_id = value["id"]
+        task_id = value["id"]
         row = self._rows(
             """
             SELECT status, state, run_at FROM workhorse.run_task_now_v1(
               %s::uuid, %s::text, %s::text, %s::text)
             """,
-            (job_id, actor, audit["reason"], audit["requestId"]),
+            (task_id, actor, audit["reason"], audit["requestId"]),
         )[0]
         if row["status"] == "not_found":
             raise DashboardRPCError(404, "NOT_FOUND", "Task not found")
         return {
             "status": row["status"],
-            "id": str(job_id),
+            "id": str(task_id),
             "state": row["state"],
             "runAt": _iso(row["run_at"]),
         }
@@ -397,7 +398,7 @@ class DashboardBackend:
             raise DashboardRPCError(404, "NOT_FOUND", "Task not found")
         return {
             "status": row["status"],
-            "jobId": str(value["id"]),
+            "taskId": str(value["id"]),
             "state": row["state"],
             "currentAttempt": row["current_attempt"],
             "requestedAt": _iso(row["requested_at"]),
@@ -425,7 +426,7 @@ class DashboardBackend:
             raise DashboardRPCError(404, "NOT_FOUND", "Task not found")
         return {
             "status": row["status"],
-            "jobId": str(value["id"]),
+            "taskId": str(value["id"]),
             "name": value["name"],
             "payload": row["payload"],
             "deliveredAt": _iso(row["delivered_at"]),
@@ -452,7 +453,7 @@ class DashboardBackend:
             raise DashboardRPCError(404, "NOT_FOUND", "Task not found")
         return {
             "status": row["status"],
-            "jobId": str(value["id"]),
+            "taskId": str(value["id"]),
             "name": value["name"],
             "result": row["result"],
             "completedAt": _iso(row["completed_at"]),
@@ -472,7 +473,7 @@ class DashboardBackend:
         page = self._admin.redrive_many(
             DeadLetterFilter(
                 queue=cast(str | None, value.get("queue")),
-                type=cast(str | None, value.get("jobType")),
+                type=cast(str | None, value.get("taskType")),
                 tags=tuple(cast(Sequence[str], value.get("tags") or ())),
             ),
             _admin_audit(value, actor),
@@ -482,7 +483,7 @@ class DashboardBackend:
                     None
                     if cursor is None
                     else DeadLetterCursor(
-                        cast(str, cursor["finishedAt"]), cast(str, cursor["jobId"])
+                        cast(str, cursor["finishedAt"]), cast(str, cursor["taskId"])
                     )
                 ),
             ),
@@ -493,7 +494,7 @@ class DashboardBackend:
             "nextCursor": (
                 None
                 if next_cursor is None
-                else {"finishedAt": next_cursor.finished_at, "jobId": next_cursor.job_id}
+                else {"finishedAt": next_cursor.finished_at, "taskId": next_cursor.task_id}
             ),
         }
 
@@ -507,8 +508,8 @@ def _camel_to_snake(value: str) -> str:
 def _redrive_result(result: RedriveResult) -> dict[str, object]:
     return {
         "status": result.status,
-        "sourceJobId": result.source_job_id,
-        "targetJobId": result.target_job_id,
+        "sourceTaskId": result.source_task_id,
+        "targetTaskId": result.target_task_id,
         "sourceState": result.source_state,
         "targetState": result.target_state,
         "requestedAt": _iso(result.requested_at),

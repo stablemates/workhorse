@@ -21,22 +21,22 @@ health
 
 ## admin subcommands
 
-jobs  read-only
-job <job-id>  read-only
-timeline <job-id>  read-only
-checkpoints <job-id>  read-only
-waits <job-id>  read-only
+tasks  read-only
+task <task-id>  read-only
+timeline <task-id>  read-only
+checkpoints <task-id>  read-only
+waits <task-id>  read-only
 external-waits  read-only
 failures  read-only
 queues  read-only
 schedules  read-only
 workers  read-only
 maintenance  read-only
-cancel <job-id>  mutates
-redrive <job-id>  mutates
+cancel <task-id>  mutates
+redrive <task-id>  mutates
 redrive-many  mutates
-signal <job-id>  mutates
-complete-human <job-id>  mutates
+signal <task-id>  mutates
+complete-human <task-id>  mutates
 pause <queue>  mutates
 resume <queue>  mutates
 purge <queue>  mutates
@@ -157,11 +157,11 @@ resume-worker <worker-id>  mutates
 
 schema status         SchemaStatusReport
 health                QueueHealth
-admin jobs            JobListPage
-admin job             JobSnapshot
-admin timeline        JobTimelinePage
-admin checkpoints     readonly JobCheckpoint[] | JobCheckpoint
-admin waits           readonly JobWait[] | JobWait
+admin tasks           TaskListPage
+admin task            TaskSnapshot
+admin timeline        TaskTimelinePage
+admin checkpoints     readonly TaskCheckpoint[] | TaskCheckpoint
+admin waits           readonly TaskWait[] | TaskWait
 admin external-waits  AdminExternalWaits
 admin failures        DeadLetterPage
 admin queues          readonly AdminQueueStatus[]
@@ -222,8 +222,8 @@ interface BulkRedrivePage {
 
 interface CancelResult {
   status: CancelStatus;
-  jobId: string;
-  state: JobState | null;
+  taskId: string;
+  state: TaskState | null;
   currentAttempt: number | null;
   requestedAt: Date | null;
   /** Caller-provided attribution only. This does not claim that the caller was authorized. */
@@ -235,7 +235,7 @@ interface CancelResult {
 type CancelStatus = "canceled" | "cancel_requested" | "already_terminal" | "not_found";
 
 interface DeadLetter {
-  jobId: string;
+  taskId: string;
   queue: string;
   type: string;
   concurrencyKey: string | null;
@@ -255,7 +255,7 @@ interface DeadLetter {
 interface DeadLetterCursor {
   /** Exact PostgreSQL UTC timestamp text. Treat as opaque continuation state. */
   finishedAt: string;
-  jobId: string;
+  taskId: string;
 }
 
 interface DeadLetterPage {
@@ -264,7 +264,7 @@ interface DeadLetterPage {
 }
 
 interface Dependencies {
-  prerequisiteJobIds: readonly string[];
+  prerequisiteTaskIds: readonly string[];
   onSuccess: DependencyTerminalPolicy;
   onFailure: DependencyTerminalPolicy;
   onCancellation: DependencyTerminalPolicy;
@@ -275,14 +275,14 @@ type DependencyTerminalPolicy = "release" | "cancel" | "fail";
 interface ExternalWaitCursor {
   /** Exact PostgreSQL UTC timestamp text. Treat as opaque continuation state. */
   createdAt: string;
-  jobId: string;
+  taskId: string;
   name: string;
 }
 
 interface ExternalWaitRecord {
-  jobId: string;
+  taskId: string;
   queue: string;
-  jobType: string;
+  taskType: string;
   name: string;
   attempt: number;
   createdAt: Date;
@@ -295,7 +295,7 @@ interface HumanWait<TContext extends Json = Json> extends ExternalWaitRecord {
 
 interface HumanWaitCompletionResult<TResult extends Json = Json> {
   status: HumanWaitCompletionStatus;
-  jobId: string;
+  taskId: string;
   name: string;
   payload: TResult | null;
   completedAt: Date | null;
@@ -307,177 +307,6 @@ type HumanWaitCompletionStatus = "completed" | "duplicate" | "not_waiting" | "al
 interface HumanWaitPage<TContext extends Json = Json> {
   items: HumanWait<TContext>[];
   nextCursor: ExternalWaitCursor | null;
-}
-
-type JobAttemptOutcome = "succeeded" | "failed" | "retry" | "lease_expired" | "canceled" | "deadline_exceeded" | "timeout";
-
-interface JobCheckpoint<TValue extends Json = Json> {
-  jobId: string;
-  name: string;
-  value: TValue;
-  /** Attempt that first persisted this checkpoint. */
-  attempt: number;
-  /** Ownership generation that authorized the checkpoint write. */
-  fenceToken: bigint;
-  workerId: string;
-  createdAt: Date;
-}
-
-interface JobListCursor {
-  /** Exact PostgreSQL timestamp text. Treat as opaque continuation state. */
-  createdAt: string;
-  jobId: string;
-  signature: string;
-}
-
-interface JobListItem {
-  id: string;
-  queue: string;
-  type: string;
-  concurrencyKey: string | null;
-  priority: number;
-  tags: string[];
-  state: JobState;
-  prerequisiteJobId: string | null;
-  prerequisiteJobIds: string[];
-  dependencyPolicy: Omit<Dependencies, "prerequisiteJobIds"> | null;
-  blockedReason: "prerequisite_pending" | null;
-  parentJobId: string | null;
-  childJobIds: string[];
-  currentAttempt: number;
-  maxAttempts: number;
-  retryPolicy: RetryPolicy | null;
-  deadlineAt: Date | null;
-  executionTimeoutMs: number | null;
-  runAt: Date;
-  cancelRequestedAt: Date | null;
-  /** Caller-provided attribution only. This does not claim that the caller was authorized. */
-  cancelRequestedBy: string | null;
-  cancelReason: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-  payload: Json | null;
-  payloadStatus: JobPayloadStatus;
-  payloadBytes: number | null;
-}
-
-interface JobListPage {
-  items: JobListItem[];
-  nextCursor: JobListCursor | null;
-}
-
-type JobPayloadStatus = "omitted" | "included" | "too_large";
-
-interface JobProgress<TValue extends Json = Json> {
-  jobId: string;
-  value: TValue;
-  /** Monotonic accepted-change revision for this job. */
-  revision: bigint;
-  /** Attempt that wrote the latest value. */
-  attempt: number;
-  /** Ownership generation that authorized the latest value. */
-  fenceToken: bigint;
-  workerId: string;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-interface JobSnapshot<TResult extends Json = Json> {
-  id: string;
-  queue: string;
-  type: string;
-  concurrencyKey: string | null;
-  priority: number;
-  payload: Json;
-  contractVersion: string | null;
-  tags: string[];
-  state: JobState;
-  prerequisiteJobId: string | null;
-  prerequisiteJobIds: string[];
-  dependencyPolicy: Omit<Dependencies, "prerequisiteJobIds"> | null;
-  blockedReason: "prerequisite_pending" | null;
-  parentJobId: string | null;
-  childJobIds: string[];
-  currentAttempt: number;
-  maxAttempts: number;
-  retryPolicy: RetryPolicy | null;
-  deadlineAt: Date | null;
-  executionTimeoutMs: number | null;
-  /** Current ownership generation, or zero before the first claim. */
-  fenceToken: bigint;
-  runAt: Date;
-  result: TResult | null;
-  error: Json | null;
-  cancelRequestedAt: Date | null;
-  /** Caller-provided attribution only. This does not claim that the caller was authorized. */
-  cancelRequestedBy: string | null;
-  cancelReason: string | null;
-  /** Latest bounded mutable progress, retained across retries and terminal materialization. */
-  progress: JobProgress | null;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-type JobState = "blocked" | "scheduled" | "ready" | "active" | "succeeded" | "failed" | "canceled";
-
-interface JobTimelineAttempt extends JobTimelineEntryBase {
-  kind: "attempt";
-  attempt: number;
-  fenceToken: bigint;
-  workerId: string;
-  outcome: JobAttemptOutcome;
-  startedAt: Date;
-  claimedAt: Date;
-  finishedAt: Date;
-  error: Json | null;
-}
-
-interface JobTimelineCursor {
-  jobId: string;
-  /** Exact PostgreSQL timestamp text. Treat as opaque continuation state. */
-  occurredAt: string;
-  kind: "event" | "attempt";
-  /** UUIDv7 historical record identity. Treat as opaque continuation state. */
-  recordId: string;
-}
-
-type JobTimelineEntry = JobTimelineEvent | JobTimelineAttempt;
-
-interface JobTimelineEntryBase {
-  recordId: string;
-  priority: number;
-  attempt: number | null;
-  occurredAt: Date;
-}
-
-interface JobTimelineEvent extends JobTimelineEntryBase {
-  kind: "event";
-  eventType: string;
-  details: Json;
-}
-
-interface JobTimelinePage {
-  /** Merged events and attempts ordered latest-first. */
-  items: JobTimelineEntry[];
-  nextCursor: JobTimelineCursor | null;
-}
-
-interface JobWait {
-  jobId: string;
-  name: string;
-  mode: "relative" | "absolute";
-  /** First committed relative duration. Later relative arguments for this name are ignored. */
-  durationMs: number | null;
-  /** Exact caller target for an absolute wait, or null for a relative wait. */
-  requestedWakeAt: Date | null;
-  /** PostgreSQL-computed durable target used by promotion. */
-  wakeAt: Date;
-  /** Logical attempt that first persisted this wait. */
-  attempt: number;
-  /** Ownership generation that authorized the first write. */
-  fenceToken: bigint;
-  workerId: string;
-  createdAt: Date;
 }
 
 type Json = null | boolean | number | string | Json[] | {
@@ -509,7 +338,7 @@ interface MaintenancePolicyDefinition {
   * at the current rollup watermark.
   */
   statisticsRollupIntervalMs?: number;
-  /** Distinct (queue, job type) groups kept per statistics bucket before folding into overflow. */
+  /** Distinct (queue, task type) groups kept per statistics bucket before folding into overflow. */
   statisticsGroupLimit?: number;
   /** Closed minutes re-derived behind the rollup watermark to absorb late-committing history. */
   statisticsRecomputeBuckets?: number;
@@ -543,7 +372,7 @@ interface QueueHealth {
   budgets: QueueHealthBudgets;
   /** Canonical schema protocol version installed in this database. */
   schemaVersion: number | null;
-  counts: Record<JobState, number>;
+  counts: Record<TaskState, number>;
   /**
   * True when terminal counts hit the bounded history scan cap and are lower bounds.
   * Live-state counts are always exact; only succeeded, failed, and canceled can cap.
@@ -552,7 +381,7 @@ interface QueueHealth {
   readyDepth: number;
   scheduledDepth: number;
   /** Scheduled runtimes currently suspended at a named durable timer boundary. */
-  sleepingJobs: number;
+  sleepingTasks: number;
   /** Durable timer runtimes whose not-before target has passed but remain unpromoted. */
   overdueWaits: number;
   /** Earliest not-before target among currently suspended durable timers. */
@@ -561,7 +390,7 @@ interface QueueHealth {
   expiredLeases: number;
   /** Dependency pressure and retained policy-selected failure outcomes. */
   dependencies: {
-    blockedJobs: number;
+    blockedTasks: number;
     pendingEdges: number;
     failedResolutions: number;
     /** The last terminal prune deleted nothing while its candidate window contained dependency pins. */
@@ -579,7 +408,7 @@ interface QueueHealth {
     /** True when at least one value is a lower bound at the operations scan limit. */
     capped: boolean;
   };
-  /** Bounded signal and human-decision lifecycle diagnostics without job or wait-name labels. */
+  /** Bounded signal and human-decision lifecycle diagnostics without task or wait-name labels. */
   externalWaits: {
     pendingSignals: number;
     pendingHumanDecisions: number;
@@ -650,16 +479,16 @@ interface QueueHealth {
   /** Oldest retained timestamp used to compute category lag. */
   oldestRetainedAt: RetentionCategoryValues<Date | null>;
   eligibleHistoryPartitions: {
-    jobEvents: number;
+    taskEvents: number;
     attemptHistory: number;
   };
   defaultHistoryRows: {
-    jobEvents: number;
+    taskEvents: number;
     attemptHistory: number;
   };
   /** True when the corresponding fallback-row count hit the 10,001-row health scan cap. */
   defaultHistoryRowsCapped: {
-    jobEvents: boolean;
+    taskEvents: boolean;
     attemptHistory: boolean;
   };
   /**
@@ -670,7 +499,7 @@ interface QueueHealth {
     /** UTC day in `YYYYMMDD` form, matching the partition name suffix. */
     day: string;
     startsAt: Date;
-    hasJobEvents: boolean;
+    hasTaskEvents: boolean;
     hasAttemptHistory: boolean;
   }>;
   /** Budget evaluation of this snapshot. Budgets are caller-overridable per call. */
@@ -741,7 +570,7 @@ interface QueueHealthStatus {
 }
 
 interface RateLimit {
-  /** Tokens added during each interval. One token admits one job start. */
+  /** Tokens added during each interval. One token admits one task start. */
   limit: number;
   intervalMs: number;
   /** Maximum tokens retained after idle time. */
@@ -767,19 +596,19 @@ interface RateLimitStatus extends RateLimitPolicy {
 
 interface RedriveResult {
   status: RedriveStatus;
-  sourceJobId: string;
-  targetJobId: string | null;
-  sourceState: JobState | null;
-  targetState: JobState | null;
+  sourceTaskId: string;
+  targetTaskId: string | null;
+  sourceState: TaskState | null;
+  targetState: TaskState | null;
   requestedAt: Date | null;
 }
 
 type RedriveStatus = "redriven" | "replayed" | "eligible" | "not_found" | "not_failed";
 
 interface RetentionCategoryValues<T> {
-  jobIdentity: T;
+  taskIdentity: T;
   terminalOutcome: T;
-  jobEvents: T;
+  taskEvents: T;
   attemptHistory: T;
   scheduleOccurrences: T;
   statistics: T;
@@ -787,13 +616,13 @@ interface RetentionCategoryValues<T> {
 
 interface RetentionPolicy extends Required<RetentionPolicyDefinition> {
   provenance: {
-    jobIdentityRetentionDays: PolicyValueProvenance<number | null>;
+    taskIdentityRetentionDays: PolicyValueProvenance<number | null>;
     terminalOutcomeRetentionDays: PolicyValueProvenance<number | null>;
-    jobEventRetentionDays: PolicyValueProvenance<number | null>;
+    taskEventRetentionDays: PolicyValueProvenance<number | null>;
     attemptHistoryRetentionDays: PolicyValueProvenance<number | null>;
     scheduleOccurrenceRetentionDays: PolicyValueProvenance<number | null>;
     statisticsRetentionDays: PolicyValueProvenance<number | null>;
-    terminalJobPruneLimit: PolicyValueProvenance<number>;
+    terminalTaskPruneLimit: PolicyValueProvenance<number>;
     historyPartitionsPerPass: PolicyValueProvenance<number>;
     defaultPartitionRowsPerPass: PolicyValueProvenance<number>;
     occurrenceRowsPerPass: PolicyValueProvenance<number>;
@@ -803,20 +632,20 @@ interface RetentionPolicy extends Required<RetentionPolicyDefinition> {
 }
 
 interface RetentionPolicyDefinition {
-  jobIdentityRetentionDays: number | null;
+  taskIdentityRetentionDays: number | null;
   terminalOutcomeRetentionDays: number | null;
-  jobEventRetentionDays: number | null;
+  taskEventRetentionDays: number | null;
   attemptHistoryRetentionDays: number | null;
   scheduleOccurrenceRetentionDays: number | null;
   /**
   * How long derived per-minute statistics are kept.
   *
-  * Deliberately independent of every window above rather than bounded by job identity. A bucket
-  * summarizes jobs, it does not attribute one, so keeping aggregates long after the history they
+  * Deliberately independent of every window above rather than bounded by task identity. A bucket
+  * summarizes tasks, it does not attribute one, so keeping aggregates long after the history they
   * came from has been deleted is the intended use rather than a violation. Null keeps them forever.
   */
   statisticsRetentionDays: number | null;
-  terminalJobPruneLimit?: number;
+  terminalTaskPruneLimit?: number;
   historyPartitionsPerPass?: number;
   defaultPartitionRowsPerPass?: number;
   occurrenceRowsPerPass?: number;
@@ -890,7 +719,7 @@ interface SchemaStatusReport {
 
 interface SignalDeliveryResult<TPayload extends Json = Json> {
   status: SignalDeliveryStatus;
-  jobId: string;
+  taskId: string;
   name: string;
   payload: TPayload | null;
   deliveredAt: Date | null;
@@ -913,6 +742,177 @@ interface StoredSchedule {
   timezone: string;
   revision: bigint;
   lastOccurrenceAt: Date | null;
+}
+
+type TaskAttemptOutcome = "succeeded" | "failed" | "retry" | "lease_expired" | "canceled" | "deadline_exceeded" | "timeout";
+
+interface TaskCheckpoint<TValue extends Json = Json> {
+  taskId: string;
+  name: string;
+  value: TValue;
+  /** Attempt that first persisted this checkpoint. */
+  attempt: number;
+  /** Ownership generation that authorized the checkpoint write. */
+  fenceToken: bigint;
+  workerId: string;
+  createdAt: Date;
+}
+
+interface TaskListCursor {
+  /** Exact PostgreSQL timestamp text. Treat as opaque continuation state. */
+  createdAt: string;
+  taskId: string;
+  signature: string;
+}
+
+interface TaskListItem {
+  id: string;
+  queue: string;
+  type: string;
+  concurrencyKey: string | null;
+  priority: number;
+  tags: string[];
+  state: TaskState;
+  prerequisiteTaskId: string | null;
+  prerequisiteTaskIds: string[];
+  dependencyPolicy: Omit<Dependencies, "prerequisiteTaskIds"> | null;
+  blockedReason: "prerequisite_pending" | null;
+  parentTaskId: string | null;
+  childTaskIds: string[];
+  currentAttempt: number;
+  maxAttempts: number;
+  retryPolicy: RetryPolicy | null;
+  deadlineAt: Date | null;
+  executionTimeoutMs: number | null;
+  runAt: Date;
+  cancelRequestedAt: Date | null;
+  /** Caller-provided attribution only. This does not claim that the caller was authorized. */
+  cancelRequestedBy: string | null;
+  cancelReason: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  payload: Json | null;
+  payloadStatus: TaskPayloadStatus;
+  payloadBytes: number | null;
+}
+
+interface TaskListPage {
+  items: TaskListItem[];
+  nextCursor: TaskListCursor | null;
+}
+
+type TaskPayloadStatus = "omitted" | "included" | "too_large";
+
+interface TaskProgress<TValue extends Json = Json> {
+  taskId: string;
+  value: TValue;
+  /** Monotonic accepted-change revision for this task. */
+  revision: bigint;
+  /** Attempt that wrote the latest value. */
+  attempt: number;
+  /** Ownership generation that authorized the latest value. */
+  fenceToken: bigint;
+  workerId: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+interface TaskSnapshot<TResult extends Json = Json> {
+  id: string;
+  queue: string;
+  type: string;
+  concurrencyKey: string | null;
+  priority: number;
+  payload: Json;
+  contractVersion: string | null;
+  tags: string[];
+  state: TaskState;
+  prerequisiteTaskId: string | null;
+  prerequisiteTaskIds: string[];
+  dependencyPolicy: Omit<Dependencies, "prerequisiteTaskIds"> | null;
+  blockedReason: "prerequisite_pending" | null;
+  parentTaskId: string | null;
+  childTaskIds: string[];
+  currentAttempt: number;
+  maxAttempts: number;
+  retryPolicy: RetryPolicy | null;
+  deadlineAt: Date | null;
+  executionTimeoutMs: number | null;
+  /** Current ownership generation, or zero before the first claim. */
+  fenceToken: bigint;
+  runAt: Date;
+  result: TResult | null;
+  error: Json | null;
+  cancelRequestedAt: Date | null;
+  /** Caller-provided attribution only. This does not claim that the caller was authorized. */
+  cancelRequestedBy: string | null;
+  cancelReason: string | null;
+  /** Latest bounded mutable progress, retained across retries and terminal materialization. */
+  progress: TaskProgress | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+type TaskState = "blocked" | "scheduled" | "ready" | "active" | "succeeded" | "failed" | "canceled";
+
+interface TaskTimelineAttempt extends TaskTimelineEntryBase {
+  kind: "attempt";
+  attempt: number;
+  fenceToken: bigint;
+  workerId: string;
+  outcome: TaskAttemptOutcome;
+  startedAt: Date;
+  claimedAt: Date;
+  finishedAt: Date;
+  error: Json | null;
+}
+
+interface TaskTimelineCursor {
+  taskId: string;
+  /** Exact PostgreSQL timestamp text. Treat as opaque continuation state. */
+  occurredAt: string;
+  kind: "event" | "attempt";
+  /** UUIDv7 historical record identity. Treat as opaque continuation state. */
+  recordId: string;
+}
+
+type TaskTimelineEntry = TaskTimelineEvent | TaskTimelineAttempt;
+
+interface TaskTimelineEntryBase {
+  recordId: string;
+  priority: number;
+  attempt: number | null;
+  occurredAt: Date;
+}
+
+interface TaskTimelineEvent extends TaskTimelineEntryBase {
+  kind: "event";
+  eventType: string;
+  details: Json;
+}
+
+interface TaskTimelinePage {
+  /** Merged events and attempts ordered latest-first. */
+  items: TaskTimelineEntry[];
+  nextCursor: TaskTimelineCursor | null;
+}
+
+interface TaskWait {
+  taskId: string;
+  name: string;
+  mode: "relative" | "absolute";
+  /** First committed relative duration. Later relative arguments for this name are ignored. */
+  durationMs: number | null;
+  /** Exact caller target for an absolute wait, or null for a relative wait. */
+  requestedWakeAt: Date | null;
+  /** PostgreSQL-computed durable target used by promotion. */
+  wakeAt: Date;
+  /** Logical attempt that first persisted this wait. */
+  attempt: number;
+  /** Ownership generation that authorized the first write. */
+  fenceToken: bigint;
+  workerId: string;
+  createdAt: Date;
 }
 
 interface WorkerClientProtocol {

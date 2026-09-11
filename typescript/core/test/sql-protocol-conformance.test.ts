@@ -13,9 +13,9 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type {
-  ClaimedJob,
+  ClaimedTask,
   EnqueueRequest,
-  JobAttemptOutcome,
+  TaskAttemptOutcome,
   Json,
   Queryable,
 } from "../src/index.js";
@@ -88,15 +88,15 @@ function runtimeQueue(database: Queryable): RuntimeQueue {
   }) as RuntimeQueue;
 }
 
-async function expectJobStates(
+async function expectTaskStates(
   admin: Admin,
   ids: Map<string, string>,
   expected: Record<string, { state: string; attempt: number }>,
 ): Promise<void> {
   for (const [key, state] of Object.entries(expected)) {
     const id = ids.get(key);
-    expect(id, `runtime fixture has no job named ${key}`).toBeDefined();
-    await expect(admin.getJob(id!)).resolves.toMatchObject({
+    expect(id, `runtime fixture has no task named ${key}`).toBeDefined();
+    await expect(admin.getTask(id!)).resolves.toMatchObject({
       state: state.state,
       currentAttempt: state.attempt,
     });
@@ -105,24 +105,24 @@ async function expectJobStates(
 
 async function expectAttemptCount(
   database: Queryable,
-  jobId: string,
+  taskId: string,
   expected: number,
 ): Promise<void> {
   const attempts = await database.query<{ count: number }>(
-    "SELECT count(*)::integer AS count FROM workhorse.attempt_history WHERE job_id = $1",
-    [jobId],
+    "SELECT count(*)::integer AS count FROM workhorse.attempt_history WHERE task_id = $1",
+    [taskId],
   );
   expect(attempts.rows).toEqual([{ count: expected }]);
 }
 
 async function expectAttemptOutcome(
   database: Queryable,
-  jobId: string,
-  expected: JobAttemptOutcome | JobAttemptOutcome[],
+  taskId: string,
+  expected: TaskAttemptOutcome | TaskAttemptOutcome[],
 ): Promise<void> {
-  const attempts = await database.query<{ outcome: JobAttemptOutcome }>(
-    "SELECT outcome FROM workhorse.attempt_history WHERE job_id = $1 ORDER BY attempt",
-    [jobId],
+  const attempts = await database.query<{ outcome: TaskAttemptOutcome }>(
+    "SELECT outcome FROM workhorse.attempt_history WHERE task_id = $1 ORDER BY attempt",
+    [taskId],
   );
   const outcomes = Array.isArray(expected) ? expected : [expected];
   expect(attempts.rows).toEqual(outcomes.map((outcome) => ({ outcome })));
@@ -159,16 +159,16 @@ async function executeBatchRuntimeFixture(
 ): Promise<void> {
   const queueName = `runtime-${fixture.id}`;
   const ids = new Map<string, string>();
-  for (const job of fixture.jobs) {
+  for (const task of fixture.tasks) {
     ids.set(
-      job.key,
+      task.key,
       await queue.enqueue(
-        fixture.jobType,
-        { key: job.key, outcome: job.outcome },
+        fixture.taskType,
+        { key: task.key, outcome: task.outcome },
         {
           queue: queueName,
-          priority: job.priority,
-          maxAttempts: job.maxAttempts,
+          priority: task.priority,
+          maxAttempts: task.maxAttempts,
         },
       ),
     );
@@ -180,16 +180,16 @@ async function executeBatchRuntimeFixture(
     concurrency: fixture.concurrency,
     retryDelayMs: 0,
   }).handleBatch<{ key: string; outcome: string }, { attempt: number }>(
-    fixture.jobType,
+    fixture.taskType,
     { maxSize: fixture.batchMaxSize, lingerMs: 100 },
     (items) => {
       seen.push(...items.map((item) => item.payload.key));
       return items.map(({ payload, context }) =>
-        payload.outcome === "succeed" || context.job.attempt > 1
-          ? { status: "succeeded" as const, result: { attempt: context.job.attempt } }
+        payload.outcome === "succeed" || context.task.attempt > 1
+          ? { status: "succeeded" as const, result: { attempt: context.task.attempt } }
           : {
               status: "failed" as const,
-              error: new Error(`${payload.outcome} on attempt ${context.job.attempt}`),
+              error: new Error(`${payload.outcome} on attempt ${context.task.attempt}`),
             },
       );
     },
@@ -197,9 +197,9 @@ async function executeBatchRuntimeFixture(
 
   await expect(worker.runOnce()).resolves.toBe(true);
   expect(seen).toEqual(fixture.expectedHandlerOrder);
-  await expectJobStates(admin, ids, fixture.expectedAfterFirstRun);
+  await expectTaskStates(admin, ids, fixture.expectedAfterFirstRun);
   await expect(worker.runOnce()).resolves.toBe(true);
-  await expectJobStates(admin, ids, fixture.expectedAfterSecondRun);
+  await expectTaskStates(admin, ids, fixture.expectedAfterSecondRun);
 }
 
 async function executeSuspensionReplayRuntimeFixture(
@@ -210,8 +210,8 @@ async function executeSuspensionReplayRuntimeFixture(
 ): Promise<void> {
   const queueName = `runtime-${fixture.id}`;
   const ids = new Map<string, string>();
-  ids.set("suspension", await queue.enqueue(fixture.jobType, {}, { queue: queueName }));
-  ids.set("following", await queue.enqueue(fixture.followingJobType, {}, { queue: queueName }));
+  ids.set("suspension", await queue.enqueue(fixture.taskType, {}, { queue: queueName }));
+  ids.set("following", await queue.enqueue(fixture.followingTaskType, {}, { queue: queueName }));
   let handlerRuns = 0;
   let checkpointOperations = 0;
   const seen: string[] = [];
@@ -220,9 +220,9 @@ async function executeSuspensionReplayRuntimeFixture(
     queue: queueName,
     maintenanceIntervalMs: 100,
   })
-    .handle(fixture.jobType, async (_payload, context) => {
+    .handle(fixture.taskType, async (_payload, context) => {
       handlerRuns += 1;
-      seen.push(`suspension:${context.job.attempt}`);
+      seen.push(`suspension:${context.task.attempt}`);
       const prepared = await context.checkpoint(fixture.checkpointName, () => {
         checkpointOperations += 1;
         return { operation: checkpointOperations };
@@ -230,13 +230,13 @@ async function executeSuspensionReplayRuntimeFixture(
       await context.sleep(fixture.waitName, fixture.waitMs);
       return { prepared, handlerRuns };
     })
-    .handle(fixture.followingJobType, (_payload, context) => {
-      seen.push(`following:${context.job.attempt}`);
+    .handle(fixture.followingTaskType, (_payload, context) => {
+      seen.push(`following:${context.task.attempt}`);
       return { handled: true };
     });
 
   await expect(worker.runOnce()).resolves.toBe(true);
-  await expectJobStates(admin, ids, fixture.expectedAfterSuspension);
+  await expectTaskStates(admin, ids, fixture.expectedAfterSuspension);
   await expectAttemptCount(
     database,
     ids.get("suspension")!,
@@ -244,19 +244,19 @@ async function executeSuspensionReplayRuntimeFixture(
   );
 
   await expect(worker.runOnce()).resolves.toBe(true);
-  await expectJobStates(admin, ids, fixture.expectedAfterSlotRelease);
+  await expectTaskStates(admin, ids, fixture.expectedAfterSlotRelease);
 
   // The wait is long enough that it cannot elapse between the suspension and the slot
   // release check on a slow runner. Rewind it, as the Go fixture does, instead of
   // sleeping through it, and promote it explicitly rather than waiting for the worker's
   // maintenance interval.
   await database.query(
-    "UPDATE workhorse.job_runtime SET run_at = clock_timestamp() - interval '1 millisecond' WHERE job_id = $1",
+    "UPDATE workhorse.task_runtime SET run_at = clock_timestamp() - interval '1 millisecond' WHERE task_id = $1",
     [ids.get("suspension")!],
   );
   await database.query("SELECT * FROM workhorse.tick_v1(100, 100)");
   await expect(worker.runOnce()).resolves.toBe(true);
-  await expectJobStates(admin, ids, fixture.expectedAfterReplay);
+  await expectTaskStates(admin, ids, fixture.expectedAfterReplay);
   await expectAttemptCount(database, ids.get("suspension")!, fixture.expectedAttemptsAfterReplay);
   expect(seen).toEqual(fixture.expectedHandlerOrder);
   expect(handlerRuns).toBe(fixture.expectedHandlerRuns);
@@ -270,7 +270,7 @@ async function executeCooperativeCancellationRuntimeFixture(
   fixture: CooperativeCancellationRuntimeFixture,
 ): Promise<void> {
   const queueName = `runtime-${fixture.id}`;
-  const id = await queue.enqueue(fixture.jobType, {}, { queue: queueName });
+  const id = await queue.enqueue(fixture.taskType, {}, { queue: queueName });
   const started = deferred();
   let abortReason: unknown;
   const worker = new Worker(queue, {
@@ -278,7 +278,7 @@ async function executeCooperativeCancellationRuntimeFixture(
     queue: queueName,
     leaseMs: fixture.leaseMs,
     heartbeatMs: fixture.heartbeatMs,
-  }).handle(fixture.jobType, async (_payload, context) => {
+  }).handle(fixture.taskType, async (_payload, context) => {
     started.resolve();
     abortReason = await waitForAbort(context.signal);
     throw abortReason;
@@ -291,7 +291,7 @@ async function executeCooperativeCancellationRuntimeFixture(
   });
   await expect(execution).resolves.toBe(true);
   expect(abortReason).toMatchObject({ name: fixture.expectedAbortReason });
-  await expect(admin.getJob(id)).resolves.toMatchObject({
+  await expect(admin.getTask(id)).resolves.toMatchObject({
     state: fixture.expectedState.state,
     currentAttempt: fixture.expectedState.attempt,
   });
@@ -313,9 +313,9 @@ async function executeExpirationRuntimeFixture(
         const claimed = await target.claim(...args);
         if (claimed && fixture.mode === "deadline") {
           const deadline = await database.query<{ deadlineAt: Date }>(
-            `UPDATE workhorse.job_runtime
+            `UPDATE workhorse.task_runtime
                 SET deadline_at = clock_timestamp() + $2::integer * interval '1 millisecond'
-              WHERE job_id = $1::uuid
+              WHERE task_id = $1::uuid
               RETURNING deadline_at AS "deadlineAt"`,
             [claimed.id, fixture.durationMs],
           );
@@ -334,7 +334,7 @@ async function executeExpirationRuntimeFixture(
   });
   const expiration = new Date(Date.now() + 3_600_000);
   const id = await queue.enqueue(
-    fixture.jobType,
+    fixture.taskType,
     {},
     fixture.mode === "deadline"
       ? { queue: queueName, deadline: expiration, maxAttempts: fixture.maxAttempts }
@@ -350,7 +350,7 @@ async function executeExpirationRuntimeFixture(
     queue: queueName,
     leaseMs: fixture.leaseMs,
     heartbeatMs: fixture.heartbeatMs,
-  }).handle(fixture.jobType, async (_payload, context) => {
+  }).handle(fixture.taskType, async (_payload, context) => {
     const reason = await waitForAbort(context.signal);
     abortReasons.push(reason);
     throw reason;
@@ -358,7 +358,7 @@ async function executeExpirationRuntimeFixture(
 
   for (const expected of fixture.expectedAfterRuns) {
     await expect(worker.runOnce()).resolves.toBe(true);
-    await expect(admin.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getTask(id)).resolves.toMatchObject({
       state: expected.state,
       currentAttempt: expected.attempt,
       ...(expected.errorName === undefined ? {} : { error: { name: expected.errorName } }),
@@ -378,7 +378,7 @@ async function executeLeaseLossRuntimeFixture(
 ): Promise<void> {
   const queueName = `runtime-${fixture.id}`;
   const id = await queue.enqueue(
-    fixture.jobType,
+    fixture.taskType,
     {},
     {
       queue: queueName,
@@ -399,7 +399,7 @@ async function executeLeaseLossRuntimeFixture(
     queue: queueName,
     leaseMs: fixture.leaseMs,
     heartbeatMs: fixture.heartbeatMs,
-  }).handle(fixture.jobType, async (_payload, context) => {
+  }).handle(fixture.taskType, async (_payload, context) => {
     started.resolve();
     const reason = await waitForAbort(context.signal);
     abortMessage = reason instanceof Error ? reason.message : String(reason);
@@ -431,7 +431,7 @@ async function executeLeaseLossRuntimeFixture(
     execution = worker.runOnce();
     await started.promise;
     await database.query(
-      "UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE job_id = $1",
+      "UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE task_id = $1",
       [id],
     );
     await expect(queue.recoverExpired(100, 0)).resolves.toBe(1);
@@ -443,7 +443,7 @@ async function executeLeaseLossRuntimeFixture(
       expect.arrayContaining(fixture.portableRejectedWrites),
     );
     expect(new Set(rejectedWrites.values())).toEqual(new Set([fixture.expectedRejectedWriteError]));
-    await expect(admin.getJob(id)).resolves.toMatchObject({
+    await expect(admin.getTask(id)).resolves.toMatchObject({
       state: fixture.expectedState.state,
       currentAttempt: fixture.expectedState.attempt,
       result: null,
@@ -461,7 +461,7 @@ async function executeHeartbeatCadenceRuntimeFixture(
   fixture: HeartbeatCadenceRuntimeFixture,
 ): Promise<void> {
   const queueName = `runtime-${fixture.id}`;
-  await queue.enqueue(fixture.jobType, {}, { queue: queueName });
+  await queue.enqueue(fixture.taskType, {}, { queue: queueName });
   const handlerStarted = deferred();
   const releaseHandler = deferred();
   const firstHeartbeatStarted = deferred();
@@ -493,7 +493,7 @@ async function executeHeartbeatCadenceRuntimeFixture(
     queue: queueName,
     leaseMs: fixture.leaseMs,
     heartbeatMs: fixture.heartbeatMs,
-  }).handle(fixture.jobType, async () => {
+  }).handle(fixture.taskType, async () => {
     handlerStarted.resolve();
     await releaseHandler.promise;
     return null;
@@ -551,7 +551,7 @@ async function executePollCadenceRuntimeFixture(
     queue: queueName,
     pollMs: fixture.pollMs,
     registryIntervalMs: 0,
-  }).handle(fixture.jobType, () => {
+  }).handle(fixture.taskType, () => {
     handled.resolve(performance.now());
     return null;
   });
@@ -565,7 +565,7 @@ async function executePollCadenceRuntimeFixture(
         // A stall longer than one backoff step. A held worker cannot advance past the
         // pinned step, so this changes nothing; an unheld one fails on every run.
         await sleep(fixture.enqueueStallMs);
-        await queue.enqueue(fixture.jobType, {}, { queue: queueName });
+        await queue.enqueue(fixture.taskType, {}, { queue: queueName });
         enqueuedAt = performance.now();
         holding = false;
       }
@@ -591,8 +591,8 @@ async function executeGracefulDrainRuntimeFixture(
 ): Promise<void> {
   const queueName = `runtime-${fixture.id}`;
   const ids = await Promise.all(
-    Array.from({ length: fixture.jobCount }, (_, sequence) =>
-      queue.enqueue(fixture.jobType, { sequence }, { queue: queueName }),
+    Array.from({ length: fixture.taskCount }, (_, sequence) =>
+      queue.enqueue(fixture.taskType, { sequence }, { queue: queueName }),
     ),
   );
   const releaseHandlers = deferred();
@@ -602,7 +602,7 @@ async function executeGracefulDrainRuntimeFixture(
     concurrency: fixture.concurrency,
     pollMs: 0,
     registryIntervalMs: 0,
-  }).handle(fixture.jobType, async () => {
+  }).handle(fixture.taskType, async () => {
     await releaseHandlers.promise;
     return null;
   });
@@ -627,7 +627,7 @@ async function executeGracefulDrainRuntimeFixture(
     releaseHandlers.resolve();
     await expect(running).resolves.toBeUndefined();
     expect(worker.runtimeState()).toMatchObject({ activeSlots: 0, draining: false });
-    const states = await Promise.all(ids.map(async (id) => (await admin.getJob(id))?.state));
+    const states = await Promise.all(ids.map(async (id) => (await admin.getTask(id))?.state));
     expect(states.filter((state) => state === "succeeded")).toHaveLength(fixture.expectedSucceeded);
     expect(states.filter((state) => state === "ready")).toHaveLength(fixture.expectedReady);
   } finally {
@@ -648,14 +648,14 @@ async function executeTracePropagationRuntimeFixture(
     const queueName = `runtime-${fixture.id}`;
     const caller = trace.getTracer("runtime-fixture").startSpan("caller");
     const callerContext: Context = trace.setSpan(otelContext.active(), caller);
-    const jobId = await otelContext.with(callerContext, () =>
-      queue.enqueue(fixture.jobType, {}, { queue: queueName }),
+    const taskId = await otelContext.with(callerContext, () =>
+      queue.enqueue(fixture.taskType, {}, { queue: queueName }),
     );
     caller.end();
 
     const stored = await database.query<{ trace_context: { traceparent: string } }>(
-      "SELECT trace_context FROM workhorse.job WHERE id = $1::uuid",
-      [jobId],
+      "SELECT trace_context FROM workhorse.task WHERE id = $1::uuid",
+      [taskId],
     );
     const traceparent = stored.rows[0]?.trace_context.traceparent;
     expect(traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/);
@@ -664,7 +664,7 @@ async function executeTracePropagationRuntimeFixture(
       workerId: `runtime-${fixture.id}`,
       queue: queueName,
       registryIntervalMs: 0,
-    }).handle(fixture.jobType, () => null);
+    }).handle(fixture.taskType, () => null);
     await expect(worker.runOnce()).resolves.toBe(true);
 
     const handler = traceExporter
@@ -692,7 +692,7 @@ async function exerciseQueue<TResult>(
   return { parameters, result };
 }
 
-const adapterJob: ClaimedJob<Json> = {
+const adapterTask: ClaimedTask<Json> = {
   id: "00000000-0000-4000-8000-000000000001",
   queue: "protocol-adapter",
   type: "protocol.adapter",
@@ -815,10 +815,10 @@ describe("SQL protocol conformance fixtures", () => {
           name: "SqlProtocolCompatibilityError",
           code: "schema-too-old",
         });
-        const jobs = await client.query<{ count: number }>(
-          "SELECT count(*)::integer AS count FROM workhorse.job",
+        const tasks = await client.query<{ count: number }>(
+          "SELECT count(*)::integer AS count FROM workhorse.task",
         );
-        expect(jobs.rows).toEqual([{ count: 0 }]);
+        expect(tasks.rows).toEqual([{ count: 0 }]);
       } finally {
         await client.query("ROLLBACK");
         client.release();
@@ -996,7 +996,7 @@ describe("SQL protocol conformance fixtures", () => {
           async query() {
             serialized = JSON.parse(String(arguments[1]?.[0]));
             return {
-              rows: [{ ordinal: 1, job_id: fixture.id, outcome: "accepted", reason: null }],
+              rows: [{ ordinal: 1, task_id: fixture.id, outcome: "accepted", reason: null }],
             } as never;
           },
         };
@@ -1011,24 +1011,24 @@ describe("SQL protocol conformance fixtures", () => {
 
         const accepted = await requestDatabase.pool.query<{
           ordinal: number;
-          job_id: string;
+          task_id: string;
           outcome: string;
           reason: string | null;
         }>(
-          "SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
+          "SELECT ordinal, task_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
           [JSON.stringify(serialized)],
         );
         expect(accepted.rows).toEqual([
-          { ordinal: 1, job_id: expect.any(String), outcome: "accepted", reason: null },
+          { ordinal: 1, task_id: expect.any(String), outcome: "accepted", reason: null },
         ]);
         const stored = await requestDatabase.pool.query(
-          "SELECT queue_name, job_type, payload, priority, concurrency_key, max_attempts, retry_policy, tags FROM workhorse.dashboard_job_v1 WHERE id = $1::uuid",
-          [accepted.rows[0]!.job_id],
+          "SELECT queue_name, task_type, payload, priority, concurrency_key, max_attempts, retry_policy, tags FROM workhorse.dashboard_task_v1 WHERE id = $1::uuid",
+          [accepted.rows[0]!.task_id],
         );
         expect(stored.rows).toEqual([
           {
             queue_name: fixture.postgres.queue,
-            job_type: fixture.postgres.type,
+            task_type: fixture.postgres.type,
             payload: fixture.postgres.payload,
             priority: fixture.postgres.priority,
             concurrency_key: fixture.postgres.concurrencyKey,
@@ -1144,34 +1144,34 @@ describe("SQL protocol conformance fixtures", () => {
     const claimed = await exerciseQueue(
       [
         {
-          job_id: adapterJob.id,
-          job_type: adapterJob.type,
-          priority: adapterJob.priority,
-          payload: adapterJob.payload,
+          task_id: adapterTask.id,
+          task_type: adapterTask.type,
+          priority: adapterTask.priority,
+          payload: adapterTask.payload,
           contract_version: null,
-          result_max_bytes: adapterJob.resultMaxBytes,
+          result_max_bytes: adapterTask.resultMaxBytes,
           redact_error_details: false,
           trace_context: null,
           attempt: 1,
           max_attempts: 2,
-          retry_policy: adapterJob.retryPolicy,
+          retry_policy: adapterTask.retryPolicy,
           deadline_at: null,
           execution_timeout_ms: null,
           attempt_timeout_at: null,
           fence_token: "17",
-          lease_expires_at: adapterJob.leaseExpiresAt,
+          lease_expires_at: adapterTask.leaseExpiresAt,
         },
       ],
-      (queue) => queue.claim(workerId, { queue: adapterJob.queue, leaseMs: 45_000 }),
+      (queue) => queue.claim(workerId, { queue: adapterTask.queue, leaseMs: 45_000 }),
     );
-    expect(claimed.parameters).toEqual([adapterJob.queue, workerId, 45_000]);
-    expect(claimed.result).toEqual(adapterJob);
+    expect(claimed.parameters).toEqual([adapterTask.queue, workerId, 45_000]);
+    expect(claimed.result).toEqual(adapterTask);
 
     const heartbeat = await exerciseQueue([{ status: "accepted" }], (queue) =>
-      queue.heartbeatStatus(adapterJob, workerId, 45_000),
+      queue.heartbeatStatus(adapterTask, workerId, 45_000),
     );
     expect(heartbeat).toEqual({
-      parameters: [adapterJob.id, workerId, "17", 45_000],
+      parameters: [adapterTask.id, workerId, "17", 45_000],
       result: "accepted",
     });
 
@@ -1187,28 +1187,28 @@ describe("SQL protocol conformance fixtures", () => {
           finished_at: occurredAt,
         },
       ],
-      (queue) => queue.cancel(adapterJob.id, { requestedBy: "operator", reason: "fixture" }),
+      (queue) => queue.cancel(adapterTask.id, { requestedBy: "operator", reason: "fixture" }),
     );
-    expect(cancellation.parameters).toEqual([adapterJob.id, "operator", "fixture"]);
+    expect(cancellation.parameters).toEqual([adapterTask.id, "operator", "fixture"]);
     expect(cancellation.result).toMatchObject({
-      jobId: adapterJob.id,
+      taskId: adapterTask.id,
       currentAttempt: 1,
       requestedBy: "operator",
       finishedAt: occurredAt,
     });
 
     const completion = await exerciseQueue([{ accepted: true }], (queue) =>
-      queue.complete(adapterJob, workerId, { done: true }),
+      queue.complete(adapterTask, workerId, { done: true }),
     );
     expect(completion).toEqual({
-      parameters: [adapterJob.id, workerId, "17", '{"done":true}'],
+      parameters: [adapterTask.id, workerId, "17", '{"done":true}'],
       result: true,
     });
 
     const failure = await exerciseQueue([{ state: "ready" }], (queue) =>
-      queue.fail(adapterJob, workerId, new Error("retry me"), 0),
+      queue.fail(adapterTask, workerId, new Error("retry me"), 0),
     );
-    expect(failure.parameters?.slice(0, 3)).toEqual([adapterJob.id, workerId, "17"]);
+    expect(failure.parameters?.slice(0, 3)).toEqual([adapterTask.id, workerId, "17"]);
     expect(JSON.parse(String(failure.parameters?.[3]))).toMatchObject({
       name: "Error",
       message: "retry me",
@@ -1227,17 +1227,17 @@ describe("SQL protocol conformance fixtures", () => {
           created_at: occurredAt,
         },
       ],
-      (queue) => queue.saveCheckpoint(adapterJob, workerId, "prepared", { step: 1 }),
+      (queue) => queue.saveCheckpoint(adapterTask, workerId, "prepared", { step: 1 }),
     );
     expect(checkpoint.parameters).toEqual([
-      adapterJob.id,
+      adapterTask.id,
       workerId,
       "17",
       "prepared",
       '{"step":1}',
     ]);
     expect(checkpoint.result).toMatchObject({
-      jobId: adapterJob.id,
+      taskId: adapterTask.id,
       name: "prepared",
       value: { step: 1 },
       fenceToken: 17n,
@@ -1258,12 +1258,12 @@ describe("SQL protocol conformance fixtures", () => {
           created_at: occurredAt,
         },
       ],
-      (queue) => queue.scheduleWait(adapterJob, workerId, "pause", { durationMs: 60_000 }),
+      (queue) => queue.scheduleWait(adapterTask, workerId, "pause", { durationMs: 60_000 }),
     );
-    expect(wait.parameters).toEqual([adapterJob.id, workerId, "17", "pause", "60000", null]);
+    expect(wait.parameters).toEqual([adapterTask.id, workerId, "17", "pause", "60000", null]);
     expect(wait.result).toMatchObject({
       status: "scheduled",
-      wait: { jobId: adapterJob.id, name: "pause", durationMs: 60_000, fenceToken: 17n },
+      wait: { taskId: adapterTask.id, name: "pause", durationMs: 60_000, fenceToken: 17n },
     });
 
     const children = await exerciseQueue(
@@ -1272,7 +1272,7 @@ describe("SQL protocol conformance fixtures", () => {
           status: "created",
           children: [
             {
-              childJobId: "00000000-0000-4000-8000-000000000002",
+              childTaskId: "00000000-0000-4000-8000-000000000002",
               name: "only",
               type: "protocol.child",
               createdAt: occurredAt,
@@ -1281,11 +1281,11 @@ describe("SQL protocol conformance fixtures", () => {
           ],
           results: null,
           result_bytes: null,
-          result_limit_bytes: adapterJob.resultMaxBytes,
+          result_limit_bytes: adapterTask.resultMaxBytes,
         },
       ],
       (queue) =>
-        queue.createChildren(adapterJob, workerId, [
+        queue.createChildren(adapterTask, workerId, [
           {
             name: "only",
             type: "protocol.child",
@@ -1294,7 +1294,7 @@ describe("SQL protocol conformance fixtures", () => {
           },
         ]),
     );
-    expect(children.parameters?.slice(0, 3)).toEqual([adapterJob.id, workerId, "17"]);
+    expect(children.parameters?.slice(0, 3)).toEqual([adapterTask.id, workerId, "17"]);
     expect(JSON.parse(String(children.parameters?.[3]))).toEqual([
       {
         name: "only",
@@ -1308,14 +1308,14 @@ describe("SQL protocol conformance fixtures", () => {
     ]);
     expect(children.result).toMatchObject({
       status: "created",
-      children: [{ parentJobId: adapterJob.id, name: "only", type: "protocol.child" }],
+      children: [{ parentTaskId: adapterTask.id, name: "only", type: "protocol.child" }],
     });
 
     const signalWait = await exerciseQueue([{ status: "waiting", payload: null }], (queue) =>
-      queue.waitForSignal(adapterJob, workerId, "approval"),
+      queue.waitForSignal(adapterTask, workerId, "approval"),
     );
     expect(signalWait).toEqual({
-      parameters: [adapterJob.id, workerId, "17", "approval", null],
+      parameters: [adapterTask.id, workerId, "17", "approval", null],
       result: { status: "waiting", payload: null },
     });
     const signalSend = await exerciseQueue(
@@ -1329,7 +1329,7 @@ describe("SQL protocol conformance fixtures", () => {
       ],
       (queue) =>
         queue.sendSignal(
-          adapterJob.id,
+          adapterTask.id,
           "approval",
           { approved: true },
           {
@@ -1339,7 +1339,7 @@ describe("SQL protocol conformance fixtures", () => {
         ),
     );
     expect(signalSend.parameters).toEqual([
-      adapterJob.id,
+      adapterTask.id,
       "approval",
       '{"approved":true}',
       "signal-key",
@@ -1352,10 +1352,10 @@ describe("SQL protocol conformance fixtures", () => {
     });
 
     const humanWait = await exerciseQueue([{ status: "waiting", result: null }], (queue) =>
-      queue.waitForHuman(adapterJob, workerId, "review", { question: "Ship?" }),
+      queue.waitForHuman(adapterTask, workerId, "review", { question: "Ship?" }),
     );
     expect(humanWait).toEqual({
-      parameters: [adapterJob.id, workerId, "17", "review", '{"question":"Ship?"}', null],
+      parameters: [adapterTask.id, workerId, "17", "review", '{"question":"Ship?"}', null],
       result: { status: "waiting", payload: null },
     });
     const humanComplete = await exerciseQueue(
@@ -1369,7 +1369,7 @@ describe("SQL protocol conformance fixtures", () => {
       ],
       (queue) =>
         queue.completeHumanWait(
-          adapterJob.id,
+          adapterTask.id,
           "review",
           { approved: true },
           {
@@ -1379,7 +1379,7 @@ describe("SQL protocol conformance fixtures", () => {
         ),
     );
     expect(humanComplete.parameters).toEqual([
-      adapterJob.id,
+      adapterTask.id,
       "review",
       '{"approved":true}',
       "human-key",

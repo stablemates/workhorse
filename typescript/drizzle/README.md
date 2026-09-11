@@ -1,6 +1,6 @@
 # `@stablemates/workhorse-drizzle`
 
-The Drizzle ORM provider for enqueuing Workhorse jobs through Drizzle transactions.
+The Drizzle ORM provider for enqueuing Workhorse tasks through Drizzle transactions.
 
 > **Public beta:** Workhorse is usable for evaluation and early production adoption. A 0.x minor
 > release may change behaviour, so read the changelog before you upgrade. It will not ask you to

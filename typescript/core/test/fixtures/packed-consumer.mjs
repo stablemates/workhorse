@@ -65,7 +65,7 @@ assert.ok(translated instanceof DrizzleQueryError);
 assert.equal(translated.code, "42P01");
 assert.ok(translated.cause);
 
-const humanWaitJob = await adapter.queue.enqueue("packed.human-wait", {}, { queue: "human-wait" });
+const humanWaitTask = await adapter.queue.enqueue("packed.human-wait", {}, { queue: "human-wait" });
 const humanWaitWorker = new Worker(adapter.queue, {
   workerId: "packed-human-wait",
   queue: "human-wait",
@@ -73,9 +73,9 @@ const humanWaitWorker = new Worker(adapter.queue, {
   context.waitForHuman("review", { prompt: "Approve the packed contract?" }),
 );
 assert.equal(await humanWaitWorker.runOnce(), true);
-assert.equal((await adapter.admin.getJob(humanWaitJob)).state, "scheduled");
+assert.equal((await adapter.admin.getTask(humanWaitTask)).state, "scheduled");
 const packedCompletion = await adapter.queue.completeHumanWait(
-  humanWaitJob,
+  humanWaitTask,
   "review",
   { approved: true },
   { idempotencyKey: "packed-completion", requestedBy: "packed-operator" },
@@ -83,7 +83,7 @@ const packedCompletion = await adapter.queue.completeHumanWait(
 assert.equal(packedCompletion.status, "completed");
 assert.equal(packedCompletion.completedBy, "packed-operator");
 assert.equal(await humanWaitWorker.runOnce(), true);
-assert.deepEqual((await adapter.admin.getJob(humanWaitJob)).result, { approved: true });
+assert.deepEqual((await adapter.admin.getTask(humanWaitTask)).result, { approved: true });
 
 let handlerStartedResolve;
 const handlerStarted = new Promise((resolve) => {
@@ -108,14 +108,14 @@ const running = await startWorkerProcess({
     },
   ],
 });
-const shutdownJob = await adapter.queue.enqueue(
+const shutdownTask = await adapter.queue.enqueue(
   "packed.shutdown",
   { value: true },
   {
     queue: "shutdown",
   },
 );
-const unclaimedJob = await adapter.queue.enqueue(
+const unclaimedTask = await adapter.queue.enqueue(
   "packed.after-shutdown",
   { value: true },
   {
@@ -129,8 +129,8 @@ assert.equal(closeCount, 0, "shutdown must drain the active handler before closi
 releaseHandler();
 await Promise.all([shutdown, running.shutdown()]);
 assert.equal(closeCount, 1);
-assert.equal((await adapter.admin.getJob(shutdownJob)).state, "succeeded");
-assert.equal((await adapter.admin.getJob(unclaimedJob)).state, "ready");
+assert.equal((await adapter.admin.getTask(shutdownTask)).state, "succeeded");
+assert.equal((await adapter.admin.getTask(unclaimedTask)).state, "ready");
 
 await pool.query("DROP TABLE IF EXISTS public.workhorse_packed_test");
 await pool.end();

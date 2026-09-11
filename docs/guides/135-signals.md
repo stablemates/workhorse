@@ -1,6 +1,6 @@
 # How do I wait for an external signal?
 
-Some jobs need a decision or event that arrives from another process. A signal wait releases the
+Some tasks need a decision or event that arrives from another process. A signal wait releases the
 worker slot until an application or authenticated operator supplies a named JSON payload.
 
 ## The handler restarts when delivery arrives
@@ -23,8 +23,8 @@ if (approval.approved) await publishOrder();
 
 ## Delivery is idempotent at the state transition
 
-An application calls `Queue.sendSignal` with the stable job identity, name, payload, idempotency
-key, and trusted actor. The first accepted delivery resumes the job. An equal retry returns the
+An application calls `Queue.sendSignal` with the stable task identity, name, payload, idempotency
+key, and trusted actor. The first accepted delivery resumes the task. An equal retry returns the
 retained delivery, so a network retry cannot resume the handler twice.
 
 A reused key conflicts if its payload or actor changes. Another key arriving after acceptance is
@@ -40,16 +40,16 @@ the same queue operation, but its server replaces browser attribution with the a
 principal. Application-owned callers must establish authorization before calling the core API.
 
 Operator tools can use `Admin.listSignalWaits` to read the current actionable boundaries. Each
-row identifies the job, queue, job type, signal name, attempt, creation time, and effective
+row identifies the task, queue, task type, signal name, attempt, creation time, and effective
 deadline without exposing a delivered payload. If a page returns `nextCursor`, pass it back to
 continue without hiding waits beyond the page bound.
 
 ## PostgreSQL closes an unanswered boundary
 
 PostgreSQL applies a finite [timeout](140-deadlines-and-timeouts.md), and a caller can choose a
-shorter one. An earlier job deadline wins. Timeout fails the job because replay cannot continue
+shorter one. An earlier task deadline wins. Timeout fails the task because replay cannot continue
 without a payload. [Cancellation](120-cancellation.md) also closes the boundary, so late delivery
-returns `stale`. The signal row follows the parent job's safe [retention](330-retention.md).
+returns `stale`. The signal row follows the parent task's safe [retention](330-retention.md).
 
 ## Next
 

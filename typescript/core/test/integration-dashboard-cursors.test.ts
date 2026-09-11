@@ -8,13 +8,13 @@ describe("dashboard cursor pages", () => {
   beforeAll(async () => {
     await database.setup();
     await database.pool.query(`
-      INSERT INTO workhorse.job(queue_name, job_type, payload, max_attempts, priority)
+      INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts, priority)
       SELECT 'cursor', 'cursor.test', '{}', 1, n % 3 FROM generate_series(1, 80) n;
-      INSERT INTO workhorse.job_outcome(job_id, state, current_attempt, fence_token, run_at,
+      INSERT INTO workhorse.task_outcome(task_id, state, current_attempt, fence_token, run_at,
         result, finished_at, history_through_at, updated_at)
       SELECT id, 'succeeded', 1, 1, created_at, '{}', created_at, created_at,
         date_trunc('milliseconds', created_at) + interval '123 microseconds'
-      FROM workhorse.job WHERE queue_name = 'cursor';
+      FROM workhorse.task WHERE queue_name = 'cursor';
     `);
   });
   afterAll(async () => database.teardown());
@@ -35,13 +35,13 @@ describe("dashboard cursor pages", () => {
       expect(first.nextCursor?.updatedAt).toMatch(/\.\d{6}Z$/);
       const second = await page({ sort, cursor: first.nextCursor });
       const back = await page({ sort, cursor: second.previousCursor, direction: "previous" });
-      expect(back.jobs.map((job) => job.id)).toEqual(first.jobs.map((job) => job.id));
+      expect(back.tasks.map((task) => task.id)).toEqual(first.tasks.map((task) => task.id));
       expect(back.previousCursor).toBeNull();
-      const ids = first.jobs.map((job) => job.id);
+      const ids = first.tasks.map((task) => task.id);
       let next = first.nextCursor;
       while (next) {
         const current = await page({ sort, cursor: next });
-        ids.push(...current.jobs.map((job) => job.id));
+        ids.push(...current.tasks.map((task) => task.id));
         next = current.nextCursor;
         expect(ids.length).toBeLessThanOrEqual(80);
       }
@@ -54,9 +54,9 @@ describe("dashboard cursor pages", () => {
     const first = await page();
     const second = await page({ cursor: first.nextCursor, count: "exact" });
     expect(second.total).toBe(80);
-    expect(second.jobs).toHaveLength(25);
-    const empty = await page({ jobType: "absent", count: "exact" });
-    expect(empty).toMatchObject({ total: 0, jobs: [], nextCursor: null, previousCursor: null });
+    expect(second.tasks).toHaveLength(25);
+    const empty = await page({ taskType: "absent", count: "exact" });
+    expect(empty).toMatchObject({ total: 0, tasks: [], nextCursor: null, previousCursor: null });
   });
 
   it("preserves legacy task responses", async () => {
@@ -68,18 +68,18 @@ describe("dashboard cursor pages", () => {
 
   it("seeks retained history without counting or scanning earlier pages", async () => {
     await database.pool.query(`
-      INSERT INTO workhorse.job(queue_name, job_type, payload, max_attempts)
+      INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts)
       SELECT 'history', 'history.test', '{}', 1 FROM generate_series(1, 5000);
-      INSERT INTO workhorse.job_outcome(job_id, state, current_attempt, fence_token, run_at,
+      INSERT INTO workhorse.task_outcome(task_id, state, current_attempt, fence_token, run_at,
         result, finished_at, history_through_at, updated_at)
       SELECT id, 'succeeded', 1, 1, created_at, '{}', created_at, created_at, created_at
-      FROM workhorse.job WHERE queue_name = 'history';
-      ANALYZE workhorse.job; ANALYZE workhorse.job_outcome;
+      FROM workhorse.task WHERE queue_name = 'history';
+      ANALYZE workhorse.task; ANALYZE workhorse.task_outcome;
     `);
     const cursor = await database.pool.query<{ cursor: object }>(`
-      SELECT jsonb_build_object('id', job_id, 'priority', 0,
+      SELECT jsonb_build_object('id', task_id, 'priority', 0,
         'updatedAt', to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')) AS cursor
-      FROM workhorse.job_outcome ORDER BY updated_at DESC, job_id DESC OFFSET 4500 LIMIT 1
+      FROM workhorse.task_outcome ORDER BY updated_at DESC, task_id DESC OFFSET 4500 LIMIT 1
     `);
     const definition = await database.pool.query<{ prosrc: string }>(`
       SELECT prosrc FROM pg_proc WHERE oid = 'workhorse.dashboard_tasks_cursor_v1(jsonb)'::regprocedure
@@ -98,7 +98,7 @@ describe("dashboard cursor pages", () => {
       JSON.stringify({ pageSize: 25, cursor: cursor.rows[0]!.cursor }),
     ]);
     const tree = JSON.stringify(plan.rows[0]!["QUERY PLAN"]);
-    expect(tree).toContain("job_outcome_updated_idx");
+    expect(tree).toContain("task_outcome_updated_idx");
     expect(plan.rows[0]!["QUERY PLAN"][0]!.Plan["Shared Hit Blocks"]).toBeLessThan(1500);
   });
 

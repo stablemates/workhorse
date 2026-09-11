@@ -23,10 +23,10 @@ func main() {
 	}
 	defer tx.Rollback(ctx)
 
-	// Application writes can use tx here. The job becomes visible only if the
+	// Application writes can use tx here. The task becomes visible only if the
 	// caller commits the same transaction.
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(tx), "orders")
-	jobID, err := queue.Enqueue(ctx, "order.accepted", map[string]any{
+	taskID, err := queue.Enqueue(ctx, "order.accepted", map[string]any{
 		"orderId": "order-42",
 	}, workhorse.EnqueueOptions{
 		MaxAttempts: 3,
@@ -40,5 +40,5 @@ func main() {
 	if err := tx.Commit(ctx); err != nil {
 		panic(err)
 	}
-	fmt.Println(jobID)
+	fmt.Println(taskID)
 }

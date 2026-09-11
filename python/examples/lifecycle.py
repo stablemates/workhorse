@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import psycopg
 
-from workhorse import ChildJobRequest, EnqueueOptions, HandlerContext, Json, Queue, Worker
+from workhorse import ChildTaskRequest, EnqueueOptions, HandlerContext, Json, Queue, Worker
 
 
 def run_until(condition: Callable[[], bool], *workers: Worker, timeout: float = 2.0) -> None:
@@ -25,13 +25,13 @@ def run(database_url: str) -> None:
     suffix = uuid4().hex
     parent_queue = f"python-example-parent-{suffix}"
     child_queue = f"python-example-child-{suffix}"
-    job_type = f"order.process-{suffix}"
+    task_type = f"order.process-{suffix}"
     child_type = f"order.step-{suffix}"
 
     with psycopg.connect(database_url) as enqueue_connection, enqueue_connection.transaction():
         queue = Queue(enqueue_connection, default_queue=parent_queue)
-        job_id = queue.enqueue(
-            job_type,
+        task_id = queue.enqueue(
+            task_type,
             {"orderId": "order-42"},
             EnqueueOptions(
                 max_attempts=2,
@@ -45,18 +45,18 @@ def run(database_url: str) -> None:
             "prepare",
             lambda: {"orderId": payload["orderId"], "prepared": True},
         )
-        if context.job.attempt == 1:
+        if context.task.attempt == 1:
             raise RuntimeError("demonstrate a PostgreSQL-owned retry")
         context.sleep("provider-backoff", 20)
         children = context.run_children_all(
             (
-                ChildJobRequest(
+                ChildTaskRequest(
                     "invoice",
                     child_type,
                     {"step": "invoice"},
                     EnqueueOptions(queue=child_queue),
                 ),
-                ChildJobRequest(
+                ChildTaskRequest(
                     "receipt",
                     child_type,
                     {"step": "receipt"},
@@ -84,7 +84,7 @@ def run(database_url: str) -> None:
             parent_connection,
             queue=parent_queue,
             worker_id=f"python-example-parent-{suffix}",
-        ).handle(job_type, process_order)
+        ).handle(task_type, process_order)
         child_worker = Worker(
             child_connection,
             queue=child_queue,
@@ -98,9 +98,9 @@ def run(database_url: str) -> None:
         def signal_waiting() -> bool:
             return (
                 parent_connection.execute(
-                    "SELECT 1 FROM workhorse.job_signal_wait "
-                    "WHERE job_id = %s AND signal_name = 'approval' AND payload IS NULL",
-                    (job_id,),
+                    "SELECT 1 FROM workhorse.task_signal_wait "
+                    "WHERE task_id = %s AND signal_name = 'approval' AND payload IS NULL",
+                    (task_id,),
                 ).fetchone()
                 is not None
             )
@@ -110,7 +110,7 @@ def run(database_url: str) -> None:
         with psycopg.connect(database_url) as delivery_connection:
             delivery = Queue(delivery_connection)
             signal = delivery.send_signal(
-                job_id,
+                task_id,
                 "approval",
                 {"approved": True},
                 idempotency_key=f"approval-{suffix}",
@@ -122,16 +122,16 @@ def run(database_url: str) -> None:
             def human_waiting() -> bool:
                 return (
                     parent_connection.execute(
-                        "SELECT 1 FROM workhorse.job_human_wait "
-                        "WHERE job_id = %s AND token_name = 'review' AND completed_at IS NULL",
-                        (job_id,),
+                        "SELECT 1 FROM workhorse.task_human_wait "
+                        "WHERE task_id = %s AND token_name = 'review' AND completed_at IS NULL",
+                        (task_id,),
                     ).fetchone()
                     is not None
                 )
 
             run_until(human_waiting, parent_worker)
             decision = delivery.complete_human_wait(
-                job_id,
+                task_id,
                 "review",
                 {"approved": True, "reviewer": "operator-42"},
                 idempotency_key=f"review-{suffix}",
@@ -143,15 +143,15 @@ def run(database_url: str) -> None:
         run_until(
             lambda: (
                 parent_connection.execute(
-                    "SELECT 1 FROM workhorse.job_outcome WHERE job_id = %s", (job_id,)
+                    "SELECT 1 FROM workhorse.task_outcome WHERE task_id = %s", (task_id,)
                 ).fetchone()
                 is not None
             ),
             parent_worker,
         )
         outcome = parent_connection.execute(
-            "SELECT state, current_attempt, result FROM workhorse.job_outcome WHERE job_id = %s",
-            (job_id,),
+            "SELECT state, current_attempt, result FROM workhorse.task_outcome WHERE task_id = %s",
+            (task_id,),
         ).fetchone()
         assert outcome is not None
         assert outcome[0:2] == ("succeeded", 2)

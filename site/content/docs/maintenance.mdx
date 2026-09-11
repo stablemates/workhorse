@@ -3,7 +3,7 @@ title: Maintenance and retention
 description: Workers keep PostgreSQL tidy automatically — promotion, recovery, partitions, and evidence retirement — while you set policy and watch for lag.
 ---
 
-A durable queue accumulates: delayed jobs waiting to become ready, leases that expired with their
+A durable queue accumulates: delayed tasks waiting to become ready, leases that expired with their
 workers, history partitions filling up, and evidence that eventually outlives its usefulness.
 Workhorse handles all of it as bounded background work that workers drive automatically.
 PostgreSQL coordinates the passes with advisory locks, so scaling from one worker to fifty never
@@ -16,11 +16,11 @@ statistics, retire history, or prune terminal and worker records.
 
 `run_maintenance_v1` calls the same versioned SQL functions you can call yourself:
 
-- `queue.tick` promotes due jobs to ready and recovers expired leases.
+- `queue.tick` promotes due tasks to ready and recovers expired leases.
 - `queue.prepareHistoryPartitions` creates future time partitions before data arrives.
 - `queue.rollupStatistics` folds raw history into minute summaries, then derives hour and day tiers.
 - `queue.retainHistory` retires history the statistics rollup no longer needs.
-- `queue.pruneTerminalStorage` removes expired idempotency bindings, then terminal job bundles.
+- `queue.pruneTerminalStorage` removes expired idempotency bindings, then terminal task bundles.
 - `queue.pruneWorkerRegistry` removes registrations whose processes stopped refreshing them.
 
 Direct calls are for controlled scripts and tests; in production the workers already make them.
@@ -48,9 +48,9 @@ defaults as a deploy step:
 
 ```ts
 await queue.syncRetentionPolicy({
-  jobIdentityRetentionDays,
+  taskIdentityRetentionDays,
   terminalOutcomeRetentionDays,
-  jobEventRetentionDays,
+  taskEventRetentionDays,
   attemptHistoryRetentionDays,
   scheduleOccurrenceRetentionDays,
   statisticsRetentionDays,
@@ -66,7 +66,7 @@ Before any destructive change, preview it:
 
 ```ts
 const impact = await queue.previewRetentionPolicy({ terminalOutcomeRetentionDays });
-console.log(impact.eligible.terminalJobs, impact.capped.terminalJobs);
+console.log(impact.eligible.terminalTasks, impact.capped.terminalTasks);
 ```
 
 The preview counts currently eligible rows per category, size-capped with an explicit `capped`
@@ -76,10 +76,10 @@ Statistics use progressively coarser summaries inside that policy window, so lon
 totals and mergeable wait percentiles without retaining the finest detail forever.
 
 PostgreSQL guards the dependency order: it rejects any `RetentionPolicyDefinition` that could
-remove a job's identity before its retained evidence, and a retained `job_redrive` descendant
+remove a task's identity before its retained evidence, and a retained `task_redrive` descendant
 keeps its source identity available for lineage.
 
-Delete terminal data through the retention functions rather than deleting `job` rows directly.
+Delete terminal data through the retention functions rather than deleting `task` rows directly.
 Direct deletion cascades into retained history, so it can remove evidence before the configured
 windows expire or statistics consume it.
 

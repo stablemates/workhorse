@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { DashboardEventDetail, DashboardJobDetail } from "../wire.js";
-import { readDashboardEventDetail, redactDashboardJobDetailErrorStacks } from "./read-model.js";
+import type { DashboardEventDetail, DashboardTaskDetail } from "../wire.js";
+import { readDashboardEventDetail, redactDashboardTaskDetailErrorStacks } from "./read-model.js";
 import type { DashboardDatabase } from "./sql.js";
 
-describe("dashboard job-detail error redaction", () => {
+describe("dashboard task-detail error redaction", () => {
   it("removes stacks from every worker error surface without changing user data", () => {
     const error = { name: "Error", message: "failed", stack: "/app/worker.ts:42" };
     const detail = {
@@ -18,9 +18,9 @@ describe("dashboard job-detail error redaction", () => {
       attempts: [{ error }],
       payload: { stack: "user payload" },
       events: [{ details: { error } }],
-    } as unknown as DashboardJobDetail;
+    } as unknown as DashboardTaskDetail;
 
-    const redacted = redactDashboardJobDetailErrorStacks(detail);
+    const redacted = redactDashboardTaskDetailErrorStacks(detail);
 
     expect(redacted.childLineage.records[0]?.error).toEqual({ name: "Error", message: "failed" });
     expect(redacted.current.runtime?.error).toEqual({ name: "Error", message: "failed" });

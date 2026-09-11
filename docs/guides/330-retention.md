@@ -12,7 +12,7 @@ therefore keeps the same evidence and partition guarantees as a TypeScript fleet
 
 ## Windows are minimums, not deadlines
 
-You configure how long to keep each category of data — finished jobs, outcomes, events,
+You configure how long to keep each category of data — finished tasks, outcomes, events,
 attempts, schedule occurrences, statistics. Each category has its own default and can be
 set independently. A category can also opt out of cleanup.
 
@@ -34,7 +34,7 @@ queueing behind live traffic and stalling dispatch. It'll try again next time.
 
 Three constraints stop cleanup from destroying its own evidence.
 
-**A job outlives its history.** The job identity is the thing everything else points at, so
+**A task outlives its history.** The task identity is the thing everything else points at, so
 its window must be at least as long as every window that depends on it. Configure it shorter
 and Workhorse rejects the configuration rather than letting you orphan an audit trail.
 
@@ -42,36 +42,36 @@ and Workhorse rejects the configuration rather than letting you orphan an audit 
 history, so cleanup won't pass the statistics watermark. See
 [320-statistics.md](320-statistics.md).
 
-**A job with descendants stays.** If a failed job was [redriven](340-redrive.md), it's the
-parent of another job, and deleting it would break the lineage. It waits until the child is
+**A task with descendants stays.** If a failed task was [redriven](340-redrive.md), it's the
+parent of another task, and deleting it would break the lineage. It waits until the child is
 gone too.
 
 ## Statistics are the exception
 
-Summary rows are the one category _not_ bound by "keep the job at least as long". That's
-intentional. A summary describes many jobs rather than pointing at one, so aggregates can
-outlive the jobs they summarize.
+Summary rows are the one category _not_ bound by "keep the task at least as long". That's
+intentional. A summary describes many tasks rather than pointing at one, so aggregates can
+outlive the tasks they summarize.
 
 ## When it doesn't keep up
 
-Cleanup is deliberately bounded: a limited number of jobs, partitions, and rows per pass. If
+Cleanup is deliberately bounded: a limited number of tasks, partitions, and rows per pass. If
 the incoming rate outruns it, tables grow. This shows up as retention lag in queue health
 rather than as a stall, and the fix is usually a shorter window rather than a bigger batch.
 
 Health also reports how many rows are sitting in the fallback partitions used when partition
 maintenance falls behind, so that condition can't stay invisible.
 
-## Don't delete jobs yourself
+## Don't delete tasks yourself
 
-It's tempting to write your own `DELETE FROM job WHERE ...`. Don't. The cleanup functions
+It's tempting to write your own `DELETE FROM task WHERE ...`. Don't. The cleanup functions
 exist to enforce the ordering rules above. Raw SQL bypasses them, cascading into retained
 history and removing evidence before statistics can be rebuilt.
 
 ## Next
 
 - [320-statistics.md](320-statistics.md) — the watermark that gates cleanup
-- [340-redrive.md](340-redrive.md) — why some failed jobs stay longer
-- [010-jobs-and-state.md](010-jobs-and-state.md) — which tables hold what
+- [340-redrive.md](340-redrive.md) — why some failed tasks stay longer
+- [010-tasks-and-state.md](010-tasks-and-state.md) — which tables hold what
 
 ---
 

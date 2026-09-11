@@ -26,14 +26,14 @@ type HumanWaitCompletionStatus = Literal[
     "completed", "duplicate", "not_waiting", "already_completed", "stale", "not_found"
 ]
 type CancelStatus = Literal["canceled", "cancel_requested", "already_terminal", "not_found"]
-type JobState = Literal[
+type TaskState = Literal[
     "blocked", "scheduled", "ready", "active", "succeeded", "failed", "canceled"
 ]
 _TJson = TypeVar("_TJson", bound=Json)
 
 
 @dataclass(frozen=True)
-class JobContractVersion:
+class TaskContractVersion:
     payload_schema: Json = True
     result_schema: Json = True
     max_payload_bytes: int = 1_048_576
@@ -43,9 +43,9 @@ class JobContractVersion:
 
 
 @dataclass(frozen=True)
-class JobTypeContracts:
+class TaskTypeContracts:
     current_version: str
-    versions: Mapping[str, JobContractVersion]
+    versions: Mapping[str, TaskContractVersion]
 
 
 @dataclass(frozen=True)
@@ -72,7 +72,7 @@ class Throttle:
 
 @dataclass(frozen=True)
 class Dependencies:
-    prerequisite_job_ids: Sequence[str]
+    prerequisite_task_ids: Sequence[str]
     on_success: DependencyTerminalPolicy
     on_failure: DependencyTerminalPolicy
     on_cancellation: DependencyTerminalPolicy
@@ -142,7 +142,7 @@ class RateLimitPolicy:
 
 
 @dataclass(frozen=True)
-class ChildJobRequest:
+class ChildTaskRequest:
     name: str
     type: str
     payload: Json
@@ -169,7 +169,7 @@ type ChildOutcome = ChildSucceeded | ChildFailed | ChildCanceled
 
 @dataclass(frozen=True)
 class EnqueueResult:
-    job_id: str
+    task_id: str
     outcome: EnqueueOutcome
     reason: EnqueueNonReplaceableReason | None = None
 
@@ -177,8 +177,8 @@ class EnqueueResult:
 @dataclass(frozen=True)
 class CancelResult:
     status: CancelStatus
-    job_id: str
-    state: JobState | None
+    task_id: str
+    state: TaskState | None
     current_attempt: int | None
     requested_at: datetime | None
     requested_by: str | None
@@ -187,7 +187,7 @@ class CancelResult:
 
 
 @dataclass(frozen=True)
-class ClaimedJob:
+class ClaimedTask:
     id: str
     queue: str
     type: str
@@ -274,8 +274,8 @@ class AsyncCancellationToken:
 
 
 @dataclass(frozen=True)
-class JobCheckpoint:
-    job_id: str
+class TaskCheckpoint:
+    task_id: str
     name: str
     value: Json
     attempt: int
@@ -285,8 +285,8 @@ class JobCheckpoint:
 
 
 @dataclass(frozen=True)
-class JobProgress:
-    job_id: str
+class TaskProgress:
+    task_id: str
     value: Json
     revision: int
     attempt: int
@@ -297,8 +297,8 @@ class JobProgress:
 
 
 @dataclass(frozen=True)
-class JobWait:
-    job_id: str
+class TaskWait:
+    task_id: str
     name: str
     mode: Literal["relative", "absolute"]
     duration_ms: int | None
@@ -313,7 +313,7 @@ class JobWait:
 @dataclass(frozen=True)
 class SignalDeliveryResult:
     status: SignalDeliveryStatus
-    job_id: str
+    task_id: str
     name: str
     payload: Json
     delivered_at: datetime | None
@@ -323,7 +323,7 @@ class SignalDeliveryResult:
 @dataclass(frozen=True)
 class HumanWaitCompletionResult:
     status: HumanWaitCompletionStatus
-    job_id: str
+    task_id: str
     name: str
     payload: Json
     completed_at: datetime | None
@@ -332,33 +332,33 @@ class HumanWaitCompletionResult:
 
 @dataclass(frozen=True)
 class HandlerContext:
-    job: ClaimedJob
+    task: ClaimedTask
     cancellation: CancellationToken
-    _get_checkpoint: Callable[[str], JobCheckpoint | None] = field(repr=False)
-    _get_wait: Callable[[str], JobWait | None] = field(repr=False)
-    _get_progress: Callable[[], JobProgress | None] = field(repr=False)
-    _set_progress: Callable[[Json], JobProgress] = field(repr=False)
+    _get_checkpoint: Callable[[str], TaskCheckpoint | None] = field(repr=False)
+    _get_wait: Callable[[str], TaskWait | None] = field(repr=False)
+    _get_progress: Callable[[], TaskProgress | None] = field(repr=False)
+    _set_progress: Callable[[Json], TaskProgress] = field(repr=False)
     _checkpoint: Callable[[str, Callable[[], Json]], Json] = field(repr=False)
     _sleep: Callable[[str, int], None] = field(repr=False)
     _sleep_until: Callable[[str, datetime], None] = field(repr=False)
     _wait_for_signal: Callable[[str, int | None], Json] = field(repr=False)
     _wait_for_human: Callable[[str, Json, int | None], Json] = field(repr=False)
     _run_child: Callable[[str, str, Json, EnqueueOptions], Json] = field(repr=False)
-    _run_children: Callable[[Sequence[ChildJobRequest]], dict[str, ChildOutcome]] = field(
+    _run_children: Callable[[Sequence[ChildTaskRequest]], dict[str, ChildOutcome]] = field(
         repr=False
     )
-    _run_children_all: Callable[[Sequence[ChildJobRequest]], dict[str, Json]] = field(repr=False)
+    _run_children_all: Callable[[Sequence[ChildTaskRequest]], dict[str, Json]] = field(repr=False)
 
-    def get_checkpoint(self, name: str) -> JobCheckpoint | None:
+    def get_checkpoint(self, name: str) -> TaskCheckpoint | None:
         return self._get_checkpoint(name)
 
-    def get_wait(self, name: str) -> JobWait | None:
+    def get_wait(self, name: str) -> TaskWait | None:
         return self._get_wait(name)
 
-    def get_progress(self) -> JobProgress | None:
+    def get_progress(self) -> TaskProgress | None:
         return self._get_progress()
 
-    def set_progress(self, value: Json) -> JobProgress:
+    def set_progress(self, value: Json) -> TaskProgress:
         return self._set_progress(value)
 
     def checkpoint(self, name: str, operation: Callable[[], _TJson]) -> _TJson:
@@ -385,15 +385,15 @@ class HandlerContext:
     ) -> Json:
         return self._run_child(name, type, payload, options or EnqueueOptions())
 
-    def run_children(self, children: Sequence[ChildJobRequest]) -> dict[str, ChildOutcome]:
+    def run_children(self, children: Sequence[ChildTaskRequest]) -> dict[str, ChildOutcome]:
         return self._run_children(children)
 
-    def run_children_all(self, children: Sequence[ChildJobRequest]) -> dict[str, Json]:
+    def run_children_all(self, children: Sequence[ChildTaskRequest]) -> dict[str, Json]:
         return self._run_children_all(children)
 
     def _as_batch_context(self) -> BatchHandlerContext:
         return BatchHandlerContext(
-            self.job,
+            self.task,
             self.cancellation,
             self._get_checkpoint,
             self._get_progress,
@@ -404,37 +404,37 @@ class HandlerContext:
 
 @dataclass(frozen=True)
 class AsyncHandlerContext:
-    """Async handler access to one claimed job's durable primitives."""
+    """Async handler access to one claimed task's durable primitives."""
 
-    job: ClaimedJob
+    task: ClaimedTask
     cancellation: AsyncCancellationToken
-    _get_checkpoint: Callable[[str], Awaitable[JobCheckpoint | None]] = field(repr=False)
-    _get_wait: Callable[[str], Awaitable[JobWait | None]] = field(repr=False)
-    _get_progress: Callable[[], Awaitable[JobProgress | None]] = field(repr=False)
-    _set_progress: Callable[[Json], Awaitable[JobProgress]] = field(repr=False)
+    _get_checkpoint: Callable[[str], Awaitable[TaskCheckpoint | None]] = field(repr=False)
+    _get_wait: Callable[[str], Awaitable[TaskWait | None]] = field(repr=False)
+    _get_progress: Callable[[], Awaitable[TaskProgress | None]] = field(repr=False)
+    _set_progress: Callable[[Json], Awaitable[TaskProgress]] = field(repr=False)
     _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]] = field(repr=False)
     _sleep: Callable[[str, int], Awaitable[None]] = field(repr=False)
     _sleep_until: Callable[[str, datetime], Awaitable[None]] = field(repr=False)
     _wait_for_signal: Callable[[str, int | None], Awaitable[Json]] = field(repr=False)
     _wait_for_human: Callable[[str, Json, int | None], Awaitable[Json]] = field(repr=False)
     _run_child: Callable[[str, str, Json, EnqueueOptions], Awaitable[Json]] = field(repr=False)
-    _run_children: Callable[[Sequence[ChildJobRequest]], Awaitable[dict[str, ChildOutcome]]] = (
+    _run_children: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, ChildOutcome]]] = (
         field(repr=False)
     )
-    _run_children_all: Callable[[Sequence[ChildJobRequest]], Awaitable[dict[str, Json]]] = field(
+    _run_children_all: Callable[[Sequence[ChildTaskRequest]], Awaitable[dict[str, Json]]] = field(
         repr=False
     )
 
-    async def get_checkpoint(self, name: str) -> JobCheckpoint | None:
+    async def get_checkpoint(self, name: str) -> TaskCheckpoint | None:
         return await self._get_checkpoint(name)
 
-    async def get_wait(self, name: str) -> JobWait | None:
+    async def get_wait(self, name: str) -> TaskWait | None:
         return await self._get_wait(name)
 
-    async def get_progress(self) -> JobProgress | None:
+    async def get_progress(self) -> TaskProgress | None:
         return await self._get_progress()
 
-    async def set_progress(self, value: Json) -> JobProgress:
+    async def set_progress(self, value: Json) -> TaskProgress:
         return await self._set_progress(value)
 
     async def checkpoint(self, name: str, operation: Callable[[], Awaitable[_TJson]]) -> _TJson:
@@ -463,31 +463,31 @@ class AsyncHandlerContext:
     ) -> Json:
         return await self._run_child(name, type, payload, options or EnqueueOptions())
 
-    async def run_children(self, children: Sequence[ChildJobRequest]) -> dict[str, ChildOutcome]:
+    async def run_children(self, children: Sequence[ChildTaskRequest]) -> dict[str, ChildOutcome]:
         return await self._run_children(children)
 
-    async def run_children_all(self, children: Sequence[ChildJobRequest]) -> dict[str, Json]:
+    async def run_children_all(self, children: Sequence[ChildTaskRequest]) -> dict[str, Json]:
         return await self._run_children_all(children)
 
 
 @dataclass(frozen=True)
 class BatchHandlerContext:
-    """Per-job batch context without APIs that suspend one shared invocation."""
+    """Per-task batch context without APIs that suspend one shared invocation."""
 
-    job: ClaimedJob
+    task: ClaimedTask
     cancellation: CancellationToken
-    _get_checkpoint: Callable[[str], JobCheckpoint | None] = field(repr=False)
-    _get_progress: Callable[[], JobProgress | None] = field(repr=False)
-    _set_progress: Callable[[Json], JobProgress] = field(repr=False)
+    _get_checkpoint: Callable[[str], TaskCheckpoint | None] = field(repr=False)
+    _get_progress: Callable[[], TaskProgress | None] = field(repr=False)
+    _set_progress: Callable[[Json], TaskProgress] = field(repr=False)
     _checkpoint: Callable[[str, Callable[[], Json]], Json] = field(repr=False)
 
-    def get_checkpoint(self, name: str) -> JobCheckpoint | None:
+    def get_checkpoint(self, name: str) -> TaskCheckpoint | None:
         return self._get_checkpoint(name)
 
-    def get_progress(self) -> JobProgress | None:
+    def get_progress(self) -> TaskProgress | None:
         return self._get_progress()
 
-    def set_progress(self, value: Json) -> JobProgress:
+    def set_progress(self, value: Json) -> TaskProgress:
         return self._set_progress(value)
 
     def checkpoint(self, name: str, operation: Callable[[], _TJson]) -> _TJson:
@@ -502,22 +502,22 @@ class BatchHandlerItem:
 
 @dataclass(frozen=True)
 class AsyncBatchHandlerContext:
-    """Async per-job batch context without suspending primitives."""
+    """Async per-task batch context without suspending primitives."""
 
-    job: ClaimedJob
+    task: ClaimedTask
     cancellation: AsyncCancellationToken
-    _get_checkpoint: Callable[[str], Awaitable[JobCheckpoint | None]] = field(repr=False)
-    _get_progress: Callable[[], Awaitable[JobProgress | None]] = field(repr=False)
-    _set_progress: Callable[[Json], Awaitable[JobProgress]] = field(repr=False)
+    _get_checkpoint: Callable[[str], Awaitable[TaskCheckpoint | None]] = field(repr=False)
+    _get_progress: Callable[[], Awaitable[TaskProgress | None]] = field(repr=False)
+    _set_progress: Callable[[Json], Awaitable[TaskProgress]] = field(repr=False)
     _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]] = field(repr=False)
 
-    async def get_checkpoint(self, name: str) -> JobCheckpoint | None:
+    async def get_checkpoint(self, name: str) -> TaskCheckpoint | None:
         return await self._get_checkpoint(name)
 
-    async def get_progress(self) -> JobProgress | None:
+    async def get_progress(self) -> TaskProgress | None:
         return await self._get_progress()
 
-    async def set_progress(self, value: Json) -> JobProgress:
+    async def set_progress(self, value: Json) -> TaskProgress:
         return await self._set_progress(value)
 
     async def checkpoint(self, name: str, operation: Callable[[], Awaitable[_TJson]]) -> _TJson:
@@ -544,7 +544,7 @@ type BatchHandlerOutcome = BatchSucceeded | BatchFailed
 
 
 @dataclass(frozen=True)
-class ScheduledJob:
+class ScheduledTask:
     type: str
     payload: Json
     queue: str | None = None
@@ -558,7 +558,7 @@ class ScheduledJob:
 class ScheduleDefinition:
     name: str
     schedule: str
-    job: ScheduledJob
+    task: ScheduledTask
     timezone: str = "UTC"
     enabled: bool = True
 
@@ -578,10 +578,10 @@ __all__ = [
     "CancellationToken",
     "ChildCanceled",
     "ChildFailed",
-    "ChildJobRequest",
     "ChildOutcome",
     "ChildSucceeded",
-    "ClaimedJob",
+    "ChildTaskRequest",
+    "ClaimedTask",
     "ConcurrencyPolicy",
     "ConcurrencyPolicyDefinition",
     "Debounce",
@@ -596,12 +596,6 @@ __all__ = [
     "HumanWaitCompletionResult",
     "HumanWaitCompletionStatus",
     "Idempotency",
-    "JobCheckpoint",
-    "JobContractVersion",
-    "JobProgress",
-    "JobState",
-    "JobTypeContracts",
-    "JobWait",
     "Json",
     "NonReplaceableReason",
     "QueueHealth",
@@ -610,9 +604,15 @@ __all__ = [
     "RateLimitPolicyDefinition",
     "RetryPolicy",
     "ScheduleDefinition",
-    "ScheduledJob",
+    "ScheduledTask",
     "SignalDeliveryResult",
     "SignalDeliveryStatus",
+    "TaskCheckpoint",
+    "TaskContractVersion",
+    "TaskProgress",
+    "TaskState",
+    "TaskTypeContracts",
+    "TaskWait",
     "TerminalPolicy",
     "Throttle",
 ]

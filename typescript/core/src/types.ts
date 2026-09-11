@@ -29,8 +29,8 @@ export interface Queryable {
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
-/** One immutable application contract version for a job type. */
-export interface JobContractVersion {
+/** One immutable application contract version for a task type. */
+export interface TaskContractVersion {
   payloadSchema?: Json;
   resultSchema?: Json;
   maxPayloadBytes?: number;
@@ -41,15 +41,15 @@ export interface JobContractVersion {
   sensitiveResultKeys?: readonly string[];
 }
 
-/** Available versions and the version assigned to newly accepted jobs of one type. */
-export interface JobTypeContracts {
+/** Available versions and the version assigned to newly accepted tasks of one type. */
+export interface TaskTypeContracts {
   currentVersion: string;
-  versions: Readonly<Record<string, JobContractVersion>>;
+  versions: Readonly<Record<string, TaskContractVersion>>;
 }
 
-/** Queue-wide defaults and optional per-job-type contracts. */
+/** Queue-wide defaults and optional per-task-type contracts. */
 export interface QueueOptions {
-  contracts?: Readonly<Record<string, JobTypeContracts>>;
+  contracts?: Readonly<Record<string, TaskTypeContracts>>;
   defaultMaxPayloadBytes?: number;
   defaultMaxResultBytes?: number;
 }
@@ -60,7 +60,7 @@ export interface TraceContext {
   tracestate?: string;
 }
 
-/** PostgreSQL-validated retry scheduling persisted with the stable job identity. */
+/** PostgreSQL-validated retry scheduling persisted with the stable task identity. */
 export type RetryPolicy =
   | { type: "fixed"; delayMs: number }
   | {
@@ -84,7 +84,7 @@ export interface Idempotency {
 /** @deprecated Renamed to {@link Idempotency}. Removed in 1.0.0. */
 export type EnqueueIdempotency = Idempotency;
 
-/** PostgreSQL-owned keyed debounce window for one pending job. */
+/** PostgreSQL-owned keyed debounce window for one pending task. */
 export interface Debounce {
   /** Caller-chosen key, unique within `scope` while the debounce window remains active. */
   key: string;
@@ -92,14 +92,14 @@ export interface Debounce {
   scope?: string;
   /** Delay and replacement window measured from PostgreSQL's clock. */
   windowMs: number;
-  /** Whether a replacement starts a fresh window or keeps the retained job's run time. */
+  /** Whether a replacement starts a fresh window or keeps the retained task's run time. */
   schedule: "reset" | "preserve";
 }
 
 /** @deprecated Renamed to {@link Debounce}. Removed in 1.0.0. */
 export type EnqueueDebounce = Debounce;
 
-/** PostgreSQL-owned keyed throttle window for one accepted job. */
+/** PostgreSQL-owned keyed throttle window for one accepted task. */
 export interface Throttle {
   /** Caller-chosen key, unique within `scope` while the throttle window remains active. */
   key: string;
@@ -115,7 +115,7 @@ export type EnqueueThrottle = Throttle;
 /** PostgreSQL's durable disposition for one enqueue request. */
 export type EnqueueOutcome = "accepted" | "replayed" | "replaced" | "non_replaceable" | "coalesced";
 
-/** Why PostgreSQL retained a debounced job instead of applying the proposed replacement. */
+/** Why PostgreSQL retained a debounced task instead of applying the proposed replacement. */
 export type EnqueueNonReplaceableReason =
   | "incompatible_key_mode"
   | "not_pending"
@@ -124,12 +124,12 @@ export type EnqueueNonReplaceableReason =
 /** Stable identity plus the durable disposition of one enqueue request. */
 export type EnqueueResult =
   | {
-      jobId: string;
+      taskId: string;
       outcome: Exclude<EnqueueOutcome, "non_replaceable">;
       reason?: never;
     }
   | {
-      jobId: string;
+      taskId: string;
       outcome: "non_replaceable";
       reason: EnqueueNonReplaceableReason;
     };
@@ -152,7 +152,7 @@ export type EnqueueIdempotencyConflictField =
   | "executionTimeoutMs"
   | "maxAttempts"
   | "retryPolicy"
-  | "prerequisiteJobId"
+  | "prerequisiteTaskId"
   | "dependencies"
   | "ttlMs";
 
@@ -162,7 +162,7 @@ export interface EnqueueIdempotencyConflictDetails {
   keyPreview: string;
   keyDigest: string;
   keyLength: number;
-  existingJobId: string;
+  existingTaskId: string;
   ordinal: number;
   conflictingFields: EnqueueIdempotencyConflictField[];
   storedRequestDigest: string;
@@ -189,16 +189,16 @@ interface EnqueueBaseOptions {
 type EnqueueDependencyOptions =
   | {
       /** @deprecated Use `dependencies` with one prerequisite and explicit terminal policies. */
-      prerequisiteJobId: string;
+      prerequisiteTaskId: string;
       dependencies?: never;
     }
   | {
-      prerequisiteJobId?: never;
+      prerequisiteTaskId?: never;
       /** Bounded fan-in and the terminal outcomes accepted from each prerequisite. */
       dependencies?: Dependencies;
     };
 
-/** Options persisted as part of the accepted job definition or initial dispatch projection. */
+/** Options persisted as part of the accepted task definition or initial dispatch projection. */
 export type EnqueueOptions = EnqueueBaseOptions &
   (
     | (EnqueueDependencyOptions & {
@@ -208,18 +208,18 @@ export type EnqueueOptions = EnqueueBaseOptions &
       })
     | {
         idempotency?: never;
-        /** Replace one still-pending keyed job during a PostgreSQL-owned window. */
+        /** Replace one still-pending keyed task during a PostgreSQL-owned window. */
         debounce: Debounce;
         throttle?: never;
-        prerequisiteJobId?: never;
+        prerequisiteTaskId?: never;
         dependencies?: never;
       }
     | {
         idempotency?: never;
         debounce?: never;
-        /** Accept at most one equivalent job per PostgreSQL-owned window. */
+        /** Accept at most one equivalent task per PostgreSQL-owned window. */
         throttle: Throttle;
-        prerequisiteJobId?: never;
+        prerequisiteTaskId?: never;
         dependencies?: never;
       }
   );
@@ -229,20 +229,20 @@ export type DependencyTerminalPolicy = "release" | "cancel" | "fail";
 
 /** A bounded set of prerequisites which must all satisfy their declared terminal policy. */
 export interface Dependencies {
-  prerequisiteJobIds: readonly string[];
+  prerequisiteTaskIds: readonly string[];
   onSuccess: DependencyTerminalPolicy;
   onFailure: DependencyTerminalPolicy;
   onCancellation: DependencyTerminalPolicy;
 }
 
 /** @deprecated Renamed to {@link Dependencies}. Removed in 1.0.0. */
-export type JobDependencies = Dependencies;
+export type TaskDependencies = Dependencies;
 
 /** One queue's deployment-synchronized concurrency budget. */
 export interface ConcurrencyPolicyDefinition {
   queue: string;
   maxActive: number;
-  /** Uniform active-job budget for each non-null concurrency key. Null disables the keyed budget. */
+  /** Uniform active-task budget for each non-null concurrency key. Null disables the keyed budget. */
   maxActivePerKey?: number | null;
 }
 
@@ -257,7 +257,7 @@ export interface ConcurrencyPolicy {
 
 /** One continuously refilled token bucket. PostgreSQL supplies the clock for every refill. */
 export interface RateLimit {
-  /** Tokens added during each interval. One token admits one job start. */
+  /** Tokens added during each interval. One token admits one task start. */
   limit: number;
   intervalMs: number;
   /** Maximum tokens retained after idle time. */
@@ -291,7 +291,7 @@ export interface RateLimitStatus extends RateLimitPolicy {
   policySetCapped: boolean;
 }
 
-/** One job accepted by {@link Queue.enqueueMany}, with the same semantics as `Queue.enqueue`. */
+/** One task accepted by {@link Queue.enqueueMany}, with the same semantics as `Queue.enqueue`. */
 export interface EnqueueRequest<TPayload extends Json = Json> {
   type: string;
   payload: TPayload;
@@ -304,10 +304,10 @@ export interface EnqueueRequest<TPayload extends Json = Json> {
  * identity allocation, and notification work inside one PostgreSQL transaction.
  */
 export { MAX_ENQUEUE_BATCH_SIZE } from "./queue/sql-catalogue.generated.js";
-/** Maximum prerequisite edges accepted for one dependent job. */
-export const MAX_JOB_DEPENDENCIES = 100;
-/** Maximum dependent edges accepted for one prerequisite job. */
-export const MAX_JOB_DEPENDENTS = 100;
+/** Maximum prerequisite edges accepted for one dependent task. */
+export const MAX_TASK_DEPENDENCIES = 100;
+/** Maximum dependent edges accepted for one prerequisite task. */
+export const MAX_TASK_DEPENDENTS = 100;
 /** Trailing window used by health and metrics for rejected external-wait deliveries (24 hours). */
 export const EXTERNAL_WAIT_REJECTION_WINDOW_MS = 86_400_000;
 /** Maximum characters accepted for one signal or human-decision name. */
@@ -318,14 +318,14 @@ export const MAX_EXTERNAL_WAIT_VALUE_BYTES = 65_536;
 export const MAX_EXTERNAL_WAIT_IDEMPOTENCY_KEY_BYTES = 512;
 /** Maximum characters accepted for external-wait delivery attribution. */
 export const MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS = 200;
-/** Maximum retained signal names or human decisions for one job. */
-export const MAX_EXTERNAL_WAITS_PER_JOB = 1_000;
+/** Maximum retained signal names or human decisions for one task. */
+export const MAX_EXTERNAL_WAITS_PER_TASK = 1_000;
 /** Maximum caller-selected timeout for a signal or human decision (7 days). */
 export const MAX_EXTERNAL_WAIT_TIMEOUT_MS = 604_800_000;
 /** Maximum actionable signal or human-decision rows returned in one page. */
 export const MAX_EXTERNAL_WAIT_LIST_SIZE = 1_000;
-/** Highest accepted job priority. Priority zero is the default. */
-export const MAX_JOB_PRIORITY = 100;
+/** Highest accepted task priority. Priority zero is the default. */
+export const MAX_TASK_PRIORITY = 100;
 /** Default namespace for enqueue idempotency keys whose caller omits an explicit scope. */
 export const DEFAULT_IDEMPOTENCY_SCOPE = "default";
 /** Default enqueue idempotency retention window (24 hours). */
@@ -342,7 +342,7 @@ export const MAX_DEBOUNCE_WINDOW_MS = 31_536_000_000;
 export const MAX_THROTTLE_WINDOW_MS = 31_536_000_000;
 /** Maximum PostgreSQL canonical JSONB text size accepted for one durable checkpoint value. */
 export const MAX_CHECKPOINT_VALUE_BYTES = 1_048_576;
-/** Maximum PostgreSQL canonical JSONB text size accepted for latest mutable job progress. */
+/** Maximum PostgreSQL canonical JSONB text size accepted for latest mutable task progress. */
 export const MAX_PROGRESS_VALUE_BYTES = 65_536;
 /** Minimum interval between changed progress writes from one ownership generation. */
 export const MIN_PROGRESS_UPDATE_INTERVAL_MS = 100;
@@ -354,26 +354,26 @@ export const MAX_EXECUTION_TIMEOUT_MS = 31_536_000_000;
 export const MAX_CANCELLATION_REQUESTED_BY_CHARACTERS = 200;
 /** Maximum characters accepted for a cancellation reason. */
 export const MAX_CANCELLATION_REASON_CHARACTERS = 2_000;
-/** Maximum failed jobs inspected or redriven by one bounded operation. */
+/** Maximum failed tasks inspected or redriven by one bounded operation. */
 export const MAX_REDRIVE_BATCH_SIZE = 1_000;
 /** Maximum UTF-8 size accepted for a redrive request identity. */
 export const MAX_REDRIVE_REQUEST_ID_BYTES = 512;
-/** Maximum jobs or timeline entries returned by one keyset-paginated query. */
-export const MAX_JOB_QUERY_PAGE_SIZE = 1_000;
+/** Maximum tasks or timeline entries returned by one keyset-paginated query. */
+export const MAX_TASK_QUERY_PAGE_SIZE = 1_000;
 /** Maximum rows inspected for each dependency pressure fact in one health or telemetry read. */
 export const DEPENDENCY_OPERATIONS_SCAN_LIMIT = 10_000;
 /** Default maximum encoded payload size included by an explicit list projection. */
-export const DEFAULT_JOB_QUERY_PAYLOAD_BYTES = 16_384;
+export const DEFAULT_TASK_QUERY_PAYLOAD_BYTES = 16_384;
 /** Maximum encoded payload size accepted by a list projection. */
-export const MAX_JOB_QUERY_PAYLOAD_BYTES = 1_048_576;
+export const MAX_TASK_QUERY_PAYLOAD_BYTES = 1_048_576;
 /** Maximum unique top-level payload keys redacted by one list projection. */
-export const MAX_JOB_QUERY_REDACT_KEYS = 50;
-/** Default PostgreSQL-canonical JSON size accepted for a job payload or result. */
-export { DEFAULT_JOB_VALUE_MAX_BYTES } from "./queue/sql-catalogue.generated.js";
-/** Largest configurable PostgreSQL-canonical JSON size accepted for a job payload or result. */
-export const MAX_JOB_VALUE_MAX_BYTES = 16_777_216;
+export const MAX_TASK_QUERY_REDACT_KEYS = 50;
+/** Default PostgreSQL-canonical JSON size accepted for a task payload or result. */
+export { DEFAULT_TASK_VALUE_MAX_BYTES } from "./queue/sql-catalogue.generated.js";
+/** Largest configurable PostgreSQL-canonical JSON size accepted for a task payload or result. */
+export const MAX_TASK_VALUE_MAX_BYTES = 16_777_216;
 /** Maximum persisted top-level sensitive keys for one payload or result contract. */
-export const MAX_JOB_CONTRACT_SENSITIVE_KEYS = 50;
+export const MAX_TASK_CONTRACT_SENSITIVE_KEYS = 50;
 
 /** Optional safe attribution attached to a cancellation request. PostgreSQL validates all bounds. */
 export interface CancellationRequest {
@@ -398,8 +398,8 @@ export type ExpireOwnedStatus =
 /** Safe lifecycle metadata returned by {@link Queue.cancel}; payloads and worker ownership are omitted. */
 export interface CancelResult {
   status: CancelStatus;
-  jobId: string;
-  state: JobState | null;
+  taskId: string;
+  state: TaskState | null;
   currentAttempt: number | null;
   requestedAt: Date | null;
   /** Caller-provided attribution only. This does not claim that the caller was authorized. */
@@ -419,11 +419,11 @@ export interface DeadLetterFilter {
   finishedBefore?: Date;
 }
 
-/** Stable descending cursor over immutable terminal failure time and job identity. */
+/** Stable descending cursor over immutable terminal failure time and task identity. */
 export interface DeadLetterCursor {
   /** Exact PostgreSQL UTC timestamp text. Treat as opaque continuation state. */
   finishedAt: string;
-  jobId: string;
+  taskId: string;
 }
 
 export interface DeadLetterQuery extends DeadLetterFilter {
@@ -433,7 +433,7 @@ export interface DeadLetterQuery extends DeadLetterFilter {
 
 /** One immutable terminal failure projected without re-entering dispatch indexes. */
 export interface DeadLetter {
-  jobId: string;
+  taskId: string;
   queue: string;
   type: string;
   concurrencyKey: string | null;
@@ -455,53 +455,53 @@ export interface DeadLetterPage {
   nextCursor: DeadLetterCursor | null;
 }
 
-/** Stable job identity and lifecycle filters applied by PostgreSQL. */
-export interface JobListFilter {
+/** Stable task identity and lifecycle filters applied by PostgreSQL. */
+export interface TaskListFilter {
   queue?: string;
   type?: string;
-  states?: JobState[];
+  states?: TaskState[];
   createdAfter?: Date;
   createdBefore?: Date;
 }
 
-/** Bounded payload projection for job listings. Redaction applies only to top-level object keys. */
-export interface JobPayloadProjection {
+/** Bounded payload projection for task listings. Redaction applies only to top-level object keys. */
+export interface TaskPayloadProjection {
   include?: boolean;
   maxBytes?: number;
   redactKeys?: string[];
 }
 
-/** Signed descending cursor over immutable creation time and job identity. */
-export interface JobListCursor {
+/** Signed descending cursor over immutable creation time and task identity. */
+export interface TaskListCursor {
   /** Exact PostgreSQL timestamp text. Treat as opaque continuation state. */
   createdAt: string;
-  jobId: string;
+  taskId: string;
   signature: string;
 }
 
-export interface JobListQuery extends JobListFilter {
+export interface TaskListQuery extends TaskListFilter {
   limit?: number;
-  cursor?: JobListCursor;
-  payload?: JobPayloadProjection;
+  cursor?: TaskListCursor;
+  payload?: TaskPayloadProjection;
 }
 
-export type JobPayloadStatus = "omitted" | "included" | "too_large";
+export type TaskPayloadStatus = "omitted" | "included" | "too_large";
 
-/** One job projection ordered newest-first without exposing outcome or worker ownership details. */
-export interface JobListItem {
+/** One task projection ordered newest-first without exposing outcome or worker ownership details. */
+export interface TaskListItem {
   id: string;
   queue: string;
   type: string;
   concurrencyKey: string | null;
   priority: number;
   tags: string[];
-  state: JobState;
-  prerequisiteJobId: string | null;
-  prerequisiteJobIds: string[];
-  dependencyPolicy: Omit<Dependencies, "prerequisiteJobIds"> | null;
+  state: TaskState;
+  prerequisiteTaskId: string | null;
+  prerequisiteTaskIds: string[];
+  dependencyPolicy: Omit<Dependencies, "prerequisiteTaskIds"> | null;
   blockedReason: "prerequisite_pending" | null;
-  parentJobId: string | null;
-  childJobIds: string[];
+  parentTaskId: string | null;
+  childTaskIds: string[];
   currentAttempt: number;
   maxAttempts: number;
   retryPolicy: RetryPolicy | null;
@@ -515,18 +515,18 @@ export interface JobListItem {
   createdAt: Date;
   updatedAt: Date;
   payload: Json | null;
-  payloadStatus: JobPayloadStatus;
+  payloadStatus: TaskPayloadStatus;
   payloadBytes: number | null;
 }
 
-export interface JobListPage {
-  items: JobListItem[];
-  nextCursor: JobListCursor | null;
+export interface TaskListPage {
+  items: TaskListItem[];
+  nextCursor: TaskListCursor | null;
 }
 
-/** Stable descending cursor over a job's merged event and closed-attempt timeline. */
-export interface JobTimelineCursor {
-  jobId: string;
+/** Stable descending cursor over a task's merged event and closed-attempt timeline. */
+export interface TaskTimelineCursor {
+  taskId: string;
   /** Exact PostgreSQL timestamp text. Treat as opaque continuation state. */
   occurredAt: string;
   kind: "event" | "attempt";
@@ -534,25 +534,25 @@ export interface JobTimelineCursor {
   recordId: string;
 }
 
-export interface JobTimelineQuery {
+export interface TaskTimelineQuery {
   limit?: number;
-  cursor?: JobTimelineCursor;
+  cursor?: TaskTimelineCursor;
 }
 
-interface JobTimelineEntryBase {
+interface TaskTimelineEntryBase {
   recordId: string;
   priority: number;
   attempt: number | null;
   occurredAt: Date;
 }
 
-export interface JobTimelineEvent extends JobTimelineEntryBase {
+export interface TaskTimelineEvent extends TaskTimelineEntryBase {
   kind: "event";
   eventType: string;
   details: Json;
 }
 
-export type JobAttemptOutcome =
+export type TaskAttemptOutcome =
   | "succeeded"
   | "failed"
   | "retry"
@@ -561,24 +561,24 @@ export type JobAttemptOutcome =
   | "deadline_exceeded"
   | "timeout";
 
-export interface JobTimelineAttempt extends JobTimelineEntryBase {
+export interface TaskTimelineAttempt extends TaskTimelineEntryBase {
   kind: "attempt";
   attempt: number;
   fenceToken: bigint;
   workerId: string;
-  outcome: JobAttemptOutcome;
+  outcome: TaskAttemptOutcome;
   startedAt: Date;
   claimedAt: Date;
   finishedAt: Date;
   error: Json | null;
 }
 
-export type JobTimelineEntry = JobTimelineEvent | JobTimelineAttempt;
+export type TaskTimelineEntry = TaskTimelineEvent | TaskTimelineAttempt;
 
-export interface JobTimelinePage {
+export interface TaskTimelinePage {
   /** Merged events and attempts ordered latest-first. */
-  items: JobTimelineEntry[];
-  nextCursor: JobTimelineCursor | null;
+  items: TaskTimelineEntry[];
+  nextCursor: TaskTimelineCursor | null;
 }
 
 /** Required audit and idempotency identity for a redrive request. */
@@ -590,13 +590,13 @@ export interface RedriveRequest {
 
 export type RedriveStatus = "redriven" | "replayed" | "eligible" | "not_found" | "not_failed";
 
-/** PostgreSQL-owned before/after result for one source job. */
+/** PostgreSQL-owned before/after result for one source task. */
 export interface RedriveResult {
   status: RedriveStatus;
-  sourceJobId: string;
-  targetJobId: string | null;
-  sourceState: JobState | null;
-  targetState: JobState | null;
+  sourceTaskId: string;
+  targetTaskId: string | null;
+  sourceState: TaskState | null;
+  targetState: TaskState | null;
   requestedAt: Date | null;
 }
 
@@ -616,8 +616,8 @@ export type RedriveIdempotencyConflictField = "requestedBy" | "reason";
 
 /** Safe diagnostics for a materially different replay. The raw request ID is never exposed. */
 export interface RedriveIdempotencyConflictDetails {
-  sourceJobId: string;
-  existingTargetJobId: string;
+  sourceTaskId: string;
+  existingTargetTaskId: string;
   requestIdPreview: string;
   requestIdDigest: string;
   requestIdLength: number;
@@ -628,8 +628,8 @@ export interface RedriveIdempotencyConflictDetails {
 
 /** One immutable audited edge in a redrive lineage graph. */
 export interface RedriveLineageRecord {
-  sourceJobId: string;
-  targetJobId: string;
+  sourceTaskId: string;
+  targetTaskId: string;
   requestedBy: string;
   reason: string;
   requestIdPreview: string;
@@ -647,8 +647,8 @@ export interface RedriveLineage {
 
 /** One retained prerequisite edge, including the policy decision PostgreSQL recorded. */
 export interface DependencyLineageRecord {
-  dependentJobId: string;
-  prerequisiteJobId: string;
+  dependentTaskId: string;
+  prerequisiteTaskId: string;
   onSuccess: DependencyTerminalPolicy;
   onFailure: DependencyTerminalPolicy;
   onCancellation: DependencyTerminalPolicy;
@@ -657,16 +657,16 @@ export interface DependencyLineageRecord {
   resolution: DependencyTerminalPolicy | null;
 }
 
-/** Bounded edges where the requested job is either the prerequisite or the dependent. */
+/** Bounded edges where the requested task is either the prerequisite or the dependent. */
 export interface DependencyLineage {
   records: DependencyLineageRecord[];
   truncated: boolean;
 }
 
 /** One immutable parent-to-child edge created by a fenced handler activation. */
-export interface ChildJob<TResult extends Json = Json> {
-  parentJobId: string;
-  childJobId: string;
+export interface ChildTask<TResult extends Json = Json> {
+  parentTaskId: string;
+  childTaskId: string;
   name: string;
   type: string;
   createdAt: Date;
@@ -675,17 +675,17 @@ export interface ChildJob<TResult extends Json = Json> {
 }
 
 /** Enqueue fields accepted for one linked child. Its parent supplies idempotency and dependency. */
-export type ChildJobOptions = Omit<
+export type ChildTaskOptions = Omit<
   EnqueueOptions,
-  "idempotency" | "debounce" | "throttle" | "prerequisiteJobId" | "dependencies"
+  "idempotency" | "debounce" | "throttle" | "prerequisiteTaskId" | "dependencies"
 >;
 
 /** One named child request in a bounded fan-out created by a fenced parent activation. */
-export interface ChildJobRequest<TPayload extends Json = Json> {
+export interface ChildTaskRequest<TPayload extends Json = Json> {
   name: string;
   type: string;
   payload: TPayload;
-  options?: ChildJobOptions;
+  options?: ChildTaskOptions;
 }
 
 /** One terminal child outcome returned by the default settled join. */
@@ -701,18 +701,18 @@ export type ChildOutcomes<TResult extends Record<string, Json> = Record<string, 
 
 /** PostgreSQL's decision when a handler creates or replays its single named child. */
 export type CreateChildResult<TResult extends Json = Json> =
-  | { status: "created"; child: ChildJob<TResult> }
-  | { status: "completed"; child: ChildJob<TResult> };
+  | { status: "created"; child: ChildTask<TResult> }
+  | { status: "completed"; child: ChildTask<TResult> };
 
 /** PostgreSQL's decision when a handler creates or replays one bounded child set. */
 export type CreateChildrenResult<TResult extends Record<string, Json> = Record<string, Json>> =
-  | { status: "created"; children: ChildJob[] }
-  | { status: "completed"; children: ChildJob[]; results: TResult };
+  | { status: "created"; children: ChildTask[] }
+  | { status: "completed"; children: ChildTask[]; results: TResult };
 
-/** Bounded edges where the requested job is either the parent or the child. */
+/** Bounded edges where the requested task is either the parent or the child. */
 export interface ChildLineage {
   records: Array<
-    Omit<ChildJob, "result"> & {
+    Omit<ChildTask, "result"> & {
       outcomeState: "succeeded" | "failed" | "canceled" | null;
       error: Json | null;
     }
@@ -720,8 +720,8 @@ export interface ChildLineage {
   truncated: boolean;
 }
 
-export interface ClaimedJob<TPayload extends Json = Json> {
-  /** Stable job identity across all attempts. */
+export interface ClaimedTask<TPayload extends Json = Json> {
+  /** Stable task identity across all attempts. */
   id: string;
   /** Queue from which PostgreSQL granted this attempt. */
   queue: string;
@@ -729,19 +729,19 @@ export interface ClaimedJob<TPayload extends Json = Json> {
   /** Immutable dispatch rank. Higher values are claimed first. */
   priority: number;
   payload: TPayload;
-  /** Contract version captured when PostgreSQL accepted this job, or null for an uncontracted job. */
+  /** Contract version captured when PostgreSQL accepted this task, or null for an uncontracted task. */
   contractVersion: string | null;
   /** Immutable PostgreSQL-canonical JSON size limit for the terminal result. */
   resultMaxBytes: number;
   /** Whether handler error details must be removed before telemetry or persistence. */
   redactErrorDetails: boolean;
-  /** W3C parent context captured when PostgreSQL first accepted this stable job identity. */
+  /** W3C parent context captured when PostgreSQL first accepted this stable task identity. */
   traceContext: TraceContext | null;
   /** One-based attempt number. Recovery and retry always create the next number. */
   attempt: number;
   maxAttempts: number;
   retryPolicy: RetryPolicy | null;
-  /** Immutable absolute job deadline, or null when the job has no deadline. */
+  /** Immutable absolute task deadline, or null when the task has no deadline. */
   deadlineAt: Date | null;
   /** Persisted active-execution budget for each logical attempt. */
   executionTimeoutMs: number | null;
@@ -756,13 +756,13 @@ export interface ClaimedJob<TPayload extends Json = Json> {
 /** Ordered claims that one worker coordinator delivers to a shared batch callback. */
 export interface BatchExecutionRecord {
   batchId: string;
-  jobs: readonly ClaimedJob[];
+  tasks: readonly ClaimedTask[];
   workerId: string;
 }
 
 /** One immutable named result persisted at an explicit handler restart boundary. */
-export interface JobCheckpoint<TValue extends Json = Json> {
-  jobId: string;
+export interface TaskCheckpoint<TValue extends Json = Json> {
+  taskId: string;
   name: string;
   value: TValue;
   /** Attempt that first persisted this checkpoint. */
@@ -773,11 +773,11 @@ export interface JobCheckpoint<TValue extends Json = Json> {
   createdAt: Date;
 }
 
-/** Latest mutable progress projection for a stable job identity. */
-export interface JobProgress<TValue extends Json = Json> {
-  jobId: string;
+/** Latest mutable progress projection for a stable task identity. */
+export interface TaskProgress<TValue extends Json = Json> {
+  taskId: string;
   value: TValue;
-  /** Monotonic accepted-change revision for this job. */
+  /** Monotonic accepted-change revision for this task. */
   revision: bigint;
   /** Attempt that wrote the latest value. */
   attempt: number;
@@ -789,8 +789,8 @@ export interface JobProgress<TValue extends Json = Json> {
 }
 
 /** One immutable named durable timer boundary. */
-export interface JobWait {
-  jobId: string;
+export interface TaskWait {
+  taskId: string;
   name: string;
   mode: "relative" | "absolute";
   /** First committed relative duration. Later relative arguments for this name are ignored. */
@@ -807,7 +807,7 @@ export interface JobWait {
   createdAt: Date;
 }
 
-export type JobState =
+export type TaskState =
   | "blocked"
   | "scheduled"
   | "ready"
@@ -816,7 +816,7 @@ export type JobState =
   | "failed"
   | "canceled";
 
-export interface JobSnapshot<TResult extends Json = Json> {
+export interface TaskSnapshot<TResult extends Json = Json> {
   id: string;
   queue: string;
   type: string;
@@ -825,13 +825,13 @@ export interface JobSnapshot<TResult extends Json = Json> {
   payload: Json;
   contractVersion: string | null;
   tags: string[];
-  state: JobState;
-  prerequisiteJobId: string | null;
-  prerequisiteJobIds: string[];
-  dependencyPolicy: Omit<Dependencies, "prerequisiteJobIds"> | null;
+  state: TaskState;
+  prerequisiteTaskId: string | null;
+  prerequisiteTaskIds: string[];
+  dependencyPolicy: Omit<Dependencies, "prerequisiteTaskIds"> | null;
   blockedReason: "prerequisite_pending" | null;
-  parentJobId: string | null;
-  childJobIds: string[];
+  parentTaskId: string | null;
+  childTaskIds: string[];
   currentAttempt: number;
   maxAttempts: number;
   retryPolicy: RetryPolicy | null;
@@ -847,27 +847,27 @@ export interface JobSnapshot<TResult extends Json = Json> {
   cancelRequestedBy: string | null;
   cancelReason: string | null;
   /** Latest bounded mutable progress, retained across retries and terminal materialization. */
-  progress: JobProgress | null;
+  progress: TaskProgress | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
 /** All windows are explicit; null disables a category. Omitted work limits retain persisted values. */
 export interface RetentionPolicyDefinition {
-  jobIdentityRetentionDays: number | null;
+  taskIdentityRetentionDays: number | null;
   terminalOutcomeRetentionDays: number | null;
-  jobEventRetentionDays: number | null;
+  taskEventRetentionDays: number | null;
   attemptHistoryRetentionDays: number | null;
   scheduleOccurrenceRetentionDays: number | null;
   /**
    * How long derived per-minute statistics are kept.
    *
-   * Deliberately independent of every window above rather than bounded by job identity. A bucket
-   * summarizes jobs, it does not attribute one, so keeping aggregates long after the history they
+   * Deliberately independent of every window above rather than bounded by task identity. A bucket
+   * summarizes tasks, it does not attribute one, so keeping aggregates long after the history they
    * came from has been deleted is the intended use rather than a violation. Null keeps them forever.
    */
   statisticsRetentionDays: number | null;
-  terminalJobPruneLimit?: number;
+  terminalTaskPruneLimit?: number;
   historyPartitionsPerPass?: number;
   defaultPartitionRowsPerPass?: number;
   occurrenceRowsPerPass?: number;
@@ -877,13 +877,13 @@ export interface RetentionPolicyDefinition {
 /** Persisted retention policy plus its PostgreSQL-owned update timestamp. */
 export interface RetentionPolicy extends Required<RetentionPolicyDefinition> {
   provenance: {
-    jobIdentityRetentionDays: PolicyValueProvenance<number | null>;
+    taskIdentityRetentionDays: PolicyValueProvenance<number | null>;
     terminalOutcomeRetentionDays: PolicyValueProvenance<number | null>;
-    jobEventRetentionDays: PolicyValueProvenance<number | null>;
+    taskEventRetentionDays: PolicyValueProvenance<number | null>;
     attemptHistoryRetentionDays: PolicyValueProvenance<number | null>;
     scheduleOccurrenceRetentionDays: PolicyValueProvenance<number | null>;
     statisticsRetentionDays: PolicyValueProvenance<number | null>;
-    terminalJobPruneLimit: PolicyValueProvenance<number>;
+    terminalTaskPruneLimit: PolicyValueProvenance<number>;
     historyPartitionsPerPass: PolicyValueProvenance<number>;
     defaultPartitionRowsPerPass: PolicyValueProvenance<number>;
     occurrenceRowsPerPass: PolicyValueProvenance<number>;
@@ -896,15 +896,15 @@ export type RetentionPolicySetting = keyof RetentionPolicyDefinition;
 
 export interface RetentionPolicyImpact {
   eligible: {
-    terminalJobs: number;
-    jobEvents: number;
+    terminalTasks: number;
+    taskEvents: number;
     attemptHistory: number;
     scheduleOccurrences: number;
     statistics: number;
   };
   capped: {
-    terminalJobs: boolean;
-    jobEvents: boolean;
+    terminalTasks: boolean;
+    taskEvents: boolean;
     attemptHistory: boolean;
     scheduleOccurrences: boolean;
     statistics: boolean;
@@ -923,7 +923,7 @@ export interface MaintenancePolicyDefinition {
    * at the current rollup watermark.
    */
   statisticsRollupIntervalMs?: number;
-  /** Distinct (queue, job type) groups kept per statistics bucket before folding into overflow. */
+  /** Distinct (queue, task type) groups kept per statistics bucket before folding into overflow. */
   statisticsGroupLimit?: number;
   /** Closed minutes re-derived behind the rollup watermark to absorb late-committing history. */
   statisticsRecomputeBuckets?: number;
@@ -950,9 +950,9 @@ export interface PolicyValueProvenance<T> {
 export type MaintenancePolicySetting = keyof MaintenancePolicyDefinition;
 
 export interface RetentionCategoryValues<T> {
-  jobIdentity: T;
+  taskIdentity: T;
   terminalOutcome: T;
-  jobEvents: T;
+  taskEvents: T;
   attemptHistory: T;
   scheduleOccurrences: T;
   statistics: T;
@@ -1073,7 +1073,7 @@ export interface QueueHealth {
   budgets: QueueHealthBudgets;
   /** Canonical schema protocol version installed in this database. */
   schemaVersion: number | null;
-  counts: Record<JobState, number>;
+  counts: Record<TaskState, number>;
   /**
    * True when terminal counts hit the bounded history scan cap and are lower bounds.
    * Live-state counts are always exact; only succeeded, failed, and canceled can cap.
@@ -1082,7 +1082,7 @@ export interface QueueHealth {
   readyDepth: number;
   scheduledDepth: number;
   /** Scheduled runtimes currently suspended at a named durable timer boundary. */
-  sleepingJobs: number;
+  sleepingTasks: number;
   /** Durable timer runtimes whose not-before target has passed but remain unpromoted. */
   overdueWaits: number;
   /** Earliest not-before target among currently suspended durable timers. */
@@ -1091,7 +1091,7 @@ export interface QueueHealth {
   expiredLeases: number;
   /** Dependency pressure and retained policy-selected failure outcomes. */
   dependencies: {
-    blockedJobs: number;
+    blockedTasks: number;
     pendingEdges: number;
     failedResolutions: number;
     /** The last terminal prune deleted nothing while its candidate window contained dependency pins. */
@@ -1109,7 +1109,7 @@ export interface QueueHealth {
     /** True when at least one value is a lower bound at the operations scan limit. */
     capped: boolean;
   };
-  /** Bounded signal and human-decision lifecycle diagnostics without job or wait-name labels. */
+  /** Bounded signal and human-decision lifecycle diagnostics without task or wait-name labels. */
   externalWaits: {
     pendingSignals: number;
     pendingHumanDecisions: number;
@@ -1180,16 +1180,16 @@ export interface QueueHealth {
   /** Oldest retained timestamp used to compute category lag. */
   oldestRetainedAt: RetentionCategoryValues<Date | null>;
   eligibleHistoryPartitions: {
-    jobEvents: number;
+    taskEvents: number;
     attemptHistory: number;
   };
   defaultHistoryRows: {
-    jobEvents: number;
+    taskEvents: number;
     attemptHistory: number;
   };
   /** True when the corresponding fallback-row count hit the 10,001-row health scan cap. */
   defaultHistoryRowsCapped: {
-    jobEvents: boolean;
+    taskEvents: boolean;
     attemptHistory: boolean;
   };
   /**
@@ -1200,7 +1200,7 @@ export interface QueueHealth {
     /** UTC day in `YYYYMMDD` form, matching the partition name suffix. */
     day: string;
     startsAt: Date;
-    hasJobEvents: boolean;
+    hasTaskEvents: boolean;
     hasAttemptHistory: boolean;
   }>;
   /** Budget evaluation of this snapshot. Budgets are caller-overridable per call. */

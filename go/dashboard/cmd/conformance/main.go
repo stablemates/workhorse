@@ -48,7 +48,7 @@ func main() {
 				priority := 0
 				fmt.Sscan(fmt.Sprint(value["priority"]), &priority)
 				id, err := queue.Enqueue(ctx, "conformance.demo-"+fmt.Sprint(value["kind"]), map[string]any{}, workhorse.EnqueueOptions{Priority: priority})
-				return map[string]any{"jobId": id}, err
+				return map[string]any{"taskId": id}, err
 			}
 			procedures["setScheduleEnabled"] = func(ctx context.Context, input any, _ string) (any, error) {
 				value := input.(map[string]any)

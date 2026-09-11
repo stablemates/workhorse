@@ -23,14 +23,14 @@ import type { TaskLocationState } from "./task-location.js";
 /** Shared execution and confirmation flow for listing and detail actions. */
 export function useTaskActions({
   canCompleteHumanWait,
-  inspectJob,
+  inspectTask,
   runTaskNow,
   auditActor,
   reload,
   updateLocation,
 }: {
   canCompleteHumanWait: boolean;
-  inspectJob: (id: string) => void;
+  inspectTask: (id: string) => void;
   runTaskNow: ((id: string) => Promise<RunNowFeedback>) | null;
   auditActor: string;
   reload: () => Promise<void>;
@@ -38,18 +38,18 @@ export function useTaskActions({
 }) {
   const client = useDashboardClient();
   // Notifications report outcomes; local state tracks pending actions and confirmation dialogs.
-  const [runningNowJobId, setRunningNowJobId] = useState<string | null>(null);
-  const [completingHumanWaitJobId, setCompletingHumanWaitJobId] = useState<string | null>(null);
+  const [runningNowTaskId, setRunningNowTaskId] = useState<string | null>(null);
+  const [completingHumanWaitTaskId, setCompletingHumanWaitTaskId] = useState<string | null>(null);
   const [confirmingHumanWait, setConfirmingHumanWait] = useState<{
-    jobId: string;
+    taskId: string;
     waitName: string;
     quickAction: NonNullable<ReturnType<typeof humanWaitQuickAction>>;
   } | null>(null);
   const [confirmingRedrive, setConfirmingRedrive] = useState<TaskActionTarget | null>(null);
-  const [redrivingJobId, setRedrivingJobId] = useState<string | null>(null);
+  const [redrivingTaskId, setRedrivingTaskId] = useState<string | null>(null);
   const [confirmingCancel, setConfirmingCancel] = useState<TaskActionTarget | null>(null);
   const [cancelReason, setCancelReason] = useState("");
-  const [cancelingJobId, setCancelingJobId] = useState<string | null>(null);
+  const [cancelingTaskId, setCancelingTaskId] = useState<string | null>(null);
   const cancelInFlight = useRef(false);
   useConfirmationActivity(confirmingCancel !== null);
   /**
@@ -59,49 +59,49 @@ export function useTaskActions({
    * before sending a request, so the operator can confirm the target and supply an audit reason.
    */
   const runRowAction = useCallback(
-    (id: TaskRowActionId, job: TaskActionTarget) => {
-      if (id === "inspect") return inspectJob(job.id);
+    (id: TaskRowActionId, task: TaskActionTarget) => {
+      if (id === "inspect") return inspectTask(task.id);
       if (id === "cancel") {
         if (
           cancelInFlight.current ||
-          isTerminalTaskState(job.state) ||
-          job.cancellation ||
-          !["ready", "scheduled", "active"].includes(job.state)
+          isTerminalTaskState(task.state) ||
+          task.cancellation ||
+          !["ready", "scheduled", "active"].includes(task.state)
         )
           return;
         setCancelReason("");
-        setConfirmingCancel(job);
+        setConfirmingCancel(task);
         return;
       }
       if (id === "complete-human-wait") {
-        const wait = job.humanWait;
+        const wait = task.humanWait;
         const quickAction = wait ? humanWaitQuickAction(wait.context) : null;
-        if (!wait || !quickAction || !canCompleteHumanWait || completingHumanWaitJobId) return;
-        setConfirmingHumanWait({ jobId: job.id, waitName: wait.name, quickAction });
+        if (!wait || !quickAction || !canCompleteHumanWait || completingHumanWaitTaskId) return;
+        setConfirmingHumanWait({ taskId: task.id, waitName: wait.name, quickAction });
         return;
       }
       if (id === "run-now") {
-        if (runTaskNow === null || runningNowJobId !== null) return;
-        setRunningNowJobId(job.id);
-        void runTaskNow(job.id)
-          .then((feedback) => notifyRunNow(feedback, { openTask: inspectJob }))
-          .finally(() => setRunningNowJobId(null));
+        if (runTaskNow === null || runningNowTaskId !== null) return;
+        setRunningNowTaskId(task.id);
+        void runTaskNow(task.id)
+          .then((feedback) => notifyRunNow(feedback, { openTask: inspectTask }))
+          .finally(() => setRunningNowTaskId(null));
         return;
       }
       if (id === "redrive") {
-        if (job.state !== "failed" || redrivingJobId !== null) return;
-        setConfirmingRedrive(job);
+        if (task.state !== "failed" || redrivingTaskId !== null) return;
+        setConfirmingRedrive(task);
         return;
       }
-      if (id === "filter-type") return updateLocation({ jobType: job.type });
-      if (id === "filter-queue") return updateLocation({ queue: job.queue });
+      if (id === "filter-type") return updateLocation({ taskType: task.type });
+      if (id === "filter-queue") return updateLocation({ queue: task.queue });
       if (id === "filter-worker") {
-        const worker = job.workerId ?? job.lastWorkerId;
+        const worker = task.workerId ?? task.lastWorkerId;
         if (worker !== null) updateLocation({ worker });
         return;
       }
       const copying = id === "copy-id" ? "Task ID" : "Input";
-      void copyToClipboard(id === "copy-id" ? job.id : formatJson(job.payload)).then((failure) =>
+      void copyToClipboard(id === "copy-id" ? task.id : formatJson(task.payload)).then((failure) =>
         notifyDashboard({
           // One id for both clipboard actions: copying twice is one running answer, not a stack.
           id: "workhorse-task-clipboard",
@@ -112,23 +112,23 @@ export function useTaskActions({
       );
     },
     [
-      completingHumanWaitJobId,
+      completingHumanWaitTaskId,
       canCompleteHumanWait,
-      inspectJob,
-      redrivingJobId,
+      inspectTask,
+      redrivingTaskId,
       runTaskNow,
-      runningNowJobId,
+      runningNowTaskId,
       updateLocation,
     ],
   );
   const cancelTask = async () => {
     if (!confirmingCancel || cancelInFlight.current) return;
-    const job = confirmingCancel;
+    const task = confirmingCancel;
     cancelInFlight.current = true;
-    setCancelingJobId(job.id);
+    setCancelingTaskId(task.id);
     try {
       const result = await client.cancelTask({
-        id: job.id,
+        id: task.id,
         audit: {
           actor: auditActor,
           reason: cancelReason.trim() || null,
@@ -136,8 +136,8 @@ export function useTaskActions({
         },
       });
       notifyCancel(
-        { jobId: job.id, status: result.status, state: result.state },
-        { openTask: inspectJob },
+        { taskId: task.id, status: result.status, state: result.state },
+        { openTask: inspectTask },
       );
       setConfirmingCancel(null);
       setCancelReason("");
@@ -146,7 +146,7 @@ export function useTaskActions({
       return;
     } finally {
       cancelInFlight.current = false;
-      setCancelingJobId(null);
+      setCancelingTaskId(null);
     }
     try {
       await reload();
@@ -160,11 +160,11 @@ export function useTaskActions({
   };
   const completeHumanWait = async () => {
     if (!confirmingHumanWait || !canCompleteHumanWait) return;
-    const { jobId, waitName, quickAction } = confirmingHumanWait;
-    setCompletingHumanWaitJobId(jobId);
+    const { taskId, waitName, quickAction } = confirmingHumanWait;
+    setCompletingHumanWaitTaskId(taskId);
     try {
       const completion = await client.completeHumanWait({
-        id: jobId,
+        id: taskId,
         name: waitName,
         result: quickAction.result,
         idempotencyKey: crypto.randomUUID(),
@@ -184,7 +184,7 @@ export function useTaskActions({
     } catch (cause) {
       notifyFailure("Decision not completed", cause, "Workhorse rejected the human decision");
     } finally {
-      setCompletingHumanWaitJobId(null);
+      setCompletingHumanWaitTaskId(null);
     }
   };
   /**
@@ -194,25 +194,25 @@ export function useTaskActions({
    * produced a fresh copy or replayed one it had already produced is a durable fact this dashboard
    * does not get to decide.
    */
-  const redriveTask = async (job: TaskActionTarget) => {
+  const redriveTask = async (task: TaskActionTarget) => {
     if (!client.redriveTask) return;
-    setRedrivingJobId(job.id);
+    setRedrivingTaskId(task.id);
     try {
       const result = await client.redriveTask({
-        id: job.id,
+        id: task.id,
         audit: {
           actor: auditActor,
-          reason: `Redrive dead letter ${job.id} from the dashboard`,
+          reason: `Redrive dead letter ${task.id} from the dashboard`,
           requestId: crypto.randomUUID(),
         },
       });
-      notifyRedrive(result, { openTask: inspectJob });
+      notifyRedrive(result, { openTask: inspectTask });
       setConfirmingRedrive(null);
       await reload();
     } catch (cause) {
       notifyFailure("Task not redriven", cause, "Workhorse could not redrive the task");
     } finally {
-      setRedrivingJobId(null);
+      setRedrivingTaskId(null);
     }
   };
 
@@ -225,9 +225,9 @@ export function useTaskActions({
         }}
         title="Cancel this task?"
         centered
-        closeOnClickOutside={cancelingJobId === null}
-        closeOnEscape={cancelingJobId === null}
-        withCloseButton={cancelingJobId === null}
+        closeOnClickOutside={cancelingTaskId === null}
+        closeOnEscape={cancelingTaskId === null}
+        withCloseButton={cancelingTaskId === null}
       >
         {confirmingCancel ? (
           <Code
@@ -249,18 +249,18 @@ export function useTaskActions({
           description="Workhorse records this reason in the audit trail."
           placeholder="Why are you canceling this task?"
           value={cancelReason}
-          disabled={cancelingJobId !== null}
+          disabled={cancelingTaskId !== null}
           onChange={(event) => setCancelReason(event.currentTarget.value)}
         />
         <Group justify="flex-end" mt="lg">
           <Button
             variant="default"
-            disabled={cancelingJobId !== null}
+            disabled={cancelingTaskId !== null}
             onClick={() => setConfirmingCancel(null)}
           >
             Keep task
           </Button>
-          <Button color="red" loading={cancelingJobId !== null} onClick={() => void cancelTask()}>
+          <Button color="red" loading={cancelingTaskId !== null} onClick={() => void cancelTask()}>
             {confirmingCancel?.state === "active" ? "Request cancellation" : "Cancel task"}
           </Button>
         </Group>
@@ -285,13 +285,13 @@ export function useTaskActions({
         <Group justify="flex-end" mt="lg">
           <Button
             variant="default"
-            disabled={completingHumanWaitJobId !== null}
+            disabled={completingHumanWaitTaskId !== null}
             onClick={() => setConfirmingHumanWait(null)}
           >
             Cancel
           </Button>
           <Button
-            loading={completingHumanWaitJobId !== null}
+            loading={completingHumanWaitTaskId !== null}
             onClick={() => void completeHumanWait()}
           >
             Confirm decision
@@ -315,13 +315,13 @@ export function useTaskActions({
         <Group justify="flex-end" mt="lg">
           <Button
             variant="default"
-            disabled={redrivingJobId !== null}
+            disabled={redrivingTaskId !== null}
             onClick={() => setConfirmingRedrive(null)}
           >
             Cancel
           </Button>
           <Button
-            loading={redrivingJobId !== null}
+            loading={redrivingTaskId !== null}
             onClick={() => void (confirmingRedrive && redriveTask(confirmingRedrive))}
           >
             Redrive as a new task
@@ -332,10 +332,10 @@ export function useTaskActions({
   );
   return {
     runRowAction,
-    completingHumanWaitJobId,
-    redrivingJobId,
-    runningNowJobId,
-    cancelingJobId,
+    completingHumanWaitTaskId,
+    redrivingTaskId,
+    runningNowTaskId,
+    cancelingTaskId,
     confirmations,
   };
 }

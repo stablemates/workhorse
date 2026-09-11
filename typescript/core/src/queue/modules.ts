@@ -1,5 +1,5 @@
 import { CheckpointsProgressWaitsModule } from "./checkpoints-progress-waits.js";
-import { ChildJobsModule } from "./child-jobs.js";
+import { ChildTasksModule } from "./child-tasks.js";
 import { ClaimLeaseFenceModule } from "./claim-lease-fence.js";
 import { CronSchedulesModule } from "./cron-schedules.js";
 import { EnqueueContractsModule } from "./enqueue-contracts.js";
@@ -13,7 +13,7 @@ import { WorkerRegistryModule } from "./worker-registry.js";
 
 export interface CachedContractDefinition {
   readonly version: string;
-  readonly contract: import("../types.js").JobContractVersion;
+  readonly contract: import("../types.js").TaskContractVersion;
 }
 
 /** @internal */
@@ -36,7 +36,7 @@ export interface QueueModules {
   readonly enqueueContracts: EnqueueContractsModule;
   readonly claimLeaseFence: ClaimLeaseFenceModule;
   readonly checkpointsProgressWaits: CheckpointsProgressWaitsModule;
-  readonly childJobs: ChildJobsModule;
+  readonly childTasks: ChildTasksModule;
   readonly signals: SignalsModule;
   readonly humanWaits: HumanWaitsModule;
   readonly queueAdministration: QueueAdministrationModule;
@@ -55,7 +55,7 @@ export function createQueueModules(
     enqueueContracts,
     claimLeaseFence: new ClaimLeaseFenceModule(context),
     checkpointsProgressWaits: new CheckpointsProgressWaitsModule(context),
-    childJobs: new ChildJobsModule(context, enqueueContracts),
+    childTasks: new ChildTasksModule(context, enqueueContracts),
     signals: new SignalsModule(context),
     humanWaits: new HumanWaitsModule(context),
     queueAdministration: new QueueAdministrationModule(context),

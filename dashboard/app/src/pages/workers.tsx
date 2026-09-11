@@ -212,7 +212,7 @@ export function WorkersPage({
                           </Text>
                         )}
                       </Table.Td>
-                      <Table.Td ta="right">{worker.activeJobs}</Table.Td>
+                      <Table.Td ta="right">{worker.activeTasks}</Table.Td>
                       <Table.Td ta="right">{worker.completedAttempts}</Table.Td>
                       <Table.Td ta="right">
                         <Text c={worker.failedAttempts > 0 ? "red.7" : undefined} size="sm">

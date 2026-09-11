@@ -1,14 +1,14 @@
-# Enqueueing the same job twice by accident
+# Enqueueing the same task twice by accident
 
-A user double-clicks "Place order". Your API handler runs twice. Two jobs get enqueued, and
+A user double-clicks "Place order". Your API handler runs twice. Two tasks get enqueued, and
 the customer gets two confirmation emails.
 
-Enqueue idempotency stops the second job from being created at all.
+Enqueue idempotency stops the second task from being created at all.
 
 ## How it works
 
-Attach a key when you enqueue. If a job with that key already exists, you get the existing
-job's id back instead of a new job.
+Attach a key when you enqueue. If a task with that key already exists, you get the existing
+task's id back instead of a new task.
 
 ```ts
 const result = await queue.enqueueWithResult(
@@ -18,8 +18,8 @@ const result = await queue.enqueueWithResult(
 );
 ```
 
-Call that twice with the same `orderId` and you get the same `result.jobId` twice. The second call
-creates nothing: no job, no event, no notification. It just tells you which job already
+Call that twice with the same `orderId` and you get the same `result.taskId` twice. The second call
+creates nothing: no task, no event, no notification. It just tells you which task already
 owns that key.
 
 The key is yours to choose, and it should come from something stable in your domain — an
@@ -40,18 +40,18 @@ their own prefix.
 
 ## Reading the enqueue outcome
 
-`Queue.enqueueWithResult` returns an `EnqueueResult`. Its `jobId` identifies the retained job, while
+`Queue.enqueueWithResult` returns an `EnqueueResult`. Its `taskId` identifies the retained task, while
 its `outcome` field is an `EnqueueOutcome` that explains what PostgreSQL did with this request.
 
-- `accepted` means PostgreSQL created a new job.
-- `replayed` means an idempotency key found an equivalent retained job.
-- `replaced` means [debounce](215-debounce.md) updated a pending job.
-- `non_replaceable` means debounce retained a job that could no longer accept an update. This
-  result also carries `reason`, so callers can distinguish an incompatible key mode, a job that is
-  no longer pending, and a pending job whose window elapsed.
-- `coalesced` means [throttle](217-throttle.md) reused the job for its active window.
+- `accepted` means PostgreSQL created a new task.
+- `replayed` means an idempotency key found an equivalent retained task.
+- `replaced` means [debounce](215-debounce.md) updated a pending task.
+- `non_replaceable` means debounce retained a task that could no longer accept an update. This
+  result also carries `reason`, so callers can distinguish an incompatible key mode, a task that is
+  no longer pending, and a pending task whose window elapsed.
+- `coalesced` means [throttle](217-throttle.md) reused the task for its active window.
 
-Use `Queue.enqueue` when the stable job id is enough. It returns the same `jobId` and hides the
+Use `Queue.enqueue` when the stable task id is enough. It returns the same `taskId` and hides the
 outcome. Use `Queue.enqueueWithResult` when logs, metrics, or application behavior need the reason.
 
 ## Keys expire
@@ -59,13 +59,13 @@ outcome. Use `Queue.enqueueWithResult` when logs, metrics, or application behavi
 Each key is retained for a configurable period and then released. That's deliberate: keys are for
 catching accidental duplicates within a short
 window, not for permanently reserving a name. Once a key expires, the same key can create a
-new job.
+new task.
 
 ## Sending different data under the same key
 
 Workhorse records a fingerprint of what you enqueued — the queue, type, payload, tags,
 attempt budget, retry policy. If you reuse a key with _different_ content, that's not a
-duplicate, it's a mistake, so you get a conflict error rather than either job silently
+duplicate, it's a mistake, so you get a conflict error rather than either task silently
 winning.
 
 Sending genuinely identical content is the normal replay case and just returns the existing
@@ -79,15 +79,15 @@ worrying about them showing up on an operator's screen.
 
 ## What this does not do
 
-It stops duplicate _jobs_. It does not make your handler run exactly once — that's still
-[at-least-once](030-delivery-guarantees.md), and one job can still execute twice after a
+It stops duplicate _tasks_. It does not make your handler run exactly once — that's still
+[at-least-once](030-delivery-guarantees.md), and one task can still execute twice after a
 crash. These are different problems and you often need both fixes.
 
 ## Next
 
 - [030-delivery-guarantees.md](030-delivery-guarantees.md) — the other half of the problem
 - [220-schedules.md](220-schedules.md) — the same idea applied to cron firings
-- [010-jobs-and-state.md](010-jobs-and-state.md) — what a job actually is
+- [010-tasks-and-state.md](010-tasks-and-state.md) — what a task actually is
 
 ---
 

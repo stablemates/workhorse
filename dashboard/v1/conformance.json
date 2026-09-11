@@ -41,7 +41,7 @@
         },
         {
           "id": "sync-retention-policy",
-          "sql": "SELECT (policy).job_identity_retention_days AS days FROM workhorse.sync_retention_policy_v1($1::integer, $2::integer, $3::integer, $4::integer, $5::integer, $6::integer, $7::integer, $8::integer, $9::integer, $10::integer, $11::integer, $12::boolean) policy",
+          "sql": "SELECT (policy).task_identity_retention_days AS days FROM workhorse.sync_retention_policy_v1($1::integer, $2::integer, $3::integer, $4::integer, $5::integer, $6::integer, $7::integer, $8::integer, $9::integer, $10::integer, $11::integer, $12::boolean) policy",
           "parameters": [
             14,
             14,
@@ -66,7 +66,7 @@
         },
         {
           "id": "stall-statistics-rollup",
-          "sql": "UPDATE workhorse.job_stat_state SET rolled_up_through=clock_timestamp()-interval '1 hour' WHERE singleton RETURNING true AS stalled",
+          "sql": "UPDATE workhorse.task_stat_state SET rolled_up_through=clock_timestamp()-interval '1 hour' WHERE singleton RETURNING true AS stalled",
           "expect": {
             "rows": [
               {
@@ -108,7 +108,7 @@
         },
         {
           "id": "enqueue-succeeded",
-          "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
           "parameters": [
             [
               {
@@ -134,7 +134,7 @@
             "rows": [
               {
                 "value": {
-                  "jobId": {
+                  "taskId": {
                     "$type": "uuid"
                   },
                   "outcome": "accepted"
@@ -143,12 +143,12 @@
             ]
           },
           "capture": {
-            "succeededJob": "0.value.jobId"
+            "succeededTask": "0.value.taskId"
           }
         },
         {
           "id": "claim-succeeded",
-          "sql": "SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
           "parameters": [
             "conformance",
             "conformance-worker",
@@ -158,8 +158,8 @@
             "rows": [
               {
                 "value": {
-                  "jobId": {
-                    "$ref": "succeededJob"
+                  "taskId": {
+                    "$ref": "succeededTask"
                   },
                   "fenceToken": {
                     "$type": "integer"
@@ -177,7 +177,7 @@
           "sql": "SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted",
           "parameters": [
             {
-              "$ref": "succeededJob"
+              "$ref": "succeededTask"
             },
             "conformance-worker",
             {
@@ -198,7 +198,7 @@
         },
         {
           "id": "enqueue-failed",
-          "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
           "parameters": [
             [
               {
@@ -213,7 +213,7 @@
             "rows": [
               {
                 "value": {
-                  "jobId": {
+                  "taskId": {
                     "$type": "uuid"
                   },
                   "outcome": "accepted"
@@ -222,12 +222,12 @@
             ]
           },
           "capture": {
-            "failedJob": "0.value.jobId"
+            "failedTask": "0.value.taskId"
           }
         },
         {
           "id": "claim-failed",
-          "sql": "SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
           "parameters": [
             "conformance",
             "conformance-worker",
@@ -237,8 +237,8 @@
             "rows": [
               {
                 "value": {
-                  "jobId": {
-                    "$ref": "failedJob"
+                  "taskId": {
+                    "$ref": "failedTask"
                   },
                   "fenceToken": {
                     "$type": "integer"
@@ -256,7 +256,7 @@
           "sql": "SELECT workhorse.fail_v1($1::uuid, $2, $3::bigint, $4::jsonb, 0) AS state",
           "parameters": [
             {
-              "$ref": "failedJob"
+              "$ref": "failedTask"
             },
             "conformance-worker",
             {
@@ -277,7 +277,7 @@
         },
         {
           "id": "enqueue-signal-wait",
-          "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
           "parameters": [
             [
               {
@@ -291,7 +291,7 @@
             "rows": [
               {
                 "value": {
-                  "jobId": {
+                  "taskId": {
                     "$type": "uuid"
                   },
                   "outcome": "accepted"
@@ -300,12 +300,12 @@
             ]
           },
           "capture": {
-            "signalJob": "0.value.jobId"
+            "signalTask": "0.value.taskId"
           }
         },
         {
           "id": "claim-signal-wait",
-          "sql": "SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
           "parameters": [
             "conformance",
             "conformance-worker",
@@ -315,8 +315,8 @@
             "rows": [
               {
                 "value": {
-                  "jobId": {
-                    "$ref": "signalJob"
+                  "taskId": {
+                    "$ref": "signalTask"
                   },
                   "fenceToken": {
                     "$type": "integer"
@@ -334,7 +334,7 @@
           "sql": "SELECT jsonb_build_object('status', status, 'payload', payload) AS value FROM workhorse.wait_for_signal_v1($1::uuid, $2, $3::bigint, $4, $5::bigint)",
           "parameters": [
             {
-              "$ref": "signalJob"
+              "$ref": "signalTask"
             },
             "conformance-worker",
             {
@@ -356,7 +356,7 @@
         },
         {
           "id": "enqueue-human-wait",
-          "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
           "parameters": [
             [
               {
@@ -370,7 +370,7 @@
             "rows": [
               {
                 "value": {
-                  "jobId": {
+                  "taskId": {
                     "$type": "uuid"
                   },
                   "outcome": "accepted"
@@ -379,12 +379,12 @@
             ]
           },
           "capture": {
-            "humanJob": "0.value.jobId"
+            "humanTask": "0.value.taskId"
           }
         },
         {
           "id": "claim-human-wait",
-          "sql": "SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
           "parameters": [
             "conformance",
             "conformance-worker",
@@ -394,8 +394,8 @@
             "rows": [
               {
                 "value": {
-                  "jobId": {
-                    "$ref": "humanJob"
+                  "taskId": {
+                    "$ref": "humanTask"
                   },
                   "fenceToken": {
                     "$type": "integer"
@@ -413,7 +413,7 @@
           "sql": "SELECT jsonb_build_object('status', status, 'result', result) AS value FROM workhorse.wait_for_human_v1($1::uuid, $2, $3::bigint, $4, $5::jsonb, $6::bigint)",
           "parameters": [
             {
-              "$ref": "humanJob"
+              "$ref": "humanTask"
             },
             "conformance-worker",
             {
@@ -438,7 +438,7 @@
         },
         {
           "id": "enqueue-ready",
-          "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
           "parameters": [
             [
               {
@@ -456,7 +456,7 @@
             "rows": [
               {
                 "value": {
-                  "jobId": {
+                  "taskId": {
                     "$type": "uuid"
                   },
                   "outcome": "accepted"
@@ -465,12 +465,12 @@
             ]
           },
           "capture": {
-            "readyJob": "0.value.jobId"
+            "readyTask": "0.value.taskId"
           }
         },
         {
           "id": "enqueue-scheduled",
-          "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
           "parameters": [
             [
               {
@@ -485,7 +485,7 @@
             "rows": [
               {
                 "value": {
-                  "jobId": {
+                  "taskId": {
                     "$type": "uuid"
                   },
                   "outcome": "accepted"
@@ -494,12 +494,12 @@
             ]
           },
           "capture": {
-            "scheduledJob": "0.value.jobId"
+            "scheduledTask": "0.value.taskId"
           }
         },
         {
           "id": "enqueue-cancel-target",
-          "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
           "parameters": [
             [
               {
@@ -513,7 +513,7 @@
             "rows": [
               {
                 "value": {
-                  "jobId": {
+                  "taskId": {
                     "$type": "uuid"
                   },
                   "outcome": "accepted"
@@ -522,12 +522,12 @@
             ]
           },
           "capture": {
-            "cancelTargetJob": "0.value.jobId"
+            "cancelTargetTask": "0.value.taskId"
           }
         },
         {
           "id": "enqueue-purge-target",
-          "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
           "parameters": [
             [
               {
@@ -541,7 +541,7 @@
             "rows": [
               {
                 "value": {
-                  "jobId": {
+                  "taskId": {
                     "$type": "uuid"
                   },
                   "outcome": "accepted"
@@ -550,12 +550,12 @@
             ]
           },
           "capture": {
-            "purgeTargetJob": "0.value.jobId"
+            "purgeTargetTask": "0.value.taskId"
           }
         },
         {
           "id": "enqueue-redrive-one",
-          "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
           "parameters": [
             [
               {
@@ -570,7 +570,7 @@
             "rows": [
               {
                 "value": {
-                  "jobId": {
+                  "taskId": {
                     "$type": "uuid"
                   },
                   "outcome": "accepted"
@@ -579,12 +579,12 @@
             ]
           },
           "capture": {
-            "redriveOneJob": "0.value.jobId"
+            "redriveOneTask": "0.value.taskId"
           }
         },
         {
           "id": "claim-redrive-one",
-          "sql": "SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
           "parameters": [
             "conformance-redrive",
             "conformance-worker",
@@ -594,8 +594,8 @@
             "rows": [
               {
                 "value": {
-                  "jobId": {
-                    "$ref": "redriveOneJob"
+                  "taskId": {
+                    "$ref": "redriveOneTask"
                   },
                   "fenceToken": {
                     "$type": "integer"
@@ -613,7 +613,7 @@
           "sql": "SELECT workhorse.fail_v1($1::uuid, $2, $3::bigint, $4::jsonb, 0) AS state",
           "parameters": [
             {
-              "$ref": "redriveOneJob"
+              "$ref": "redriveOneTask"
             },
             "conformance-worker",
             {
@@ -634,7 +634,7 @@
         },
         {
           "id": "enqueue-redrive-batch",
-          "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
           "parameters": [
             [
               {
@@ -649,7 +649,7 @@
             "rows": [
               {
                 "value": {
-                  "jobId": {
+                  "taskId": {
                     "$type": "uuid"
                   },
                   "outcome": "accepted"
@@ -658,12 +658,12 @@
             ]
           },
           "capture": {
-            "redriveBatchJob": "0.value.jobId"
+            "redriveBatchTask": "0.value.taskId"
           }
         },
         {
           "id": "claim-redrive-batch",
-          "sql": "SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
+          "sql": "SELECT jsonb_build_object('taskId', task_id, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
           "parameters": [
             "conformance-redrive",
             "conformance-worker",
@@ -673,8 +673,8 @@
             "rows": [
               {
                 "value": {
-                  "jobId": {
-                    "$ref": "redriveBatchJob"
+                  "taskId": {
+                    "$ref": "redriveBatchTask"
                   },
                   "fenceToken": {
                     "$type": "integer"
@@ -692,7 +692,7 @@
           "sql": "SELECT workhorse.fail_v1($1::uuid, $2, $3::bigint, $4::jsonb, 0) AS state",
           "parameters": [
             {
-              "$ref": "redriveBatchJob"
+              "$ref": "redriveBatchTask"
             },
             "conformance-worker",
             {
@@ -785,10 +785,14 @@
             "status": 200,
             "body": {
               "json": {
-                "jobs": [
+                "page": 1,
+                "sort": "updated",
+                "tags": [],
+                "queue": null,
+                "tasks": [
                   {
                     "id": {
-                      "$ref": "redriveBatchJob"
+                      "$ref": "redriveBatchTask"
                     },
                     "tags": [],
                     "type": "conformance.redrive.batch",
@@ -825,11 +829,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "redriveOneJob"
+                      "$ref": "redriveOneTask"
                     },
                     "tags": [],
                     "type": "conformance.redrive.one",
@@ -866,11 +870,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "purgeTargetJob"
+                      "$ref": "purgeTargetTask"
                     },
                     "tags": [],
                     "type": "conformance.purge",
@@ -905,11 +909,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "cancelTargetJob"
+                      "$ref": "cancelTargetTask"
                     },
                     "tags": [],
                     "type": "conformance.cancel-target",
@@ -944,11 +948,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "scheduledJob"
+                      "$ref": "scheduledTask"
                     },
                     "tags": [],
                     "type": "conformance.scheduled",
@@ -981,11 +985,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "readyJob"
+                      "$ref": "readyTask"
                     },
                     "tags": [
                       "conformance"
@@ -1022,11 +1026,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "humanJob"
+                      "$ref": "humanTask"
                     },
                     "tags": [],
                     "type": "conformance.human",
@@ -1067,11 +1071,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "signalJob"
+                      "$ref": "signalTask"
                     },
                     "tags": [],
                     "type": "conformance.signal",
@@ -1109,11 +1113,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "failedJob"
+                      "$ref": "failedTask"
                     },
                     "tags": [],
                     "type": "conformance.fail",
@@ -1150,11 +1154,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "succeededJob"
+                      "$ref": "succeededTask"
                     },
                     "tags": [
                       "conformance"
@@ -1193,20 +1197,16 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   }
                 ],
-                "page": 1,
-                "sort": "updated",
-                "tags": [],
-                "queue": null,
                 "total": 10,
                 "filter": "all",
                 "search": null,
                 "worker": null,
-                "jobType": null,
                 "pageSize": 50,
                 "priority": null,
+                "taskType": null,
                 "capturedAt": {
                   "$type": "timestamp"
                 },
@@ -1231,20 +1231,20 @@
             "status": 200,
             "body": {
               "json": {
-                "jobs": [],
                 "page": 1,
                 "sort": "priority",
                 "tags": [
                   "conformance"
                 ],
                 "queue": null,
+                "tasks": [],
                 "total": 0,
                 "filter": "discarded",
                 "search": null,
                 "worker": null,
-                "jobType": null,
                 "pageSize": 50,
                 "priority": null,
+                "taskType": null,
                 "capturedAt": {
                   "$type": "timestamp"
                 },
@@ -1272,7 +1272,7 @@
                 "workers": [
                   "conformance-worker"
                 ],
-                "jobTypes": [
+                "taskTypes": [
                   "conformance.cancel-target",
                   "conformance.fail",
                   "conformance.human",
@@ -1592,10 +1592,10 @@
                     },
                     "kind": "event",
                     "type": "failed",
-                    "jobId": {
-                      "$ref": "redriveBatchJob"
-                    },
                     "queue": "conformance-redrive",
+                    "taskId": {
+                      "$ref": "redriveBatchTask"
+                    },
                     "attempt": 1,
                     "details": {
                       "error": {
@@ -1603,10 +1603,10 @@
                         "message": "conformance.redrive.batch failed"
                       }
                     },
-                    "jobType": "conformance.redrive.batch",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.redrive.batch",
                     "workerId": "conformance-worker",
                     "durationMs": null,
                     "fenceToken": null,
@@ -1621,16 +1621,16 @@
                     },
                     "kind": "attempt",
                     "type": "failed",
-                    "jobId": {
-                      "$ref": "redriveBatchJob"
-                    },
                     "queue": "conformance-redrive",
+                    "taskId": {
+                      "$ref": "redriveBatchTask"
+                    },
                     "attempt": 1,
                     "details": null,
-                    "jobType": "conformance.redrive.batch",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.redrive.batch",
                     "workerId": "conformance-worker",
                     "durationMs": {
                       "$type": "integer"
@@ -1647,10 +1647,10 @@
                     },
                     "kind": "event",
                     "type": "claimed",
-                    "jobId": {
-                      "$ref": "redriveBatchJob"
-                    },
                     "queue": "conformance-redrive",
+                    "taskId": {
+                      "$ref": "redriveBatchTask"
+                    },
                     "attempt": 1,
                     "details": {
                       "worker_id": "conformance-worker",
@@ -1659,10 +1659,10 @@
                       },
                       "fence_token": "6"
                     },
-                    "jobType": "conformance.redrive.batch",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.redrive.batch",
                     "workerId": "conformance-worker",
                     "durationMs": null,
                     "fenceToken": null,
@@ -1677,10 +1677,10 @@
                     },
                     "kind": "event",
                     "type": "enqueued",
-                    "jobId": {
-                      "$ref": "redriveBatchJob"
-                    },
                     "queue": "conformance-redrive",
+                    "taskId": {
+                      "$ref": "redriveBatchTask"
+                    },
                     "attempt": null,
                     "details": {
                       "state": "ready",
@@ -1691,10 +1691,10 @@
                       "deadline_at": null,
                       "execution_timeout_ms": null
                     },
-                    "jobType": "conformance.redrive.batch",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.redrive.batch",
                     "workerId": null,
                     "durationMs": null,
                     "fenceToken": null,
@@ -1709,10 +1709,10 @@
                     },
                     "kind": "event",
                     "type": "failed",
-                    "jobId": {
-                      "$ref": "redriveOneJob"
-                    },
                     "queue": "conformance-redrive",
+                    "taskId": {
+                      "$ref": "redriveOneTask"
+                    },
                     "attempt": 1,
                     "details": {
                       "error": {
@@ -1720,10 +1720,10 @@
                         "message": "conformance.redrive.one failed"
                       }
                     },
-                    "jobType": "conformance.redrive.one",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.redrive.one",
                     "workerId": "conformance-worker",
                     "durationMs": null,
                     "fenceToken": null,
@@ -1738,16 +1738,16 @@
                     },
                     "kind": "attempt",
                     "type": "failed",
-                    "jobId": {
-                      "$ref": "redriveOneJob"
-                    },
                     "queue": "conformance-redrive",
+                    "taskId": {
+                      "$ref": "redriveOneTask"
+                    },
                     "attempt": 1,
                     "details": null,
-                    "jobType": "conformance.redrive.one",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.redrive.one",
                     "workerId": "conformance-worker",
                     "durationMs": {
                       "$type": "integer"
@@ -1764,10 +1764,10 @@
                     },
                     "kind": "event",
                     "type": "claimed",
-                    "jobId": {
-                      "$ref": "redriveOneJob"
-                    },
                     "queue": "conformance-redrive",
+                    "taskId": {
+                      "$ref": "redriveOneTask"
+                    },
                     "attempt": 1,
                     "details": {
                       "worker_id": "conformance-worker",
@@ -1776,10 +1776,10 @@
                       },
                       "fence_token": "5"
                     },
-                    "jobType": "conformance.redrive.one",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.redrive.one",
                     "workerId": "conformance-worker",
                     "durationMs": null,
                     "fenceToken": null,
@@ -1794,10 +1794,10 @@
                     },
                     "kind": "event",
                     "type": "enqueued",
-                    "jobId": {
-                      "$ref": "redriveOneJob"
-                    },
                     "queue": "conformance-redrive",
+                    "taskId": {
+                      "$ref": "redriveOneTask"
+                    },
                     "attempt": null,
                     "details": {
                       "state": "ready",
@@ -1808,10 +1808,10 @@
                       "deadline_at": null,
                       "execution_timeout_ms": null
                     },
-                    "jobType": "conformance.redrive.one",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.redrive.one",
                     "workerId": null,
                     "durationMs": null,
                     "fenceToken": null,
@@ -1826,10 +1826,10 @@
                     },
                     "kind": "event",
                     "type": "enqueued",
-                    "jobId": {
-                      "$ref": "purgeTargetJob"
-                    },
                     "queue": "conformance-purge",
+                    "taskId": {
+                      "$ref": "purgeTargetTask"
+                    },
                     "attempt": null,
                     "details": {
                       "state": "ready",
@@ -1840,10 +1840,10 @@
                       "deadline_at": null,
                       "execution_timeout_ms": null
                     },
-                    "jobType": "conformance.purge",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.purge",
                     "workerId": null,
                     "durationMs": null,
                     "fenceToken": null,
@@ -1858,10 +1858,10 @@
                     },
                     "kind": "event",
                     "type": "enqueued",
-                    "jobId": {
-                      "$ref": "cancelTargetJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "cancelTargetTask"
+                    },
                     "attempt": null,
                     "details": {
                       "state": "ready",
@@ -1872,10 +1872,10 @@
                       "deadline_at": null,
                       "execution_timeout_ms": null
                     },
-                    "jobType": "conformance.cancel-target",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.cancel-target",
                     "workerId": null,
                     "durationMs": null,
                     "fenceToken": null,
@@ -1890,10 +1890,10 @@
                     },
                     "kind": "event",
                     "type": "enqueued",
-                    "jobId": {
-                      "$ref": "scheduledJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "scheduledTask"
+                    },
                     "attempt": null,
                     "details": {
                       "state": "scheduled",
@@ -1904,10 +1904,10 @@
                       "deadline_at": null,
                       "execution_timeout_ms": null
                     },
-                    "jobType": "conformance.scheduled",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.scheduled",
                     "workerId": null,
                     "durationMs": null,
                     "fenceToken": null,
@@ -1922,10 +1922,10 @@
                     },
                     "kind": "event",
                     "type": "enqueued",
-                    "jobId": {
-                      "$ref": "readyJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "readyTask"
+                    },
                     "attempt": null,
                     "details": {
                       "state": "ready",
@@ -1936,10 +1936,10 @@
                       "deadline_at": null,
                       "execution_timeout_ms": null
                     },
-                    "jobType": "conformance.ready",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.ready",
                     "workerId": null,
                     "durationMs": null,
                     "fenceToken": null,
@@ -1954,20 +1954,20 @@
                     },
                     "kind": "event",
                     "type": "human_wait_created",
-                    "jobId": {
-                      "$ref": "humanJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "humanTask"
+                    },
                     "attempt": 1,
                     "details": {
                       "name": "review",
                       "fence_token": "4",
                       "context_bytes": 44
                     },
-                    "jobType": "conformance.human",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.human",
                     "workerId": null,
                     "durationMs": null,
                     "fenceToken": null,
@@ -1982,10 +1982,10 @@
                     },
                     "kind": "event",
                     "type": "claimed",
-                    "jobId": {
-                      "$ref": "humanJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "humanTask"
+                    },
                     "attempt": 1,
                     "details": {
                       "worker_id": "conformance-worker",
@@ -1994,10 +1994,10 @@
                       },
                       "fence_token": "4"
                     },
-                    "jobType": "conformance.human",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.human",
                     "workerId": "conformance-worker",
                     "durationMs": null,
                     "fenceToken": null,
@@ -2012,10 +2012,10 @@
                     },
                     "kind": "event",
                     "type": "enqueued",
-                    "jobId": {
-                      "$ref": "humanJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "humanTask"
+                    },
                     "attempt": null,
                     "details": {
                       "state": "ready",
@@ -2026,10 +2026,10 @@
                       "deadline_at": null,
                       "execution_timeout_ms": null
                     },
-                    "jobType": "conformance.human",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.human",
                     "workerId": null,
                     "durationMs": null,
                     "fenceToken": null,
@@ -2044,19 +2044,19 @@
                     },
                     "kind": "event",
                     "type": "signal_waiting",
-                    "jobId": {
-                      "$ref": "signalJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "signalTask"
+                    },
                     "attempt": 1,
                     "details": {
                       "name": "approval",
                       "fence_token": "3"
                     },
-                    "jobType": "conformance.signal",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.signal",
                     "workerId": null,
                     "durationMs": null,
                     "fenceToken": null,
@@ -2071,10 +2071,10 @@
                     },
                     "kind": "event",
                     "type": "claimed",
-                    "jobId": {
-                      "$ref": "signalJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "signalTask"
+                    },
                     "attempt": 1,
                     "details": {
                       "worker_id": "conformance-worker",
@@ -2083,10 +2083,10 @@
                       },
                       "fence_token": "3"
                     },
-                    "jobType": "conformance.signal",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.signal",
                     "workerId": "conformance-worker",
                     "durationMs": null,
                     "fenceToken": null,
@@ -2101,10 +2101,10 @@
                     },
                     "kind": "event",
                     "type": "enqueued",
-                    "jobId": {
-                      "$ref": "signalJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "signalTask"
+                    },
                     "attempt": null,
                     "details": {
                       "state": "ready",
@@ -2115,10 +2115,10 @@
                       "deadline_at": null,
                       "execution_timeout_ms": null
                     },
-                    "jobType": "conformance.signal",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.signal",
                     "workerId": null,
                     "durationMs": null,
                     "fenceToken": null,
@@ -2133,10 +2133,10 @@
                     },
                     "kind": "event",
                     "type": "failed",
-                    "jobId": {
-                      "$ref": "failedJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "failedTask"
+                    },
                     "attempt": 1,
                     "details": {
                       "error": {
@@ -2144,10 +2144,10 @@
                         "message": "conformance.fail failed"
                       }
                     },
-                    "jobType": "conformance.fail",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.fail",
                     "workerId": "conformance-worker",
                     "durationMs": null,
                     "fenceToken": null,
@@ -2162,16 +2162,16 @@
                     },
                     "kind": "attempt",
                     "type": "failed",
-                    "jobId": {
-                      "$ref": "failedJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "failedTask"
+                    },
                     "attempt": 1,
                     "details": null,
-                    "jobType": "conformance.fail",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.fail",
                     "workerId": "conformance-worker",
                     "durationMs": {
                       "$type": "integer"
@@ -2188,10 +2188,10 @@
                     },
                     "kind": "event",
                     "type": "claimed",
-                    "jobId": {
-                      "$ref": "failedJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "failedTask"
+                    },
                     "attempt": 1,
                     "details": {
                       "worker_id": "conformance-worker",
@@ -2200,10 +2200,10 @@
                       },
                       "fence_token": "2"
                     },
-                    "jobType": "conformance.fail",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.fail",
                     "workerId": "conformance-worker",
                     "durationMs": null,
                     "fenceToken": null,
@@ -2218,10 +2218,10 @@
                     },
                     "kind": "event",
                     "type": "enqueued",
-                    "jobId": {
-                      "$ref": "failedJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "failedTask"
+                    },
                     "attempt": null,
                     "details": {
                       "state": "ready",
@@ -2232,10 +2232,10 @@
                       "deadline_at": null,
                       "execution_timeout_ms": null
                     },
-                    "jobType": "conformance.fail",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.fail",
                     "workerId": null,
                     "durationMs": null,
                     "fenceToken": null,
@@ -2250,18 +2250,18 @@
                     },
                     "kind": "event",
                     "type": "succeeded",
-                    "jobId": {
-                      "$ref": "succeededJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "succeededTask"
+                    },
                     "attempt": 1,
                     "details": {
                       "fence_token": "1"
                     },
-                    "jobType": "conformance.succeed",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.succeed",
                     "workerId": "conformance-worker",
                     "durationMs": null,
                     "fenceToken": null,
@@ -2276,16 +2276,16 @@
                     },
                     "kind": "attempt",
                     "type": "succeeded",
-                    "jobId": {
-                      "$ref": "succeededJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "succeededTask"
+                    },
                     "attempt": 1,
                     "details": null,
-                    "jobType": "conformance.succeed",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.succeed",
                     "workerId": "conformance-worker",
                     "durationMs": {
                       "$type": "integer"
@@ -2302,10 +2302,10 @@
                     },
                     "kind": "event",
                     "type": "claimed",
-                    "jobId": {
-                      "$ref": "succeededJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "succeededTask"
+                    },
                     "attempt": 1,
                     "details": {
                       "worker_id": "conformance-worker",
@@ -2314,10 +2314,10 @@
                       },
                       "fence_token": "1"
                     },
-                    "jobType": "conformance.succeed",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.succeed",
                     "workerId": "conformance-worker",
                     "durationMs": null,
                     "fenceToken": null,
@@ -2330,7 +2330,7 @@
                 "window": "1h",
                 "pageSize": 25,
                 "retention": {
-                  "jobEventDays": 14,
+                  "taskEventDays": 14,
                   "attemptHistoryDays": 14
                 },
                 "capturedAt": {
@@ -2368,10 +2368,10 @@
                 "kind": "event",
                 "type": "failed",
                 "error": null,
-                "jobId": {
-                  "$ref": "redriveBatchJob"
-                },
                 "queue": "conformance-redrive",
+                "taskId": {
+                  "$ref": "redriveBatchTask"
+                },
                 "attempt": 1,
                 "details": {
                   "error": {
@@ -2379,10 +2379,10 @@
                     "message": "conformance.redrive.batch failed"
                   }
                 },
-                "jobType": "conformance.redrive.batch",
                 "recordId": {
                   "$type": "uuid"
                 },
+                "taskType": "conformance.redrive.batch",
                 "workerId": "conformance-worker",
                 "claimedAt": null,
                 "startedAt": null,
@@ -2634,7 +2634,7 @@
                   },
                   "dependencies": {
                     "capped": false,
-                    "blockedJobs": 0,
+                    "blockedTasks": 0,
                     "pendingEdges": 0,
                     "failedResolutions": 0,
                     "retentionPruneStarved": false
@@ -4140,7 +4140,7 @@
                         "deadRows": {
                           "$type": "integer"
                         },
-                        "relation": "job_event",
+                        "relation": "task_event",
                         "indexBytes": {
                           "$type": "integer"
                         },
@@ -4180,7 +4180,7 @@
                         "deadRows": {
                           "$type": "integer"
                         },
-                        "relation": "job_runtime",
+                        "relation": "task_runtime",
                         "indexBytes": {
                           "$type": "integer"
                         },
@@ -4200,7 +4200,7 @@
                         "deadRows": {
                           "$type": "integer"
                         },
-                        "relation": "job_outcome",
+                        "relation": "task_outcome",
                         "indexBytes": {
                           "$type": "integer"
                         },
@@ -4220,7 +4220,7 @@
                         "deadRows": {
                           "$type": "integer"
                         },
-                        "relation": "job_query",
+                        "relation": "task_query",
                         "indexBytes": {
                           "$type": "integer"
                         },
@@ -4240,7 +4240,7 @@
                         "deadRows": {
                           "$type": "integer"
                         },
-                        "relation": "job",
+                        "relation": "task",
                         "indexBytes": {
                           "$type": "integer"
                         },
@@ -4280,7 +4280,7 @@
                         "deadRows": {
                           "$type": "integer"
                         },
-                        "relation": "job_stat_bucket",
+                        "relation": "task_stat_bucket",
                         "indexBytes": {
                           "$type": "integer"
                         },
@@ -4300,7 +4300,7 @@
                         "deadRows": {
                           "$type": "integer"
                         },
-                        "relation": "job_stat_bucket_hour",
+                        "relation": "task_stat_bucket_hour",
                         "indexBytes": {
                           "$type": "integer"
                         },
@@ -4320,7 +4320,7 @@
                         "deadRows": {
                           "$type": "integer"
                         },
-                        "relation": "job_stat_bucket_day",
+                        "relation": "task_stat_bucket_day",
                         "indexBytes": {
                           "$type": "integer"
                         },
@@ -4343,7 +4343,7 @@
                     "categories": [
                       {
                         "lagMs": null,
-                        "category": "jobIdentity",
+                        "category": "taskIdentity",
                         "retentionDays": 14,
                         "oldestRetainedAt": {
                           "$type": "timestamp"
@@ -4361,7 +4361,7 @@
                       },
                       {
                         "lagMs": 0,
-                        "category": "jobEvents",
+                        "category": "taskEvents",
                         "retentionDays": 14,
                         "oldestRetainedAt": {
                           "$type": "timestamp"
@@ -4400,16 +4400,16 @@
                       "$type": "timestamp"
                     },
                     "defaultHistoryRows": {
-                      "jobEvents": 0,
+                      "taskEvents": 0,
                       "attemptHistory": 0
                     },
-                    "oldestRetainedCategory": "jobIdentity",
+                    "oldestRetainedCategory": "taskIdentity",
                     "defaultHistoryRowsCapped": {
-                      "jobEvents": false,
+                      "taskEvents": false,
                       "attemptHistory": false
                     },
                     "eligibleHistoryPartitions": {
-                      "jobEvents": 0,
+                      "taskEvents": 0,
                       "attemptHistory": 0
                     }
                   },
@@ -4570,13 +4570,13 @@
                     "startedAt": {
                       "$type": "timestamp"
                     },
-                    "activeJobs": 0,
                     "lastSeenAt": {
                       "$type": "timestamp"
                     },
                     "registered": true,
                     "sdkVersion": "1.2.3",
                     "activeSlots": 0,
+                    "activeTasks": 0,
                     "concurrency": 2,
                     "sdkLanguage": "conformance-sdk",
                     "failedAttempts": 3,
@@ -4633,10 +4633,6 @@
                     "$type": "timestamp"
                   },
                   "provenance": {
-                    "jobEventRetentionDays": {
-                      "source": "application",
-                      "applicationDefault": 14
-                    },
                     "occurrenceRowsPerPass": {
                       "source": "application",
                       "applicationDefault": 10000
@@ -4645,7 +4641,11 @@
                       "source": "application",
                       "applicationDefault": 10000
                     },
-                    "terminalJobPruneLimit": {
+                    "taskEventRetentionDays": {
+                      "source": "application",
+                      "applicationDefault": 14
+                    },
+                    "terminalTaskPruneLimit": {
                       "source": "application",
                       "applicationDefault": 1000
                     },
@@ -4657,7 +4657,7 @@
                       "source": "application",
                       "applicationDefault": 4
                     },
-                    "jobIdentityRetentionDays": {
+                    "taskIdentityRetentionDays": {
                       "source": "application",
                       "applicationDefault": 14
                     },
@@ -4678,13 +4678,13 @@
                       "applicationDefault": 14
                     }
                   },
-                  "jobEventRetentionDays": 14,
                   "occurrenceRowsPerPass": 10000,
                   "statisticsRowsPerPass": 10000,
-                  "terminalJobPruneLimit": 1000,
+                  "taskEventRetentionDays": 14,
+                  "terminalTaskPruneLimit": 1000,
                   "statisticsRetentionDays": 14,
                   "historyPartitionsPerPass": 4,
-                  "jobIdentityRetentionDays": 14,
+                  "taskIdentityRetentionDays": 14,
                   "attemptHistoryRetentionDays": 14,
                   "defaultPartitionRowsPerPass": 10000,
                   "terminalOutcomeRetentionDays": 14,
@@ -4756,15 +4756,15 @@
                     }
                   },
                   "enqueueRate": {
-                    "jobs": 10,
+                    "tasks": 10,
                     "windowMs": 3600000
                   },
                   "defaultHistoryRows": {
-                    "jobEvents": 0,
+                    "taskEvents": 0,
                     "attemptHistory": 0
                   },
                   "defaultHistoryRowsCapped": {
-                    "jobEvents": false,
+                    "taskEvents": false,
                     "attemptHistory": false
                   }
                 }
@@ -4790,15 +4790,15 @@
             "body": {
               "json": {
                 "eligible": {
-                  "terminalJobs": 0,
-                  "jobEvents": 0,
+                  "terminalTasks": 0,
+                  "taskEvents": 0,
                   "attemptHistory": 0,
                   "scheduleOccurrences": 0,
                   "statistics": 0
                 },
                 "capped": {
-                  "terminalJobs": false,
-                  "jobEvents": false,
+                  "terminalTasks": false,
+                  "taskEvents": false,
                   "attemptHistory": false,
                   "scheduleOccurrences": false,
                   "statistics": false
@@ -4808,12 +4808,12 @@
           }
         },
         {
-          "id": "job-detail",
-          "procedure": "jobDetail",
+          "id": "task-detail",
+          "procedure": "taskDetail",
           "request": {
             "json": {
               "id": {
-                "$ref": "succeededJob"
+                "$ref": "succeededTask"
               }
             }
           },
@@ -4925,7 +4925,7 @@
                 ],
                 "identity": {
                   "id": {
-                    "$ref": "succeededJob"
+                    "$ref": "succeededTask"
                   },
                   "type": "conformance.succeed",
                   "queue": "conformance",
@@ -4940,9 +4940,9 @@
                   "blockedReason": null,
                   "concurrencyKey": null,
                   "dependencyPolicy": null,
-                  "prerequisiteJobId": null,
                   "executionTimeoutMs": null,
-                  "prerequisiteJobIds": [],
+                  "prerequisiteTaskId": null,
+                  "prerequisiteTaskIds": [],
                   "dependencyReleasedAt": null
                 },
                 "progress": null,
@@ -4981,15 +4981,15 @@
                 "waits": [
                   {
                     "name": "review",
-                    "jobId": {
-                      "$ref": "humanJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "humanTask"
+                    },
                     "attempt": 1,
                     "context": {
                       "question": "Approve the conformance run?"
                     },
-                    "jobType": "conformance.human",
+                    "taskType": "conformance.human",
                     "createdAt": {
                       "$type": "timestamp"
                     },
@@ -5016,12 +5016,12 @@
                 "signalWaits": [
                   {
                     "name": "approval",
-                    "jobId": {
-                      "$ref": "signalJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "signalTask"
+                    },
                     "attempt": 1,
-                    "jobType": "conformance.signal",
+                    "taskType": "conformance.signal",
                     "createdAt": {
                       "$type": "timestamp"
                     },
@@ -5044,10 +5044,14 @@
             "status": 200,
             "body": {
               "json": {
-                "jobs": [
+                "page": 1,
+                "sort": "updated",
+                "tags": [],
+                "queue": null,
+                "tasks": [
                   {
                     "id": {
-                      "$ref": "redriveBatchJob"
+                      "$ref": "redriveBatchTask"
                     },
                     "tags": [],
                     "type": "conformance.redrive.batch",
@@ -5084,11 +5088,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "redriveOneJob"
+                      "$ref": "redriveOneTask"
                     },
                     "tags": [],
                     "type": "conformance.redrive.one",
@@ -5125,11 +5129,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "purgeTargetJob"
+                      "$ref": "purgeTargetTask"
                     },
                     "tags": [],
                     "type": "conformance.purge",
@@ -5164,11 +5168,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "cancelTargetJob"
+                      "$ref": "cancelTargetTask"
                     },
                     "tags": [],
                     "type": "conformance.cancel-target",
@@ -5203,11 +5207,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "scheduledJob"
+                      "$ref": "scheduledTask"
                     },
                     "tags": [],
                     "type": "conformance.scheduled",
@@ -5240,11 +5244,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "readyJob"
+                      "$ref": "readyTask"
                     },
                     "tags": [
                       "conformance"
@@ -5281,11 +5285,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "humanJob"
+                      "$ref": "humanTask"
                     },
                     "tags": [],
                     "type": "conformance.human",
@@ -5326,11 +5330,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "signalJob"
+                      "$ref": "signalTask"
                     },
                     "tags": [],
                     "type": "conformance.signal",
@@ -5368,11 +5372,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "failedJob"
+                      "$ref": "failedTask"
                     },
                     "tags": [],
                     "type": "conformance.fail",
@@ -5409,11 +5413,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "succeededJob"
+                      "$ref": "succeededTask"
                     },
                     "tags": [
                       "conformance"
@@ -5452,20 +5456,16 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   }
                 ],
-                "page": 1,
-                "sort": "updated",
-                "tags": [],
-                "queue": null,
                 "total": null,
                 "filter": "all",
                 "search": null,
                 "worker": null,
-                "jobType": null,
                 "pageSize": 50,
                 "priority": null,
+                "taskType": null,
                 "capturedAt": {
                   "$type": "timestamp"
                 },
@@ -5516,8 +5516,8 @@
           }
         },
         {
-          "id": "job-detail-not-found",
-          "procedure": "jobDetail",
+          "id": "task-detail-not-found",
+          "procedure": "taskDetail",
           "request": {
             "json": {
               "id": "00000000-0000-4000-8000-00000000dead"
@@ -5985,7 +5985,7 @@
           "request": {
             "json": {
               "queue": "conformance-redrive",
-              "jobType": null,
+              "taskType": null,
               "tags": [],
               "limit": 10,
               "cursor": null,
@@ -6382,10 +6382,14 @@
             "status": 200,
             "body": {
               "json": {
-                "jobs": [
+                "page": 1,
+                "sort": "updated",
+                "tags": [],
+                "queue": null,
+                "tasks": [
                   {
                     "id": {
-                      "$ref": "redriveBatchJob"
+                      "$ref": "redriveBatchTask"
                     },
                     "tags": [],
                     "type": "conformance.redrive.batch",
@@ -6422,11 +6426,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "redriveOneJob"
+                      "$ref": "redriveOneTask"
                     },
                     "tags": [],
                     "type": "conformance.redrive.one",
@@ -6463,11 +6467,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "purgeTargetJob"
+                      "$ref": "purgeTargetTask"
                     },
                     "tags": [],
                     "type": "conformance.purge",
@@ -6502,11 +6506,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "cancelTargetJob"
+                      "$ref": "cancelTargetTask"
                     },
                     "tags": [],
                     "type": "conformance.cancel-target",
@@ -6541,11 +6545,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "scheduledJob"
+                      "$ref": "scheduledTask"
                     },
                     "tags": [],
                     "type": "conformance.scheduled",
@@ -6578,11 +6582,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "readyJob"
+                      "$ref": "readyTask"
                     },
                     "tags": [
                       "conformance"
@@ -6619,11 +6623,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "humanJob"
+                      "$ref": "humanTask"
                     },
                     "tags": [],
                     "type": "conformance.human",
@@ -6664,11 +6668,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "signalJob"
+                      "$ref": "signalTask"
                     },
                     "tags": [],
                     "type": "conformance.signal",
@@ -6706,11 +6710,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "failedJob"
+                      "$ref": "failedTask"
                     },
                     "tags": [],
                     "type": "conformance.fail",
@@ -6747,11 +6751,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "succeededJob"
+                      "$ref": "succeededTask"
                     },
                     "tags": [
                       "conformance"
@@ -6790,20 +6794,16 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   }
                 ],
-                "page": 1,
-                "sort": "updated",
-                "tags": [],
-                "queue": null,
                 "total": 10,
                 "filter": "all",
                 "search": null,
                 "worker": null,
-                "jobType": null,
                 "pageSize": 50,
                 "priority": null,
+                "taskType": null,
                 "capturedAt": {
                   "$type": "timestamp"
                 },
@@ -6834,13 +6834,13 @@
                     "startedAt": {
                       "$type": "timestamp"
                     },
-                    "activeJobs": 0,
                     "lastSeenAt": {
                       "$type": "timestamp"
                     },
                     "registered": true,
                     "sdkVersion": "1.2.3",
                     "activeSlots": 0,
+                    "activeTasks": 0,
                     "concurrency": 2,
                     "sdkLanguage": "conformance-sdk",
                     "failedAttempts": 3,
@@ -6898,10 +6898,6 @@
                     "$type": "timestamp"
                   },
                   "provenance": {
-                    "jobEventRetentionDays": {
-                      "source": "application",
-                      "applicationDefault": 14
-                    },
                     "occurrenceRowsPerPass": {
                       "source": "application",
                       "applicationDefault": 10000
@@ -6910,7 +6906,11 @@
                       "source": "application",
                       "applicationDefault": 10000
                     },
-                    "terminalJobPruneLimit": {
+                    "taskEventRetentionDays": {
+                      "source": "application",
+                      "applicationDefault": 14
+                    },
+                    "terminalTaskPruneLimit": {
                       "source": "application",
                       "applicationDefault": 1000
                     },
@@ -6922,7 +6922,7 @@
                       "source": "application",
                       "applicationDefault": 4
                     },
-                    "jobIdentityRetentionDays": {
+                    "taskIdentityRetentionDays": {
                       "source": "application",
                       "applicationDefault": 14
                     },
@@ -6943,13 +6943,13 @@
                       "applicationDefault": 14
                     }
                   },
-                  "jobEventRetentionDays": 14,
                   "occurrenceRowsPerPass": 10000,
                   "statisticsRowsPerPass": 10000,
-                  "terminalJobPruneLimit": 1000,
+                  "taskEventRetentionDays": 14,
+                  "terminalTaskPruneLimit": 1000,
                   "statisticsRetentionDays": 14,
                   "historyPartitionsPerPass": 4,
-                  "jobIdentityRetentionDays": 14,
+                  "taskIdentityRetentionDays": 14,
                   "attemptHistoryRetentionDays": 14,
                   "defaultPartitionRowsPerPass": 10000,
                   "terminalOutcomeRetentionDays": 14,
@@ -7021,15 +7021,15 @@
                     }
                   },
                   "enqueueRate": {
-                    "jobs": 10,
+                    "tasks": 10,
                     "windowMs": 3600000
                   },
                   "defaultHistoryRows": {
-                    "jobEvents": 0,
+                    "taskEvents": 0,
                     "attemptHistory": 0
                   },
                   "defaultHistoryRowsCapped": {
-                    "jobEvents": false,
+                    "taskEvents": false,
                     "attemptHistory": false
                   }
                 }
@@ -7052,15 +7052,15 @@
                 "waits": [
                   {
                     "name": "review",
-                    "jobId": {
-                      "$ref": "humanJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "humanTask"
+                    },
                     "attempt": 1,
                     "context": {
                       "question": "Approve the conformance run?"
                     },
-                    "jobType": "conformance.human",
+                    "taskType": "conformance.human",
                     "createdAt": {
                       "$type": "timestamp"
                     },
@@ -7087,12 +7087,12 @@
                 "signalWaits": [
                   {
                     "name": "approval",
-                    "jobId": {
-                      "$ref": "signalJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "signalTask"
+                    },
                     "attempt": 1,
-                    "jobType": "conformance.signal",
+                    "taskType": "conformance.signal",
                     "createdAt": {
                       "$type": "timestamp"
                     },
@@ -7137,7 +7137,7 @@
           "request": {
             "json": {
               "queue": "conformance-redrive",
-              "jobType": null,
+              "taskType": null,
               "tags": [],
               "limit": 10,
               "cursor": null,
@@ -7172,10 +7172,14 @@
             "status": 200,
             "body": {
               "json": {
-                "jobs": [
+                "page": 1,
+                "sort": "updated",
+                "tags": [],
+                "queue": null,
+                "tasks": [
                   {
                     "id": {
-                      "$ref": "redriveBatchJob"
+                      "$ref": "redriveBatchTask"
                     },
                     "tags": [],
                     "type": "conformance.redrive.batch",
@@ -7212,11 +7216,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "redriveOneJob"
+                      "$ref": "redriveOneTask"
                     },
                     "tags": [],
                     "type": "conformance.redrive.one",
@@ -7253,11 +7257,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "purgeTargetJob"
+                      "$ref": "purgeTargetTask"
                     },
                     "tags": [],
                     "type": "conformance.purge",
@@ -7292,11 +7296,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "cancelTargetJob"
+                      "$ref": "cancelTargetTask"
                     },
                     "tags": [],
                     "type": "conformance.cancel-target",
@@ -7331,11 +7335,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "scheduledJob"
+                      "$ref": "scheduledTask"
                     },
                     "tags": [],
                     "type": "conformance.scheduled",
@@ -7368,11 +7372,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "readyJob"
+                      "$ref": "readyTask"
                     },
                     "tags": [
                       "conformance"
@@ -7409,11 +7413,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "humanJob"
+                      "$ref": "humanTask"
                     },
                     "tags": [],
                     "type": "conformance.human",
@@ -7454,11 +7458,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "signalJob"
+                      "$ref": "signalTask"
                     },
                     "tags": [],
                     "type": "conformance.signal",
@@ -7496,11 +7500,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "failedJob"
+                      "$ref": "failedTask"
                     },
                     "tags": [],
                     "type": "conformance.fail",
@@ -7537,11 +7541,11 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   },
                   {
                     "id": {
-                      "$ref": "succeededJob"
+                      "$ref": "succeededTask"
                     },
                     "tags": [
                       "conformance"
@@ -7580,20 +7584,16 @@
                     "lastWorkerId": null,
                     "blockedReason": null,
                     "executionTimeoutMs": null,
-                    "prerequisiteJobIds": []
+                    "prerequisiteTaskIds": []
                   }
                 ],
-                "page": 1,
-                "sort": "updated",
-                "tags": [],
-                "queue": null,
                 "total": null,
                 "filter": "all",
                 "search": null,
                 "worker": null,
-                "jobType": null,
                 "pageSize": 50,
                 "priority": null,
+                "taskType": null,
                 "capturedAt": {
                   "$type": "timestamp"
                 },
@@ -7627,7 +7627,7 @@
             "status": 200,
             "body": {
               "json": {
-                "jobId": {
+                "taskId": {
                   "$type": "uuid"
                 }
               }
@@ -7653,7 +7653,7 @@
             "status": 200,
             "body": {
               "json": {
-                "jobId": {
+                "taskId": {
                   "$type": "uuid"
                 }
               }
@@ -7839,7 +7839,7 @@
           "request": {
             "json": {
               "id": {
-                "$ref": "scheduledJob"
+                "$ref": "scheduledTask"
               },
               "audit": {
                 "actor": "browser-operator",
@@ -7854,7 +7854,7 @@
               "json": {
                 "status": "released",
                 "id": {
-                  "$ref": "scheduledJob"
+                  "$ref": "scheduledTask"
                 },
                 "state": "ready",
                 "runAt": {
@@ -7874,8 +7874,8 @@
               "types": [
                 "promoted"
               ],
-              "jobId": {
-                "$ref": "scheduledJob"
+              "taskId": {
+                "$ref": "scheduledTask"
               }
             }
           },
@@ -7892,10 +7892,10 @@
                     },
                     "kind": "event",
                     "type": "promoted",
-                    "jobId": {
-                      "$ref": "scheduledJob"
-                    },
                     "queue": "conformance",
+                    "taskId": {
+                      "$ref": "scheduledTask"
+                    },
                     "attempt": 1,
                     "details": {
                       "reason": "manual",
@@ -7905,10 +7905,10 @@
                       "request_id_length": 19,
                       "request_id_preview": "conforma…uest"
                     },
-                    "jobType": "conformance.scheduled",
                     "recordId": {
                       "$type": "uuid"
                     },
+                    "taskType": "conformance.scheduled",
                     "workerId": null,
                     "durationMs": null,
                     "fenceToken": null,
@@ -7921,7 +7921,7 @@
                 "window": "1h",
                 "pageSize": 25,
                 "retention": {
-                  "jobEventDays": 14,
+                  "taskEventDays": 14,
                   "attemptHistoryDays": 14
                 },
                 "capturedAt": {
@@ -7938,7 +7938,7 @@
           "request": {
             "json": {
               "id": {
-                "$ref": "scheduledJob"
+                "$ref": "scheduledTask"
               },
               "audit": {
                 "actor": "browser-operator",
@@ -7953,7 +7953,7 @@
               "json": {
                 "status": "already_ready",
                 "id": {
-                  "$ref": "scheduledJob"
+                  "$ref": "scheduledTask"
                 },
                 "state": "ready",
                 "runAt": {
@@ -7969,7 +7969,7 @@
           "request": {
             "json": {
               "id": {
-                "$ref": "readyJob"
+                "$ref": "readyTask"
               },
               "audit": {
                 "actor": "browser-operator",
@@ -7984,7 +7984,7 @@
               "json": {
                 "status": "already_ready",
                 "id": {
-                  "$ref": "readyJob"
+                  "$ref": "readyTask"
                 },
                 "state": "ready",
                 "runAt": {
@@ -8000,7 +8000,7 @@
           "request": {
             "json": {
               "id": {
-                "$ref": "signalJob"
+                "$ref": "signalTask"
               },
               "audit": {
                 "actor": "browser-operator",
@@ -8015,7 +8015,7 @@
               "json": {
                 "status": "waiting",
                 "id": {
-                  "$ref": "signalJob"
+                  "$ref": "signalTask"
                 },
                 "state": "scheduled",
                 "runAt": "9999-12-31T00:00:00.000Z"
@@ -8029,7 +8029,7 @@
           "request": {
             "json": {
               "id": {
-                "$ref": "cancelTargetJob"
+                "$ref": "cancelTargetTask"
               },
               "audit": {
                 "actor": "browser-operator",
@@ -8043,8 +8043,8 @@
             "body": {
               "json": {
                 "status": "canceled",
-                "jobId": {
-                  "$ref": "cancelTargetJob"
+                "taskId": {
+                  "$ref": "cancelTargetTask"
                 },
                 "state": "canceled",
                 "currentAttempt": 1,
@@ -8066,7 +8066,7 @@
           "request": {
             "json": {
               "id": {
-                "$ref": "signalJob"
+                "$ref": "signalTask"
               },
               "name": "approval",
               "payload": {
@@ -8085,8 +8085,8 @@
             "body": {
               "json": {
                 "status": "delivered",
-                "jobId": {
-                  "$ref": "signalJob"
+                "taskId": {
+                  "$ref": "signalTask"
                 },
                 "name": "approval",
                 "payload": {
@@ -8106,7 +8106,7 @@
           "request": {
             "json": {
               "id": {
-                "$ref": "humanJob"
+                "$ref": "humanTask"
               },
               "name": "review",
               "result": {
@@ -8125,8 +8125,8 @@
             "body": {
               "json": {
                 "status": "completed",
-                "jobId": {
-                  "$ref": "humanJob"
+                "taskId": {
+                  "$ref": "humanTask"
                 },
                 "name": "review",
                 "completedAt": {
@@ -8146,7 +8146,7 @@
           "request": {
             "json": {
               "id": {
-                "$ref": "redriveOneJob"
+                "$ref": "redriveOneTask"
               },
               "audit": {
                 "actor": "browser-operator",
@@ -8160,10 +8160,10 @@
             "body": {
               "json": {
                 "status": "redriven",
-                "sourceJobId": {
-                  "$ref": "redriveOneJob"
+                "sourceTaskId": {
+                  "$ref": "redriveOneTask"
                 },
-                "targetJobId": {
+                "targetTaskId": {
                   "$type": "uuid"
                 },
                 "sourceState": "failed",
@@ -8181,7 +8181,7 @@
           "request": {
             "json": {
               "id": {
-                "$ref": "redriveOneJob"
+                "$ref": "redriveOneTask"
               },
               "audit": {
                 "actor": "browser-operator",
@@ -8195,10 +8195,10 @@
             "body": {
               "json": {
                 "status": "replayed",
-                "sourceJobId": {
-                  "$ref": "redriveOneJob"
+                "sourceTaskId": {
+                  "$ref": "redriveOneTask"
                 },
-                "targetJobId": {
+                "targetTaskId": {
                   "$type": "uuid"
                 },
                 "sourceState": "failed",
@@ -8216,7 +8216,7 @@
           "request": {
             "json": {
               "queue": "conformance-redrive",
-              "jobType": "conformance.redrive.batch",
+              "taskType": "conformance.redrive.batch",
               "tags": [],
               "limit": 10,
               "cursor": null,
@@ -8234,10 +8234,10 @@
                 "results": [
                   {
                     "status": "redriven",
-                    "sourceJobId": {
-                      "$ref": "redriveBatchJob"
+                    "sourceTaskId": {
+                      "$ref": "redriveBatchTask"
                     },
-                    "targetJobId": {
+                    "targetTaskId": {
                       "$type": "uuid"
                     },
                     "sourceState": "failed",

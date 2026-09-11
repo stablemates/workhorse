@@ -11,7 +11,7 @@ import {
   ChildConflictError,
   HumanWaitAlreadyWaitingError,
   HumanWaitConflictError,
-  JobValueSizeLimitError,
+  TaskValueSizeLimitError,
   SignalIdempotencyConflictError,
   SignalWaitConflictError,
   SignalWaitLeaseLostError,
@@ -33,18 +33,18 @@ class AdapterError extends Error {
 
 describe("WorkhorseError", () => {
   it.each([
-    ["CheckpointConflictError", new CheckpointConflictError("job", "checkpoint")],
-    ["ChildConflictError", new ChildConflictError("job", "child")],
-    ["HumanWaitAlreadyWaitingError", new HumanWaitAlreadyWaitingError("job", "decision")],
-    ["HumanWaitConflictError", new HumanWaitConflictError("job", "decision")],
-    ["SignalIdempotencyConflictError", new SignalIdempotencyConflictError("job", "signal")],
-    ["SignalWaitConflictError", new SignalWaitConflictError("job", "signal")],
-    ["SignalWaitLeaseLostError", new SignalWaitLeaseLostError("job", "signal")],
-    ["SignalWaitLimitExceededError", new SignalWaitLimitExceededError("job")],
-    ["WaitLimitExceededError", new WaitLimitExceededError("job")],
-    ["JobValueSizeLimitError", new JobValueSizeLimitError("type", "payload", 2, 1)],
-    ["CancellationRequestedError", new CancellationRequestedError("job")],
-    ["ExecutionTimeoutError", new ExecutionTimeoutError("job", 1)],
+    ["CheckpointConflictError", new CheckpointConflictError("task", "checkpoint")],
+    ["ChildConflictError", new ChildConflictError("task", "child")],
+    ["HumanWaitAlreadyWaitingError", new HumanWaitAlreadyWaitingError("task", "decision")],
+    ["HumanWaitConflictError", new HumanWaitConflictError("task", "decision")],
+    ["SignalIdempotencyConflictError", new SignalIdempotencyConflictError("task", "signal")],
+    ["SignalWaitConflictError", new SignalWaitConflictError("task", "signal")],
+    ["SignalWaitLeaseLostError", new SignalWaitLeaseLostError("task", "signal")],
+    ["SignalWaitLimitExceededError", new SignalWaitLimitExceededError("task")],
+    ["WaitLimitExceededError", new WaitLimitExceededError("task")],
+    ["TaskValueSizeLimitError", new TaskValueSizeLimitError("type", "payload", 2, 1)],
+    ["CancellationRequestedError", new CancellationRequestedError("task")],
+    ["ExecutionTimeoutError", new ExecutionTimeoutError("task", 1)],
     ["MissingRowError", new MissingRowError("workhorse.promote_v1")],
   ])("%s shares the common base", (name, error) => {
     expect(error).toBeInstanceOf(WorkhorseError);
@@ -57,10 +57,10 @@ describe("WorkhorseError", () => {
   });
 
   it("uses waitName for signal and human-wait error context", () => {
-    expect(new SignalWaitLeaseLostError("job", "signal")).toMatchObject({
+    expect(new SignalWaitLeaseLostError("task", "signal")).toMatchObject({
       waitName: "signal",
     });
-    expect(new HumanWaitConflictError("job", "decision")).toMatchObject({
+    expect(new HumanWaitConflictError("task", "decision")).toMatchObject({
       waitName: "decision",
     });
   });

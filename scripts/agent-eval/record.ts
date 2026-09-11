@@ -112,7 +112,7 @@ async function run(taskId: string, runName: string, model: string): Promise<void
   // URL; a repository-start task is told where it is and that it was given none.
   const start =
     task.startUrl === null
-      ? "The application's repository is your working directory. It already depends on the job library you should use. You were given no documentation URL."
+      ? "The application's repository is your working directory. It already depends on the task library you should use. You were given no documentation URL."
       : `Start here: ${task.startUrl}`;
   const prompt = [taskText, `Write it in ${task.language}.`, start].join("\n\n");
 

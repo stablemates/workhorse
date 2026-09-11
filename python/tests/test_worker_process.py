@@ -112,13 +112,13 @@ def test_signal_between_handler_installation_and_worker_run_is_not_lost() -> Non
 
 @pytest.mark.integration
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process signals are required")
-def test_killed_worker_job_is_recovered_and_completed_once(
+def test_killed_worker_task_is_recovered_and_completed_once(
     database_url: str,
     tmp_path: Path,
 ) -> None:
     started = tmp_path / "handler-started"
     with psycopg.connect(database_url) as enqueue_connection:
-        job_id = Queue(enqueue_connection).enqueue("process.crash-recovery", {})
+        task_id = Queue(enqueue_connection).enqueue("process.crash-recovery", {})
         enqueue_connection.commit()
 
     crashed = subprocess.Popen(
@@ -149,9 +149,9 @@ def test_killed_worker_job_is_recovered_and_completed_once(
             ).handle("process.crash-recovery", complete)
             eventually(worker.run_once, "the killed worker's lease was never recovered")
             outcome = recovery_connection.execute(
-                "SELECT state, current_attempt, result FROM workhorse.job_outcome "
-                "WHERE job_id = %s",
-                (job_id,),
+                "SELECT state, current_attempt, result FROM workhorse.task_outcome "
+                "WHERE task_id = %s",
+                (task_id,),
             ).fetchone()
             assert outcome == ("succeeded", 2, {"recovered": True})
             assert completions == 1

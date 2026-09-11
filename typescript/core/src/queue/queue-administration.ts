@@ -13,8 +13,8 @@ export class QueueAdministrationModule extends QueueModule {
     );
     const count = expectOneRow(result, "workhorse.promote_v1").count;
     if (count > 0) {
-      logInfo("workhorse.jobs.promoted", "Scheduled jobs promoted", {
-        "workhorse.job.count": count,
+      logInfo("workhorse.tasks.promoted", "Scheduled tasks promoted", {
+        "workhorse.task.count": count,
       });
     }
     return count;

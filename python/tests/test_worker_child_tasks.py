@@ -5,10 +5,10 @@ import pytest
 
 from workhorse import (
     ChildConflictError,
-    ChildJobRequest,
     ChildLeaseLostError,
     ChildLimitExceededError,
     ChildResultLimitExceededError,
+    ChildTaskRequest,
     EnqueueOptions,
     HandlerContext,
     Queue,
@@ -17,7 +17,7 @@ from workhorse import (
 )
 
 
-def test_child_job_suspends_the_parent_and_replays_its_retained_result(
+def test_child_task_suspends_the_parent_and_replays_its_retained_result(
     database_url: str,
 ) -> None:
     activations = 0
@@ -58,7 +58,7 @@ def test_child_job_suspends_the_parent_and_replays_its_retained_result(
 
         assert parent_worker.run_once() is True
         assert parent_connection.execute(
-            "SELECT state, worker_id FROM workhorse.job_runtime WHERE job_id = %s",
+            "SELECT state, worker_id FROM workhorse.task_runtime WHERE task_id = %s",
             (parent_id,),
         ).fetchone() == ("blocked", None)
 
@@ -66,7 +66,7 @@ def test_child_job_suspends_the_parent_and_replays_its_retained_result(
         assert parent_worker.run_once() is True
         assert activations == 2
         assert parent_connection.execute(
-            "SELECT state, result FROM workhorse.job_outcome WHERE job_id = %s",
+            "SELECT state, result FROM workhorse.task_outcome WHERE task_id = %s",
             (parent_id,),
         ).fetchone() == ("succeeded", {"receiptId": "receipt-1"})
 
@@ -91,13 +91,13 @@ def test_child_fan_out_joins_results_by_stable_name(database_url: str) -> None:
             activations += 1
             return context.run_children(
                 (
-                    ChildJobRequest(
+                    ChildTaskRequest(
                         "first",
                         "fan-out-child",
                         {"value": 1},
                         EnqueueOptions(queue="fan-out-children"),
                     ),
-                    ChildJobRequest(
+                    ChildTaskRequest(
                         "second",
                         "fan-out-child",
                         {"value": 2},
@@ -125,7 +125,7 @@ def test_child_fan_out_joins_results_by_stable_name(database_url: str) -> None:
         assert parent_worker.run_once() is True
         assert activations == 2
         assert parent_connection.execute(
-            "SELECT state, result FROM workhorse.job_outcome WHERE job_id = %s",
+            "SELECT state, result FROM workhorse.task_outcome WHERE task_id = %s",
             (parent_id,),
         ).fetchone() == (
             "succeeded",
@@ -154,7 +154,7 @@ def test_empty_child_fan_out_completes_without_replay(database_url: str) -> None
         assert Worker(worker_connection).handle("empty-fan-out", handle).run_once() is True
         assert activations == 1
         assert worker_connection.execute(
-            "SELECT state, result FROM workhorse.job_outcome WHERE job_id = %s",
+            "SELECT state, result FROM workhorse.task_outcome WHERE task_id = %s",
             (parent_id,),
         ).fetchone() == ("succeeded", {})
 
@@ -175,19 +175,19 @@ def test_child_fan_out_returns_mixed_settled_outcomes(database_url: str) -> None
         def handle_parent(_payload: object, context: HandlerContext) -> object:
             outcomes = context.run_children(
                 (
-                    ChildJobRequest(
+                    ChildTaskRequest(
                         "accepted",
                         "settled-child",
                         {"kind": "success"},
                         EnqueueOptions(queue="python-settled-children", max_attempts=1),
                     ),
-                    ChildJobRequest(
+                    ChildTaskRequest(
                         "rejected",
                         "settled-child",
                         {"kind": "failure"},
                         EnqueueOptions(queue="python-settled-children", max_attempts=1),
                     ),
-                    ChildJobRequest(
+                    ChildTaskRequest(
                         "skipped",
                         "settled-child",
                         {"kind": "canceled"},
@@ -216,8 +216,8 @@ def test_child_fan_out_returns_mixed_settled_outcomes(database_url: str) -> None
 
         assert parent_worker.run_once() is True
         canceled_id = child_connection.execute(
-            "SELECT child_job_id FROM workhorse.job_child "
-            "WHERE parent_job_id = %s AND child_name = 'skipped'",
+            "SELECT child_task_id FROM workhorse.task_child "
+            "WHERE parent_task_id = %s AND child_name = 'skipped'",
             (parent_id,),
         ).fetchone()[0]
         assert Queue(child_connection).cancel(str(canceled_id)).status == "canceled"
@@ -225,7 +225,7 @@ def test_child_fan_out_returns_mixed_settled_outcomes(database_url: str) -> None
         assert parent_worker.run_once() is True
         assert joined_names == ["accepted", "rejected", "skipped"]
         state, result = parent_connection.execute(
-            "SELECT state, result FROM workhorse.job_outcome WHERE job_id = %s", (parent_id,)
+            "SELECT state, result FROM workhorse.task_outcome WHERE task_id = %s", (parent_id,)
         ).fetchone()
         assert state == "succeeded"
         assert result["accepted"] == {"status": "succeeded", "result": {"value": 1}}
@@ -247,7 +247,7 @@ def test_child_fan_out_all_success_propagates_failure(database_url: str) -> None
         def handle_parent(_payload: object, context: HandlerContext) -> object:
             return context.run_children_all(
                 (
-                    ChildJobRequest(
+                    ChildTaskRequest(
                         "rejected",
                         "all-success-child",
                         None,
@@ -273,7 +273,7 @@ def test_child_fan_out_all_success_propagates_failure(database_url: str) -> None
         assert parent_worker.run_once() is True
         assert child_worker.run_once() is True
         assert parent_connection.execute(
-            "SELECT state FROM workhorse.job_outcome WHERE job_id = %s", (parent_id,)
+            "SELECT state FROM workhorse.task_outcome WHERE task_id = %s", (parent_id,)
         ).fetchone() == ("failed",)
 
 
@@ -321,7 +321,7 @@ def test_changed_child_request_replays_as_a_typed_conflict(database_url: str) ->
         version = 2
         assert parent_worker.run_once() is True
         assert len(conflicts) == 1
-        assert conflicts[0].parent_job_id == parent_id
+        assert conflicts[0].parent_task_id == parent_id
 
 
 def test_child_calls_surface_stale_fences_and_local_limits_as_typed_errors(
@@ -341,7 +341,7 @@ def test_child_calls_surface_stale_fences_and_local_limits_as_typed_errors(
 
         def handle(_payload: object, context: HandlerContext) -> None:
             competing_connection.execute(
-                "UPDATE workhorse.job SET result_max_bytes = 1 WHERE id = %s",
+                "UPDATE workhorse.task SET result_max_bytes = 1 WHERE id = %s",
                 (parent_id,),
             )
             try:
@@ -349,13 +349,13 @@ def test_child_calls_surface_stale_fences_and_local_limits_as_typed_errors(
             except ChildResultLimitExceededError as error:
                 result_limit_errors.append(error)
             competing_connection.execute(
-                "UPDATE workhorse.job SET result_max_bytes = 1048576 WHERE id = %s",
+                "UPDATE workhorse.task SET result_max_bytes = 1048576 WHERE id = %s",
                 (parent_id,),
             )
             try:
                 context.run_children(
                     tuple(
-                        ChildJobRequest(f"child-{index}", "limited-child", None)
+                        ChildTaskRequest(f"child-{index}", "limited-child", None)
                         for index in range(101)
                     )
                 )
@@ -363,7 +363,7 @@ def test_child_calls_surface_stale_fences_and_local_limits_as_typed_errors(
                 limit_errors.append(error)
             assert competing_connection.execute(
                 "SELECT workhorse.complete_v1(%s, %s, %s, %s)",
-                (parent_id, "python-typed-child-worker", context.job.fence_token, "null"),
+                (parent_id, "python-typed-child-worker", context.task.fence_token, "null"),
             ).fetchone() == (True,)
             try:
                 context.run_child("too-late", "stale-child", None)
@@ -376,10 +376,10 @@ def test_child_calls_surface_stale_fences_and_local_limits_as_typed_errors(
         with pytest.raises(StaleLeaseError):
             worker.run_once()
         assert len(limit_errors) == 1
-        assert limit_errors[0].parent_job_id == parent_id
+        assert limit_errors[0].parent_task_id == parent_id
         assert len(result_limit_errors) == 1
-        assert result_limit_errors[0].parent_job_id == parent_id
+        assert result_limit_errors[0].parent_task_id == parent_id
         assert result_limit_errors[0].result_bytes == 2
         assert result_limit_errors[0].result_limit_bytes == 1
         assert len(stale_errors) == 1
-        assert stale_errors[0].parent_job_id == parent_id
+        assert stale_errors[0].parent_task_id == parent_id

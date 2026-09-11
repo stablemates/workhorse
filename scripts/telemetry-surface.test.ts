@@ -17,10 +17,10 @@ const surface = await telemetrySurface();
 describe("the telemetry surface reader", () => {
   it("reads a counter's unit and description from its helper call", () => {
     expect(surface.instruments).toContainEqual({
-      name: "workhorse.jobs.enqueued",
+      name: "workhorse.tasks.enqueued",
       kind: "counter",
-      unit: "{job}",
-      description: "Jobs accepted for durable execution",
+      unit: "{task}",
+      description: "Tasks accepted for durable execution",
     });
   });
 
@@ -35,10 +35,10 @@ describe("the telemetry surface reader", () => {
 
   it("reads a gauge", () => {
     expect(surface.instruments).toContainEqual({
-      name: "workhorse.jobs.count",
+      name: "workhorse.tasks.count",
       kind: "gauge",
-      unit: "{job}",
-      description: "Current live jobs by queue and runtime state",
+      unit: "{task}",
+      description: "Current live tasks by queue and runtime state",
     });
   });
 
@@ -46,7 +46,7 @@ describe("the telemetry surface reader", () => {
     expect(surface.instruments).toContainEqual({
       name: "workhorse.queue.depth",
       kind: "observable_gauge",
-      unit: "{job}",
+      unit: "{task}",
       description: "Current live work by dispatch state",
     });
   });
@@ -67,7 +67,7 @@ describe("the telemetry surface reader", () => {
     // An instrument name is not tested here: `workhorse.handler.batch.size` is a histogram and
     // also an attribute of the batch span, and both readings are right.
     for (const span of surface.spans) expect(surface.attributes).not.toContain(span);
-    expect(surface.attributes).not.toContain("workhorse.job.claimed");
+    expect(surface.attributes).not.toContain("workhorse.task.claimed");
     expect(surface.attributes).not.toContain("workhorse.worker.registered");
   });
 });

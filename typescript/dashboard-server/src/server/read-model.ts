@@ -9,7 +9,7 @@ import {
   DashboardEventKind,
   DashboardEventsPage,
   DashboardEventsWindow,
-  DashboardJobDetail,
+  DashboardTaskDetail,
   DashboardHumanWaitPage,
   DashboardQueuesPage,
   DashboardSystemPage,
@@ -129,7 +129,7 @@ export interface DashboardTasksQuery {
   tags: readonly string[];
   search: string | null;
   worker: string | null;
-  jobType: string | null;
+  taskType: string | null;
   priority: number | null;
   sort: DashboardTaskSort;
 }
@@ -171,12 +171,12 @@ export async function readDashboardTasksCursor(
   );
 }
 
-async function projectTaskDurability<T extends { jobs: DashboardTasksPage["jobs"] }>(
+async function projectTaskDurability<T extends { tasks: DashboardTasksPage["tasks"] }>(
   database: DashboardDatabase,
   page: T,
   projectDurability: DashboardDurabilityProjector,
 ): Promise<T> {
-  if (projectDurability === noDashboardDurability || page.jobs.length === 0) return page;
+  if (projectDurability === noDashboardDurability || page.tasks.length === 0) return page;
 
   const durabilityRows = await database.execute<{
     id: string;
@@ -184,15 +184,15 @@ async function projectTaskDurability<T extends { jobs: DashboardTasksPage["jobs"
     payload: unknown;
     checkpoint_names: string[];
   }>(sql`
-    SELECT job.id::text AS id, job.job_type AS type, job.payload,
+    SELECT task.id::text AS id, task.task_type AS type, task.payload,
            ARRAY(SELECT checkpoint.checkpoint_name
-                   FROM workhorse.dashboard_job_checkpoint_v1 checkpoint
-                  WHERE checkpoint.job_id = job.id
+                   FROM workhorse.dashboard_task_checkpoint_v1 checkpoint
+                  WHERE checkpoint.task_id = task.id
                   ORDER BY checkpoint.checkpoint_name) AS checkpoint_names
-      FROM workhorse.dashboard_job_v1 job
-     WHERE job.id = ANY(${page.jobs.map((job) => job.id)}::uuid[])
+      FROM workhorse.dashboard_task_v1 task
+     WHERE task.id = ANY(${page.tasks.map((task) => task.id)}::uuid[])
   `);
-  const durabilityByJob = new Map(
+  const durabilityByTask = new Map(
     durabilityRows.rows.map((row) => {
       const plan = projectDurability(row.type, row.payload);
       const checkpointNames = new Set(row.checkpoint_names);
@@ -209,8 +209,8 @@ async function projectTaskDurability<T extends { jobs: DashboardTasksPage["jobs"
   );
   return {
     ...page,
-    jobs: page.jobs.map((job) =>
-      Object.assign(job, { durability: durabilityByJob.get(job.id) ?? null }),
+    tasks: page.tasks.map((task) =>
+      Object.assign(task, { durability: durabilityByTask.get(task.id) ?? null }),
     ),
   };
 }
@@ -259,7 +259,7 @@ export async function readDashboardWorkers(
   return expectOneRow(rows, "the dashboard workers procedure").result;
 }
 
-export async function readDashboardJobDetail(
+export async function readDashboardTaskDetail(
   database: DashboardDatabase,
   id: string,
   projectDurability: DashboardDurabilityProjector = () => null,
@@ -268,18 +268,18 @@ export async function readDashboardJobDetail(
   _readQueueHealth?: DashboardQueueHealthReader,
   redactErrorStacks = false,
   canCompleteHumanWait = false,
-): Promise<DashboardJobDetail | null> {
+): Promise<DashboardTaskDetail | null> {
   const input = JSON.stringify({ id, canSignal, canCompleteHumanWait });
-  const result = await database.execute<{ result: DashboardJobDetail | null }>(sql`
-    SELECT workhorse.dashboard_job_detail_v1(${input}::jsonb) AS result
+  const result = await database.execute<{ result: DashboardTaskDetail | null }>(sql`
+    SELECT workhorse.dashboard_task_detail_v1(${input}::jsonb) AS result
   `);
-  const detail = expectOneRow(result, "the dashboard job detail procedure").result;
+  const detail = expectOneRow(result, "the dashboard task detail procedure").result;
   if (!detail) return null;
   const projected = {
     ...detail,
     durability: projectDurability(detail.identity.type, detail.payload),
   };
-  return redactErrorStacks ? redactDashboardJobDetailErrorStacks(projected) : projected;
+  return redactErrorStacks ? redactDashboardTaskDetailErrorStacks(projected) : projected;
 }
 
 function redactErrorStack(error: unknown): unknown {
@@ -290,9 +290,9 @@ function redactErrorStack(error: unknown): unknown {
 }
 
 /** Remove persisted worker stacks while leaving user payloads, results, and event details intact. */
-export function redactDashboardJobDetailErrorStacks(
-  detail: DashboardJobDetail,
-): DashboardJobDetail {
+export function redactDashboardTaskDetailErrorStacks(
+  detail: DashboardTaskDetail,
+): DashboardTaskDetail {
   return {
     ...detail,
     childLineage: {
@@ -339,24 +339,24 @@ export interface DashboardEventsQuery {
   pageSize?: number;
   kind?: DashboardEventKind | "all";
   queue?: string | null;
-  jobType?: string | null;
+  taskType?: string | null;
   /** Lifecycle event names and attempt outcomes to keep. Empty means every type. */
   types?: readonly string[];
-  /** Restrict the feed to one job, for following a single task live. */
-  jobId?: string | null;
+  /** Restrict the feed to one task, for following a single task live. */
+  taskId?: string | null;
 }
 
 /**
  * Read the fleet-wide event feed from the durable history tables.
  *
- * The feed is sourced from `job_event` and `attempt_history`, never from `LISTEN`/`NOTIFY`.
+ * The feed is sourced from `task_event` and `attempt_history`, never from `LISTEN`/`NOTIFY`.
  * Notification payloads carry only a queue name, are coalesced by both the worker and the dashboard
  * listener, and are dropped entirely while no session is listening — a feed built from them would
- * be uninformative and silently incomplete. The notification channels keep their real job of
+ * be uninformative and silently incomplete. The notification channels keep their real task of
  * telling this page *when* to re-read; the rows below are what it shows.
  *
  * Every query is bounded by a time window so the descending scan stays on
- * `job_event (occurred_at, event_id)` and `attempt_history (occurred_at, attempt_id)` instead of
+ * `task_event (occurred_at, event_id)` and `attempt_history (occurred_at, attempt_id)` instead of
  * walking the whole retained history to fill a page that a narrow filter would otherwise starve.
  * The window is also what keeps the total count affordable: it is a count over one bounded slice of
  * two partitioned tables, not over everything retention still holds.

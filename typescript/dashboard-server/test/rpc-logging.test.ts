@@ -78,7 +78,7 @@ describe("dashboard RPC logging", () => {
   it("records a failed procedure without its input or error details", async () => {
     const sensitiveInput = "customer-secret-that-is-not-a-uuid";
 
-    await expect(dashboardClient().dashboard.jobDetail({ id: sensitiveInput })).rejects.toThrow(
+    await expect(dashboardClient().dashboard.taskDetail({ id: sensitiveInput })).rejects.toThrow(
       /validation/i,
     );
 
@@ -89,7 +89,7 @@ describe("dashboard RPC logging", () => {
         body: "Dashboard RPC request failed",
         attributes: expect.objectContaining({
           "rpc.system": "orpc",
-          "rpc.method": "dashboard.jobDetail",
+          "rpc.method": "dashboard.taskDetail",
           "http.response.status_code": 400,
           "workhorse.dashboard.rpc.duration_ms": expect.any(Number),
         }),

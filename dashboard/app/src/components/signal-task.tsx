@@ -2,7 +2,7 @@ import type { DashboardClient } from "@stablemates/workhorse-dashboard-server";
 import { parseHumanWaitResult } from "../presentation.js";
 import { notifyDashboard, notifyFailure } from "../notifications.js";
 import type {
-  DashboardJobDetail,
+  DashboardTaskDetail,
   DashboardSignalWaitRow,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import { Box, Button, Code, Group, Paper, Stack, Text } from "@mantine/core";
@@ -15,14 +15,14 @@ import { DrawerSection } from "./task-detail-overview.js";
 async function deliverDashboardSignal({
   client,
   auditActor,
-  jobId,
+  taskId,
   name,
   payloadSource,
   reason,
 }: {
   client: DashboardClient;
   auditActor: string;
-  jobId: string;
+  taskId: string;
   name: string;
   payloadSource: string;
   reason: string;
@@ -38,7 +38,7 @@ async function deliverDashboardSignal({
   }
   try {
     const delivery = await client.signalTask({
-      id: jobId,
+      id: taskId,
       name,
       payload: parsed.value,
       idempotencyKey: crypto.randomUUID(),
@@ -62,7 +62,7 @@ export function SignalWaitCard({
   sending,
   onPayloadChange,
   onSend,
-  inspectJob,
+  inspectTask,
 }: {
   wait: DashboardSignalWaitRow;
   payload: string;
@@ -70,12 +70,12 @@ export function SignalWaitCard({
   sending: boolean;
   onPayloadChange: (value: string) => void;
   onSend: () => void;
-  inspectJob?: (id: string) => void;
+  inspectTask?: (id: string) => void;
 }) {
   return (
     <Paper
       component="section"
-      aria-label={`Signal ${wait.name} for task ${wait.jobId}`}
+      aria-label={`Signal ${wait.name} for task ${wait.taskId}`}
       withBorder
       p="lg"
     >
@@ -84,15 +84,15 @@ export function SignalWaitCard({
           <Box>
             <Text fw={700}>{wait.name}</Text>
             <Text size="sm">
-              {wait.jobType} · {wait.queue} · attempt {wait.attempt}
+              {wait.taskType} · {wait.queue} · attempt {wait.attempt}
             </Text>
-            <Code fz="xs">{wait.jobId}</Code>
-            {inspectJob ? (
+            <Code fz="xs">{wait.taskId}</Code>
+            {inspectTask ? (
               <Button
                 variant="subtle"
                 size="compact-xs"
-                aria-label={`View task ${wait.jobId}`}
-                onClick={() => inspectJob(wait.jobId)}
+                aria-label={`View task ${wait.taskId}`}
+                onClick={() => inspectTask(wait.taskId)}
               >
                 View task
               </Button>
@@ -119,18 +119,18 @@ export function SignalWaitCard({
   );
 }
 export function SignalTaskPanel({
-  job,
+  task,
   auditActor,
   reload,
 }: {
-  job: DashboardJobDetail;
+  task: DashboardTaskDetail;
   auditActor: string;
   reload: () => Promise<void>;
 }) {
   const client = useDashboardClient();
   const [payload, setPayload] = useState("");
   const [sending, setSending] = useState(false);
-  const wait = job.signalWait;
+  const wait = task.signalWait;
   if (!wait) return null;
 
   const send = async () => {
@@ -139,7 +139,7 @@ export function SignalTaskPanel({
       const requestSucceeded = await deliverDashboardSignal({
         client,
         auditActor,
-        jobId: job.identity.id,
+        taskId: task.identity.id,
         name: wait.name,
         payloadSource: payload,
         reason: `Send signal ${wait.name} from the task drawer`,
@@ -166,7 +166,7 @@ export function SignalTaskPanel({
       <SignalPayloadEditor
         ariaLabel={`Signal input for ${wait.name}`}
         payload={payload}
-        disabled={!job.canSignal}
+        disabled={!task.canSignal}
         sending={sending}
         onPayloadChange={setPayload}
         onSend={() => void send()}

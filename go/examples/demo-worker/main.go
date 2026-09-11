@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	languageJobType         = "demo.language-worker"
-	sharedJobType           = "demo.shared-worker"
+	languageTaskType        = "demo.language-worker"
+	sharedTaskType          = "demo.shared-worker"
 	goQueue                 = "demo-go"
 	sharedQueue             = "demo-shared"
 	scheduleNamespace       = "workhorse-demo"
@@ -58,23 +58,23 @@ func pollInterval() (time.Duration, error) {
 	return time.Duration(milliseconds) * time.Millisecond, nil
 }
 
-func languageJob(
+func languageTask(
 	_ context.Context,
 	payload any,
 	handler *workhorse.HandlerContext,
 ) (any, error) {
 	object, ok := payload.(map[string]any)
 	if !ok || object["language"] != "go" {
-		return nil, errors.New("go worker received a job for another language")
+		return nil, errors.New("go worker received a task for another language")
 	}
 	return map[string]any{
 		"language": "go",
 		"runtime":  "go",
-		"attempt":  handler.Job.Attempt,
+		"attempt":  handler.Task.Attempt,
 	}, nil
 }
 
-func sharedJob(
+func sharedTask(
 	_ context.Context,
 	payload any,
 	handler *workhorse.HandlerContext,
@@ -87,7 +87,7 @@ func sharedJob(
 	return map[string]any{
 		"source":  source,
 		"runtime": "go",
-		"attempt": handler.Job.Attempt,
+		"attempt": handler.Task.Attempt,
 	}, nil
 }
 
@@ -127,8 +127,8 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	worker.Handle(languageJobType, languageJob)
-	worker.Handle(sharedJobType, sharedJob)
+	worker.Handle(languageTaskType, languageTask)
+	worker.Handle(sharedTaskType, sharedTask)
 	if err := worker.Run(runContext); err != nil {
 		panic(err)
 	}

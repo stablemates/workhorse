@@ -1,17 +1,17 @@
 ---
-title: Job dependencies
+title: Task dependencies
 description: Keep downstream work blocked until its prerequisites reach declared outcomes.
 ---
 
-Dependencies prevent a job from entering dispatch before its inputs are ready. PostgreSQL stores
-the job and its dependency edges in the enqueue transaction, so a rollback removes both.
+Dependencies prevent a task from entering dispatch before its inputs are ready. PostgreSQL stores
+the task and its dependency edges in the enqueue transaction, so a rollback removes both.
 
 <Tabs items={["TypeScript", "Python", "Go"]}>
   <Tab value="TypeScript">
     ```ts
     const importId = await queue.enqueue("contacts.import", { source: "upload" });
     await queue.enqueue("contacts.notify", { importId }, { dependencies: {
-      prerequisiteJobIds: [importId], onSuccess: "release", onFailure: "fail", onCancellation: "cancel",
+      prerequisiteTaskIds: [importId], onSuccess: "release", onFailure: "fail", onCancellation: "cancel",
     } });
     ```
   </Tab>
@@ -22,7 +22,7 @@ the job and its dependency edges in the enqueue transaction, so a rollback remov
         "contacts.notify",
         {"importId": import_id},
         EnqueueOptions(dependencies=Dependencies(
-            prerequisite_job_ids=[import_id],
+            prerequisite_task_ids=[import_id],
             on_success="release", on_failure="fail", on_cancellation="cancel",
         )),
     )
@@ -33,7 +33,7 @@ the job and its dependency edges in the enqueue transaction, so a rollback remov
     importID, err := queue.Enqueue(ctx, "contacts.import", map[string]any{"source": "upload"}, workhorse.EnqueueOptions{})
     _, err = queue.Enqueue(ctx, "contacts.notify", map[string]any{"importId": importID}, workhorse.EnqueueOptions{
     	Dependencies: &workhorse.Dependencies{
-    		PrerequisiteJobIDs: []string{importID}, OnSuccess: workhorse.DependencyRelease,
+    		PrerequisiteTaskIDs: []string{importID}, OnSuccess: workhorse.DependencyRelease,
     		OnFailure: workhorse.DependencyFail, OnCancellation: workhorse.DependencyCancel,
     	},
     })
@@ -41,12 +41,12 @@ the job and its dependency edges in the enqueue transaction, so a rollback remov
   </Tab>
 </Tabs>
 
-The older `prerequisiteJobId` shorthand is deprecated because it hides the terminal policies.
+The older `prerequisiteTaskId` shorthand is deprecated because it hides the terminal policies.
 
 For fan-in, declare every prerequisite and what each terminal outcome means:
 
 The same `Dependencies` value accepts several prerequisite IDs for fan-in. TypeScript uses
-`prerequisiteJobIds`, Python uses `prerequisite_job_ids`, and Go uses `PrerequisiteJobIDs`.
+`prerequisiteTaskIds`, Python uses `prerequisite_task_ids`, and Go uses `PrerequisiteTaskIDs`.
 
 The dependent remains `blocked` until every edge resolves. If policies disagree after fan-in,
 `fail` wins over `cancel`, and `cancel` wins over `release`, so concurrent completion order cannot
@@ -54,8 +54,8 @@ change the result.
 
 ## Inspect blocked work
 
-`Admin.getJob` and `Admin.listJobs` expose `prerequisiteJobIds`, `dependencyPolicy`, and
-`blockedReason`. `Admin.getDependencyLineage(jobId)` returns retained edges in both directions,
+`Admin.getTask` and `Admin.listTasks` expose `prerequisiteTaskIds`, `dependencyPolicy`, and
+`blockedReason`. `Admin.getDependencyLineage(taskId)` returns retained edges in both directions,
 including policy, resolution, and release evidence. The dashboard exposes the same links and lets
 an operator open related tasks directly.
 
@@ -63,13 +63,13 @@ PostgreSQL bounds direct edges and downstream settlement work. A cycle or an ove
 `DependencyCycleError` or `DependencyLimitExceededError` before unbounded work reaches dispatch.
 
 Producers declare edges with `EnqueueOptions.dependencies`. PostgreSQL stores blocked work in
-`job_runtime` until its `runAt` gate and prerequisites allow a `dependency_released` transition.
+`task_runtime` until its `runAt` gate and prerequisites allow a `dependency_released` transition.
 `Queue.cancel` can settle that graph, while `Queue.health()` reports `Blocked` work through the
 public `Queue` client.
 
 ## Next
 
-- [Child jobs](/docs/child-jobs) — delegate work from inside a handler
+- [Child tasks](/docs/child-tasks) — delegate work from inside a handler
 - [Priority](/docs/priority) — order a dependent after release
 - [Dead letters](/docs/dead-letters) — preserve terminal evidence
 

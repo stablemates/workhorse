@@ -41,10 +41,10 @@ func main() {
 	worker.Handle("process.fixture", func(handlerContext context.Context, payload any, handler *workhorse.HandlerContext) (any, error) {
 		if _, err := pool.Exec(
 			handlerContext,
-			"INSERT INTO process_fixture_invocation(job_id, worker_id, attempt) VALUES ($1::uuid, $2::text, $3::integer)",
-			handler.Job.ID,
+			"INSERT INTO process_fixture_invocation(task_id, worker_id, attempt) VALUES ($1::uuid, $2::text, $3::integer)",
+			handler.Task.ID,
 			workerID,
-			handler.Job.Attempt,
+			handler.Task.Attempt,
 		); err != nil {
 			return nil, err
 		}
@@ -76,7 +76,7 @@ func main() {
 			panic(err)
 		}
 		if !processed {
-			panic("recovery worker did not process a job")
+			panic("recovery worker did not process a task")
 		}
 		return
 	}

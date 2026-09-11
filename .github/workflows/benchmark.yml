@@ -28,7 +28,7 @@ jobs:
   smoke:
     name: smoke benchmark
     runs-on: depot-ubuntu-24.04
-    # An explicit ceiling. A benchmark that hangs — a scenario waiting on a job that never claims,
+    # An explicit ceiling. A benchmark that hangs — a scenario waiting on a task that never claims,
     # a churn producer that never drains — must fail the run rather than occupy a runner for the
     # six-hour default.
     timeout-minutes: 30
@@ -93,7 +93,7 @@ jobs:
             echo
             # Means with their 95% confidence intervals, because a single mean at two repetitions
             # is not a number anyone should compare across runs.
-            echo "| Design | Workers | Jobs/s (95% CI) | Claim p95 ms (95% CI) |"
+            echo "| Design | Workers | Tasks/s (95% CI) | Claim p95 ms (95% CI) |"
             echo "| --- | ---: | ---: | ---: |"
             jq -r 'def ci: if .mean == null then "n/a"
                            else "\(.mean | .*100 | round / 100) [\(.confidenceInterval95.lower | .*100 | round / 100), \(.confidenceInterval95.upper | .*100 | round / 100)]"

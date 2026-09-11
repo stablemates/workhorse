@@ -2,7 +2,7 @@
   "name": "@stablemates/workhorse",
   "version": "0.1.3",
   "private": false,
-  "description": "A durable job queue for PostgreSQL. Public beta.",
+  "description": "A durable task queue for PostgreSQL. Public beta.",
   "homepage": "https://workhorse.run",
   "bugs": {
     "url": "https://github.com/stablemates/workhorse/issues"

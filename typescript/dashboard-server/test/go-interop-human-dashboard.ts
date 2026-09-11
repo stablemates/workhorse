@@ -9,9 +9,9 @@ import { createDashboardHost } from "../src/server/host.js";
 import { createDashboardOperatorControllers } from "../src/server/operator-controllers.js";
 import type { DashboardRouter } from "../src/server/router.js";
 
-const [databaseUrl, jobId] = process.argv.slice(2);
-if (databaseUrl === undefined || jobId === undefined) {
-  throw new Error("usage: go-interop-human-dashboard.ts <database-url> <job-id>");
+const [databaseUrl, taskId] = process.argv.slice(2);
+if (databaseUrl === undefined || taskId === undefined) {
+  throw new Error("usage: go-interop-human-dashboard.ts <database-url> <task-id>");
 }
 
 const pool = new Pool({ connectionString: databaseUrl });
@@ -44,7 +44,7 @@ try {
     }),
   );
   const completion = await client.dashboard.completeHumanWait({
-    id: jobId,
+    id: taskId,
     name: "review",
     result: { approved: true },
     idempotencyKey: "review-completion",

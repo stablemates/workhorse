@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_IDEMPOTENCY_SCOPE,
   DEFAULT_IDEMPOTENCY_TTL_MS,
-  DEFAULT_JOB_QUERY_PAYLOAD_BYTES,
-  DEFAULT_JOB_VALUE_MAX_BYTES,
+  DEFAULT_TASK_QUERY_PAYLOAD_BYTES,
+  DEFAULT_TASK_VALUE_MAX_BYTES,
   MAX_CANCELLATION_REASON_CHARACTERS,
   MAX_CANCELLATION_REQUESTED_BY_CHARACTERS,
   MAX_CHECKPOINT_VALUE_BYTES,
@@ -16,16 +16,16 @@ import {
   MAX_EXTERNAL_WAIT_NAME_CHARACTERS,
   MAX_EXTERNAL_WAIT_TIMEOUT_MS,
   MAX_EXTERNAL_WAIT_VALUE_BYTES,
-  MAX_EXTERNAL_WAITS_PER_JOB,
+  MAX_EXTERNAL_WAITS_PER_TASK,
   MAX_IDEMPOTENCY_KEY_BYTES,
   MAX_IDEMPOTENCY_SCOPE_BYTES,
   MAX_IDEMPOTENCY_TTL_MS,
-  MAX_JOB_CONTRACT_SENSITIVE_KEYS,
-  MAX_JOB_PRIORITY,
-  MAX_JOB_QUERY_PAGE_SIZE,
-  MAX_JOB_QUERY_PAYLOAD_BYTES,
-  MAX_JOB_QUERY_REDACT_KEYS,
-  MAX_JOB_VALUE_MAX_BYTES,
+  MAX_TASK_CONTRACT_SENSITIVE_KEYS,
+  MAX_TASK_PRIORITY,
+  MAX_TASK_QUERY_PAGE_SIZE,
+  MAX_TASK_QUERY_PAYLOAD_BYTES,
+  MAX_TASK_QUERY_REDACT_KEYS,
+  MAX_TASK_VALUE_MAX_BYTES,
   MAX_PROGRESS_VALUE_BYTES,
   MAX_REDRIVE_BATCH_SIZE,
   MAX_REDRIVE_REQUEST_ID_BYTES,
@@ -96,11 +96,11 @@ const rules: readonly LimitRule[] = [
     patterns: [/char_length\(p_(?:requested_by|completed_by)\) > (\d+)/g],
   },
   {
-    constant: "MAX_EXTERNAL_WAITS_PER_JOB",
-    value: MAX_EXTERNAL_WAITS_PER_JOB,
-    bounds: "signal names or human decisions retained for one job",
+    constant: "MAX_EXTERNAL_WAITS_PER_TASK",
+    value: MAX_EXTERNAL_WAITS_PER_TASK,
+    bounds: "signal names or human decisions retained for one task",
     patterns: [
-      /count\(\*\) FROM workhorse\.job_(?:signal|human)_wait stored WHERE stored\.job_id = p_job_id\) >= (\d+)/g,
+      /count\(\*\) FROM workhorse\.task_(?:signal|human)_wait stored WHERE stored\.task_id = p_task_id\) >= (\d+)/g,
     ],
   },
   {
@@ -127,9 +127,9 @@ const rules: readonly LimitRule[] = [
     ],
   },
   {
-    constant: "MAX_JOB_PRIORITY",
-    value: MAX_JOB_PRIORITY,
-    bounds: "dispatch priority accepted for one job",
+    constant: "MAX_TASK_PRIORITY",
+    value: MAX_TASK_PRIORITY,
+    bounds: "dispatch priority accepted for one task",
     patterns: [
       new RegExp(
         String.raw`v_priority NOT BETWEEN 0 AND (\d+)${gap}RAISE EXCEPTION 'priority must be an integer between 0 and (\d+)'`,
@@ -207,7 +207,7 @@ const rules: readonly LimitRule[] = [
   {
     constant: "MAX_PROGRESS_VALUE_BYTES",
     value: MAX_PROGRESS_VALUE_BYTES,
-    bounds: "canonical JSONB text size of latest mutable job progress",
+    bounds: "canonical JSONB text size of latest mutable task progress",
     patterns: [
       new RegExp(
         String.raw`octet_length\(p_progress_value::text\) > (\d+)${gap}RAISE EXCEPTION 'progress_value must be at most (\d+) bytes'`,
@@ -263,7 +263,7 @@ const rules: readonly LimitRule[] = [
   {
     constant: "MAX_REDRIVE_BATCH_SIZE",
     value: MAX_REDRIVE_BATCH_SIZE,
-    bounds: "failed jobs inspected or redriven by one bounded operation",
+    bounds: "failed tasks inspected or redriven by one bounded operation",
     patterns: [
       new RegExp(
         String.raw`p_limit NOT BETWEEN 1 AND (\d+)${gap}RAISE EXCEPTION '(?:dead-letter|bulk redrive) limit must be between 1 and (\d+)'`,
@@ -284,8 +284,8 @@ const rules: readonly LimitRule[] = [
     ],
   },
   {
-    constant: "MAX_JOB_QUERY_PAGE_SIZE",
-    value: MAX_JOB_QUERY_PAGE_SIZE,
+    constant: "MAX_TASK_QUERY_PAGE_SIZE",
+    value: MAX_TASK_QUERY_PAGE_SIZE,
     bounds: "rows returned by one keyset-paginated query",
     patterns: [
       new RegExp(
@@ -295,14 +295,14 @@ const rules: readonly LimitRule[] = [
     ],
   },
   {
-    constant: "DEFAULT_JOB_QUERY_PAYLOAD_BYTES",
-    value: DEFAULT_JOB_QUERY_PAYLOAD_BYTES,
+    constant: "DEFAULT_TASK_QUERY_PAYLOAD_BYTES",
+    value: DEFAULT_TASK_QUERY_PAYLOAD_BYTES,
     bounds: "encoded payload size included by a list projection that omits maxBytes",
     patterns: [/v_max_bytes integer := (\d+);/g],
   },
   {
-    constant: "MAX_JOB_QUERY_PAYLOAD_BYTES",
-    value: MAX_JOB_QUERY_PAYLOAD_BYTES,
+    constant: "MAX_TASK_QUERY_PAYLOAD_BYTES",
+    value: MAX_TASK_QUERY_PAYLOAD_BYTES,
     bounds: "encoded payload size accepted by a list projection",
     patterns: [
       /\(v_projection->>'maxBytes'\)::numeric NOT BETWEEN 1 AND (\d+)/g,
@@ -310,8 +310,8 @@ const rules: readonly LimitRule[] = [
     ],
   },
   {
-    constant: "MAX_JOB_QUERY_REDACT_KEYS",
-    value: MAX_JOB_QUERY_REDACT_KEYS,
+    constant: "MAX_TASK_QUERY_REDACT_KEYS",
+    value: MAX_TASK_QUERY_REDACT_KEYS,
     bounds: "unique top-level payload keys redacted by one list projection",
     patterns: [
       /jsonb_array_length\(v_projection->'redactKeys'\) > (\d+)/g,
@@ -319,8 +319,8 @@ const rules: readonly LimitRule[] = [
     ],
   },
   {
-    constant: "DEFAULT_JOB_VALUE_MAX_BYTES",
-    value: DEFAULT_JOB_VALUE_MAX_BYTES,
+    constant: "DEFAULT_TASK_VALUE_MAX_BYTES",
+    value: DEFAULT_TASK_VALUE_MAX_BYTES,
     bounds: "canonical JSON size accepted for a payload or result when a contract omits one",
     patterns: [
       /(?:payload|result)_max_bytes integer NOT NULL DEFAULT (\d+)/g,
@@ -329,8 +329,8 @@ const rules: readonly LimitRule[] = [
     ],
   },
   {
-    constant: "MAX_JOB_VALUE_MAX_BYTES",
-    value: MAX_JOB_VALUE_MAX_BYTES,
+    constant: "MAX_TASK_VALUE_MAX_BYTES",
+    value: MAX_TASK_VALUE_MAX_BYTES,
     bounds: "largest configurable canonical JSON size for a payload or result",
     patterns: [
       /(?:payload|result)_max_bytes BETWEEN 1 AND (\d+)/g,
@@ -339,8 +339,8 @@ const rules: readonly LimitRule[] = [
     ],
   },
   {
-    constant: "MAX_JOB_CONTRACT_SENSITIVE_KEYS",
-    value: MAX_JOB_CONTRACT_SENSITIVE_KEYS,
+    constant: "MAX_TASK_CONTRACT_SENSITIVE_KEYS",
+    value: MAX_TASK_CONTRACT_SENSITIVE_KEYS,
     bounds: "persisted top-level sensitive keys for one payload or result contract",
     patterns: [
       /jsonb_array_length\(COALESCE\(v_request->'sensitive(?:Payload|Result)Keys', '\[\]'::jsonb\)\) > (\d+)/g,
@@ -442,7 +442,7 @@ describe("schema limit parity", () => {
     const removed = schema.replaceAll("v_max_bytes integer := 16384;", "v_max_bytes integer;");
     expect(removed).not.toBe(schema);
     expect(findDrift(removed)).toContainEqual(
-      expect.stringContaining("DEFAULT_JOB_QUERY_PAYLOAD_BYTES: no SQL site matched"),
+      expect.stringContaining("DEFAULT_TASK_QUERY_PAYLOAD_BYTES: no SQL site matched"),
     );
   });
 });

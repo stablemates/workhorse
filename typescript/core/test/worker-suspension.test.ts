@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ClaimedJob } from "../src/types.js";
+import type { ClaimedTask } from "../src/types.js";
 import { Worker, type WorkerQueueApi } from "../src/worker.js";
 
 async function unsupportedWorkerQueueOperation(): Promise<never> {
@@ -12,7 +12,7 @@ describe("worker suspension", () => {
     ["runChild", "waitForSignal"],
     ["waitForSignal", "waitForHuman"],
   ] as const)("keeps a %s winner from letting %s return missing data", async (first, second) => {
-    const job: ClaimedJob = {
+    const task: ClaimedTask = {
       id: `concurrent-${first}-${second}`,
       queue: "default",
       type: "concurrent-suspension",
@@ -34,14 +34,14 @@ describe("worker suspension", () => {
     const continued: string[] = [];
     const queue = {
       defaultQueue: "default",
-      claim: async () => job,
+      claim: async () => task,
       waitForSignal: async () => ({ status: "waiting", payload: null }),
       waitForHuman: async () => ({ status: "waiting", result: null }),
       createChild: async () => ({
         status: "created",
         child: {
-          parentJobId: job.id,
-          childJobId: "concurrent-suspension-child",
+          parentTaskId: task.id,
+          childTaskId: "concurrent-suspension-child",
           name: "side",
           type: "side-effect",
           createdAt: new Date(),

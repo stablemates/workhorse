@@ -9,7 +9,7 @@ import {
 import type { QueryResult, QueryResultRow } from "pg";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkerQueueApi } from "../src/worker.js";
-import type { ClaimedJob, Queryable } from "../src/types.js";
+import type { ClaimedTask, Queryable } from "../src/types.js";
 
 const exporter = new InMemoryMetricExporter(AggregationTemporality.DELTA);
 const reader = new PeriodicExportingMetricReader({
@@ -85,13 +85,13 @@ beforeEach(() => exporter.reset());
 afterAll(() => provider.shutdown());
 
 describe("Workhorse OpenTelemetry metrics", () => {
-  it("counts accepted enqueue requests by queue and job type", async () => {
+  it("counts accepted enqueue requests by queue and task type", async () => {
     const { Queue } = await import("../src/queue.js");
     const database: Queryable = {
       query: async <R extends QueryResultRow>() =>
         queryResult([
-          { ordinal: 1, job_id: "job-1", outcome: "accepted" },
-          { ordinal: 2, job_id: "job-2", outcome: "accepted" },
+          { ordinal: 1, task_id: "task-1", outcome: "accepted" },
+          { ordinal: 2, task_id: "task-2", outcome: "accepted" },
         ] as unknown as R[]),
     };
     const queue = new Queue(database);
@@ -102,16 +102,16 @@ describe("Workhorse OpenTelemetry metrics", () => {
     ]);
     await collect();
 
-    expect(metric("workhorse.jobs.enqueued")?.dataPoints).toEqual([
+    expect(metric("workhorse.tasks.enqueued")?.dataPoints).toEqual([
       expect.objectContaining({
         attributes: {
-          "workhorse.job.type": "email.send",
+          "workhorse.task.type": "email.send",
           "workhorse.queue.name": "mail",
         },
         value: 2,
       }),
     ]);
-    expect(metric("workhorse.jobs.enqueue.outcomes")?.dataPoints).toEqual([
+    expect(metric("workhorse.tasks.enqueue.outcomes")?.dataPoints).toEqual([
       expect.objectContaining({
         attributes: {
           "workhorse.enqueue.outcome": "accepted",
@@ -130,7 +130,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
         queryResult(
           outcomes.map((outcome, index) => ({
             ordinal: index + 1,
-            job_id: `job-${index + 1}`,
+            task_id: `task-${index + 1}`,
             outcome,
             reason: outcome === "non_replaceable" ? "not_pending" : null,
           })) as unknown as R[],
@@ -172,7 +172,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     ]);
     await collect();
 
-    expect(metric("workhorse.jobs.enqueue.outcomes")?.dataPoints).toEqual(
+    expect(metric("workhorse.tasks.enqueue.outcomes")?.dataPoints).toEqual(
       outcomes.map((outcome) =>
         expect.objectContaining({
           attributes: {
@@ -183,18 +183,18 @@ describe("Workhorse OpenTelemetry metrics", () => {
         }),
       ),
     );
-    expect(JSON.stringify(metric("workhorse.jobs.enqueue.outcomes")?.dataPoints)).not.toContain(
+    expect(JSON.stringify(metric("workhorse.tasks.enqueue.outcomes")?.dataPoints)).not.toContain(
       "secret-",
     );
-    expect(JSON.stringify(metric("workhorse.jobs.enqueue.outcomes")?.dataPoints)).not.toContain(
+    expect(JSON.stringify(metric("workhorse.tasks.enqueue.outcomes")?.dataPoints)).not.toContain(
       "customer-42",
     );
   });
 
   it("records worker executions by bounded outcome with their duration", async () => {
     const { Worker } = await import("../src/worker.js");
-    const job: ClaimedJob = {
-      id: "job-1",
+    const task: ClaimedTask = {
+      id: "task-1",
       queue: "mail",
       type: "email.send",
       priority: 0,
@@ -213,7 +213,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
       leaseExpiresAt: new Date(Date.now() + 30_000),
     };
     const queue = workerQueue({
-      claim: async () => job,
+      claim: async () => task,
       complete: async () => true,
     });
     const worker = new Worker(queue, {
@@ -228,7 +228,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
       expect.objectContaining({
         attributes: {
           "workhorse.handler.outcome": "succeeded",
-          "workhorse.job.type": "email.send",
+          "workhorse.task.type": "email.send",
           "workhorse.queue.name": "mail",
         },
         value: 1,
@@ -238,7 +238,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
       expect.objectContaining({
         attributes: {
           "workhorse.handler.outcome": "succeeded",
-          "workhorse.job.type": "email.send",
+          "workhorse.task.type": "email.send",
           "workhorse.queue.name": "mail",
         },
       }),
@@ -247,8 +247,8 @@ describe("Workhorse OpenTelemetry metrics", () => {
 
   it("records partial batch dispatch diagnostics", async () => {
     const { Worker } = await import("../src/worker.js");
-    const jobs: ClaimedJob[] = [1, 2].map((value) => ({
-      id: `batch-job-${value}`,
+    const tasks: ClaimedTask[] = [1, 2].map((value) => ({
+      id: `batch-task-${value}`,
       queue: "mail",
       type: "email.batch",
       priority: value,
@@ -267,7 +267,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
       leaseExpiresAt: new Date(Date.now() + 30_000),
     }));
     const queue = workerQueue({
-      claim: async () => jobs.shift() ?? null,
+      claim: async () => tasks.shift() ?? null,
       complete: async () => true,
     });
     const worker = new Worker(queue, {
@@ -283,7 +283,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
 
     const attributes = {
       "workhorse.handler.batch.full": false,
-      "workhorse.job.type": "email.batch",
+      "workhorse.task.type": "email.batch",
       "workhorse.queue.name": "mail",
     };
     expect(metric("workhorse.handler.batch.size")?.dataPoints).toEqual([
@@ -299,8 +299,8 @@ describe("Workhorse OpenTelemetry metrics", () => {
 
   it("records a handler failure scheduled for another attempt as a retry", async () => {
     const { Worker } = await import("../src/worker.js");
-    const job: ClaimedJob = {
-      id: "job-2",
+    const task: ClaimedTask = {
+      id: "task-2",
       queue: "mail",
       type: "email.send",
       priority: 0,
@@ -319,7 +319,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
       leaseExpiresAt: new Date(Date.now() + 30_000),
     };
     const queue = workerQueue({
-      claim: async () => job,
+      claim: async () => task,
       fail: async () => "scheduled",
     });
     const worker = new Worker(queue, {
@@ -336,7 +336,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
       expect.objectContaining({
         attributes: {
           "workhorse.handler.outcome": "retry",
-          "workhorse.job.type": "email.send",
+          "workhorse.task.type": "email.send",
           "workhorse.queue.name": "mail",
         },
         value: 1,
@@ -346,8 +346,8 @@ describe("Workhorse OpenTelemetry metrics", () => {
 
   it("records a terminal handler failure", async () => {
     const { Worker } = await import("../src/worker.js");
-    const job: ClaimedJob = {
-      id: "job-3",
+    const task: ClaimedTask = {
+      id: "task-3",
       queue: "mail",
       type: "email.send",
       priority: 0,
@@ -366,7 +366,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
       leaseExpiresAt: new Date(Date.now() + 30_000),
     };
     const queue = workerQueue({
-      claim: async () => job,
+      claim: async () => task,
       fail: async () => "failed",
     });
     const worker = new Worker(queue, {
@@ -383,7 +383,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
       expect.objectContaining({
         attributes: {
           "workhorse.handler.outcome": "failed",
-          "workhorse.job.type": "email.send",
+          "workhorse.task.type": "email.send",
           "workhorse.queue.name": "mail",
         },
         value: 1,
@@ -393,8 +393,8 @@ describe("Workhorse OpenTelemetry metrics", () => {
 
   it("records a cooperatively canceled execution", async () => {
     const { CancellationRequestedError, Worker } = await import("../src/worker.js");
-    const job: ClaimedJob = {
-      id: "job-4",
+    const task: ClaimedTask = {
+      id: "task-4",
       queue: "mail",
       type: "email.send",
       priority: 0,
@@ -413,14 +413,14 @@ describe("Workhorse OpenTelemetry metrics", () => {
       leaseExpiresAt: new Date(Date.now() + 30_000),
     };
     const queue = workerQueue({
-      claim: async () => job,
+      claim: async () => task,
       acknowledgeCancel: async () => true,
     });
     const worker = new Worker(queue, {
       queue: "mail",
       registryIntervalMs: 0,
     }).handle("email.send", async () => {
-      throw new CancellationRequestedError(job.id);
+      throw new CancellationRequestedError(task.id);
     });
 
     await worker.runOnce();
@@ -430,7 +430,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
       expect.objectContaining({
         attributes: {
           "workhorse.handler.outcome": "canceled",
-          "workhorse.job.type": "email.send",
+          "workhorse.task.type": "email.send",
           "workhorse.queue.name": "mail",
         },
         value: 1,
@@ -440,8 +440,8 @@ describe("Workhorse OpenTelemetry metrics", () => {
 
   it("records cancellation when it wins the execution-timeout race", async () => {
     const { Worker } = await import("../src/worker.js");
-    const job: ClaimedJob = {
-      id: "job-timeout-cancel-race",
+    const task: ClaimedTask = {
+      id: "task-timeout-cancel-race",
       queue: "mail",
       type: "email.send",
       priority: 0,
@@ -460,7 +460,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
       leaseExpiresAt: new Date(Date.now() + 30_000),
     };
     const queue = workerQueue({
-      claim: async () => job,
+      claim: async () => task,
       expireOwned: async () => "cancel_requested",
       acknowledgeCancel: async () => true,
     });
@@ -484,7 +484,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
       expect.objectContaining({
         attributes: {
           "workhorse.handler.outcome": "canceled",
-          "workhorse.job.type": "email.send",
+          "workhorse.task.type": "email.send",
           "workhorse.queue.name": "mail",
         },
         value: 1,
@@ -496,7 +496,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const { WorkhorseMetricsObserver } = await import("../src/metrics-observer.js");
     const database: Queryable = {
       query: async <R extends QueryResultRow>(text: string) => {
-        if (text.includes("FROM workhorse.job_runtime")) {
+        if (text.includes("FROM workhorse.task_runtime")) {
           return queryResult([
             {
               queue_name: "mail",
@@ -535,14 +535,14 @@ describe("Workhorse OpenTelemetry metrics", () => {
     await new WorkhorseMetricsObserver(database).collect();
     await collect();
 
-    expect(metric("workhorse.jobs.count")?.dataPoints).toEqual(
+    expect(metric("workhorse.tasks.count")?.dataPoints).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          attributes: { "workhorse.job.state": "ready", "workhorse.queue.name": "mail" },
+          attributes: { "workhorse.task.state": "ready", "workhorse.queue.name": "mail" },
           value: 3,
         }),
         expect.objectContaining({
-          attributes: { "workhorse.job.state": "active", "workhorse.queue.name": "mail" },
+          attributes: { "workhorse.task.state": "active", "workhorse.queue.name": "mail" },
           value: 1,
         }),
       ]),
@@ -697,10 +697,10 @@ describe("Workhorse OpenTelemetry metrics", () => {
         ] as unknown as R[]),
     };
 
-    await new Queue(database).cancel("job-1", { requestedBy: "operator", reason: "deploy" });
+    await new Queue(database).cancel("task-1", { requestedBy: "operator", reason: "deploy" });
     await collect();
 
-    expect(metric("workhorse.jobs.cancellation")?.dataPoints).toEqual([
+    expect(metric("workhorse.tasks.cancellation")?.dataPoints).toEqual([
       expect.objectContaining({
         attributes: { "workhorse.cancellation.status": "cancel_requested" },
         value: 1,
@@ -714,7 +714,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const database: Queryable = {
       query: async <R extends QueryResultRow>() => {
         fireCalls += 1;
-        return queryResult([{ job_id: fireCalls === 1 ? "job-1" : null }] as unknown as R[]);
+        return queryResult([{ task_id: fireCalls === 1 ? "task-1" : null }] as unknown as R[]);
       },
     };
     const queue = new Queue(database);
@@ -743,8 +743,8 @@ describe("Workhorse OpenTelemetry metrics", () => {
         queryResult([
           {
             status: "redriven",
-            source_job_id: "failed-job",
-            target_job_id: "new-job",
+            source_task_id: "failed-task",
+            target_task_id: "new-task",
             source_state: "failed",
             target_state: "ready",
             requested_at: new Date(),
@@ -752,14 +752,14 @@ describe("Workhorse OpenTelemetry metrics", () => {
         ] as unknown as R[]),
     };
 
-    await new Admin(database).redrive("failed-job", {
+    await new Admin(database).redrive("failed-task", {
       actor: "operator",
       reason: "fixed",
       requestId: "request-1",
     });
     await collect();
 
-    expect(metric("workhorse.jobs.redrive")?.dataPoints).toEqual([
+    expect(metric("workhorse.tasks.redrive")?.dataPoints).toEqual([
       expect.objectContaining({
         attributes: { "workhorse.redrive.status": "redriven" },
         value: 1,
@@ -774,8 +774,8 @@ describe("Workhorse OpenTelemetry metrics", () => {
         queryResult([
           {
             status: "redriven",
-            source_job_id: "failed-1",
-            target_job_id: "new-1",
+            source_task_id: "failed-1",
+            target_task_id: "new-1",
             source_state: "failed",
             target_state: "ready",
             requested_at: new Date(),
@@ -784,8 +784,8 @@ describe("Workhorse OpenTelemetry metrics", () => {
           },
           {
             status: "replayed",
-            source_job_id: "failed-2",
-            target_job_id: "new-2",
+            source_task_id: "failed-2",
+            target_task_id: "new-2",
             source_state: "failed",
             target_state: "ready",
             requested_at: new Date(),
@@ -801,7 +801,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     );
     await collect();
 
-    expect(metric("workhorse.jobs.redrive")?.dataPoints).toEqual(
+    expect(metric("workhorse.tasks.redrive")?.dataPoints).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           attributes: { "workhorse.redrive.status": "redriven" },
@@ -815,14 +815,14 @@ describe("Workhorse OpenTelemetry metrics", () => {
     );
   });
 
-  it("counts claimed jobs by queue and job type", async () => {
+  it("counts claimed tasks by queue and task type", async () => {
     const { Queue } = await import("../src/queue.js");
     const database: Queryable = {
       query: async <R extends QueryResultRow>() =>
         queryResult([
           {
-            job_id: "job-1",
-            job_type: "email.send",
+            task_id: "task-1",
+            task_type: "email.send",
             payload: null,
             attempt: 1,
             max_attempts: 3,
@@ -839,10 +839,10 @@ describe("Workhorse OpenTelemetry metrics", () => {
     await new Queue(database).claim("worker-1", { queue: "mail" });
     await collect();
 
-    expect(metric("workhorse.jobs.claimed")?.dataPoints).toEqual([
+    expect(metric("workhorse.tasks.claimed")?.dataPoints).toEqual([
       expect.objectContaining({
         attributes: {
-          "workhorse.job.type": "email.send",
+          "workhorse.task.type": "email.send",
           "workhorse.queue.name": "mail",
         },
         value: 1,
@@ -856,8 +856,8 @@ describe("Workhorse OpenTelemetry metrics", () => {
       query: async <R extends QueryResultRow>() =>
         queryResult([{ status: "stale" }] as unknown as R[]),
     };
-    const job: ClaimedJob = {
-      id: "job-1",
+    const task: ClaimedTask = {
+      id: "task-1",
       queue: "mail",
       type: "email.send",
       priority: 0,
@@ -876,7 +876,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
       leaseExpiresAt: new Date(Date.now() + 30_000),
     };
 
-    await new Queue(database).heartbeatStatus(job, "worker-1");
+    await new Queue(database).heartbeatStatus(task, "worker-1");
     await collect();
 
     expect(metric("workhorse.worker.heartbeat.failure")?.dataPoints).toEqual([
@@ -893,8 +893,8 @@ describe("Workhorse OpenTelemetry metrics", () => {
     ["stale", "lease_lost"],
   ] as const)("records %s execution finalization as %s", async (databaseState, outcome) => {
     const { Worker } = await import("../src/worker.js");
-    const job: ClaimedJob = {
-      id: `job-${databaseState}`,
+    const task: ClaimedTask = {
+      id: `task-${databaseState}`,
       queue: "mail",
       type: "email.send",
       priority: 0,
@@ -913,7 +913,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
       leaseExpiresAt: new Date(Date.now() + 30_000),
     };
     const queue = workerQueue({
-      claim: async () => job,
+      claim: async () => task,
       fail: async () => databaseState,
     });
     const worker = new Worker(queue, {
@@ -930,7 +930,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
       expect.objectContaining({
         attributes: {
           "workhorse.handler.outcome": outcome,
-          "workhorse.job.type": "email.send",
+          "workhorse.task.type": "email.send",
           "workhorse.queue.name": "mail",
         },
         value: 1,
@@ -940,8 +940,8 @@ describe("Workhorse OpenTelemetry metrics", () => {
 
   it("records durable wait suspension without treating it as a failure", async () => {
     const { Worker } = await import("../src/worker.js");
-    const job: ClaimedJob = {
-      id: "job-wait",
+    const task: ClaimedTask = {
+      id: "task-wait",
       queue: "reports",
       type: "report.publish",
       priority: 0,
@@ -960,11 +960,11 @@ describe("Workhorse OpenTelemetry metrics", () => {
       leaseExpiresAt: new Date(Date.now() + 30_000),
     };
     const queue = workerQueue({
-      claim: async () => job,
+      claim: async () => task,
       scheduleWait: async () => ({
         status: "scheduled",
         wait: {
-          jobId: job.id,
+          taskId: task.id,
           name: "publish",
           mode: "relative",
           durationMs: 1_000,
@@ -992,7 +992,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
       expect.objectContaining({
         attributes: {
           "workhorse.handler.outcome": "suspended",
-          "workhorse.job.type": "report.publish",
+          "workhorse.task.type": "report.publish",
           "workhorse.queue.name": "reports",
         },
         value: 1,
@@ -1002,10 +1002,10 @@ describe("Workhorse OpenTelemetry metrics", () => {
 
   it("records a missing handler as the failure PostgreSQL selected", async () => {
     const { Worker } = await import("../src/worker.js");
-    const job: ClaimedJob = {
-      id: "job-missing-handler",
+    const task: ClaimedTask = {
+      id: "task-missing-handler",
       queue: "default",
-      type: "unknown.job",
+      type: "unknown.task",
       priority: 0,
       payload: null,
       contractVersion: null,
@@ -1022,7 +1022,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
       leaseExpiresAt: new Date(Date.now() + 30_000),
     };
     const queue = workerQueue({
-      claim: async () => job,
+      claim: async () => task,
       fail: async () => "failed",
     });
     const worker = new Worker(queue, {
@@ -1037,7 +1037,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
       expect.objectContaining({
         attributes: {
           "workhorse.handler.outcome": "failed",
-          "workhorse.job.type": "unknown.job",
+          "workhorse.task.type": "unknown.task",
           "workhorse.queue.name": "default",
         },
         value: 1,
@@ -1058,7 +1058,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const lateProvider = new MeterProvider({ readers: [lateReader] });
     const database: Queryable = {
       query: async <R extends QueryResultRow>() =>
-        queryResult([{ ordinal: 1, job_id: "job-late", outcome: "accepted" }] as unknown as R[]),
+        queryResult([{ ordinal: 1, task_id: "task-late", outcome: "accepted" }] as unknown as R[]),
     };
 
     metrics.disable();
@@ -1072,7 +1072,8 @@ describe("Workhorse OpenTelemetry metrics", () => {
           .getMetrics()
           .flatMap((resource) => resource.scopeMetrics)
           .flatMap((scope) => scope.metrics)
-          .find((candidate) => candidate.descriptor.name === "workhorse.jobs.enqueued")?.dataPoints,
+          .find((candidate) => candidate.descriptor.name === "workhorse.tasks.enqueued")
+          ?.dataPoints,
       ).toEqual([expect.objectContaining({ value: 1 })]);
     } finally {
       await lateProvider.shutdown();

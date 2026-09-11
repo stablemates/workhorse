@@ -36,17 +36,17 @@ function run(
     design,
     workerConcurrency,
     repetition,
-    jobs: 10,
+    tasks: 10,
     enqueueBatchSize: 4,
     enqueueRequests: 3,
     enqueueDurationMs: repetition * 2,
     processingDurationMs: repetition * 4,
     totalDurationMs: repetition * 6,
-    enqueueJobsPerSecond: 5_000 / repetition,
-    processingJobsPerSecond: 2_500 / repetition,
-    totalJobsPerSecond: throughputPerSecond,
+    enqueueTasksPerSecond: 5_000 / repetition,
+    processingTasksPerSecond: 2_500 / repetition,
+    totalTasksPerSecond: throughputPerSecond,
     throughputPerSecond,
-    completedJobs: 10,
+    completedTasks: 10,
     claimLatencySamplesMs,
     claimLatencyMs: {
       p50: claimLatencySamplesMs[0] ?? null,
@@ -61,14 +61,14 @@ describe("normalizeComparativeOptions", () => {
   it("merges defaults and canonicalizes v3 fixed-rate options", () => {
     const defaults: ComparativeBenchmarkOptions = {
       seed: 7,
-      jobsPerRun: 8,
+      tasksPerRun: 8,
       enqueueBatchSize: 2,
       repetitions: 2,
       workerConcurrency: [4],
       queueName: "default-name",
       leaseMs: 5_000,
       churn: {
-        targetJobs: 20,
+        targetTasks: 20,
         targetRatePerSecond: 10,
         batchSize: 3,
         sampleIntervalMs: 20,
@@ -80,24 +80,24 @@ describe("normalizeComparativeOptions", () => {
       normalizeComparativeOptions(
         {
           seed: 42,
-          jobsPerRun: 12,
+          tasksPerRun: 12,
           enqueueBatchSize: 5,
           workerConcurrency: [4, 1, 4, 2],
           queueName: "  benchmark  ",
-          churn: { targetJobs: 30, targetRatePerSecond: 15 },
+          churn: { targetTasks: 30, targetRatePerSecond: 15 },
         },
         defaults,
       ),
     ).toEqual({
       seed: 42,
-      jobsPerRun: 12,
+      tasksPerRun: 12,
       enqueueBatchSize: 5,
       repetitions: 2,
       workerConcurrency: [1, 2, 4],
       queueName: "benchmark",
       leaseMs: 5_000,
       churn: {
-        targetJobs: 30,
+        targetTasks: 30,
         targetRatePerSecond: 15,
         batchSize: 3,
         sampleIntervalMs: 20,
@@ -109,7 +109,7 @@ describe("normalizeComparativeOptions", () => {
   it("rejects invalid seed, batching, and fixed-rate options", () => {
     expect(() => normalizeComparativeOptions({ seed: -1 })).toThrow(/seed/);
     expect(() => normalizeComparativeOptions({ enqueueBatchSize: 0 })).toThrow(/enqueueBatchSize/);
-    expect(() => normalizeComparativeOptions({ churn: { targetJobs: 0 } })).toThrow(/targetJobs/);
+    expect(() => normalizeComparativeOptions({ churn: { targetTasks: 0 } })).toThrow(/targetTasks/);
     expect(() => normalizeComparativeOptions({ churn: { targetRatePerSecond: 0 } })).toThrow(
       /targetRatePerSecond/,
     );
@@ -187,7 +187,7 @@ describe("deterministic JSON conversion", () => {
     });
     const result: ComparativeBenchmarkResult = {
       version: 3,
-      options: normalizeComparativeOptions({ churn: { targetJobs: 1 } }),
+      options: normalizeComparativeOptions({ churn: { targetTasks: 1 } }),
       executionPlan: [],
       runs: [],
       summaries: [],

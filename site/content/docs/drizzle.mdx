@@ -1,11 +1,11 @@
 ---
 title: Drizzle
-description: Adapt a node-postgres Drizzle database and enqueue jobs inside caller-owned transactions.
+description: Adapt a node-postgres Drizzle database and enqueue tasks inside caller-owned transactions.
 ---
 
 Your application already writes through Drizzle. When a request inserts an account and enqueues a
-follow-up job, those two writes must commit together — a job for a row that rolled back is a bug,
-and a committed row with no job is a silent gap. `@stablemates/workhorse-drizzle` closes that gap: it converts
+follow-up task, those two writes must commit together — a task for a row that rolled back is a bug,
+and a committed row with no task is a silent gap. `@stablemates/workhorse-drizzle` closes that gap: it converts
 Drizzle's database and transaction objects into the core `Queryable` protocol, so `Queue.enqueue`
 runs inside the same transaction as your Drizzle writes.
 
@@ -42,7 +42,7 @@ one stable surface without adding Drizzle to core.
 ## Enqueue inside a Drizzle transaction
 
 This is the pattern the adapter exists for. Call `forTransaction` with the transaction object. The
-returned `Queue` sends its SQL through that transaction, so the job follows the surrounding commit
+returned `Queue` sends its SQL through that transaction, so the task follows the surrounding commit
 or rollback.
 
 ```ts
@@ -54,7 +54,7 @@ await db.transaction(async (tx) => {
 });
 ```
 
-If the callback throws, Drizzle rolls back both the account and the job. Nothing outside the
+If the callback throws, Drizzle rolls back both the account and the task. Nothing outside the
 transaction ever sees a half-committed pair. A queue created from the adapter's default `queue`
 property remains outside that caller transaction — use it for enqueues that stand alone.
 

@@ -2,7 +2,7 @@ import { taskStatusColors } from "../status-colors.js";
 import { StatusLabel } from "../status-badge.js";
 import type {
   DashboardCancellationRequest,
-  DashboardJobRow,
+  DashboardTaskRow,
   DashboardTaskFacets,
   DashboardTasksPage,
   DashboardTasksCursorPage,
@@ -59,8 +59,8 @@ import {
 } from "../preferences.js";
 import { useDashboardClient } from "../core.js";
 
-export function DurableProgressBadge({ job }: { job: DashboardJobRow }) {
-  if (!job.durability) {
+export function DurableProgressBadge({ task }: { task: DashboardTaskRow }) {
+  if (!task.durability) {
     return (
       <Text size="sm" c="dimmed">
         —
@@ -73,14 +73,14 @@ export function DurableProgressBadge({ job }: { job: DashboardJobRow }) {
       variant="light"
       color="violet"
       tt="none"
-      title={`${job.durability.completedSteps} of ${job.durability.totalSteps} durable steps completed`}
+      title={`${task.durability.completedSteps} of ${task.durability.totalSteps} durable steps completed`}
       role="progressbar"
       aria-label="Durable steps completed"
       aria-valuemin={0}
-      aria-valuemax={job.durability.totalSteps}
-      aria-valuenow={job.durability.completedSteps}
+      aria-valuemax={task.durability.totalSteps}
+      aria-valuenow={task.durability.completedSteps}
     >
-      {job.durability.completedSteps}/{job.durability.totalSteps}
+      {task.durability.completedSteps}/{task.durability.totalSteps}
     </Badge>
   );
 }
@@ -119,31 +119,31 @@ export function CancelRequestedBadge({
   );
 }
 /** One-line, state-specific context so a row explains itself without opening the drawer. */
-export function TaskStatusDetail({ job }: { job: DashboardJobRow }) {
+export function TaskStatusDetail({ task }: { task: DashboardTaskRow }) {
   let detail: string | null = null;
   let exactTime: string | null = null;
-  if (job.blockedReason === "prerequisite_pending") {
-    detail = `${job.prerequisiteJobIds.length} unresolved ${job.prerequisiteJobIds.length === 1 ? "prerequisite" : "prerequisites"}`;
-  } else if (job.state === "scheduled" && job.wait) {
+  if (task.blockedReason === "prerequisite_pending") {
+    detail = `${task.prerequisiteTaskIds.length} unresolved ${task.prerequisiteTaskIds.length === 1 ? "prerequisite" : "prerequisites"}`;
+  } else if (task.state === "scheduled" && task.wait) {
     // A durable wait is a scheduled restart boundary, not an owned execution.
-    detail = `sleeping until ${formatClock(job.wait.wakeAt)} · ${job.wait.name}`;
-    exactTime = formatExact(job.wait.wakeAt);
-  } else if (job.state === "scheduled" && job.runAt) {
-    detail = `runs ${formatRelative(job.runAt)}`;
-    exactTime = formatExact(job.runAt);
-    if (job.attempt > 1) detail += ` · ${describeRetryPolicy(job.retryPolicy).label}`;
-  } else if (job.state === "active" && job.workerId) detail = `on ${job.workerId}`;
-  else if (job.state === "failed" && job.errorMessage) detail = job.errorMessage;
-  else if (job.state === "canceled" && job.finishedAt) {
+    detail = `sleeping until ${formatClock(task.wait.wakeAt)} · ${task.wait.name}`;
+    exactTime = formatExact(task.wait.wakeAt);
+  } else if (task.state === "scheduled" && task.runAt) {
+    detail = `runs ${formatRelative(task.runAt)}`;
+    exactTime = formatExact(task.runAt);
+    if (task.attempt > 1) detail += ` · ${describeRetryPolicy(task.retryPolicy).label}`;
+  } else if (task.state === "active" && task.workerId) detail = `on ${task.workerId}`;
+  else if (task.state === "failed" && task.errorMessage) detail = task.errorMessage;
+  else if (task.state === "canceled" && task.finishedAt) {
     // Canceled work reads as a deliberate stop, never as an error, even though the stored
     // cancellation envelope lives in the same column a failure would use.
-    detail = `canceled ${formatRelative(job.finishedAt)}`;
-    exactTime = formatExact(job.finishedAt);
+    detail = `canceled ${formatRelative(task.finishedAt)}`;
+    exactTime = formatExact(task.finishedAt);
   }
   if (!detail) return null;
   return (
     <Text
-      c={job.state === "failed" ? "red.7" : "dimmed"}
+      c={task.state === "failed" ? "red.7" : "dimmed"}
       size="xs"
       style={{ overflowWrap: "anywhere" }}
       title={[detail, exactTime].filter(Boolean).join(" · ")}
@@ -153,8 +153,8 @@ export function TaskStatusDetail({ job }: { job: DashboardJobRow }) {
   );
 }
 /** The unresolved dependency which keeps a list row outside dispatch. */
-export function TaskBlockedBy({ job }: { job: DashboardJobRow }) {
-  if (job.blockedReason !== "prerequisite_pending") {
+export function TaskBlockedBy({ task }: { task: DashboardTaskRow }) {
+  if (task.blockedReason !== "prerequisite_pending") {
     return (
       <Text size="sm" c="dimmed">
         —
@@ -174,7 +174,7 @@ export function TaskBlockedBy({ job }: { job: DashboardJobRow }) {
         Prerequisite pending
       </Badge>
       <Text size="xs" c="dimmed" lineClamp={1}>
-        <Code fz="xs">{job.prerequisiteJobIds.join(", ")}</Code>
+        <Code fz="xs">{task.prerequisiteTaskIds.join(", ")}</Code>
       </Text>
     </Stack>
   );
@@ -248,10 +248,10 @@ export function TaskTags({ tags }: { tags: readonly string[] }) {
  * Badge for a scheduled durable wait. "Waking" means the stored target has passed
  * and the task is eligible for promotion and a fresh claim, not that a worker holds it.
  */
-export function TaskWaitBadge({ job }: { job: DashboardJobRow }) {
-  const scheduledWait = job.state === "scheduled" ? job.wait : null;
+export function TaskWaitBadge({ task }: { task: DashboardTaskRow }) {
+  const scheduledWait = task.state === "scheduled" ? task.wait : null;
   const due = useElapsed(scheduledWait?.wakeAt ?? null);
-  if (job.signalWait) {
+  if (task.signalWait) {
     return (
       <Badge
         size="sm"
@@ -259,16 +259,16 @@ export function TaskWaitBadge({ job }: { job: DashboardJobRow }) {
         color="violet"
         leftSection={<Lightning size={11} weight="bold" />}
         tt="none"
-        title={`Waiting for signal ${job.signalWait.name} · deadline ${formatExact(job.signalWait.deadlineAt)}`}
+        title={`Waiting for signal ${task.signalWait.name} · deadline ${formatExact(task.signalWait.deadlineAt)}`}
         role="status"
-        aria-label={`Waiting for signal ${job.signalWait.name}`}
+        aria-label={`Waiting for signal ${task.signalWait.name}`}
         style={{ flexShrink: 0 }}
       >
-        Waiting for signal: {job.signalWait.name}
+        Waiting for signal: {task.signalWait.name}
       </Badge>
     );
   }
-  if (job.humanWait) {
+  if (task.humanWait) {
     return (
       <Badge
         size="sm"
@@ -276,12 +276,12 @@ export function TaskWaitBadge({ job }: { job: DashboardJobRow }) {
         color="violet"
         leftSection={<UserFocus size={11} weight="bold" />}
         tt="none"
-        title={`Waiting for decision ${job.humanWait.name} · deadline ${formatExact(job.humanWait.deadlineAt)}`}
+        title={`Waiting for decision ${task.humanWait.name} · deadline ${formatExact(task.humanWait.deadlineAt)}`}
         role="status"
-        aria-label={`Waiting for decision ${job.humanWait.name}`}
+        aria-label={`Waiting for decision ${task.humanWait.name}`}
         style={{ flexShrink: 0 }}
       >
-        Waiting for decision: {job.humanWait.name}
+        Waiting for decision: {task.humanWait.name}
       </Badge>
     );
   }
@@ -302,10 +302,10 @@ export function TaskWaitBadge({ job }: { job: DashboardJobRow }) {
     </Badge>
   );
 }
-/** Wall-clock time from enqueue to terminal outcome, only shown once the job finished. */
-export function taskDuration(job: DashboardJobRow): string | null {
-  if (!job.finishedAt) return null;
-  const elapsed = new Date(job.finishedAt).getTime() - new Date(job.createdAt).getTime();
+/** Wall-clock time from enqueue to terminal outcome, only shown once the task finished. */
+export function taskDuration(task: DashboardTaskRow): string | null {
+  if (!task.finishedAt) return null;
+  const elapsed = new Date(task.finishedAt).getTime() - new Date(task.createdAt).getTime();
   return elapsed >= 0 ? formatDuration(elapsed) : null;
 }
 export function PageHeader({ title, description }: { title: string; description: string }) {
@@ -346,9 +346,9 @@ export function includeSelectedOptions(values: string[], selected: readonly stri
 export function useTaskFacets({
   queue,
   worker,
-  jobType,
+  taskType,
   tags,
-}: Pick<DashboardTasksPage, "queue" | "worker" | "jobType" | "tags">) {
+}: Pick<DashboardTasksPage, "queue" | "worker" | "taskType" | "tags">) {
   const client = useDashboardClient();
   const [facets, setFacets] = useState<DashboardTaskFacets | null>(null);
   const [loading, setLoading] = useState(false);
@@ -383,12 +383,12 @@ export function useTaskFacets({
         }
       });
   }, [client, facets]);
-  const values = facets ?? { queues: [], workers: [], jobTypes: [], tags: [] };
+  const values = facets ?? { queues: [], workers: [], taskTypes: [], tags: [] };
   return {
     facets: {
       queues: includeSelectedOption(values.queues, queue),
       workers: includeSelectedOption(values.workers, worker),
-      jobTypes: includeSelectedOption(values.jobTypes, jobType),
+      taskTypes: includeSelectedOption(values.taskTypes, taskType),
       tags: includeSelectedOptions(values.tags, tags),
     },
     loading,
@@ -440,7 +440,7 @@ export function TaskListingFilters({
         [
           ["Queue", data.queue, taskFacets.facets.queues, "queue"],
           ["Worker", data.worker, taskFacets.facets.workers, "worker"],
-          ["Task type", data.jobType, taskFacets.facets.jobTypes, "jobType"],
+          ["Task type", data.taskType, taskFacets.facets.taskTypes, "taskType"],
         ] as const
       ).map(([placeholder, value, values, key]) => (
         <Select
@@ -498,20 +498,20 @@ export function taskRowActionIcon(id: TaskRowActionId): ReactNode {
  * the mutation in flight, and reports the durable result without claiming the handler ran inline.
  */
 export function TaskRowActions({
-  job,
+  task,
   onAction,
   capabilities,
   pendingAction,
   showOpenDetails = true,
 }: {
-  job: TaskActionTarget;
-  onAction: (id: TaskRowActionId, job: TaskActionTarget) => void;
+  task: TaskActionTarget;
+  onAction: (id: TaskRowActionId, task: TaskActionTarget) => void;
   capabilities: TaskRowActionCapabilities;
   /** The action currently in flight for this row, so its item can show it rather than look idle. */
   pendingAction: TaskRowActionId | null;
   showOpenDetails?: boolean;
 }) {
-  const groups = taskRowActionGroups(job, capabilities);
+  const groups = taskRowActionGroups(task, capabilities);
   return (
     <Menu
       blocksRefresh
@@ -526,7 +526,7 @@ export function TaskRowActions({
           size="sm"
           variant="subtle"
           color="gray"
-          aria-label={`Actions for task ${job.id}`}
+          aria-label={`Actions for task ${task.id}`}
           className="task-table__action-trigger"
           loading={pendingAction !== null}
           // The row itself opens the drawer on click, which is not what opening this menu means.
@@ -549,7 +549,7 @@ export function TaskRowActions({
                   leftSection={pending ? <Loader size={14} /> : taskRowActionIcon(action.id)}
                   color={action.destructive && action.unavailable === null ? "red" : undefined}
                   disabled={action.unavailable !== null || pendingAction !== null}
-                  onClick={() => onAction(action.id, job)}
+                  onClick={() => onAction(action.id, task)}
                 >
                   <Text size="sm" lh={1.3}>
                     {action.label}
@@ -569,37 +569,38 @@ export function TaskRowActions({
   );
 }
 
-export function TaskStatusIndicators({ job }: { job: DashboardJobRow }) {
-  const waiting = job.signalWait
+export function TaskStatusIndicators({ task }: { task: DashboardTaskRow }) {
+  const waiting = task.signalWait
     ? {
         text: "Waiting for signal",
-        label: `Waiting for signal: ${job.signalWait.name}`,
+        label: `Waiting for signal: ${task.signalWait.name}`,
         color: taskStatusColors.signalWait,
-        timing: `Deadline ${formatExact(job.signalWait.deadlineAt)}`,
+        timing: `Deadline ${formatExact(task.signalWait.deadlineAt)}`,
       }
-    : job.humanWait
+    : task.humanWait
       ? {
           text: "Waiting for decision",
-          label: `Waiting for decision: ${job.humanWait.name}`,
+          label: `Waiting for decision: ${task.humanWait.name}`,
           color: taskStatusColors.humanWait,
-          timing: `Deadline ${formatExact(job.humanWait.deadlineAt)}`,
+          timing: `Deadline ${formatExact(task.humanWait.deadlineAt)}`,
         }
-      : job.state === "scheduled" && job.wait
+      : task.state === "scheduled" && task.wait
         ? {
             text: "Durable wait",
-            label: `Durable wait: ${job.wait.name}`,
+            label: `Durable wait: ${task.wait.name}`,
             color: taskStatusColors.durableWait,
-            timing: `Wake at ${formatExact(job.wait.wakeAt)}`,
+            timing: `Wake at ${formatExact(task.wait.wakeAt)}`,
           }
         : null;
   return (
     <Group gap={4} wrap="nowrap">
       <StatusLabel
-        state={waiting ? "waiting" : job.state}
+        state={waiting ? "waiting" : task.state}
         text={waiting?.text}
         color={waiting?.color}
         label={
-          waiting?.label ?? `Status: ${job.state}${job.errorMessage ? `. ${job.errorMessage}` : ""}`
+          waiting?.label ??
+          `Status: ${task.state}${task.errorMessage ? `. ${task.errorMessage}` : ""}`
         }
       >
         <Stack gap={4}>
@@ -608,32 +609,32 @@ export function TaskStatusIndicators({ job }: { job: DashboardJobRow }) {
             tt={waiting ? undefined : "capitalize"}
             style={{ overflowWrap: "anywhere" }}
           >
-            {waiting?.label ?? job.state}
+            {waiting?.label ?? task.state}
           </Text>
           {waiting ? (
             <>
               <Text size="xs">{waiting.timing}</Text>
-              <Text size="xs">Status: {job.state}</Text>
+              <Text size="xs">Status: {task.state}</Text>
             </>
           ) : (
-            <TaskStatusDetail job={job} />
+            <TaskStatusDetail task={task} />
           )}
-          {job.blockedReason ? (
-            <Text size="xs">Blocked by: {job.prerequisiteJobIds.join(", ")}</Text>
+          {task.blockedReason ? (
+            <Text size="xs">Blocked by: {task.prerequisiteTaskIds.join(", ")}</Text>
           ) : null}
-          {job.finishedAt ? (
+          {task.finishedAt ? (
             <Text size="xs">
-              Finished {formatRelative(job.finishedAt)} · {formatExact(job.finishedAt)}
+              Finished {formatRelative(task.finishedAt)} · {formatExact(task.finishedAt)}
             </Text>
           ) : null}
         </Stack>
       </StatusLabel>
-      {job.cancellation ? (
+      {task.cancellation ? (
         <StatusLabel
           state="cancel_requested"
-          label={`Cancellation requested: ${job.cancellation.reason}`}
+          label={`Cancellation requested: ${task.cancellation.reason}`}
         >
-          <CancelRequestedBadge cancellation={job.cancellation} />
+          <CancelRequestedBadge cancellation={task.cancellation} />
         </StatusLabel>
       ) : null}
     </Group>
@@ -641,7 +642,11 @@ export function TaskStatusIndicators({ job }: { job: DashboardJobRow }) {
 }
 
 /** Keep older hosts readable while newer listings identify the accepted keyed mode. */
-export function TaskEnqueueBadge({ job }: { job: Pick<DashboardJobRow, "keyed" | "enqueueMode"> }) {
+export function TaskEnqueueBadge({
+  task,
+}: {
+  task: Pick<DashboardTaskRow, "keyed" | "enqueueMode">;
+}) {
   const modes = {
     idempotency: {
       label: "Idempotency",
@@ -662,8 +667,8 @@ export function TaskEnqueueBadge({ job }: { job: Pick<DashboardJobRow, "keyed" |
         "Matching requests reuse the first task within the throttle window. Different requests with the same key are rejected.",
     },
   };
-  const mode = job.enqueueMode ? modes[job.enqueueMode] : undefined;
-  if (!mode && !job.keyed) return null;
+  const mode = task.enqueueMode ? modes[task.enqueueMode] : undefined;
+  if (!mode && !task.keyed) return null;
   return (
     <Badge
       size="xs"

@@ -13,7 +13,7 @@ const site = { base: "https://workhorse.run", name: "Workhorse" };
 const entryPoint = {
   title: "Workhorse for AI coding agents",
   url: "/docs/for-ai-agents",
-  description: "Read the agent-facing documentation, then integrate one job.",
+  description: "Read the agent-facing documentation, then integrate one task.",
 };
 const installation = { title: "Installation", url: "/docs/installation", description: "Install." };
 const limitations = { title: "Limitations", url: "/docs/limitations", description: "Boundaries." };

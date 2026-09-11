@@ -52,28 +52,30 @@ try {
     pollMs: 10,
   }).handle("smoke.echo", async (received) => ({ echoed: received }));
 
-  const jobId = await queue.enqueue("smoke.echo", payload, { queue: "runtime-smoke" });
+  const taskId = await queue.enqueue("smoke.echo", payload, { queue: "runtime-smoke" });
 
   let state = "pending";
   for (let attempt = 0; attempt < 100; attempt += 1) {
     await worker.runOnce();
-    const snapshot = await workhorseAdmin.getJob(jobId);
+    const snapshot = await workhorseAdmin.getTask(taskId);
     state = snapshot?.state ?? "missing";
     if (state === "succeeded") {
       const echoed = (snapshot?.result as { echoed?: unknown } | null)?.echoed;
       if (JSON.stringify(echoed) !== JSON.stringify(payload)) {
-        throw new Error(`Job succeeded with the wrong result: ${JSON.stringify(snapshot?.result)}`);
+        throw new Error(
+          `Task succeeded with the wrong result: ${JSON.stringify(snapshot?.result)}`,
+        );
       }
       break;
     }
     if (state === "failed" || state === "canceled") {
-      throw new Error(`Job finished in ${state} state`);
+      throw new Error(`Task finished in ${state} state`);
     }
     await sleep(20);
   }
-  if (state !== "succeeded") throw new Error(`Job did not complete; final state was ${state}`);
+  if (state !== "succeeded") throw new Error(`Task did not complete; final state was ${state}`);
 
-  console.log(JSON.stringify({ ok: true, runtime, jobId, state }));
+  console.log(JSON.stringify({ ok: true, runtime, taskId, state }));
 } finally {
   await pool.end();
   const cleanup = new Client({ connectionString: testDatabaseUrl });

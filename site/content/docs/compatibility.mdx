@@ -141,7 +141,7 @@ releases from one commit.
 Bun and Deno hold a smoke-tested tier, not support. On pull requests, pushes to `main`, and weekly
 runs, CI executes an enqueue, claim, and complete round-trip through the built package against
 PostgreSQL under the latest release of each; `SMOKE_TESTED_JS_RUNTIMES` exports the tier to tooling. A green lane proves the driver
-connects, the schema installs, and one job completes there — the full test suites run under
+connects, the schema installs, and one task completes there — the full test suites run under
 Node.js only, so no stronger claim is made. Known runtime-specific findings live in the
 [compatibility matrix](https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md).
 

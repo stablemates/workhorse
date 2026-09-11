@@ -36,16 +36,16 @@ func (admin *Admin) Health(ctx context.Context) (QueueHealth, error) {
 
 type AdminCursor struct {
 	OccurredAt time.Time
-	JobID      string
+	TaskID     string
 	Kind       string
 	RecordID   string
 	Signature  string
 }
 
-type JobListQuery struct {
+type TaskListQuery struct {
 	Queue             string
 	Type              string
-	States            []JobState
+	States            []TaskState
 	CreatedAfter      *time.Time
 	CreatedBefore     *time.Time
 	IncludePayload    bool
@@ -55,55 +55,55 @@ type JobListQuery struct {
 	Cursor            *AdminCursor
 }
 
-type JobListItem struct {
-	ID                 string
-	Queue              string
-	Type               string
-	ConcurrencyKey     *string
-	Priority           int
-	Tags               []string
-	State              JobState
-	PrerequisiteJobID  *string
-	PrerequisiteJobIDs []string
-	BlockedReason      *string
-	ParentJobID        *string
-	ChildJobIDs        []string
-	CurrentAttempt     int
-	MaxAttempts        int
-	RetryPolicy        map[string]any
-	DeadlineAt         *time.Time
-	ExecutionTimeoutMS *int64
-	RunAt              time.Time
-	CancelRequestedAt  *time.Time
-	CancelRequestedBy  *string
-	CancelReason       *string
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
-	Payload            any
-	PayloadStatus      string
-	PayloadBytes       *int64
+type TaskListItem struct {
+	ID                  string
+	Queue               string
+	Type                string
+	ConcurrencyKey      *string
+	Priority            int
+	Tags                []string
+	State               TaskState
+	PrerequisiteTaskID  *string
+	PrerequisiteTaskIDs []string
+	BlockedReason       *string
+	ParentTaskID        *string
+	ChildTaskIDs        []string
+	CurrentAttempt      int
+	MaxAttempts         int
+	RetryPolicy         map[string]any
+	DeadlineAt          *time.Time
+	ExecutionTimeoutMS  *int64
+	RunAt               time.Time
+	CancelRequestedAt   *time.Time
+	CancelRequestedBy   *string
+	CancelReason        *string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	Payload             any
+	PayloadStatus       string
+	PayloadBytes        *int64
 }
 
-type JobListPage struct {
-	Items      []JobListItem
+type TaskListPage struct {
+	Items      []TaskListItem
 	NextCursor *AdminCursor
 }
 
-type JobSnapshot struct {
-	JobListItem
+type TaskSnapshot struct {
+	TaskListItem
 	ContractVersion *string
 	FenceToken      int64
 	Result          any
 	Error           any
-	Progress        *JobProgress
+	Progress        *TaskProgress
 }
 
-type JobTimelineQuery struct {
+type TaskTimelineQuery struct {
 	Limit  int
 	Cursor *AdminCursor
 }
 
-type JobTimelineEntry struct {
+type TaskTimelineEntry struct {
 	Kind       string
 	RecordID   string
 	Priority   int
@@ -120,8 +120,8 @@ type JobTimelineEntry struct {
 	OccurredAt time.Time
 }
 
-type JobTimelinePage struct {
-	Items      []JobTimelineEntry
+type TaskTimelinePage struct {
+	Items      []TaskTimelineEntry
 	NextCursor *AdminCursor
 }
 
@@ -141,7 +141,7 @@ type DeadLetterQuery struct {
 }
 
 type DeadLetter struct {
-	JobID              string
+	TaskID             string
 	Queue              string
 	Type               string
 	ConcurrencyKey     *string
@@ -164,12 +164,12 @@ type DeadLetterPage struct {
 }
 
 type RedriveResult struct {
-	Status      string
-	SourceJobID string
-	TargetJobID *string
-	SourceState *JobState
-	TargetState *JobState
-	RequestedAt *time.Time
+	Status       string
+	SourceTaskID string
+	TargetTaskID *string
+	SourceState  *TaskState
+	TargetState  *TaskState
+	RequestedAt  *time.Time
 }
 
 type BulkRedriveOptions struct {
@@ -183,8 +183,8 @@ type BulkRedrivePage struct {
 	NextCursor *AdminCursor
 }
 
-type JobCheckpoint struct {
-	JobID      string
+type TaskCheckpoint struct {
+	TaskID     string
 	Name       string
 	Value      any
 	Attempt    int
@@ -193,8 +193,8 @@ type JobCheckpoint struct {
 	CreatedAt  time.Time
 }
 
-type JobWait struct {
-	JobID           string
+type TaskWait struct {
+	TaskID          string
 	Name            string
 	Mode            string
 	DurationMS      *int64
@@ -212,9 +212,9 @@ type ExternalWaitQuery struct {
 }
 
 type ExternalWait struct {
-	JobID      string
+	TaskID     string
 	Queue      string
-	JobType    string
+	TaskType   string
 	Name       string
 	Context    any
 	Attempt    int
@@ -310,10 +310,10 @@ func deadLetterFilterValue(filter DeadLetterFilter) map[string]any {
 	return value
 }
 
-func (admin *Admin) ListJobs(ctx context.Context, query JobListQuery) (JobListPage, error) {
+func (admin *Admin) ListTasks(ctx context.Context, query TaskListQuery) (TaskListPage, error) {
 	limit, err := adminLimit(query.Limit)
 	if err != nil {
-		return JobListPage{}, err
+		return TaskListPage{}, err
 	}
 	filterValue := make(map[string]any)
 	if query.Queue != "" {
@@ -333,7 +333,7 @@ func (admin *Admin) ListJobs(ctx context.Context, query JobListQuery) (JobListPa
 	}
 	filter, err := adminFilter(filterValue)
 	if err != nil {
-		return JobListPage{}, err
+		return TaskListPage{}, err
 	}
 	payloadMaxBytes := query.PayloadMaxBytes
 	if payloadMaxBytes == 0 {
@@ -345,34 +345,34 @@ func (admin *Admin) ListJobs(ctx context.Context, query JobListQuery) (JobListPa
 	}
 	projection, err := adminFilter(map[string]any{"include": query.IncludePayload, "maxBytes": payloadMaxBytes, "redactKeys": redactKeys})
 	if err != nil {
-		return JobListPage{}, err
+		return TaskListPage{}, err
 	}
 	var created any
-	var jobID, signature any
+	var taskID, signature any
 	if query.Cursor != nil {
-		created, jobID, signature = query.Cursor.OccurredAt, query.Cursor.JobID, query.Cursor.Signature
+		created, taskID, signature = query.Cursor.OccurredAt, query.Cursor.TaskID, query.Cursor.Signature
 	}
-	rows, err := admin.query(ctx, adminStatementRegistry["list_jobs"], filter, limit, created, jobID, signature, projection)
+	rows, err := admin.query(ctx, adminStatementRegistry["list_tasks"], filter, limit, created, taskID, signature, projection)
 	if err != nil {
-		return JobListPage{}, err
+		return TaskListPage{}, err
 	}
-	page := JobListPage{Items: make([]JobListItem, 0, len(rows))}
+	page := TaskListPage{Items: make([]TaskListItem, 0, len(rows))}
 	for _, row := range rows {
-		item, mapErr := mapJobListItem(row)
+		item, mapErr := mapTaskListItem(row)
 		if mapErr != nil {
-			return JobListPage{}, mapErr
+			return TaskListPage{}, mapErr
 		}
 		page.Items = append(page.Items, item)
 	}
 	if len(rows) > 0 && boolValue(rows[len(rows)-1]["has_more"]) {
 		row := rows[len(rows)-1]
-		page.NextCursor = &AdminCursor{OccurredAt: timeValue(row["cursor_created_at"]), JobID: stringValue(row["job_id"]), Signature: stringValue(row["cursor_signature"])}
+		page.NextCursor = &AdminCursor{OccurredAt: timeValue(row["cursor_created_at"]), TaskID: stringValue(row["task_id"]), Signature: stringValue(row["cursor_signature"])}
 	}
 	return page, nil
 }
 
-func (admin *Admin) GetJob(ctx context.Context, id string) (*JobSnapshot, error) {
-	rows, err := admin.query(ctx, adminStatementRegistry["get_job"], id)
+func (admin *Admin) GetTask(ctx context.Context, id string) (*TaskSnapshot, error) {
+	rows, err := admin.query(ctx, adminStatementRegistry["get_task"], id)
 	if err != nil {
 		return nil, err
 	}
@@ -380,40 +380,40 @@ func (admin *Admin) GetJob(ctx context.Context, id string) (*JobSnapshot, error)
 		return nil, nil
 	}
 	if len(rows) != 1 {
-		return nil, fmt.Errorf("get job returned %d rows", len(rows))
+		return nil, fmt.Errorf("get task returned %d rows", len(rows))
 	}
-	item, err := mapJobListItem(rows[0])
+	item, err := mapTaskListItem(rows[0])
 	if err != nil {
 		return nil, err
 	}
 	row := rows[0]
-	result := &JobSnapshot{JobListItem: item, ContractVersion: optionalStringValue(row["contract_version"]), FenceToken: adminInt64Value(row["version"]), Result: jsonValue(row["result"]), Error: jsonValue(row["error"])}
+	result := &TaskSnapshot{TaskListItem: item, ContractVersion: optionalStringValue(row["contract_version"]), FenceToken: adminInt64Value(row["version"]), Result: jsonValue(row["result"]), Error: jsonValue(row["error"])}
 	if row["progress_revision"] != nil {
-		result.Progress = &JobProgress{JobID: id, Value: jsonValue(row["progress_value"]), Revision: adminInt64Value(row["progress_revision"]), Attempt: intValue(row["progress_attempt"]), FenceToken: adminInt64Value(row["progress_fence_token"]), WorkerID: stringValue(row["progress_worker_id"]), CreatedAt: timeValue(row["progress_created_at"]), UpdatedAt: timeValue(row["progress_updated_at"])}
+		result.Progress = &TaskProgress{TaskID: id, Value: jsonValue(row["progress_value"]), Revision: adminInt64Value(row["progress_revision"]), Attempt: intValue(row["progress_attempt"]), FenceToken: adminInt64Value(row["progress_fence_token"]), WorkerID: stringValue(row["progress_worker_id"]), CreatedAt: timeValue(row["progress_created_at"]), UpdatedAt: timeValue(row["progress_updated_at"])}
 	}
 	return result, nil
 }
 
-func (admin *Admin) GetJobTimeline(ctx context.Context, jobID string, query JobTimelineQuery) (JobTimelinePage, error) {
+func (admin *Admin) GetTaskTimeline(ctx context.Context, taskID string, query TaskTimelineQuery) (TaskTimelinePage, error) {
 	limit, err := adminLimit(query.Limit)
 	if err != nil {
-		return JobTimelinePage{}, err
+		return TaskTimelinePage{}, err
 	}
 	var occurred, kind, record any
 	if query.Cursor != nil {
 		occurred, kind, record = query.Cursor.OccurredAt, query.Cursor.Kind, query.Cursor.RecordID
 	}
-	rows, err := admin.query(ctx, adminStatementRegistry["list_job_timeline"], jobID, limit, occurred, kind, record)
+	rows, err := admin.query(ctx, adminStatementRegistry["list_task_timeline"], taskID, limit, occurred, kind, record)
 	if err != nil {
-		return JobTimelinePage{}, err
+		return TaskTimelinePage{}, err
 	}
-	page := JobTimelinePage{Items: make([]JobTimelineEntry, 0, len(rows))}
+	page := TaskTimelinePage{Items: make([]TaskTimelineEntry, 0, len(rows))}
 	for _, row := range rows {
-		page.Items = append(page.Items, JobTimelineEntry{Kind: stringValue(row["kind"]), RecordID: stringValue(row["record_id"]), Priority: intValue(row["priority"]), Attempt: optionalIntValue(row["attempt"]), EventType: optionalStringValue(row["event_type"]), Details: jsonValue(row["details"]), FenceToken: optionalInt64Value(row["fence_token"]), WorkerID: optionalStringValue(row["worker_id"]), Outcome: optionalStringValue(row["outcome"]), StartedAt: optionalTimeValue(row["started_at"]), ClaimedAt: optionalTimeValue(row["claimed_at"]), FinishedAt: optionalTimeValue(row["finished_at"]), Error: jsonValue(row["error"]), OccurredAt: timeValue(row["occurred_at"])})
+		page.Items = append(page.Items, TaskTimelineEntry{Kind: stringValue(row["kind"]), RecordID: stringValue(row["record_id"]), Priority: intValue(row["priority"]), Attempt: optionalIntValue(row["attempt"]), EventType: optionalStringValue(row["event_type"]), Details: jsonValue(row["details"]), FenceToken: optionalInt64Value(row["fence_token"]), WorkerID: optionalStringValue(row["worker_id"]), Outcome: optionalStringValue(row["outcome"]), StartedAt: optionalTimeValue(row["started_at"]), ClaimedAt: optionalTimeValue(row["claimed_at"]), FinishedAt: optionalTimeValue(row["finished_at"]), Error: jsonValue(row["error"]), OccurredAt: timeValue(row["occurred_at"])})
 	}
 	if len(rows) > 0 && boolValue(rows[len(rows)-1]["has_more"]) {
 		row := rows[len(rows)-1]
-		page.NextCursor = &AdminCursor{JobID: jobID, OccurredAt: timeValue(row["cursor_occurred_at"]), Kind: stringValue(row["kind"]), RecordID: stringValue(row["record_id"])}
+		page.NextCursor = &AdminCursor{TaskID: taskID, OccurredAt: timeValue(row["cursor_occurred_at"]), Kind: stringValue(row["kind"]), RecordID: stringValue(row["record_id"])}
 	}
 	return page, nil
 }
@@ -427,30 +427,30 @@ func (admin *Admin) ListDeadLetters(ctx context.Context, query DeadLetterQuery) 
 	if err != nil {
 		return DeadLetterPage{}, err
 	}
-	var finished, jobID any
+	var finished, taskID any
 	if query.Cursor != nil {
-		finished, jobID = query.Cursor.OccurredAt, query.Cursor.JobID
+		finished, taskID = query.Cursor.OccurredAt, query.Cursor.TaskID
 	}
-	rows, err := admin.query(ctx, adminStatementRegistry["list_dead_letters"], filter, limit, finished, jobID)
+	rows, err := admin.query(ctx, adminStatementRegistry["list_dead_letters"], filter, limit, finished, taskID)
 	if err != nil {
 		return DeadLetterPage{}, err
 	}
 	page := DeadLetterPage{Items: make([]DeadLetter, 0, len(rows))}
 	for _, row := range rows {
-		page.Items = append(page.Items, DeadLetter{JobID: stringValue(row["job_id"]), Queue: stringValue(row["queue_name"]), Type: stringValue(row["job_type"]), ConcurrencyKey: optionalStringValue(row["concurrency_key"]), Priority: intValue(row["priority"]), Payload: jsonValue(row["payload"]), Tags: stringValues(row["tags"]), CurrentAttempt: intValue(row["current_attempt"]), MaxAttempts: intValue(row["max_attempts"]), RetryPolicy: mapValue(row["retry_policy"]), DeadlineAt: optionalTimeValue(row["deadline_at"]), ExecutionTimeoutMS: optionalInt64Value(row["execution_timeout_ms"]), Error: jsonValue(row["error"]), FinishedAt: timeValue(row["finished_at"]), RedriveCount: adminInt64Value(row["redrive_count"])})
+		page.Items = append(page.Items, DeadLetter{TaskID: stringValue(row["task_id"]), Queue: stringValue(row["queue_name"]), Type: stringValue(row["task_type"]), ConcurrencyKey: optionalStringValue(row["concurrency_key"]), Priority: intValue(row["priority"]), Payload: jsonValue(row["payload"]), Tags: stringValues(row["tags"]), CurrentAttempt: intValue(row["current_attempt"]), MaxAttempts: intValue(row["max_attempts"]), RetryPolicy: mapValue(row["retry_policy"]), DeadlineAt: optionalTimeValue(row["deadline_at"]), ExecutionTimeoutMS: optionalInt64Value(row["execution_timeout_ms"]), Error: jsonValue(row["error"]), FinishedAt: timeValue(row["finished_at"]), RedriveCount: adminInt64Value(row["redrive_count"])})
 	}
 	if len(rows) > 0 && boolValue(rows[len(rows)-1]["has_more"]) {
 		row := rows[len(rows)-1]
-		page.NextCursor = &AdminCursor{OccurredAt: timeValue(row["cursor_finished_at"]), JobID: stringValue(row["job_id"])}
+		page.NextCursor = &AdminCursor{OccurredAt: timeValue(row["cursor_finished_at"]), TaskID: stringValue(row["task_id"])}
 	}
 	return page, nil
 }
 
-func (admin *Admin) Redrive(ctx context.Context, sourceJobID string, audit AdminAudit) (RedriveResult, error) {
+func (admin *Admin) Redrive(ctx context.Context, sourceTaskID string, audit AdminAudit) (RedriveResult, error) {
 	if err := validateAdminAudit(audit); err != nil {
 		return RedriveResult{}, err
 	}
-	rows, err := admin.query(ctx, adminStatementRegistry["redrive"], sourceJobID, audit.Actor, audit.Reason, audit.RequestID)
+	rows, err := admin.query(ctx, adminStatementRegistry["redrive"], sourceTaskID, audit.Actor, audit.Reason, audit.RequestID)
 	if err != nil {
 		return RedriveResult{}, err
 	}
@@ -472,11 +472,11 @@ func (admin *Admin) RedriveMany(ctx context.Context, filter DeadLetterFilter, au
 	if err != nil {
 		return BulkRedrivePage{}, err
 	}
-	var finished, jobID any
+	var finished, taskID any
 	if options.Cursor != nil {
-		finished, jobID = options.Cursor.OccurredAt, options.Cursor.JobID
+		finished, taskID = options.Cursor.OccurredAt, options.Cursor.TaskID
 	}
-	rows, err := admin.query(ctx, adminStatementRegistry["redrive_many"], encoded, limit, options.DryRun, audit.Actor, audit.Reason, audit.RequestID, finished, jobID)
+	rows, err := admin.query(ctx, adminStatementRegistry["redrive_many"], encoded, limit, options.DryRun, audit.Actor, audit.Reason, audit.RequestID, finished, taskID)
 	if err != nil {
 		return BulkRedrivePage{}, err
 	}
@@ -486,13 +486,13 @@ func (admin *Admin) RedriveMany(ctx context.Context, filter DeadLetterFilter, au
 	}
 	if len(rows) > 0 && boolValue(rows[len(rows)-1]["has_more"]) {
 		row := rows[len(rows)-1]
-		page.NextCursor = &AdminCursor{OccurredAt: timeValue(row["source_finished_at_cursor"]), JobID: stringValue(row["source_job_id"])}
+		page.NextCursor = &AdminCursor{OccurredAt: timeValue(row["source_finished_at_cursor"]), TaskID: stringValue(row["source_task_id"])}
 	}
 	return page, nil
 }
 
-func (admin *Admin) GetCheckpoint(ctx context.Context, jobID, name string) (*JobCheckpoint, error) {
-	rows, err := admin.query(ctx, adminStatementRegistry["get_checkpoint"], jobID, name)
+func (admin *Admin) GetCheckpoint(ctx context.Context, taskID, name string) (*TaskCheckpoint, error) {
+	rows, err := admin.query(ctx, adminStatementRegistry["get_checkpoint"], taskID, name)
 	if err != nil {
 		return nil, err
 	}
@@ -502,19 +502,19 @@ func (admin *Admin) GetCheckpoint(ctx context.Context, jobID, name string) (*Job
 	value := mapCheckpoint(rows[0])
 	return &value, nil
 }
-func (admin *Admin) ListCheckpoints(ctx context.Context, jobID string) ([]JobCheckpoint, error) {
-	rows, err := admin.query(ctx, adminStatementRegistry["list_checkpoints"], jobID)
+func (admin *Admin) ListCheckpoints(ctx context.Context, taskID string) ([]TaskCheckpoint, error) {
+	rows, err := admin.query(ctx, adminStatementRegistry["list_checkpoints"], taskID)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]JobCheckpoint, 0, len(rows))
+	result := make([]TaskCheckpoint, 0, len(rows))
 	for _, row := range rows {
 		result = append(result, mapCheckpoint(row))
 	}
 	return result, nil
 }
-func (admin *Admin) GetProgress(ctx context.Context, jobID string) (*JobProgress, error) {
-	rows, err := admin.query(ctx, adminStatementRegistry["get_progress"], jobID)
+func (admin *Admin) GetProgress(ctx context.Context, taskID string) (*TaskProgress, error) {
+	rows, err := admin.query(ctx, adminStatementRegistry["get_progress"], taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -522,10 +522,10 @@ func (admin *Admin) GetProgress(ctx context.Context, jobID string) (*JobProgress
 		return nil, nil
 	}
 	row := rows[0]
-	return &JobProgress{JobID: stringValue(row["job_id"]), Value: jsonValue(row["progress_value"]), Revision: adminInt64Value(row["revision"]), Attempt: intValue(row["attempt"]), FenceToken: adminInt64Value(row["fence_token"]), WorkerID: stringValue(row["worker_id"]), CreatedAt: timeValue(row["created_at"]), UpdatedAt: timeValue(row["updated_at"])}, nil
+	return &TaskProgress{TaskID: stringValue(row["task_id"]), Value: jsonValue(row["progress_value"]), Revision: adminInt64Value(row["revision"]), Attempt: intValue(row["attempt"]), FenceToken: adminInt64Value(row["fence_token"]), WorkerID: stringValue(row["worker_id"]), CreatedAt: timeValue(row["created_at"]), UpdatedAt: timeValue(row["updated_at"])}, nil
 }
-func (admin *Admin) GetWait(ctx context.Context, jobID, name string) (*JobWait, error) {
-	rows, err := admin.query(ctx, adminStatementRegistry["get_wait"], jobID, name)
+func (admin *Admin) GetWait(ctx context.Context, taskID, name string) (*TaskWait, error) {
+	rows, err := admin.query(ctx, adminStatementRegistry["get_wait"], taskID, name)
 	if err != nil {
 		return nil, err
 	}
@@ -535,12 +535,12 @@ func (admin *Admin) GetWait(ctx context.Context, jobID, name string) (*JobWait, 
 	value := mapWait(rows[0])
 	return &value, nil
 }
-func (admin *Admin) ListWaits(ctx context.Context, jobID string) ([]JobWait, error) {
-	rows, err := admin.query(ctx, adminStatementRegistry["list_waits"], jobID)
+func (admin *Admin) ListWaits(ctx context.Context, taskID string) ([]TaskWait, error) {
+	rows, err := admin.query(ctx, adminStatementRegistry["list_waits"], taskID)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]JobWait, 0, len(rows))
+	result := make([]TaskWait, 0, len(rows))
 	for _, row := range rows {
 		result = append(result, mapWait(row))
 	}
@@ -562,21 +562,21 @@ func (admin *Admin) listExternalWaits(ctx context.Context, query ExternalWaitQue
 	if human {
 		statement = adminStatementRegistry["list_human_waits"]
 	}
-	var created, jobID, name any
+	var created, taskID, name any
 	if query.Cursor != nil {
-		created, jobID, name = query.Cursor.OccurredAt, query.Cursor.JobID, query.Cursor.RecordID
+		created, taskID, name = query.Cursor.OccurredAt, query.Cursor.TaskID, query.Cursor.RecordID
 	}
-	rows, err := admin.query(ctx, statement, limit+1, created, jobID, name)
+	rows, err := admin.query(ctx, statement, limit+1, created, taskID, name)
 	if err != nil {
 		return ExternalWaitPage{}, err
 	}
 	page := ExternalWaitPage{Items: make([]ExternalWait, 0, min(len(rows), limit))}
 	for _, row := range rows[:min(len(rows), limit)] {
-		page.Items = append(page.Items, ExternalWait{JobID: stringValue(row["job_id"]), Queue: stringValue(row["queue_name"]), JobType: stringValue(row["job_type"]), Name: stringValue(row["wait_name"]), Context: jsonValue(row["context"]), Attempt: intValue(row["attempt"]), CreatedAt: timeValue(row["created_at"]), DeadlineAt: optionalTimeValue(row["deadline_at"])})
+		page.Items = append(page.Items, ExternalWait{TaskID: stringValue(row["task_id"]), Queue: stringValue(row["queue_name"]), TaskType: stringValue(row["task_type"]), Name: stringValue(row["wait_name"]), Context: jsonValue(row["context"]), Attempt: intValue(row["attempt"]), CreatedAt: timeValue(row["created_at"]), DeadlineAt: optionalTimeValue(row["deadline_at"])})
 	}
 	if len(rows) > limit {
 		row := rows[limit-1]
-		page.NextCursor = &AdminCursor{OccurredAt: timeValue(row["cursor_created_at"]), JobID: stringValue(row["job_id"]), RecordID: stringValue(row["wait_name"])}
+		page.NextCursor = &AdminCursor{OccurredAt: timeValue(row["cursor_created_at"]), TaskID: stringValue(row["task_id"]), RecordID: stringValue(row["wait_name"])}
 	}
 	return page, nil
 }
@@ -640,22 +640,22 @@ func (admin *Admin) SetWorkerPaused(ctx context.Context, workerID string, paused
 	return &WorkerPauseResult{WorkerID: stringValue(row["worker_id"]), Paused: boolValue(row["paused"]), RequestedAt: timeValue(row["paused_at"]), RequestedBy: stringValue(row["paused_by"]), Reason: stringValue(row["paused_reason"])}, nil
 }
 
-func mapJobListItem(row Row) (JobListItem, error) {
-	if row["id"] != nil && row["job_id"] == nil {
-		row["job_id"] = row["id"]
+func mapTaskListItem(row Row) (TaskListItem, error) {
+	if row["id"] != nil && row["task_id"] == nil {
+		row["task_id"] = row["id"]
 	}
-	return JobListItem{ID: stringValue(row["job_id"]), Queue: stringValue(row["queue_name"]), Type: stringValue(row["job_type"]), ConcurrencyKey: optionalStringValue(row["concurrency_key"]), Priority: intValue(row["priority"]), Tags: stringValues(row["tags"]), State: JobState(stringValue(row["state"])), PrerequisiteJobID: optionalStringValue(row["prerequisite_job_id"]), PrerequisiteJobIDs: stringValues(row["prerequisite_job_ids"]), BlockedReason: optionalStringValue(row["blocked_reason"]), ParentJobID: optionalStringValue(row["parent_job_id"]), ChildJobIDs: stringValues(row["child_job_ids"]), CurrentAttempt: intValue(row["current_attempt"]), MaxAttempts: intValue(row["max_attempts"]), RetryPolicy: mapValue(row["retry_policy"]), DeadlineAt: optionalTimeValue(row["deadline_at"]), ExecutionTimeoutMS: optionalInt64Value(row["execution_timeout_ms"]), RunAt: timeValue(row["run_at"]), CancelRequestedAt: optionalTimeValue(row["cancel_requested_at"]), CancelRequestedBy: optionalStringValue(row["cancel_requested_by"]), CancelReason: optionalStringValue(row["cancel_reason"]), CreatedAt: timeValue(row["created_at"]), UpdatedAt: timeValue(row["updated_at"]), Payload: jsonValue(row["payload"]), PayloadStatus: stringValue(row["payload_status"]), PayloadBytes: optionalInt64Value(row["payload_bytes"])}, nil
+	return TaskListItem{ID: stringValue(row["task_id"]), Queue: stringValue(row["queue_name"]), Type: stringValue(row["task_type"]), ConcurrencyKey: optionalStringValue(row["concurrency_key"]), Priority: intValue(row["priority"]), Tags: stringValues(row["tags"]), State: TaskState(stringValue(row["state"])), PrerequisiteTaskID: optionalStringValue(row["prerequisite_task_id"]), PrerequisiteTaskIDs: stringValues(row["prerequisite_task_ids"]), BlockedReason: optionalStringValue(row["blocked_reason"]), ParentTaskID: optionalStringValue(row["parent_task_id"]), ChildTaskIDs: stringValues(row["child_task_ids"]), CurrentAttempt: intValue(row["current_attempt"]), MaxAttempts: intValue(row["max_attempts"]), RetryPolicy: mapValue(row["retry_policy"]), DeadlineAt: optionalTimeValue(row["deadline_at"]), ExecutionTimeoutMS: optionalInt64Value(row["execution_timeout_ms"]), RunAt: timeValue(row["run_at"]), CancelRequestedAt: optionalTimeValue(row["cancel_requested_at"]), CancelRequestedBy: optionalStringValue(row["cancel_requested_by"]), CancelReason: optionalStringValue(row["cancel_reason"]), CreatedAt: timeValue(row["created_at"]), UpdatedAt: timeValue(row["updated_at"]), Payload: jsonValue(row["payload"]), PayloadStatus: stringValue(row["payload_status"]), PayloadBytes: optionalInt64Value(row["payload_bytes"])}, nil
 }
 func mapRedrive(row Row) RedriveResult {
-	source := optionalJobStateValue(row["source_state"])
-	target := optionalJobStateValue(row["target_state"])
-	return RedriveResult{Status: stringValue(row["status"]), SourceJobID: stringValue(row["source_job_id"]), TargetJobID: optionalStringValue(row["target_job_id"]), SourceState: source, TargetState: target, RequestedAt: optionalTimeValue(row["requested_at"])}
+	source := optionalTaskStateValue(row["source_state"])
+	target := optionalTaskStateValue(row["target_state"])
+	return RedriveResult{Status: stringValue(row["status"]), SourceTaskID: stringValue(row["source_task_id"]), TargetTaskID: optionalStringValue(row["target_task_id"]), SourceState: source, TargetState: target, RequestedAt: optionalTimeValue(row["requested_at"])}
 }
-func mapCheckpoint(row Row) JobCheckpoint {
-	return JobCheckpoint{JobID: stringValue(row["job_id"]), Name: stringValue(row["checkpoint_name"]), Value: jsonValue(row["checkpoint_value"]), Attempt: intValue(row["attempt"]), FenceToken: adminInt64Value(row["fence_token"]), WorkerID: stringValue(row["worker_id"]), CreatedAt: timeValue(row["created_at"])}
+func mapCheckpoint(row Row) TaskCheckpoint {
+	return TaskCheckpoint{TaskID: stringValue(row["task_id"]), Name: stringValue(row["checkpoint_name"]), Value: jsonValue(row["checkpoint_value"]), Attempt: intValue(row["attempt"]), FenceToken: adminInt64Value(row["fence_token"]), WorkerID: stringValue(row["worker_id"]), CreatedAt: timeValue(row["created_at"])}
 }
-func mapWait(row Row) JobWait {
-	return JobWait{JobID: stringValue(row["job_id"]), Name: stringValue(row["wait_name"]), Mode: stringValue(row["mode"]), DurationMS: optionalInt64Value(row["duration_ms"]), RequestedWakeAt: optionalTimeValue(row["requested_wake_at"]), WakeAt: timeValue(row["wake_at"]), Attempt: intValue(row["attempt"]), FenceToken: adminInt64Value(row["fence_token"]), WorkerID: stringValue(row["worker_id"]), CreatedAt: timeValue(row["created_at"])}
+func mapWait(row Row) TaskWait {
+	return TaskWait{TaskID: stringValue(row["task_id"]), Name: stringValue(row["wait_name"]), Mode: stringValue(row["mode"]), DurationMS: optionalInt64Value(row["duration_ms"]), RequestedWakeAt: optionalTimeValue(row["requested_wake_at"]), WakeAt: timeValue(row["wake_at"]), Attempt: intValue(row["attempt"]), FenceToken: adminInt64Value(row["fence_token"]), WorkerID: stringValue(row["worker_id"]), CreatedAt: timeValue(row["created_at"])}
 }
 func stringValue(value any) string {
 	if value == nil {
@@ -802,10 +802,10 @@ func jsonValue(value any) any {
 	return value
 }
 func mapValue(value any) map[string]any { v, _ := jsonValue(value).(map[string]any); return v }
-func optionalJobStateValue(value any) *JobState {
+func optionalTaskStateValue(value any) *TaskState {
 	if value == nil {
 		return nil
 	}
-	v := JobState(stringValue(value))
+	v := TaskState(stringValue(value))
 	return &v
 }

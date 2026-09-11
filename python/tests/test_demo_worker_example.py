@@ -36,27 +36,27 @@ def test_database_url_reads_development_primary_database() -> None:
     )
 
 
-def test_language_job_identifies_python_runtime() -> None:
-    context = cast(HandlerContext, SimpleNamespace(job=SimpleNamespace(attempt=2)))
+def test_language_task_identifies_python_runtime() -> None:
+    context = cast(HandlerContext, SimpleNamespace(task=SimpleNamespace(attempt=2)))
 
-    assert demo_worker.language_job({"language": "python"}, context) == {
+    assert demo_worker.language_task({"language": "python"}, context) == {
         "language": "python",
         "runtime": "python",
         "attempt": 2,
     }
 
 
-def test_language_job_refuses_another_runtime() -> None:
-    context = cast(HandlerContext, SimpleNamespace(job=SimpleNamespace(attempt=1)))
+def test_language_task_refuses_another_runtime() -> None:
+    context = cast(HandlerContext, SimpleNamespace(task=SimpleNamespace(attempt=1)))
 
     with pytest.raises(ValueError, match="another language"):
-        demo_worker.language_job({"language": "go"}, context)
+        demo_worker.language_task({"language": "go"}, context)
 
 
-def test_shared_job_identifies_python_runtime() -> None:
-    context = cast(HandlerContext, SimpleNamespace(job=SimpleNamespace(attempt=3)))
+def test_shared_task_identifies_python_runtime() -> None:
+    context = cast(HandlerContext, SimpleNamespace(task=SimpleNamespace(attempt=3)))
 
-    assert demo_worker.shared_job({"source": "schedule"}, context) == {
+    assert demo_worker.shared_task({"source": "schedule"}, context) == {
         "source": "schedule",
         "runtime": "python",
         "attempt": 3,

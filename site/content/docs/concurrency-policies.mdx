@@ -55,7 +55,7 @@ PostgreSQL rejects another namespace that tries to replace a queue this namespac
 
 ## Attach a queue-scoped key
 
-The key names the group a job competes in — a tenant, a destination host, an account.
+The key names the group a task competes in — a tenant, a destination host, an account.
 
 <Tabs items={["TypeScript", "Python", "Go"]}>
   <Tab value="TypeScript">
@@ -81,14 +81,14 @@ The key names the group a job competes in — a tenant, a destination host, an a
   </Tab>
 </Tabs>
 
-Keyless jobs consume queue capacity only. A keyed job also consumes capacity for its key. The same
+Keyless tasks consume queue capacity only. A keyed task also consumes capacity for its key. The same
 key text in another queue is independent, and one saturated key does not block the queue: admission
 can pass over a full key and claim later ready work for another key, within a bounded window
 ordered by priority first and FIFO among equal priorities.
 
 ## A dispatch budget, not a mutex
 
-Capacity counts active jobs with unexpired leases. If a worker disappears, its capacity returns
+Capacity counts active tasks with unexpired leases. If a worker disappears, its capacity returns
 when the lease expires — the queue cannot be starved by a dead process. The flip side: a stale
 handler can briefly overlap its replacement after expiry, and fence tokens — not the policy —
 prevent that stale generation from recording a result. Handlers keep the ordinary at-least-once

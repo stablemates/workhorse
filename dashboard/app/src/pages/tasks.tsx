@@ -55,7 +55,7 @@ import {
 } from "@phosphor-icons/react";
 import { TaskOpenButton } from "../task-table-ui.js";
 import { TaskTableId } from "../components/task-table-id.js";
-import { DemoJobKind, DurableDemoScenario, taskHref, useDashboardClient } from "../core.js";
+import { DemoTaskKind, DurableDemoScenario, taskHref, useDashboardClient } from "../core.js";
 import {
   DurableProgressBadge,
   TaskListingFilters,
@@ -76,7 +76,7 @@ import {
 
 const TasksActivityChart = lazy(() => import("../charts/activity.js"));
 
-export interface DemoJobOptions {
+export interface DemoTaskOptions {
   scenario?: DurableDemoScenario;
   feature?: DashboardDemoFeature;
 }
@@ -84,9 +84,9 @@ export interface DemoJobOptions {
 export const TasksPage = memo(function TasksPage({
   data,
   navigate,
-  runDemoJob,
-  runningDemoJob,
-  inspectJob,
+  runDemoTask,
+  runningDemoTask,
+  inspectTask,
   replace,
   taskLocation,
   runTaskNow,
@@ -97,9 +97,9 @@ export const TasksPage = memo(function TasksPage({
   navigate: (href: string) => void;
   replace: (href: string) => void;
   taskLocation: TaskLocationState;
-  runDemoJob: ((kind: DemoJobKind, options?: DemoJobOptions) => Promise<void>) | null;
-  runningDemoJob: DemoJobKind | null;
-  inspectJob: (id: string) => void;
+  runDemoTask: ((kind: DemoTaskKind, options?: DemoTaskOptions) => Promise<void>) | null;
+  runningDemoTask: DemoTaskKind | null;
+  inspectTask: (id: string) => void;
   /**
    * Release one scheduled task, or null when the host cannot. Null is passed through to the menu
    * as a stated reason rather than removing the item.
@@ -147,7 +147,7 @@ export const TasksPage = memo(function TasksPage({
   }, [searchDraft, taskLocation.search, updateLocation]);
   const taskActions = useTaskActions({
     canCompleteHumanWait: data.canCompleteHumanWait,
-    inspectJob,
+    inspectTask,
     runTaskNow,
     auditActor,
     reload,
@@ -155,10 +155,10 @@ export const TasksPage = memo(function TasksPage({
   });
   const {
     runRowAction,
-    completingHumanWaitJobId,
-    redrivingJobId,
-    runningNowJobId,
-    cancelingJobId,
+    completingHumanWaitTaskId,
+    redrivingTaskId,
+    runningNowTaskId,
+    cancelingTaskId,
   } = taskActions;
   const redriveSelection = describeRedriveSelection(data);
   /**
@@ -175,7 +175,7 @@ export const TasksPage = memo(function TasksPage({
     try {
       const batch = await client.redriveDeadLetters({
         queue: redriveSelection.queue,
-        jobType: redriveSelection.jobType,
+        taskType: redriveSelection.taskType,
         tags: redriveSelection.tags,
         limit: dashboardRedriveBatchDefault,
         cursor,
@@ -242,8 +242,8 @@ export const TasksPage = memo(function TasksPage({
         aria-label="Tasks pagination"
       />
     );
-  const enqueueTestTask = (kind: DemoJobKind, options?: DemoJobOptions) =>
-    runDemoJob?.(kind, options);
+  const enqueueTestTask = (kind: DemoTaskKind, options?: DemoTaskOptions) =>
+    runDemoTask?.(kind, options);
 
   return (
     <Stack gap="xl">
@@ -338,10 +338,10 @@ export const TasksPage = memo(function TasksPage({
                   size="xs"
                   radius="xl"
                   leftSection={<ArrowCounterClockwise size={16} />}
-                  disabled={redriveSelection.unavailable !== null || data.jobs.length === 0}
+                  disabled={redriveSelection.unavailable !== null || data.tasks.length === 0}
                   title={
                     redriveSelection.unavailable ??
-                    (data.jobs.length === 0
+                    (data.tasks.length === 0
                       ? "This listing shows no dead letter, so there is nothing to redrive."
                       : `Redrive ${redriveSelection.selected}`)
                   }
@@ -352,7 +352,7 @@ export const TasksPage = memo(function TasksPage({
                   Redrive these dead letters
                 </Button>
               ) : null}
-              {runDemoJob ? (
+              {runDemoTask ? (
                 <Menu position="bottom-start" withinPortal>
                   <Menu.Target>
                     <Button
@@ -360,7 +360,7 @@ export const TasksPage = memo(function TasksPage({
                       size="xs"
                       radius="xl"
                       leftSection={<PlayCircle size={16} />}
-                      loading={runningDemoJob !== null}
+                      loading={runningDemoTask !== null}
                     >
                       Enqueue test task
                     </Button>
@@ -530,7 +530,7 @@ export const TasksPage = memo(function TasksPage({
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
-              {data.jobs.length === 0 ? (
+              {data.tasks.length === 0 ? (
                 <Table.Tr>
                   <Table.Td colSpan={10}>
                     <Center mih={120}>
@@ -541,90 +541,90 @@ export const TasksPage = memo(function TasksPage({
                   </Table.Td>
                 </Table.Tr>
               ) : (
-                data.jobs.map((job) => (
+                data.tasks.map((task) => (
                   <Table.Tr
-                    key={job.id}
-                    onClick={() => inspectJob(job.id)}
+                    key={task.id}
+                    onClick={() => inspectTask(task.id)}
                     style={{ cursor: "pointer" }}
                   >
                     <Table.Td className="task-table__col--actions">
                       <TaskRowActions
-                        job={job}
+                        task={task}
                         onAction={runRowAction}
                         capabilities={{
                           runNow: runTaskNow !== null,
                           completeHumanWait: data.canCompleteHumanWait,
                         }}
                         pendingAction={
-                          cancelingJobId === job.id
+                          cancelingTaskId === task.id
                             ? "cancel"
-                            : completingHumanWaitJobId === job.id
+                            : completingHumanWaitTaskId === task.id
                               ? "complete-human-wait"
-                              : redrivingJobId === job.id
+                              : redrivingTaskId === task.id
                                 ? "redrive"
-                                : runningNowJobId === job.id
+                                : runningNowTaskId === task.id
                                   ? "run-now"
                                   : null
                         }
                       />
                     </Table.Td>
                     <Table.Td className="task-table__col--id">
-                      <TaskTableId id={job.id} />
+                      <TaskTableId id={task.id} />
                     </Table.Td>
                     <Table.Td className="task-table__col--status">
-                      <TaskStatusIndicators job={job} />
+                      <TaskStatusIndicators task={task} />
                     </Table.Td>
                     <Table.Td className="task-table__col--queue">
-                      <Text size="sm" c="dimmed" title={job.queue}>
-                        {job.queue}
+                      <Text size="sm" c="dimmed" title={task.queue}>
+                        {task.queue}
                       </Text>
                     </Table.Td>
                     <Table.Td className="task-table__col--task">
                       <TaskOpenButton
-                        jobId={job.id}
-                        taskType={job.type}
-                        onOpen={() => inspectJob(job.id)}
+                        taskId={task.id}
+                        taskType={task.type}
+                        onOpen={() => inspectTask(task.id)}
                       >
                         <Group gap={4} wrap="nowrap" style={{ minWidth: 0 }}>
-                          <TaskName type={job.type} queue={job.queue} />
-                          <TaskEnqueueBadge job={job} />
-                          {job.priority > 0 ? (
+                          <TaskName type={task.type} queue={task.queue} />
+                          <TaskEnqueueBadge task={task} />
+                          {task.priority > 0 ? (
                             <Badge
                               size="xs"
                               variant="light"
                               color="orange"
                               tt="none"
-                              title={`Priority ${job.priority}; higher-priority ready tasks are claimed first.`}
+                              title={`Priority ${task.priority}; higher-priority ready tasks are claimed first.`}
                             >
-                              P{job.priority}
+                              P{task.priority}
                             </Badge>
                           ) : null}
                         </Group>
                       </TaskOpenButton>
                     </Table.Td>
                     <Table.Td className="task-table__col--tags">
-                      <TaskTags tags={job.tags} />
+                      <TaskTags tags={task.tags} />
                     </Table.Td>
                     <Table.Td className="task-table__col--steps" ta="right">
-                      <DurableProgressBadge job={job} />
+                      <DurableProgressBadge task={task} />
                     </Table.Td>
                     <Table.Td className="task-table__col--attempt" ta="right">
                       <Text
                         size="sm"
-                        c={job.attempt > 1 ? "yellow.8" : undefined}
-                        fw={job.attempt > 1 ? 600 : undefined}
+                        c={task.attempt > 1 ? "yellow.8" : undefined}
+                        fw={task.attempt > 1 ? 600 : undefined}
                       >
-                        {job.attempt}/{job.maxAttempts}
+                        {task.attempt}/{task.maxAttempts}
                       </Text>
                     </Table.Td>
                     <Table.Td className="task-table__col--duration" ta="left">
                       <Text size="sm" c="dimmed">
-                        {taskDuration(job) ?? "—"}
+                        {taskDuration(task) ?? "—"}
                       </Text>
                     </Table.Td>
                     <Table.Td className="task-table__col--updated" ta="left">
-                      <Text size="sm" title={formatExact(job.updatedAt)} c="dimmed">
-                        {formatRelative(job.updatedAt)}
+                      <Text size="sm" title={formatExact(task.updatedAt)} c="dimmed">
+                        {formatRelative(task.updatedAt)}
                       </Text>
                     </Table.Td>
                   </Table.Tr>

@@ -15,7 +15,7 @@ export interface TaskLocationState {
   filter: DashboardTaskFilter;
   queue: string | null;
   worker: string | null;
-  jobType: string | null;
+  taskType: string | null;
   sort: DashboardTaskSort;
   tags: string[];
   search: string | null;
@@ -113,7 +113,7 @@ export function parseTaskLocation(
     filter: requestedFilter && filters.has(requestedFilter) ? requestedFilter : "all",
     queue: optionalValue(parameters, "queue"),
     worker: optionalValue(parameters, "worker"),
-    jobType: optionalValue(parameters, "type"),
+    taskType: optionalValue(parameters, "type"),
     sort: requestedSort && sorts.has(requestedSort) ? requestedSort : "updated",
     tags,
     search: optionalValue(parameters, "q"),
@@ -140,7 +140,7 @@ export function taskLocationHref(state: TaskLocationState): string {
   if (state.search) parameters.set("q", state.search);
   if (state.queue) parameters.set("queue", state.queue);
   if (state.worker) parameters.set("worker", state.worker);
-  if (state.jobType) parameters.set("type", state.jobType);
+  if (state.taskType) parameters.set("type", state.taskType);
   if (state.sort !== "updated") parameters.set("sort", state.sort);
   if (state.cursor) {
     parameters.set("cursor", JSON.stringify(state.cursor));
@@ -168,7 +168,7 @@ export function taskListingKey(state: TaskLocationState): string {
     state.filter,
     state.queue,
     state.worker,
-    state.jobType,
+    state.taskType,
     state.tags,
     state.search,
     state.sort,

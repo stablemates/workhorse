@@ -44,8 +44,8 @@ describe("compact status presentation", () => {
         kind,
         id: `${kind}:1`,
         recordId: "1",
-        jobId: "job-123",
-        jobType: "billing.invoice",
+        taskId: "task-123",
+        taskType: "billing.invoice",
         queue: "billing",
         type: "succeeded",
         occurredAt: "2026-09-10T12:00:00Z",
@@ -78,7 +78,7 @@ describe("compact status presentation", () => {
       expect(html.indexOf(">billing<")).toBeLessThan(html.indexOf(">billing.invoice<"));
       expect(html).toContain('title="worker-123"');
       expect(html).not.toContain("Copy event ID");
-      expect(html.indexOf('aria-label="Copy task ID job-123"')).toBeLessThan(
+      expect(html.indexOf('aria-label="Copy task ID task-123"')).toBeLessThan(
         html.indexOf(kind === "attempt" ? ">Attempt succeeded<" : ">Task succeeded<"),
       );
     },

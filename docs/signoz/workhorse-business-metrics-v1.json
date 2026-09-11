@@ -1,6 +1,6 @@
 {
   "schemaVersion": "v6",
-  "name": "workhorse-jobs",
+  "name": "workhorse-tasks",
   "image": "/assets/Icons/eight-ball",
   "tags": [
     {
@@ -14,8 +14,8 @@
   ],
   "spec": {
     "display": {
-      "name": "Workhorse jobs",
-      "description": "Job throughput, outcomes, runtime, capacity, and queue pressure. Environment and service filters use OpenTelemetry resource attributes."
+      "name": "Workhorse tasks",
+      "description": "Task throughput, outcomes, runtime, capacity, and queue pressure. Environment and service filters use OpenTelemetry resource attributes."
     },
     "duration": "6h",
     "refreshInterval": "1m",
@@ -90,7 +90,7 @@
           "plugin": {
             "kind": "signoz/DynamicVariable",
             "spec": {
-              "name": "workhorse.job.type",
+              "name": "workhorse.task.type",
               "signal": "metrics"
             }
           }
@@ -133,7 +133,7 @@
                     "signal": "metrics",
                     "aggregations": [
                       {
-                        "metricName": "workhorse.jobs.enqueued",
+                        "metricName": "workhorse.tasks.enqueued",
                         "temporality": "",
                         "timeAggregation": "rate",
                         "spaceAggregation": "sum",
@@ -141,16 +141,16 @@
                       }
                     ],
                     "filter": {
-                      "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task"
+                      "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.task.type IN $task"
                     },
                     "groupBy": [
                       {
-                        "name": "workhorse.job.type",
+                        "name": "workhorse.task.type",
                         "fieldDataType": "string",
                         "fieldContext": "attribute"
                       }
                     ],
-                    "legend": "{{workhorse.job.type}}"
+                    "legend": "{{workhorse.task.type}}"
                   }
                 }
               }
@@ -192,7 +192,7 @@
                     "signal": "metrics",
                     "aggregations": [
                       {
-                        "metricName": "workhorse.jobs.claimed",
+                        "metricName": "workhorse.tasks.claimed",
                         "temporality": "",
                         "timeAggregation": "rate",
                         "spaceAggregation": "sum",
@@ -200,16 +200,16 @@
                       }
                     ],
                     "filter": {
-                      "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task"
+                      "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.task.type IN $task"
                     },
                     "groupBy": [
                       {
-                        "name": "workhorse.job.type",
+                        "name": "workhorse.task.type",
                         "fieldDataType": "string",
                         "fieldContext": "attribute"
                       }
                     ],
-                    "legend": "{{workhorse.job.type}}"
+                    "legend": "{{workhorse.task.type}}"
                   }
                 }
               }
@@ -251,7 +251,7 @@
                     "signal": "metrics",
                     "aggregations": [
                       {
-                        "metricName": "workhorse.jobs.count",
+                        "metricName": "workhorse.tasks.count",
                         "temporality": "",
                         "timeAggregation": "latest",
                         "spaceAggregation": "max",
@@ -268,12 +268,12 @@
                         "fieldContext": "attribute"
                       },
                       {
-                        "name": "workhorse.job.state",
+                        "name": "workhorse.task.state",
                         "fieldDataType": "string",
                         "fieldContext": "attribute"
                       }
                     ],
-                    "legend": "{{workhorse.queue.name}} {{workhorse.job.state}}"
+                    "legend": "{{workhorse.queue.name}} {{workhorse.task.state}}"
                   }
                 }
               }
@@ -323,16 +323,16 @@
                       }
                     ],
                     "filter": {
-                      "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task AND workhorse.handler.outcome IN ['canceled', 'deadline_exceeded', 'failed', 'succeeded', 'timeout']"
+                      "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.task.type IN $task AND workhorse.handler.outcome IN ['canceled', 'deadline_exceeded', 'failed', 'succeeded', 'timeout']"
                     },
                     "groupBy": [
                       {
-                        "name": "workhorse.job.type",
+                        "name": "workhorse.task.type",
                         "fieldDataType": "string",
                         "fieldContext": "attribute"
                       }
                     ],
-                    "legend": "{{workhorse.job.type}}"
+                    "legend": "{{workhorse.task.type}}"
                   }
                 }
               }
@@ -386,11 +386,11 @@
                             }
                           ],
                           "filter": {
-                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task"
+                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.task.type IN $task"
                           },
                           "groupBy": [
                             {
-                              "name": "workhorse.job.type",
+                              "name": "workhorse.task.type",
                               "fieldDataType": "string",
                               "fieldContext": "attribute"
                             },
@@ -400,7 +400,7 @@
                               "fieldContext": "attribute"
                             }
                           ],
-                          "legend": "{{workhorse.job.type}} {{workhorse.handler.outcome}}"
+                          "legend": "{{workhorse.task.type}} {{workhorse.handler.outcome}}"
                         }
                       }
                     ]
@@ -453,16 +453,16 @@
                             }
                           ],
                           "filter": {
-                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task"
+                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.task.type IN $task"
                           },
                           "groupBy": [
                             {
-                              "name": "workhorse.job.type",
+                              "name": "workhorse.task.type",
                               "fieldDataType": "string",
                               "fieldContext": "attribute"
                             }
                           ],
-                          "legend": "p50 {{workhorse.job.type}}"
+                          "legend": "p50 {{workhorse.task.type}}"
                         }
                       },
                       {
@@ -480,16 +480,16 @@
                             }
                           ],
                           "filter": {
-                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task"
+                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.task.type IN $task"
                           },
                           "groupBy": [
                             {
-                              "name": "workhorse.job.type",
+                              "name": "workhorse.task.type",
                               "fieldDataType": "string",
                               "fieldContext": "attribute"
                             }
                           ],
-                          "legend": "p95 {{workhorse.job.type}}"
+                          "legend": "p95 {{workhorse.task.type}}"
                         }
                       },
                       {
@@ -507,16 +507,16 @@
                             }
                           ],
                           "filter": {
-                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task"
+                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.task.type IN $task"
                           },
                           "groupBy": [
                             {
-                              "name": "workhorse.job.type",
+                              "name": "workhorse.task.type",
                               "fieldDataType": "string",
                               "fieldContext": "attribute"
                             }
                           ],
-                          "legend": "p99 {{workhorse.job.type}}"
+                          "legend": "p99 {{workhorse.task.type}}"
                         }
                       }
                     ]
@@ -561,11 +561,11 @@
                       }
                     ],
                     "filter": {
-                      "expression": "name = 'workhorse.handler' AND deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task"
+                      "expression": "name = 'workhorse.handler' AND deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.task.type IN $task"
                     },
                     "groupBy": [
                       {
-                        "name": "workhorse.job.type",
+                        "name": "workhorse.task.type",
                         "fieldDataType": "string",
                         "fieldContext": "span"
                       }
@@ -579,7 +579,7 @@
                         "direction": "desc"
                       }
                     ],
-                    "legend": "{{workhorse.job.type}}"
+                    "legend": "{{workhorse.task.type}}"
                   }
                 }
               }
@@ -683,7 +683,7 @@
         "spec": {
           "display": {
             "name": "Queue depth",
-            "description": "Ready, scheduled, and active jobs grouped by queue."
+            "description": "Ready, scheduled, and active tasks grouped by queue."
           },
           "plugin": {
             "kind": "signoz/TimeSeriesPanel",
@@ -708,7 +708,7 @@
                     "signal": "metrics",
                     "aggregations": [
                       {
-                        "metricName": "workhorse.jobs.count",
+                        "metricName": "workhorse.tasks.count",
                         "temporality": "",
                         "timeAggregation": "latest",
                         "spaceAggregation": "max",
@@ -725,12 +725,12 @@
                         "fieldContext": "attribute"
                       },
                       {
-                        "name": "workhorse.job.state",
+                        "name": "workhorse.task.state",
                         "fieldDataType": "string",
                         "fieldContext": "attribute"
                       }
                     ],
-                    "legend": "{{workhorse.queue.name}} {{workhorse.job.state}}"
+                    "legend": "{{workhorse.queue.name}} {{workhorse.task.state}}"
                   }
                 }
               }
@@ -742,8 +742,8 @@
         "kind": "Panel",
         "spec": {
           "display": {
-            "name": "Oldest ready job",
-            "description": "Age in seconds of the oldest ready job in each queue."
+            "name": "Oldest ready task",
+            "description": "Age in seconds of the oldest ready task in each queue."
           },
           "plugin": {
             "kind": "signoz/TimeSeriesPanel",
@@ -828,7 +828,7 @@
                           "disabled": true,
                           "aggregations": [
                             {
-                              "metricName": "workhorse.jobs.count",
+                              "metricName": "workhorse.tasks.count",
                               "temporality": "",
                               "timeAggregation": "latest",
                               "spaceAggregation": "max",
@@ -836,7 +836,7 @@
                             }
                           ],
                           "filter": {
-                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.state = 'ready'"
+                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.task.state = 'ready'"
                           },
                           "groupBy": [
                             {
@@ -932,7 +932,7 @@
                             }
                           ],
                           "filter": {
-                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task AND workhorse.handler.outcome = 'succeeded'"
+                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.task.type IN $task AND workhorse.handler.outcome = 'succeeded'"
                           }
                         }
                       },
@@ -952,7 +952,7 @@
                             }
                           ],
                           "filter": {
-                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task AND workhorse.handler.outcome IN ['canceled', 'deadline_exceeded', 'failed', 'timeout']"
+                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.task.type IN $task AND workhorse.handler.outcome IN ['canceled', 'deadline_exceeded', 'failed', 'timeout']"
                           }
                         }
                       },
@@ -993,13 +993,13 @@
                   "fieldContext": "span"
                 },
                 {
-                  "name": "workhorse.job.id",
+                  "name": "workhorse.task.id",
                   "signal": "traces",
                   "fieldContext": "span",
                   "fieldDataType": "string"
                 },
                 {
-                  "name": "workhorse.job.type",
+                  "name": "workhorse.task.type",
                   "signal": "traces",
                   "fieldContext": "span",
                   "fieldDataType": "string"
@@ -1023,7 +1023,7 @@
                     "name": "A",
                     "signal": "traces",
                     "filter": {
-                      "expression": "name = 'workhorse.handler' AND deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task"
+                      "expression": "name = 'workhorse.handler' AND deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.task.type IN $task"
                     },
                     "limit": 10,
                     "order": [

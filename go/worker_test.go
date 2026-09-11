@@ -20,56 +20,56 @@ import (
 )
 
 type workerRuntimeFixture struct {
-	ID                                   string                           `json:"id"`
-	Kind                                 string                           `json:"kind"`
-	Covers                               []string                         `json:"covers"`
-	JobType                              string                           `json:"jobType"`
-	FollowingJobType                     string                           `json:"followingJobType"`
-	CheckpointName                       string                           `json:"checkpointName"`
-	WaitName                             string                           `json:"waitName"`
-	WaitMS                               int                              `json:"waitMs"`
-	ExpectedHandlerOrder                 []string                         `json:"expectedHandlerOrder"`
-	ExpectedHandlerRuns                  int                              `json:"expectedHandlerRuns"`
-	ExpectedCheckpointOperations         int                              `json:"expectedCheckpointOperations"`
-	ExpectedAttemptsAfterSuspension      int                              `json:"expectedAttemptsAfterSuspension"`
-	ExpectedAttemptsAfterReplay          int                              `json:"expectedAttemptsAfterReplay"`
-	ExpectedAfterSuspension              map[string]workerFixtureJobState `json:"expectedAfterSuspension"`
-	ExpectedAfterSlotRelease             map[string]workerFixtureJobState `json:"expectedAfterSlotRelease"`
-	ExpectedAfterReplay                  map[string]workerFixtureJobState `json:"expectedAfterReplay"`
-	LeaseMS                              int                              `json:"leaseMs"`
-	HeartbeatMS                          int                              `json:"heartbeatMs"`
-	DurationMS                           int                              `json:"durationMs"`
-	MaxAttempts                          int                              `json:"maxAttempts"`
-	CancelReason                         string                           `json:"cancelReason"`
-	ExpectedCallsWhileBlocked            int                              `json:"expectedCallsWhileBlocked"`
-	ExpectedMinimumCallsBeforeSettlement int                              `json:"expectedMinimumCallsBeforeSettlement"`
-	ExpectedMaximumOverlap               int                              `json:"expectedMaximumOverlap"`
-	PollMS                               int                              `json:"pollMs"`
-	EmptyPollsBeforeEnqueue              int                              `json:"emptyPollsBeforeEnqueue"`
-	EnqueueStallMS                       int                              `json:"enqueueStallMs"`
-	ExpectedMinimumDelayMS               int                              `json:"expectedMinimumDelayMs"`
-	ExpectedMaximumDelayMS               int                              `json:"expectedMaximumDelayMs"`
-	Mode                                 string                           `json:"mode"`
-	LocalClockLeadMS                     int                              `json:"localClockLeadMs"`
-	ExpectedAbortReason                  string                           `json:"expectedAbortReason"`
-	ExpectedAbortReasons                 []string                         `json:"expectedAbortReasons"`
-	ExpectedAbortMessage                 string                           `json:"expectedAbortMessage"`
-	ExpectedRejectedWrites               []string                         `json:"expectedRejectedWrites"`
-	PortableRejectedWrites               []string                         `json:"portableRejectedWrites"`
-	ExpectedRejectedWriteError           string                           `json:"expectedRejectedWriteError"`
-	ExpectedState                        workerFixtureJobState            `json:"expectedState"`
-	ExpectedAfterRuns                    []workerFixtureJobState          `json:"expectedAfterRuns"`
-	ExpectedAttemptOutcome               string                           `json:"expectedAttemptOutcome"`
-	ExpectedAttemptOutcomes              []string                         `json:"expectedAttemptOutcomes"`
-	Concurrency                          int                              `json:"concurrency"`
-	JobCount                             int                              `json:"jobCount"`
-	SettleCheckMS                        int                              `json:"settleCheckMs"`
-	ExpectedActiveAtStop                 int                              `json:"expectedActiveAtStop"`
-	ExpectedSucceeded                    int                              `json:"expectedSucceeded"`
-	ExpectedReady                        int                              `json:"expectedReady"`
+	ID                                   string                            `json:"id"`
+	Kind                                 string                            `json:"kind"`
+	Covers                               []string                          `json:"covers"`
+	TaskType                             string                            `json:"taskType"`
+	FollowingTaskType                    string                            `json:"followingTaskType"`
+	CheckpointName                       string                            `json:"checkpointName"`
+	WaitName                             string                            `json:"waitName"`
+	WaitMS                               int                               `json:"waitMs"`
+	ExpectedHandlerOrder                 []string                          `json:"expectedHandlerOrder"`
+	ExpectedHandlerRuns                  int                               `json:"expectedHandlerRuns"`
+	ExpectedCheckpointOperations         int                               `json:"expectedCheckpointOperations"`
+	ExpectedAttemptsAfterSuspension      int                               `json:"expectedAttemptsAfterSuspension"`
+	ExpectedAttemptsAfterReplay          int                               `json:"expectedAttemptsAfterReplay"`
+	ExpectedAfterSuspension              map[string]workerFixtureTaskState `json:"expectedAfterSuspension"`
+	ExpectedAfterSlotRelease             map[string]workerFixtureTaskState `json:"expectedAfterSlotRelease"`
+	ExpectedAfterReplay                  map[string]workerFixtureTaskState `json:"expectedAfterReplay"`
+	LeaseMS                              int                               `json:"leaseMs"`
+	HeartbeatMS                          int                               `json:"heartbeatMs"`
+	DurationMS                           int                               `json:"durationMs"`
+	MaxAttempts                          int                               `json:"maxAttempts"`
+	CancelReason                         string                            `json:"cancelReason"`
+	ExpectedCallsWhileBlocked            int                               `json:"expectedCallsWhileBlocked"`
+	ExpectedMinimumCallsBeforeSettlement int                               `json:"expectedMinimumCallsBeforeSettlement"`
+	ExpectedMaximumOverlap               int                               `json:"expectedMaximumOverlap"`
+	PollMS                               int                               `json:"pollMs"`
+	EmptyPollsBeforeEnqueue              int                               `json:"emptyPollsBeforeEnqueue"`
+	EnqueueStallMS                       int                               `json:"enqueueStallMs"`
+	ExpectedMinimumDelayMS               int                               `json:"expectedMinimumDelayMs"`
+	ExpectedMaximumDelayMS               int                               `json:"expectedMaximumDelayMs"`
+	Mode                                 string                            `json:"mode"`
+	LocalClockLeadMS                     int                               `json:"localClockLeadMs"`
+	ExpectedAbortReason                  string                            `json:"expectedAbortReason"`
+	ExpectedAbortReasons                 []string                          `json:"expectedAbortReasons"`
+	ExpectedAbortMessage                 string                            `json:"expectedAbortMessage"`
+	ExpectedRejectedWrites               []string                          `json:"expectedRejectedWrites"`
+	PortableRejectedWrites               []string                          `json:"portableRejectedWrites"`
+	ExpectedRejectedWriteError           string                            `json:"expectedRejectedWriteError"`
+	ExpectedState                        workerFixtureTaskState            `json:"expectedState"`
+	ExpectedAfterRuns                    []workerFixtureTaskState          `json:"expectedAfterRuns"`
+	ExpectedAttemptOutcome               string                            `json:"expectedAttemptOutcome"`
+	ExpectedAttemptOutcomes              []string                          `json:"expectedAttemptOutcomes"`
+	Concurrency                          int                               `json:"concurrency"`
+	TaskCount                            int                               `json:"taskCount"`
+	SettleCheckMS                        int                               `json:"settleCheckMs"`
+	ExpectedActiveAtStop                 int                               `json:"expectedActiveAtStop"`
+	ExpectedSucceeded                    int                               `json:"expectedSucceeded"`
+	ExpectedReady                        int                               `json:"expectedReady"`
 }
 
-type workerFixtureJobState struct {
+type workerFixtureTaskState struct {
 	State     string `json:"state"`
 	Attempt   int    `json:"attempt"`
 	ErrorName string `json:"errorName"`
@@ -86,11 +86,11 @@ func executeWorkerSuspensionReplayFixture(t *testing.T, fixture workerRuntimeFix
 
 	queueName := "go-worker-suspension-replay"
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-	suspensionJobID, err := queue.Enqueue(ctx, fixture.JobType, nil)
+	suspensionTaskID, err := queue.Enqueue(ctx, fixture.TaskType, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	followingJobID, err := queue.Enqueue(ctx, fixture.FollowingJobType, nil)
+	followingTaskID, err := queue.Enqueue(ctx, fixture.FollowingTaskType, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,13 +105,13 @@ func executeWorkerSuspensionReplayFixture(t *testing.T, fixture workerRuntimeFix
 	order := make([]string, 0, len(fixture.ExpectedHandlerOrder))
 	handlerRuns := 0
 	checkpointOperations := 0
-	worker.Handle(fixture.JobType, func(
+	worker.Handle(fixture.TaskType, func(
 		_ context.Context,
 		_ any,
 		handlerContext *workhorse.HandlerContext,
 	) (any, error) {
 		handlerRuns++
-		order = append(order, "suspension:"+strconv.Itoa(handlerContext.Job.Attempt))
+		order = append(order, "suspension:"+strconv.Itoa(handlerContext.Task.Attempt))
 		prepared, err := handlerContext.Checkpoint(fixture.CheckpointName, func() (any, error) {
 			checkpointOperations++
 			return map[string]any{"operation": checkpointOperations}, nil
@@ -124,12 +124,12 @@ func executeWorkerSuspensionReplayFixture(t *testing.T, fixture workerRuntimeFix
 		}
 		return prepared, nil
 	})
-	worker.Handle(fixture.FollowingJobType, func(
+	worker.Handle(fixture.FollowingTaskType, func(
 		_ context.Context,
 		_ any,
 		handlerContext *workhorse.HandlerContext,
 	) (any, error) {
-		order = append(order, "following:"+strconv.Itoa(handlerContext.Job.Attempt))
+		order = append(order, "following:"+strconv.Itoa(handlerContext.Task.Attempt))
 		return nil, nil
 	})
 
@@ -138,18 +138,18 @@ func executeWorkerSuspensionReplayFixture(t *testing.T, fixture workerRuntimeFix
 	}
 	if _, err := pool.Exec(
 		ctx,
-		"UPDATE workhorse.job_runtime SET run_at = clock_timestamp() + interval '30 seconds' WHERE job_id = $1::uuid",
-		suspensionJobID,
+		"UPDATE workhorse.task_runtime SET run_at = clock_timestamp() + interval '30 seconds' WHERE task_id = $1::uuid",
+		suspensionTaskID,
 	); err != nil {
 		t.Fatal(err)
 	}
-	assertWorkerFixtureJobState(t, ctx, pool, suspensionJobID, fixture.ExpectedAfterSuspension["suspension"])
-	assertWorkerFixtureJobState(t, ctx, pool, followingJobID, fixture.ExpectedAfterSuspension["following"])
+	assertWorkerFixtureTaskState(t, ctx, pool, suspensionTaskID, fixture.ExpectedAfterSuspension["suspension"])
+	assertWorkerFixtureTaskState(t, ctx, pool, followingTaskID, fixture.ExpectedAfterSuspension["following"])
 	var attemptsAfterSuspension int
 	if err := pool.QueryRow(
 		ctx,
-		"SELECT count(*) FROM workhorse.attempt_history WHERE job_id = $1",
-		suspensionJobID,
+		"SELECT count(*) FROM workhorse.attempt_history WHERE task_id = $1",
+		suspensionTaskID,
 	).Scan(&attemptsAfterSuspension); err != nil {
 		t.Fatal(err)
 	}
@@ -163,20 +163,20 @@ func executeWorkerSuspensionReplayFixture(t *testing.T, fixture workerRuntimeFix
 	if processed, err := worker.RunOnce(ctx); err != nil || !processed {
 		t.Fatalf("following run: processed=%t err=%v", processed, err)
 	}
-	assertWorkerFixtureJobState(t, ctx, pool, suspensionJobID, fixture.ExpectedAfterSlotRelease["suspension"])
-	assertWorkerFixtureJobState(t, ctx, pool, followingJobID, fixture.ExpectedAfterSlotRelease["following"])
+	assertWorkerFixtureTaskState(t, ctx, pool, suspensionTaskID, fixture.ExpectedAfterSlotRelease["suspension"])
+	assertWorkerFixtureTaskState(t, ctx, pool, followingTaskID, fixture.ExpectedAfterSlotRelease["following"])
 	if _, err := pool.Exec(
 		ctx,
-		"UPDATE workhorse.job_runtime SET run_at = clock_timestamp() - interval '1 millisecond' WHERE job_id = $1::uuid",
-		suspensionJobID,
+		"UPDATE workhorse.task_runtime SET run_at = clock_timestamp() - interval '1 millisecond' WHERE task_id = $1::uuid",
+		suspensionTaskID,
 	); err != nil {
 		t.Fatal(err)
 	}
 	if processed, err := worker.RunOnce(ctx); err != nil || !processed {
 		t.Fatalf("replay run: processed=%t err=%v", processed, err)
 	}
-	assertWorkerFixtureJobState(t, ctx, pool, suspensionJobID, fixture.ExpectedAfterReplay["suspension"])
-	assertWorkerFixtureJobState(t, ctx, pool, followingJobID, fixture.ExpectedAfterReplay["following"])
+	assertWorkerFixtureTaskState(t, ctx, pool, suspensionTaskID, fixture.ExpectedAfterReplay["suspension"])
+	assertWorkerFixtureTaskState(t, ctx, pool, followingTaskID, fixture.ExpectedAfterReplay["following"])
 
 	if strings.Join(order, ",") != strings.Join(fixture.ExpectedHandlerOrder, ",") {
 		t.Fatalf("unexpected handler order: %v", order)
@@ -188,7 +188,7 @@ func executeWorkerSuspensionReplayFixture(t *testing.T, fixture workerRuntimeFix
 		t.Fatalf("expected %d checkpoint operations, received %d", fixture.ExpectedCheckpointOperations, checkpointOperations)
 	}
 	var attempts int
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM workhorse.attempt_history WHERE job_id = $1", suspensionJobID).Scan(&attempts); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM workhorse.attempt_history WHERE task_id = $1", suspensionTaskID).Scan(&attempts); err != nil {
 		t.Fatal(err)
 	}
 	if attempts != fixture.ExpectedAttemptsAfterReplay {
@@ -207,7 +207,7 @@ func TestHandlerContextReturnsTypedFenceErrorsForCheckpointAndWait(t *testing.T)
 
 	queueName := "go-worker-durability-stale"
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-	jobID, err := queue.Enqueue(ctx, "durability.stale", nil)
+	taskID, err := queue.Enqueue(ctx, "durability.stale", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,9 +229,9 @@ func TestHandlerContextReturnsTypedFenceErrorsForCheckpointAndWait(t *testing.T)
 		if err := pool.QueryRow(
 			ctx,
 			"SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, '{}'::jsonb)",
-			jobID,
+			taskID,
 			"go-durability-stale",
-			handlerContext.Job.FenceToken,
+			handlerContext.Task.FenceToken,
 		).Scan(&accepted); err != nil {
 			return nil, err
 		}
@@ -252,14 +252,14 @@ func TestHandlerContextReturnsTypedFenceErrorsForCheckpointAndWait(t *testing.T)
 	}
 	checkpointErr := <-checkpointError
 	var checkpointLeaseLost *workhorse.CheckpointLeaseLostError
-	if !errors.As(checkpointErr, &checkpointLeaseLost) || checkpointLeaseLost.JobID != jobID ||
+	if !errors.As(checkpointErr, &checkpointLeaseLost) || checkpointLeaseLost.TaskID != taskID ||
 		checkpointLeaseLost.CheckpointName != "stale-checkpoint" ||
 		!errors.Is(checkpointErr, workhorse.ErrLeaseLost) {
 		t.Fatalf("unexpected checkpoint fence error: %#v", checkpointErr)
 	}
 	waitErr := <-waitError
 	var waitLeaseLost *workhorse.WaitLeaseLostError
-	if !errors.As(waitErr, &waitLeaseLost) || waitLeaseLost.JobID != jobID ||
+	if !errors.As(waitErr, &waitLeaseLost) || waitLeaseLost.TaskID != taskID ||
 		waitLeaseLost.WaitName != "stale-wait" || !errors.Is(waitErr, workhorse.ErrLeaseLost) {
 		t.Fatalf("unexpected wait fence error: %#v", waitErr)
 	}
@@ -276,7 +276,7 @@ func TestHandlerContextReportsAndReadsLatestProgress(t *testing.T) {
 
 	queueName := "go-worker-progress"
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-	jobID, err := queue.Enqueue(ctx, "progress.report", nil)
+	taskID, err := queue.Enqueue(ctx, "progress.report", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +304,7 @@ func TestHandlerContextReportsAndReadsLatestProgress(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		if observed == nil || observed.Revision != updated.Revision || observed.JobID != jobID {
+		if observed == nil || observed.Revision != updated.Revision || observed.TaskID != taskID {
 			return nil, fmt.Errorf("unexpected cached progress: %#v", observed)
 		}
 		return observed.Value, nil
@@ -317,8 +317,8 @@ func TestHandlerContextReportsAndReadsLatestProgress(t *testing.T) {
 	var revision int64
 	if err := pool.QueryRow(
 		ctx,
-		"SELECT progress_value, revision FROM workhorse.job_progress WHERE job_id = $1",
-		jobID,
+		"SELECT progress_value, revision FROM workhorse.task_progress WHERE task_id = $1",
+		taskID,
 	).Scan(&value, &revision); err != nil {
 		t.Fatal(err)
 	}
@@ -332,13 +332,13 @@ func TestHandlerContextReportsAndReadsLatestProgress(t *testing.T) {
 	var result []byte
 	if err := pool.QueryRow(
 		ctx,
-		"SELECT state, result FROM workhorse.job_outcome WHERE job_id = $1",
-		jobID,
+		"SELECT state, result FROM workhorse.task_outcome WHERE task_id = $1",
+		taskID,
 	).Scan(&state, &result); err != nil {
 		t.Fatal(err)
 	}
 	if state != "succeeded" || string(result) != `{"stage": "reading"}` && string(result) != `{"stage":"reading"}` {
-		t.Fatalf("unexpected progress job outcome: state=%s result=%s", state, result)
+		t.Fatalf("unexpected progress task outcome: state=%s result=%s", state, result)
 	}
 }
 
@@ -353,7 +353,7 @@ func TestHandlerContextReturnsTypedProgressFenceAndRateLimitErrors(t *testing.T)
 
 	queueName := "go-worker-progress-errors"
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-	jobID, err := queue.Enqueue(ctx, "progress.errors", nil)
+	taskID, err := queue.Enqueue(ctx, "progress.errors", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,9 +380,9 @@ func TestHandlerContextReturnsTypedProgressFenceAndRateLimitErrors(t *testing.T)
 		if err := pool.QueryRow(
 			ctx,
 			"SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, '{}'::jsonb)",
-			jobID,
+			taskID,
 			"go-progress-errors",
-			handlerContext.Job.FenceToken,
+			handlerContext.Task.FenceToken,
 		).Scan(&accepted); err != nil {
 			return nil, err
 		}
@@ -398,11 +398,11 @@ func TestHandlerContextReturnsTypedProgressFenceAndRateLimitErrors(t *testing.T)
 		t.Fatalf("expected stale settlement: processed=%t err=%v", processed, runError)
 	}
 	var limited *workhorse.ProgressRateLimitError
-	if !errors.As(rateLimitError, &limited) || limited.JobID != jobID || limited.RetryAfter <= 0 {
+	if !errors.As(rateLimitError, &limited) || limited.TaskID != taskID || limited.RetryAfter <= 0 {
 		t.Fatalf("unexpected progress errors: first=%#v rate_limit=%#v", firstProgressError, rateLimitError)
 	}
 	var lost *workhorse.ProgressLeaseLostError
-	if !errors.As(leaseError, &lost) || lost.JobID != jobID || !errors.Is(leaseError, workhorse.ErrLeaseLost) {
+	if !errors.As(leaseError, &lost) || lost.TaskID != taskID || !errors.Is(leaseError, workhorse.ErrLeaseLost) {
 		t.Fatalf("unexpected progress fence error: %#v", leaseError)
 	}
 }
@@ -445,7 +445,7 @@ func TestHandlerContextCoalescesWaitsAndCancelsOnSuspension(t *testing.T) {
 
 	queueName := "go-worker-wait-coalescing"
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-	jobID, err := queue.Enqueue(ctx, "wait.coalescing", nil)
+	taskID, err := queue.Enqueue(ctx, "wait.coalescing", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -491,8 +491,8 @@ func TestHandlerContextCoalescesWaitsAndCancelsOnSuspension(t *testing.T) {
 	var attempt int
 	if err := pool.QueryRow(
 		ctx,
-		"SELECT state, current_attempt FROM workhorse.job_runtime WHERE job_id = $1",
-		jobID,
+		"SELECT state, current_attempt FROM workhorse.task_runtime WHERE task_id = $1",
+		taskID,
 	).Scan(&state, &attempt); err != nil {
 		t.Fatal(err)
 	}
@@ -539,7 +539,7 @@ func (tracer *notificationReconnectGateTracer) TraceQueryStart(
 	_ *pgx.Conn,
 	data pgx.TraceQueryStartData,
 ) context.Context {
-	if strings.TrimSpace(data.SQL) != "LISTEN workhorse_jobs" {
+	if strings.TrimSpace(data.SQL) != "LISTEN workhorse_tasks" {
 		return ctx
 	}
 	tracer.mu.Lock()
@@ -656,7 +656,7 @@ func (tracer *heartbeatQueryTracer) waitForCalls(t *testing.T, expected int) {
 	}
 }
 
-func TestWorkerClaimsHandlesAndCompletesAJob(t *testing.T) {
+func TestWorkerClaimsHandlesAndCompletesATask(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-complete")
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -666,7 +666,7 @@ func TestWorkerClaimsHandlesAndCompletesAJob(t *testing.T) {
 	t.Cleanup(pool.Close)
 
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-worker")
-	jobID, err := queue.Enqueue(ctx, "report.generate", map[string]any{"reportId": "r-1"})
+	taskID, err := queue.Enqueue(ctx, "report.generate", map[string]any{"reportId": "r-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -687,15 +687,15 @@ func TestWorkerClaimsHandlesAndCompletesAJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !processed {
-		t.Fatal("worker did not claim the enqueued job")
+		t.Fatal("worker did not claim the enqueued task")
 	}
 
 	var state string
 	var result []byte
 	if err := pool.QueryRow(
 		ctx,
-		"SELECT state, result FROM workhorse.job_outcome WHERE job_id = $1::uuid",
-		jobID,
+		"SELECT state, result FROM workhorse.task_outcome WHERE task_id = $1::uuid",
+		taskID,
 	).Scan(&state, &result); err != nil {
 		t.Fatal(err)
 	}
@@ -718,10 +718,10 @@ func TestContractSyncValidatesPayloadAndWorkerResult(t *testing.T) {
 	t.Cleanup(pool.Close)
 
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-contract")
-	err = queue.SyncContracts(ctx, map[string]workhorse.JobTypeContracts{
+	err = queue.SyncContracts(ctx, map[string]workhorse.TaskTypeContracts{
 		"contract.go": {
 			CurrentVersion: "current",
-			Versions: map[string]workhorse.JobContractVersion{
+			Versions: map[string]workhorse.TaskContractVersion{
 				"current": {
 					PayloadSchema: map[string]any{
 						"type": "object", "required": []any{"name"},
@@ -741,7 +741,7 @@ func TestContractSyncValidatesPayloadAndWorkerResult(t *testing.T) {
 	if _, err := queue.Enqueue(ctx, "contract.go", map[string]any{"name": 42}); err == nil {
 		t.Fatal("expected invalid payload rejection")
 	}
-	jobID, err := queue.Enqueue(
+	taskID, err := queue.Enqueue(
 		ctx,
 		"contract.go",
 		map[string]any{"name": "accepted"},
@@ -756,7 +756,7 @@ func TestContractSyncValidatesPayloadAndWorkerResult(t *testing.T) {
 	type contractResult struct {
 		OK bool `json:"ok"`
 	}
-	structJobID, err := queue.Enqueue(
+	structTaskID, err := queue.Enqueue(
 		ctx,
 		"contract.go",
 		contractPayload{Name: "struct"},
@@ -784,14 +784,14 @@ func TestContractSyncValidatesPayloadAndWorkerResult(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !processed {
-			t.Fatal("worker did not claim the contracted job")
+			t.Fatal("worker did not claim the contracted task")
 		}
 	}
 	var state, structState string
 	if err := pool.QueryRow(
 		ctx,
-		"SELECT state FROM workhorse.job_outcome WHERE job_id = $1::uuid",
-		jobID,
+		"SELECT state FROM workhorse.task_outcome WHERE task_id = $1::uuid",
+		taskID,
 	).Scan(&state); err != nil {
 		t.Fatal(err)
 	}
@@ -800,8 +800,8 @@ func TestContractSyncValidatesPayloadAndWorkerResult(t *testing.T) {
 	}
 	if err := pool.QueryRow(
 		ctx,
-		"SELECT state FROM workhorse.job_outcome WHERE job_id = $1::uuid",
-		structJobID,
+		"SELECT state FROM workhorse.task_outcome WHERE task_id = $1::uuid",
+		structTaskID,
 	).Scan(&structState); err != nil {
 		t.Fatal(err)
 	}
@@ -820,7 +820,7 @@ func TestWorkerRecordsFailureAndLetsPostgreSQLScheduleTheRetry(t *testing.T) {
 	t.Cleanup(pool.Close)
 
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-worker-retry")
-	jobID, err := queue.Enqueue(ctx, "delivery.retry", nil, workhorse.EnqueueOptions{
+	taskID, err := queue.Enqueue(ctx, "delivery.retry", nil, workhorse.EnqueueOptions{
 		MaxAttempts: 2,
 		RetryPolicy: map[string]any{"type": "fixed", "delayMs": 25},
 	})
@@ -851,8 +851,8 @@ func TestWorkerRecordsFailureAndLetsPostgreSQLScheduleTheRetry(t *testing.T) {
 	var runAt time.Time
 	if err := pool.QueryRow(
 		ctx,
-		"SELECT state, current_attempt, run_at FROM workhorse.job_runtime WHERE job_id = $1::uuid",
-		jobID,
+		"SELECT state, current_attempt, run_at FROM workhorse.task_runtime WHERE task_id = $1::uuid",
+		taskID,
 	).Scan(&state, &attempt, &runAt); err != nil {
 		t.Fatal(err)
 	}
@@ -874,8 +874,8 @@ func TestWorkerRecordsFailureAndLetsPostgreSQLScheduleTheRetry(t *testing.T) {
 	var currentAttempt int
 	if err := pool.QueryRow(
 		ctx,
-		"SELECT state, current_attempt FROM workhorse.job_outcome WHERE job_id = $1::uuid",
-		jobID,
+		"SELECT state, current_attempt FROM workhorse.task_outcome WHERE task_id = $1::uuid",
+		taskID,
 	).Scan(&outcome, &currentAttempt); err != nil {
 		t.Fatal(err)
 	}
@@ -884,7 +884,7 @@ func TestWorkerRecordsFailureAndLetsPostgreSQLScheduleTheRetry(t *testing.T) {
 	}
 }
 
-func TestWorkersCannotClaimTheSameJobConcurrently(t *testing.T) {
+func TestWorkersCannotClaimTheSameTaskConcurrently(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-exclusive")
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -920,7 +920,7 @@ func TestWorkersCannotClaimTheSameJobConcurrently(t *testing.T) {
 	go func() {
 		processed, err := first.RunOnce(ctx)
 		if err == nil && !processed {
-			err = errors.New("first worker did not claim the job")
+			err = errors.New("first worker did not claim the task")
 		}
 		firstResult <- err
 	}()
@@ -931,7 +931,7 @@ func TestWorkersCannotClaimTheSameJobConcurrently(t *testing.T) {
 		t.Fatal(err)
 	}
 	if processed {
-		t.Fatal("second worker claimed a job already owned by the first worker")
+		t.Fatal("second worker claimed a task already owned by the first worker")
 	}
 	close(release)
 	if err := <-firstResult; err != nil {
@@ -992,7 +992,7 @@ func TestWorkerRunBoundsConcurrencyAndRefillsSlots(t *testing.T) {
 	second := <-started
 	select {
 	case sequence := <-started:
-		t.Fatalf("worker exceeded its concurrency bound by starting job %d", sequence)
+		t.Fatalf("worker exceeded its concurrency bound by starting task %d", sequence)
 	case <-time.After(100 * time.Millisecond):
 	}
 	close(releases[first])
@@ -1059,7 +1059,7 @@ func TestWorkerRunRotatesClaimsAcrossQueues(t *testing.T) {
 		case queueName := <-handled:
 			order = append(order, queueName)
 		case <-time.After(time.Second):
-			t.Fatal("worker did not process every queued job")
+			t.Fatal("worker did not process every queued task")
 		}
 	}
 	stop()
@@ -1126,7 +1126,7 @@ func TestWorkerRunStopsClaimsAndDrainsWithinTheGracePeriod(t *testing.T) {
 	close(releaseFirst)
 	select {
 	case sequence := <-started:
-		t.Fatalf("worker claimed job %d after shutdown started", sequence)
+		t.Fatalf("worker claimed task %d after shutdown started", sequence)
 	case <-time.After(150 * time.Millisecond):
 	}
 	select {
@@ -1161,7 +1161,7 @@ func TestWorkerSurfacesRejectedSettlementAsTypedStaleLease(t *testing.T) {
 	t.Cleanup(pool.Close)
 
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-worker-stale")
-	jobID, err := queue.Enqueue(ctx, "stale", nil)
+	taskID, err := queue.Enqueue(ctx, "stale", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1188,8 +1188,8 @@ func TestWorkerSurfacesRejectedSettlementAsTypedStaleLease(t *testing.T) {
 	var fence int64
 	if err := pool.QueryRow(
 		ctx,
-		"SELECT fence_token FROM workhorse.job_runtime WHERE job_id = $1::uuid",
-		jobID,
+		"SELECT fence_token FROM workhorse.task_runtime WHERE task_id = $1::uuid",
+		taskID,
 	).Scan(&fence); err != nil {
 		t.Fatal(err)
 	}
@@ -1197,7 +1197,7 @@ func TestWorkerSurfacesRejectedSettlementAsTypedStaleLease(t *testing.T) {
 	if err := pool.QueryRow(
 		ctx,
 		"SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)",
-		jobID,
+		taskID,
 		"go-worker-stale",
 		fence,
 		[]byte(`{"source":"competing-settlement"}`),
@@ -1213,8 +1213,8 @@ func TestWorkerSurfacesRejectedSettlementAsTypedStaleLease(t *testing.T) {
 		t.Fatalf("expected errors.Is stale lease match, received %v", err)
 	}
 	var stale *workhorse.StaleLeaseError
-	if !errors.As(err, &stale) || stale.JobID != jobID {
-		t.Fatalf("expected typed stale lease for %s, received %#v", jobID, err)
+	if !errors.As(err, &stale) || stale.TaskID != taskID {
+		t.Fatalf("expected typed stale lease for %s, received %#v", taskID, err)
 	}
 }
 
@@ -1234,7 +1234,7 @@ func executeWorkerHeartbeatFixture(t *testing.T, fixture workerRuntimeFixture) {
 	t.Cleanup(pool.Close)
 
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-worker-heartbeat")
-	jobID, err := queue.Enqueue(ctx, fixture.JobType, nil)
+	taskID, err := queue.Enqueue(ctx, fixture.TaskType, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1249,7 +1249,7 @@ func executeWorkerHeartbeatFixture(t *testing.T, fixture workerRuntimeFixture) {
 	}
 	started := make(chan struct{})
 	release := make(chan struct{})
-	worker.Handle(fixture.JobType, func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
+	worker.Handle(fixture.TaskType, func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
 		close(started)
 		<-release
 		return nil, nil
@@ -1295,8 +1295,8 @@ func executeWorkerHeartbeatFixture(t *testing.T, fixture workerRuntimeFixture) {
 	var state string
 	if err := pool.QueryRow(
 		ctx,
-		"SELECT state FROM workhorse.job_outcome WHERE job_id = $1::uuid",
-		jobID,
+		"SELECT state FROM workhorse.task_outcome WHERE task_id = $1::uuid",
+		taskID,
 	).Scan(&state); err != nil {
 		t.Fatal(err)
 	}
@@ -1315,7 +1315,7 @@ func executeWorkerCancellationFixture(t *testing.T, fixture workerRuntimeFixture
 	t.Cleanup(pool.Close)
 
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-worker-cancel")
-	jobID, err := queue.Enqueue(ctx, fixture.JobType, nil)
+	taskID, err := queue.Enqueue(ctx, fixture.TaskType, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1330,7 +1330,7 @@ func executeWorkerCancellationFixture(t *testing.T, fixture workerRuntimeFixture
 	}
 	started := make(chan struct{})
 	cause := make(chan error, 1)
-	worker.Handle(fixture.JobType, func(handlerContext context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
+	worker.Handle(fixture.TaskType, func(handlerContext context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
 		close(started)
 		<-handlerContext.Done()
 		cause <- context.Cause(handlerContext)
@@ -1343,7 +1343,7 @@ func executeWorkerCancellationFixture(t *testing.T, fixture workerRuntimeFixture
 	}()
 	<-started
 	requestedBy := "go-test"
-	cancelResult, err := queue.Cancel(ctx, jobID, workhorse.CancellationRequest{
+	cancelResult, err := queue.Cancel(ctx, taskID, workhorse.CancellationRequest{
 		RequestedBy: &requestedBy,
 		Reason:      &fixture.CancelReason,
 	})
@@ -1363,18 +1363,18 @@ func executeWorkerCancellationFixture(t *testing.T, fixture workerRuntimeFixture
 		t.Fatalf("expected typed cancellation cause, received %v", observed)
 	}
 	var cancellation *workhorse.CancellationRequestedError
-	if !errors.As(observed, &cancellation) || cancellation.JobID != jobID {
-		t.Fatalf("expected cancellation cause for %s, received %#v", jobID, observed)
+	if !errors.As(observed, &cancellation) || cancellation.TaskID != taskID {
+		t.Fatalf("expected cancellation cause for %s, received %#v", taskID, observed)
 	}
 	if lifecycleCauseName(observed) != fixture.ExpectedAbortReason {
 		t.Fatalf("expected %s, received %s", fixture.ExpectedAbortReason, lifecycleCauseName(observed))
 	}
-	assertWorkerFixtureJobState(t, ctx, pool, jobID, fixture.ExpectedState)
-	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, jobID, []string{fixture.ExpectedAttemptOutcome})
+	assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedState)
+	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, taskID, []string{fixture.ExpectedAttemptOutcome})
 }
 
 // anchorDeadlineAtClaim starts a deadline fixture's budget inside the claim itself. claim_v1
-// filters ready jobs on job_runtime.deadline_at and returns job.deadline_at, so the trigger
+// filters ready tasks on task_runtime.deadline_at and returns task.deadline_at, so the trigger
 // rewrites both when the claim moves the row from ready to active. The worker then arms its local
 // timer durationMs after the claim's own clock, and no stall between the test and the claim can
 // spend the budget before the claim runs. The database is a throwaway conformance copy.
@@ -1386,12 +1386,12 @@ LANGUAGE plpgsql AS $$
 BEGIN
   IF OLD.state = 'ready' AND NEW.state = 'active' THEN
     NEW.deadline_at := clock_timestamp() + (%d * interval '1 millisecond');
-    UPDATE workhorse.job SET deadline_at = NEW.deadline_at WHERE id = NEW.job_id;
+    UPDATE workhorse.task SET deadline_at = NEW.deadline_at WHERE id = NEW.task_id;
   END IF;
   RETURN NEW;
 END
 $$;
-CREATE TRIGGER test_anchor_deadline_at_claim BEFORE UPDATE ON workhorse.job_runtime
+CREATE TRIGGER test_anchor_deadline_at_claim BEFORE UPDATE ON workhorse.task_runtime
   FOR EACH ROW EXECUTE FUNCTION workhorse.test_anchor_deadline_at_claim()`, durationMS)); err != nil {
 		t.Fatal(err)
 	}
@@ -1418,7 +1418,7 @@ func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) 
 	} else {
 		options.ExecutionTimeoutMS = fixture.DurationMS
 	}
-	jobID, err := queue.Enqueue(ctx, fixture.JobType, nil, options)
+	taskID, err := queue.Enqueue(ctx, fixture.TaskType, nil, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1432,16 +1432,16 @@ func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) 
 		t.Fatal(err)
 	}
 	causes := make(chan error, len(fixture.ExpectedAbortReasons))
-	worker.Handle(fixture.JobType, func(handlerContext context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
+	worker.Handle(fixture.TaskType, func(handlerContext context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
 		field := "attempt_timeout_at"
 		if fixture.Mode == "deadline" {
 			field = "deadline_at"
 		}
 		if _, err := pool.Exec(ctx, fmt.Sprintf(
-			"UPDATE workhorse.job_runtime SET %s = %s + ($2 * interval '1 millisecond') WHERE job_id = $1::uuid",
+			"UPDATE workhorse.task_runtime SET %s = %s + ($2 * interval '1 millisecond') WHERE task_id = $1::uuid",
 			field,
 			field,
-		), jobID, fixture.LocalClockLeadMS); err != nil {
+		), taskID, fixture.LocalClockLeadMS); err != nil {
 			return nil, err
 		}
 		<-handlerContext.Done()
@@ -1465,7 +1465,7 @@ func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) 
 		if err != nil || !processed {
 			t.Fatalf("expiration attempt: processed=%t err=%v", processed, err)
 		}
-		assertWorkerFixtureJobState(t, ctx, pool, jobID, expected)
+		assertWorkerFixtureTaskState(t, ctx, pool, taskID, expected)
 	}
 	observedCauses := make([]string, 0, len(fixture.ExpectedAbortReasons))
 	for range fixture.ExpectedAbortReasons {
@@ -1474,7 +1474,7 @@ func executeWorkerExpirationFixture(t *testing.T, fixture workerRuntimeFixture) 
 	if strings.Join(observedCauses, ",") != strings.Join(fixture.ExpectedAbortReasons, ",") {
 		t.Fatalf("unexpected expiration causes: %v", observedCauses)
 	}
-	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, jobID, fixture.ExpectedAttemptOutcomes)
+	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, taskID, fixture.ExpectedAttemptOutcomes)
 }
 
 func executeWorkerLeaseLossFixture(t *testing.T, fixture workerRuntimeFixture) {
@@ -1497,7 +1497,7 @@ func executeWorkerLeaseLossFixture(t *testing.T, fixture workerRuntimeFixture) {
 
 	queueName := "go-worker-lease-loss"
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-	jobID, err := queue.Enqueue(ctx, fixture.JobType, nil, workhorse.EnqueueOptions{
+	taskID, err := queue.Enqueue(ctx, fixture.TaskType, nil, workhorse.EnqueueOptions{
 		MaxAttempts: fixture.MaxAttempts,
 		RetryPolicy: map[string]any{"type": "fixed", "delayMs": 0},
 	})
@@ -1520,7 +1520,7 @@ func executeWorkerLeaseLossFixture(t *testing.T, fixture workerRuntimeFixture) {
 		messages []string
 	}
 	rejectedWrites := make(chan rejectedWriteResults, 1)
-	worker.Handle(fixture.JobType, func(handlerContext context.Context, _ any, durability *workhorse.HandlerContext) (any, error) {
+	worker.Handle(fixture.TaskType, func(handlerContext context.Context, _ any, durability *workhorse.HandlerContext) (any, error) {
 		close(started)
 		<-handlerContext.Done()
 		cause <- context.Cause(handlerContext)
@@ -1547,7 +1547,7 @@ func executeWorkerLeaseLossFixture(t *testing.T, fixture workerRuntimeFixture) {
 				return err
 			}},
 			{name: "runChildren", run: func() error {
-				_, err := durability.RunChildren([]workhorse.ChildJobRequest{{Name: "too-late", Type: "protocol.child"}})
+				_, err := durability.RunChildren([]workhorse.ChildTaskRequest{{Name: "too-late", Type: "protocol.child"}})
 				return err
 			}},
 		}
@@ -1571,15 +1571,15 @@ func executeWorkerLeaseLossFixture(t *testing.T, fixture workerRuntimeFixture) {
 	var staleFence int64
 	if err := pool.QueryRow(
 		ctx,
-		"SELECT fence_token FROM workhorse.job_runtime WHERE job_id = $1::uuid",
-		jobID,
+		"SELECT fence_token FROM workhorse.task_runtime WHERE task_id = $1::uuid",
+		taskID,
 	).Scan(&staleFence); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(
 		ctx,
-		"UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE job_id = $1::uuid",
-		jobID,
+		"UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE task_id = $1::uuid",
+		taskID,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -1602,8 +1602,8 @@ func executeWorkerLeaseLossFixture(t *testing.T, fixture workerRuntimeFixture) {
 		t.Fatalf("expected lease-loss cancellation cause, received %v", observed)
 	}
 	var leaseLoss *workhorse.LeaseLostError
-	if !errors.As(observed, &leaseLoss) || leaseLoss.JobID != jobID {
-		t.Fatalf("expected lease-loss cause for %s, received %#v", jobID, observed)
+	if !errors.As(observed, &leaseLoss) || leaseLoss.TaskID != taskID {
+		t.Fatalf("expected lease-loss cause for %s, received %#v", taskID, observed)
 	}
 	if observed.Error() != fixture.ExpectedAbortMessage {
 		t.Fatalf("expected lease-loss message %q, received %q", fixture.ExpectedAbortMessage, observed)
@@ -1622,13 +1622,13 @@ func executeWorkerLeaseLossFixture(t *testing.T, fixture workerRuntimeFixture) {
 			t.Fatalf("portable rejected write %q is absent from expectedRejectedWrites", portable)
 		}
 	}
-	assertWorkerFixtureJobState(t, ctx, pool, jobID, fixture.ExpectedState)
-	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, jobID, []string{fixture.ExpectedAttemptOutcome})
+	assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedState)
+	assertWorkerFixtureAttemptOutcomes(t, ctx, pool, taskID, []string{fixture.ExpectedAttemptOutcome})
 	var accepted bool
 	if err := pool.QueryRow(
 		ctx,
 		"SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)",
-		jobID,
+		taskID,
 		"lease-loss-worker",
 		staleFence,
 		[]byte(`{"stale":true}`),
@@ -1651,7 +1651,7 @@ func TestWorkerMaintenanceRecoversAnExpiredPeerLease(t *testing.T) {
 
 	queueName := "go-worker-recovery"
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-	jobID, err := queue.Enqueue(ctx, "recovered", nil, workhorse.EnqueueOptions{
+	taskID, err := queue.Enqueue(ctx, "recovered", nil, workhorse.EnqueueOptions{
 		MaxAttempts: 2,
 		RetryPolicy: map[string]any{"type": "fixed", "delayMs": 0},
 	})
@@ -1687,8 +1687,8 @@ func TestWorkerMaintenanceRecoversAnExpiredPeerLease(t *testing.T) {
 	var attempt int
 	if err := pool.QueryRow(
 		ctx,
-		"SELECT state, current_attempt FROM workhorse.job_outcome WHERE job_id = $1::uuid",
-		jobID,
+		"SELECT state, current_attempt FROM workhorse.task_outcome WHERE task_id = $1::uuid",
+		taskID,
 	).Scan(&state, &attempt); err != nil {
 		t.Fatal(err)
 	}
@@ -1878,7 +1878,7 @@ func TestWorkerMaintenanceCadenceDoesNotWaitForAHandler(t *testing.T) {
 
 	queueName := "go-worker-maintenance-cadence"
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-	peerJobID, err := queue.Enqueue(ctx, "peer", nil, workhorse.EnqueueOptions{
+	peerTaskID, err := queue.Enqueue(ctx, "peer", nil, workhorse.EnqueueOptions{
 		MaxAttempts: 2,
 		RetryPolicy: map[string]any{"type": "fixed", "delayMs": 0},
 	})
@@ -1922,8 +1922,8 @@ func TestWorkerMaintenanceCadenceDoesNotWaitForAHandler(t *testing.T) {
 	<-started
 	if _, err := pool.Exec(
 		ctx,
-		"UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE job_id = $1::uuid",
-		peerJobID,
+		"UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE task_id = $1::uuid",
+		peerTaskID,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -1940,8 +1940,8 @@ func TestWorkerMaintenanceCadenceDoesNotWaitForAHandler(t *testing.T) {
 			var attempt int
 			if err := pool.QueryRow(
 				ctx,
-				"SELECT state, current_attempt FROM workhorse.job_runtime WHERE job_id = $1::uuid",
-				peerJobID,
+				"SELECT state, current_attempt FROM workhorse.task_runtime WHERE task_id = $1::uuid",
+				peerTaskID,
 			).Scan(&state, &attempt); err != nil {
 				t.Fatal(err)
 			}
@@ -2010,7 +2010,7 @@ func TestWorkerOwnershipLifecycleSupportsASingleConnectionPool(t *testing.T) {
 
 	queueName := "go-worker-single-connection"
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
-	jobID, err := queue.Enqueue(ctx, "single-connection", nil)
+	taskID, err := queue.Enqueue(ctx, "single-connection", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2039,7 +2039,7 @@ func TestWorkerOwnershipLifecycleSupportsASingleConnectionPool(t *testing.T) {
 	go func() {
 		processed, err := worker.RunOnce(ctx)
 		if err == nil && !processed {
-			err = errors.New("single-connection worker did not process the job")
+			err = errors.New("single-connection worker did not process the task")
 		}
 		workerResult <- err
 	}()
@@ -2056,18 +2056,18 @@ func TestWorkerOwnershipLifecycleSupportsASingleConnectionPool(t *testing.T) {
 			t.Fatal(err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("single-connection worker did not settle the heartbeated job")
+		t.Fatal("single-connection worker did not settle the heartbeated task")
 	}
 	var settled bool
 	if err := pool.QueryRow(
 		ctx,
-		"SELECT EXISTS (SELECT 1 FROM workhorse.job_outcome WHERE job_id = $1::uuid)",
-		jobID,
+		"SELECT EXISTS (SELECT 1 FROM workhorse.task_outcome WHERE task_id = $1::uuid)",
+		taskID,
 	).Scan(&settled); err != nil {
 		t.Fatal(err)
 	}
 	if !settled {
-		t.Fatal("single-connection worker returned before persisting the job outcome")
+		t.Fatal("single-connection worker returned before persisting the task outcome")
 	}
 }
 
@@ -2257,7 +2257,7 @@ func TestWorkerPollingContinuesDuringNotificationReconnectBackoff(t *testing.T) 
 		`SELECT count(*)
 		 FROM pg_stat_activity
 		 WHERE datname = current_database()
-		   AND query = 'LISTEN workhorse_jobs'
+		   AND query = 'LISTEN workhorse_tasks'
 		   AND pid <> $1`,
 		listenerPID,
 	).Scan(&replacementListeners); err != nil {
@@ -2301,7 +2301,7 @@ func waitForNotificationListener(t *testing.T, ctx context.Context, pool *pgxpoo
 			`SELECT pid
 			 FROM pg_stat_activity
 			 WHERE datname = current_database()
-			   AND query = 'LISTEN workhorse_jobs'
+			   AND query = 'LISTEN workhorse_tasks'
 			   AND pid <> pg_backend_pid()
 			   AND pid <> $1
 			 ORDER BY backend_start DESC

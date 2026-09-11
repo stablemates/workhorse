@@ -111,7 +111,7 @@ func assertAdminQuery(t *testing.T, executor workhorse.Executor) {
 	t.Helper()
 	ctx := context.Background()
 	admin := workhorse.NewAdmin(executor)
-	jobID := "00000000-0000-4000-8000-000000000001"
+	taskID := "00000000-0000-4000-8000-000000000001"
 	queueName := fmt.Sprintf("executor-test-%d", time.Now().UnixNano())
 	audit := func(operation string) workhorse.AdminAudit {
 		return workhorse.AdminAudit{
@@ -120,41 +120,41 @@ func assertAdminQuery(t *testing.T, executor workhorse.Executor) {
 			RequestID: fmt.Sprintf("%s-%s-%d", t.Name(), operation, time.Now().UnixNano()),
 		}
 	}
-	page, err := admin.ListJobs(ctx, workhorse.JobListQuery{Limit: 1})
+	page, err := admin.ListTasks(ctx, workhorse.TaskListQuery{Limit: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(page.Items) > 1 {
 		t.Fatalf("Admin limit was not respected: %#v", page)
 	}
-	if _, err := admin.GetJob(ctx, jobID); err != nil {
+	if _, err := admin.GetTask(ctx, taskID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.GetJobTimeline(ctx, jobID, workhorse.JobTimelineQuery{Limit: 1}); err != nil {
+	if _, err := admin.GetTaskTimeline(ctx, taskID, workhorse.TaskTimelineQuery{Limit: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := admin.ListDeadLetters(ctx, workhorse.DeadLetterQuery{Limit: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.Redrive(ctx, jobID, audit("redrive")); err != nil {
+	if _, err := admin.Redrive(ctx, taskID, audit("redrive")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := admin.RedriveMany(ctx, workhorse.DeadLetterFilter{}, audit("redrive-many"), workhorse.BulkRedriveOptions{Limit: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.GetCheckpoint(ctx, jobID, "checkpoint"); err != nil {
+	if _, err := admin.GetCheckpoint(ctx, taskID, "checkpoint"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.ListCheckpoints(ctx, jobID); err != nil {
+	if _, err := admin.ListCheckpoints(ctx, taskID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.GetProgress(ctx, jobID); err != nil {
+	if _, err := admin.GetProgress(ctx, taskID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.GetWait(ctx, jobID, "wait"); err != nil {
+	if _, err := admin.GetWait(ctx, taskID, "wait"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.ListWaits(ctx, jobID); err != nil {
+	if _, err := admin.ListWaits(ctx, taskID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := admin.ListSignalWaits(ctx, workhorse.ExternalWaitQuery{Limit: 1}); err != nil {

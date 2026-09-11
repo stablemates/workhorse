@@ -2,10 +2,10 @@ import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { expectOneRow } from "../errors.js";
 import { logDebug, logInfo, recordScheduleFired, withSpan } from "../telemetry.js";
 import type { Json, RetryPolicy } from "../types.js";
-import { validateJobPriority, type EnqueueContractsModule } from "./enqueue-contracts.js";
+import { validateTaskPriority, type EnqueueContractsModule } from "./enqueue-contracts.js";
 import { QueueModule, type QueueModuleContext } from "./module-context.js";
 
-export interface ScheduledJob {
+export interface ScheduledTask {
   type: string;
   payload: Json;
   queue?: string;
@@ -16,8 +16,8 @@ export interface ScheduledJob {
   retryPolicy?: RetryPolicy;
 }
 
-/** @deprecated Renamed to {@link ScheduledJob}. Removed in 1.0.0. */
-export type ScheduleJobDefinition = ScheduledJob;
+/** @deprecated Renamed to {@link ScheduledTask}. Removed in 1.0.0. */
+export type ScheduleTaskDefinition = ScheduledTask;
 
 export interface ScheduleDefinition {
   name: string;
@@ -25,7 +25,7 @@ export interface ScheduleDefinition {
   /** IANA timezone used to interpret cron wall-clock fields. */
   timezone?: string;
   enabled?: boolean;
-  job: ScheduledJob;
+  task: ScheduledTask;
 }
 
 export interface StoredSchedule {
@@ -41,7 +41,7 @@ export interface StoredSchedule {
 export class CronSchedulesModule extends QueueModule {
   constructor(
     context: QueueModuleContext,
-    private readonly enqueueContracts: Pick<EnqueueContractsModule, "jobAcceptance">,
+    private readonly enqueueContracts: Pick<EnqueueContractsModule, "taskAcceptance">,
   ) {
     super(context);
   }
@@ -53,18 +53,21 @@ export class CronSchedulesModule extends QueueModule {
   ): Promise<void> {
     const scheduleInputs = await Promise.all(
       definitions.map(async (definition) => ({
-        ...(await this.enqueueContracts.jobAcceptance(definition.job.type, definition.job.payload)),
+        ...(await this.enqueueContracts.taskAcceptance(
+          definition.task.type,
+          definition.task.payload,
+        )),
         name: definition.name,
         schedule: definition.schedule,
         timezone: definition.timezone ?? "UTC",
         enabled: definition.enabled ?? true,
-        queue: definition.job.queue ?? this.context.defaultQueue,
-        priority: validateJobPriority(definition.job.priority),
-        concurrencyKey: definition.job.concurrencyKey ?? null,
-        type: definition.job.type,
-        payload: definition.job.payload,
-        maxAttempts: definition.job.maxAttempts ?? 25,
-        retryPolicy: definition.job.retryPolicy ?? null,
+        queue: definition.task.queue ?? this.context.defaultQueue,
+        priority: validateTaskPriority(definition.task.priority),
+        concurrencyKey: definition.task.concurrencyKey ?? null,
+        type: definition.task.type,
+        payload: definition.task.payload,
+        maxAttempts: definition.task.maxAttempts ?? 25,
+        retryPolicy: definition.task.retryPolicy ?? null,
       })),
     );
     await withSpan(
@@ -114,17 +117,17 @@ export class CronSchedulesModule extends QueueModule {
       namespace: string;
       schedule_name: string;
       occurrence_at: Date | string;
-      job_id: string | null;
+      task_id: string | null;
     }>(SQL_STATEMENTS["fire_due_schedules_v1"], [namespaces, now.toISOString(), catchupLimit]);
     for (const row of result.rows) {
-      if (row.job_id !== null) {
+      if (row.task_id !== null) {
         const occurrenceAt =
           row.occurrence_at instanceof Date ? row.occurrence_at : new Date(row.occurrence_at);
         recordScheduleFired(row.namespace, row.schedule_name, occurrenceAt);
         logInfo("workhorse.schedule.fired", "Recurring schedule fired", {
           "workhorse.schedule.namespace": row.namespace,
           "workhorse.schedule.name": row.schedule_name,
-          "workhorse.job.id": row.job_id,
+          "workhorse.task.id": row.task_id,
         });
       } else {
         logDebug("workhorse.schedule.fire_replayed", "Recurring schedule occurrence replayed", {
@@ -141,17 +144,17 @@ export class CronSchedulesModule extends QueueModule {
     revision: bigint,
     occurrenceAt: Date,
   ): Promise<string | null> {
-    const result = await this.context.database.query<{ job_id: string | null }>(
+    const result = await this.context.database.query<{ task_id: string | null }>(
       SQL_STATEMENTS["fire_schedule_v1"],
       [namespace, name, revision.toString(), occurrenceAt.toISOString()],
     );
-    const jobId = expectOneRow(result, "workhorse.fire_schedule_v1").job_id;
-    if (jobId !== null) {
+    const taskId = expectOneRow(result, "workhorse.fire_schedule_v1").task_id;
+    if (taskId !== null) {
       recordScheduleFired(namespace, name, occurrenceAt);
       logInfo("workhorse.schedule.fired", "Recurring schedule fired", {
         "workhorse.schedule.namespace": namespace,
         "workhorse.schedule.name": name,
-        "workhorse.job.id": jobId,
+        "workhorse.task.id": taskId,
       });
     } else {
       logDebug("workhorse.schedule.fire_replayed", "Recurring schedule occurrence replayed", {
@@ -159,6 +162,6 @@ export class CronSchedulesModule extends QueueModule {
         "workhorse.schedule.name": name,
       });
     }
-    return jobId;
+    return taskId;
   }
 }

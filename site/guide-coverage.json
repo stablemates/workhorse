@@ -1,7 +1,7 @@
 {
   "pages": {
     "000-start-here": "index",
-    "010-jobs-and-state": "concepts",
+    "010-tasks-and-state": "concepts",
     "020-leases-and-fences": "workers",
     "030-delivery-guarantees": "concepts",
     "110-retries": "retries",
@@ -11,8 +11,8 @@
     "140-deadlines-and-timeouts": "deadlines",
     "145-human-decisions": "human-waits",
     "150-priority": "priority",
-    "160-job-dependencies": "job-dependencies",
-    "170-child-jobs": "child-jobs",
+    "160-task-dependencies": "task-dependencies",
+    "170-child-tasks": "child-tasks",
     "180-agentic-flow": "agentic-flow",
     "200-transactional-enqueue": "enqueue",
     "210-enqueue-idempotency": "idempotency",

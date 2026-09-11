@@ -1,12 +1,12 @@
 import { SQL_STATEMENTS } from "./queue/sql-catalogue.generated.js";
 import type {
-  ChildJobOptions,
+  ChildTaskOptions,
   ChildOutcomes,
-  ChildJobRequest,
+  ChildTaskRequest,
   CancellationRequest,
   CancelResult,
   BatchExecutionRecord,
-  ClaimedJob,
+  ClaimedTask,
   CreateChildResult,
   CreateChildrenResult,
   ConcurrencyPolicy,
@@ -18,9 +18,9 @@ import type {
   EnqueueRequest,
   EnqueueResult,
   ExpireOwnedStatus,
-  JobCheckpoint,
-  JobProgress,
-  JobWait,
+  TaskCheckpoint,
+  TaskProgress,
+  TaskWait,
   HeartbeatStatus,
   Json,
   MaintenancePolicy,
@@ -37,9 +37,9 @@ import type {
 } from "./types.js";
 import type { QueueMetricSnapshot } from "./telemetry.js";
 import {
-  subscribeToJobNotifications,
-  supportsJobNotifications,
-  type JobNotificationSubscription,
+  subscribeToTaskNotifications,
+  supportsTaskNotifications,
+  type TaskNotificationSubscription,
 } from "./notifications.js";
 import { createQueueModuleContext } from "./queue/module-context.js";
 import {
@@ -72,19 +72,19 @@ import {
   type DependencyCycleDetails,
   type DependencyLimit,
   EnqueueIdempotencyConflictError,
-  JobContractUnavailableError,
-  JobContractValidationError,
-  JobValueSizeLimitError,
+  TaskContractUnavailableError,
+  TaskContractValidationError,
+  TaskValueSizeLimitError,
   validateQueueOptions,
 } from "./queue/enqueue-contracts.js";
-import type { ScheduleDefinition, ScheduledJob, StoredSchedule } from "./queue/cron-schedules.js";
+import type { ScheduleDefinition, ScheduledTask, StoredSchedule } from "./queue/cron-schedules.js";
 import type { MaintenancePhaseResult } from "./queue/retention-maintenance.js";
 import {
   ChildConflictError,
   ChildLeaseLostError,
   ChildLimitExceededError,
   ChildResultLimitExceededError,
-} from "./queue/child-jobs.js";
+} from "./queue/child-tasks.js";
 import {
   SignalIdempotencyConflictError,
   SignalWaitConflictError,
@@ -132,9 +132,9 @@ export {
   DependencyCycleError,
   DependencyLimitExceededError,
   EnqueueIdempotencyConflictError,
-  JobContractUnavailableError,
-  JobContractValidationError,
-  JobValueSizeLimitError,
+  TaskContractUnavailableError,
+  TaskContractValidationError,
+  TaskValueSizeLimitError,
   ProgressLeaseLostError,
   ProgressRateLimitError,
   RedriveIdempotencyConflictError,
@@ -175,13 +175,13 @@ export type {
   ExternalWaitCursor,
   ExternalWaitQuery,
 };
-export type { ScheduleDefinition, ScheduledJob, StoredSchedule };
+export type { ScheduleDefinition, ScheduledTask, StoredSchedule };
 
 // Deprecated 0.x aliases for the names Python and Go already shared. Removed in 1.0.0.
 export type { SendSignalResult, SendSignalStatus } from "./queue/signals.js";
 export type { CompleteHumanWaitResult, CompleteHumanWaitStatus } from "./queue/human-waits.js";
 export type { ExternalWaitListOptions } from "./queue/external-waits.js";
-export type { ScheduleJobDefinition } from "./queue/cron-schedules.js";
+export type { ScheduleTaskDefinition } from "./queue/cron-schedules.js";
 
 /**
  * Thin TypeScript facade over the versioned PostgreSQL protocol.
@@ -222,17 +222,17 @@ export class Queue {
   }
 
   /** @internal Whether workers can reserve a node-postgres LISTEN connection. */
-  supportsJobNotifications(): boolean {
-    return supportsJobNotifications(this.database);
+  supportsTaskNotifications(): boolean {
+    return supportsTaskNotifications(this.database);
   }
 
   /** @internal Subscribe a worker to the process-local notification hub for this database. */
-  subscribeToJobNotifications(
+  subscribeToTaskNotifications(
     queueName: string,
     wake: () => void,
     error: (error: unknown) => void,
-  ): Promise<JobNotificationSubscription | null> {
-    return subscribeToJobNotifications(this.database, { queueName, wake, error });
+  ): Promise<TaskNotificationSubscription | null> {
+    return subscribeToTaskNotifications(this.database, { queueName, wake, error });
   }
 
   async enqueue<TPayload extends Json>(
@@ -485,14 +485,14 @@ export class Queue {
     return this.modules.cronSchedules.fireDueSchedules(namespaces, now, catchupLimit);
   }
 
-  async cancel(jobId: string, request: CancellationRequest = {}): Promise<CancelResult> {
-    return this.modules.claimLeaseFence.cancel(jobId, request);
+  async cancel(taskId: string, request: CancellationRequest = {}): Promise<CancelResult> {
+    return this.modules.claimLeaseFence.cancel(taskId, request);
   }
 
   async claim<TPayload extends Json = Json>(
     workerId: string,
     options: { queue?: string; leaseMs?: number } = {},
-  ): Promise<ClaimedJob<TPayload> | null> {
+  ): Promise<ClaimedTask<TPayload> | null> {
     return this.modules.claimLeaseFence.claim<TPayload>(workerId, options);
   }
 
@@ -500,7 +500,7 @@ export class Queue {
     workerId: string,
     limit: number,
     options: { queue?: string; leaseMs?: number } = {},
-  ): Promise<ClaimedJob<TPayload>[]> {
+  ): Promise<ClaimedTask<TPayload>[]> {
     return this.modules.claimLeaseFence.claimMany<TPayload>(workerId, limit, options);
   }
 
@@ -514,104 +514,104 @@ export class Queue {
     return this.modules.claimLeaseFence.recordBatchFailure(batch);
   }
 
-  async heartbeat(job: ClaimedJob, workerId: string, leaseMs = 30_000): Promise<boolean> {
-    return this.modules.claimLeaseFence.heartbeat(job, workerId, leaseMs);
+  async heartbeat(task: ClaimedTask, workerId: string, leaseMs = 30_000): Promise<boolean> {
+    return this.modules.claimLeaseFence.heartbeat(task, workerId, leaseMs);
   }
 
   async heartbeatStatus(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     leaseMs = 30_000,
   ): Promise<HeartbeatStatus> {
-    return this.modules.claimLeaseFence.heartbeatStatus(job, workerId, leaseMs);
+    return this.modules.claimLeaseFence.heartbeatStatus(task, workerId, leaseMs);
   }
 
   /** @internal Renew every active lease owned by one worker in a single statement. */
   async heartbeatMany(
-    jobs: readonly ClaimedJob[],
+    tasks: readonly ClaimedTask[],
     workerId: string,
     leaseMs = 30_000,
   ): Promise<Map<string, HeartbeatStatus>> {
-    return this.modules.claimLeaseFence.heartbeatMany(jobs, workerId, leaseMs);
+    return this.modules.claimLeaseFence.heartbeatMany(tasks, workerId, leaseMs);
   }
 
-  async expireOwned(job: ClaimedJob, workerId: string): Promise<ExpireOwnedStatus> {
-    return this.modules.claimLeaseFence.expireOwned(job, workerId);
+  async expireOwned(task: ClaimedTask, workerId: string): Promise<ExpireOwnedStatus> {
+    return this.modules.claimLeaseFence.expireOwned(task, workerId);
   }
 
-  async acknowledgeCancel(job: ClaimedJob, workerId: string): Promise<boolean> {
-    return this.modules.claimLeaseFence.acknowledgeCancel(job, workerId);
+  async acknowledgeCancel(task: ClaimedTask, workerId: string): Promise<boolean> {
+    return this.modules.claimLeaseFence.acknowledgeCancel(task, workerId);
   }
 
   async [workerCheckpointsRead]<TValue extends Json = Json>(
-    jobId: string,
-  ): Promise<JobCheckpoint<TValue>[]> {
-    return this.modules.checkpointsProgressWaits.listCheckpoints<TValue>(jobId);
+    taskId: string,
+  ): Promise<TaskCheckpoint<TValue>[]> {
+    return this.modules.checkpointsProgressWaits.listCheckpoints<TValue>(taskId);
   }
 
   async saveCheckpoint<TValue extends Json>(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     name: string,
     value: TValue,
-  ): Promise<JobCheckpoint<TValue>> {
-    return this.modules.checkpointsProgressWaits.saveCheckpoint(job, workerId, name, value);
+  ): Promise<TaskCheckpoint<TValue>> {
+    return this.modules.checkpointsProgressWaits.saveCheckpoint(task, workerId, name, value);
   }
 
   async [workerProgressRead]<TValue extends Json = Json>(
-    jobId: string,
-  ): Promise<JobProgress<TValue> | null> {
-    return this.modules.checkpointsProgressWaits.getProgress<TValue>(jobId);
+    taskId: string,
+  ): Promise<TaskProgress<TValue> | null> {
+    return this.modules.checkpointsProgressWaits.getProgress<TValue>(taskId);
   }
 
   async updateProgress<TValue extends Json>(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     value: TValue,
-  ): Promise<JobProgress<TValue>> {
-    return this.modules.checkpointsProgressWaits.updateProgress(job, workerId, value);
+  ): Promise<TaskProgress<TValue>> {
+    return this.modules.checkpointsProgressWaits.updateProgress(task, workerId, value);
   }
 
-  async [workerWaitsRead](jobId: string): Promise<JobWait[]> {
-    return this.modules.checkpointsProgressWaits.listWaits(jobId);
+  async [workerWaitsRead](taskId: string): Promise<TaskWait[]> {
+    return this.modules.checkpointsProgressWaits.listWaits(taskId);
   }
 
   async scheduleWait(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     name: string,
     request: ScheduleWaitRequest,
   ): Promise<ScheduleWaitResult> {
-    return this.modules.checkpointsProgressWaits.scheduleWait(job, workerId, name, request);
+    return this.modules.checkpointsProgressWaits.scheduleWait(task, workerId, name, request);
   }
 
   async waitForSignal<TPayload extends Json = Json>(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     name: string,
     options: ExternalWaitOptions = {},
   ): Promise<WaitForSignalResult<TPayload>> {
-    return this.modules.signals.waitForSignal<TPayload>(job, workerId, name, options);
+    return this.modules.signals.waitForSignal<TPayload>(task, workerId, name, options);
   }
 
   async sendSignal<TPayload extends Json>(
-    jobId: string,
+    taskId: string,
     name: string,
     payload: TPayload,
     request: SendSignalRequest,
   ): Promise<SignalDeliveryResult<TPayload>> {
-    return this.modules.signals.sendSignal(jobId, name, payload, request);
+    return this.modules.signals.sendSignal(taskId, name, payload, request);
   }
 
   async waitForHuman<TContext extends Json, TResult extends Json = Json>(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     name: string,
     context: TContext,
     options: ExternalWaitOptions = {},
   ): Promise<WaitForHumanResult<TResult>> {
     return this.modules.humanWaits.waitForHuman<TContext, TResult>(
-      job,
+      task,
       workerId,
       name,
       context,
@@ -620,48 +620,48 @@ export class Queue {
   }
 
   async completeHumanWait<TResult extends Json>(
-    jobId: string,
+    taskId: string,
     name: string,
     result: TResult,
     request: CompleteHumanWaitRequest,
   ): Promise<HumanWaitCompletionResult<TResult>> {
-    return this.modules.humanWaits.completeHumanWait(jobId, name, result, request);
+    return this.modules.humanWaits.completeHumanWait(taskId, name, result, request);
   }
 
   async createChild<TPayload extends Json, TResult extends Json = Json>(
-    parent: ClaimedJob,
+    parent: ClaimedTask,
     workerId: string,
     name: string,
     type: string,
     payload: TPayload,
-    options: ChildJobOptions = {},
+    options: ChildTaskOptions = {},
   ): Promise<CreateChildResult<TResult>> {
-    return this.modules.childJobs.createChild(parent, workerId, name, type, payload, options);
+    return this.modules.childTasks.createChild(parent, workerId, name, type, payload, options);
   }
 
   async createChildren<TResult extends Record<string, Json> = Record<string, Json>>(
-    parent: ClaimedJob,
+    parent: ClaimedTask,
     workerId: string,
-    children: readonly ChildJobRequest[],
+    children: readonly ChildTaskRequest[],
   ): Promise<CreateChildrenResult<ChildOutcomes<TResult>>> {
-    return this.modules.childJobs.createChildren<TResult>(parent, workerId, children);
+    return this.modules.childTasks.createChildren<TResult>(parent, workerId, children);
   }
 
   async createChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(
-    parent: ClaimedJob,
+    parent: ClaimedTask,
     workerId: string,
-    children: readonly ChildJobRequest[],
+    children: readonly ChildTaskRequest[],
   ): Promise<CreateChildrenResult<TResult>> {
-    return this.modules.childJobs.createChildrenAll<TResult>(parent, workerId, children);
+    return this.modules.childTasks.createChildrenAll<TResult>(parent, workerId, children);
   }
 
   async complete<TResult extends Json>(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     result: TResult,
   ): Promise<boolean> {
-    return this.modules.claimLeaseFence.complete(job, workerId, result, () =>
-      this.modules.enqueueContracts.validateResult(job, result),
+    return this.modules.claimLeaseFence.complete(task, workerId, result, () =>
+      this.modules.enqueueContracts.validateResult(task, result),
     );
   }
 
@@ -671,7 +671,7 @@ export class Queue {
   }
 
   async fail(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     error: unknown,
     retryDelayMs?: number,
@@ -684,7 +684,7 @@ export class Queue {
     | "timeout_exceeded"
     | "stale"
   > {
-    return this.modules.claimLeaseFence.fail(job, workerId, error, retryDelayMs);
+    return this.modules.claimLeaseFence.fail(task, workerId, error, retryDelayMs);
   }
 
   async recoverExpired(limit = 100, retryDelayMs?: number): Promise<number> {

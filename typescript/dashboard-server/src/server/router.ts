@@ -1,13 +1,13 @@
 import { isProcedure, ORPCError, os } from "@orpc/server";
 import {
-  MAX_JOB_PRIORITY,
+  MAX_TASK_PRIORITY,
   MAX_REDRIVE_BATCH_SIZE,
   type Admin,
   type Queue,
 } from "@stablemates/workhorse";
 import type {
   DashboardDemoFeature,
-  DashboardDemoJobKind,
+  DashboardDemoTaskKind,
   DashboardDemoScenario,
   DashboardEventTypeFilter,
   DashboardSystemWindow,
@@ -16,7 +16,7 @@ import type {
 } from "../wire.js";
 import {
   dashboardAttemptOutcomes,
-  dashboardJobEventTypes,
+  dashboardTaskEventTypes,
   dashboardRedriveBatchDefault,
   dashboardRedriveBatchMax,
   dashboardTaskFilters,
@@ -40,7 +40,7 @@ import {
   readDashboardCron,
   readDashboardEvents,
   readDashboardEventDetail,
-  readDashboardJobDetail,
+  readDashboardTaskDetail,
   readDashboardHumanWaits,
   readDashboardQueues,
   readDashboardSystem,
@@ -95,7 +95,7 @@ const cancellationAuditSchema = z.object({
   requestId: z.string().trim().min(1),
 });
 
-const jobDetailInput = z.object({ id: z.uuid() });
+const taskDetailInput = z.object({ id: z.uuid() });
 const eventDetailInput = z.object({
   id: z
     .string()
@@ -105,7 +105,7 @@ const eventDetailInput = z.object({
 });
 const taskFilter = z.enum(dashboardTaskFilters);
 const taskSort = z.enum(dashboardTaskSorts);
-const checkedDashboardTaskPriorityMax: typeof MAX_JOB_PRIORITY = dashboardTaskPriorityMax;
+const checkedDashboardTaskPriorityMax: typeof MAX_TASK_PRIORITY = dashboardTaskPriorityMax;
 const dashboardFilterString = z.string().trim().min(1).max(200);
 const dashboardPage = z.number().int().min(1).max(100).default(1);
 const tasksInput = z.object({
@@ -113,7 +113,7 @@ const tasksInput = z.object({
   queue: dashboardFilterString.nullable().default(null),
   page: dashboardPage,
   worker: dashboardFilterString.nullable().default(null),
-  jobType: dashboardFilterString.nullable().default(null),
+  taskType: dashboardFilterString.nullable().default(null),
   priority: z.number().int().min(0).max(checkedDashboardTaskPriorityMax).nullable().default(null),
   sort: taskSort.default("updated" satisfies DashboardTaskSort),
   tags: z.array(z.string().trim().min(1).max(100)).max(20).default([]),
@@ -152,13 +152,13 @@ const systemInput = z.object({
 type CompleteDashboardOptions<Union, Options extends readonly Union[]> =
   Exclude<Union, Options[number]> extends never ? Options : never;
 
-const eventTypeValues = [...dashboardJobEventTypes, ...dashboardAttemptOutcomes] as const;
+const eventTypeValues = [...dashboardTaskEventTypes, ...dashboardAttemptOutcomes] as const;
 const checkedEventTypeValues: CompleteDashboardOptions<
   DashboardEventTypeFilter,
   typeof eventTypeValues
 > = eventTypeValues;
 const eventType = z.enum(checkedEventTypeValues);
-const demoJobKindValues = [
+const demoTaskKindValues = [
   "success",
   "retry",
   "durable",
@@ -169,10 +169,10 @@ const demoJobKindValues = [
   "redrive",
   "feature",
 ] as const;
-const checkedDemoJobKindValues: CompleteDashboardOptions<
-  DashboardDemoJobKind,
-  typeof demoJobKindValues
-> = demoJobKindValues;
+const checkedDemoTaskKindValues: CompleteDashboardOptions<
+  DashboardDemoTaskKind,
+  typeof demoTaskKindValues
+> = demoTaskKindValues;
 const demoScenarioValues = [
   "order-fulfillment",
   "customer-onboarding",
@@ -191,7 +191,7 @@ const demoFeatureValues = [
   "timing-controls",
   "cancellation",
   "dead-letters-redrive",
-  "job-dependencies",
+  "task-dependencies",
   "child-workflows",
   "signals",
   "human-decisions",
@@ -218,15 +218,15 @@ const eventsInput = z.object({
   pageSize: z.union([z.literal(25), z.literal(50), z.literal(100)]).default(50),
   kind: z.enum(["all", "event", "attempt"]).default("all"),
   queue: dashboardFilterString.nullable().default(null),
-  jobType: dashboardFilterString.nullable().default(null),
+  taskType: dashboardFilterString.nullable().default(null),
   worker: dashboardFilterString.nullable().default(null),
   search: dashboardFilterString.nullable().default(null),
   types: z.array(eventType).max(eventType.options.length).default([]),
-  jobId: z.uuid().nullable().default(null),
+  taskId: z.uuid().nullable().default(null),
 });
 const enqueueTestInput = z
   .object({
-    kind: z.enum(checkedDemoJobKindValues),
+    kind: z.enum(checkedDemoTaskKindValues),
     scenario: z.enum(checkedDemoScenarioValues).optional(),
     feature: z.enum(checkedDemoFeatureValues).optional(),
     priority: z.number().int().min(0).max(checkedDashboardTaskPriorityMax).default(0),
@@ -266,7 +266,7 @@ const redriveTaskInput = z.object({
  */
 const redriveDeadLettersInput = z.object({
   queue: dashboardFilterString.nullable().default(null),
-  jobType: dashboardFilterString.nullable().default(null),
+  taskType: dashboardFilterString.nullable().default(null),
   tags: z.array(z.string().trim().min(1).max(100)).max(20).default([]),
   limit: z
     .number()
@@ -274,7 +274,7 @@ const redriveDeadLettersInput = z.object({
     .min(1)
     .max(checkedDashboardRedriveBatchMax)
     .default(dashboardRedriveBatchDefault),
-  cursor: z.object({ finishedAt: z.iso.datetime(), jobId: z.uuid() }).nullable().default(null),
+  cursor: z.object({ finishedAt: z.iso.datetime(), taskId: z.uuid() }).nullable().default(null),
   audit: auditSchema,
 });
 const setWorkerPausedInput = z.object({
@@ -292,13 +292,13 @@ const maintenanceSetting = z.enum([
   "statisticsRecomputeBuckets",
 ]);
 const retentionSetting = z.enum([
-  "jobIdentityRetentionDays",
+  "taskIdentityRetentionDays",
   "terminalOutcomeRetentionDays",
-  "jobEventRetentionDays",
+  "taskEventRetentionDays",
   "attemptHistoryRetentionDays",
   "scheduleOccurrenceRetentionDays",
   "statisticsRetentionDays",
-  "terminalJobPruneLimit",
+  "terminalTaskPruneLimit",
   "historyPartitionsPerPass",
   "defaultPartitionRowsPerPass",
   "occurrenceRowsPerPass",
@@ -327,13 +327,13 @@ const maintenanceDefinition = z
 const retentionDays = z.number().int().min(1).max(36_500).nullable();
 const retentionDefinition = z
   .object({
-    jobIdentityRetentionDays: retentionDays.optional(),
+    taskIdentityRetentionDays: retentionDays.optional(),
     terminalOutcomeRetentionDays: retentionDays.optional(),
-    jobEventRetentionDays: retentionDays.optional(),
+    taskEventRetentionDays: retentionDays.optional(),
     attemptHistoryRetentionDays: retentionDays.optional(),
     scheduleOccurrenceRetentionDays: retentionDays.optional(),
     statisticsRetentionDays: retentionDays.optional(),
-    terminalJobPruneLimit: z.number().int().min(1).max(100_000).optional(),
+    terminalTaskPruneLimit: z.number().int().min(1).max(100_000).optional(),
     historyPartitionsPerPass: z.number().int().min(1).max(52).optional(),
     defaultPartitionRowsPerPass: z.number().int().min(1).max(1_000_000).optional(),
     occurrenceRowsPerPass: z.number().int().min(1).max(1_000_000).optional(),
@@ -464,8 +464,8 @@ export const dashboardRouter = {
     previewRetentionPolicy: procedure
       .input(z.object({ definition: retentionDefinition }))
       .handler(({ context, input }) => context.admin.previewRetentionPolicy(input.definition)),
-    jobDetail: procedure.input(jobDetailInput).handler(async ({ context, input }) => {
-      const detail = await readDashboardJobDetail(
+    taskDetail: procedure.input(taskDetailInput).handler(async ({ context, input }) => {
+      const detail = await readDashboardTaskDetail(
         context.database,
         input.id,
         context.projectDurability,
@@ -690,7 +690,7 @@ export const dashboardRouter = {
           throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
         }
         return context.taskController.redriveDeadLetters(
-          { queue: input.queue, jobType: input.jobType, tags: input.tags },
+          { queue: input.queue, taskType: input.taskType, tags: input.tags },
           input.limit,
           input.cursor,
           auditWithOccurredAt(input.audit, context.authenticatedActor),

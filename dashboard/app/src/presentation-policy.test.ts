@@ -28,13 +28,13 @@ const maintenance = {
 } as MaintenancePolicy;
 
 const retention = {
-  jobIdentityRetentionDays: 14,
+  taskIdentityRetentionDays: 14,
   terminalOutcomeRetentionDays: 14,
-  jobEventRetentionDays: 14,
+  taskEventRetentionDays: 14,
   attemptHistoryRetentionDays: 14,
   scheduleOccurrenceRetentionDays: 14,
   statisticsRetentionDays: 30,
-  terminalJobPruneLimit: 1_000,
+  terminalTaskPruneLimit: 1_000,
 } as RetentionPolicy;
 
 function settingsPage(
@@ -50,9 +50,9 @@ function settingsPage(
         lagMs: 30_000,
         lastRunAt: "2026-08-17T12:00:30.000Z",
       },
-      defaultHistoryRows: { jobEvents: 0, attemptHistory: 0 },
-      defaultHistoryRowsCapped: { jobEvents: false, attemptHistory: false },
-      enqueueRate: { jobs: 1_000, windowMs: 3_600_000 },
+      defaultHistoryRows: { taskEvents: 0, attemptHistory: 0 },
+      defaultHistoryRowsCapped: { taskEvents: false, attemptHistory: false },
+      enqueueRate: { tasks: 1_000, windowMs: 3_600_000 },
       ...recommendationInputs,
     },
   } as DashboardSettingsPage;
@@ -61,7 +61,7 @@ function settingsPage(
 describe("dashboard presentation policy", () => {
   it("derives settings advice and its English summary in the SPA", () => {
     const [ceiling] = deriveSettingsRecommendations(
-      settingsPage({ enqueueRate: { jobs: 15_000, windowMs: 3_600_000 } }),
+      settingsPage({ enqueueRate: { tasks: 15_000, windowMs: 3_600_000 } }),
     );
     expect(ceiling).toMatchObject({
       id: "terminal-cleanup-ceiling",
@@ -107,7 +107,7 @@ describe("dashboard presentation policy", () => {
         severity: "degraded",
         observed: 90_000_000,
         budget: 21_600_000,
-        category: "jobEvents",
+        category: "taskEvents",
       },
     ]);
     expect(criticalChecks.map(({ message }) => message)).toEqual([
@@ -131,7 +131,7 @@ describe("dashboard presentation policy", () => {
     expect(retryBucketLabel({ upperBoundMs: 300_000, count: 2 })).toBe("5m");
     expect(retryBucketLabel({ upperBoundMs: null, count: 2 })).toBe("later");
     const worker = {
-      activeJobs: 0,
+      activeTasks: 0,
       registered: true,
       lastHeartbeatAt: "2026-08-17T11:59:45.000Z",
       lastSeenAt: "2026-08-17T11:59:45.000Z",

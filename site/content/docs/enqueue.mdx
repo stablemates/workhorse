@@ -1,18 +1,18 @@
 ---
 title: Enqueue and transactions
-description: Accept immediate, delayed, batched, or transactional jobs without separating them from application state.
+description: Accept immediate, delayed, batched, or transactional tasks without separating them from application state.
 ---
 
-The classic queue bug is a job that disagrees with your data: the order row committed but the
-fulfillment job was lost, or the job exists and the row does not. Workhorse removes that gap by
+The classic queue bug is a task that disagrees with your data: the order row committed but the
+fulfillment task was lost, or the task exists and the row does not. Workhorse removes that gap by
 living in the same PostgreSQL database as your data — an enqueue is a row your transaction can
 carry. This page covers everything an enqueue can do: run now, run later, join a transaction,
 batch, and target a named queue.
 
 ## Enqueue immediate or delayed work
 
-`queue.enqueue(type, payload, options?)` turns a type and JSON payload into a durable job and
-returns its ID. Without `runAt`, PostgreSQL places the job in `ready` and a worker can claim it
+`queue.enqueue(type, payload, options?)` turns a type and JSON payload into a durable task and
+returns its ID. Without `runAt`, PostgreSQL places the task in `ready` and a worker can claim it
 immediately. A future `runAt` places it in `scheduled` until promotion moves it to `ready`.
 
 <Tabs items={["TypeScript", "Python", "Go"]}>
@@ -47,9 +47,9 @@ immediately. A future `runAt` places it in `scheduled` until promotion moves it 
 </Tabs>
 
 `runAt` is a not-before boundary, not an appointment. If someone pauses the queue, or workers
-become unavailable, a worker claims the job later than the boundary — never earlier.
+become unavailable, a worker claims the task later than the boundary — never earlier.
 
-`EnqueueOptions` carries everything else a job can be born with:
+`EnqueueOptions` carries everything else a task can be born with:
 
 <Tabs items={["TypeScript", "Python", "Go"]}>
   <Tab value="TypeScript">
@@ -85,7 +85,7 @@ Each option is owned by its own page — [retries](/docs/retries), [deadlines](/
 ## Join an application transaction
 
 This is the option that replaces an outbox. Hand the queue the transaction you already opened and
-PostgreSQL commits the job and your business write together — or rolls both back together. There is
+PostgreSQL commits the task and your business write together — or rolls both back together. There is
 no window where one exists without the other.
 
 Each language hands it over differently. TypeScript passes the transaction client as the fourth
@@ -130,21 +130,21 @@ outside your transaction, so their external effects still need their own idempot
 
 ## Enqueue a batch
 
-If a single operation produces many jobs — a fan-out to every subscriber, an import — use
+If a single operation produces many tasks — a fan-out to every subscriber, an import — use
 `queue.enqueueMany`. It validates and writes the whole group in one statement, and it also accepts
 a transaction as its second argument.
 
 <Tabs items={["TypeScript", "Python", "Go"]}>
   <Tab value="TypeScript">
     ```ts
-    const jobIds = await queue.enqueueMany(recipients.map((recipient) => ({
+    const taskIds = await queue.enqueueMany(recipients.map((recipient) => ({
       type: "email.digest", payload: { to: recipient.email }, options: { queue: "mail" },
     })));
     ```
   </Tab>
   <Tab value="Python">
     ```python
-    job_ids = queue.enqueue_many([
+    task_ids = queue.enqueue_many([
         EnqueueRequest("email.digest", {"to": recipient.email}, EnqueueOptions(queue="mail"))
         for recipient in recipients
     ])
@@ -159,7 +159,7 @@ a transaction as its second argument.
     		Options: workhorse.EnqueueOptions{Queue: "mail"},
     	}
     }
-    jobIDs, err := queue.EnqueueMany(ctx, requests)
+    taskIDs, err := queue.EnqueueMany(ctx, requests)
     ```
   </Tab>
 </Tabs>
@@ -171,13 +171,13 @@ duplicating.
 
 ## Prioritize work within a queue
 
-`new Queue(pool, "billing")` sets the client default queue; `options.queue` overrides one job. A
+`new Queue(pool, "billing")` sets the client default queue; `options.queue` overrides one task. A
 `Worker` claims only from its configured queue set, rotating across those queues under one
 identity and one concurrency budget.
 
 Set `options.priority` when urgent ready work should run before ordinary work in the same queue.
-Workhorse dispatches higher-priority jobs first, and it keeps FIFO order among jobs with the same
-value. Priority is strict, so a sustained stream of urgent work can delay lower-priority jobs.
+Workhorse dispatches higher-priority tasks first, and it keeps FIFO order among tasks with the same
+value. Priority is strict, so a sustained stream of urgent work can delay lower-priority tasks.
 
 Use separate queue names when work needs independent capacity or worker policy. Priority changes
 dispatch order within one queue; it does not reserve capacity for lower-priority work.
@@ -221,8 +221,8 @@ The queue does not `close` a connection or transaction supplied by its caller.
 
 ## Next
 
-- [Idempotency](/docs/idempotency) — make repeated acceptance converge on one job
-- [Schedules](/docs/schedules) — create recurring jobs from desired state
+- [Idempotency](/docs/idempotency) — make repeated acceptance converge on one task
+- [Schedules](/docs/schedules) — create recurring tasks from desired state
 - [Workers](/docs/workers) — let a process claim the work you accepted
 
 ---

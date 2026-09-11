@@ -37,7 +37,7 @@ Two boundaries keep this matrix small:
 | Enqueue idempotency                        | Supported  | Supported | Supported |
 | Keyed debounce                             | Supported  | Supported | Supported |
 | Keyed throttle                             | Supported  | Supported | Supported |
-| Job dependencies with terminal policies    | Supported  | Supported | Supported |
+| Task dependencies with terminal policies   | Supported  | Supported | Supported |
 | Concurrency keys                           | Supported  | Supported | Supported |
 | Concurrency policy management              | Supported  | Supported | Supported |
 | Rate-limit policy management               | Supported  | Supported | Supported |
@@ -101,7 +101,7 @@ the rule stands for any capability added after it.
 
 | Capability                                 | PostgreSQL | Dashboard | CLI       |
 | ------------------------------------------ | ---------- | --------- | --------- |
-| Job lookup, listing, and timeline          | Supported  | Supported | Supported |
+| Task lookup, listing, and timeline         | Supported  | Supported | Supported |
 | Queue health snapshot                      | Supported  | Supported | Supported |
 | Cancellation requests                      | Supported  | Supported | Supported |
 | Queue pause and resume                     | Supported  | Supported | Supported |
@@ -122,7 +122,7 @@ through its own public SDK.
 
 | Capability                                 | TypeScript | Python    | Go        |
 | ------------------------------------------ | ---------- | --------- | --------- |
-| Job lookup, listing, and timeline          | Supported  | Supported | Supported |
+| Task lookup, listing, and timeline         | Supported  | Supported | Supported |
 | Queue health snapshot                      | Supported  | Supported | Supported |
 | Cancellation requests                      | Supported  | Supported | Supported |
 | Queue pause, resume, and purge             | Supported  | Supported | Supported |

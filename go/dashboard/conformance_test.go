@@ -135,11 +135,11 @@ func newDashboardConformanceHandler(t *testing.T, harness dashboardHarness, exec
 		procedures["enqueueTest"] = func(ctx context.Context, input any, _ string) (any, error) {
 			value := input.(map[string]any)
 			priority, _ := dashboardInteger(value["priority"])
-			jobID, err := queue.Enqueue(ctx, "conformance.demo-"+value["kind"].(string), map[string]any{}, workhorse.EnqueueOptions{Priority: priority})
+			taskID, err := queue.Enqueue(ctx, "conformance.demo-"+value["kind"].(string), map[string]any{}, workhorse.EnqueueOptions{Priority: priority})
 			if err != nil {
 				return nil, err
 			}
-			return map[string]any{"jobId": jobID}, nil
+			return map[string]any{"taskId": taskID}, nil
 		}
 		procedures["setScheduleEnabled"] = func(ctx context.Context, input any, _ string) (any, error) {
 			value := input.(map[string]any)

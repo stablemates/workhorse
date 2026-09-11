@@ -2,7 +2,7 @@ import { MantineProvider } from "@mantine/core";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { DashboardJobDetail } from "./wire.js";
+import type { DashboardTaskDetail } from "./wire.js";
 
 Object.defineProperty(globalThis, "localStorage", {
   value: { getItem: () => null, setItem: () => undefined },
@@ -26,7 +26,7 @@ const event = (
   type: string,
   details: unknown,
   second = 0,
-): DashboardJobDetail["events"][number] => ({
+): DashboardTaskDetail["events"][number] => ({
   id: `${type}-${second}`,
   type,
   details,
@@ -34,13 +34,13 @@ const event = (
   occurredAt: `2026-09-10T12:00:${String(second).padStart(2, "0")}Z`,
 });
 
-async function render(events: DashboardJobDetail["events"]) {
+async function render(events: DashboardTaskDetail["events"]) {
   const { TaskEnqueueSection } = await import("./components/task-detail-relations.js");
   return renderToStaticMarkup(
     createElement(
       MantineProvider,
       null,
-      createElement(TaskEnqueueSection, { job: { events } as DashboardJobDetail }),
+      createElement(TaskEnqueueSection, { task: { events } as DashboardTaskDetail }),
     ),
   );
 }
@@ -91,7 +91,7 @@ describe("task enqueue mode", () => {
       event("debounced", { debounce: accepted }, 20),
       event("enqueued", { idempotency, debounce: { ...coalescing, schedule: "reset" } }),
     ];
-    expect(coalescingEvidenceFor({ events } as DashboardJobDetail)).toMatchObject({
+    expect(coalescingEvidenceFor({ events } as DashboardTaskDetail)).toMatchObject({
       windowMs: 90000,
       schedule: "preserve",
       expiresAt: accepted.expires_at,
@@ -108,7 +108,7 @@ describe("task enqueue mode", () => {
       event("enqueued", { idempotency, throttle: coalescing }),
       event("debounce_rejected", { debounce: coalescing, reason: "incompatible_key_mode" }, 30),
     ];
-    expect(coalescingEvidenceFor({ events } as DashboardJobDetail)).toMatchObject({
+    expect(coalescingEvidenceFor({ events } as DashboardTaskDetail)).toMatchObject({
       mode: "throttle",
       windowMs: 60000,
       absorbed: 1,
@@ -141,7 +141,7 @@ describe("task listing enqueue labels", () => {
       createElement(
         MantineProvider,
         null,
-        createElement(TaskEnqueueBadge, { job: { keyed: true, enqueueMode } }),
+        createElement(TaskEnqueueBadge, { task: { keyed: true, enqueueMode } }),
       ),
     );
     expect(html).toContain(`>${label}<`);
@@ -152,7 +152,7 @@ describe("task listing enqueue labels", () => {
     const { TaskEnqueueBadge } = await import("./components/task-list.js");
     const renderBadge = (keyed: boolean) =>
       renderToStaticMarkup(
-        createElement(MantineProvider, null, createElement(TaskEnqueueBadge, { job: { keyed } })),
+        createElement(MantineProvider, null, createElement(TaskEnqueueBadge, { task: { keyed } })),
       );
     expect(renderBadge(true)).toContain(">Keyed<");
     expect(renderBadge(false)).not.toContain("mantine-Badge-root");

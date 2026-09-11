@@ -13,10 +13,10 @@ The Go worker emits the worker-owned subset through the OpenTelemetry Go API. Cl
 handler outcomes and timing, batch delivery, rejected heartbeats, and lease recovery use the same
 instrument names, units, and bounded attributes as the JavaScript runtime.
 
-Execution metrics use queue, job type, and outcome as attributes. They never use a job ID, payload,
+Execution metrics use queue, task type, and outcome as attributes. They never use a task ID, payload,
 worker ID, or error message. Those values grow without a stable bound, so putting them in metric
 attributes would make the monitoring backend create an ever-growing set of time series. Use traces
-for per-job evidence instead.
+for per-task evidence instead.
 
 ## Database metrics need a dedicated collector
 
@@ -40,7 +40,7 @@ Do not start the observer in every worker replica. Each observer reads the same 
 multiple observers would export duplicate gauges and add unnecessary queries.
 
 `registerQueueMetrics` reads through a `Queue` instead. It adds policy and orchestration gauges for
-concurrency, dependencies, child jobs, and rate limits alongside queue depth and age:
+concurrency, dependencies, child tasks, and rate limits alongside queue depth and age:
 
 ```ts
 import { registerQueueMetrics } from "@stablemates/workhorse";
@@ -57,22 +57,22 @@ telemetry resource.
 
 ## Reading the signals together
 
-Use `workhorse.jobs.enqueued` and `workhorse.jobs.claimed` to see whether work enters and leaves the
+Use `workhorse.tasks.enqueued` and `workhorse.tasks.claimed` to see whether work enters and leaves the
 ready queue. If enqueue continues while claim stops, compare `workhorse.queue.paused`, worker
-capacity, and the age of the oldest ready job.
+capacity, and the age of the oldest ready task.
 
-Use `workhorse.jobs.enqueue.outcomes` to compare `accepted`, `replayed`, `replaced`,
+Use `workhorse.tasks.enqueue.outcomes` to compare `accepted`, `replayed`, `replaced`,
 `non_replaceable`, and `coalesced` requests by queue. The metric omits keyed-request material, so
 coalescing rates remain visible without exposing or multiplying time series by keys.
 
 Use `workhorse.handler.executions` for outcomes and `workhorse.handler.duration` for handler
 latency. Both carry the same bounded outcome attribute. A rising retry or lease-loss rate points to
 different problems than terminal failures, so that attribute keeps those paths separate without
-identifying individual jobs.
+identifying individual tasks.
 
 Every event reaches one instrument only. If you want the number of activations that ended a given
 way, count `workhorse.handler.executions`; if you want the durable result the queue wrote, count
-`workhorse.jobs.completed`, `workhorse.jobs.failed`, or `workhorse.jobs.retried`. The two differ
+`workhorse.tasks.completed`, `workhorse.tasks.failed`, or `workhorse.tasks.retried`. The two differ
 when an attempt suspends on a durable wait, which closes an activation without ending the attempt.
 
 Use the maintenance, schedule-lag, expired-lease, overdue-deadline, and overdue-timeout metrics to

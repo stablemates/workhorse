@@ -2,47 +2,47 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDatabaseTestHarness } from "./support/db.js";
 
 const database = createDatabaseTestHarness(import.meta.url);
-const seededJobs = 500;
+const seededTasks = 500;
 
 describe("dashboard procedure plans", () => {
   beforeAll(async () => {
     await database.setup();
     await database.pool.query(
-      `INSERT INTO workhorse.job(queue_name, job_type, payload, max_attempts)
+      `INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts)
        SELECT 'dashboard-plan', 'dashboard.plan', '{}'::jsonb, 1
          FROM generate_series(1, $1)`,
-      [seededJobs],
+      [seededTasks],
     );
     await database.pool.query(
-      `INSERT INTO workhorse.job_outcome(
-         job_id, state, current_attempt, fence_token, run_at, result,
+      `INSERT INTO workhorse.task_outcome(
+         task_id, state, current_attempt, fence_token, run_at, result,
          finished_at, history_through_at, updated_at
        )
        SELECT id, 'succeeded', 1, 1, created_at, '{}'::jsonb,
               created_at, created_at, created_at
-         FROM workhorse.job
+         FROM workhorse.task
         WHERE queue_name = 'dashboard-plan'`,
     );
     await database.pool.query(
-      `INSERT INTO workhorse.job_event(job_id, attempt, event_type, details, occurred_at)
+      `INSERT INTO workhorse.task_event(task_id, attempt, event_type, details, occurred_at)
        SELECT id, NULL, 'enqueued', '{}'::jsonb, created_at
-         FROM workhorse.job
+         FROM workhorse.task
         WHERE queue_name = 'dashboard-plan'`,
     );
     await database.pool.query(
       `INSERT INTO workhorse.attempt_history(
-         job_id, attempt, fence_token, worker_id, outcome,
+         task_id, attempt, fence_token, worker_id, outcome,
          started_at, claimed_at, finished_at, occurred_at
        )
        SELECT id, 1, 1, 'dashboard-plan-worker', 'succeeded',
               created_at, created_at, created_at, created_at
-         FROM workhorse.job
+         FROM workhorse.task
         WHERE queue_name = 'dashboard-plan'`,
     );
     await database.pool.query(
-      `ANALYZE workhorse.job;
-       ANALYZE workhorse.job_outcome;
-       ANALYZE workhorse.job_event;
+      `ANALYZE workhorse.task;
+       ANALYZE workhorse.task_outcome;
+       ANALYZE workhorse.task_event;
        ANALYZE workhorse.attempt_history;`,
     );
   });
@@ -81,6 +81,6 @@ describe("dashboard procedure plans", () => {
 
     expect(sharedHits).toBeTypeOf("number");
     // Enriching all seeded rows probes every event and attempt partition and exceeds this bound.
-    expect(sharedHits).toBeLessThan(seededJobs * 10);
+    expect(sharedHits).toBeLessThan(seededTasks * 10);
   });
 });

@@ -139,10 +139,10 @@ async function readPartitions(
   );
   // Counting the default partition is capped the way queue_health_v1 caps it: the number only has
   // to separate "empty" from "retention is behind", and an uncapped scan is unbounded work.
-  const defaults = await client.query<{ job_event: string; attempt_history: string }>(
+  const defaults = await client.query<{ task_event: string; attempt_history: string }>(
     `SELECT
-       (SELECT count(*) FROM (SELECT 1 FROM workhorse.job_event_default LIMIT 10001) probe)
-         AS job_event,
+       (SELECT count(*) FROM (SELECT 1 FROM workhorse.task_event_default LIMIT 10001) probe)
+         AS task_event,
        (SELECT count(*) FROM (SELECT 1 FROM workhorse.attempt_history_default LIMIT 10001) probe)
          AS attempt_history`,
   );
@@ -171,12 +171,12 @@ async function readPartitions(
 
 async function readRetention(client: PoolClient): Promise<SoakObservation["retention"]> {
   const policy = await client.query<{
-    job_event_retention_days: number | null;
+    task_event_retention_days: number | null;
     attempt_history_retention_days: number | null;
     statistics_retention_days: number | null;
     history_partitions_per_pass: number;
   }>(
-    `SELECT job_event_retention_days, attempt_history_retention_days,
+    `SELECT task_event_retention_days, attempt_history_retention_days,
             statistics_retention_days, history_partitions_per_pass
        FROM workhorse.retention_policy WHERE singleton`,
   );
@@ -197,7 +197,7 @@ async function readRetention(client: PoolClient): Promise<SoakObservation["reten
   const partitions = state.rows.find((row) => row.routine_name === "history_partitions");
   const row = policy.rows[0]!;
   return {
-    jobEventRetentionDays: row.job_event_retention_days,
+    taskEventRetentionDays: row.task_event_retention_days,
     attemptHistoryRetentionDays: row.attempt_history_retention_days,
     statisticsRetentionDays: row.statistics_retention_days,
     historyPartitionsPerPass: row.history_partitions_per_pass,
@@ -219,9 +219,9 @@ async function readThroughput(client: PoolClient): Promise<ThroughputDay[]> {
   const days = await client.query<{
     day: string;
     enqueued: string;
-    job_succeeded: string;
-    job_failed: string;
-    job_canceled: string;
+    task_succeeded: string;
+    task_failed: string;
+    task_canceled: string;
     attempt_succeeded: string;
     attempt_failed: string;
     attempt_retry: string;
@@ -231,18 +231,18 @@ async function readThroughput(client: PoolClient): Promise<ThroughputDay[]> {
   }>(
     `SELECT to_char(bucket.bucket_start AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
             sum(bucket.enqueued)::text AS enqueued,
-            sum(bucket.job_succeeded)::text AS job_succeeded,
-            sum(bucket.job_failed)::text AS job_failed,
-            sum(bucket.job_canceled)::text AS job_canceled,
+            sum(bucket.task_succeeded)::text AS task_succeeded,
+            sum(bucket.task_failed)::text AS task_failed,
+            sum(bucket.task_canceled)::text AS task_canceled,
             sum(bucket.attempt_succeeded)::text AS attempt_succeeded,
             sum(bucket.attempt_failed)::text AS attempt_failed,
             sum(bucket.attempt_retry)::text AS attempt_retry,
             sum(bucket.attempt_lease_expired)::text AS attempt_lease_expired,
             sum(bucket.attempt_canceled)::text AS attempt_canceled,
             sum(bucket.attempt_other)::text AS attempt_other
-       FROM workhorse.job_stat_bucket_day bucket
+       FROM workhorse.task_stat_bucket_day bucket
       WHERE bucket.bucket_start < (
-              SELECT state.daily_rolled_up_through FROM workhorse.job_stat_state state
+              SELECT state.daily_rolled_up_through FROM workhorse.task_stat_state state
                WHERE state.singleton
             )
       GROUP BY 1
@@ -251,9 +251,9 @@ async function readThroughput(client: PoolClient): Promise<ThroughputDay[]> {
   return days.rows.map((row) => ({
     day: row.day,
     enqueued: count(row.enqueued),
-    jobSucceeded: count(row.job_succeeded),
-    jobFailed: count(row.job_failed),
-    jobCanceled: count(row.job_canceled),
+    taskSucceeded: count(row.task_succeeded),
+    taskFailed: count(row.task_failed),
+    taskCanceled: count(row.task_canceled),
     attemptSucceeded: count(row.attempt_succeeded),
     attemptFailed: count(row.attempt_failed),
     attemptRetry: count(row.attempt_retry),
@@ -267,9 +267,9 @@ async function readThroughput(client: PoolClient): Promise<ThroughputDay[]> {
  * Reconcile one ungraceful kill.
  *
  * A `SIGKILL`ed worker acknowledges nothing. Its held attempts close as `lease_expired` when
- * recovery reaches them, and those attempts name the jobs the kill put at risk. Every such job must
+ * recovery reaches them, and those attempts name the tasks the kill put at risk. Every such task must
  * be somewhere afterwards — terminal, or live and moving — and none may hold two succeeded
- * attempts. `jobsLost` and `jobsSucceededMoreThanOnce` are the two numbers that must read zero.
+ * attempts. `tasksLost` and `tasksSucceededMoreThanOnce` are the two numbers that must read zero.
  */
 async function readKillRecovery(
   client: PoolClient,
@@ -280,37 +280,37 @@ async function readKillRecovery(
   const windowEnd = new Date(Date.parse(killedAt) + windowHours * 3_600_000).toISOString();
   const reconciliation = await client.query<{
     lease_expired_attempts: string;
-    affected_jobs: string;
-    jobs_settled: string;
-    jobs_live: string;
-    jobs_lost: string;
-    jobs_succeeded_more_than_once: string;
+    affected_tasks: string;
+    tasks_settled: string;
+    tasks_live: string;
+    tasks_lost: string;
+    tasks_succeeded_more_than_once: string;
   }>(
     `WITH lost AS (
-       SELECT history.job_id, count(*) AS attempts
+       SELECT history.task_id, count(*) AS attempts
          FROM workhorse.attempt_history history
         WHERE history.worker_id = $1
           AND history.outcome = 'lease_expired'
           AND history.occurred_at >= $2::timestamptz
           AND history.occurred_at < $3::timestamptz
-        GROUP BY history.job_id
+        GROUP BY history.task_id
      ), settled AS (
-       SELECT lost.job_id,
-              EXISTS (SELECT 1 FROM workhorse.job_outcome outcome WHERE outcome.job_id = lost.job_id)
+       SELECT lost.task_id,
+              EXISTS (SELECT 1 FROM workhorse.task_outcome outcome WHERE outcome.task_id = lost.task_id)
                 AS terminal,
-              EXISTS (SELECT 1 FROM workhorse.job_runtime runtime WHERE runtime.job_id = lost.job_id)
+              EXISTS (SELECT 1 FROM workhorse.task_runtime runtime WHERE runtime.task_id = lost.task_id)
                 AS live,
               (SELECT count(*) FROM workhorse.attempt_history success
-                WHERE success.job_id = lost.job_id AND success.outcome = 'succeeded')
+                WHERE success.task_id = lost.task_id AND success.outcome = 'succeeded')
                 AS succeeded_attempts
          FROM lost
      )
      SELECT (SELECT coalesce(sum(attempts), 0) FROM lost)::text AS lease_expired_attempts,
-            count(*)::text AS affected_jobs,
-            count(*) FILTER (WHERE terminal)::text AS jobs_settled,
-            count(*) FILTER (WHERE live AND NOT terminal)::text AS jobs_live,
-            count(*) FILTER (WHERE NOT terminal AND NOT live)::text AS jobs_lost,
-            count(*) FILTER (WHERE succeeded_attempts > 1)::text AS jobs_succeeded_more_than_once
+            count(*)::text AS affected_tasks,
+            count(*) FILTER (WHERE terminal)::text AS tasks_settled,
+            count(*) FILTER (WHERE live AND NOT terminal)::text AS tasks_live,
+            count(*) FILTER (WHERE NOT terminal AND NOT live)::text AS tasks_lost,
+            count(*) FILTER (WHERE succeeded_attempts > 1)::text AS tasks_succeeded_more_than_once
        FROM settled`,
     [workerId, killedAt, windowEnd],
   );
@@ -320,11 +320,11 @@ async function readKillRecovery(
     killedAt: new Date(killedAt).toISOString(),
     windowEnd,
     leaseExpiredAttempts: count(row.lease_expired_attempts),
-    affectedJobs: count(row.affected_jobs),
-    jobsSettled: count(row.jobs_settled),
-    jobsLive: count(row.jobs_live),
-    jobsLost: count(row.jobs_lost),
-    jobsSucceededMoreThanOnce: count(row.jobs_succeeded_more_than_once),
+    affectedTasks: count(row.affected_tasks),
+    tasksSettled: count(row.tasks_settled),
+    tasksLive: count(row.tasks_live),
+    tasksLost: count(row.tasks_lost),
+    tasksSucceededMoreThanOnce: count(row.tasks_succeeded_more_than_once),
   };
 }
 
@@ -353,8 +353,8 @@ export async function collectSoakObservation(
     );
     const observedAt = instant(identity.rows[0]!.observed_at)!;
 
-    const backlog = await client.query<{ state: string; jobs: string }>(
-      "SELECT state, count(*)::text AS jobs FROM workhorse.job_runtime GROUP BY state",
+    const backlog = await client.query<{ state: string; tasks: string }>(
+      "SELECT state, count(*)::text AS tasks FROM workhorse.task_runtime GROUP BY state",
     );
     const workers = await client.query<{
       worker_id: string;
@@ -382,7 +382,7 @@ export async function collectSoakObservation(
       partitions: await readPartitions(client, observedAt),
       retention: await readRetention(client),
       throughput: await readThroughput(client),
-      backlog: Object.fromEntries(backlog.rows.map((row) => [row.state, count(row.jobs)])),
+      backlog: Object.fromEntries(backlog.rows.map((row) => [row.state, count(row.tasks)])),
       workers: workers.rows.map((row) => ({
         workerId: row.worker_id,
         hostname: row.hostname,

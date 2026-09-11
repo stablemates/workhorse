@@ -10,7 +10,7 @@
         "schedule": "0 0 1 * *",
         "timezone": "America/New_York",
         "enabled": true,
-        "job": {
+        "task": {
           "type": "invoice.create",
           "payload": {
             "account": "acct-1"
@@ -28,7 +28,7 @@
         "schedule": "0 2 * * 0",
         "timezone": "UTC",
         "enabled": false,
-        "job": {
+        "task": {
           "type": "billing.cleanup",
           "payload": null,
           "queue": "maintenance",
@@ -94,7 +94,7 @@
         "schedule": "0 3 * * *",
         "timezone": "UTC",
         "enabled": true,
-        "job": {
+        "task": {
           "type": "maintenance.cleanup",
           "payload": null,
           "priority": 0,

@@ -2,7 +2,7 @@ export type {
   DashboardAuditInput,
   DashboardClient,
   DashboardDemoFeature,
-  DashboardDemoJobKind,
+  DashboardDemoTaskKind,
   DashboardDemoScenario,
   DashboardDemoTools,
 } from "./client.js";

@@ -20,7 +20,7 @@ func TestWorkerFiresSchedulesWhenAnotherWorkerOwnsTheMaintenanceTick(t *testing.
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "scheduled")
 	if err := queue.SyncSchedules(ctx, "go-worker", []workhorse.ScheduleDefinition{{
 		Name: "billing-rollup", Schedule: "* * * * * *",
-		Job: workhorse.ScheduledJob{Type: "billing.rollup", Payload: map[string]any{}},
+		Task: workhorse.ScheduledTask{Type: "billing.rollup", Payload: map[string]any{}},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestWorkerLimitsScheduleCatchup(t *testing.T) {
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "scheduled")
 	if err := queue.SyncSchedules(ctx, "go-worker", []workhorse.ScheduleDefinition{{
 		Name: "billing-rollup", Schedule: "* * * * * *",
-		Job: workhorse.ScheduledJob{Type: "billing.rollup", Payload: map[string]any{}},
+		Task: workhorse.ScheduledTask{Type: "billing.rollup", Payload: map[string]any{}},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -72,12 +72,12 @@ func TestWorkerLimitsScheduleCatchup(t *testing.T) {
 		t.Fatal(err)
 	}
 	seed := time.Now().UTC().Truncate(time.Second).Add(-6 * time.Second)
-	var seededJobID string
+	var seededTaskID string
 	if err := pool.QueryRow(
 		ctx,
 		"SELECT workhorse.fire_schedule_v1($1, $2, $3, $4)",
 		"go-worker", "billing-rollup", revision, seed,
-	).Scan(&seededJobID); err != nil {
+	).Scan(&seededTaskID); err != nil {
 		t.Fatal(err)
 	}
 

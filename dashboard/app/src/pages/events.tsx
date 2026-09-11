@@ -10,7 +10,7 @@ import type {
 } from "@stablemates/workhorse-dashboard-server/wire";
 import {
   dashboardAttemptOutcomes,
-  dashboardJobEventTypes,
+  dashboardTaskEventTypes,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import { isEventTypeFilter, type EventsLocationState } from "../events-location.js";
 import {
@@ -76,7 +76,7 @@ export function uniqueSorted(values: Array<string | null>): string[] {
 /**
  * The fleet-wide feed of durable lifecycle history.
  *
- * Rows come from `job_event` and `attempt_history`, never from the PostgreSQL notification
+ * Rows come from `task_event` and `attempt_history`, never from the PostgreSQL notification
  * channels. Those channels carry only a queue name, are coalesced by both the worker and the
  * dashboard's listener, and are dropped while nothing is listening — a feed built from them would
  * be both uninformative and quietly incomplete.
@@ -109,20 +109,20 @@ export function EventsPage({
   const eventFacets = useTaskFacets({
     queue: query.queue,
     worker: query.worker,
-    jobType: query.jobType,
+    taskType: query.taskType,
     tags: [],
   });
   const queueOptions = includeSelectedOption(eventFacets.facets.queues, query.queue);
   const workerOptions = includeSelectedOption(eventFacets.facets.workers, query.worker);
-  const typeOptions = includeSelectedOption(eventFacets.facets.jobTypes, query.jobType);
+  const typeOptions = includeSelectedOption(eventFacets.facets.taskTypes, query.taskType);
   const eventTypeOptions = includeSelectedOptions(
-    uniqueSorted([...dashboardJobEventTypes, ...dashboardAttemptOutcomes]),
+    uniqueSorted([...dashboardTaskEventTypes, ...dashboardAttemptOutcomes]),
     query.types,
   );
   const retentionNote = [
-    data.retention.jobEventDays === null
+    data.retention.taskEventDays === null
       ? "lifecycle events are retained indefinitely"
-      : `lifecycle events are retained for ${data.retention.jobEventDays} days`,
+      : `lifecycle events are retained for ${data.retention.taskEventDays} days`,
     data.retention.attemptHistoryDays === null
       ? "attempt history is retained indefinitely"
       : `attempt history is retained for ${data.retention.attemptHistoryDays} days`,
@@ -169,8 +169,8 @@ export function EventsPage({
             searchable
             w={200}
             data={typeOptions}
-            value={query.jobType}
-            onChange={(value) => filter({ jobType: value })}
+            value={query.taskType}
+            onChange={(value) => filter({ taskType: value })}
             onDropdownOpen={eventFacets.load}
             rightSection={eventFacets.loading ? <Loader size={14} /> : undefined}
             nothingFoundMessage={facetMessage ?? "No task types found"}
@@ -238,8 +238,8 @@ export function EventsPage({
           </Group>
         </Group>
       </Paper>
-      {/* Queue and task filters are matched against the job a history row points at. History
-          outlives the job it describes, so rows whose job has already been retained away can only
+      {/* Queue and task filters are matched against the task a history row points at. History
+          outlives the task it describes, so rows whose task has already been retained away can only
           be reached with those filters cleared. */}
       {data.events.length === 0 ? (
         <EmptyState>
@@ -341,11 +341,11 @@ export function EventRow({
       }}
       tabIndex={0}
       role="button"
-      aria-label={`Inspect ${event.type.replaceAll("_", " ")} event for ${event.jobType ?? event.jobId}`}
+      aria-label={`Inspect ${event.type.replaceAll("_", " ")} event for ${event.taskType ?? event.taskId}`}
       style={{ cursor: "pointer" }}
     >
       <Table.Td className="event-table__col--id">
-        <TaskTableId id={event.jobId} />
+        <TaskTableId id={event.taskId} />
       </Table.Td>
       <Table.Td className="event-table__col--status">
         <StatusLabel
@@ -367,10 +367,10 @@ export function EventRow({
       <Table.Td className="event-table__col--task">
         <Text
           size="sm"
-          title={event.jobType ?? "Task deleted"}
+          title={event.taskType ?? "Task deleted"}
           style={{ overflowWrap: "anywhere" }}
         >
-          {event.jobType ?? "—"}
+          {event.taskType ?? "—"}
         </Text>
       </Table.Td>
       <Table.Td style={{ whiteSpace: "nowrap", maxWidth: 160 }}>
@@ -409,15 +409,15 @@ export function EventDetails({
 }) {
   const taskId = (
     <Group gap="xs" wrap="nowrap">
-      <TaskIdChip id={event.jobId} />
-      {event.jobType !== null ? (
+      <TaskIdChip id={event.taskId} />
+      {event.taskType !== null ? (
         <Text
           component="a"
-          href={taskLinkHref(event.jobId)}
+          href={taskLinkHref(event.taskId)}
           target="_blank"
           rel="noopener noreferrer"
-          title={`Open task ${event.jobId}`}
-          aria-label={`Open task ${event.jobId} in a new window`}
+          title={`Open task ${event.taskId}`}
+          aria-label={`Open task ${event.taskId} in a new window`}
         >
           <ArrowSquareOut size={14} aria-hidden />
         </Text>
@@ -431,7 +431,7 @@ export function EventDetails({
     ],
     ["Source", event.kind === "event" ? "Lifecycle" : "Attempt history"],
     ["Occurred", formatExact(event.occurredAt)],
-    ["Task", event.jobType ?? "Retained away"],
+    ["Task", event.taskType ?? "Retained away"],
     ["Task ID", taskId],
     ["Queue", event.queue ?? "Retained away"],
     ["Attempt", event.attempt ?? "—"],

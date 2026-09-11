@@ -8,7 +8,7 @@ This document records the worker-concurrency investigation, benchmark findings, 
 ## Why workers are separate from web servers
 
 A worker and an HTTP application have different scaling and failure boundaries. A dedicated process
-keeps job capacity independent of HTTP replica count, isolates handler failures from web ingress,
+keeps task capacity independent of HTTP replica count, isolates handler failures from web ingress,
 and gives each worker an explicit PostgreSQL pool, memory budget, and shutdown path.
 
 Prefer one worker per process when you want each worker identity, concurrency budget, and failure
@@ -59,7 +59,7 @@ Create a configuration module in application code:
 ```ts
 // src/workhorse.worker.ts
 import { createWorkhorseAdapter, defineWorkerProcess, Pool } from "@stablemates/workhorse";
-import { generateReport, sendEmail } from "./jobs.js";
+import { generateReport, sendEmail } from "./tasks.js";
 
 export default defineWorkerProcess({
   adapter() {
@@ -151,9 +151,9 @@ The first termination signal:
 5. Closes adapter-owned resources and the probe server after the drain.
 6. Exits normally when shutdown succeeds.
 
-A process signal does **not** abort active handler `AbortSignal`s. Handler cancellation remains a durable job-level operation through `Queue.cancel()`. Process shutdown asks active work to finish while preserving its lease.
+A process signal does **not** abort active handler `AbortSignal`s. Handler cancellation remains a durable task-level operation through `Queue.cancel()`. Process shutdown asks active work to finish while preserving its lease.
 
-There is one unavoidable transaction boundary: a claim query already in flight when shutdown begins may commit. That committed job is treated as active work and drained. The guarantee is therefore “no new claim requests after shutdown is observed,” not “no claim can commit after the signal timestamp.”
+There is one unavoidable transaction boundary: a claim query already in flight when shutdown begins may commit. That committed task is treated as active work and drained. The guarantee is therefore “no new claim requests after shutdown is observed,” not “no claim can commit after the signal timestamp.”
 
 ### Deadline and second signal
 
@@ -164,7 +164,7 @@ The default shutdown deadline is 25 seconds and may be configured from 1 millise
 - A missed graceful-shutdown deadline exits immediately with code 1.
 - A fatal worker-loop failure uses the same deadline while sibling workers drain, then exits with code 1 if they do not settle.
 
-A hard exit does not invent a job failure or retry transition. Active leases remain durable PostgreSQL state. Another worker recovers them after lease expiry using the existing fenced recovery protocol. External effects remain at least once, so handlers must retain their normal idempotency strategy.
+A hard exit does not invent a task failure or retry transition. Active leases remain durable PostgreSQL state. Another worker recovers them after lease expiry using the existing fenced recovery protocol. External effects remain at least once, so handlers must retain their normal idempotency strategy.
 
 The deadline exists because JavaScript cannot safely preempt an arbitrary promise or synchronous computation. A handler that never settles can otherwise keep graceful shutdown pending forever.
 
@@ -179,7 +179,7 @@ When `probes` is configured, Workhorse starts a small status-only HTTP server:
 
 Both paths are configurable. `HEAD` is supported. Other paths and methods return 404. The default hostname is `127.0.0.1`; bind `0.0.0.0` only when the orchestrator must reach the pod or container network address.
 
-The server does not expose queues, jobs, handlers, application routes, metrics, or mutation APIs. Authentication and TLS should be handled by the deployment network if the listener is exposed beyond a trusted probe network.
+The server does not expose queues, tasks, handlers, application routes, metrics, or mutation APIs. Authentication and TLS should be handled by the deployment network if the listener is exposed beyond a trusted probe network.
 
 ## Concurrency findings
 
@@ -196,17 +196,17 @@ The 2026-08-02 lifecycle benchmark produced these relevant results.
 
 ### Slot scaling with approximately 120 ms handlers
 
-| Concurrency |   Throughput | Maximum overlap |
-| ----------: | -----------: | --------------: |
-|           1 |  8.08 jobs/s |               1 |
-|           4 | 31.83 jobs/s |               4 |
-|           8 | 62.85 jobs/s |               8 |
+| Concurrency |    Throughput | Maximum overlap |
+| ----------: | ------------: | --------------: |
+|           1 |  8.08 tasks/s |               1 |
+|           4 | 31.83 tasks/s |               4 |
+|           8 | 62.85 tasks/s |               8 |
 
 All 104 benchmark assertions passed. Handler overlap, lease ownership, shutdown, pause behavior, and slot bounds remained correct.
 
 ### Equal total capacity of eight slots
 
-For I/O-like handlers, `1×8`, `2×4`, and `8×1` achieved approximately 63 to 64 jobs/s. One eight-slot worker bounded concurrent claim pressure at one query while preserving the same handler overlap. Eight one-slot workers allowed eight simultaneous claim queries without meaningfully improving useful-work throughput.
+For I/O-like handlers, `1×8`, `2×4`, and `8×1` achieved approximately 63 to 64 tasks/s. One eight-slot worker bounded concurrent claim pressure at one query while preserving the same handler overlap. Eight one-slot workers allowed eight simultaneous claim queries without meaningfully improving useful-work throughput.
 
 For immediate no-op handlers, multiple one-slot workers were faster because independent claim coordinators overlapped PostgreSQL round trips. That result measures claim latency more than representative handler capacity and does not justify multiplying pollers for ordinary asynchronous work.
 
@@ -221,7 +221,7 @@ Use one multi-slot `Worker` for queues that share a handler registry and operati
 - maintenance behavior;
 - retry overrides.
 
-Scale process replicas for availability and aggregate capacity. Do not create one `Worker` per concurrency slot. If extremely short jobs become a primary workload, prototype and benchmark bounded batch claiming or notification-assisted dispatch before changing the coordinator model.
+Scale process replicas for availability and aggregate capacity. Do not create one `Worker` per concurrency slot. If extremely short tasks become a primary workload, prototype and benchmark bounded batch claiming or notification-assisted dispatch before changing the coordinator model.
 
 Detailed benchmark artifacts remain in:
 
@@ -274,7 +274,7 @@ Restart=on-failure
 - Give every process its own database pool and close it only after workers drain.
 - Budget pool capacity across process replicas. Notification-assisted dispatch reserves one shared listener connection per node-postgres pool; claims, heartbeats, handler queries, and maintenance use the remaining pool capacity.
 - Keep the process-level deadline below the orchestrator grace period.
-- Keep job leases long enough to tolerate normal heartbeat jitter, but short enough to meet recovery objectives after hard termination.
+- Keep task leases long enough to tolerate normal heartbeat jitter, but short enough to meet recovery objectives after hard termination.
 - Treat an unexpected worker-loop failure as process-fatal and let the supervisor restart a clean process.
 - Use at least two process replicas when worker availability matters.
 - Synchronize recurring schedules during deployment. Workers execute matching synchronized namespaces, but should not be the only place definitions are authored.

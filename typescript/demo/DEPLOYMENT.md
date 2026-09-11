@@ -72,7 +72,7 @@ The container supervises and drains this worker alongside the primary workers.
 Staging stays read-only in the dashboard but executes a smaller release-validation seed and one
 report every ten minutes. Its seed covers dependencies, retry recovery, durable timers, cancellation,
 scheduled work, and expired deadlines. Startup markers prevent repeated seed insertion. Existing
-staging history is retained, and admission policies also govern jobs left by the previous seed.
+staging history is retained, and admission policies also govern tasks left by the previous seed.
 Fresh production history includes task-specific customer, email, order, and report context.
 Each URL must resolve from inside the deployed container, so a loopback address on the build machine
 is not usable.
@@ -106,8 +106,8 @@ The server also bounds each request independently of the rate budget. It refuses
 request body over 131,072 bytes with 413, and a `POST`, `PUT`, or `PATCH` that streams without a
 declared `Content-Length` with 411 — so the proxy must buffer request bodies and forward their
 length. More than four operator mutations executing at once answer 503, and any request still open
-after sixty seconds is closed. The three admissions that create jobs — `enqueueTest`,
-`redriveTask`, and `redriveDeadLetters` — additionally refuse once fifty jobs are ready or running,
+after sixty seconds is closed. The three admissions that create tasks — `enqueueTest`,
+`redriveTask`, and `redriveDeadLetters` — additionally refuse once fifty tasks are ready or running,
 so a flood of distinct clients cannot pile work on the demo fleet faster than it drains.
 
 Because the demo is unauthenticated by design, the edge in front of it must carry controls of its
@@ -121,10 +121,10 @@ must satisfy:
 - A method allowlist of `GET`, `HEAD`, `POST`, and `OPTIONS` on the demo hostname.
 - A request-body ceiling at or below the server's 131,072 bytes.
 
-Demo jobs cannot reach production credentials or outside services. Every handler is fixed code
-compiled into the image: the job path imports no network or process primitive and reads no
+Demo tasks cannot reach production credentials or outside services. Every handler is fixed code
+compiled into the image: the task path imports no network or process primitive and reads no
 environment, which `typescript/demo/src/egress.test.ts` asserts on every run. The only channel a
-job can touch is its own workspace's PostgreSQL pool. A deployment should still restrict the
+task can touch is its own workspace's PostgreSQL pool. A deployment should still restrict the
 container's egress to its two databases and the telemetry collector, so a future regression has no
 network to use.
 
@@ -252,7 +252,7 @@ somewhere `DATABASE_URL_PRIMARY` resolves, which for a deployment that reaches P
 Unix socket is the database host rather than the machine that deploys it.
 
 One of the bars is an ungraceful kill. Stop a worker container with `SIGKILL` while the demo is
-under its usual load, so the worker acknowledges nothing and its held jobs are recovered through
+under its usual load, so the worker acknowledges nothing and its held tasks are recovered through
 lease expiry. Then run the collector again, naming that worker and the moment it was killed, while
 the attempts behind it are still inside the history retention window:
 

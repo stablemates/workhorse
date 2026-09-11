@@ -4,7 +4,7 @@ description: Synchronize PostgreSQL-owned queue and keyed token buckets across e
 ---
 
 An external API allows sixty calls a minute. A concurrency policy cannot enforce that: it limits
-how much work runs at once, and sixty jobs that each finish in a hundred milliseconds sail through
+how much work runs at once, and sixty tasks that each finish in a hundred milliseconds sail through
 a `maxActive` of five. A rate-limit policy governs the other axis — how quickly work starts —
 with a token bucket that PostgreSQL owns, so every worker process draws from the same budget no
 matter how many you run.
@@ -54,12 +54,12 @@ caller-owned connection. `list_rate_limit_policies` returns the persisted typed 
 </Tabs>
 
 Reading the `rate` bucket: time refills tokens at `limit` per `intervalMs` — sixty starts per
-minute — and each job start consumes one token. `burst` caps how many tokens survive an idle
+minute — and each task start consumes one token. `burst` caps how many tokens survive an idle
 period, so a quiet hour buys at most ten immediate starts, not a flood.
 
 `perKey` is optional. When set, every non-null `concurrencyKey` gets its own independent bucket —
 here, five starts per minute with a burst of two. One customer exhausting its bucket waits for its
-own refill while another customer's job starts. A keyless job draws from the queue bucket only.
+own refill while another customer's task starts. A keyless task draws from the queue bucket only.
 Omitted policies are pruned by default, and another namespace cannot replace a queue this
 namespace owns.
 
@@ -69,9 +69,9 @@ The claim transaction consumes tokens, and PostgreSQL supplies the refill time. 
 skew cannot mint capacity, and two competing workers cannot spend the same token — the same
 property that makes claims safe makes throttling exact.
 
-Tokens are never refunded. The budget measures starts: a job that succeeds, fails, waits, or loses
+Tokens are never refunded. The budget measures starts: a task that succeeds, fails, waits, or loses
 its lease keeps its token spent, and every retry start consumes a fresh one. Size the limit for
-attempts, not for jobs.
+attempts, not for tasks.
 
 ## Observe throttling
 
@@ -86,7 +86,7 @@ keys, and the earliest sampled eligibility time — enough to tell "waiting for 
 queue-level configured rate, tokens, throttle depth, and eligibility delay.
 
 The dashboard's Queues page keeps concurrency and start rate in separate columns, so an
-active-work cap stays visually distinct from a ready job waiting for its next token.
+active-work cap stays visually distinct from a ready task waiting for its next token.
 
 Python synchronizes policies through `Queue.sync_rate_limit_policies` or
 `AsyncQueue.sync_rate_limit_policies`, then reads them through `Queue.list_rate_limit_policies` or

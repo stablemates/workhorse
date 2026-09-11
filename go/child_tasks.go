@@ -7,13 +7,13 @@ import (
 	"fmt"
 )
 
-// MaxChildJobs is PostgreSQL's linked-child limit for one parent.
-const MaxChildJobs = 100
+// MaxChildTasks is PostgreSQL's linked-child limit for one parent.
+const MaxChildTasks = 100
 
 var errChildSuspension = errors.New(childSuspensionMessage)
 
-// ChildJobRequest describes one named child created by an active parent handler.
-type ChildJobRequest struct {
+// ChildTaskRequest describes one named child created by an active parent handler.
+type ChildTaskRequest struct {
 	Name    string
 	Type    string
 	Payload any
@@ -30,7 +30,7 @@ type ChildSucceeded struct {
 	Result any `json:"result"`
 }
 
-func (ChildSucceeded) OutcomeStatus() string { return jobSucceededValue }
+func (ChildSucceeded) OutcomeStatus() string { return taskSucceededValue }
 func (ChildSucceeded) childOutcome()         {}
 func (outcome ChildSucceeded) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
@@ -43,7 +43,7 @@ type ChildFailed struct {
 	Error any `json:"error"`
 }
 
-func (ChildFailed) OutcomeStatus() string { return jobFailedValue }
+func (ChildFailed) OutcomeStatus() string { return taskFailedValue }
 func (ChildFailed) childOutcome()         {}
 func (outcome ChildFailed) MarshalJSON() ([]byte, error) {
 	return marshalChildErrorOutcome(outcome.OutcomeStatus(), outcome.Error)
@@ -53,7 +53,7 @@ type ChildCanceled struct {
 	Error any `json:"error"`
 }
 
-func (ChildCanceled) OutcomeStatus() string { return jobCanceledValue }
+func (ChildCanceled) OutcomeStatus() string { return taskCanceledValue }
 func (ChildCanceled) childOutcome()         {}
 func (outcome ChildCanceled) MarshalJSON() ([]byte, error) {
 	return marshalChildErrorOutcome(outcome.OutcomeStatus(), outcome.Error)
@@ -102,46 +102,46 @@ type childEnqueueInput struct {
 	ExecutionTimeoutMS   any      `json:"executionTimeoutMs"`
 	MaxAttempts          int      `json:"maxAttempts"`
 	RetryPolicy          any      `json:"retryPolicy"`
-	PrerequisiteJobID    any      `json:"prerequisiteJobId"`
+	PrerequisiteTaskID   any      `json:"prerequisiteTaskId"`
 	Dependencies         any      `json:"dependencies"`
 	Tags                 []string `json:"tags"`
 }
 
 // ChildLeaseLostError identifies child creation rejected under a stale parent fence.
-type ChildLeaseLostError struct{ ParentJobID string }
+type ChildLeaseLostError struct{ ParentTaskID string }
 
 func (err *ChildLeaseLostError) Error() string {
-	return fmt.Sprintf(childLeaseLostErrorFormat, err.ParentJobID)
+	return fmt.Sprintf(childLeaseLostErrorFormat, err.ParentTaskID)
 }
 
 func (err *ChildLeaseLostError) Unwrap() error { return ErrLeaseLost }
 
 // ChildConflictError identifies a retained child name or set replayed with another request.
 type ChildConflictError struct {
-	ParentJobID string
-	ChildName   string
+	ParentTaskID string
+	ChildName    string
 }
 
 func (err *ChildConflictError) Error() string {
-	return fmt.Sprintf(childConflictErrorFormat, err.ChildName, err.ParentJobID)
+	return fmt.Sprintf(childConflictErrorFormat, err.ChildName, err.ParentTaskID)
 }
 
-// ChildLimitExceededError identifies a parent that exceeds MaxChildJobs.
-type ChildLimitExceededError struct{ ParentJobID string }
+// ChildLimitExceededError identifies a parent that exceeds MaxChildTasks.
+type ChildLimitExceededError struct{ ParentTaskID string }
 
 func (err *ChildLimitExceededError) Error() string {
-	return fmt.Sprintf(childLimitExceededErrorFormat, err.ParentJobID)
+	return fmt.Sprintf(childLimitExceededErrorFormat, err.ParentTaskID)
 }
 
 // ChildResultLimitExceededError identifies joined results larger than the parent's contract.
 type ChildResultLimitExceededError struct {
-	ParentJobID      string
+	ParentTaskID     string
 	ResultBytes      int
 	ResultLimitBytes int
 }
 
 func (err *ChildResultLimitExceededError) Error() string {
-	return fmt.Sprintf(childResultLimitExceededErrorFormat, err.ParentJobID)
+	return fmt.Sprintf(childResultLimitExceededErrorFormat, err.ParentTaskID)
 }
 
 type childCall struct {
@@ -161,7 +161,7 @@ type childrenCall struct {
 // RunChild creates one named child or joins its retained result after parent replay.
 func (handler *HandlerContext) RunChild(
 	name string,
-	jobType string,
+	taskType string,
 	payload any,
 	options ...EnqueueOptions,
 ) (any, error) {
@@ -175,7 +175,7 @@ func (handler *HandlerContext) RunChild(
 	if len(options) == 1 {
 		childOptions = options[0]
 	}
-	_, canonical, err := serializeChildRequest(handler.Job, jobType, payload, childOptions)
+	_, canonical, err := serializeChildRequest(handler.Task, taskType, payload, childOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +187,7 @@ func (handler *HandlerContext) RunChild(
 	if pending := handler.children[name]; pending != nil {
 		if pending.request != canonical {
 			handler.child.Unlock()
-			return nil, &ChildConflictError{ParentJobID: handler.Job.ID, ChildName: name}
+			return nil, &ChildConflictError{ParentTaskID: handler.Task.ID, ChildName: name}
 		}
 		handler.child.Unlock()
 		<-pending.done
@@ -212,9 +212,9 @@ func (handler *HandlerContext) createChild(name string, request []byte) (any, er
 	rows, err := handler.executor.Query(
 		handler.context,
 		protocolStatementRegistry[createChildStatementName],
-		handler.Job.ID,
+		handler.Task.ID,
 		handler.workerID,
-		handler.Job.FenceToken,
+		handler.Task.FenceToken,
 		name,
 		request,
 	)
@@ -233,11 +233,11 @@ func (handler *HandlerContext) createChild(name string, request []byte) (any, er
 	case childCompletedValue:
 		return decodedJSON(rows[0][rowResultField])
 	case durableStaleValue:
-		return nil, &ChildLeaseLostError{ParentJobID: handler.Job.ID}
+		return nil, &ChildLeaseLostError{ParentTaskID: handler.Task.ID}
 	case durableConflictValue:
-		return nil, &ChildConflictError{ParentJobID: handler.Job.ID, ChildName: name}
+		return nil, &ChildConflictError{ParentTaskID: handler.Task.ID, ChildName: name}
 	case durableLimitExceededValue:
-		return nil, &ChildLimitExceededError{ParentJobID: handler.Job.ID}
+		return nil, &ChildLimitExceededError{ParentTaskID: handler.Task.ID}
 	default:
 		return nil, fmt.Errorf(unknownChildStatusFormat, status)
 	}
@@ -245,7 +245,7 @@ func (handler *HandlerContext) createChild(name string, request []byte) (any, er
 
 // RunChildren creates one bounded child set or joins its results after parent replay.
 // Results retain request order, while Name provides stable keyed lookup to callers.
-func (handler *HandlerContext) RunChildren(children []ChildJobRequest) ([]ChildResult, error) {
+func (handler *HandlerContext) RunChildren(children []ChildTaskRequest) ([]ChildResult, error) {
 	value, err := handler.createChildSet(children, childSettledModeValue)
 	if err != nil {
 		return nil, err
@@ -254,7 +254,7 @@ func (handler *HandlerContext) RunChildren(children []ChildJobRequest) ([]ChildR
 }
 
 // RunChildrenAll preserves propagation semantics and returns only successful child results.
-func (handler *HandlerContext) RunChildrenAll(children []ChildJobRequest) ([]ChildSuccessResult, error) {
+func (handler *HandlerContext) RunChildrenAll(children []ChildTaskRequest) ([]ChildSuccessResult, error) {
 	value, err := handler.createChildSet(children, childAllSuccessModeValue)
 	if err != nil {
 		return nil, err
@@ -262,9 +262,9 @@ func (handler *HandlerContext) RunChildrenAll(children []ChildJobRequest) ([]Chi
 	return value.([]ChildSuccessResult), nil
 }
 
-func (handler *HandlerContext) createChildSet(children []ChildJobRequest, mode childJoinMode) (any, error) {
-	if len(children) > MaxChildJobs {
-		return nil, &ChildLimitExceededError{ParentJobID: handler.Job.ID}
+func (handler *HandlerContext) createChildSet(children []ChildTaskRequest, mode childJoinMode) (any, error) {
+	if len(children) > MaxChildTasks {
+		return nil, &ChildLimitExceededError{ParentTaskID: handler.Task.ID}
 	}
 	requests := make([]childSetInput, len(children))
 	names := make(map[string]struct{}, len(children))
@@ -276,7 +276,7 @@ func (handler *HandlerContext) createChildSet(children []ChildJobRequest, mode c
 			return nil, errors.New(uniqueChildNamesMessage)
 		}
 		names[child.Name] = struct{}{}
-		request, _, err := serializeChildRequest(handler.Job, child.Type, child.Payload, child.Options)
+		request, _, err := serializeChildRequest(handler.Task, child.Type, child.Payload, child.Options)
 		if err != nil {
 			return nil, fmt.Errorf(childRequestErrorFormat, index+1, err)
 		}
@@ -292,7 +292,7 @@ func (handler *HandlerContext) createChildSet(children []ChildJobRequest, mode c
 	if pending := handler.childSetCall; pending != nil {
 		if pending.request != canonical {
 			handler.childSet.Unlock()
-			return nil, &ChildConflictError{ParentJobID: handler.Job.ID, ChildName: childSetNameValue}
+			return nil, &ChildConflictError{ParentTaskID: handler.Task.ID, ChildName: childSetNameValue}
 		}
 		handler.childSet.Unlock()
 		<-pending.done
@@ -317,9 +317,9 @@ func (handler *HandlerContext) createChildren(requests []byte, mode childJoinMod
 	rows, err := handler.executor.Query(
 		handler.context,
 		protocolStatementRegistry[createChildrenStatementName],
-		handler.Job.ID,
+		handler.Task.ID,
 		handler.workerID,
-		handler.Job.FenceToken,
+		handler.Task.FenceToken,
 		requests,
 		mode,
 	)
@@ -338,16 +338,16 @@ func (handler *HandlerContext) createChildren(requests []byte, mode childJoinMod
 	case childCompletedValue:
 		return orderedChildResults(rows[0][rowChildrenField], mode)
 	case durableStaleValue:
-		return nil, &ChildLeaseLostError{ParentJobID: handler.Job.ID}
+		return nil, &ChildLeaseLostError{ParentTaskID: handler.Task.ID}
 	case durableConflictValue:
-		return nil, &ChildConflictError{ParentJobID: handler.Job.ID, ChildName: childSetNameValue}
+		return nil, &ChildConflictError{ParentTaskID: handler.Task.ID, ChildName: childSetNameValue}
 	case durableLimitExceededValue:
-		return nil, &ChildLimitExceededError{ParentJobID: handler.Job.ID}
+		return nil, &ChildLimitExceededError{ParentTaskID: handler.Task.ID}
 	case childResultTooLargeValue:
 		resultBytes, _ := integer(rows[0][rowResultBytesField])
 		resultLimitBytes, _ := integer(rows[0][rowResultLimitBytesField])
 		return nil, &ChildResultLimitExceededError{
-			ParentJobID: handler.Job.ID, ResultBytes: resultBytes, ResultLimitBytes: resultLimitBytes,
+			ParentTaskID: handler.Task.ID, ResultBytes: resultBytes, ResultLimitBytes: resultLimitBytes,
 		}
 	default:
 		return nil, fmt.Errorf(unknownChildrenStatusFormat, status)
@@ -355,8 +355,8 @@ func (handler *HandlerContext) createChildren(requests []byte, mode childJoinMod
 }
 
 func serializeChildRequest(
-	parent ClaimedJob,
-	jobType string,
+	parent ClaimedTask,
+	taskType string,
 	payload any,
 	options EnqueueOptions,
 ) (childEnqueueInput, string, error) {
@@ -375,8 +375,8 @@ func serializeChildRequest(
 		maxAttempts = defaultMaxAttempts
 	}
 	request := childEnqueueInput{
-		Queue: queueName, Type: jobType, Payload: payload, Priority: options.Priority,
-		PayloadMaxBytes: defaultJobValueMaxBytes, ResultMaxBytes: defaultJobValueMaxBytes,
+		Queue: queueName, Type: taskType, Payload: payload, Priority: options.Priority,
+		PayloadMaxBytes: defaultTaskValueMaxBytes, ResultMaxBytes: defaultTaskValueMaxBytes,
 		SensitivePayloadKeys: []string{}, SensitiveResultKeys: []string{},
 		TraceContext: parent.TraceContext, ConcurrencyKey: nilIfEmpty(options.ConcurrencyKey),
 		ExecutionTimeoutMS: nilIfZero(options.ExecutionTimeoutMS), MaxAttempts: maxAttempts,
@@ -425,11 +425,11 @@ func orderedChildResults(value any, mode childJoinMode) (any, error) {
 	for index, child := range children {
 		var outcome ChildOutcome
 		switch child.Outcome[rowStatusField] {
-		case jobSucceededValue:
+		case taskSucceededValue:
 			outcome = ChildSucceeded{Result: child.Outcome[rowResultField]}
-		case jobFailedValue:
+		case taskFailedValue:
 			outcome = ChildFailed{Error: child.Outcome[rowErrorField]}
-		case jobCanceledValue:
+		case taskCanceledValue:
 			outcome = ChildCanceled{Error: child.Outcome[rowErrorField]}
 		default:
 			return nil, errors.New(invalidChildrenResultMessage)

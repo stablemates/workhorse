@@ -43,7 +43,7 @@ const (
 // SignalDeliveryResult contains the accepted or retained signal delivery.
 type SignalDeliveryResult struct {
 	Status      SignalDeliveryStatus
-	JobID       string
+	TaskID      string
 	Name        string
 	Payload     any
 	DeliveredAt *time.Time
@@ -65,7 +65,7 @@ const (
 // HumanWaitCompletionResult contains the accepted or retained human decision.
 type HumanWaitCompletionResult struct {
 	Status      HumanWaitCompletionStatus
-	JobID       string
+	TaskID      string
 	Name        string
 	Payload     any
 	CompletedAt *time.Time
@@ -74,90 +74,90 @@ type HumanWaitCompletionResult struct {
 
 // SignalWaitLeaseLostError identifies a signal wait rejected under a stale fence.
 type SignalWaitLeaseLostError struct {
-	JobID    string
+	TaskID   string
 	WaitName string
 }
 
 func (err *SignalWaitLeaseLostError) Error() string {
-	return fmt.Sprintf(signalWaitLeaseLostErrorFormat, err.WaitName, err.JobID)
+	return fmt.Sprintf(signalWaitLeaseLostErrorFormat, err.WaitName, err.TaskID)
 }
 
 func (err *SignalWaitLeaseLostError) Unwrap() error { return ErrLeaseLost }
 
 // SignalWaitConflictError identifies a signal name already waiting under another activation.
 type SignalWaitConflictError struct {
-	JobID    string
+	TaskID   string
 	WaitName string
 }
 
 func (err *SignalWaitConflictError) Error() string {
-	return fmt.Sprintf(signalWaitConflictErrorFormat, err.WaitName, err.JobID)
+	return fmt.Sprintf(signalWaitConflictErrorFormat, err.WaitName, err.TaskID)
 }
 
-// SignalWaitLimitExceededError identifies a job that owns the supported number of signal waits.
-type SignalWaitLimitExceededError struct{ JobID string }
+// SignalWaitLimitExceededError identifies a task that owns the supported number of signal waits.
+type SignalWaitLimitExceededError struct{ TaskID string }
 
 func (err *SignalWaitLimitExceededError) Error() string {
-	return fmt.Sprintf(signalWaitLimitExceededErrorFormat, err.JobID)
+	return fmt.Sprintf(signalWaitLimitExceededErrorFormat, err.TaskID)
 }
 
 // SignalIdempotencyConflictError identifies a retained key reused with another signal delivery.
 type SignalIdempotencyConflictError struct {
-	JobID    string
+	TaskID   string
 	WaitName string
 }
 
 func (err *SignalIdempotencyConflictError) Error() string {
-	return fmt.Sprintf(signalIdempotencyConflictFormat, err.WaitName, err.JobID)
+	return fmt.Sprintf(signalIdempotencyConflictFormat, err.WaitName, err.TaskID)
 }
 
 // HumanWaitLeaseLostError identifies a human wait rejected under a stale fence.
 type HumanWaitLeaseLostError struct {
-	JobID    string
+	TaskID   string
 	WaitName string
 }
 
 func (err *HumanWaitLeaseLostError) Error() string {
-	return fmt.Sprintf(humanWaitLeaseLostErrorFormat, err.WaitName, err.JobID)
+	return fmt.Sprintf(humanWaitLeaseLostErrorFormat, err.WaitName, err.TaskID)
 }
 
 func (err *HumanWaitLeaseLostError) Unwrap() error { return ErrLeaseLost }
 
 // HumanWaitAlreadyWaitingError identifies a human wait already owned by another activation.
 type HumanWaitAlreadyWaitingError struct {
-	JobID    string
+	TaskID   string
 	WaitName string
 }
 
 func (err *HumanWaitAlreadyWaitingError) Error() string {
-	return fmt.Sprintf(humanWaitAlreadyWaitingErrorFormat, err.WaitName, err.JobID)
+	return fmt.Sprintf(humanWaitAlreadyWaitingErrorFormat, err.WaitName, err.TaskID)
 }
 
-// HumanWaitLimitExceededError identifies a job that owns the supported number of human waits.
-type HumanWaitLimitExceededError struct{ JobID string }
+// HumanWaitLimitExceededError identifies a task that owns the supported number of human waits.
+type HumanWaitLimitExceededError struct{ TaskID string }
 
 func (err *HumanWaitLimitExceededError) Error() string {
-	return fmt.Sprintf(humanWaitLimitExceededErrorFormat, err.JobID)
+	return fmt.Sprintf(humanWaitLimitExceededErrorFormat, err.TaskID)
 }
 
 // HumanWaitConflictError identifies a human wait name replayed with different context.
 type HumanWaitConflictError struct {
-	JobID    string
+	TaskID   string
 	WaitName string
 }
 
 func (err *HumanWaitConflictError) Error() string {
-	return fmt.Sprintf(humanWaitConflictErrorFormat, err.WaitName, err.JobID)
+	return fmt.Sprintf(humanWaitConflictErrorFormat, err.WaitName, err.TaskID)
 }
 
 // HumanWaitIdempotencyConflictError identifies a retained key reused with another decision.
 type HumanWaitIdempotencyConflictError struct {
-	JobID    string
+	TaskID   string
 	WaitName string
 }
 
 func (err *HumanWaitIdempotencyConflictError) Error() string {
-	return fmt.Sprintf(humanWaitIdempotencyConflictFormat, err.WaitName, err.JobID)
+	return fmt.Sprintf(humanWaitIdempotencyConflictFormat, err.WaitName, err.TaskID)
 }
 
 type externalWaitCall struct {
@@ -171,7 +171,7 @@ type humanWaitCall struct {
 	context string
 }
 
-// WaitForSignal suspends the job until a named signal is delivered, then returns its JSON payload.
+// WaitForSignal suspends the task until a named signal is delivered, then returns its JSON payload.
 func (handler *HandlerContext) WaitForSignal(name string, options ...ExternalWaitOptions) (any, error) {
 	timeoutMS, err := validateExternalWait(name, signalLabelValue, options)
 	if err != nil {
@@ -209,9 +209,9 @@ func (handler *HandlerContext) runSignalWait(name string, timeoutMS *int64) (any
 	rows, err := handler.executor.Query(
 		handler.context,
 		protocolStatementRegistry[waitForSignalStatementName],
-		handler.Job.ID,
+		handler.Task.ID,
 		handler.workerID,
-		handler.Job.FenceToken,
+		handler.Task.FenceToken,
 		name,
 		timeoutArgument,
 	)
@@ -229,17 +229,17 @@ func (handler *HandlerContext) runSignalWait(name string, timeoutMS *int64) (any
 		handler.cancel(errDurableWaitSuspension)
 		return nil, errDurableWaitSuspension
 	case durableStaleValue:
-		return nil, &SignalWaitLeaseLostError{JobID: handler.Job.ID, WaitName: name}
+		return nil, &SignalWaitLeaseLostError{TaskID: handler.Task.ID, WaitName: name}
 	case externalAlreadyWaitingValue:
-		return nil, &SignalWaitConflictError{JobID: handler.Job.ID, WaitName: name}
+		return nil, &SignalWaitConflictError{TaskID: handler.Task.ID, WaitName: name}
 	case durableLimitExceededValue:
-		return nil, &SignalWaitLimitExceededError{JobID: handler.Job.ID}
+		return nil, &SignalWaitLimitExceededError{TaskID: handler.Task.ID}
 	default:
 		return nil, fmt.Errorf(unknownSignalWaitStatusFormat, status)
 	}
 }
 
-// WaitForHuman suspends the job until a named decision is completed, then returns its JSON result.
+// WaitForHuman suspends the task until a named decision is completed, then returns its JSON result.
 func (handler *HandlerContext) WaitForHuman(
 	name string,
 	waitContext any,
@@ -261,7 +261,7 @@ func (handler *HandlerContext) WaitForHuman(
 	if pending := handler.humanWaits[name]; pending != nil {
 		if pending.context != canonicalContext {
 			handler.human.Unlock()
-			return nil, &HumanWaitConflictError{JobID: handler.Job.ID, WaitName: name}
+			return nil, &HumanWaitConflictError{TaskID: handler.Task.ID, WaitName: name}
 		}
 		handler.human.Unlock()
 		<-pending.done
@@ -293,9 +293,9 @@ func (handler *HandlerContext) runHumanWait(name string, waitContext []byte, tim
 	rows, err := handler.executor.Query(
 		handler.context,
 		protocolStatementRegistry[waitForHumanStatementName],
-		handler.Job.ID,
+		handler.Task.ID,
 		handler.workerID,
-		handler.Job.FenceToken,
+		handler.Task.FenceToken,
 		name,
 		waitContext,
 		timeoutArgument,
@@ -314,13 +314,13 @@ func (handler *HandlerContext) runHumanWait(name string, waitContext []byte, tim
 		handler.cancel(errDurableWaitSuspension)
 		return nil, errDurableWaitSuspension
 	case durableStaleValue:
-		return nil, &HumanWaitLeaseLostError{JobID: handler.Job.ID, WaitName: name}
+		return nil, &HumanWaitLeaseLostError{TaskID: handler.Task.ID, WaitName: name}
 	case externalAlreadyWaitingValue:
-		return nil, &HumanWaitAlreadyWaitingError{JobID: handler.Job.ID, WaitName: name}
+		return nil, &HumanWaitAlreadyWaitingError{TaskID: handler.Task.ID, WaitName: name}
 	case durableLimitExceededValue:
-		return nil, &HumanWaitLimitExceededError{JobID: handler.Job.ID}
+		return nil, &HumanWaitLimitExceededError{TaskID: handler.Task.ID}
 	case durableConflictValue:
-		return nil, &HumanWaitConflictError{JobID: handler.Job.ID, WaitName: name}
+		return nil, &HumanWaitConflictError{TaskID: handler.Task.ID, WaitName: name}
 	default:
 		return nil, fmt.Errorf(unknownHumanWaitStatusFormat, status)
 	}
@@ -329,7 +329,7 @@ func (handler *HandlerContext) runHumanWait(name string, waitContext []byte, tim
 // SendSignal delivers one idempotent JSON payload to a named signal wait.
 func (queue *Queue) SendSignal(
 	ctx context.Context,
-	jobID string,
+	taskID string,
 	name string,
 	payload any,
 	delivery ExternalWaitDelivery,
@@ -350,7 +350,7 @@ func (queue *Queue) SendSignal(
 	rows, err := queue.executor.Query(
 		ctx,
 		protocolStatementRegistry[sendSignalStatementName],
-		jobID,
+		taskID,
 		name,
 		encoded,
 		delivery.IdempotencyKey,
@@ -364,9 +364,9 @@ func (queue *Queue) SendSignal(
 	}
 	status, _ := rows[0][rowStatusField].(string)
 	if status == durableConflictValue {
-		return SignalDeliveryResult{}, &SignalIdempotencyConflictError{JobID: jobID, WaitName: name}
+		return SignalDeliveryResult{}, &SignalIdempotencyConflictError{TaskID: taskID, WaitName: name}
 	}
-	result := SignalDeliveryResult{Status: SignalDeliveryStatus(status), JobID: jobID, Name: name}
+	result := SignalDeliveryResult{Status: SignalDeliveryStatus(status), TaskID: taskID, Name: name}
 	switch result.Status {
 	case SignalDelivered, SignalDuplicate, SignalNotWaiting, SignalAlreadyDelivered, SignalStale, SignalNotFound:
 	default:
@@ -388,7 +388,7 @@ func (queue *Queue) SendSignal(
 // CompleteHumanWait supplies one idempotent JSON result to a named human wait.
 func (queue *Queue) CompleteHumanWait(
 	ctx context.Context,
-	jobID string,
+	taskID string,
 	name string,
 	result any,
 	delivery ExternalWaitDelivery,
@@ -409,7 +409,7 @@ func (queue *Queue) CompleteHumanWait(
 	rows, err := queue.executor.Query(
 		ctx,
 		protocolStatementRegistry[completeHumanWaitStatementName],
-		jobID,
+		taskID,
 		name,
 		encoded,
 		delivery.IdempotencyKey,
@@ -423,10 +423,10 @@ func (queue *Queue) CompleteHumanWait(
 	}
 	status, _ := rows[0][rowStatusField].(string)
 	if status == durableConflictValue {
-		return HumanWaitCompletionResult{}, &HumanWaitIdempotencyConflictError{JobID: jobID, WaitName: name}
+		return HumanWaitCompletionResult{}, &HumanWaitIdempotencyConflictError{TaskID: taskID, WaitName: name}
 	}
 	completion := HumanWaitCompletionResult{
-		Status: HumanWaitCompletionStatus(status), JobID: jobID, Name: name,
+		Status: HumanWaitCompletionStatus(status), TaskID: taskID, Name: name,
 	}
 	switch completion.Status {
 	case HumanWaitCompleted, HumanWaitDuplicate, HumanWaitNotWaiting,

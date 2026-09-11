@@ -103,7 +103,7 @@ describe("the Markdown twin transform", () => {
   });
 
   it("leaves prose and fenced code outside a tab exactly as it found them", () => {
-    const source = ["Prose with `Array<Job>` in it.", "", "```ts", "  const x = 1;", "```"].join(
+    const source = ["Prose with `Array<Task>` in it.", "", "```ts", "  const x = 1;", "```"].join(
       "\n",
     );
     expect(mdxToMarkdown(source, "example")).toBe(source);

@@ -10,13 +10,13 @@ describe("retry and attempt lifecycle", () => {
     const id = await queue.enqueue("email", { to: "a@example.com" }, { maxAttempts: 2 });
     const first = await queue.claim("worker-a");
     expect(await queue.fail(first!, "worker-a", new Error("temporary"), 0)).toBe("ready");
-    expect((await admin.getJob(id))?.fenceToken).toBe(0n);
+    expect((await admin.getTask(id))?.fenceToken).toBe(0n);
     const second = await queue.claim("worker-a");
     expect(second?.attempt).toBe(2);
     expect(await queue.complete(second!, "worker-a", { ok: true })).toBe(true);
 
     const attempts = await pool.query(
-      "SELECT attempt, outcome FROM workhorse.attempt_history WHERE job_id = $1 ORDER BY attempt",
+      "SELECT attempt, outcome FROM workhorse.attempt_history WHERE task_id = $1 ORDER BY attempt",
       [id],
     );
     expect(attempts.rows).toEqual([
@@ -24,7 +24,7 @@ describe("retry and attempt lifecycle", () => {
       { attempt: 2, outcome: "succeeded" },
     ]);
     const events = await pool.query(
-      "SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY occurred_at, event_id",
+      "SELECT event_type FROM workhorse.task_event WHERE task_id = $1 ORDER BY occurred_at, event_id",
       [id],
     );
     expect(events.rows.map((row) => row.event_type)).toEqual([
@@ -37,14 +37,17 @@ describe("retry and attempt lifecycle", () => {
     expect(
       (
         await pool.query(
-          "SELECT count(*)::integer AS count FROM workhorse.job_runtime WHERE job_id = $1",
+          "SELECT count(*)::integer AS count FROM workhorse.task_runtime WHERE task_id = $1",
           [id],
         )
       ).rows[0].count,
     ).toBe(0);
     expect(
-      (await pool.query("SELECT state, result FROM workhorse.job_outcome WHERE job_id = $1", [id]))
-        .rows[0],
+      (
+        await pool.query("SELECT state, result FROM workhorse.task_outcome WHERE task_id = $1", [
+          id,
+        ])
+      ).rows[0],
     ).toEqual({ state: "succeeded", result: { ok: true } });
   });
 
@@ -66,8 +69,8 @@ describe("retry and attempt lifecycle", () => {
     }>(
       `SELECT current_attempt, run_at,
               extract(epoch FROM (run_at - $2::timestamptz))::double precision AS delay_seconds
-         FROM workhorse.job_runtime
-        WHERE job_id = $1`,
+         FROM workhorse.task_runtime
+        WHERE task_id = $1`,
       [id, beforeFailure],
     );
     expect(retry.rows[0]!.current_attempt).toBe(3);
@@ -99,7 +102,7 @@ describe("retry and attempt lifecycle", () => {
     const [id] = await queue.enqueueMany([
       { type: "mapped", payload: {}, options: { queue: "mapped", retryPolicy } },
     ]);
-    await expect(admin.getJob(id!)).resolves.toMatchObject({ retryPolicy });
+    await expect(admin.getTask(id!)).resolves.toMatchObject({ retryPolicy });
     await expect(queue.claim("mapped-worker", { queue: "mapped" })).resolves.toMatchObject({
       retryPolicy,
     });
@@ -113,7 +116,7 @@ describe("retry and attempt lifecycle", () => {
       {
         name: "policy",
         schedule: "0 * * * *",
-        job: { type: "scheduled", payload: {}, retryPolicy: scheduledPolicy },
+        task: { type: "scheduled", payload: {}, retryPolicy: scheduledPolicy },
       },
     ]);
     const stored = await pool.query<{ revision: string; retry_policy: unknown }>(
@@ -126,7 +129,7 @@ describe("retry and attempt lifecycle", () => {
       BigInt(stored.rows[0]!.revision),
       new Date("2026-08-01T01:00:00Z"),
     );
-    await expect(admin.getJob(scheduledId!)).resolves.toMatchObject({
+    await expect(admin.getTask(scheduledId!)).resolves.toMatchObject({
       retryPolicy: scheduledPolicy,
     });
   });
@@ -147,12 +150,12 @@ describe("retry and attempt lifecycle", () => {
     );
     await queue.claim("fixed-recover-worker", { queue: "fixed-recover", leaseMs: 100 });
     await pool.query(
-      "UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 ms' WHERE job_id = $1",
+      "UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 ms' WHERE task_id = $1",
       [recoverId],
     );
     expect((await queue.tick()).find((phase) => phase.phase === "recover")?.rowsAffected).toBe(1);
     const events = await pool.query<{ details: Record<string, unknown> }>(
-      "SELECT details FROM workhorse.job_event WHERE job_id = ANY($1::uuid[]) AND event_type IN ('retry_scheduled', 'lease_expired')",
+      "SELECT details FROM workhorse.task_event WHERE task_id = ANY($1::uuid[]) AND event_type IN ('retry_scheduled', 'lease_expired')",
       [[failId, recoverId]],
     );
     for (const event of events.rows)
@@ -187,7 +190,7 @@ describe("retry and attempt lifecycle", () => {
       const claim = await new Queue(pool).claim(`jitter-${attempt}`, { queue: "jitter" });
       expect(await queue.fail(claim!, `jitter-${attempt}`, new Error("retry"))).toBe("scheduled");
       const runtime = await pool.query<{ delay: string }>(
-        "SELECT previous_retry_delay_ms::text AS delay FROM workhorse.job_runtime WHERE job_id = $1",
+        "SELECT previous_retry_delay_ms::text AS delay FROM workhorse.task_runtime WHERE task_id = $1",
         [jitterId],
       );
       const selected = Number(runtime.rows[0]!.delay);
@@ -199,7 +202,7 @@ describe("retry and attempt lifecycle", () => {
       previous = selected;
       if (attempt === 1)
         await pool.query(
-          "UPDATE workhorse.job_runtime SET state = 'ready', run_at = clock_timestamp(), ready_at = clock_timestamp(), sequence = nextval('workhorse.ready_sequence_seq') WHERE job_id = $1",
+          "UPDATE workhorse.task_runtime SET state = 'ready', run_at = clock_timestamp(), ready_at = clock_timestamp(), sequence = nextval('workhorse.ready_sequence_seq') WHERE task_id = $1",
           [jitterId],
         );
     }
@@ -209,7 +212,7 @@ describe("retry and attempt lifecycle", () => {
     const legacyId = await queue.enqueue("legacy", {}, { queue: "legacy", maxAttempts: 2 });
     await queue.claim("legacy-worker", { queue: "legacy", leaseMs: 100 });
     await pool.query(
-      "UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 ms' WHERE job_id = $1",
+      "UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 ms' WHERE task_id = $1",
       [legacyId],
     );
     expect(await queue.recoverExpired()).toBe(1);
@@ -242,15 +245,15 @@ describe("retry and attempt lifecycle", () => {
     );
     await queue.claim("recovery-worker", { queue: "recovery", leaseMs: 100 });
     await pool.query(
-      "UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 ms' WHERE job_id = $1",
+      "UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 ms' WHERE task_id = $1",
       [recoveryId],
     );
     expect(await queue.recoverExpired(100, 0)).toBe(1);
-    const sources = await pool.query<{ job_id: string; source: string }>(
-      "SELECT job_id, details->>'retry_delay_source' AS source FROM workhorse.job_event WHERE job_id = ANY($1::uuid[]) AND event_type IN ('retry_scheduled', 'lease_expired')",
+    const sources = await pool.query<{ task_id: string; source: string }>(
+      "SELECT task_id, details->>'retry_delay_source' AS source FROM workhorse.task_event WHERE task_id = ANY($1::uuid[]) AND event_type IN ('retry_scheduled', 'lease_expired')",
       [[legacyId, numericId, callbackId, recoveryId]],
     );
-    expect(new Map(sources.rows.map((row) => [row.job_id, row.source]))).toEqual(
+    expect(new Map(sources.rows.map((row) => [row.task_id, row.source]))).toEqual(
       new Map([
         [legacyId, "lease-recovery-immediate"],
         [numericId, "override"],
@@ -260,22 +263,22 @@ describe("retry and attempt lifecycle", () => {
     );
   });
 
-  it("passes the claimed job to retry delay callbacks", async () => {
+  it("passes the claimed task to retry delay callbacks", async () => {
     const delayMs = 300_000;
     const observed: Array<{ attempt: number; type: string; payload: unknown }> = [];
     const worker = new Worker(queue, {
-      workerId: "job-aware-retry-worker",
+      workerId: "task-aware-retry-worker",
       pollMs: 0,
-      retryDelayMs: (attempt, job) => {
-        observed.push({ attempt, type: job.type, payload: job.payload });
-        return (job.payload as { retryDelayMs: number }).retryDelayMs;
+      retryDelayMs: (attempt, task) => {
+        observed.push({ attempt, type: task.type, payload: task.payload });
+        return (task.payload as { retryDelayMs: number }).retryDelayMs;
       },
     });
-    worker.handle("job-aware-retry", () => {
-      throw new Error("intentional job-aware retry");
+    worker.handle("task-aware-retry", () => {
+      throw new Error("intentional task-aware retry");
     });
     const id = await queue.enqueue(
-      "job-aware-retry",
+      "task-aware-retry",
       { retryDelayMs: delayMs },
       { maxAttempts: 2 },
     );
@@ -284,10 +287,10 @@ describe("retry and attempt lifecycle", () => {
     await expect(worker.runOnce()).resolves.toBe(true);
 
     expect(observed).toEqual([
-      { attempt: 1, type: "job-aware-retry", payload: { retryDelayMs: delayMs } },
+      { attempt: 1, type: "task-aware-retry", payload: { retryDelayMs: delayMs } },
     ]);
     const runtime = await pool.query<{ state: string; current_attempt: number; run_at: Date }>(
-      "SELECT state, current_attempt, run_at FROM workhorse.job_runtime WHERE job_id = $1",
+      "SELECT state, current_attempt, run_at FROM workhorse.task_runtime WHERE task_id = $1",
       [id],
     );
     expect(runtime.rows[0]).toMatchObject({ state: "scheduled", current_attempt: 2 });
@@ -297,42 +300,42 @@ describe("retry and attempt lifecycle", () => {
 
   it("moves a terminal handler failure to failed", async () => {
     const id = await queue.enqueue("email", {}, { maxAttempts: 1 });
-    const job = await queue.claim("worker-a");
-    expect(await queue.fail(job!, "worker-a", new Error("permanent"))).toBe("failed");
-    expect((await admin.getJob(id))?.state).toBe("failed");
+    const task = await queue.claim("worker-a");
+    expect(await queue.fail(task!, "worker-a", new Error("permanent"))).toBe("failed");
+    expect((await admin.getTask(id))?.state).toBe("failed");
     expect(
       (
         await pool.query(
-          "SELECT count(*)::integer AS count FROM workhorse.job_runtime WHERE job_id = $1",
+          "SELECT count(*)::integer AS count FROM workhorse.task_runtime WHERE task_id = $1",
           [id],
         )
       ).rows[0].count,
     ).toBe(0);
     expect(
-      (await pool.query("SELECT state FROM workhorse.job_outcome WHERE job_id = $1", [id])).rows[0]
-        .state,
+      (await pool.query("SELECT state FROM workhorse.task_outcome WHERE task_id = $1", [id]))
+        .rows[0].state,
     ).toBe("failed");
   });
 
   it("rejects retry when the live runtime fence is inconsistent", async () => {
     await queue.enqueue("work", {}, { maxAttempts: 2 });
-    const job = await queue.claim("worker-a");
+    const task = await queue.claim("worker-a");
     await pool.query(
-      "UPDATE workhorse.job_runtime SET fence_token = fence_token + 1 WHERE job_id = $1",
-      [job!.id],
+      "UPDATE workhorse.task_runtime SET fence_token = fence_token + 1 WHERE task_id = $1",
+      [task!.id],
     );
-    await expect(queue.fail(job!, "worker-a", new Error("retry"))).resolves.toBe("stale");
+    await expect(queue.fail(task!, "worker-a", new Error("retry"))).resolves.toBe("stale");
     expect(
       (
         await pool.query(
-          "SELECT count(*)::integer AS count FROM workhorse.job_runtime WHERE state = 'active'",
+          "SELECT count(*)::integer AS count FROM workhorse.task_runtime WHERE state = 'active'",
         )
       ).rows[0].count,
     ).toBe(1);
     expect(
       (
         await pool.query(
-          "SELECT count(*)::integer AS count FROM workhorse.job_runtime WHERE state = 'ready'",
+          "SELECT count(*)::integer AS count FROM workhorse.task_runtime WHERE state = 'ready'",
         )
       ).rows[0].count,
     ).toBe(0);
@@ -340,24 +343,24 @@ describe("retry and attempt lifecycle", () => {
 
   it("recovery CAS skips a runtime whose active fence changed", async () => {
     await queue.enqueue("work", {}, { maxAttempts: 2 });
-    const job = await queue.claim("worker-a", { leaseMs: 100 });
+    const task = await queue.claim("worker-a", { leaseMs: 100 });
     await pool.query(
-      "UPDATE workhorse.job_runtime SET fence_token = fence_token + 1 WHERE job_id = $1",
-      [job!.id],
+      "UPDATE workhorse.task_runtime SET fence_token = fence_token + 1 WHERE task_id = $1",
+      [task!.id],
     );
     await sleep(130);
     await expect(queue.recoverExpired()).resolves.toBe(1);
     expect(
       (
         await pool.query(
-          "SELECT count(*)::integer AS count FROM workhorse.job_runtime WHERE state = 'ready'",
+          "SELECT count(*)::integer AS count FROM workhorse.task_runtime WHERE state = 'ready'",
         )
       ).rows[0].count,
     ).toBe(1);
     expect(
       (
-        await pool.query("SELECT current_attempt FROM workhorse.job_runtime WHERE job_id = $1", [
-          job!.id,
+        await pool.query("SELECT current_attempt FROM workhorse.task_runtime WHERE task_id = $1", [
+          task!.id,
         ])
       ).rows[0].current_attempt,
     ).toBe(2);

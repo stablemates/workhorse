@@ -1,6 +1,6 @@
 import type {
   CancelStatus,
-  ClaimedJob,
+  ClaimedTask,
   HeartbeatStatus,
   RedriveStatus,
   TraceContext,
@@ -143,31 +143,31 @@ export type WorkhorseLogEvent =
   | "workhorse.handler.registered"
   | "workhorse.handler.signal_swallowed"
   | "workhorse.handler.started"
-  | "workhorse.job.cancellation_acknowledged"
-  | "workhorse.job.cancellation_processed"
-  | "workhorse.job.checkpoint_saved"
-  | "workhorse.job.child_processed"
-  | "workhorse.job.debounce_rejected"
-  | "workhorse.job.debounced"
-  | "workhorse.job.claimed"
-  | "workhorse.job.completed"
-  | "workhorse.job.completion_rejected"
-  | "workhorse.job.enqueue_replayed"
-  | "workhorse.job.enqueued"
-  | "workhorse.job.throttled"
-  | "workhorse.job.execution_finished"
-  | "workhorse.job.failure_processed"
-  | "workhorse.job.heartbeat_accepted"
-  | "workhorse.job.heartbeat_rejected"
-  | "workhorse.job.ownership_expired"
-  | "workhorse.job.progress_updated"
-  | "workhorse.job.redrive_processed"
-  | "workhorse.job.run_now_requested"
-  | "workhorse.job.signal_processed"
-  | "workhorse.job.human_wait_processed"
-  | "workhorse.job.wait_processed"
-  | "workhorse.jobs.promoted"
-  | "workhorse.jobs.redrive_processed"
+  | "workhorse.task.cancellation_acknowledged"
+  | "workhorse.task.cancellation_processed"
+  | "workhorse.task.checkpoint_saved"
+  | "workhorse.task.child_processed"
+  | "workhorse.task.debounce_rejected"
+  | "workhorse.task.debounced"
+  | "workhorse.task.claimed"
+  | "workhorse.task.completed"
+  | "workhorse.task.completion_rejected"
+  | "workhorse.task.enqueue_replayed"
+  | "workhorse.task.enqueued"
+  | "workhorse.task.throttled"
+  | "workhorse.task.execution_finished"
+  | "workhorse.task.failure_processed"
+  | "workhorse.task.heartbeat_accepted"
+  | "workhorse.task.heartbeat_rejected"
+  | "workhorse.task.ownership_expired"
+  | "workhorse.task.progress_updated"
+  | "workhorse.task.redrive_processed"
+  | "workhorse.task.run_now_requested"
+  | "workhorse.task.signal_processed"
+  | "workhorse.task.human_wait_processed"
+  | "workhorse.task.wait_processed"
+  | "workhorse.tasks.promoted"
+  | "workhorse.tasks.redrive_processed"
   | "workhorse.leases.recovered"
   | "workhorse.maintenance.completed"
   | "workhorse.maintenance_policy.synchronized"
@@ -268,29 +268,29 @@ export function lazyGauge(name: string, options: TelemetryMetricOptions): Teleme
 }
 
 export const telemetryMetrics = {
-  enqueued: lazyCounter("workhorse.jobs.enqueued", {
-    description: "Jobs accepted for durable execution",
-    unit: "{job}",
+  enqueued: lazyCounter("workhorse.tasks.enqueued", {
+    description: "Tasks accepted for durable execution",
+    unit: "{task}",
   }),
-  enqueueOutcomes: lazyCounter("workhorse.jobs.enqueue.outcomes", {
+  enqueueOutcomes: lazyCounter("workhorse.tasks.enqueue.outcomes", {
     description: "Enqueue requests by PostgreSQL acceptance outcome",
     unit: "{request}",
   }),
-  claimed: lazyCounter("workhorse.jobs.claimed", {
-    description: "Jobs claimed for handler execution",
-    unit: "{job}",
+  claimed: lazyCounter("workhorse.tasks.claimed", {
+    description: "Tasks claimed for handler execution",
+    unit: "{task}",
   }),
-  completed: lazyCounter("workhorse.jobs.completed", {
-    description: "Jobs completed under a valid lease",
-    unit: "{job}",
+  completed: lazyCounter("workhorse.tasks.completed", {
+    description: "Tasks completed under a valid lease",
+    unit: "{task}",
   }),
-  failed: lazyCounter("workhorse.jobs.failed", {
+  failed: lazyCounter("workhorse.tasks.failed", {
     description: "Handler failures submitted to PostgreSQL",
-    unit: "{job}",
+    unit: "{task}",
   }),
-  retried: lazyCounter("workhorse.jobs.retried", {
-    description: "Failed or expired jobs returned to live work",
-    unit: "{job}",
+  retried: lazyCounter("workhorse.tasks.retried", {
+    description: "Failed or expired tasks returned to live work",
+    unit: "{task}",
   }),
   expiredLeases: lazyCounter("workhorse.leases.expired", {
     description: "Expired leases recovered by maintenance",
@@ -309,8 +309,8 @@ export const telemetryMetrics = {
     unit: "ms",
   }),
   handlerBatchSize: lazyHistogram("workhorse.handler.batch.size", {
-    description: "Jobs delivered in one batch handler invocation",
-    unit: "{job}",
+    description: "Tasks delivered in one batch handler invocation",
+    unit: "{task}",
   }),
   handlerBatchLinger: lazyHistogram("workhorse.handler.batch.linger", {
     description: "Time from the first batch member arriving until dispatch",
@@ -324,12 +324,12 @@ export const telemetryMetrics = {
     description: "Worker handler activations by outcome",
     unit: "{execution}",
   }),
-  cancellations: lazyCounter("workhorse.jobs.cancellation", {
-    description: "Job cancellation requests by durable result",
+  cancellations: lazyCounter("workhorse.tasks.cancellation", {
+    description: "Task cancellation requests by durable result",
     unit: "{request}",
   }),
-  redrives: lazyCounter("workhorse.jobs.redrive", {
-    description: "Job redrive requests by durable result",
+  redrives: lazyCounter("workhorse.tasks.redrive", {
+    description: "Task redrive requests by durable result",
     unit: "{request}",
   }),
   schedulesFired: lazyCounter("workhorse.schedule.fired", {
@@ -364,7 +364,7 @@ export const telemetryMetrics = {
 
 /** Bounded `workhorse.handler.outcome` values. `unknown` covers an activation that ended without
  * reaching a recorded outcome, which only a defect in worker control flow produces. */
-export type JobExecutionOutcome =
+export type TaskExecutionOutcome =
   | "canceled"
   | "deadline_exceeded"
   | "failed"
@@ -378,11 +378,11 @@ export type JobExecutionOutcome =
 export function recordHandlerExecution(
   queue: string,
   type: string,
-  outcome: JobExecutionOutcome,
+  outcome: TaskExecutionOutcome,
 ): void {
   telemetryMetrics.handlerExecutions.add(1, {
     "workhorse.queue.name": queue,
-    "workhorse.job.type": type,
+    "workhorse.task.type": type,
     "workhorse.handler.outcome": outcome,
   });
 }
@@ -430,20 +430,22 @@ export function recordHeartbeatFailure(status: Exclude<HeartbeatStatus, "accepte
   telemetryMetrics.heartbeatFailures.add(1, { "workhorse.heartbeat.status": status });
 }
 
-export function jobSpanAttributes(
-  job: Pick<ClaimedJob, "id" | "type" | "attempt">,
+export function taskSpanAttributes(
+  task: Pick<ClaimedTask, "id" | "type" | "attempt">,
 ): TelemetryAttributes {
   return {
-    "workhorse.job.id": job.id,
-    "workhorse.job.type": job.type,
-    "workhorse.job.attempt": job.attempt,
+    "workhorse.task.id": task.id,
+    "workhorse.task.type": task.type,
+    "workhorse.task.attempt": task.attempt,
   };
 }
 
-export function jobMetricAttributes(job: Pick<ClaimedJob, "queue" | "type">): TelemetryAttributes {
+export function taskMetricAttributes(
+  task: Pick<ClaimedTask, "queue" | "type">,
+): TelemetryAttributes {
   return {
-    "workhorse.queue.name": job.queue,
-    "workhorse.job.type": job.type,
+    "workhorse.queue.name": task.queue,
+    "workhorse.task.type": task.type,
   };
 }
 
@@ -480,17 +482,17 @@ const queueMetricDefinitions: readonly TelemetryObservationDefinition[] = [
   {
     name: "workhorse.queue.depth",
     description: "Current live work by dispatch state",
-    unit: "{job}",
+    unit: "{task}",
   },
   {
     name: "workhorse.queue.oldest_ready_age",
-    description: "Age of the oldest ready job",
+    description: "Age of the oldest ready task",
     unit: "ms",
   },
   {
     name: "workhorse.queue.dependencies.blocked",
-    description: "Jobs waiting for prerequisite policy resolution",
-    unit: "{job}",
+    description: "Tasks waiting for prerequisite policy resolution",
+    unit: "{task}",
   },
   {
     name: "workhorse.queue.dependencies.pending_edges",
@@ -499,8 +501,8 @@ const queueMetricDefinitions: readonly TelemetryObservationDefinition[] = [
   },
   {
     name: "workhorse.queue.dependencies.failed_resolutions",
-    description: "Retained jobs failed by dependency policy",
-    unit: "{job}",
+    description: "Retained tasks failed by dependency policy",
+    unit: "{task}",
   },
   {
     name: "workhorse.queue.dependencies.capped",
@@ -510,12 +512,12 @@ const queueMetricDefinitions: readonly TelemetryObservationDefinition[] = [
   {
     name: "workhorse.queue.children.waiting_parents",
     description: "Parents suspended while linked children settle",
-    unit: "{job}",
+    unit: "{task}",
   },
   {
     name: "workhorse.queue.children.pending",
     description: "Linked children without a terminal outcome",
-    unit: "{job}",
+    unit: "{task}",
   },
   {
     name: "workhorse.queue.children.unjoined_results",
@@ -525,12 +527,12 @@ const queueMetricDefinitions: readonly TelemetryObservationDefinition[] = [
   {
     name: "workhorse.queue.children.failed_parents",
     description: "Retained parents failed by linked child policy",
-    unit: "{job}",
+    unit: "{task}",
   },
   {
     name: "workhorse.queue.children.canceled_parents",
     description: "Retained parents canceled by linked child policy",
-    unit: "{job}",
+    unit: "{task}",
   },
   {
     name: "workhorse.queue.children.capped",
@@ -540,22 +542,22 @@ const queueMetricDefinitions: readonly TelemetryObservationDefinition[] = [
   {
     name: "workhorse.queue.concurrency.limit",
     description: "Configured queue concurrency limit",
-    unit: "{job}",
+    unit: "{task}",
   },
   {
     name: "workhorse.queue.concurrency.active",
-    description: "Unexpired active jobs counted by queue concurrency admission",
-    unit: "{job}",
+    description: "Unexpired active tasks counted by queue concurrency admission",
+    unit: "{task}",
   },
   {
     name: "workhorse.queue.concurrency.blocked_ready",
     description: "Bounded ready depth blocked by queue concurrency policy",
-    unit: "{job}",
+    unit: "{task}",
   },
   {
     name: "workhorse.queue.rate_limit.configured",
     description: "Configured sustained queue start rate",
-    unit: "{job}/s",
+    unit: "{task}/s",
   },
   {
     name: "workhorse.queue.rate_limit.available_tokens",
@@ -565,11 +567,11 @@ const queueMetricDefinitions: readonly TelemetryObservationDefinition[] = [
   {
     name: "workhorse.queue.rate_limit.throttled_ready",
     description: "Bounded ready depth waiting for rate-limit tokens",
-    unit: "{job}",
+    unit: "{task}",
   },
   {
     name: "workhorse.queue.rate_limit.next_eligible_delay",
-    description: "Delay until the earliest sampled throttled job can start",
+    description: "Delay until the earliest sampled throttled task can start",
     unit: "ms",
   },
 ];
@@ -586,7 +588,7 @@ async function collectQueueMetrics(source: QueueMetricSource): Promise<Telemetry
       ["scheduled", snapshot.scheduledDepth],
       ["active", snapshot.activeLeases],
     ] as const) {
-      observe("workhorse.queue.depth", value, { ...queueAttribute, "workhorse.job.state": state });
+      observe("workhorse.queue.depth", value, { ...queueAttribute, "workhorse.task.state": state });
     }
     if (snapshot.oldestReadyAgeMs !== null)
       observe("workhorse.queue.oldest_ready_age", snapshot.oldestReadyAgeMs, queueAttribute);

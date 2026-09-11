@@ -27,7 +27,7 @@ func (service *backend) procedures() map[string]Procedure {
 		"cron": service.cron, "workers": service.workers, "humanWaits": service.humanWaits,
 		"events": service.events, "eventDetail": service.eventDetail,
 		"previewRetentionPolicy": service.previewRetentionPolicy,
-		"jobDetail":              service.jobDetail, "settings": service.settings, "system": service.system,
+		"taskDetail":             service.taskDetail, "settings": service.settings, "system": service.system,
 		"setQueuePaused": service.setQueuePaused, "purgeQueue": service.purgeQueue,
 		"setWorkerPaused":           service.setWorkerPaused,
 		"overrideMaintenancePolicy": service.overrideMaintenancePolicy,

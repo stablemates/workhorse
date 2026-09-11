@@ -9,7 +9,7 @@ import type { DashboardRunNowStatus } from "@stablemates/workhorse-dashboard-ser
  * a described status or a failure sentence rather than modelling failure as absence.
  */
 export interface RunNowFeedback {
-  jobId: string;
+  taskId: string;
   /** Exactly what the server reported, kept beside the wording so a reader can act on either. */
   status: DashboardRunNowStatus | null;
   described: ReturnType<typeof describeRunNowOutcome> | null;
@@ -32,7 +32,7 @@ export async function requestRunNow(
   const { id, auditActor, requestId } = input;
   if (!client.runTaskNow) {
     return {
-      jobId: id,
+      taskId: id,
       status: null,
       described: null,
       failure: "This host cannot run a scheduled task now",
@@ -48,14 +48,14 @@ export async function requestRunNow(
       },
     });
     return {
-      jobId: id,
+      taskId: id,
       status: result.status,
       described: describeRunNowOutcome(result.status, { state: result.state }),
       failure: null,
     };
   } catch (cause) {
     return {
-      jobId: id,
+      taskId: id,
       status: null,
       described: null,
       failure: cause instanceof Error ? cause.message : "Workhorse could not release the task",

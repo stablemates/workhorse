@@ -6,7 +6,7 @@ import { createIntegrationTestContext } from "./support/integration.js";
 const { pool, queue, admin, adminAudit } = createIntegrationTestContext(import.meta.url);
 
 describe("queue administration", () => {
-  it("replays a purge request without deleting jobs that arrived afterward", async () => {
+  it("replays a purge request without deleting tasks that arrived afterward", async () => {
     const queueName = "idempotent-purge";
     await queue.enqueue("first", {}, { queue: queueName });
     await queue.enqueue("second", {}, { queue: queueName });
@@ -15,14 +15,14 @@ describe("queue administration", () => {
     await expect(admin.purgeQueue(queueName, audit)).resolves.toBe(2);
     const laterId = await queue.enqueue("later", {}, { queue: queueName });
     await expect(admin.purgeQueue(queueName, audit)).resolves.toBe(2);
-    await expect(admin.getJob(laterId)).resolves.toMatchObject({ state: "ready" });
+    await expect(admin.getTask(laterId)).resolves.toMatchObject({ state: "ready" });
 
     await expect(
       admin.purgeQueue(queueName, { ...audit, reason: "a different destructive request" }),
     ).rejects.toBeInstanceOf(PurgeIdempotencyConflictError);
   });
 
-  it("pauses claims, resumes dispatch, and purges only non-active jobs from one queue", async () => {
+  it("pauses claims, resumes dispatch, and purges only non-active tasks from one queue", async () => {
     const queueName = "managed";
     const activeId = await queue.enqueue("active", {}, { queue: queueName });
     const active = await queue.claim("worker-active", { queue: queueName });
@@ -39,7 +39,7 @@ describe("queue administration", () => {
     );
     await pool.query(
       `INSERT INTO workhorse.attempt_history(
-           job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at
+           task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at
          ) VALUES ($1, 1, 1, 'purge-history-worker', 'succeeded', clock_timestamp(), clock_timestamp())`,
       [scheduledId],
     );
@@ -58,16 +58,16 @@ describe("queue administration", () => {
 
     await queue.enqueue("ready-after-resume", {}, { queue: queueName });
     expect(await admin.purgeQueue(queueName, adminAudit("purge managed queue"))).toBe(2);
-    expect(await admin.getJob(activeId)).toMatchObject({ state: "active" });
-    expect(await admin.getJob(readyId)).toMatchObject({ state: "active" });
-    expect(await admin.getJob(scheduledId)).toBeNull();
-    expect(await admin.getJob(otherId)).toMatchObject({ state: "ready" });
+    expect(await admin.getTask(activeId)).toMatchObject({ state: "active" });
+    expect(await admin.getTask(readyId)).toMatchObject({ state: "active" });
+    expect(await admin.getTask(scheduledId)).toBeNull();
+    expect(await admin.getTask(otherId)).toMatchObject({ state: "ready" });
     expect(
       (
         await pool.query(
           `SELECT
-               (SELECT count(*)::integer FROM workhorse.job_event WHERE job_id = $1) AS events,
-               (SELECT count(*)::integer FROM workhorse.attempt_history WHERE job_id = $1) AS attempts`,
+               (SELECT count(*)::integer FROM workhorse.task_event WHERE task_id = $1) AS events,
+               (SELECT count(*)::integer FROM workhorse.attempt_history WHERE task_id = $1) AS attempts`,
           [scheduledId],
         )
       ).rows[0],
@@ -104,13 +104,13 @@ describe("queue administration", () => {
       },
     );
 
-    expect(await admin.purgeQueue(queueName, adminAudit("purge keyed jobs"))).toBe(2);
-    expect(await admin.getJob(activeId)).toMatchObject({ state: "active" });
-    expect(await admin.getJob(readyId)).toBeNull();
-    expect(await admin.getJob(scheduledId)).toBeNull();
+    expect(await admin.purgeQueue(queueName, adminAudit("purge keyed tasks"))).toBe(2);
+    expect(await admin.getTask(activeId)).toMatchObject({ state: "active" });
+    expect(await admin.getTask(readyId)).toBeNull();
+    expect(await admin.getTask(scheduledId)).toBeNull();
     expect(
-      (await pool.query("SELECT job_id FROM workhorse.enqueue_idempotency ORDER BY job_id")).rows,
-    ).toEqual([{ job_id: activeId }]);
+      (await pool.query("SELECT task_id FROM workhorse.enqueue_idempotency ORDER BY task_id")).rows,
+    ).toEqual([{ task_id: activeId }]);
 
     const reusedReady = await queue.enqueue(
       "purge-ready-reused",
@@ -149,7 +149,7 @@ describe("queue administration", () => {
     try {
       await inserter.query("BEGIN");
       await inserter.query(
-        `INSERT INTO workhorse.job_event(job_id, event_type) VALUES ($1, 'concurrent-purge')`,
+        `INSERT INTO workhorse.task_event(task_id, event_type) VALUES ($1, 'concurrent-purge')`,
         [id],
       );
       let settled = false;
@@ -161,11 +161,11 @@ describe("queue administration", () => {
       await inserter.query("COMMIT");
 
       expect(await purge).toBe(1);
-      expect(await admin.getJob(id)).toBeNull();
+      expect(await admin.getTask(id)).toBeNull();
       expect(
         (
           await pool.query(
-            "SELECT count(*)::integer AS count FROM workhorse.job_event WHERE job_id = $1",
+            "SELECT count(*)::integer AS count FROM workhorse.task_event WHERE task_id = $1",
             [id],
           )
         ).rows[0]?.count,

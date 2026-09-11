@@ -204,22 +204,22 @@ try {
     throw new Error("Dashboard TSX modules did not use the automatic JSX runtime");
   }
 
-  const representativeJobTypes = [
+  const representativeTaskTypes = [
     "demo.retry",
     "demo.durable-timer",
     "demo.failure",
     "demo.long-running",
   ];
   const taskResults = await Promise.all(
-    representativeJobTypes.map(async (jobType) => {
+    representativeTaskTypes.map(async (taskType) => {
       const response = await fetch(`${baseUrl}/rpc/dashboard/tasks`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          json: { filter: "all", jobType, page: 1, pageSize: 100 },
+          json: { filter: "all", taskType, page: 1, pageSize: 100 },
         }),
       });
-      return { jobType, ok: response.ok, text: await response.text() };
+      return { taskType, ok: response.ok, text: await response.text() };
     }),
   );
   const cronResponse = await fetch(`${baseUrl}/rpc/dashboard/cron`, {
@@ -229,7 +229,7 @@ try {
   });
   const cronText = await cronResponse.text();
   if (
-    taskResults.some(({ jobType, ok, text }) => !ok || !text.includes(jobType)) ||
+    taskResults.some(({ taskType, ok, text }) => !ok || !text.includes(taskType)) ||
     !cronResponse.ok ||
     !cronText.includes("workhorse-demo") ||
     !cronText.includes("demo.long-running")
@@ -267,7 +267,7 @@ try {
       outOfProcessWorkersRegistered: true,
       dashboard: true,
       singleOriginHotReload: true,
-      representativeJobs: true,
+      representativeTasks: true,
       recurringLongRunningTask: true,
       recurringSchedule: true,
     })}`,

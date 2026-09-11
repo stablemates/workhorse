@@ -1,11 +1,11 @@
 ---
 title: Workhorse for AI coding agents
-description: Read the agent-facing documentation, decide whether Workhorse fits, then integrate one transactional job from enqueue through confirmation.
+description: Read the agent-facing documentation, decide whether Workhorse fits, then integrate one transactional task from enqueue through confirmation.
 ---
 
 You are integrating Workhorse into someone else's application. This page is the whole integration:
 what to read, whether to stop, the four things you write, the three mistakes that survive review,
-and how to confirm the job settled.
+and how to confirm the task settled.
 
 ## How to read this documentation
 
@@ -77,7 +77,7 @@ retry budget remains.
 
 ## The three mistakes
 
-**Enqueuing outside the caller's transaction.** The job commits even though the row rolled back, and
+**Enqueuing outside the caller's transaction.** The task commits even though the row rolled back, and
 a worker then processes an order that does not exist. The remedy is to pass the transaction, as the
 example does.
 
@@ -91,7 +91,7 @@ on every retry. The remedy is `context.checkpoint(name, operation)` in TypeScrip
 recorded value instead of running it again. An idempotency key on the remote call, an outbox, an
 inbox, or a compensation path are the alternatives when a checkpoint does not fit.
 
-## One job, end to end
+## One task, end to end
 
 Each example opens PostgreSQL, enqueues `order.created` inside the transaction that inserts the
 order, sets a failure policy, runs a worker whose handler wraps its external send in a checkpoint,
@@ -105,7 +105,7 @@ and reads the durable result.
     const pool = new Pool({ connectionString: process.env.DATABASE_URL });
     const queue = new Queue(pool);
     const client = await pool.connect();
-    let jobId: string;
+    let taskId: string;
 
     async function sendConfirmationEmail(orderId: string): Promise<string> {
       return `receipt-for-${orderId}`;
@@ -114,7 +114,7 @@ and reads the durable result.
     try {
       await client.query("BEGIN");
       await client.query("INSERT INTO orders (id, status) VALUES ($1, $2)", ["order-42", "new"]);
-      jobId = await queue.enqueue(
+      taskId = await queue.enqueue(
         "order.created",
         { orderId: "order-42" },
         { maxAttempts: 5, retryPolicy: { type: "fixed", delayMs: 1_000 } },
@@ -140,8 +140,8 @@ and reads the durable result.
     );
     await worker.runOnce(); // Production worker processes call worker.run().
 
-    const job = await new Admin(pool).getJob(jobId);
-    console.log(job?.state, job?.result);
+    const task = await new Admin(pool).getTask(taskId);
+    console.log(task?.state, task?.result);
     await pool.end();
     ```
 
@@ -177,7 +177,7 @@ and reads the durable result.
                 "INSERT INTO orders (id, status) VALUES (%s, %s)",
                 ("order-42", "new"),
             )
-            job_id = Queue(application_connection).enqueue(
+            task_id = Queue(application_connection).enqueue(
                 "order.created",
                 {"orderId": "order-42"},
                 EnqueueOptions(
@@ -189,8 +189,8 @@ and reads the durable result.
     with psycopg.connect(database_url, autocommit=True) as worker_connection:
         worker = Worker(worker_connection).handle("order.created", handle_order_created)
         worker.run_once()  # Production worker processes call worker.run().
-        job = Admin(worker_connection).get_job(job_id)
-        print(job.state if job else None, job.result if job else None)
+        task = Admin(worker_connection).get_task(task_id)
+        print(task.state if task else None, task.result if task else None)
     ```
 
   </Tab>
@@ -240,7 +240,7 @@ and reads the durable result.
     		return err
     	}
     	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(tx), "default")
-    	jobID, err := queue.Enqueue(
+    	taskID, err := queue.Enqueue(
     		ctx,
     		"order.created",
     		map[string]any{"orderId": "order-42"},
@@ -279,11 +279,11 @@ and reads the durable result.
     		return err
     	}
 
-    	job, err := workhorse.NewAdmin(workhorse.NewPGXExecutor(pool)).GetJob(ctx, jobID)
+    	task, err := workhorse.NewAdmin(workhorse.NewPGXExecutor(pool)).GetTask(ctx, taskID)
     	if err != nil {
     		return err
     	}
-    	fmt.Println(job.State, job.Result)
+    	fmt.Println(task.State, task.Result)
     	return nil
     }
     ```
@@ -295,15 +295,15 @@ Two asymmetries to expect. Go's `RetryPolicy` is a `map[string]any` where TypeSc
 union, and Python's is a mapping, so only TypeScript rejects a malformed policy at compile time.
 Every language does have a schema compatibility assertion, named above.
 
-## Confirm the job settled
+## Confirm the task settled
 
-Read the job back by its identifier: `Admin.getJob` in TypeScript, `Admin.get_job` in Python, and
-`Admin.GetJob` in Go, as each example does. A settled job reports its state and its result. Until
+Read the task back by its identifier: `Admin.getTask` in TypeScript, `Admin.get_task` in Python, and
+`Admin.GetTask` in Go, as each example does. A settled task reports its state and its result. Until
 then it reports the state it is in, which is how you tell a slow worker from a missing one.
 
 ## Next
 
-- [Enqueue a job](/docs/enqueue.md) — every transaction and routing option
+- [Enqueue a task](/docs/enqueue.md) — every transaction and routing option
 - [Workers](/docs/workers.md) — run handlers continuously in production
 - [Agent workflows](/docs/agentic-flow.md) — compose durable model, tool, timer, and approval boundaries
 

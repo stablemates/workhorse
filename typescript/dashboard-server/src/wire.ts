@@ -33,9 +33,9 @@ export interface DashboardSettingsPage {
       lagMs: number;
       lastRunAt: string | null;
     };
-    defaultHistoryRows: { jobEvents: number; attemptHistory: number };
-    defaultHistoryRowsCapped: { jobEvents: boolean; attemptHistory: boolean };
-    enqueueRate: { jobs: number; windowMs: number };
+    defaultHistoryRows: { taskEvents: number; attemptHistory: number };
+    defaultHistoryRowsCapped: { taskEvents: boolean; attemptHistory: boolean };
+    enqueueRate: { tasks: number; windowMs: number };
   };
   workers: Array<{
     id: string;
@@ -112,10 +112,10 @@ function numberDetail(details: Record<string, unknown>, key: string): number | n
 }
 
 /**
- * Read the safe deduplication evidence from one recorded job event.
+ * Read the safe deduplication evidence from one recorded task event.
  *
  * Returns null for every event that is not the initial `enqueued` event and for every `enqueued`
- * event that carries no idempotency metadata, so an unkeyed job produces no idempotency surface at
+ * event that carries no idempotency metadata, so an unkeyed task produces no idempotency surface at
  * all. A structurally incomplete record is also treated as absent rather than partially rendered,
  * because a half-populated claim about deduplication would be worse than saying nothing.
  */
@@ -242,7 +242,7 @@ export type DashboardRedriveStatus = RedriveStatus;
  */
 export interface DashboardRedriveCursor {
   finishedAt: string;
-  jobId: string;
+  taskId: string;
 }
 
 export interface DashboardQueueRow {
@@ -339,7 +339,7 @@ export interface DashboardManagedQueueRow {
   rateLimitPolicy: DashboardRateLimitPolicySummary | null;
 }
 
-export interface DashboardJobRow extends Record<string, unknown> {
+export interface DashboardTaskRow extends Record<string, unknown> {
   id: string;
   queue: string;
   type: string;
@@ -348,10 +348,10 @@ export interface DashboardJobRow extends Record<string, unknown> {
   /** Why this live task cannot enter dispatch. Null for every non-blocked task. */
   blockedReason: "prerequisite_pending" | null;
   /** Unresolved prerequisite identities which currently keep this task blocked. */
-  prerequisiteJobIds: string[];
+  prerequisiteTaskIds: string[];
   attempt: number;
   maxAttempts: number;
-  /** Retry scheduling persisted with the job identity. Null means the default SQL-owned backoff. */
+  /** Retry scheduling persisted with the task identity. Null means the default SQL-owned backoff. */
   retryPolicy: RetryPolicy | null;
   deadlineAt?: string | null;
   executionTimeoutMs?: number | null;
@@ -430,10 +430,10 @@ export interface DashboardWorkerRow {
   hostname: string | null;
   pid: number | null;
   /**
-   * Jobs PostgreSQL currently reports as active for this worker. It is observed durable state and
+   * Tasks PostgreSQL currently reports as active for this worker. It is observed durable state and
    * can briefly differ from `activeSlots`, which is the in-process handler count.
    */
-  activeJobs: number;
+  activeTasks: number;
   /** Declared execution slots, or null when the worker has no durable registration. */
   concurrency: number | null;
   /** Handlers the worker reported executing at its last registration refresh. */
@@ -531,7 +531,7 @@ export interface DashboardTasksPage {
   filter: DashboardTaskFilter;
   queue: string | null;
   worker: string | null;
-  jobType: string | null;
+  taskType: string | null;
   priority: number | null;
   sort: DashboardTaskSort;
   tags: string[];
@@ -539,7 +539,7 @@ export interface DashboardTasksPage {
   page: number;
   pageSize: number;
   total: number;
-  jobs: DashboardJobRow[];
+  tasks: DashboardTaskRow[];
 }
 
 /** A stable ordering tuple, retaining database timestamp precision. */
@@ -559,7 +559,7 @@ export interface DashboardTasksCursorPage extends Omit<DashboardTasksPage, "tota
 export interface DashboardTaskFacets {
   queues: string[];
   workers: string[];
-  jobTypes: string[];
+  taskTypes: string[];
   tags: string[];
 }
 
@@ -640,9 +640,9 @@ export interface DashboardSystemFailingType {
 
 /** Retention categories exposed by `Queue.health()`, ordered from identity outward. */
 export type DashboardRetentionCategory =
-  | "jobIdentity"
+  | "taskIdentity"
   | "terminalOutcome"
-  | "jobEvents"
+  | "taskEvents"
   | "attemptHistory"
   | "scheduleOccurrences"
   | "statistics";
@@ -668,10 +668,10 @@ export interface DashboardSystemRetention {
   oldestRetainedAt: string | null;
   oldestRetainedCategory: DashboardRetentionCategory | null;
   /** Daily history partitions already past their cutoff but not yet dropped. */
-  eligibleHistoryPartitions: { jobEvents: number; attemptHistory: number };
+  eligibleHistoryPartitions: { taskEvents: number; attemptHistory: number };
   /** Cumulative rows that landed in the catch-all partitions; never window-scoped. */
-  defaultHistoryRows: { jobEvents: number; attemptHistory: number };
-  defaultHistoryRowsCapped: { jobEvents: boolean; attemptHistory: boolean };
+  defaultHistoryRows: { taskEvents: number; attemptHistory: number };
+  defaultHistoryRowsCapped: { taskEvents: boolean; attemptHistory: boolean };
 }
 
 /** One relation an operator can reason about, with partitioned children already folded in. */
@@ -774,13 +774,13 @@ export interface DashboardWorkersPage {
 }
 
 /**
- * Lifecycle event names `workhorse.job_event` records.
+ * Lifecycle event names `workhorse.task_event` records.
  *
  * Declared here rather than discovered with a `DISTINCT` scan: the set is fixed by the SQL that
  * writes it, and a filter list built from observed rows would silently lose an option whenever the
  * chosen window happens to contain none of that kind.
  */
-export const dashboardJobEventTypes = [
+export const dashboardTaskEventTypes = [
   "enqueued",
   "debounced",
   "debounce_rejected",
@@ -822,7 +822,7 @@ export const dashboardJobEventTypes = [
   "human_wait_replayed",
   "human_wait_rejected",
 ] as const;
-export type DashboardJobEventType = (typeof dashboardJobEventTypes)[number];
+export type DashboardTaskEventType = (typeof dashboardTaskEventTypes)[number];
 
 /** Terminal outcomes `workhorse.attempt_history` records, constrained by a CHECK in the schema. */
 export const dashboardAttemptOutcomes = [
@@ -843,10 +843,10 @@ export type DashboardAttemptOutcome = (typeof dashboardAttemptOutcomes)[number];
  * vocabulary. Naming the union once keeps a filter that survived parsing from having to be
  * re-checked before it is sent.
  */
-export type DashboardEventTypeFilter = DashboardJobEventType | DashboardAttemptOutcome;
+export type DashboardEventTypeFilter = DashboardTaskEventType | DashboardAttemptOutcome;
 
-/** The demonstration jobs a demo host can enqueue from the dashboard. */
-export type DashboardDemoJobKind =
+/** The demonstration tasks a demo host can enqueue from the dashboard. */
+export type DashboardDemoTaskKind =
   | "success"
   | "retry"
   | "durable"
@@ -878,7 +878,7 @@ export type DashboardDemoFeature =
   | "timing-controls"
   | "cancellation"
   | "dead-letters-redrive"
-  | "job-dependencies"
+  | "task-dependencies"
   | "child-workflows"
   | "signals"
   | "human-decisions"
@@ -903,15 +903,15 @@ export interface DashboardEventRow {
   id: string;
   kind: DashboardEventKind;
   recordId: string;
-  jobId: string;
+  taskId: string;
   /**
-   * Queue and type of the job this row belongs to, or null once that job has been retained away.
+   * Queue and type of the task this row belongs to, or null once that task has been retained away.
    *
-   * History outlives the `job` row it describes, so the feed reports the orphan rather than
-   * dropping it: a deleted job is exactly the case an operator is trying to see.
+   * History outlives the `task` row it describes, so the feed reports the orphan rather than
+   * dropping it: a deleted task is exactly the case an operator is trying to see.
    */
   queue: string | null;
-  jobType: string | null;
+  taskType: string | null;
   occurredAt: string;
   attempt: number | null;
   /** Lifecycle event name for `event` rows; the attempt outcome for `attempt` rows. */
@@ -961,7 +961,7 @@ export interface DashboardEventsPage {
    * The feed can only reach as far back as the partitions retention still keeps, so the depth is
    * shown rather than left for an operator to infer from a feed that simply stops.
    */
-  retention: { jobEventDays: number | null; attemptHistoryDays: number | null };
+  retention: { taskEventDays: number | null; attemptHistoryDays: number | null };
 }
 
 export interface DashboardMetricBucket {
@@ -974,7 +974,7 @@ export interface DashboardMetricBucket {
   averageDurationMs: number | null;
 }
 
-export interface DashboardJobDetail {
+export interface DashboardTaskDetail {
   tags: string[];
   humanWait: DashboardHumanWaitSummary | null;
   canCompleteHumanWait: boolean;
@@ -985,7 +985,7 @@ export interface DashboardJobDetail {
     priority: number;
     state: string;
     createdAt: string;
-    /** Retry scheduling persisted with the job identity. Null means the default SQL-owned backoff. */
+    /** Retry scheduling persisted with the task identity. Null means the default SQL-owned backoff. */
     retryPolicy: RetryPolicy | null;
     maxAttempts: number;
     deadlineAt?: string | null;
@@ -996,9 +996,9 @@ export interface DashboardJobDetail {
      */
     concurrencyKey: string | null;
     /** Stable prerequisite identity, or null when this task has no dependency. */
-    prerequisiteJobId: string | null;
+    prerequisiteTaskId: string | null;
     /** Stable prerequisite identities in deterministic order. */
-    prerequisiteJobIds: string[];
+    prerequisiteTaskIds: string[];
     /** Terminal outcome policy shared by every prerequisite edge. */
     dependencyPolicy: {
       onSuccess: "release" | "cancel" | "fail";
@@ -1012,8 +1012,8 @@ export interface DashboardJobDetail {
   };
   dependencyLineage: {
     records: Array<{
-      dependentJobId: string;
-      prerequisiteJobId: string;
+      dependentTaskId: string;
+      prerequisiteTaskId: string;
       onSuccess: "release" | "cancel" | "fail";
       onFailure: "release" | "cancel" | "fail";
       onCancellation: "release" | "cancel" | "fail";
@@ -1025,8 +1025,8 @@ export interface DashboardJobDetail {
   };
   childLineage: {
     records: Array<{
-      parentJobId: string;
-      childJobId: string;
+      parentTaskId: string;
+      childTaskId: string;
       name: string;
       type: string;
       createdAt: string;
@@ -1038,8 +1038,8 @@ export interface DashboardJobDetail {
   };
   redriveLineage: {
     records: Array<{
-      sourceJobId: string;
-      targetJobId: string;
+      sourceTaskId: string;
+      targetTaskId: string;
       requestedBy: string;
       reason: string;
       requestIdPreview: string;
@@ -1156,9 +1156,9 @@ export interface DashboardJobDetail {
 }
 
 export interface DashboardHumanWaitRow {
-  jobId: string;
+  taskId: string;
   queue: string;
-  jobType: string;
+  taskType: string;
   name: string;
   context: unknown;
   attempt: number;
@@ -1168,9 +1168,9 @@ export interface DashboardHumanWaitRow {
 }
 
 export interface DashboardSignalWaitRow {
-  jobId: string;
+  taskId: string;
   queue: string;
-  jobType: string;
+  taskType: string;
   name: string;
   attempt: number;
   createdAt: string;

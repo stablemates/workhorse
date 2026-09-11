@@ -3,7 +3,7 @@
 Install the public beta with `go get github.com/stablemates/workhorse/go`, then set
 `WORKHORSE_DATABASE_URL` to a database where the Workhorse schema is installed.
 
-- `transaction` enqueues a retryable job inside an application-owned pgx transaction.
+- `transaction` enqueues a retryable task inside an application-owned pgx transaction.
 - `dedicated-worker` runs a supervised worker with checkpoints, a durable timer, bounded concurrency,
   and signal-driven drain.
 - `orchestration` shows child joins, signal waits, and human decisions. Another process supplies

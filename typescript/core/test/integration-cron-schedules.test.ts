@@ -81,7 +81,7 @@ describe("cron schedules", () => {
       {
         name: "pulse",
         schedule: "* * * * *",
-        job: { type: "recurring-cancel", payload: { value: 1 } },
+        task: { type: "recurring-cancel", payload: { value: 1 } },
       },
     ]);
     const [schedule] = await queue.schedules(["cancel-recurring"]);
@@ -101,13 +101,13 @@ describe("cron schedules", () => {
     );
     expect(secondId).not.toBeNull();
     expect(secondId).not.toBe(firstId);
-    expect(await admin.getJob(secondId!)).toMatchObject({ state: "ready" });
+    expect(await admin.getTask(secondId!)).toMatchObject({ state: "ready" });
     expect((await queue.schedules(["cancel-recurring"])).map((item) => item.name)).toEqual([
       "pulse",
     ]);
   });
 
-  it("includes canceled jobs in health counts", async () => {
+  it("includes canceled tasks in health counts", async () => {
     const canceledId = await queue.enqueue("health-canceled", null);
     await queue.cancel(canceledId);
     await queue.enqueue("health-ready", null);
@@ -124,13 +124,13 @@ describe("cron schedules", () => {
     });
   });
 
-  it("propagates concurrency keys from recurring schedules into fired jobs", async () => {
+  it("propagates concurrency keys from recurring schedules into fired tasks", async () => {
     const namespace = `keyed-schedule-${randomUUID()}`;
     await queue.syncSchedules(namespace, [
       {
         name: "keyed",
         schedule: "0 * * * *",
-        job: {
+        task: {
           type: "scheduled-keyed",
           payload: { scheduled: true },
           concurrencyKey: "tenant-scheduled",
@@ -138,13 +138,13 @@ describe("cron schedules", () => {
       },
     ]);
     const stored = (await queue.schedules([namespace]))[0]!;
-    const jobId = await queue.fireSchedule(
+    const taskId = await queue.fireSchedule(
       namespace,
       stored.name,
       stored.revision,
       new Date("2026-08-11T03:00:00Z"),
     );
-    await expect(admin.getJob(jobId!)).resolves.toMatchObject({
+    await expect(admin.getTask(taskId!)).resolves.toMatchObject({
       concurrencyKey: "tenant-scheduled",
     });
   });
@@ -155,7 +155,7 @@ describe("cron schedules", () => {
         name: "daily-report",
         schedule: "0 6 * * *",
         timezone: "America/New_York",
-        job: {
+        task: {
           type: "generate-report",
           payload: { scope: "daily" },
           queue: "reports",
@@ -166,14 +166,14 @@ describe("cron schedules", () => {
         name: "disabled-cleanup",
         schedule: "0 2 * * 0",
         enabled: false,
-        job: { type: "cleanup", payload: null },
+        task: { type: "cleanup", payload: null },
       },
     ]);
 
     expect(
       (
         await pool.query(
-          `SELECT schedule_name, cron_expression, timezone, queue_name, job_type, payload, max_attempts,
+          `SELECT schedule_name, cron_expression, timezone, queue_name, task_type, payload, max_attempts,
                   enabled, revision::text
              FROM workhorse.schedule_definition
             WHERE namespace = 'integration'
@@ -186,7 +186,7 @@ describe("cron schedules", () => {
         cron_expression: "0 6 * * *",
         timezone: "America/New_York",
         queue_name: "reports",
-        job_type: "generate-report",
+        task_type: "generate-report",
         payload: { scope: "daily" },
         max_attempts: 5,
         enabled: true,
@@ -197,7 +197,7 @@ describe("cron schedules", () => {
         cron_expression: "0 2 * * 0",
         timezone: "UTC",
         queue_name: "default",
-        job_type: "cleanup",
+        task_type: "cleanup",
         payload: null,
         max_attempts: 25,
         enabled: false,
@@ -209,7 +209,7 @@ describe("cron schedules", () => {
       {
         name: "other-report",
         schedule: "0 8 * * *",
-        job: { type: "other-report", payload: {} },
+        task: { type: "other-report", payload: {} },
       },
     ]);
     await queue.syncSchedules("integration", [
@@ -217,7 +217,7 @@ describe("cron schedules", () => {
         name: "daily-report",
         schedule: "30 6 * * *",
         timezone: "America/New_York",
-        job: { type: "generate-report", payload: { scope: "changed" }, queue: "reports" },
+        task: { type: "generate-report", payload: { scope: "changed" }, queue: "reports" },
       },
     ]);
 
@@ -255,7 +255,7 @@ describe("cron schedules", () => {
         {
           name: "invalid",
           schedule: "every sometime",
-          job: { type: "invalid", payload: {} },
+          task: { type: "invalid", payload: {} },
         },
       ]),
     ).rejects.toThrow(/invalid cron expression/);
@@ -273,19 +273,19 @@ describe("cron schedules", () => {
           {
             name: "invalid-priority",
             schedule: "0 * * * *",
-            job: { type: "invalid-priority", payload: null, priority },
+            task: { type: "invalid-priority", payload: null, priority },
           },
         ]),
       ).rejects.toThrow("priority must be an integer between 0 and 100");
     },
   );
 
-  it("lets workers coordinate recurring occurrences without duplicate jobs", async () => {
+  it("lets workers coordinate recurring occurrences without duplicate tasks", async () => {
     await queue.syncSchedules("integration", [
       {
         name: "heartbeat",
         schedule: "* * * * * *",
-        job: { type: "cron-tick", payload: { source: "worker" } },
+        task: { type: "cron-tick", payload: { source: "worker" } },
       },
     ]);
     const occurrenceAt = new Date(Math.floor(Date.now() / 1_000) * 1_000);
@@ -310,7 +310,7 @@ describe("cron schedules", () => {
       ).rows[0]?.count,
     ).toBe(1);
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0]?.count,
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.task")).rows[0]?.count,
     ).toBe(1);
   });
 
@@ -319,7 +319,7 @@ describe("cron schedules", () => {
       {
         name: "heartbeat",
         schedule: "* * * * * *",
-        job: { type: "cron-adjacent", payload: null },
+        task: { type: "cron-adjacent", payload: null },
       },
     ]);
     const firstOccurrenceAt = new Date(Math.floor(Date.now() / 1_000) * 1_000);
@@ -349,7 +349,7 @@ describe("cron schedules", () => {
       secondOccurrenceAt.toISOString(),
     ]);
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0]?.count,
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.task")).rows[0]?.count,
     ).toBe(2);
   });
 
@@ -358,14 +358,14 @@ describe("cron schedules", () => {
       {
         name: "heartbeat-a",
         schedule: "* * * * * *",
-        job: { type: "cron-a", payload: null, queue: "schedule-a" },
+        task: { type: "cron-a", payload: null, queue: "schedule-a" },
       },
     ]);
     await queue.syncSchedules("integration-b", [
       {
         name: "heartbeat-b",
         schedule: "* * * * * *",
-        job: { type: "cron-b", payload: null, queue: "schedule-b" },
+        task: { type: "cron-b", payload: null, queue: "schedule-b" },
       },
     ]);
     const first = new Worker(queue, {
@@ -394,7 +394,7 @@ describe("cron schedules", () => {
       {
         name: "hashed-minute",
         schedule: "H * * * *",
-        job: { type: "cron-tick", payload: {} },
+        task: { type: "cron-tick", payload: {} },
       },
     ]);
     const worker = new Worker(queue, {
@@ -417,7 +417,7 @@ describe("cron schedules", () => {
       {
         name: "revision-fence",
         schedule: "0 * * * *",
-        job: { type: "old", payload: { revision: 1 } },
+        task: { type: "old", payload: { revision: 1 } },
       },
     ]);
     const [oldDefinition] = await queue.schedules(["integration"]);
@@ -425,7 +425,7 @@ describe("cron schedules", () => {
       {
         name: "revision-fence",
         schedule: "30 * * * *",
-        job: { type: "new", payload: { revision: 2 } },
+        task: { type: "new", payload: { revision: 2 } },
       },
     ]);
 
@@ -438,7 +438,7 @@ describe("cron schedules", () => {
       ),
     ).toBeNull();
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0]?.count,
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.task")).rows[0]?.count,
     ).toBe(0);
   });
 
@@ -447,7 +447,7 @@ describe("cron schedules", () => {
       {
         name: "hourly-rollup",
         schedule: "0 * * * *",
-        job: { type: "rollup", payload: { scope: "hourly" } },
+        task: { type: "rollup", payload: { scope: "hourly" } },
       },
     ]);
     const [definition] = await queue.schedules(["integration"]);
@@ -459,7 +459,7 @@ describe("cron schedules", () => {
 
     expect(results.filter(Boolean)).toHaveLength(1);
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0]?.count,
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.task")).rows[0]?.count,
     ).toBe(1);
     expect(
       (
@@ -475,7 +475,7 @@ describe("cron schedules", () => {
       {
         name: "serialized-hourly-rollup",
         schedule: "0 * * * *",
-        job: { type: "rollup", payload: { scope: "hourly" } },
+        task: { type: "rollup", payload: { scope: "hourly" } },
       },
     ]);
     const [definition] = await queue.schedules(["integration"]);
@@ -497,7 +497,7 @@ describe("cron schedules", () => {
     expect(firstId).not.toBeNull();
     expect(replayedId).toBeNull();
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0]?.count,
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.task")).rows[0]?.count,
     ).toBe(1);
   });
 
@@ -506,7 +506,7 @@ describe("cron schedules", () => {
       {
         name: "overlapping-hourly-rollup",
         schedule: "0 * * * *",
-        job: { type: "rollup", payload: { scope: "hourly" } },
+        task: { type: "rollup", payload: { scope: "hourly" } },
       },
     ]);
     const [definition] = await queue.schedules(["integration"]);
@@ -539,7 +539,7 @@ describe("cron schedules", () => {
     }
 
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0]?.count,
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.task")).rows[0]?.count,
     ).toBe(1);
   });
 
@@ -548,7 +548,7 @@ describe("cron schedules", () => {
       {
         name: "daily-report",
         schedule: "0 8 * * *",
-        job: { type: "report", payload: { scope: "daily" } },
+        task: { type: "report", payload: { scope: "daily" } },
       },
     ]);
     const scheduleBefore = await pool.query(
@@ -557,7 +557,7 @@ describe("cron schedules", () => {
         WHERE namespace = 'integration' AND schedule_name = 'daily-report'`,
     );
     const originalRunAt = new Date(Date.now() + 3_600_000);
-    const jobId = await queue.enqueue(
+    const taskId = await queue.enqueue(
       "manual-release",
       {},
       {
@@ -567,19 +567,19 @@ describe("cron schedules", () => {
     );
     const requestedAt = Date.now();
 
-    const runNowAudit = adminAudit("run scheduled job");
-    await expect(admin.runTaskNow(jobId, runNowAudit)).resolves.toMatchObject({
+    const runNowAudit = adminAudit("run scheduled task");
+    await expect(admin.runTaskNow(taskId, runNowAudit)).resolves.toMatchObject({
       status: "released",
-      jobId,
+      taskId,
       state: "ready",
       runAt: expect.any(Date),
     });
-    const released = await admin.getJob(jobId);
+    const released = await admin.getTask(taskId);
     expect(released).toMatchObject({ state: "ready" });
     expect(released!.runAt.getTime()).toBeGreaterThanOrEqual(requestedAt);
     expect(released!.runAt.getTime()).toBeLessThan(originalRunAt.getTime());
     await expect(
-      admin.runTaskNow(jobId, adminAudit("repeat immediate run")),
+      admin.runTaskNow(taskId, adminAudit("repeat immediate run")),
     ).resolves.toMatchObject({
       status: "already_ready",
       state: "ready",
@@ -587,9 +587,9 @@ describe("cron schedules", () => {
     });
     await expect(
       pool.query(
-        `SELECT attempt, event_type, details FROM workhorse.job_event
-          WHERE job_id = $1 AND event_type = 'promoted'`,
-        [jobId],
+        `SELECT attempt, event_type, details FROM workhorse.task_event
+          WHERE task_id = $1 AND event_type = 'promoted'`,
+        [taskId],
       ),
     ).resolves.toMatchObject({
       rows: [
@@ -619,16 +619,16 @@ describe("cron schedules", () => {
     await queue.scheduleWait(claimed!, "wait-worker", "approval", {
       wakeAt: new Date(Date.now() + 3_600_000),
     });
-    const waitingBefore = await admin.getJob(waitingId);
+    const waitingBefore = await admin.getTask(waitingId);
     await expect(
-      admin.runTaskNow(waitingId, adminAudit("reject waiting job")),
+      admin.runTaskNow(waitingId, adminAudit("reject waiting task")),
     ).resolves.toMatchObject({
       status: "waiting",
-      jobId: waitingId,
+      taskId: waitingId,
       state: "scheduled",
       runAt: waitingBefore!.runAt,
     });
-    await expect(admin.getJob(waitingId)).resolves.toMatchObject({
+    await expect(admin.getTask(waitingId)).resolves.toMatchObject({
       state: "scheduled",
       runAt: waitingBefore!.runAt,
     });
@@ -638,17 +638,17 @@ describe("cron schedules", () => {
     expect(terminalClaim?.id).toBe(terminalId);
     expect(await queue.complete(terminalClaim!, "terminal-worker", { ok: true })).toBe(true);
     await expect(
-      admin.runTaskNow(terminalId, adminAudit("reject terminal job")),
+      admin.runTaskNow(terminalId, adminAudit("reject terminal task")),
     ).resolves.toMatchObject({
       status: "not_scheduled",
-      jobId: terminalId,
+      taskId: terminalId,
       state: "succeeded",
     });
     await expect(
-      admin.runTaskNow("00000000-0000-4000-8000-000000000099", adminAudit("run missing job")),
+      admin.runTaskNow("00000000-0000-4000-8000-000000000099", adminAudit("run missing task")),
     ).resolves.toEqual({
       status: "not_found",
-      jobId: "00000000-0000-4000-8000-000000000099",
+      taskId: "00000000-0000-4000-8000-000000000099",
       state: null,
       runAt: null,
     });

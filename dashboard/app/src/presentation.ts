@@ -3,9 +3,9 @@ import type {
   DashboardCancellationRequest,
   DashboardCancelStatus,
   DashboardDemoFeature,
-  DashboardDemoJobKind,
+  DashboardDemoTaskKind,
   DashboardDemoScenario,
-  DashboardJobRow,
+  DashboardTaskRow,
   DashboardHumanWaitRow,
   DashboardRedriveStatus,
   DashboardRunNowStatus,
@@ -38,8 +38,8 @@ export function orderHumanWaits(
 
 interface ExternalWaitIdentity {
   name: string;
-  jobId: string;
-  jobType: string;
+  taskId: string;
+  taskType: string;
   queue: string;
   deadlineAt: string;
 }
@@ -52,7 +52,7 @@ export function filterExternalWaits<TWait extends ExternalWaitIdentity>(
   return waits.filter((wait) => {
     if (options.overdueOnly && Date.parse(wait.deadlineAt) > options.nowMs) return false;
     if (!query) return true;
-    return [wait.name, wait.jobId, wait.jobType, wait.queue].some((value) =>
+    return [wait.name, wait.taskId, wait.taskType, wait.queue].some((value) =>
       value.toLowerCase().includes(query),
     );
   });
@@ -104,7 +104,7 @@ export function humanWaitResultsDirty(results: Readonly<Record<string, string>>)
   return Object.values(results).some((result) => result.trim().length > 0);
 }
 
-const demoJobKinds = [
+const demoTaskKinds = [
   "success",
   "retry",
   "durable",
@@ -115,10 +115,10 @@ const demoJobKinds = [
   "redrive",
   "feature",
 ] as const;
-export const dashboardDemoJobKinds: CompleteDashboardOptions<
-  DashboardDemoJobKind,
-  typeof demoJobKinds
-> = demoJobKinds;
+export const dashboardDemoTaskKinds: CompleteDashboardOptions<
+  DashboardDemoTaskKind,
+  typeof demoTaskKinds
+> = demoTaskKinds;
 
 const demoScenarios = ["order-fulfillment", "customer-onboarding", "report-publication"] as const;
 export const dashboardDemoScenarios: CompleteDashboardOptions<
@@ -135,7 +135,7 @@ const demoFeatures = [
   "timing-controls",
   "cancellation",
   "dead-letters-redrive",
-  "job-dependencies",
+  "task-dependencies",
   "child-workflows",
   "signals",
   "human-decisions",
@@ -163,7 +163,7 @@ const demoFeatureLabels: Record<DashboardDemoFeature, string> = {
   "timing-controls": "Timing · completes within its budgets",
   cancellation: "Cancellation · cooperative self-cancel",
   "dead-letters-redrive": "Dead letter · fresh failure to redrive",
-  "job-dependencies": "Dependencies · prerequisite then dependent",
+  "task-dependencies": "Dependencies · prerequisite then dependent",
   "child-workflows": "Child workflow · parent awaiting one child",
   signals: "Signal · waits for an operator delivery",
   "human-decisions": "Human decision · refund approval",
@@ -499,7 +499,7 @@ export const redriveAtLeastOnceWarning =
 /** Which dead letters a filtered redrive would act on, and whether this view can ask for one. */
 export interface RedriveSelection {
   queue: string | null;
-  jobType: string | null;
+  taskType: string | null;
   tags: string[];
   /** What the request would select, as one phrase naming every filter it applies. */
   selected: string;
@@ -518,7 +518,7 @@ export interface RedriveSelection {
 export function describeRedriveSelection(view: {
   filter: DashboardTaskFilter;
   queue: string | null;
-  jobType: string | null;
+  taskType: string | null;
   worker: string | null;
   priority: number | null;
   search: string | null;
@@ -531,12 +531,12 @@ export function describeRedriveSelection(view: {
   ].filter((name) => name !== null);
   const clauses = [
     view.queue === null ? null : `in queue ${view.queue}`,
-    view.jobType === null ? null : `of type ${view.jobType}`,
+    view.taskType === null ? null : `of type ${view.taskType}`,
     view.tags.length === 0 ? null : `tagged ${view.tags.join(", ")}`,
   ].filter((clause) => clause !== null);
   return {
     queue: view.queue,
-    jobType: view.jobType,
+    taskType: view.taskType,
     tags: [...view.tags],
     selected: clauses.length === 0 ? "every dead letter" : `every dead letter ${clauses.join(" ")}`,
     unavailable:
@@ -727,17 +727,17 @@ export interface TaskRowActionGroup {
  * `Queue.cancel` delivers, and it never offers a one-click cancel: the item opens a confirmation dialog
  * where the irreversibility is stated and an optional reason is recorded.
  */
-function cancelRowAction(job: TaskActionTarget): TaskRowAction {
+function cancelRowAction(task: TaskActionTarget): TaskRowAction {
   const destructive = true;
-  if (isTerminalTaskState(job.state)) {
+  if (isTerminalTaskState(task.state)) {
     return {
       id: "cancel",
       label: "Cancel task",
-      unavailable: `Because this task finished as ${job.state}, Workhorse cannot change its outcome.`,
+      unavailable: `Because this task finished as ${task.state}, Workhorse cannot change its outcome.`,
       destructive,
     };
   }
-  if (job.cancellation !== null) {
+  if (task.cancellation !== null) {
     return {
       id: "cancel",
       label: "Cancellation requested",
@@ -746,18 +746,18 @@ function cancelRowAction(job: TaskActionTarget): TaskRowAction {
       destructive,
     };
   }
-  if (job.state === "active") {
+  if (task.state === "active") {
     return { id: "cancel", label: "Request cancellation…", unavailable: null, destructive };
   }
-  if (job.state === "scheduled") {
+  if (task.state === "scheduled") {
     return {
       id: "cancel",
-      label: job.waitName === null ? "Cancel scheduled task…" : "Cancel task at wait…",
+      label: task.waitName === null ? "Cancel scheduled task…" : "Cancel task at wait…",
       unavailable: null,
       destructive,
     };
   }
-  if (job.state === "ready") {
+  if (task.state === "ready") {
     return { id: "cancel", label: "Cancel queued task…", unavailable: null, destructive };
   }
   return {
@@ -778,7 +778,7 @@ function cancelRowAction(job: TaskActionTarget): TaskRowAction {
  * resumed. Every refusal names its reason so the operator learns it here rather than from a menu
  * item that is simply dim.
  */
-function runNowRowAction(job: TaskActionTarget, supported: boolean): TaskRowAction {
+function runNowRowAction(task: TaskActionTarget, supported: boolean): TaskRowAction {
   const destructive = false;
   if (!supported) {
     return {
@@ -788,15 +788,15 @@ function runNowRowAction(job: TaskActionTarget, supported: boolean): TaskRowActi
       destructive,
     };
   }
-  if (isTerminalTaskState(job.state)) {
+  if (isTerminalTaskState(task.state)) {
     return {
       id: "run-now",
       label: "Run now",
-      unavailable: `Because this task finished as ${job.state}, it has no start time to move.`,
+      unavailable: `Because this task finished as ${task.state}, it has no start time to move.`,
       destructive,
     };
   }
-  if (job.cancellation !== null) {
+  if (task.cancellation !== null) {
     return {
       id: "run-now",
       label: "Run now",
@@ -805,7 +805,7 @@ function runNowRowAction(job: TaskActionTarget, supported: boolean): TaskRowActi
       destructive,
     };
   }
-  if (job.state === "active") {
+  if (task.state === "active") {
     return {
       id: "run-now",
       label: "Run now",
@@ -813,7 +813,7 @@ function runNowRowAction(job: TaskActionTarget, supported: boolean): TaskRowActi
       destructive,
     };
   }
-  if (job.state === "ready") {
+  if (task.state === "ready") {
     return {
       id: "run-now",
       label: "Run now",
@@ -821,12 +821,12 @@ function runNowRowAction(job: TaskActionTarget, supported: boolean): TaskRowActi
       destructive,
     };
   }
-  if (job.state === "scheduled") {
-    if (job.waitName !== null || job.wait !== null) {
+  if (task.state === "scheduled") {
+    if (task.waitName !== null || task.wait !== null) {
       return {
         id: "run-now",
         label: "Run now",
-        unavailable: `The handler requested the durable wait ${job.waitName ?? job.wait!.name}, so the dashboard cannot shorten it.`,
+        unavailable: `The handler requested the durable wait ${task.waitName ?? task.wait!.name}, so the dashboard cannot shorten it.`,
         destructive,
       };
     }
@@ -847,16 +847,16 @@ function runNowRowAction(job: TaskActionTarget, supported: boolean): TaskRowActi
  * label says "as a new task" everywhere it appears, because redrive never restarts the failure an
  * operator is looking at: the original stays failed and a copy is enqueued beside it.
  */
-function redriveRowAction(job: TaskActionTarget): TaskRowAction {
+function redriveRowAction(task: TaskActionTarget): TaskRowAction {
   const destructive = false;
-  if (job.state === "failed") {
+  if (task.state === "failed") {
     return { id: "redrive", label: "Redrive as a new task…", unavailable: null, destructive };
   }
-  if (isTerminalTaskState(job.state)) {
+  if (isTerminalTaskState(task.state)) {
     return {
       id: "redrive",
       label: "Redrive as a new task",
-      unavailable: `Only a task that finished as failed is a dead letter, and this one is ${job.state}.`,
+      unavailable: `Only a task that finished as failed is a dead letter, and this one is ${task.state}.`,
       destructive,
     };
   }
@@ -868,9 +868,9 @@ function redriveRowAction(job: TaskActionTarget): TaskRowAction {
   };
 }
 
-function completeHumanWaitRowAction(job: TaskActionTarget, supported: boolean): TaskRowAction {
-  const quickAction = job.humanWait ? humanWaitQuickAction(job.humanWait.context) : null;
-  if (!job.humanWait) {
+function completeHumanWaitRowAction(task: TaskActionTarget, supported: boolean): TaskRowAction {
+  const quickAction = task.humanWait ? humanWaitQuickAction(task.humanWait.context) : null;
+  if (!task.humanWait) {
     return {
       id: "complete-human-wait",
       label: "Complete human decision",
@@ -901,7 +901,7 @@ function completeHumanWaitRowAction(job: TaskActionTarget, supported: boolean): 
  * rather than by quietly dropping an item.
  */
 export type TaskActionTarget = Pick<
-  DashboardJobRow,
+  DashboardTaskRow,
   | "id"
   | "type"
   | "queue"
@@ -932,10 +932,10 @@ export interface TaskRowActionCapabilities {
  * limit rather than as a missing feature.
  */
 export function taskRowActionGroups(
-  job: TaskActionTarget,
+  task: TaskActionTarget,
   capabilities: TaskRowActionCapabilities = { runNow: true, completeHumanWait: true },
 ): TaskRowActionGroup[] {
-  const worker = job.workerId ?? job.lastWorkerId;
+  const worker = task.workerId ?? task.lastWorkerId;
   return [
     {
       label: "Task",
@@ -946,7 +946,7 @@ export function taskRowActionGroups(
           id: "copy-args",
           label: "Copy input",
           unavailable:
-            job.payload === undefined || job.payload === null
+            task.payload === undefined || task.payload === null
               ? "This task stored no input, so there is nothing to copy."
               : null,
           destructive: false,
@@ -956,10 +956,10 @@ export function taskRowActionGroups(
     {
       label: "Filter tasks",
       actions: [
-        { id: "filter-type", label: `Only ${job.type}`, unavailable: null, destructive: false },
+        { id: "filter-type", label: `Only ${task.type}`, unavailable: null, destructive: false },
         {
           id: "filter-queue",
-          label: `Only queue ${job.queue}`,
+          label: `Only queue ${task.queue}`,
           unavailable: null,
           destructive: false,
         },
@@ -977,10 +977,10 @@ export function taskRowActionGroups(
     {
       label: "Change task",
       actions: [
-        completeHumanWaitRowAction(job, capabilities.completeHumanWait !== false),
-        runNowRowAction(job, capabilities.runNow),
-        redriveRowAction(job),
-        cancelRowAction(job),
+        completeHumanWaitRowAction(task, capabilities.completeHumanWait !== false),
+        runNowRowAction(task, capabilities.runNow),
+        redriveRowAction(task),
+        cancelRowAction(task),
       ],
     },
   ];

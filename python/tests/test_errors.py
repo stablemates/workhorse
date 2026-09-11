@@ -67,7 +67,7 @@ class Connection:
     ],
 )
 def test_maps_structured_postgres_failures(sqlstate: str, exception_type: type[Exception]) -> None:
-    detail = {"jobId": "00000000-0000-4000-8000-000000000001", "ordinal": 1}
+    detail = {"taskId": "00000000-0000-4000-8000-000000000001", "ordinal": 1}
 
     with pytest.raises(exception_type) as raised:
         Queue(Connection(DatabaseError(sqlstate, detail))).enqueue("email.send", {"id": 1})

@@ -9,7 +9,7 @@ checks, so nothing you learn in one is wrong in the other.
 
 ## Looking around is always safe
 
-The inspection commands — `admin jobs`, `admin job`, `admin timeline`, `admin checkpoints`,
+The inspection commands — `admin tasks`, `admin task`, `admin timeline`, `admin checkpoints`,
 `admin waits`, `admin external-waits`, `admin failures`, `admin queues`, `admin schedules`,
 `admin workers`, `admin maintenance` — only read. You can run
 them against production without ceremony, the same way you would run `queue.health` from code.
@@ -20,36 +20,36 @@ object the TypeScript operator API returns — so a script that parses it is rea
 shape, not a private CLI format.
 
 ```sh
-workhorse admin failures --queue billing --json | jq '.items[].jobId'
+workhorse admin failures --queue billing --json | jq '.items[].taskId'
 ```
 
-`admin jobs`, `admin timeline`, and `admin failures` accept `--cursor` with the previous
+`admin tasks`, `admin timeline`, and `admin failures` accept `--cursor` with the previous
 answer's `nextCursor` object. Text output also prints that continuation. Keep the same filters
-when continuing; PostgreSQL rejects a job-list cursor used with different filters.
+when continuing; PostgreSQL rejects a task-list cursor used with different filters.
 
-To narrow an incident window, use `--created-after` and `--created-before` on jobs.
+To narrow an incident window, use `--created-after` and `--created-before` on tasks.
 Failure listings accept `--finished-after`, `--finished-before`, repeated `--tag`, and `--error-name`.
 Timestamp filters require a timezone and include the lower bound while excluding the upper bound.
 
-## Finding out what a stalled job is waiting on
+## Finding out what a stalled task is waiting on
 
 A durable handler can stop for a good reason. It saved a checkpoint and is between steps, or it
 is sleeping on a timer, or it is waiting for a person or an outside system to answer. From the
-outside all four look the same: a job that is not finishing.
+outside all four look the same: a task that is not finishing.
 
-Three reads separate them. `admin checkpoints <job-id>` shows the restart boundaries a handler
-already got past, so you can see how far it got before it stopped. `admin waits <job-id>` shows
+Three reads separate them. `admin checkpoints <task-id>` shows the restart boundaries a handler
+already got past, so you can see how far it got before it stopped. `admin waits <task-id>` shows
 its durable timer waits and when each one wakes. Both take `--name` when you already know which
 one you want.
 
-`admin external-waits` asks the fleet-wide version of the question: which jobs are waiting on
+`admin external-waits` asks the fleet-wide version of the question: which tasks are waiting on
 someone. It lists the pending human decisions and the pending signal waits together, oldest
 first, because the oldest boundary is usually the one closest to running out of time. A human
 decision carries the context its handler recorded, which is what the person deciding was meant
 to read.
 
 ```sh
-workhorse admin external-waits --json | jq '.human.items[] | {jobId, name, context}'
+workhorse admin external-waits --json | jq '.human.items[] | {taskId, name, context}'
 ```
 
 Long lists page. Each `--json` answer carries the continuation for its own list, and you hand
@@ -57,12 +57,12 @@ that object back on the next call. This is the same paging the dashboard does, s
 walk a busy queue's waits the same way.
 
 When you have the answer, `admin signal` delivers a signal and `admin complete-human` completes
-a [human decision](145-human-decisions.md). Both select a job and its wait with `--name`.
+a [human decision](145-human-decisions.md). Both select a task and its wait with `--name`.
 Pass the answer through `--payload-json` or `--payload-file`, and identify the delivery with
 `--request-id` and `--actor`.
 
 ```sh
-workhorse admin complete-human "$JOB_ID" --name approval --payload-file decision.json \
+workhorse admin complete-human "$TASK_ID" --name approval --payload-file decision.json \
   --request-id "$DELIVERY_ID" --actor oncall --env workhorse_production --yes
 ```
 
@@ -83,7 +83,7 @@ database's own name, and the client checks that claim against the database it ac
 If they disagree, nothing happens and the command tells you what it refused and why. There is no
 flag that skips this check.
 
-Confirmation is the second, separate gate. Interactively, you retype the job id, queue name, or
+Confirmation is the second, separate gate. Interactively, you retype the task id, queue name, or
 worker id you are about to affect. In a script, you pass `--yes` — the script author, not a
 default, decides the command may proceed unattended.
 
@@ -97,16 +97,16 @@ through the public `Admin` client — the CLI adds no separate semantics. Queue 
 also require a reason and retain the request's audit identity.
 
 `admin purge` is the one that empties a queue, and it deletes rather than cancels: it takes out
-that queue's waiting jobs and leaves the ones a worker is already running. Reach for it when a
+that queue's waiting tasks and leaves the ones a worker is already running. Reach for it when a
 backlog is poison and draining it by hand is not worth the incident. It carries the same
 idempotency identity as a redrive, so a retried runbook step re-reports the first purge instead of
 taking a second bite; reusing that identity with different audit fields is refused. The command
-answers with how many jobs it removed.
+answers with how many tasks it removed.
 
 ## Recovering a failed backlog
 
 `admin redrive-many` recovers a bounded page using the same filters as `admin failures`.
-Start with `--dry-run` to inspect eligible sources without creating jobs or audit records.
+Start with `--dry-run` to inspect eligible sources without creating tasks or audit records.
 A preview requires a reason but needs no environment confirmation.
 
 ```sh
@@ -133,7 +133,7 @@ be listening. A worker finds out on its next registration, and until then anyone
 
 ## The TUI is the same client with a refresh loop
 
-`workhorse tui` shows jobs, queues, schedules, failures, workers, and health as switchable views
+`workhorse tui` shows tasks, queues, schedules, failures, workers, and health as switchable views
 that refresh themselves. It is the "what is happening right now" tool: watch a backlog drain,
 watch workers come back after a deploy, see a failure count stop growing.
 

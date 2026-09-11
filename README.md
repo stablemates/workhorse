@@ -1,6 +1,6 @@
 # Workhorse
 
-A durable job queue for PostgreSQL, with TypeScript, Python, and Go workers on one SQL protocol.
+A durable task queue for PostgreSQL, with TypeScript, Python, and Go workers on one SQL protocol.
 
 Workhorse is versioned SQL functions inside the database you already run. Every language gets the
 same workers, the same durable waits, and the same dashboard, with no broker or server beside
@@ -19,10 +19,10 @@ PostgreSQL.
 
 ## Why Workhorse
 
-Applications often need a database change and a background job to succeed together. Workhorse
+Applications often need a database change and a background task to succeed together. Workhorse
 enqueues through the same PostgreSQL transaction, so a rollback cannot leave one without the other.
 
-PostgreSQL owns queue state, scheduling, retries, recovery, and immutable history. Workers claim jobs
+PostgreSQL owns queue state, scheduling, retries, recovery, and immutable history. Workers claim tasks
 with fence tokens, so a worker that resumes after losing its lease cannot overwrite newer work.
 
 Handlers receive at-least-once delivery. Workhorse records durable progress and outcomes, but external
@@ -45,7 +45,7 @@ schedules without making the queue's PostgreSQL tables part of your operator int
 Open the [live demo](https://demo.workhorse.run) to explore the dashboard, including recurring
 schedules and task details.
 
-## Run one job
+## Run one task
 
 Install the TypeScript package and its schema:
 
@@ -72,11 +72,11 @@ export async function runQuickstart(databaseUrl) {
       "welcome.send",
       async (payload) => ({ message: `Welcome, ${payload.name}!` }),
     );
-    const jobId = await queue.enqueue("welcome.send", { name: "Ada" });
+    const taskId = await queue.enqueue("welcome.send", { name: "Ada" });
     await worker.runOnce();
-    const job = await admin.getJob(jobId);
-    if (job?.state !== "succeeded") throw new Error(`Quickstart job finished in ${job?.state}`);
-    return { jobId, result: job.result };
+    const task = await admin.getTask(taskId);
+    if (task?.state !== "succeeded") throw new Error(`Quickstart task finished in ${task?.state}`);
+    return { taskId, result: task.result };
   } finally {
     await pool.end();
   }

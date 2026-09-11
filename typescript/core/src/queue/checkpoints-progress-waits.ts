@@ -1,12 +1,12 @@
 import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { expectOneRow, WorkhorseError } from "../errors.js";
-import { jobSpanAttributes, logDebug, logInfo } from "../telemetry.js";
-import type { ClaimedJob, JobCheckpoint, JobProgress, JobWait, Json } from "../types.js";
+import { taskSpanAttributes, logDebug, logInfo } from "../telemetry.js";
+import type { ClaimedTask, TaskCheckpoint, TaskProgress, TaskWait, Json } from "../types.js";
 import { MAX_WAIT_DURATION_MS } from "../types.js";
 import { QueueModule } from "./module-context.js";
 
 type CheckpointRow = {
-  job_id: string;
+  task_id: string;
   checkpoint_name: string;
   checkpoint_value: Json;
   attempt: number;
@@ -15,12 +15,12 @@ type CheckpointRow = {
   created_at: Date;
 };
 
-type SaveCheckpointRow = Omit<CheckpointRow, "job_id" | "checkpoint_name"> & {
+type SaveCheckpointRow = Omit<CheckpointRow, "task_id" | "checkpoint_name"> & {
   status: "saved" | "existing" | "conflict" | "stale";
 };
 
 export type ProgressRow = {
-  job_id: string;
+  task_id: string;
   progress_value: Json;
   revision: string;
   attempt: number;
@@ -30,15 +30,15 @@ export type ProgressRow = {
   updated_at: Date;
 };
 
-type UpdateProgressRow = Omit<ProgressRow, "job_id"> & {
+type UpdateProgressRow = Omit<ProgressRow, "task_id"> & {
   status: "updated" | "unchanged" | "rate_limited" | "stale";
   retry_after_ms: string | null;
 };
 
 type WaitRow = {
-  job_id: string;
+  task_id: string;
   wait_name: string;
-  mode: JobWait["mode"];
+  mode: TaskWait["mode"];
   duration_ms: string | null;
   requested_wake_at: Date | null;
   wake_at: Date;
@@ -48,7 +48,7 @@ type WaitRow = {
   created_at: Date;
 };
 
-type ScheduleWaitRow = Omit<WaitRow, "job_id"> & {
+type ScheduleWaitRow = Omit<WaitRow, "task_id"> & {
   status: "scheduled" | "elapsed" | "conflict" | "limit_exceeded" | "stale";
 };
 
@@ -58,12 +58,12 @@ export type ScheduleWaitRequest =
 
 export interface ScheduleWaitResult {
   status: "scheduled" | "elapsed";
-  wait: JobWait;
+  wait: TaskWait;
 }
 
-function checkpointRecord<TValue extends Json>(row: CheckpointRow): JobCheckpoint<TValue> {
+function checkpointRecord<TValue extends Json>(row: CheckpointRow): TaskCheckpoint<TValue> {
   return {
-    jobId: row.job_id,
+    taskId: row.task_id,
     name: row.checkpoint_name,
     value: row.checkpoint_value as TValue,
     attempt: row.attempt,
@@ -73,9 +73,9 @@ function checkpointRecord<TValue extends Json>(row: CheckpointRow): JobCheckpoin
   };
 }
 
-export function progressRecord<TValue extends Json>(row: ProgressRow): JobProgress<TValue> {
+export function progressRecord<TValue extends Json>(row: ProgressRow): TaskProgress<TValue> {
   return {
-    jobId: row.job_id,
+    taskId: row.task_id,
     value: row.progress_value as TValue,
     revision: BigInt(row.revision),
     attempt: row.attempt,
@@ -86,9 +86,9 @@ export function progressRecord<TValue extends Json>(row: ProgressRow): JobProgre
   };
 }
 
-function waitRecord(row: WaitRow): JobWait {
+function waitRecord(row: WaitRow): TaskWait {
   return {
-    jobId: row.job_id,
+    taskId: row.task_id,
     name: row.wait_name,
     mode: row.mode,
     durationMs: row.duration_ms === null ? null : Number(row.duration_ms),
@@ -110,45 +110,47 @@ function validateWaitName(name: string): void {
 }
 
 export class CheckpointLeaseLostError extends WorkhorseError {
-  constructor(jobId: string, checkpointName: string) {
+  constructor(taskId: string, checkpointName: string) {
     super(
-      `Cannot save checkpoint ${checkpointName} for job ${jobId} because the lease is stale or expired`,
+      `Cannot save checkpoint ${checkpointName} for task ${taskId} because the lease is stale or expired`,
     );
     this.name = "CheckpointLeaseLostError";
   }
 }
 
 export class ProgressLeaseLostError extends WorkhorseError {
-  constructor(jobId: string) {
-    super(`Cannot update progress for job ${jobId} because the lease is stale or expired`);
+  constructor(taskId: string) {
+    super(`Cannot update progress for task ${taskId} because the lease is stale or expired`);
     this.name = "ProgressLeaseLostError";
   }
 }
 
 export class ProgressRateLimitError extends WorkhorseError {
   constructor(
-    readonly jobId: string,
+    readonly taskId: string,
     readonly retryAfterMs: number,
   ) {
-    super(`Cannot update progress for job ${jobId} yet; retry after ${retryAfterMs} milliseconds`);
+    super(
+      `Cannot update progress for task ${taskId} yet; retry after ${retryAfterMs} milliseconds`,
+    );
     this.name = "ProgressRateLimitError";
   }
 }
 
 export class CheckpointConflictError extends WorkhorseError {
-  constructor(jobId: string, checkpointName: string) {
-    super(`Checkpoint ${checkpointName} for job ${jobId} already exists with a different value`);
+  constructor(taskId: string, checkpointName: string) {
+    super(`Checkpoint ${checkpointName} for task ${taskId} already exists with a different value`);
     this.name = "CheckpointConflictError";
   }
 }
 
 export class WaitLeaseLostError extends WorkhorseError {
   constructor(
-    readonly jobId: string,
+    readonly taskId: string,
     readonly waitName: string,
   ) {
     super(
-      `Cannot schedule wait ${waitName} for job ${jobId} because the lease is stale or expired`,
+      `Cannot schedule wait ${waitName} for task ${taskId} because the lease is stale or expired`,
     );
     this.name = "WaitLeaseLostError";
   }
@@ -156,20 +158,20 @@ export class WaitLeaseLostError extends WorkhorseError {
 
 export class WaitConflictError extends WorkhorseError {
   constructor(
-    readonly jobId: string,
+    readonly taskId: string,
     readonly waitName: string,
-    readonly existing: JobWait,
+    readonly existing: TaskWait,
   ) {
     super(
-      `Wait ${waitName} for job ${jobId} already exists with a different mode or absolute target`,
+      `Wait ${waitName} for task ${taskId} already exists with a different mode or absolute target`,
     );
     this.name = "WaitConflictError";
   }
 }
 
 export class WaitLimitExceededError extends WorkhorseError {
-  constructor(readonly jobId: string) {
-    super(`Job ${jobId} already has the maximum of 1000 durable waits`);
+  constructor(readonly taskId: string) {
+    super(`Task ${taskId} already has the maximum of 1000 durable waits`);
     this.name = "WaitLimitExceededError";
   }
 }
@@ -177,114 +179,114 @@ export class WaitLimitExceededError extends WorkhorseError {
 /** Owns checkpoint, progress, and durable-wait operations behind the Queue facade. */
 export class CheckpointsProgressWaitsModule extends QueueModule {
   async getCheckpoint<TValue extends Json = Json>(
-    jobId: string,
+    taskId: string,
     name: string,
-  ): Promise<JobCheckpoint<TValue> | null> {
+  ): Promise<TaskCheckpoint<TValue> | null> {
     const result = await this.context.database.query<CheckpointRow>(
       SQL_STATEMENTS["get_checkpoint"],
-      [jobId, name],
+      [taskId, name],
     );
     const row = result.rows[0];
     return row ? checkpointRecord<TValue>(row) : null;
   }
 
   async listCheckpoints<TValue extends Json = Json>(
-    jobId: string,
-  ): Promise<JobCheckpoint<TValue>[]> {
+    taskId: string,
+  ): Promise<TaskCheckpoint<TValue>[]> {
     const result = await this.context.database.query<CheckpointRow>(
       SQL_STATEMENTS["list_checkpoints"],
-      [jobId],
+      [taskId],
     );
     return result.rows.map((row) => checkpointRecord<TValue>(row));
   }
 
   async saveCheckpoint<TValue extends Json>(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     name: string,
     value: TValue,
-  ): Promise<JobCheckpoint<TValue>> {
+  ): Promise<TaskCheckpoint<TValue>> {
     const encodedValue = JSON.stringify(value);
     if (encodedValue === undefined) {
       throw new TypeError("Checkpoint value must be JSON serializable");
     }
     const result = await this.context.database.query<SaveCheckpointRow>(
       SQL_STATEMENTS["save_checkpoint_v1"],
-      [job.id, workerId, job.fenceToken.toString(), name, encodedValue],
+      [task.id, workerId, task.fenceToken.toString(), name, encodedValue],
     );
     const row = expectOneRow(result, "workhorse.save_checkpoint_v1");
-    if (row.status === "stale") throw new CheckpointLeaseLostError(job.id, name);
-    if (row.status === "conflict") throw new CheckpointConflictError(job.id, name);
+    if (row.status === "stale") throw new CheckpointLeaseLostError(task.id, name);
+    if (row.status === "conflict") throw new CheckpointConflictError(task.id, name);
     if (row.status !== "saved" && row.status !== "existing") {
       throw new Error(`Unexpected checkpoint status: ${String(row.status)}`);
     }
-    logDebug("workhorse.job.checkpoint_saved", "Job checkpoint persisted", {
-      ...jobSpanAttributes(job),
+    logDebug("workhorse.task.checkpoint_saved", "Task checkpoint persisted", {
+      ...taskSpanAttributes(task),
       "workhorse.checkpoint.name": name,
       "workhorse.checkpoint.status": row.status,
       "workhorse.worker.id": workerId,
     });
-    return checkpointRecord<TValue>({ ...row, job_id: job.id, checkpoint_name: name });
+    return checkpointRecord<TValue>({ ...row, task_id: task.id, checkpoint_name: name });
   }
 
   async getProgress<TValue extends Json = Json>(
-    jobId: string,
-  ): Promise<JobProgress<TValue> | null> {
+    taskId: string,
+  ): Promise<TaskProgress<TValue> | null> {
     const result = await this.context.database.query<ProgressRow>(SQL_STATEMENTS["get_progress"], [
-      jobId,
+      taskId,
     ]);
     const row = result.rows[0];
     return row ? progressRecord<TValue>(row) : null;
   }
 
   async updateProgress<TValue extends Json>(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     value: TValue,
-  ): Promise<JobProgress<TValue>> {
+  ): Promise<TaskProgress<TValue>> {
     const encodedValue = JSON.stringify(value);
     if (encodedValue === undefined) {
       throw new TypeError("Progress value must be JSON serializable");
     }
     const result = await this.context.database.query<UpdateProgressRow>(
       SQL_STATEMENTS["update_progress_v1"],
-      [job.id, workerId, job.fenceToken.toString(), encodedValue],
+      [task.id, workerId, task.fenceToken.toString(), encodedValue],
     );
     const row = expectOneRow(result, "workhorse.update_progress_v1");
-    if (row.status === "stale") throw new ProgressLeaseLostError(job.id);
+    if (row.status === "stale") throw new ProgressLeaseLostError(task.id);
     if (row.status === "rate_limited") {
-      throw new ProgressRateLimitError(job.id, Number(row.retry_after_ms));
+      throw new ProgressRateLimitError(task.id, Number(row.retry_after_ms));
     }
     if (row.status !== "updated" && row.status !== "unchanged") {
       throw new Error(`Unexpected progress status: ${String(row.status)}`);
     }
-    logDebug("workhorse.job.progress_updated", "Job progress persisted", {
-      ...jobSpanAttributes(job),
+    logDebug("workhorse.task.progress_updated", "Task progress persisted", {
+      ...taskSpanAttributes(task),
       "workhorse.progress.status": row.status,
       "workhorse.worker.id": workerId,
     });
-    return progressRecord<TValue>({ ...row, job_id: job.id });
+    return progressRecord<TValue>({ ...row, task_id: task.id });
   }
 
-  async getWait(jobId: string, name: string): Promise<JobWait | null> {
+  async getWait(taskId: string, name: string): Promise<TaskWait | null> {
     validateWaitName(name);
     const result = await this.context.database.query<WaitRow>(SQL_STATEMENTS["get_wait"], [
-      jobId,
+      taskId,
       name,
     ]);
     const row = result.rows[0];
     return row ? waitRecord(row) : null;
   }
 
-  async listWaits(jobId: string): Promise<JobWait[]> {
+  async listWaits(taskId: string): Promise<TaskWait[]> {
     const result = await this.context.database.query<WaitRow>(SQL_STATEMENTS["list_waits"], [
-      jobId,
+      taskId,
     ]);
     return result.rows.map(waitRecord);
   }
 
   async scheduleWait(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     name: string,
     request: ScheduleWaitRequest,
@@ -325,23 +327,23 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
 
     const result = await this.context.database.query<ScheduleWaitRow>(
       SQL_STATEMENTS["schedule_wait_v1"],
-      [job.id, workerId, job.fenceToken.toString(), name, durationWire, wakeAtWire],
+      [task.id, workerId, task.fenceToken.toString(), name, durationWire, wakeAtWire],
     );
     const row = expectOneRow(result, "workhorse.schedule_wait_v1");
-    if (row.status === "stale") throw new WaitLeaseLostError(job.id, name);
+    if (row.status === "stale") throw new WaitLeaseLostError(task.id, name);
     if (row.status === "conflict") {
-      throw new WaitConflictError(job.id, name, waitRecord({ ...row, job_id: job.id }));
+      throw new WaitConflictError(task.id, name, waitRecord({ ...row, task_id: task.id }));
     }
-    if (row.status === "limit_exceeded") throw new WaitLimitExceededError(job.id);
+    if (row.status === "limit_exceeded") throw new WaitLimitExceededError(task.id);
     if (row.status !== "scheduled" && row.status !== "elapsed") {
       throw new Error(`Unexpected wait status: ${String(row.status)}`);
     }
-    logInfo("workhorse.job.wait_processed", "Durable job wait processed", {
-      ...jobSpanAttributes(job),
+    logInfo("workhorse.task.wait_processed", "Durable task wait processed", {
+      ...taskSpanAttributes(task),
       "workhorse.wait.name": name,
       "workhorse.wait.status": row.status,
       "workhorse.worker.id": workerId,
     });
-    return { status: row.status, wait: waitRecord({ ...row, job_id: job.id }) };
+    return { status: row.status, wait: waitRecord({ ...row, task_id: task.id }) };
   }
 }

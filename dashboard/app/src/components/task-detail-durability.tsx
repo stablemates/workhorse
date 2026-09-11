@@ -1,4 +1,4 @@
-import type { DashboardJobDetail } from "@stablemates/workhorse-dashboard-server/wire";
+import type { DashboardTaskDetail } from "@stablemates/workhorse-dashboard-server/wire";
 import { Badge, Box, Code, Divider, Group, Paper, Stack, Text } from "@mantine/core";
 import { describeTaskConcurrency } from "../concurrency-policy.js";
 import { readDashboardIdempotencyEvidence } from "@stablemates/workhorse-dashboard-server/wire";
@@ -64,42 +64,43 @@ const dependencyResolutionVerb: Record<"release" | "cancel" | "fail", string> = 
 };
 /** The immutable prerequisite edge and its current release state. */
 export function DependencyLine({
-  job,
+  task,
   ...navigation
-}: { job: DashboardJobDetail } & LineageNavigationProps) {
+}: { task: DashboardTaskDetail } & LineageNavigationProps) {
   // Spawning a child also inserts a dependency edge — the parent blocks until the child joins —
   // so every parent-child pair would otherwise appear twice in this drawer: once here and once
   // in ChildLine. ChildLine owns that relationship; this component shows only the dependencies
   // an enqueue declared explicitly.
   const childEdgeKeys = new Set(
-    (job.childLineage?.records ?? []).map((edge) => `${edge.parentJobId}:${edge.childJobId}`),
+    (task.childLineage?.records ?? []).map((edge) => `${edge.parentTaskId}:${edge.childTaskId}`),
   );
-  const explicitRecords = job.dependencyLineage.records.filter(
-    (edge) => !childEdgeKeys.has(`${edge.dependentJobId}:${edge.prerequisiteJobId}`),
+  const explicitRecords = task.dependencyLineage.records.filter(
+    (edge) => !childEdgeKeys.has(`${edge.dependentTaskId}:${edge.prerequisiteTaskId}`),
   );
   const ownChildIds = new Set(
-    (job.childLineage?.records ?? [])
-      .filter((edge) => edge.parentJobId === job.identity.id)
-      .map((edge) => edge.childJobId),
+    (task.childLineage?.records ?? [])
+      .filter((edge) => edge.parentTaskId === task.identity.id)
+      .map((edge) => edge.childTaskId),
   );
-  const explicitPrerequisiteIds = job.identity.prerequisiteJobIds.filter(
+  const explicitPrerequisiteIds = task.identity.prerequisiteTaskIds.filter(
     (id) => !ownChildIds.has(id),
   );
   if (explicitPrerequisiteIds.length === 0 && explicitRecords.length === 0) return null;
-  const blocked = job.identity.blockedReason === "prerequisite_pending";
+  const blocked = task.identity.blockedReason === "prerequisite_pending";
   const summary = blocked
     ? "Blocked until every prerequisite satisfies the dependency policy"
-    : job.identity.dependencyReleasedAt === null
+    : task.identity.dependencyReleasedAt === null
       ? "Dependency recorded"
-      : `Released ${formatRelative(job.identity.dependencyReleasedAt)}`;
+      : `Released ${formatRelative(task.identity.dependencyReleasedAt)}`;
   // One edge renders as one row. The prerequisite identity, its state, and its policy used to be
   // split between a labeled row and a raw "success: release, failure: fail" line that repeated
   // the same id, which read as two different facts about two different tasks.
   const prerequisiteEdges = explicitRecords.filter(
-    (edge) => edge.dependentJobId === job.identity.id,
+    (edge) => edge.dependentTaskId === task.identity.id,
   );
   const dependentEdges = explicitRecords.filter(
-    (edge) => edge.prerequisiteJobId === job.identity.id && edge.dependentJobId !== job.identity.id,
+    (edge) =>
+      edge.prerequisiteTaskId === task.identity.id && edge.dependentTaskId !== task.identity.id,
   );
   return (
     <Stack gap={6}>
@@ -117,9 +118,9 @@ export function DependencyLine({
         </MetaRow>
       ) : null}
       {prerequisiteEdges.map((edge) => (
-        <MetaRow key={`${edge.dependentJobId}:${edge.prerequisiteJobId}`} label="Policy">
+        <MetaRow key={`${edge.dependentTaskId}:${edge.prerequisiteTaskId}`} label="Policy">
           {prerequisiteEdges.length > 1 ? (
-            <RelatedTaskLink id={edge.prerequisiteJobId} {...navigation} />
+            <RelatedTaskLink id={edge.prerequisiteTaskId} {...navigation} />
           ) : null}
           <Text c="dimmed" size="xs">
             {dependencyPolicySentence(edge, "it", "this task")}
@@ -130,8 +131,8 @@ export function DependencyLine({
         </MetaRow>
       ))}
       {dependentEdges.map((edge) => (
-        <MetaRow key={`${edge.dependentJobId}:${edge.prerequisiteJobId}`} label="Dependent">
-          <RelatedTaskLink id={edge.dependentJobId} {...navigation} />
+        <MetaRow key={`${edge.dependentTaskId}:${edge.prerequisiteTaskId}`} label="Dependent">
+          <RelatedTaskLink id={edge.dependentTaskId} {...navigation} />
           <Text c="dimmed" size="xs">
             {dependencyPolicySentence(edge, "this task", "it")}{" "}
             {edge.releasedAt === null || edge.resolution === null
@@ -140,7 +141,7 @@ export function DependencyLine({
           </Text>
         </MetaRow>
       ))}
-      {job.dependencyLineage.truncated ? (
+      {task.dependencyLineage.truncated ? (
         <Text c="dimmed" size="xs">
           Additional dependency edges are omitted.
         </Text>
@@ -150,11 +151,13 @@ export function DependencyLine({
 }
 /** The immutable parent-child edge and whether the parent has consumed the child result. */
 export function ChildLine({
-  job,
+  task,
   ...navigation
-}: { job: DashboardJobDetail } & LineageNavigationProps) {
-  if (job.childLineage.records.length === 0) return null;
-  const children = job.childLineage.records.filter((edge) => edge.parentJobId === job.identity.id);
+}: { task: DashboardTaskDetail } & LineageNavigationProps) {
+  if (task.childLineage.records.length === 0) return null;
+  const children = task.childLineage.records.filter(
+    (edge) => edge.parentTaskId === task.identity.id,
+  );
   const joinedChildren = children.filter((edge) => edge.joinedAt !== null).length;
   return (
     <Stack gap={6}>
@@ -164,8 +167,8 @@ export function ChildLine({
           joined
         </Text>
       ) : null}
-      {job.childLineage.records.map((edge) => {
-        const isParent = edge.parentJobId === job.identity.id;
+      {task.childLineage.records.map((edge) => {
+        const isParent = edge.parentTaskId === task.identity.id;
         const state =
           edge.joinedAt !== null
             ? "joined"
@@ -173,8 +176,8 @@ export function ChildLine({
               ? "result ready"
               : (edge.outcomeState ?? "waiting");
         return (
-          <MetaRow key={`${edge.parentJobId}:${edge.name}`} label={isParent ? "Child" : "Parent"}>
-            <RelatedTaskLink id={isParent ? edge.childJobId : edge.parentJobId} {...navigation} />
+          <MetaRow key={`${edge.parentTaskId}:${edge.name}`} label={isParent ? "Child" : "Parent"}>
+            <RelatedTaskLink id={isParent ? edge.childTaskId : edge.parentTaskId} {...navigation} />
             <Text c="dimmed" size="xs">
               {edge.name} · {edge.type} · {state}
             </Text>
@@ -182,7 +185,7 @@ export function ChildLine({
           </MetaRow>
         );
       })}
-      {job.childLineage.truncated ? (
+      {task.childLineage.truncated ? (
         <Text c="dimmed" size="xs">
           Additional child edges are omitted.
         </Text>
@@ -192,27 +195,30 @@ export function ChildLine({
 }
 /** Fresh execution identities linked to the immutable failed source they replay. */
 export function RedriveLine({
-  job,
+  task,
   ...navigation
-}: { job: DashboardJobDetail } & LineageNavigationProps) {
-  if (job.redriveLineage.records.length === 0) return null;
+}: { task: DashboardTaskDetail } & LineageNavigationProps) {
+  if (task.redriveLineage.records.length === 0) return null;
   return (
     <Stack gap={6}>
-      {job.redriveLineage.records.map((edge) => {
-        const isSource = edge.sourceJobId === job.identity.id;
+      {task.redriveLineage.records.map((edge) => {
+        const isSource = edge.sourceTaskId === task.identity.id;
         return (
           <MetaRow
-            key={`${edge.sourceJobId}:${edge.targetJobId}`}
+            key={`${edge.sourceTaskId}:${edge.targetTaskId}`}
             label={isSource ? "Redrive" : "Redriven from"}
           >
-            <RelatedTaskLink id={isSource ? edge.targetJobId : edge.sourceJobId} {...navigation} />
+            <RelatedTaskLink
+              id={isSource ? edge.targetTaskId : edge.sourceTaskId}
+              {...navigation}
+            />
             <Text c="dimmed" size="xs">
               {edge.requestedBy} · {edge.reason} · {formatRelative(edge.requestedAt)}
             </Text>
           </MetaRow>
         );
       })}
-      {job.redriveLineage.truncated ? (
+      {task.redriveLineage.truncated ? (
         <Text c="dimmed" size="xs">
           Additional redrive edges are omitted.
         </Text>
@@ -230,8 +236,8 @@ export function RedriveLine({
  * queue's ceiling is known but its utilisation was never measured, the line shows the ceiling and
  * says the usage is unknown, rather than showing zeroes that would read as an idle queue.
  */
-export function ConcurrencyPolicyLine({ job }: { job: DashboardJobDetail }) {
-  const described = describeTaskConcurrency(job);
+export function ConcurrencyPolicyLine({ task }: { task: DashboardTaskDetail }) {
+  const described = describeTaskConcurrency(task);
   if (described === null) return null;
   return (
     <MetaRow label="Concurrency">
@@ -274,14 +280,14 @@ export function ConcurrencyPolicyLine({ job }: { job: DashboardJobDetail }) {
   );
 }
 /**
- * Absolute lifetime and per-attempt execution limits persisted with the job definition.
+ * Absolute lifetime and per-attempt execution limits persisted with the task definition.
  *
  * A task without limits says so instead of omitting the row: an operator asking "why is this
  * still running?" needs "no limit is set" as an answer, not a gap where the answer would be.
  */
-export function TimingPolicyLine({ job }: { job: DashboardJobDetail }) {
-  const deadlineAt = job.identity.deadlineAt ?? null;
-  const executionTimeoutMs = job.identity.executionTimeoutMs ?? null;
+export function TimingPolicyLine({ task }: { task: DashboardTaskDetail }) {
+  const deadlineAt = task.identity.deadlineAt ?? null;
+  const executionTimeoutMs = task.identity.executionTimeoutMs ?? null;
   if (deadlineAt === null && executionTimeoutMs === null) {
     // "None set" stays visible — an operator asking "why is this still running?" needs the
     // answer in the row — while the wordier explanation moves behind the help icon.
@@ -297,7 +303,7 @@ export function TimingPolicyLine({ job }: { job: DashboardJobDetail }) {
       </MetaRow>
     );
   }
-  const runtimeTimeoutAt = job.current.runtime?.attemptTimeoutAt ?? null;
+  const runtimeTimeoutAt = task.current.runtime?.attemptTimeoutAt ?? null;
   const parts = [
     deadlineAt === null ? null : `deadline ${formatExact(deadlineAt)}`,
     executionTimeoutMs === null
@@ -318,10 +324,10 @@ export function TimingPolicyLine({ job }: { job: DashboardJobDetail }) {
  * claims inside one attempt are called out, because a durable wait releases
  * ownership without closing the logical attempt.
  */
-export function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
+export function BoundaryTimeline({ task }: { task: DashboardTaskDetail }) {
   // Acceptance is a boundary worth showing only when it deduplicated something. An unkeyed task
   // keeps exactly the timeline it had before this feature existed.
-  const events = job.events.filter(
+  const events = task.events.filter(
     (event) => event.type !== "enqueued" || readDashboardIdempotencyEvidence(event) !== null,
   );
   if (events.length === 0) return null;
@@ -418,16 +424,16 @@ export function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
 }
 /** One stored wait row rendered with its release proof and immutable provenance. */
 function DurableWaitCard({
-  job,
+  task,
   wait,
   nowMs,
 }: {
-  job: DashboardJobDetail;
+  task: DashboardTaskDetail;
   wait: DurableWait;
   nowMs: number;
 }) {
-  const phase = waitPhaseFor(job, wait, nowMs);
-  const runtime = job.current.runtime;
+  const phase = waitPhaseFor(task, wait, nowMs);
+  const runtime = task.current.runtime;
   const suspended = phase !== "resumed" && runtime !== null;
   return (
     <Paper withBorder p="sm">
@@ -521,28 +527,28 @@ function DurableWaitCard({
  * Durable wait evidence for one task. Waits are stored rows, not a workflow graph,
  * so this panel reports only what Workhorse recorded.
  */
-export function DurableWaits({ job }: { job: DashboardJobDetail }) {
-  const runtimeWaitName = job.current.runtime?.waitName ?? null;
+export function DurableWaits({ task }: { task: DashboardTaskDetail }) {
+  const runtimeWaitName = task.current.runtime?.waitName ?? null;
   const nowMs = useNow(runtimeWaitName !== null);
   // A task can record retry and claim boundaries without ever suspending on a durable wait, so the
   // timeline stands alone rather than disappearing with the wait panel.
-  if (job.waits.length === 0) return <BoundaryTimeline job={job} />;
-  const planNames = new Set((job.durability?.steps ?? []).map((step) => step.name));
-  const unmatchedWaits = job.waits.filter((wait) => !planNames.has(wait.name));
-  const matchedWaits = job.waits.filter((wait) => planNames.has(wait.name));
+  if (task.waits.length === 0) return <BoundaryTimeline task={task} />;
+  const planNames = new Set((task.durability?.steps ?? []).map((step) => step.name));
+  const unmatchedWaits = task.waits.filter((wait) => !planNames.has(wait.name));
+  const matchedWaits = task.waits.filter((wait) => planNames.has(wait.name));
   return (
     <DrawerSection
       id="durable-wait-heading"
       title="Durable wait"
       aside={
         <Badge variant="light" color="indigo">
-          {job.waits.length}
+          {task.waits.length}
         </Badge>
       }
     >
       <Stack gap="sm">
         {matchedWaits.map((wait) => (
-          <DurableWaitCard key={wait.name} job={job} wait={wait} nowMs={nowMs} />
+          <DurableWaitCard key={wait.name} task={task} wait={wait} nowMs={nowMs} />
         ))}
       </Stack>
       {unmatchedWaits.length > 0 ? (
@@ -554,7 +560,7 @@ export function DurableWaits({ job }: { job: DashboardJobDetail }) {
           ) : null}
           <Stack gap="sm">
             {unmatchedWaits.map((wait) => (
-              <DurableWaitCard key={wait.name} job={job} wait={wait} nowMs={nowMs} />
+              <DurableWaitCard key={wait.name} task={task} wait={wait} nowMs={nowMs} />
             ))}
           </Stack>
         </Box>
@@ -566,7 +572,7 @@ export function DurableWaits({ job }: { job: DashboardJobDetail }) {
       <Text c="dimmed" size="xs" mt={6}>
         Workhorse stores checkpoint and wait records, not a workflow graph.
       </Text>
-      <BoundaryTimeline job={job} />
+      <BoundaryTimeline task={task} />
     </DrawerSection>
   );
 }

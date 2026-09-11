@@ -7,7 +7,7 @@ import type { EnqueueRequest, Json, Queryable } from "../src/types.js";
 export const conventionalSchema = "workhorse_benchmark_conventional";
 const conventionalSqlFile = "benchmark-conventional.sql";
 
-type ConventionalJobState = "scheduled" | "ready" | "active" | "succeeded" | "failed";
+type ConventionalTaskState = "scheduled" | "ready" | "active" | "succeeded" | "failed";
 export type ConventionalFailState = "ready" | "scheduled" | "failed" | "stale";
 
 export interface ConventionalEnqueueOptions {
@@ -21,7 +21,7 @@ export interface ConventionalClaimOptions {
   leaseMs?: number;
 }
 
-export interface ConventionalClaimedJob<TPayload = Json> {
+export interface ConventionalClaimedTask<TPayload = Json> {
   id: string;
   type: string;
   payload: TPayload;
@@ -31,12 +31,12 @@ export interface ConventionalClaimedJob<TPayload = Json> {
   leaseExpiresAt: Date;
 }
 
-export interface ConventionalJobSnapshot<TResult = Json> {
+export interface ConventionalTaskSnapshot<TResult = Json> {
   id: string;
   queue: string;
   type: string;
   payload: Json;
-  state: ConventionalJobState;
+  state: ConventionalTaskState;
   currentAttempt: number;
   maxAttempts: number;
   fenceToken: bigint;
@@ -142,7 +142,7 @@ export class ConventionalQueue {
   async claim<TPayload = Json>(
     workerId: string,
     options: ConventionalClaimOptions = {},
-  ): Promise<ConventionalClaimedJob<TPayload> | null> {
+  ): Promise<ConventionalClaimedTask<TPayload> | null> {
     const result = await this.database.query<ClaimRow>(
       `SELECT * FROM ${conventionalSchema}.claim_v1($1, $2, $3)`,
       [options.queue ?? this.defaultQueue, workerId, options.leaseMs ?? 30_000],
@@ -161,31 +161,31 @@ export class ConventionalQueue {
   }
 
   async heartbeat(
-    job: ConventionalClaimedJob<unknown>,
+    task: ConventionalClaimedTask<unknown>,
     workerId: string,
     leaseMs = 30_000,
   ): Promise<boolean> {
     const result = await this.database.query<{ accepted: boolean }>(
       `SELECT ${conventionalSchema}.heartbeat_v1($1, $2, $3, $4) AS accepted`,
-      [job.id, workerId, job.fenceToken.toString(), leaseMs],
+      [task.id, workerId, task.fenceToken.toString(), leaseMs],
     );
     return result.rows[0]!.accepted;
   }
 
   async complete<TResult extends Json>(
-    job: ConventionalClaimedJob<unknown>,
+    task: ConventionalClaimedTask<unknown>,
     workerId: string,
     result: TResult,
   ): Promise<boolean> {
     const query = await this.database.query<{ accepted: boolean }>(
       `SELECT ${conventionalSchema}.complete_v1($1, $2, $3, $4::jsonb) AS accepted`,
-      [job.id, workerId, job.fenceToken.toString(), JSON.stringify(result)],
+      [task.id, workerId, task.fenceToken.toString(), JSON.stringify(result)],
     );
     return query.rows[0]!.accepted;
   }
 
   async fail(
-    job: ConventionalClaimedJob<unknown>,
+    task: ConventionalClaimedTask<unknown>,
     workerId: string,
     error: unknown,
     retryDelayMs = 0,
@@ -193,9 +193,9 @@ export class ConventionalQueue {
     const result = await this.database.query<{ state: ConventionalFailState }>(
       `SELECT ${conventionalSchema}.fail_v1($1, $2, $3, $4::jsonb, $5) AS state`,
       [
-        job.id,
+        task.id,
         workerId,
-        job.fenceToken.toString(),
+        task.fenceToken.toString(),
         JSON.stringify(errorEnvelope(error)),
         retryDelayMs,
       ],
@@ -211,13 +211,13 @@ export class ConventionalQueue {
     return result.rows[0]!.count;
   }
 
-  async getJob<TResult = Json>(id: string): Promise<ConventionalJobSnapshot<TResult> | null> {
+  async getTask<TResult = Json>(id: string): Promise<ConventionalTaskSnapshot<TResult> | null> {
     const result = await this.database.query<{
       id: string;
       queue_name: string;
       job_type: string;
       payload: Json;
-      state: ConventionalJobState;
+      state: ConventionalTaskState;
       current_attempt: number;
       max_attempts: number;
       fence_token: string;

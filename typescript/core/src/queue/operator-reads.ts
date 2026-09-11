@@ -12,16 +12,16 @@ import type {
   DeadLetterQuery,
   DependencyLineage,
   DependencyLineageRecord,
-  JobListFilter,
-  JobListItem,
-  JobListPage,
-  JobListQuery,
-  JobSnapshot,
-  JobState,
-  JobTimelineCursor,
-  JobTimelineEntry,
-  JobTimelinePage,
-  JobTimelineQuery,
+  TaskListFilter,
+  TaskListItem,
+  TaskListPage,
+  TaskListQuery,
+  TaskSnapshot,
+  TaskState,
+  TaskTimelineCursor,
+  TaskTimelineEntry,
+  TaskTimelinePage,
+  TaskTimelineQuery,
   Json,
   QueueHealth,
   QueueHealthBudgets,
@@ -38,25 +38,25 @@ import type {
 } from "../types.js";
 import {
   EXTERNAL_WAIT_REJECTION_WINDOW_MS,
-  MAX_JOB_QUERY_PAGE_SIZE,
+  MAX_TASK_QUERY_PAGE_SIZE,
   MAX_REDRIVE_BATCH_SIZE,
 } from "../types.js";
 import { progressRecord } from "./checkpoints-progress-waits.js";
 import { QUEUE_HEALTH_SQL } from "./health-protocol.js";
 import {
-  validateJobListQuery,
-  validateJobTimelineCursor,
+  validateTaskListQuery,
+  validateTaskTimelineCursor,
   validatePageLimit,
-  type ValidatedJobListQuery,
+  type ValidatedTaskListQuery,
 } from "./filter-cursor.js";
 import { QueueModule } from "./module-context.js";
 import { retentionPolicy, type RetentionPolicyRow } from "./retention-maintenance.js";
 import { nullableRowTimestamp, rowTimestamp } from "./row-mapping.js";
 
 type DeadLetterRow = {
-  job_id: string;
+  task_id: string;
   queue_name: string;
-  job_type: string;
+  task_type: string;
   concurrency_key: string | null;
   priority: number;
   payload: Json;
@@ -73,22 +73,22 @@ type DeadLetterRow = {
   cursor_finished_at: string;
 };
 
-type JobListRow = {
-  job_id: string;
+type TaskListRow = {
+  task_id: string;
   queue_name: string;
-  job_type: string;
+  task_type: string;
   concurrency_key: string | null;
   priority: number;
   tags: string[];
-  state: JobState;
-  prerequisite_job_id: string | null;
-  prerequisite_job_ids: string[];
+  state: TaskState;
+  prerequisite_task_id: string | null;
+  prerequisite_task_ids: string[];
   dependency_on_success: "release" | "cancel" | "fail" | null;
   dependency_on_failure: "release" | "cancel" | "fail" | null;
   dependency_on_cancellation: "release" | "cancel" | "fail" | null;
   blocked_reason: "prerequisite_pending" | null;
-  parent_job_id: string | null;
-  child_job_ids: string[];
+  parent_task_id: string | null;
+  child_task_ids: string[];
   current_attempt: number;
   max_attempts: number;
   retry_policy: RetryPolicy | null;
@@ -101,15 +101,15 @@ type JobListRow = {
   created_at: Date | string;
   updated_at: Date | string;
   payload: Json | null;
-  payload_status: JobListItem["payloadStatus"];
+  payload_status: TaskListItem["payloadStatus"];
   payload_bytes: number | string | null;
   has_more: boolean;
   cursor_created_at: string;
   cursor_signature: string;
 };
 
-type JobTimelineRow = {
-  kind: JobTimelineEntry["kind"];
+type TaskTimelineRow = {
+  kind: TaskTimelineEntry["kind"];
   record_id: string;
   priority: number;
   attempt: number | null;
@@ -117,7 +117,7 @@ type JobTimelineRow = {
   details: Json | null;
   fence_token: string | null;
   worker_id: string | null;
-  outcome: Extract<JobTimelineEntry, { kind: "attempt" }>["outcome"] | null;
+  outcome: Extract<TaskTimelineEntry, { kind: "attempt" }>["outcome"] | null;
   started_at: Date | string | null;
   claimed_at: Date | string | null;
   finished_at: Date | string | null;
@@ -129,8 +129,8 @@ type JobTimelineRow = {
 
 type RedriveRow = {
   status: RedriveResult["status"];
-  source_job_id: string;
-  target_job_id: string | null;
+  source_task_id: string;
+  target_task_id: string | null;
   source_state: RedriveResult["sourceState"];
   target_state: RedriveResult["targetState"];
   requested_at: Date | string | null;
@@ -142,8 +142,8 @@ type BulkRedriveRow = RedriveRow & {
 };
 
 type RedriveLineageRow = {
-  source_job_id: string;
-  target_job_id: string;
+  source_task_id: string;
+  target_task_id: string;
   requested_by: string;
   reason: string;
   request_id_preview: string;
@@ -220,7 +220,7 @@ type QueueHealthDocument = RetentionPolicyRow & {
   failed_count: string;
   canceled_count: string;
   terminal_counts_capped: boolean;
-  dependency_blocked_jobs: string;
+  dependency_blocked_tasks: string;
   dependency_pending_edges: string;
   dependency_failed_resolutions: string;
   dependency_retention_prune_starved: boolean;
@@ -237,15 +237,15 @@ type QueueHealthDocument = RetentionPolicyRow & {
   oldest_external_wait_age_ms: number | null;
   rejected_wait_deliveries: string;
   external_wait_counts_capped: boolean;
-  oldest_job_identity_at: Date | string | null;
+  oldest_task_identity_at: Date | string | null;
   oldest_terminal_outcome_at: Date | string | null;
-  oldest_job_event_at: Date | string | null;
+  oldest_task_event_at: Date | string | null;
   oldest_attempt_history_at: Date | string | null;
   oldest_schedule_occurrence_at: Date | string | null;
   oldest_statistics_at: Date | string | null;
-  job_identity_lag_ms: number | null;
+  task_identity_lag_ms: number | null;
   terminal_outcome_lag_ms: number | null;
-  job_event_lag_ms: number | null;
+  task_event_lag_ms: number | null;
   attempt_history_lag_ms: number | null;
   schedule_occurrence_lag_ms: number | null;
   statistics_lag_ms: number | null;
@@ -276,7 +276,7 @@ type QueueHealthDocument = RetentionPolicyRow & {
   history_partition_days: Array<{
     day: string;
     starts_at: string;
-    has_job_events: boolean;
+    has_task_events: boolean;
     has_attempt_history: boolean;
   }> | null;
   budgets: QueueHealthBudgets;
@@ -318,9 +318,9 @@ function deadLetterFilter(filter: DeadLetterFilter): Record<string, Json> {
 
 function deadLetter(row: DeadLetterRow): DeadLetter {
   return {
-    jobId: row.job_id,
+    taskId: row.task_id,
     queue: row.queue_name,
-    type: row.job_type,
+    type: row.task_type,
     concurrencyKey: row.concurrency_key,
     priority: row.priority,
     payload: row.payload,
@@ -336,7 +336,7 @@ function deadLetter(row: DeadLetterRow): DeadLetter {
   };
 }
 
-function jobListFilter(filter: JobListFilter): Record<string, Json> {
+function taskListFilter(filter: TaskListFilter): Record<string, Json> {
   return {
     ...(filter.queue === undefined ? {} : { queue: filter.queue }),
     ...(filter.type === undefined ? {} : { type: filter.type }),
@@ -350,17 +350,17 @@ function jobListFilter(filter: JobListFilter): Record<string, Json> {
   };
 }
 
-function jobListItem(row: JobListRow): JobListItem {
+function taskListItem(row: TaskListRow): TaskListItem {
   return {
-    id: row.job_id,
+    id: row.task_id,
     queue: row.queue_name,
-    type: row.job_type,
+    type: row.task_type,
     concurrencyKey: row.concurrency_key,
     priority: row.priority,
     tags: row.tags,
     state: row.state,
-    prerequisiteJobId: row.prerequisite_job_id,
-    prerequisiteJobIds: row.prerequisite_job_ids,
+    prerequisiteTaskId: row.prerequisite_task_id,
+    prerequisiteTaskIds: row.prerequisite_task_ids,
     dependencyPolicy:
       row.dependency_on_failure === null
         ? null
@@ -370,8 +370,8 @@ function jobListItem(row: JobListRow): JobListItem {
             onCancellation: row.dependency_on_cancellation!,
           },
     blockedReason: row.blocked_reason,
-    parentJobId: row.parent_job_id,
-    childJobIds: row.child_job_ids,
+    parentTaskId: row.parent_task_id,
+    childTaskIds: row.child_task_ids,
     currentAttempt: row.current_attempt,
     maxAttempts: row.max_attempts,
     retryPolicy: row.retry_policy,
@@ -389,7 +389,7 @@ function jobListItem(row: JobListRow): JobListItem {
   };
 }
 
-function jobTimelineEntry(row: JobTimelineRow): JobTimelineEntry {
+function taskTimelineEntry(row: TaskTimelineRow): TaskTimelineEntry {
   const base = {
     recordId: row.record_id,
     priority: row.priority,
@@ -398,7 +398,7 @@ function jobTimelineEntry(row: JobTimelineRow): JobTimelineEntry {
   };
   if (row.kind === "event") {
     if (row.event_type === null || row.details === null) {
-      throw new Error("list_job_timeline_v1 returned an incomplete event row");
+      throw new Error("list_task_timeline_v1 returned an incomplete event row");
     }
     return { ...base, kind: "event", eventType: row.event_type, details: row.details };
   }
@@ -411,7 +411,7 @@ function jobTimelineEntry(row: JobTimelineRow): JobTimelineEntry {
     row.claimed_at === null ||
     row.finished_at === null
   ) {
-    throw new Error("list_job_timeline_v1 returned an incomplete attempt row");
+    throw new Error("list_task_timeline_v1 returned an incomplete attempt row");
   }
   return {
     ...base,
@@ -430,8 +430,8 @@ function jobTimelineEntry(row: JobTimelineRow): JobTimelineEntry {
 function redriveResult(row: RedriveRow): RedriveResult {
   return {
     status: row.status,
-    sourceJobId: row.source_job_id,
-    targetJobId: row.target_job_id,
+    sourceTaskId: row.source_task_id,
+    targetTaskId: row.target_task_id,
     sourceState: row.source_state,
     targetState: row.target_state,
     requestedAt: row.requested_at === null ? null : rowTimestamp(row.requested_at, "requested_at"),
@@ -440,8 +440,8 @@ function redriveResult(row: RedriveRow): RedriveResult {
 
 function redriveLineageRecord(row: RedriveLineageRow): RedriveLineageRecord {
   return {
-    sourceJobId: row.source_job_id,
-    targetJobId: row.target_job_id,
+    sourceTaskId: row.source_task_id,
+    targetTaskId: row.target_task_id,
     requestedBy: row.requested_by,
     reason: row.reason,
     requestIdPreview: row.request_id_preview,
@@ -522,8 +522,8 @@ function conflictDetails<TDetails>(
 
 const redriveConflictFields = new Set<RedriveIdempotencyConflictField>(["reason", "requestedBy"]);
 const redriveConflictDetailKeys = new Set([
-  "sourceJobId",
-  "existingTargetJobId",
+  "sourceTaskId",
+  "existingTargetTaskId",
   "requestIdPreview",
   "requestIdDigest",
   "requestIdLength",
@@ -532,8 +532,8 @@ const redriveConflictDetailKeys = new Set([
   "rejectedRequestDigest",
 ]);
 const sanitizedRedriveConflictDetails: RedriveIdempotencyConflictDetails = {
-  sourceJobId: "unknown",
-  existingTargetJobId: "unknown",
+  sourceTaskId: "unknown",
+  existingTargetTaskId: "unknown",
   requestIdPreview: "unknown",
   requestIdDigest: "000000000000",
   requestIdLength: 0,
@@ -550,10 +550,10 @@ function validRedriveConflictDetails(value: unknown): value is RedriveIdempotenc
   return (
     keys.length === redriveConflictDetailKeys.size &&
     keys.every((key) => redriveConflictDetailKeys.has(key)) &&
-    typeof detail.sourceJobId === "string" &&
-    uuid.test(detail.sourceJobId) &&
-    typeof detail.existingTargetJobId === "string" &&
-    uuid.test(detail.existingTargetJobId) &&
+    typeof detail.sourceTaskId === "string" &&
+    uuid.test(detail.sourceTaskId) &&
+    typeof detail.existingTargetTaskId === "string" &&
+    uuid.test(detail.existingTargetTaskId) &&
     typeof detail.requestIdPreview === "string" &&
     detail.requestIdPreview.length > 0 &&
     [...detail.requestIdPreview].length <= 16 &&
@@ -591,7 +591,7 @@ function redriveConflict(error: unknown): RedriveIdempotencyConflictError | null
 export class RedriveIdempotencyConflictError extends WorkhorseError {
   constructor(readonly details: RedriveIdempotencyConflictDetails) {
     super(
-      `Redrive request conflict for source ${details.sourceJobId} and request ${details.requestIdPreview} (${details.requestIdDigest}); fields: ${details.conflictingFields.join(", ")}`,
+      `Redrive request conflict for source ${details.sourceTaskId} and request ${details.requestIdPreview} (${details.requestIdDigest}); fields: ${details.conflictingFields.join(", ")}`,
     );
     this.name = "RedriveIdempotencyConflictError";
   }
@@ -615,13 +615,13 @@ function queueHealthFromDocument(row: QueueHealthDocument): QueueHealth {
     terminalCountsCapped: row.terminal_counts_capped,
     readyDepth: Number(row.ready),
     scheduledDepth: Number(row.scheduled),
-    sleepingJobs: Number(row.sleeping),
+    sleepingTasks: Number(row.sleeping),
     overdueWaits: Number(row.overdue_waits),
     nextWakeAt: nullableHealthTimestamp(row.next_wake_at),
     activeLeases: Number(row.active),
     expiredLeases: Number(row.expired),
     dependencies: {
-      blockedJobs: Number(row.dependency_blocked_jobs),
+      blockedTasks: Number(row.dependency_blocked_tasks),
       pendingEdges: Number(row.dependency_pending_edges),
       failedResolutions: Number(row.dependency_failed_resolutions),
       retentionPruneStarved: row.dependency_retention_prune_starved,
@@ -687,10 +687,10 @@ function queueHealthFromDocument(row: QueueHealthDocument): QueueHealth {
     },
     retentionPolicy: retentionPolicy(row),
     retentionLagMs: {
-      jobIdentity: row.job_identity_lag_ms === null ? null : Number(row.job_identity_lag_ms),
+      taskIdentity: row.task_identity_lag_ms === null ? null : Number(row.task_identity_lag_ms),
       terminalOutcome:
         row.terminal_outcome_lag_ms === null ? null : Number(row.terminal_outcome_lag_ms),
-      jobEvents: row.job_event_lag_ms === null ? null : Number(row.job_event_lag_ms),
+      taskEvents: row.task_event_lag_ms === null ? null : Number(row.task_event_lag_ms),
       attemptHistory:
         row.attempt_history_lag_ms === null ? null : Number(row.attempt_history_lag_ms),
       scheduleOccurrences:
@@ -698,29 +698,29 @@ function queueHealthFromDocument(row: QueueHealthDocument): QueueHealth {
       statistics: row.statistics_lag_ms === null ? null : Number(row.statistics_lag_ms),
     },
     oldestRetainedAt: {
-      jobIdentity: nullableHealthTimestamp(row.oldest_job_identity_at),
+      taskIdentity: nullableHealthTimestamp(row.oldest_task_identity_at),
       terminalOutcome: nullableHealthTimestamp(row.oldest_terminal_outcome_at),
-      jobEvents: nullableHealthTimestamp(row.oldest_job_event_at),
+      taskEvents: nullableHealthTimestamp(row.oldest_task_event_at),
       attemptHistory: nullableHealthTimestamp(row.oldest_attempt_history_at),
       scheduleOccurrences: nullableHealthTimestamp(row.oldest_schedule_occurrence_at),
       statistics: nullableHealthTimestamp(row.oldest_statistics_at),
     },
     eligibleHistoryPartitions: {
-      jobEvents: Number(row.eligible_event_partitions),
+      taskEvents: Number(row.eligible_event_partitions),
       attemptHistory: Number(row.eligible_attempt_partitions),
     },
     defaultHistoryRows: {
-      jobEvents: Number(row.default_event_rows),
+      taskEvents: Number(row.default_event_rows),
       attemptHistory: Number(row.default_attempt_rows),
     },
     defaultHistoryRowsCapped: {
-      jobEvents: row.default_event_rows_capped,
+      taskEvents: row.default_event_rows_capped,
       attemptHistory: row.default_attempt_rows_capped,
     },
     historyPartitionDays: (row.history_partition_days ?? []).map((dayRow) => ({
       day: dayRow.day,
       startsAt: new Date(dayRow.starts_at),
-      hasJobEvents: dayRow.has_job_events,
+      hasTaskEvents: dayRow.has_task_events,
       hasAttemptHistory: dayRow.has_attempt_history,
     })),
     observations: {
@@ -755,18 +755,18 @@ function queueHealthFromDocument(row: QueueHealthDocument): QueueHealth {
 
 /** Owns operator reads, redrive operations, health, and metric snapshots. */
 export class OperatorReadsModule extends QueueModule {
-  validateJobListQuery(query: JobListQuery): ValidatedJobListQuery {
-    return validateJobListQuery(query);
+  validateTaskListQuery(query: TaskListQuery): ValidatedTaskListQuery {
+    return validateTaskListQuery(query);
   }
 
-  validateJobTimelineQuery(
-    jobId: string,
+  validateTaskTimelineQuery(
+    taskId: string,
     limit: number | undefined,
-    cursor: JobTimelineCursor | undefined,
-  ): { limit: number; cursor: JobTimelineCursor | undefined } {
+    cursor: TaskTimelineCursor | undefined,
+  ): { limit: number; cursor: TaskTimelineCursor | undefined } {
     return {
-      limit: validatePageLimit(limit, 100, MAX_JOB_QUERY_PAGE_SIZE, "getJobTimeline limit"),
-      cursor: validateJobTimelineCursor(jobId, cursor),
+      limit: validatePageLimit(limit, 100, MAX_TASK_QUERY_PAGE_SIZE, "getTaskTimeline limit"),
+      cursor: validateTaskTimelineCursor(taskId, cursor),
     };
   }
 
@@ -777,17 +777,17 @@ export class OperatorReadsModule extends QueueModule {
     return result.rows.map(rateLimitStatus);
   }
 
-  async listJobs(query: JobListQuery = {}): Promise<JobListPage> {
-    const { limit, cursor, payloadProjection } = this.validateJobListQuery(query);
-    const result = await this.context.database.query<JobListRow>(SQL_STATEMENTS["list_jobs_v1"], [
-      JSON.stringify(jobListFilter(query)),
+  async listTasks(query: TaskListQuery = {}): Promise<TaskListPage> {
+    const { limit, cursor, payloadProjection } = this.validateTaskListQuery(query);
+    const result = await this.context.database.query<TaskListRow>(SQL_STATEMENTS["list_tasks_v1"], [
+      JSON.stringify(taskListFilter(query)),
       limit,
       cursor?.createdAt ?? null,
-      cursor?.jobId ?? null,
+      cursor?.taskId ?? null,
       cursor?.signature ?? null,
       JSON.stringify(payloadProjection),
     ]);
-    const items = result.rows.map(jobListItem);
+    const items = result.rows.map(taskListItem);
     const last = result.rows.at(-1);
     return {
       items,
@@ -795,28 +795,28 @@ export class OperatorReadsModule extends QueueModule {
         last?.has_more === true
           ? {
               createdAt: last.cursor_created_at,
-              jobId: last.job_id,
+              taskId: last.task_id,
               signature: last.cursor_signature,
             }
           : null,
     };
   }
 
-  async getJobTimeline(jobId: string, query: JobTimelineQuery = {}): Promise<JobTimelinePage> {
-    const { limit, cursor } = this.validateJobTimelineQuery(jobId, query.limit, query.cursor);
+  async getTaskTimeline(taskId: string, query: TaskTimelineQuery = {}): Promise<TaskTimelinePage> {
+    const { limit, cursor } = this.validateTaskTimelineQuery(taskId, query.limit, query.cursor);
 
-    const result = await this.context.database.query<JobTimelineRow>(
-      SQL_STATEMENTS["list_job_timeline_v1"],
-      [jobId, limit, cursor?.occurredAt ?? null, cursor?.kind ?? null, cursor?.recordId ?? null],
+    const result = await this.context.database.query<TaskTimelineRow>(
+      SQL_STATEMENTS["list_task_timeline_v1"],
+      [taskId, limit, cursor?.occurredAt ?? null, cursor?.kind ?? null, cursor?.recordId ?? null],
     );
-    const items = result.rows.map(jobTimelineEntry);
+    const items = result.rows.map(taskTimelineEntry);
     const last = result.rows.at(-1);
     return {
       items,
       nextCursor:
         last?.has_more === true
           ? {
-              jobId,
+              taskId,
               occurredAt: last.cursor_occurred_at,
               kind: last.kind,
               recordId: last.record_id,
@@ -838,7 +838,7 @@ export class OperatorReadsModule extends QueueModule {
         JSON.stringify(deadLetterFilter(query)),
         limit,
         query.cursor?.finishedAt ?? null,
-        query.cursor?.jobId ?? null,
+        query.cursor?.taskId ?? null,
       ],
     );
     const items = result.rows.map(deadLetter);
@@ -847,15 +847,15 @@ export class OperatorReadsModule extends QueueModule {
       items,
       nextCursor:
         result.rows.at(-1)?.has_more === true && last !== undefined
-          ? { finishedAt: result.rows.at(-1)!.cursor_finished_at, jobId: last.jobId }
+          ? { finishedAt: result.rows.at(-1)!.cursor_finished_at, taskId: last.taskId }
           : null,
     };
   }
 
-  async redrive(sourceJobId: string, request: RedriveRequest): Promise<RedriveResult> {
+  async redrive(sourceTaskId: string, request: RedriveRequest): Promise<RedriveResult> {
     try {
       const result = await this.context.database.query<RedriveRow>(SQL_STATEMENTS["redrive"], [
-        sourceJobId,
+        sourceTaskId,
         request.requestedBy,
         request.reason,
         request.requestId,
@@ -863,9 +863,9 @@ export class OperatorReadsModule extends QueueModule {
       const row = result.rows[0];
       if (!row) throw new Error("redrive_v1 returned no result");
       recordRedrive(row.status);
-      logInfo("workhorse.job.redrive_processed", "Dead-letter job redrive processed", {
-        "workhorse.job.id": sourceJobId,
-        "workhorse.redrive.target_job_id": row.target_job_id ?? "none",
+      logInfo("workhorse.task.redrive_processed", "Dead-letter task redrive processed", {
+        "workhorse.task.id": sourceTaskId,
+        "workhorse.redrive.target_task_id": row.target_task_id ?? "none",
         "workhorse.operation.status": row.status,
       });
       return redriveResult(row);
@@ -896,15 +896,15 @@ export class OperatorReadsModule extends QueueModule {
           request.reason,
           request.requestId,
           options.cursor?.finishedAt ?? null,
-          options.cursor?.jobId ?? null,
+          options.cursor?.taskId ?? null,
         ],
       );
       const last = result.rows.at(-1);
       const statuses = new Map<RedriveResult["status"], number>();
       for (const row of result.rows) statuses.set(row.status, (statuses.get(row.status) ?? 0) + 1);
       for (const [status, count] of statuses) recordRedrive(status, count);
-      logInfo("workhorse.jobs.redrive_processed", "Dead-letter job redrive batch processed", {
-        "workhorse.job.count": result.rows.length,
+      logInfo("workhorse.tasks.redrive_processed", "Dead-letter task redrive batch processed", {
+        "workhorse.task.count": result.rows.length,
         "workhorse.redrive.dry_run": options.dryRun ?? false,
       });
       return {
@@ -913,7 +913,7 @@ export class OperatorReadsModule extends QueueModule {
           last?.has_more === true
             ? {
                 finishedAt: last.source_finished_at_cursor,
-                jobId: last.source_job_id,
+                taskId: last.source_task_id,
               }
             : null,
       };
@@ -922,7 +922,7 @@ export class OperatorReadsModule extends QueueModule {
     }
   }
 
-  async getRedriveLineage(jobId: string, limit = MAX_REDRIVE_BATCH_SIZE): Promise<RedriveLineage> {
+  async getRedriveLineage(taskId: string, limit = MAX_REDRIVE_BATCH_SIZE): Promise<RedriveLineage> {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_REDRIVE_BATCH_SIZE) {
       throw new RangeError(
         `getRedriveLineage limit must be an integer between 1 and ${MAX_REDRIVE_BATCH_SIZE}`,
@@ -930,7 +930,7 @@ export class OperatorReadsModule extends QueueModule {
     }
     const result = await this.context.database.query<RedriveLineageRow>(
       SQL_STATEMENTS["redrive_lineage_v1"],
-      [jobId, limit + 1],
+      [taskId, limit + 1],
     );
     return {
       records: result.rows.slice(0, limit).map(redriveLineageRecord),
@@ -939,29 +939,29 @@ export class OperatorReadsModule extends QueueModule {
   }
 
   async getDependencyLineage(
-    jobId: string,
-    requestedLimit = MAX_JOB_QUERY_PAGE_SIZE,
+    taskId: string,
+    requestedLimit = MAX_TASK_QUERY_PAGE_SIZE,
   ): Promise<DependencyLineage> {
     const limit = validatePageLimit(
       requestedLimit,
-      MAX_JOB_QUERY_PAGE_SIZE,
-      MAX_JOB_QUERY_PAGE_SIZE,
+      MAX_TASK_QUERY_PAGE_SIZE,
+      MAX_TASK_QUERY_PAGE_SIZE,
       "getDependencyLineage limit",
     );
     const result = await this.context.database.query<{
-      dependent_job_id: string;
-      prerequisite_job_id: string;
+      dependent_task_id: string;
+      prerequisite_task_id: string;
       on_success: DependencyLineageRecord["onSuccess"];
       on_failure: DependencyLineageRecord["onFailure"];
       on_cancellation: DependencyLineageRecord["onCancellation"];
       created_at: Date | string;
       released_at: Date | string | null;
       resolution: DependencyLineageRecord["resolution"];
-    }>(SQL_STATEMENTS["job_dependency"], [jobId, limit + 1]);
+    }>(SQL_STATEMENTS["task_dependency"], [taskId, limit + 1]);
     return {
       records: result.rows.slice(0, limit).map((row) => ({
-        dependentJobId: row.dependent_job_id,
-        prerequisiteJobId: row.prerequisite_job_id,
+        dependentTaskId: row.dependent_task_id,
+        prerequisiteTaskId: row.prerequisite_task_id,
         onSuccess: row.on_success,
         onFailure: row.on_failure,
         onCancellation: row.on_cancellation,
@@ -974,29 +974,29 @@ export class OperatorReadsModule extends QueueModule {
   }
 
   async getChildLineage(
-    jobId: string,
-    requestedLimit = MAX_JOB_QUERY_PAGE_SIZE,
+    taskId: string,
+    requestedLimit = MAX_TASK_QUERY_PAGE_SIZE,
   ): Promise<ChildLineage> {
     const limit = validatePageLimit(
       requestedLimit,
-      MAX_JOB_QUERY_PAGE_SIZE,
-      MAX_JOB_QUERY_PAGE_SIZE,
+      MAX_TASK_QUERY_PAGE_SIZE,
+      MAX_TASK_QUERY_PAGE_SIZE,
       "getChildLineage limit",
     );
     const result = await this.context.database.query<{
-      parent_job_id: string;
-      child_job_id: string;
+      parent_task_id: string;
+      child_task_id: string;
       child_name: string;
       child_type: string;
       created_at: Date | string;
       joined_at: Date | string | null;
       outcome_state: "succeeded" | "failed" | "canceled" | null;
       outcome_error: Json | null;
-    }>(SQL_STATEMENTS["job_child"], [jobId, limit + 1]);
+    }>(SQL_STATEMENTS["task_child"], [taskId, limit + 1]);
     return {
       records: result.rows.slice(0, limit).map((row) => ({
-        parentJobId: row.parent_job_id,
-        childJobId: row.child_job_id,
+        parentTaskId: row.parent_task_id,
+        childTaskId: row.child_task_id,
         name: row.child_name,
         type: row.child_type,
         createdAt: rowTimestamp(row.created_at, "created_at"),
@@ -1008,26 +1008,26 @@ export class OperatorReadsModule extends QueueModule {
     };
   }
 
-  async getJob<TResult extends Json = Json>(id: string): Promise<JobSnapshot<TResult> | null> {
-    // A job exists in exactly one lifecycle relation: runtime while live, outcome when terminal.
+  async getTask<TResult extends Json = Json>(id: string): Promise<TaskSnapshot<TResult> | null> {
+    // A task exists in exactly one lifecycle relation: runtime while live, outcome when terminal.
     const result = await this.context.database.query<{
       id: string;
       queue_name: string;
-      job_type: string;
+      task_type: string;
       concurrency_key: string | null;
       priority: number;
       payload: Json;
       contract_version: string | null;
       tags: string[];
-      state: JobSnapshot["state"];
-      prerequisite_job_id: string | null;
-      prerequisite_job_ids: string[];
+      state: TaskSnapshot["state"];
+      prerequisite_task_id: string | null;
+      prerequisite_task_ids: string[];
       dependency_on_success: "release" | "cancel" | "fail" | null;
       dependency_on_failure: "release" | "cancel" | "fail" | null;
       dependency_on_cancellation: "release" | "cancel" | "fail" | null;
       blocked_reason: "prerequisite_pending" | null;
-      parent_job_id: string | null;
-      child_job_ids: string[];
+      parent_task_id: string | null;
+      child_task_ids: string[];
       current_attempt: number;
       max_attempts: number;
       retry_policy: RetryPolicy | null;
@@ -1055,15 +1055,15 @@ export class OperatorReadsModule extends QueueModule {
     return {
       id: row.id,
       queue: row.queue_name,
-      type: row.job_type,
+      type: row.task_type,
       concurrencyKey: row.concurrency_key,
       priority: row.priority,
       payload: row.payload,
       contractVersion: row.contract_version,
       tags: row.tags,
       state: row.state,
-      prerequisiteJobId: row.prerequisite_job_id,
-      prerequisiteJobIds: row.prerequisite_job_ids,
+      prerequisiteTaskId: row.prerequisite_task_id,
+      prerequisiteTaskIds: row.prerequisite_task_ids,
       dependencyPolicy:
         row.dependency_on_failure === null
           ? null
@@ -1073,8 +1073,8 @@ export class OperatorReadsModule extends QueueModule {
               onCancellation: row.dependency_on_cancellation!,
             },
       blockedReason: row.blocked_reason,
-      parentJobId: row.parent_job_id,
-      childJobIds: row.child_job_ids,
+      parentTaskId: row.parent_task_id,
+      childTaskIds: row.child_task_ids,
       currentAttempt: row.current_attempt,
       maxAttempts: row.max_attempts,
       retryPolicy: row.retry_policy,
@@ -1092,7 +1092,7 @@ export class OperatorReadsModule extends QueueModule {
         row.progress_revision === null
           ? null
           : progressRecord({
-              job_id: row.id,
+              task_id: row.id,
               progress_value: row.progress_value,
               revision: row.progress_revision,
               attempt: row.progress_attempt!,

@@ -36,14 +36,14 @@ V3 has two suites.
 
 The comparative suite runs equivalent queue lifecycle semantics through two storage designs:
 
-1. **Conventional:** a mutable lifetime job table with ready, scheduled, and expired-lease indexes plus event and attempt history.
-2. **Hybrid/runtime:** stable job identity with a replaceable pending debounce definition, one live-only mutable runtime row, immutable terminal outcome, and append-only event and attempt history.
+1. **Conventional:** a mutable lifetime task table with ready, scheduled, and expired-lease indexes plus event and attempt history.
+2. **Hybrid/runtime:** stable task identity with a replaceable pending debounce definition, one live-only mutable runtime row, immutable terminal outcome, and append-only event and attempt history.
 
 A seeded execution plan shuffles worker/repetition pairs and alternates which design runs first. The exact plan is recorded in `executionPlan`. For each pair, both designs are independently reset before measurement. The suite records:
 
 - configurable `enqueueMany` batch size and the exact enqueue request count;
-- enqueue, processing, and end-to-end duration plus phase-specific jobs/second;
-- completed jobs per second;
+- enqueue, processing, and end-to-end duration plus phase-specific tasks/second;
+- completed tasks per second;
 - paired hybrid/conventional ratios and differences by worker level;
 - raw client-observed claim latency samples and p50/p95/p99;
 - Student-t 95% confidence intervals across independent repetitions;
@@ -55,7 +55,7 @@ A seeded execution plan shuffles worker/repetition pairs and alternates which de
 - `pg_stat_io` deltas where supported;
 - `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` for the populated claim path.
 
-The suite also performs equal-load fixed-rate producer-consumer churn. Both designs receive the same exact `targetJobs` at the same `targetRatePerSecond`; concurrent workers drain every job before the run can pass. It records production and drain duration, producer scheduling-lag distribution, maximum observed backlog, and exact completion. Telemetry runs on an independent scheduled task, not in the producer loop, and every sample records its own `sampleDurationMs`.
+The suite also performs equal-load fixed-rate producer-consumer churn. Both designs receive the same exact `targetTasks` at the same `targetRatePerSecond`; concurrent workers drain every task before the run can pass. It records production and drain duration, producer scheduling-lag distribution, maximum observed backlog, and exact completion. Telemetry runs on an independent scheduled task, not in the producer loop, and every sample records its own `sampleDurationMs`.
 
 ### Lifecycle suite
 
@@ -64,7 +64,7 @@ The lifecycle suite runs deterministic operational scenarios with hard invariant
 | Scenario                        | Evidence produced                                                                                                                                                                                      |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `scheduled-promotion-drift`     | bounded promotion batches and due-time drift distribution                                                                                                                                              |
-| `schedule-cadence-jitter`       | recurring fire-delay distribution, worst observed delay, durable occurrence uniqueness, and completed load jobs at the configured maintenance cadence                                                  |
+| `schedule-cadence-jitter`       | recurring fire-delay distribution, worst observed delay, durable occurrence uniqueness, and completed load tasks at the configured maintenance cadence                                                 |
 | `heartbeat-fencing`             | accepted heartbeat cost and stale-fence rejection cost                                                                                                                                                 |
 | `priority-dispatch`             | FIFO and mixed-priority claim distributions, throughput, retained-history plan bounds, ready-index size, and strict starvation under replenished urgent work                                           |
 | `cancellation-lifecycle`        | immediate/waiting cancellation, active signal/ack, expiry materialization, stale races, truthful history, recurrence, and query timings                                                                |
@@ -78,10 +78,10 @@ The lifecycle suite runs deterministic operational scenarios with hard invariant
 | `idempotent-ingress`            | exact replay, conflict rollback, same-batch duplicates, expiry reuse, and full transition timings/invariants                                                                                           |
 | `coalescing-ingress`            | concurrent idempotent replay, debounce reset/preserve, throttle coalescing, durable effects, notifications, key-index size, and purge cost                                                             |
 | `dependency-operations`         | fan-in release, maximum-width terminal fan-out settlement, concurrent enqueue into disconnected components, cancellation policy, dependency health, and claim-plan buffer cost around retained history |
-| `retention-pruning`             | persisted-policy housekeeping, independent event/attempt retirement, and retained job identity                                                                                                         |
+| `retention-pruning`             | persisted-policy housekeeping, independent event/attempt retirement, and retained task identity                                                                                                        |
 | `health-snapshot`               | single-statement snapshot latency, capped-scan flags, and machine-readable critical status reasons                                                                                                     |
 | `worker-concurrency`            | 1/4/8-slot timing, equal-capacity single/balanced/distributed worker topologies, immediate/I/O-like profiles, start latency, query pressure, heartbeats, first-null, pause, and drain invariants       |
-| `batch-dispatch`                | equal serial and batched cohorts, full/partial groups, mixed outcomes, per-job policy admission, claim cost, active slots, and isolated recovery                                                       |
+| `batch-dispatch`                | equal serial and batched cohorts, full/partial groups, mixed outcomes, per-task policy admission, claim cost, active slots, and isolated recovery                                                      |
 | `notification-dispatch`         | polling-only versus notification-assisted idle claim pressure, enqueue-to-claim latency, completion, and bounded-fallback invariants                                                                   |
 | `telemetry-context`             | equal-cohort enqueue and claiming timings with the OpenTelemetry SDK disabled and enabled, plus export, payload, and index invariants                                                                  |
 
@@ -108,14 +108,14 @@ No numerical overhead claim is supported until an actual benchmark artifact is r
 
 `idempotent-ingress` records client-observed durations for initial keyed acceptance, exact replay,
 conflict rollback, duplicate-key batch acceptance, first expiring acceptance, and reuse after expiry. Its
-hard invariants verify stable replay identity; no duplicate job, binding, event, runtime, or FIFO state;
+hard invariants verify stable replay identity; no duplicate task, binding, event, runtime, or FIFO state;
 whole-batch conflict rollback; duplicate result ordering alongside unchanged unkeyed behavior; and transfer
 of scoped ownership after expiry. These are full SQL transition timings. No latency or overhead number is
 claimed until a benchmark artifact containing this scenario is recorded.
 
 `coalescing-ingress` runs concurrent requests across bounded key sets for idempotency, debounce with
 reset and preserve scheduling, and throttle. It records per-request p50/p95, retained-key index
-size, ready notifications, and pending-job purge cost. Hard invariants compare structured outcomes
+size, ready notifications, and pending-task purge cost. Hard invariants compare structured outcomes
 with accepted identities, live runtimes, FIFO placement, and lifecycle events. The scenario proves
 serialization and durable bookkeeping for the sampled traffic. It does not prove exactly-once
 handler effects, production latency, or a generally faster coalescing mode.
@@ -133,7 +133,7 @@ supported until a recorded artifact is published and interpreted in its environm
 `deadline-timeout-lifecycle` records bounded reaping of never-started expired work, cooperative
 active-deadline delivery, one timeout-to-retry transition, late-completion fencing, and canonical
 health pressure. Its hard invariants distinguish deadline and execution-timeout evidence from generic
-lease expiry, prove that expired jobs are not newly claimed, and fence late completion after
+lease expiry, prove that expired tasks are not newly claimed, and fence late completion after
 terminalization. Cancellation precedence and cross-transition races remain covered by the live
 PostgreSQL integration suite. The small timings are operational diagnostics only. No latency,
 timeout-precision, or deployment-drain claim is supported until a live artifact is recorded and
@@ -147,11 +147,11 @@ These small full-transition observations are diagnostics only, not a redrive thr
 claim. No performance claim is supported until a live artifact is recorded and interpreted.
 
 `worker-concurrency` seeds work before measurement, then times the complete worker run so no claim query is
-excluded from the throughput window. It records 1/4/8-slot durations and derived jobs/second, maximum
+excluded from the throughput window. It records 1/4/8-slot durations and derived tasks/second, maximum
 handler and runtime-slot overlap, total and maximum-overlap query/claim pressure proxies, heartbeat calls,
 and terminal lease health. Its 10 ms scenario poll interval models continuous refill truthfully: once the
 seeded backlog is exhausted while handlers remain active, the fallback may issue one serial null claim per
-elapsed polling window. The hard claim bound is successful jobs plus `ceil(durationMs / pollMs)` plus two
+elapsed polling window. The hard claim bound is successful tasks plus `ceil(durationMs / pollMs)` plus two
 calls of endpoint/scheduling slack. It does not multiply polling pressure by configured concurrency. The
 scenario also verifies that claim calls remain serial and only occur with a free slot. Separate invariant
 runs prove that one fill pass stops after its first null claim, pause issues no claims, and stop issues no
@@ -216,23 +216,23 @@ Core options:
 | `--profile`          | `smoke`, `default`, `full`        | Select a bounded configuration            |
 | `--scenario`         | comma-separated names             | Run a lifecycle subset                    |
 | `--seed`             | non-negative integer              | Seed the deterministic shuffled plan      |
-| `--jobs`             | positive integer                  | Jobs per fixed comparative run            |
-| `--enqueue-batch`    | positive integer                  | Jobs per `enqueueMany` request            |
+| `--tasks`            | positive integer                  | Tasks per fixed comparative run           |
+| `--enqueue-batch`    | positive integer                  | Tasks per `enqueueMany` request           |
 | `--repetitions`      | positive integer                  | Independent repetitions                   |
 | `--workers`          | comma-separated integers          | Worker-concurrency sweep                  |
-| `--churn-rate`       | positive integer                  | Producer target jobs per second           |
-| `--churn-jobs`       | positive integer                  | Exact churn jobs per design               |
+| `--churn-rate`       | positive integer                  | Producer target tasks per second          |
+| `--churn-tasks`      | positive integer                  | Exact churn tasks per design              |
 | `--sample-ms`        | positive integer                  | Independent telemetry interval            |
 | `--schedule-samples` | positive integer                  | Recurring fires sampled under worker load |
 | `--output`           | path                              | Persist canonical deterministic-key JSON  |
 
 ## Profiles
 
-| Profile   | Intended use           | Fixed runs                                       | Equal-load churn    |
-| --------- | ---------------------- | ------------------------------------------------ | ------------------- |
-| `smoke`   | correctness and wiring | 12 jobs, batch 4, 2 reps, workers 1/2            | 20 jobs at 40/s     |
-| `default` | local evidence         | 100 jobs, batch 25, 3 reps, workers 1/4/8        | 500 jobs at 100/s   |
-| `full`    | controlled evidence    | 1,000 jobs, batch 100, 5 reps, workers 1/4/16/32 | 6,000 jobs at 100/s |
+| Profile   | Intended use           | Fixed runs                                        | Equal-load churn     |
+| --------- | ---------------------- | ------------------------------------------------- | -------------------- |
+| `smoke`   | correctness and wiring | 12 tasks, batch 4, 2 reps, workers 1/2            | 20 tasks at 40/s     |
+| `default` | local evidence         | 100 tasks, batch 25, 3 reps, workers 1/4/8        | 500 tasks at 100/s   |
+| `full`    | controlled evidence    | 1,000 tasks, batch 100, 5 reps, workers 1/4/16/32 | 6,000 tasks at 100/s |
 
 Profile values are starting points, not universal publication standards. Use CLI overrides for the hardware and research question.
 
@@ -285,12 +285,12 @@ pnpm benchmark -- \
   --suite comparative \
   --profile smoke \
   --seed 42 \
-  --jobs 500 \
+  --tasks 500 \
   --enqueue-batch 50 \
   --repetitions 5 \
   --workers 1,4,16 \
   --churn-rate 200 \
-  --churn-jobs 6000 \
+  --churn-tasks 6000 \
   --sample-ms 1000 \
   --output worker-sweep.json
 ```
@@ -327,7 +327,7 @@ Raw claim samples and raw PostgreSQL plans are intentionally retained so derived
 - Compare distributions and confidence intervals, not the single fastest run.
 - Treat WAL as cluster-wide. Other database writes contaminate the delta.
 - Treat tuple statistics as estimates that may lag or change after vacuum.
-- Confirm claim plans use `conventional_job_claim_idx` and `job_runtime_ready_idx` before comparing latency.
+- Confirm claim plans use `conventional_job_claim_idx` and `task_runtime_ready_idx` before comparing latency.
 - A smoke run proves wiring and invariants, not production scalability.
 - Run publication-grade tests on stable hardware without unrelated load and preserve raw JSON plus environment metadata.
 - External side effects remain at least once. Queue benchmark success does not prove exactly-once delivery to HTTP, email, or payment providers.
@@ -340,7 +340,7 @@ Raw claim samples and raw PostgreSQL plans are intentionally retained so derived
 pnpm benchmark -- --suite all --profile smoke --output benchmark-report.json
 ```
 
-The job is capped at 30 minutes and the benchmark step at 20, so a scenario that waits on a job which never arrives fails the run instead of holding a runner.
+The task is capped at 30 minutes and the benchmark step at 20, so a scenario that waits on a task which never arrives fails the run instead of holding a runner.
 
 Two things follow every run. A step summary renders each comparative group's mean throughput and per-run claim p95 with their 95% confidence intervals, plus every lifecycle scenario's duration and assertion verdict. The full canonical report is uploaded as the `benchmark-smoke-<run number>` artifact, retained for 90 days, and uploaded even when the run fails — a failing report is the evidence needed to diagnose the failure.
 
@@ -351,7 +351,7 @@ Before uploading, the workflow asserts the report is `schemaVersion: 3`, carries
 The workflow answers one question: does the harness still run green, and has anything changed by an amount too large to be noise? It does not answer how fast Workhorse is.
 
 - **Assertions are the signal.** A lifecycle assertion that flips from passing to failing is a real regression at any profile. Investigate it directly.
-- **Timings are not a signal on their own.** The smoke profile runs 12 jobs over 2 repetitions on a shared runner. Confidence intervals at that size routinely span more than the mean, and consecutive runs can differ by a factor of two with no code change between them.
+- **Timings are not a signal on their own.** The smoke profile runs 12 tasks over 2 repetitions on a shared runner. Confidence intervals at that size routinely span more than the mean, and consecutive runs can differ by a factor of two with no code change between them.
 - **Only act on a sustained shift.** Treat a timing change as worth investigating when several consecutive runs move the same way and the new interval does not overlap the old one. A single slow run is runner noise.
 - **Never compare across environments.** Runner hardware, PostgreSQL image, and settings all vary. Compare a workflow artifact only with other workflow artifacts, and read `environment` and `provenance` before concluding anything.
 - **Reproduce before recording.** A trend the workflow surfaces is a prompt to run `default` or `full` on stable hardware and record that artifact under `docs/benchmarks/`. The workflow artifact itself is never publication evidence.

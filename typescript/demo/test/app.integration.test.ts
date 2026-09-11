@@ -22,13 +22,13 @@ import {
   DEMO_CONCURRENCY_POLICY_NAMESPACE,
   DEMO_OPERATOR_IDEMPOTENCY_KEY,
   DEMO_OPERATOR_IDEMPOTENCY_SCOPE,
-  DEMO_OPERATOR_MAX_PENDING_JOBS,
+  DEMO_OPERATOR_MAX_PENDING_TASKS,
   DEMO_SEED_IDEMPOTENCY_KEY,
   DEMO_SEED_IDEMPOTENCY_SCOPE,
   DEMO_DURABLE_STEP_MS,
   DEMO_DURABLE_TIMER_WAIT_MS,
   DEMO_LONG_RUNNING_MS,
-  DEMO_LONG_RUNNING_SEED_JOBS,
+  DEMO_LONG_RUNNING_SEED_TASKS,
   DEMO_MAINTENANCE_INTERVAL_MS,
   DEMO_MAINTENANCE_ROUTINE_POLL_MS,
   DEMO_PERSISTENT_RETRY_DELAYS_MS,
@@ -40,7 +40,7 @@ import {
   DEMO_RATE_LIMIT_PER_KEY,
   DEMO_RATE_LIMIT_POLICY_NAMESPACE,
   DEMO_RATE_LIMIT_QUEUE,
-  DEMO_RATE_LIMIT_SEED_JOBS,
+  DEMO_RATE_LIMIT_SEED_TASKS,
   DEMO_SCHEDULE_NAMESPACE,
   DEMO_SHARED_QUEUE,
   DEMO_TIMING_POLICY_TIMEOUT_MS,
@@ -50,7 +50,7 @@ import {
   DEMO_WORKER_POLL_MS,
   DEMO_WORKER_CONCURRENCY,
   HISTORICAL_WORKER_IDS,
-  DURABLE_TIMER_JOB_TYPE,
+  DURABLE_TIMER_TASK_TYPE,
   DURABLE_TIMER_PREPARE_CHECKPOINT,
   DURABLE_TIMER_PUBLISH_CHECKPOINT,
   DURABLE_TIMER_WAIT_NAME,
@@ -58,11 +58,11 @@ import {
   GO_WORKER_SCHEDULE_NAME,
   installDemoSchema,
   LONG_RUNNING_SCHEDULE_NAME,
-  LANGUAGE_WORKER_JOB_TYPE,
+  LANGUAGE_WORKER_TASK_TYPE,
   PYTHON_WORKER_SCHEDULE_NAME,
-  RECURRING_JOB_TYPE,
+  RECURRING_TASK_TYPE,
   REPORT_SCHEDULE_NAME,
-  SHARED_WORKER_JOB_TYPE,
+  SHARED_WORKER_TASK_TYPE,
   SHARED_WORKER_SCHEDULE_NAME,
   seedDemoData,
   syncDemoConcurrencyPolicies,
@@ -129,20 +129,20 @@ const TEST_REGISTRY_INTERVAL_MS = 100;
 const GENERATED_WORKER_ID = /^\S+-\d+-[\da-f]{8}$/;
 
 /**
- * Duration for jobs whose *transient* in-flight state a test asserts on.
+ * Duration for tasks whose *transient* in-flight state a test asserts on.
  *
  * Reported slot use is only as fresh as the registry cadence, so a test that wants to observe
  * overlapping handlers has to keep them overlapping for many refresh cycles. Tuning this close to
  * the cadence makes the test race with load on the machine rather than with the behavior it checks.
  *
  * It also has to stay comfortably inside `waitFor`'s polling budget, because the same tests then
- * wait for those jobs to succeed. Ten registry refreshes is enough headroom for the first
+ * wait for those tasks to succeed. Ten registry refreshes is enough headroom for the first
  * constraint without approaching the second.
  */
-const TEST_OBSERVABLE_JOB_MS = TEST_REGISTRY_INTERVAL_MS * 10;
+const TEST_OBSERVABLE_TASK_MS = TEST_REGISTRY_INTERVAL_MS * 10;
 
 /** Keep handlers active long enough for a loaded CI runner to observe and act on transient state. */
-const TEST_CONTROL_WINDOW_JOB_MS = TEST_REGISTRY_INTERVAL_MS * 50;
+const TEST_CONTROL_WINDOW_TASK_MS = TEST_REGISTRY_INTERVAL_MS * 50;
 
 /**
  * Applications created by the current test, stopped before the next one truncates.
@@ -160,7 +160,7 @@ interface DemoTestRuntimeOptions {
   workerPollMs?: number;
   registryIntervalMs?: number;
   maintenanceRoutinePollMs?: number;
-  longRunningJobMs?: number;
+  longRunningTaskMs?: number;
   durableStepMs?: number;
   durableTimerWaitMs?: number;
   onDurableStepOperation?: (
@@ -178,7 +178,7 @@ interface DemoTestRuntimeOptions {
 type TestApplicationOptions = CreateDemoApplicationOptions & DemoTestRuntimeOptions;
 
 function createTestWorkerRuntime(options: DemoTestRuntimeOptions) {
-  // The worker runtime shares the demo's queue options so contracted job types stay completable.
+  // The worker runtime shares the demo's queue options so contracted task types stay completable.
   const adapter = createDrizzleAdapter(database, {
     defaultQueue: DEMO_QUEUE,
     queueOptions: DEMO_QUEUE_OPTIONS,
@@ -207,7 +207,7 @@ function createTestWorkerRuntime(options: DemoTestRuntimeOptions) {
             registryIntervalMs: options.registryIntervalMs,
             durableStepMs: options.durableStepMs,
             durableTimerWaitMs: options.durableTimerWaitMs,
-            longRunningJobMs: options.longRunningJobMs,
+            longRunningTaskMs: options.longRunningTaskMs,
             onDurableStepOperation: options.onDurableStepOperation,
             onDurableTimerOperation: options.onDurableTimerOperation,
           }),
@@ -252,7 +252,7 @@ function createTestApplication(options: TestApplicationOptions = {}) {
   const resolved = {
     workerPollMs: 15,
     registryIntervalMs: TEST_REGISTRY_INTERVAL_MS,
-    longRunningJobMs: 25,
+    longRunningTaskMs: 25,
     durableStepMs: 0,
     ...options,
   };
@@ -272,23 +272,23 @@ beforeEach(async () => {
   // Stop any worker left running by the previous test before truncating, so a straggler cannot
   // re-register itself into the fleet view this test is about to assert on.
   await Promise.all(runningApplications.splice(0).map((workhorse) => workhorse.stop()));
-  await pool.query(`TRUNCATE public.workhorse_demo_audit, public.workhorse_demo_seed, public.workhorse_demo_order, workhorse.job_event,
-    workhorse.job_wait, workhorse.job_checkpoint, workhorse.attempt_history, workhorse.schedule_occurrence, workhorse.schedule_definition,
+  await pool.query(`TRUNCATE public.workhorse_demo_audit, public.workhorse_demo_seed, public.workhorse_demo_order, workhorse.task_event,
+    workhorse.task_wait, workhorse.task_checkpoint, workhorse.attempt_history, workhorse.schedule_occurrence, workhorse.schedule_definition,
     workhorse.queue_control, workhorse.rate_limit_bucket, workhorse.rate_limit_policy,
     workhorse.concurrency_policy, workhorse.worker_registry,
-    workhorse.enqueue_idempotency, workhorse.job_outcome, workhorse.job_runtime,
-    workhorse.job_stat_bucket, workhorse.job RESTART IDENTITY CASCADE`);
-  await pool.query(`UPDATE workhorse.job_stat_state SET
+    workhorse.enqueue_idempotency, workhorse.task_outcome, workhorse.task_runtime,
+    workhorse.task_stat_bucket, workhorse.task RESTART IDENTITY CASCADE`);
+  await pool.query(`UPDATE workhorse.task_stat_state SET
     rolled_up_through = date_bin('1 minute', clock_timestamp(), timestamp '2000-01-01' AT TIME ZONE 'UTC'),
     last_run_at = NULL, updated_at = clock_timestamp()`);
   await new Queue(pool).syncRetentionPolicy({
-    jobIdentityRetentionDays: null,
+    taskIdentityRetentionDays: null,
     terminalOutcomeRetentionDays: null,
-    jobEventRetentionDays: null,
+    taskEventRetentionDays: null,
     attemptHistoryRetentionDays: null,
     scheduleOccurrenceRetentionDays: 30,
     statisticsRetentionDays: 14,
-    terminalJobPruneLimit: 1_000,
+    terminalTaskPruneLimit: 1_000,
     historyPartitionsPerPass: 4,
     defaultPartitionRowsPerPass: 10_000,
     occurrenceRowsPerPass: 10_000,
@@ -551,17 +551,17 @@ function showcaseTestPayload(
   };
 }
 
-async function jobResult(jobId: string): Promise<Json | null> {
+async function taskResult(taskId: string): Promise<Json | null> {
   const rows = await pool.query<{ result: Json | null }>(
-    "SELECT result FROM workhorse.job_outcome WHERE job_id = $1",
-    [jobId],
+    "SELECT result FROM workhorse.task_outcome WHERE task_id = $1",
+    [taskId],
   );
   return rows.rows[0]?.result ?? null;
 }
 
-const waitForJobState = (admin: Admin, jobId: string, state: string) =>
+const waitForTaskState = (admin: Admin, taskId: string, state: string) =>
   waitFor(
-    async () => (await admin.getJob(jobId))?.state,
+    async () => (await admin.getTask(taskId))?.state,
     (value) => value === state,
     1_600,
   );
@@ -582,9 +582,9 @@ describe("Workhorse demo", () => {
     }
   });
 
-  it("migrates legacy showcase jobs to their family task types", async () => {
+  it("migrates legacy showcase tasks to their family task types", async () => {
     const queue = new Queue(pool, { defaultQueue: DEMO_QUEUE });
-    const jobIds = await Promise.all(
+    const taskIds = await Promise.all(
       DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) =>
         queue.enqueue("demo.feature-showcase", {
           source: DEMO_FEATURE_SHOWCASE_SOURCE,
@@ -597,16 +597,16 @@ describe("Workhorse demo", () => {
 
     expect(
       await pool.query(
-        `SELECT payload->>'family' AS family, job_type
-           FROM workhorse.job
+        `SELECT payload->>'family' AS family, task_type
+           FROM workhorse.task
           WHERE id = ANY($1::uuid[])
           ORDER BY payload->>'family'`,
-        [jobIds],
+        [taskIds],
       ),
     ).toMatchObject({
       rows: [...DEMO_FEATURE_SHOWCASE_FAMILIES]
         .toSorted((left, right) => left.key.localeCompare(right.key))
-        .map((family) => ({ family: family.key, job_type: family.jobType })),
+        .map((family) => ({ family: family.key, task_type: family.taskType })),
     });
   });
 
@@ -622,7 +622,7 @@ describe("Workhorse demo", () => {
 
     expect(
       await pool.query(
-        `SELECT schedule_name, cron_expression, job_type, queue_name, enabled
+        `SELECT schedule_name, cron_expression, task_type, queue_name, enabled
            FROM workhorse.schedule_definition
           WHERE namespace = $1
           ORDER BY schedule_name`,
@@ -633,56 +633,56 @@ describe("Workhorse demo", () => {
         {
           schedule_name: LONG_RUNNING_SCHEDULE_NAME,
           cron_expression: "* * * * *",
-          job_type: "demo.long-running",
+          task_type: "demo.long-running",
           queue_name: DEMO_QUEUE,
           enabled: true,
         },
         {
           schedule_name: REPORT_SCHEDULE_NAME,
           cron_expression: "*/5 * * * *",
-          job_type: "demo.report",
+          task_type: "demo.report",
           queue_name: DEMO_QUEUE,
           enabled: true,
         },
         {
           schedule_name: HEARTBEAT_SCHEDULE_NAME,
           cron_expression: "* * * * *",
-          job_type: "demo.recurring",
+          task_type: "demo.recurring",
           queue_name: DEMO_QUEUE,
           enabled: true,
         },
         {
           schedule_name: GO_WORKER_SCHEDULE_NAME,
           cron_expression: "2-59/3 * * * *",
-          job_type: LANGUAGE_WORKER_JOB_TYPE,
+          task_type: LANGUAGE_WORKER_TASK_TYPE,
           queue_name: DEMO_GO_QUEUE,
           enabled: true,
         },
         {
           schedule_name: PYTHON_WORKER_SCHEDULE_NAME,
           cron_expression: "1-59/3 * * * *",
-          job_type: LANGUAGE_WORKER_JOB_TYPE,
+          task_type: LANGUAGE_WORKER_TASK_TYPE,
           queue_name: DEMO_PYTHON_QUEUE,
           enabled: true,
         },
         {
           schedule_name: TYPESCRIPT_WORKER_SCHEDULE_NAME,
           cron_expression: "*/3 * * * *",
-          job_type: LANGUAGE_WORKER_JOB_TYPE,
+          task_type: LANGUAGE_WORKER_TASK_TYPE,
           queue_name: DEMO_QUEUE,
           enabled: true,
         },
         {
           schedule_name: SHARED_WORKER_SCHEDULE_NAME,
           cron_expression: "* * * * *",
-          job_type: SHARED_WORKER_JOB_TYPE,
+          task_type: SHARED_WORKER_TASK_TYPE,
           queue_name: DEMO_SHARED_QUEUE,
           enabled: true,
         },
         ...DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) => ({
           schedule_name: family.scheduleName,
           cron_expression: family.schedule,
-          job_type: family.jobType,
+          task_type: family.taskType,
           queue_name: DEMO_QUEUE,
           enabled: true,
         })).toSorted((left, right) => left.schedule_name.localeCompare(right.schedule_name)),
@@ -692,8 +692,8 @@ describe("Workhorse demo", () => {
 
   it("seeds a distinct staging workload once and executes its dependencies and retries", async () => {
     const seed = await seedStagingData(database);
-    expect(seed.jobIds).toHaveLength(7);
-    expect(await seedStagingData(database)).toEqual({ seeded: false, jobIds: [] });
+    expect(seed.taskIds).toHaveLength(7);
+    expect(await seedStagingData(database)).toEqual({ seeded: false, taskIds: [] });
     await syncStagingSchedules(pool);
     await syncStagingSchedules(pool);
     expect(
@@ -723,16 +723,16 @@ describe("Workhorse demo", () => {
     try {
       await waitFor(
         async () => {
-          const jobs = await Promise.all(seed.jobIds.map((id) => adapter.admin.getJob(id)));
+          const tasks = await Promise.all(seed.taskIds.map((id) => adapter.admin.getTask(id)));
           return (
-            jobs.map((job) => job?.state).join(",") ===
+            tasks.map((task) => task?.state).join(",") ===
             "succeeded,succeeded,succeeded,succeeded,canceled,scheduled,failed"
           );
         },
         (done) => done,
         1000,
       );
-      expect((await adapter.admin.getJob(seed.jobIds[2]!))?.currentAttempt).toBe(2);
+      expect((await adapter.admin.getTask(seed.taskIds[2]!))?.currentAttempt).toBe(2);
     } finally {
       await worker.stop();
       await run;
@@ -743,12 +743,12 @@ describe("Workhorse demo", () => {
     const { app } = createTestApplication();
 
     const seeded = await seedDemoData(database);
-    expect(seeded).toMatchObject({ seeded: true, historicalJobCount: 362 });
-    expect(seeded.jobIds).toHaveLength(86);
+    expect(seeded).toMatchObject({ seeded: true, historicalTaskCount: 362 });
+    expect(seeded.taskIds).toHaveLength(86);
     expect(await seedDemoData(database)).toEqual({
       seeded: false,
-      jobIds: [],
-      historicalJobCount: 0,
+      taskIds: [],
+      historicalTaskCount: 0,
     });
     expect(
       await pool.query(
@@ -756,14 +756,14 @@ describe("Workhorse demo", () => {
            FROM (
              -- Throttled acceptance runs inside a SQL exception block, so those rows carry
              -- subtransaction xids of the same showcase transaction rather than its top-level id.
-             SELECT xmin::text AS version FROM workhorse.job
+             SELECT xmin::text AS version FROM workhorse.task
                WHERE id = ANY($1::uuid[])
-                 AND job_type NOT IN ('demo.long-running', 'demo.keyed-throttle')
+                 AND task_type NOT IN ('demo.long-running', 'demo.keyed-throttle')
              UNION ALL SELECT xmin::text FROM public.workhorse_demo_order
             UNION ALL SELECT xmin::text FROM public.workhorse_demo_seed
                WHERE name = 'default-dashboard-v8'
            ) representative_rows`,
-        [seeded.jobIds],
+        [seeded.taskIds],
       ),
     ).toMatchObject({
       rows: [{ versions: [expect.any(String), expect.any(String), expect.any(String)] }],
@@ -771,15 +771,17 @@ describe("Workhorse demo", () => {
     expect(
       await pool.query("SELECT count(*)::integer AS count FROM public.workhorse_demo_order"),
     ).toMatchObject({ rows: [{ count: 1 }] });
-    expect(await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).toMatchObject({
-      rows: [{ count: 448 }],
-    });
+    expect(await pool.query("SELECT count(*)::integer AS count FROM workhorse.task")).toMatchObject(
+      {
+        rows: [{ count: 448 }],
+      },
+    );
     const blockedTasks = await dashboardClient(app).dashboard.tasks({
       filter: "blocked",
       page: 1,
       pageSize: 25,
     });
-    expect(blockedTasks.jobs).toEqual(
+    expect(blockedTasks.tasks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           state: "blocked",
@@ -788,15 +790,15 @@ describe("Workhorse demo", () => {
         }),
       ]),
     );
-    const visibleBlockedTask = blockedTasks.jobs.find(
-      (job) => job.tags.includes("dependency") && job.tags.includes("release"),
+    const visibleBlockedTask = blockedTasks.tasks.find(
+      (task) => task.tags.includes("dependency") && task.tags.includes("release"),
     );
     expect(visibleBlockedTask).toBeDefined();
     await expect(
-      dashboardClient(app).dashboard.jobDetail({ id: visibleBlockedTask!.id }),
+      dashboardClient(app).dashboard.taskDetail({ id: visibleBlockedTask!.id }),
     ).resolves.toMatchObject({
       payload: {
-        family: "job-dependencies",
+        family: "task-dependencies",
         scenario: "release-after-success",
         role: "dependent",
       },
@@ -806,60 +808,60 @@ describe("Workhorse demo", () => {
       page: 1,
       pageSize: 25,
     });
-    expect(scheduledTasks.jobs.map((job) => job.id)).toEqual(
-      expect.arrayContaining(visibleBlockedTask!.prerequisiteJobIds),
+    expect(scheduledTasks.tasks.map((task) => task.id)).toEqual(
+      expect.arrayContaining(visibleBlockedTask!.prerequisiteTaskIds),
     );
-    const retainedPrerequisite = scheduledTasks.jobs.find((job) =>
-      visibleBlockedTask!.prerequisiteJobIds.includes(job.id),
+    const retainedPrerequisite = scheduledTasks.tasks.find((task) =>
+      visibleBlockedTask!.prerequisiteTaskIds.includes(task.id),
     );
     expect(retainedPrerequisite?.runAt).toBe("9999-12-31T23:59:59.999Z");
     expect(
       await pool.query(
         `SELECT payload->>'family' AS family,
-                job_type,
+                task_type,
                 count(DISTINCT payload->>'scenario')::integer AS scenarios
-           FROM workhorse.job
+           FROM workhorse.task
           WHERE payload->>'source' = $1
-          GROUP BY payload->>'family', job_type
+          GROUP BY payload->>'family', task_type
           ORDER BY payload->>'family'`,
         [DEMO_FEATURE_SHOWCASE_SOURCE],
       ),
     ).toMatchObject({
       rows: [...DEMO_FEATURE_SHOWCASE_FAMILIES]
         .toSorted((left, right) => left.key.localeCompare(right.key))
-        .map((family) => ({ family: family.key, job_type: family.jobType, scenarios: 3 })),
+        .map((family) => ({ family: family.key, task_type: family.taskType, scenarios: 3 })),
     });
     expect(DEMO_FEATURE_SHOWCASE_EXAMPLE_COUNT).toBe(51);
     expect(
       await pool.query(
         `SELECT count(*)::integer AS count
-           FROM workhorse.job job
-           JOIN workhorse.job_outcome outcome ON outcome.job_id = job.id
-          WHERE job.job_type = 'demo.cancellation'
-            AND job.payload->>'family' = 'cancellation'
+           FROM workhorse.task task
+           JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
+          WHERE task.task_type = 'demo.cancellation'
+            AND task.payload->>'family' = 'cancellation'
             AND outcome.state = 'canceled'`,
       ),
     ).toMatchObject({ rows: [{ count: 2 }] });
     expect(
       await pool.query(
         `SELECT count(*)::integer AS count,
-                count(DISTINCT source_job_id)::integer AS sources,
-                count(DISTINCT target_job_id)::integer AS targets
-           FROM workhorse.job_redrive
+                count(DISTINCT source_task_id)::integer AS sources,
+                count(DISTINCT target_task_id)::integer AS targets
+           FROM workhorse.task_redrive
           WHERE requested_by = 'demo-seed'`,
       ),
     ).toMatchObject({ rows: [{ count: 2, sources: 2, targets: 2 }] });
     expect(
       await pool.query(
-        `SELECT job.payload, job.concurrency_key, job.max_attempts, job.tags, runtime.state,
+        `SELECT task.payload, task.concurrency_key, task.max_attempts, task.tags, runtime.state,
                 runtime.run_at > clock_timestamp() AS is_future
-           FROM workhorse.job job
-           JOIN workhorse.job_runtime runtime ON runtime.job_id = job.id
-          WHERE job_type = 'demo.long-running' AND payload->>'source' = 'long-running-seed'
+           FROM workhorse.task task
+           JOIN workhorse.task_runtime runtime ON runtime.task_id = task.id
+          WHERE task_type = 'demo.long-running' AND payload->>'source' = 'long-running-seed'
           ORDER BY payload->>'label'`,
       ),
     ).toMatchObject({
-      rows: DEMO_LONG_RUNNING_SEED_JOBS.map(({ label, concurrencyKey }) => ({
+      rows: DEMO_LONG_RUNNING_SEED_TASKS.map(({ label, concurrencyKey }) => ({
         payload: { source: "long-running-seed", label },
         concurrency_key: concurrencyKey,
         max_attempts: 1,
@@ -870,9 +872,9 @@ describe("Workhorse demo", () => {
     });
     expect(
       await pool.query(
-        `SELECT payload, max_attempts, tags FROM workhorse.job
-          WHERE job_type = $1 AND payload->>'source' = 'representative-seed'`,
-        [DURABLE_TIMER_JOB_TYPE],
+        `SELECT payload, max_attempts, tags FROM workhorse.task
+          WHERE task_type = $1 AND payload->>'source' = 'representative-seed'`,
+        [DURABLE_TIMER_TASK_TYPE],
       ),
     ).toMatchObject({
       rows: [
@@ -885,18 +887,18 @@ describe("Workhorse demo", () => {
     });
     expect(
       await pool.query(
-        `SELECT job.payload, job.max_attempts,
-                job.execution_timeout_ms::integer AS execution_timeout_ms,
-                job.deadline_at IS NOT NULL AS has_deadline,
+        `SELECT task.payload, task.max_attempts,
+                task.execution_timeout_ms::integer AS execution_timeout_ms,
+                task.deadline_at IS NOT NULL AS has_deadline,
                 COALESCE(runtime.state, outcome.state) AS state,
                 CASE WHEN runtime.run_at IS NULL THEN NULL
-                     ELSE job.deadline_at > runtime.run_at END AS deadline_after_run_at,
-                job.tags
-           FROM workhorse.job job
-           LEFT JOIN workhorse.job_runtime runtime ON runtime.job_id = job.id
-           LEFT JOIN workhorse.job_outcome outcome ON outcome.job_id = job.id
-          WHERE job.job_type = 'demo.timing-policy'
-          ORDER BY job.payload->>'source'`,
+                     ELSE task.deadline_at > runtime.run_at END AS deadline_after_run_at,
+                task.tags
+           FROM workhorse.task task
+           LEFT JOIN workhorse.task_runtime runtime ON runtime.task_id = task.id
+           LEFT JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
+          WHERE task.task_type = 'demo.timing-policy'
+          ORDER BY task.payload->>'source'`,
       ),
     ).toMatchObject({
       rows: [
@@ -931,8 +933,8 @@ describe("Workhorse demo", () => {
     });
     expect(
       await pool.query(
-        `SELECT payload, max_attempts, retry_policy, tags FROM workhorse.job
-          WHERE job_type = 'demo.retry' AND payload->>'label' = 'recover-with-durable-checkpoint'`,
+        `SELECT payload, max_attempts, retry_policy, tags FROM workhorse.task
+          WHERE task_type = 'demo.retry' AND payload->>'label' = 'recover-with-durable-checkpoint'`,
       ),
     ).toMatchObject({
       rows: [
@@ -946,8 +948,8 @@ describe("Workhorse demo", () => {
     });
     expect(
       await pool.query(
-        `SELECT payload, max_attempts, tags FROM workhorse.job
-          WHERE job_type = 'demo.durable-pipeline'
+        `SELECT payload, max_attempts, tags FROM workhorse.task
+          WHERE task_type = 'demo.durable-pipeline'
             AND payload->>'failureMode' IS NULL
           ORDER BY payload->>'scenario'`,
       ),
@@ -972,8 +974,8 @@ describe("Workhorse demo", () => {
     });
     expect(
       await pool.query(
-        `SELECT payload, max_attempts, retry_policy, tags FROM workhorse.job
-          WHERE job_type = 'demo.durable-pipeline'
+        `SELECT payload, max_attempts, retry_policy, tags FROM workhorse.task
+          WHERE task_type = 'demo.durable-pipeline'
             AND payload->>'failureMode' = 'continuous'
           ORDER BY CASE payload->>'scenario'
             WHEN 'order-fulfillment' THEN 1
@@ -1059,9 +1061,9 @@ describe("Workhorse demo", () => {
         retention: {
           maxLagMs: null,
           maxLagCategory: null,
-          eligibleHistoryPartitions: { jobEvents: 0, attemptHistory: 0 },
-          defaultHistoryRows: { jobEvents: 0, attemptHistory: 0 },
-          defaultHistoryRowsCapped: { jobEvents: false, attemptHistory: false },
+          eligibleHistoryPartitions: { taskEvents: 0, attemptHistory: 0 },
+          defaultHistoryRows: { taskEvents: 0, attemptHistory: 0 },
+          defaultHistoryRowsCapped: { taskEvents: false, attemptHistory: false },
         },
       },
     });
@@ -1080,7 +1082,7 @@ describe("Workhorse demo", () => {
       completed: 350,
       discarded: 21,
     });
-    expect(firstPage.jobs).toHaveLength(25);
+    expect(firstPage.tasks).toHaveLength(25);
     expect(firstPage).not.toHaveProperty("facets");
     await expect(client.dashboard.taskFacets()).resolves.toMatchObject({
       queues: [
@@ -1101,18 +1103,18 @@ describe("Workhorse demo", () => {
         "showcase-seed-redrive-replay",
         "showcase-seed-redrive-success",
       ],
-      jobTypes: expect.arrayContaining(["demo.report", "order.process"]),
+      taskTypes: expect.arrayContaining(["demo.report", "order.process"]),
       tags: expect.arrayContaining(["billing", "email", "reports", "weekly"]),
     });
-    expect(firstPage.jobs.some((job) => job.tags.length > 0)).toBe(true);
+    expect(firstPage.tasks.some((task) => task.tags.length > 0)).toBe(true);
     expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 448 });
-    expect(secondPage.jobs).toHaveLength(25);
+    expect(secondPage.tasks).toHaveLength(25);
     expect(
       await client.dashboard.tasks({ filter: "scheduled", page: 1, pageSize: 25 }),
     ).toMatchObject({
       filter: "scheduled",
       total: 10,
-      jobs: expect.arrayContaining([expect.objectContaining({ state: "scheduled" })]),
+      tasks: expect.arrayContaining([expect.objectContaining({ state: "scheduled" })]),
     });
     await expect(
       client.dashboard.tasks({ filter: "all", page: 1, pageSize: 10 as 25 }),
@@ -1126,22 +1128,24 @@ describe("Workhorse demo", () => {
     });
     expect(tagFiltered.total).toBeGreaterThan(0);
     expect(
-      tagFiltered.jobs.every((job) => job.tags.some((tag) => ["weekly", "billing"].includes(tag))),
+      tagFiltered.tasks.every((task) =>
+        task.tags.some((tag) => ["weekly", "billing"].includes(tag)),
+      ),
     ).toBe(true);
 
     await expect(
       client.dashboard.tasks({ filter: "all", page: 1, pageSize: 25, search: "report" }),
     ).resolves.toMatchObject({
-      jobs: expect.arrayContaining([expect.objectContaining({ type: "demo.report" })]),
+      tasks: expect.arrayContaining([expect.objectContaining({ type: "demo.report" })]),
     });
     await expect(
       client.dashboard.tasks({ filter: "all", page: 1, pageSize: 25, search: "demo.r*ort" }),
     ).resolves.toMatchObject({
-      jobs: expect.arrayContaining([expect.objectContaining({ type: "demo.report" })]),
+      tasks: expect.arrayContaining([expect.objectContaining({ type: "demo.report" })]),
     });
     await expect(
       client.dashboard.tasks({ filter: "all", page: 1, pageSize: 25, search: "no-such-task" }),
-    ).resolves.toMatchObject({ total: 0, jobs: [] });
+    ).resolves.toMatchObject({ total: 0, tasks: [] });
 
     const queueFiltered = await client.dashboard.tasks({
       filter: "all",
@@ -1149,40 +1153,40 @@ describe("Workhorse demo", () => {
       pageSize: 25,
       queue: "emails",
     });
-    expect(queueFiltered.jobs.every((job) => job.queue === "emails")).toBe(true);
+    expect(queueFiltered.tasks.every((task) => task.queue === "emails")).toBe(true);
     const workerFiltered = await client.dashboard.tasks({
       filter: "all",
       page: 1,
       pageSize: 25,
       worker: HISTORICAL_WORKER_IDS[0],
     });
-    expect(workerFiltered.jobs.every((job) => job.lastWorkerId === HISTORICAL_WORKER_IDS[0])).toBe(
-      true,
-    );
+    expect(
+      workerFiltered.tasks.every((task) => task.lastWorkerId === HISTORICAL_WORKER_IDS[0]),
+    ).toBe(true);
     const typeFiltered = await client.dashboard.tasks({
       filter: "all",
       page: 1,
       pageSize: 25,
-      jobType: "email.send",
+      taskType: "email.send",
     });
-    expect(typeFiltered.jobs.every((job) => job.type === "email.send")).toBe(true);
+    expect(typeFiltered.tasks.every((task) => task.type === "email.send")).toBe(true);
     const combined = await client.dashboard.tasks({
       filter: "all",
       page: 1,
       pageSize: 25,
       queue: "emails",
       worker: HISTORICAL_WORKER_IDS[0],
-      jobType: "email.send",
+      taskType: "email.send",
       tags: ["email"],
     });
     expect(combined.total).toBeGreaterThan(0);
     expect(
-      combined.jobs.every(
-        (job) =>
-          job.queue === "emails" &&
-          job.lastWorkerId === HISTORICAL_WORKER_IDS[0] &&
-          job.type === "email.send" &&
-          job.tags.includes("email"),
+      combined.tasks.every(
+        (task) =>
+          task.queue === "emails" &&
+          task.lastWorkerId === HISTORICAL_WORKER_IDS[0] &&
+          task.type === "email.send" &&
+          task.tags.includes("email"),
       ),
     ).toBe(true);
     const priorityFiltered = await client.dashboard.tasks({
@@ -1193,7 +1197,7 @@ describe("Workhorse demo", () => {
     });
     expect(priorityFiltered).toMatchObject({ priority: 90, sort: "updated" });
     expect(priorityFiltered.total).toBeGreaterThan(0);
-    expect(priorityFiltered.jobs.every((job) => job.priority === 90)).toBe(true);
+    expect(priorityFiltered.tasks.every((task) => task.priority === 90)).toBe(true);
 
     const prioritySorted = await client.dashboard.tasks({
       filter: "all",
@@ -1202,14 +1206,14 @@ describe("Workhorse demo", () => {
       sort: "priority",
     });
     expect(prioritySorted).toMatchObject({ priority: null, sort: "priority" });
-    const sortedPriorities = prioritySorted.jobs.map((job) => job.priority);
+    const sortedPriorities = prioritySorted.tasks.map((task) => task.priority);
     expect(sortedPriorities).toEqual(sortedPriorities.toSorted((left, right) => right - left));
     expect(
       await pool.query(
-        `SELECT runtime.state, job.payload, runtime.run_at > clock_timestamp() AS is_future
-           FROM workhorse.job job
-           JOIN workhorse.job_runtime runtime ON runtime.job_id = job.id
-          WHERE job.payload->>'source' = 'scheduled-seed'`,
+        `SELECT runtime.state, task.payload, runtime.run_at > clock_timestamp() AS is_future
+           FROM workhorse.task task
+           JOIN workhorse.task_runtime runtime ON runtime.task_id = task.id
+          WHERE task.payload->>'source' = 'scheduled-seed'`,
       ),
     ).toMatchObject({
       rows: [{ state: "scheduled", payload: { source: "scheduled-seed" }, is_future: true }],
@@ -1264,7 +1268,7 @@ describe("Workhorse demo", () => {
       expect.arrayContaining([
         "demo.batch-digest",
         "demo.durable-pipeline",
-        "demo.job-dependency",
+        "demo.task-dependency",
         "demo.recurring",
         "demo.report",
         "email.digest",
@@ -1298,8 +1302,8 @@ describe("Workhorse demo", () => {
     await expect(
       pool.query(
         `SELECT payload->>'label' AS label, concurrency_key, tags
-           FROM workhorse.job
-          WHERE job_type = 'demo.long-running'
+           FROM workhorse.task
+          WHERE task_type = 'demo.long-running'
             AND payload->>'source' = 'long-running-seed'
           ORDER BY payload->>'label'`,
       ),
@@ -1325,15 +1329,15 @@ describe("Workhorse demo", () => {
 
     const examples = await pool.query<{ id: string; label: string; concurrency_key: string }>(
       `SELECT id::text, payload->>'label' AS label, concurrency_key
-         FROM workhorse.job
-        WHERE job_type = 'demo.long-running'
+         FROM workhorse.task
+        WHERE task_type = 'demo.long-running'
           AND payload->>'source' = 'long-running-seed'`,
     );
     const idByLabel = new Map(examples.rows.map((row) => [row.label, row.id]));
     const keyById = new Map(examples.rows.map((row) => [row.id, row.concurrency_key]));
     const exampleIds = examples.rows.map((row) => row.id);
     await pool.query(
-      `UPDATE workhorse.job_runtime
+      `UPDATE workhorse.task_runtime
           SET state = 'scheduled', run_at = clock_timestamp() + interval '1 day',
               ready_at = NULL, sequence = NULL, worker_id = NULL, acquired_at = NULL,
               heartbeat_at = NULL, expires_at = NULL, attempt_timeout_at = NULL,
@@ -1341,10 +1345,10 @@ describe("Workhorse demo", () => {
               cancel_requested_at = NULL, cancel_requested_by = NULL, cancel_reason = NULL`,
     );
     await pool.query(
-      `UPDATE workhorse.job_runtime
+      `UPDATE workhorse.task_runtime
           SET state = 'ready', run_at = clock_timestamp(), ready_at = clock_timestamp(),
               sequence = nextval('workhorse.ready_sequence_seq')
-        WHERE job_id = ANY($1::uuid[])`,
+        WHERE task_id = ANY($1::uuid[])`,
       [exampleIds],
     );
 
@@ -1387,12 +1391,12 @@ describe("Workhorse demo", () => {
     ]);
     await expect(
       pool.query(
-        `SELECT runtime.state, job.concurrency_key, count(*)::integer AS count
-           FROM workhorse.job job
-           JOIN workhorse.job_runtime runtime ON runtime.job_id = job.id
-          WHERE job.payload->>'source' = 'rate-limit-seed'
-          GROUP BY runtime.state, job.concurrency_key
-          ORDER BY job.concurrency_key`,
+        `SELECT runtime.state, task.concurrency_key, count(*)::integer AS count
+           FROM workhorse.task task
+           JOIN workhorse.task_runtime runtime ON runtime.task_id = task.id
+          WHERE task.payload->>'source' = 'rate-limit-seed'
+          GROUP BY runtime.state, task.concurrency_key
+          ORDER BY task.concurrency_key`,
       ),
     ).resolves.toMatchObject({
       rows: [
@@ -1400,7 +1404,7 @@ describe("Workhorse demo", () => {
         { state: "ready", concurrency_key: "customer-globex", count: 1 },
       ],
     });
-    expect(DEMO_RATE_LIMIT_SEED_JOBS).toHaveLength(5);
+    expect(DEMO_RATE_LIMIT_SEED_TASKS).toHaveLength(5);
     await expect(new Queue(pool).rateLimitStatuses([DEMO_RATE_LIMIT_QUEUE])).resolves.toMatchObject(
       [
         {
@@ -1429,9 +1433,9 @@ describe("Workhorse demo", () => {
         async () => {
           const result = await pool.query<{ count: number }>(
             `SELECT count(*)::integer AS count
-               FROM workhorse.job job
-               JOIN workhorse.job_outcome outcome ON outcome.job_id = job.id
-              WHERE job.payload->>'source' = 'rate-limit-seed'
+               FROM workhorse.task task
+               JOIN workhorse.task_outcome outcome ON outcome.task_id = task.id
+              WHERE task.payload->>'source' = 'rate-limit-seed'
                 AND outcome.state = 'succeeded'`,
           );
           return result.rows[0]!.count;
@@ -1441,9 +1445,9 @@ describe("Workhorse demo", () => {
       await expect(
         pool.query(
           `SELECT count(*)::integer AS count
-             FROM workhorse.job job
-             JOIN workhorse.job_runtime runtime ON runtime.job_id = job.id
-            WHERE job.payload->>'source' = 'rate-limit-seed' AND runtime.state = 'ready'`,
+             FROM workhorse.task task
+             JOIN workhorse.task_runtime runtime ON runtime.task_id = task.id
+            WHERE task.payload->>'source' = 'rate-limit-seed' AND runtime.state = 'ready'`,
         ),
       ).resolves.toMatchObject({ rows: [{ count: 1 }] });
     } finally {
@@ -1455,20 +1459,20 @@ describe("Workhorse demo", () => {
     const { workhorse } = createTestApplication({ maintenanceIntervalMs: 100 });
     await seedDemoData(database);
     const seeded = await pool.query<{ id: string }>(
-      `SELECT id::text FROM workhorse.job
-        WHERE job_type = 'demo.timing-policy'
+      `SELECT id::text FROM workhorse.task
+        WHERE task_type = 'demo.timing-policy'
           AND payload->>'source' = 'execution-timeout-seed'`,
     );
-    const jobId = seeded.rows[0]!.id;
+    const taskId = seeded.rows[0]!.id;
     workhorse.start();
 
     try {
-      let job = await workhorse.context.admin.getJob(jobId);
-      for (let attempt = 0; attempt < 240 && job?.state !== "failed"; attempt += 1) {
+      let task = await workhorse.context.admin.getTask(taskId);
+      for (let attempt = 0; attempt < 240 && task?.state !== "failed"; attempt += 1) {
         await sleep(25);
-        job = await workhorse.context.admin.getJob(jobId);
+        task = await workhorse.context.admin.getTask(taskId);
       }
-      expect(job).toMatchObject({
+      expect(task).toMatchObject({
         state: "failed",
         currentAttempt: 1,
         error: { name: "ExecutionTimeout" },
@@ -1476,8 +1480,8 @@ describe("Workhorse demo", () => {
       await expect(
         pool.query(
           `SELECT outcome FROM workhorse.attempt_history
-            WHERE job_id = $1 ORDER BY attempt`,
-          [jobId],
+            WHERE task_id = $1 ORDER BY attempt`,
+          [taskId],
         ),
       ).resolves.toMatchObject({ rows: [{ outcome: "timeout" }] });
     } finally {
@@ -1496,7 +1500,7 @@ describe("Workhorse demo", () => {
     workhorse.start();
 
     type PersistentFailureRow = {
-      job_id: string;
+      task_id: string;
       scenario: string;
       retry_delay_ms: number;
       state: string;
@@ -1543,27 +1547,27 @@ describe("Workhorse demo", () => {
     const readPersistentRows = async () =>
       (
         await pool.query<PersistentFailureRow>(`
-          SELECT job.id AS job_id, job.payload->>'scenario' AS scenario,
-                 CASE job.payload->>'scenario'
+          SELECT task.id AS task_id, task.payload->>'scenario' AS scenario,
+                 CASE task.payload->>'scenario'
                    WHEN 'order-fulfillment' THEN ${DEMO_PERSISTENT_RETRY_DELAYS_MS[0]}
                    WHEN 'customer-onboarding' THEN ${DEMO_PERSISTENT_RETRY_DELAYS_MS[1]}
                    ELSE ${DEMO_PERSISTENT_RETRY_DELAYS_MS[2]}
                  END AS retry_delay_ms,
-                 job.retry_policy,
+                 task.retry_policy,
                  (SELECT (event.details->>'retry_delay_ms')::integer
-                    FROM workhorse.job_event event
-                   WHERE event.job_id = job.id AND event.event_type = 'retry_scheduled'
+                    FROM workhorse.task_event event
+                   WHERE event.task_id = task.id AND event.event_type = 'retry_scheduled'
                    ORDER BY event.occurred_at DESC, event.event_id DESC LIMIT 1) AS selected_delay_ms,
-                 runtime.state, runtime.current_attempt, job.max_attempts,
+                 runtime.state, runtime.current_attempt, task.max_attempts,
                  floor(extract(epoch FROM (runtime.run_at - clock_timestamp())) * 1000)::integer
                    AS remaining_ms,
-                 (SELECT count(*)::integer FROM workhorse.job_checkpoint checkpoint
-                   WHERE checkpoint.job_id = job.id) AS checkpoint_count,
+                 (SELECT count(*)::integer FROM workhorse.task_checkpoint checkpoint
+                   WHERE checkpoint.task_id = task.id) AS checkpoint_count,
                  runtime.error->>'message' AS error_message
-            FROM workhorse.job job
-            JOIN workhorse.job_runtime runtime ON runtime.job_id = job.id
-           WHERE job.payload->>'source' = 'persistent-failure-seed'
-           ORDER BY CASE job.payload->>'scenario'
+            FROM workhorse.task task
+            JOIN workhorse.task_runtime runtime ON runtime.task_id = task.id
+           WHERE task.payload->>'source' = 'persistent-failure-seed'
+           ORDER BY CASE task.payload->>'scenario'
              WHEN 'order-fulfillment' THEN 1
              WHEN 'customer-onboarding' THEN 2
              ELSE 3
@@ -1573,13 +1577,13 @@ describe("Workhorse demo", () => {
     const readPersistentCheckpoints = async () =>
       (
         await pool.query<PersistentCheckpointRow>(`
-          SELECT job.payload->>'scenario' AS scenario, checkpoint.checkpoint_name,
+          SELECT task.payload->>'scenario' AS scenario, checkpoint.checkpoint_name,
                  checkpoint.checkpoint_value, checkpoint.attempt,
                  checkpoint.fence_token::text, checkpoint.worker_id
-            FROM workhorse.job_checkpoint checkpoint
-            JOIN workhorse.job job ON job.id = checkpoint.job_id
-           WHERE job.payload->>'source' = 'persistent-failure-seed'
-           ORDER BY CASE job.payload->>'scenario'
+            FROM workhorse.task_checkpoint checkpoint
+            JOIN workhorse.task task ON task.id = checkpoint.task_id
+           WHERE task.payload->>'source' = 'persistent-failure-seed'
+           ORDER BY CASE task.payload->>'scenario'
              WHEN 'order-fulfillment' THEN 1
              WHEN 'customer-onboarding' THEN 2
              ELSE 3
@@ -1642,12 +1646,12 @@ describe("Workhorse demo", () => {
         });
       }
       await pool.query(`
-        UPDATE workhorse.job_runtime runtime
+        UPDATE workhorse.task_runtime runtime
            SET run_at = clock_timestamp()
-          FROM workhorse.job job
-         WHERE runtime.job_id = job.id
+          FROM workhorse.task task
+         WHERE runtime.task_id = task.id
            AND runtime.state = 'scheduled'
-           AND job.payload->>'source' = 'persistent-failure-seed'
+           AND task.payload->>'source' = 'persistent-failure-seed'
       `);
       const secondAttemptRows = await waitFor(
         readPersistentRows,
@@ -1672,11 +1676,11 @@ describe("Workhorse demo", () => {
       expect(
         (
           await pool.query<{ scenario: string; attempt: number; outcome: string }>(`
-            SELECT job.payload->>'scenario' AS scenario, history.attempt, history.outcome
+            SELECT task.payload->>'scenario' AS scenario, history.attempt, history.outcome
               FROM workhorse.attempt_history history
-              JOIN workhorse.job job ON job.id = history.job_id
-             WHERE job.payload->>'source' = 'persistent-failure-seed'
-             ORDER BY CASE job.payload->>'scenario'
+              JOIN workhorse.task task ON task.id = history.task_id
+             WHERE task.payload->>'source' = 'persistent-failure-seed'
+             ORDER BY CASE task.payload->>'scenario'
                WHEN 'order-fulfillment' THEN 1
                WHEN 'customer-onboarding' THEN 2
                ELSE 3
@@ -1692,7 +1696,7 @@ describe("Workhorse demo", () => {
 
       const client = dashboardClient(app);
       const retried = await client.dashboard.tasks({ filter: "retried", page: 1, pageSize: 25 });
-      expect(retried.jobs).toEqual(
+      expect(retried.tasks).toEqual(
         expect.arrayContaining(
           DEMO_PERSISTENT_RETRY_DELAYS_MS.map((retryDelayMs, index) =>
             expect.objectContaining({
@@ -1708,7 +1712,7 @@ describe("Workhorse demo", () => {
       );
       for (const [index, row] of secondAttemptRows.entries()) {
         const expected = persistentScenarios[index]!;
-        const detail = await client.dashboard.jobDetail({ id: row.job_id });
+        const detail = await client.dashboard.taskDetail({ id: row.task_id });
         expect(detail).toMatchObject({
           payload: {
             failureMode: "continuous",
@@ -1716,7 +1720,7 @@ describe("Workhorse demo", () => {
             scenario: expected.scenario,
           },
           identity: {
-            id: row.job_id,
+            id: row.task_id,
             state: "scheduled",
             retryPolicy: expected.retryPolicy,
             maxAttempts: 25,
@@ -1773,13 +1777,13 @@ describe("Workhorse demo", () => {
       expect(accepted.expectedAttempts).toBe(2);
       expect(accepted.expectedCheckpoint).toBe("reserve-capacity");
 
-      let job: { state: string; currentAttempt: number; result: unknown } | undefined;
-      for (let attempt = 0; attempt < 80 && job?.state !== "succeeded"; attempt += 1) {
+      let task: { state: string; currentAttempt: number; result: unknown } | undefined;
+      for (let attempt = 0; attempt < 80 && task?.state !== "succeeded"; attempt += 1) {
         await sleep(25);
-        job = (await workhorse.context.admin.getJob(accepted.jobId)) as typeof job;
+        task = (await workhorse.context.admin.getTask(accepted.taskId)) as typeof task;
       }
 
-      expect(job).toMatchObject({
+      expect(task).toMatchObject({
         state: "succeeded",
         currentAttempt: 2,
         result: {
@@ -1797,8 +1801,8 @@ describe("Workhorse demo", () => {
         (
           await pool.query(
             `SELECT checkpoint_name, checkpoint_value, attempt, fence_token::text, worker_id
-               FROM workhorse.job_checkpoint WHERE job_id = $1`,
-            [accepted.jobId],
+               FROM workhorse.task_checkpoint WHERE task_id = $1`,
+            [accepted.taskId],
           )
         ).rows,
       ).toEqual([
@@ -1817,8 +1821,8 @@ describe("Workhorse demo", () => {
       expect(
         (
           await pool.query(
-            "SELECT attempt, outcome FROM workhorse.attempt_history WHERE job_id = $1 ORDER BY attempt",
-            [accepted.jobId],
+            "SELECT attempt, outcome FROM workhorse.attempt_history WHERE task_id = $1 ORDER BY attempt",
+            [accepted.taskId],
           )
         ).rows,
       ).toEqual([
@@ -1832,7 +1836,7 @@ describe("Workhorse demo", () => {
       ).toMatchObject({
         filter: "retried",
         total: 1,
-        jobs: [{ id: accepted.jobId, state: "succeeded", attempt: 2 }],
+        tasks: [{ id: accepted.taskId, state: "succeeded", attempt: 2 }],
       });
       await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
         all: 1,
@@ -1853,8 +1857,8 @@ describe("Workhorse demo", () => {
         window: "1h",
         kpis: { retry: { backoff: 0 }, errorRate: { current: expect.any(Number) } },
       });
-      expect(await client.dashboard.jobDetail({ id: accepted.jobId })).toMatchObject({
-        identity: { id: accepted.jobId, state: "succeeded" },
+      expect(await client.dashboard.taskDetail({ id: accepted.taskId })).toMatchObject({
+        identity: { id: accepted.taskId, state: "succeeded" },
         checkpoints: [
           {
             name: "reserve-capacity",
@@ -1878,9 +1882,9 @@ describe("Workhorse demo", () => {
       });
       expect(
         await pool.query(
-          `SELECT count(*)::integer AS count FROM workhorse.job_event
-            WHERE job_id = $1 AND event_type = 'checkpoint_saved'`,
-          [accepted.jobId],
+          `SELECT count(*)::integer AS count FROM workhorse.task_event
+            WHERE task_id = $1 AND event_type = 'checkpoint_saved'`,
+          [accepted.taskId],
         ),
       ).toMatchObject({ rows: [{ count: 1 }] });
     } finally {
@@ -1935,8 +1939,8 @@ describe("Workhorse demo", () => {
           await pool.query(
             `SELECT state, current_attempt, fence_token::text, worker_id, acquired_at, heartbeat_at,
                     expires_at, wait_name, attempt_started_at
-               FROM workhorse.job_runtime WHERE job_id = $1`,
-            [accepted.jobId],
+               FROM workhorse.task_runtime WHERE task_id = $1`,
+            [accepted.taskId],
           )
         ).rows[0];
       }
@@ -1962,8 +1966,8 @@ describe("Workhorse demo", () => {
         worker_id: string;
       }>(
         `SELECT wait_name, mode, duration_ms::text, wake_at, attempt, fence_token::text, worker_id
-           FROM workhorse.job_wait WHERE job_id = $1`,
-        [accepted.jobId],
+           FROM workhorse.task_wait WHERE task_id = $1`,
+        [accepted.taskId],
       );
       expect(waits.rows).toEqual([
         {
@@ -1982,18 +1986,18 @@ describe("Workhorse demo", () => {
       expect(
         (
           await pool.query(
-            `SELECT checkpoint_name, fence_token::text FROM workhorse.job_checkpoint
-              WHERE job_id = $1 ORDER BY created_at`,
-            [accepted.jobId],
+            `SELECT checkpoint_name, fence_token::text FROM workhorse.task_checkpoint
+              WHERE task_id = $1 ORDER BY created_at`,
+            [accepted.taskId],
           )
         ).rows,
       ).toEqual([{ checkpoint_name: DURABLE_TIMER_PREPARE_CHECKPOINT, fence_token: firstFence }]);
       expect(
         (
           await pool.query(
-            `SELECT event_type FROM workhorse.job_event
-              WHERE job_id = $1 ORDER BY occurred_at, event_id`,
-            [accepted.jobId],
+            `SELECT event_type FROM workhorse.task_event
+              WHERE task_id = $1 ORDER BY occurred_at, event_id`,
+            [accepted.taskId],
           )
         ).rows.map((row) => row.event_type),
       ).toEqual(["enqueued", "claimed", "checkpoint_saved", "wait_scheduled"]);
@@ -2003,9 +2007,9 @@ describe("Workhorse demo", () => {
         page: 1,
         pageSize: 25,
       });
-      expect(scheduledTasks.jobs).toEqual([
+      expect(scheduledTasks.tasks).toEqual([
         expect.objectContaining({
-          id: accepted.jobId,
+          id: accepted.taskId,
           state: "scheduled",
           attempt: 1,
           workerId: null,
@@ -2019,7 +2023,7 @@ describe("Workhorse demo", () => {
           },
         }),
       ]);
-      expect(await client.dashboard.jobDetail({ id: accepted.jobId })).toMatchObject({
+      expect(await client.dashboard.taskDetail({ id: accepted.taskId })).toMatchObject({
         current: {
           runtime: {
             state: "scheduled",
@@ -2046,7 +2050,7 @@ describe("Workhorse demo", () => {
         ],
       });
 
-      let finalJob:
+      let finalTask:
         | {
             state: string;
             currentAttempt: number;
@@ -2054,11 +2058,11 @@ describe("Workhorse demo", () => {
             result: Record<string, unknown>;
           }
         | undefined;
-      for (let poll = 0; poll < 200 && finalJob?.state !== "succeeded"; poll += 1) {
+      for (let poll = 0; poll < 200 && finalTask?.state !== "succeeded"; poll += 1) {
         await sleep(10);
-        finalJob = (await workhorse.context.admin.getJob(accepted.jobId)) as typeof finalJob;
+        finalTask = (await workhorse.context.admin.getTask(accepted.taskId)) as typeof finalTask;
       }
-      expect(finalJob).toMatchObject({
+      expect(finalTask).toMatchObject({
         state: "succeeded",
         currentAttempt: 1,
         result: {
@@ -2078,15 +2082,15 @@ describe("Workhorse demo", () => {
         occurred_at: Date;
       }>(
         `SELECT details->>'fence_token' AS fence_token, occurred_at
-           FROM workhorse.job_event
-          WHERE job_id = $1 AND event_type = 'claimed' ORDER BY occurred_at, event_id`,
-        [accepted.jobId],
+           FROM workhorse.task_event
+          WHERE task_id = $1 AND event_type = 'claimed' ORDER BY occurred_at, event_id`,
+        [accepted.taskId],
       );
       expect(claims.rows).toHaveLength(2);
       expect(claims.rows[0]!.fence_token).toBe(firstFence);
       const secondFence = claims.rows[1]!.fence_token;
       expect(secondFence).not.toBe(firstFence);
-      expect(finalJob!.fenceToken).toBe(BigInt(secondFence));
+      expect(finalTask!.fenceToken).toBe(BigInt(secondFence));
       expect(operations).toEqual([
         { operation: "prepare", attempt: 1, fenceToken: firstFence },
         { operation: "publish", attempt: 1, fenceToken: secondFence },
@@ -2101,8 +2105,8 @@ describe("Workhorse demo", () => {
         finished_at: Date;
       }>(
         `SELECT attempt, fence_token::text, outcome, started_at, claimed_at, finished_at
-           FROM workhorse.attempt_history WHERE job_id = $1`,
-        [accepted.jobId],
+           FROM workhorse.attempt_history WHERE task_id = $1`,
+        [accepted.taskId],
       );
       expect(history.rows).toHaveLength(1);
       expect(history.rows[0]).toMatchObject({
@@ -2121,9 +2125,9 @@ describe("Workhorse demo", () => {
         history.rows[0]!.claimed_at.getTime(),
       );
 
-      const finalDetail = await client.dashboard.jobDetail({ id: accepted.jobId });
+      const finalDetail = await client.dashboard.taskDetail({ id: accepted.taskId });
       expect(finalDetail).toMatchObject({
-        identity: { type: DURABLE_TIMER_JOB_TYPE, state: "succeeded" },
+        identity: { type: DURABLE_TIMER_TASK_TYPE, state: "succeeded" },
         current: { runtime: null, outcome: { attempt: 1, result: { waitReplayed: true } } },
         checkpoints: [
           { name: DURABLE_TIMER_PREPARE_CHECKPOINT, attempt: 1, fenceToken: firstFence },
@@ -2193,12 +2197,12 @@ describe("Workhorse demo", () => {
         expectedAttempts: 2,
       });
 
-      let job: { state: string; currentAttempt: number; result: unknown } | undefined;
-      for (let attempt = 0; attempt < 80 && job?.state !== "succeeded"; attempt += 1) {
+      let task: { state: string; currentAttempt: number; result: unknown } | undefined;
+      for (let attempt = 0; attempt < 80 && task?.state !== "succeeded"; attempt += 1) {
         await sleep(25);
-        job = (await workhorse.context.admin.getJob(accepted.jobId)) as typeof job;
+        task = (await workhorse.context.admin.getTask(accepted.taskId)) as typeof task;
       }
-      expect(job).toMatchObject({
+      expect(task).toMatchObject({
         state: "succeeded",
         currentAttempt: 2,
         result: {
@@ -2222,8 +2226,8 @@ describe("Workhorse demo", () => {
           attempt: number;
         }>(
           `SELECT checkpoint_name, checkpoint_value, attempt
-             FROM workhorse.job_checkpoint WHERE job_id = $1 ORDER BY created_at, checkpoint_name`,
-          [accepted.jobId],
+             FROM workhorse.task_checkpoint WHERE task_id = $1 ORDER BY created_at, checkpoint_name`,
+          [accepted.taskId],
         )
       ).rows;
       expect(
@@ -2243,8 +2247,8 @@ describe("Workhorse demo", () => {
       ]);
 
       const client = dashboardClient(app);
-      expect(await client.dashboard.jobDetail({ id: accepted.jobId })).toMatchObject({
-        identity: { id: accepted.jobId, state: "succeeded", type: "demo.durable-pipeline" },
+      expect(await client.dashboard.taskDetail({ id: accepted.taskId })).toMatchObject({
+        identity: { id: accepted.taskId, state: "succeeded", type: "demo.durable-pipeline" },
         durability: {
           source: "demo-declared",
           scenario: "order-fulfillment",
@@ -2259,22 +2263,22 @@ describe("Workhorse demo", () => {
         checkpoints: [{ attempt: 1 }, { attempt: 1 }, { attempt: 2 }, { attempt: 2 }],
       });
       await pool.query(
-        `INSERT INTO workhorse.job_checkpoint
-          (job_id, checkpoint_name, checkpoint_value, attempt, fence_token, worker_id)
+        `INSERT INTO workhorse.task_checkpoint
+          (task_id, checkpoint_name, checkpoint_value, attempt, fence_token, worker_id)
          VALUES ($1, 'diagnostic-extra', '{"output":"extra evidence"}'::jsonb, 2, 999999, 'test')`,
-        [accepted.jobId],
+        [accepted.taskId],
       );
       expect(
         await client.dashboard.tasks({ filter: "retried", page: 1, pageSize: 25 }),
       ).toMatchObject({
-        jobs: [
+        tasks: [
           {
-            id: accepted.jobId,
+            id: accepted.taskId,
             durability: { completedSteps: 4, totalSteps: 4 },
           },
         ],
       });
-      expect(await client.dashboard.jobDetail({ id: accepted.jobId })).toMatchObject({
+      expect(await client.dashboard.taskDetail({ id: accepted.taskId })).toMatchObject({
         durability: { steps: expect.any(Array) },
         checkpoints: expect.arrayContaining([
           expect.objectContaining({
@@ -2285,9 +2289,9 @@ describe("Workhorse demo", () => {
       });
       expect(
         await pool.query(
-          `SELECT count(*)::integer AS count FROM workhorse.job_event
-            WHERE job_id = $1 AND event_type = 'checkpoint_saved'`,
-          [accepted.jobId],
+          `SELECT count(*)::integer AS count FROM workhorse.task_event
+            WHERE task_id = $1 AND event_type = 'checkpoint_saved'`,
+          [accepted.taskId],
         ),
       ).toMatchObject({ rows: [{ count: 4 }] });
     } finally {
@@ -2327,13 +2331,13 @@ describe("Workhorse demo", () => {
 
     try {
       const accepted = await enqueueDemoTest("durable", example.scenario);
-      let job: { state: string; currentAttempt: number; result: unknown } | undefined;
-      for (let attempt = 0; attempt < 80 && job?.state !== "succeeded"; attempt += 1) {
+      let task: { state: string; currentAttempt: number; result: unknown } | undefined;
+      for (let attempt = 0; attempt < 80 && task?.state !== "succeeded"; attempt += 1) {
         await sleep(25);
-        job = (await workhorse.context.admin.getJob(accepted.jobId)) as typeof job;
+        task = (await workhorse.context.admin.getTask(accepted.taskId)) as typeof task;
       }
 
-      expect(job).toMatchObject({
+      expect(task).toMatchObject({
         state: "succeeded",
         currentAttempt: 2,
         result: { reusedCheckpoints: example.reused },
@@ -2342,9 +2346,9 @@ describe("Workhorse demo", () => {
       expect(
         (
           await pool.query<{ attempt: number }>(
-            `SELECT attempt FROM workhorse.job_checkpoint
-              WHERE job_id = $1 ORDER BY created_at, checkpoint_name`,
-            [accepted.jobId],
+            `SELECT attempt FROM workhorse.task_checkpoint
+              WHERE task_id = $1 ORDER BY created_at, checkpoint_name`,
+            [accepted.taskId],
           )
         ).rows.map((row) => row.attempt),
       ).toEqual(example.checkpointAttempts);
@@ -2352,8 +2356,8 @@ describe("Workhorse demo", () => {
         (
           await pool.query<{ attempt: number; outcome: string }>(
             `SELECT attempt, outcome FROM workhorse.attempt_history
-              WHERE job_id = $1 ORDER BY attempt`,
-            [accepted.jobId],
+              WHERE task_id = $1 ORDER BY attempt`,
+            [accepted.taskId],
           )
         ).rows,
       ).toEqual([
@@ -2375,7 +2379,7 @@ describe("Workhorse demo", () => {
       let state: string | undefined;
       for (let attempt = 0; attempt < 40 && state !== "failed"; attempt += 1) {
         await sleep(25);
-        state = (await workhorse.context.admin.getJob(accepted.jobId))?.state;
+        state = (await workhorse.context.admin.getTask(accepted.taskId))?.state;
       }
       expect(state).toBe("failed");
 
@@ -2385,7 +2389,7 @@ describe("Workhorse demo", () => {
       ).toMatchObject({
         filter: "discarded",
         total: 1,
-        jobs: [{ id: accepted.jobId, type: "demo.failure", state: "failed" }],
+        tasks: [{ id: accepted.taskId, type: "demo.failure", state: "failed" }],
       });
       await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
         all: 1,
@@ -2407,42 +2411,42 @@ describe("Workhorse demo", () => {
     }
   });
 
-  it("fires a recurring definition and exposes its occurrence and job in the dashboard", async () => {
+  it("fires a recurring definition and exposes its occurrence and task in the dashboard", async () => {
     await syncDemoSchedules(pool);
     const { app, workhorse } = createTestApplication();
     workhorse.start();
 
     try {
-      let jobId: string | undefined;
+      let taskId: string | undefined;
       let state: string | undefined;
       for (let attempt = 0; attempt < 40 && state !== "succeeded"; attempt += 1) {
         await sleep(25);
-        const occurrence = await pool.query<{ job_id: string | null }>(
-          `SELECT job_id FROM workhorse.schedule_occurrence
+        const occurrence = await pool.query<{ task_id: string | null }>(
+          `SELECT task_id FROM workhorse.schedule_occurrence
             WHERE namespace = $1 AND schedule_name = $2
             ORDER BY occurrence_at DESC LIMIT 1`,
           [DEMO_SCHEDULE_NAMESPACE, HEARTBEAT_SCHEDULE_NAME],
         );
-        jobId = occurrence.rows[0]?.job_id ?? undefined;
-        state = jobId ? (await workhorse.context.admin.getJob(jobId))?.state : undefined;
+        taskId = occurrence.rows[0]?.task_id ?? undefined;
+        state = taskId ? (await workhorse.context.admin.getTask(taskId))?.state : undefined;
       }
-      expect(jobId).toBeDefined();
+      expect(taskId).toBeDefined();
       expect(state).toBe("succeeded");
 
-      const longRunningJob = await waitFor(
+      const longRunningTask = await waitFor(
         async () => {
-          const occurrence = await pool.query<{ job_id: string | null }>(
-            `SELECT job_id FROM workhorse.schedule_occurrence
+          const occurrence = await pool.query<{ task_id: string | null }>(
+            `SELECT task_id FROM workhorse.schedule_occurrence
               WHERE namespace = $1 AND schedule_name = $2
               ORDER BY occurrence_at DESC LIMIT 1`,
             [DEMO_SCHEDULE_NAMESPACE, LONG_RUNNING_SCHEDULE_NAME],
           );
-          const recurringJobId = occurrence.rows[0]?.job_id;
-          return recurringJobId ? workhorse.context.admin.getJob(recurringJobId) : null;
+          const recurringTaskId = occurrence.rows[0]?.task_id;
+          return recurringTaskId ? workhorse.context.admin.getTask(recurringTaskId) : null;
         },
-        (job) => job?.state === "succeeded",
+        (task) => task?.state === "succeeded",
       );
-      expect(longRunningJob).toMatchObject({ type: "demo.long-running", state: "succeeded" });
+      expect(longRunningTask).toMatchObject({ type: "demo.long-running", state: "succeeded" });
 
       const client = dashboardClient(app);
       const cron = await client.dashboard.cron();
@@ -2467,9 +2471,9 @@ describe("Workhorse demo", () => {
         page: 1,
         pageSize: 25,
       });
-      expect(completed.jobs).toEqual(
+      expect(completed.tasks).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ id: jobId, type: "demo.recurring", state: "succeeded" }),
+          expect.objectContaining({ id: taskId, type: "demo.recurring", state: "succeeded" }),
           expect.objectContaining({
             type: "demo.long-running",
             state: "succeeded",
@@ -2527,11 +2531,11 @@ describe("Workhorse demo", () => {
     });
   });
 
-  it("keeps a long-running test job active for the configured duration", async () => {
+  it("keeps a long-running test task active for the configured duration", async () => {
     const { app, workhorse } = createTestApplication({
       operator: createLocalOperator(database),
       workerPollMs: 5,
-      longRunningJobMs: 250,
+      longRunningTaskMs: 250,
     });
     const client = dashboardClient(app);
     workhorse.start();
@@ -2551,17 +2555,17 @@ describe("Workhorse demo", () => {
         await sleep(10);
         observedRunning = (
           await client.dashboard.tasks({ filter: "running", page: 1, pageSize: 25 })
-        ).jobs.some((job) => job.id === enqueued.jobId);
+        ).tasks.some((task) => task.id === enqueued.taskId);
       }
       expect(observedRunning).toBe(true);
 
-      let detail = await client.dashboard.jobDetail({ id: enqueued.jobId });
+      let detail = await client.dashboard.taskDetail({ id: enqueued.taskId });
       for (let attempt = 0; attempt < 40 && detail.identity.state !== "succeeded"; attempt += 1) {
         await sleep(10);
-        detail = await client.dashboard.jobDetail({ id: enqueued.jobId });
+        detail = await client.dashboard.taskDetail({ id: enqueued.taskId });
       }
       expect(detail).toMatchObject({
-        identity: { id: enqueued.jobId, type: "demo.long-running", state: "succeeded" },
+        identity: { id: enqueued.taskId, type: "demo.long-running", state: "succeeded" },
         progress: {
           value: { phase: "complete", completed: 250, total: 250 },
           revision: "2",
@@ -2588,14 +2592,14 @@ describe("Workhorse demo", () => {
       },
     });
 
-    expect(await client.dashboard.jobDetail({ id: enqueued.jobId })).toMatchObject({
-      identity: { id: enqueued.jobId, type: "demo.retry", state: "ready", priority: 73 },
+    expect(await client.dashboard.taskDetail({ id: enqueued.taskId })).toMatchObject({
+      identity: { id: enqueued.taskId, type: "demo.retry", state: "ready", priority: 73 },
       payload: { label: "operator-retry", failUntilAttempt: 1 },
       checkpoints: [],
     });
     expect(
-      await pool.query("SELECT max_attempts, tags FROM workhorse.job WHERE id = $1", [
-        enqueued.jobId,
+      await pool.query("SELECT max_attempts, tags FROM workhorse.task WHERE id = $1", [
+        enqueued.taskId,
       ]),
     ).toMatchObject({
       rows: [{ max_attempts: 3, tags: ["demo-test", "durable-checkpoint"] }],
@@ -2625,14 +2629,16 @@ describe("Workhorse demo", () => {
         requestId: "audit-durable-timer",
       },
     });
-    expect(await client.dashboard.jobDetail({ id: timer.jobId })).toMatchObject({
-      identity: { id: timer.jobId, type: DURABLE_TIMER_JOB_TYPE, state: "ready" },
+    expect(await client.dashboard.taskDetail({ id: timer.taskId })).toMatchObject({
+      identity: { id: timer.taskId, type: DURABLE_TIMER_TASK_TYPE, state: "ready" },
       payload: { source: "operator" },
       waits: [],
       checkpoints: [],
     });
     expect(
-      await pool.query("SELECT max_attempts, tags FROM workhorse.job WHERE id = $1", [timer.jobId]),
+      await pool.query("SELECT max_attempts, tags FROM workhorse.task WHERE id = $1", [
+        timer.taskId,
+      ]),
     ).toMatchObject({
       rows: [
         {
@@ -2646,7 +2652,7 @@ describe("Workhorse demo", () => {
         `SELECT action, target FROM public.workhorse_demo_audit WHERE request_id = $1`,
         ["audit-durable-timer"],
       ),
-    ).toMatchObject({ rows: [{ action: "enqueueTest", target: "job:timer" }] });
+    ).toMatchObject({ rows: [{ action: "enqueueTest", target: "task:timer" }] });
 
     for (const example of [
       { scenario: "order-fulfillment", totalSteps: 4 },
@@ -2662,9 +2668,9 @@ describe("Workhorse demo", () => {
           requestId: `audit-durable-${example.scenario}`,
         },
       });
-      const detail = await client.dashboard.jobDetail({ id: durable.jobId });
+      const detail = await client.dashboard.taskDetail({ id: durable.taskId });
       expect(detail).toMatchObject({
-        identity: { id: durable.jobId, type: "demo.durable-pipeline", state: "ready" },
+        identity: { id: durable.taskId, type: "demo.durable-pipeline", state: "ready" },
         payload: { scenario: example.scenario },
         durability: { source: "demo-declared", scenario: example.scenario },
         checkpoints: [],
@@ -2673,9 +2679,9 @@ describe("Workhorse demo", () => {
       expect(
         await client.dashboard.tasks({ filter: "queued", page: 1, pageSize: 25 }),
       ).toMatchObject({
-        jobs: expect.arrayContaining([
+        tasks: expect.arrayContaining([
           expect.objectContaining({
-            id: durable.jobId,
+            id: durable.taskId,
             durability: { completedSteps: 0, totalSteps: example.totalSteps },
           }),
         ]),
@@ -2697,9 +2703,9 @@ describe("Workhorse demo", () => {
         requestId: "audit-feature-contract",
       },
     });
-    expect(await client.dashboard.jobDetail({ id: contract.jobId })).toMatchObject({
+    expect(await client.dashboard.taskDetail({ id: contract.taskId })).toMatchObject({
       identity: {
-        id: contract.jobId,
+        id: contract.taskId,
         type: "demo.contract-check",
         state: "ready",
         priority: 12,
@@ -2720,8 +2726,8 @@ describe("Workhorse demo", () => {
       rows: [
         {
           action: "enqueueTest",
-          target: "job:feature:payload-contracts",
-          after: expect.objectContaining({ jobId: contract.jobId, memberCount: 1 }),
+          target: "task:feature:payload-contracts",
+          after: expect.objectContaining({ taskId: contract.taskId, memberCount: 1 }),
         },
       ],
     });
@@ -2736,11 +2742,11 @@ describe("Workhorse demo", () => {
         requestId: "audit-feature-batch",
       },
     });
-    expect(batch.jobId).toEqual(expect.any(String));
+    expect(batch.taskId).toEqual(expect.any(String));
     expect(
       await pool.query(
-        `SELECT count(*)::integer AS members FROM workhorse.job
-          WHERE job_type = 'demo.batch-digest'
+        `SELECT count(*)::integer AS members FROM workhorse.task
+          WHERE task_type = 'demo.batch-digest'
             AND payload->>'source' = 'feature-showcase-operator'`,
       ),
     ).toMatchObject({ rows: [{ members: 3 }] });
@@ -2775,13 +2781,13 @@ describe("Workhorse demo", () => {
           requestId: "audit-feature-ingress",
         },
       });
-      let detail = await client.dashboard.jobDetail({ id: enqueued.jobId });
+      let detail = await client.dashboard.taskDetail({ id: enqueued.taskId });
       for (let attempt = 0; attempt < 200 && detail.identity.state !== "succeeded"; attempt += 1) {
         await sleep(10);
-        detail = await client.dashboard.jobDetail({ id: enqueued.jobId });
+        detail = await client.dashboard.taskDetail({ id: enqueued.taskId });
       }
       expect(detail).toMatchObject({
-        identity: { id: enqueued.jobId, type: "demo.ingress-routing", state: "succeeded" },
+        identity: { id: enqueued.taskId, type: "demo.ingress-routing", state: "succeeded" },
         payload: {
           source: "feature-showcase-operator",
           family: "ingress-routing",
@@ -2805,9 +2811,9 @@ describe("Workhorse demo", () => {
       kind: "success",
       audit: { actor: "operator", reason: "smoke enqueue", requestId: "audit-enqueue" },
     });
-    expect(enqueued.jobId).toEqual(expect.any(String));
-    expect(await client.dashboard.jobDetail({ id: enqueued.jobId })).toMatchObject({
-      identity: { id: enqueued.jobId, state: "ready" },
+    expect(enqueued.taskId).toEqual(expect.any(String));
+    expect(await client.dashboard.taskDetail({ id: enqueued.taskId })).toMatchObject({
+      identity: { id: enqueued.taskId, state: "ready" },
       payload: { source: "operator" },
     });
     expect(
@@ -2837,12 +2843,12 @@ describe("Workhorse demo", () => {
     ).toEqual([
       {
         action: "enqueueTest",
-        target: "job:success",
+        target: "task:success",
         actor: "local-demo",
         reason: "smoke enqueue",
         request_id: "audit-enqueue",
         before: null,
-        after: expect.objectContaining({ jobId: enqueued.jobId }),
+        after: expect.objectContaining({ taskId: enqueued.taskId }),
         status: "succeeded",
       },
       {
@@ -2863,10 +2869,10 @@ describe("Workhorse demo", () => {
     const client = dashboardClient(app);
     const queue = new Queue(pool, DEMO_QUEUE);
 
-    // Jobs admitted outside the operator surface still occupy the same fleet budget.
-    const jobIds = await queue.enqueueMany(
-      Array.from({ length: DEMO_OPERATOR_MAX_PENDING_JOBS }, (_, index) => ({
-        type: RECURRING_JOB_TYPE,
+    // Tasks admitted outside the operator surface still occupy the same fleet budget.
+    const taskIds = await queue.enqueueMany(
+      Array.from({ length: DEMO_OPERATOR_MAX_PENDING_TASKS }, (_, index) => ({
+        type: RECURRING_TASK_TYPE,
         payload: { source: "budget-fill", index },
       })),
     );
@@ -2877,11 +2883,11 @@ describe("Workhorse demo", () => {
         audit: { actor: "operator", reason: "saturated budget", requestId: "audit-budget" },
       }),
     ).rejects.toThrow(/operator-admitted work/);
-    // Every job-creating mutation shares the ceiling, not just enqueueTest.
+    // Every task-creating mutation shares the ceiling, not just enqueueTest.
     await expect(
       client.dashboard.redriveDeadLetters({
         queue: null,
-        jobType: null,
+        taskType: null,
         tags: [],
         limit: 1,
         cursor: null,
@@ -2891,7 +2897,7 @@ describe("Workhorse demo", () => {
     // Mutations that act on existing work stay available under saturation; this one drains it.
     await expect(
       client.dashboard.cancelTask({
-        id: jobIds[0]!,
+        id: taskIds[0]!,
         audit: { actor: "operator", requestId: "audit-budget-cancel" },
       }),
     ).resolves.toMatchObject({ status: "canceled" });
@@ -2900,7 +2906,7 @@ describe("Workhorse demo", () => {
         kind: "success",
         audit: { actor: "operator", reason: "drained budget", requestId: "audit-budget-drained" },
       }),
-    ).resolves.toMatchObject({ jobId: expect.any(String) });
+    ).resolves.toMatchObject({ taskId: expect.any(String) });
   });
 
   it("pauses a local worker through RPC and audits the in-memory state change", async () => {
@@ -2980,7 +2986,7 @@ describe("Workhorse demo", () => {
       expect(defaultQueueWorker).toMatchObject({
         concurrency: 3,
         activeSlots: 0,
-        activeJobs: 0,
+        activeTasks: 0,
         paused: false,
         draining: false,
       });
@@ -2995,7 +3001,7 @@ describe("Workhorse demo", () => {
     const { app, workhorse } = createTestApplication({
       operator: createLocalOperator(database),
       workerPollMs: 5,
-      longRunningJobMs: TEST_CONTROL_WINDOW_JOB_MS,
+      longRunningTaskMs: TEST_CONTROL_WINDOW_TASK_MS,
     });
     const client = dashboardClient(app);
     workhorse.start();
@@ -3023,8 +3029,8 @@ describe("Workhorse demo", () => {
       );
       const overlapped = busyFleet.workers.find((worker) => worker.activeSlots === 3)!;
       expect(overlapped).toMatchObject({ concurrency: 3, activeSlots: 3, paused: false });
-      // SQL-observed active jobs and in-process slots describe the same overlap from two sources.
-      expect(overlapped.activeJobs).toBe(3);
+      // SQL-observed active tasks and in-process slots describe the same overlap from two sources.
+      expect(overlapped.activeTasks).toBe(3);
 
       await expect(
         client.dashboard.setWorkerPaused({
@@ -3040,9 +3046,9 @@ describe("Workhorse demo", () => {
       );
       expect(paused).toMatchObject({ paused: true, activeSlots: 3, concurrency: 3 });
 
-      for (const { jobId } of enqueued) {
+      for (const { taskId } of enqueued) {
         const detail = await waitFor(
-          () => client.dashboard.jobDetail({ id: jobId }),
+          () => client.dashboard.taskDetail({ id: taskId }),
           (value) => value.identity.state === "succeeded",
           2_000,
         );
@@ -3108,7 +3114,7 @@ describe("Workhorse demo", () => {
     const { app, workhorse } = createTestApplication({
       operator: createLocalOperator(database),
       workerPollMs: 5,
-      longRunningJobMs: TEST_OBSERVABLE_JOB_MS,
+      longRunningTaskMs: TEST_OBSERVABLE_TASK_MS,
     });
     const client = dashboardClient(app);
     workhorse.start();
@@ -3126,9 +3132,9 @@ describe("Workhorse demo", () => {
       // No declared fleet is configured: the page discovers workers from the registry alone. The
       // read is a pure SQL projection with no process-local worker handle, yet it still reports
       // declared capacity and slot use because workers publish both to the durable registry.
-      // SQL-observed active jobs remain a separate, independently sourced number.
+      // SQL-observed active tasks remain a separate, independently sourced number.
       const page = await client.dashboard.workers();
-      expect(page.workers.map((worker) => worker.activeJobs).reduce((a, b) => a + b, 0)).toBe(1);
+      expect(page.workers.map((worker) => worker.activeTasks).reduce((a, b) => a + b, 0)).toBe(1);
       expect(page.workers).toHaveLength(DEMO_WORKER_CONCURRENCY.length);
       expect(page.workers.map((worker) => worker.concurrency)).toEqual([3, 3, 3]);
       for (const worker of page.workers) {
@@ -3144,7 +3150,7 @@ describe("Workhorse demo", () => {
     const { app, workhorse } = createTestApplication({
       operator: createLocalOperator(database),
       workerPollMs: 5,
-      longRunningJobMs: TEST_OBSERVABLE_JOB_MS,
+      longRunningTaskMs: TEST_OBSERVABLE_TASK_MS,
     });
     const client = dashboardClient(app);
     workhorse.start();
@@ -3173,7 +3179,7 @@ describe("Workhorse demo", () => {
 
       await quiesced;
       quiesced = null;
-      await expect(client.dashboard.jobDetail({ id: enqueued.jobId })).resolves.toMatchObject({
+      await expect(client.dashboard.taskDetail({ id: enqueued.taskId })).resolves.toMatchObject({
         identity: { state: "succeeded" },
       });
       // A drained worker has stopped, so it deregisters. The demo declares no expected fleet, so it
@@ -3284,7 +3290,7 @@ describe("Workhorse demo", () => {
         blockedReady: 0,
       },
     });
-    await expect(client.dashboard.jobDetail({ id: readyId })).resolves.toMatchObject({
+    await expect(client.dashboard.taskDetail({ id: readyId })).resolves.toMatchObject({
       identity: { concurrencyKey: "tenant-secret" },
       concurrencyPolicy: {
         namespace: "dashboard-test",
@@ -3308,7 +3314,7 @@ describe("Workhorse demo", () => {
     });
     expect(terminalClaim?.id).toBe(terminalId);
     await workhorse.context.queue.complete(terminalClaim!, "terminal-worker", { done: true });
-    await expect(client.dashboard.jobDetail({ id: terminalId })).resolves.toMatchObject({
+    await expect(client.dashboard.taskDetail({ id: terminalId })).resolves.toMatchObject({
       identity: { state: "succeeded", concurrencyKey: "tenant-finished" },
       current: { runtime: null },
       concurrencyPolicy: {
@@ -3339,7 +3345,7 @@ describe("Workhorse demo", () => {
     const eventList = await client.dashboard.events({
       window: "1h",
       pageSize: 100,
-      jobId: readyId,
+      taskId: readyId,
     });
     expect(JSON.stringify(taskList)).not.toContain("tenant-secret");
     expect(JSON.stringify(eventList)).not.toContain("tenant-secret");
@@ -3384,7 +3390,7 @@ describe("Workhorse demo", () => {
         audit: { actor: "operator", reason: "clear queue", requestId: "queue-purge" },
       }),
     ).resolves.toEqual({ deletedCount: 2 });
-    await expect(workhorse.context.admin.getJob(activeId)).resolves.toMatchObject({
+    await expect(workhorse.context.admin.getTask(activeId)).resolves.toMatchObject({
       state: "active",
     });
 
@@ -3422,7 +3428,7 @@ describe("Workhorse demo", () => {
         actor: "local-demo",
         reason: "clear queue",
         request_id: "queue-purge",
-        before: { purgeable_jobs: 2 },
+        before: { purgeable_tasks: 2 },
         after: { deletedCount: 2 },
         status: "succeeded",
       },
@@ -3449,7 +3455,7 @@ describe("Workhorse demo", () => {
       terminalQueue,
     );
 
-    const jobId = await queue.enqueue(
+    const taskId = await queue.enqueue(
       "terminal-beyond-policy-cap",
       {},
       { queue: terminalQueue, concurrencyKey: "tenant-private" },
@@ -3457,7 +3463,7 @@ describe("Workhorse demo", () => {
     // The ceiling is read from this queue's own policy row, so it is exact even past the cap. The
     // counts beside it were never measured, and none of them may be defaulted into a claim: an
     // `available` of 7 here would tell an operator the whole budget is free.
-    await expect(client.dashboard.jobDetail({ id: jobId })).resolves.toMatchObject({
+    await expect(client.dashboard.taskDetail({ id: taskId })).resolves.toMatchObject({
       identity: {
         state: "ready",
         concurrencyKey: "tenant-private",
@@ -3478,9 +3484,9 @@ describe("Workhorse demo", () => {
 
     // A finished task in the same queue keeps its exact ceiling and the same unmeasured signal.
     const claim = await queue.claim("terminal-policy-worker", { queue: terminalQueue });
-    expect(claim?.id).toBe(jobId);
+    expect(claim?.id).toBe(taskId);
     await queue.complete(claim!, "terminal-policy-worker", { done: true });
-    await expect(client.dashboard.jobDetail({ id: jobId })).resolves.toMatchObject({
+    await expect(client.dashboard.taskDetail({ id: taskId })).resolves.toMatchObject({
       identity: { state: "succeeded", concurrencyKey: "tenant-private" },
       current: { runtime: null },
       concurrencyPolicy: {
@@ -3495,7 +3501,7 @@ describe("Workhorse demo", () => {
     // A queue inside the health sample still reports measured utilization, so the flag marks the
     // capped read specifically rather than every task detail.
     const measuredId = await queue.enqueue("inside-policy-cap", {}, { queue: "policy-000" });
-    await expect(client.dashboard.jobDetail({ id: measuredId })).resolves.toMatchObject({
+    await expect(client.dashboard.taskDetail({ id: measuredId })).resolves.toMatchObject({
       concurrencyPolicy: {
         namespace: "dashboard-cap-test",
         maxActive: 1,
@@ -3593,12 +3599,12 @@ describe("Workhorse demo", () => {
     // A timestamp older than every daily partition lands in the catch-all partition, which is
     // exactly the condition operators need to see. No sleeping or seed data is involved.
     await pool.query(
-      `INSERT INTO workhorse.job(id, queue_name, job_type, payload, max_attempts, created_at)
+      `INSERT INTO workhorse.task(id, queue_name, task_type, payload, max_attempts, created_at)
        VALUES ($1, 'demo', 'retention-spill', '{}'::jsonb, 1, timestamptz '2000-01-01T00:00:00Z')`,
       ["00000000-0000-4000-8000-000000000001"],
     );
     await pool.query(
-      `INSERT INTO workhorse.job_event (job_id, attempt, event_type, details, occurred_at)
+      `INSERT INTO workhorse.task_event (task_id, attempt, event_type, details, occurred_at)
        VALUES ($1, 1, 'enqueued', '{}'::jsonb, timestamptz '2000-01-01T00:00:00Z')`,
       ["00000000-0000-4000-8000-000000000001"],
     );
@@ -3616,24 +3622,24 @@ describe("Workhorse demo", () => {
       }),
     ]);
     expect(system.integrity.retention.defaultHistoryRows).toEqual({
-      jobEvents: 1,
+      taskEvents: 1,
       attemptHistory: 0,
     });
     // The row predates every partition cutoff, so it is spill rather than an un-dropped day.
     expect(system.integrity.retention.eligibleHistoryPartitions).toEqual({
-      jobEvents: 0,
+      taskEvents: 0,
       attemptHistory: 0,
     });
     expect(system.integrity.defaultEventRows).toBe(1);
     expect(system.integrity.retention.oldestRetainedAt).toBe("2000-01-01T00:00:00.000Z");
-    expect(system.integrity.retention.oldestRetainedCategory).toBe("jobEvents");
+    expect(system.integrity.retention.oldestRetainedCategory).toBe("taskEvents");
 
     // Retention is disabled by default in the demo, so no category can report lag.
     expect(system.integrity.retention.maxLagMs).toBeNull();
     expect(system.integrity.retention.categories).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          category: "jobEvents",
+          category: "taskEvents",
           lagMs: null,
           prunedByPartition: true,
         }),
@@ -3648,7 +3654,7 @@ describe("Workhorse demo", () => {
     // Relative interval arithmetic keeps this free of time-zone and ISO-week dependence.
     await pool.query(
       `INSERT INTO workhorse.schedule_occurrence
-         (namespace, schedule_name, occurrence_at, job_id, fired_at)
+         (namespace, schedule_name, occurrence_at, task_id, fired_at)
        VALUES ($1, $2, clock_timestamp() - interval '60 days', NULL,
                clock_timestamp() - interval '60 days')`,
       [DEMO_SCHEDULE_NAMESPACE, HEARTBEAT_SCHEDULE_NAME],
@@ -3683,11 +3689,11 @@ describe("Workhorse demo", () => {
 
     // Categories the policy leaves disabled report no window and no lag rather than a false zero.
     expect(
-      system.integrity.retention.categories.find((row) => row.category === "jobEvents"),
+      system.integrity.retention.categories.find((row) => row.category === "taskEvents"),
     ).toMatchObject({ retentionDays: null, lagMs: null });
     // Retention never escalates past degraded, and nothing spilled outside daily storage.
     expect(system.integrity.retention.defaultHistoryRows).toEqual({
-      jobEvents: 0,
+      taskEvents: 0,
       attemptHistory: 0,
     });
   });
@@ -3701,9 +3707,9 @@ describe("Workhorse demo", () => {
       health.retentionPolicy.updatedAt.toISOString(),
     );
     expect(system.integrity.retention.categories.map((row) => row.category)).toEqual([
-      "jobIdentity",
+      "taskIdentity",
       "terminalOutcome",
-      "jobEvents",
+      "taskEvents",
       "attemptHistory",
       "scheduleOccurrences",
       "statistics",
@@ -3722,16 +3728,16 @@ describe("Workhorse demo", () => {
       expect((await app.request("/")).status).toBe(404);
       expect((await app.request("/workhorse/rpc/dashboard/tasks")).status).toBe(404);
       expect((await app.request("/workhorse/events")).status).toBe(404);
-      const jobId = await workhorse.context.queue.enqueue(
+      const taskId = await workhorse.context.queue.enqueue(
         "demo.recurring",
         { source: "headless-test" },
         { maxAttempts: 1, tags: ["demo-test"] },
       );
-      const job = await waitFor(
-        () => workhorse.context.admin.getJob(jobId),
+      const task = await waitFor(
+        () => workhorse.context.admin.getTask(taskId),
         (candidate) => candidate?.state === "succeeded",
       );
-      expect(job?.state).toBe("succeeded");
+      expect(task?.state).toBe("succeeded");
     } finally {
       await workhorse.stop();
     }
@@ -3749,12 +3755,12 @@ describe("Workhorse demo", () => {
       audit: { actor: "operator", reason: "show deduplication", requestId: "audit-idempotent-2" },
     });
     expect(first).toMatchObject({ outcome: "accepted" });
-    expect(second).toMatchObject({ jobId: first.jobId, outcome: "replayed" });
+    expect(second).toMatchObject({ taskId: first.taskId, outcome: "replayed" });
     expect(
-      (await pool.query(`SELECT count(*)::integer AS count FROM workhorse.job`)).rows[0],
+      (await pool.query(`SELECT count(*)::integer AS count FROM workhorse.task`)).rows[0],
     ).toEqual({ count: 1 });
 
-    const detail = await client.dashboard.jobDetail({ id: first.jobId });
+    const detail = await client.dashboard.taskDetail({ id: first.taskId });
     const enqueued = detail.events.find((event) => event.type === "enqueued");
     expect(
       readDashboardIdempotencyEvidence({ type: enqueued!.type, details: enqueued!.details }),
@@ -3777,24 +3783,24 @@ describe("Workhorse demo", () => {
     const queue = new Queue(pool, "demo");
     const admin = new Admin(pool, "demo");
     const originalRunAt = new Date(Date.now() + 3_600_000);
-    const jobId = await queue.enqueue(
+    const taskId = await queue.enqueue(
       "demo.success",
       { label: "run-now" },
       { queue: "run-now-release", runAt: originalRunAt },
     );
 
     const released = await client.dashboard.runTaskNow({
-      id: jobId,
+      id: taskId,
       audit: { actor: "operator", reason: "Needed for incident recovery", requestId: "run-now-1" },
     });
-    expect(released).toMatchObject({ status: "released", id: jobId, state: "ready" });
+    expect(released).toMatchObject({ status: "released", id: taskId, state: "ready" });
     expect(new Date(released.runAt!).getTime()).toBeLessThan(originalRunAt.getTime());
     await expect(
       client.dashboard.runTaskNow({
-        id: jobId,
+        id: taskId,
         audit: { actor: "operator", reason: "Retry click", requestId: "run-now-2" },
       }),
-    ).resolves.toMatchObject({ status: "already_ready", id: jobId, state: "ready" });
+    ).resolves.toMatchObject({ status: "already_ready", id: taskId, state: "ready" });
 
     const waitingId = await queue.enqueue(
       "demo.success",
@@ -3806,7 +3812,7 @@ describe("Workhorse demo", () => {
     await queue.scheduleWait(claimed!, "run-now-wait-worker", "approval", {
       wakeAt: new Date(Date.now() + 3_600_000),
     });
-    const waitingBefore = await admin.getJob(waitingId);
+    const waitingBefore = await admin.getTask(waitingId);
     await expect(
       client.dashboard.runTaskNow({
         id: waitingId,
@@ -3818,7 +3824,7 @@ describe("Workhorse demo", () => {
       state: "scheduled",
       runAt: waitingBefore!.runAt.toISOString(),
     });
-    await expect(admin.getJob(waitingId)).resolves.toMatchObject({
+    await expect(admin.getTask(waitingId)).resolves.toMatchObject({
       state: "scheduled",
       runAt: waitingBefore!.runAt,
     });
@@ -3841,23 +3847,23 @@ describe("Workhorse demo", () => {
       {
         request_id: "run-now-1",
         action: "runTaskNow",
-        target: `job:${jobId}`,
+        target: `task:${taskId}`,
         status: "succeeded",
         reason: "Needed for incident recovery",
         before: { state: "scheduled", runAt: originalRunAt.toISOString(), waitName: null },
-        after: { status: "released", id: jobId, state: "ready" },
+        after: { status: "released", id: taskId, state: "ready" },
       },
       {
         request_id: "run-now-2",
         action: "runTaskNow",
-        target: `job:${jobId}`,
+        target: `task:${taskId}`,
         status: "succeeded",
-        after: { status: "already_ready", id: jobId, state: "ready" },
+        after: { status: "already_ready", id: taskId, state: "ready" },
       },
       {
         request_id: "run-now-wait",
         action: "runTaskNow",
-        target: `job:${waitingId}`,
+        target: `task:${waitingId}`,
         status: "failed",
         before: { state: "scheduled", waitName: "approval" },
         after: { status: "waiting", id: waitingId, state: "scheduled" },
@@ -3871,15 +3877,15 @@ describe("Workhorse demo", () => {
     const { app } = createTestApplication({ operator: createLocalOperator(database) });
     const client = dashboardClient(app);
     const queue = new Queue(pool, "demo");
-    const jobId = await queue.enqueue("demo.success", { label: "cancel-ready" }, {});
+    const taskId = await queue.enqueue("demo.success", { label: "cancel-ready" }, {});
 
     const result = await client.dashboard.cancelTask({
-      id: jobId,
+      id: taskId,
       audit: { actor: "operator", reason: "Superseded by a newer request", requestId: "cancel-1" },
     });
     expect(result).toMatchObject({
       status: "canceled",
-      jobId,
+      taskId,
       state: "canceled",
       requestedBy: "local-demo",
       reason: "Superseded by a newer request",
@@ -3887,7 +3893,7 @@ describe("Workhorse demo", () => {
     expect(result.finishedAt).toEqual(expect.any(String));
 
     // Canceled is its own terminal state. It must never be reported as failed or discarded.
-    const detail = await client.dashboard.jobDetail({ id: jobId });
+    const detail = await client.dashboard.taskDetail({ id: taskId });
     expect(detail.identity.state).toBe("canceled");
     expect(detail.current.outcome).toMatchObject({ state: "canceled" });
     expect(detail.current.runtime).toBeNull();
@@ -3907,7 +3913,7 @@ describe("Workhorse demo", () => {
     expect(audit.rows).toHaveLength(1);
     expect(audit.rows[0]).toMatchObject({
       action: "cancelTask",
-      target: `job:${jobId}`,
+      target: `task:${taskId}`,
       status: "succeeded",
       reason: "Superseded by a newer request",
       before: { state: "ready" },
@@ -3918,7 +3924,7 @@ describe("Workhorse demo", () => {
   it("allows canceling a task without a reason", async () => {
     const { app } = createTestApplication({ operator: createLocalOperator(database) });
     const client = dashboardClient(app);
-    const jobId = await new Queue(pool, "demo").enqueue(
+    const taskId = await new Queue(pool, "demo").enqueue(
       "demo.success",
       { label: "cancel-without-reason" },
       {},
@@ -3926,7 +3932,7 @@ describe("Workhorse demo", () => {
 
     await expect(
       client.dashboard.cancelTask({
-        id: jobId,
+        id: taskId,
         audit: { actor: "operator", requestId: "cancel-without-reason" },
       }),
     ).resolves.toMatchObject({ status: "canceled", state: "canceled", reason: null });
@@ -3941,22 +3947,22 @@ describe("Workhorse demo", () => {
     const { app } = createTestApplication({ operator: createLocalOperator(database) });
     const client = dashboardClient(app);
     const queue = new Queue(pool, "demo");
-    const jobId = await queue.enqueue(
+    const taskId = await queue.enqueue(
       "demo.success",
       { label: "cancel-scheduled" },
       { runAt: new Date(Date.now() + 3_600_000) },
     );
-    await expect(client.dashboard.jobDetail({ id: jobId })).resolves.toMatchObject({
+    await expect(client.dashboard.taskDetail({ id: taskId })).resolves.toMatchObject({
       current: { runtime: { state: "scheduled" } },
     });
 
     await expect(
       client.dashboard.cancelTask({
-        id: jobId,
+        id: taskId,
         audit: { actor: "operator", reason: "No longer needed", requestId: "cancel-scheduled" },
       }),
     ).resolves.toMatchObject({ status: "canceled", state: "canceled" });
-    await expect(client.dashboard.jobDetail({ id: jobId })).resolves.toMatchObject({
+    await expect(client.dashboard.taskDetail({ id: taskId })).resolves.toMatchObject({
       identity: { state: "canceled" },
     });
   });
@@ -3988,15 +3994,15 @@ describe("Workhorse demo", () => {
     const running = worker.run();
 
     try {
-      const jobId = await adapter.queue.enqueue("demo.test-cooperative-cancel", {}, {});
+      const taskId = await adapter.queue.enqueue("demo.test-cooperative-cancel", {}, {});
       await handlerStarted.promise;
       await waitFor(
-        () => client.dashboard.jobDetail({ id: jobId }),
+        () => client.dashboard.taskDetail({ id: taskId }),
         (detail) => detail.current.runtime?.state === "active",
       );
 
       const requested = await client.dashboard.cancelTask({
-        id: jobId,
+        id: taskId,
         audit: { actor: "operator", reason: "Runaway task", requestId: "cancel-active" },
       });
       // While the handler still owns the lease, PostgreSQL can only record the request.
@@ -4011,7 +4017,7 @@ describe("Workhorse demo", () => {
 
       // The request is visible on the live task before the outcome exists, so an operator is not
       // left staring at an apparently untouched running task.
-      const pending = await client.dashboard.jobDetail({ id: jobId });
+      const pending = await client.dashboard.taskDetail({ id: taskId });
       expect(pending.current.runtime).toMatchObject({
         state: "active",
         cancellation: { requestedBy: "local-demo", reason: "Runaway task" },
@@ -4021,7 +4027,7 @@ describe("Workhorse demo", () => {
       // as proof that a task remains active between the read above and the cancellation request.
       releaseHandler.resolve();
       const finished = await waitFor(
-        () => client.dashboard.jobDetail({ id: jobId }),
+        () => client.dashboard.taskDetail({ id: taskId }),
         (detail) => detail.identity.state === "canceled",
       );
       expect(finished.current.outcome).toMatchObject({ state: "canceled" });
@@ -4029,10 +4035,10 @@ describe("Workhorse demo", () => {
       expect(finished.attempts.map((attempt) => attempt.outcome)).toEqual(["canceled"]);
 
       const events = await pool.query<{ event_type: string; details: Record<string, unknown> }>(
-        `SELECT event_type, details FROM workhorse.job_event
-          WHERE job_id = $1 AND event_type IN ('cancel_requested', 'canceled')
+        `SELECT event_type, details FROM workhorse.task_event
+          WHERE task_id = $1 AND event_type IN ('cancel_requested', 'canceled')
           ORDER BY occurred_at, event_id`,
-        [jobId],
+        [taskId],
       );
       expect(events.rows.map((row) => row.event_type)).toEqual(["cancel_requested", "canceled"]);
       expect(events.rows[0]?.details).toMatchObject({
@@ -4054,30 +4060,30 @@ describe("Workhorse demo", () => {
     });
     const client = dashboardClient(app);
     workhorse.start();
-    let jobId: string;
+    let taskId: string;
 
     try {
       const enqueued = await client.dashboard.enqueueTest({
         kind: "success",
         audit: { actor: "operator", reason: "terminal cancel", requestId: "cancel-terminal-seed" },
       });
-      jobId = enqueued.jobId;
+      taskId = enqueued.taskId;
       await waitFor(
-        () => client.dashboard.jobDetail({ id: jobId }),
+        () => client.dashboard.taskDetail({ id: taskId }),
         (detail) => detail.identity.state === "succeeded",
       );
     } finally {
       await workhorse.stop();
     }
 
-    const before = await client.dashboard.jobDetail({ id: jobId! });
+    const before = await client.dashboard.taskDetail({ id: taskId! });
     const result = await client.dashboard.cancelTask({
-      id: jobId!,
+      id: taskId!,
       audit: { actor: "operator", reason: "Too late", requestId: "cancel-terminal" },
     });
     expect(result).toMatchObject({ status: "already_terminal", state: "succeeded" });
     // A terminal outcome is immutable: the recorded success must survive the attempt untouched.
-    await expect(client.dashboard.jobDetail({ id: jobId! })).resolves.toMatchObject({
+    await expect(client.dashboard.taskDetail({ id: taskId! })).resolves.toMatchObject({
       identity: { state: "succeeded" },
       current: { outcome: { state: before.current.outcome?.state } },
     });
@@ -4108,15 +4114,19 @@ describe("Workhorse demo", () => {
   it("refuses cancellation from a read-only operator", async () => {
     const { app } = createTestApplication();
     const client = dashboardClient(app);
-    const jobId = await new Queue(pool, "demo").enqueue("demo.success", { label: "read-only" }, {});
+    const taskId = await new Queue(pool, "demo").enqueue(
+      "demo.success",
+      { label: "read-only" },
+      {},
+    );
 
     await expect(
       client.dashboard.cancelTask({
-        id: jobId,
+        id: taskId,
         audit: { actor: "viewer", reason: "Not permitted", requestId: "cancel-read-only" },
       }),
     ).rejects.toThrow(/read-only/i);
-    await expect(client.dashboard.jobDetail({ id: jobId })).resolves.toMatchObject({
+    await expect(client.dashboard.taskDetail({ id: taskId })).resolves.toMatchObject({
       identity: { state: "ready" },
     });
     await expect(
@@ -4149,17 +4159,17 @@ describe("Workhorse demo", () => {
       pageSize: 25,
     });
     expect(canceledPage.total).toBe(1);
-    expect(canceledPage.jobs.map((job) => job.id)).toEqual([canceledId]);
-    expect(canceledPage.jobs[0]).toMatchObject({ state: "canceled" });
+    expect(canceledPage.tasks.map((task) => task.id)).toEqual([canceledId]);
+    expect(canceledPage.tasks[0]).toMatchObject({ state: "canceled" });
 
     const discardedPage = await client.dashboard.tasks({
       filter: "discarded",
       page: 1,
       pageSize: 25,
     });
-    expect(discardedPage.jobs.map((job) => job.id)).not.toContain(canceledId);
+    expect(discardedPage.tasks.map((task) => task.id)).not.toContain(canceledId);
     const queuedPage = await client.dashboard.tasks({ filter: "queued", page: 1, pageSize: 25 });
-    expect(queuedPage.jobs.map((job) => job.id)).toEqual([readyId]);
+    expect(queuedPage.tasks.map((task) => task.id)).toEqual([readyId]);
   });
 
   it("counts and filters blocked tasks with their prerequisite reason", async () => {
@@ -4170,7 +4180,7 @@ describe("Workhorse demo", () => {
     const blockedId = await queue.enqueue(
       "demo.success",
       { label: "dependent" },
-      { prerequisiteJobId: prerequisiteId },
+      { prerequisiteTaskId: prerequisiteId },
     );
 
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({ all: 2, blocked: 1 });
@@ -4178,12 +4188,12 @@ describe("Workhorse demo", () => {
     expect(page).toMatchObject({
       filter: "blocked",
       total: 1,
-      jobs: [
+      tasks: [
         {
           id: blockedId,
           state: "blocked",
           blockedReason: "prerequisite_pending",
-          prerequisiteJobIds: [prerequisiteId],
+          prerequisiteTaskIds: [prerequisiteId],
         },
       ],
     });
@@ -4199,19 +4209,19 @@ describe("Workhorse demo", () => {
     const stored = await new Queue(pool, "demo").schedules([DEMO_SCHEDULE_NAMESPACE]);
     const heartbeat = stored.find((schedule) => schedule.name === HEARTBEAT_SCHEDULE_NAME)!;
     // Materialize one occurrence directly so the test does not depend on wall-clock cron timing.
-    const occurrenceJobId = (await new Queue(pool, "demo").fireSchedule(
+    const occurrenceTaskId = (await new Queue(pool, "demo").fireSchedule(
       DEMO_SCHEDULE_NAMESPACE,
       HEARTBEAT_SCHEDULE_NAME,
       heartbeat.revision,
       new Date(),
     ))!;
-    expect(occurrenceJobId).toEqual(expect.any(String));
+    expect(occurrenceTaskId).toEqual(expect.any(String));
     await client.dashboard.cancelTask({
-      id: occurrenceJobId,
+      id: occurrenceTaskId,
       audit: { actor: "operator", reason: "Skip this run", requestId: "cancel-occurrence" },
     });
 
-    await expect(client.dashboard.jobDetail({ id: occurrenceJobId })).resolves.toMatchObject({
+    await expect(client.dashboard.taskDetail({ id: occurrenceTaskId })).resolves.toMatchObject({
       identity: { state: "canceled" },
     });
     // Cancelling one materialized run says nothing about the schedule, which stays enabled and
@@ -4234,7 +4244,7 @@ describe("Workhorse demo", () => {
     const { app, workhorse } = createTestApplication({
       operator: createLocalOperator(database),
       workerPollMs: 5,
-      longRunningJobMs: TEST_CONTROL_WINDOW_JOB_MS,
+      longRunningTaskMs: TEST_CONTROL_WINDOW_TASK_MS,
     });
     const client = dashboardClient(app);
     workhorse.start();
@@ -4245,15 +4255,15 @@ describe("Workhorse demo", () => {
         audit: { actor: "operator", reason: "metrics", requestId: "cancel-metrics-seed" },
       });
       await waitFor(
-        () => client.dashboard.jobDetail({ id: enqueued.jobId }),
+        () => client.dashboard.taskDetail({ id: enqueued.taskId }),
         (detail) => detail.current.runtime?.state === "active",
       );
       await client.dashboard.cancelTask({
-        id: enqueued.jobId,
+        id: enqueued.taskId,
         audit: { actor: "operator", reason: "Metrics", requestId: "cancel-metrics" },
       });
       await waitFor(
-        () => client.dashboard.jobDetail({ id: enqueued.jobId }),
+        () => client.dashboard.taskDetail({ id: enqueued.taskId }),
         (detail) => detail.identity.state === "canceled",
         600,
       );
@@ -4276,17 +4286,17 @@ describe("Workhorse demo", () => {
     await seedDemoData(database);
 
     // Keys are retained only as a hash, so the seed is located by its scope rather than its key.
-    const keyedRows = await pool.query<{ job_id: string }>(
-      `SELECT job_id::text FROM workhorse.enqueue_idempotency
+    const keyedRows = await pool.query<{ task_id: string }>(
+      `SELECT task_id::text FROM workhorse.enqueue_idempotency
         WHERE idempotency_scope = $1`,
       [DEMO_SEED_IDEMPOTENCY_SCOPE],
     );
     expect(keyedRows.rows).toHaveLength(1);
-    const seededJobId = keyedRows.rows[0]!.job_id;
+    const seededTaskId = keyedRows.rows[0]!.task_id;
 
     const tasks = await client.dashboard.tasks({ filter: "all", page: 1, pageSize: 100 });
-    expect(tasks.jobs.filter((job) => job.keyed).map((job) => job.id)).toContain(seededJobId);
-    expect(tasks.jobs.find((job) => job.id === seededJobId)?.tags).toContain("idempotent");
+    expect(tasks.tasks.filter((task) => task.keyed).map((task) => task.id)).toContain(seededTaskId);
+    expect(tasks.tasks.find((task) => task.id === seededTaskId)?.tags).toContain("idempotent");
     expect(JSON.stringify(tasks)).not.toContain(DEMO_SEED_IDEMPOTENCY_KEY);
 
     // Re-running the seed leaves the keyed task alone rather than accumulating duplicates.
@@ -4319,25 +4329,25 @@ describe("Workhorse dashboard events feed", () => {
     workhorse.start();
 
     try {
-      const { jobId } = await enqueueDemoTest("success");
+      const { taskId } = await enqueueDemoTest("success");
       const page = await waitFor(
         () => client.dashboard.events({ window: "1h", pageSize: 100 }),
         (value) =>
           value.events.some(
             (event) =>
-              event.jobId === jobId && event.kind === "attempt" && event.type === "succeeded",
+              event.taskId === taskId && event.kind === "attempt" && event.type === "succeeded",
           ),
       );
 
-      const rows = page.events.filter((event) => event.jobId === jobId);
+      const rows = page.events.filter((event) => event.taskId === taskId);
       // Both history tables reach the same feed, and the row says which one it came from.
       expect(rows.map((event) => `${event.kind}:${event.type}`)).toEqual(
         expect.arrayContaining(["event:enqueued", "attempt:succeeded"]),
       );
-      // The job identity is joined in, so a feed row names the task rather than only its uuid.
+      // The task identity is joined in, so a feed row names the task rather than only its uuid.
       for (const row of rows) {
         expect(row.queue).toBe("demo");
-        expect(row.jobType).toMatch(/^demo\./);
+        expect(row.taskType).toMatch(/^demo\./);
       }
       const attempt = rows.find((event) => event.kind === "attempt")!;
       expect(attempt.workerId).toEqual(expect.any(String));
@@ -4361,7 +4371,7 @@ describe("Workhorse dashboard events feed", () => {
     }
   });
 
-  it("filters by source table, event type, and the queue the job belongs to", async () => {
+  it("filters by source table, event type, and the queue the task belongs to", async () => {
     const { app, workhorse } = createTestApplication({
       operator: createLocalOperator(database),
       workerPollMs: 5,
@@ -4370,10 +4380,10 @@ describe("Workhorse dashboard events feed", () => {
     workhorse.start();
 
     try {
-      const { jobId } = await enqueueDemoTest("success");
+      const { taskId } = await enqueueDemoTest("success");
       await waitFor(
         () => client.dashboard.events({ window: "1h", pageSize: 100, kind: "attempt" }),
-        (value) => value.events.some((event) => event.jobId === jobId),
+        (value) => value.events.some((event) => event.taskId === taskId),
       );
 
       const attempts = await client.dashboard.events({
@@ -4392,7 +4402,7 @@ describe("Workhorse dashboard events feed", () => {
       expect(enqueues.events.length).toBeGreaterThan(0);
       expect(enqueues.events.every((event) => event.type === "enqueued")).toBe(true);
 
-      // Queue and task filters are matched through the job the history row points at.
+      // Queue and task filters are matched through the task the history row points at.
       expect(
         (await client.dashboard.events({ window: "1h", pageSize: 100, queue: "demo" })).events
           .length,
@@ -4402,8 +4412,8 @@ describe("Workhorse dashboard events feed", () => {
           .events,
       ).toEqual([]);
       expect(
-        (await client.dashboard.events({ window: "1h", pageSize: 100, jobId })).events.every(
-          (event) => event.jobId === jobId,
+        (await client.dashboard.events({ window: "1h", pageSize: 100, taskId })).events.every(
+          (event) => event.taskId === taskId,
         ),
       ).toBe(true);
     } finally {
@@ -4420,9 +4430,9 @@ describe("Workhorse dashboard events feed", () => {
     workhorse.start();
 
     try {
-      const { jobId } = await enqueueDemoTest("retry");
+      const { taskId } = await enqueueDemoTest("retry");
       const page = await waitFor(
-        () => client.dashboard.events({ window: "1h", pageSize: 100, jobId }),
+        () => client.dashboard.events({ window: "1h", pageSize: 100, taskId }),
         (value) =>
           value.events.some((event) => event.kind === "attempt" && event.errorMessage !== null),
       );
@@ -4479,9 +4489,9 @@ describe("Workhorse dashboard events feed", () => {
       // Depth is bounded by retention, so the page carries the policy rather than leaving an
       // operator to infer it from a feed that simply stops.
       const policy = await pool.query<{ days: number | null }>(
-        "SELECT job_event_retention_days AS days FROM workhorse.retention_policy WHERE singleton",
+        "SELECT task_event_retention_days AS days FROM workhorse.retention_policy WHERE singleton",
       );
-      expect(full.retention.jobEventDays).toBe(policy.rows[0]?.days ?? null);
+      expect(full.retention.taskEventDays).toBe(policy.rows[0]?.days ?? null);
     } finally {
       await workhorse.stop();
     }
@@ -4496,30 +4506,30 @@ describe("Workhorse dashboard events feed", () => {
     workhorse.start();
 
     try {
-      const { jobId } = await enqueueDemoTest("success");
+      const { taskId } = await enqueueDemoTest("success");
       await waitFor(
-        () => client.dashboard.events({ window: "15m", pageSize: 100, jobId }),
+        () => client.dashboard.events({ window: "15m", pageSize: 100, taskId }),
         (value) => value.events.some((event) => event.kind === "attempt"),
       );
       // Stop the fleet before rewriting history: a worker still claiming work would write fresh
-      // rows for this job after the aging update and the window assertion would race it.
+      // rows for this task after the aging update and the window assertion would race it.
       await workhorse.stop();
 
       // Age the history past the shortest window without touching the clock the queue runs on.
       await pool.query(
-        "UPDATE workhorse.job_event SET occurred_at = occurred_at - interval '20 minutes' WHERE job_id = $1",
-        [jobId],
+        "UPDATE workhorse.task_event SET occurred_at = occurred_at - interval '20 minutes' WHERE task_id = $1",
+        [taskId],
       );
       await pool.query(
-        "UPDATE workhorse.attempt_history SET occurred_at = occurred_at - interval '20 minutes' WHERE job_id = $1",
-        [jobId],
+        "UPDATE workhorse.attempt_history SET occurred_at = occurred_at - interval '20 minutes' WHERE task_id = $1",
+        [taskId],
       );
 
       expect(
-        (await client.dashboard.events({ window: "15m", pageSize: 100, jobId })).events,
+        (await client.dashboard.events({ window: "15m", pageSize: 100, taskId })).events,
       ).toEqual([]);
       expect(
-        (await client.dashboard.events({ window: "1h", pageSize: 100, jobId })).events.length,
+        (await client.dashboard.events({ window: "1h", pageSize: 100, taskId })).events.length,
       ).toBeGreaterThan(0);
     } finally {
       await workhorse.stop();
@@ -4529,20 +4539,20 @@ describe("Workhorse dashboard events feed", () => {
   it("releases and cancels dependents according to their prerequisite outcomes", async () => {
     const { workhorse } = createTestApplication();
     const queue = workhorse.context.queue;
-    const family = demoFeatureShowcaseFamily("job-dependencies");
+    const family = demoFeatureShowcaseFamily("task-dependencies");
 
     const releasedPrerequisite = await queue.enqueue(
-      family.jobType,
-      showcaseTestPayload("job-dependencies", "test-release", "success", { role: "prerequisite" }),
+      family.taskType,
+      showcaseTestPayload("task-dependencies", "test-release", "success", { role: "prerequisite" }),
       { maxAttempts: 1 },
     );
     const releasedDependent = await queue.enqueue(
-      family.jobType,
-      showcaseTestPayload("job-dependencies", "test-release", "success", { role: "dependent" }),
+      family.taskType,
+      showcaseTestPayload("task-dependencies", "test-release", "success", { role: "dependent" }),
       {
         maxAttempts: 1,
         dependencies: {
-          prerequisiteJobIds: [releasedPrerequisite],
+          prerequisiteTaskIds: [releasedPrerequisite],
           onSuccess: "release",
           onFailure: "fail",
           onCancellation: "cancel",
@@ -4550,19 +4560,19 @@ describe("Workhorse dashboard events feed", () => {
       },
     );
     const failingPrerequisite = await queue.enqueue(
-      family.jobType,
-      showcaseTestPayload("job-dependencies", "test-cancel", "always-fail", {
+      family.taskType,
+      showcaseTestPayload("task-dependencies", "test-cancel", "always-fail", {
         role: "prerequisite",
       }),
       { maxAttempts: 1 },
     );
     const canceledDependent = await queue.enqueue(
-      family.jobType,
-      showcaseTestPayload("job-dependencies", "test-cancel", "success", { role: "dependent" }),
+      family.taskType,
+      showcaseTestPayload("task-dependencies", "test-cancel", "success", { role: "dependent" }),
       {
         maxAttempts: 1,
         dependencies: {
-          prerequisiteJobIds: [failingPrerequisite],
+          prerequisiteTaskIds: [failingPrerequisite],
           onSuccess: "release",
           onFailure: "cancel",
           onCancellation: "cancel",
@@ -4572,13 +4582,13 @@ describe("Workhorse dashboard events feed", () => {
     workhorse.start();
 
     try {
-      await waitForJobState(workhorse.context.admin, releasedDependent, "succeeded");
-      await waitForJobState(workhorse.context.admin, canceledDependent, "canceled");
+      await waitForTaskState(workhorse.context.admin, releasedDependent, "succeeded");
+      await waitForTaskState(workhorse.context.admin, canceledDependent, "canceled");
       const lineage = await workhorse.context.admin.getDependencyLineage(releasedDependent);
       expect(lineage.records).toMatchObject([
         {
-          dependentJobId: releasedDependent,
-          prerequisiteJobId: releasedPrerequisite,
+          dependentTaskId: releasedDependent,
+          prerequisiteTaskId: releasedPrerequisite,
           resolution: "release",
         },
       ]);
@@ -4592,16 +4602,16 @@ describe("Workhorse dashboard events feed", () => {
     const queue = workhorse.context.queue;
     const family = demoFeatureShowcaseFamily("child-workflows");
 
-    const parentJobId = await queue.enqueue(
-      family.jobType,
+    const parentTaskId = await queue.enqueue(
+      family.taskType,
       showcaseTestPayload("child-workflows", "test-fan-out", "fan-out-join", { childCount: 2 }),
       { maxAttempts: 1 },
     );
     workhorse.start();
 
     try {
-      await waitForJobState(workhorse.context.admin, parentJobId, "succeeded");
-      expect(await jobResult(parentJobId)).toMatchObject({
+      await waitForTaskState(workhorse.context.admin, parentTaskId, "succeeded");
+      expect(await taskResult(parentTaskId)).toMatchObject({
         scenario: "test-fan-out",
         childCount: 2,
         children: {
@@ -4615,7 +4625,7 @@ describe("Workhorse dashboard events feed", () => {
           },
         },
       });
-      const lineage = await workhorse.context.admin.getChildLineage(parentJobId);
+      const lineage = await workhorse.context.admin.getChildLineage(parentTaskId);
       expect(lineage.records).toHaveLength(2);
       expect(lineage.records.every((record) => record.outcomeState === "succeeded")).toBe(true);
     } finally {
@@ -4628,8 +4638,8 @@ describe("Workhorse dashboard events feed", () => {
     const queue = workhorse.context.queue;
     const family = demoFeatureShowcaseFamily("signals");
 
-    const waiterJobId = await queue.enqueue(
-      family.jobType,
+    const waiterTaskId = await queue.enqueue(
+      family.taskType,
       showcaseTestPayload("signals", "test-handoff", "signal-handoff", {
         waitTimeoutMs: 60_000,
       }),
@@ -4638,8 +4648,8 @@ describe("Workhorse dashboard events feed", () => {
     workhorse.start();
 
     try {
-      await waitForJobState(workhorse.context.admin, waiterJobId, "succeeded");
-      expect(await jobResult(waiterJobId)).toMatchObject({
+      await waitForTaskState(workhorse.context.admin, waiterTaskId, "succeeded");
+      expect(await taskResult(waiterTaskId)).toMatchObject({
         scenario: "test-handoff",
         behavior: "signal-handoff",
         signal: { scenario: "test-handoff", sentBy: "showcase-sender" },
@@ -4654,8 +4664,8 @@ describe("Workhorse dashboard events feed", () => {
     const queue = workhorse.context.queue;
     const family = demoFeatureShowcaseFamily("signals");
 
-    const waiterJobId = await queue.enqueue(
-      family.jobType,
+    const waiterTaskId = await queue.enqueue(
+      family.taskType,
       showcaseTestPayload("signals", "test-operator", "signal-operator", {
         waitTimeoutMs: 60_000,
       }),
@@ -4666,18 +4676,18 @@ describe("Workhorse dashboard events feed", () => {
     try {
       await waitFor(
         () => workhorse.context.admin.listSignalWaits(),
-        (page) => page.items.some((wait) => wait.jobId === waiterJobId),
+        (page) => page.items.some((wait) => wait.taskId === waiterTaskId),
         1_600,
       );
       const delivery = await queue.sendSignal(
-        waiterJobId,
+        waiterTaskId,
         DEMO_SIGNAL_NAME,
         { approved: true },
         { idempotencyKey: "test-operator-signal", requestedBy: "integration-test" },
       );
       expect(delivery.status).toBe("delivered");
-      await waitForJobState(workhorse.context.admin, waiterJobId, "succeeded");
-      expect(await jobResult(waiterJobId)).toMatchObject({ signal: { approved: true } });
+      await waitForTaskState(workhorse.context.admin, waiterTaskId, "succeeded");
+      expect(await taskResult(waiterTaskId)).toMatchObject({ signal: { approved: true } });
     } finally {
       await workhorse.stop();
     }
@@ -4688,8 +4698,8 @@ describe("Workhorse dashboard events feed", () => {
     const queue = workhorse.context.queue;
     const family = demoFeatureShowcaseFamily("human-decisions");
 
-    const jobId = await queue.enqueue(
-      family.jobType,
+    const taskId = await queue.enqueue(
+      family.taskType,
       showcaseTestPayload("human-decisions", "test-approval", "human-pending", {
         waitTimeoutMs: 60_000,
       }),
@@ -4700,10 +4710,10 @@ describe("Workhorse dashboard events feed", () => {
     try {
       const pending = await waitFor(
         () => workhorse.context.admin.listHumanWaits(),
-        (page) => page.items.some((wait) => wait.jobId === jobId),
+        (page) => page.items.some((wait) => wait.taskId === taskId),
         1_600,
       );
-      expect(pending.items.find((wait) => wait.jobId === jobId)).toMatchObject({
+      expect(pending.items.find((wait) => wait.taskId === taskId)).toMatchObject({
         name: DEMO_HUMAN_WAIT_NAME,
         context: {
           scenario: "test-approval",
@@ -4720,17 +4730,17 @@ describe("Workhorse dashboard events feed", () => {
       expect(waiting).toMatchObject({
         filter: "waiting",
         total: 1,
-        jobs: [{ id: jobId, state: "scheduled", waitName: DEMO_HUMAN_WAIT_NAME }],
+        tasks: [{ id: taskId, state: "scheduled", waitName: DEMO_HUMAN_WAIT_NAME }],
       });
       const completion = await queue.completeHumanWait(
-        jobId,
+        taskId,
         DEMO_HUMAN_WAIT_NAME,
         { approved: true, note: "looks good" },
         { idempotencyKey: "test-human-decision", requestedBy: "integration-test" },
       );
       expect(completion.status).toBe("completed");
-      await waitForJobState(workhorse.context.admin, jobId, "succeeded");
-      expect(await jobResult(jobId)).toMatchObject({
+      await waitForTaskState(workhorse.context.admin, taskId, "succeeded");
+      expect(await taskResult(taskId)).toMatchObject({
         scenario: "test-approval",
         decision: { approved: true, note: "looks good" },
       });
@@ -4744,16 +4754,16 @@ describe("Workhorse dashboard events feed", () => {
     const queue = workhorse.context.queue;
     const family = demoFeatureShowcaseFamily("batch-handlers");
 
-    const [succeedingJobId, failingJobId] = await queue.enqueueMany([
+    const [succeedingTaskId, failingTaskId] = await queue.enqueueMany([
       {
-        type: family.jobType,
+        type: family.taskType,
         payload: showcaseTestPayload("batch-handlers", "test-batch", "batch-member", {
           memberIndex: 1,
         }),
         options: { maxAttempts: 1 },
       },
       {
-        type: family.jobType,
+        type: family.taskType,
         payload: showcaseTestPayload("batch-handlers", "test-batch", "batch-member", {
           memberIndex: 2,
           shouldFail: true,
@@ -4764,9 +4774,9 @@ describe("Workhorse dashboard events feed", () => {
 
     workhorse.start();
     try {
-      await waitForJobState(workhorse.context.admin, succeedingJobId!, "succeeded");
-      await waitForJobState(workhorse.context.admin, failingJobId!, "failed");
-      expect(await jobResult(succeedingJobId!)).toMatchObject({
+      await waitForTaskState(workhorse.context.admin, succeedingTaskId!, "succeeded");
+      await waitForTaskState(workhorse.context.admin, failingTaskId!, "failed");
+      expect(await taskResult(succeedingTaskId!)).toMatchObject({
         scenario: "test-batch",
         memberIndex: 1,
         digestId: expect.any(String),
@@ -4781,22 +4791,22 @@ describe("Workhorse dashboard events feed", () => {
     const queue = workhorse.context.queue;
     const family = demoFeatureShowcaseFamily("payload-contracts");
 
-    const acceptedJobId = await queue.enqueue(
-      family.jobType,
+    const acceptedTaskId = await queue.enqueue(
+      family.taskType,
       showcaseTestPayload("payload-contracts", "test-accepted", "contract-valid", {
         invoiceId: "INV-test-accepted",
       }),
       { maxAttempts: 1 },
     );
-    const rejectedResultJobId = await queue.enqueue(
-      family.jobType,
+    const rejectedResultTaskId = await queue.enqueue(
+      family.taskType,
       showcaseTestPayload("payload-contracts", "test-rejected", "contract-result-invalid", {
         invoiceId: "INV-test-rejected",
       }),
       { maxAttempts: 1 },
     );
-    const probeJobId = await queue.enqueue(
-      family.jobType,
+    const probeTaskId = await queue.enqueue(
+      family.taskType,
       showcaseTestPayload("payload-contracts", "test-probe", "contract-payload-probe", {
         invoiceId: "INV-test-probe",
       }),
@@ -4804,29 +4814,29 @@ describe("Workhorse dashboard events feed", () => {
     );
     await expect(
       queue.enqueue(
-        family.jobType,
+        family.taskType,
         showcaseTestPayload("payload-contracts", "test-refused", "contract-valid"),
       ),
     ).rejects.toThrow(/contract/i);
 
     workhorse.start();
     try {
-      await waitForJobState(workhorse.context.admin, acceptedJobId, "succeeded");
-      expect(await jobResult(acceptedJobId)).toMatchObject({
+      await waitForTaskState(workhorse.context.admin, acceptedTaskId, "succeeded");
+      expect(await taskResult(acceptedTaskId)).toMatchObject({
         approved: true,
         invoiceId: "INV-test-accepted",
         contractVersion: "v1",
       });
-      await waitForJobState(workhorse.context.admin, rejectedResultJobId, "failed");
+      await waitForTaskState(workhorse.context.admin, rejectedResultTaskId, "failed");
       const failure = await pool.query<{ message: string }>(
-        "SELECT error->>'message' AS message FROM workhorse.job_outcome WHERE job_id = $1",
-        [rejectedResultJobId],
+        "SELECT error->>'message' AS message FROM workhorse.task_outcome WHERE task_id = $1",
+        [rejectedResultTaskId],
       );
       expect(failure.rows[0]!.message).toMatch(/contract/i);
-      await waitForJobState(workhorse.context.admin, probeJobId, "succeeded");
-      expect(await jobResult(probeJobId)).toMatchObject({
+      await waitForTaskState(workhorse.context.admin, probeTaskId, "succeeded");
+      expect(await taskResult(probeTaskId)).toMatchObject({
         approved: true,
-        probedRejection: { name: "JobContractValidationError" },
+        probedRejection: { name: "TaskContractValidationError" },
       });
     } finally {
       await workhorse.stop();

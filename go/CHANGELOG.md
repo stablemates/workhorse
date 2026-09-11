@@ -8,6 +8,30 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## 0.1.4 — 2026-09-11
+
+The npm packages, Python distribution, and Go module release from one source commit.
+
+Requires **schema v1** and Go **1.25** or newer.
+
+**A 0.1.x database must be dropped and reinstalled.** This release renames the unit of work from
+"job" to "task" on every surface and re-cuts the schema baseline in place; no migration exists
+between 0.1.3 and 0.1.4 ([ADR 0064](../docs/decisions/0064-rename-the-unit-noun-from-job-to-task.md)).
+
+- Rename every `Job*` identifier to its `Task` spelling: `ClaimedJob` is `ClaimedTask`,
+  `HandlerContext.Job` is `HandlerContext.Task`, `ChildJobRequest` is `ChildTaskRequest`,
+  `PrerequisiteJobIDs` is `PrerequisiteTaskIDs`, and `GetJob`, `ListJobs`, and `GetJobTimeline`
+  are `GetTask`, `ListTasks`, and `GetTaskTimeline`. `api/go.txt` lists every removed name.
+- Remove the pre-rename aliases `AssertCompatible`, `CreateChild`, `CreateChildren`, and
+  `CreateChildrenAll` that `go/deprecated.go` carried.
+- Rename the schema, the `workhorse_jobs` notification channel (now `workhorse_tasks`), and the
+  substituted error name `RedactedJobError` (now `RedactedTaskError`).
+- Rename the OpenTelemetry names from `workhorse.jobs.*` and `workhorse.job.*` to
+  `workhorse.tasks.*` and `workhorse.task.*`, with the `{task}` unit.
+- Rename the `dashboard/v1` bindings: `JobDetail` becomes `TaskDetail` and every `Job*` field
+  becomes `Task*`; `MaintenanceTaskPollMs` becomes `MaintenanceRoutinePollMs` and the cron page
+  lists `Maintenance.Routines`.
+
 ## 0.1.3 — 2026-09-10
 
 The npm packages, Python distribution, and Go module release from one source commit.

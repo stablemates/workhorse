@@ -1,12 +1,12 @@
 ---
 title: Queries and timelines
-description: Inspect any job's state, list work with bounded payloads, replay lifecycle evidence, and ask the queue how it feels.
+description: Inspect any task's state, list work with bounded payloads, replay lifecycle evidence, and ask the queue how it feels.
 ---
 
 When something goes wrong at 2 a.m., you need answers from the queue itself: what state is this
-job in, what happened to it, and is the system healthy? Workhorse answers all three from
+task in, what happened to it, and is the system healthy? Workhorse answers all three from
 PostgreSQL read models that stay separate from the dispatch path. You can page through millions
-of terminal jobs without slowing a single worker's claim.
+of terminal tasks without slowing a single worker's claim.
 
 Construct `Admin` from the same caller-owned pool or executor as `Queue`:
 
@@ -14,31 +14,31 @@ Construct `Admin` from the same caller-owned pool or executor as `Queue`:
 const admin = new Admin(pool);
 ```
 
-## Read one known job
+## Read one known task
 
-`admin.getJob(jobId)` joins the job's stable identity and accepted definition to its runtime or outcome row and
-returns a `JobSnapshot` — or `null` when the identity is unknown or retired.
+`admin.getTask(taskId)` joins the task's stable identity and accepted definition to its runtime or outcome row and
+returns a `TaskSnapshot` — or `null` when the identity is unknown or retired.
 
 ```ts
-const snapshot = await admin.getJob(jobId);
+const snapshot = await admin.getTask(taskId);
 
 if (snapshot) {
   console.log(snapshot.state, snapshot.currentAttempt, snapshot.result);
 } else {
-  console.log("no such job, or its identity was retired");
+  console.log("no such task, or its identity was retired");
 }
 ```
 
 That `null` matters. A history query alone cannot distinguish "never existed" from "existed and
-was cleaned up", so use `getJob` whenever existence is the question.
+was cleaned up", so use `getTask` whenever existence is the question.
 
-## List jobs with bounded payloads
+## List tasks with bounded payloads
 
-`admin.listJobs(query)` filters by queue, type, states, tags, and creation time. It orders pages
+`admin.listTasks(query)` filters by queue, type, states, tags, and creation time. It orders pages
 newest-first by immutable creation keys and returns a signed cursor for the next call.
 
 ```ts
-const page = await admin.listJobs({
+const page = await admin.listTasks({
   queue: "billing",
   states: ["active", "failed"],
   payload: {
@@ -48,12 +48,12 @@ const page = await admin.listJobs({
   },
 });
 
-for (const job of page.items) {
-  console.log(job.id, job.state, job.payloadStatus, job.payload);
+for (const task of page.items) {
+  console.log(task.id, task.state, task.payloadStatus, task.payload);
 }
 
 if (page.nextCursor) {
-  const next = await admin.listJobs({
+  const next = await admin.listTasks({
     queue: "billing",
     states: ["active", "failed"],
     payload: { include: true, maxBytes: 4_096, redactKeys: ["cardNumber", "accessToken"] },
@@ -71,17 +71,17 @@ Two rules keep paging honest:
 
 - A cursor is signed against the filters and payload projection that created it. Reusing it with
   a different query fails loudly instead of silently changing page membership.
-- Pages are weakly consistent across calls. Jobs enqueued or transitioned between calls can shift
-  later pages, so confirm any individual job with `getJob`.
+- Pages are weakly consistent across calls. Tasks enqueued or transitioned between calls can shift
+  later pages, so confirm any individual task with `getTask`.
 
 ## Reconstruct what happened
 
-`admin.getJobTimeline(jobId, query)` merges retained `job_event` rows and closed
+`admin.getTaskTimeline(taskId, query)` merges retained `task_event` rows and closed
 `attempt_history` rows into one newest-first stream, with its own cursor for long histories. Cursor
 record identities are UUIDv7 values and can also identify exported history rows.
 
 ```ts
-const timeline = await admin.getJobTimeline(jobId, { limit: 50 });
+const timeline = await admin.getTaskTimeline(taskId, { limit: 50 });
 
 for (const entry of timeline.items) {
   if (entry.kind === "event") {
@@ -94,8 +94,8 @@ for (const entry of timeline.items) {
 
 This is the durable answer to "why did attempt 3 retry?" — each closed attempt carries its
 outcome, and each event carries its details. One caveat: history categories retire on independent
-retention windows, so a known job can have a partial or empty timeline. Absence of timeline is
-never proof of absence of the job.
+retention windows, so a known task can have a partial or empty timeline. Absence of timeline is
+never proof of absence of the task.
 
 For the other durable projections, `admin.getCheckpoint`, `listCheckpoints`, `getWait`,
 `listWaits`, and `getProgress` expose checkpoints, durable waits, and progress without

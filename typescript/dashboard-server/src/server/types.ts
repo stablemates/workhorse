@@ -2,7 +2,7 @@ import type {
   CancelStatus,
   HumanWaitCompletionStatus,
   Json,
-  JobState,
+  TaskState,
   MaintenancePolicyDefinition,
   MaintenancePolicySetting,
   RetentionPolicyDefinition,
@@ -11,7 +11,7 @@ import type {
 } from "@stablemates/workhorse";
 import type {
   DashboardDemoFeature,
-  DashboardDemoJobKind,
+  DashboardDemoTaskKind,
   DashboardDemoScenario,
   DashboardDurabilityPlan,
   DashboardRedriveCursor,
@@ -40,14 +40,14 @@ export interface DashboardCancellationAuditContext extends Omit<DashboardAuditCo
 export type DashboardEnqueueTestOutcome = "accepted" | "replayed";
 
 export interface DashboardEnqueueTestResult {
-  jobId: string;
+  taskId: string;
   outcome?: DashboardEnqueueTestOutcome;
 }
 
 export interface DashboardOperator {
   mode: "read-only" | "writable";
   enqueueTest?: (
-    kind: DashboardDemoJobKind,
+    kind: DashboardDemoTaskKind,
     audit: DashboardAuditContext,
     scenario?: DashboardDemoScenario,
     priority?: number,
@@ -78,8 +78,8 @@ export interface DashboardQueueController {
 
 export interface DashboardCancelTaskResult {
   status: CancelStatus;
-  jobId: string;
-  state: JobState | null;
+  taskId: string;
+  state: TaskState | null;
   currentAttempt: number | null;
   requestedAt: string | null;
   requestedBy: string | null;
@@ -96,7 +96,7 @@ export interface DashboardRunNowResult {
 
 export interface DashboardSignalTaskResult {
   status: SignalDeliveryStatus;
-  jobId: string;
+  taskId: string;
   name: string;
   payload: Json | null;
   deliveredAt: string | null;
@@ -105,7 +105,7 @@ export interface DashboardSignalTaskResult {
 
 export interface DashboardCompleteHumanWaitResult {
   status: HumanWaitCompletionStatus;
-  jobId: string;
+  taskId: string;
   name: string;
   result: Json | null;
   completedAt: string | null;
@@ -115,10 +115,10 @@ export interface DashboardCompleteHumanWaitResult {
 /** What PostgreSQL did with one dead letter, projected for the wire. */
 export interface DashboardRedriveResult {
   status: DashboardRedriveStatus;
-  sourceJobId: string;
-  targetJobId: string | null;
-  sourceState: JobState | null;
-  targetState: JobState | null;
+  sourceTaskId: string;
+  targetTaskId: string | null;
+  sourceState: TaskState | null;
+  targetState: TaskState | null;
   requestedAt: string | null;
 }
 
@@ -131,7 +131,7 @@ export interface DashboardRedriveResult {
  */
 export interface DashboardRedriveFilter {
   queue: string | null;
-  jobType: string | null;
+  taskType: string | null;
   tags: readonly string[];
 }
 
@@ -149,20 +149,20 @@ export interface DashboardRedriveBatch {
 }
 
 export interface DashboardTaskController {
-  runTaskNow?: (jobId: string, audit: DashboardAuditContext) => Promise<DashboardRunNowResult>;
+  runTaskNow?: (taskId: string, audit: DashboardAuditContext) => Promise<DashboardRunNowResult>;
   cancelTask?: (
-    jobId: string,
+    taskId: string,
     audit: DashboardCancellationAuditContext,
   ) => Promise<DashboardCancelTaskResult>;
   signalTask?: (
-    jobId: string,
+    taskId: string,
     name: string,
     payload: Json,
     idempotencyKey: string,
     audit: DashboardAuditContext,
   ) => Promise<DashboardSignalTaskResult>;
   completeHumanWait?: (
-    jobId: string,
+    taskId: string,
     name: string,
     result: Json,
     idempotencyKey: string,
@@ -174,7 +174,7 @@ export interface DashboardTaskController {
    * The source failure is never edited, so the result names both identities and the operator can
    * follow the audited lineage edge PostgreSQL wrote between them.
    */
-  redriveTask?: (jobId: string, audit: DashboardAuditContext) => Promise<DashboardRedriveResult>;
+  redriveTask?: (taskId: string, audit: DashboardAuditContext) => Promise<DashboardRedriveResult>;
   /** Redrive a bounded page of the dead letters one filter selects. */
   redriveDeadLetters?: (
     filter: DashboardRedriveFilter,

@@ -4,7 +4,7 @@ import { MantineProvider } from "@mantine/core";
 import { describe, expect, it } from "vitest";
 import type {
   DashboardConcurrencyPolicySummary,
-  DashboardJobDetail,
+  DashboardTaskDetail,
   DashboardManagedQueueRow,
   DashboardQueuesPage,
   DashboardRateLimitPolicySummary,
@@ -104,7 +104,7 @@ function renderQueuePressure(
   );
 }
 
-function job(overrides: {
+function task(overrides: {
   runtimeState: string | null;
   concurrencyKey?: string | null;
   concurrencyPolicy?: DashboardConcurrencyPolicySummary | null;
@@ -266,7 +266,7 @@ describe("queues page rate-limit columns", () => {
 describe("task drawer concurrency line", () => {
   it("describes the effective queue and per-key budget for an active task", () => {
     const described = describeTaskConcurrency(
-      job({
+      task({
         runtimeState: "active",
         concurrencyKey: "tenant-a",
         concurrencyPolicy: policy({
@@ -290,7 +290,7 @@ describe("task drawer concurrency line", () => {
 
   it("frames the queue limits as fleet-wide rather than per worker", () => {
     const described = describeTaskConcurrency(
-      job({ runtimeState: "active", concurrencyPolicy: policy() }),
+      task({ runtimeState: "active", concurrencyPolicy: policy() }),
     );
     expect(described?.title).toContain("across every worker sharing this database");
   });
@@ -299,7 +299,7 @@ describe("task drawer concurrency line", () => {
     // `Queue.health()` measures a bounded number of policies. Past that bound the ceiling is still
     // exact, so the line keeps it and drops every count rather than reporting zeroes as idleness.
     const described = describeTaskConcurrency(
-      job({
+      task({
         runtimeState: "active",
         concurrencyKey: "tenant-a",
         concurrencyPolicy: policy({
@@ -332,7 +332,7 @@ describe("task drawer concurrency line", () => {
 
   it("keeps unmeasured wording future-facing for a scheduled task without a key", () => {
     const described = describeTaskConcurrency(
-      job({
+      task({
         runtimeState: "scheduled",
         concurrencyPolicy: policy({ maxActive: 1, maxActivePerKey: null, utilizationKnown: false }),
       }),
@@ -349,7 +349,7 @@ describe("task drawer concurrency line", () => {
 
   it("does not claim keyed competition for an unmeasured queue with keyed admission off", () => {
     const described = describeTaskConcurrency(
-      job({
+      task({
         runtimeState: "ready",
         concurrencyKey: "tenant-a",
         concurrencyPolicy: policy({ maxActivePerKey: null, utilizationKnown: false }),
@@ -361,23 +361,23 @@ describe("task drawer concurrency line", () => {
 
   it("reports measured utilization as known so the line is not marked bounded", () => {
     expect(
-      describeTaskConcurrency(job({ runtimeState: "ready", concurrencyPolicy: policy() }))
+      describeTaskConcurrency(task({ runtimeState: "ready", concurrencyPolicy: policy() }))
         ?.utilizationKnown,
     ).toBe(true);
     // A settled line makes no utilization claim at all, so it is never marked bounded either.
     expect(
-      describeTaskConcurrency(job({ runtimeState: null, concurrencyPolicy: policy() }))
+      describeTaskConcurrency(task({ runtimeState: null, concurrencyPolicy: policy() }))
         ?.utilizationKnown,
     ).toBe(true);
     expect(
-      describeTaskConcurrency(job({ runtimeState: "ready", concurrencyKey: "tenant-a" }))
+      describeTaskConcurrency(task({ runtimeState: "ready", concurrencyKey: "tenant-a" }))
         ?.utilizationKnown,
     ).toBe(true);
   });
 
   it("keeps a terminal task's immutable key and marks the policy as the queue's current one", () => {
     const described = describeTaskConcurrency(
-      job({
+      task({
         runtimeState: null,
         concurrencyKey: "tenant-a",
         concurrencyPolicy: policy({ maxActive: 8, active: 6, maxActivePerKey: 2 }),
@@ -398,7 +398,7 @@ describe("task drawer concurrency line", () => {
 
   it("gives a terminal task without a key the queue's current limits anyway", () => {
     const described = describeTaskConcurrency(
-      job({ runtimeState: null, concurrencyPolicy: policy({ maxActive: 1 }) }),
+      task({ runtimeState: null, concurrencyPolicy: policy({ maxActive: 1 }) }),
     );
     expect(described?.concurrencyKey).toBeNull();
     expect(described?.summary).toBe("queue limit 1");
@@ -408,7 +408,7 @@ describe("task drawer concurrency line", () => {
 
   it("tells a terminal task with a key that its queue has no limit now", () => {
     const described = describeTaskConcurrency(
-      job({ runtimeState: null, concurrencyKey: "tenant-a", concurrencyPolicy: null }),
+      task({ runtimeState: null, concurrencyKey: "tenant-a", concurrencyPolicy: null }),
     );
     expect(described?.summary).toBe("no queue limit");
     expect(described?.basisLabel).toBe("queue policy now");
@@ -417,12 +417,12 @@ describe("task drawer concurrency line", () => {
   });
 
   it("shows nothing for a terminal task with neither a key nor a current policy", () => {
-    expect(describeTaskConcurrency(job({ runtimeState: null }))).toBeNull();
+    expect(describeTaskConcurrency(task({ runtimeState: null }))).toBeNull();
   });
 
   it("reads a scheduled task as the budget it will enter rather than one it holds", () => {
     const described = describeTaskConcurrency(
-      job({
+      task({
         runtimeState: "scheduled",
         concurrencyKey: "tenant-a",
         concurrencyPolicy: policy({ maxActivePerKey: 2 }),
@@ -438,7 +438,7 @@ describe("task drawer concurrency line", () => {
 
   it("keeps a scheduled keyless task's capacity wording future-facing", () => {
     const described = describeTaskConcurrency(
-      job({ runtimeState: "scheduled", concurrencyPolicy: policy() }),
+      task({ runtimeState: "scheduled", concurrencyPolicy: policy() }),
     );
     expect(described?.title).toContain("will consume queue capacity only");
     expect(described?.title).not.toContain("This task consumes");
@@ -447,7 +447,7 @@ describe("task drawer concurrency line", () => {
 
   it("says a keyless task consumes queue capacity only", () => {
     const described = describeTaskConcurrency(
-      job({ runtimeState: "ready", concurrencyPolicy: policy() }),
+      task({ runtimeState: "ready", concurrencyPolicy: policy() }),
     );
     expect(described?.concurrencyKey).toBeNull();
     expect(described?.title).toContain("no concurrency key");
@@ -455,7 +455,7 @@ describe("task drawer concurrency line", () => {
 
   it("does not claim keyed competition when per-key admission is disabled", () => {
     const described = describeTaskConcurrency(
-      job({
+      task({
         runtimeState: "ready",
         concurrencyKey: "tenant-a",
         concurrencyPolicy: policy({ maxActivePerKey: null }),
@@ -466,7 +466,7 @@ describe("task drawer concurrency line", () => {
   });
 
   it("shows nothing when the task has neither a key nor a queue policy", () => {
-    expect(describeTaskConcurrency(job({ runtimeState: "ready" }))).toBeNull();
+    expect(describeTaskConcurrency(task({ runtimeState: "ready" }))).toBeNull();
   });
 
   it("renders the key and the budget summary in the drawer", async () => {
@@ -476,11 +476,11 @@ describe("task drawer concurrency line", () => {
         MantineProvider,
         null,
         createElement(ConcurrencyPolicyLine, {
-          job: job({
+          task: task({
             runtimeState: "ready",
             concurrencyKey: "tenant-a",
             concurrencyPolicy: policy({ maxActivePerKey: 2 }),
-          }) as unknown as DashboardJobDetail,
+          }) as unknown as DashboardTaskDetail,
         }),
       ),
     );
@@ -502,10 +502,10 @@ describe("task drawer concurrency line", () => {
         MantineProvider,
         null,
         createElement(ConcurrencyPolicyLine, {
-          job: job({
+          task: task({
             runtimeState: "scheduled",
             concurrencyPolicy: policy(),
-          }) as unknown as DashboardJobDetail,
+          }) as unknown as DashboardTaskDetail,
         }),
       ),
     );
@@ -521,7 +521,7 @@ describe("task drawer concurrency line", () => {
         MantineProvider,
         null,
         createElement(ConcurrencyPolicyLine, {
-          job: job({
+          task: task({
             runtimeState: "ready",
             concurrencyKey: "tenant-a",
             concurrencyPolicy: policy({
@@ -531,7 +531,7 @@ describe("task drawer concurrency line", () => {
               active: 0,
               available: 0,
             }),
-          }) as unknown as DashboardJobDetail,
+          }) as unknown as DashboardTaskDetail,
         }),
       ),
     );
@@ -549,11 +549,11 @@ describe("task drawer concurrency line", () => {
         MantineProvider,
         null,
         createElement(ConcurrencyPolicyLine, {
-          job: job({
+          task: task({
             runtimeState: null,
             concurrencyKey: "tenant-a",
             concurrencyPolicy: policy({ maxActivePerKey: 2 }),
-          }) as unknown as DashboardJobDetail,
+          }) as unknown as DashboardTaskDetail,
         }),
       ),
     );
@@ -572,7 +572,7 @@ describe("task drawer concurrency line", () => {
         MantineProvider,
         null,
         createElement(ConcurrencyPolicyLine, {
-          job: job({ runtimeState: null }) as unknown as DashboardJobDetail,
+          task: task({ runtimeState: null }) as unknown as DashboardTaskDetail,
         }),
       ),
     );

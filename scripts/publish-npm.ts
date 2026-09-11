@@ -395,7 +395,7 @@ export async function preflight(packages: readonly PublishedPackage[]): Promise<
  *
  * The order comes from `scripts/packages.ts`: `@stablemates/workhorse` first, because every other
  * package declares it as a peer. Publication output is inherited rather than captured so the
- * provenance notices stay in the job log where a reader expects them.
+ * provenance notices stay in the task log where a reader expects them.
  */
 export async function publishAll(packages: readonly PublishedPackage[]): Promise<PublishLedger> {
   const published: PublishedPackage[] = [];
@@ -422,7 +422,7 @@ export async function publishAll(packages: readonly PublishedPackage[]): Promise
   return { published, pending: [] };
 }
 
-/** Put the ledger where a maintainer finds it without reading the job log. */
+/** Put the ledger where a maintainer finds it without reading the task log. */
 async function recordSummary(report: string): Promise<void> {
   const summary = process.env.GITHUB_STEP_SUMMARY;
   if (!summary) return;

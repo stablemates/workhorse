@@ -53,8 +53,8 @@ failing step.
 
 A schema dump speaks for shape, not for rows, so the suite proves data survival separately.
 `typescript/core/test/support/populated-schema.ts` seeds each artifact before it is migrated,
-through the released schema's own SQL functions wherever one exists. The seed holds a job in every
-state the schema can carry, a job set whose history spans more than one partition, a schedule with
+through the released schema's own SQL functions wherever one exists. The seed holds a task in every
+state the schema can carry, a task set whose history spans more than one partition, a schedule with
 its fired occurrence, a checkpoint and a wait, audit records, and a concurrency and a rate limit
 policy. The test reads every seeded row back after the migration and compares whole rows by value,
 because a count would pass a migration that rewrote a column. Rows are projected to the columns the
@@ -132,7 +132,7 @@ rejected; the migration chain is the single authority.
 
 Take a backup before `migrateSchema` runs: a `pg_dump` of the database, or a provider snapshot or
 PITR restore point. The migration framework has no down migrations by design; restoring the backup
-is the rollback path, and it discards jobs enqueued after the backup, so stop producers first for a
+is the rollback path, and it discards tasks enqueued after the backup, so stop producers first for a
 clean rollback window. The absence of down migrations is the decision, not a gap in one: a reversed
 migration cannot restore rows a forward step interpreted, so a restore is the only rollback that
 means what it says
@@ -317,7 +317,7 @@ never requires a dashboard release inside a major line.
 
 ## Application data
 
-Application data is outside this lifecycle. Representative jobs, schedules, audit records, and
+Application data is outside this lifecycle. Representative tasks, schedules, audit records, and
 other seed or reset behavior live in `typescript/demo/` and are not shipped as core migrations.
 The demo recreates its purpose-guarded database in development and preserves it in the production
 shape.

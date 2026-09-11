@@ -50,7 +50,7 @@ Commands:
   schema     Install the schema or report schema and PostgreSQL compatibility.
   worker     Run workers from a compiled configuration module.
   dashboard  Serve the operator dashboard against a Workhorse database.
-  admin      Inspect jobs, queues, schedules, failures, workers, checkpoints, waits, and
+  admin      Inspect tasks, queues, schedules, failures, workers, checkpoints, waits, and
              maintenance state, and run guarded cancel, redrive, pause, resume, purge, and
              worker-pause operations.
   tui        Interactive terminal views over the same administrative client.
@@ -190,7 +190,7 @@ Options:
 ${DATABASE_HELP}  --env <database>        Enable pause and resume; must equal the connected database's name.
   --help, -h              Show this help.
 
-Views: jobs, queues, schedules, failures, workers, and health. Keys 1 through 6 switch views,
+Views: tasks, queues, schedules, failures, workers, and health. Keys 1 through 6 switch views,
 r refreshes, and q quits. Without --env the session is read-only; with it, the queues view can
 pause and resume the selected queue after an in-place confirmation. The same administrative
 client and environment check back "workhorse admin".

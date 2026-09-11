@@ -1,9 +1,9 @@
 # Workhorse demo
 
-This is the end-to-end product demo for Workhorse. It lets you create test jobs from the operator dashboard, request cooperative cancellation, watch workers process them, inspect retries and terminal failures, and observe recurring work, retention health, and queue health.
+This is the end-to-end product demo for Workhorse. It lets you create test tasks from the operator dashboard, request cooperative cancellation, watch workers process them, inspect retries and terminal failures, and observe recurring work, retention health, and queue health.
 
 The demo uses Hono as its web server and Drizzle through Workhorse's ORM adapter. Seed data includes
-a transactionally created order and durable job, and worker-owned scheduling drives recurring work.
+a transactionally created order and durable task, and worker-owned scheduling drives recurring work.
 
 **The demo runs each worker in a separate process.** The Hono server and TypeScript, Python, and Go
 workers share nothing but PostgreSQL. Workers announce themselves in
@@ -60,7 +60,7 @@ PostgreSQL, Node.js runtime, and Workhorse queue, execution, schedule, maintenan
 the same local OTLP endpoint. Structured logs retain their active trace context, so SigNoz can correlate
 handler activity with its trace. The server owns the database-wide metric observations, so queue and worker
 gauges are not duplicated by the worker process. `signoz:up` also reconciles the version-controlled
-**Workhorse Operations**, **Workhorse Reliability**, and **Workhorse jobs** dashboards. Run
+**Workhorse Operations**, **Workhorse Reliability**, and **Workhorse tasks** dashboards. Run
 `pnpm signoz:dashboards` to apply dashboard changes without restarting SigNoz. Run
 `pnpm signoz:down` to stop the containers without deleting their volumes. Plain `pnpm demo` installs only
 the local log pipeline and does not require SigNoz. The loopback-only local stack uses SigNoz impersonation
@@ -76,11 +76,11 @@ The command uses the purpose-guarded development primary and secondary databases
 server-side runtime packages, then starts a watched Hono server and dedicated TypeScript, Python,
 and Go worker processes. Run `pnpm dev:reset` first when every repository database needs a clean
 schema. Everything is served from `http://workhorse.localhost:43155/`, mounted at `/`; the demo
-intentionally exposes no ad hoc public job API. Set `WORKHORSE_WORKER_POLL_MS` to override the
+intentionally exposes no ad hoc public task API. Set `WORKHORSE_WORKER_POLL_MS` to override the
 workers' 15-second idle polling delay.
 Startup also creates a living feature showcase: seventeen feature families, each with three one-off
 scenarios and one staggered recurring definition, covering ingress, retries, checkpoints, relative and
-absolute durable waits, progress, timing, cancellation, dead letters and redrive, job dependencies,
+absolute durable waits, progress, timing, cancellation, dead letters and redrive, task dependencies,
 child workflows, signals, human decisions, keyed debounce and throttle, priority lanes, batch handlers,
 and payload contracts. Each recurring occurrence deterministically selects a stable variant, so the
 dashboard continues changing while it is open. The seeded operator-handoff signal and the two pending
@@ -97,8 +97,8 @@ single-administrator login and demonstrate the authentication flow.
 The earlier representative layer still seeds one successful transactional order, one named durable timer, fixed, exponential, and
 decorrelated-jitter retry examples, one checkpointed recoverable retry, three recoverable multi-step
 durable pipelines, three intentionally persistent durable pipelines, one terminal failure, one future
-scheduled job, three timing examples, and three long-running concurrency examples. Two long-running
-jobs share one customer key and serialize. The third uses another key and can overlap within the queue
+scheduled task, three timing examples, and three long-running concurrency examples. Two long-running
+tasks share one customer key and serialize. The third uses another key and can overlap within the queue
 budget. The timing examples include a materialized expired deadline,
 an active handler that cooperatively reaches a one-second execution timeout, and a future scheduled task
 with a later absolute deadline plus a 90-second per-attempt budget. The durable pipelines cover order
@@ -116,7 +116,7 @@ every attempt and never execute a later stage:
 
 Their immutable checkpoint artifacts and per-attempt failure evidence remain visible between retries in the
 existing task drawer. Timing seeds expose deadline and timeout policy in the same drawer, while the
-System page shows current deadline pressure. Use the dashboard's **enqueue test job** menu to create fresh success, retry,
+System page shows current deadline pressure. Use the dashboard's **enqueue test task** menu to create fresh success, retry,
 durable pipeline, durable timer, failure, and 20-second long-running paths, plus one live example of every showcased
 feature family — from durable waits and signals to keyed throttles and payload contracts. The dedicated Steps column shows
 **N/M** for durable rows, and their task drawer uses a Mantine Stepper to show saved, running, and pending
@@ -130,8 +130,8 @@ application shell keeps the header and responsive sidebar in place while browser
 the `filter` query parameter, with pagination persisted as `page`.
 
 The demo runs **three** named worker processes with three execution slots each. The TypeScript
-worker claims application jobs from `demo` and rate-limited work from `partner-api`. Python and Go
-claim their runtime-specific jobs from `demo-python` and `demo-go`. All three workers also compete
+worker claims application tasks from `demo` and rate-limited work from `partner-api`. Python and Go
+claim their runtime-specific tasks from `demo-python` and `demo-go`. All three workers also compete
 for `demo-shared`, whose single handler has the same contract in every SDK.
 
 The production identities begin with `demo-typescript-`, `demo-python-`, and `demo-go-`, so the
@@ -159,7 +159,7 @@ evidence, and do not infer performance from the dashboard.
 
 The browser refreshes only the active page through its dedicated oRPC reader on a bounded polling cadence.
 The default is 15 seconds, with 5-second, 30-second, 1-minute, 5-minute, and manual-only options. It does
-not reload on every worker or PostgreSQL notification, so concurrent job volume cannot directly create a
+not reload on every worker or PostgreSQL notification, so concurrent task volume cannot directly create a
 browser request storm. Task filtering and pagination happen in PostgreSQL, so the client never downloads
 the full task list.
 
@@ -171,16 +171,16 @@ intentionally represent a healthy retention state rather than manufacturing time
 failures.
 
 The reusable `createDemoApplication` boundary remains read-only by default. The one-command local demo
-injects a deliberately narrow writable operator that can enqueue test jobs, request cancellation, and
+injects a deliberately narrow writable operator that can enqueue test tasks, request cancellation, and
 enable or disable its heartbeat schedule. Every action records actor, reason, request ID, timestamp,
 target, before/after state, and status in `public.workhorse_demo_audit`. Redrive and arbitrary schedule
 editing remain unavailable.
 
 Cancellation is shown as **Cancellation requested** while an active handler still owns the lease and as
 **Canceled** only after exact-fence acknowledgement or requested-lease expiry. Ready, future-scheduled,
-and durable-wait jobs cancel immediately. The handler receives `CancellationRequestedError` through its
+and durable-wait tasks cancel immediately. The handler receives `CancellationRequestedError` through its
 `AbortSignal`; this is cooperative and does not forcibly interrupt JavaScript. The operator attribution is
-not authorization, and the demo does not claim exactly-once external effects. Canceling a recurring job
+not authorization, and the demo does not claim exactly-once external effects. Canceling a recurring task
 changes only that occurrence, not the schedule or its next fire.
 
 Startup synchronizes a namespaced one-minute heartbeat, a five-minute report, a one-minute lightweight
@@ -188,8 +188,8 @@ long-running schedule, and the staggered feature-family definitions through `Que
 All three workers evaluate due schedules in-process with advisory-lock coordination and SQL-level
 occurrence deduplication. The Schedules view reports the live evaluator count for each namespace.
 Its maintenance rows use `Maintenance` as the destination because workers call those PostgreSQL
-functions directly; they are not jobs sent to a queue. The view distinguishes the application heartbeat from four worker-owned maintenance entries: the fast tick, partition preparation, daily history retention at the configured local time, and terminal/idempotency cleanup. PostgreSQL stores the global IANA maintenance timezone, local retention time, and routine due state. The heartbeat's
-audited control updates the durable schedule definition, and Jobs and Workers show each resulting
+functions directly; they are not tasks sent to a queue. The view distinguishes the application heartbeat from four worker-owned maintenance entries: the fast tick, partition preparation, daily history retention at the configured local time, and terminal/idempotency cleanup. PostgreSQL stores the global IANA maintenance timezone, local retention time, and routine due state. The heartbeat's
+audited control updates the durable schedule definition, and Tasks and Workers show each resulting
 execution.
 
 Dashboard mounting is optional at the application boundary. Pass `{ dashboard: false }` to

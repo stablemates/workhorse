@@ -16,7 +16,7 @@ from workhorse import (
     AsyncWorker,
     BatchHandlerItem,
     BatchHandlerOutcome,
-    ChildJobRequest,
+    ChildTaskRequest,
     ConcurrencyPolicyDefinition,
     DeadLetterQuery,
     Dependencies,
@@ -72,10 +72,10 @@ def sync_admin(connection: psycopg.Connection[Any]) -> str | None:
     if not failures.items:
         return None
     result = admin.redrive(
-        failures.items[0].job_id,
+        failures.items[0].task_id,
         AdminAudit("operator", "provider recovered", "incident-42"),
     )
-    return result.target_job_id
+    return result.target_task_id
 
 
 def sync_worker(connection: psycopg.Connection[Any], database_url: str) -> bool:
@@ -88,10 +88,10 @@ def sync_worker(connection: psycopg.Connection[Any], database_url: str) -> bool:
         decision = context.wait_for_human("review", {"signal": signal})
         child = context.run_child("audit", "audit.write", {"decision": decision})
         children = context.run_children_all(
-            (ChildJobRequest("notify", "notify.send", {"child": child}),)
+            (ChildTaskRequest("notify", "notify.send", {"child": child}),)
         )
         return {
-            "jobId": context.job.id,
+            "taskId": context.task.id,
             "prepared": prepared,
             "decision": decision,
             "children": children,
@@ -118,7 +118,9 @@ def sync_worker_process(connection: psycopg.Connection[Any]) -> None:
 
 def sync_batch_worker(connection: psycopg.Connection[Any]) -> bool:
     def handle(items: Sequence[BatchHandlerItem]) -> list[BatchHandlerOutcome]:
-        return [{"status": "succeeded", "result": {"jobId": item.context.job.id}} for item in items]
+        return [
+            {"status": "succeeded", "result": {"taskId": item.context.task.id}} for item in items
+        ]
 
     return (
         Worker(connection, concurrency=2)
@@ -129,15 +131,15 @@ def sync_batch_worker(connection: psycopg.Connection[Any]) -> bool:
 
 async def async_psycopg_enqueue(connection: psycopg.AsyncConnection[Any]) -> str:
     queue = AsyncQueue.from_psycopg(connection)
-    job_id = await queue.enqueue("email.send", {"message": "hello"})
+    task_id = await queue.enqueue("email.send", {"message": "hello"})
     await queue.send_signal(
-        job_id,
+        task_id,
         "approval",
         {"approved": True},
         idempotency_key="approval",
         requested_by="service",
     )
-    return job_id
+    return task_id
 
 
 async def async_startup_checks(
@@ -150,21 +152,21 @@ async def async_startup_checks(
 
 async def asyncpg_enqueue(connection: asyncpg.Connection) -> str:
     queue = AsyncQueue.from_asyncpg(connection)
-    job_id = await queue.enqueue("email.send", {"message": "hello"})
+    task_id = await queue.enqueue("email.send", {"message": "hello"})
     await queue.complete_human_wait(
-        job_id,
+        task_id,
         "review",
         {"approved": True},
         idempotency_key="review",
         requested_by="reviewer",
     )
-    await queue.cancel(job_id, requested_by="service", reason="request ended")
-    return job_id
+    await queue.cancel(task_id, requested_by="service", reason="request ended")
+    return task_id
 
 
 async def asyncpg_admin(connection: asyncpg.Connection) -> int:
     admin = AsyncAdmin.from_asyncpg(connection)
-    return len((await admin.list_jobs()).items)
+    return len((await admin.list_tasks()).items)
 
 
 async def asyncpg_policies(connection: asyncpg.Connection) -> None:
@@ -193,7 +195,9 @@ async def async_psycopg_worker(connection: psycopg.AsyncConnection[Any]) -> bool
 
 async def asyncpg_batch_worker(connection: asyncpg.Connection) -> bool:
     async def handle(items: Sequence[AsyncBatchHandlerItem]) -> list[BatchHandlerOutcome]:
-        return [{"status": "succeeded", "result": {"jobId": item.context.job.id}} for item in items]
+        return [
+            {"status": "succeeded", "result": {"taskId": item.context.task.id}} for item in items
+        ]
 
     return await (
         AsyncWorker.from_asyncpg(connection, concurrency=2)
@@ -224,10 +228,10 @@ def renamed_types_keep_their_deprecated_aliases() -> None:
     deprecated_reason: NonReplaceableReason = reason
     EnqueueOptions(
         dependencies=Dependencies(
-            prerequisite_job_ids=("import",),
+            prerequisite_task_ids=("import",),
             on_success=deprecated_policy,
             on_failure="fail",
             on_cancellation="cancel",
         )
     )
-    EnqueueResult(job_id="one", outcome="non_replaceable", reason=deprecated_reason)
+    EnqueueResult(task_id="one", outcome="non_replaceable", reason=deprecated_reason)

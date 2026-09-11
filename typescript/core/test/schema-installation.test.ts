@@ -37,7 +37,7 @@ describe("schema installation", () => {
           FROM information_schema.columns
          WHERE table_schema = 'workhorse'
            AND (table_name, column_name) IN (
-             ('job_event', 'event_id'), ('attempt_history', 'attempt_id')
+             ('task_event', 'event_id'), ('attempt_history', 'attempt_id')
            )
          ORDER BY table_name`);
     expect(columns.rows).toEqual([
@@ -47,7 +47,7 @@ describe("schema installation", () => {
         column_default: "uuid_v7_v1()",
       },
       {
-        table_name: "job_event",
+        table_name: "task_event",
         data_type: "uuid",
         column_default: "uuid_v7_v1()",
       },
@@ -63,13 +63,13 @@ describe("schema installation", () => {
         JOIN pg_attribute attribute
           ON attribute.attrelid = relation.oid AND attribute.attnum = key.attnum
        WHERE namespace.nspname = 'workhorse'
-         AND relation.relname IN ('job_event', 'attempt_history')
+         AND relation.relname IN ('task_event', 'attempt_history')
          AND constraint_row.contype = 'p'
        GROUP BY relation.relname
        ORDER BY relation.relname`);
     expect(primaryKeys.rows).toEqual([
       { table_name: "attempt_history", columns: ["occurred_at", "attempt_id"] },
-      { table_name: "job_event", columns: ["occurred_at", "event_id"] },
+      { table_name: "task_event", columns: ["occurred_at", "event_id"] },
     ]);
   });
 
@@ -84,13 +84,13 @@ describe("schema installation", () => {
             FROM (VALUES ('00000000-0000-0000-0000-000000000000'::uuid)) candidate(id)
            WHERE NOT EXISTS (
              SELECT 1 FROM workhorse.enqueue_idempotency idempotency
-              WHERE idempotency.job_id = candidate.id
+              WHERE idempotency.task_id = candidate.id
            )`)
       ).rows
         .map((row) => row["QUERY PLAN"])
         .join("\n");
 
-      expect(plan).toContain("enqueue_idempotency_job_idx");
+      expect(plan).toContain("enqueue_idempotency_task_idx");
     } finally {
       await client.query("ROLLBACK").catch(() => undefined);
       client.release();
@@ -111,7 +111,7 @@ describe("schema installation", () => {
     expect(Object.fromEntries(views.rows.map((row) => [row.table_name, row.columns]))).toEqual({
       dashboard_attempt_history_v1: [
         "attempt_id",
-        "job_id",
+        "task_id",
         "attempt",
         "fence_token",
         "worker_id",
@@ -130,9 +130,9 @@ describe("schema installation", () => {
         "updated_at",
       ],
       dashboard_human_wait_v1: [
-        "job_id",
+        "task_id",
         "queue_name",
-        "job_type",
+        "task_type",
         "token_name",
         "context",
         "attempt",
@@ -142,16 +142,16 @@ describe("schema installation", () => {
         "deadline_at",
       ],
       dashboard_signal_wait_v1: [
-        "job_id",
+        "task_id",
         "queue_name",
-        "job_type",
+        "task_type",
         "signal_name",
         "attempt",
         "created_at",
         "deadline_at",
       ],
-      dashboard_job_checkpoint_v1: [
-        "job_id",
+      dashboard_task_checkpoint_v1: [
+        "task_id",
         "checkpoint_name",
         "checkpoint_value",
         "attempt",
@@ -159,16 +159,16 @@ describe("schema installation", () => {
         "worker_id",
         "created_at",
       ],
-      dashboard_job_child_v1: [
-        "parent_job_id",
-        "child_job_id",
+      dashboard_task_child_v1: [
+        "parent_task_id",
+        "child_task_id",
         "child_name",
         "created_at",
         "joined_at",
       ],
-      dashboard_job_dependency_v1: [
-        "dependent_job_id",
-        "prerequisite_job_id",
+      dashboard_task_dependency_v1: [
+        "dependent_task_id",
+        "prerequisite_task_id",
         "on_success",
         "on_failure",
         "on_cancellation",
@@ -176,18 +176,18 @@ describe("schema installation", () => {
         "released_at",
         "resolution",
       ],
-      dashboard_job_event_v1: [
+      dashboard_task_event_v1: [
         "event_id",
-        "job_id",
+        "task_id",
         "attempt",
         "event_type",
         "details",
         "occurred_at",
       ],
-      // `result` is deliberately absent: it is served by dashboard_job_result_v1 so that readers
-      // which never want a result do not join workhorse.job for its redaction keys (ADR 0035).
-      dashboard_job_outcome_v1: [
-        "job_id",
+      // `result` is deliberately absent: it is served by dashboard_task_result_v1 so that readers
+      // which never want a result do not join workhorse.task for its redaction keys (ADR 0035).
+      dashboard_task_outcome_v1: [
+        "task_id",
         "state",
         "current_attempt",
         "run_at",
@@ -195,9 +195,9 @@ describe("schema installation", () => {
         "finished_at",
         "updated_at",
       ],
-      dashboard_job_redrive_v1: [
-        "source_job_id",
-        "target_job_id",
+      dashboard_task_redrive_v1: [
+        "source_task_id",
+        "target_task_id",
         "request_id_preview",
         "request_id_digest",
         "request_id_length",
@@ -207,8 +207,8 @@ describe("schema installation", () => {
         "target_initial_state",
         "requested_at",
       ],
-      dashboard_job_progress_v1: [
-        "job_id",
+      dashboard_task_progress_v1: [
+        "task_id",
         "progress_value",
         "revision",
         "attempt",
@@ -217,8 +217,8 @@ describe("schema installation", () => {
         "created_at",
         "updated_at",
       ],
-      dashboard_job_runtime_v1: [
-        "job_id",
+      dashboard_task_runtime_v1: [
+        "task_id",
         "queue_name",
         "state",
         "current_attempt",
@@ -238,10 +238,10 @@ describe("schema installation", () => {
         "error",
         "updated_at",
       ],
-      dashboard_job_v1: [
+      dashboard_task_v1: [
         "id",
         "queue_name",
-        "job_type",
+        "task_type",
         "concurrency_key",
         "payload",
         "payload_redact_keys",
@@ -254,8 +254,8 @@ describe("schema installation", () => {
         "created_at",
         "priority",
       ],
-      dashboard_job_wait_v1: [
-        "job_id",
+      dashboard_task_wait_v1: [
+        "task_id",
         "wait_name",
         "mode",
         "duration_ms",
@@ -287,7 +287,7 @@ describe("schema installation", () => {
       dashboard_rate_limit_policy_v1: ["queue_name"],
       dashboard_retention_policy_v1: [
         "singleton",
-        "job_event_retention_days",
+        "task_event_retention_days",
         "attempt_history_retention_days",
       ],
       dashboard_schedule_definition_v1: [
@@ -296,7 +296,7 @@ describe("schema installation", () => {
         "cron_expression",
         "timezone",
         "queue_name",
-        "job_type",
+        "task_type",
         "enabled",
         "revision",
         "updated_at",
@@ -329,7 +329,7 @@ describe("schema installation", () => {
     });
 
     const estimate = await pool.query<{ estimate: string }>(
-      "SELECT estimate::text FROM workhorse.dashboard_job_estimate_v1()",
+      "SELECT estimate::text FROM workhorse.dashboard_task_estimate_v1()",
     );
     expect(Number(estimate.rows[0]?.estimate)).toBeGreaterThanOrEqual(-1);
 
@@ -338,12 +338,12 @@ describe("schema installation", () => {
         FROM pg_proc
         JOIN pg_namespace ON pg_namespace.oid = pg_proc.pronamespace
        WHERE nspname = 'workhorse'
-         AND proname IN ('dashboard_human_waits_v1', 'dashboard_job_detail_v1')
+         AND proname IN ('dashboard_human_waits_v1', 'dashboard_task_detail_v1')
        ORDER BY proname
     `);
     expect(procedures.rows).toEqual([
       { name: "dashboard_human_waits_v1" },
-      { name: "dashboard_job_detail_v1" },
+      { name: "dashboard_task_detail_v1" },
     ]);
   });
 
@@ -424,7 +424,7 @@ describe("schema installation", () => {
     expect(unsuffixed.rows).toEqual([]);
   });
 
-  it("installs the current schema with database-owned settings, job contracts, and fenced progress", async () => {
+  it("installs the current schema with database-owned settings, task contracts, and fenced progress", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
@@ -510,22 +510,22 @@ describe("schema installation", () => {
           JOIN pg_class parent ON parent.oid = inheritance.inhparent
           JOIN pg_namespace namespace ON namespace.oid = parent.relnamespace
          WHERE namespace.nspname = 'workhorse'
-           AND parent.relname IN ('job_event', 'attempt_history')
+           AND parent.relname IN ('task_event', 'attempt_history')
          GROUP BY parent.relname
          ORDER BY parent.relname`);
     expect(historyPartitions.rows).toEqual([
       { parent: "attempt_history", partitions: 5 },
-      { parent: "job_event", partitions: 5 },
+      { parent: "task_event", partitions: 5 },
     ]);
 
     const historyIntegrity = await pool.query<{ foreign_keys: number; triggers: string[] }>(`
         SELECT
           (SELECT count(*)::integer FROM pg_constraint
-            WHERE conrelid IN ('workhorse.job_event'::regclass, 'workhorse.attempt_history'::regclass)
+            WHERE conrelid IN ('workhorse.task_event'::regclass, 'workhorse.attempt_history'::regclass)
               AND contype = 'f') AS foreign_keys,
           (SELECT json_agg(trigger_name ORDER BY trigger_name) FROM (
             SELECT tgname AS trigger_name FROM pg_trigger
-             WHERE tgrelid IN ('workhorse.job_event'::regclass, 'workhorse.attempt_history'::regclass)
+             WHERE tgrelid IN ('workhorse.task_event'::regclass, 'workhorse.attempt_history'::regclass)
                AND NOT tgisinternal
           ) triggers) AS triggers`);
     expect(historyIntegrity.rows[0]).toEqual({
@@ -540,7 +540,7 @@ describe("schema installation", () => {
          WHERE n.nspname = 'workhorse'
            AND c.relname = ANY($1::text[])
            AND c.relkind IN ('r', 'p', 'v', 'm')`,
-      [["job_current", "ready_job", "scheduled_job", "lease"]],
+      [["task_current", "ready_task", "scheduled_task", "lease"]],
     );
     expect(relations.rows).toEqual([]);
 
@@ -552,30 +552,30 @@ describe("schema installation", () => {
          ORDER BY indexname`,
       [
         [
-          "job_runtime_expired_active_idx",
-          "job_runtime_blocked_queue_idx",
-          "job_runtime_ready_idx",
-          "job_runtime_scheduled_idx",
-          "job_dependency_dependent_pending_idx",
-          "job_dependency_prerequisite_idx",
-          "job_dependency_released_retention_idx",
-          "job_tags_gin_idx",
+          "task_runtime_expired_active_idx",
+          "task_runtime_blocked_queue_idx",
+          "task_runtime_ready_idx",
+          "task_runtime_scheduled_idx",
+          "task_dependency_dependent_pending_idx",
+          "task_dependency_prerequisite_idx",
+          "task_dependency_released_retention_idx",
+          "task_tags_gin_idx",
           "enqueue_idempotency_expiry_idx",
-          "enqueue_idempotency_job_idx",
+          "enqueue_idempotency_task_idx",
         ],
       ],
     );
     expect(indexes.rows.map((row) => row.indexname)).toEqual([
       "enqueue_idempotency_expiry_idx",
-      "enqueue_idempotency_job_idx",
-      "job_dependency_dependent_pending_idx",
-      "job_dependency_prerequisite_idx",
-      "job_dependency_released_retention_idx",
-      "job_runtime_blocked_queue_idx",
-      "job_runtime_expired_active_idx",
-      "job_runtime_ready_idx",
-      "job_runtime_scheduled_idx",
-      "job_tags_gin_idx",
+      "enqueue_idempotency_task_idx",
+      "task_dependency_dependent_pending_idx",
+      "task_dependency_prerequisite_idx",
+      "task_dependency_released_retention_idx",
+      "task_runtime_blocked_queue_idx",
+      "task_runtime_expired_active_idx",
+      "task_runtime_ready_idx",
+      "task_runtime_scheduled_idx",
+      "task_tags_gin_idx",
     ]);
 
     const idempotencyConstraint = await pool.query<{
@@ -686,7 +686,7 @@ describe("schema installation", () => {
       .map((row) => row.name);
     expect(wrongResults).toEqual([]);
 
-    // Partitions of `job_event` and `attempt_history` are created at runtime, so the schema text
+    // Partitions of `task_event` and `attempt_history` are created at runtime, so the schema text
     // declares them only inside a function body and the parser never sees one.
     const partition = /_(default|\d{8})$/;
     const columns = await pool.query<{ relation: string; column: string; type: string }>(`

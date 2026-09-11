@@ -3,9 +3,9 @@ title: About Workhorse
 description: What Workhorse is, who publishes it, what it promises, and where its source lives.
 ---
 
-Workhorse is a durable job queue that lives inside PostgreSQL. An application enqueues a job in
-the same transaction that writes its own data, so the job and the data commit together or not at
-all. Workers in TypeScript, Python, and Go claim and run those jobs through one SQL protocol, and
+Workhorse is a durable task queue that lives inside PostgreSQL. An application enqueues a task in
+the same transaction that writes its own data, so the task and the data commit together or not at
+all. Workers in TypeScript, Python, and Go claim and run those tasks through one SQL protocol, and
 the database keeps the evidence: every attempt, checkpoint, wait, and outcome is a row an operator
 can query.
 
@@ -45,6 +45,6 @@ workflow definition language: durable steps are composed in ordinary handler cod
 
 ## Where to start
 
-[Quickstart](/docs/quickstart) installs the schema and runs a first job. Coding agents start at
+[Quickstart](/docs/quickstart) installs the schema and runs a first task. Coding agents start at
 [Workhorse for AI coding agents](/docs/for-ai-agents), and [llms.txt](/llms.txt) indexes every page
 in a form an agent can read. Questions and bug reports go to the channels on [Contact](/contact).

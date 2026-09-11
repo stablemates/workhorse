@@ -1,6 +1,6 @@
 # Waiting without holding a worker hostage
 
-Some jobs need to pause before sending a reminder, polling an external system again, or
+Some tasks need to pause before sending a reminder, polling an external system again, or
 continuing at a known time.
 
 The naive way is to sit in the handler. That's terrible: your worker has a bounded set of
@@ -8,10 +8,10 @@ slots, and a sleeping handler occupies one while doing nothing.
 
 ## What a durable wait does instead
 
-A named wait releases the job entirely. The lease is dropped, the job goes back to
+A named wait releases the task entirely. The lease is dropped, the task goes back to
 `scheduled` with a wake time, and the worker slot is immediately free for other work.
 
-Later, the job becomes ready again, some worker claims it, and it carries on. Nothing sits
+Later, the task becomes ready again, some worker claims it, and it carries on. Nothing sits
 idle in between, however long the wait lasts.
 
 The synchronous Python worker uses `context.sleep` for a duration and `context.sleep_until` for a
@@ -21,7 +21,7 @@ wake time. Both release the slot and replay the handler without consuming the at
 
 This is the part that surprises people, so get it clear.
 
-When the job resumes, your handler function is called **again, from the beginning**. It is
+When the task resumes, your handler function is called **again, from the beginning**. It is
 not resumed mid-function — there is no saved call stack, because the process that was
 running it is long gone and may have been replaced by a newer deployment.
 
@@ -58,8 +58,8 @@ swallowed. Any side effects after the catch have already happened and can't be u
 
 A wait does **not** consume an attempt. The attempt counter stays where it was.
 
-This is deliberate: waiting is a normal part of the job doing its work, not a sign anything
-went wrong. Repeated sleeps remain part of the same logical attempt. A resumed job gets a
+This is deliberate: waiting is a normal part of the task doing its work, not a sign anything
+went wrong. Repeated sleeps remain part of the same logical attempt. A resumed task gets a
 new fence token because it has a new claim.
 
 ## When it wakes up

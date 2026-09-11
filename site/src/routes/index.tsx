@@ -108,11 +108,11 @@ const features: readonly Feature[] = [
   {
     id: "transactional-enqueue",
     kicker: "transactional enqueue",
-    title: "The job and your data commit together.",
+    title: "The task and your data commit together.",
     lede: (
       <>
-        Pass your open transaction as the last argument and the job becomes one more row in it. If
-        the order rolls back, the job was never enqueued. No outbox table, no relay process, no
+        Pass your open transaction as the last argument and the task becomes one more row in it. If
+        the order rolls back, the task was never enqueued. No outbox table, no relay process, no
         two-phase anything.
       </>
     ),
@@ -125,7 +125,7 @@ const features: readonly Feature[] = [
   {
     id: "checkpoints",
     kicker: "checkpoints",
-    title: "Crash mid-job. Finish anyway.",
+    title: "Crash mid-task. Finish anyway.",
     lede: (
       <>
         Wrap each completed stage in a named <code>checkpoint</code>. When a retry or restart runs
@@ -163,9 +163,9 @@ const features: readonly Feature[] = [
     title: "Retry on a policy. Stop at a deadline.",
     lede: (
       <>
-        The retry policy is stored with the job and enforced by PostgreSQL, so every worker backs
+        The retry policy is stored with the task and enforced by PostgreSQL, so every worker backs
         off identically. <code>executionTimeoutMs</code>, <code>execution_timeout_ms</code>, and{" "}
-        <code>ExecutionTimeoutMS</code> bound one attempt, while the deadline bounds the whole job.
+        <code>ExecutionTimeoutMS</code> bound one attempt, while the deadline bounds the whole task.
       </>
     ),
     file: "reminder.ts",
@@ -177,12 +177,12 @@ const features: readonly Feature[] = [
   {
     id: "idempotency",
     kicker: "idempotency",
-    title: "Replay the request, get the same job.",
+    title: "Replay the request, get the same task.",
     lede: (
       <>
-        Give an enqueue a key and a scope, and replaying it returns the original job id instead of
+        Give an enqueue a key and a scope, and replaying it returns the original task id instead of
         creating a duplicate. A replay with a materially different payload raises a typed conflict.
-        It never creates a silent second job.
+        It never creates a silent second task.
       </>
     ),
     file: "capture.ts",
@@ -194,7 +194,7 @@ const features: readonly Feature[] = [
   {
     id: "schedules",
     kicker: "schedules",
-    title: "Cron jobs, no scheduler process.",
+    title: "Scheduled tasks, no scheduler process.",
     lede: (
       <>
         Declare schedules as code and sync them on every deploy. The sync treats its namespace as
@@ -214,8 +214,8 @@ const features: readonly Feature[] = [
     title: "Throttle by queue, tenant, or key.",
     lede: (
       <>
-        Concurrency and rate-limit policies live in the database, so they bind the whole fleet. Jobs
-        supply <code>concurrencyKey</code>, <code>concurrency_key</code>, or{" "}
+        Concurrency and rate-limit policies live in the database, so they bind the whole fleet.
+        Tasks supply <code>concurrencyKey</code>, <code>concurrency_key</code>, or{" "}
         <code>ConcurrencyKey</code> to keep one tenant from starving the rest.
       </>
     ),
@@ -231,15 +231,15 @@ const features: readonly Feature[] = [
     title: "Release downstream work only when its inputs settle.",
     lede: (
       <>
-        Producers can declare prerequisites, and handlers can create named child jobs then join
+        Producers can declare prerequisites, and handlers can create named child tasks then join
         their results. Parents and dependents leave dispatch while they wait, so orchestration uses
         no worker slot and survives every restart.
       </>
     ),
     file: "checkout.ts",
     snippet: "dependencies",
-    href: "/docs/job-dependencies",
-    linkLabel: "Dependencies and child jobs",
+    href: "/docs/task-dependencies",
+    linkLabel: "Dependencies and child tasks",
     diagram: <DependenciesDiagram />,
   },
   {
@@ -249,8 +249,8 @@ const features: readonly Feature[] = [
     lede: (
       <>
         Debounce replaces a pending payload while updates settle. <code>enqueueWithResult</code>,{" "}
-        <code>enqueue_with_result</code>, and <code>EnqueueWithResult</code> return the retained job
-        and a typed outcome, so diagnostics show whether Workhorse replaced or coalesced it.
+        <code>enqueue_with_result</code>, and <code>EnqueueWithResult</code> return the retained
+        task and a typed outcome, so diagnostics show whether Workhorse replaced or coalesced it.
       </>
     ),
     file: "indexing.ts",
@@ -279,10 +279,10 @@ const features: readonly Feature[] = [
   {
     id: "batch-handlers",
     kicker: "batch handlers",
-    title: "Share the provider call, keep every job independent.",
+    title: "Share the provider call, keep every task independent.",
     lede: (
       <>
-        A batch handler groups jobs of one type for efficient bulk I/O. Every member keeps its own
+        A batch handler groups tasks of one type for efficient bulk I/O. Every member keeps its own
         lease, cancellation, retry budget, and result, so one provider response does not collapse
         separate durable identities.
       </>
@@ -316,7 +316,7 @@ const features: readonly Feature[] = [
     title: "Failures leave evidence, and redrive leaves an audit trail.",
     lede: (
       <>
-        Exhausted jobs land in a cold relation with their error, attempts, and tags. Reading them
+        Exhausted tasks land in a cold relation with their error, attempts, and tags. Reading them
         never competes with dispatch. Redrive requires an actor, a reason, and a request id, and
         keeps lineage back to the failure it replaced.
       </>
@@ -584,11 +584,11 @@ function Hero() {
         <div className="wh-hero-copy flex flex-col justify-center border-b px-5 py-14 wh-rule sm:px-10 sm:py-20 lg:border-b-0 lg:border-r lg:px-8">
           <BetaMark />
           <h1 className="mt-7 max-w-xl text-balance text-4xl font-semibold leading-[1.08] tracking-[-0.035em] sm:text-5xl lg:text-[3.25rem]">
-            Durable jobs. <span className="wh-accent-text">The Postgres you already run.</span>
+            Durable tasks. <span className="wh-accent-text">The Postgres you already run.</span>
           </h1>
           <p className="mt-6 max-w-xl text-pretty text-lg leading-relaxed text-fd-muted-foreground">
-            Commit jobs with your application data. Recover after a crash. Wait without holding a
-            worker. A durable job queue for TypeScript, Python, and Go, with no separate broker.
+            Commit tasks with your application data. Recover after a crash. Wait without holding a
+            worker. A durable task queue for TypeScript, Python, and Go, with no separate broker.
           </p>
           <div className="mt-8">
             <HeroActions />
@@ -626,10 +626,10 @@ function FeatureNavigation() {
       <div className="mx-auto grid w-full max-w-7xl gap-7 px-5 py-9 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] lg:gap-14 lg:px-8">
         <div>
           <p id="feature-navigation-title" className="text-lg font-semibold tracking-tight">
-            Find the guarantee your job needs.
+            Find the guarantee your task needs.
           </p>
           <p className="mt-2 max-w-sm text-sm leading-relaxed text-fd-muted-foreground">
-            Explore working examples below, or follow the quickstart to run your first job.
+            Explore working examples below, or follow the quickstart to run your first task.
           </p>
           <a
             href="/docs/quickstart"
@@ -858,7 +858,7 @@ function ClosingCall() {
             Your database is already the queue.
           </h2>
           <p className="mt-4 max-w-xl text-pretty text-[16px] leading-relaxed text-brand-200/90">
-            Install the schema, enqueue a job inside a transaction, and inspect every transition in
+            Install the schema, enqueue a task inside a transaction, and inspect every transition in
             the dashboard.
           </p>
           <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
@@ -992,7 +992,7 @@ function HomePage() {
               </h2>
               <p className="mt-3 text-pretty text-[16px] leading-relaxed text-fd-muted-foreground">
                 Each adapter is a separate package that turns your ORM's transaction object into the
-                queue's database protocol. The account row and its follow-up job either commit or
+                queue's database protocol. The account row and its follow-up task either commit or
                 roll back together.
               </p>
               <p className="mt-4">
@@ -1072,7 +1072,7 @@ function HomePage() {
             <Tile
               href="/docs/quickstart"
               label="Quickstart"
-              note="Install the schema, enqueue the first job, and run a worker."
+              note="Install the schema, enqueue the first task, and run a worker."
             />
             <Tile
               href="/docs/api"

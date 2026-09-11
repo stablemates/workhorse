@@ -44,7 +44,7 @@ export function createDemoWorkerDefinition(
       maintenanceRoutinePollMs:
         options.maintenanceRoutinePollMs ?? DEMO_MAINTENANCE_ROUTINE_POLL_MS,
       registryIntervalMs: options.registryIntervalMs ?? DEMO_REGISTRY_INTERVAL_MS,
-      retryDelayMs: (attempt, job) => (job.retryPolicy === null ? attempt * 100 : undefined),
+      retryDelayMs: (attempt, task) => (task.retryPolicy === null ? attempt * 100 : undefined),
       onRegistrationError: options.onRegistrationError,
     },
     configure(worker) {
@@ -55,7 +55,7 @@ export function createDemoWorkerDefinition(
         batchMaxSize: Math.min(DEMO_BATCH_MAX_SIZE, options.concurrency),
         durableStepMs: options.durableStepMs,
         durableTimerWaitMs: options.durableTimerWaitMs,
-        longRunningJobMs: options.longRunningJobMs,
+        longRunningTaskMs: options.longRunningTaskMs,
         onDurableStepOperation: options.onDurableStepOperation,
         onDurableTimerOperation: options.onDurableTimerOperation,
       });

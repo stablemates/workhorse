@@ -48,8 +48,8 @@ Each accepted update replaces the previous one.
 </Tabs>
 
 `HandlerContext.getProgress` returns the latest retained value from inside a handler. Outside
-one, `Admin.getProgress` reads it by job ID, and a custom runtime can write through
-`Queue.updateProgress` with the claimed job and worker identity. The
+one, `Admin.getProgress` reads it by task ID, and a custom runtime can write through
+`Queue.updateProgress` with the claimed task and worker identity. The
 [dashboard](/docs/dashboard) renders the value live.
 
 Python exposes the handler methods as `set_progress` and `get_progress`. Go exposes `SetProgress`
@@ -58,7 +58,7 @@ as the TypeScript record.
 
 ## Why progress is rate-limited
 
-Every changed value updates one `job_progress` row and appends a small `progress_updated`
+Every changed value updates one `task_progress` row and appends a small `progress_updated`
 event. A tight loop — say, one update per imported row — would churn the database without
 making the interface more useful; no operator reads a thousand updates a second.
 
@@ -73,7 +73,7 @@ event. You can call `setProgress` defensively without paying for it.
 
 Each accepted update records the attempt, fence token, worker ID, revision, and timestamps.
 The latest value survives retries and terminal materialization, until retention removes the
-job identity — so a failed job's last reported phase remains readable evidence.
+task identity — so a failed task's last reported phase remains readable evidence.
 
 Only the current unexpired owner can write. If a stale generation tries — an old handler
 still running after its lease was recovered — it gets `ProgressLeaseLostError`, so a zombie
@@ -86,7 +86,7 @@ not progress — make it a checkpoint.
 ## Next
 
 - [Durable execution](/docs/durable-execution) — save immutable completion evidence
-- [Queries and timelines](/docs/queries) — read job and lifecycle state
+- [Queries and timelines](/docs/queries) — read task and lifecycle state
 - [Dashboard](/docs/dashboard) — show progress to operators
 
 ---

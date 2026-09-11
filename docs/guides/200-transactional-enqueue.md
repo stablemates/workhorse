@@ -1,11 +1,11 @@
-# Enqueueing a job in the same transaction as your data
+# Enqueueing a task in the same transaction as your data
 
 Your handler inserts an order, then enqueues "send confirmation email". If the insert and the
 enqueue commit separately, one of them will eventually happen without the other: an order with
 no email, or an email for an order that rolled back.
 
-Workhorse closes that gap because a job is a row in your own PostgreSQL database. Enqueue
-inside your open transaction, and PostgreSQL commits the order and the job together — or rolls
+Workhorse closes that gap because a task is a row in your own PostgreSQL database. Enqueue
+inside your open transaction, and PostgreSQL commits the order and the task together — or rolls
 both back together. There is no outbox table to build and no window where only one exists.
 
 ## With node-postgres
@@ -44,7 +44,7 @@ with connection.transaction():
     Queue(connection).enqueue("account.created", {"accountId": id})
 ```
 
-If the block raises, Psycopg rolls back, and the job goes with your row.
+If the block raises, Psycopg rolls back, and the task goes with your row.
 
 A worker needs a connection of its own, in autocommit mode. `Worker` raises `ValueError` if you
 hand it anything else, so that mistake is loud. The quiet mistake is sharing one connection between
@@ -69,7 +69,7 @@ err = tx.Commit(ctx)
 ```
 
 `NewSQLExecutor` does the same for the standard library, and accepts a `*sql.Tx`. Either way the
-queue reads and writes through the handle you passed, so your commit covers the job.
+queue reads and writes through the handle you passed, so your commit covers the task.
 
 ## With an ORM provider
 
@@ -126,8 +126,8 @@ await db.transaction().execute(async (trx) => {
 });
 ```
 
-If the transaction callback throws, the ORM rolls back, and the job disappears with your data.
-If it commits, the job is durable and a worker can claim it.
+If the transaction callback throws, the ORM rolls back, and the task disappears with your data.
+If it commits, the task is durable and a worker can claim it.
 
 ## What the transaction covers
 
@@ -141,9 +141,9 @@ call `close` on the adapter.
 
 ## Next
 
-- [210-enqueue-idempotency.md](210-enqueue-idempotency.md) — stop a retried request from creating two jobs
+- [210-enqueue-idempotency.md](210-enqueue-idempotency.md) — stop a retried request from creating two tasks
 - [030-delivery-guarantees.md](030-delivery-guarantees.md) — why the handler still needs idempotency
-- [010-jobs-and-state.md](010-jobs-and-state.md) — what the committed row actually is
+- [010-tasks-and-state.md](010-tasks-and-state.md) — what the committed row actually is
 
 ---
 

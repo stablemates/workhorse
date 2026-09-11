@@ -1,11 +1,11 @@
 ---
 title: TypeORM
-description: Adapt a TypeORM data source and enqueue jobs through transactional entity managers.
+description: Adapt a TypeORM data source and enqueue tasks through transactional entity managers.
 ---
 
 Your application already writes through TypeORM. When a request saves an entity and enqueues a
-follow-up job, those two writes must commit together — a job for a row that rolled back is a bug,
-and a committed row with no job is a silent gap. `@stablemates/workhorse-typeorm` closes that gap: it converts
+follow-up task, those two writes must commit together — a task for a row that rolled back is a bug,
+and a committed row with no task is a silent gap. `@stablemates/workhorse-typeorm` closes that gap: it converts
 TypeORM data sources and transactional entity managers into the core `Queryable` protocol, so
 `Queue.enqueue` runs inside the same transaction as your entity writes.
 
@@ -38,7 +38,7 @@ operator tools, and worker processes.
 ## Enqueue inside a transaction
 
 This is the pattern the adapter exists for. Call `forTransaction` with the callback's entity
-manager. The queue sends its SQL through that manager, so the job follows the surrounding commit or
+manager. The queue sends its SQL through that manager, so the task follows the surrounding commit or
 rollback.
 
 ```ts
@@ -58,8 +58,8 @@ enqueues that stand alone.
 
 TypeORM does not expose its internal node-postgres pool as a stable API. Supply a separate
 caller-owned pool as `notificationPool` when workers should reserve a connection for
-`LISTEN/NOTIFY` and pick up new jobs immediately. Without it, workers use bounded polling and keep
-the same durable behavior — jobs still run, just on the polling cadence.
+`LISTEN/NOTIFY` and pick up new tasks immediately. Without it, workers use bounded polling and keep
+the same durable behavior — tasks still run, just on the polling cadence.
 
 Database execution failures become `TypeOrmQueryError`, which retains the statement, original
 cause, and PostgreSQL driver code. Typed Workhorse conflicts — idempotency, checkpoint, and wait

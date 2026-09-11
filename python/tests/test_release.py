@@ -29,7 +29,7 @@ def _repository_toml(*parts: str) -> dict[str, Any]:
 
 def test_readme_example_matches_release_tested_example() -> None:
     readme = _repository_file("python", "README.md")
-    match = re.search(r"## Run one job\n\n```python\n(.*?)\n```", readme, re.DOTALL)
+    match = re.search(r"## Run one task\n\n```python\n(.*?)\n```", readme, re.DOTALL)
     assert match is not None
     assert match.group(1) == _repository_file("python", "examples", "quickstart.py").strip()
 
@@ -65,7 +65,7 @@ def test_python_support_contract_matches_repository_declarations(database_url: s
         f"py{python_support['minimum'].replace('.', '')}"
     )
     assert project["description"] == (
-        "Python SDK for the Workhorse durable job queue for PostgreSQL. Public beta."
+        "Python SDK for the Workhorse durable task queue for PostgreSQL. Public beta."
     )
     assert project["dependencies"] == [
         "jsonschema>=4.25,<5",

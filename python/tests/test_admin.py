@@ -17,9 +17,9 @@ from workhorse import (
     DeadLetterQuery,
     EnqueueOptions,
     HandlerContext,
-    JobListQuery,
-    JobPayloadProjection,
     Queue,
+    TaskListQuery,
+    TaskPayloadProjection,
     Worker,
 )
 
@@ -28,11 +28,11 @@ pytestmark = pytest.mark.integration
 
 @dataclass(frozen=True)
 class AdminFixture:
-    listed_job_id: str
-    purge_job_id: str
-    failed_job_ids: tuple[str, str]
-    durable_job_id: str
-    human_job_id: str
+    listed_task_id: str
+    purge_task_id: str
+    failed_task_ids: tuple[str, str]
+    durable_task_id: str
+    human_task_id: str
     worker_id: str
 
 
@@ -55,9 +55,9 @@ def _human_wait(_payload: object, context: HandlerContext) -> object:
 def _prepare_admin_fixture(database_url: str) -> AdminFixture:
     with psycopg.connect(database_url, autocommit=True) as connection:
         queue = Queue(connection)
-        listed_job_id = queue.enqueue("admin.listed", {"secret": "hidden", "safe": True})
-        purge_job_id = queue.enqueue("admin.purge", {}, EnqueueOptions(queue="admin-purge"))
-        failed_job_ids = (
+        listed_task_id = queue.enqueue("admin.listed", {"secret": "hidden", "safe": True})
+        purge_task_id = queue.enqueue("admin.purge", {}, EnqueueOptions(queue="admin-purge"))
+        failed_task_ids = (
             queue.enqueue(
                 "admin.failure",
                 {"number": 1},
@@ -69,8 +69,8 @@ def _prepare_admin_fixture(database_url: str) -> AdminFixture:
                 EnqueueOptions(queue="admin-failure", max_attempts=1),
             ),
         )
-        durable_job_id = queue.enqueue("admin.durable", {}, EnqueueOptions(queue="admin-durable"))
-        human_job_id = queue.enqueue("admin.human", {}, EnqueueOptions(queue="admin-human"))
+        durable_task_id = queue.enqueue("admin.durable", {}, EnqueueOptions(queue="admin-durable"))
+        human_task_id = queue.enqueue("admin.human", {}, EnqueueOptions(queue="admin-human"))
 
     worker_id = "python-admin-worker"
     with psycopg.connect(database_url, autocommit=True) as connection:
@@ -118,11 +118,11 @@ def _prepare_admin_fixture(database_url: str) -> AdminFixture:
         )
 
     return AdminFixture(
-        listed_job_id,
-        purge_job_id,
-        failed_job_ids,
-        durable_job_id,
-        human_job_id,
+        listed_task_id,
+        purge_task_id,
+        failed_task_ids,
+        durable_task_id,
+        human_task_id,
         worker_id,
     )
 
@@ -130,11 +130,11 @@ def _prepare_admin_fixture(database_url: str) -> AdminFixture:
 def _assert_read_results(
     fixture: AdminFixture,
     *,
-    get_job: Callable[[str], object],
-    list_jobs: Callable[[], object],
+    get_task: Callable[[str], object],
+    list_tasks: Callable[[], object],
 ) -> None:
-    assert get_job(fixture.listed_job_id) is not None
-    assert list_jobs() is not None
+    assert get_task(fixture.listed_task_id) is not None
+    assert list_tasks() is not None
 
 
 def test_admin_exposes_each_operator_operation_over_psycopg(database_url: str) -> None:
@@ -143,36 +143,36 @@ def test_admin_exposes_each_operator_operation_over_psycopg(database_url: str) -
 
     with psycopg.connect(database_url, autocommit=True) as connection:
         admin = Admin(connection)
-        snapshot = admin.get_job(fixture.listed_job_id)
+        snapshot = admin.get_task(fixture.listed_task_id)
         assert snapshot is not None and snapshot.state == "ready"
-        listed = admin.list_jobs(
-            JobListQuery(payload=JobPayloadProjection(include=True, redact_keys=("secret",)))
+        listed = admin.list_tasks(
+            TaskListQuery(payload=TaskPayloadProjection(include=True, redact_keys=("secret",)))
         )
-        assert fixture.listed_job_id in {job.id for job in listed.items}
-        assert next(job for job in listed.items if job.id == fixture.listed_job_id).payload == {
+        assert fixture.listed_task_id in {task.id for task in listed.items}
+        assert next(task for task in listed.items if task.id == fixture.listed_task_id).payload == {
             "safe": True
         }
-        assert admin.get_job_timeline(fixture.listed_job_id).items
+        assert admin.get_task_timeline(fixture.listed_task_id).items
 
         dead_letters = admin.list_dead_letters(DeadLetterQuery(queue="admin-failure"))
-        assert {letter.job_id for letter in dead_letters.items} == set(fixture.failed_job_ids)
-        single = admin.redrive(fixture.failed_job_ids[0], audit)
-        assert single.status == "redriven" and single.target_job_id is not None
+        assert {letter.task_id for letter in dead_letters.items} == set(fixture.failed_task_ids)
+        single = admin.redrive(fixture.failed_task_ids[0], audit)
+        assert single.status == "redriven" and single.target_task_id is not None
         bulk = admin.redrive_many(
             DeadLetterFilter(queue="admin-failure"),
             AdminAudit("python-test", "preview remaining failures", "sync-admin-bulk"),
             BulkRedriveOptions(dry_run=True),
         )
-        assert fixture.failed_job_ids[1] in {result.source_job_id for result in bulk.results}
+        assert fixture.failed_task_ids[1] in {result.source_task_id for result in bulk.results}
         assert {result.status for result in bulk.results} == {"eligible"}
 
-        assert admin.get_checkpoint(fixture.durable_job_id, "prepared") is not None
-        assert len(admin.list_checkpoints(fixture.durable_job_id)) == 1
-        assert admin.get_progress(fixture.durable_job_id) is not None
-        assert admin.get_wait(fixture.durable_job_id, "backoff") is not None
-        assert len(admin.list_waits(fixture.durable_job_id)) == 1
+        assert admin.get_checkpoint(fixture.durable_task_id, "prepared") is not None
+        assert len(admin.list_checkpoints(fixture.durable_task_id)) == 1
+        assert admin.get_progress(fixture.durable_task_id) is not None
+        assert admin.get_wait(fixture.durable_task_id, "backoff") is not None
+        assert len(admin.list_waits(fixture.durable_task_id)) == 1
         human_waits = admin.list_human_waits()
-        assert fixture.human_job_id in {wait.job_id for wait in human_waits.items}
+        assert fixture.human_task_id in {wait.task_id for wait in human_waits.items}
         assert admin.list_signal_waits().items == ()
 
         workers = admin.list_workers()
@@ -191,7 +191,7 @@ def test_admin_exposes_each_operator_operation_over_psycopg(database_url: str) -
         ).fetchone() == (False,)
         assert admin.purge_queue("admin-purge", audit) == 1
         assert admin.purge_queue("admin-purge", audit) == 1
-        assert admin.get_job(fixture.purge_job_id) is None
+        assert admin.get_task(fixture.purge_task_id) is None
 
 
 async def _assert_async_admin_operations(
@@ -200,15 +200,15 @@ async def _assert_async_admin_operations(
     audit = AdminAudit(
         "python-test", "exercise async operator operation", f"{driver}-admin-request"
     )
-    snapshot = await admin.get_job(fixture.listed_job_id)
+    snapshot = await admin.get_task(fixture.listed_task_id)
     assert snapshot is not None and snapshot.state == "ready"
-    listed = await admin.list_jobs(JobListQuery(states=("ready",)))
-    assert fixture.listed_job_id in {job.id for job in listed.items}
-    assert (await admin.get_job_timeline(fixture.listed_job_id)).items
+    listed = await admin.list_tasks(TaskListQuery(states=("ready",)))
+    assert fixture.listed_task_id in {task.id for task in listed.items}
+    assert (await admin.get_task_timeline(fixture.listed_task_id)).items
 
     dead_letters = await admin.list_dead_letters(DeadLetterQuery(queue="admin-failure"))
-    assert {letter.job_id for letter in dead_letters.items} == set(fixture.failed_job_ids)
-    single = await admin.redrive(fixture.failed_job_ids[0], audit)
+    assert {letter.task_id for letter in dead_letters.items} == set(fixture.failed_task_ids)
+    single = await admin.redrive(fixture.failed_task_ids[0], audit)
     assert single.status == "redriven"
     bulk = await admin.redrive_many(
         DeadLetterFilter(queue="admin-failure"),
@@ -217,12 +217,14 @@ async def _assert_async_admin_operations(
     )
     assert bulk.results[0].status == "eligible"
 
-    assert await admin.get_checkpoint(fixture.durable_job_id, "prepared") is not None
-    assert len(await admin.list_checkpoints(fixture.durable_job_id)) == 1
-    assert await admin.get_progress(fixture.durable_job_id) is not None
-    assert await admin.get_wait(fixture.durable_job_id, "backoff") is not None
-    assert len(await admin.list_waits(fixture.durable_job_id)) == 1
-    assert fixture.human_job_id in {wait.job_id for wait in (await admin.list_human_waits()).items}
+    assert await admin.get_checkpoint(fixture.durable_task_id, "prepared") is not None
+    assert len(await admin.list_checkpoints(fixture.durable_task_id)) == 1
+    assert await admin.get_progress(fixture.durable_task_id) is not None
+    assert await admin.get_wait(fixture.durable_task_id, "backoff") is not None
+    assert len(await admin.list_waits(fixture.durable_task_id)) == 1
+    assert fixture.human_task_id in {
+        wait.task_id for wait in (await admin.list_human_waits()).items
+    }
     assert (await admin.list_signal_waits()).items == ()
 
     assert fixture.worker_id in {worker.worker_id for worker in await admin.list_workers()}
@@ -232,7 +234,7 @@ async def _assert_async_admin_operations(
     await admin.resume_queue("admin-listed", audit)
     assert await admin.purge_queue("admin-purge", audit) == 1
     assert await admin.purge_queue("admin-purge", audit) == 1
-    assert await admin.get_job(fixture.purge_job_id) is None
+    assert await admin.get_task(fixture.purge_task_id) is None
 
 
 @pytest.mark.asyncio

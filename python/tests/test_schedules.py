@@ -5,7 +5,7 @@ import json
 from protocol_fixtures import assert_fixture_execution, read_protocol_fixture
 from test_enqueue import Connection
 
-from workhorse import Queue, ScheduleDefinition, ScheduledJob
+from workhorse import Queue, ScheduleDefinition, ScheduledTask
 from workhorse._statements import MINIMUM_SCHEMA_VERSION
 
 
@@ -31,14 +31,14 @@ def test_synchronizes_every_shared_schedule_fixture_through_the_versioned_sql_fu
                     schedule=definition["schedule"],
                     timezone=definition["timezone"],
                     enabled=definition["enabled"],
-                    job=ScheduledJob(
-                        type=definition["job"]["type"],
-                        payload=definition["job"]["payload"],
-                        queue=definition["job"].get("queue"),
-                        priority=definition["job"]["priority"],
-                        concurrency_key=definition["job"].get("concurrencyKey"),
-                        max_attempts=definition["job"]["maxAttempts"],
-                        retry_policy=definition["job"].get("retryPolicy"),
+                    task=ScheduledTask(
+                        type=definition["task"]["type"],
+                        payload=definition["task"]["payload"],
+                        queue=definition["task"].get("queue"),
+                        priority=definition["task"]["priority"],
+                        concurrency_key=definition["task"].get("concurrencyKey"),
+                        max_attempts=definition["task"]["maxAttempts"],
+                        retry_policy=definition["task"].get("retryPolicy"),
                     ),
                 )
                 for definition in fixture["application"]

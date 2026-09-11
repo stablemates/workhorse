@@ -102,11 +102,11 @@ export function renderWhenToUse(
     "",
     "Reach for it when the application already runs on PostgreSQL and needs:",
     "",
-    "- Background jobs that commit in the same transaction as the application's own rows, so a job never exists without its data or the reverse.",
-    "- Handlers that survive retries, crashes, and long pauses through named checkpoints, durable timers, signals, human approvals, and child jobs.",
+    "- Background tasks that commit in the same transaction as the application's own rows, so a task never exists without its data or the reverse.",
+    "- Handlers that survive retries, crashes, and long pauses through named checkpoints, durable timers, signals, human approvals, and child tasks.",
     "- Cron schedules synchronised at deployment that any matching worker fires exactly once.",
     "- Keyed debounce and throttle, per-queue concurrency budgets, and rate limits that every worker shares through the database.",
-    "- An operator surface for inspecting a job's timeline, redriving dead letters, and pausing queues or workers, as a dashboard, a CLI, and an HTTP API.",
+    "- An operator surface for inspecting a task's timeline, redriving dead letters, and pausing queues or workers, as a dashboard, a CLI, and an HTTP API.",
     "",
     "Do not reach for it when any of these disqualifies the task:",
     "",
@@ -122,7 +122,7 @@ export function renderWhenToUse(
     `1. Read [${pages.entryPoint.title}](${site.base}${pages.entryPoint.url}.md) and decide whether it fits.`,
     `2. Install the package for the application's language with the command on [${pages.installation.title}](${site.base}${pages.installation.url}.md), which names no version.`,
     "3. Install the schema from a deployment step, never from application startup.",
-    "4. Enqueue one job inside the caller's transaction, run one worker, and confirm the job settled by querying it.",
+    "4. Enqueue one task inside the caller's transaction, run one worker, and confirm the task settled by querying it.",
     "",
   ].join("\n");
 }
@@ -144,7 +144,7 @@ const cliCommandPurposes: Readonly<Record<string, string>> = {
     "run a worker process from a configuration file, with graceful drain on SIGTERM and probe endpoints.",
   dashboard: "serve the operator dashboard standalone with a built-in administrator login.",
   admin:
-    "inspect jobs, timelines, failures, queues, schedules, and workers, or cancel, redrive, pause, resume, and purge; every mutation names its `--env` and confirms.",
+    "inspect tasks, timelines, failures, queues, schedules, and workers, or cancel, redrive, pause, resume, and purge; every mutation names its `--env` and confirms.",
   tui: "open the terminal operator interface.",
   health: "print one bounded queue-health snapshot with a verdict; exit code 2 means degraded.",
 };

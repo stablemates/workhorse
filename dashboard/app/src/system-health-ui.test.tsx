@@ -40,7 +40,7 @@ const systemPage = {
     retry: { backoff: 4, dueSoon: 1, buckets: [] },
     lease: { active: 2, expired: 0, expiringSoon: 1, recovered: 1 },
     dependencies: {
-      blockedJobs: 5,
+      blockedTasks: 5,
       pendingEdges: 7,
       failedResolutions: 2,
       retentionPruneStarved: true,

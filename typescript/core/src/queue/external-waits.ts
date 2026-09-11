@@ -14,7 +14,7 @@ export interface ExternalWaitDeliveryRequest {
 }
 
 export interface ExternalWaitOptions {
-  /** Fail the job if the boundary remains unanswered for this many milliseconds. */
+  /** Fail the task if the boundary remains unanswered for this many milliseconds. */
   timeoutMs?: number;
 }
 
@@ -31,14 +31,14 @@ export type ExternalWaitListOptions = ExternalWaitQuery;
 export interface ExternalWaitCursor {
   /** Exact PostgreSQL UTC timestamp text. Treat as opaque continuation state. */
   createdAt: string;
-  jobId: string;
+  taskId: string;
   name: string;
 }
 
 export interface ExternalWaitRecord {
-  jobId: string;
+  taskId: string;
   queue: string;
-  jobType: string;
+  taskType: string;
   name: string;
   attempt: number;
   createdAt: Date;
@@ -46,9 +46,9 @@ export interface ExternalWaitRecord {
 }
 
 export type ExternalWaitRow = {
-  job_id: string;
+  task_id: string;
   queue_name: string;
-  job_type: string;
+  task_type: string;
   wait_name: string;
   attempt: number;
   created_at: Date | string;
@@ -81,7 +81,7 @@ export function validateExternalWaitListOptions(options: ExternalWaitQuery): {
     }
     const cursorFields = Object.keys(cursor);
     const unknownCursorField = cursorFields.find(
-      (field) => field !== "createdAt" && field !== "jobId" && field !== "name",
+      (field) => field !== "createdAt" && field !== "taskId" && field !== "name",
     );
     if (unknownCursorField !== undefined) {
       throw new TypeError(
@@ -94,7 +94,7 @@ export function validateExternalWaitListOptions(options: ExternalWaitQuery): {
       }
     }
     if (cursorFields.length !== 3) {
-      throw new TypeError("External wait list cursor requires createdAt, jobId, and name");
+      throw new TypeError("External wait list cursor requires createdAt, taskId, and name");
     }
   }
   return { limit, cursor };
@@ -102,9 +102,9 @@ export function validateExternalWaitListOptions(options: ExternalWaitQuery): {
 
 export function externalWaitRecord(row: ExternalWaitRow): ExternalWaitRecord {
   return {
-    jobId: row.job_id,
+    taskId: row.task_id,
     queue: row.queue_name,
-    jobType: row.job_type,
+    taskType: row.task_type,
     name: row.wait_name,
     attempt: Number(row.attempt),
     createdAt: new Date(row.created_at),
@@ -113,7 +113,7 @@ export function externalWaitRecord(row: ExternalWaitRow): ExternalWaitRecord {
 }
 
 export function externalWaitCursor(row: ExternalWaitRow): ExternalWaitCursor {
-  return { createdAt: row.cursor_created_at, jobId: row.job_id, name: row.wait_name };
+  return { createdAt: row.cursor_created_at, taskId: row.task_id, name: row.wait_name };
 }
 
 export function validateExternalWaitName(name: string, label: string): void {

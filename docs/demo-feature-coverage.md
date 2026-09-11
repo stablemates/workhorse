@@ -3,7 +3,7 @@
 The demo turns the supported task lifecycle into seventeen discoverable feature families. Each family
 owns exactly three idempotently seeded one-off scenarios and one namespaced recurring definition. This
 keeps the dashboard populated with useful contrasts without pretending that every infrastructure
-capability is a job outcome.
+capability is a task outcome.
 
 | Feature family           | Task type                  | Three startup scenarios                                                     | Recurring variation                                     |
 | ------------------------ | -------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------- |
@@ -15,7 +15,7 @@ capability is a job outcome.
 | Timing controls          | `demo.timing-control`      | expired deadline, execution timeout, completion within both budgets         | varied execution duration and outcome                   |
 | Cancellation             | `demo.cancellation`        | ready cancellation, scheduled cancellation, cooperative active cancellation | success, cooperative cancellation, or failure           |
 | Dead letters and redrive | `demo.dead-letter-redrive` | terminal failure, successful redrive, idempotent redrive replay             | success, retry/recovery, or terminal failure            |
-| Job dependencies         | `demo.job-dependency`      | single prerequisite release, two-prerequisite fan-in, cancel on failure     | a fresh prerequisite-to-dependent chain per occurrence  |
+| Task dependencies        | `demo.task-dependency`     | single prerequisite release, two-prerequisite fan-in, cancel on failure     | a fresh prerequisite-to-dependent chain per occurrence  |
 | Child workflows          | `demo.child-workflow`      | one awaited child, three-child fan-out join, child retry before join        | one to three children joined by name                    |
 | Signals                  | `demo.signal-wait`         | companion-task delivery, operator delivery, expiring unanswered             | delivered, operator-answerable, or expiring             |
 | Human decisions          | `demo.human-decision`      | refund approval, publication sign-off, expiring review                      | operator-answerable or expiring decisions               |
@@ -26,9 +26,9 @@ capability is a job outcome.
 | Payload contracts        | `demo.contract-check`      | accepted under `v1`, result rejected at completion, payload rejection probe | accepted under `v1`                                     |
 
 The seventeen definitions are staggered across a seventeen-minute cycle, one family per minute. Their
-stable job identity selects a stable variant for that occurrence, so retries preserve one scenario
+stable task identity selects a stable variant for that occurrence, so retries preserve one scenario
 while later occurrences rotate through different results. Schedule occurrence deduplication still
-guarantees one accepted job per definition and second.
+guarantees one accepted task per definition and second.
 
 ## Coverage of the feature matrix
 
@@ -36,7 +36,7 @@ The seventeen families exercise immediate and delayed enqueue, tags, named queue
 idempotency, keyed debounce and throttle with their durable `enqueueWithResult` dispositions,
 `enqueueMany` batch acceptance, priority, all persisted retry policies, recurring schedules,
 checkpoints, relative and absolute durable waits, progress, deadlines, execution timeouts,
-cancellation, job dependencies with terminal policies, child jobs with named join, external signals,
+cancellation, task dependencies with terminal policies, child tasks with named join, external signals,
 human wait tokens, batch handlers with independent settlement, payload and result contracts,
 terminal outcomes, dead-letter queries, redrive lineage, and idempotent redrive. Every task also
 remains available through cross-state listing and the merged lifecycle timeline.

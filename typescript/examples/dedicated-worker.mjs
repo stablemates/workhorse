@@ -40,19 +40,19 @@ async function verifyDedicatedWorker(databaseUrl) {
   const runtime = await startWorkerProcess(createDedicatedWorker(databaseUrl));
   const observer = new Pool({ connectionString: databaseUrl });
   try {
-    const jobId = await new Queue(observer, "orders").enqueue("order.accepted", {
+    const taskId = await new Queue(observer, "orders").enqueue("order.accepted", {
       orderId: "order-42",
     });
     const admin = new Admin(observer);
     for (let pass = 0; pass < 100; pass += 1) {
-      const job = await admin.getJob(jobId);
-      if (job?.state === "succeeded") return { jobId, result: job.result };
-      if (job?.state === "failed" || job?.state === "canceled") {
-        throw new Error(`Dedicated worker job finished in ${job.state} state`);
+      const task = await admin.getTask(taskId);
+      if (task?.state === "succeeded") return { taskId, result: task.result };
+      if (task?.state === "failed" || task?.state === "canceled") {
+        throw new Error(`Dedicated worker task finished in ${task.state} state`);
       }
       await delay(20);
     }
-    throw new Error(`Dedicated worker did not finish ${jobId}`);
+    throw new Error(`Dedicated worker did not finish ${taskId}`);
   } finally {
     await runtime.shutdown();
     await observer.end();

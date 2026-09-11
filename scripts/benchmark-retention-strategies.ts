@@ -19,7 +19,7 @@ Options:
   --rows N[,N...]       History rows inserted per cycle (default: 10,50,100,250,500,1000,10000,50000)
   --cycles N            Churn cycles per strategy and scale (default: 7)
   --retained-cycles N   Generations retained before cleanup (default: 2)
-  --ready-jobs N        Constant ready depth for claim probes (default: 500)
+  --ready-tasks N        Constant ready depth for claim probes (default: 500)
   --claim-samples N     Claim probes before, during, and after each cleanup (default: 40)
   --trigger-rows N      Rows per history-trigger repetition (default: 2000)
   --trigger-repetitions N  Trigger-cost repetitions (default: 5)
@@ -68,7 +68,7 @@ if (process.argv.includes("--help")) {
     const rowsPerCycle = integerList("--rows");
     const cycles = integer("--cycles");
     const retainedCycles = integer("--retained-cycles");
-    const readyJobs = integer("--ready-jobs");
+    const readyTasks = integer("--ready-tasks");
     const claimSamples = integer("--claim-samples");
     const triggerRows = integer("--trigger-rows");
     const triggerRepetitions = integer("--trigger-repetitions");
@@ -77,7 +77,7 @@ if (process.argv.includes("--help")) {
       ...(rowsPerCycle === undefined ? {} : { rowsPerCycle }),
       ...(cycles === undefined ? {} : { cycles }),
       ...(retainedCycles === undefined ? {} : { retainedCycles }),
-      ...(readyJobs === undefined ? {} : { readyJobs }),
+      ...(readyTasks === undefined ? {} : { readyTasks }),
       ...(claimSamples === undefined ? {} : { claimSamples }),
       ...(triggerRows === undefined ? {} : { triggerRows }),
       ...(triggerRepetitions === undefined ? {} : { triggerRepetitions }),

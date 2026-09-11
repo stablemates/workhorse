@@ -9,7 +9,7 @@ AttributeValue = (
     str | bool | int | float | Sequence[str] | Sequence[bool] | Sequence[int] | Sequence[float]
 )
 Attributes = Mapping[str, AttributeValue]
-JobExecutionOutcome = Literal[
+TaskExecutionOutcome = Literal[
     "canceled",
     "deadline_exceeded",
     "failed",
@@ -27,19 +27,19 @@ WorkhorseLogEvent = Literal[
     "workhorse.handler.registered",
     "workhorse.handler.signal_swallowed",
     "workhorse.handler.started",
-    "workhorse.job.cancellation_acknowledged",
-    "workhorse.job.checkpoint_saved",
-    "workhorse.job.child_processed",
-    "workhorse.job.claimed",
-    "workhorse.job.completed",
-    "workhorse.job.completion_rejected",
-    "workhorse.job.execution_finished",
-    "workhorse.job.failure_processed",
-    "workhorse.job.heartbeat_accepted",
-    "workhorse.job.heartbeat_rejected",
-    "workhorse.job.ownership_expired",
-    "workhorse.job.progress_updated",
-    "workhorse.job.wait_processed",
+    "workhorse.task.cancellation_acknowledged",
+    "workhorse.task.checkpoint_saved",
+    "workhorse.task.child_processed",
+    "workhorse.task.claimed",
+    "workhorse.task.completed",
+    "workhorse.task.completion_rejected",
+    "workhorse.task.execution_finished",
+    "workhorse.task.failure_processed",
+    "workhorse.task.heartbeat_accepted",
+    "workhorse.task.heartbeat_rejected",
+    "workhorse.task.ownership_expired",
+    "workhorse.task.progress_updated",
+    "workhorse.task.wait_processed",
     "workhorse.leases.recovered",
     "workhorse.maintenance.completed",
     "workhorse.schedule.fire_replayed",
@@ -67,7 +67,7 @@ class Span(Protocol):
     def add_event(self, name: str, attributes: Attributes | None = None) -> None: ...
 
 
-class Job(Protocol):
+class TaskRecord(Protocol):
     @property
     def id(self) -> str: ...
 
@@ -148,10 +148,10 @@ def _histogram(name: str, description: str, unit: str) -> _Histogram:
     )
 
 
-_claimed = _counter("workhorse.jobs.claimed", "Jobs claimed for handler execution", "{job}")
-_completed = _counter("workhorse.jobs.completed", "Jobs completed under a valid lease", "{job}")
-_failed = _counter("workhorse.jobs.failed", "Handler failures submitted to PostgreSQL", "{job}")
-_retried = _counter("workhorse.jobs.retried", "Failed jobs returned to live work", "{job}")
+_claimed = _counter("workhorse.tasks.claimed", "Tasks claimed for handler execution", "{task}")
+_completed = _counter("workhorse.tasks.completed", "Tasks completed under a valid lease", "{task}")
+_failed = _counter("workhorse.tasks.failed", "Handler failures submitted to PostgreSQL", "{task}")
+_retried = _counter("workhorse.tasks.retried", "Failed tasks returned to live work", "{task}")
 _expired_leases = _counter(
     "workhorse.leases.expired", "Expired leases recovered by maintenance", "{lease}"
 )
@@ -179,7 +179,7 @@ _maintenance_errors = _counter(
 _claim_duration = _histogram("workhorse.claim.duration", "PostgreSQL claim operation latency", "ms")
 _handler_duration = _histogram("workhorse.handler.duration", "Handler execution latency", "ms")
 _handler_batch_size = _histogram(
-    "workhorse.handler.batch.size", "Jobs delivered in one batch handler invocation", "{job}"
+    "workhorse.handler.batch.size", "Tasks delivered in one batch handler invocation", "{task}"
 )
 _handler_batch_linger = _histogram(
     "workhorse.handler.batch.linger",
@@ -194,18 +194,18 @@ _maintenance_duration = _histogram(
 )
 
 
-def job_span_attributes(job: Job) -> dict[str, AttributeValue]:
+def task_span_attributes(task: TaskRecord) -> dict[str, AttributeValue]:
     return {
-        "workhorse.job.id": job.id,
-        "workhorse.job.type": job.type,
-        "workhorse.job.attempt": job.attempt,
+        "workhorse.task.id": task.id,
+        "workhorse.task.type": task.type,
+        "workhorse.task.attempt": task.attempt,
     }
 
 
-def job_metric_attributes(job: Job) -> dict[str, AttributeValue]:
+def task_metric_attributes(task: TaskRecord) -> dict[str, AttributeValue]:
     return {
-        "workhorse.queue.name": job.queue,
-        "workhorse.job.type": job.type,
+        "workhorse.queue.name": task.queue,
+        "workhorse.task.type": task.type,
     }
 
 
@@ -284,31 +284,31 @@ def emit_log(
     )
 
 
-def record_claim(queue: str, duration_ms: float, jobs: Sequence[Job]) -> None:
+def record_claim(queue: str, duration_ms: float, tasks: Sequence[TaskRecord]) -> None:
     _claim_duration.record(
         duration_ms,
         {
             "workhorse.queue.name": queue,
-            "workhorse.claim.result": "empty" if not jobs else "claimed",
+            "workhorse.claim.result": "empty" if not tasks else "claimed",
         },
     )
-    for job in jobs:
-        _claimed.add(1, job_metric_attributes(job))
+    for task in tasks:
+        _claimed.add(1, task_metric_attributes(task))
 
 
-def record_completion(job: Job) -> None:
-    _completed.add(1, job_metric_attributes(job))
+def record_completion(task: TaskRecord) -> None:
+    _completed.add(1, task_metric_attributes(task))
 
 
-def record_failure(job: Job, outcome: str) -> None:
-    attributes = {**job_metric_attributes(job), "workhorse.attempt.outcome": outcome}
+def record_failure(task: TaskRecord, outcome: str) -> None:
+    attributes = {**task_metric_attributes(task), "workhorse.attempt.outcome": outcome}
     _failed.add(1, attributes)
     if outcome in {"ready", "scheduled"}:
-        _retried.add(1, job_metric_attributes(job))
+        _retried.add(1, task_metric_attributes(task))
 
 
-def record_retry(job: Job) -> None:
-    _retried.add(1, job_metric_attributes(job))
+def record_retry(task: TaskRecord) -> None:
+    _retried.add(1, task_metric_attributes(task))
 
 
 def record_heartbeat_failure(status: str) -> None:
@@ -316,11 +316,11 @@ def record_heartbeat_failure(status: str) -> None:
 
 
 def record_handler_execution(
-    job: Job,
-    outcome: JobExecutionOutcome,
+    task: TaskRecord,
+    outcome: TaskExecutionOutcome,
     duration_ms: float,
 ) -> None:
-    attributes = job_metric_attributes(job)
+    attributes = task_metric_attributes(task)
     _handler_duration.record(
         duration_ms,
         {**attributes, "workhorse.handler.outcome": outcome},
@@ -334,14 +334,14 @@ def record_handler_execution(
 
 def record_batch(
     queue: str,
-    job_type: str,
+    task_type: str,
     size: int,
     linger_ms: float,
     full: bool,
 ) -> None:
     attributes: dict[str, AttributeValue] = {
         "workhorse.queue.name": queue,
-        "workhorse.job.type": job_type,
+        "workhorse.task.type": task_type,
         "workhorse.handler.batch.full": full,
     }
     _handler_batch_size.record(size, attributes)
@@ -355,29 +355,29 @@ def record_recovery(expired_leases: int, retried: int, retry_dimensions: object)
         if retried > 0:
             _retried.add(
                 retried,
-                {"workhorse.queue.name": "unknown", "workhorse.job.type": "unknown"},
+                {"workhorse.queue.name": "unknown", "workhorse.task.type": "unknown"},
             )
         return
-    retries_by_job: dict[tuple[str, str], int] = {}
+    retries_by_task: dict[tuple[str, str], int] = {}
     for dimension in retry_dimensions:
         if not isinstance(dimension, Mapping):
             continue
         queue = dimension.get("queue")
-        job_type = dimension.get("type")
-        if isinstance(queue, str) and isinstance(job_type, str):
-            key = (queue, job_type)
-            retries_by_job[key] = retries_by_job.get(key, 0) + 1
+        task_type = dimension.get("type")
+        if isinstance(queue, str) and isinstance(task_type, str):
+            key = (queue, task_type)
+            retries_by_task[key] = retries_by_task.get(key, 0) + 1
     attributed_retries = 0
-    for (queue, job_type), count in retries_by_job.items():
+    for (queue, task_type), count in retries_by_task.items():
         attributed_retries += count
         _retried.add(
             count,
-            {"workhorse.queue.name": queue, "workhorse.job.type": job_type},
+            {"workhorse.queue.name": queue, "workhorse.task.type": task_type},
         )
     if attributed_retries < retried:
         _retried.add(
             retried - attributed_retries,
-            {"workhorse.queue.name": "unknown", "workhorse.job.type": "unknown"},
+            {"workhorse.queue.name": "unknown", "workhorse.task.type": "unknown"},
         )
 
 

@@ -5,9 +5,9 @@ import { isDeepStrictEqual } from "node:util";
 import { WorkhorseError } from "./errors.js";
 import { Queue } from "./queue.js";
 import { errorForTelemetry, type FailureStatus } from "./queue/claim-lease-fence.js";
-import { ChildConflictError } from "./queue/child-jobs.js";
+import { ChildConflictError } from "./queue/child-tasks.js";
 import { jitterDuration } from "./notifications.js";
-import type { JobNotificationSubscription } from "./notifications.js";
+import type { TaskNotificationSubscription } from "./notifications.js";
 import type {
   ScheduleWaitRequest,
   ScheduleWaitResult,
@@ -18,8 +18,8 @@ import type { StoredSchedule } from "./queue/cron-schedules.js";
 import type { MaintenancePhaseResult } from "./queue/retention-maintenance.js";
 import {
   extractTraceContext,
-  jobMetricAttributes,
-  jobSpanAttributes,
+  taskMetricAttributes,
+  taskSpanAttributes,
   logDebug,
   logInfo,
   logWarn,
@@ -28,20 +28,20 @@ import {
   telemetryMetrics,
   type WorkhorseTelemetrySpan,
   withSpan,
-  type JobExecutionOutcome,
+  type TaskExecutionOutcome,
 } from "./telemetry.js";
 import type {
-  ChildJobOptions,
+  ChildTaskOptions,
   ChildOutcomes,
-  ChildJobRequest,
+  ChildTaskRequest,
   BatchExecutionRecord,
-  ClaimedJob,
+  ClaimedTask,
   CreateChildResult,
   CreateChildrenResult,
   ExpireOwnedStatus,
-  JobCheckpoint,
-  JobProgress,
-  JobWait,
+  TaskCheckpoint,
+  TaskProgress,
+  TaskWait,
   HeartbeatStatus,
   Json,
   WorkerRegistration,
@@ -49,7 +49,7 @@ import type {
 import { workerCheckpointsRead, workerProgressRead, workerWaitsRead } from "./worker-internal.js";
 
 const DURABLE_WAIT_SUSPENSION = Symbol("workhorse.durableWaitSuspension");
-const CHILD_JOB_SUSPENSION = Symbol("workhorse.childJobSuspension");
+const CHILD_TASK_SUSPENSION = Symbol("workhorse.childTaskSuspension");
 const DEFAULT_POLL_MS = 250;
 const DEFAULT_NOTIFICATION_FALLBACK_POLL_MS = 5_000;
 const MAX_EMPTY_POLL_MS = 5_000;
@@ -99,16 +99,16 @@ export type Failpoint =
   | "beforeComplete"
   | "afterComplete";
 export interface HandlerContext<TPayload extends Json = Json> {
-  job: ClaimedJob<TPayload>;
+  task: ClaimedTask<TPayload>;
   signal: AbortSignal;
   /** Read a previously persisted restart boundary without executing user code. */
-  getCheckpoint<TValue extends Json = Json>(name: string): Promise<JobCheckpoint<TValue> | null>;
+  getCheckpoint<TValue extends Json = Json>(name: string): Promise<TaskCheckpoint<TValue> | null>;
   /** Read an immutable named durable wait from the current handler activation's snapshot. */
-  getWait(name: string): Promise<JobWait | null>;
+  getWait(name: string): Promise<TaskWait | null>;
   /** Read the latest mutable progress observed by this handler activation. */
-  getProgress<TValue extends Json = Json>(): Promise<JobProgress<TValue> | null>;
+  getProgress<TValue extends Json = Json>(): Promise<TaskProgress<TValue> | null>;
   /** Replace the latest mutable progress under the current fenced lease. */
-  setProgress<TValue extends Json>(value: TValue): Promise<JobProgress<TValue>>;
+  setProgress<TValue extends Json>(value: TValue): Promise<TaskProgress<TValue>>;
   /**
    * Return the persisted value when this name already exists. Otherwise run the operation and
    * immutably persist its JSON result under the current fenced lease.
@@ -117,9 +117,9 @@ export interface HandlerContext<TPayload extends Json = Json> {
     name: string,
     operation: () => Promise<TValue> | TValue,
   ): Promise<TValue>;
-  /** Suspend this job without consuming its logical attempt until the relative timer is due. */
+  /** Suspend this task without consuming its logical attempt until the relative timer is due. */
   sleep(name: string, durationMs: number): Promise<void>;
-  /** Suspend this job without consuming its logical attempt until the absolute target is due. */
+  /** Suspend this task without consuming its logical attempt until the absolute target is due. */
   sleepUntil(name: string, wakeAt: Date): Promise<void>;
   /** Suspend until one idempotent external delivery supplies this named signal payload. */
   waitForSignal<TPayload extends Json = Json>(
@@ -137,15 +137,15 @@ export interface HandlerContext<TPayload extends Json = Json> {
     name: string,
     type: string,
     payload: TChildPayload,
-    options?: ChildJobOptions,
+    options?: ChildTaskOptions,
   ): Promise<TResult>;
   /** Create or replay a bounded named child set and return every terminal outcome by name. */
   runChildren<TResult extends Record<string, Json> = Record<string, Json>>(
-    children: readonly ChildJobRequest[],
+    children: readonly ChildTaskRequest[],
   ): Promise<ChildOutcomes<TResult>>;
   /** Join a bounded child set only when every child succeeds. */
   runChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(
-    children: readonly ChildJobRequest[],
+    children: readonly ChildTaskRequest[],
   ): Promise<TResult>;
 }
 
@@ -154,7 +154,7 @@ export type Handler<TPayload extends Json = Json, TResult extends Json = Json> =
   context: HandlerContext<TPayload>,
 ) => Promise<TResult> | TResult;
 
-/** Per-job batch context without APIs that suspend and replay an individual handler. */
+/** Per-task batch context without APIs that suspend and replay an individual handler. */
 export type BatchHandlerContext<TPayload extends Json = Json> = Omit<
   HandlerContext<TPayload>,
   | "sleep"
@@ -166,7 +166,7 @@ export type BatchHandlerContext<TPayload extends Json = Json> = Omit<
   | "runChildrenAll"
 >;
 
-/** One independently leased job delivered to a shared batch-handler invocation. */
+/** One independently leased task delivered to a shared batch-handler invocation. */
 export interface BatchHandlerItem<TPayload extends Json = Json> {
   payload: TPayload;
   context: BatchHandlerContext<TPayload>;
@@ -178,7 +178,7 @@ export type BatchHandlerOutcome<TResult extends Json = Json> =
   | { status: "failed"; error: unknown };
 
 /**
- * A compatible group of jobs from one queue and job type. Outcomes correspond by array position;
+ * A compatible group of tasks from one queue and task type. Outcomes correspond by array position;
  * throwing or returning an invalid outcome list fails every member through its own fenced lifecycle.
  */
 export type BatchHandler<TPayload extends Json = Json, TResult extends Json = Json> = (
@@ -186,7 +186,7 @@ export type BatchHandler<TPayload extends Json = Json, TResult extends Json = Js
 ) => Promise<readonly BatchHandlerOutcome<TResult>[]> | readonly BatchHandlerOutcome<TResult>[];
 
 export interface BatchHandlerOptions {
-  /** Maximum jobs delivered in one invocation. It cannot exceed the worker's job concurrency. */
+  /** Maximum tasks delivered in one invocation. It cannot exceed the worker's task concurrency. */
   maxSize: number;
   /** Maximum time after the first member arrives before a partial batch dispatches. */
   lingerMs: number;
@@ -210,89 +210,89 @@ export interface WorkerMaintenanceTelemetry extends MaintenancePhaseResult {
  */
 export interface WorkerQueueApi {
   readonly defaultQueue: string;
-  supportsJobNotifications?(): boolean;
-  subscribeToJobNotifications?(
+  supportsTaskNotifications?(): boolean;
+  subscribeToTaskNotifications?(
     queueName: string,
     wake: () => void,
     error: (error: unknown) => void,
-  ): Promise<JobNotificationSubscription | null>;
+  ): Promise<TaskNotificationSubscription | null>;
   claim(
     workerId: string,
     options?: { queue?: string; leaseMs?: number },
-  ): Promise<ClaimedJob | null>;
+  ): Promise<ClaimedTask | null>;
   claimMany?(
     workerId: string,
     limit: number,
     options?: { queue?: string; leaseMs?: number },
-  ): Promise<ClaimedJob[]>;
+  ): Promise<ClaimedTask[]>;
   recordBatchDispatch?(batch: BatchExecutionRecord): Promise<void>;
   recordBatchFailure?(batch: BatchExecutionRecord): Promise<void>;
-  heartbeatStatus(job: ClaimedJob, workerId: string, leaseMs?: number): Promise<HeartbeatStatus>;
+  heartbeatStatus(task: ClaimedTask, workerId: string, leaseMs?: number): Promise<HeartbeatStatus>;
   heartbeatMany?(
-    jobs: readonly ClaimedJob[],
+    tasks: readonly ClaimedTask[],
     workerId: string,
     leaseMs?: number,
   ): Promise<Map<string, HeartbeatStatus>>;
-  expireOwned(job: ClaimedJob, workerId: string): Promise<ExpireOwnedStatus>;
-  acknowledgeCancel(job: ClaimedJob, workerId: string): Promise<boolean>;
-  listCheckpoints(jobId: string): Promise<JobCheckpoint[]>;
+  expireOwned(task: ClaimedTask, workerId: string): Promise<ExpireOwnedStatus>;
+  acknowledgeCancel(task: ClaimedTask, workerId: string): Promise<boolean>;
+  listCheckpoints(taskId: string): Promise<TaskCheckpoint[]>;
   saveCheckpoint<TValue extends Json>(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     name: string,
     value: TValue,
-  ): Promise<JobCheckpoint<TValue>>;
-  getProgress(jobId: string): Promise<JobProgress | null>;
+  ): Promise<TaskCheckpoint<TValue>>;
+  getProgress(taskId: string): Promise<TaskProgress | null>;
   updateProgress<TValue extends Json>(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     value: TValue,
-  ): Promise<JobProgress<TValue>>;
-  listWaits(jobId: string): Promise<JobWait[]>;
+  ): Promise<TaskProgress<TValue>>;
+  listWaits(taskId: string): Promise<TaskWait[]>;
   scheduleWait(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     name: string,
     request: ScheduleWaitRequest,
   ): Promise<ScheduleWaitResult>;
   waitForSignal<TPayload extends Json = Json>(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     name: string,
     options?: ExternalWaitOptions,
   ): Promise<WaitForSignalResult<TPayload>>;
   waitForHuman<TContext extends Json, TResult extends Json = Json>(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     name: string,
     context: TContext,
     options?: ExternalWaitOptions,
   ): Promise<import("./queue/human-waits.js").WaitForHumanResult<TResult>>;
   createChild<TPayload extends Json, TResult extends Json = Json>(
-    parent: ClaimedJob,
+    parent: ClaimedTask,
     workerId: string,
     name: string,
     type: string,
     payload: TPayload,
-    options?: ChildJobOptions,
+    options?: ChildTaskOptions,
   ): Promise<CreateChildResult<TResult>>;
   createChildren<TResult extends Record<string, Json> = Record<string, Json>>(
-    parent: ClaimedJob,
+    parent: ClaimedTask,
     workerId: string,
-    children: readonly ChildJobRequest[],
+    children: readonly ChildTaskRequest[],
   ): Promise<CreateChildrenResult<ChildOutcomes<TResult>>>;
   createChildrenAll<TResult extends Record<string, Json> = Record<string, Json>>(
-    parent: ClaimedJob,
+    parent: ClaimedTask,
     workerId: string,
-    children: readonly ChildJobRequest[],
+    children: readonly ChildTaskRequest[],
   ): Promise<CreateChildrenResult<TResult>>;
   complete<TResult extends Json>(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     result: TResult,
   ): Promise<boolean>;
   fail(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     error: unknown,
     retryDelayMs?: number,
@@ -323,18 +323,18 @@ export class InjectedCrashError extends WorkhorseError {
   }
 }
 
-/** AbortSignal reason used when PostgreSQL reports a cancellation request for an owned job. */
+/** AbortSignal reason used when PostgreSQL reports a cancellation request for an owned task. */
 export class CancellationRequestedError extends WorkhorseError {
-  constructor(readonly jobId: string) {
-    super(`Cancellation was requested for job ${jobId}`);
+  constructor(readonly taskId: string) {
+    super(`Cancellation was requested for task ${taskId}`);
     this.name = "CancellationRequestedError";
   }
 }
 
-/** AbortSignal reason used when a job's immutable absolute deadline is reached. */
+/** AbortSignal reason used when a task's immutable absolute deadline is reached. */
 export class DeadlineExceededError extends WorkhorseError {
-  constructor(readonly jobId: string) {
-    super(`Deadline was exceeded for job ${jobId}`);
+  constructor(readonly taskId: string) {
+    super(`Deadline was exceeded for task ${taskId}`);
     this.name = "DeadlineExceededError";
   }
 }
@@ -342,10 +342,10 @@ export class DeadlineExceededError extends WorkhorseError {
 /** AbortSignal reason used when one logical attempt consumes its active execution budget. */
 export class ExecutionTimeoutError extends WorkhorseError {
   constructor(
-    readonly jobId: string,
+    readonly taskId: string,
     readonly attempt: number,
   ) {
-    super(`Execution timeout was exceeded for job ${jobId} attempt ${attempt}`);
+    super(`Execution timeout was exceeded for task ${taskId} attempt ${attempt}`);
     this.name = "ExecutionTimeoutError";
   }
 }
@@ -363,7 +363,7 @@ export interface WorkerOptions {
    * scoped to a running process rather than to this name.
    */
   workerId?: string;
-  /** Maximum number of jobs this worker may execute concurrently. */
+  /** Maximum number of tasks this worker may execute concurrently. */
   concurrency?: number;
   /** Ownership duration granted by claim and every accepted heartbeat. */
   leaseMs?: number;
@@ -407,11 +407,11 @@ export interface WorkerOptions {
   scheduleNamespaces?: readonly string[];
   /** Maximum missed occurrences fired for one schedule in one maintenance pass. */
   scheduleCatchupLimit?: number;
-  /** Override SQL-owned retry backoff, either fixed or derived from the attempt and claimed job. */
-  /** Return undefined to defer to the job's persisted policy or SQL compatibility default. */
-  retryDelayMs?: number | ((attempt: number, job: ClaimedJob) => number | undefined);
+  /** Override SQL-owned retry backoff, either fixed or derived from the attempt and claimed task. */
+  /** Return undefined to defer to the task's persisted policy or SQL compatibility default. */
+  retryDelayMs?: number | ((attempt: number, task: ClaimedTask) => number | undefined);
   /** @internal Test-only crash hook. Injected crashes deliberately bypass normal fail/retry handling. */
-  failpoint?: Failpoint | ((point: Failpoint, job: ClaimedJob) => boolean | Promise<boolean>);
+  failpoint?: Failpoint | ((point: Failpoint, task: ClaimedTask) => boolean | Promise<boolean>);
 }
 
 /**
@@ -461,7 +461,7 @@ function queueAsWorkerApi(queue: Queue): WorkerQueueApi {
  * Bounded-concurrency polling worker for the validation protocol.
  *
  * PostgreSQL SKIP LOCKED distributes ready rows between workers, while each instance claims only
- * enough jobs to fill its configured local execution slots.
+ * enough tasks to fill its configured local execution slots.
  */
 export class Worker {
   private readonly queue: WorkerQueueApi;
@@ -515,7 +515,7 @@ export class Worker {
   private readonly heartbeatLeases = new Map<
     string,
     {
-      job: ClaimedJob;
+      task: ClaimedTask;
       status: (status: HeartbeatStatus) => void;
       error: (error: unknown) => void;
     }
@@ -529,7 +529,7 @@ export class Worker {
       const leases = [...this.heartbeatLeases.values()];
       const heartbeat = this.queue.heartbeatMany
         ? this.queue.heartbeatMany(
-            leases.map((lease) => lease.job),
+            leases.map((lease) => lease.task),
             this.workerId,
             this.leaseMs,
           )
@@ -537,8 +537,8 @@ export class Worker {
             leases.map(
               async (lease) =>
                 [
-                  lease.job.id,
-                  await this.queue.heartbeatStatus(lease.job, this.workerId, this.leaseMs),
+                  lease.task.id,
+                  await this.queue.heartbeatStatus(lease.task, this.workerId, this.leaseMs),
                 ] as const,
             ),
           ).then((statuses) => new Map(statuses));
@@ -546,13 +546,13 @@ export class Worker {
         .then(
           (statuses) => {
             for (const lease of leases) {
-              if (this.heartbeatLeases.get(lease.job.id) !== lease) continue;
-              lease.status(statuses.get(lease.job.id) ?? "stale");
+              if (this.heartbeatLeases.get(lease.task.id) !== lease) continue;
+              lease.status(statuses.get(lease.task.id) ?? "stale");
             }
           },
           (error: unknown) => {
             for (const lease of leases) {
-              if (this.heartbeatLeases.get(lease.job.id) === lease) lease.error(error);
+              if (this.heartbeatLeases.get(lease.task.id) === lease) lease.error(error);
             }
           },
         )
@@ -562,15 +562,15 @@ export class Worker {
   }
 
   private addHeartbeatLease(
-    job: ClaimedJob,
+    task: ClaimedTask,
     status: (status: HeartbeatStatus) => void,
     error: (error: unknown) => void,
   ): () => void {
-    const lease = { job, status, error };
-    this.heartbeatLeases.set(job.id, lease);
+    const lease = { task, status, error };
+    this.heartbeatLeases.set(task.id, lease);
     this.scheduleHeartbeatBatch();
     return () => {
-      if (this.heartbeatLeases.get(job.id) === lease) this.heartbeatLeases.delete(job.id);
+      if (this.heartbeatLeases.get(task.id) === lease) this.heartbeatLeases.delete(task.id);
       if (this.heartbeatLeases.size === 0 && this.heartbeatTimer !== undefined) {
         clearTimeout(this.heartbeatTimer);
         this.heartbeatTimer = undefined;
@@ -583,7 +583,7 @@ export class Worker {
   private dispatchWakeVersion = 0;
   private consecutiveEmptyClaims = 0;
   private notificationClaimDelayPending = false;
-  private notificationSubscriptions: JobNotificationSubscription[] = [];
+  private notificationSubscriptions: TaskNotificationSubscription[] = [];
 
   constructor(
     queue: WorkerQueueApi | Queue,
@@ -606,7 +606,7 @@ export class Worker {
     this.leaseMs = options.leaseMs ?? 30_000;
     this.heartbeatMs = options.heartbeatMs ?? Math.max(100, Math.floor(this.leaseMs / 3));
     this.pollMs = options.pollMs ?? DEFAULT_POLL_MS;
-    this.supportsNotifications = this.queue.supportsJobNotifications?.() ?? false;
+    this.supportsNotifications = this.queue.supportsTaskNotifications?.() ?? false;
     this.dispatchPollMs =
       options.pollMs ??
       (this.supportsNotifications ? DEFAULT_NOTIFICATION_FALLBACK_POLL_MS : DEFAULT_POLL_MS);
@@ -633,8 +633,8 @@ export class Worker {
     handler: Handler<TPayload, TResult>,
   ): this {
     this.handlers.set(type, handler as unknown as Handler);
-    logDebug("workhorse.handler.registered", "Job handler registered", {
-      "workhorse.job.type": type,
+    logDebug("workhorse.handler.registered", "Task handler registered", {
+      "workhorse.task.type": type,
       "workhorse.worker.id": this.workerId,
     });
     return this;
@@ -700,12 +700,12 @@ export class Worker {
       const actualLingerMs = Math.max(0, performance.now() - firstArrivedAt);
       const attributes = {
         "workhorse.queue.name": queueName,
-        "workhorse.job.type": type,
+        "workhorse.task.type": type,
         "workhorse.handler.batch.full": full,
       };
       telemetryMetrics.handlerBatchSize.record(batch.length, attributes);
       telemetryMetrics.handlerBatchLinger.record(actualLingerMs, attributes);
-      logInfo("workhorse.handler.batch_dispatched", "Job batch dispatched", {
+      logInfo("workhorse.handler.batch_dispatched", "Task batch dispatched", {
         ...attributes,
         "workhorse.handler.batch.size": batch.length,
         "workhorse.handler.batch.linger_ms": actualLingerMs,
@@ -714,7 +714,7 @@ export class Worker {
 
       const batchRecord: BatchExecutionRecord = {
         batchId,
-        jobs: batch.map(({ item }) => item.context.job),
+        tasks: batch.map(({ item }) => item.context.task),
         workerId: this.workerId,
       };
       const recordEvidence = async (
@@ -770,7 +770,7 @@ export class Worker {
         .then((outcomes) => {
           if (!Array.isArray(outcomes) || outcomes.length !== batch.length) {
             throw new Error(
-              `Batch handler for ${type} returned ${Array.isArray(outcomes) ? outcomes.length : "a non-array value"} outcomes for ${batch.length} jobs`,
+              `Batch handler for ${type} returned ${Array.isArray(outcomes) ? outcomes.length : "a non-array value"} outcomes for ${batch.length} tasks`,
             );
           }
           const invalidIndex = outcomes.findIndex((outcome) => {
@@ -803,13 +803,13 @@ export class Worker {
 
     const adapter: Handler<TPayload, TResult> = (payload, context) =>
       new Promise<TResult>((resolve, reject) => {
-        const queueName = context.job.queue;
+        const queueName = context.task.queue;
         const pending = pendingQueues.get(queueName) ?? { items: [], lingerTimer: undefined };
         pendingQueues.set(queueName, pending);
         pending.items.push({
           arrivalOrder: nextArrival,
           arrivedAt: performance.now(),
-          priority: context.job.priority,
+          priority: context.task.priority,
           item: { payload, context },
           resolve,
           reject,
@@ -823,8 +823,8 @@ export class Worker {
       });
 
     this.handlers.set(type, adapter as unknown as Handler);
-    logDebug("workhorse.handler.registered", "Batch job handler registered", {
-      "workhorse.job.type": type,
+    logDebug("workhorse.handler.registered", "Batch task handler registered", {
+      "workhorse.task.type": type,
       "workhorse.handler.batch.max_size": maxSize,
       "workhorse.handler.batch.linger_ms": lingerMs,
       "workhorse.worker.id": this.workerId,
@@ -862,7 +862,7 @@ export class Worker {
     return this.locallyPaused || this.remotelyPaused;
   }
 
-  /** Stop claiming new jobs while leaving maintenance and any in-flight handler running. */
+  /** Stop claiming new tasks while leaving maintenance and any in-flight handler running. */
   pause(): void {
     this.locallyPaused = true;
     logInfo("workhorse.worker.paused", "Worker paused locally", {
@@ -908,10 +908,10 @@ export class Worker {
     return [...this.latestMaintenance.values()];
   }
 
-  private async inject(point: Failpoint, job: ClaimedJob): Promise<void> {
+  private async inject(point: Failpoint, task: ClaimedTask): Promise<void> {
     const configured = this.options.failpoint;
     const shouldCrash =
-      typeof configured === "function" ? await configured(point, job) : configured === point;
+      typeof configured === "function" ? await configured(point, task) : configured === point;
     if (shouldCrash) throw new InjectedCrashError(point);
   }
 
@@ -919,41 +919,41 @@ export class Worker {
     return this.withExclusiveExecution(() => this.runBatch(true));
   }
 
-  private async claimNextMany(limit: number): Promise<ClaimedJob[]> {
-    const jobs: ClaimedJob[] = [];
+  private async claimNextMany(limit: number): Promise<ClaimedTask[]> {
+    const tasks: ClaimedTask[] = [];
     if (!this.queue.claimMany) {
       let emptyQueues = 0;
-      while (jobs.length < limit && emptyQueues < this.queueNames.length) {
+      while (tasks.length < limit && emptyQueues < this.queueNames.length) {
         const queueName = this.queueNames[this.nextQueueIndex]!;
         this.nextQueueIndex = (this.nextQueueIndex + 1) % this.queueNames.length;
-        const job = await this.queue.claim(this.workerId, {
+        const task = await this.queue.claim(this.workerId, {
           queue: queueName,
           leaseMs: this.leaseMs,
         });
-        if (job) {
-          jobs.push(job);
+        if (task) {
+          tasks.push(task);
           emptyQueues = 0;
         } else {
           emptyQueues += 1;
         }
       }
-      return jobs;
+      return tasks;
     }
-    for (let checked = 0; checked < this.queueNames.length && jobs.length < limit; checked += 1) {
+    for (let checked = 0; checked < this.queueNames.length && tasks.length < limit; checked += 1) {
       const queueName = this.queueNames[this.nextQueueIndex]!;
       this.nextQueueIndex = (this.nextQueueIndex + 1) % this.queueNames.length;
-      const remaining = limit - jobs.length;
-      jobs.push(
+      const remaining = limit - tasks.length;
+      tasks.push(
         ...(await this.queue.claimMany(this.workerId, remaining, {
           queue: queueName,
           leaseMs: this.leaseMs,
         })),
       );
     }
-    return jobs;
+    return tasks;
   }
 
-  private async claimNext(): Promise<ClaimedJob | null> {
+  private async claimNext(): Promise<ClaimedTask | null> {
     return (await this.claimNextMany(1))[0] ?? null;
   }
 
@@ -973,8 +973,8 @@ export class Worker {
     const freeSlots = this.concurrency - this.activeSlots;
     if (!shouldStop() && !this.paused && freeSlots > 0) {
       try {
-        const jobs = await this.claimNextMany(freeSlots);
-        executions.push(...jobs.map((job) => this.startExecution(job)));
+        const tasks = await this.claimNextMany(freeSlots);
+        executions.push(...tasks.map((task) => this.startExecution(task)));
       } catch (error) {
         claimError = error;
         claimFailed = true;
@@ -992,9 +992,9 @@ export class Worker {
     return claimed;
   }
 
-  private startExecution(job: ClaimedJob): Promise<PromiseSettledResult<void>> {
+  private startExecution(task: ClaimedTask): Promise<PromiseSettledResult<void>> {
     this.activeSlots += 1;
-    return this.executeJob(job)
+    return this.executeTask(task)
       .then<PromiseSettledResult<void>, PromiseSettledResult<void>>(
         () => ({ status: "fulfilled", value: undefined }),
         (reason: unknown) => ({ status: "rejected", reason }),
@@ -1005,60 +1005,60 @@ export class Worker {
       });
   }
 
-  private async executeJob(job: ClaimedJob): Promise<void> {
+  private async executeTask(task: ClaimedTask): Promise<void> {
     const startedAt = performance.now();
-    // executeJobWithinSpan records the outcome here so one handler-duration histogram carries it.
+    // executeTaskWithinSpan records the outcome here so one handler-duration histogram carries it.
     // A second duration instrument dimensioned by outcome would double-count every activation.
-    const activation: { outcome: JobExecutionOutcome } = { outcome: "unknown" };
+    const activation: { outcome: TaskExecutionOutcome } = { outcome: "unknown" };
     return withSpan(
       "workhorse.handler",
       {
-        "workhorse.queue.name": job.queue,
-        ...jobSpanAttributes(job),
+        "workhorse.queue.name": task.queue,
+        ...taskSpanAttributes(task),
       },
       async (span) => {
-        logDebug("workhorse.handler.started", "Job handler started", {
-          ...jobSpanAttributes(job),
-          "workhorse.queue.name": job.queue,
+        logDebug("workhorse.handler.started", "Task handler started", {
+          ...taskSpanAttributes(task),
+          "workhorse.queue.name": task.queue,
           "workhorse.worker.id": this.workerId,
         });
         try {
-          await this.executeJobWithinSpan(job, span, activation);
+          await this.executeTaskWithinSpan(task, span, activation);
         } finally {
           const durationMs = performance.now() - startedAt;
-          const attributes = jobMetricAttributes(job);
+          const attributes = taskMetricAttributes(task);
           telemetryMetrics.handlerDuration.record(durationMs, {
             ...attributes,
             "workhorse.handler.outcome": activation.outcome,
           });
           telemetryMetrics.handlerRuntime.add(durationMs, attributes);
-          logDebug("workhorse.handler.finished", "Job handler finished", {
-            ...jobSpanAttributes(job),
-            "workhorse.queue.name": job.queue,
+          logDebug("workhorse.handler.finished", "Task handler finished", {
+            ...taskSpanAttributes(task),
+            "workhorse.queue.name": task.queue,
             "workhorse.worker.id": this.workerId,
             "workhorse.handler.duration_ms": durationMs,
           });
         }
       },
-      extractTraceContext(job.traceContext),
+      extractTraceContext(task.traceContext),
       "consumer",
     );
   }
 
-  private async executeJobWithinSpan(
-    job: ClaimedJob,
+  private async executeTaskWithinSpan(
+    task: ClaimedTask,
     span: WorkhorseTelemetrySpan,
-    activation: { outcome: JobExecutionOutcome },
+    activation: { outcome: TaskExecutionOutcome },
   ): Promise<void> {
     // afterClaim is outside the committed claim transaction. Throwing here leaves the lease exactly
     // as a killed process would, which allows deterministic expiry-recovery testing.
-    const recordExecution = (outcome: JobExecutionOutcome): void => {
+    const recordExecution = (outcome: TaskExecutionOutcome): void => {
       if (activation.outcome !== "unknown") return;
       activation.outcome = outcome;
-      recordHandlerExecution(job.queue, job.type, outcome);
-      logInfo("workhorse.job.execution_finished", "Job execution finished", {
-        ...jobSpanAttributes(job),
-        "workhorse.queue.name": job.queue,
+      recordHandlerExecution(task.queue, task.type, outcome);
+      logInfo("workhorse.task.execution_finished", "Task execution finished", {
+        ...taskSpanAttributes(task),
+        "workhorse.queue.name": task.queue,
         "workhorse.worker.id": this.workerId,
         "workhorse.handler.outcome": outcome,
       });
@@ -1080,7 +1080,7 @@ export class Worker {
     const arbiter = new AttemptOutcomeArbiter();
     const suspend = (outcome: "suspended_for_wait" | "suspended_for_child"): never => {
       const reason =
-        outcome === "suspended_for_wait" ? DURABLE_WAIT_SUSPENSION : CHILD_JOB_SUSPENSION;
+        outcome === "suspended_for_wait" ? DURABLE_WAIT_SUSPENSION : CHILD_TASK_SUSPENSION;
       if (arbiter.submit(outcome)) controller.abort(reason);
       throw reason;
     };
@@ -1099,15 +1099,15 @@ export class Worker {
     const markCancellationRequested = (): void => {
       arbiter.submit("cancelled");
       stopHeartbeat();
-      if (!controller.signal.aborted) controller.abort(new CancellationRequestedError(job.id));
+      if (!controller.signal.aborted) controller.abort(new CancellationRequestedError(task.id));
     };
     const acknowledgeCancellation = async (): Promise<boolean> => {
-      const accepted = await this.queue.acknowledgeCancel(job, this.workerId);
+      const accepted = await this.queue.acknowledgeCancel(task, this.workerId);
       if (accepted && arbiter.is("cancelled")) recordExecution("canceled");
       return accepted;
     };
     const expireOwnership = (): Promise<ExpireOwnedStatus> => {
-      expirationPromise ??= this.queue.expireOwned(job, this.workerId).then((status) => {
+      expirationPromise ??= this.queue.expireOwned(task, this.workerId).then((status) => {
         if (status === "cancel_requested") markCancellationRequested();
         else if (status === "deadline_exceeded") arbiter.submit("deadline_exceeded");
         else if (status === "timeout_exceeded") arbiter.submit("attempt_timeout");
@@ -1127,19 +1127,19 @@ export class Worker {
       } else if (status === "deadline_exceeded") {
         stopHeartbeat();
         expireOwnershipInBackground();
-        if (!controller.signal.aborted) controller.abort(new DeadlineExceededError(job.id));
+        if (!controller.signal.aborted) controller.abort(new DeadlineExceededError(task.id));
       } else if (status === "timeout_exceeded") {
         stopHeartbeat();
         expireOwnershipInBackground();
         if (!controller.signal.aborted)
-          controller.abort(new ExecutionTimeoutError(job.id, job.attempt));
+          controller.abort(new ExecutionTimeoutError(task.id, task.attempt));
       } else if (status === "stale") {
         arbiter.submit("lease_expired");
         stopHeartbeat();
-        if (!controller.signal.aborted) controller.abort(new Error("Job lease was lost"));
+        if (!controller.signal.aborted) controller.abort(new Error("Task lease was lost"));
       }
     };
-    const expirationAt = [job.deadlineAt, job.attemptTimeoutAt].reduce<Date | null>(
+    const expirationAt = [task.deadlineAt, task.attemptTimeoutAt].reduce<Date | null>(
       (earliest, candidate) =>
         candidate !== null && (earliest === null || candidate < earliest) ? candidate : earliest,
       null,
@@ -1149,13 +1149,13 @@ export class Worker {
         () => {
           expirationTimer = undefined;
           const isDeadline =
-            job.deadlineAt !== null &&
-            (job.attemptTimeoutAt === null || job.deadlineAt <= job.attemptTimeoutAt);
+            task.deadlineAt !== null &&
+            (task.attemptTimeoutAt === null || task.deadlineAt <= task.attemptTimeoutAt);
           if (isDeadline) {
-            if (!controller.signal.aborted) controller.abort(new DeadlineExceededError(job.id));
+            if (!controller.signal.aborted) controller.abort(new DeadlineExceededError(task.id));
           } else {
             if (!controller.signal.aborted)
-              controller.abort(new ExecutionTimeoutError(job.id, job.attempt));
+              controller.abort(new ExecutionTimeoutError(task.id, task.attempt));
           }
           stopHeartbeat();
           expireOwnershipInBackground();
@@ -1167,20 +1167,20 @@ export class Worker {
       );
       expirationTimer.unref();
     }
-    removeHeartbeatLease = this.addHeartbeatLease(job, refreshOwnership, (error) => {
+    removeHeartbeatLease = this.addHeartbeatLease(task, refreshOwnership, (error) => {
       if (heartbeatStopped) return;
       stopHeartbeat();
       controller.abort(error);
     });
 
     try {
-      await this.inject("afterClaim", job);
-      const handler = this.handlers.get(job.type);
+      await this.inject("afterClaim", task);
+      const handler = this.handlers.get(task.type);
       if (!handler) {
-        const error = new Error(`No handler registered for ${job.type}`);
+        const error = new Error(`No handler registered for ${task.type}`);
         span.recordException(error);
         span.setStatus("error");
-        const failed = await this.queue.fail(job, this.workerId, error);
+        const failed = await this.queue.fail(task, this.workerId, error);
         span.setAttribute("workhorse.handler.outcome", failed);
         if (failed === "cancel_requested") {
           markCancellationRequested();
@@ -1188,20 +1188,20 @@ export class Worker {
         } else recordFailure(failed);
         return;
       }
-      await this.inject("beforeHandler", job);
-      let checkpoints: Map<string, JobCheckpoint> | undefined;
-      let checkpointsLoad: Promise<Map<string, JobCheckpoint>> | undefined;
-      const loadCheckpoints = (): Promise<Map<string, JobCheckpoint>> => {
-        checkpointsLoad ??= this.queue.listCheckpoints(job.id).then((items) => {
+      await this.inject("beforeHandler", task);
+      let checkpoints: Map<string, TaskCheckpoint> | undefined;
+      let checkpointsLoad: Promise<Map<string, TaskCheckpoint>> | undefined;
+      const loadCheckpoints = (): Promise<Map<string, TaskCheckpoint>> => {
+        checkpointsLoad ??= this.queue.listCheckpoints(task.id).then((items) => {
           checkpoints = new Map(items.map((item) => [item.name, item]));
           return checkpoints;
         });
         return checkpointsLoad;
       };
-      let waits: Map<string, JobWait> | undefined;
-      let waitsLoad: Promise<Map<string, JobWait>> | undefined;
-      const loadWaits = (): Promise<Map<string, JobWait>> => {
-        waitsLoad ??= this.queue.listWaits(job.id).then((items) => {
+      let waits: Map<string, TaskWait> | undefined;
+      let waitsLoad: Promise<Map<string, TaskWait>> | undefined;
+      const loadWaits = (): Promise<Map<string, TaskWait>> => {
+        waitsLoad ??= this.queue.listWaits(task.id).then((items) => {
           waits = new Map(items.map((item) => [item.name, item]));
           return waits;
         });
@@ -1211,21 +1211,21 @@ export class Worker {
       // use external idempotency for effects that cannot safely repeat.
       const getCheckpoint: HandlerContext["getCheckpoint"] = async <TValue extends Json>(
         name: string,
-      ) => ((await loadCheckpoints()).get(name) as JobCheckpoint<TValue> | undefined) ?? null;
+      ) => ((await loadCheckpoints()).get(name) as TaskCheckpoint<TValue> | undefined) ?? null;
       const getWait: HandlerContext["getWait"] = async (name: string) =>
         (await loadWaits()).get(name) ?? null;
-      let progressLoad: Promise<JobProgress | null> | undefined;
+      let progressLoad: Promise<TaskProgress | null> | undefined;
       const getProgress: HandlerContext["getProgress"] = async <TValue extends Json>() => {
-        progressLoad ??= this.queue.getProgress(job.id);
-        return (await progressLoad) as JobProgress<TValue> | null;
+        progressLoad ??= this.queue.getProgress(task.id);
+        return (await progressLoad) as TaskProgress<TValue> | null;
       };
       const setProgress: HandlerContext["setProgress"] = async <TValue extends Json>(
         value: TValue,
       ) => {
         if (controller.signal.aborted) {
-          throw controller.signal.reason ?? new Error("Job lease was lost");
+          throw controller.signal.reason ?? new Error("Task lease was lost");
         }
-        const updated = await this.queue.updateProgress(job, this.workerId, value);
+        const updated = await this.queue.updateProgress(task, this.workerId, value);
         progressLoad = Promise.resolve(updated);
         return updated;
       };
@@ -1238,12 +1238,12 @@ export class Worker {
         if (pending) return (await pending) as TValue;
         const execution = (async (): Promise<TValue> => {
           const checkpointCache = await loadCheckpoints();
-          const existing = checkpointCache.get(name) as JobCheckpoint<TValue> | undefined;
+          const existing = checkpointCache.get(name) as TaskCheckpoint<TValue> | undefined;
           if (existing) return existing.value;
           if (controller.signal.aborted)
-            throw controller.signal.reason ?? new Error("Job lease was lost");
+            throw controller.signal.reason ?? new Error("Task lease was lost");
           const value = await operation();
-          const saved = await this.queue.saveCheckpoint(job, this.workerId, name, value);
+          const saved = await this.queue.saveCheckpoint(task, this.workerId, name, value);
           checkpointCache.set(name, saved);
           return saved.value;
         })();
@@ -1263,9 +1263,9 @@ export class Worker {
         if (pending) return pending;
         const execution = (async () => {
           if (controller.signal.aborted) {
-            throw controller.signal.reason ?? new Error("Job lease was lost");
+            throw controller.signal.reason ?? new Error("Task lease was lost");
           }
-          const scheduled = await this.queue.scheduleWait(job, this.workerId, name, request);
+          const scheduled = await this.queue.scheduleWait(task, this.workerId, name, request);
           waits?.set(name, scheduled.wait);
           if (scheduled.status === "scheduled" && arbiter.submit("suspended_for_wait")) {
             controller.abort(DURABLE_WAIT_SUSPENSION);
@@ -1293,10 +1293,10 @@ export class Worker {
         if (pending) return (await pending) as TPayload;
         const execution = (async (): Promise<TPayload> => {
           if (controller.signal.aborted) {
-            throw controller.signal.reason ?? new Error("Job lease was lost");
+            throw controller.signal.reason ?? new Error("Task lease was lost");
           }
           const signal = await this.queue.waitForSignal<TPayload>(
-            job,
+            task,
             this.workerId,
             name,
             options,
@@ -1331,10 +1331,10 @@ export class Worker {
         }
         const execution = (async (): Promise<TResult> => {
           if (controller.signal.aborted) {
-            throw controller.signal.reason ?? new Error("Job lease was lost");
+            throw controller.signal.reason ?? new Error("Task lease was lost");
           }
           const token = await this.queue.waitForHuman<TContext, TResult>(
-            job,
+            task,
             this.workerId,
             name,
             context,
@@ -1361,22 +1361,22 @@ export class Worker {
         name: string,
         type: string,
         payload: TChildPayload,
-        options?: ChildJobOptions,
+        options?: ChildTaskOptions,
       ): Promise<TResult> => {
         const request = structuredClone({ type, payload, options: options ?? {} });
         const pending = inFlightChildren.get(name);
         if (pending) {
           if (!isDeepStrictEqual(pending.request, request)) {
-            return Promise.reject(new ChildConflictError(job.id, name));
+            return Promise.reject(new ChildConflictError(task.id, name));
           }
           return pending.execution as Promise<TResult>;
         }
         const execution = (async (): Promise<TResult> => {
           if (controller.signal.aborted) {
-            throw controller.signal.reason ?? new Error("Job lease was lost");
+            throw controller.signal.reason ?? new Error("Task lease was lost");
           }
           const processed = await this.queue.createChild<TChildPayload, TResult>(
-            job,
+            task,
             this.workerId,
             name,
             type,
@@ -1400,24 +1400,24 @@ export class Worker {
         | { request: unknown; execution: Promise<Record<string, Json>> }
         | undefined;
       const runChildSet = <TJoined extends Record<string, Json>>(
-        children: readonly ChildJobRequest[],
+        children: readonly ChildTaskRequest[],
         mode: "settled" | "all_success",
       ): Promise<TJoined> => {
         const request = { children: structuredClone(children), mode };
         if (inFlightChildSet) {
           if (!isDeepStrictEqual(inFlightChildSet.request, request)) {
-            return Promise.reject(new ChildConflictError(job.id, "child set"));
+            return Promise.reject(new ChildConflictError(task.id, "child set"));
           }
           return inFlightChildSet.execution as Promise<TJoined>;
         }
         const execution = (async (): Promise<TJoined> => {
           if (controller.signal.aborted) {
-            throw controller.signal.reason ?? new Error("Job lease was lost");
+            throw controller.signal.reason ?? new Error("Task lease was lost");
           }
           const processed =
             mode === "settled"
-              ? await this.queue.createChildren(job, this.workerId, children)
-              : await this.queue.createChildrenAll(job, this.workerId, children);
+              ? await this.queue.createChildren(task, this.workerId, children)
+              : await this.queue.createChildrenAll(task, this.workerId, children);
           if (processed.status === "created") {
             return suspend("suspended_for_child");
           }
@@ -1435,8 +1435,8 @@ export class Worker {
         runChildSet(children, "settled");
       const runChildrenAll: HandlerContext["runChildrenAll"] = (children) =>
         runChildSet(children, "all_success");
-      const result = await handler(job.payload, {
-        job,
+      const result = await handler(task.payload, {
+        task,
         signal: controller.signal,
         getCheckpoint,
         getWait,
@@ -1451,11 +1451,11 @@ export class Worker {
         runChildren,
         runChildrenAll,
       });
-      await this.inject("afterHandler", job);
+      await this.inject("afterHandler", task);
       if (arbiter.isSuspended()) {
-        logWarn("workhorse.handler.signal_swallowed", "Job handler swallowed its abort signal", {
-          ...jobSpanAttributes(job),
-          "workhorse.queue.name": job.queue,
+        logWarn("workhorse.handler.signal_swallowed", "Task handler swallowed its abort signal", {
+          ...taskSpanAttributes(task),
+          "workhorse.queue.name": task.queue,
           "workhorse.worker.id": this.workerId,
           "workhorse.handler.outcome": "suspended",
         });
@@ -1474,9 +1474,9 @@ export class Worker {
         return;
       }
       if (controller.signal.aborted)
-        throw controller.signal.reason ?? new Error("Job lease was lost");
-      await this.inject("beforeComplete", job);
-      const accepted = await this.queue.complete(job, this.workerId, result);
+        throw controller.signal.reason ?? new Error("Task lease was lost");
+      await this.inject("beforeComplete", task);
+      const accepted = await this.queue.complete(task, this.workerId, result);
       if (!accepted) {
         if (await acknowledgeCancellation()) {
           span.setAttribute("workhorse.handler.outcome", "canceled");
@@ -1487,7 +1487,7 @@ export class Worker {
       if (!arbiter.submit("completed")) return;
       span.setAttribute("workhorse.handler.outcome", "succeeded");
       recordExecution("succeeded");
-      await this.inject("afterComplete", job);
+      await this.inject("afterComplete", task);
     } catch (error) {
       if (arbiter.isSuspended()) {
         span.setAttribute("workhorse.handler.outcome", "suspended");
@@ -1553,13 +1553,13 @@ export class Worker {
         );
         return;
       }
-      span.recordException(errorForTelemetry(error, job.redactErrorDetails));
+      span.recordException(errorForTelemetry(error, task.redactErrorDetails));
       span.setStatus("error");
       const delay =
         typeof this.options.retryDelayMs === "function"
-          ? this.options.retryDelayMs(job.attempt, job)
+          ? this.options.retryDelayMs(task.attempt, task)
           : this.options.retryDelayMs;
-      const failed = await this.queue.fail(job, this.workerId, error, delay);
+      const failed = await this.queue.fail(task, this.workerId, error, delay);
       span.setAttribute("workhorse.handler.outcome", failed);
       if (failed === "cancel_requested") {
         markCancellationRequested();
@@ -1752,17 +1752,17 @@ export class Worker {
       this.wakeLoops();
     };
 
-    const notificationSubscriptions: JobNotificationSubscription[] = [];
+    const notificationSubscriptions: TaskNotificationSubscription[] = [];
     this.notificationSubscriptions = notificationSubscriptions;
     const runFailure = await (async () => {
       if (shouldStop()) return;
       await this.runMaintenance();
       if (shouldStop()) return;
 
-      const subscribeToJobNotifications = this.queue.subscribeToJobNotifications;
-      if (typeof subscribeToJobNotifications === "function") {
+      const subscribeToTaskNotifications = this.queue.subscribeToTaskNotifications;
+      if (typeof subscribeToTaskNotifications === "function") {
         for (const queueName of this.queueNames) {
-          const subscription = await subscribeToJobNotifications.call(
+          const subscription = await subscribeToTaskNotifications.call(
             this.queue,
             queueName,
             () => {
@@ -1854,12 +1854,12 @@ export class Worker {
         firstFailure = { executionId, reason: settlement.reason };
       }
     };
-    const launch = (job: ClaimedJob): void => {
+    const launch = (task: ClaimedTask): void => {
       const executionId = nextExecutionId;
       nextExecutionId += 1;
       active.set(
         executionId,
-        this.startExecution(job).then((settlement) => ({ executionId, settlement })),
+        this.startExecution(task).then((settlement) => ({ executionId, settlement })),
       );
     };
     const waitForOne = async (): Promise<void> => {
@@ -1904,14 +1904,14 @@ export class Worker {
         }
         this.lastClaimAt = Date.now();
         const claimWakeVersion = this.dispatchWakeVersion;
-        let jobs: ClaimedJob[];
+        let tasks: ClaimedTask[];
         try {
-          jobs = await this.claimNextMany(this.concurrency - active.size);
+          tasks = await this.claimNextMany(this.concurrency - active.size);
         } catch (error) {
           claimError = error;
           break;
         }
-        if (jobs.length === 0) {
+        if (tasks.length === 0) {
           this.previousPassWorked = false;
           this.consecutiveEmptyClaims += 1;
           empty = true;
@@ -1920,7 +1920,7 @@ export class Worker {
         }
         this.previousPassWorked = true;
         this.consecutiveEmptyClaims = 0;
-        for (const job of jobs) launch(job);
+        for (const task of tasks) launch(task);
       }
 
       if (shouldStop() || this.paused || firstFailure || claimError !== undefined) continue;

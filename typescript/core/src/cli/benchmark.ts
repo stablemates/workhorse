@@ -24,13 +24,13 @@ Suite selection:
 
 Comparative overrides:
   --seed <number>            Non-negative deterministic execution-plan seed.
-  --jobs <number>            Jobs per independent run.
-  --enqueue-batch <number>   Jobs per enqueueMany request.
+  --tasks <number>            Tasks per independent run.
+  --enqueue-batch <number>   Tasks per enqueueMany request.
   --repetitions <number>     Independent reset-and-run repetitions.
   --rounds <number>          Legacy alias for --repetitions.
   --workers <numbers>        Comma-separated worker sweep, for example 1,4,16.
-  --churn-rate <number>      Fixed producer target jobs per second.
-  --churn-jobs <number>      Exact jobs produced and completed per design.
+  --churn-rate <number>      Fixed producer target tasks per second.
+  --churn-tasks <number>      Exact tasks produced and completed per design.
   --sample-ms <number>       Churn telemetry sample interval in milliseconds.
   --schedule-samples <number>
                              Recurring occurrences sampled under worker load.
@@ -49,13 +49,13 @@ export interface BenchmarkCommandOptions {
   readonly profile?: string;
   readonly scenario?: string;
   readonly seed?: string;
-  readonly jobs?: string;
+  readonly tasks?: string;
   readonly enqueueBatch?: string;
   readonly repetitions?: string;
   readonly rounds?: string;
   readonly workers?: string;
   readonly churnRate?: string;
-  readonly churnJobs?: string;
+  readonly churnTasks?: string;
   readonly sampleMs?: string;
   readonly scheduleSamples?: string;
   readonly output?: string;
@@ -124,14 +124,14 @@ function benchmarkRunOptions(
   operationalScenarioNames: readonly OperationalScenarioName[],
 ): BenchmarkRunOptions {
   const seed = nonNegativeInteger(options.seed, "--seed");
-  const jobsPerRun = positiveInteger(options.jobs, "--jobs");
+  const tasksPerRun = positiveInteger(options.tasks, "--tasks");
   const enqueueBatchSize = positiveInteger(options.enqueueBatch, "--enqueue-batch");
   const repetitions =
     positiveInteger(options.repetitions, "--repetitions") ??
     positiveInteger(options.rounds, "--rounds");
   const workerConcurrency = positiveIntegerList(options.workers, "--workers");
   const targetRatePerSecond = positiveInteger(options.churnRate, "--churn-rate");
-  const targetJobs = positiveInteger(options.churnJobs, "--churn-jobs");
+  const targetTasks = positiveInteger(options.churnTasks, "--churn-tasks");
   const sampleIntervalMs = positiveInteger(options.sampleMs, "--sample-ms");
   const scheduleSamples = positiveInteger(options.scheduleSamples, "--schedule-samples");
   const scenarios = scenarioList(options.scenario, operationalScenarioNames);
@@ -145,18 +145,18 @@ function benchmarkRunOptions(
     ]),
     comparative: {
       ...(seed === undefined ? {} : { seed }),
-      ...(jobsPerRun === undefined ? {} : { jobsPerRun }),
+      ...(tasksPerRun === undefined ? {} : { tasksPerRun }),
       ...(enqueueBatchSize === undefined ? {} : { enqueueBatchSize }),
       ...(repetitions === undefined ? {} : { repetitions }),
       ...(workerConcurrency === undefined ? {} : { workerConcurrency }),
       ...(targetRatePerSecond === undefined &&
-      targetJobs === undefined &&
+      targetTasks === undefined &&
       sampleIntervalMs === undefined
         ? {}
         : {
             churn: {
               ...(targetRatePerSecond === undefined ? {} : { targetRatePerSecond }),
-              ...(targetJobs === undefined ? {} : { targetJobs }),
+              ...(targetTasks === undefined ? {} : { targetTasks }),
               ...(sampleIntervalMs === undefined ? {} : { sampleIntervalMs }),
             },
           }),
@@ -211,13 +211,13 @@ async function main(args: readonly string[]): Promise<void> {
       profile: { type: "string" },
       scenario: { type: "string" },
       seed: { type: "string" },
-      jobs: { type: "string" },
+      tasks: { type: "string" },
       "enqueue-batch": { type: "string" },
       repetitions: { type: "string" },
       rounds: { type: "string" },
       workers: { type: "string" },
       "churn-rate": { type: "string" },
-      "churn-jobs": { type: "string" },
+      "churn-tasks": { type: "string" },
       "sample-ms": { type: "string" },
       "schedule-samples": { type: "string" },
       output: { type: "string" },
@@ -236,13 +236,13 @@ async function main(args: readonly string[]): Promise<void> {
     profile: values.profile,
     scenario: values.scenario,
     seed: values.seed,
-    jobs: values.jobs,
+    tasks: values.tasks,
     enqueueBatch: values["enqueue-batch"],
     repetitions: values.repetitions,
     rounds: values.rounds,
     workers: values.workers,
     churnRate: values["churn-rate"],
-    churnJobs: values["churn-jobs"],
+    churnTasks: values["churn-tasks"],
     sampleMs: values["sample-ms"],
     scheduleSamples: values["schedule-samples"],
     output: values.output,

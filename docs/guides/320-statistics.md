@@ -1,6 +1,6 @@
 # Counting things without melting the database
 
-The dashboard needs to answer questions like "how many jobs failed in the last hour?" This
+The dashboard needs to answer questions like "how many tasks failed in the last hour?" This
 guide explains why that's harder than it sounds, and how Workhorse does it.
 
 ## The problem
@@ -13,16 +13,16 @@ system is. Exactly when you most want to look at it, looking at it hurts most.
 
 ## Pre-computed summaries
 
-So Workhorse keeps running summaries per queue and job type. Recent rows cover minutes,
+So Workhorse keeps running summaries per queue and task type. Recent rows cover minutes,
 older rows cover hours, and the oldest rows cover days. Each row holds counts for its period
 plus the last error seen, so a dashboard can name a likely cause without touching history.
 
 Two different things get counted, and they're kept separate on purpose:
 
-- **Jobs** — a job that retried several times and then succeeded counts as one success.
-- **Attempts** — the same job contributes every attempt it made.
+- **Tasks** — a task that retried several times and then succeeded counts as one success.
+- **Attempts** — the same task contributes every attempt it made.
 
-Conflating those is how a failure rate can exceed the number of jobs that ran.
+Conflating those is how a failure rate can exceed the number of tasks that ran.
 
 ## Filling them in
 
@@ -30,7 +30,7 @@ A background pass summarises periods that have fully elapsed and records how far
 That marker is the **watermark**.
 
 When you ask for a time window, Workhorse reads pre-computed rows below the watermark and
-calculates the rest live. So a window is correct the instant a job runs — you never wait for
+calculates the rest live. So a window is correct the instant a task runs — you never wait for
 a rollup to see your own work. If the rollup falls behind, you get a longer live section and
 a slower query, not a wrong answer.
 
@@ -62,7 +62,7 @@ numbers, which isn't.
 
 ## Cardinality
 
-If your job types are generated rather than fixed — one per customer, say — the number of
+If your task types are generated rather than fixed — one per customer, say — the number of
 summary rows could grow without limit. Beyond a threshold, extra combinations are folded
 into a catch-all type within their own queue. You lose the per-type breakdown for the long
 tail; you don't lose the totals, and the table stays bounded.
@@ -82,9 +82,9 @@ deployment, and the settings page warns while retention depends on the watermark
 
 - [330-retention.md](330-retention.md) — the cleanup this interlocks with
 - [310-workers.md](310-workers.md) — who runs the rollup pass
-- [010-jobs-and-state.md](010-jobs-and-state.md) — where the raw history lives
+- [010-tasks-and-state.md](010-tasks-and-state.md) — where the raw history lives
 
 ---
 
 Exact measures, bucket definition, and health fields:
-[`architecture.md`](../architecture.md#job_stat_bucket-job_stat_bucket_hour-job_stat_bucket_day-and-job_stat_state).
+[`architecture.md`](../architecture.md#task_stat_bucket-task_stat_bucket_hour-task_stat_bucket_day-and-task_stat_state).

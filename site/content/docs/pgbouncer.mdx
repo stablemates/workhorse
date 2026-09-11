@@ -27,11 +27,11 @@ verified result, not a reading of either manual.
 
 ## The silent `LISTEN` failure
 
-Transaction-mode PgBouncer accepts `LISTEN workhorse_jobs` and returns success, then releases the
+Transaction-mode PgBouncer accepts `LISTEN workhorse_tasks` and returns success, then releases the
 server connection when the statement ends. PgCat accepts it in every mode, then holds the
 notification until the client sends another query — which an idle listener never does. Either way
 nothing errors: the worker believes it is listening while dispatch runs entirely on its fallback
-poll. That fallback is the correctness mechanism, so jobs still run; wake-up is just slower.
+poll. That fallback is the correctness mechanism, so tasks still run; wake-up is just slower.
 
 To keep wake hints, give the listener a connection that reaches PostgreSQL directly or through
 session-mode PgBouncer:

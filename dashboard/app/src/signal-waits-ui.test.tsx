@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type {
-  DashboardJobRow,
+  DashboardTaskRow,
   DashboardSignalWaitRow,
 } from "@stablemates/workhorse-dashboard-server/wire";
 
@@ -12,9 +12,9 @@ Object.defineProperty(globalThis, "localStorage", {
 });
 
 const signalWait: DashboardSignalWaitRow = {
-  jobId: "signal-job",
+  taskId: "signal-task",
   queue: "default",
-  jobType: "approval-task",
+  taskType: "approval-task",
   name: "account-approval",
   attempt: 1,
   createdAt: "2026-08-16T03:00:00.000Z",
@@ -30,7 +30,7 @@ describe("dashboard signal waits", () => {
     "uses one $kind waiting indicator instead of also showing scheduled",
     async ({ kind, color, label }) => {
       const { TaskStatusIndicators } = await import("./components/task-list.js");
-      const job = {
+      const task = {
         state: "scheduled",
         signalWait:
           kind === "signal" ? { name: signalWait.name, deadlineAt: signalWait.deadlineAt } : null,
@@ -42,9 +42,9 @@ describe("dashboard signal waits", () => {
           kind === "durable"
             ? { name: "retry-delay", wakeAt: signalWait.deadlineAt, mode: "relative" }
             : null,
-      } as DashboardJobRow;
+      } as DashboardTaskRow;
       const html = renderToStaticMarkup(
-        createElement(MantineProvider, null, createElement(TaskStatusIndicators, { job })),
+        createElement(MantineProvider, null, createElement(TaskStatusIndicators, { task })),
       );
 
       expect(html.match(/mantine-Badge-root/g)).toHaveLength(1);
@@ -61,13 +61,13 @@ describe("dashboard signal waits", () => {
 
   it("marks a task row as waiting for its named signal", async () => {
     const { TaskWaitBadge } = await import("./dashboard.js");
-    const job = {
+    const task = {
       state: "scheduled",
       wait: null,
       signalWait: { name: signalWait.name, deadlineAt: signalWait.deadlineAt },
-    } as DashboardJobRow;
+    } as DashboardTaskRow;
     const html = renderToStaticMarkup(
-      createElement(MantineProvider, null, createElement(TaskWaitBadge, { job })),
+      createElement(MantineProvider, null, createElement(TaskWaitBadge, { task })),
     );
 
     expect(html).toContain("Waiting for signal");
@@ -76,7 +76,7 @@ describe("dashboard signal waits", () => {
 
   it("marks a task row as waiting for its named human decision", async () => {
     const { TaskWaitBadge } = await import("./dashboard.js");
-    const job = {
+    const task = {
       state: "active",
       wait: null,
       signalWait: null,
@@ -85,9 +85,9 @@ describe("dashboard signal waits", () => {
         context: { prompt: "Approve this account?" },
         deadlineAt: "2026-08-17T03:00:00.000Z",
       },
-    } as DashboardJobRow;
+    } as DashboardTaskRow;
     const html = renderToStaticMarkup(
-      createElement(MantineProvider, null, createElement(TaskWaitBadge, { job })),
+      createElement(MantineProvider, null, createElement(TaskWaitBadge, { task })),
     );
 
     expect(html).toContain("Waiting for decision");
@@ -107,7 +107,7 @@ describe("dashboard signal waits", () => {
           sending: false,
           onPayloadChange: () => undefined,
           onSend: () => undefined,
-          inspectJob: () => undefined,
+          inspectTask: () => undefined,
         }),
       ),
     );
@@ -117,7 +117,7 @@ describe("dashboard signal waits", () => {
     expect(html).toContain("Signal payload (JSON)");
     expect(html).toContain("Send signal");
     expect(html).toContain("View task");
-    expect(html).toContain('aria-label="Signal account-approval for task signal-job"');
+    expect(html).toContain('aria-label="Signal account-approval for task signal-task"');
     expect(html).toContain('aria-label="Signal input for account-approval"');
   });
 });

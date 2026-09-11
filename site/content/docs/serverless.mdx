@@ -33,7 +33,7 @@ versioned SQL behavior that a Workhorse client implements.
 
 The Vercel Node.js runtime is ordinary supported Node.js for this purpose. It can open a `pg`
 connection, and Vercel documents `pg` pools directly. If the function owns a transaction, pass it
-to `Queue.enqueue`. The job then commits or rolls back with the business write.
+to `Queue.enqueue`. The task then commits or rolls back with the business write.
 
 ```ts
 const client = await pool.connect();
@@ -93,7 +93,7 @@ even though a function can reuse a database connection while an environment rema
 
 ## Next
 
-- [Transactional enqueue](/docs/enqueue) — commit the job with the business write
+- [Transactional enqueue](/docs/enqueue) — commit the task with the business write
 - [Worker processes](/docs/worker-processes) — run handlers in continuous compute
 - [Compatibility](/docs/compatibility) — check the supported runtime and database matrix
 

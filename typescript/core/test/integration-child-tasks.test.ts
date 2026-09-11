@@ -5,7 +5,7 @@ import { registerOpenTelemetry } from "@stablemates/workhorse-otel";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Queue } from "../src/queue.js";
 import { Worker } from "../src/worker.js";
-import { readDashboardJobDetail } from "../../dashboard-server/src/server/read-model.js";
+import { readDashboardTaskDetail } from "../../dashboard-server/src/server/read-model.js";
 import { dashboardDatabase } from "../../dashboard-server/src/server/sql.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
@@ -29,7 +29,7 @@ const underTrace = <T>(traceId: string, spanId: string, operation: () => Promise
     operation,
   );
 
-describe("child jobs", () => {
+describe("child tasks", () => {
   it("creates bounded fan-out and joins results by stable child name", async () => {
     const parentId = await queue.enqueue("fan-out-parent", null, { queue: "fan-out-parents" });
     let activations = 0;
@@ -56,14 +56,14 @@ describe("child jobs", () => {
     });
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(admin.getJob(parentId)).resolves.toMatchObject({ state: "blocked" });
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({ state: "blocked" });
     const lineage = await admin.getChildLineage(parentId);
     expect(new Set(lineage.records.map((record) => record.name))).toEqual(
       new Set(["first", "second"]),
     );
 
     const values = new Map(
-      lineage.records.map((record) => [record.childJobId, record.name === "first" ? 1 : 2]),
+      lineage.records.map((record) => [record.childTaskId, record.name === "first" ? 1 : 2]),
     );
     for (let index = 0; index < lineage.records.length; index += 1) {
       const child = await queue.claim("fan-out-child-worker", { queue: "fan-out-children" });
@@ -75,7 +75,7 @@ describe("child jobs", () => {
     }
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(admin.getJob(parentId)).resolves.toMatchObject({
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({
       state: "succeeded",
       result: {
         first: { status: "succeeded", result: { value: 10 } },
@@ -100,7 +100,10 @@ describe("child jobs", () => {
     });
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(admin.getJob(parentId)).resolves.toMatchObject({ state: "succeeded", result: {} });
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({
+      state: "succeeded",
+      result: {},
+    });
     expect(activations).toBe(1);
     await expect(admin.getChildLineage(parentId)).resolves.toEqual({
       records: [],
@@ -142,7 +145,7 @@ describe("child jobs", () => {
 
     expect(await worker.runOnce()).toBe(true);
     expect(joinedNames).toEqual(["accepted", "rejected", "skipped"]);
-    await expect(admin.getJob(parentId)).resolves.toMatchObject({
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({
       state: "succeeded",
       result: {
         accepted: { status: "succeeded", result: { value: 1 } },
@@ -178,7 +181,7 @@ describe("child jobs", () => {
       childOutcome = "canceled";
     }
     expect(childOutcome).toBe(childState);
-    await expect(admin.getJob(parentId)).resolves.toMatchObject({ state: parentState });
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({ state: parentState });
   });
 
   it("reuses one joined fan-out across retries and ignores duplicate wakeups", async () => {
@@ -209,11 +212,11 @@ describe("child jobs", () => {
     ).resolves.toMatchObject({ rows: [{ count: 0 }] });
     expect(await worker.runOnce()).toBe(true);
     expect(await worker.runOnce()).toBe(true);
-    await expect(admin.getJob(parentId)).resolves.toMatchObject({
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({
       state: "succeeded",
       result: { child: { status: "succeeded", result: { value: 7 } } },
     });
-    const timeline = await admin.getJobTimeline(parentId, { limit: 100 });
+    const timeline = await admin.getTaskTimeline(parentId, { limit: 100 });
     expect(
       timeline.items.filter(
         (item) => item.kind === "event" && item.eventType === "children_joined",
@@ -234,7 +237,7 @@ describe("child jobs", () => {
 
     await expect(
       queue.createChildren(resumed!, "one-child-set-parent-worker", []),
-    ).rejects.toMatchObject({ name: "ChildConflictError", parentJobId: parentId });
+    ).rejects.toMatchObject({ name: "ChildConflictError", parentTaskId: parentId });
     await expect(
       queue.createChild(
         resumed!,
@@ -243,7 +246,7 @@ describe("child jobs", () => {
         "one-child-set-child",
         null,
       ),
-    ).rejects.toMatchObject({ name: "ChildLimitExceededError", parentJobId: parentId });
+    ).rejects.toMatchObject({ name: "ChildLimitExceededError", parentTaskId: parentId });
 
     const singleParentId = await queue.enqueue("single-contract-parent", null);
     const singleParent = await queue.claim("single-contract-parent-worker");
@@ -263,7 +266,7 @@ describe("child jobs", () => {
       queue.createChildren(resumedSingle!, "single-contract-parent-worker", [
         { name: "child", type: "single-contract-child", payload: null },
       ]),
-    ).rejects.toMatchObject({ name: "ChildConflictError", parentJobId: singleParentId });
+    ).rejects.toMatchObject({ name: "ChildConflictError", parentTaskId: singleParentId });
     expect(single.status).toBe("created");
   });
 
@@ -271,7 +274,7 @@ describe("child jobs", () => {
     const prerequisiteId = await queue.enqueue("child-parent-prerequisite", null);
     const parentId = await queue.enqueue("dependent-child-parent", null, {
       dependencies: {
-        prerequisiteJobIds: [prerequisiteId],
+        prerequisiteTaskIds: [prerequisiteId],
         onSuccess: "release",
         onFailure: "fail",
         onCancellation: "cancel",
@@ -314,13 +317,13 @@ describe("child jobs", () => {
     expect(await queue.fail(rejected!, "late-failure-child-worker", new Error("rejected"))).toBe(
       "failed",
     );
-    await expect(admin.getJob(parentId)).resolves.toMatchObject({ state: "blocked" });
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({ state: "blocked" });
     const accepted = await queue.claim("late-failure-child-worker");
     expect(await queue.complete(accepted!, "late-failure-child-worker", null)).toBe(true);
-    await expect(admin.getJob(parentId)).resolves.toMatchObject({
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({
       state: "failed",
       error: {
-        prerequisite_job_id: rejected!.id,
+        prerequisite_task_id: rejected!.id,
         prerequisite_state: "failed",
         policy_action: "fail",
       },
@@ -335,7 +338,7 @@ describe("child jobs", () => {
       oneByteQueue.createChildren(oneByteParent!, "one-byte-empty-parent-worker", []),
     ).rejects.toMatchObject({
       name: "ChildResultLimitExceededError",
-      parentJobId: oneByteParentId,
+      parentTaskId: oneByteParentId,
       resultBytes: 2,
       resultLimitBytes: 1,
     });
@@ -353,7 +356,7 @@ describe("child jobs", () => {
           payload: null,
         })),
       ),
-    ).rejects.toMatchObject({ name: "ChildLimitExceededError", parentJobId: parentId });
+    ).rejects.toMatchObject({ name: "ChildLimitExceededError", parentTaskId: parentId });
 
     const created = await limitedQueue.createChildren(parent!, "limited-fan-out-parent-worker", [
       { name: "first", type: "limited-child", payload: null },
@@ -372,7 +375,7 @@ describe("child jobs", () => {
       ]),
     ).rejects.toMatchObject({
       name: "ChildResultLimitExceededError",
-      parentJobId: parentId,
+      parentTaskId: parentId,
       resultLimitBytes: 32,
     });
   });
@@ -466,47 +469,47 @@ describe("child jobs", () => {
     expect(created).toMatchObject({
       status: "created",
       child: {
-        parentJobId: parentId,
+        parentTaskId: parentId,
         name: "charge",
         type: "charge-card",
         result: null,
       },
     });
-    await expect(admin.getJob(parentId)).resolves.toMatchObject({
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({
       state: "blocked",
-      childJobIds: [created.child.childJobId],
-      parentJobId: null,
+      childTaskIds: [created.child.childTaskId],
+      parentTaskId: null,
     });
-    await expect(admin.getJob(created.child.childJobId)).resolves.toMatchObject({
+    await expect(admin.getTask(created.child.childTaskId)).resolves.toMatchObject({
       state: "ready",
-      childJobIds: [],
-      parentJobId: parentId,
+      childTaskIds: [],
+      parentTaskId: parentId,
     });
     await expect(admin.getChildLineage(parentId)).resolves.toMatchObject({
       records: [
         expect.objectContaining({
-          parentJobId: parentId,
-          childJobId: created.child.childJobId,
+          parentTaskId: parentId,
+          childTaskId: created.child.childTaskId,
           name: "charge",
         }),
       ],
       truncated: false,
     });
-    const listed = await admin.listJobs({ states: ["blocked", "ready"] });
+    const listed = await admin.listTasks({ states: ["blocked", "ready"] });
     expect(listed.items).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: parentId, childJobIds: [created.child.childJobId] }),
-        expect.objectContaining({ id: created.child.childJobId, parentJobId: parentId }),
+        expect.objectContaining({ id: parentId, childTaskIds: [created.child.childTaskId] }),
+        expect.objectContaining({ id: created.child.childTaskId, parentTaskId: parentId }),
       ]),
     );
     await expect(
-      readDashboardJobDetail(dashboardDatabase(pool), created.child.childJobId),
+      readDashboardTaskDetail(dashboardDatabase(pool), created.child.childTaskId),
     ).resolves.toMatchObject({
       childLineage: {
         records: [
           expect.objectContaining({
-            parentJobId: parentId,
-            childJobId: created.child.childJobId,
+            parentTaskId: parentId,
+            childTaskId: created.child.childTaskId,
           }),
         ],
         truncated: false,
@@ -530,15 +533,15 @@ describe("child jobs", () => {
     });
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(admin.getJob(parentId)).resolves.toMatchObject({ state: "blocked" });
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({ state: "blocked" });
     const lineage = await admin.getChildLineage(parentId);
-    const childId = lineage.records[0]!.childJobId;
+    const childId = lineage.records[0]!.childTaskId;
     const child = await queue.claim("child-worker", { queue: "children" });
     expect(child?.id).toBe(childId);
     expect(await queue.complete(child!, "child-worker", { receiptId: "receipt-1" })).toBe(true);
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(admin.getJob(parentId)).resolves.toMatchObject({
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({
       state: "succeeded",
       result: { receiptId: "receipt-1" },
     });
@@ -546,7 +549,7 @@ describe("child jobs", () => {
     await expect(admin.getChildLineage(parentId)).resolves.toMatchObject({
       records: [expect.objectContaining({ joinedAt: expect.any(Date) })],
     });
-    const timeline = await admin.getJobTimeline(parentId, { limit: 100 });
+    const timeline = await admin.getTaskTimeline(parentId, { limit: 100 });
     expect(timeline.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: "event", eventType: "child_created" }),
@@ -570,15 +573,15 @@ describe("child jobs", () => {
         "transactional-child",
         null,
       );
-      rolledBackChildId = created.child.childJobId;
+      rolledBackChildId = created.child.childTaskId;
       await client.query("ROLLBACK");
     } finally {
       await client.query("ROLLBACK").catch(() => undefined);
       client.release();
     }
 
-    await expect(admin.getJob(parentId)).resolves.toMatchObject({ state: "active" });
-    await expect(admin.getJob(rolledBackChildId!)).resolves.toBeNull();
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({ state: "active" });
+    await expect(admin.getTask(rolledBackChildId!)).resolves.toBeNull();
     await expect(admin.getChildLineage(parentId)).resolves.toEqual({
       records: [],
       truncated: false,
@@ -593,7 +596,7 @@ describe("child jobs", () => {
 
     await expect(
       queue.createChild(stale!, "stale-parent-worker", "child", "stale-child", null),
-    ).rejects.toMatchObject({ name: "ChildLeaseLostError", parentJobId: parentId });
+    ).rejects.toMatchObject({ name: "ChildLeaseLostError", parentTaskId: parentId });
     await expect(admin.getChildLineage(parentId)).resolves.toEqual({
       records: [],
       truncated: false,
@@ -612,16 +615,16 @@ describe("child jobs", () => {
       END
       $$;
       CREATE TRIGGER test_delay_child_link
-      BEFORE INSERT ON workhorse.job_child
+      BEFORE INSERT ON workhorse.task_child
       FOR EACH ROW EXECUTE FUNCTION workhorse.test_delay_child_link()
     `);
     try {
       await expect(
         queue.createChild(parent!, "expiring-transition-worker", "child", "orphan-candidate", null),
-      ).rejects.toMatchObject({ name: "ChildLeaseLostError", parentJobId: parentId });
+      ).rejects.toMatchObject({ name: "ChildLeaseLostError", parentTaskId: parentId });
     } finally {
       await pool.query(`
-        DROP TRIGGER test_delay_child_link ON workhorse.job_child;
+        DROP TRIGGER test_delay_child_link ON workhorse.task_child;
         DROP FUNCTION workhorse.test_delay_child_link()
       `);
     }
@@ -631,7 +634,7 @@ describe("child jobs", () => {
       truncated: false,
     });
     const children = await pool.query<{ count: string }>(
-      `SELECT count(*)::text AS count FROM workhorse.job WHERE job_type = 'orphan-candidate'`,
+      `SELECT count(*)::text AS count FROM workhorse.task WHERE task_type = 'orphan-candidate'`,
     );
     expect(children.rows[0]?.count).toBe("0");
   });
@@ -653,7 +656,7 @@ describe("child jobs", () => {
       ),
     ).resolves.toMatchObject({
       status: "completed",
-      child: { childJobId: created.child.childJobId, result: { value: 1 } },
+      child: { childTaskId: created.child.childTaskId, result: { value: 1 } },
     });
   });
 
@@ -670,10 +673,10 @@ describe("child jobs", () => {
       { runAt },
     );
 
-    await expect(admin.getJob(created.child.childJobId)).resolves.toMatchObject({
+    await expect(admin.getTask(created.child.childTaskId)).resolves.toMatchObject({
       state: "scheduled",
       runAt,
-      parentJobId: parentId,
+      parentTaskId: parentId,
     });
   });
 
@@ -698,7 +701,7 @@ describe("child jobs", () => {
     });
 
     expect(await worker.runOnce()).toBe(true);
-    expect(conflict).toMatchObject({ name: "ChildConflictError", parentJobId: parentId });
+    expect(conflict).toMatchObject({ name: "ChildConflictError", parentTaskId: parentId });
     await expect(admin.getChildLineage(parentId)).resolves.toMatchObject({
       records: [expect.objectContaining({ name: "child" })],
     });
@@ -712,12 +715,12 @@ describe("child jobs", () => {
     }));
 
     expect(await worker.runOnce()).toBe(true);
-    await expect(admin.getJob(parentId)).resolves.toMatchObject({
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({
       state: "succeeded",
       result: { doubled: 8 },
-      childJobIds: [],
+      childTaskIds: [],
     });
-    const timeline = await admin.getJobTimeline(parentId, { limit: 100 });
+    const timeline = await admin.getTaskTimeline(parentId, { limit: 100 });
     expect(timeline.items).toEqual(
       expect.arrayContaining([expect.objectContaining({ kind: "event", eventType: "succeeded" })]),
     );
@@ -744,20 +747,20 @@ describe("child jobs", () => {
     });
 
     expect(await worker.runOnce()).toBe(true);
-    const childId = (await admin.getChildLineage(parentId)).records[0]!.childJobId;
+    const childId = (await admin.getChildLineage(parentId)).records[0]!.childTaskId;
     const child = await queue.claim("retry-child-worker", { queue: "retry-children" });
     expect(await queue.complete(child!, "retry-child-worker", { value: 7 })).toBe(true);
     expect(await worker.runOnce()).toBe(true);
-    await expect(admin.getJob(parentId)).resolves.toMatchObject({ state: "ready" });
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({ state: "ready" });
     expect(await worker.runOnce()).toBe(true);
-    await expect(admin.getJob(parentId)).resolves.toMatchObject({
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({
       state: "succeeded",
       result: { value: 7 },
     });
     expect(await admin.getChildLineage(parentId)).toMatchObject({
-      records: [expect.objectContaining({ childJobId: childId })],
+      records: [expect.objectContaining({ childTaskId: childId })],
     });
-    const timeline = await admin.getJobTimeline(parentId, { limit: 100 });
+    const timeline = await admin.getTaskTimeline(parentId, { limit: 100 });
     expect(
       timeline.items.filter((item) => item.kind === "event" && item.eventType === "child_joined"),
     ).toHaveLength(1);
@@ -777,9 +780,9 @@ describe("child jobs", () => {
       status: "canceled",
     });
     const child = await queue.claim("cancel-child-worker");
-    expect(child?.id).toBe(created.child.childJobId);
+    expect(child?.id).toBe(created.child.childTaskId);
     expect(await queue.complete(child!, "cancel-child-worker", null)).toBe(true);
-    await expect(admin.getJob(parentId)).resolves.toMatchObject({ state: "canceled" });
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({ state: "canceled" });
   });
 
   it("settles active-child cancellation once and leaves terminal descendants unchanged", async () => {
@@ -793,16 +796,16 @@ describe("child jobs", () => {
       null,
     );
     const activeChild = await queue.claim("active-cancel-child-worker");
-    expect(activeChild?.id).toBe(activeCreated.child.childJobId);
+    expect(activeChild?.id).toBe(activeCreated.child.childTaskId);
 
     await expect(queue.cancel(activeChild!.id, { requestedBy: "operator" })).resolves.toMatchObject(
       {
         status: "cancel_requested",
       },
     );
-    await expect(admin.getJob(activeParentId)).resolves.toMatchObject({ state: "blocked" });
+    await expect(admin.getTask(activeParentId)).resolves.toMatchObject({ state: "blocked" });
     expect(await queue.acknowledgeCancel(activeChild!, "active-cancel-child-worker")).toBe(true);
-    await expect(admin.getJob(activeParentId)).resolves.toMatchObject({ state: "canceled" });
+    await expect(admin.getTask(activeParentId)).resolves.toMatchObject({ state: "canceled" });
 
     const terminalParentId = await queue.enqueue("terminal-cancel-parent", null);
     const terminalParent = await queue.claim("terminal-cancel-parent-worker");
@@ -818,9 +821,9 @@ describe("child jobs", () => {
       true,
     );
     await expect(
-      queue.cancel(terminalCreated.child.childJobId, { requestedBy: "operator" }),
+      queue.cancel(terminalCreated.child.childTaskId, { requestedBy: "operator" }),
     ).resolves.toMatchObject({ status: "already_terminal", state: "succeeded" });
-    await expect(admin.getJob(terminalParentId)).resolves.toMatchObject({ state: "ready" });
+    await expect(admin.getTask(terminalParentId)).resolves.toMatchObject({ state: "ready" });
   });
 
   it("retains a canceled parent while its child is live and later reclaims the expired tree", async () => {
@@ -835,50 +838,50 @@ describe("child jobs", () => {
     );
     await queue.cancel(parentId, { requestedBy: "operator" });
     const expiredAt = new Date("2020-01-01T00:00:00.000Z");
-    await pool.query("UPDATE workhorse.job SET created_at = $2 WHERE id = ANY($1::uuid[])", [
-      [parentId, created.child.childJobId],
+    await pool.query("UPDATE workhorse.task SET created_at = $2 WHERE id = ANY($1::uuid[])", [
+      [parentId, created.child.childTaskId],
       expiredAt,
     ]);
     await pool.query(
-      `UPDATE workhorse.job_outcome
+      `UPDATE workhorse.task_outcome
           SET finished_at = $2, history_through_at = $2
-        WHERE job_id = $1::uuid`,
+        WHERE task_id = $1::uuid`,
       [parentId, expiredAt],
     );
 
     await expect(
-      pool.query("SELECT workhorse.prune_terminal_jobs_v1($1, $1, $1, 100) AS count", [
+      pool.query("SELECT workhorse.prune_terminal_tasks_v1($1, $1, $1, 100) AS count", [
         new Date("2021-01-01T00:00:00.000Z"),
       ]),
     ).resolves.toMatchObject({ rows: [{ count: 0 }] });
     await expect(admin.getChildLineage(parentId)).resolves.toMatchObject({
-      records: [expect.objectContaining({ childJobId: created.child.childJobId })],
+      records: [expect.objectContaining({ childTaskId: created.child.childTaskId })],
     });
 
-    expect((await queue.cancel(created.child.childJobId)).status).toBe("canceled");
+    expect((await queue.cancel(created.child.childTaskId)).status).toBe("canceled");
     await pool.query(
-      `UPDATE workhorse.job_outcome
+      `UPDATE workhorse.task_outcome
           SET finished_at = $2, history_through_at = $2
-        WHERE job_id = $1::uuid`,
-      [created.child.childJobId, expiredAt],
+        WHERE task_id = $1::uuid`,
+      [created.child.childTaskId, expiredAt],
     );
-    await pool.query("DELETE FROM workhorse.job_event WHERE job_id = ANY($1::uuid[])", [
-      [parentId, created.child.childJobId],
+    await pool.query("DELETE FROM workhorse.task_event WHERE task_id = ANY($1::uuid[])", [
+      [parentId, created.child.childTaskId],
     ]);
-    await pool.query("DELETE FROM workhorse.attempt_history WHERE job_id = ANY($1::uuid[])", [
-      [parentId, created.child.childJobId],
+    await pool.query("DELETE FROM workhorse.attempt_history WHERE task_id = ANY($1::uuid[])", [
+      [parentId, created.child.childTaskId],
     ]);
     const firstPass = await pool.query<{ count: number }>(
-      "SELECT workhorse.prune_terminal_jobs_v1($1, $1, $1, 100) AS count",
+      "SELECT workhorse.prune_terminal_tasks_v1($1, $1, $1, 100) AS count",
       [new Date("2021-01-01T00:00:00.000Z")],
     );
     const secondPass = await pool.query<{ count: number }>(
-      "SELECT workhorse.prune_terminal_jobs_v1($1, $1, $1, 100) AS count",
+      "SELECT workhorse.prune_terminal_tasks_v1($1, $1, $1, 100) AS count",
       [new Date("2021-01-01T00:00:00.000Z")],
     );
     expect(firstPass.rows[0]!.count + secondPass.rows[0]!.count).toBe(2);
-    await expect(admin.getJob(parentId)).resolves.toBeNull();
-    await expect(admin.getJob(created.child.childJobId)).resolves.toBeNull();
+    await expect(admin.getTask(parentId)).resolves.toBeNull();
+    await expect(admin.getTask(created.child.childTaskId)).resolves.toBeNull();
   });
 
   it("redrives a failed parent into a fresh identity without rewriting its child tree", async () => {
@@ -896,7 +899,7 @@ describe("child jobs", () => {
     expect(await queue.fail(child!, "redriven-child-worker", new Error("child failed"))).toBe(
       "failed",
     );
-    await expect(admin.getJob(parentId)).resolves.toMatchObject({ state: "failed" });
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({ state: "failed" });
 
     const redrive = await admin.redrive(parentId, {
       actor: "operator",
@@ -904,34 +907,38 @@ describe("child jobs", () => {
       requestId: `child-parent-redrive-${parentId}`,
     });
     expect(redrive.status).toBe("redriven");
-    const targetId = redrive.targetJobId!;
+    const targetId = redrive.targetTaskId!;
     await expect(admin.getChildLineage(parentId)).resolves.toMatchObject({
-      records: [expect.objectContaining({ childJobId: created.child.childJobId })],
+      records: [expect.objectContaining({ childTaskId: created.child.childTaskId })],
     });
     await expect(admin.getChildLineage(targetId)).resolves.toEqual({
       records: [],
       truncated: false,
     });
     await expect(admin.getRedriveLineage(parentId)).resolves.toMatchObject({
-      records: [expect.objectContaining({ sourceJobId: parentId, targetJobId: targetId })],
+      records: [expect.objectContaining({ sourceTaskId: parentId, targetTaskId: targetId })],
       truncated: false,
     });
-    await expect(readDashboardJobDetail(dashboardDatabase(pool), parentId)).resolves.toMatchObject({
-      childLineage: {
-        records: [expect.objectContaining({ childJobId: created.child.childJobId })],
+    await expect(readDashboardTaskDetail(dashboardDatabase(pool), parentId)).resolves.toMatchObject(
+      {
+        childLineage: {
+          records: [expect.objectContaining({ childTaskId: created.child.childTaskId })],
+        },
+        redriveLineage: {
+          records: [expect.objectContaining({ sourceTaskId: parentId, targetTaskId: targetId })],
+          truncated: false,
+        },
       },
-      redriveLineage: {
-        records: [expect.objectContaining({ sourceJobId: parentId, targetJobId: targetId })],
-        truncated: false,
+    );
+    await expect(readDashboardTaskDetail(dashboardDatabase(pool), targetId)).resolves.toMatchObject(
+      {
+        childLineage: { records: [], truncated: false },
+        redriveLineage: {
+          records: [expect.objectContaining({ sourceTaskId: parentId, targetTaskId: targetId })],
+          truncated: false,
+        },
       },
-    });
-    await expect(readDashboardJobDetail(dashboardDatabase(pool), targetId)).resolves.toMatchObject({
-      childLineage: { records: [], truncated: false },
-      redriveLineage: {
-        records: [expect.objectContaining({ sourceJobId: parentId, targetJobId: targetId })],
-        truncated: false,
-      },
-    });
+    );
   });
 
   it("returns complete dashboard lineage for a child that owns a full child set", async () => {
@@ -945,7 +952,7 @@ describe("child jobs", () => {
       null,
     );
     const middle = await queue.claim("lineage-middle-worker");
-    expect(middle?.id).toBe(middleResult.child.childJobId);
+    expect(middle?.id).toBe(middleResult.child.childTaskId);
     await queue.createChildren(
       middle!,
       "lineage-middle-worker",
@@ -956,17 +963,17 @@ describe("child jobs", () => {
       })),
     );
 
-    const detail = await readDashboardJobDetail(
+    const detail = await readDashboardTaskDetail(
       dashboardDatabase(pool),
-      middleResult.child.childJobId,
+      middleResult.child.childTaskId,
     );
     expect(detail).not.toBeNull();
     expect(detail).toMatchObject({
       childLineage: {
         records: expect.arrayContaining([
           expect.objectContaining({
-            parentJobId: rootId,
-            childJobId: middleResult.child.childJobId,
+            parentTaskId: rootId,
+            childTaskId: middleResult.child.childTaskId,
           }),
         ]),
         truncated: false,
@@ -1001,7 +1008,7 @@ describe("child jobs", () => {
     expect(await queue.complete(first!, "observed-child-worker", { value: 1 })).toBe(true);
     const second = await queue.claim("observed-child-worker");
     expect(await queue.fail(second!, "observed-child-worker", new Error("failed"))).toBe("failed");
-    await expect(admin.getJob(parentId)).resolves.toMatchObject({ state: "failed" });
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({ state: "failed" });
     await expect(queue.health()).resolves.toMatchObject({
       children: {
         waitingParents: 0,
@@ -1048,7 +1055,7 @@ describe("child jobs", () => {
       }),
     ).resolves.toMatchObject({
       status: "completed",
-      child: { childJobId: created.child.childJobId, result: { answer: 1 } },
+      child: { childTaskId: created.child.childTaskId, result: { answer: 1 } },
     });
     await expect(
       queue.createChild(resumed!, "duplicate-parent-worker", "only", "duplicate-child", {
@@ -1083,17 +1090,21 @@ describe("child jobs", () => {
       const child = await queue.claim("failing-child-worker");
       childOutcome = await queue.fail(child!, "failing-child-worker", new Error("child failed"));
     } else {
-      childOutcome = (await queue.cancel(created.child.childJobId)).status;
+      childOutcome = (await queue.cancel(created.child.childTaskId)).status;
     }
     expect(childOutcome).toBe(childState);
-    await expect(admin.getJob(parentId)).resolves.toMatchObject({ state: parentState });
+    await expect(admin.getTask(parentId)).resolves.toMatchObject({ state: parentState });
     await expect(admin.getChildLineage(parentId)).resolves.toMatchObject({
       records: [expect.objectContaining({ outcomeState: childState, error: expect.anything() })],
     });
-    await expect(readDashboardJobDetail(dashboardDatabase(pool), parentId)).resolves.toMatchObject({
-      childLineage: {
-        records: [expect.objectContaining({ outcomeState: childState, error: expect.anything() })],
+    await expect(readDashboardTaskDetail(dashboardDatabase(pool), parentId)).resolves.toMatchObject(
+      {
+        childLineage: {
+          records: [
+            expect.objectContaining({ outcomeState: childState, error: expect.anything() }),
+          ],
+        },
       },
-    });
+    );
   });
 });

@@ -10,8 +10,8 @@ import psycopg
 
 from workhorse import HandlerContext, Json, Worker, run_worker_process
 
-LANGUAGE_JOB_TYPE = "demo.language-worker"
-SHARED_JOB_TYPE = "demo.shared-worker"
+LANGUAGE_TASK_TYPE = "demo.language-worker"
+SHARED_TASK_TYPE = "demo.shared-worker"
 PYTHON_QUEUE = "demo-python"
 SHARED_QUEUE = "demo-shared"
 SCHEDULE_NAMESPACE = "workhorse-demo"
@@ -26,16 +26,16 @@ def database_url(environment: Mapping[str, str] = os.environ) -> str:
     return value
 
 
-def language_job(payload: Any, context: HandlerContext) -> dict[str, Json]:
+def language_task(payload: Any, context: HandlerContext) -> dict[str, Json]:
     if not isinstance(payload, dict) or payload.get("language") != "python":
-        raise ValueError("Python worker received a job for another language")
-    return {"language": "python", "runtime": "python", "attempt": context.job.attempt}
+        raise ValueError("Python worker received a task for another language")
+    return {"language": "python", "runtime": "python", "attempt": context.task.attempt}
 
 
-def shared_job(payload: Any, context: HandlerContext) -> dict[str, Json]:
+def shared_task(payload: Any, context: HandlerContext) -> dict[str, Json]:
     if not isinstance(payload, dict) or not isinstance(payload.get("source"), str):
         raise ValueError("Shared worker requires a source")
-    return {"source": payload["source"], "runtime": "python", "attempt": context.job.attempt}
+    return {"source": payload["source"], "runtime": "python", "attempt": context.task.attempt}
 
 
 def worker_id() -> str:
@@ -60,8 +60,8 @@ def main() -> None:
                 maintenance_interval_ms=1_000,
                 registry_interval_ms=250,
             )
-            .handle(LANGUAGE_JOB_TYPE, language_job)
-            .handle(SHARED_JOB_TYPE, shared_job)
+            .handle(LANGUAGE_TASK_TYPE, language_task)
+            .handle(SHARED_TASK_TYPE, shared_task)
         )
         run_worker_process(worker)
 

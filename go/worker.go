@@ -75,25 +75,25 @@ var ErrLeaseLost = errors.New(leaseLostMessage)
 // ErrCancellationRequested matches cooperative cancellation requested by an operator.
 var ErrCancellationRequested = errors.New(cancellationRequestedMessage)
 
-// ErrDeadlineExceeded matches cancellation at a job's immutable deadline.
+// ErrDeadlineExceeded matches cancellation at a task's immutable deadline.
 var ErrDeadlineExceeded = errors.New(deadlineExceededMessage)
 
 // ErrExecutionTimeout matches cancellation after an attempt consumes its execution budget.
 var ErrExecutionTimeout = errors.New(executionTimeoutMessage)
 
-// StaleLeaseError identifies the job whose fenced settlement PostgreSQL rejected.
+// StaleLeaseError identifies the task whose fenced settlement PostgreSQL rejected.
 type StaleLeaseError struct {
-	JobID string
+	TaskID string
 }
 
 func (err *StaleLeaseError) Error() string {
-	return fmt.Sprintf(staleLeaseErrorFormat, ErrStaleLease, err.JobID)
+	return fmt.Sprintf(staleLeaseErrorFormat, ErrStaleLease, err.TaskID)
 }
 
 func (err *StaleLeaseError) Unwrap() error { return ErrStaleLease }
 
 // LeaseLostError identifies the attempt whose fence PostgreSQL no longer accepts.
-type LeaseLostError struct{ JobID string }
+type LeaseLostError struct{ TaskID string }
 
 func (err *LeaseLostError) Error() string {
 	return leaseLostErrorMessage
@@ -101,34 +101,34 @@ func (err *LeaseLostError) Error() string {
 func (err *LeaseLostError) Unwrap() error { return ErrLeaseLost }
 
 // CancellationRequestedError identifies an operator cancellation delivered to a handler.
-type CancellationRequestedError struct{ JobID string }
+type CancellationRequestedError struct{ TaskID string }
 
 func (err *CancellationRequestedError) Error() string {
-	return fmt.Sprintf(jobLifecycleErrorFormat, ErrCancellationRequested, err.JobID)
+	return fmt.Sprintf(taskLifecycleErrorFormat, ErrCancellationRequested, err.TaskID)
 }
 func (err *CancellationRequestedError) Unwrap() error { return ErrCancellationRequested }
 
-// DeadlineExceededError identifies a job whose immutable deadline cancelled its handler.
-type DeadlineExceededError struct{ JobID string }
+// DeadlineExceededError identifies a task whose immutable deadline cancelled its handler.
+type DeadlineExceededError struct{ TaskID string }
 
 func (err *DeadlineExceededError) Error() string {
-	return fmt.Sprintf(jobLifecycleErrorFormat, ErrDeadlineExceeded, err.JobID)
+	return fmt.Sprintf(taskLifecycleErrorFormat, ErrDeadlineExceeded, err.TaskID)
 }
 func (err *DeadlineExceededError) Unwrap() error { return ErrDeadlineExceeded }
 
 // ExecutionTimeoutError identifies an attempt whose active execution budget was consumed.
 type ExecutionTimeoutError struct {
-	JobID   string
+	TaskID  string
 	Attempt int
 }
 
 func (err *ExecutionTimeoutError) Error() string {
-	return fmt.Sprintf(attemptLifecycleErrorFormat, ErrExecutionTimeout, err.JobID, err.Attempt)
+	return fmt.Sprintf(attemptLifecycleErrorFormat, ErrExecutionTimeout, err.TaskID, err.Attempt)
 }
 func (err *ExecutionTimeoutError) Unwrap() error { return ErrExecutionTimeout }
 
-// ClaimedJob is PostgreSQL's immutable snapshot of one fenced attempt.
-type ClaimedJob struct {
+// ClaimedTask is PostgreSQL's immutable snapshot of one fenced attempt.
+type ClaimedTask struct {
 	ID                 string
 	Queue              string
 	Type               string
@@ -171,7 +171,7 @@ type WorkerOptions struct {
 	OnRegistrationError  func(error)
 }
 
-// Worker claims and settles jobs through a caller-owned pool.
+// Worker claims and settles tasks through a caller-owned pool.
 type Worker struct {
 	pool                 *pgxpool.Pool
 	queues               []string
@@ -209,19 +209,19 @@ type Worker struct {
 
 type heartbeatMember struct {
 	ctx           context.Context
-	job           ClaimedJob
+	task          ClaimedTask
 	cancelHandler context.CancelCauseFunc
 	result        chan ownershipResult
 }
 
 type fencedLease struct {
-	jobID      string
+	taskID     string
 	workerID   string
 	fenceToken int64
 }
 
 func (lease fencedLease) parameters() []any {
-	return []any{lease.jobID, lease.workerID, lease.fenceToken}
+	return []any{lease.taskID, lease.workerID, lease.fenceToken}
 }
 
 // NewWorker constructs a bounded worker over a caller-owned pool.
@@ -365,15 +365,15 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 	}, nil
 }
 
-// Handle registers the handler for a job type and returns the worker for chaining.
-func (worker *Worker) Handle(jobType string, handler Handler) *Worker {
-	if jobType == emptyString {
-		panic(emptyWorkerJobTypeMessage)
+// Handle registers the handler for a task type and returns the worker for chaining.
+func (worker *Worker) Handle(taskType string, handler Handler) *Worker {
+	if taskType == emptyString {
+		panic(emptyWorkerTaskTypeMessage)
 	}
 	if handler == nil {
 		panic(nilWorkerHandlerMessage)
 	}
-	worker.handlers[jobType] = handler
+	worker.handlers[taskType] = handler
 	return worker
 }
 
@@ -412,7 +412,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 	var notificationListening atomic.Bool
 	go func() {
 		defer close(notificationDone)
-		listenForJobNotifications(
+		listenForTaskNotifications(
 			notificationContext,
 			worker.pool,
 			worker.queues,
@@ -473,7 +473,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 			if stopping {
 				break
 			}
-			jobs, err := worker.claimNextMany(ctx, executor, freeSlots)
+			tasks, err := worker.claimNextMany(ctx, executor, freeSlots)
 			if err != nil {
 				if ctx.Err() == nil {
 					firstError = err
@@ -481,17 +481,17 @@ func (worker *Worker) Run(ctx context.Context) error {
 				stopping = true
 				break
 			}
-			if len(jobs) == 0 {
+			if len(tasks) == 0 {
 				consecutiveEmptyClaims++
 				break
 			}
 			claimedInPass = true
 			consecutiveEmptyClaims = 0
-			for _, job := range jobs {
+			for _, task := range tasks {
 				worker.handlerSlots <- struct{}{}
 				active++
 				worker.activeSlots.Add(1)
-				go func(claimed ClaimedJob) {
+				go func(claimed ClaimedTask) {
 					handler := worker.handlers[claimed.Type]
 					var err error
 					if handler == nil {
@@ -503,7 +503,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 					<-worker.handlerSlots
 					worker.activeSlots.Add(-1)
 					executionResults <- err
-				}(job)
+				}(task)
 			}
 		}
 		if stopping {
@@ -579,7 +579,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 	return firstError
 }
 
-// RunOnce claims and processes at most one job.
+// RunOnce claims and processes at most one task.
 func (worker *Worker) RunOnce(ctx context.Context) (bool, error) {
 	releaseRun, err := worker.acquireRun(ctx)
 	if err != nil {
@@ -782,7 +782,7 @@ func (worker *Worker) recordRecovery(ctx context.Context, row Row) {
 			int64(retried),
 			metric.WithAttributes(
 				attribute.String(queueNameAttribute, telemetryUnknownValue),
-				attribute.String(jobTypeAttribute, telemetryUnknownValue),
+				attribute.String(taskTypeAttribute, telemetryUnknownValue),
 			),
 		)
 	}
@@ -812,28 +812,28 @@ func (worker *Worker) fireDueSchedules(ctx context.Context, executor Executor, n
 }
 
 func (worker *Worker) runOnce(ctx context.Context, executor Executor) (bool, error) {
-	job, err := worker.claimNext(ctx, executor)
-	if err != nil || job == nil {
+	task, err := worker.claimNext(ctx, executor)
+	if err != nil || task == nil {
 		return false, err
 	}
-	handler := worker.handlers[job.Type]
+	handler := worker.handlers[task.Type]
 	if handler == nil {
-		err = fmt.Errorf(missingWorkerHandlerFormat, job.Type)
+		err = fmt.Errorf(missingWorkerHandlerFormat, task.Type)
 	} else {
-		return true, worker.execute(ctx, executor, *job, handler)
+		return true, worker.execute(ctx, executor, *task, handler)
 	}
-	return true, worker.fail(ctx, executor, *job, err)
+	return true, worker.fail(ctx, executor, *task, err)
 }
 
-func (worker *Worker) claimNext(ctx context.Context, executor Executor) (*ClaimedJob, error) {
-	jobs, err := worker.claimNextMany(ctx, executor, 1)
-	if err != nil || len(jobs) == 0 {
+func (worker *Worker) claimNext(ctx context.Context, executor Executor) (*ClaimedTask, error) {
+	tasks, err := worker.claimNextMany(ctx, executor, 1)
+	if err != nil || len(tasks) == 0 {
 		return nil, err
 	}
-	return &jobs[0], nil
+	return &tasks[0], nil
 }
 
-func (worker *Worker) claimNextMany(ctx context.Context, executor Executor, limit int) ([]ClaimedJob, error) {
+func (worker *Worker) claimNextMany(ctx context.Context, executor Executor, limit int) ([]ClaimedTask, error) {
 	if _, err := executor.Query(
 		ctx,
 		internalStatementRegistry[promoteStatementName],
@@ -841,7 +841,7 @@ func (worker *Worker) claimNextMany(ctx context.Context, executor Executor, limi
 	); err != nil {
 		return nil, err
 	}
-	jobs := make([]ClaimedJob, 0, limit)
+	tasks := make([]ClaimedTask, 0, limit)
 	for range worker.queues {
 		queue := worker.queues[worker.nextQueueIndex]
 		worker.nextQueueIndex = (worker.nextQueueIndex + 1) % len(worker.queues)
@@ -851,7 +851,7 @@ func (worker *Worker) claimNextMany(ctx context.Context, executor Executor, limi
 			protocolStatementRegistry[claimManyStatementName],
 			queue,
 			worker.workerID,
-			limit-len(jobs),
+			limit-len(tasks),
 			int(worker.leaseDuration/time.Millisecond),
 		)
 		if err != nil {
@@ -875,7 +875,7 @@ func (worker *Worker) claimNextMany(ctx context.Context, executor Executor, limi
 			continue
 		}
 		for _, row := range rows {
-			job, err := claimedJob(row, queue)
+			task, err := claimedTask(row, queue)
 			if err != nil {
 				return nil, err
 			}
@@ -883,20 +883,20 @@ func (worker *Worker) claimNextMany(ctx context.Context, executor Executor, limi
 				ctx,
 				worker.logger,
 				slog.LevelDebug,
-				jobClaimedEvent,
-				jobClaimedLogMessage,
-				jobLogAttributes(job, worker.workerID)...,
+				taskClaimedEvent,
+				taskClaimedLogMessage,
+				taskLogAttributes(task, worker.workerID)...,
 			)
 			if worker.metrics.enabled {
-				worker.metrics.claimed.Add(ctx, 1, jobMetricOptions(job))
+				worker.metrics.claimed.Add(ctx, 1, taskMetricOptions(task))
 			}
-			jobs = append(jobs, job)
+			tasks = append(tasks, task)
 		}
-		if len(jobs) == limit {
+		if len(tasks) == limit {
 			break
 		}
 	}
-	return jobs, nil
+	return tasks, nil
 }
 
 type ownershipResult struct {
@@ -908,10 +908,10 @@ type ownershipResult struct {
 func (worker *Worker) execute(
 	ctx context.Context,
 	executor Executor,
-	job ClaimedJob,
+	task ClaimedTask,
 	handler Handler,
 ) (resultError error) {
-	handlerParent, span := startHandlerSpan(ctx, job)
+	handlerParent, span := startHandlerSpan(ctx, task)
 	outcome := handlerOutcomeUnknown
 	startedAt := time.Now()
 	logWorkerEvent(
@@ -920,13 +920,13 @@ func (worker *Worker) execute(
 		slog.LevelDebug,
 		handlerStartedEvent,
 		handlerStartedLogMessage,
-		jobLogAttributes(job, worker.workerID)...,
+		taskLogAttributes(task, worker.workerID)...,
 	)
 	defer func() {
 		finishHandlerSpan(span, outcome, resultError)
-		worker.metrics.recordHandler(handlerParent, job, outcome, time.Since(startedAt))
+		worker.metrics.recordHandler(handlerParent, task, outcome, time.Since(startedAt))
 		attributes := append(
-			jobLogAttributes(job, worker.workerID),
+			taskLogAttributes(task, worker.workerID),
 			slog.String(handlerOutcomeAttribute, string(outcome)),
 		)
 		logWorkerEvent(
@@ -947,16 +947,16 @@ func (worker *Worker) execute(
 		)
 	}()
 	cancelDeadline := func() {}
-	if expiration, cause := ownershipExpiration(job); expiration != nil {
+	if expiration, cause := ownershipExpiration(task); expiration != nil {
 		handlerParent, cancelDeadline = context.WithDeadlineCause(handlerParent, *expiration, cause)
 	}
 	handlerContext, cancelHandler := context.WithCancelCause(handlerParent)
-	stopOwnership, ownershipDone := worker.superviseOwnership(ctx, job, cancelHandler)
+	stopOwnership, ownershipDone := worker.superviseOwnership(ctx, task, cancelHandler)
 	durability := &HandlerContext{
-		Job: job, context: handlerContext, cancel: cancelHandler, executor: executor,
+		Task: task, context: handlerContext, cancel: cancelHandler, executor: executor,
 		workerID: worker.workerID,
 	}
-	result, handlerError := callHandler(job.Type, handler, handlerContext, job.Payload, durability)
+	result, handlerError := callHandler(task.Type, handler, handlerContext, task.Payload, durability)
 	stopOwnership()
 	ownership := <-ownershipDone
 	cause := context.Cause(handlerContext)
@@ -972,53 +972,53 @@ func (worker *Worker) execute(
 	}
 	if ownership.status == workerOwnershipCancelRequested {
 		outcome = handlerOutcomeCanceled
-		return worker.acknowledgeCancellation(ctx, executor, job)
+		return worker.acknowledgeCancellation(ctx, executor, task)
 	}
 	if ownership.status == workerOwnershipDeadline {
 		outcome = handlerOutcomeDeadlineExceeded
 		if ownership.expirationSettled {
 			return nil
 		}
-		return worker.settleExpiration(ctx, executor, job)
+		return worker.settleExpiration(ctx, executor, task)
 	}
 	if ownership.status == workerOwnershipTimeout {
 		outcome = handlerOutcomeTimeout
 		if ownership.expirationSettled {
 			return nil
 		}
-		return worker.settleExpiration(ctx, executor, job)
+		return worker.settleExpiration(ctx, executor, task)
 	}
 	if ownership.status == workerOwnershipStale {
 		outcome = handlerOutcomeLeaseLost
-		return &StaleLeaseError{JobID: job.ID}
+		return &StaleLeaseError{TaskID: task.ID}
 	}
 	if ownership.status == workerOwnershipNotDue {
 		return errors.New(expirationNotDueMessage)
 	}
 	if errors.Is(cause, ErrCancellationRequested) {
 		outcome = handlerOutcomeCanceled
-		return worker.acknowledgeCancellation(ctx, executor, job)
+		return worker.acknowledgeCancellation(ctx, executor, task)
 	}
 	if errors.Is(cause, ErrDeadlineExceeded) {
 		outcome = handlerOutcomeDeadlineExceeded
-		return worker.settleExpiration(ctx, executor, job)
+		return worker.settleExpiration(ctx, executor, task)
 	}
 	if errors.Is(cause, ErrExecutionTimeout) {
 		outcome = handlerOutcomeTimeout
-		return worker.settleExpiration(ctx, executor, job)
+		return worker.settleExpiration(ctx, executor, task)
 	}
 	if errors.Is(cause, ErrLeaseLost) {
 		outcome = handlerOutcomeLeaseLost
-		return &StaleLeaseError{JobID: job.ID}
+		return &StaleLeaseError{TaskID: task.ID}
 	}
 	if ctx.Err() != nil {
 		outcome = handlerOutcomeCanceled
 		return ctx.Err()
 	}
 	if handlerError != nil {
-		span.RecordError(handlerTelemetryError(handlerError, job.RedactErrorDetails))
+		span.RecordError(handlerTelemetryError(handlerError, task.RedactErrorDetails))
 		span.SetStatus(codes.Error, handlerFailedSpanStatusMessage)
-		state, err := worker.failWithState(ctx, executor, job, handlerError)
+		state, err := worker.failWithState(ctx, executor, task, handlerError)
 		if err != nil {
 			return err
 		}
@@ -1039,16 +1039,16 @@ func (worker *Worker) execute(
 		return nil
 	}
 	outcome = handlerOutcomeSucceeded
-	if err := worker.complete(ctx, executor, job, result); errors.Is(err, ErrStaleLease) {
+	if err := worker.complete(ctx, executor, task, result); errors.Is(err, ErrStaleLease) {
 		outcome = handlerOutcomeLeaseLost
-		return worker.reconcileRejectedSettlement(ctx, executor, job, err)
+		return worker.reconcileRejectedSettlement(ctx, executor, task, err)
 	} else {
 		return err
 	}
 }
 
 func callHandler(
-	jobType string,
+	taskType string,
 	handler Handler,
 	ctx context.Context,
 	payload any,
@@ -1056,7 +1056,7 @@ func callHandler(
 ) (result any, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf(workerHandlerPanicFormat, jobType, recovered)
+			err = fmt.Errorf(workerHandlerPanicFormat, taskType, recovered)
 		}
 	}()
 	return handler(ctx, payload, durability)
@@ -1064,18 +1064,18 @@ func callHandler(
 
 func (worker *Worker) superviseOwnership(
 	ctx context.Context,
-	job ClaimedJob,
+	task ClaimedTask,
 	cancelHandler context.CancelCauseFunc,
 ) (func(), <-chan ownershipResult) {
 	stop := make(chan struct{})
 	done := make(chan ownershipResult, 1)
 	member := &heartbeatMember{
-		ctx: ctx, job: job, cancelHandler: cancelHandler, result: make(chan ownershipResult, 1),
+		ctx: ctx, task: task, cancelHandler: cancelHandler, result: make(chan ownershipResult, 1),
 	}
 	worker.registerHeartbeat(member)
 	go func() {
 		defer worker.unregisterHeartbeat(member)
-		expirationTimer, expirationCause := ownershipExpirationTimer(job)
+		expirationTimer, expirationCause := ownershipExpirationTimer(task)
 		if expirationTimer != nil {
 			defer expirationTimer.Stop()
 		}
@@ -1096,7 +1096,7 @@ func (worker *Worker) superviseOwnership(
 				return
 			case <-expiration:
 				cancelHandler(expirationCause)
-				status, err := worker.expireOwnership(ctx, job)
+				status, err := worker.expireOwnership(ctx, task)
 				done <- ownershipResult{status: status, expirationSettled: err == nil, err: err}
 				return
 			}
@@ -1168,14 +1168,14 @@ func (worker *Worker) runHeartbeats() {
 
 func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 	type lease struct {
-		JobID      string `json:"jobId"`
+		TaskID     string `json:"taskId"`
 		FenceToken string `json:"fenceToken"`
 		LeaseMS    int    `json:"leaseMs"`
 	}
 	requests := make([]lease, 0, len(members))
 	for _, member := range members {
 		requests = append(requests, lease{
-			JobID: member.job.ID, FenceToken: fmt.Sprint(member.job.FenceToken),
+			TaskID: member.task.ID, FenceToken: fmt.Sprint(member.task.FenceToken),
 			LeaseMS: int(worker.leaseDuration / time.Millisecond),
 		})
 	}
@@ -1201,21 +1201,21 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 			worker.deliverHeartbeatError(members, parseErr)
 			return
 		}
-		statuses[stringValue(row[rowJobIDField])] = status
+		statuses[stringValue(row[rowTaskIDField])] = status
 	}
 	for _, member := range members {
 		if !worker.heartbeatRegistered(member) {
 			continue
 		}
-		status := statuses[member.job.ID]
+		status := statuses[member.task.ID]
 		if status == emptyString {
 			status = workerOwnershipStale
 		}
 		if status == workerOwnershipAccepted {
 			continue
 		}
-		member.cancelHandler(ownershipCause(member.job, status))
-		worker.recordRejectedHeartbeat(member.ctx, member.job, status)
+		member.cancelHandler(ownershipCause(member.task, status))
+		worker.recordRejectedHeartbeat(member.ctx, member.task, status)
 		member.result <- ownershipResult{status: status}
 	}
 }
@@ -1230,7 +1230,7 @@ func (worker *Worker) deliverHeartbeatError(members []*heartbeatMember, err erro
 }
 
 func (worker *Worker) recordRejectedHeartbeat(
-	ctx context.Context, job ClaimedJob, status ownershipStatus,
+	ctx context.Context, task ClaimedTask, status ownershipStatus,
 ) {
 	if worker.metrics.enabled {
 		worker.metrics.heartbeatFailures.Add(
@@ -1240,28 +1240,28 @@ func (worker *Worker) recordRejectedHeartbeat(
 	}
 	logWorkerEvent(
 		ctx, worker.logger, slog.LevelInfo, heartbeatRejectedEvent, heartbeatRejectedLogMessage,
-		append(jobLogAttributes(job, worker.workerID), slog.String(heartbeatStatusAttribute, string(status)))...,
+		append(taskLogAttributes(task, worker.workerID), slog.String(heartbeatStatusAttribute, string(status)))...,
 	)
 }
 
-func ownershipExpirationTimer(job ClaimedJob) (*time.Timer, error) {
-	expiration, cause := ownershipExpiration(job)
+func ownershipExpirationTimer(task ClaimedTask) (*time.Timer, error) {
+	expiration, cause := ownershipExpiration(task)
 	if expiration == nil {
 		return nil, nil
 	}
 	return time.NewTimer(max(time.Millisecond, time.Until(expiration.Add(time.Millisecond)))), cause
 }
 
-func ownershipExpiration(job ClaimedJob) (*time.Time, error) {
+func ownershipExpiration(task ClaimedTask) (*time.Time, error) {
 	var expiration *time.Time
 	var cause error
-	if job.Deadline != nil {
-		expiration = job.Deadline
-		cause = &DeadlineExceededError{JobID: job.ID}
+	if task.Deadline != nil {
+		expiration = task.Deadline
+		cause = &DeadlineExceededError{TaskID: task.ID}
 	}
-	if job.AttemptTimeout != nil && (expiration == nil || job.AttemptTimeout.Before(*expiration)) {
-		expiration = job.AttemptTimeout
-		cause = &ExecutionTimeoutError{JobID: job.ID, Attempt: job.Attempt}
+	if task.AttemptTimeout != nil && (expiration == nil || task.AttemptTimeout.Before(*expiration)) {
+		expiration = task.AttemptTimeout
+		cause = &ExecutionTimeoutError{TaskID: task.ID, Attempt: task.Attempt}
 	}
 	if expiration == nil {
 		return nil, nil
@@ -1269,26 +1269,26 @@ func ownershipExpiration(job ClaimedJob) (*time.Time, error) {
 	return expiration, cause
 }
 
-func ownershipCause(job ClaimedJob, status ownershipStatus) error {
+func ownershipCause(task ClaimedTask, status ownershipStatus) error {
 	switch status {
 	case workerOwnershipCancelRequested:
-		return &CancellationRequestedError{JobID: job.ID}
+		return &CancellationRequestedError{TaskID: task.ID}
 	case workerOwnershipDeadline:
-		return &DeadlineExceededError{JobID: job.ID}
+		return &DeadlineExceededError{TaskID: task.ID}
 	case workerOwnershipTimeout:
-		return &ExecutionTimeoutError{JobID: job.ID, Attempt: job.Attempt}
+		return &ExecutionTimeoutError{TaskID: task.ID, Attempt: task.Attempt}
 	default:
-		return &LeaseLostError{JobID: job.ID}
+		return &LeaseLostError{TaskID: task.ID}
 	}
 }
 
-func (worker *Worker) expireOwnership(ctx context.Context, job ClaimedJob) (ownershipStatus, error) {
+func (worker *Worker) expireOwnership(ctx context.Context, task ClaimedTask) (ownershipStatus, error) {
 	deadline := time.Now().Add(expirationRetryBudget)
 	for {
 		rows, err := NewPGXExecutor(worker.pool).Query(
 			ctx,
 			protocolStatementRegistry[expireOwnedStatementName],
-			worker.fencedLease(job).parameters()...,
+			worker.fencedLease(task).parameters()...,
 		)
 		if err != nil {
 			return emptyString, err
@@ -1327,13 +1327,13 @@ func parseOwnershipStatus(rows []Row) (ownershipStatus, error) {
 	}
 }
 
-func (worker *Worker) acknowledgeCancellation(ctx context.Context, executor Executor, job ClaimedJob) error {
-	accepted, err := worker.cancellationAccepted(ctx, executor, job)
+func (worker *Worker) acknowledgeCancellation(ctx context.Context, executor Executor, task ClaimedTask) error {
+	accepted, err := worker.cancellationAccepted(ctx, executor, task)
 	if err != nil {
 		return err
 	}
 	if !accepted {
-		return &StaleLeaseError{JobID: job.ID}
+		return &StaleLeaseError{TaskID: task.ID}
 	}
 	return nil
 }
@@ -1341,23 +1341,23 @@ func (worker *Worker) acknowledgeCancellation(ctx context.Context, executor Exec
 func (worker *Worker) reconcileRejectedSettlement(
 	ctx context.Context,
 	executor Executor,
-	job ClaimedJob,
+	task ClaimedTask,
 	settlementError error,
 ) error {
-	accepted, err := worker.cancellationAccepted(ctx, executor, job)
+	accepted, err := worker.cancellationAccepted(ctx, executor, task)
 	if err != nil {
 		return err
 	}
 	if accepted {
 		return nil
 	}
-	status, err := worker.expireOwnership(ctx, job)
+	status, err := worker.expireOwnership(ctx, task)
 	if err != nil {
 		return err
 	}
 	switch status {
 	case workerOwnershipCancelRequested:
-		return worker.acknowledgeCancellation(ctx, executor, job)
+		return worker.acknowledgeCancellation(ctx, executor, task)
 	case workerOwnershipDeadline, workerOwnershipTimeout:
 		return nil
 	default:
@@ -1365,18 +1365,18 @@ func (worker *Worker) reconcileRejectedSettlement(
 	}
 }
 
-func (worker *Worker) settleExpiration(ctx context.Context, executor Executor, job ClaimedJob) error {
-	status, err := worker.expireOwnership(ctx, job)
+func (worker *Worker) settleExpiration(ctx context.Context, executor Executor, task ClaimedTask) error {
+	status, err := worker.expireOwnership(ctx, task)
 	if err != nil {
 		return err
 	}
 	switch status {
 	case workerOwnershipCancelRequested:
-		return worker.acknowledgeCancellation(ctx, executor, job)
+		return worker.acknowledgeCancellation(ctx, executor, task)
 	case workerOwnershipDeadline, workerOwnershipTimeout:
 		return nil
 	case workerOwnershipStale:
-		return &StaleLeaseError{JobID: job.ID}
+		return &StaleLeaseError{TaskID: task.ID}
 	default:
 		return errors.New(expirationNotDueMessage)
 	}
@@ -1385,12 +1385,12 @@ func (worker *Worker) settleExpiration(ctx context.Context, executor Executor, j
 func (worker *Worker) cancellationAccepted(
 	ctx context.Context,
 	executor Executor,
-	job ClaimedJob,
+	task ClaimedTask,
 ) (bool, error) {
 	rows, err := executor.Query(
 		ctx,
 		protocolStatementRegistry[acknowledgeCancelStatementName],
-		worker.fencedLease(job).parameters()...,
+		worker.fencedLease(task).parameters()...,
 	)
 	if err != nil {
 		return false, err
@@ -1405,19 +1405,19 @@ func (worker *Worker) cancellationAccepted(
 	return accepted, nil
 }
 
-func (worker *Worker) complete(ctx context.Context, executor Executor, job ClaimedJob, result any) error {
+func (worker *Worker) complete(ctx context.Context, executor Executor, task ClaimedTask, result any) error {
 	encoded, err := json.Marshal(result)
 	if err != nil {
-		return worker.fail(ctx, executor, job, err)
+		return worker.fail(ctx, executor, task, err)
 	}
 	var normalizedResult any
 	if err := decodeContractJSON(encoded, &normalizedResult); err != nil {
-		return worker.fail(ctx, executor, job, err)
+		return worker.fail(ctx, executor, task, err)
 	}
-	if err := worker.validateResultContract(ctx, executor, job, normalizedResult); err != nil {
-		return worker.fail(ctx, executor, job, err)
+	if err := worker.validateResultContract(ctx, executor, task, normalizedResult); err != nil {
+		return worker.fail(ctx, executor, task, err)
 	}
-	lease := worker.fencedLease(job)
+	lease := worker.fencedLease(task)
 	arguments := append(lease.parameters(), encoded)
 	rows, err := executor.Query(ctx, protocolStatementRegistry[completeStatementName], arguments...)
 	if err != nil {
@@ -1431,18 +1431,18 @@ func (worker *Worker) complete(ctx context.Context, executor Executor, job Claim
 		return errors.New(invalidCompletionResultMessage)
 	}
 	if !accepted {
-		return &StaleLeaseError{JobID: job.ID}
+		return &StaleLeaseError{TaskID: task.ID}
 	}
 	if worker.metrics.enabled {
-		worker.metrics.completed.Add(ctx, 1, jobMetricOptions(job))
+		worker.metrics.completed.Add(ctx, 1, taskMetricOptions(task))
 	}
 	logWorkerEvent(
 		ctx,
 		worker.logger,
 		slog.LevelInfo,
-		jobCompletedEvent,
-		jobCompletedLogMessage,
-		jobLogAttributes(job, worker.workerID)...,
+		taskCompletedEvent,
+		taskCompletedLogMessage,
+		taskLogAttributes(task, worker.workerID)...,
 	)
 	return nil
 }
@@ -1450,14 +1450,14 @@ func (worker *Worker) complete(ctx context.Context, executor Executor, job Claim
 func (worker *Worker) validateResultContract(
 	ctx context.Context,
 	executor Executor,
-	job ClaimedJob,
+	task ClaimedTask,
 	result any,
 ) error {
-	if job.ContractVersion == nil {
+	if task.ContractVersion == nil {
 		return nil
 	}
-	version := *job.ContractVersion
-	key := job.Type + contractCacheSeparator + version + contractCacheSeparator + contractResultKind
+	version := *task.ContractVersion
+	key := task.Type + contractCacheSeparator + version + contractCacheSeparator + contractResultKind
 	worker.contracts.mu.RLock()
 	validator := worker.contracts.validators[key]
 	worker.contracts.mu.RUnlock()
@@ -1465,14 +1465,14 @@ func (worker *Worker) validateResultContract(
 		rows, err := executor.Query(
 			ctx,
 			protocolStatementRegistry[getContractDefinitionStatementName],
-			job.Type,
+			task.Type,
 			version,
 		)
 		if err != nil {
 			return err
 		}
 		if len(rows) != 1 {
-			return &JobContractUnavailableError{JobType: job.Type, Version: version}
+			return &TaskContractUnavailableError{TaskType: task.Type, Version: version}
 		}
 		document, err := contractDocument(rows[0][contractSchemaField])
 		if err != nil {
@@ -1484,28 +1484,28 @@ func (worker *Worker) validateResultContract(
 		}
 	}
 	if err := validator.Validate(result); err != nil {
-		return &JobContractValidationError{JobType: job.Type, Version: version, Kind: contractResultKind}
+		return &TaskContractValidationError{TaskType: task.Type, Version: version, Kind: contractResultKind}
 	}
 	return nil
 }
 
-func (worker *Worker) fail(ctx context.Context, executor Executor, job ClaimedJob, handlerError error) error {
-	_, err := worker.failWithState(ctx, executor, job, handlerError)
+func (worker *Worker) fail(ctx context.Context, executor Executor, task ClaimedTask, handlerError error) error {
+	_, err := worker.failWithState(ctx, executor, task, handlerError)
 	return err
 }
 
 func (worker *Worker) failWithState(
 	ctx context.Context,
 	executor Executor,
-	job ClaimedJob,
+	task ClaimedTask,
 	handlerError error,
 ) (string, error) {
-	envelope := handlerErrorEnvelope(handlerError, job.RedactErrorDetails)
+	envelope := handlerErrorEnvelope(handlerError, task.RedactErrorDetails)
 	encoded, err := json.Marshal(envelope)
 	if err != nil {
 		return emptyString, err
 	}
-	lease := worker.fencedLease(job)
+	lease := worker.fencedLease(task)
 	arguments := append(lease.parameters(), encoded, nil)
 	rows, err := executor.Query(ctx, protocolStatementRegistry[failStatementName], arguments...)
 	if err != nil {
@@ -1523,54 +1523,54 @@ func (worker *Worker) failWithState(
 			ctx,
 			1,
 			metric.WithAttributes(
-				attribute.String(queueNameAttribute, job.Queue),
-				attribute.String(jobTypeAttribute, job.Type),
+				attribute.String(queueNameAttribute, task.Queue),
+				attribute.String(taskTypeAttribute, task.Type),
 				attribute.String(attemptOutcomeAttribute, state),
 			),
 		)
 		if state == workerFailureReady || state == workerFailureScheduled {
-			worker.metrics.retried.Add(ctx, 1, jobMetricOptions(job))
+			worker.metrics.retried.Add(ctx, 1, taskMetricOptions(task))
 		}
 	}
 	logWorkerEvent(
 		ctx,
 		worker.logger,
 		slog.LevelInfo,
-		jobFailureProcessedEvent,
-		jobFailureProcessedLogMessage,
-		append(jobLogAttributes(job, worker.workerID), slog.String(attemptOutcomeAttribute, state))...,
+		taskFailureProcessedEvent,
+		taskFailureProcessedLogMessage,
+		append(taskLogAttributes(task, worker.workerID), slog.String(attemptOutcomeAttribute, state))...,
 	)
 	switch state {
 	case workerFailureReady, workerFailureScheduled, workerFailureFailed:
 		return state, nil
 	case workerFailureCancelRequested:
-		return state, worker.acknowledgeCancellation(ctx, executor, job)
+		return state, worker.acknowledgeCancellation(ctx, executor, task)
 	case workerFailureDeadline, workerFailureTimeout:
 		return state, nil
 	case workerFailureStale:
 		return state, worker.reconcileRejectedSettlement(
 			ctx,
 			executor,
-			job,
-			&StaleLeaseError{JobID: job.ID},
+			task,
+			&StaleLeaseError{TaskID: task.ID},
 		)
 	default:
 		return emptyString, fmt.Errorf(rejectedFailureStateFormat, state)
 	}
 }
 
-func (worker *Worker) fencedLease(job ClaimedJob) fencedLease {
-	return fencedLease{jobID: job.ID, workerID: worker.workerID, fenceToken: job.FenceToken}
+func (worker *Worker) fencedLease(task ClaimedTask) fencedLease {
+	return fencedLease{taskID: task.ID, workerID: worker.workerID, fenceToken: task.FenceToken}
 }
 
-func claimedJob(row Row, queue string) (ClaimedJob, error) {
-	jobID, ok := uuidString(row[rowJobIDField])
+func claimedTask(row Row, queue string) (ClaimedTask, error) {
+	taskID, ok := uuidString(row[rowTaskIDField])
 	if !ok {
-		return ClaimedJob{}, errors.New(invalidClaimResultMessage)
+		return ClaimedTask{}, errors.New(invalidClaimResultMessage)
 	}
-	jobType, ok := row[rowJobTypeField].(string)
-	if !ok || jobType == emptyString {
-		return ClaimedJob{}, errors.New(invalidClaimResultMessage)
+	taskType, ok := row[rowTaskTypeField].(string)
+	if !ok || taskType == emptyString {
+		return ClaimedTask{}, errors.New(invalidClaimResultMessage)
 	}
 	priority, priorityOK := integer(row[rowPriorityField])
 	attempt, attemptOK := integer(row[rowAttemptField])
@@ -1579,34 +1579,34 @@ func claimedJob(row Row, queue string) (ClaimedJob, error) {
 	fenceToken, fenceOK := int64Value(row[rowFenceTokenField])
 	leaseExpiresAt, leaseOK := row[rowLeaseExpiresAtField].(time.Time)
 	if !priorityOK || !attemptOK || !maxAttemptsOK || !resultMaxBytesOK || !fenceOK || !leaseOK {
-		return ClaimedJob{}, errors.New(invalidClaimResultMessage)
+		return ClaimedTask{}, errors.New(invalidClaimResultMessage)
 	}
 	payload, err := decodedJSON(row[rowPayloadField])
 	if err != nil {
-		return ClaimedJob{}, err
+		return ClaimedTask{}, err
 	}
-	job := ClaimedJob{
-		ID: jobID, Queue: queue, Type: jobType, Priority: priority, Payload: payload,
+	task := ClaimedTask{
+		ID: taskID, Queue: queue, Type: taskType, Priority: priority, Payload: payload,
 		ResultMaxBytes: resultMaxBytes, RedactErrorDetails: row[rowRedactErrorDetailsField] == true,
 		TraceContext: row[rowTraceContextField], Attempt: attempt, MaxAttempts: maxAttempts,
 		FenceToken: fenceToken, LeaseExpiresAt: leaseExpiresAt,
 	}
 	if value, ok := row[rowContractVersionField].(string); ok {
-		job.ContractVersion = &value
+		task.ContractVersion = &value
 	}
 	if value, ok := row[rowRetryPolicyField].(map[string]any); ok {
-		job.RetryPolicy = value
+		task.RetryPolicy = value
 	}
 	if value, ok := row[rowDeadlineAtField].(time.Time); ok {
-		job.Deadline = &value
+		task.Deadline = &value
 	}
 	if value, ok := int64Value(row[rowExecutionTimeoutMSField]); ok {
-		job.ExecutionTimeout = time.Duration(value) * time.Millisecond
+		task.ExecutionTimeout = time.Duration(value) * time.Millisecond
 	}
 	if value, ok := row[rowAttemptTimeoutAtField].(time.Time); ok {
-		job.AttemptTimeout = &value
+		task.AttemptTimeout = &value
 	}
-	return job, nil
+	return task, nil
 }
 
 func decodedJSON(value any) (any, error) {

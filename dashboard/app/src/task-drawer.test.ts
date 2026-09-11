@@ -42,10 +42,10 @@ describe("task detail drawer", () => {
   });
 
   it("moves focus into every selected task and back to the latest trigger on close", () => {
-    expect(taskDrawerFocusChange(null, "job-a")).toBe("drawer");
-    expect(taskDrawerFocusChange("job-a", "job-b")).toBe("drawer");
-    expect(taskDrawerFocusChange("job-b", null)).toBe("trigger");
-    expect(taskDrawerFocusChange("job-b", "job-b")).toBe("none");
+    expect(taskDrawerFocusChange(null, "task-a")).toBe("drawer");
+    expect(taskDrawerFocusChange("task-a", "task-b")).toBe("drawer");
+    expect(taskDrawerFocusChange("task-b", null)).toBe("trigger");
+    expect(taskDrawerFocusChange("task-b", "task-b")).toBe("none");
   });
 
   it("lets Escape close only the top interaction layer", () => {
@@ -55,40 +55,40 @@ describe("task detail drawer", () => {
 
   it("stays open while the next selected task loads", () => {
     const loaded = {
-      selectedJobId: "job-1",
-      selectedJob: { id: "job-1" },
-      jobDetailError: null,
+      selectedTaskId: "task-1",
+      selectedTask: { id: "task-1" },
+      taskDetailError: null,
     };
-    expect(taskDrawerOpened(loaded.selectedJobId)).toBe(true);
+    expect(taskDrawerOpened(loaded.selectedTaskId)).toBe(true);
     expect(taskDrawerBody(loaded)).toBe("detail");
 
     // Selecting another row clears the loaded detail but keeps the drawer open on a loader,
     // so the panel swaps contents in place instead of closing and re-opening.
     const switching = {
-      selectedJobId: "job-2",
-      selectedJob: null,
-      jobDetailError: null,
+      selectedTaskId: "task-2",
+      selectedTask: null,
+      taskDetailError: null,
     };
-    expect(taskDrawerOpened(switching.selectedJobId)).toBe(true);
+    expect(taskDrawerOpened(switching.selectedTaskId)).toBe(true);
     expect(taskDrawerBody(switching)).toBe("loading");
 
-    expect(taskDrawerBody({ ...switching, selectedJob: { id: "job-2" } })).toBe("detail");
+    expect(taskDrawerBody({ ...switching, selectedTask: { id: "task-2" } })).toBe("detail");
   });
 
   it("closes only when no task is selected and reports a load failure in place", () => {
     expect(taskDrawerOpened(null)).toBe(false);
     expect(
       taskDrawerBody({
-        selectedJobId: null,
-        selectedJob: null,
-        jobDetailError: null,
+        selectedTaskId: null,
+        selectedTask: null,
+        taskDetailError: null,
       }),
     ).toBe("closed");
     expect(
       taskDrawerBody({
-        selectedJobId: "job-3",
-        selectedJob: null,
-        jobDetailError: "boom",
+        selectedTaskId: "task-3",
+        selectedTask: null,
+        taskDetailError: "boom",
       }),
     ).toBe("error");
   });
@@ -138,29 +138,29 @@ describe("latest task detail request guard", () => {
 
     // Task A is clicked first but its server response arrives last.
     const slowA = Promise.withResolvers<string>();
-    const a = load("job-a", slowA.promise);
-    const b = load("job-b", Promise.resolve("job-b"));
+    const a = load("task-a", slowA.promise);
+    const b = load("task-b", Promise.resolve("task-b"));
 
     await b;
-    expect(drawer).toBe("job-b");
+    expect(drawer).toBe("task-b");
 
-    slowA.resolve("job-a");
+    slowA.resolve("task-a");
     await a;
-    expect(drawer).toBe("job-b");
+    expect(drawer).toBe("task-b");
   });
 });
 
 describe("late cancellation result ownership", () => {
   it("writes the result only while the drawer still shows that task", () => {
-    expect(cancelResultAppliesTo("job-a", "job-a")).toBe(true);
+    expect(cancelResultAppliesTo("task-a", "task-a")).toBe(true);
     // The operator clicked task B while A's cancellation was still in flight.
-    expect(cancelResultAppliesTo("job-a", "job-b")).toBe(false);
+    expect(cancelResultAppliesTo("task-a", "task-b")).toBe(false);
     // Closing the drawer discards the result rather than re-opening the panel.
-    expect(cancelResultAppliesTo("job-a", null)).toBe(false);
+    expect(cancelResultAppliesTo("task-a", null)).toBe(false);
   });
 
   it("keeps a late failure for the previous task out of the newly selected task's panel", () => {
-    let selected: string | null = "job-a";
+    let selected: string | null = "task-a";
     let shownError: string | null = null;
 
     const settleCancel = (id: string, message: string) => {
@@ -169,38 +169,38 @@ describe("late cancellation result ownership", () => {
     };
 
     // Cancellation of A is requested, then B is selected before the server answers.
-    selected = "job-b";
-    settleCancel("job-a", "Unable to cancel the task");
+    selected = "task-b";
+    settleCancel("task-a", "Unable to cancel the task");
     expect(shownError).toBe(null);
 
     // B's own failure is still reported, so the guard silences staleness and nothing else.
-    settleCancel("job-b", "boom");
+    settleCancel("task-b", "boom");
     expect(shownError).toBe("boom");
   });
 
   it("clears the pending flag only for the task whose cancellation settled", () => {
     // The flag is a single slot holding at most one task id, so a late settle clearing it
     // unconditionally would unstick the spinner of a cancellation that is still running.
-    expect(clearPendingCancel("job-b", "job-a")).toBe("job-b");
-    expect(clearPendingCancel("job-a", "job-a")).toBe(null);
-    expect(clearPendingCancel(null, "job-a")).toBe(null);
+    expect(clearPendingCancel("task-b", "task-a")).toBe("task-b");
+    expect(clearPendingCancel("task-a", "task-a")).toBe(null);
+    expect(clearPendingCancel(null, "task-a")).toBe(null);
   });
 });
 
 describe("reconciling the drawer with the URL", () => {
   it("opens, switches, and closes to match the address bar", () => {
     // A deep link or a reload arrives with no drawer showing yet.
-    expect(taskDrawerSync("job-a", null)).toBe("open");
+    expect(taskDrawerSync("task-a", null)).toBe("open");
     // Clicking another row, and Back or Forward between two tasks, both swap in place.
-    expect(taskDrawerSync("job-b", "job-a")).toBe("open");
+    expect(taskDrawerSync("task-b", "task-a")).toBe("open");
     // Removing the task parameter, whether by the close button or by Back, closes the panel.
-    expect(taskDrawerSync(null, "job-a")).toBe("close");
+    expect(taskDrawerSync(null, "task-a")).toBe("close");
   });
 
   it("does nothing when the drawer already agrees with the URL", () => {
     // This runs on every render of the controller, so re-rendering for an unrelated reason (a
     // poll landing, a filter changing) must not restart the load or discard one in flight.
-    expect(taskDrawerSync("job-a", "job-a")).toBe("none");
+    expect(taskDrawerSync("task-a", "task-a")).toBe("none");
     expect(taskDrawerSync(null, null)).toBe("none");
   });
 
@@ -216,17 +216,17 @@ describe("reconciling the drawer with the URL", () => {
       }
     };
 
-    reconcile("job-a");
+    reconcile("task-a");
     // Three unrelated re-renders while the same task is open.
-    reconcile("job-a");
-    reconcile("job-a");
-    reconcile("job-a");
-    expect(loads).toEqual(["job-a"]);
+    reconcile("task-a");
+    reconcile("task-a");
+    reconcile("task-a");
+    expect(loads).toEqual(["task-a"]);
 
     // Back to the list, then Forward to the same task, is a genuine open again.
     reconcile(null);
-    reconcile("job-a");
-    expect(loads).toEqual(["job-a", "job-a"]);
-    expect(shown).toBe("job-a");
+    reconcile("task-a");
+    expect(loads).toEqual(["task-a", "task-a"]);
+    expect(shown).toBe("task-a");
   });
 });

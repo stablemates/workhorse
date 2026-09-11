@@ -16,7 +16,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from workhorse import (
-    ChildJobRequest,
+    ChildTaskRequest,
     EnqueueOptions,
     HandlerContext,
     LifecycleError,
@@ -77,10 +77,10 @@ def execute_trace_propagation_fixture(
     queue = Queue(connection, queue_name)
     with trace.get_tracer("runtime-fixture").start_as_current_span("caller") as caller:
         caller_context = caller.get_span_context()
-        job_id = queue.enqueue(fixture["jobType"], {})
+        task_id = queue.enqueue(fixture["taskType"], {})
 
     row = connection.execute(
-        "SELECT trace_context FROM workhorse.job WHERE id = %s::uuid", (job_id,)
+        "SELECT trace_context FROM workhorse.task WHERE id = %s::uuid", (task_id,)
     ).fetchone()
     assert row is not None
     stored = row[0]
@@ -88,7 +88,7 @@ def execute_trace_propagation_fixture(
     traceparent = stored["traceparent"]
 
     worker = Worker(connection, queue=queue_name, worker_id=f"python-{fixture['id']}")
-    worker.handle(fixture["jobType"], lambda _payload, _context: None)
+    worker.handle(fixture["taskType"], lambda _payload, _context: None)
     assert worker.run_once() is True
 
     handler = next(
@@ -103,18 +103,18 @@ def execute_trace_propagation_fixture(
 def execute_batch_fixture(connection: psycopg.Connection[Any], fixture: Mapping[str, Any]) -> None:
     queue_name = runtime_queue(fixture)
     queue = Queue(connection)
-    job_ids = {
-        job["key"]: queue.enqueue(
-            fixture["jobType"],
-            {"key": job["key"], "outcome": job["outcome"]},
+    task_ids = {
+        task["key"]: queue.enqueue(
+            fixture["taskType"],
+            {"key": task["key"], "outcome": task["outcome"]},
             EnqueueOptions(
                 queue=queue_name,
-                priority=job["priority"],
-                max_attempts=job["maxAttempts"],
+                priority=task["priority"],
+                max_attempts=task["maxAttempts"],
                 retry_policy={"type": "fixed", "delayMs": 0},
             ),
         )
-        for job in fixture["jobs"]
+        for task in fixture["tasks"]
     }
     seen: list[str] = []
     worker: Worker
@@ -126,13 +126,13 @@ def execute_batch_fixture(connection: psycopg.Connection[Any], fixture: Mapping[
             (
                 {
                     "status": "succeeded",
-                    "result": {"attempt": item.context.job.attempt},
+                    "result": {"attempt": item.context.task.attempt},
                 }
-                if item.payload["outcome"] == "succeed" or item.context.job.attempt > 1
+                if item.payload["outcome"] == "succeed" or item.context.task.attempt > 1
                 else {
                     "status": "failed",
                     "error": RuntimeError(
-                        f"{item.payload['outcome']} on attempt {item.context.job.attempt}"
+                        f"{item.payload['outcome']} on attempt {item.context.task.attempt}"
                     ),
                 }
             )
@@ -145,7 +145,7 @@ def execute_batch_fixture(connection: psycopg.Connection[Any], fixture: Mapping[
         worker_id=f"python-{fixture['id']}",
         concurrency=fixture["concurrency"],
     ).handle_batch(
-        fixture["jobType"],
+        fixture["taskType"],
         handle_batch,
         max_size=fixture["batchMaxSize"],
         linger_ms=100,
@@ -153,10 +153,10 @@ def execute_batch_fixture(connection: psycopg.Connection[Any], fixture: Mapping[
 
     assert worker.run_once() is True
     assert seen == fixture["expectedHandlerOrder"]
-    assert_job_states(connection, job_ids, fixture["expectedAfterFirstRun"])
+    assert_task_states(connection, task_ids, fixture["expectedAfterFirstRun"])
     worker.resume()
     assert worker.run_once() is True
-    assert_job_states(connection, job_ids, fixture["expectedAfterSecondRun"])
+    assert_task_states(connection, task_ids, fixture["expectedAfterSecondRun"])
 
 
 def execute_suspension_replay_fixture(
@@ -164,10 +164,10 @@ def execute_suspension_replay_fixture(
 ) -> None:
     queue_name = runtime_queue(fixture)
     queue = Queue(connection)
-    job_ids = {
-        "suspension": queue.enqueue(fixture["jobType"], {}, EnqueueOptions(queue=queue_name)),
+    task_ids = {
+        "suspension": queue.enqueue(fixture["taskType"], {}, EnqueueOptions(queue=queue_name)),
         "following": queue.enqueue(
-            fixture["followingJobType"], {}, EnqueueOptions(queue=queue_name)
+            fixture["followingTaskType"], {}, EnqueueOptions(queue=queue_name)
         ),
     }
     seen: list[str] = []
@@ -178,7 +178,7 @@ def execute_suspension_replay_fixture(
     def suspension(_payload: object, context: HandlerContext) -> dict[str, object]:
         nonlocal handler_runs, checkpoint_operations
         handler_runs += 1
-        seen.append(f"suspension:{context.job.attempt}")
+        seen.append(f"suspension:{context.task.attempt}")
 
         def prepare() -> dict[str, int]:
             nonlocal checkpoint_operations
@@ -192,7 +192,7 @@ def execute_suspension_replay_fixture(
         return {"prepared": prepared, "handlerRuns": handler_runs}
 
     def following(_payload: object, context: HandlerContext) -> dict[str, bool]:
-        seen.append(f"following:{context.job.attempt}")
+        seen.append(f"following:{context.task.attempt}")
         return {"handled": True}
 
     worker = (
@@ -202,33 +202,33 @@ def execute_suspension_replay_fixture(
             worker_id=f"python-{fixture['id']}",
             maintenance_interval_ms=100,
         )
-        .handle(fixture["jobType"], suspension)
-        .handle(fixture["followingJobType"], following)
+        .handle(fixture["taskType"], suspension)
+        .handle(fixture["followingTaskType"], following)
     )
 
     assert worker.run_once() is True
-    assert_job_states(connection, job_ids, fixture["expectedAfterSuspension"])
+    assert_task_states(connection, task_ids, fixture["expectedAfterSuspension"])
     assert_attempt_count(
-        connection, job_ids["suspension"], fixture["expectedAttemptsAfterSuspension"]
+        connection, task_ids["suspension"], fixture["expectedAttemptsAfterSuspension"]
     )
 
     worker.resume()
     assert worker.run_once() is True
-    assert_job_states(connection, job_ids, fixture["expectedAfterSlotRelease"])
+    assert_task_states(connection, task_ids, fixture["expectedAfterSlotRelease"])
 
     # The wait is long enough that it cannot elapse between the suspension and the slot
     # release check on a slow runner. Rewind it, as the Go fixture does, instead of
     # sleeping through it, and promote it explicitly rather than waiting for the worker's
     # maintenance interval.
     connection.execute(
-        "UPDATE workhorse.job_runtime SET run_at = clock_timestamp() - interval '1 millisecond'"
-        " WHERE job_id = %s",
-        (job_ids["suspension"],),
+        "UPDATE workhorse.task_runtime SET run_at = clock_timestamp() - interval '1 millisecond'"
+        " WHERE task_id = %s",
+        (task_ids["suspension"],),
     )
     connection.execute("SELECT * FROM workhorse.tick_v1(100, 100)").fetchall()
     assert worker.run_once() is True
-    assert_job_states(connection, job_ids, fixture["expectedAfterReplay"])
-    assert_attempt_count(connection, job_ids["suspension"], fixture["expectedAttemptsAfterReplay"])
+    assert_task_states(connection, task_ids, fixture["expectedAfterReplay"])
+    assert_attempt_count(connection, task_ids["suspension"], fixture["expectedAttemptsAfterReplay"])
     assert seen == fixture["expectedHandlerOrder"]
     assert handler_runs == fixture["expectedHandlerRuns"]
     assert checkpoint_operations == fixture["expectedCheckpointOperations"]
@@ -238,7 +238,7 @@ def execute_cancellation_fixture(
     connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
 ) -> None:
     queue_name = runtime_queue(fixture)
-    job_id = Queue(connection).enqueue(fixture["jobType"], {}, EnqueueOptions(queue=queue_name))
+    task_id = Queue(connection).enqueue(fixture["taskType"], {}, EnqueueOptions(queue=queue_name))
     started = Event()
     abort_reasons: list[str] = []
     errors: list[BaseException] = []
@@ -256,11 +256,11 @@ def execute_cancellation_fixture(
         worker_id=f"python-{fixture['id']}",
         lease_ms=fixture["leaseMs"],
         heartbeat_ms=fixture["heartbeatMs"],
-    ).handle(fixture["jobType"], handler)
+    ).handle(fixture["taskType"], handler)
     thread = run_in_thread(worker.run_once, errors)
     assert started.wait(timeout=5)
     cancellation = Queue(connection).cancel(
-        job_id,
+        task_id,
         requested_by="runtime-fixture",
         reason=fixture["cancelReason"],
     )
@@ -269,8 +269,8 @@ def execute_cancellation_fixture(
     join(thread)
     assert errors == []
     assert abort_reasons == [fixture["expectedAbortReason"]]
-    assert_job_states(connection, {"job": job_id}, {"job": fixture["expectedState"]})
-    assert_attempt_outcomes(connection, job_id, [fixture["expectedAttemptOutcome"]])
+    assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
+    assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])
 
 
 def execute_expiration_fixture(
@@ -278,7 +278,7 @@ def execute_expiration_fixture(
 ) -> None:
     queue_name = runtime_queue(fixture)
     # The deadline budget starts after the claim, inside early_claim. This value only has to be
-    # far enough away that the claim never skips the job.
+    # far enough away that the claim never skips the task.
     placeholder = datetime.now(UTC) + timedelta(hours=1)
     options = (
         EnqueueOptions(
@@ -295,7 +295,7 @@ def execute_expiration_fixture(
             retry_policy={"type": "fixed", "delayMs": 0},
         )
     )
-    job_id = Queue(connection).enqueue(fixture["jobType"], {}, options)
+    task_id = Queue(connection).enqueue(fixture["taskType"], {}, options)
     abort_reasons: list[str] = []
     worker: Worker
 
@@ -312,7 +312,7 @@ def execute_expiration_fixture(
         worker_id=f"python-{fixture['id']}",
         lease_ms=fixture["leaseMs"],
         heartbeat_ms=fixture["heartbeatMs"],
-    ).handle(fixture["jobType"], handler)
+    ).handle(fixture["taskType"], handler)
     original_rows = worker._executor.rows
 
     def early_claim(statement: DriverStatement, parameters: Any = ()) -> list[Mapping[str, object]]:
@@ -322,10 +322,10 @@ def execute_expiration_fixture(
             if fixture["mode"] == "deadline":
                 field = "deadline_at"
                 anchored = connection.execute(
-                    "UPDATE workhorse.job_runtime "
+                    "UPDATE workhorse.task_runtime "
                     "SET deadline_at = clock_timestamp() + (%s * interval '1 millisecond') "
-                    "WHERE job_id = %s RETURNING deadline_at",
-                    (fixture["durationMs"], job_id),
+                    "WHERE task_id = %s RETURNING deadline_at",
+                    (fixture["durationMs"], task_id),
                 ).fetchone()
                 assert anchored is not None
                 value = anchored[0]
@@ -341,17 +341,17 @@ def execute_expiration_fixture(
     for expected in fixture["expectedAfterRuns"]:
         worker.resume()
         assert worker.run_once() is True
-        assert_job_states(connection, {"job": job_id}, {"job": expected})
+        assert_task_states(connection, {"task": task_id}, {"task": expected})
     assert abort_reasons == fixture["expectedAbortReasons"]
-    assert_attempt_outcomes(connection, job_id, fixture["expectedAttemptOutcomes"])
+    assert_attempt_outcomes(connection, task_id, fixture["expectedAttemptOutcomes"])
 
 
 def execute_lease_loss_fixture(
     connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
 ) -> None:
     queue_name = runtime_queue(fixture)
-    job_id = Queue(connection).enqueue(
-        fixture["jobType"],
+    task_id = Queue(connection).enqueue(
+        fixture["taskType"],
         {},
         EnqueueOptions(
             queue=queue_name,
@@ -382,7 +382,7 @@ def execute_lease_loss_fixture(
             ("runChild", lambda: context.run_child("too-late", "protocol.child", {})),
             (
                 "runChildren",
-                lambda: context.run_children([ChildJobRequest("too-late", "protocol.child", {})]),
+                lambda: context.run_children([ChildTaskRequest("too-late", "protocol.child", {})]),
             ),
         ]
         for name, write in writes:
@@ -399,13 +399,13 @@ def execute_lease_loss_fixture(
         worker_id=f"python-{fixture['id']}",
         lease_ms=fixture["leaseMs"],
         heartbeat_ms=fixture["heartbeatMs"],
-    ).handle(fixture["jobType"], handler)
+    ).handle(fixture["taskType"], handler)
     thread = run_in_thread(worker.run_once, errors)
     assert started.wait(timeout=5)
     connection.execute(
-        "UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 ms' "
-        "WHERE job_id = %s",
-        (job_id,),
+        "UPDATE workhorse.task_runtime SET expires_at = clock_timestamp() - interval '1 ms' "
+        "WHERE task_id = %s",
+        (task_id,),
     )
     recovered = connection.execute(
         "SELECT rows_affected FROM workhorse.recover_expired_telemetry_v1(%s, %s)",
@@ -418,15 +418,15 @@ def execute_lease_loss_fixture(
     assert set(fixture["portableRejectedWrites"]) <= set(fixture["expectedRejectedWrites"])
     assert list(rejected_writes) == fixture["portableRejectedWrites"]
     assert set(rejected_writes.values()) == {fixture["expectedRejectedWriteError"]}
-    assert_job_states(connection, {"job": job_id}, {"job": fixture["expectedState"]})
-    assert_attempt_outcomes(connection, job_id, [fixture["expectedAttemptOutcome"]])
+    assert_task_states(connection, {"task": task_id}, {"task": fixture["expectedState"]})
+    assert_attempt_outcomes(connection, task_id, [fixture["expectedAttemptOutcome"]])
 
 
 def execute_heartbeat_fixture(
     connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
 ) -> None:
     queue_name = runtime_queue(fixture)
-    Queue(connection).enqueue(fixture["jobType"], {}, EnqueueOptions(queue=queue_name))
+    Queue(connection).enqueue(fixture["taskType"], {}, EnqueueOptions(queue=queue_name))
     handler_started = Event()
     release_handler = Event()
     first_heartbeat_started = Event()
@@ -447,7 +447,7 @@ def execute_heartbeat_fixture(
         worker_id=f"python-{fixture['id']}",
         lease_ms=fixture["leaseMs"],
         heartbeat_ms=fixture["heartbeatMs"],
-    ).handle(fixture["jobType"], handler)
+    ).handle(fixture["taskType"], handler)
     original_rows = worker._executor.rows
 
     def delayed_heartbeat(
@@ -564,7 +564,7 @@ def execute_poll_cadence_fixture(
             handled_at = monotonic()
             handled.set()
 
-        worker.handle(fixture["jobType"], handle)
+        worker.handle(fixture["taskType"], handle)
         running = Thread(target=worker.run)
         running.start()
         try:
@@ -581,7 +581,7 @@ def execute_poll_cadence_fixture(
                     # the pinned step, so this changes nothing; an unheld one fails every run.
                     sleep(fixture["enqueueStallMs"] / 1_000)
                     Queue(connection).enqueue(
-                        fixture["jobType"], {}, EnqueueOptions(queue=queue_name)
+                        fixture["taskType"], {}, EnqueueOptions(queue=queue_name)
                     )
                     enqueued_at = monotonic()
                     gate.holding = False
@@ -603,9 +603,9 @@ def execute_graceful_drain_fixture(
 ) -> None:
     queue_name = runtime_queue(fixture)
     queue = Queue(connection)
-    job_ids = [
-        queue.enqueue(fixture["jobType"], {"sequence": sequence}, EnqueueOptions(queue=queue_name))
-        for sequence in range(fixture["jobCount"])
+    task_ids = [
+        queue.enqueue(fixture["taskType"], {"sequence": sequence}, EnqueueOptions(queue=queue_name))
+        for sequence in range(fixture["taskCount"])
     ]
     release_handlers = Event()
     errors: list[BaseException] = []
@@ -619,7 +619,7 @@ def execute_graceful_drain_fixture(
         worker_id=f"python-{fixture['id']}",
         concurrency=fixture["concurrency"],
         poll_ms=5_000,
-    ).handle(fixture["jobType"], handler)
+    ).handle(fixture["taskType"], handler)
     thread = run_in_thread(worker.run, errors)
     wait_for(
         lambda: active_slots(worker) == fixture["expectedActiveAtStop"],
@@ -633,49 +633,49 @@ def execute_graceful_drain_fixture(
     join(thread)
     assert errors == []
     assert active_slots(worker) == 0
-    states = [job_state(connection, job_id)["state"] for job_id in job_ids]
+    states = [task_state(connection, task_id)["state"] for task_id in task_ids]
     assert states.count("succeeded") == fixture["expectedSucceeded"]
     assert states.count("ready") == fixture["expectedReady"]
 
 
-def assert_job_states(
+def assert_task_states(
     connection: psycopg.Connection[Any],
-    job_ids: Mapping[str, str],
+    task_ids: Mapping[str, str],
     expected: Mapping[str, Mapping[str, Any]],
 ) -> None:
     for key, expected_state in expected.items():
-        actual = job_state(connection, job_ids[key])
+        actual = task_state(connection, task_ids[key])
         assert actual["state"] == expected_state["state"], key
         assert actual["attempt"] == expected_state["attempt"], key
         if "errorName" in expected_state:
             assert actual["error_name"] == expected_state["errorName"], key
 
 
-def job_state(connection: psycopg.Connection[Any], job_id: str) -> dict[str, object]:
+def task_state(connection: psycopg.Connection[Any], task_id: str) -> dict[str, object]:
     row = connection.execute(
-        "SELECT state, current_attempt, error->>'name' FROM workhorse.job_runtime "
-        "WHERE job_id = %s UNION ALL "
-        "SELECT state, current_attempt, error->>'name' FROM workhorse.job_outcome "
-        "WHERE job_id = %s",
-        (job_id, job_id),
+        "SELECT state, current_attempt, error->>'name' FROM workhorse.task_runtime "
+        "WHERE task_id = %s UNION ALL "
+        "SELECT state, current_attempt, error->>'name' FROM workhorse.task_outcome "
+        "WHERE task_id = %s",
+        (task_id, task_id),
     ).fetchone()
-    assert row is not None, job_id
+    assert row is not None, task_id
     return {"state": row[0], "attempt": row[1], "error_name": row[2]}
 
 
-def assert_attempt_count(connection: psycopg.Connection[Any], job_id: str, expected: int) -> None:
+def assert_attempt_count(connection: psycopg.Connection[Any], task_id: str, expected: int) -> None:
     row = connection.execute(
-        "SELECT count(*) FROM workhorse.attempt_history WHERE job_id = %s", (job_id,)
+        "SELECT count(*) FROM workhorse.attempt_history WHERE task_id = %s", (task_id,)
     ).fetchone()
     assert row == (expected,)
 
 
 def assert_attempt_outcomes(
-    connection: psycopg.Connection[Any], job_id: str, expected: list[str]
+    connection: psycopg.Connection[Any], task_id: str, expected: list[str]
 ) -> None:
     rows = connection.execute(
-        "SELECT outcome FROM workhorse.attempt_history WHERE job_id = %s ORDER BY attempt",
-        (job_id,),
+        "SELECT outcome FROM workhorse.attempt_history WHERE task_id = %s ORDER BY attempt",
+        (task_id,),
     ).fetchall()
     assert [row[0] for row in rows] == expected
 

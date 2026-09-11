@@ -1,6 +1,6 @@
 # `@stablemates/workhorse-prisma`
 
-The Prisma ORM provider for enqueuing Workhorse jobs through Prisma transactions.
+The Prisma ORM provider for enqueuing Workhorse tasks through Prisma transactions.
 
 > **Public beta:** Workhorse is usable for evaluation and early production adoption. A 0.x minor
 > release may change behaviour, so read the changelog before you upgrade. It will not ask you to

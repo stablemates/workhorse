@@ -32,19 +32,19 @@ export async function runOrchestrationExample(databaseUrl) {
     const queue = new Queue(pool, "orders");
     const admin = new Admin(pool);
     const workers = createOrderWorkers(queue);
-    const jobId = await queue.enqueue("order.process", { orderId: "order-42" });
+    const taskId = await queue.enqueue("order.process", { orderId: "order-42" });
 
     for (let pass = 0; pass < 100; pass += 1) {
       await workers.parentWorker.runOnce();
       await workers.childWorker.runOnce();
-      const job = await admin.getJob(jobId);
-      if (job?.state === "succeeded") return { jobId, result: job.result };
-      if (job?.state === "failed" || job?.state === "canceled") {
-        throw new Error(`Order orchestration finished in ${job.state} state`);
+      const task = await admin.getTask(taskId);
+      if (task?.state === "succeeded") return { taskId, result: task.result };
+      if (task?.state === "failed" || task?.state === "canceled") {
+        throw new Error(`Order orchestration finished in ${task.state} state`);
       }
       await delay(20);
     }
-    throw new Error(`Order orchestration did not finish ${jobId}`);
+    throw new Error(`Order orchestration did not finish ${taskId}`);
   } finally {
     await pool.end();
   }

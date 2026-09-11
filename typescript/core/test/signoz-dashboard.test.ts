@@ -31,9 +31,9 @@ describe("SigNoz business dashboard", () => {
 
     expect(panels.some((panel) => panel.spec.plugin.kind === "signoz/NumberPanel")).toBe(false);
     for (const [title, metric] of [
-      ["Enqueued tasks", "workhorse.jobs.enqueued"],
-      ["Started tasks", "workhorse.jobs.claimed"],
-      ["Running and waiting tasks", "workhorse.jobs.count"],
+      ["Enqueued tasks", "workhorse.tasks.enqueued"],
+      ["Started tasks", "workhorse.tasks.claimed"],
+      ["Running and waiting tasks", "workhorse.tasks.count"],
       ["Completed tasks", "workhorse.handler.executions"],
     ] as const) {
       const panel = panels.find((candidate) => candidate.spec.display.name === title);
@@ -82,10 +82,10 @@ describe("SigNoz business dashboard", () => {
     expect(metricNames("Worker slots")).toEqual(
       new Set(["workhorse.worker.active", "workhorse.worker.capacity"]),
     );
-    expect(metricNames("Queue depth")).toEqual(new Set(["workhorse.jobs.count"]));
-    expect(metricNames("Oldest ready job")).toEqual(new Set(["workhorse.queue.oldest_ready.age"]));
+    expect(metricNames("Queue depth")).toEqual(new Set(["workhorse.tasks.count"]));
+    expect(metricNames("Oldest ready task")).toEqual(new Set(["workhorse.queue.oldest_ready.age"]));
     expect(metricNames("Estimated queue drain time")).toEqual(
-      new Set(["workhorse.jobs.count", "workhorse.handler.executions"]),
+      new Set(["workhorse.tasks.count", "workhorse.handler.executions"]),
     );
     expect(metricNames("Terminal success rate")).toEqual(new Set(["workhorse.handler.executions"]));
   });
@@ -96,7 +96,7 @@ describe("SigNoz business dashboard", () => {
     ]);
 
     expect(new Set(dashboards.map((dashboard) => dashboard.name))).toEqual(
-      new Set(["workhorse-jobs", "workhorse-operations", "workhorse-reliability"]),
+      new Set(["workhorse-tasks", "workhorse-operations", "workhorse-reliability"]),
     );
     expect(
       dashboards.every((dashboard) =>
@@ -121,12 +121,12 @@ describe("SigNoz business dashboard", () => {
       "deployment.environment.name",
       "service.name",
       "workhorse.queue.name",
-      "workhorse.job.type",
+      "workhorse.task.type",
     ]);
     for (const metric of [
-      "workhorse.jobs.enqueued",
-      "workhorse.jobs.claimed",
-      "workhorse.jobs.count",
+      "workhorse.tasks.enqueued",
+      "workhorse.tasks.claimed",
+      "workhorse.tasks.count",
       "workhorse.handler.executions",
       "workhorse.handler.duration.bucket",
       "workhorse.queue.oldest_ready.age",
@@ -138,13 +138,13 @@ describe("SigNoz business dashboard", () => {
     // The eager instrumentation module consolidated away by 0.1b owned these names. A dashboard
     // still asking for one of them would query a series nothing writes.
     for (const retiredMetric of [
-      "workhorse.job.enqueued",
-      "workhorse.job.claimed",
-      "workhorse.job.count",
-      "workhorse.job.execution",
-      "workhorse.job.execution.duration.bucket",
-      "workhorse.job.cancellation",
-      "workhorse.job.redrive",
+      "workhorse.task.enqueued",
+      "workhorse.task.claimed",
+      "workhorse.task.count",
+      "workhorse.task.execution",
+      "workhorse.task.execution.duration.bucket",
+      "workhorse.task.cancellation",
+      "workhorse.task.redrive",
       "workhorse.lease.recovered",
     ]) {
       expect(encoded).not.toContain(`"metricName":"${retiredMetric}"`);

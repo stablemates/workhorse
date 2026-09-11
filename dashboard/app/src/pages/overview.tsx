@@ -76,9 +76,9 @@ export function SystemPage({
     ...degradedChecks.map((check) => ({ check, severity: "degraded" as const })),
   ];
   const defaultSpill =
-    retention.defaultHistoryRows.jobEvents + retention.defaultHistoryRows.attemptHistory;
+    retention.defaultHistoryRows.taskEvents + retention.defaultHistoryRows.attemptHistory;
   const eligiblePartitions =
-    retention.eligibleHistoryPartitions.jobEvents +
+    retention.eligibleHistoryPartitions.taskEvents +
     retention.eligibleHistoryPartitions.attemptHistory;
   const enabledRetention = retention.categories.filter((row) => row.retentionDays !== null);
   const retentionDetail =
@@ -436,9 +436,9 @@ export function SystemPage({
                 <Badge
                   color={eligiblePartitions > 0 ? "yellow" : "teal"}
                   variant="light"
-                  title={`${retention.eligibleHistoryPartitions.jobEvents} task-event days, ${retention.eligibleHistoryPartitions.attemptHistory} attempt-history days`}
+                  title={`${retention.eligibleHistoryPartitions.taskEvents} task-event days, ${retention.eligibleHistoryPartitions.attemptHistory} attempt-history days`}
                 >
-                  {retention.eligibleHistoryPartitions.jobEvents} events ·{" "}
+                  {retention.eligibleHistoryPartitions.taskEvents} events ·{" "}
                   {retention.eligibleHistoryPartitions.attemptHistory} attempts
                 </Badge>
               </Group>
@@ -458,8 +458,8 @@ export function SystemPage({
                   </Text>
                 </Box>
                 <Badge color={defaultSpill > 0 ? "yellow" : "teal"} variant="light">
-                  {retention.defaultHistoryRows.jobEvents}
-                  {retention.defaultHistoryRowsCapped.jobEvents ? "+" : ""} events ·{" "}
+                  {retention.defaultHistoryRows.taskEvents}
+                  {retention.defaultHistoryRowsCapped.taskEvents ? "+" : ""} events ·{" "}
                   {retention.defaultHistoryRows.attemptHistory}
                   {retention.defaultHistoryRowsCapped.attemptHistory ? "+" : ""} attempts
                 </Badge>

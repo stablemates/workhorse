@@ -524,7 +524,7 @@ export function SystemKpiList({
               View blocked tasks
             </Button>
             <Text fw={750} fz={18} lh={1.2} ta="right">
-              {data.kpis.dependencies.blockedJobs}
+              {data.kpis.dependencies.blockedTasks}
             </Text>
           </Group>
         }
@@ -535,7 +535,7 @@ export function SystemKpiList({
           data.kpis.dependencies.failedResolutions > 0 ||
           data.kpis.dependencies.retentionPruneStarved
             ? "orange"
-            : data.kpis.dependencies.blockedJobs > 0
+            : data.kpis.dependencies.blockedTasks > 0
               ? "yellow"
               : "teal"
         }

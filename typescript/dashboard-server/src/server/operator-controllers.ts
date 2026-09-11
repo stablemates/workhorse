@@ -19,11 +19,11 @@ export type DashboardOperatorAction =
       audit: DashboardAuditContext;
     }
   | { kind: "purgeQueue"; queueName: string; audit: DashboardAuditContext }
-  | { kind: "runTaskNow"; jobId: string; audit: DashboardAuditContext }
-  | { kind: "cancelTask"; jobId: string; audit: DashboardCancellationAuditContext }
+  | { kind: "runTaskNow"; taskId: string; audit: DashboardAuditContext }
+  | { kind: "cancelTask"; taskId: string; audit: DashboardCancellationAuditContext }
   | {
       kind: "signalTask";
-      jobId: string;
+      taskId: string;
       name: string;
       payload: Json;
       idempotencyKey: string;
@@ -31,13 +31,13 @@ export type DashboardOperatorAction =
     }
   | {
       kind: "completeHumanWait";
-      jobId: string;
+      taskId: string;
       name: string;
       result: Json;
       idempotencyKey: string;
       audit: DashboardAuditContext;
     }
-  | { kind: "redriveTask"; jobId: string; audit: DashboardAuditContext }
+  | { kind: "redriveTask"; taskId: string; audit: DashboardAuditContext }
   | {
       kind: "redriveDeadLetters";
       filter: DashboardRedriveFilter;
@@ -88,7 +88,7 @@ function redriveResult(result: RedriveResult): DashboardRedriveResult {
 function deadLetterFilter(filter: DashboardRedriveFilter): DeadLetterFilter {
   return {
     ...(filter.queue === null ? {} : { queue: filter.queue }),
-    ...(filter.jobType === null ? {} : { type: filter.jobType }),
+    ...(filter.taskType === null ? {} : { type: filter.taskType }),
     ...(filter.tags.length === 0 ? {} : { tags: [...filter.tags] }),
   };
 }
@@ -121,25 +121,25 @@ export function createDashboardOperatorControllers(
         })),
     },
     taskController: {
-      runTaskNow: (jobId, audit) =>
-        options.run({ kind: "runTaskNow", jobId, audit }, async ({ admin }) => {
-          const result = await admin.runTaskNow(jobId, audit);
+      runTaskNow: (taskId, audit) =>
+        options.run({ kind: "runTaskNow", taskId, audit }, async ({ admin }) => {
+          const result = await admin.runTaskNow(taskId, audit);
           return {
             status: result.status,
-            id: result.jobId,
+            id: result.taskId,
             state: result.state,
             runAt: isoTimestamp(result.runAt),
           };
         }),
-      cancelTask: (jobId, audit) =>
-        options.run({ kind: "cancelTask", jobId, audit }, async ({ queue }) => {
-          const result = await queue.cancel(jobId, {
+      cancelTask: (taskId, audit) =>
+        options.run({ kind: "cancelTask", taskId, audit }, async ({ queue }) => {
+          const result = await queue.cancel(taskId, {
             requestedBy: requestedBy(audit),
             reason: audit.reason ?? undefined,
           });
           return {
             status: result.status,
-            jobId: result.jobId,
+            taskId: result.taskId,
             state: result.state,
             currentAttempt: result.currentAttempt,
             requestedAt: isoTimestamp(result.requestedAt),
@@ -148,11 +148,11 @@ export function createDashboardOperatorControllers(
             finishedAt: isoTimestamp(result.finishedAt),
           };
         }),
-      signalTask: (jobId, name, payload, idempotencyKey, audit) =>
+      signalTask: (taskId, name, payload, idempotencyKey, audit) =>
         options.run(
-          { kind: "signalTask", jobId, name, payload, idempotencyKey, audit },
+          { kind: "signalTask", taskId, name, payload, idempotencyKey, audit },
           async ({ queue }) => {
-            const result = await queue.sendSignal(jobId, name, payload, {
+            const result = await queue.sendSignal(taskId, name, payload, {
               idempotencyKey,
               requestedBy: requestedBy(audit),
             });
@@ -162,11 +162,11 @@ export function createDashboardOperatorControllers(
             };
           },
         ),
-      completeHumanWait: (jobId, name, result, idempotencyKey, audit) =>
+      completeHumanWait: (taskId, name, result, idempotencyKey, audit) =>
         options.run(
-          { kind: "completeHumanWait", jobId, name, result, idempotencyKey, audit },
+          { kind: "completeHumanWait", taskId, name, result, idempotencyKey, audit },
           async ({ queue }) => {
-            const completed = await queue.completeHumanWait(jobId, name, result, {
+            const completed = await queue.completeHumanWait(taskId, name, result, {
               idempotencyKey,
               requestedBy: requestedBy(audit),
             });
@@ -178,9 +178,9 @@ export function createDashboardOperatorControllers(
             };
           },
         ),
-      redriveTask: (jobId, audit) =>
-        options.run({ kind: "redriveTask", jobId, audit }, async ({ admin }) =>
-          redriveResult(await admin.redrive(jobId, { ...audit, actor: requestedBy(audit) })),
+      redriveTask: (taskId, audit) =>
+        options.run({ kind: "redriveTask", taskId, audit }, async ({ admin }) =>
+          redriveResult(await admin.redrive(taskId, { ...audit, actor: requestedBy(audit) })),
         ),
       redriveDeadLetters: (filter, limit, cursor, audit) =>
         options.run(

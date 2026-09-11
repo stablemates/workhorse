@@ -24,7 +24,7 @@ from .errors import (
     RedriveIdempotencyConflictError,
     _translate_database_error,
 )
-from .types import JobCheckpoint, JobProgress, JobState, JobWait, Json, RetryPolicy
+from .types import Json, RetryPolicy, TaskCheckpoint, TaskProgress, TaskState, TaskWait
 
 if TYPE_CHECKING:
     import psycopg
@@ -40,7 +40,7 @@ _MAX_REDRIVE_BATCH_SIZE = 1_000
 _DEFAULT_PAYLOAD_BYTES = 16_384
 _MAX_PAYLOAD_BYTES = 1_048_576
 _MAX_REDACT_KEYS = 50
-_JOB_STATES = frozenset(
+_TASK_STATES = frozenset(
     {"blocked", "scheduled", "ready", "active", "succeeded", "failed", "canceled"}
 )
 
@@ -50,9 +50,9 @@ def _catalogue_statement(name: str) -> _DriverStatement:
     return _DriverStatement(psycopg=psycopg, asyncpg=asyncpg)
 
 
-_LIST_JOBS = _catalogue_statement("list_jobs")
-_GET_JOB = _catalogue_statement("get_job")
-_LIST_TIMELINE = _catalogue_statement("list_job_timeline")
+_LIST_TASKS = _catalogue_statement("list_tasks")
+_GET_TASK = _catalogue_statement("get_task")
+_LIST_TIMELINE = _catalogue_statement("list_task_timeline")
 _LIST_DEAD_LETTERS = _catalogue_statement("list_dead_letters")
 _REDRIVE = _catalogue_statement("redrive")
 _REDRIVE_MANY = _catalogue_statement("redrive_many")
@@ -89,7 +89,7 @@ class DeadLetterFilter:
 @dataclass(frozen=True)
 class DeadLetterCursor:
     finished_at: str
-    job_id: str
+    task_id: str
 
 
 @dataclass(frozen=True)
@@ -100,7 +100,7 @@ class DeadLetterQuery(DeadLetterFilter):
 
 @dataclass(frozen=True)
 class DeadLetter:
-    job_id: str
+    task_id: str
     queue: str
     type: str
     concurrency_key: str | None
@@ -124,29 +124,29 @@ class DeadLetterPage:
 
 
 @dataclass(frozen=True)
-class JobListCursor:
+class TaskListCursor:
     created_at: str
-    job_id: str
+    task_id: str
     signature: str
 
 
 @dataclass(frozen=True)
-class JobPayloadProjection:
+class TaskPayloadProjection:
     include: bool = False
     max_bytes: int = _DEFAULT_PAYLOAD_BYTES
     redact_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
-class JobListQuery:
+class TaskListQuery:
     queue: str | None = None
     type: str | None = None
-    states: tuple[JobState, ...] = ()
+    states: tuple[TaskState, ...] = ()
     created_after: datetime | None = None
     created_before: datetime | None = None
     limit: int = 100
-    cursor: JobListCursor | None = None
-    payload: JobPayloadProjection = field(default_factory=JobPayloadProjection)
+    cursor: TaskListCursor | None = None
+    payload: TaskPayloadProjection = field(default_factory=TaskPayloadProjection)
 
 
 @dataclass(frozen=True)
@@ -157,20 +157,20 @@ class DependencyPolicy:
 
 
 @dataclass(frozen=True)
-class JobListItem:
+class TaskListItem:
     id: str
     queue: str
     type: str
     concurrency_key: str | None
     priority: int
     tags: tuple[str, ...]
-    state: JobState
-    prerequisite_job_id: str | None
-    prerequisite_job_ids: tuple[str, ...]
+    state: TaskState
+    prerequisite_task_id: str | None
+    prerequisite_task_ids: tuple[str, ...]
     dependency_policy: DependencyPolicy | None
     blocked_reason: Literal["prerequisite_pending"] | None
-    parent_job_id: str | None
-    child_job_ids: tuple[str, ...]
+    parent_task_id: str | None
+    child_task_ids: tuple[str, ...]
     current_attempt: int
     max_attempts: int
     retry_policy: RetryPolicy | None
@@ -188,21 +188,21 @@ class JobListItem:
 
 
 @dataclass(frozen=True)
-class JobListPage:
-    items: tuple[JobListItem, ...]
-    next_cursor: JobListCursor | None
+class TaskListPage:
+    items: tuple[TaskListItem, ...]
+    next_cursor: TaskListCursor | None
 
 
 @dataclass(frozen=True)
-class JobTimelineCursor:
-    job_id: str
+class TaskTimelineCursor:
+    task_id: str
     occurred_at: str
     kind: Literal["event", "attempt"]
     record_id: str
 
 
 @dataclass(frozen=True)
-class JobTimelineEvent:
+class TaskTimelineEvent:
     kind: Literal["event"]
     record_id: str
     priority: int
@@ -213,7 +213,7 @@ class JobTimelineEvent:
 
 
 @dataclass(frozen=True)
-class JobTimelineAttempt:
+class TaskTimelineAttempt:
     kind: Literal["attempt"]
     record_id: str
     priority: int
@@ -228,17 +228,17 @@ class JobTimelineAttempt:
     error: Json
 
 
-JobTimelineEntry = JobTimelineEvent | JobTimelineAttempt
+TaskTimelineEntry = TaskTimelineEvent | TaskTimelineAttempt
 
 
 @dataclass(frozen=True)
-class JobTimelinePage:
-    items: tuple[JobTimelineEntry, ...]
-    next_cursor: JobTimelineCursor | None
+class TaskTimelinePage:
+    items: tuple[TaskTimelineEntry, ...]
+    next_cursor: TaskTimelineCursor | None
 
 
 @dataclass(frozen=True)
-class JobSnapshot:
+class TaskSnapshot:
     id: str
     queue: str
     type: str
@@ -247,13 +247,13 @@ class JobSnapshot:
     payload: Json
     contract_version: str | None
     tags: tuple[str, ...]
-    state: JobState
-    prerequisite_job_id: str | None
-    prerequisite_job_ids: tuple[str, ...]
+    state: TaskState
+    prerequisite_task_id: str | None
+    prerequisite_task_ids: tuple[str, ...]
     dependency_policy: DependencyPolicy | None
     blocked_reason: Literal["prerequisite_pending"] | None
-    parent_job_id: str | None
-    child_job_ids: tuple[str, ...]
+    parent_task_id: str | None
+    child_task_ids: tuple[str, ...]
     current_attempt: int
     max_attempts: int
     retry_policy: RetryPolicy | None
@@ -266,7 +266,7 @@ class JobSnapshot:
     cancel_requested_at: datetime | None
     cancel_requested_by: str | None
     cancel_reason: str | None
-    progress: JobProgress | None
+    progress: TaskProgress | None
     created_at: datetime
     updated_at: datetime
 
@@ -274,10 +274,10 @@ class JobSnapshot:
 @dataclass(frozen=True)
 class RedriveResult:
     status: Literal["redriven", "replayed", "eligible", "not_found", "not_failed"]
-    source_job_id: str
-    target_job_id: str | None
-    source_state: JobState | None
-    target_state: JobState | None
+    source_task_id: str
+    target_task_id: str | None
+    source_state: TaskState | None
+    target_state: TaskState | None
     requested_at: datetime | None
 
 
@@ -297,15 +297,15 @@ class BulkRedrivePage:
 @dataclass(frozen=True)
 class ExternalWaitCursor:
     created_at: str
-    job_id: str
+    task_id: str
     name: str
 
 
 @dataclass(frozen=True)
 class ExternalWait:
-    job_id: str
+    task_id: str
     queue: str
-    job_type: str
+    task_type: str
     name: str
     attempt: int
     created_at: datetime
@@ -383,22 +383,22 @@ class Admin(_AdminOperations):
     ) -> list[_Row]:
         return self._executor.rows(statement, parameters)
 
-    def list_jobs(self, query: JobListQuery | None = None) -> JobListPage:
+    def list_tasks(self, query: TaskListQuery | None = None) -> TaskListPage:
         _assert_sync_compatible(self._executor)
-        value = _validate_job_query(query or JobListQuery())
-        return _job_page(self._sync_rows(_LIST_JOBS, _job_parameters(value)))
+        value = _validate_task_query(query or TaskListQuery())
+        return _task_page(self._sync_rows(_LIST_TASKS, _task_parameters(value)))
 
-    def get_job(self, job_id: str) -> JobSnapshot | None:
+    def get_task(self, task_id: str) -> TaskSnapshot | None:
         _assert_sync_compatible(self._executor)
-        rows = self._sync_rows(_GET_JOB, (job_id,))
-        return None if not rows else _job_snapshot(rows[0])
+        rows = self._sync_rows(_GET_TASK, (task_id,))
+        return None if not rows else _task_snapshot(rows[0])
 
-    def get_job_timeline(
-        self, job_id: str, *, limit: int = 100, cursor: JobTimelineCursor | None = None
-    ) -> JobTimelinePage:
+    def get_task_timeline(
+        self, task_id: str, *, limit: int = 100, cursor: TaskTimelineCursor | None = None
+    ) -> TaskTimelinePage:
         _assert_sync_compatible(self._executor)
         return _timeline_page(
-            job_id, self._sync_rows(_LIST_TIMELINE, _timeline_parameters(job_id, limit, cursor))
+            task_id, self._sync_rows(_LIST_TIMELINE, _timeline_parameters(task_id, limit, cursor))
         )
 
     def list_dead_letters(self, query: DeadLetterQuery | None = None) -> DeadLetterPage:
@@ -408,14 +408,14 @@ class Admin(_AdminOperations):
             self._sync_rows(_LIST_DEAD_LETTERS, _dead_letter_parameters(value))
         )
 
-    def redrive(self, source_job_id: str, audit: AdminAudit) -> RedriveResult:
+    def redrive(self, source_task_id: str, audit: AdminAudit) -> RedriveResult:
         _assert_sync_compatible(self._executor)
         _validate_audit(audit)
         try:
             return _redrive_result(
                 _one(
                     self._sync_rows(
-                        _REDRIVE, (source_job_id, audit.actor, audit.reason, audit.request_id)
+                        _REDRIVE, (source_task_id, audit.actor, audit.reason, audit.request_id)
                     ),
                     "workhorse.redrive_v1",
                 )
@@ -439,28 +439,28 @@ class Admin(_AdminOperations):
         except Exception as error:
             _raise_admin_error(error)
 
-    def get_checkpoint(self, job_id: str, name: str) -> JobCheckpoint | None:
+    def get_checkpoint(self, task_id: str, name: str) -> TaskCheckpoint | None:
         _assert_sync_compatible(self._executor)
-        rows = self._sync_rows(_GET_CHECKPOINT, (job_id, name))
+        rows = self._sync_rows(_GET_CHECKPOINT, (task_id, name))
         return None if not rows else _checkpoint(rows[0])
 
-    def list_checkpoints(self, job_id: str) -> tuple[JobCheckpoint, ...]:
+    def list_checkpoints(self, task_id: str) -> tuple[TaskCheckpoint, ...]:
         _assert_sync_compatible(self._executor)
-        return tuple(_checkpoint(row) for row in self._sync_rows(_LIST_CHECKPOINTS, (job_id,)))
+        return tuple(_checkpoint(row) for row in self._sync_rows(_LIST_CHECKPOINTS, (task_id,)))
 
-    def get_progress(self, job_id: str) -> JobProgress | None:
+    def get_progress(self, task_id: str) -> TaskProgress | None:
         _assert_sync_compatible(self._executor)
-        rows = self._sync_rows(_GET_PROGRESS, (job_id,))
+        rows = self._sync_rows(_GET_PROGRESS, (task_id,))
         return None if not rows else _progress(rows[0])
 
-    def get_wait(self, job_id: str, name: str) -> JobWait | None:
+    def get_wait(self, task_id: str, name: str) -> TaskWait | None:
         _assert_sync_compatible(self._executor)
-        rows = self._sync_rows(_GET_WAIT, (job_id, name))
+        rows = self._sync_rows(_GET_WAIT, (task_id, name))
         return None if not rows else _wait(rows[0])
 
-    def list_waits(self, job_id: str) -> tuple[JobWait, ...]:
+    def list_waits(self, task_id: str) -> tuple[TaskWait, ...]:
         _assert_sync_compatible(self._executor)
-        return tuple(_wait(row) for row in self._sync_rows(_LIST_WAITS, (job_id,)))
+        return tuple(_wait(row) for row in self._sync_rows(_LIST_WAITS, (task_id,)))
 
     def list_signal_waits(
         self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None
@@ -546,23 +546,23 @@ class AsyncAdmin(_AdminOperations):
     ) -> list[_Row]:
         return await self._executor.rows(statement, parameters)
 
-    async def list_jobs(self, query: JobListQuery | None = None) -> JobListPage:
+    async def list_tasks(self, query: TaskListQuery | None = None) -> TaskListPage:
         await _assert_async_compatible(self._executor)
-        value = _validate_job_query(query or JobListQuery())
-        return _job_page(await self._async_rows(_LIST_JOBS, _job_parameters(value)))
+        value = _validate_task_query(query or TaskListQuery())
+        return _task_page(await self._async_rows(_LIST_TASKS, _task_parameters(value)))
 
-    async def get_job(self, job_id: str) -> JobSnapshot | None:
+    async def get_task(self, task_id: str) -> TaskSnapshot | None:
         await _assert_async_compatible(self._executor)
-        rows = await self._async_rows(_GET_JOB, (job_id,))
-        return None if not rows else _job_snapshot(rows[0])
+        rows = await self._async_rows(_GET_TASK, (task_id,))
+        return None if not rows else _task_snapshot(rows[0])
 
-    async def get_job_timeline(
-        self, job_id: str, *, limit: int = 100, cursor: JobTimelineCursor | None = None
-    ) -> JobTimelinePage:
+    async def get_task_timeline(
+        self, task_id: str, *, limit: int = 100, cursor: TaskTimelineCursor | None = None
+    ) -> TaskTimelinePage:
         await _assert_async_compatible(self._executor)
         return _timeline_page(
-            job_id,
-            await self._async_rows(_LIST_TIMELINE, _timeline_parameters(job_id, limit, cursor)),
+            task_id,
+            await self._async_rows(_LIST_TIMELINE, _timeline_parameters(task_id, limit, cursor)),
         )
 
     async def list_dead_letters(self, query: DeadLetterQuery | None = None) -> DeadLetterPage:
@@ -572,14 +572,14 @@ class AsyncAdmin(_AdminOperations):
             await self._async_rows(_LIST_DEAD_LETTERS, _dead_letter_parameters(value))
         )
 
-    async def redrive(self, source_job_id: str, audit: AdminAudit) -> RedriveResult:
+    async def redrive(self, source_task_id: str, audit: AdminAudit) -> RedriveResult:
         await _assert_async_compatible(self._executor)
         _validate_audit(audit)
         try:
             return _redrive_result(
                 _one(
                     await self._async_rows(
-                        _REDRIVE, (source_job_id, audit.actor, audit.reason, audit.request_id)
+                        _REDRIVE, (source_task_id, audit.actor, audit.reason, audit.request_id)
                     ),
                     "workhorse.redrive_v1",
                 )
@@ -602,30 +602,30 @@ class AsyncAdmin(_AdminOperations):
         except Exception as error:
             _raise_admin_error(error)
 
-    async def get_checkpoint(self, job_id: str, name: str) -> JobCheckpoint | None:
+    async def get_checkpoint(self, task_id: str, name: str) -> TaskCheckpoint | None:
         await _assert_async_compatible(self._executor)
-        rows = await self._async_rows(_GET_CHECKPOINT, (job_id, name))
+        rows = await self._async_rows(_GET_CHECKPOINT, (task_id, name))
         return None if not rows else _checkpoint(rows[0])
 
-    async def list_checkpoints(self, job_id: str) -> tuple[JobCheckpoint, ...]:
+    async def list_checkpoints(self, task_id: str) -> tuple[TaskCheckpoint, ...]:
         await _assert_async_compatible(self._executor)
         return tuple(
-            _checkpoint(row) for row in await self._async_rows(_LIST_CHECKPOINTS, (job_id,))
+            _checkpoint(row) for row in await self._async_rows(_LIST_CHECKPOINTS, (task_id,))
         )
 
-    async def get_progress(self, job_id: str) -> JobProgress | None:
+    async def get_progress(self, task_id: str) -> TaskProgress | None:
         await _assert_async_compatible(self._executor)
-        rows = await self._async_rows(_GET_PROGRESS, (job_id,))
+        rows = await self._async_rows(_GET_PROGRESS, (task_id,))
         return None if not rows else _progress(rows[0])
 
-    async def get_wait(self, job_id: str, name: str) -> JobWait | None:
+    async def get_wait(self, task_id: str, name: str) -> TaskWait | None:
         await _assert_async_compatible(self._executor)
-        rows = await self._async_rows(_GET_WAIT, (job_id, name))
+        rows = await self._async_rows(_GET_WAIT, (task_id, name))
         return None if not rows else _wait(rows[0])
 
-    async def list_waits(self, job_id: str) -> tuple[JobWait, ...]:
+    async def list_waits(self, task_id: str) -> tuple[TaskWait, ...]:
         await _assert_async_compatible(self._executor)
-        return tuple(_wait(row) for row in await self._async_rows(_LIST_WAITS, (job_id,)))
+        return tuple(_wait(row) for row in await self._async_rows(_LIST_WAITS, (task_id,)))
 
     async def list_signal_waits(
         self, *, limit: int = 100, cursor: ExternalWaitCursor | None = None
@@ -700,14 +700,14 @@ def _validate_limit(limit: int, maximum: int, label: str) -> int:
     return limit
 
 
-def _validate_job_query(query: JobListQuery) -> JobListQuery:
-    _validate_limit(query.limit, _MAX_PAGE_SIZE, "list_jobs limit")
+def _validate_task_query(query: TaskListQuery) -> TaskListQuery:
+    _validate_limit(query.limit, _MAX_PAGE_SIZE, "list_tasks limit")
     if query.created_after and query.created_before and query.created_after >= query.created_before:
         raise ValueError("created_after must be earlier than created_before")
     if len(set(query.states)) != len(query.states):
         raise ValueError("states must be unique")
-    if any(state not in _JOB_STATES for state in query.states):
-        raise ValueError("states contains an invalid job state")
+    if any(state not in _TASK_STATES for state in query.states):
+        raise ValueError("states contains an invalid task state")
     if (
         isinstance(query.payload.max_bytes, bool)
         or not isinstance(query.payload.max_bytes, int)
@@ -743,7 +743,7 @@ def _dependency_policy(row: _Row) -> DependencyPolicy | None:
     )
 
 
-def _job_parameters(query: JobListQuery) -> tuple[object, ...]:
+def _task_parameters(query: TaskListQuery) -> tuple[object, ...]:
     filter = {
         **({"queue": query.queue} if query.queue is not None else {}),
         **({"type": query.type} if query.type is not None else {}),
@@ -760,31 +760,31 @@ def _job_parameters(query: JobListQuery) -> tuple[object, ...]:
         json.dumps(filter),
         query.limit,
         query.cursor.created_at if query.cursor else None,
-        query.cursor.job_id if query.cursor else None,
+        query.cursor.task_id if query.cursor else None,
         query.cursor.signature if query.cursor else None,
         json.dumps(projection),
     )
 
 
-def _job_item(row: _Row) -> JobListItem:
-    return JobListItem(
-        id=str(row["job_id"]),
+def _task_item(row: _Row) -> TaskListItem:
+    return TaskListItem(
+        id=str(row["task_id"]),
         queue=cast(str, row["queue_name"]),
-        type=cast(str, row["job_type"]),
+        type=cast(str, row["task_type"]),
         concurrency_key=cast(str | None, row["concurrency_key"]),
         priority=int(cast(int, row["priority"])),
         tags=tuple(cast(list[str], row["tags"])),
-        state=cast(JobState, row["state"]),
-        prerequisite_job_id=None
-        if row["prerequisite_job_id"] is None
-        else str(row["prerequisite_job_id"]),
-        prerequisite_job_ids=tuple(
-            str(value) for value in cast(list[object], row["prerequisite_job_ids"])
+        state=cast(TaskState, row["state"]),
+        prerequisite_task_id=None
+        if row["prerequisite_task_id"] is None
+        else str(row["prerequisite_task_id"]),
+        prerequisite_task_ids=tuple(
+            str(value) for value in cast(list[object], row["prerequisite_task_ids"])
         ),
         dependency_policy=_dependency_policy(row),
         blocked_reason=cast(Any, row["blocked_reason"]),
-        parent_job_id=None if row["parent_job_id"] is None else str(row["parent_job_id"]),
-        child_job_ids=tuple(str(value) for value in cast(list[object], row["child_job_ids"])),
+        parent_task_id=None if row["parent_task_id"] is None else str(row["parent_task_id"]),
+        child_task_ids=tuple(str(value) for value in cast(list[object], row["child_task_ids"])),
         current_attempt=int(cast(int, row["current_attempt"])),
         max_attempts=int(cast(int, row["max_attempts"])),
         retry_policy=cast(
@@ -809,25 +809,27 @@ def _job_item(row: _Row) -> JobListItem:
     )
 
 
-def _job_page(rows: list[_Row]) -> JobListPage:
+def _task_page(rows: list[_Row]) -> TaskListPage:
     last = rows[-1] if rows else None
     cursor = (
         None
         if last is None or last["has_more"] is not True
-        else JobListCursor(
-            str(last["cursor_created_at"]), str(last["job_id"]), cast(str, last["cursor_signature"])
+        else TaskListCursor(
+            str(last["cursor_created_at"]),
+            str(last["task_id"]),
+            cast(str, last["cursor_signature"]),
         )
     )
-    return JobListPage(tuple(_job_item(row) for row in rows), cursor)
+    return TaskListPage(tuple(_task_item(row) for row in rows), cursor)
 
 
-def _job_snapshot(row: _Row) -> JobSnapshot:
+def _task_snapshot(row: _Row) -> TaskSnapshot:
     progress = (
         None
         if row["progress_revision"] is None
         else _progress(
             {
-                "job_id": row["id"],
+                "task_id": row["id"],
                 "progress_value": row["progress_value"],
                 "revision": row["progress_revision"],
                 "attempt": row["progress_attempt"],
@@ -838,26 +840,26 @@ def _job_snapshot(row: _Row) -> JobSnapshot:
             }
         )
     )
-    return JobSnapshot(
+    return TaskSnapshot(
         id=str(row["id"]),
         queue=cast(str, row["queue_name"]),
-        type=cast(str, row["job_type"]),
+        type=cast(str, row["task_type"]),
         concurrency_key=cast(str | None, row["concurrency_key"]),
         priority=int(cast(int, row["priority"])),
         payload=_json(row["payload"]),
         contract_version=cast(str | None, row["contract_version"]),
         tags=tuple(cast(list[str], row["tags"])),
-        state=cast(JobState, row["state"]),
-        prerequisite_job_id=None
-        if row["prerequisite_job_id"] is None
-        else str(row["prerequisite_job_id"]),
-        prerequisite_job_ids=tuple(
-            str(value) for value in cast(list[object], row["prerequisite_job_ids"])
+        state=cast(TaskState, row["state"]),
+        prerequisite_task_id=None
+        if row["prerequisite_task_id"] is None
+        else str(row["prerequisite_task_id"]),
+        prerequisite_task_ids=tuple(
+            str(value) for value in cast(list[object], row["prerequisite_task_ids"])
         ),
         dependency_policy=_dependency_policy(row),
         blocked_reason=cast(Any, row["blocked_reason"]),
-        parent_job_id=None if row["parent_job_id"] is None else str(row["parent_job_id"]),
-        child_job_ids=tuple(str(value) for value in cast(list[object], row["child_job_ids"])),
+        parent_task_id=None if row["parent_task_id"] is None else str(row["parent_task_id"]),
+        child_task_ids=tuple(str(value) for value in cast(list[object], row["child_task_ids"])),
         current_attempt=int(cast(int, row["current_attempt"])),
         max_attempts=int(cast(int, row["max_attempts"])),
         retry_policy=cast(
@@ -882,13 +884,13 @@ def _job_snapshot(row: _Row) -> JobSnapshot:
 
 
 def _timeline_parameters(
-    job_id: str, limit: int, cursor: JobTimelineCursor | None
+    task_id: str, limit: int, cursor: TaskTimelineCursor | None
 ) -> tuple[object, ...]:
-    _validate_limit(limit, _MAX_PAGE_SIZE, "get_job_timeline limit")
-    if cursor is not None and cursor.job_id != job_id:
-        raise ValueError("cursor job_id must match the requested job_id")
+    _validate_limit(limit, _MAX_PAGE_SIZE, "get_task_timeline limit")
+    if cursor is not None and cursor.task_id != task_id:
+        raise ValueError("cursor task_id must match the requested task_id")
     return (
-        job_id,
+        task_id,
         limit,
         cursor.occurred_at if cursor else None,
         cursor.kind if cursor else None,
@@ -896,9 +898,9 @@ def _timeline_parameters(
     )
 
 
-def _timeline_entry(row: _Row) -> JobTimelineEntry:
+def _timeline_entry(row: _Row) -> TaskTimelineEntry:
     if row["kind"] == "event":
-        return JobTimelineEvent(
+        return TaskTimelineEvent(
             "event",
             str(row["record_id"]),
             int(cast(int, row["priority"])),
@@ -907,7 +909,7 @@ def _timeline_entry(row: _Row) -> JobTimelineEntry:
             cast(str, row["event_type"]),
             _json(row["details"]),
         )
-    return JobTimelineAttempt(
+    return TaskTimelineAttempt(
         "attempt",
         str(row["record_id"]),
         int(cast(int, row["priority"])),
@@ -923,16 +925,19 @@ def _timeline_entry(row: _Row) -> JobTimelineEntry:
     )
 
 
-def _timeline_page(job_id: str, rows: list[_Row]) -> JobTimelinePage:
+def _timeline_page(task_id: str, rows: list[_Row]) -> TaskTimelinePage:
     last = rows[-1] if rows else None
     cursor = (
         None
         if last is None or last["has_more"] is not True
-        else JobTimelineCursor(
-            job_id, str(last["cursor_occurred_at"]), cast(Any, last["kind"]), str(last["record_id"])
+        else TaskTimelineCursor(
+            task_id,
+            str(last["cursor_occurred_at"]),
+            cast(Any, last["kind"]),
+            str(last["record_id"]),
         )
     )
-    return JobTimelinePage(tuple(_timeline_entry(row) for row in rows), cursor)
+    return TaskTimelinePage(tuple(_timeline_entry(row) for row in rows), cursor)
 
 
 def _filter_document(filter: DeadLetterFilter) -> str:
@@ -954,15 +959,15 @@ def _dead_letter_parameters(query: DeadLetterQuery) -> tuple[object, ...]:
         _filter_document(query),
         query.limit,
         query.cursor.finished_at if query.cursor else None,
-        query.cursor.job_id if query.cursor else None,
+        query.cursor.task_id if query.cursor else None,
     )
 
 
 def _dead_letter(row: _Row) -> DeadLetter:
     return DeadLetter(
-        str(row["job_id"]),
+        str(row["task_id"]),
         cast(str, row["queue_name"]),
-        cast(str, row["job_type"]),
+        cast(str, row["task_type"]),
         cast(str | None, row["concurrency_key"]),
         int(cast(int, row["priority"])),
         _json(row["payload"]),
@@ -988,7 +993,7 @@ def _dead_letter_page(rows: list[_Row]) -> DeadLetterPage:
     cursor = (
         None
         if last is None or last["has_more"] is not True
-        else DeadLetterCursor(str(last["cursor_finished_at"]), str(last["job_id"]))
+        else DeadLetterCursor(str(last["cursor_finished_at"]), str(last["task_id"]))
     )
     return DeadLetterPage(tuple(_dead_letter(row) for row in rows), cursor)
 
@@ -996,10 +1001,10 @@ def _dead_letter_page(rows: list[_Row]) -> DeadLetterPage:
 def _redrive_result(row: _Row) -> RedriveResult:
     return RedriveResult(
         cast(Any, row["status"]),
-        str(row["source_job_id"]),
-        None if row["target_job_id"] is None else str(row["target_job_id"]),
-        cast(JobState | None, row["source_state"]),
-        cast(JobState | None, row["target_state"]),
+        str(row["source_task_id"]),
+        None if row["target_task_id"] is None else str(row["target_task_id"]),
+        cast(TaskState | None, row["source_state"]),
+        cast(TaskState | None, row["target_state"]),
         cast(datetime | None, row["requested_at"]),
     )
 
@@ -1016,7 +1021,7 @@ def _bulk_redrive_parameters(
         audit.reason,
         audit.request_id,
         options.cursor.finished_at if options.cursor else None,
-        options.cursor.job_id if options.cursor else None,
+        options.cursor.task_id if options.cursor else None,
     )
 
 
@@ -1025,14 +1030,14 @@ def _bulk_redrive_page(rows: list[_Row]) -> BulkRedrivePage:
     cursor = (
         None
         if last is None or last["has_more"] is not True
-        else DeadLetterCursor(str(last["source_finished_at_cursor"]), str(last["source_job_id"]))
+        else DeadLetterCursor(str(last["source_finished_at_cursor"]), str(last["source_task_id"]))
     )
     return BulkRedrivePage(tuple(_redrive_result(row) for row in rows), cursor)
 
 
-def _checkpoint(row: _Row) -> JobCheckpoint:
-    return JobCheckpoint(
-        str(row["job_id"]),
+def _checkpoint(row: _Row) -> TaskCheckpoint:
+    return TaskCheckpoint(
+        str(row["task_id"]),
         cast(str, row["checkpoint_name"]),
         _json(row["checkpoint_value"]),
         int(cast(int, row["attempt"])),
@@ -1042,9 +1047,9 @@ def _checkpoint(row: _Row) -> JobCheckpoint:
     )
 
 
-def _progress(row: _Row) -> JobProgress:
-    return JobProgress(
-        str(row["job_id"]),
+def _progress(row: _Row) -> TaskProgress:
+    return TaskProgress(
+        str(row["task_id"]),
         _json(row["progress_value"]),
         int(cast(str | int, row["revision"])),
         int(cast(int, row["attempt"])),
@@ -1055,9 +1060,9 @@ def _progress(row: _Row) -> JobProgress:
     )
 
 
-def _wait(row: _Row) -> JobWait:
-    return JobWait(
-        str(row["job_id"]),
+def _wait(row: _Row) -> TaskWait:
+    return TaskWait(
+        str(row["task_id"]),
         cast(str, row["wait_name"]),
         cast(Any, row["mode"]),
         None if row["duration_ms"] is None else int(cast(str | int, row["duration_ms"])),
@@ -1075,16 +1080,16 @@ def _wait_page_parameters(limit: int, cursor: ExternalWaitCursor | None) -> tupl
     return (
         limit + 1,
         cursor.created_at if cursor else None,
-        cursor.job_id if cursor else None,
+        cursor.task_id if cursor else None,
         cursor.name if cursor else None,
     )
 
 
 def _external_wait(row: _Row) -> ExternalWait:
     return ExternalWait(
-        str(row["job_id"]),
+        str(row["task_id"]),
         cast(str, row["queue_name"]),
-        cast(str, row["job_type"]),
+        cast(str, row["task_type"]),
         cast(str, row["wait_name"]),
         int(cast(int, row["attempt"])),
         cast(datetime, row["created_at"]),
@@ -1099,7 +1104,7 @@ def _external_wait_page(rows: list[_Row], limit: int) -> ExternalWaitPage:
         None
         if len(rows) <= limit or last is None
         else ExternalWaitCursor(
-            str(last["cursor_created_at"]), str(last["job_id"]), cast(str, last["wait_name"])
+            str(last["cursor_created_at"]), str(last["task_id"]), cast(str, last["wait_name"])
         )
     )
     return ExternalWaitPage(tuple(_external_wait(row) for row in page), cursor)
@@ -1112,7 +1117,7 @@ def _human_wait_page(rows: list[_Row], limit: int) -> HumanWaitPage:
         None
         if len(rows) <= limit or last is None
         else ExternalWaitCursor(
-            str(last["cursor_created_at"]), str(last["job_id"]), cast(str, last["wait_name"])
+            str(last["cursor_created_at"]), str(last["task_id"]), cast(str, last["wait_name"])
         )
     )
     return HumanWaitPage(
@@ -1198,18 +1203,18 @@ __all__ = [
     "ExternalWaitPage",
     "HumanWait",
     "HumanWaitPage",
-    "JobListCursor",
-    "JobListItem",
-    "JobListPage",
-    "JobListQuery",
-    "JobPayloadProjection",
-    "JobSnapshot",
-    "JobTimelineAttempt",
-    "JobTimelineCursor",
-    "JobTimelineEntry",
-    "JobTimelineEvent",
-    "JobTimelinePage",
     "RedriveResult",
+    "TaskListCursor",
+    "TaskListItem",
+    "TaskListPage",
+    "TaskListQuery",
+    "TaskPayloadProjection",
+    "TaskSnapshot",
+    "TaskTimelineAttempt",
+    "TaskTimelineCursor",
+    "TaskTimelineEntry",
+    "TaskTimelineEvent",
+    "TaskTimelinePage",
     "WorkerPauseResult",
     "WorkerRegistryEntry",
 ]

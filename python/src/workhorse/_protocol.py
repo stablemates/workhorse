@@ -15,7 +15,7 @@ from ._statements import (
 )
 from .errors import CompatibilityCode, ProtocolCompatibilityError
 from .types import (
-    ClaimedJob,
+    ClaimedTask,
     Debounce,
     Dependencies,
     EnqueueOptions,
@@ -93,21 +93,21 @@ def serialize_requests(
 def serialize_schedules(definitions: Sequence[ScheduleDefinition], default_queue: str) -> str:
     values: list[dict[str, Json]] = []
     for definition in definitions:
-        job = definition.job
-        _validate_priority(job.priority)
+        task = definition.task
+        _validate_priority(task.priority)
         values.append(
             {
                 "name": definition.name,
                 "schedule": definition.schedule,
                 "timezone": definition.timezone,
                 "enabled": definition.enabled,
-                "queue": job.queue or default_queue,
-                "priority": job.priority,
-                "concurrencyKey": job.concurrency_key,
-                "type": job.type,
-                "payload": job.payload,
-                "maxAttempts": job.max_attempts,
-                "retryPolicy": dict(job.retry_policy) if job.retry_policy is not None else None,
+                "queue": task.queue or default_queue,
+                "priority": task.priority,
+                "concurrencyKey": task.concurrency_key,
+                "type": task.type,
+                "payload": task.payload,
+                "maxAttempts": task.max_attempts,
+                "retryPolicy": dict(task.retry_policy) if task.retry_policy is not None else None,
                 "contractVersion": None,
                 "payloadMaxBytes": DEFAULT_VALUE_MAX_BYTES,
                 "resultMaxBytes": DEFAULT_VALUE_MAX_BYTES,
@@ -141,7 +141,7 @@ def serialize_request(
         "executionTimeoutMs": options.execution_timeout_ms,
         "maxAttempts": options.max_attempts,
         "retryPolicy": dict(options.retry_policy) if options.retry_policy is not None else None,
-        "prerequisiteJobId": None,
+        "prerequisiteTaskId": None,
         "dependencies": dependencies,
         "tags": list(options.tags),
     }
@@ -160,7 +160,7 @@ def serialize_request(
 
 
 def serialize_child_request(
-    parent: ClaimedJob,
+    parent: ClaimedTask,
     type: str,
     payload: Json,
     options: EnqueueOptions,
@@ -168,7 +168,7 @@ def serialize_child_request(
 ) -> dict[str, Json]:
     _validate_options(options)
     if any((options.idempotency, options.debounce, options.throttle, options.dependencies)):
-        raise TypeError("Child jobs cannot use coalescing or dependency enqueue options")
+        raise TypeError("Child tasks cannot use coalescing or dependency enqueue options")
     value: dict[str, Json] = {
         "queue": options.queue or default_queue,
         "type": type,
@@ -184,7 +184,7 @@ def serialize_child_request(
         "executionTimeoutMs": options.execution_timeout_ms,
         "maxAttempts": options.max_attempts,
         "retryPolicy": dict(options.retry_policy) if options.retry_policy is not None else None,
-        "prerequisiteJobId": None,
+        "prerequisiteTaskId": None,
         "dependencies": None,
         "tags": list(options.tags),
     }
@@ -242,11 +242,11 @@ def _throttle(value: Throttle) -> dict[str, Json]:
 def _dependencies(value: Dependencies | None) -> dict[str, Json] | None:
     if value is None:
         return None
-    ids = sorted(value.prerequisite_job_ids)
+    ids = sorted(value.prerequisite_task_ids)
     if not ids or len(ids) != len(set(ids)):
-        raise ValueError("dependencies must contain unique prerequisite_job_ids")
+        raise ValueError("dependencies must contain unique prerequisite_task_ids")
     return {
-        "prerequisiteJobIds": cast(list[Json], ids),
+        "prerequisiteTaskIds": cast(list[Json], ids),
         "onSuccess": value.on_success,
         "onFailure": value.on_failure,
         "onCancellation": value.on_cancellation,

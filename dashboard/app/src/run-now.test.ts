@@ -102,7 +102,7 @@ describe("run-now vocabulary", () => {
     }>({
       call(path, input) {
         calls.push({ path, input });
-        return Promise.resolve({ status: "released", id: "job", state: "ready", runAt: null });
+        return Promise.resolve({ status: "released", id: "task", state: "ready", runAt: null });
       },
     }).dashboard;
 
@@ -125,13 +125,13 @@ describe("run-now vocabulary", () => {
   it("reports a rejected request as a failure sentence rather than a silent no-op", async () => {
     const client = createORPCClient<{ dashboard: DashboardClient }>({
       call() {
-        return Promise.reject(new Error("Job not found"));
+        return Promise.reject(new Error("Task not found"));
       },
     }).dashboard;
 
     await expect(
-      requestRunNow(client, { id: "job", auditActor: "operator", requestId: "request-2" }),
-    ).resolves.toMatchObject({ jobId: "job", described: null, failure: "Job not found" });
+      requestRunNow(client, { id: "task", auditActor: "operator", requestId: "request-2" }),
+    ).resolves.toMatchObject({ taskId: "task", described: null, failure: "Task not found" });
   });
 
   it("never overclaims what running a task now does", () => {

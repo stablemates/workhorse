@@ -66,7 +66,7 @@ describe("createWorkhorseAdapter", () => {
             rows: [
               {
                 ordinal: 1,
-                job_id: "123e4567-e89b-42d3-a456-426614174000",
+                task_id: "123e4567-e89b-42d3-a456-426614174000",
                 outcome: "accepted",
                 reason: null,
                 contract_mismatch: null,
@@ -124,9 +124,9 @@ describe("createWorkhorseAdapter", () => {
               rows: [
                 {
                   ordinal: 0,
-                  job_id: null,
+                  task_id: null,
                   outcome: "contract_mismatch",
-                  reason: JSON.stringify({ jobTypes: ["send"] }),
+                  reason: JSON.stringify({ taskTypes: ["send"] }),
                 },
               ],
             }
@@ -134,7 +134,7 @@ describe("createWorkhorseAdapter", () => {
               rows: [
                 {
                   ordinal: 1,
-                  job_id: "123e4567-e89b-42d3-a456-426614174000",
+                  task_id: "123e4567-e89b-42d3-a456-426614174000",
                   outcome: "accepted",
                   reason: null,
                 },

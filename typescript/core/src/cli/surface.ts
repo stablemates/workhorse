@@ -2,11 +2,11 @@ import type {
   BulkRedrivePage,
   CancelResult,
   DeadLetterPage,
-  JobCheckpoint,
-  JobListPage,
-  JobSnapshot,
-  JobTimelinePage,
-  JobWait,
+  TaskCheckpoint,
+  TaskListPage,
+  TaskSnapshot,
+  TaskTimelinePage,
+  TaskWait,
   QueueHealth,
   RedriveResult,
   WorkerPauseResult,
@@ -167,22 +167,22 @@ export interface AdminCommand {
 
 /** The declared `admin` subcommands, inspection before mutation as the help lists them. */
 export const ADMIN_COMMANDS = [
-  { name: "jobs", mutates: false, positionals: [] },
-  { name: "job", mutates: false, positionals: ["job-id"] },
-  { name: "timeline", mutates: false, positionals: ["job-id"] },
-  { name: "checkpoints", mutates: false, positionals: ["job-id"] },
-  { name: "waits", mutates: false, positionals: ["job-id"] },
+  { name: "tasks", mutates: false, positionals: [] },
+  { name: "task", mutates: false, positionals: ["task-id"] },
+  { name: "timeline", mutates: false, positionals: ["task-id"] },
+  { name: "checkpoints", mutates: false, positionals: ["task-id"] },
+  { name: "waits", mutates: false, positionals: ["task-id"] },
   { name: "external-waits", mutates: false, positionals: [] },
   { name: "failures", mutates: false, positionals: [] },
   { name: "queues", mutates: false, positionals: [] },
   { name: "schedules", mutates: false, positionals: [] },
   { name: "workers", mutates: false, positionals: [] },
   { name: "maintenance", mutates: false, positionals: [] },
-  { name: "cancel", mutates: true, positionals: ["job-id"] },
-  { name: "redrive", mutates: true, positionals: ["job-id"] },
+  { name: "cancel", mutates: true, positionals: ["task-id"] },
+  { name: "redrive", mutates: true, positionals: ["task-id"] },
   { name: "redrive-many", mutates: true, positionals: [] },
-  { name: "signal", mutates: true, positionals: ["job-id"] },
-  { name: "complete-human", mutates: true, positionals: ["job-id"] },
+  { name: "signal", mutates: true, positionals: ["task-id"] },
+  { name: "complete-human", mutates: true, positionals: ["task-id"] },
   { name: "pause", mutates: true, positionals: ["queue"] },
   { name: "resume", mutates: true, positionals: ["queue"] },
   { name: "purge", mutates: true, positionals: ["queue"] },
@@ -248,11 +248,11 @@ interface AdminQueuePurgeReport {
 export interface CliJsonPayloads {
   readonly "schema status": SchemaStatusReport;
   readonly health: QueueHealth;
-  readonly "admin jobs": JobListPage;
-  readonly "admin job": JobSnapshot;
-  readonly "admin timeline": JobTimelinePage;
-  readonly "admin checkpoints": readonly JobCheckpoint[] | JobCheckpoint;
-  readonly "admin waits": readonly JobWait[] | JobWait;
+  readonly "admin tasks": TaskListPage;
+  readonly "admin task": TaskSnapshot;
+  readonly "admin timeline": TaskTimelinePage;
+  readonly "admin checkpoints": readonly TaskCheckpoint[] | TaskCheckpoint;
+  readonly "admin waits": readonly TaskWait[] | TaskWait;
   readonly "admin external-waits": AdminExternalWaits;
   readonly "admin failures": DeadLetterPage;
   readonly "admin queues": readonly AdminQueueStatus[];

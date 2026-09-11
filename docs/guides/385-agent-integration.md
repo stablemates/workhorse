@@ -28,11 +28,11 @@ application. It enqueues inside the transaction that writes application data, so
 together. It registers a handler. It chooses the failure policy when it enqueues.
 
 Three mistakes survive review because none of them fails immediately. Enqueueing outside the
-caller's transaction leaves a job for a row that rolled back. Installing the schema at startup makes
+caller's transaction leaves a task for a row that rolled back. Installing the schema at startup makes
 every instance race. An external effect that is not restart-safe repeats on every retry, which a
 checkpoint prevents by recording the result the first time.
 
-After the worker settles the job, the agent reads it back by its identifier to confirm the durable
+After the worker settles the task, the agent reads it back by its identifier to confirm the durable
 state and result.
 
 ## How the examples stay true

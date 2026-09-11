@@ -31,7 +31,7 @@ import {
 import type {
   DashboardEventDetail,
   DashboardEventRow,
-  DashboardJobDetail,
+  DashboardTaskDetail,
   DashboardSystemWindow,
   DashboardTaskCounts,
 } from "@stablemates/workhorse-dashboard-server/wire";
@@ -48,7 +48,7 @@ import { requestRunNow, type RunNowFeedback } from "../run-now.js";
 import { Button, Center, Loader, Stack, Text } from "@mantine/core";
 import { WarningCircle } from "@phosphor-icons/react";
 import {
-  DemoJobKind,
+  DemoTaskKind,
   LoadState,
   PageData,
   PageRoute,
@@ -61,7 +61,7 @@ import {
   useDashboardClient,
 } from "../core.js";
 import { subscribeTimeZone } from "../preferences.js";
-import type { DemoJobOptions } from "../pages/tasks.js";
+import type { DemoTaskOptions } from "../pages/tasks.js";
 
 const TasksPage = lazy(() =>
   import("../pages/tasks.js").then((module) => ({ default: module.TasksPage })),
@@ -133,7 +133,7 @@ export function useDashboardController(
       cancelled = true;
     };
   }, [client]);
-  const [runningDemoJob, setRunningDemoJob] = useState<DemoJobKind | null>(null);
+  const [runningDemoTask, setRunningDemoTask] = useState<DemoTaskKind | null>(null);
   const [togglingSchedule, setTogglingSchedule] = useState<string | null>(null);
   const [togglingQueue, setTogglingQueue] = useState<string | null>(null);
   const [purgingQueue, setPurgingQueue] = useState<string | null>(null);
@@ -145,30 +145,30 @@ export function useDashboardController(
    * restores the same list and the same open drawer, and Back/Forward can only ever agree with
    * what is on screen.
    */
-  const selectedJobId = location.route === "/tasks" ? location.taskId : null;
-  useRefreshBlocker(taskDrawerOpened(selectedJobId), dashboardRefreshBlockers.taskDrawer);
+  const selectedTaskId = location.route === "/tasks" ? location.taskId : null;
+  useRefreshBlocker(taskDrawerOpened(selectedTaskId), dashboardRefreshBlockers.taskDrawer);
   const selectedEventId = location.route === "/events" ? location.events.eventId : null;
   const [inspectedEvent, setInspectedEvent] = useState<DashboardEventDetail | null>(null);
   const [eventDetailError, setEventDetailError] = useState<string | null>(null);
   const eventDetailRequests = useRef(createLatestRequestGuard());
   const selectedEventIdRef = useRef<string | null>(null);
-  const [selectedJob, setSelectedJob] = useState<DashboardJobDetail | null>(null);
-  const [jobDetailError, setJobDetailError] = useState<string | null>(null);
+  const [selectedTask, setSelectedTask] = useState<DashboardTaskDetail | null>(null);
+  const [taskDetailError, setTaskDetailError] = useState<string | null>(null);
   /**
    * Which task detail load may still write to the drawer.
    *
    * Clicking task A then task B leaves two requests racing for the same panel, and the slower
    * one is not necessarily the older one, so the drawer only accepts the newest claim.
    */
-  const jobDetailRequests = useRef(createLatestRequestGuard());
+  const taskDetailRequests = useRef(createLatestRequestGuard());
   /**
    * The task the drawer is showing right now, readable from an async callback.
    *
-   * `selectedJobId` is what renders, but a callback that awaited the server closed over the
+   * `selectedTaskId` is what renders, but a callback that awaited the server closed over the
    * value from the render that started it, which is exactly the stale answer these guards must
    * not trust. This ref is written at the same moment the selection changes.
    */
-  const selectedJobIdRef = useRef<string | null>(null);
+  const selectedTaskIdRef = useRef<string | null>(null);
   const [refreshInterval, setRefreshInterval] =
     useState<DashboardRefreshIntervalValue>(readStoredRefreshInterval);
   const [resumeCountdown, setResumeCountdown] = useState<number | null>(null);
@@ -283,7 +283,7 @@ export function useDashboardController(
                 filter: listing.filter,
                 queue: listing.queue,
                 worker: listing.worker,
-                jobType: listing.jobType,
+                taskType: listing.taskType,
                 sort: listing.sort,
                 tags: listing.tags,
                 search: listing.search ?? undefined,
@@ -311,7 +311,7 @@ export function useDashboardController(
                   pageSize: events.pageSize,
                   kind: events.kind,
                   queue: events.queue,
-                  jobType: events.jobType,
+                  taskType: events.taskType,
                   types: events.types,
                   worker: events.worker,
                   search: events.search,
@@ -564,34 +564,34 @@ export function useDashboardController(
    * reload, and Back all reach the drawer through the same path as a click and cannot disagree
    * with the address bar.
    */
-  const showJobDetail = useCallback(
+  const showTaskDetail = useCallback(
     async (id: string) => {
       // Claim the drawer before the await, so a later click wins even if this request
       // resolves after it.
-      const ticket = jobDetailRequests.current.begin();
-      selectedJobIdRef.current = id;
-      setSelectedJob(null);
-      setJobDetailError(null);
+      const ticket = taskDetailRequests.current.begin();
+      selectedTaskIdRef.current = id;
+      setSelectedTask(null);
+      setTaskDetailError(null);
       try {
-        const detail = await client.jobDetail({ id });
-        if (!jobDetailRequests.current.current(ticket)) return;
-        setSelectedJob(detail);
+        const detail = await client.taskDetail({ id });
+        if (!taskDetailRequests.current.current(ticket)) return;
+        setSelectedTask(detail);
       } catch (cause) {
-        if (!jobDetailRequests.current.current(ticket)) return;
-        setJobDetailError(
+        if (!taskDetailRequests.current.current(ticket)) return;
+        setTaskDetailError(
           cause instanceof Error ? cause.message : "Workhorse could not load the task",
         );
       }
     },
     [client],
   );
-  const reloadSelectedJob = useCallback(async () => {
-    if (selectedJobIdRef.current) await showJobDetail(selectedJobIdRef.current);
-  }, [showJobDetail]);
+  const reloadSelectedTask = useCallback(async () => {
+    if (selectedTaskIdRef.current) await showTaskDetail(selectedTaskIdRef.current);
+  }, [showTaskDetail]);
   const reloadTasks = useCallback(async () => {
     await loadPage();
-    await reloadSelectedJob();
-  }, [loadPage, reloadSelectedJob]);
+    await reloadSelectedTask();
+  }, [loadPage, reloadSelectedTask]);
 
   /**
    * Empty the drawer and abandon any detail load still in flight.
@@ -599,11 +599,11 @@ export function useDashboardController(
    * Without dropping the claim, a request that arrives after the operator closed the panel would
    * set detail or an error and reopen it on a task they already dismissed.
    */
-  const clearJobDetail = useCallback(() => {
-    jobDetailRequests.current.cancel();
-    selectedJobIdRef.current = null;
-    setSelectedJob(null);
-    setJobDetailError(null);
+  const clearTaskDetail = useCallback(() => {
+    taskDetailRequests.current.cancel();
+    selectedTaskIdRef.current = null;
+    setSelectedTask(null);
+    setTaskDetailError(null);
   }, []);
 
   /**
@@ -624,13 +624,13 @@ export function useDashboardController(
     [location, navigate, replace],
   );
 
-  const inspectJob = useCallback((id: string) => selectTask(id), [selectTask]);
-  const closeJobDetail = useCallback(() => selectTask(null), [selectTask]);
+  const inspectTask = useCallback((id: string) => selectTask(id), [selectTask]);
+  const closeTaskDetail = useCallback(() => selectTask(null), [selectTask]);
 
-  const runDemoJob = useCallback(
-    async (kind: DemoJobKind, options: DemoJobOptions = {}) => {
+  const runDemoTask = useCallback(
+    async (kind: DemoTaskKind, options: DemoTaskOptions = {}) => {
       const { scenario, feature } = options;
-      setRunningDemoJob(kind);
+      setRunningDemoTask(kind);
       try {
         if (!demoTools) return;
         const enqueued = await demoTools.enqueueTest({
@@ -646,16 +646,16 @@ export function useDashboardController(
         });
         // A keyed kind may replay to a task that predates this click, so the answer names what
         // happened and offers the task it resolved to rather than only refreshing the listing.
-        notifyEnqueueTest(enqueued, { openTask: inspectJob });
+        notifyEnqueueTest(enqueued, { openTask: inspectTask });
         if (location.filter !== "all" || location.page !== 1) navigate("/tasks");
         await loadPage();
       } catch (cause) {
         notifyFailure("Demo task not enqueued", cause, "Workhorse could not enqueue the demo task");
       } finally {
-        setRunningDemoJob(null);
+        setRunningDemoTask(null);
       }
     },
-    [auditActor, demoTools, inspectJob, loadPage, location.filter, location.page, navigate],
+    [auditActor, demoTools, inspectTask, loadPage, location.filter, location.page, navigate],
   );
   const inspectEvent = useCallback(
     (event: DashboardEventRow) => {
@@ -708,10 +708,10 @@ export function useDashboardController(
    */
   useLayoutEffect(() => {
     const requested = location.route === "/tasks" ? location.taskId : null;
-    const sync = taskDrawerSync(requested, selectedJobIdRef.current);
-    if (sync === "close") clearJobDetail();
-    else if (sync === "open") void showJobDetail(requested!);
-  }, [location.route, location.taskId, clearJobDetail, showJobDetail]);
+    const sync = taskDrawerSync(requested, selectedTaskIdRef.current);
+    if (sync === "close") clearTaskDetail();
+    else if (sync === "open") void showTaskDetail(requested!);
+  }, [location.route, location.taskId, clearTaskDetail, showTaskDetail]);
 
   useLayoutEffect(() => {
     const requested = location.route === "/events" ? location.events.eventId : null;
@@ -748,10 +748,10 @@ export function useDashboardController(
       // Reloaded on every outcome: a refusal is still a statement about durable state this list
       // should be showing, and a released task has already changed row.
       await loadPage();
-      await reloadSelectedJob();
+      await reloadSelectedTask();
       return feedback;
     };
-  }, [auditActor, client, loadPage, reloadSelectedJob]);
+  }, [auditActor, client, loadPage, reloadSelectedTask]);
 
   useEffect(() => {
     const onPopState = () => {
@@ -847,9 +847,9 @@ export function useDashboardController(
         navigate={navigate}
         replace={replace}
         taskLocation={location}
-        runDemoJob={demoTools ? runDemoJob : null}
-        runningDemoJob={runningDemoJob}
-        inspectJob={inspectJob}
+        runDemoTask={demoTools ? runDemoTask : null}
+        runningDemoTask={runningDemoTask}
+        inspectTask={inspectTask}
         runTaskNow={runTaskNow}
         auditActor={auditActor}
         reload={reloadTasks}
@@ -946,15 +946,15 @@ export function useDashboardController(
     content,
     navigate,
     runTaskNow,
-    selectedJobId,
+    selectedTaskId,
     selectedEventId,
     selectedEvent,
     eventDetailError,
-    selectedJob,
-    jobDetailError,
-    reloadSelectedJob,
-    inspectJob,
-    closeJobDetail,
+    selectedTask,
+    taskDetailError,
+    reloadSelectedTask,
+    inspectTask,
+    closeTaskDetail,
     closeEventDetail,
   };
 }

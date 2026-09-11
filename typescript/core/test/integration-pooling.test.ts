@@ -216,23 +216,23 @@ for (const lane of lanes) {
         ).toEqual([{ marker: "committed" }]);
         expect(
           (
-            await lanePool.query("SELECT job_type FROM workhorse.job WHERE job_type LIKE $1", [
+            await lanePool.query("SELECT task_type FROM workhorse.task WHERE task_type LIKE $1", [
               `${type}.%`,
             ])
           ).rows,
-        ).toEqual([{ job_type: `${type}.commit` }]);
+        ).toEqual([{ task_type: `${type}.commit` }]);
       });
 
-      it("claims and completes a job through the lane", async () => {
+      it("claims and completes a task through the lane", async () => {
         const type = `pooling.${lane.name}.round-trip`;
         const workerId = `pooling-${lane.name}-round-trip`;
 
-        const jobId = await queue.enqueue(type, { lane: lane.name });
+        const taskId = await queue.enqueue(type, { lane: lane.name });
         const claimed = await queue.claim(workerId);
-        expect(claimed?.id).toBe(jobId);
+        expect(claimed?.id).toBe(taskId);
         await queue.complete(claimed!, workerId, { done: true });
 
-        expect((await admin.getJob(jobId))?.state).toBe("succeeded");
+        expect((await admin.getTask(taskId))?.state).toBe("succeeded");
       });
 
       it("coordinates the maintenance tick through a transaction-scoped advisory lock", async () => {
@@ -248,7 +248,7 @@ for (const lane of lanes) {
         );
       });
 
-      it("dispatches a job to a worker through the lane", async () => {
+      it("dispatches a task to a worker through the lane", async () => {
         const type = `pooling.${lane.name}.dispatch`;
         const handled: string[] = [];
         const worker = new Worker(queue, {
@@ -330,7 +330,7 @@ describe("notification capability", () => {
   it("keeps a queryable without a dedicated connection on polling alone", async () => {
     const queryOnly = { query: database.pool.query.bind(database.pool) };
     const queue = new Queue(queryOnly);
-    expect(queue.supportsJobNotifications()).toBe(false);
+    expect(queue.supportsTaskNotifications()).toBe(false);
 
     const handled: string[] = [];
     const worker = new Worker(queue, {

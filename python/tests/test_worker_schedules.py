@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 import psycopg
 
-from workhorse import Queue, ScheduleDefinition, ScheduledJob, Worker
+from workhorse import Queue, ScheduleDefinition, ScheduledTask, Worker
 
 
 def _sync_schedule(
@@ -18,7 +18,7 @@ def _sync_schedule(
                 name="billing-rollup",
                 schedule=expression,
                 timezone=schedule_timezone,
-                job=ScheduledJob(type="billing.rollup", payload={}),
+                task=ScheduledTask(type="billing.rollup", payload={}),
             )
         ],
     )

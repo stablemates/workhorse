@@ -4,9 +4,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type {
   DashboardEventRow,
-  DashboardJobDetail,
+  DashboardTaskDetail,
 } from "@stablemates/workhorse-dashboard-server/wire";
-import { dashboardJobEventTypes } from "@stablemates/workhorse-dashboard-server/wire";
+import { dashboardTaskEventTypes } from "@stablemates/workhorse-dashboard-server/wire";
 import { taskStatusColors } from "./status-colors.js";
 
 Object.defineProperty(globalThis, "localStorage", {
@@ -32,21 +32,21 @@ const newlyPersistedEventTypes = [
   "human_wait_rejected",
 ] as const;
 
-function jobWithEvents(events: DashboardJobDetail["events"]): DashboardJobDetail {
+function taskWithEvents(events: DashboardTaskDetail["events"]): DashboardTaskDetail {
   return {
-    identity: { id: "job-1", type: "example", state: "scheduled" },
+    identity: { id: "task-1", type: "example", state: "scheduled" },
     events,
-  } as DashboardJobDetail;
+  } as DashboardTaskDetail;
 }
 
 async function renderExport(
   name: "BoundaryTimeline" | "CoalescingSection",
-  job: DashboardJobDetail,
+  task: DashboardTaskDetail,
 ) {
   const dashboard = await import("./dashboard.js");
   const Component = dashboard[name];
   return renderToStaticMarkup(
-    createElement(MantineProvider, null, createElement(Component, { job })),
+    createElement(MantineProvider, null, createElement(Component, { task })),
   );
 }
 
@@ -57,9 +57,9 @@ describe("dashboard event history", () => {
       id: "event:018f0000-0000-7000-8000-000000000042",
       kind: "event",
       recordId: "018f0000-0000-7000-8000-000000000042",
-      jobId: "job-123",
+      taskId: "task-123",
       queue: "billing",
-      jobType: "invoice.send",
+      taskType: "invoice.send",
       occurredAt: "2026-08-16T12:00:00.000Z",
       attempt: 1,
       type: "claimed",
@@ -75,30 +75,30 @@ describe("dashboard event history", () => {
         null,
         createElement(EventDetails, {
           event,
-          taskLinkHref: (jobId: string) => `/dashboard/tasks?task=${jobId}`,
+          taskLinkHref: (taskId: string) => `/dashboard/tasks?task=${taskId}`,
         }),
       ),
     );
 
-    expect(html).toContain('href="/dashboard/tasks?task=job-123"');
+    expect(html).toContain('href="/dashboard/tasks?task=task-123"');
     expect(html).toContain('target="_blank"');
     expect(html).toContain('rel="noopener noreferrer"');
-    expect(html).toContain('aria-label="Open task job-123 in a new window"');
+    expect(html).toContain('aria-label="Open task task-123 in a new window"');
   });
 
   it("offers every new lifecycle type as an Events feed filter", () => {
-    expect(dashboardJobEventTypes).toEqual(expect.arrayContaining(newlyPersistedEventTypes));
+    expect(dashboardTaskEventTypes).toEqual(expect.arrayContaining(newlyPersistedEventTypes));
   });
 
   it("renders known and future event types instead of dropping them", async () => {
     const html = await renderExport(
       "BoundaryTimeline",
-      jobWithEvents([
+      taskWithEvents([
         {
           id: "known",
           attempt: null,
           type: "dependency_blocked",
-          details: { prerequisite_job_id: "parent-1" },
+          details: { prerequisite_task_id: "parent-1" },
           occurredAt: "2026-08-15T12:00:00.000Z",
         },
         {
@@ -119,7 +119,7 @@ describe("dashboard event history", () => {
   it("attributes operator-initiated boundary events", async () => {
     const html = await renderExport(
       "BoundaryTimeline",
-      jobWithEvents([
+      taskWithEvents([
         {
           id: "cancel-request",
           attempt: 2,
@@ -140,7 +140,7 @@ describe("dashboard event history", () => {
   it("attributes a finalized cancellation to Workhorse", async () => {
     const html = await renderExport(
       "BoundaryTimeline",
-      jobWithEvents([
+      taskWithEvents([
         {
           id: "canceled",
           attempt: 2,
@@ -167,7 +167,7 @@ describe("dashboard event history", () => {
   it("explains debounce replacement using safe key evidence and absorbed counts", async () => {
     const html = await renderExport(
       "CoalescingSection",
-      jobWithEvents([
+      taskWithEvents([
         {
           id: "accepted",
           attempt: null,
@@ -213,7 +213,7 @@ describe("dashboard event history", () => {
   it("does not present rejected debounce settings as the task's accepted mode", async () => {
     const html = await renderExport(
       "CoalescingSection",
-      jobWithEvents([
+      taskWithEvents([
         {
           id: "rejected",
           attempt: null,

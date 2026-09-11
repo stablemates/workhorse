@@ -1,7 +1,7 @@
 import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { expectOneRow, WorkhorseError } from "../errors.js";
 import { logInfo } from "../telemetry.js";
-import { MAX_EXTERNAL_WAITS_PER_JOB, type ClaimedJob, type Json } from "../types.js";
+import { MAX_EXTERNAL_WAITS_PER_TASK, type ClaimedTask, type Json } from "../types.js";
 import {
   encodeExternalWaitValue,
   externalWaitCursor,
@@ -34,7 +34,7 @@ export type HumanWaitCompletionStatus =
   | "not_found";
 export interface HumanWaitCompletionResult<TResult extends Json = Json> {
   status: HumanWaitCompletionStatus;
-  jobId: string;
+  taskId: string;
   name: string;
   payload: TResult | null;
   completedAt: Date | null;
@@ -74,46 +74,46 @@ type CompleteRow = {
 
 export class HumanWaitLeaseLostError extends WorkhorseError {
   constructor(
-    readonly jobId: string,
+    readonly taskId: string,
     readonly waitName: string,
   ) {
     super(
-      `Human wait ${waitName} for job ${jobId} cannot be recorded because the lease is stale or expired`,
+      `Human wait ${waitName} for task ${taskId} cannot be recorded because the lease is stale or expired`,
     );
     this.name = "HumanWaitLeaseLostError";
   }
 }
 export class HumanWaitAlreadyWaitingError extends WorkhorseError {
   constructor(
-    readonly jobId: string,
+    readonly taskId: string,
     readonly waitName: string,
   ) {
-    super(`Human wait ${waitName} for job ${jobId} is already waiting for completion`);
+    super(`Human wait ${waitName} for task ${taskId} is already waiting for completion`);
     this.name = "HumanWaitAlreadyWaitingError";
   }
 }
 export class HumanWaitLimitExceededError extends WorkhorseError {
-  constructor(readonly jobId: string) {
-    super(`Job ${jobId} already has the maximum of ${MAX_EXTERNAL_WAITS_PER_JOB} human waits`);
+  constructor(readonly taskId: string) {
+    super(`Task ${taskId} already has the maximum of ${MAX_EXTERNAL_WAITS_PER_TASK} human waits`);
     this.name = "HumanWaitLimitExceededError";
   }
 }
 export class HumanWaitConflictError extends WorkhorseError {
   constructor(
-    readonly jobId: string,
+    readonly taskId: string,
     readonly waitName: string,
   ) {
-    super(`Human wait ${waitName} for job ${jobId} was replayed with different context`);
+    super(`Human wait ${waitName} for task ${taskId} was replayed with different context`);
     this.name = "HumanWaitConflictError";
   }
 }
 export class HumanWaitIdempotencyConflictError extends WorkhorseError {
   constructor(
-    readonly jobId: string,
+    readonly taskId: string,
     readonly waitName: string,
   ) {
     super(
-      `Human wait ${waitName} for job ${jobId} received a different completion for a retained idempotency key`,
+      `Human wait ${waitName} for task ${taskId} received a different completion for a retained idempotency key`,
     );
     this.name = "HumanWaitIdempotencyConflictError";
   }
@@ -127,7 +127,7 @@ export class HumanWaitsModule extends QueueModule {
     const { limit, cursor } = validateExternalWaitListOptions(options);
     const result = await this.context.database.query<HumanWaitRow>(
       SQL_STATEMENTS["dashboard_human_wait_v1"],
-      [limit + 1, cursor?.createdAt ?? null, cursor?.jobId ?? null, cursor?.name ?? null],
+      [limit + 1, cursor?.createdAt ?? null, cursor?.taskId ?? null, cursor?.name ?? null],
     );
     const pageRows = result.rows.slice(0, limit);
     return {
@@ -141,7 +141,7 @@ export class HumanWaitsModule extends QueueModule {
   }
 
   async waitForHuman<TContext extends Json, TResult extends Json = Json>(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     name: string,
     context: TContext,
@@ -152,18 +152,18 @@ export class HumanWaitsModule extends QueueModule {
       throw new TypeError("Worker ID must be a non-empty string");
     }
     const query = await this.context.database.query<WaitRow>(SQL_STATEMENTS["wait_for_human_v1"], [
-      job.id,
+      task.id,
       workerId,
-      job.fenceToken.toString(),
+      task.fenceToken.toString(),
       name,
       encodeExternalWaitValue(context, "Human wait context"),
       validateExternalWaitOptions(options),
     ]);
     const row = expectOneRow(query, "workhorse.wait_for_human_v1");
-    if (row.status === "already_waiting") throw new HumanWaitAlreadyWaitingError(job.id, name);
-    if (row.status === "stale") throw new HumanWaitLeaseLostError(job.id, name);
-    if (row.status === "limit_exceeded") throw new HumanWaitLimitExceededError(job.id);
-    if (row.status === "conflict") throw new HumanWaitConflictError(job.id, name);
+    if (row.status === "already_waiting") throw new HumanWaitAlreadyWaitingError(task.id, name);
+    if (row.status === "stale") throw new HumanWaitLeaseLostError(task.id, name);
+    if (row.status === "limit_exceeded") throw new HumanWaitLimitExceededError(task.id);
+    if (row.status === "conflict") throw new HumanWaitConflictError(task.id, name);
     if (row.status !== "waiting" && row.status !== "completed") {
       throw new Error(`Unexpected human wait status: ${String(row.status)}`);
     }
@@ -171,7 +171,7 @@ export class HumanWaitsModule extends QueueModule {
   }
 
   async completeHumanWait<TResult extends Json>(
-    jobId: string,
+    taskId: string,
     name: string,
     result: TResult,
     request: CompleteHumanWaitRequest,
@@ -181,7 +181,7 @@ export class HumanWaitsModule extends QueueModule {
     const query = await this.context.database.query<CompleteRow>(
       SQL_STATEMENTS["complete_human_wait_v1"],
       [
-        jobId,
+        taskId,
         name,
         encodeExternalWaitValue(result, "Human wait result"),
         request.idempotencyKey,
@@ -189,15 +189,15 @@ export class HumanWaitsModule extends QueueModule {
       ],
     );
     const row = expectOneRow(query, "workhorse.complete_human_wait_v1");
-    if (row.status === "conflict") throw new HumanWaitIdempotencyConflictError(jobId, name);
-    logInfo("workhorse.job.human_wait_processed", "Human wait completion processed", {
-      "workhorse.job.id": jobId,
+    if (row.status === "conflict") throw new HumanWaitIdempotencyConflictError(taskId, name);
+    logInfo("workhorse.task.human_wait_processed", "Human wait completion processed", {
+      "workhorse.task.id": taskId,
       "workhorse.human_wait.name": name,
       "workhorse.human_wait.status": row.status,
     });
     return {
       status: row.status,
-      jobId,
+      taskId,
       name,
       payload: row.result as TResult | null,
       completedAt: row.completed_at === null ? null : new Date(row.completed_at),

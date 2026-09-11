@@ -6,9 +6,9 @@ function throughputDay(day: string, enqueued: number, succeeded: number): Throug
   return {
     day,
     enqueued,
-    jobSucceeded: succeeded,
-    jobFailed: 0,
-    jobCanceled: 0,
+    taskSucceeded: succeeded,
+    taskFailed: 0,
+    taskCanceled: 0,
     attemptSucceeded: succeeded,
     attemptFailed: 0,
     attemptRetry: 0,
@@ -46,14 +46,14 @@ function observation(observedAt: string, overrides: ObservationOverrides = {}): 
     },
     partitions: {
       parents: [
-        { parent: "job_event", days, defaultRows: 0 },
+        { parent: "task_event", days, defaultRows: 0 },
         { parent: "attempt_history", days, defaultRows: 0 },
       ],
       oldestSurvivingDay: days.at(0) ?? null,
       oldestSurvivingAgeDays: days.length === 0 ? null : 14,
     },
     retention: {
-      jobEventRetentionDays: 14,
+      taskEventRetentionDays: 14,
       attemptHistoryRetentionDays: 14,
       statisticsRetentionDays: 14,
       historyPartitionsPerPass: 4,
@@ -109,7 +109,7 @@ describe("soak report", () => {
     expect(report.retention.passesThatDroppedAPartition).toBe(2);
     expect(report.retention.passes[0]).toMatchObject({
       dropped: [
-        { parent: "job_event", day: "2025-12-30" },
+        { parent: "task_event", day: "2025-12-30" },
         { parent: "attempt_history", day: "2025-12-30" },
       ],
       retainedBeforeFrom: "2025-12-18T00:00:00.000Z",
@@ -138,7 +138,7 @@ describe("soak report", () => {
     // 2025-12-31 closed before the first observation, so it is context and not window throughput.
     expect(report.throughput.days.map((day) => day.day)).toEqual(["2026-01-01", "2026-01-02"]);
     expect(report.throughput.totals.enqueued).toBe(500);
-    expect(report.throughput.totals.jobSucceeded).toBe(490);
+    expect(report.throughput.totals.taskSucceeded).toBe(490);
     expect(report.throughput.disagreements).toEqual([]);
     expect(report.reconciliation).toMatchObject({ enqueued: 500, settled: 490, residual: 10 });
   });
@@ -181,15 +181,15 @@ describe("soak report", () => {
       killedAt: "2026-01-02T09:00:00.000Z",
       windowEnd: "2026-01-02T15:00:00.000Z",
       leaseExpiredAttempts: 12,
-      affectedJobs: 12,
-      jobsSettled: 11,
-      jobsLive: 1,
-      jobsLost: 0,
-      jobsSucceededMoreThanOnce: 0,
+      affectedTasks: 12,
+      tasksSettled: 11,
+      tasksLive: 1,
+      tasksLost: 0,
+      tasksSucceededMoreThanOnce: 0,
     };
     const observations = series();
     observations[1]!.killRecovery = clean;
-    observations[2]!.killRecovery = { ...clean, jobsLost: 1, jobsSettled: 10 };
+    observations[2]!.killRecovery = { ...clean, tasksLost: 1, tasksSettled: 10 };
 
     const report = buildSoakReport(observations);
 
@@ -203,11 +203,11 @@ describe("soak report", () => {
       killedAt: "2026-01-02T09:00:00.000Z",
       windowEnd: "2026-01-02T15:00:00.000Z",
       leaseExpiredAttempts: 0,
-      affectedJobs: 0,
-      jobsSettled: 0,
-      jobsLive: 0,
-      jobsLost: 0,
-      jobsSucceededMoreThanOnce: 0,
+      affectedTasks: 0,
+      tasksSettled: 0,
+      tasksLive: 0,
+      tasksLost: 0,
+      tasksSucceededMoreThanOnce: 0,
     };
 
     expect(buildSoakReport(observations).kills[0]?.clean).toBe(false);

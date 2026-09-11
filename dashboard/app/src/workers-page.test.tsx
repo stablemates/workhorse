@@ -45,7 +45,7 @@ describe("workers page", () => {
           scheduleNamespaces: ["billing"],
           hostname: "worker-host",
           pid: 123,
-          activeJobs: 0,
+          activeTasks: 0,
           concurrency: 4,
           activeSlots: 0,
           draining: false,

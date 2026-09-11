@@ -5,7 +5,7 @@ import { apiEntries, renderApi } from "./typescript-api.js";
  * Write or verify `api/typescript.txt`.
  *
  * The snapshot is read from the built declarations, so `pnpm build:runtime:dev` must have run in
- * this checkout first. CI's `static` job builds before it checks for the same reason.
+ * this checkout first. CI's `static` task builds before it checks for the same reason.
  */
 
 const header = [

@@ -4,7 +4,7 @@ description: The public surface grouped by concern — Queue, Admin, Worker, Han
 ---
 
 Workhorse's public surface is small: `Queue` produces and controls application work, `Admin`
-provides operator reads and controls, and `Worker` runs jobs. A handful of schema and process helpers surround them. This page
+provides operator reads and controls, and `Worker` runs tasks. A handful of schema and process helpers surround them. This page
 maps that surface by concern so you can find the right method fast. It is an overview, not an
 exhaustive reference — the published TypeScript declarations carry the exact signatures, and
 [`typescript/core/src/index.ts`](https://github.com/stablemates/workhorse/blob/main/typescript/core/src/index.ts) is the
@@ -14,16 +14,16 @@ authoritative export list.
 
 `new Queue(database, defaultQueue?, options?)` takes any `Queryable` — a `pg` pool, a client, or an ORM adapter.
 
-**Producing work.** `enqueue(type, payload, options?, transaction?)` accepts one job and returns
-its ID; pass an open transaction as the last argument to commit the job with your data.
+**Producing work.** `enqueue(type, payload, options?, transaction?)` accepts one task and returns
+its ID; pass an open transaction as the last argument to commit the task with your data.
 `enqueueMany(requests, transaction?)` accepts a bounded batch. `enqueueWithResult` and
-`enqueueManyWithResults` return each retained job ID with an `EnqueueOutcome` describing whether
+`enqueueManyWithResults` return each retained task ID with an `EnqueueOutcome` describing whether
 PostgreSQL accepted, replayed, replaced, could not replace, or coalesced the request.
 `EnqueueOptions` carries
 `queue`, `runAt`, `priority`, `deadline`, `executionTimeoutMs`, `maxAttempts`, `retryPolicy`,
 `concurrencyKey`, `tags`, `idempotency`, `debounce`, `throttle`, and dependency inputs.
 
-**Stopping work.** `cancel(jobId, { requestedBy, reason })` records an attributed cooperative
+**Stopping work.** `cancel(taskId, { requestedBy, reason })` records an attributed cooperative
 cancellation. Queued work cancels immediately; active handlers observe it through their
 `AbortSignal`.
 
@@ -47,7 +47,7 @@ Python exposes the same boundary through synchronous and asynchronous
 **External waits and child work.** `sendSignal` and `completeHumanWait` deliver an attributed, idempotent result after the caller
 enforces authorization. Workers use the
 lower-level `scheduleWait`, `waitForSignal`, `waitForHuman`, `createChild`, and `createChildren`
-methods under a claimed job's fence; application code normally reaches those through
+methods under a claimed task's fence; application code normally reaches those through
 `HandlerContext`.
 
 **Health.** `health()` returns a database-evaluated `QueueHealth` verdict with reasons.
@@ -65,7 +65,7 @@ methods under a claimed job's fence; application code normally reaches those thr
 Go exposes the matching boundary through `workhorse.NewAdmin(executor)`. It uses the same pgx or
 `database/sql` executor as `NewQueue`, while the caller retains connection and transaction ownership.
 
-**Reading evidence.** `getJob`, `listJobs`, and `getJobTimeline` inspect jobs.
+**Reading evidence.** `getTask`, `listTasks`, and `getTaskTimeline` inspect tasks.
 `listCheckpoints`, `listWaits`, `listSignalWaits`, `listHumanWaits`, and `getProgress` inspect
 durable boundaries. Dependency, child, and redrive lineage reads expose retained graph edges.
 
@@ -73,14 +73,14 @@ durable boundaries. Dependency, child, and redrive lineage reads expose retained
 terminal failures. `listWorkers` and `setWorkerPaused` inspect and steer worker processes.
 `pauseQueue`, `resumeQueue`, and `purgeQueue` control a whole queue. Every mutation takes
 `{ actor, reason, requestId }`; purge returns its deleted count and safely replays the same request.
-`schedules` reads recurring definitions, and `runTaskNow` releases one scheduled job early.
+`schedules` reads recurring definitions, and `runTaskNow` releases one scheduled task early.
 
 ## Worker
 
-`new Worker(queue, options?)` claims and runs jobs with bounded concurrency.
+`new Worker(queue, options?)` claims and runs tasks with bounded concurrency.
 
 - `handle(type, handler)` registers a typed handler and returns the worker for chaining.
-- `handleBatch(type, options, handler)` groups jobs of one type while preserving a separate outcome
+- `handleBatch(type, options, handler)` groups tasks of one type while preserving a separate outcome
   and fence for every member.
 - `run(signal?)` is the production loop; `runOnce()` performs one claim-and-run pass.
 - `stop()` drains: no new claims, active handlers finish. `pause()` and `resume()` toggle claiming
@@ -96,7 +96,7 @@ terminal failures. `listWorkers` and `setWorkerPaused` inspect and steer worker 
 
 Every handler receives `(payload, context)`. The context is the durable-execution surface:
 
-- `job` — the `ClaimedJob` with ID, attempt, and metadata.
+- `task` — the `ClaimedTask` with ID, attempt, and metadata.
 - `signal` — an `AbortSignal` aborted on cancellation, deadline, or execution timeout.
 - `checkpoint(name, operation)` — run once, persist the JSON result, replay it on restart.
 - `sleep(name, durationMs)` and `sleepUntil(name, wakeAt)` — durable timers that release the
@@ -116,7 +116,7 @@ All Workhorse errors extend `WorkhorseError`. The ones you are most likely to ca
 - `EnqueueIdempotencyConflictError` and `RedriveIdempotencyConflictError` — a replay differed
   materially from the original request.
 - `CheckpointConflictError` and `WaitConflictError` — a durable name was reused with different
-  content; `WaitLimitExceededError` bounds waits per job.
+  content; `WaitLimitExceededError` bounds waits per task.
 - `ChildConflictError`, `ChildLimitExceededError`, and `ChildResultLimitExceededError` — child work
   changed during replay or exceeded a bounded set or result.
 - `DependencyCycleError` and `DependencyLimitExceededError` — a dependency would create a cycle or
@@ -125,7 +125,7 @@ All Workhorse errors extend `WorkhorseError`. The ones you are most likely to ca
   tried to write after losing ownership.
 - `CancellationRequestedError`, `DeadlineExceededError`, and `ExecutionTimeoutError` — the reasons
   behind an aborted `context.signal`.
-- `JobContractValidationError`, `JobContractUnavailableError`, and `JobValueSizeLimitError` —
+- `TaskContractValidationError`, `TaskContractUnavailableError`, and `TaskValueSizeLimitError` —
   payload contract and size enforcement.
 
 Exported constants such as `MAX_ENQUEUE_BATCH_SIZE`, `MAX_CHECKPOINT_VALUE_BYTES`, and

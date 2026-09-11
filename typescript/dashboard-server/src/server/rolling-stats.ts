@@ -7,7 +7,7 @@ import { sql } from "./sql.js";
  * from a scan over retained history, so its cost tracks the window length and the number of active
  * (queue, task type) pairs instead of throughput. `workhorse.stat_buckets_v1` stitches materialized
  * buckets to a live tail for the minutes the rollup has not closed yet, so a window is correct even
- * immediately after a job runs and stays correct if the rollup pass is behind.
+ * immediately after a task runs and stays correct if the rollup pass is behind.
  */
 
 /**
@@ -39,7 +39,7 @@ export const statAttempts = sql`(
 )`;
 
 /**
- * Attempts that did not end the job successfully or by operator cancellation.
+ * Attempts that did not end the task successfully or by operator cancellation.
  *
  * Cancellation is an operator decision rather than an error, and a retry is an error the system
  * absorbed, which is exactly why it belongs here: an error rate that ignored retries would read as
@@ -49,7 +49,7 @@ export const statAttemptErrors = sql`(
   stat.attempt_failed + stat.attempt_retry + stat.attempt_lease_expired + stat.attempt_other
 )`;
 
-/** Attempts that closed their job, which is what "completed" means on a drain rate. */
+/** Attempts that closed their task, which is what "completed" means on a drain rate. */
 export const statCompleted = sql`(
   stat.attempt_succeeded + stat.attempt_failed + stat.attempt_canceled
 )`;

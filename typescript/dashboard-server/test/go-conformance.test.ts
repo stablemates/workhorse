@@ -68,17 +68,17 @@ it("passes dashboard/v1 through the Go embedded backend", { timeout: 120_000 }, 
        SET tokens=excluded.tokens,refilled_at=excluded.refilled_at`,
   );
   const selected = await database.pool.query<{ id: string; current_attempt: number }>(
-    `SELECT job.id,runtime.current_attempt FROM workhorse.dashboard_job_v1 job
-       JOIN workhorse.dashboard_job_runtime_v1 runtime ON runtime.job_id=job.id
-      WHERE job.queue_name='conformance-demo' ORDER BY job.created_at LIMIT 1`,
+    `SELECT task.id,runtime.current_attempt FROM workhorse.dashboard_task_v1 task
+       JOIN workhorse.dashboard_task_runtime_v1 runtime ON runtime.task_id=task.id
+      WHERE task.queue_name='conformance-demo' ORDER BY task.created_at LIMIT 1`,
   );
-  const job = selected.rows[0]!;
+  const task = selected.rows[0]!;
   await database.pool.query(
-    `INSERT INTO workhorse.job_event(job_id,attempt,event_type,details)
+    `INSERT INTO workhorse.task_event(task_id,attempt,event_type,details)
      VALUES ($1,$2::integer,'batch_dispatched',jsonb_build_object(
        'batch_id','dashboard-semantic-batch','members',jsonb_build_array(
-         jsonb_build_object('job_id',$1::uuid,'attempt',$2::integer))))`,
-    [job.id, job.current_attempt],
+         jsonb_build_object('task_id',$1::uuid,'attempt',$2::integer))))`,
+    [task.id, task.current_attempt],
   );
 
   await new Promise((resolve) => {
@@ -90,7 +90,7 @@ it("passes dashboard/v1 through the Go embedded backend", { timeout: 120_000 }, 
   expect(queue.rateLimitPolicy.rate).toEqual({ limit: 10, intervalMs: 1000, burst: 12 });
   expect(queue.rateLimitPolicy.availableTokens).toBe(0.5);
 
-  const detail = await rpc(address, fixtures.harness.origin, "jobDetail", { id: job.id });
+  const detail = await rpc(address, fixtures.harness.origin, "taskDetail", { id: task.id });
   expect(detail.concurrencyPolicy).toMatchObject({ maxActive: 7, maxActivePerKey: 2 });
   expect(detail.batchExecutions[0]).toMatchObject({ id: "dashboard-semantic-batch" });
 
@@ -102,13 +102,19 @@ it("passes dashboard/v1 through the Go embedded backend", { timeout: 120_000 }, 
   const sqlFacets = await rpc(address, fixtures.harness.origin, "taskFacets", null, true);
   expect(Array.isArray(sqlFacets.queues)).toBe(true);
   expect(Array.isArray(sqlFacets.workers)).toBe(true);
-  const sqlDetail = await rpc(address, fixtures.harness.origin, "jobDetail", { id: job.id }, true);
+  const sqlDetail = await rpc(
+    address,
+    fixtures.harness.origin,
+    "taskDetail",
+    { id: task.id },
+    true,
+  );
   expect(sqlDetail.batchExecutions[0]).toMatchObject({ id: "dashboard-semantic-batch" });
   const event = await database.pool.query<{ event_id: string }>(
-    `SELECT event_id::text FROM workhorse.dashboard_job_event_v1
-      WHERE job_id=$1 AND event_type='batch_dispatched'
+    `SELECT event_id::text FROM workhorse.dashboard_task_event_v1
+      WHERE task_id=$1 AND event_type='batch_dispatched'
       ORDER BY occurred_at DESC, event_id DESC LIMIT 1`,
-    [job.id],
+    [task.id],
   );
   const sqlEvent = await rpc(
     address,
@@ -117,17 +123,17 @@ it("passes dashboard/v1 through the Go embedded backend", { timeout: 120_000 }, 
     { id: `event:${event.rows[0]!.event_id}` },
     true,
   );
-  expect(sqlEvent).toMatchObject({ kind: "event", jobId: job.id });
+  expect(sqlEvent).toMatchObject({ kind: "event", taskId: task.id });
   await expect(
     rpc(address, fixtures.harness.origin, "settings", null, true),
   ).resolves.toHaveProperty("workers");
 
   await database.pool.query(
-    `WITH job AS (
-       INSERT INTO workhorse.job(queue_name,job_type,payload,max_attempts)
+    `WITH task AS (
+       INSERT INTO workhorse.task(queue_name,task_type,payload,max_attempts)
        VALUES ('conformance-demo','conformance.retry-summary','{}',3) RETURNING id
-     ) INSERT INTO workhorse.job_runtime(job_id,queue_name,state,current_attempt,run_at)
-     SELECT id,'conformance-demo','scheduled',2,clock_timestamp()+interval '30 seconds' FROM job`,
+     ) INSERT INTO workhorse.task_runtime(task_id,queue_name,state,current_attempt,run_at)
+     SELECT id,'conformance-demo','scheduled',2,clock_timestamp()+interval '30 seconds' FROM task`,
   );
   const system = await rpc(address, fixtures.harness.origin, "system", { window: "1h" });
   expect(system.retryStorm.buckets[0].count).toBeGreaterThanOrEqual(1);

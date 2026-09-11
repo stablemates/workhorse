@@ -8,25 +8,25 @@ This document records the problem, the design, the schema, the read path, the op
 
 The dashboard system page auto-refreshes. Before this change, one refresh ran five window queries against unbounded relations:
 
-| Panel                  | Query before                                                      | Cost driver                         |
-| ---------------------- | ----------------------------------------------------------------- | ----------------------------------- |
-| Throughput chart       | `job_event` + `attempt_history` scans over the window             | Events in window                    |
-| Drain / error-rate KPI | `attempt_history` scan over **twice** the window                  | Attempts in two windows             |
-| First-attempt wait     | `job_event` **self join**, claimed rows to their enqueued partner | One index probe per first claim     |
-| Per-queue rows         | `job_event` and `attempt_history` each joined to `job`            | Events in window × join to identity |
-| Failing task types     | `attempt_history` joined to `job`, grouped by queue and type      | Attempts in window                  |
+| Panel                  | Query before                                                       | Cost driver                         |
+| ---------------------- | ------------------------------------------------------------------ | ----------------------------------- |
+| Throughput chart       | `task_event` + `attempt_history` scans over the window             | Events in window                    |
+| Drain / error-rate KPI | `attempt_history` scan over **twice** the window                   | Attempts in two windows             |
+| First-attempt wait     | `task_event` **self join**, claimed rows to their enqueued partner | One index probe per first claim     |
+| Per-queue rows         | `task_event` and `attempt_history` each joined to `task`           | Events in window × join to identity |
+| Failing task types     | `attempt_history` joined to `task`, grouped by queue and type      | Attempts in window                  |
 
 Each is correct and each is proportional to throughput. Together they make a dashboard cost the most exactly when the system is busiest, which is when an operator is most likely to be looking at it. A 24-hour window on a busy queue is millions of rows re-scanned every refresh.
 
-The activity chart on the tasks page was worse in a different way: it built its base relation from **every job that ever existed**, left-joined to runtime, outcome, and a per-job `attempt_history` LATERAL, and only then applied the time window in a join condition.
+The activity chart on the tasks page was worse in a different way: it built its base relation from **every task that ever existed**, left-joined to runtime, outcome, and a per-task `attempt_history` LATERAL, and only then applied the time window in a join condition.
 
-The goal was to make these costs track the _window_ and the number of _active `(queue, job type)` pairs_ instead of throughput, without adding anything to the dispatch path.
+The goal was to make these costs track the _window_ and the number of _active `(queue, task type)` pairs_ instead of throughput, without adding anything to the dispatch path.
 
 ## What was deliberately not done
 
 **Nothing was added to enqueue, claim, or complete.** No triggers on the hot path, no counter rows to contend on.
 
-The obvious implementation — a trigger that upserts a counter row per event — would put a hot-row update in the middle of a queue whose entire value proposition is dispatch throughput. Every enqueue on the same queue and job type in the same minute would serialize on one tuple. A statistics feature that makes the queue slower is a bad trade regardless of how fast it makes the dashboard.
+The obvious implementation — a trigger that upserts a counter row per event — would put a hot-row update in the middle of a queue whose entire value proposition is dispatch throughput. Every enqueue on the same queue and task type in the same minute would serialize on one tuple. A statistics feature that makes the queue slower is a bad trade regardless of how fast it makes the dashboard.
 
 Instead a maintenance pass aggregates raw history for minutes that have already closed. Aggregation cost is proportional to _new_ history only, once per minute, in a pass that is already running.
 
@@ -34,17 +34,17 @@ Instead a maintenance pass aggregates raw history for minutes that have already 
 
 ### Statistics tiers
 
-One row per closed minute per `(queue_name, job_type)`. Primary key `(bucket_start, queue_name, job_type)`; the leading key column makes every window a range scan without an extra index.
+One row per closed minute per `(queue_name, task_type)`. Primary key `(bucket_start, queue_name, task_type)`; the leading key column makes every window a range scan without an extra index.
 
 | Column                                                                                              | Grain   | Meaning                                                         |
 | --------------------------------------------------------------------------------------------------- | ------- | --------------------------------------------------------------- |
 | `bucket_start`                                                                                      | —       | UTC minute boundary, `date_bin('1 minute', …, UTC origin)`      |
-| `enqueued`                                                                                          | job     | `job_event` rows with `event_type = 'enqueued'`                 |
-| `job_succeeded`, `job_failed`, `job_canceled`                                                       | job     | `job_outcome` rows by terminal state                            |
+| `enqueued`                                                                                          | task    | `task_event` rows with `event_type = 'enqueued'`                |
+| `task_succeeded`, `task_failed`, `task_canceled`                                                    | task    | `task_outcome` rows by terminal state                           |
 | `attempt_succeeded`, `attempt_failed`, `attempt_retry`, `attempt_lease_expired`, `attempt_canceled` | attempt | `attempt_history` rows by outcome                               |
 | `attempt_other`                                                                                     | attempt | `deadline_exceeded` and `timeout` closures                      |
 | `attempt_duration_ms`                                                                               | attempt | Sum of `finished_at - started_at`                               |
-| `wait_sketch`                                                                                       | job     | Mergeable first-claim wait histogram                            |
+| `wait_sketch`                                                                                       | task    | Mergeable first-claim wait histogram                            |
 | `last_attempt_at`, `last_error`, `last_error_at`                                                    | attempt | Latest attempt and latest error message (≤ 500 chars) in minute |
 
 **Every boundary is a UTC boundary.** `date_bin` takes an origin, and the origin is
@@ -52,22 +52,22 @@ One row per closed minute per `(queue_name, job_type)`. Primary key `(bucket_sta
 resolves in its own `TimeZone`. That is what makes a day bucket agree with the history day
 partition it was derived from, on a database in any timezone.
 
-**Grain is never conflated.** A job that retried four times before succeeding contributes one `job_succeeded` and five attempts. Mixing the two is the usual way a throughput panel starts disagreeing with a task list, so the columns are named for their grain and the dashboard picks one deliberately per panel.
+**Grain is never conflated.** A task that retried four times before succeeding contributes one `task_succeeded` and five attempts. Mixing the two is the usual way a throughput panel starts disagreeing with a task list, so the columns are named for their grain and the dashboard picks one deliberately per panel.
 
 `attempt_other` is separate from `attempt_failed` on purpose: a deadline or execution timeout is an error, but it is not a handler failure, and folding them together would misattribute a scheduling problem to application code.
 
-`job_stat_bucket_hour` has the same measures with `bigint` counters and one row per complete hour.
-`job_stat_bucket_day` has the same shape and one row per complete day. Hours derive only from
+`task_stat_bucket_hour` has the same measures with `bigint` counters and one row per complete hour.
+`task_stat_bucket_day` has the same shape and one row per complete day. Hours derive only from
 minute rows, and days derive only from hour rows.
 
-### `workhorse.job_stat_state`
+### `workhorse.task_stat_state`
 
 Singleton. `rolled_up_through`, `hourly_rolled_up_through`, and `daily_rolled_up_through` are
 exclusive tier watermarks. `last_run_at` records the last pass for health.
 
-### `job_outcome_updated_idx`
+### `task_outcome_updated_idx`
 
-`workhorse.job_outcome (updated_at, job_id)`, added for the activity chart's candidate set. It is safe on `job_outcome` because `updated_at` is stamped once when the row is written and never bumped afterwards — the same index on `job_runtime` would cost every heartbeat its HOT update, which is why the activity query scans `job_runtime` (small by design, live jobs only) instead of indexing it.
+`workhorse.task_outcome (updated_at, task_id)`, added for the activity chart's candidate set. It is safe on `task_outcome` because `updated_at` is stamped once when the row is written and never bumped afterwards — the same index on `task_runtime` would cost every heartbeat its HOT update, which is why the activity query scans `task_runtime` (small by design, live tasks only) instead of indexing it.
 
 ## Functions
 
@@ -77,18 +77,18 @@ The single definition of what a minute bucket means. A `STABLE` SQL function ret
 
 | Source            | Rows                          | Bucketed by         |
 | ----------------- | ----------------------------- | ------------------- |
-| `job_event`       | `event_type = 'enqueued'`     | `occurred_at`       |
+| `task_event`      | `event_type = 'enqueued'`     | `occurred_at`       |
 | `attempt_history` | all closed attempts           | `occurred_at`       |
-| `job_outcome`     | all terminal jobs             | `finished_at`       |
-| `job_event`       | first claim joined to enqueue | claim `occurred_at` |
+| `task_outcome`    | all terminal tasks            | `finished_at`       |
+| `task_event`      | first claim joined to enqueue | claim `occurred_at` |
 
 Each grain is bucketed by the timestamp its own row carries when it lands. `occurred_at` is also the history partition key, so ranges prune. Bucketing by anything a row does _not_ carry would make recomputation non-idempotent.
 
 ### `stat_overflow_type_v1()` — cardinality bound
 
-Returns `'__other__'`. Within each bucket, `(queue, job type)` pairs are ranked by volume; everything past `p_group_limit` is folded into the `__other__` job type **within its own queue**, so per-queue rates stay accurate while the row count per bucket stays bounded by `group_limit + distinct queues`.
+Returns `'__other__'`. Within each bucket, `(queue, task type)` pairs are ranked by volume; everything past `p_group_limit` is folded into the `__other__` task type **within its own queue**, so per-queue rates stay accurate while the row count per bucket stays bounded by `group_limit + distinct queues`.
 
-Queue and job type are the only dimensions in the rollup because they are the only two whose cardinality is bounded by code rather than by data. Worker and tag dimensions were considered and left to live queries; see Limits.
+Queue and task type are the only dimensions in the rollup because they are the only two whose cardinality is bounded by code rather than by data. Worker and tag dimensions were considered and left to live queries; see Limits.
 
 ### `stat_sketch_index_v1`, `stat_sketch_merge_v1`, `stat_sketch_percentile_v1`
 
@@ -102,7 +102,7 @@ an upper clipping boundary.
 Defaults: `false, clock_timestamp(), 240`. Returns the standard maintenance phase shape (`phase, rows_affected, duration_ms, skipped_lock, error`) for two phases, `stat_rollup` and `stat_retention`. The cadence, recompute window, and group limit are read from `maintenance_policy` (`statistics_rollup_interval_ms` default 60,000, `statistics_recompute_buckets` default 2, `statistics_group_limit` default 200) rather than passed by the caller; a fleet shares one statistics contract.
 
 1. Take `pg_try_advisory_xact_lock('workhorse:maintenance:stat-rollup')`. A losing caller returns both phases with `skipped_lock = true` and does nothing, so every worker can run it.
-2. Read `maintenance_policy`. Unless `p_force`, return no rows when `statistics_rollup_interval_ms` is zero or `job_stat_state.last_run_at` is within the interval of `p_now`. `p_force` bypasses only this gate.
+2. Read `maintenance_policy`. Unless `p_force`, return no rows when `statistics_rollup_interval_ms` is zero or `task_stat_state.last_run_at` is within the interval of `p_now`. `p_force` bypasses only this gate.
 3. `v_closed = date_bin('1 minute', p_now)` — only fully elapsed minutes are eligible.
 4. `v_from = LEAST(rolled_up_through - statistics_recompute_buckets minutes, v_closed)`.
 5. `v_to = LEAST(v_closed, v_from + p_max_buckets minutes)` — catching up after an outage advances in bounded passes rather than in one long transaction.
@@ -111,7 +111,7 @@ Defaults: `false, clock_timestamp(), 240`. Returns the standard maintenance phas
 
 **Why the pass rewrites minutes it already closed.** A bucket is a pure function of the raw history in its minute. A transaction that commits its history row after its own minute closed would otherwise be lost forever; rewriting the last couple of minutes absorbs it. The same property makes the pass safe to run twice — it converges rather than double counting, which is what the "recompute" integration test asserts.
 
-`job_outcome` rows can be deleted by terminal pruning, which would make a recompute of a long-past bucket lose counts. This cannot happen: pruning only touches rows days old, far outside a two-minute recompute window.
+`task_outcome` rows can be deleted by terminal pruning, which would make a recompute of a long-past bucket lose counts. This cannot happen: pruning only touches rows days old, far outside a two-minute recompute window.
 
 ### `stat_buckets_v1(p_from, p_to)`
 
@@ -120,7 +120,7 @@ hours, and windows of at least ninety days substitute complete days. `stat_windo
 the lower bound to align to the selected minute, hour, or day tier. Finer rows and
 `aggregate_stats_v1` supply the recent right edge.
 
-Callers never need to know where the watermark sits. A window is correct the instant a job runs, without waiting for a rollup pass, and a rollup that is behind costs a longer live tail rather than a wrong answer. In steady state the tail is one to three minutes of partition-pruned raw history.
+Callers never need to know where the watermark sits. A window is correct the instant a task runs, without waiting for a rollup pass, and a rollup that is behind costs a longer live tail rather than a wrong answer. In steady state the tail is one to three minutes of partition-pruned raw history.
 
 Lower bounds must be minute-aligned. Stored buckets are selected by `bucket_start`, so an unaligned bound would drop a whole minute the live tail would have included, and the two halves of a stitched window would disagree. `statWindowStart` in the dashboard exists to make that alignment impossible to forget.
 
@@ -150,8 +150,8 @@ Buckets are a sixth retained category, configured exactly like the other five th
 Minute rows retain at most two days and hour rows retain at most ninety days. A shorter
 `statisticsRetentionDays` value shortens every tier. Each tier applies the row bound independently.
 
-It sits **outside** the `job_identity >= dependents` constraint that governs the history categories,
-and that placement is the point. A bucket summarizes jobs; it does not attribute one. Keeping
+It sits **outside** the `task_identity >= dependents` constraint that governs the history categories,
+and that placement is the point. A bucket summarizes tasks; it does not attribute one. Keeping
 aggregates long after the events they were derived from have been deleted is the intended
 configuration, not a violation, and it is the only way to answer a long window cheaply once history
 is gone.
@@ -192,25 +192,25 @@ Workers offer the pass on `WorkerOptions.maintenanceRoutinePollMs` (default `60_
 | `statWindowStart(windowSeconds, multiple)` | Minute-aligned lower bound                           |
 | `statAttempts`                             | All closed attempts in a bucket                      |
 | `statAttemptErrors`                        | Attempts that neither succeeded nor were canceled    |
-| `statCompleted`                            | Attempts that closed their job                       |
+| `statCompleted`                            | Attempts that closed their task                      |
 
 `statAttemptErrors` counts retries. A retry is an error the system absorbed, and an error rate that ignored retries would read as healthy while a queue burned its attempt budget.
 
 ### System page
 
-| Panel                                | Source after                                                         |
-| ------------------------------------ | -------------------------------------------------------------------- |
-| Throughput chart                     | Buckets grouped by minute                                            |
-| Drain, error rate (current + prior)  | Two window aggregates, `statWindow(w, 1)` and `statWindow(w, 2)`     |
-| First-attempt wait percentiles       | Merged `wait_sketch`, percentiles computed in PostgreSQL             |
-| Per-queue enqueued / completed rates | Buckets grouped by `queue_name`                                      |
-| Failing task types                   | Buckets grouped by `(queue_name, job_type)`, error text from the row |
+| Panel                                | Source after                                                          |
+| ------------------------------------ | --------------------------------------------------------------------- |
+| Throughput chart                     | Buckets grouped by minute                                             |
+| Drain, error rate (current + prior)  | Two window aggregates, `statWindow(w, 1)` and `statWindow(w, 2)`      |
+| First-attempt wait percentiles       | Merged `wait_sketch`, percentiles computed in PostgreSQL              |
+| Per-queue enqueued / completed rates | Buckets grouped by `queue_name`                                       |
+| Failing task types                   | Buckets grouped by `(queue_name, task_type)`, error text from the row |
 
 Storing `last_error` per bucket is what lets the failing-types panel name a cause without touching `attempt_history` at all.
 
-Still read live, because they are live gauges over the small `job_runtime` relation rather than windows: backlog, lease pressure, retry backoff buckets, retry-storm top types, partition presence, and `Queue.health()`.
+Still read live, because they are live gauges over the small `task_runtime` relation rather than windows: backlog, lease pressure, retry backoff buckets, retry-storm top types, partition presence, and `Queue.health()`.
 
-The per-queue query also dropped a `job` scan: the queue-name set previously unioned `job` rows created within the window, and now unions the rolled-up queue names, which is equivalent because every job creates an enqueued event.
+The per-queue query also dropped a `task` scan: the queue-name set previously unioned `task` rows created within the window, and now unions the rolled-up queue names, which is equivalent because every task creates an enqueued event.
 
 ### Activity chart
 
@@ -218,14 +218,14 @@ Not moved to rollups, and deliberately so. Its semantics are "tasks whose `updat
 
 It was made cheap the other way instead, with no semantic change:
 
-- The base relation now starts from tasks that changed inside the window — a `UNION` of `job_runtime` and `job_outcome` candidates — instead of from every job that ever existed. `UNION` handles the brief window where a live runtime row and a terminal outcome row coexist for one task, and the projection keeps the original runtime-wins `COALESCE` precedence.
-- The per-job `attempt_history` LATERAL now only appears when grouping by worker or filtering by worker, which is the only thing that needed it.
+- The base relation now starts from tasks that changed inside the window — a `UNION` of `task_runtime` and `task_outcome` candidates — instead of from every task that ever existed. `UNION` handles the brief window where a live runtime row and a terminal outcome row coexist for one task, and the projection keeps the original runtime-wins `COALESCE` precedence.
+- The per-task `attempt_history` LATERAL now only appears when grouping by worker or filtering by worker, which is the only thing that needed it.
 
 ## Measured effect
 
-Method: synthetic history seeded over a trailing 24 hours across 4 queues × 15 job types, one closed attempt per job plus a second attempt for 10% that retried, one terminal outcome per job, and enqueue and claim events. Median of three runs per query on one developer machine, warm cache. The seed keeps all 60 `(queue, type)` pairs active in every minute, which is the **worst case for the rollup**: bucket count is fixed at 86,400 per day regardless of volume, so compression comes only from throughput.
+Method: synthetic history seeded over a trailing 24 hours across 4 queues × 15 task types, one closed attempt per task plus a second attempt for 10% that retried, one terminal outcome per task, and enqueue and claim events. Median of three runs per query on one developer machine, warm cache. The seed keeps all 60 `(queue, type)` pairs active in every minute, which is the **worst case for the rollup**: bucket count is fixed at 86,400 per day regardless of volume, so compression comes only from throughput.
 
-**2,000,000 jobs/day (~23/s), 24-hour window** — 4.0M events, 2.2M attempts, 86,418 buckets:
+**2,000,000 tasks/day (~23/s), 24-hour window** — 4.0M events, 2.2M attempts, 86,418 buckets:
 
 | Query              | Before    | After    | Change    |
 | ------------------ | --------- | -------- | --------- |
@@ -235,7 +235,7 @@ Method: synthetic history seeded over a trailing 24 hours across 4 queues × 15 
 | Drain / error rate | 358 ms    | 52 ms    | **6.9x**  |
 | Activity chart     | 16,961 ms | 5,074 ms | **3.3x**  |
 
-**200,000 jobs/day (~2.3/s), 24-hour window** — 400k events, 220k attempts, 86,400 buckets:
+**200,000 tasks/day (~2.3/s), 24-hour window** — 400k events, 220k attempts, 86,400 buckets:
 
 | Query              | Before   | After  | Change |
 | ------------------ | -------- | ------ | ------ |
@@ -247,7 +247,7 @@ Method: synthetic history seeded over a trailing 24 hours across 4 queues × 15 
 
 **At low volume the rollup roughly breaks even.** With ~2 events per pair per minute, a bucket
 compresses almost nothing. The benefit is a function of events per bucket, not of table size — it
-turns on somewhere around 1M jobs/day at this pair cardinality, and earlier for deployments with
+turns on somewhere around 1M tasks/day at this pair cardinality, and earlier for deployments with
 fewer active pairs per minute.
 
 The fixed-edge wait histogram from the first experiment remains removed. The retained logarithmic
@@ -255,12 +255,12 @@ sketch has no fixed upper edge, keeps relative error stable across scales, and m
 hour and day tiers.
 
 Rollup cost: 26–88 ms per steady-state pass, 2.7 s for a cold 24-hour backfill. Storage: 24 MB per
-day of buckets at 86k rows/day, against 1.1 GB/day of raw history at 2M jobs/day.
+day of buckets at 86k rows/day, against 1.1 GB/day of raw history at 2M tasks/day.
 
-**A note on that upper figure.** 2M jobs/day is comfortably within PostgreSQL's dispatch capacity,
-but it is above what the _default_ retention settings can delete. `terminal_job_prune_limit` (1,000)
-times the `terminal_cleanup_interval_ms` cadence (5 minutes) caps terminal-job deletion at roughly
-288,000 jobs/day, so a deployment at that volume must raise those limits or retention falls
+**A note on that upper figure.** 2M tasks/day is comfortably within PostgreSQL's dispatch capacity,
+but it is above what the _default_ retention settings can delete. `terminal_task_prune_limit` (1,000)
+times the `terminal_cleanup_interval_ms` cadence (5 minutes) caps terminal-task deletion at roughly
+288,000 tasks/day, so a deployment at that volume must raise those limits or retention falls
 permanently behind. The benchmark scale demonstrates where the read costs go; it is not a claim that
 the defaults sustain it. The settings page now computes this ceiling from the live policy and the
 measured arrival rate (`deriveSettingsRecommendations` in
@@ -274,13 +274,13 @@ Two defects surfaced only under this benchmark, both fixed:
 
 ### Long-horizon tier benchmark
 
-The production-shaped 120-day benchmark loaded 200,000 jobs with 2 KiB payloads, three tags,
-sixteen queues, 128 job types, and 64 workers. Mean tiered/raw p95 query latency was 20/431 ms for
+The production-shaped 120-day benchmark loaded 200,000 tasks with 2 KiB payloads, three tags,
+sixteen queues, 128 task types, and 64 workers. Mean tiered/raw p95 query latency was 20/431 ms for
 one day, 91/498 ms for thirty days, and 101/645 ms for 120 days. Relative p95 error stayed below
 one percent.
 
-Cold catch-up wrote 3.42 aggregate rows per job. After the retention ladder settled, aggregates
-retained 0.90 rows per job and used 138.7 MB against 180.3 MB of raw event and attempt history.
+Cold catch-up wrote 3.42 aggregate rows per task. After the retention ladder settled, aggregates
+retained 0.90 rows per task and used 138.7 MB against 180.3 MB of raw event and attempt history.
 This sparse profile is intentionally unfavorable to aggregation, which is why it supports keeping
 worker and tag dimensions live rather than multiplying rollup groups.
 

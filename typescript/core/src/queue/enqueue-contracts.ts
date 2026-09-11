@@ -2,7 +2,7 @@ import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { databaseErrorCode, databaseErrorDetails, WorkhorseError } from "../errors.js";
 import { injectTraceContext, logDebug, telemetryMetrics, withSpan } from "../telemetry.js";
 import type {
-  ClaimedJob,
+  ClaimedTask,
   Idempotency,
   EnqueueIdempotencyConflictDetails,
   EnqueueIdempotencyConflictField,
@@ -11,7 +11,7 @@ import type {
   EnqueueOutcome,
   EnqueueRequest,
   EnqueueResult,
-  JobContractVersion,
+  TaskContractVersion,
   Json,
   Queryable,
   QueueOptions,
@@ -19,12 +19,12 @@ import type {
 import {
   DEFAULT_IDEMPOTENCY_SCOPE,
   DEFAULT_IDEMPOTENCY_TTL_MS,
-  DEFAULT_JOB_VALUE_MAX_BYTES,
+  DEFAULT_TASK_VALUE_MAX_BYTES,
   MAX_ENQUEUE_BATCH_SIZE,
-  MAX_JOB_CONTRACT_SENSITIVE_KEYS,
-  MAX_JOB_DEPENDENCIES,
-  MAX_JOB_PRIORITY,
-  MAX_JOB_VALUE_MAX_BYTES,
+  MAX_TASK_CONTRACT_SENSITIVE_KEYS,
+  MAX_TASK_DEPENDENCIES,
+  MAX_TASK_PRIORITY,
+  MAX_TASK_VALUE_MAX_BYTES,
 } from "../types.js";
 import { compileContractSchema } from "../contract-schema.js";
 import { QueueModule, type QueueModuleContext } from "./module-context.js";
@@ -51,8 +51,8 @@ export class EnqueueIdempotencyConflictError extends WorkhorseError {
   get keyLength(): number {
     return this.details.keyLength;
   }
-  get existingJobId(): string {
-    return this.details.existingJobId;
+  get existingTaskId(): string {
+    return this.details.existingTaskId;
   }
   get ordinal(): number {
     return this.details.ordinal;
@@ -71,9 +71,9 @@ export class EnqueueIdempotencyConflictError extends WorkhorseError {
 export type DependencyLimit = "prerequisites" | "dependents" | "unresolved_dependents" | "unknown";
 
 export interface DependencyCycleDetails {
-  readonly dependentJobId: string;
-  readonly prerequisiteJobId: string;
-  readonly cycleJobIds: readonly string[];
+  readonly dependentTaskId: string;
+  readonly prerequisiteTaskId: string;
+  readonly cycleTaskIds: readonly string[];
   readonly truncated: boolean;
 }
 
@@ -81,19 +81,19 @@ export interface DependencyCycleDetails {
 export class DependencyCycleError extends WorkhorseError {
   constructor(readonly details: DependencyCycleDetails) {
     super(
-      `Dependency from ${details.dependentJobId} to ${details.prerequisiteJobId} forms a cycle`,
+      `Dependency from ${details.dependentTaskId} to ${details.prerequisiteTaskId} forms a cycle`,
     );
     this.name = "DependencyCycleError";
   }
 
-  get dependentJobId(): string {
-    return this.details.dependentJobId;
+  get dependentTaskId(): string {
+    return this.details.dependentTaskId;
   }
-  get prerequisiteJobId(): string {
-    return this.details.prerequisiteJobId;
+  get prerequisiteTaskId(): string {
+    return this.details.prerequisiteTaskId;
   }
-  get cycleJobIds(): readonly string[] {
-    return this.details.cycleJobIds;
+  get cycleTaskIds(): readonly string[] {
+    return this.details.cycleTaskIds;
   }
   get truncated(): boolean {
     return this.details.truncated;
@@ -103,45 +103,45 @@ export class DependencyCycleError extends WorkhorseError {
 /** PostgreSQL rejected a dependency edge because it exceeded a bounded graph dimension. */
 export class DependencyLimitExceededError extends WorkhorseError {
   constructor(
-    readonly jobId: string,
+    readonly taskId: string,
     readonly limit: DependencyLimit,
     readonly max: number,
   ) {
-    super(`Job ${jobId} exceeds the supported dependency limit for ${limit}`);
+    super(`Task ${taskId} exceeds the supported dependency limit for ${limit}`);
     this.name = "DependencyLimitExceededError";
   }
 }
 
-export class JobContractValidationError extends WorkhorseError {
+export class TaskContractValidationError extends WorkhorseError {
   constructor(
-    readonly jobType: string,
+    readonly taskType: string,
     readonly contractVersion: string,
     readonly valueKind: "payload" | "result",
   ) {
-    super(`${jobType} ${valueKind} does not satisfy contract version ${contractVersion}`);
-    this.name = "JobContractValidationError";
+    super(`${taskType} ${valueKind} does not satisfy contract version ${contractVersion}`);
+    this.name = "TaskContractValidationError";
   }
 }
 
-export class JobValueSizeLimitError extends WorkhorseError {
+export class TaskValueSizeLimitError extends WorkhorseError {
   constructor(
-    readonly jobType: string,
+    readonly taskType: string,
     readonly valueKind: "payload" | "result",
     readonly actualBytes: number,
     readonly maxBytes: number,
   ) {
-    super(`${jobType} ${valueKind} exceeds its configured size limit`);
-    this.name = "JobValueSizeLimitError";
+    super(`${taskType} ${valueKind} exceeds its configured size limit`);
+    this.name = "TaskValueSizeLimitError";
   }
 }
 
-export class JobContractUnavailableError extends WorkhorseError {
+export class TaskContractUnavailableError extends WorkhorseError {
   constructor(
-    readonly jobType: string,
+    readonly taskType: string,
     readonly contractVersion: string,
   ) {
-    super(`${jobType} contract version ${contractVersion} is not configured in this process`);
-    this.name = "JobContractUnavailableError";
+    super(`${taskType} contract version ${contractVersion} is not configured in this process`);
+    this.name = "TaskContractUnavailableError";
   }
 }
 
@@ -162,7 +162,7 @@ const enqueueConflictFields = new Set<EnqueueIdempotencyConflictField>([
   "executionTimeoutMs",
   "maxAttempts",
   "retryPolicy",
-  "prerequisiteJobId",
+  "prerequisiteTaskId",
   "dependencies",
   "ttlMs",
 ]);
@@ -171,7 +171,7 @@ const enqueueConflictDetailKeys = new Set([
   "keyPreview",
   "keyDigest",
   "keyLength",
-  "existingJobId",
+  "existingTaskId",
   "ordinal",
   "conflictingFields",
   "storedRequestDigest",
@@ -183,7 +183,7 @@ const sanitizedEnqueueConflictDetails: EnqueueIdempotencyConflictDetails = {
   keyPreview: "unknown",
   keyDigest: "000000000000",
   keyLength: 0,
-  existingJobId: "unknown",
+  existingTaskId: "unknown",
   ordinal: 0,
   conflictingFields: [],
   storedRequestDigest: "0".repeat(64),
@@ -232,8 +232,8 @@ function validEnqueueConflictDetails(value: unknown): value is EnqueueIdempotenc
     Number.isSafeInteger(detail.keyLength) &&
     detail.keyLength >= 1 &&
     detail.keyLength <= 512 &&
-    typeof detail.existingJobId === "string" &&
-    uuidPattern.test(detail.existingJobId) &&
+    typeof detail.existingTaskId === "string" &&
+    uuidPattern.test(detail.existingTaskId) &&
     typeof detail.ordinal === "number" &&
     Number.isSafeInteger(detail.ordinal) &&
     detail.ordinal >= 1 &&
@@ -264,7 +264,7 @@ function enqueueConflict(error: unknown): EnqueueIdempotencyConflictError | null
 }
 
 interface DependencyLimitDetails {
-  readonly jobId: string;
+  readonly taskId: string;
   readonly limit: DependencyLimit;
   readonly max: number;
 }
@@ -274,11 +274,11 @@ function validDependencyLimitDetails(value: unknown): value is DependencyLimitDe
   const detail = value as Record<string, unknown>;
   return (
     Object.keys(detail).length === 3 &&
-    typeof detail.jobId === "string" &&
-    uuidPattern.test(detail.jobId) &&
+    typeof detail.taskId === "string" &&
+    uuidPattern.test(detail.taskId) &&
     typeof detail.max === "number" &&
     Number.isSafeInteger(detail.max) &&
-    detail.max === MAX_JOB_DEPENDENCIES &&
+    detail.max === MAX_TASK_DEPENDENCIES &&
     (detail.limit === "prerequisites" ||
       detail.limit === "dependents" ||
       detail.limit === "unresolved_dependents")
@@ -290,14 +290,14 @@ function validDependencyCycleDetails(value: unknown): value is DependencyCycleDe
   const detail = value as Record<string, unknown>;
   return (
     Object.keys(detail).length === 4 &&
-    typeof detail.dependentJobId === "string" &&
-    uuidPattern.test(detail.dependentJobId) &&
-    typeof detail.prerequisiteJobId === "string" &&
-    uuidPattern.test(detail.prerequisiteJobId) &&
-    Array.isArray(detail.cycleJobIds) &&
-    detail.cycleJobIds.length >= 2 &&
-    detail.cycleJobIds.length <= 101 &&
-    detail.cycleJobIds.every((jobId) => typeof jobId === "string" && uuidPattern.test(jobId)) &&
+    typeof detail.dependentTaskId === "string" &&
+    uuidPattern.test(detail.dependentTaskId) &&
+    typeof detail.prerequisiteTaskId === "string" &&
+    uuidPattern.test(detail.prerequisiteTaskId) &&
+    Array.isArray(detail.cycleTaskIds) &&
+    detail.cycleTaskIds.length >= 2 &&
+    detail.cycleTaskIds.length <= 101 &&
+    detail.cycleTaskIds.every((taskId) => typeof taskId === "string" && uuidPattern.test(taskId)) &&
     typeof detail.truncated === "boolean"
   );
 }
@@ -305,20 +305,20 @@ function validDependencyCycleDetails(value: unknown): value is DependencyCycleDe
 function dependencyLimit(error: unknown): DependencyLimitExceededError | null {
   if (databaseErrorCode(error) !== "P1005") return null;
   const details = parsedErrorDetails<DependencyLimitDetails>(error, validDependencyLimitDetails, {
-    jobId: "unknown",
+    taskId: "unknown",
     limit: "unknown",
-    max: MAX_JOB_DEPENDENCIES,
+    max: MAX_TASK_DEPENDENCIES,
   });
-  return new DependencyLimitExceededError(details.jobId, details.limit, details.max);
+  return new DependencyLimitExceededError(details.taskId, details.limit, details.max);
 }
 
 function dependencyCycle(error: unknown): DependencyCycleError | null {
   if (databaseErrorCode(error) !== "P1003") return null;
   return new DependencyCycleError(
     parsedErrorDetails<DependencyCycleDetails>(error, validDependencyCycleDetails, {
-      dependentJobId: "unknown",
-      prerequisiteJobId: "unknown",
-      cycleJobIds: [],
+      dependentTaskId: "unknown",
+      prerequisiteTaskId: "unknown",
+      cycleTaskIds: [],
       truncated: true,
     }),
   );
@@ -326,24 +326,24 @@ function dependencyCycle(error: unknown): DependencyCycleError | null {
 
 function validateValueLimit(value: number | undefined, field: string): number | undefined {
   if (value === undefined) return undefined;
-  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_JOB_VALUE_MAX_BYTES) {
-    throw new RangeError(`${field} must be an integer between 1 and ${MAX_JOB_VALUE_MAX_BYTES}`);
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_TASK_VALUE_MAX_BYTES) {
+    throw new RangeError(`${field} must be an integer between 1 and ${MAX_TASK_VALUE_MAX_BYTES}`);
   }
   return value;
 }
 
-export function validateJobPriority(value: number | undefined): number {
+export function validateTaskPriority(value: number | undefined): number {
   if (value === undefined) return 0;
-  if (!Number.isSafeInteger(value) || value < 0 || value > MAX_JOB_PRIORITY) {
-    throw new RangeError(`priority must be an integer between 0 and ${MAX_JOB_PRIORITY}`);
+  if (!Number.isSafeInteger(value) || value < 0 || value > MAX_TASK_PRIORITY) {
+    throw new RangeError(`priority must be an integer between 0 and ${MAX_TASK_PRIORITY}`);
   }
   return value;
 }
 
 function validateSensitiveKeys(keys: readonly string[] | undefined, field: string): void {
   if (keys === undefined) return;
-  if (keys.length > MAX_JOB_CONTRACT_SENSITIVE_KEYS) {
-    throw new RangeError(`${field} accepts at most ${MAX_JOB_CONTRACT_SENSITIVE_KEYS} keys`);
+  if (keys.length > MAX_TASK_CONTRACT_SENSITIVE_KEYS) {
+    throw new RangeError(`${field} accepts at most ${MAX_TASK_CONTRACT_SENSITIVE_KEYS} keys`);
   }
   if (new Set(keys).size !== keys.length) throw new TypeError(`${field} must contain unique keys`);
   for (const key of keys) {
@@ -357,30 +357,30 @@ function validateSensitiveKeys(keys: readonly string[] | undefined, field: strin
 export function validateQueueOptions(options: QueueOptions): QueueOptions {
   validateValueLimit(options.defaultMaxPayloadBytes, "defaultMaxPayloadBytes");
   validateValueLimit(options.defaultMaxResultBytes, "defaultMaxResultBytes");
-  for (const [jobType, typeContracts] of Object.entries(options.contracts ?? {})) {
-    if ([...jobType].length === 0) throw new TypeError("contract job types must be non-empty");
+  for (const [taskType, typeContracts] of Object.entries(options.contracts ?? {})) {
+    if ([...taskType].length === 0) throw new TypeError("contract task types must be non-empty");
     if (
       [...typeContracts.currentVersion].length < 1 ||
       [...typeContracts.currentVersion].length > 100 ||
       !(typeContracts.currentVersion in typeContracts.versions)
     ) {
       throw new TypeError(
-        `contract ${jobType} currentVersion must name a configured version of 1 to 100 characters`,
+        `contract ${taskType} currentVersion must name a configured version of 1 to 100 characters`,
       );
     }
     for (const [version, contract] of Object.entries(typeContracts.versions)) {
       if ([...version].length < 1 || [...version].length > 100) {
-        throw new TypeError(`contract ${jobType} versions must contain 1 to 100 characters`);
+        throw new TypeError(`contract ${taskType} versions must contain 1 to 100 characters`);
       }
-      validateValueLimit(contract.maxPayloadBytes, `${jobType}.${version}.maxPayloadBytes`);
-      validateValueLimit(contract.maxResultBytes, `${jobType}.${version}.maxResultBytes`);
+      validateValueLimit(contract.maxPayloadBytes, `${taskType}.${version}.maxPayloadBytes`);
+      validateValueLimit(contract.maxResultBytes, `${taskType}.${version}.maxResultBytes`);
       validateSensitiveKeys(
         contract.sensitivePayloadKeys,
-        `${jobType}.${version}.sensitivePayloadKeys`,
+        `${taskType}.${version}.sensitivePayloadKeys`,
       );
       validateSensitiveKeys(
         contract.sensitiveResultKeys,
-        `${jobType}.${version}.sensitiveResultKeys`,
+        `${taskType}.${version}.sensitiveResultKeys`,
       );
       if (contract.payloadSchema !== undefined) {
         compileContractSchema(contract.payloadSchema);
@@ -394,23 +394,23 @@ export function validateQueueOptions(options: QueueOptions): QueueOptions {
 }
 
 function validateContractValue(
-  jobType: string,
+  taskType: string,
   version: string,
   kind: "payload" | "result",
   value: Json,
-  contract: JobContractVersion,
+  contract: TaskContractVersion,
   maxBytes: number,
 ): string {
   const schema = kind === "payload" ? contract.payloadSchema : contract.resultSchema;
   if (schema !== undefined) {
     const validator = compileContractSchema(schema);
-    if (!validator(value)) throw new JobContractValidationError(jobType, version, kind);
+    if (!validator(value)) throw new TaskContractValidationError(taskType, version, kind);
   }
-  return serializeJsonWithinLimit(jobType, kind, value, maxBytes);
+  return serializeJsonWithinLimit(taskType, kind, value, maxBytes);
 }
 
 function serializeJsonWithinLimit(
-  jobType: string,
+  taskType: string,
   kind: "payload" | "result",
   value: Json,
   maxBytes: number,
@@ -418,12 +418,12 @@ function serializeJsonWithinLimit(
   const serialized = JSON.stringify(value);
   const actualBytes = Buffer.byteLength(serialized, "utf8");
   if (actualBytes > maxBytes) {
-    throw new JobValueSizeLimitError(jobType, kind, actualBytes, maxBytes);
+    throw new TaskValueSizeLimitError(taskType, kind, actualBytes, maxBytes);
   }
   return serialized;
 }
 
-interface JobAcceptance {
+interface TaskAcceptance {
   contractVersion: string | null;
   payloadMaxBytes: number;
   resultMaxBytes: number;
@@ -431,8 +431,8 @@ interface JobAcceptance {
   sensitiveResultKeys: readonly string[];
 }
 
-interface SerializedJobAcceptance {
-  acceptance: JobAcceptance;
+interface SerializedTaskAcceptance {
+  acceptance: TaskAcceptance;
   serializedPayload: string;
 }
 
@@ -445,7 +445,7 @@ interface ContractDefinitionRow {
   result_redact_keys: string[];
 }
 
-/** Owns enqueue serialization and process-local job contract validation behind the Queue facade. */
+/** Owns enqueue serialization and process-local task contract validation behind the Queue facade. */
 export class EnqueueContractsModule extends QueueModule {
   constructor(
     context: QueueModuleContext,
@@ -456,8 +456,8 @@ export class EnqueueContractsModule extends QueueModule {
 
   async syncContracts(): Promise<void> {
     const definitions = Object.entries(this.context.options.contracts ?? {}).map(
-      ([jobType, contracts]) => ({
-        jobType,
+      ([taskType, contracts]) => ({
+        taskType,
         currentVersion: contracts.currentVersion,
         versions: Object.fromEntries(
           Object.entries(contracts.versions).map(([version, contract]) => [
@@ -468,11 +468,11 @@ export class EnqueueContractsModule extends QueueModule {
               maxPayloadBytes:
                 contract.maxPayloadBytes ??
                 this.context.options.defaultMaxPayloadBytes ??
-                DEFAULT_JOB_VALUE_MAX_BYTES,
+                DEFAULT_TASK_VALUE_MAX_BYTES,
               maxResultBytes:
                 contract.maxResultBytes ??
                 this.context.options.defaultMaxResultBytes ??
-                DEFAULT_JOB_VALUE_MAX_BYTES,
+                DEFAULT_TASK_VALUE_MAX_BYTES,
               sensitivePayloadKeys: contract.sensitivePayloadKeys,
               sensitiveResultKeys: contract.sensitiveResultKeys,
             },
@@ -484,25 +484,25 @@ export class EnqueueContractsModule extends QueueModule {
       JSON.stringify(definitions),
     ]);
     const currentContracts = new Map<string, CachedContractDefinition>();
-    for (const jobType of Object.keys(this.context.options.contracts ?? {})) {
-      const definition = await this.loadContract(jobType, null);
-      if (definition !== null) currentContracts.set(jobType, definition);
+    for (const taskType of Object.keys(this.context.options.contracts ?? {})) {
+      const definition = await this.loadContract(taskType, null);
+      if (definition !== null) currentContracts.set(taskType, definition);
     }
     this.state.currentDatabaseContracts.clear();
-    for (const [jobType, definition] of currentContracts) {
-      this.state.currentDatabaseContracts.set(jobType, definition);
+    for (const [taskType, definition] of currentContracts) {
+      this.state.currentDatabaseContracts.set(taskType, definition);
     }
     this.state.contractsSynchronized = true;
   }
 
   private async loadContract(
-    jobType: string,
+    taskType: string,
     version: string | null,
     database: Queryable = this.context.database,
-  ): Promise<{ version: string; contract: JobContractVersion } | null> {
+  ): Promise<{ version: string; contract: TaskContractVersion } | null> {
     const result = await database.query<ContractDefinitionRow>(
       SQL_STATEMENTS["get_contract_definition_v1"],
-      [jobType, version],
+      [taskType, version],
     );
     const row = result.rows[0];
     if (row === undefined) return null;
@@ -519,30 +519,30 @@ export class EnqueueContractsModule extends QueueModule {
     };
   }
 
-  async jobAcceptance(jobType: string, payload: Json): Promise<JobAcceptance> {
-    return (await this.serializedJobAcceptance(jobType, payload)).acceptance;
+  async taskAcceptance(taskType: string, payload: Json): Promise<TaskAcceptance> {
+    return (await this.serializedTaskAcceptance(taskType, payload)).acceptance;
   }
 
-  private async serializedJobAcceptance(
-    jobType: string,
+  private async serializedTaskAcceptance(
+    taskType: string,
     payload: Json,
-  ): Promise<SerializedJobAcceptance> {
+  ): Promise<SerializedTaskAcceptance> {
     const { options } = this.context;
-    const typeContracts = options.contracts?.[jobType];
+    const typeContracts = options.contracts?.[taskType];
     const databaseContract = !this.state.contractsSynchronized
       ? undefined
-      : this.state.currentDatabaseContracts.get(jobType);
+      : this.state.currentDatabaseContracts.get(taskType);
     const contractVersion = databaseContract?.version ?? typeContracts?.currentVersion ?? null;
     const contract =
       databaseContract?.contract ??
       (contractVersion === null ? undefined : typeContracts!.versions[contractVersion]!);
     const payloadMaxBytes =
-      contract?.maxPayloadBytes ?? options.defaultMaxPayloadBytes ?? DEFAULT_JOB_VALUE_MAX_BYTES;
+      contract?.maxPayloadBytes ?? options.defaultMaxPayloadBytes ?? DEFAULT_TASK_VALUE_MAX_BYTES;
     const resultMaxBytes =
-      contract?.maxResultBytes ?? options.defaultMaxResultBytes ?? DEFAULT_JOB_VALUE_MAX_BYTES;
+      contract?.maxResultBytes ?? options.defaultMaxResultBytes ?? DEFAULT_TASK_VALUE_MAX_BYTES;
     if (contract !== undefined) {
       const serializedPayload = validateContractValue(
-        jobType,
+        taskType,
         contractVersion!,
         "payload",
         payload,
@@ -561,7 +561,7 @@ export class EnqueueContractsModule extends QueueModule {
       };
     } else {
       const serializedPayload = serializeJsonWithinLimit(
-        jobType,
+        taskType,
         "payload",
         payload,
         payloadMaxBytes,
@@ -579,34 +579,34 @@ export class EnqueueContractsModule extends QueueModule {
     }
   }
 
-  async validateResult(job: ClaimedJob, result: Json): Promise<string> {
-    if (job.contractVersion !== null) {
-      const retainedVersions = this.state.retainedDatabaseContracts.get(job.type);
-      let contract = retainedVersions?.get(job.contractVersion)?.contract;
+  async validateResult(task: ClaimedTask, result: Json): Promise<string> {
+    if (task.contractVersion !== null) {
+      const retainedVersions = this.state.retainedDatabaseContracts.get(task.type);
+      let contract = retainedVersions?.get(task.contractVersion)?.contract;
       if (contract === undefined) {
-        const loaded = await this.loadContract(job.type, job.contractVersion);
+        const loaded = await this.loadContract(task.type, task.contractVersion);
         contract =
           loaded?.contract ??
-          this.context.options.contracts?.[job.type]?.versions[job.contractVersion];
+          this.context.options.contracts?.[task.type]?.versions[task.contractVersion];
         if (loaded !== null) {
           const versions = retainedVersions ?? new Map<string, CachedContractDefinition>();
-          versions.set(job.contractVersion, loaded);
-          this.state.retainedDatabaseContracts.set(job.type, versions);
+          versions.set(task.contractVersion, loaded);
+          this.state.retainedDatabaseContracts.set(task.type, versions);
         }
       }
       if (contract === undefined) {
-        throw new JobContractUnavailableError(job.type, job.contractVersion);
+        throw new TaskContractUnavailableError(task.type, task.contractVersion);
       }
       return validateContractValue(
-        job.type,
-        job.contractVersion,
+        task.type,
+        task.contractVersion,
         "result",
         result,
         contract,
-        job.resultMaxBytes,
+        task.resultMaxBytes,
       );
     }
-    return serializeJsonWithinLimit(job.type, "result", result, job.resultMaxBytes);
+    return serializeJsonWithinLimit(task.type, "result", result, task.resultMaxBytes);
   }
 
   async enqueue<TPayload extends Json>(
@@ -615,7 +615,7 @@ export class EnqueueContractsModule extends QueueModule {
     options: EnqueueOptions = {},
     transaction: Queryable = this.context.database,
   ): Promise<string> {
-    return (await this.enqueueWithResult(type, payload, options, transaction)).jobId;
+    return (await this.enqueueWithResult(type, payload, options, transaction)).taskId;
   }
 
   async enqueueWithResult<TPayload extends Json>(
@@ -636,7 +636,9 @@ export class EnqueueContractsModule extends QueueModule {
     requests: readonly EnqueueRequest[],
     transaction: Queryable = this.context.database,
   ): Promise<string[]> {
-    return (await this.enqueueManyWithResults(requests, transaction)).map((result) => result.jobId);
+    return (await this.enqueueManyWithResults(requests, transaction)).map(
+      (result) => result.taskId,
+    );
   }
 
   async enqueueManyWithResults(
@@ -665,7 +667,7 @@ export class EnqueueContractsModule extends QueueModule {
         ...(queueNames.size === 1
           ? { "workhorse.queue.name": queueNames.values().next().value! }
           : {}),
-        ...(requests.length === 1 ? { "workhorse.job.type": requests[0]!.type } : {}),
+        ...(requests.length === 1 ? { "workhorse.task.type": requests[0]!.type } : {}),
         "workhorse.enqueue.count": requests.length,
       },
       async (span) => {
@@ -688,46 +690,46 @@ export class EnqueueContractsModule extends QueueModule {
             }
             if (
               (options.debounce !== undefined || options.throttle !== undefined) &&
-              (options.prerequisiteJobId !== undefined || options.dependencies !== undefined)
+              (options.prerequisiteTaskId !== undefined || options.dependencies !== undefined)
             ) {
               throw new TypeError(
-                "enqueue options cannot combine debounce or throttle with prerequisiteJobId or dependencies",
+                "enqueue options cannot combine debounce or throttle with prerequisiteTaskId or dependencies",
               );
             }
-            const { serializedPayload, acceptance } = await this.serializedJobAcceptance(
+            const { serializedPayload, acceptance } = await this.serializedTaskAcceptance(
               type,
               payload,
             );
-            if (options.prerequisiteJobId !== undefined && options.dependencies !== undefined) {
+            if (options.prerequisiteTaskId !== undefined && options.dependencies !== undefined) {
               throw new TypeError(
-                "enqueue options cannot combine prerequisiteJobId and dependencies",
+                "enqueue options cannot combine prerequisiteTaskId and dependencies",
               );
             }
             const dependencies = options.dependencies;
             if (dependencies !== undefined) {
               if (
-                dependencies.prerequisiteJobIds.length === 0 ||
-                dependencies.prerequisiteJobIds.length > MAX_JOB_DEPENDENCIES
+                dependencies.prerequisiteTaskIds.length === 0 ||
+                dependencies.prerequisiteTaskIds.length > MAX_TASK_DEPENDENCIES
               ) {
                 throw new RangeError(
-                  `dependencies requires between 1 and ${MAX_JOB_DEPENDENCIES} prerequisiteJobIds`,
+                  `dependencies requires between 1 and ${MAX_TASK_DEPENDENCIES} prerequisiteTaskIds`,
                 );
               }
               if (
-                new Set(dependencies.prerequisiteJobIds).size !==
-                dependencies.prerequisiteJobIds.length
+                new Set(dependencies.prerequisiteTaskIds).size !==
+                dependencies.prerequisiteTaskIds.length
               ) {
-                throw new TypeError("dependencies prerequisiteJobIds must be unique");
+                throw new TypeError("dependencies prerequisiteTaskIds must be unique");
               }
             }
-            const prerequisiteJobIds = [...(dependencies?.prerequisiteJobIds ?? [])];
+            const prerequisiteTaskIds = [...(dependencies?.prerequisiteTaskIds ?? [])];
             // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
-            prerequisiteJobIds.sort();
+            prerequisiteTaskIds.sort();
             return {
               queue: options.queue ?? this.context.defaultQueue,
               type,
               serializedPayload,
-              priority: validateJobPriority(options.priority),
+              priority: validateTaskPriority(options.priority),
               ...acceptance,
               ...(traceContext === null ? {} : { traceContext }),
               ...(options.runAt === undefined &&
@@ -741,12 +743,12 @@ export class EnqueueContractsModule extends QueueModule {
               executionTimeoutMs: options.executionTimeoutMs ?? null,
               maxAttempts: options.maxAttempts ?? 25,
               retryPolicy: options.retryPolicy ?? null,
-              prerequisiteJobId: options.prerequisiteJobId ?? null,
+              prerequisiteTaskId: options.prerequisiteTaskId ?? null,
               dependencies:
                 dependencies === undefined
                   ? null
                   : {
-                      prerequisiteJobIds,
+                      prerequisiteTaskIds,
                       onSuccess: dependencies.onSuccess,
                       onFailure: dependencies.onFailure,
                       onCancellation: dependencies.onCancellation,
@@ -792,26 +794,26 @@ export class EnqueueContractsModule extends QueueModule {
             .join(",")}]`;
           const result = await transaction.query<{
             ordinal: number;
-            job_id: string | null;
+            task_id: string | null;
             outcome: EnqueueOutcome | "contract_mismatch";
             reason: string | null;
           }>(SQL_STATEMENTS["enqueue_many_v1"], [serializedInput]);
           const mismatchRow = result.rows.find((row) => row.outcome === "contract_mismatch");
           if (mismatchRow !== undefined) {
             const mismatch = JSON.parse(mismatchRow.reason ?? "null") as {
-              jobTypes?: unknown;
+              taskTypes?: unknown;
             } | null;
             if (
               mismatch === null ||
-              !Array.isArray(mismatch.jobTypes) ||
-              mismatch.jobTypes.some((jobType) => typeof jobType !== "string")
+              !Array.isArray(mismatch.taskTypes) ||
+              mismatch.taskTypes.some((taskType) => typeof taskType !== "string")
             ) {
               throw new Error("PostgreSQL returned invalid contract mismatch details");
             }
-            for (const jobType of mismatch.jobTypes) {
-              const definition = await this.loadContract(jobType, null, transaction);
-              if (definition === null) this.state.currentDatabaseContracts.delete(jobType);
-              else this.state.currentDatabaseContracts.set(jobType, definition);
+            for (const taskType of mismatch.taskTypes) {
+              const definition = await this.loadContract(taskType, null, transaction);
+              if (definition === null) this.state.currentDatabaseContracts.delete(taskType);
+              else this.state.currentDatabaseContracts.set(taskType, definition);
             }
             if (!refreshOnMismatch) {
               throw new Error("Contract policy changed again while retrying enqueue");
@@ -819,11 +821,11 @@ export class EnqueueContractsModule extends QueueModule {
             return this.enqueueManyWithResultsAttempt(requests, transaction, false);
           }
           const enqueueResults = result.rows.map((row): EnqueueResult => {
-            if (row.job_id === null || row.outcome === "contract_mismatch") {
+            if (row.task_id === null || row.outcome === "contract_mismatch") {
               throw new Error("PostgreSQL returned an incomplete enqueue result");
             }
             if (row.outcome !== "non_replaceable") {
-              return { jobId: row.job_id, outcome: row.outcome };
+              return { taskId: row.task_id, outcome: row.outcome };
             }
             if (!enqueueNonReplaceableReasons.has(row.reason as EnqueueNonReplaceableReason)) {
               throw new Error(
@@ -831,7 +833,7 @@ export class EnqueueContractsModule extends QueueModule {
               );
             }
             return {
-              jobId: row.job_id,
+              taskId: row.task_id,
               outcome: row.outcome,
               reason: row.reason as EnqueueNonReplaceableReason,
             };
@@ -840,21 +842,24 @@ export class EnqueueContractsModule extends QueueModule {
             const request = requests[(row.ordinal ?? index + 1) - 1];
             if (!request) continue;
             const outcome = row.outcome;
-            if (outcome === "contract_mismatch" || row.job_id === null) continue;
+            if (outcome === "contract_mismatch" || row.task_id === null) continue;
             const logDetailsByOutcome: Record<
               EnqueueOutcome,
               readonly [Parameters<typeof logDebug>[0], string]
             > = {
-              accepted: ["workhorse.job.enqueued", "Job enqueued"],
-              replayed: ["workhorse.job.enqueue_replayed", "Idempotent enqueue replayed"],
-              replaced: ["workhorse.job.debounced", "Pending job replaced"],
-              non_replaceable: ["workhorse.job.debounce_rejected", "Debounced job not replaceable"],
-              coalesced: ["workhorse.job.throttled", "Throttled enqueue coalesced"],
+              accepted: ["workhorse.task.enqueued", "Task enqueued"],
+              replayed: ["workhorse.task.enqueue_replayed", "Idempotent enqueue replayed"],
+              replaced: ["workhorse.task.debounced", "Pending task replaced"],
+              non_replaceable: [
+                "workhorse.task.debounce_rejected",
+                "Debounced task not replaceable",
+              ],
+              coalesced: ["workhorse.task.throttled", "Throttled enqueue coalesced"],
             };
             const [eventName, body] = logDetailsByOutcome[outcome];
             logDebug(eventName, body, {
-              "workhorse.job.id": row.job_id,
-              "workhorse.job.type": request.type,
+              "workhorse.task.id": row.task_id,
+              "workhorse.task.type": request.type,
               "workhorse.queue.name": request.options?.queue ?? this.context.defaultQueue,
             });
             telemetryMetrics.enqueueOutcomes.add(1, {
@@ -864,11 +869,11 @@ export class EnqueueContractsModule extends QueueModule {
             if (outcome !== "accepted") continue;
             telemetryMetrics.enqueued.add(1, {
               "workhorse.queue.name": request.options?.queue ?? this.context.defaultQueue,
-              "workhorse.job.type": request.type,
+              "workhorse.task.type": request.type,
             });
           }
           if (enqueueResults.length === 1) {
-            span.setAttribute("workhorse.job.id", enqueueResults[0]!.jobId);
+            span.setAttribute("workhorse.task.id", enqueueResults[0]!.taskId);
             span.setAttribute("workhorse.enqueue.outcome", enqueueResults[0]!.outcome);
           }
           return enqueueResults;

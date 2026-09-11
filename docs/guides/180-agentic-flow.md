@@ -1,7 +1,7 @@
 # How do I build a durable agent loop?
 
 An agent loop becomes durable when each restart boundary lives in PostgreSQL. Workhorse composes
-those boundaries from ordinary jobs, so the application still owns the model calls and tools.
+those boundaries from ordinary tasks, so the application still owns the model calls and tools.
 
 ## Compose restart boundaries
 
@@ -25,7 +25,7 @@ const approval = await context.waitForSignal("approval");
 The child set must keep stable names and requests, because changed replay conflicts. A checkpoint
 reuses its stored result after persistence, while a relative timer keeps its first wake target.
 
-`HandlerContext.runChildrenAll` joins independent [child jobs](170-child-jobs.md) and propagates a
+`HandlerContext.runChildrenAll` joins independent [child tasks](170-child-tasks.md) and propagates a
 rejected tool outcome. Use `runChildren` when the model should inspect every settled outcome. The example puts them
 on a queue governed by `Queue.syncRateLimitPolicies`, with the conversation identity as each
 `concurrencyKey` for [per-key traffic control](250-rate-limits.md).
@@ -55,10 +55,10 @@ result and progress projection.
 ## Next
 
 - [030-delivery-guarantees.md](030-delivery-guarantees.md) — make external effects safe to repeat
-- [170-child-jobs.md](170-child-jobs.md) — delegate and join durable tool work
+- [170-child-tasks.md](170-child-tasks.md) — delegate and join durable tool work
 - [135-signals.md](135-signals.md) — resume an execution from another process
 
 ---
 
 Exact child-join contracts and limits:
-[`architecture.md`](../architecture.md#job_child).
+[`architecture.md`](../architecture.md#task_child).

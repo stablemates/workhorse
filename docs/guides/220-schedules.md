@@ -1,4 +1,4 @@
-# Recurring jobs on a cron schedule
+# Recurring tasks on a cron schedule
 
 Some work runs on a clock: a nightly report, an hourly sync, a weekly cleanup. Workhorse
 runs these from cron definitions stored and evaluated in PostgreSQL. Workers offer the cadence.
@@ -18,7 +18,7 @@ await queue.syncSchedules(
       name: "nightly-invoice-run",
       schedule: nightlyCron,
       timezone: "America/New_York",
-      job: { type: "generate-invoices", payload: {} },
+      task: { type: "generate-invoices", payload: {} },
     },
   ],
   { prune: true },
@@ -28,7 +28,7 @@ await queue.syncSchedules(
 This is a desired-state call, like a database migration. Run it on deploy. Definitions you
 list are created or updated; definitions you've dropped from the list get disabled.
 
-Note _disabled_, not deleted. The old definition stays so the jobs it fired in the past
+Note _disabled_, not deleted. The old definition stays so the tasks it fired in the past
 still have something to point at.
 
 The **namespace** keeps one deployment's schedules separate from another's, so two services
@@ -38,12 +38,12 @@ sharing a database don't prune each other's definitions.
 
 Several workers are running. They all offer the same namespace when the schedule may be due.
 
-Only one job is created. Each firing writes a durable key built from the namespace, the
+Only one task is created. Each firing writes a durable key built from the namespace, the
 schedule name, and the planned occurrence. The first worker to get there claims the key; the
-others find it taken and receive no job id, because they didn't create the job.
+others find it taken and receive no task id, because they didn't create the task.
 
 You don't have to elect a leader or run exactly one scheduler. Any number of workers can
-race and the outcome is one job.
+race and the outcome is one task.
 
 TypeScript workers select definitions with `scheduleNamespaces`. Python workers use
 `schedule_namespaces`, and Go workers use `WorkerOptions.ScheduleNamespaces`. Each worker asks
@@ -55,7 +55,7 @@ definitions, so workers that offer the same namespace always evaluate the same d
 dashboard shows how many live workers can evaluate each namespace.
 
 The dashboard also lists Workhorse maintenance beside application schedules. Maintenance runs
-directly in PostgreSQL instead of creating a job. Its last-run value records that direct execution.
+directly in PostgreSQL instead of creating a task. Its last-run value records that direct execution.
 
 ## Deploys don't cause duplicates either
 
@@ -76,7 +76,7 @@ becomes a no-op.
   creates one occurrence.
 - **Hashed fields stay stable across worker languages.** An `H` field spreads schedules to a
   repeatable offset, so TypeScript, Python, and Go workers agree on the same occurrence.
-- **Cancelling one fired job doesn't disable the schedule.** The definition and the jobs it
+- **Cancelling one fired task doesn't disable the schedule.** The definition and the tasks it
   creates have separate lifecycles — tomorrow's occurrence still runs.
 
 ## Next

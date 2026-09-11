@@ -107,7 +107,7 @@ function Lane({
   rank: number;
   onPick: () => void;
 }) {
-  const percent = Math.round((horse.jobsDone / horse.jobsTotal) * 100);
+  const percent = Math.round((horse.tasksDone / horse.tasksTotal) * 100);
   const silk = silks[horse.id] ?? "text-fd-foreground/70";
   return (
     <label
@@ -137,7 +137,7 @@ function Lane({
       </span>
       <span
         className={`wh-derby-track mt-1 block ${silk}`}
-        style={{ "--race-progress": horse.jobsDone / horse.jobsTotal } as CSSProperties}
+        style={{ "--race-progress": horse.tasksDone / horse.tasksTotal } as CSSProperties}
         aria-hidden
       >
         <span className="wh-derby-distance" />
@@ -147,7 +147,7 @@ function Lane({
       </span>
       <span className="mt-1 flex justify-between font-mono text-[11px] text-fd-muted-foreground">
         <span>
-          {horse.jobsDone} / {horse.jobsTotal} jobs
+          {horse.tasksDone} / {horse.tasksTotal} tasks
         </span>
         <span>{horse.status === "drained" ? "Finished" : `${percent}%`}</span>
       </span>
@@ -240,17 +240,17 @@ export function TheDerby() {
         ? `${winnerId} takes the Derby.`
         : leaders.length > 1
           ? "Neck and neck at the front."
-          : `${leader?.horse.id} ${leader && leader.horse.jobsDone >= 100 ? "is on the home stretch." : "takes the lead."}`;
+          : `${leader?.horse.id} ${leader && leader.horse.tasksDone >= 100 ? "is on the home stretch." : "takes the lead."}`;
   const raceNote =
     phase === "pick"
-      ? `First to drain ${DERBY_TUNING.jobsTotal} jobs wins. Retries and throttles can turn the race. Every horse starts with the same odds.`
+      ? `First to drain ${DERBY_TUNING.tasksTotal} tasks wins. Retries and throttles can turn the race. Every horse starts with the same odds.`
       : phase === "done"
         ? winnerId === pickedId
           ? "You picked the winner. Oats are on the house."
-          : `Your pick was #${selection?.rank} when the race ended, ${selection?.behind} jobs behind the winner.`
+          : `Your pick was #${selection?.rank} when the race ended, ${selection?.behind} tasks behind the winner.`
         : selection?.rank === 1
           ? "Your horse is out front. Can it hold on?"
-          : `Your pick is #${selection?.rank}, ${selection?.behind} jobs off the lead.`;
+          : `Your pick is #${selection?.rank}, ${selection?.behind} tasks off the lead.`;
   /* The simulation never learns the visitor's pick (that is what keeps the
    * race fair), so the victory lap is appended here, outside the sim. */
   const log: readonly LogLine[] =

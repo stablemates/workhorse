@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
-  durableDemoPlanForJob,
+  durableDemoPlanForTask,
   durableDemoScenarios,
-  DURABLE_DEMO_JOB_TYPE,
+  DURABLE_DEMO_TASK_TYPE,
 } from "./durable-demo.js";
 
 describe("persistent failure projection", () => {
   it("marks a seeded continuous-failure task and leaves ordinary tasks untouched", () => {
-    const ordinary = durableDemoPlanForJob(DURABLE_DEMO_JOB_TYPE, {
+    const ordinary = durableDemoPlanForTask(DURABLE_DEMO_TASK_TYPE, {
       scenario: "order-fulfillment",
     });
     expect(ordinary?.persistentFailure).toBeNull();
 
-    const blocked = durableDemoPlanForJob(DURABLE_DEMO_JOB_TYPE, {
+    const blocked = durableDemoPlanForTask(DURABLE_DEMO_TASK_TYPE, {
       scenario: "order-fulfillment",
       failureMode: "continuous",
     });
@@ -26,7 +26,7 @@ describe("persistent failure projection", () => {
 
   it("keeps every declared boundary inside the declared step list", () => {
     for (const [scenario, definition] of Object.entries(durableDemoScenarios)) {
-      const plan = durableDemoPlanForJob(DURABLE_DEMO_JOB_TYPE, {
+      const plan = durableDemoPlanForTask(DURABLE_DEMO_TASK_TYPE, {
         scenario,
         failureMode: "continuous",
       });
@@ -38,6 +38,6 @@ describe("persistent failure projection", () => {
   });
 
   it("leaves a task with no declared plan without an invented boundary", () => {
-    expect(durableDemoPlanForJob("demo.recurring", { failureMode: "continuous" })).toBeNull();
+    expect(durableDemoPlanForTask("demo.recurring", { failureMode: "continuous" })).toBeNull();
   });
 });

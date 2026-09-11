@@ -8,14 +8,14 @@ import type {
   DeadLetterPage,
   DeadLetterQuery,
   DependencyLineage,
-  JobCheckpoint,
-  JobListPage,
-  JobListQuery,
-  JobProgress,
-  JobSnapshot,
-  JobTimelinePage,
-  JobTimelineQuery,
-  JobWait,
+  TaskCheckpoint,
+  TaskListPage,
+  TaskListQuery,
+  TaskProgress,
+  TaskSnapshot,
+  TaskTimelinePage,
+  TaskTimelineQuery,
+  TaskWait,
   Json,
   MaintenancePolicy,
   Queryable,
@@ -30,7 +30,7 @@ import type {
   WorkerRegistryEntry,
 } from "./types.js";
 import { databaseErrorCode, databaseErrorDetails, expectOneRow, WorkhorseError } from "./errors.js";
-import { MAX_JOB_QUERY_PAGE_SIZE, MAX_REDRIVE_BATCH_SIZE } from "./types.js";
+import { MAX_TASK_QUERY_PAGE_SIZE, MAX_REDRIVE_BATCH_SIZE } from "./types.js";
 import type { QueueMetricSnapshot } from "./telemetry.js";
 import { logInfo } from "./telemetry.js";
 import { createQueueModuleContext } from "./queue/module-context.js";
@@ -52,7 +52,7 @@ export type RunTaskNowStatus =
 
 export interface RunTaskNowResult {
   status: RunTaskNowStatus;
-  jobId: string;
+  taskId: string;
   state: string | null;
   runAt: Date | null;
 }
@@ -148,25 +148,25 @@ export class Admin {
     );
   }
 
-  listJobs(query: JobListQuery = {}): Promise<JobListPage> {
-    return this.modules.operatorReads.listJobs(query);
+  listTasks(query: TaskListQuery = {}): Promise<TaskListPage> {
+    return this.modules.operatorReads.listTasks(query);
   }
 
-  getJob<TResult extends Json = Json>(id: string): Promise<JobSnapshot<TResult> | null> {
-    return this.modules.operatorReads.getJob<TResult>(id);
+  getTask<TResult extends Json = Json>(id: string): Promise<TaskSnapshot<TResult> | null> {
+    return this.modules.operatorReads.getTask<TResult>(id);
   }
 
-  getJobTimeline(jobId: string, query: JobTimelineQuery = {}): Promise<JobTimelinePage> {
-    return this.modules.operatorReads.getJobTimeline(jobId, query);
+  getTaskTimeline(taskId: string, query: TaskTimelineQuery = {}): Promise<TaskTimelinePage> {
+    return this.modules.operatorReads.getTaskTimeline(taskId, query);
   }
 
   listDeadLetters(query: DeadLetterQuery = {}): Promise<DeadLetterPage> {
     return this.modules.operatorReads.listDeadLetters(query);
   }
 
-  redrive(sourceJobId: string, audit: AdminAudit): Promise<RedriveResult> {
+  redrive(sourceTaskId: string, audit: AdminAudit): Promise<RedriveResult> {
     validateAdminAudit(audit);
-    return this.modules.operatorReads.redrive(sourceJobId, {
+    return this.modules.operatorReads.redrive(sourceTaskId, {
       requestedBy: audit.actor,
       reason: audit.reason,
       requestId: audit.requestId,
@@ -186,39 +186,42 @@ export class Admin {
     );
   }
 
-  getRedriveLineage(jobId: string, limit = MAX_REDRIVE_BATCH_SIZE): Promise<RedriveLineage> {
-    return this.modules.operatorReads.getRedriveLineage(jobId, limit);
+  getRedriveLineage(taskId: string, limit = MAX_REDRIVE_BATCH_SIZE): Promise<RedriveLineage> {
+    return this.modules.operatorReads.getRedriveLineage(taskId, limit);
   }
 
-  getDependencyLineage(jobId: string, limit = MAX_JOB_QUERY_PAGE_SIZE): Promise<DependencyLineage> {
-    return this.modules.operatorReads.getDependencyLineage(jobId, limit);
+  getDependencyLineage(
+    taskId: string,
+    limit = MAX_TASK_QUERY_PAGE_SIZE,
+  ): Promise<DependencyLineage> {
+    return this.modules.operatorReads.getDependencyLineage(taskId, limit);
   }
 
-  getChildLineage(jobId: string, limit = MAX_JOB_QUERY_PAGE_SIZE): Promise<ChildLineage> {
-    return this.modules.operatorReads.getChildLineage(jobId, limit);
+  getChildLineage(taskId: string, limit = MAX_TASK_QUERY_PAGE_SIZE): Promise<ChildLineage> {
+    return this.modules.operatorReads.getChildLineage(taskId, limit);
   }
 
   getCheckpoint<TValue extends Json = Json>(
-    jobId: string,
+    taskId: string,
     name: string,
-  ): Promise<JobCheckpoint<TValue> | null> {
-    return this.modules.checkpointsProgressWaits.getCheckpoint<TValue>(jobId, name);
+  ): Promise<TaskCheckpoint<TValue> | null> {
+    return this.modules.checkpointsProgressWaits.getCheckpoint<TValue>(taskId, name);
   }
 
-  listCheckpoints<TValue extends Json = Json>(jobId: string): Promise<JobCheckpoint<TValue>[]> {
-    return this.modules.checkpointsProgressWaits.listCheckpoints<TValue>(jobId);
+  listCheckpoints<TValue extends Json = Json>(taskId: string): Promise<TaskCheckpoint<TValue>[]> {
+    return this.modules.checkpointsProgressWaits.listCheckpoints<TValue>(taskId);
   }
 
-  getProgress<TValue extends Json = Json>(jobId: string): Promise<JobProgress<TValue> | null> {
-    return this.modules.checkpointsProgressWaits.getProgress<TValue>(jobId);
+  getProgress<TValue extends Json = Json>(taskId: string): Promise<TaskProgress<TValue> | null> {
+    return this.modules.checkpointsProgressWaits.getProgress<TValue>(taskId);
   }
 
-  getWait(jobId: string, name: string): Promise<JobWait | null> {
-    return this.modules.checkpointsProgressWaits.getWait(jobId, name);
+  getWait(taskId: string, name: string): Promise<TaskWait | null> {
+    return this.modules.checkpointsProgressWaits.getWait(taskId, name);
   }
 
-  listWaits(jobId: string): Promise<JobWait[]> {
-    return this.modules.checkpointsProgressWaits.listWaits(jobId);
+  listWaits(taskId: string): Promise<TaskWait[]> {
+    return this.modules.checkpointsProgressWaits.listWaits(taskId);
   }
 
   listSignalWaits(options: ExternalWaitQuery = {}): Promise<SignalWaitPage> {
@@ -248,22 +251,22 @@ export class Admin {
     });
   }
 
-  async runTaskNow(jobId: string, audit: AdminAudit): Promise<RunTaskNowResult> {
+  async runTaskNow(taskId: string, audit: AdminAudit): Promise<RunTaskNowResult> {
     validateAdminAudit(audit);
     const result = await this.database.query<{
       status: RunTaskNowStatus;
       state: string | null;
       run_at: Date | string | null;
-    }>(SQL_STATEMENTS["run_task_now_v1"], [jobId, audit.actor, audit.reason, audit.requestId]);
+    }>(SQL_STATEMENTS["run_task_now_v1"], [taskId, audit.actor, audit.reason, audit.requestId]);
     const row = expectOneRow(result, "workhorse.run_task_now_v1");
-    logInfo("workhorse.job.run_now_requested", "Immediate job run requested", {
-      "workhorse.job.id": jobId,
-      "workhorse.job.state": row.state ?? "not_found",
+    logInfo("workhorse.task.run_now_requested", "Immediate task run requested", {
+      "workhorse.task.id": taskId,
+      "workhorse.task.state": row.state ?? "not_found",
       "workhorse.operation.status": row.status,
     });
     return {
       status: row.status,
-      jobId,
+      taskId,
       state: row.state,
       runAt: nullableRowTimestamp(row.run_at, "run_at"),
     };

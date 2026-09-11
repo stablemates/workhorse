@@ -3,9 +3,9 @@ title: Worker processes
 description: Run workers as dedicated processes with one configuration file, graceful drain on SIGTERM, and probe endpoints for your orchestrator.
 ---
 
-Your web tier and your job workers have different failure modes, different scaling curves, and
+Your web tier and your task workers have different failure modes, different scaling curves, and
 different memory budgets. A dedicated worker process keeps them apart: web replicas serve
-traffic, worker replicas process jobs, and the two meet only in PostgreSQL. Workhorse packages
+traffic, worker replicas process tasks, and the two meet only in PostgreSQL. Workhorse packages
 the whole process lifecycle — startup, signals, drain, probes — so a worker deployment is one
 configuration file and one command.
 
@@ -20,7 +20,7 @@ its adapter — and through it, its database pool — plus one entry per worker.
 
 ```ts title="src/workhorse.worker.ts"
 import { createWorkhorseAdapter, defineWorkerProcess, Pool } from "@stablemates/workhorse";
-import { generateReport, sendEmail } from "./jobs.js";
+import { generateReport, sendEmail } from "./tasks.js";
 
 export default defineWorkerProcess({
   adapter() {
@@ -62,19 +62,19 @@ adds the standalone Node.js lifecycle — signal handling, exit codes, forced ex
 ## Drain, don't drop
 
 On the first `SIGTERM` or `SIGINT`, the process marks readiness false and calls `Worker.stop` on
-every worker. Workers stop asking PostgreSQL for jobs; active handlers keep their leases and
+every worker. Workers stop asking PostgreSQL for tasks; active handlers keep their leases and
 finish. If a claim was already in flight when the signal arrived, it can still commit — the
-process now owns that lease, so it drains that job too.
+process now owns that lease, so it drains that task too.
 
 The drain is bounded by `shutdownTimeoutMs` (25 seconds by default). If the deadline expires, the
 process exits and leaves the remaining leases in PostgreSQL, where ordinary fenced recovery hands
-them to another worker. Nothing is lost either way — a drained job finished here, an abandoned
+them to another worker. Nothing is lost either way — a drained task finished here, an abandoned
 one finishes elsewhere.
 
 Two boundaries worth knowing:
 
 - Process shutdown does not abort `HandlerContext.signal` and creates no cancellation evidence.
-  When the job itself must stop, call `queue.cancel`.
+  When the task itself must stop, call `queue.cancel`.
 - Keep the drain deadline shorter than your platform's termination window. A second signal
   requests immediate exit, so handlers must stay safe for recovery after a forced stop — which
   checkpointed, idempotent handlers already are.
@@ -82,10 +82,10 @@ Two boundaries worth knowing:
 ## Probes for your orchestrator
 
 The optional probe listener serves exactly two endpoints: liveness (`/livez`) while the process
-exists, readiness (`/readyz`) while workers can still ask for jobs. Readiness drops the moment
+exists, readiness (`/readyz`) while workers can still ask for tasks. Readiness drops the moment
 draining begins, so a rolling deployment routes nothing to a process on its way out.
 
-The probe server is not application ingress. It exposes no job data, no queue data, no metrics,
+The probe server is not application ingress. It exposes no task data, no queue data, no metrics,
 and no mutations — safe to bind wherever your orchestrator needs it.
 
 If startup fails partway, the process closes every resource it already created. If any worker
@@ -104,7 +104,7 @@ cadence, which is what lets a dashboard on another machine see the fleet — see
 
 - [Workers](/docs/workers) — handlers, concurrency, and local lifecycle
 - [Maintenance and retention](/docs/maintenance) — the background work these processes drive
-- [Cancellation](/docs/cancellation) — stop one job instead of one process
+- [Cancellation](/docs/cancellation) — stop one task instead of one process
 
 ---
 

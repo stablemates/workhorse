@@ -103,7 +103,7 @@
     "previewRetentionPolicy": {
       "mutation": false
     },
-    "jobDetail": {
+    "taskDetail": {
       "mutation": false
     },
     "humanWaits": {

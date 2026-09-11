@@ -13,7 +13,7 @@ describe("demo feature showcase catalog", () => {
     expect(new Set(DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) => family.scheduleName)).size).toBe(
       DEMO_FEATURE_SHOWCASE_FAMILIES.length,
     );
-    expect(new Set(DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) => family.jobType)).size).toBe(
+    expect(new Set(DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) => family.taskType)).size).toBe(
       DEMO_FEATURE_SHOWCASE_FAMILIES.length,
     );
     for (const [index, family] of DEMO_FEATURE_SHOWCASE_FAMILIES.entries()) {

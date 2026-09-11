@@ -61,19 +61,19 @@ export function taskDrawerCloseOnEscape(dropdownOpened: boolean): boolean {
 export type TaskDrawerBody = "closed" | "error" | "loading" | "detail";
 
 export function taskDrawerBody(state: {
-  selectedJobId: string | null;
-  selectedJob: unknown | null;
-  jobDetailError: string | null;
+  selectedTaskId: string | null;
+  selectedTask: unknown | null;
+  taskDetailError: string | null;
 }): TaskDrawerBody {
-  if (state.selectedJobId === null) return "closed";
-  if (state.jobDetailError !== null) return "error";
-  if (state.selectedJob === null) return "loading";
+  if (state.selectedTaskId === null) return "closed";
+  if (state.taskDetailError !== null) return "error";
+  if (state.selectedTask === null) return "loading";
   return "detail";
 }
 
 /** The drawer is open for as long as a task is selected, including while its detail loads. */
-export function taskDrawerOpened(selectedJobId: string | null): boolean {
-  return selectedJobId !== null;
+export function taskDrawerOpened(selectedTaskId: string | null): boolean {
+  return selectedTaskId !== null;
 }
 
 /**
@@ -117,19 +117,19 @@ export function createLatestRequestGuard(): LatestRequestGuard {
  * loads, and a cancellation outlives the load that opened it. The task id the operator is
  * looking at now is the fact that settles it.
  */
-export function cancelResultAppliesTo(jobId: string, selectedJobId: string | null): boolean {
-  return selectedJobId === jobId;
+export function cancelResultAppliesTo(taskId: string, selectedTaskId: string | null): boolean {
+  return selectedTaskId === taskId;
 }
 
 /**
- * The next pending-cancellation task id once the cancellation of `jobId` has settled.
+ * The next pending-cancellation task id once the cancellation of `taskId` has settled.
  *
  * The pending flag is a single slot holding at most one task id. Clearing it unconditionally
  * would let a slow cancellation, settling after the operator started a second one, unstick a
  * spinner belonging to a request that is still running, so only the owner clears it.
  */
-export function clearPendingCancel(pending: string | null, jobId: string): string | null {
-  return pending === jobId ? null : pending;
+export function clearPendingCancel(pending: string | null, taskId: string): string | null {
+  return pending === taskId ? null : pending;
 }
 
 /**

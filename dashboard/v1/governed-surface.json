@@ -150,9 +150,6 @@
         "finishedAt": {
           "type": "null|string"
         },
-        "jobId": {
-          "type": "string"
-        },
         "reason": {
           "type": "null|string"
         },
@@ -173,6 +170,9 @@
             "canceled",
             "not_found"
           ]
+        },
+        "taskId": {
+          "type": "string"
         }
       }
     },
@@ -219,9 +219,6 @@
         "completedBy": {
           "type": "null|string"
         },
-        "jobId": {
-          "type": "string"
-        },
         "name": {
           "type": "string"
         },
@@ -241,6 +238,9 @@
             "not_waiting",
             "stale"
           ]
+        },
+        "taskId": {
+          "type": "string"
         }
       }
     },
@@ -403,7 +403,6 @@
             "durable-waits",
             "human-decisions",
             "ingress-routing",
-            "job-dependencies",
             "keyed-debounce",
             "keyed-throttle",
             "payload-contracts",
@@ -411,6 +410,7 @@
             "progress",
             "retry-policies",
             "signals",
+            "task-dependencies",
             "timing-controls"
           ],
           "required": false
@@ -445,15 +445,15 @@
         }
       },
       "response": {
-        "jobId": {
-          "type": "string"
-        },
         "outcome": {
           "type": "enum",
           "enum": [
             "accepted",
             "replayed"
           ]
+        },
+        "taskId": {
+          "type": "string"
         }
       }
     },
@@ -493,12 +493,6 @@
         "id": {
           "type": "string"
         },
-        "jobId": {
-          "type": "string"
-        },
-        "jobType": {
-          "type": "null|string"
-        },
         "kind": {
           "type": "enum",
           "enum": [
@@ -518,6 +512,12 @@
         "startedAt": {
           "type": "null|string"
         },
+        "taskId": {
+          "type": "string"
+        },
+        "taskType": {
+          "type": "null|string"
+        },
         "type": {
           "type": "string"
         },
@@ -529,14 +529,6 @@
     "events": {
       "mutation": false,
       "request": {
-        "jobId": {
-          "type": "null|string",
-          "required": false
-        },
-        "jobType": {
-          "type": "null|string",
-          "required": false
-        },
         "kind": {
           "type": "enum",
           "enum": [
@@ -564,6 +556,14 @@
           "required": false
         },
         "search": {
+          "type": "null|string",
+          "required": false
+        },
+        "taskId": {
+          "type": "null|string",
+          "required": false
+        },
+        "taskType": {
           "type": "null|string",
           "required": false
         },
@@ -662,12 +662,6 @@
         "events[].id": {
           "type": "string"
         },
-        "events[].jobId": {
-          "type": "string"
-        },
-        "events[].jobType": {
-          "type": "null|string"
-        },
         "events[].kind": {
           "type": "enum",
           "enum": [
@@ -683,6 +677,12 @@
         },
         "events[].recordId": {
           "type": "string"
+        },
+        "events[].taskId": {
+          "type": "string"
+        },
+        "events[].taskType": {
+          "type": "null|string"
         },
         "events[].type": {
           "type": "string"
@@ -702,7 +702,7 @@
         "retention.attemptHistoryDays": {
           "type": "null|number"
         },
-        "retention.jobEventDays": {
+        "retention.taskEventDays": {
           "type": "null|number"
         },
         "total": {
@@ -771,16 +771,16 @@
         "signalWaits[].deadlineAt": {
           "type": "string"
         },
-        "signalWaits[].jobId": {
-          "type": "string"
-        },
-        "signalWaits[].jobType": {
-          "type": "string"
-        },
         "signalWaits[].name": {
           "type": "string"
         },
         "signalWaits[].queue": {
+          "type": "string"
+        },
+        "signalWaits[].taskId": {
+          "type": "string"
+        },
+        "signalWaits[].taskType": {
           "type": "string"
         },
         "waits": {
@@ -801,634 +801,16 @@
         "waits[].deadlineAt": {
           "type": "string"
         },
-        "waits[].jobId": {
-          "type": "string"
-        },
-        "waits[].jobType": {
-          "type": "string"
-        },
         "waits[].name": {
           "type": "string"
         },
         "waits[].queue": {
           "type": "string"
-        }
-      }
-    },
-    "jobDetail": {
-      "mutation": false,
-      "request": {
-        "id": {
-          "type": "string",
-          "required": true
-        }
-      },
-      "response": {
-        "attempts": {
-          "type": "array"
         },
-        "attempts[]": {
-          "type": "object"
-        },
-        "attempts[].attempt": {
-          "type": "number"
-        },
-        "attempts[].claimedAt": {
-          "type": "string"
-        },
-        "attempts[].durationMs": {
-          "type": "number"
-        },
-        "attempts[].elapsedMs": {
-          "type": "number"
-        },
-        "attempts[].error": {
-          "type": "unknown"
-        },
-        "attempts[].executionMs": {
-          "type": "number"
-        },
-        "attempts[].finishedAt": {
-          "type": "string"
-        },
-        "attempts[].outcome": {
-          "type": "string"
-        },
-        "attempts[].startedAt": {
-          "type": "string"
-        },
-        "attempts[].workerId": {
-          "type": "string"
-        },
-        "batchExecutions": {
-          "type": "array"
-        },
-        "batchExecutions[]": {
-          "type": "object"
-        },
-        "batchExecutions[].attempt": {
-          "type": "number"
-        },
-        "batchExecutions[].batchWideFailure": {
-          "type": "boolean"
-        },
-        "batchExecutions[].dispatchedAt": {
-          "type": "string"
-        },
-        "batchExecutions[].id": {
-          "type": "string"
-        },
-        "batchExecutions[].members": {
-          "type": "array"
-        },
-        "batchExecutions[].members[]": {
-          "type": "object"
-        },
-        "batchExecutions[].members[].attempt": {
-          "type": "number"
-        },
-        "batchExecutions[].members[].error": {
-          "type": "unknown"
-        },
-        "batchExecutions[].members[].id": {
-          "type": "string"
-        },
-        "batchExecutions[].members[].outcome": {
-          "type": "null|string"
-        },
-        "batchExecutions[].members[].type": {
-          "type": "string"
-        },
-        "canCompleteHumanWait": {
-          "type": "boolean"
-        },
-        "canSignal": {
-          "type": "boolean"
-        },
-        "checkpoints": {
-          "type": "array"
-        },
-        "checkpoints[]": {
-          "type": "object"
-        },
-        "checkpoints[].attempt": {
-          "type": "number"
-        },
-        "checkpoints[].createdAt": {
-          "type": "string"
-        },
-        "checkpoints[].fenceToken": {
-          "type": "string"
-        },
-        "checkpoints[].name": {
-          "type": "string"
-        },
-        "checkpoints[].value": {
-          "type": "unknown"
-        },
-        "checkpoints[].workerId": {
-          "type": "string"
-        },
-        "childLineage": {
-          "type": "object"
-        },
-        "childLineage.records": {
-          "type": "array"
-        },
-        "childLineage.records[]": {
-          "type": "object"
-        },
-        "childLineage.records[].childJobId": {
-          "type": "string"
-        },
-        "childLineage.records[].createdAt": {
-          "type": "string"
-        },
-        "childLineage.records[].error": {
-          "type": "unknown"
-        },
-        "childLineage.records[].joinedAt": {
-          "type": "null|string"
-        },
-        "childLineage.records[].name": {
-          "type": "string"
-        },
-        "childLineage.records[].outcomeState": {
-          "type": "null|unknown"
-        },
-        "childLineage.records[].parentJobId": {
-          "type": "string"
-        },
-        "childLineage.records[].type": {
-          "type": "string"
-        },
-        "childLineage.truncated": {
-          "type": "boolean"
-        },
-        "concurrencyPolicy": {
-          "type": "null|object"
-        },
-        "concurrencyPolicy.active": {
-          "type": "number"
-        },
-        "concurrencyPolicy.available": {
-          "type": "number"
-        },
-        "concurrencyPolicy.blockedReady": {
-          "type": "number"
-        },
-        "concurrencyPolicy.highestKeyActive": {
-          "type": "number"
-        },
-        "concurrencyPolicy.maxActive": {
-          "type": "number"
-        },
-        "concurrencyPolicy.maxActivePerKey": {
-          "type": "null|number"
-        },
-        "concurrencyPolicy.namespace": {
-          "type": "string"
-        },
-        "concurrencyPolicy.saturatedKeys": {
-          "type": "number"
-        },
-        "concurrencyPolicy.utilizationKnown": {
-          "type": "boolean"
-        },
-        "current": {
-          "type": "object"
-        },
-        "current.error": {
-          "type": "unknown"
-        },
-        "current.outcome": {
-          "type": "null|object"
-        },
-        "current.outcome.attempt": {
-          "type": "number"
-        },
-        "current.outcome.error": {
-          "type": "unknown"
-        },
-        "current.outcome.finishedAt": {
-          "type": "string"
-        },
-        "current.outcome.result": {
-          "type": "unknown"
-        },
-        "current.outcome.state": {
-          "type": "string"
-        },
-        "current.result": {
-          "type": "unknown"
-        },
-        "current.runtime": {
-          "type": "null|object"
-        },
-        "current.runtime.acquiredAt": {
-          "type": "null|string"
-        },
-        "current.runtime.attempt": {
-          "type": "number"
-        },
-        "current.runtime.attemptStartedAt": {
-          "type": "null|string"
-        },
-        "current.runtime.attemptTimeoutAt": {
-          "type": "null|string"
-        },
-        "current.runtime.cancellation": {
-          "type": "null|object"
-        },
-        "current.runtime.cancellation.reason": {
-          "type": "null|string"
-        },
-        "current.runtime.cancellation.requestedAt": {
-          "type": "string"
-        },
-        "current.runtime.cancellation.requestedBy": {
-          "type": "null|string"
-        },
-        "current.runtime.error": {
-          "type": "unknown"
-        },
-        "current.runtime.expiresAt": {
-          "type": "null|string"
-        },
-        "current.runtime.fenceToken": {
-          "type": "string"
-        },
-        "current.runtime.heartbeatAt": {
-          "type": "null|string"
-        },
-        "current.runtime.readyAt": {
-          "type": "null|string"
-        },
-        "current.runtime.runAt": {
-          "type": "string"
-        },
-        "current.runtime.state": {
-          "type": "string"
-        },
-        "current.runtime.waitName": {
-          "type": "null|string"
-        },
-        "current.runtime.workerId": {
-          "type": "null|string"
-        },
-        "dependencyLineage": {
-          "type": "object"
-        },
-        "dependencyLineage.records": {
-          "type": "array"
-        },
-        "dependencyLineage.records[]": {
-          "type": "object"
-        },
-        "dependencyLineage.records[].createdAt": {
-          "type": "string"
-        },
-        "dependencyLineage.records[].dependentJobId": {
-          "type": "string"
-        },
-        "dependencyLineage.records[].onCancellation": {
-          "type": "enum",
-          "enum": [
-            "cancel",
-            "fail",
-            "release"
-          ]
-        },
-        "dependencyLineage.records[].onFailure": {
-          "type": "enum",
-          "enum": [
-            "cancel",
-            "fail",
-            "release"
-          ]
-        },
-        "dependencyLineage.records[].onSuccess": {
-          "type": "enum",
-          "enum": [
-            "cancel",
-            "fail",
-            "release"
-          ]
-        },
-        "dependencyLineage.records[].prerequisiteJobId": {
-          "type": "string"
-        },
-        "dependencyLineage.records[].releasedAt": {
-          "type": "null|string"
-        },
-        "dependencyLineage.records[].resolution": {
-          "type": "null|unknown"
-        },
-        "dependencyLineage.truncated": {
-          "type": "boolean"
-        },
-        "durability": {
-          "type": "null|object"
-        },
-        "durability.description": {
-          "type": "string"
-        },
-        "durability.label": {
-          "type": "string"
-        },
-        "durability.persistentFailure": {
-          "type": "null|object"
-        },
-        "durability.persistentFailure.afterStepIndex": {
-          "type": "number"
-        },
-        "durability.persistentFailure.afterStepName": {
-          "type": "string"
-        },
-        "durability.persistentFailure.beforeStepName": {
-          "type": "string"
-        },
-        "durability.persistentFailure.reason": {
-          "type": "string"
-        },
-        "durability.scenario": {
-          "type": "string"
-        },
-        "durability.source": {
-          "type": "string"
-        },
-        "durability.steps": {
-          "type": "array"
-        },
-        "durability.steps[]": {
-          "type": "object"
-        },
-        "durability.steps[].description": {
-          "type": "string"
-        },
-        "durability.steps[].label": {
-          "type": "string"
-        },
-        "durability.steps[].name": {
-          "type": "string"
-        },
-        "events": {
-          "type": "array"
-        },
-        "events[]": {
-          "type": "object"
-        },
-        "events[].attempt": {
-          "type": "null|number"
-        },
-        "events[].details": {
-          "type": "unknown"
-        },
-        "events[].id": {
-          "type": "string"
-        },
-        "events[].occurredAt": {
-          "type": "string"
-        },
-        "events[].type": {
-          "type": "string"
-        },
-        "humanWait": {
-          "type": "null|object"
-        },
-        "humanWait.context": {
-          "type": "unknown"
-        },
-        "humanWait.deadlineAt": {
-          "type": "string"
-        },
-        "humanWait.name": {
-          "type": "string"
-        },
-        "identity": {
-          "type": "object"
-        },
-        "identity.blockedReason": {
-          "type": "null|unknown"
-        },
-        "identity.concurrencyKey": {
-          "type": "null|string"
-        },
-        "identity.createdAt": {
-          "type": "string"
-        },
-        "identity.deadlineAt": {
-          "type": "null|string"
-        },
-        "identity.dependencyPolicy": {
-          "type": "null|object"
-        },
-        "identity.dependencyPolicy.onCancellation": {
-          "type": "enum",
-          "enum": [
-            "cancel",
-            "fail",
-            "release"
-          ]
-        },
-        "identity.dependencyPolicy.onFailure": {
-          "type": "enum",
-          "enum": [
-            "cancel",
-            "fail",
-            "release"
-          ]
-        },
-        "identity.dependencyPolicy.onSuccess": {
-          "type": "enum",
-          "enum": [
-            "cancel",
-            "fail",
-            "release"
-          ]
-        },
-        "identity.dependencyReleasedAt": {
-          "type": "null|string"
-        },
-        "identity.executionTimeoutMs": {
-          "type": "null|number"
-        },
-        "identity.id": {
-          "type": "string"
-        },
-        "identity.maxAttempts": {
-          "type": "number"
-        },
-        "identity.prerequisiteJobId": {
-          "type": "null|string"
-        },
-        "identity.prerequisiteJobIds": {
-          "type": "array"
-        },
-        "identity.prerequisiteJobIds[]": {
-          "type": "string"
-        },
-        "identity.priority": {
-          "type": "number"
-        },
-        "identity.queue": {
-          "type": "string"
-        },
-        "identity.retryPolicy": {
-          "type": "null|object"
-        },
-        "identity.retryPolicy.baseDelayMs": {
-          "type": "number"
-        },
-        "identity.retryPolicy.delayMs": {
-          "type": "number"
-        },
-        "identity.retryPolicy.initialDelayMs": {
-          "type": "number"
-        },
-        "identity.retryPolicy.maxDelayMs": {
-          "type": "number"
-        },
-        "identity.retryPolicy.multiplier": {
-          "type": "number"
-        },
-        "identity.retryPolicy.type": {
-          "type": "enum",
-          "enum": [
-            "fixed"
-          ]
-        },
-        "identity.state": {
-          "type": "string"
-        },
-        "identity.type": {
-          "type": "string"
-        },
-        "payload": {
-          "type": "unknown"
-        },
-        "progress": {
-          "type": "null|object"
-        },
-        "progress.attempt": {
-          "type": "number"
-        },
-        "progress.createdAt": {
-          "type": "string"
-        },
-        "progress.fenceToken": {
-          "type": "string"
-        },
-        "progress.revision": {
-          "type": "string"
-        },
-        "progress.updatedAt": {
-          "type": "string"
-        },
-        "progress.value": {
-          "type": "unknown"
-        },
-        "progress.workerId": {
-          "type": "string"
-        },
-        "redriveLineage": {
-          "type": "object"
-        },
-        "redriveLineage.records": {
-          "type": "array"
-        },
-        "redriveLineage.records[]": {
-          "type": "object"
-        },
-        "redriveLineage.records[].reason": {
-          "type": "string"
-        },
-        "redriveLineage.records[].requestIdDigest": {
-          "type": "string"
-        },
-        "redriveLineage.records[].requestIdLength": {
-          "type": "number"
-        },
-        "redriveLineage.records[].requestIdPreview": {
-          "type": "string"
-        },
-        "redriveLineage.records[].requestedAt": {
-          "type": "string"
-        },
-        "redriveLineage.records[].requestedBy": {
-          "type": "string"
-        },
-        "redriveLineage.records[].sourceJobId": {
-          "type": "string"
-        },
-        "redriveLineage.records[].sourceState": {
-          "type": "enum",
-          "enum": [
-            "failed"
-          ]
-        },
-        "redriveLineage.records[].targetInitialState": {
-          "type": "enum",
-          "enum": [
-            "ready"
-          ]
-        },
-        "redriveLineage.records[].targetJobId": {
-          "type": "string"
-        },
-        "redriveLineage.truncated": {
-          "type": "boolean"
-        },
-        "signalWait": {
-          "type": "null|object"
-        },
-        "signalWait.deadlineAt": {
-          "type": "string"
-        },
-        "signalWait.name": {
-          "type": "string"
-        },
-        "tags": {
-          "type": "array"
-        },
-        "tags[]": {
-          "type": "string"
-        },
-        "waits": {
-          "type": "array"
-        },
-        "waits[]": {
-          "type": "object"
-        },
-        "waits[].attempt": {
-          "type": "number"
-        },
-        "waits[].createdAt": {
-          "type": "string"
-        },
-        "waits[].durationMs": {
-          "type": "null|number"
-        },
-        "waits[].fenceToken": {
-          "type": "string"
-        },
-        "waits[].mode": {
-          "type": "enum",
-          "enum": [
-            "absolute",
-            "relative"
-          ]
-        },
-        "waits[].name": {
-          "type": "string"
-        },
-        "waits[].requestedWakeAt": {
-          "type": "null|string"
-        },
-        "waits[].wakeAt": {
+        "waits[].taskId": {
           "type": "string"
         },
-        "waits[].workerId": {
+        "waits[].taskType": {
           "type": "string"
         }
       }
@@ -1531,14 +913,6 @@
           "type": "integer",
           "required": false
         },
-        "definition.jobEventRetentionDays": {
-          "type": "integer|null",
-          "required": false
-        },
-        "definition.jobIdentityRetentionDays": {
-          "type": "integer|null",
-          "required": false
-        },
         "definition.occurrenceRowsPerPass": {
           "type": "integer",
           "required": false
@@ -1555,12 +929,20 @@
           "type": "integer",
           "required": false
         },
-        "definition.terminalJobPruneLimit": {
-          "type": "integer",
+        "definition.taskEventRetentionDays": {
+          "type": "integer|null",
+          "required": false
+        },
+        "definition.taskIdentityRetentionDays": {
+          "type": "integer|null",
           "required": false
         },
         "definition.terminalOutcomeRetentionDays": {
           "type": "integer|null",
+          "required": false
+        },
+        "definition.terminalTaskPruneLimit": {
+          "type": "integer",
           "required": false
         }
       },
@@ -1585,14 +967,6 @@
           "type": "integer",
           "required": false
         },
-        "definition.jobEventRetentionDays": {
-          "type": "integer|null",
-          "required": false
-        },
-        "definition.jobIdentityRetentionDays": {
-          "type": "integer|null",
-          "required": false
-        },
         "definition.occurrenceRowsPerPass": {
           "type": "integer",
           "required": false
@@ -1609,12 +983,20 @@
           "type": "integer",
           "required": false
         },
-        "definition.terminalJobPruneLimit": {
-          "type": "integer",
+        "definition.taskEventRetentionDays": {
+          "type": "integer|null",
+          "required": false
+        },
+        "definition.taskIdentityRetentionDays": {
+          "type": "integer|null",
           "required": false
         },
         "definition.terminalOutcomeRetentionDays": {
           "type": "integer|null",
+          "required": false
+        },
+        "definition.terminalTaskPruneLimit": {
+          "type": "integer",
           "required": false
         }
       },
@@ -1625,16 +1007,16 @@
         "capped.attemptHistory": {
           "type": "boolean"
         },
-        "capped.jobEvents": {
-          "type": "boolean"
-        },
         "capped.scheduleOccurrences": {
           "type": "boolean"
         },
         "capped.statistics": {
           "type": "boolean"
         },
-        "capped.terminalJobs": {
+        "capped.taskEvents": {
+          "type": "boolean"
+        },
+        "capped.terminalTasks": {
           "type": "boolean"
         },
         "eligible": {
@@ -1643,16 +1025,16 @@
         "eligible.attemptHistory": {
           "type": "number"
         },
-        "eligible.jobEvents": {
-          "type": "number"
-        },
         "eligible.scheduleOccurrences": {
           "type": "number"
         },
         "eligible.statistics": {
           "type": "number"
         },
-        "eligible.terminalJobs": {
+        "eligible.taskEvents": {
+          "type": "number"
+        },
+        "eligible.terminalTasks": {
           "type": "number"
         }
       }
@@ -1834,12 +1216,8 @@
           "type": "string",
           "required": false
         },
-        "cursor.jobId": {
+        "cursor.taskId": {
           "type": "string",
-          "required": false
-        },
-        "jobType": {
-          "type": "null|string",
           "required": false
         },
         "limit": {
@@ -1857,6 +1235,10 @@
         "tags[]": {
           "type": "string",
           "required": false
+        },
+        "taskType": {
+          "type": "null|string",
+          "required": false
         }
       },
       "response": {
@@ -1866,7 +1248,7 @@
         "nextCursor.finishedAt": {
           "type": "string"
         },
-        "nextCursor.jobId": {
+        "nextCursor.taskId": {
           "type": "string"
         },
         "results": {
@@ -1878,11 +1260,11 @@
         "results[].requestedAt": {
           "type": "null|string"
         },
-        "results[].sourceJobId": {
-          "type": "string"
-        },
         "results[].sourceState": {
           "type": "null|unknown"
+        },
+        "results[].sourceTaskId": {
+          "type": "string"
         },
         "results[].status": {
           "type": "enum",
@@ -1894,11 +1276,11 @@
             "replayed"
           ]
         },
-        "results[].targetJobId": {
-          "type": "null|string"
-        },
         "results[].targetState": {
           "type": "null|unknown"
+        },
+        "results[].targetTaskId": {
+          "type": "null|string"
         }
       }
     },
@@ -1930,11 +1312,11 @@
         "requestedAt": {
           "type": "null|string"
         },
-        "sourceJobId": {
-          "type": "string"
-        },
         "sourceState": {
           "type": "null|unknown"
+        },
+        "sourceTaskId": {
+          "type": "string"
         },
         "status": {
           "type": "enum",
@@ -1946,11 +1328,11 @@
             "replayed"
           ]
         },
-        "targetJobId": {
-          "type": "null|string"
-        },
         "targetState": {
           "type": "null|unknown"
+        },
+        "targetTaskId": {
+          "type": "null|string"
         }
       }
     },
@@ -2022,14 +1404,14 @@
             "attemptHistoryRetentionDays",
             "defaultPartitionRowsPerPass",
             "historyPartitionsPerPass",
-            "jobEventRetentionDays",
-            "jobIdentityRetentionDays",
             "occurrenceRowsPerPass",
             "scheduleOccurrenceRetentionDays",
             "statisticsRetentionDays",
             "statisticsRowsPerPass",
-            "terminalJobPruneLimit",
-            "terminalOutcomeRetentionDays"
+            "taskEventRetentionDays",
+            "taskIdentityRetentionDays",
+            "terminalOutcomeRetentionDays",
+            "terminalTaskPruneLimit"
           ],
           "required": true
         }
@@ -2335,7 +1717,7 @@
         "recommendationInputs.defaultHistoryRows.attemptHistory": {
           "type": "number"
         },
-        "recommendationInputs.defaultHistoryRows.jobEvents": {
+        "recommendationInputs.defaultHistoryRows.taskEvents": {
           "type": "number"
         },
         "recommendationInputs.defaultHistoryRowsCapped": {
@@ -2344,13 +1726,13 @@
         "recommendationInputs.defaultHistoryRowsCapped.attemptHistory": {
           "type": "boolean"
         },
-        "recommendationInputs.defaultHistoryRowsCapped.jobEvents": {
+        "recommendationInputs.defaultHistoryRowsCapped.taskEvents": {
           "type": "boolean"
         },
         "recommendationInputs.enqueueRate": {
           "type": "object"
         },
-        "recommendationInputs.enqueueRate.jobs": {
+        "recommendationInputs.enqueueRate.tasks": {
           "type": "number"
         },
         "recommendationInputs.enqueueRate.windowMs": {
@@ -2369,10 +1751,10 @@
           "type": "enum",
           "enum": [
             "attemptHistory",
-            "jobEvents",
-            "jobIdentity",
             "scheduleOccurrences",
             "statistics",
+            "taskEvents",
+            "taskIdentity",
             "terminalOutcome"
           ]
         },
@@ -2430,12 +1812,6 @@
         "retention.historyPartitionsPerPass": {
           "type": "number"
         },
-        "retention.jobEventRetentionDays": {
-          "type": "null|number"
-        },
-        "retention.jobIdentityRetentionDays": {
-          "type": "null|number"
-        },
         "retention.occurrenceRowsPerPass": {
           "type": "number"
         },
@@ -2475,32 +1851,6 @@
           "type": "number"
         },
         "retention.provenance.historyPartitionsPerPass.source": {
-          "type": "enum",
-          "enum": [
-            "application",
-            "operator"
-          ]
-        },
-        "retention.provenance.jobEventRetentionDays": {
-          "type": "object"
-        },
-        "retention.provenance.jobEventRetentionDays.applicationDefault": {
-          "type": "null|number"
-        },
-        "retention.provenance.jobEventRetentionDays.source": {
-          "type": "enum",
-          "enum": [
-            "application",
-            "operator"
-          ]
-        },
-        "retention.provenance.jobIdentityRetentionDays": {
-          "type": "object"
-        },
-        "retention.provenance.jobIdentityRetentionDays.applicationDefault": {
-          "type": "null|number"
-        },
-        "retention.provenance.jobIdentityRetentionDays.source": {
           "type": "enum",
           "enum": [
             "application",
@@ -2559,13 +1909,26 @@
             "operator"
           ]
         },
-        "retention.provenance.terminalJobPruneLimit": {
+        "retention.provenance.taskEventRetentionDays": {
           "type": "object"
         },
-        "retention.provenance.terminalJobPruneLimit.applicationDefault": {
-          "type": "number"
+        "retention.provenance.taskEventRetentionDays.applicationDefault": {
+          "type": "null|number"
         },
-        "retention.provenance.terminalJobPruneLimit.source": {
+        "retention.provenance.taskEventRetentionDays.source": {
+          "type": "enum",
+          "enum": [
+            "application",
+            "operator"
+          ]
+        },
+        "retention.provenance.taskIdentityRetentionDays": {
+          "type": "object"
+        },
+        "retention.provenance.taskIdentityRetentionDays.applicationDefault": {
+          "type": "null|number"
+        },
+        "retention.provenance.taskIdentityRetentionDays.source": {
           "type": "enum",
           "enum": [
             "application",
@@ -2585,6 +1948,19 @@
             "operator"
           ]
         },
+        "retention.provenance.terminalTaskPruneLimit": {
+          "type": "object"
+        },
+        "retention.provenance.terminalTaskPruneLimit.applicationDefault": {
+          "type": "number"
+        },
+        "retention.provenance.terminalTaskPruneLimit.source": {
+          "type": "enum",
+          "enum": [
+            "application",
+            "operator"
+          ]
+        },
         "retention.scheduleOccurrenceRetentionDays": {
           "type": "null|number"
         },
@@ -2594,11 +1970,17 @@
         "retention.statisticsRowsPerPass": {
           "type": "number"
         },
-        "retention.terminalJobPruneLimit": {
-          "type": "number"
+        "retention.taskEventRetentionDays": {
+          "type": "null|number"
+        },
+        "retention.taskIdentityRetentionDays": {
+          "type": "null|number"
         },
         "retention.terminalOutcomeRetentionDays": {
           "type": "null|number"
+        },
+        "retention.terminalTaskPruneLimit": {
+          "type": "number"
         },
         "retention.updatedAt": {
           "type": "string"
@@ -2690,9 +2072,6 @@
         "deliveredBy": {
           "type": "null|string"
         },
-        "jobId": {
-          "type": "string"
-        },
         "name": {
           "type": "string"
         },
@@ -2712,6 +2091,9 @@
             "not_waiting",
             "stale"
           ]
+        },
+        "taskId": {
+          "type": "string"
         }
       }
     },
@@ -2805,10 +2187,10 @@
           "type": "enum",
           "enum": [
             "attemptHistory",
-            "jobEvents",
-            "jobIdentity",
             "scheduleOccurrences",
             "statistics",
+            "taskEvents",
+            "taskIdentity",
             "terminalOutcome"
           ]
         },
@@ -2830,7 +2212,7 @@
         "integrity.retention.defaultHistoryRows.attemptHistory": {
           "type": "number"
         },
-        "integrity.retention.defaultHistoryRows.jobEvents": {
+        "integrity.retention.defaultHistoryRows.taskEvents": {
           "type": "number"
         },
         "integrity.retention.defaultHistoryRowsCapped": {
@@ -2839,7 +2221,7 @@
         "integrity.retention.defaultHistoryRowsCapped.attemptHistory": {
           "type": "boolean"
         },
-        "integrity.retention.defaultHistoryRowsCapped.jobEvents": {
+        "integrity.retention.defaultHistoryRowsCapped.taskEvents": {
           "type": "boolean"
         },
         "integrity.retention.eligibleHistoryPartitions": {
@@ -2848,7 +2230,7 @@
         "integrity.retention.eligibleHistoryPartitions.attemptHistory": {
           "type": "number"
         },
-        "integrity.retention.eligibleHistoryPartitions.jobEvents": {
+        "integrity.retention.eligibleHistoryPartitions.taskEvents": {
           "type": "number"
         },
         "integrity.retention.maxLagCategory": {
@@ -2983,7 +2365,7 @@
         "kpis.dependencies": {
           "type": "object"
         },
-        "kpis.dependencies.blockedJobs": {
+        "kpis.dependencies.blockedTasks": {
           "type": "number"
         },
         "kpis.dependencies.capped": {
@@ -3301,10 +2683,10 @@
           "type": "enum",
           "enum": [
             "attemptHistory",
-            "jobEvents",
-            "jobIdentity",
             "scheduleOccurrences",
             "statistics",
+            "taskEvents",
+            "taskIdentity",
             "terminalOutcome"
           ]
         },
@@ -3387,16 +2769,628 @@
         }
       }
     },
+    "taskDetail": {
+      "mutation": false,
+      "request": {
+        "id": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "response": {
+        "attempts": {
+          "type": "array"
+        },
+        "attempts[]": {
+          "type": "object"
+        },
+        "attempts[].attempt": {
+          "type": "number"
+        },
+        "attempts[].claimedAt": {
+          "type": "string"
+        },
+        "attempts[].durationMs": {
+          "type": "number"
+        },
+        "attempts[].elapsedMs": {
+          "type": "number"
+        },
+        "attempts[].error": {
+          "type": "unknown"
+        },
+        "attempts[].executionMs": {
+          "type": "number"
+        },
+        "attempts[].finishedAt": {
+          "type": "string"
+        },
+        "attempts[].outcome": {
+          "type": "string"
+        },
+        "attempts[].startedAt": {
+          "type": "string"
+        },
+        "attempts[].workerId": {
+          "type": "string"
+        },
+        "batchExecutions": {
+          "type": "array"
+        },
+        "batchExecutions[]": {
+          "type": "object"
+        },
+        "batchExecutions[].attempt": {
+          "type": "number"
+        },
+        "batchExecutions[].batchWideFailure": {
+          "type": "boolean"
+        },
+        "batchExecutions[].dispatchedAt": {
+          "type": "string"
+        },
+        "batchExecutions[].id": {
+          "type": "string"
+        },
+        "batchExecutions[].members": {
+          "type": "array"
+        },
+        "batchExecutions[].members[]": {
+          "type": "object"
+        },
+        "batchExecutions[].members[].attempt": {
+          "type": "number"
+        },
+        "batchExecutions[].members[].error": {
+          "type": "unknown"
+        },
+        "batchExecutions[].members[].id": {
+          "type": "string"
+        },
+        "batchExecutions[].members[].outcome": {
+          "type": "null|string"
+        },
+        "batchExecutions[].members[].type": {
+          "type": "string"
+        },
+        "canCompleteHumanWait": {
+          "type": "boolean"
+        },
+        "canSignal": {
+          "type": "boolean"
+        },
+        "checkpoints": {
+          "type": "array"
+        },
+        "checkpoints[]": {
+          "type": "object"
+        },
+        "checkpoints[].attempt": {
+          "type": "number"
+        },
+        "checkpoints[].createdAt": {
+          "type": "string"
+        },
+        "checkpoints[].fenceToken": {
+          "type": "string"
+        },
+        "checkpoints[].name": {
+          "type": "string"
+        },
+        "checkpoints[].value": {
+          "type": "unknown"
+        },
+        "checkpoints[].workerId": {
+          "type": "string"
+        },
+        "childLineage": {
+          "type": "object"
+        },
+        "childLineage.records": {
+          "type": "array"
+        },
+        "childLineage.records[]": {
+          "type": "object"
+        },
+        "childLineage.records[].childTaskId": {
+          "type": "string"
+        },
+        "childLineage.records[].createdAt": {
+          "type": "string"
+        },
+        "childLineage.records[].error": {
+          "type": "unknown"
+        },
+        "childLineage.records[].joinedAt": {
+          "type": "null|string"
+        },
+        "childLineage.records[].name": {
+          "type": "string"
+        },
+        "childLineage.records[].outcomeState": {
+          "type": "null|unknown"
+        },
+        "childLineage.records[].parentTaskId": {
+          "type": "string"
+        },
+        "childLineage.records[].type": {
+          "type": "string"
+        },
+        "childLineage.truncated": {
+          "type": "boolean"
+        },
+        "concurrencyPolicy": {
+          "type": "null|object"
+        },
+        "concurrencyPolicy.active": {
+          "type": "number"
+        },
+        "concurrencyPolicy.available": {
+          "type": "number"
+        },
+        "concurrencyPolicy.blockedReady": {
+          "type": "number"
+        },
+        "concurrencyPolicy.highestKeyActive": {
+          "type": "number"
+        },
+        "concurrencyPolicy.maxActive": {
+          "type": "number"
+        },
+        "concurrencyPolicy.maxActivePerKey": {
+          "type": "null|number"
+        },
+        "concurrencyPolicy.namespace": {
+          "type": "string"
+        },
+        "concurrencyPolicy.saturatedKeys": {
+          "type": "number"
+        },
+        "concurrencyPolicy.utilizationKnown": {
+          "type": "boolean"
+        },
+        "current": {
+          "type": "object"
+        },
+        "current.error": {
+          "type": "unknown"
+        },
+        "current.outcome": {
+          "type": "null|object"
+        },
+        "current.outcome.attempt": {
+          "type": "number"
+        },
+        "current.outcome.error": {
+          "type": "unknown"
+        },
+        "current.outcome.finishedAt": {
+          "type": "string"
+        },
+        "current.outcome.result": {
+          "type": "unknown"
+        },
+        "current.outcome.state": {
+          "type": "string"
+        },
+        "current.result": {
+          "type": "unknown"
+        },
+        "current.runtime": {
+          "type": "null|object"
+        },
+        "current.runtime.acquiredAt": {
+          "type": "null|string"
+        },
+        "current.runtime.attempt": {
+          "type": "number"
+        },
+        "current.runtime.attemptStartedAt": {
+          "type": "null|string"
+        },
+        "current.runtime.attemptTimeoutAt": {
+          "type": "null|string"
+        },
+        "current.runtime.cancellation": {
+          "type": "null|object"
+        },
+        "current.runtime.cancellation.reason": {
+          "type": "null|string"
+        },
+        "current.runtime.cancellation.requestedAt": {
+          "type": "string"
+        },
+        "current.runtime.cancellation.requestedBy": {
+          "type": "null|string"
+        },
+        "current.runtime.error": {
+          "type": "unknown"
+        },
+        "current.runtime.expiresAt": {
+          "type": "null|string"
+        },
+        "current.runtime.fenceToken": {
+          "type": "string"
+        },
+        "current.runtime.heartbeatAt": {
+          "type": "null|string"
+        },
+        "current.runtime.readyAt": {
+          "type": "null|string"
+        },
+        "current.runtime.runAt": {
+          "type": "string"
+        },
+        "current.runtime.state": {
+          "type": "string"
+        },
+        "current.runtime.waitName": {
+          "type": "null|string"
+        },
+        "current.runtime.workerId": {
+          "type": "null|string"
+        },
+        "dependencyLineage": {
+          "type": "object"
+        },
+        "dependencyLineage.records": {
+          "type": "array"
+        },
+        "dependencyLineage.records[]": {
+          "type": "object"
+        },
+        "dependencyLineage.records[].createdAt": {
+          "type": "string"
+        },
+        "dependencyLineage.records[].dependentTaskId": {
+          "type": "string"
+        },
+        "dependencyLineage.records[].onCancellation": {
+          "type": "enum",
+          "enum": [
+            "cancel",
+            "fail",
+            "release"
+          ]
+        },
+        "dependencyLineage.records[].onFailure": {
+          "type": "enum",
+          "enum": [
+            "cancel",
+            "fail",
+            "release"
+          ]
+        },
+        "dependencyLineage.records[].onSuccess": {
+          "type": "enum",
+          "enum": [
+            "cancel",
+            "fail",
+            "release"
+          ]
+        },
+        "dependencyLineage.records[].prerequisiteTaskId": {
+          "type": "string"
+        },
+        "dependencyLineage.records[].releasedAt": {
+          "type": "null|string"
+        },
+        "dependencyLineage.records[].resolution": {
+          "type": "null|unknown"
+        },
+        "dependencyLineage.truncated": {
+          "type": "boolean"
+        },
+        "durability": {
+          "type": "null|object"
+        },
+        "durability.description": {
+          "type": "string"
+        },
+        "durability.label": {
+          "type": "string"
+        },
+        "durability.persistentFailure": {
+          "type": "null|object"
+        },
+        "durability.persistentFailure.afterStepIndex": {
+          "type": "number"
+        },
+        "durability.persistentFailure.afterStepName": {
+          "type": "string"
+        },
+        "durability.persistentFailure.beforeStepName": {
+          "type": "string"
+        },
+        "durability.persistentFailure.reason": {
+          "type": "string"
+        },
+        "durability.scenario": {
+          "type": "string"
+        },
+        "durability.source": {
+          "type": "string"
+        },
+        "durability.steps": {
+          "type": "array"
+        },
+        "durability.steps[]": {
+          "type": "object"
+        },
+        "durability.steps[].description": {
+          "type": "string"
+        },
+        "durability.steps[].label": {
+          "type": "string"
+        },
+        "durability.steps[].name": {
+          "type": "string"
+        },
+        "events": {
+          "type": "array"
+        },
+        "events[]": {
+          "type": "object"
+        },
+        "events[].attempt": {
+          "type": "null|number"
+        },
+        "events[].details": {
+          "type": "unknown"
+        },
+        "events[].id": {
+          "type": "string"
+        },
+        "events[].occurredAt": {
+          "type": "string"
+        },
+        "events[].type": {
+          "type": "string"
+        },
+        "humanWait": {
+          "type": "null|object"
+        },
+        "humanWait.context": {
+          "type": "unknown"
+        },
+        "humanWait.deadlineAt": {
+          "type": "string"
+        },
+        "humanWait.name": {
+          "type": "string"
+        },
+        "identity": {
+          "type": "object"
+        },
+        "identity.blockedReason": {
+          "type": "null|unknown"
+        },
+        "identity.concurrencyKey": {
+          "type": "null|string"
+        },
+        "identity.createdAt": {
+          "type": "string"
+        },
+        "identity.deadlineAt": {
+          "type": "null|string"
+        },
+        "identity.dependencyPolicy": {
+          "type": "null|object"
+        },
+        "identity.dependencyPolicy.onCancellation": {
+          "type": "enum",
+          "enum": [
+            "cancel",
+            "fail",
+            "release"
+          ]
+        },
+        "identity.dependencyPolicy.onFailure": {
+          "type": "enum",
+          "enum": [
+            "cancel",
+            "fail",
+            "release"
+          ]
+        },
+        "identity.dependencyPolicy.onSuccess": {
+          "type": "enum",
+          "enum": [
+            "cancel",
+            "fail",
+            "release"
+          ]
+        },
+        "identity.dependencyReleasedAt": {
+          "type": "null|string"
+        },
+        "identity.executionTimeoutMs": {
+          "type": "null|number"
+        },
+        "identity.id": {
+          "type": "string"
+        },
+        "identity.maxAttempts": {
+          "type": "number"
+        },
+        "identity.prerequisiteTaskId": {
+          "type": "null|string"
+        },
+        "identity.prerequisiteTaskIds": {
+          "type": "array"
+        },
+        "identity.prerequisiteTaskIds[]": {
+          "type": "string"
+        },
+        "identity.priority": {
+          "type": "number"
+        },
+        "identity.queue": {
+          "type": "string"
+        },
+        "identity.retryPolicy": {
+          "type": "null|object"
+        },
+        "identity.retryPolicy.baseDelayMs": {
+          "type": "number"
+        },
+        "identity.retryPolicy.delayMs": {
+          "type": "number"
+        },
+        "identity.retryPolicy.initialDelayMs": {
+          "type": "number"
+        },
+        "identity.retryPolicy.maxDelayMs": {
+          "type": "number"
+        },
+        "identity.retryPolicy.multiplier": {
+          "type": "number"
+        },
+        "identity.retryPolicy.type": {
+          "type": "enum",
+          "enum": [
+            "fixed"
+          ]
+        },
+        "identity.state": {
+          "type": "string"
+        },
+        "identity.type": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "unknown"
+        },
+        "progress": {
+          "type": "null|object"
+        },
+        "progress.attempt": {
+          "type": "number"
+        },
+        "progress.createdAt": {
+          "type": "string"
+        },
+        "progress.fenceToken": {
+          "type": "string"
+        },
+        "progress.revision": {
+          "type": "string"
+        },
+        "progress.updatedAt": {
+          "type": "string"
+        },
+        "progress.value": {
+          "type": "unknown"
+        },
+        "progress.workerId": {
+          "type": "string"
+        },
+        "redriveLineage": {
+          "type": "object"
+        },
+        "redriveLineage.records": {
+          "type": "array"
+        },
+        "redriveLineage.records[]": {
+          "type": "object"
+        },
+        "redriveLineage.records[].reason": {
+          "type": "string"
+        },
+        "redriveLineage.records[].requestIdDigest": {
+          "type": "string"
+        },
+        "redriveLineage.records[].requestIdLength": {
+          "type": "number"
+        },
+        "redriveLineage.records[].requestIdPreview": {
+          "type": "string"
+        },
+        "redriveLineage.records[].requestedAt": {
+          "type": "string"
+        },
+        "redriveLineage.records[].requestedBy": {
+          "type": "string"
+        },
+        "redriveLineage.records[].sourceState": {
+          "type": "enum",
+          "enum": [
+            "failed"
+          ]
+        },
+        "redriveLineage.records[].sourceTaskId": {
+          "type": "string"
+        },
+        "redriveLineage.records[].targetInitialState": {
+          "type": "enum",
+          "enum": [
+            "ready"
+          ]
+        },
+        "redriveLineage.records[].targetTaskId": {
+          "type": "string"
+        },
+        "redriveLineage.truncated": {
+          "type": "boolean"
+        },
+        "signalWait": {
+          "type": "null|object"
+        },
+        "signalWait.deadlineAt": {
+          "type": "string"
+        },
+        "signalWait.name": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array"
+        },
+        "tags[]": {
+          "type": "string"
+        },
+        "waits": {
+          "type": "array"
+        },
+        "waits[]": {
+          "type": "object"
+        },
+        "waits[].attempt": {
+          "type": "number"
+        },
+        "waits[].createdAt": {
+          "type": "string"
+        },
+        "waits[].durationMs": {
+          "type": "null|number"
+        },
+        "waits[].fenceToken": {
+          "type": "string"
+        },
+        "waits[].mode": {
+          "type": "enum",
+          "enum": [
+            "absolute",
+            "relative"
+          ]
+        },
+        "waits[].name": {
+          "type": "string"
+        },
+        "waits[].requestedWakeAt": {
+          "type": "null|string"
+        },
+        "waits[].wakeAt": {
+          "type": "string"
+        },
+        "waits[].workerId": {
+          "type": "string"
+        }
+      }
+    },
     "taskFacets": {
       "mutation": false,
       "request": {},
       "response": {
-        "jobTypes": {
-          "type": "array"
-        },
-        "jobTypes[]": {
-          "type": "string"
-        },
         "queues": {
           "type": "array"
         },
@@ -3407,6 +3401,12 @@
           "type": "array"
         },
         "tags[]": {
+          "type": "string"
+        },
+        "taskTypes": {
+          "type": "array"
+        },
+        "taskTypes[]": {
           "type": "string"
         },
         "workers": {
@@ -3434,10 +3434,6 @@
             "scheduled",
             "waiting"
           ],
-          "required": false
-        },
-        "jobType": {
-          "type": "null|string",
           "required": false
         },
         "page": {
@@ -3481,6 +3477,10 @@
           "type": "string",
           "required": false
         },
+        "taskType": {
+          "type": "null|string",
+          "required": false
+        },
         "worker": {
           "type": "null|string",
           "required": false
@@ -3507,172 +3507,6 @@
             "scheduled",
             "waiting"
           ]
-        },
-        "jobType": {
-          "type": "null|string"
-        },
-        "jobs": {
-          "type": "array"
-        },
-        "jobs[]": {
-          "type": "object"
-        },
-        "jobs[].attempt": {
-          "type": "number"
-        },
-        "jobs[].blockedReason": {
-          "type": "null|unknown"
-        },
-        "jobs[].cancellation": {
-          "type": "null|object"
-        },
-        "jobs[].cancellation.reason": {
-          "type": "null|string"
-        },
-        "jobs[].cancellation.requestedAt": {
-          "type": "string"
-        },
-        "jobs[].cancellation.requestedBy": {
-          "type": "null|string"
-        },
-        "jobs[].createdAt": {
-          "type": "string"
-        },
-        "jobs[].deadlineAt": {
-          "type": "null|string"
-        },
-        "jobs[].durability": {
-          "type": "null|object"
-        },
-        "jobs[].durability.completedSteps": {
-          "type": "number"
-        },
-        "jobs[].durability.totalSteps": {
-          "type": "number"
-        },
-        "jobs[].enqueueMode": {
-          "type": "null|unknown"
-        },
-        "jobs[].errorMessage": {
-          "type": "null|string"
-        },
-        "jobs[].executionTimeoutMs": {
-          "type": "null|number"
-        },
-        "jobs[].finishedAt": {
-          "type": "null|string"
-        },
-        "jobs[].humanWait": {
-          "type": "null|object"
-        },
-        "jobs[].humanWait.context": {
-          "type": "unknown"
-        },
-        "jobs[].humanWait.deadlineAt": {
-          "type": "string"
-        },
-        "jobs[].humanWait.name": {
-          "type": "string"
-        },
-        "jobs[].id": {
-          "type": "string"
-        },
-        "jobs[].keyed": {
-          "type": "boolean"
-        },
-        "jobs[].lastWorkerId": {
-          "type": "null|string"
-        },
-        "jobs[].maxAttempts": {
-          "type": "number"
-        },
-        "jobs[].prerequisiteJobIds": {
-          "type": "array"
-        },
-        "jobs[].prerequisiteJobIds[]": {
-          "type": "string"
-        },
-        "jobs[].priority": {
-          "type": "number"
-        },
-        "jobs[].queue": {
-          "type": "string"
-        },
-        "jobs[].retryPolicy": {
-          "type": "null|object"
-        },
-        "jobs[].retryPolicy.baseDelayMs": {
-          "type": "number"
-        },
-        "jobs[].retryPolicy.delayMs": {
-          "type": "number"
-        },
-        "jobs[].retryPolicy.initialDelayMs": {
-          "type": "number"
-        },
-        "jobs[].retryPolicy.maxDelayMs": {
-          "type": "number"
-        },
-        "jobs[].retryPolicy.multiplier": {
-          "type": "number"
-        },
-        "jobs[].retryPolicy.type": {
-          "type": "enum",
-          "enum": [
-            "fixed"
-          ]
-        },
-        "jobs[].runAt": {
-          "type": "null|string"
-        },
-        "jobs[].signalWait": {
-          "type": "null|object"
-        },
-        "jobs[].signalWait.deadlineAt": {
-          "type": "string"
-        },
-        "jobs[].signalWait.name": {
-          "type": "string"
-        },
-        "jobs[].state": {
-          "type": "string"
-        },
-        "jobs[].tags": {
-          "type": "array"
-        },
-        "jobs[].tags[]": {
-          "type": "string"
-        },
-        "jobs[].type": {
-          "type": "string"
-        },
-        "jobs[].updatedAt": {
-          "type": "string"
-        },
-        "jobs[].wait": {
-          "type": "null|object"
-        },
-        "jobs[].wait.mode": {
-          "type": "enum",
-          "enum": [
-            "absolute",
-            "relative"
-          ]
-        },
-        "jobs[].wait.name": {
-          "type": "string"
-        },
-        "jobs[].wait.wakeAt": {
-          "type": "string"
-        },
-        "jobs[].waitName": {
-          "type": "null|string"
-        },
-        "jobs[].wakeAt": {
-          "type": "null|string"
-        },
-        "jobs[].workerId": {
-          "type": "null|string"
         },
         "page": {
           "type": "number"
@@ -3701,6 +3535,172 @@
         },
         "tags[]": {
           "type": "string"
+        },
+        "taskType": {
+          "type": "null|string"
+        },
+        "tasks": {
+          "type": "array"
+        },
+        "tasks[]": {
+          "type": "object"
+        },
+        "tasks[].attempt": {
+          "type": "number"
+        },
+        "tasks[].blockedReason": {
+          "type": "null|unknown"
+        },
+        "tasks[].cancellation": {
+          "type": "null|object"
+        },
+        "tasks[].cancellation.reason": {
+          "type": "null|string"
+        },
+        "tasks[].cancellation.requestedAt": {
+          "type": "string"
+        },
+        "tasks[].cancellation.requestedBy": {
+          "type": "null|string"
+        },
+        "tasks[].createdAt": {
+          "type": "string"
+        },
+        "tasks[].deadlineAt": {
+          "type": "null|string"
+        },
+        "tasks[].durability": {
+          "type": "null|object"
+        },
+        "tasks[].durability.completedSteps": {
+          "type": "number"
+        },
+        "tasks[].durability.totalSteps": {
+          "type": "number"
+        },
+        "tasks[].enqueueMode": {
+          "type": "null|unknown"
+        },
+        "tasks[].errorMessage": {
+          "type": "null|string"
+        },
+        "tasks[].executionTimeoutMs": {
+          "type": "null|number"
+        },
+        "tasks[].finishedAt": {
+          "type": "null|string"
+        },
+        "tasks[].humanWait": {
+          "type": "null|object"
+        },
+        "tasks[].humanWait.context": {
+          "type": "unknown"
+        },
+        "tasks[].humanWait.deadlineAt": {
+          "type": "string"
+        },
+        "tasks[].humanWait.name": {
+          "type": "string"
+        },
+        "tasks[].id": {
+          "type": "string"
+        },
+        "tasks[].keyed": {
+          "type": "boolean"
+        },
+        "tasks[].lastWorkerId": {
+          "type": "null|string"
+        },
+        "tasks[].maxAttempts": {
+          "type": "number"
+        },
+        "tasks[].prerequisiteTaskIds": {
+          "type": "array"
+        },
+        "tasks[].prerequisiteTaskIds[]": {
+          "type": "string"
+        },
+        "tasks[].priority": {
+          "type": "number"
+        },
+        "tasks[].queue": {
+          "type": "string"
+        },
+        "tasks[].retryPolicy": {
+          "type": "null|object"
+        },
+        "tasks[].retryPolicy.baseDelayMs": {
+          "type": "number"
+        },
+        "tasks[].retryPolicy.delayMs": {
+          "type": "number"
+        },
+        "tasks[].retryPolicy.initialDelayMs": {
+          "type": "number"
+        },
+        "tasks[].retryPolicy.maxDelayMs": {
+          "type": "number"
+        },
+        "tasks[].retryPolicy.multiplier": {
+          "type": "number"
+        },
+        "tasks[].retryPolicy.type": {
+          "type": "enum",
+          "enum": [
+            "fixed"
+          ]
+        },
+        "tasks[].runAt": {
+          "type": "null|string"
+        },
+        "tasks[].signalWait": {
+          "type": "null|object"
+        },
+        "tasks[].signalWait.deadlineAt": {
+          "type": "string"
+        },
+        "tasks[].signalWait.name": {
+          "type": "string"
+        },
+        "tasks[].state": {
+          "type": "string"
+        },
+        "tasks[].tags": {
+          "type": "array"
+        },
+        "tasks[].tags[]": {
+          "type": "string"
+        },
+        "tasks[].type": {
+          "type": "string"
+        },
+        "tasks[].updatedAt": {
+          "type": "string"
+        },
+        "tasks[].wait": {
+          "type": "null|object"
+        },
+        "tasks[].wait.mode": {
+          "type": "enum",
+          "enum": [
+            "absolute",
+            "relative"
+          ]
+        },
+        "tasks[].wait.name": {
+          "type": "string"
+        },
+        "tasks[].wait.wakeAt": {
+          "type": "string"
+        },
+        "tasks[].waitName": {
+          "type": "null|string"
+        },
+        "tasks[].wakeAt": {
+          "type": "null|string"
+        },
+        "tasks[].workerId": {
+          "type": "null|string"
         },
         "total": {
           "type": "number"
@@ -3761,10 +3761,6 @@
           ],
           "required": false
         },
-        "jobType": {
-          "type": "null|string",
-          "required": false
-        },
         "pageSize": {
           "type": "number",
           "enum": [
@@ -3802,6 +3798,10 @@
           "type": "string",
           "required": false
         },
+        "taskType": {
+          "type": "null|string",
+          "required": false
+        },
         "worker": {
           "type": "null|string",
           "required": false
@@ -3828,172 +3828,6 @@
             "scheduled",
             "waiting"
           ]
-        },
-        "jobType": {
-          "type": "null|string"
-        },
-        "jobs": {
-          "type": "array"
-        },
-        "jobs[]": {
-          "type": "object"
-        },
-        "jobs[].attempt": {
-          "type": "number"
-        },
-        "jobs[].blockedReason": {
-          "type": "null|unknown"
-        },
-        "jobs[].cancellation": {
-          "type": "null|object"
-        },
-        "jobs[].cancellation.reason": {
-          "type": "null|string"
-        },
-        "jobs[].cancellation.requestedAt": {
-          "type": "string"
-        },
-        "jobs[].cancellation.requestedBy": {
-          "type": "null|string"
-        },
-        "jobs[].createdAt": {
-          "type": "string"
-        },
-        "jobs[].deadlineAt": {
-          "type": "null|string"
-        },
-        "jobs[].durability": {
-          "type": "null|object"
-        },
-        "jobs[].durability.completedSteps": {
-          "type": "number"
-        },
-        "jobs[].durability.totalSteps": {
-          "type": "number"
-        },
-        "jobs[].enqueueMode": {
-          "type": "null|unknown"
-        },
-        "jobs[].errorMessage": {
-          "type": "null|string"
-        },
-        "jobs[].executionTimeoutMs": {
-          "type": "null|number"
-        },
-        "jobs[].finishedAt": {
-          "type": "null|string"
-        },
-        "jobs[].humanWait": {
-          "type": "null|object"
-        },
-        "jobs[].humanWait.context": {
-          "type": "unknown"
-        },
-        "jobs[].humanWait.deadlineAt": {
-          "type": "string"
-        },
-        "jobs[].humanWait.name": {
-          "type": "string"
-        },
-        "jobs[].id": {
-          "type": "string"
-        },
-        "jobs[].keyed": {
-          "type": "boolean"
-        },
-        "jobs[].lastWorkerId": {
-          "type": "null|string"
-        },
-        "jobs[].maxAttempts": {
-          "type": "number"
-        },
-        "jobs[].prerequisiteJobIds": {
-          "type": "array"
-        },
-        "jobs[].prerequisiteJobIds[]": {
-          "type": "string"
-        },
-        "jobs[].priority": {
-          "type": "number"
-        },
-        "jobs[].queue": {
-          "type": "string"
-        },
-        "jobs[].retryPolicy": {
-          "type": "null|object"
-        },
-        "jobs[].retryPolicy.baseDelayMs": {
-          "type": "number"
-        },
-        "jobs[].retryPolicy.delayMs": {
-          "type": "number"
-        },
-        "jobs[].retryPolicy.initialDelayMs": {
-          "type": "number"
-        },
-        "jobs[].retryPolicy.maxDelayMs": {
-          "type": "number"
-        },
-        "jobs[].retryPolicy.multiplier": {
-          "type": "number"
-        },
-        "jobs[].retryPolicy.type": {
-          "type": "enum",
-          "enum": [
-            "fixed"
-          ]
-        },
-        "jobs[].runAt": {
-          "type": "null|string"
-        },
-        "jobs[].signalWait": {
-          "type": "null|object"
-        },
-        "jobs[].signalWait.deadlineAt": {
-          "type": "string"
-        },
-        "jobs[].signalWait.name": {
-          "type": "string"
-        },
-        "jobs[].state": {
-          "type": "string"
-        },
-        "jobs[].tags": {
-          "type": "array"
-        },
-        "jobs[].tags[]": {
-          "type": "string"
-        },
-        "jobs[].type": {
-          "type": "string"
-        },
-        "jobs[].updatedAt": {
-          "type": "string"
-        },
-        "jobs[].wait": {
-          "type": "null|object"
-        },
-        "jobs[].wait.mode": {
-          "type": "enum",
-          "enum": [
-            "absolute",
-            "relative"
-          ]
-        },
-        "jobs[].wait.name": {
-          "type": "string"
-        },
-        "jobs[].wait.wakeAt": {
-          "type": "string"
-        },
-        "jobs[].waitName": {
-          "type": "null|string"
-        },
-        "jobs[].wakeAt": {
-          "type": "null|string"
-        },
-        "jobs[].workerId": {
-          "type": "null|string"
         },
         "nextCursor": {
           "type": "null|object"
@@ -4047,6 +3881,172 @@
         "tags[]": {
           "type": "string"
         },
+        "taskType": {
+          "type": "null|string"
+        },
+        "tasks": {
+          "type": "array"
+        },
+        "tasks[]": {
+          "type": "object"
+        },
+        "tasks[].attempt": {
+          "type": "number"
+        },
+        "tasks[].blockedReason": {
+          "type": "null|unknown"
+        },
+        "tasks[].cancellation": {
+          "type": "null|object"
+        },
+        "tasks[].cancellation.reason": {
+          "type": "null|string"
+        },
+        "tasks[].cancellation.requestedAt": {
+          "type": "string"
+        },
+        "tasks[].cancellation.requestedBy": {
+          "type": "null|string"
+        },
+        "tasks[].createdAt": {
+          "type": "string"
+        },
+        "tasks[].deadlineAt": {
+          "type": "null|string"
+        },
+        "tasks[].durability": {
+          "type": "null|object"
+        },
+        "tasks[].durability.completedSteps": {
+          "type": "number"
+        },
+        "tasks[].durability.totalSteps": {
+          "type": "number"
+        },
+        "tasks[].enqueueMode": {
+          "type": "null|unknown"
+        },
+        "tasks[].errorMessage": {
+          "type": "null|string"
+        },
+        "tasks[].executionTimeoutMs": {
+          "type": "null|number"
+        },
+        "tasks[].finishedAt": {
+          "type": "null|string"
+        },
+        "tasks[].humanWait": {
+          "type": "null|object"
+        },
+        "tasks[].humanWait.context": {
+          "type": "unknown"
+        },
+        "tasks[].humanWait.deadlineAt": {
+          "type": "string"
+        },
+        "tasks[].humanWait.name": {
+          "type": "string"
+        },
+        "tasks[].id": {
+          "type": "string"
+        },
+        "tasks[].keyed": {
+          "type": "boolean"
+        },
+        "tasks[].lastWorkerId": {
+          "type": "null|string"
+        },
+        "tasks[].maxAttempts": {
+          "type": "number"
+        },
+        "tasks[].prerequisiteTaskIds": {
+          "type": "array"
+        },
+        "tasks[].prerequisiteTaskIds[]": {
+          "type": "string"
+        },
+        "tasks[].priority": {
+          "type": "number"
+        },
+        "tasks[].queue": {
+          "type": "string"
+        },
+        "tasks[].retryPolicy": {
+          "type": "null|object"
+        },
+        "tasks[].retryPolicy.baseDelayMs": {
+          "type": "number"
+        },
+        "tasks[].retryPolicy.delayMs": {
+          "type": "number"
+        },
+        "tasks[].retryPolicy.initialDelayMs": {
+          "type": "number"
+        },
+        "tasks[].retryPolicy.maxDelayMs": {
+          "type": "number"
+        },
+        "tasks[].retryPolicy.multiplier": {
+          "type": "number"
+        },
+        "tasks[].retryPolicy.type": {
+          "type": "enum",
+          "enum": [
+            "fixed"
+          ]
+        },
+        "tasks[].runAt": {
+          "type": "null|string"
+        },
+        "tasks[].signalWait": {
+          "type": "null|object"
+        },
+        "tasks[].signalWait.deadlineAt": {
+          "type": "string"
+        },
+        "tasks[].signalWait.name": {
+          "type": "string"
+        },
+        "tasks[].state": {
+          "type": "string"
+        },
+        "tasks[].tags": {
+          "type": "array"
+        },
+        "tasks[].tags[]": {
+          "type": "string"
+        },
+        "tasks[].type": {
+          "type": "string"
+        },
+        "tasks[].updatedAt": {
+          "type": "string"
+        },
+        "tasks[].wait": {
+          "type": "null|object"
+        },
+        "tasks[].wait.mode": {
+          "type": "enum",
+          "enum": [
+            "absolute",
+            "relative"
+          ]
+        },
+        "tasks[].wait.name": {
+          "type": "string"
+        },
+        "tasks[].wait.wakeAt": {
+          "type": "string"
+        },
+        "tasks[].waitName": {
+          "type": "null|string"
+        },
+        "tasks[].wakeAt": {
+          "type": "null|string"
+        },
+        "tasks[].workerId": {
+          "type": "null|string"
+        },
         "total": {
           "type": "null|number"
         },
@@ -4071,11 +4071,11 @@
         "workers[]": {
           "type": "object"
         },
-        "workers[].activeJobs": {
-          "type": "number"
-        },
         "workers[].activeSlots": {
           "type": "null|number"
+        },
+        "workers[].activeTasks": {
+          "type": "number"
         },
         "workers[].averageExecutionMs": {
           "type": "null|number"

@@ -54,8 +54,8 @@ const { PrismaClient } = require("@prisma/client") as {
   } & PrismaExecutor;
 };
 
-const statement = "SELECT $1::text AS job_id, $2::int AS attempt";
-const values = ["job-1", 2] as const;
+const statement = "SELECT $1::text AS task_id, $2::int AS attempt";
+const values = ["task-1", 2] as const;
 
 type Execute = (text: string, parameters: readonly unknown[]) => Promise<QueryResultRow[]>;
 
@@ -191,7 +191,7 @@ const queryableProviders: QueryableProvider[] = [
 
 describe.each(queryableProviders)("$name queryable contract", (provider) => {
   it("preserves statements, positional values, row order, and result metadata", async () => {
-    const execute = vi.fn<Execute>(async () => [{ job_id: "job-1" }, { job_id: "job-2" }]);
+    const execute = vi.fn<Execute>(async () => [{ task_id: "task-1" }, { task_id: "task-2" }]);
 
     const result = await provider.queryable(execute).query(statement, values);
 
@@ -201,7 +201,7 @@ describe.each(queryableProviders)("$name queryable contract", (provider) => {
       rowCount: 2,
       oid: 0,
       fields: [],
-      rows: [{ job_id: "job-1" }, { job_id: "job-2" }],
+      rows: [{ task_id: "task-1" }, { task_id: "task-2" }],
     });
   });
 
@@ -266,7 +266,7 @@ describe.each(queryableProviders)("$name queryable contract", (provider) => {
     const execute = vi.fn<Execute>(async () => [
       {
         ordinal: 1,
-        job_id: "00000000-0000-4000-8000-000000000001",
+        task_id: "00000000-0000-4000-8000-000000000001",
         outcome: "accepted",
       },
     ]);
@@ -409,8 +409,8 @@ describe.each(integrationProviders)("$name built-package conformance", (provider
     expect(
       (await pool.query("SELECT provider, value FROM public.adapter_conformance")).rows,
     ).toEqual([{ provider: provider.name, value: "committed" }]);
-    expect((await pool.query("SELECT job_type FROM workhorse.job")).rows).toEqual([
-      { job_type: `${provider.name}.transaction.commit` },
+    expect((await pool.query("SELECT task_type FROM workhorse.task")).rows).toEqual([
+      { task_type: `${provider.name}.transaction.commit` },
     ]);
   });
 
@@ -424,22 +424,22 @@ describe.each(integrationProviders)("$name built-package conformance", (provider
     expect(new Set(ids).size).toBe(6);
   });
 
-  it("returns Date instances for every job snapshot timestamp", async () => {
+  it("returns Date instances for every task snapshot timestamp", async () => {
     const workerId = `${provider.name}-snapshot-worker`;
-    const jobId = await provider.adapter.queue.enqueue(
+    const taskId = await provider.adapter.queue.enqueue(
       `${provider.name}.snapshot`,
       { provider: provider.name },
       { deadline: new Date(Date.now() + 60_000) },
     );
     const claimed = await provider.adapter.queue.claim(workerId);
-    expect(claimed?.id).toBe(jobId);
+    expect(claimed?.id).toBe(taskId);
     await provider.adapter.queue.updateProgress(claimed!, workerId, { completed: 1 });
-    await provider.adapter.queue.cancel(jobId, {
+    await provider.adapter.queue.cancel(taskId, {
       requestedBy: `${provider.name}-operator`,
       reason: "timestamp conformance",
     });
 
-    const snapshot = await provider.adapter.admin.getJob(jobId);
+    const snapshot = await provider.adapter.admin.getTask(taskId);
 
     expect(snapshot).not.toBeNull();
     expect(snapshot!.deadlineAt).toBeInstanceOf(Date);
@@ -501,13 +501,13 @@ describe.each(integrationProviders)("$name built-package conformance", (provider
 
   it("preserves typed redrive replay conflicts through the provider wrapper", async () => {
     const type = `${provider.name}.redrive`;
-    const sourceJobId = await provider.adapter.queue.enqueue(
+    const sourceTaskId = await provider.adapter.queue.enqueue(
       type,
       { provider: provider.name },
       { maxAttempts: 1 },
     );
     const claimed = await provider.adapter.queue.claim(`${provider.name}-redrive-worker`);
-    expect(claimed?.id).toBe(sourceJobId);
+    expect(claimed?.id).toBe(sourceTaskId);
     expect(
       await provider.adapter.queue.fail(
         claimed!,
@@ -521,10 +521,10 @@ describe.each(integrationProviders)("$name built-package conformance", (provider
       requestId: `${provider.name}-redrive-request`,
     };
 
-    await provider.adapter.admin.redrive(sourceJobId, request);
+    await provider.adapter.admin.redrive(sourceTaskId, request);
 
     await expect(
-      provider.adapter.admin.redrive(sourceJobId, { ...request, reason: "different" }),
+      provider.adapter.admin.redrive(sourceTaskId, { ...request, reason: "different" }),
     ).rejects.toBeInstanceOf(RedriveIdempotencyConflictError);
   });
 });

@@ -2,23 +2,23 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { RedriveIdempotencyConflictError } from "../src/index.js";
-import { readDashboardJobDetail } from "../../dashboard-server/src/server/read-model.js";
+import { readDashboardTaskDetail } from "../../dashboard-server/src/server/read-model.js";
 import { dashboardDatabase } from "../../dashboard-server/src/server/sql.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { createFailedJob, pool, queue, admin } = createIntegrationTestContext(import.meta.url);
+const { createFailedTask, pool, queue, admin } = createIntegrationTestContext(import.meta.url);
 
 describe("operator reads", () => {
-  async function projectionXmin(jobId: string): Promise<string | undefined> {
+  async function projectionXmin(taskId: string): Promise<string | undefined> {
     return (
       await pool.query<{ xmin: string }>(
-        "SELECT xmin::text AS xmin FROM workhorse.job_query WHERE job_id = $1",
-        [jobId],
+        "SELECT xmin::text AS xmin FROM workhorse.task_query WHERE task_id = $1",
+        [taskId],
       )
     ).rows[0]?.xmin;
   }
 
-  it("preserves priority when a failed job is redriven", async () => {
+  it("preserves priority when a failed task is redriven", async () => {
     const queueName = `priority-redrive-${randomUUID()}`;
     const source = await queue.enqueue("priority-source", null, {
       queue: queueName,
@@ -31,7 +31,7 @@ describe("operator reads", () => {
       queue.fail(claimed!, "priority-redrive-worker", new Error("terminal priority")),
     ).resolves.toBe("failed");
     await expect(admin.listDeadLetters({ queue: queueName })).resolves.toMatchObject({
-      items: [expect.objectContaining({ jobId: source, priority: 85 })],
+      items: [expect.objectContaining({ taskId: source, priority: 85 })],
     });
 
     const redrive = await admin.redrive(source, {
@@ -39,27 +39,27 @@ describe("operator reads", () => {
       reason: "preserve dispatch rank",
       requestId: randomUUID(),
     });
-    await expect(admin.getJob(redrive.targetJobId!)).resolves.toMatchObject({
+    await expect(admin.getTask(redrive.targetTaskId!)).resolves.toMatchObject({
       priority: 85,
       state: "ready",
     });
   });
 
   it("lists only failed outcomes with filters, a stable cursor, and a partial cold index", async () => {
-    const smtp = await createFailedJob({
+    const smtp = await createFailedTask({
       type: "email",
       queueName: "mail",
       payload: { recipient: "a@example.test" },
       tags: ["urgent", "tenant-a"],
       errorName: "SmtpError",
     });
-    const timeout = await createFailedJob({
+    const timeout = await createFailedTask({
       type: "email",
       queueName: "mail",
       tags: ["urgent", "tenant-b"],
       errorName: "TimeoutError",
     });
-    const other = await createFailedJob({
+    const other = await createFailedTask({
       type: "report",
       queueName: "analytics",
       tags: ["urgent"],
@@ -74,19 +74,19 @@ describe("operator reads", () => {
 
     const base = new Date(Date.now() - 60_000);
     await pool.query(
-      `UPDATE workhorse.job_outcome SET finished_at = CASE job_id
+      `UPDATE workhorse.task_outcome SET finished_at = CASE task_id
          WHEN $1 THEN $4::timestamptz - interval '3 hours'
          WHEN $2 THEN $4::timestamptz - interval '2 hours'
          WHEN $3 THEN $4::timestamptz - interval '1 hour'
          ELSE $4::timestamptz END
-       WHERE job_id = ANY($5::uuid[])`,
+       WHERE task_id = ANY($5::uuid[])`,
       [smtp, timeout, other, base, [smtp, timeout, other, succeeded]],
     );
 
     const first = await pool.query<{
-      job_id: string;
+      task_id: string;
       queue_name: string;
-      job_type: string;
+      task_type: string;
       tags: string[];
       error: { name: string };
       finished_at: Date;
@@ -102,36 +102,36 @@ describe("operator reads", () => {
     ]);
     expect(first.rows).toMatchObject([
       {
-        job_id: timeout,
+        task_id: timeout,
         queue_name: "mail",
-        job_type: "email",
+        task_type: "email",
         tags: ["urgent", "tenant-b"],
         error: { name: "TimeoutError" },
         redrive_count: 0,
       },
     ]);
-    const second = await pool.query<{ job_id: string }>(
-      `SELECT job_id FROM workhorse.list_dead_letters_v1($1, 10, $2, $3)`,
+    const second = await pool.query<{ task_id: string }>(
+      `SELECT task_id FROM workhorse.list_dead_letters_v1($1, 10, $2, $3)`,
       [JSON.stringify({ queue: "mail", tags: ["urgent"] }), first.rows[0]!.finished_at, timeout],
     );
-    expect(second.rows).toEqual([{ job_id: smtp }]);
-    const errorFiltered = await pool.query<{ job_id: string }>(
-      "SELECT job_id FROM workhorse.list_dead_letters_v1($1, 10, NULL, NULL)",
+    expect(second.rows).toEqual([{ task_id: smtp }]);
+    const errorFiltered = await pool.query<{ task_id: string }>(
+      "SELECT task_id FROM workhorse.list_dead_letters_v1($1, 10, NULL, NULL)",
       [JSON.stringify({ errorName: "SmtpError" })],
     );
-    expect(new Set(errorFiltered.rows.map((row) => row.job_id))).toEqual(new Set([other, smtp]));
-    expect(errorFiltered.rows.some((row) => row.job_id === succeeded)).toBe(false);
+    expect(new Set(errorFiltered.rows.map((row) => row.task_id))).toEqual(new Set([other, smtp]));
+    expect(errorFiltered.rows.some((row) => row.task_id === succeeded)).toBe(false);
 
     const index = await pool.query<{ indexdef: string }>(
       `SELECT indexdef FROM pg_indexes
-        WHERE schemaname = 'workhorse' AND indexname = 'job_outcome_failed_finished_idx'`,
+        WHERE schemaname = 'workhorse' AND indexname = 'task_outcome_failed_finished_idx'`,
     );
     expect(index.rows[0]!.indexdef).toMatch(
-      /finished_at DESC, job_id DESC.*WHERE \(state = 'failed'/,
+      /finished_at DESC, task_id DESC.*WHERE \(state = 'failed'/,
     );
     const dispatchIndexes = await pool.query<{ indexname: string }>(
       `SELECT indexname FROM pg_indexes
-        WHERE schemaname = 'workhorse' AND tablename = 'job_runtime'
+        WHERE schemaname = 'workhorse' AND tablename = 'task_runtime'
           AND indexdef ILIKE '%failed%'`,
     );
     expect(dispatchIndexes.rows).toEqual([]);
@@ -153,16 +153,16 @@ describe("operator reads", () => {
       reason: "verify concurrency key propagation",
       requestId: `keyed-redrive-${randomUUID()}`,
     });
-    await expect(admin.getJob(redrive.targetJobId!)).resolves.toMatchObject({
+    await expect(admin.getTask(redrive.targetTaskId!)).resolves.toMatchObject({
       concurrencyKey: "tenant-redrive",
     });
     await expect(admin.listDeadLetters({ queue: queueName })).resolves.toMatchObject({
-      items: [{ jobId: sourceId, concurrencyKey: "tenant-redrive" }],
+      items: [{ taskId: sourceId, concurrencyKey: "tenant-redrive" }],
     });
-    await expect(admin.listJobs({ queue: queueName })).resolves.toMatchObject({
+    await expect(admin.listTasks({ queue: queueName })).resolves.toMatchObject({
       items: expect.arrayContaining([
         expect.objectContaining({ id: sourceId, concurrencyKey: "tenant-redrive" }),
-        expect.objectContaining({ id: redrive.targetJobId, concurrencyKey: "tenant-redrive" }),
+        expect.objectContaining({ id: redrive.targetTaskId, concurrencyKey: "tenant-redrive" }),
       ]),
     });
   });
@@ -170,7 +170,7 @@ describe("operator reads", () => {
   it("redrives once with immutable source evidence, exact copy semantics, audit, replay, and safe conflict", async () => {
     const rawRequestId = "operator-secret-request-123456";
     const deadline = new Date(Date.now() + 86_400_000);
-    const source = await createFailedJob({
+    const source = await createFailedTask({
       type: "rebuild-search",
       queueName: "operations",
       payload: { tenant: 42, full: true },
@@ -181,27 +181,27 @@ describe("operator reads", () => {
       errorName: "SearchUnavailable",
     });
     await pool.query(
-      `INSERT INTO workhorse.job_checkpoint(
-         job_id, checkpoint_name, checkpoint_value, attempt, fence_token, worker_id
+      `INSERT INTO workhorse.task_checkpoint(
+         task_id, checkpoint_name, checkpoint_value, attempt, fence_token, worker_id
        ) VALUES ($1, 'source-only', '{"done":true}', 1, 1, 'fixture')`,
       [source],
     );
     await pool.query(
-      `INSERT INTO workhorse.job_wait(
-         job_id, wait_name, mode, duration_ms, wake_at, attempt, fence_token, worker_id, claimed_at
+      `INSERT INTO workhorse.task_wait(
+         task_id, wait_name, mode, duration_ms, wake_at, attempt, fence_token, worker_id, claimed_at
        ) VALUES ($1, 'source-wait', 'relative', 1000, clock_timestamp() + interval '1 second',
                  1, 1, 'fixture', clock_timestamp())`,
       [source],
     );
     const sourceBefore = await pool.query<{ outcome: Record<string, unknown> }>(
-      "SELECT to_jsonb(outcome) - 'history_through_at' AS outcome FROM workhorse.job_outcome outcome WHERE job_id = $1",
+      "SELECT to_jsonb(outcome) - 'history_through_at' AS outcome FROM workhorse.task_outcome outcome WHERE task_id = $1",
       [source],
     );
 
     const created = await pool.query<{
       status: string;
-      source_job_id: string;
-      target_job_id: string;
+      source_task_id: string;
+      target_task_id: string;
       source_state: string;
       target_state: string;
       requested_at: Date;
@@ -213,24 +213,24 @@ describe("operator reads", () => {
     ]);
     expect(created.rows[0]).toMatchObject({
       status: "redriven",
-      source_job_id: source,
+      source_task_id: source,
       source_state: "failed",
       target_state: "ready",
     });
-    const target = created.rows[0]!.target_job_id;
+    const target = created.rows[0]!.target_task_id;
     expect(target).not.toBe(source);
 
     const copied = await pool.query(
-      `SELECT job.queue_name, job.job_type, job.payload, job.tags, job.max_attempts,
-              job.retry_policy, job.deadline_at, job.execution_timeout_ms,
+      `SELECT task.queue_name, task.task_type, task.payload, task.tags, task.max_attempts,
+              task.retry_policy, task.deadline_at, task.execution_timeout_ms,
               runtime.state, runtime.current_attempt, runtime.deadline_at AS runtime_deadline_at
-         FROM workhorse.job job JOIN workhorse.job_runtime runtime ON runtime.job_id = job.id
-        WHERE job.id = $1`,
+         FROM workhorse.task task JOIN workhorse.task_runtime runtime ON runtime.task_id = task.id
+        WHERE task.id = $1`,
       [target],
     );
     expect(copied.rows[0]).toMatchObject({
       queue_name: "operations",
-      job_type: "rebuild-search",
+      task_type: "rebuild-search",
       payload: { tenant: 42, full: true },
       tags: ["tenant-42", "manual"],
       max_attempts: 1,
@@ -245,8 +245,8 @@ describe("operator reads", () => {
       (
         await pool.query(
           `SELECT count(*)::integer AS count FROM (
-             SELECT 1 FROM workhorse.job_checkpoint WHERE job_id = $1
-             UNION ALL SELECT 1 FROM workhorse.job_wait WHERE job_id = $1
+             SELECT 1 FROM workhorse.task_checkpoint WHERE task_id = $1
+             UNION ALL SELECT 1 FROM workhorse.task_wait WHERE task_id = $1
            ) durability`,
           [target],
         )
@@ -255,7 +255,7 @@ describe("operator reads", () => {
     expect(
       (
         await pool.query(
-          "SELECT to_jsonb(outcome) - 'history_through_at' AS outcome FROM workhorse.job_outcome outcome WHERE job_id = $1",
+          "SELECT to_jsonb(outcome) - 'history_through_at' AS outcome FROM workhorse.task_outcome outcome WHERE task_id = $1",
           [source],
         )
       ).rows[0],
@@ -263,7 +263,7 @@ describe("operator reads", () => {
     expect(
       (
         await pool.query(
-          "SELECT count(*)::integer AS count FROM workhorse.job_outcome WHERE job_id = $1",
+          "SELECT count(*)::integer AS count FROM workhorse.task_outcome WHERE task_id = $1",
           [target],
         )
       ).rows[0]!.count,
@@ -281,7 +281,7 @@ describe("operator reads", () => {
     }>(
       `SELECT requested_by, reason, request_id_preview, request_id_digest, request_id_length,
               source_state, target_initial_state, to_jsonb(redrive)::text AS row_text
-         FROM workhorse.job_redrive redrive WHERE source_job_id = $1`,
+         FROM workhorse.task_redrive redrive WHERE source_task_id = $1`,
       [source],
     );
     expect(audit.rows[0]).toMatchObject({
@@ -295,19 +295,19 @@ describe("operator reads", () => {
     });
     expect(audit.rows[0]!.row_text).not.toContain(rawRequestId);
     const events = await pool.query<{
-      job_id: string;
+      task_id: string;
       event_type: string;
       details: unknown;
       occurred_at: Date;
     }>(
-      `SELECT job_id, event_type, details, occurred_at FROM workhorse.job_event
-        WHERE job_id = ANY($1::uuid[]) AND event_type IN ('redriven', 'redrive_created')
+      `SELECT task_id, event_type, details, occurred_at FROM workhorse.task_event
+        WHERE task_id = ANY($1::uuid[]) AND event_type IN ('redriven', 'redrive_created')
         ORDER BY event_type`,
       [[source, target]],
     );
     expect(events.rows).toMatchObject([
-      { job_id: target, event_type: "redrive_created" },
-      { job_id: source, event_type: "redriven" },
+      { task_id: target, event_type: "redrive_created" },
+      { task_id: source, event_type: "redriven" },
     ]);
     expect(events.rows.every((event) => event.occurred_at >= created.rows[0]!.requested_at)).toBe(
       true,
@@ -320,10 +320,10 @@ describe("operator reads", () => {
       "upstream recovered",
       rawRequestId,
     ]);
-    expect(replay.rows[0]).toMatchObject({ status: "replayed", target_job_id: target });
+    expect(replay.rows[0]).toMatchObject({ status: "replayed", target_task_id: target });
     expect(replay.rows[0]!.requested_at).toEqual(created.rows[0]!.requested_at);
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job_redrive")).rows[0]!
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.task_redrive")).rows[0]!
         .count,
     ).toBe(1);
 
@@ -341,8 +341,8 @@ describe("operator reads", () => {
     expect(conflict).toMatchObject({ code: "P1002" });
     const detail = JSON.parse(String((conflict as { detail: string }).detail));
     expect(detail).toMatchObject({
-      sourceJobId: source,
-      existingTargetJobId: target,
+      sourceTaskId: source,
+      existingTargetTaskId: target,
       requestIdPreview: "operator…3456",
       requestIdLength: rawRequestId.length,
       conflictingFields: ["reason"],
@@ -356,9 +356,9 @@ describe("operator reads", () => {
     );
     expect(notFailed.rows[0]).toMatchObject({
       status: "not_failed",
-      source_job_id: live,
+      source_task_id: live,
       source_state: "ready",
-      target_job_id: null,
+      target_task_id: null,
       requested_at: null,
     });
     const missing = await pool.query(
@@ -366,7 +366,7 @@ describe("operator reads", () => {
     );
     expect(missing.rows[0]).toMatchObject({
       status: "not_found",
-      target_job_id: null,
+      target_task_id: null,
       requested_at: null,
     });
     await expect(
@@ -381,7 +381,7 @@ describe("operator reads", () => {
   });
 
   it("serializes concurrent exact redrive requests to one target", async () => {
-    const source = await createFailedJob({ type: "concurrent-redrive" });
+    const source = await createFailedTask({ type: "concurrent-redrive" });
     const params = [source, "operator", "retry concurrently", "concurrent-request"];
     const [first, second] = await Promise.all([
       pool.query("SELECT * FROM workhorse.redrive_v1($1, $2, $3, $4)", params),
@@ -390,24 +390,24 @@ describe("operator reads", () => {
     expect(new Set([first.rows[0]!.status, second.rows[0]!.status])).toEqual(
       new Set(["redriven", "replayed"]),
     );
-    expect(first.rows[0]!.target_job_id).toBe(second.rows[0]!.target_job_id);
+    expect(first.rows[0]!.target_task_id).toBe(second.rows[0]!.target_task_id);
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job_redrive")).rows[0]!
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.task_redrive")).rows[0]!
         .count,
     ).toBe(1);
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0]!.count,
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.task")).rows[0]!.count,
     ).toBe(2);
   });
 
   it("maps dead-letter, redrive, lineage, conflict, and bulk results through the public Admin API", async () => {
-    const older = await createFailedJob({
+    const older = await createFailedTask({
       type: "public-redrive",
       queueName: "public-redrive",
       tags: ["public"],
       errorName: "PublicFailure",
     });
-    const newer = await createFailedJob({
+    const newer = await createFailedTask({
       type: "public-redrive",
       queueName: "public-redrive",
       tags: ["public"],
@@ -415,10 +415,10 @@ describe("operator reads", () => {
     });
     const now = new Date(Date.now() - 10_000);
     await pool.query(
-      `UPDATE workhorse.job_outcome SET finished_at = CASE job_id
+      `UPDATE workhorse.task_outcome SET finished_at = CASE task_id
          WHEN $1 THEN $3::timestamptz - interval '2 hours'
          WHEN $2 THEN $3::timestamptz - interval '1 hour' END
-       WHERE job_id = ANY($4::uuid[])`,
+       WHERE task_id = ANY($4::uuid[])`,
       [older, newer, now, [older, newer]],
     );
 
@@ -430,7 +430,7 @@ describe("operator reads", () => {
     });
     expect(firstPage.items).toMatchObject([
       {
-        jobId: newer,
+        taskId: newer,
         queue: "public-redrive",
         type: "public-redrive",
         error: { name: "PublicFailure" },
@@ -440,14 +440,14 @@ describe("operator reads", () => {
     ]);
     expect(firstPage.nextCursor).toEqual({
       finishedAt: expect.any(String),
-      jobId: newer,
+      taskId: newer,
     });
     const secondPage = await admin.listDeadLetters({
       queue: "public-redrive",
       limit: 1,
       cursor: firstPage.nextCursor!,
     });
-    expect(secondPage.items.map((item) => item.jobId)).toEqual([older]);
+    expect(secondPage.items.map((item) => item.taskId)).toEqual([older]);
     expect(secondPage.nextCursor).toBeNull();
 
     const request = {
@@ -458,8 +458,8 @@ describe("operator reads", () => {
     const created = await admin.redrive(older, request);
     expect(created).toMatchObject({
       status: "redriven",
-      sourceJobId: older,
-      targetJobId: expect.any(String),
+      sourceTaskId: older,
+      targetTaskId: expect.any(String),
       sourceState: "failed",
       targetState: "ready",
       requestedAt: expect.any(Date),
@@ -468,8 +468,8 @@ describe("operator reads", () => {
     expect(lineage).toMatchObject({
       records: [
         {
-          sourceJobId: older,
-          targetJobId: created.targetJobId,
+          sourceTaskId: older,
+          targetTaskId: created.targetTaskId,
           requestedBy: request.actor,
           reason: request.reason,
           requestIdPreview: "public-r…uest",
@@ -491,8 +491,8 @@ describe("operator reads", () => {
     expect(conflict).toBeInstanceOf(RedriveIdempotencyConflictError);
     expect(conflict).toMatchObject({
       details: {
-        sourceJobId: older,
-        existingTargetJobId: created.targetJobId,
+        sourceTaskId: older,
+        existingTargetTaskId: created.targetTaskId,
         conflictingFields: ["reason"],
       },
     });
@@ -510,16 +510,16 @@ describe("operator reads", () => {
       results: [
         {
           status: "eligible",
-          sourceJobId: older,
-          targetJobId: null,
+          sourceTaskId: older,
+          targetTaskId: null,
           sourceState: "failed",
           targetState: null,
           requestedAt: null,
         },
         {
           status: "eligible",
-          sourceJobId: newer,
-          targetJobId: null,
+          sourceTaskId: newer,
+          targetTaskId: null,
           sourceState: "failed",
           targetState: null,
           requestedAt: null,
@@ -530,25 +530,25 @@ describe("operator reads", () => {
   });
 
   it("bulk redrive shares filters, bounds oldest-first work, keeps dry-run pure, and replays", async () => {
-    const oldest = await createFailedJob({
+    const oldest = await createFailedTask({
       type: "bulk-import",
       queueName: "bulk",
       tags: ["tenant-a", "retryable"],
       errorName: "BulkError",
     });
-    const middle = await createFailedJob({
+    const middle = await createFailedTask({
       type: "bulk-import",
       queueName: "bulk",
       tags: ["tenant-a", "retryable"],
       errorName: "BulkError",
     });
-    const newest = await createFailedJob({
+    const newest = await createFailedTask({
       type: "bulk-import",
       queueName: "bulk",
       tags: ["tenant-a", "retryable"],
       errorName: "BulkError",
     });
-    await createFailedJob({
+    await createFailedTask({
       type: "bulk-import",
       queueName: "other",
       tags: ["tenant-a", "retryable"],
@@ -556,11 +556,11 @@ describe("operator reads", () => {
     });
     const base = new Date(Date.now() - 60_000);
     await pool.query(
-      `UPDATE workhorse.job_outcome SET finished_at = CASE job_id
+      `UPDATE workhorse.task_outcome SET finished_at = CASE task_id
          WHEN $1 THEN $4::timestamptz - interval '3 hours'
          WHEN $2 THEN $4::timestamptz - interval '2 hours'
          WHEN $3 THEN $4::timestamptz - interval '1 hour' END
-       WHERE job_id = ANY($5::uuid[])`,
+       WHERE task_id = ANY($5::uuid[])`,
       [oldest, middle, newest, base, [oldest, middle, newest]],
     );
     const filter = JSON.stringify({
@@ -571,15 +571,15 @@ describe("operator reads", () => {
       finishedAfter: new Date(base.getTime() - 4 * 3_600_000).toISOString(),
       finishedBefore: base.toISOString(),
     });
-    const before = await pool.query<{ jobs: number; redrives: number; events: number }>(
-      `SELECT (SELECT count(*)::integer FROM workhorse.job) AS jobs,
-              (SELECT count(*)::integer FROM workhorse.job_redrive) AS redrives,
-              (SELECT count(*)::integer FROM workhorse.job_event) AS events`,
+    const before = await pool.query<{ tasks: number; redrives: number; events: number }>(
+      `SELECT (SELECT count(*)::integer FROM workhorse.task) AS tasks,
+              (SELECT count(*)::integer FROM workhorse.task_redrive) AS redrives,
+              (SELECT count(*)::integer FROM workhorse.task_event) AS events`,
     );
     const listener = await pool.connect();
     const notifications: string[] = [];
     listener.on("notification", (notification) => notifications.push(notification.payload ?? ""));
-    await listener.query("LISTEN workhorse_jobs");
+    await listener.query("LISTEN workhorse_tasks");
     const preview = await (async () => {
       try {
         const result = await pool.query(
@@ -590,7 +590,7 @@ describe("operator reads", () => {
         expect(notifications).toEqual([]);
         return result;
       } finally {
-        await listener.query("UNLISTEN workhorse_jobs");
+        await listener.query("UNLISTEN workhorse_tasks");
         listener.release();
       }
     })();
@@ -598,22 +598,22 @@ describe("operator reads", () => {
       {
         ordinal: 1,
         status: "eligible",
-        source_job_id: oldest,
-        target_job_id: null,
+        source_task_id: oldest,
+        target_task_id: null,
         requested_at: null,
       },
       {
         ordinal: 2,
         status: "eligible",
-        source_job_id: middle,
-        target_job_id: null,
+        source_task_id: middle,
+        target_task_id: null,
         requested_at: null,
       },
     ]);
-    const afterPreview = await pool.query<{ jobs: number; redrives: number; events: number }>(
-      `SELECT (SELECT count(*)::integer FROM workhorse.job) AS jobs,
-              (SELECT count(*)::integer FROM workhorse.job_redrive) AS redrives,
-              (SELECT count(*)::integer FROM workhorse.job_event) AS events`,
+    const afterPreview = await pool.query<{ tasks: number; redrives: number; events: number }>(
+      `SELECT (SELECT count(*)::integer FROM workhorse.task) AS tasks,
+              (SELECT count(*)::integer FROM workhorse.task_redrive) AS redrives,
+              (SELECT count(*)::integer FROM workhorse.task_event) AS events`,
     );
     expect(afterPreview.rows).toEqual(before.rows);
 
@@ -622,17 +622,17 @@ describe("operator reads", () => {
       [filter],
     );
     expect(created.rows).toMatchObject([
-      { ordinal: 1, status: "redriven", source_job_id: oldest, target_state: "ready" },
-      { ordinal: 2, status: "redriven", source_job_id: middle, target_state: "ready" },
+      { ordinal: 1, status: "redriven", source_task_id: oldest, target_state: "ready" },
+      { ordinal: 2, status: "redriven", source_task_id: middle, target_state: "ready" },
     ]);
-    expect(created.rows.some((row) => row.source_job_id === newest)).toBe(false);
+    expect(created.rows.some((row) => row.source_task_id === newest)).toBe(false);
     const replay = await pool.query(
       "SELECT * FROM workhorse.redrive_many_v1($1, 2, false, 'operator', 'bulk recovery', 'bulk-request') ORDER BY ordinal",
       [filter],
     );
     expect(replay.rows.map((row) => row.status)).toEqual(["replayed", "replayed"]);
-    expect(replay.rows.map((row) => row.target_job_id)).toEqual(
-      created.rows.map((row) => row.target_job_id),
+    expect(replay.rows.map((row) => row.target_task_id)).toEqual(
+      created.rows.map((row) => row.target_task_id),
     );
     await expect(
       pool.query(
@@ -645,16 +645,16 @@ describe("operator reads", () => {
     const sourceIds: string[] = [];
     for (let index = 0; index < 3; index += 1) {
       sourceIds.push(
-        await createFailedJob({ type: `bulk-cursor-${index}`, queueName: "bulk-cursor" }),
+        await createFailedTask({ type: `bulk-cursor-${index}`, queueName: "bulk-cursor" }),
       );
     }
     const [oldest, ...ties] = sourceIds;
     const boundary = new Date(Date.now() - 60_000);
     await pool.query(
-      `UPDATE workhorse.job_outcome
-          SET finished_at = CASE WHEN job_id = $1
+      `UPDATE workhorse.task_outcome
+          SET finished_at = CASE WHEN task_id = $1
             THEN $2::timestamptz - interval '1 hour' ELSE $2::timestamptz END
-        WHERE job_id = ANY($3::uuid[])`,
+        WHERE task_id = ANY($3::uuid[])`,
       [oldest, boundary, sourceIds],
     );
     const orderedTies = ties[0]! < ties[1]! ? ties : [ties[1]!, ties[0]!];
@@ -665,8 +665,8 @@ describe("operator reads", () => {
     };
 
     const first = await admin.redriveMany({ queue: "bulk-cursor" }, request, { limit: 2 });
-    expect(first.results.map((result) => result.sourceJobId)).toEqual([oldest, orderedTies[0]]);
-    expect(first.nextCursor).toEqual({ finishedAt: expect.any(String), jobId: orderedTies[0] });
+    expect(first.results.map((result) => result.sourceTaskId)).toEqual([oldest, orderedTies[0]]);
+    expect(first.nextCursor).toEqual({ finishedAt: expect.any(String), taskId: orderedTies[0] });
 
     const replay = await admin.redriveMany({ queue: "bulk-cursor" }, request, { limit: 2 });
     expect(replay.results.map((result) => result.status)).toEqual(["replayed", "replayed"]);
@@ -677,17 +677,17 @@ describe("operator reads", () => {
       cursor: first.nextCursor!,
     });
     expect(second.results).toMatchObject([
-      { status: "redriven", sourceJobId: orderedTies[1], targetJobId: expect.any(String) },
+      { status: "redriven", sourceTaskId: orderedTies[1], targetTaskId: expect.any(String) },
     ]);
     expect(second.nextCursor).toBeNull();
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job_redrive")).rows[0]!
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.task_redrive")).rows[0]!
         .count,
     ).toBe(3);
   });
 
   it("bounds retained lineage traversal and reports truncation", async () => {
-    const source = await createFailedJob({
+    const source = await createFailedTask({
       type: "bounded-lineage-source",
       queueName: "bounded-lineage",
     });
@@ -697,31 +697,31 @@ describe("operator reads", () => {
       requestId: "lineage-first",
     });
     const firstTarget = await queue.claim("bounded-lineage-worker", { queue: "bounded-lineage" });
-    expect(firstTarget?.id).toBe(first.targetJobId);
+    expect(firstTarget?.id).toBe(first.targetTaskId);
     expect(
       await queue.fail(firstTarget!, "bounded-lineage-worker", new Error("first target failed")),
     ).toBe("failed");
-    const second = await admin.redrive(first.targetJobId!, {
+    const second = await admin.redrive(first.targetTaskId!, {
       actor: "lineage-operator",
       reason: "second generation",
       requestId: "lineage-second",
     });
 
     expect(await admin.getRedriveLineage(source, 1)).toMatchObject({
-      records: [{ sourceJobId: source, targetJobId: first.targetJobId }],
+      records: [{ sourceTaskId: source, targetTaskId: first.targetTaskId }],
       truncated: true,
     });
-    expect(await admin.getRedriveLineage(second.targetJobId!)).toMatchObject({
+    expect(await admin.getRedriveLineage(second.targetTaskId!)).toMatchObject({
       records: [
-        { sourceJobId: first.targetJobId, targetJobId: second.targetJobId },
-        { sourceJobId: source, targetJobId: first.targetJobId },
+        { sourceTaskId: first.targetTaskId, targetTaskId: second.targetTaskId },
+        { sourceTaskId: source, targetTaskId: first.targetTaskId },
       ],
       truncated: false,
     });
   });
 
   it("keeps bounded branching lineage as a shared core and dashboard prefix", async () => {
-    const source = await createFailedJob({
+    const source = await createFailedTask({
       type: "branching-lineage-source",
       queueName: "branching-lineage",
     });
@@ -738,51 +738,51 @@ describe("operator reads", () => {
     const firstTarget = await queue.claim("branching-lineage-worker", {
       queue: "branching-lineage",
     });
-    expect(firstTarget?.id).toBe(first.targetJobId);
+    expect(firstTarget?.id).toBe(first.targetTaskId);
     expect(
       await queue.fail(firstTarget!, "branching-lineage-worker", new Error("branch failed")),
     ).toBe("failed");
-    const descendant = await admin.redrive(first.targetJobId!, {
+    const descendant = await admin.redrive(first.targetTaskId!, {
       actor: "lineage-operator",
       reason: "branch descendant",
       requestId: "lineage-branch-descendant",
     });
     await pool.query(
-      `UPDATE workhorse.job_redrive
-          SET requested_at = CASE target_job_id
+      `UPDATE workhorse.task_redrive
+          SET requested_at = CASE target_task_id
             WHEN $1::uuid THEN clock_timestamp() - interval '3 minutes'
             WHEN $2::uuid THEN clock_timestamp() - interval '2 minutes'
             ELSE clock_timestamp() - interval '4 minutes'
           END
-        WHERE target_job_id = ANY($3::uuid[])`,
+        WHERE target_task_id = ANY($3::uuid[])`,
       [
-        first.targetJobId,
-        second.targetJobId,
-        [first.targetJobId, second.targetJobId, descendant.targetJobId],
+        first.targetTaskId,
+        second.targetTaskId,
+        [first.targetTaskId, second.targetTaskId, descendant.targetTaskId],
       ],
     );
 
     const bounded = await admin.getRedriveLineage(source, 2);
-    const dashboard = await readDashboardJobDetail(dashboardDatabase(pool), source);
+    const dashboard = await readDashboardTaskDetail(dashboardDatabase(pool), source);
     expect(bounded.truncated).toBe(true);
     expect(dashboard?.redriveLineage.records.slice(0, 2)).toMatchObject(
       bounded.records.map((edge) => ({
-        sourceJobId: edge.sourceJobId,
-        targetJobId: edge.targetJobId,
+        sourceTaskId: edge.sourceTaskId,
+        targetTaskId: edge.targetTaskId,
       })),
     );
   });
 
   it("protects redrive sources until descendant targets are pruned", async () => {
-    const source = await createFailedJob({
+    const source = await createFailedTask({
       type: "retained-redrive",
       queueName: "retention-redrive",
     });
-    const redrive = await pool.query<{ target_job_id: string }>(
-      "SELECT target_job_id FROM workhorse.redrive_v1($1, 'operator', 'retention proof', 'retention-request')",
+    const redrive = await pool.query<{ target_task_id: string }>(
+      "SELECT target_task_id FROM workhorse.redrive_v1($1, 'operator', 'retention proof', 'retention-request')",
       [source],
     );
-    const target = redrive.rows[0]!.target_job_id;
+    const target = redrive.rows[0]!.target_task_id;
     const targetClaim = await queue.claim("retention-redrive-target", {
       queue: "retention-redrive",
     });
@@ -790,77 +790,77 @@ describe("operator reads", () => {
     expect(
       await queue.fail(targetClaim!, "retention-redrive-target", new Error("target failed")),
     ).toBe("failed");
-    await pool.query("DELETE FROM workhorse.job_event WHERE job_id = ANY($1::uuid[])", [
+    await pool.query("DELETE FROM workhorse.task_event WHERE task_id = ANY($1::uuid[])", [
       [source, target],
     ]);
-    await pool.query("DELETE FROM workhorse.attempt_history WHERE job_id = ANY($1::uuid[])", [
+    await pool.query("DELETE FROM workhorse.attempt_history WHERE task_id = ANY($1::uuid[])", [
       [source, target],
     ]);
     await pool.query(
-      `UPDATE workhorse.job SET created_at = clock_timestamp() - interval '40 days'
+      `UPDATE workhorse.task SET created_at = clock_timestamp() - interval '40 days'
         WHERE id = ANY($1::uuid[])`,
       [[source, target]],
     );
     await pool.query(
-      `UPDATE workhorse.job_outcome
+      `UPDATE workhorse.task_outcome
           SET finished_at = clock_timestamp() - interval '40 days',
               history_through_at = clock_timestamp() - interval '40 days'
-        WHERE job_id = ANY($1::uuid[])`,
+        WHERE task_id = ANY($1::uuid[])`,
       [[source, target]],
     );
 
     await expect(
-      pool.query("DELETE FROM workhorse.job WHERE id = $1", [source]),
+      pool.query("DELETE FROM workhorse.task WHERE id = $1", [source]),
     ).rejects.toMatchObject({
       code: "23503",
     });
     const first = await pool.query<{ pruned: number }>(
-      `SELECT workhorse.prune_terminal_jobs_v1(
+      `SELECT workhorse.prune_terminal_tasks_v1(
          clock_timestamp() - interval '30 days', clock_timestamp() - interval '30 days',
          date_trunc('day', clock_timestamp() - interval '30 days'), 10
        ) AS pruned`,
     );
     expect(first.rows[0]!.pruned).toBe(1);
     expect(
-      (await pool.query("SELECT id FROM workhorse.job WHERE id = $1", [source])).rows,
+      (await pool.query("SELECT id FROM workhorse.task WHERE id = $1", [source])).rows,
     ).toHaveLength(1);
     expect(
-      (await pool.query("SELECT id FROM workhorse.job WHERE id = $1", [target])).rows,
+      (await pool.query("SELECT id FROM workhorse.task WHERE id = $1", [target])).rows,
     ).toHaveLength(0);
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job_redrive")).rows[0]!
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.task_redrive")).rows[0]!
         .count,
     ).toBe(0);
     const second = await pool.query<{ pruned: number }>(
-      `SELECT workhorse.prune_terminal_jobs_v1(
+      `SELECT workhorse.prune_terminal_tasks_v1(
          clock_timestamp() - interval '30 days', clock_timestamp() - interval '30 days',
          date_trunc('day', clock_timestamp() - interval '30 days'), 10
        ) AS pruned`,
     );
     expect(second.rows[0]!.pruned).toBe(1);
     expect(
-      (await pool.query("SELECT id FROM workhorse.job WHERE id = $1", [source])).rows,
+      (await pool.query("SELECT id FROM workhorse.task WHERE id = $1", [source])).rows,
     ).toHaveLength(0);
   });
 
   it("installs the routing projection, indexes, functions, and identity triggers", async () => {
     const objects = await pool.query<{
       projection: string | null;
-      list_jobs: string | null;
+      list_tasks: string | null;
       timeline: string | null;
       projection_has_payload: boolean;
     }>(`SELECT
-      to_regclass('workhorse.job_query')::text AS projection,
-      to_regprocedure('workhorse.list_jobs_v1(jsonb,integer,timestamp with time zone,uuid,text,jsonb)')::text AS list_jobs,
-      to_regprocedure('workhorse.list_job_timeline_v1(uuid,integer,timestamp with time zone,text,uuid)')::text AS timeline,
+      to_regclass('workhorse.task_query')::text AS projection,
+      to_regprocedure('workhorse.list_tasks_v1(jsonb,integer,timestamp with time zone,uuid,text,jsonb)')::text AS list_tasks,
+      to_regprocedure('workhorse.list_task_timeline_v1(uuid,integer,timestamp with time zone,text,uuid)')::text AS timeline,
       EXISTS (
         SELECT 1 FROM information_schema.columns
-         WHERE table_schema = 'workhorse' AND table_name = 'job_query' AND column_name = 'payload'
+         WHERE table_schema = 'workhorse' AND table_name = 'task_query' AND column_name = 'payload'
       ) AS projection_has_payload`);
     expect(objects.rows[0]).toEqual({
-      projection: "job_query",
-      list_jobs: "list_jobs_v1(jsonb,integer,timestamp with time zone,uuid,text,jsonb)",
-      timeline: "list_job_timeline_v1(uuid,integer,timestamp with time zone,text,uuid)",
+      projection: "task_query",
+      list_tasks: "list_tasks_v1(jsonb,integer,timestamp with time zone,uuid,text,jsonb)",
+      timeline: "list_task_timeline_v1(uuid,integer,timestamp with time zone,text,uuid)",
       projection_has_payload: false,
     });
 
@@ -868,41 +868,41 @@ describe("operator reads", () => {
       SELECT indexname FROM pg_indexes
        WHERE schemaname = 'workhorse'
          AND indexname IN (
-           'job_query_created_idx', 'job_query_queue_created_idx',
-           'job_query_type_created_idx',
-           'attempt_history_job_time_idx'
+           'task_query_created_idx', 'task_query_queue_created_idx',
+           'task_query_type_created_idx',
+           'attempt_history_task_time_idx'
          ) ORDER BY indexname`);
     expect(indexes.rows.map((row) => row.indexname)).toEqual([
-      "attempt_history_job_time_idx",
-      "job_query_created_idx",
-      "job_query_queue_created_idx",
-      "job_query_type_created_idx",
+      "attempt_history_task_time_idx",
+      "task_query_created_idx",
+      "task_query_queue_created_idx",
+      "task_query_type_created_idx",
     ]);
 
     const triggers = await pool.query<{ tgname: string }>(`
       SELECT tgname FROM pg_trigger
        WHERE tgrelid IN (
-         'workhorse.job'::regclass,
-         'workhorse.job_runtime'::regclass,
-         'workhorse.job_outcome'::regclass
+         'workhorse.task'::regclass,
+         'workhorse.task_runtime'::regclass,
+         'workhorse.task_outcome'::regclass
        )
          AND NOT tgisinternal AND tgname LIKE '%query_projection%'
        ORDER BY tgname`);
     expect(triggers.rows.map((row) => row.tgname)).toEqual([
-      "job_query_projection_insert",
-      "job_query_projection_update",
+      "task_query_projection_insert",
+      "task_query_projection_update",
     ]);
 
     const id = await queue.enqueue("projection-routing", { ignored: true });
     expect(
       (
         await pool.query(
-          `SELECT queue_name, job_type, created_at
-             FROM workhorse.job_query WHERE job_id = $1`,
+          `SELECT queue_name, task_type, created_at
+             FROM workhorse.task_query WHERE task_id = $1`,
           [id],
         )
       ).rows[0],
-    ).toMatchObject({ queue_name: "default", job_type: "projection-routing" });
+    ).toMatchObject({ queue_name: "default", task_type: "projection-routing" });
   });
 
   it("keeps the operator projection immutable across live and terminal transitions", async () => {
@@ -932,11 +932,13 @@ describe("operator reads", () => {
       ).rows[0]?.accepted,
     ).toBe(true);
     expect(await projectionXmin(id)).toBe(projection);
-    await expect(admin.getJob(id)).resolves.toMatchObject({ state: "canceled", priority: 63 });
-    expect((await admin.getJobTimeline(id)).items.every((item) => item.priority === 63)).toBe(true);
+    await expect(admin.getTask(id)).resolves.toMatchObject({ state: "canceled", priority: 63 });
+    expect((await admin.getTaskTimeline(id)).items.every((item) => item.priority === 63)).toBe(
+      true,
+    );
   });
 
-  it("lists mixed live and terminal jobs with every filter and immutable same-time cursors", async () => {
+  it("lists mixed live and terminal tasks with every filter and immutable same-time cursors", async () => {
     const createdAt = "2025-01-02T03:04:05.123456Z";
     const ids = [
       "00000000-0000-0000-0000-000000000001",
@@ -944,28 +946,28 @@ describe("operator reads", () => {
       "00000000-0000-0000-0000-000000000003",
     ];
     await pool.query(
-      `INSERT INTO workhorse.job(id, queue_name, job_type, payload, tags, max_attempts, created_at)
+      `INSERT INTO workhorse.task(id, queue_name, task_type, payload, tags, max_attempts, created_at)
        VALUES ($1, 'query-a', 'email', '{"n":1}', ARRAY['one'], 3, $4),
               ($2, 'query-a', 'email', '{"n":2}', ARRAY['two'], 3, $4),
               ($3, 'query-b', 'report', '{"n":3}', ARRAY['three'], 3, $4)`,
       [...ids, createdAt],
     );
     await pool.query(
-      `INSERT INTO workhorse.job_runtime(
-         job_id, queue_name, state, current_attempt, run_at, ready_at, sequence, updated_at
+      `INSERT INTO workhorse.task_runtime(
+         task_id, queue_name, state, current_attempt, run_at, ready_at, sequence, updated_at
        ) VALUES ($1, 'query-a', 'ready', 1, $2, $2, nextval('workhorse.ready_sequence_seq'), $2)`,
       [ids[0], createdAt],
     );
     await pool.query(
-      `INSERT INTO workhorse.job_outcome(
-         job_id, state, current_attempt, fence_token, run_at, result, finished_at, updated_at
+      `INSERT INTO workhorse.task_outcome(
+         task_id, state, current_attempt, fence_token, run_at, result, finished_at, updated_at
        ) VALUES
          ($1, 'succeeded', 1, 1, $3, '{}', $3, $3),
          ($2, 'succeeded', 2, 1, $3, '{}', $3, $3)`,
       [ids[1], ids[2], createdAt],
     );
 
-    const filtered = await admin.listJobs({
+    const filtered = await admin.listTasks({
       queue: "query-a",
       type: "email",
       states: ["ready", "succeeded"],
@@ -976,24 +978,24 @@ describe("operator reads", () => {
     expect(filtered.items.map((item) => item.id)).toEqual([ids[1], ids[0]]);
     expect(filtered.nextCursor).toBeNull();
 
-    const first = await admin.listJobs({ limit: 2 });
+    const first = await admin.listTasks({ limit: 2 });
     expect(first.items.map((item) => item.id)).toEqual([ids[2], ids[1]]);
     expect(first.nextCursor).not.toBeNull();
     await pool.query(
-      `INSERT INTO workhorse.job(id, queue_name, job_type, payload, max_attempts, created_at)
+      `INSERT INTO workhorse.task(id, queue_name, task_type, payload, max_attempts, created_at)
        VALUES ('00000000-0000-0000-0000-000000000004', 'query-new', 'new', '{}', 1, $1)`,
       [createdAt],
     );
     await pool.query(
-      `INSERT INTO workhorse.job_runtime(
-         job_id, queue_name, state, run_at, ready_at, sequence, updated_at
+      `INSERT INTO workhorse.task_runtime(
+         task_id, queue_name, state, run_at, ready_at, sequence, updated_at
        ) VALUES (
          '00000000-0000-0000-0000-000000000004', 'query-new', 'ready', $1, $1,
          nextval('workhorse.ready_sequence_seq'), $1
        )`,
       [createdAt],
     );
-    const second = await admin.listJobs({ limit: 2, cursor: first.nextCursor! });
+    const second = await admin.listTasks({ limit: 2, cursor: first.nextCursor! });
     expect(second.items.map((item) => item.id)).toEqual([ids[0]]);
     expect(second.nextCursor).toBeNull();
     expect(new Set([...first.items, ...second.items].map((item) => item.id)).size).toBe(3);
@@ -1008,25 +1010,25 @@ describe("operator reads", () => {
       ["10000000-0000-0000-0000-000000000002", "bound-a"],
     ] as const) {
       await pool.query(
-        `INSERT INTO workhorse.job(id, queue_name, job_type, payload, max_attempts, created_at)
+        `INSERT INTO workhorse.task(id, queue_name, task_type, payload, max_attempts, created_at)
          VALUES ($1, 'bound', $2, '{"secret":"x"}', 1, '2025-02-01T00:00:00Z')`,
         [id, type],
       );
       await pool.query(
-        `INSERT INTO workhorse.job_runtime(
-           job_id, queue_name, state, run_at, ready_at, sequence, updated_at
+        `INSERT INTO workhorse.task_runtime(
+           task_id, queue_name, state, run_at, ready_at, sequence, updated_at
          ) VALUES ($1, 'bound', 'ready', '2025-02-01T00:00:00Z', '2025-02-01T00:00:00Z',
            nextval('workhorse.ready_sequence_seq'), '2025-02-01T00:00:00Z')`,
         [id],
       );
     }
-    const first = await admin.listJobs({ type: "bound-a", limit: 1 });
+    const first = await admin.listTasks({ type: "bound-a", limit: 1 });
     expect(first.nextCursor?.signature).toMatch(/^[0-9a-f]{16}$/);
     await expect(
-      admin.listJobs({ type: "bound-b", limit: 1, cursor: first.nextCursor! }),
+      admin.listTasks({ type: "bound-b", limit: 1, cursor: first.nextCursor! }),
     ).rejects.toThrow(/cursor does not match/);
     await expect(
-      admin.listJobs({
+      admin.listTasks({
         type: "bound-a",
         limit: 1,
         cursor: first.nextCursor!,
@@ -1034,7 +1036,7 @@ describe("operator reads", () => {
       }),
     ).rejects.toThrow(/cursor does not match/);
     await expect(
-      pool.query("SELECT * FROM workhorse.list_jobs_v1('{}', 1, now(), NULL, NULL, '{}')"),
+      pool.query("SELECT * FROM workhorse.list_tasks_v1('{}', 1, now(), NULL, NULL, '{}')"),
     ).rejects.toThrow(/provided together/);
 
     const client = await pool.connect();
@@ -1042,22 +1044,22 @@ describe("operator reads", () => {
       await client.query("BEGIN");
       await client.query("SET LOCAL TIME ZONE 'UTC'");
       const timezoneFirst = await client.query<{
-        job_id: string;
+        task_id: string;
         cursor_created_at: string;
         cursor_signature: string;
       }>(
-        `SELECT job_id, cursor_created_at::text AS cursor_created_at, cursor_signature
-           FROM workhorse.list_jobs_v1($1, 1, NULL, NULL, NULL, '{}')`,
+        `SELECT task_id, cursor_created_at::text AS cursor_created_at, cursor_signature
+           FROM workhorse.list_tasks_v1($1, 1, NULL, NULL, NULL, '{}')`,
         [JSON.stringify({ type: "bound-a", createdAfter: "2025-01-01T00:00:00Z" })],
       );
       await client.query("SET LOCAL TIME ZONE 'Pacific/Honolulu'");
       const timezoneSecond = await client.query(
-        `SELECT job_id
-           FROM workhorse.list_jobs_v1($1, 1, $2, $3, $4, '{}')`,
+        `SELECT task_id
+           FROM workhorse.list_tasks_v1($1, 1, $2, $3, $4, '{}')`,
         [
           JSON.stringify({ type: "bound-a", createdAfter: "2025-01-01T00:00:00Z" }),
           timezoneFirst.rows[0]!.cursor_created_at,
-          timezoneFirst.rows[0]!.job_id,
+          timezoneFirst.rows[0]!.task_id,
           timezoneFirst.rows[0]!.cursor_signature,
         ],
       );
@@ -1072,28 +1074,28 @@ describe("operator reads", () => {
   it("preserves the public validation contract while operator queries move behind a module", async () => {
     const invalidDate = new Date(Number.NaN);
     const calls: Array<readonly [() => Promise<unknown>, RegExp]> = [
-      [() => admin.listJobs(null as never), /listJobs query must be an object/],
-      [() => admin.listJobs({ limit: 0 }), /listJobs limit must be an integer between 1 and/],
-      [() => admin.listJobs({ createdAfter: invalidDate }), /must be a finite Date/],
-      [() => admin.listJobs({ states: ["ready", "ready"] }), /states must be unique: ready/],
+      [() => admin.listTasks(null as never), /listTasks query must be an object/],
+      [() => admin.listTasks({ limit: 0 }), /listTasks limit must be an integer between 1 and/],
+      [() => admin.listTasks({ createdAfter: invalidDate }), /must be a finite Date/],
+      [() => admin.listTasks({ states: ["ready", "ready"] }), /states must be unique: ready/],
       [
         () =>
-          admin.listJobs({
-            cursor: { createdAt: "now", jobId: "job", signature: "signature", extra: true },
+          admin.listTasks({
+            cursor: { createdAt: "now", taskId: "task", signature: "signature", extra: true },
           } as never),
-        /listJobs cursor contains unknown field: extra/,
+        /listTasks cursor contains unknown field: extra/,
       ],
       [
         () =>
-          admin.getJobTimeline("job-a", {
+          admin.getTaskTimeline("task-a", {
             cursor: {
-              jobId: "job-b",
+              taskId: "task-b",
               occurredAt: "now",
               kind: "event",
               recordId: "record",
             },
           }),
-        /cursor jobId must match the requested jobId/,
+        /cursor taskId must match the requested taskId/,
       ],
     ];
 
@@ -1106,7 +1108,7 @@ describe("operator reads", () => {
       secret: "x".repeat(10_000),
       nested: { secret: "retained" },
     });
-    const omitted = await admin.listJobs({ type: "payload-object" });
+    const omitted = await admin.listTasks({ type: "payload-object" });
     expect(omitted.items[0]).toMatchObject({
       id: objectId,
       payload: null,
@@ -1127,7 +1129,7 @@ describe("operator reads", () => {
         )
       ).rows[0]?.bytes,
     );
-    const included = await admin.listJobs({
+    const included = await admin.listTasks({
       type: "payload-object",
       payload: { include: true, maxBytes: expectedBytes, redactKeys: ["secret"] },
     });
@@ -1136,7 +1138,7 @@ describe("operator reads", () => {
       payloadStatus: "included",
       payloadBytes: expectedBytes,
     });
-    const tooLarge = await admin.listJobs({
+    const tooLarge = await admin.listTasks({
       type: "payload-object",
       payload: { include: true, maxBytes: expectedBytes - 1, redactKeys: ["secret"] },
     });
@@ -1150,7 +1152,7 @@ describe("operator reads", () => {
     await queue.enqueue("payload-array", ["secret", { secret: "retained" }]);
     expect(
       (
-        await admin.listJobs({
+        await admin.listTasks({
           states: ["ready"],
           payload: { include: true, maxBytes: 1_024, redactKeys: ["secret"] },
         })
@@ -1171,16 +1173,16 @@ describe("operator reads", () => {
       [{ include: true, unknown: true }, /permits only/],
     ] as const) {
       await expect(
-        pool.query("SELECT * FROM workhorse.list_jobs_v1('{}', 1, NULL, NULL, NULL, $1)", [
+        pool.query("SELECT * FROM workhorse.list_tasks_v1('{}', 1, NULL, NULL, NULL, $1)", [
           JSON.stringify(projection),
         ]),
       ).rejects.toThrow(message);
     }
-    await expect(admin.listJobs({ unknown: true } as never)).rejects.toThrow(
+    await expect(admin.listTasks({ unknown: true } as never)).rejects.toThrow(
       /query contains unknown field: unknown/,
     );
     await expect(
-      admin.listJobs({ payload: { include: true, unknown: true } } as never),
+      admin.listTasks({ payload: { include: true, unknown: true } } as never),
     ).rejects.toThrow(/payload contains unknown field: unknown/);
   });
 
@@ -1191,16 +1193,16 @@ describe("operator reads", () => {
       await client.query("SET LOCAL enable_seqscan = off");
       const queries = [
         [
-          "job_query_created_idx",
-          "SELECT * FROM workhorse.job_query ORDER BY created_at DESC, job_id DESC LIMIT 10",
+          "task_query_created_idx",
+          "SELECT * FROM workhorse.task_query ORDER BY created_at DESC, task_id DESC LIMIT 10",
         ],
         [
-          "job_query_queue_created_idx",
-          "SELECT * FROM workhorse.job_query WHERE queue_name = 'q' ORDER BY created_at DESC, job_id DESC LIMIT 10",
+          "task_query_queue_created_idx",
+          "SELECT * FROM workhorse.task_query WHERE queue_name = 'q' ORDER BY created_at DESC, task_id DESC LIMIT 10",
         ],
         [
-          "job_query_type_created_idx",
-          "SELECT * FROM workhorse.job_query WHERE job_type = 't' ORDER BY created_at DESC, job_id DESC LIMIT 10",
+          "task_query_type_created_idx",
+          "SELECT * FROM workhorse.task_query WHERE task_type = 't' ORDER BY created_at DESC, task_id DESC LIMIT 10",
         ],
       ] as const;
       for (const [indexName, sql] of queries) {
@@ -1211,29 +1213,29 @@ describe("operator reads", () => {
           .join("\n");
         expect(plan).toContain(indexName);
         expect(plan).not.toMatch(
-          /job_runtime_(ready|scheduled|expired_active|deadline|timeout)_idx/,
+          /task_runtime_(ready|scheduled|expired_active|deadline|timeout)_idx/,
         );
       }
       const combinedPlan = (
         await client.query<{ "QUERY PLAN": string }>(`EXPLAIN (COSTS OFF)
           SELECT query_row.*
-            FROM workhorse.job_query query_row
+            FROM workhorse.task_query query_row
             JOIN LATERAL (
-              SELECT runtime.state FROM workhorse.job_runtime runtime
-               WHERE runtime.job_id = query_row.job_id
+              SELECT runtime.state FROM workhorse.task_runtime runtime
+               WHERE runtime.task_id = query_row.task_id
               UNION ALL
-              SELECT outcome.state FROM workhorse.job_outcome outcome
-               WHERE outcome.job_id = query_row.job_id
+              SELECT outcome.state FROM workhorse.task_outcome outcome
+               WHERE outcome.task_id = query_row.task_id
             ) lifecycle ON true
            WHERE query_row.queue_name = 'query-a'
-             AND query_row.job_type = 'email'
+             AND query_row.task_type = 'email'
              AND lifecycle.state = ANY (ARRAY['ready', 'succeeded'])
-           ORDER BY query_row.created_at DESC, query_row.job_id DESC LIMIT 10`)
+           ORDER BY query_row.created_at DESC, query_row.task_id DESC LIMIT 10`)
       ).rows
         .map((row) => row["QUERY PLAN"])
         .join("\n");
-      expect(combinedPlan).toMatch(/job_query_(queue|type)_created_idx/);
-      expect(combinedPlan).toMatch(/job_(runtime|outcome)_pkey/);
+      expect(combinedPlan).toMatch(/task_query_(queue|type)_created_idx/);
+      expect(combinedPlan).toMatch(/task_(runtime|outcome)_pkey/);
       await client.query("ROLLBACK");
     } finally {
       await client.query("ROLLBACK").catch(() => undefined);
@@ -1242,32 +1244,32 @@ describe("operator reads", () => {
   });
 
   it("merges retained events and attempts with stable equal-time cursors and exact final pages", async () => {
-    const jobId = "20000000-0000-0000-0000-000000000001";
+    const taskId = "20000000-0000-0000-0000-000000000001";
     const sameTime = "2025-03-04T05:06:07.123456Z";
     await pool.query(
-      `INSERT INTO workhorse.job(id, queue_name, job_type, payload, max_attempts, created_at)
+      `INSERT INTO workhorse.task(id, queue_name, task_type, payload, max_attempts, created_at)
        VALUES ($1, 'timeline', 'timeline', '{}', 2, '2025-03-01T00:00:00Z')`,
-      [jobId],
+      [taskId],
     );
     await pool.query(
-      `INSERT INTO workhorse.job_event(job_id, attempt, event_type, details, occurred_at)
+      `INSERT INTO workhorse.task_event(task_id, attempt, event_type, details, occurred_at)
        VALUES ($1, 1, 'older-event', '{"position":"old"}', '2025-03-04T05:06:06Z'),
               ($1, 1, 'same-event', '{"position":"event"}', $2),
               ($1, 2, 'newer-event', '{"position":"new"}', '2025-03-04T05:06:08Z')`,
-      [jobId, sameTime],
+      [taskId, sameTime],
     );
     await pool.query(
       `INSERT INTO workhorse.attempt_history(
-         job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at,
+         task_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at,
          finished_at, error, occurred_at
        ) VALUES (
          $1, 1, 7, 'timeline-worker', 'retry', '2025-03-04T05:00:00Z',
          '2025-03-04T05:00:01Z', $2, '{"name":"Retry"}', $2
        )`,
-      [jobId, sameTime],
+      [taskId, sameTime],
     );
 
-    const first = await admin.getJobTimeline(jobId, { limit: 2 });
+    const first = await admin.getTaskTimeline(taskId, { limit: 2 });
     expect(first.items.every((item) => item.priority === 0)).toBe(true);
     expect(
       first.items.map((item) => [item.kind, item.kind === "event" ? item.eventType : item.outcome]),
@@ -1276,7 +1278,7 @@ describe("operator reads", () => {
       ["event", "same-event"],
     ]);
     expect(first.nextCursor).not.toBeNull();
-    const second = await admin.getJobTimeline(jobId, { limit: 2, cursor: first.nextCursor! });
+    const second = await admin.getTaskTimeline(taskId, { limit: 2, cursor: first.nextCursor! });
     expect(second.items.every((item) => item.priority === 0)).toBe(true);
     expect(second.items.map((item) => item.kind)).toEqual(["attempt", "event"]);
     expect(second.items[0]).toMatchObject({
@@ -1294,24 +1296,26 @@ describe("operator reads", () => {
     ).toBe(4);
 
     await expect(
-      pool.query("SELECT * FROM workhorse.list_job_timeline_v1($1, 10, $2, 'unknown', $3)", [
-        jobId,
+      pool.query("SELECT * FROM workhorse.list_task_timeline_v1($1, 10, $2, 'unknown', $3)", [
+        taskId,
         sameTime,
         first.nextCursor!.recordId,
       ]),
     ).rejects.toThrow(/event or attempt/);
     await expect(
-      pool.query("SELECT * FROM workhorse.list_job_timeline_v1($1, 10, $2, NULL, $3)", [
-        jobId,
+      pool.query("SELECT * FROM workhorse.list_task_timeline_v1($1, 10, $2, NULL, $3)", [
+        taskId,
         sameTime,
         first.nextCursor!.recordId,
       ]),
     ).rejects.toThrow(/provided together/);
 
-    await pool.query("DELETE FROM workhorse.job_event WHERE job_id = $1", [jobId]);
-    expect((await admin.getJobTimeline(jobId)).items.map((item) => item.kind)).toEqual(["attempt"]);
-    await pool.query("DELETE FROM workhorse.attempt_history WHERE job_id = $1", [jobId]);
-    expect((await admin.getJobTimeline(jobId)).items).toEqual([]);
-    expect((await admin.getJobTimeline("20000000-0000-0000-0000-000000000099")).items).toEqual([]);
+    await pool.query("DELETE FROM workhorse.task_event WHERE task_id = $1", [taskId]);
+    expect((await admin.getTaskTimeline(taskId)).items.map((item) => item.kind)).toEqual([
+      "attempt",
+    ]);
+    await pool.query("DELETE FROM workhorse.attempt_history WHERE task_id = $1", [taskId]);
+    expect((await admin.getTaskTimeline(taskId)).items).toEqual([]);
+    expect((await admin.getTaskTimeline("20000000-0000-0000-0000-000000000099")).items).toEqual([]);
   });
 });

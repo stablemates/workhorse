@@ -51,7 +51,7 @@ winner without resuming the handler again.
 If another transition has already closed the boundary, the delivery returns `stale` and leaves the
 retained outcome unchanged.
 
-A delivery before the wait exists is rejected rather than buffered. A timeout, job deadline, or
+A delivery before the wait exists is rejected rather than buffered. A timeout, task deadline, or
 cancellation closes the boundary, so replay cannot continue with an invented payload.
 
 `Admin.listSignalWaits` provides the actionable operator projection. The dashboard uses the same

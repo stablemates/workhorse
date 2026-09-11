@@ -1,6 +1,6 @@
 import type { Json } from "@stablemates/workhorse";
 
-export const DURABLE_DEMO_JOB_TYPE = "demo.durable-pipeline";
+export const DURABLE_DEMO_TASK_TYPE = "demo.durable-pipeline";
 
 export const durableDemoScenarios = {
   "order-fulfillment": {
@@ -111,8 +111,8 @@ export function parseDurableDemoScenario(value: unknown): DurableDemoScenario | 
     : null;
 }
 
-export function durableDemoPlanForJob(type: string, payload: unknown): DurableDemoPlan | null {
-  if (type !== DURABLE_DEMO_JOB_TYPE || !payload || typeof payload !== "object") return null;
+export function durableDemoPlanForTask(type: string, payload: unknown): DurableDemoPlan | null {
+  if (type !== DURABLE_DEMO_TASK_TYPE || !payload || typeof payload !== "object") return null;
   const scenario = parseDurableDemoScenario((payload as { scenario?: unknown }).scenario);
   if (!scenario) return null;
   const definition = durableDemoScenarios[scenario];

@@ -22,7 +22,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Queue } from "../src/queue.js";
-import type { ClaimedJob, Queryable } from "../src/types.js";
+import type { ClaimedTask, Queryable } from "../src/types.js";
 import { Worker } from "../src/worker.js";
 import { registerQueueMetrics, type QueueMetricSource } from "../src/telemetry.js";
 
@@ -79,7 +79,7 @@ describe("OpenTelemetry", () => {
             rows: [
               {
                 ordinal: 1,
-                job_id: "00000000-0000-4000-8000-000000000001",
+                task_id: "00000000-0000-4000-8000-000000000001",
                 outcome: "accepted",
               },
             ] as never[],
@@ -89,8 +89,8 @@ describe("OpenTelemetry", () => {
           return {
             rows: [
               {
-                job_id: "00000000-0000-4000-8000-000000000001",
-                job_type: "mail.send",
+                task_id: "00000000-0000-4000-8000-000000000001",
+                task_type: "mail.send",
                 payload: { recipient: "reader@example.com", accessToken: "trace-secret" },
                 contract_version: "mail-current",
                 result_max_bytes: 1_048_576,
@@ -126,7 +126,7 @@ describe("OpenTelemetry", () => {
     const caller = trace.getTracer("test").startSpan("caller");
     const callerContext: Context = trace.setSpan(context.active(), caller);
 
-    const jobId = await context.with(callerContext, () =>
+    const taskId = await context.with(callerContext, () =>
       queue.enqueue("mail.send", {
         recipient: "reader@example.com",
         accessToken: "trace-secret",
@@ -135,7 +135,7 @@ describe("OpenTelemetry", () => {
     caller.end();
     const claimed = await queue.claim("worker-a");
 
-    expect(jobId).toBe("00000000-0000-4000-8000-000000000001");
+    expect(taskId).toBe("00000000-0000-4000-8000-000000000001");
     expect(acceptedRequest?.payload).toEqual({
       recipient: "reader@example.com",
       accessToken: "trace-secret",
@@ -150,7 +150,7 @@ describe("OpenTelemetry", () => {
     expect(enqueueSpan?.parentSpanContext?.spanId).toBe(caller.spanContext().spanId);
     expect(enqueueSpan?.attributes).toMatchObject({
       "workhorse.queue.name": "mail",
-      "workhorse.job.type": "mail.send",
+      "workhorse.task.type": "mail.send",
       "workhorse.enqueue.count": 1,
       "workhorse.enqueue.outcome": "accepted",
     });
@@ -164,11 +164,11 @@ describe("OpenTelemetry", () => {
       .getMetrics()
       .flatMap((resource) => resource.scopeMetrics)
       .flatMap((scope) => scope.metrics)
-      .find((metric) => metric.descriptor.name === "workhorse.jobs.enqueued");
+      .find((metric) => metric.descriptor.name === "workhorse.tasks.enqueued");
     expect(enqueuedMetric?.dataPoints).toContainEqual(
       expect.objectContaining({
         attributes: {
-          "workhorse.job.type": "mail.send",
+          "workhorse.task.type": "mail.send",
           "workhorse.queue.name": "mail",
         },
       }),
@@ -193,8 +193,8 @@ describe("OpenTelemetry", () => {
           return {
             rows: [
               {
-                job_id: "00000000-0000-4000-8000-000000000002",
-                job_type: "mail.send",
+                task_id: "00000000-0000-4000-8000-000000000002",
+                task_type: "mail.send",
                 payload: { recipient: "reader@example.com" },
                 contract_version: null,
                 result_max_bytes: 1_048_576,
@@ -229,8 +229,8 @@ describe("OpenTelemetry", () => {
     expect(handlerSpan?.parentSpanContext?.spanId).toBe("00f067aa0ba902b7");
     expect(handlerSpan?.attributes).toMatchObject({
       "workhorse.queue.name": "mail",
-      "workhorse.job.type": "mail.send",
-      "workhorse.job.attempt": 2,
+      "workhorse.task.type": "mail.send",
+      "workhorse.task.attempt": 2,
     });
     expect(completionSpan?.parentSpanContext?.spanId).toBe(handlerSpan?.spanContext().spanId);
 
@@ -240,15 +240,15 @@ describe("OpenTelemetry", () => {
       .flatMap((resource) => resource.scopeMetrics)
       .flatMap((scope) => scope.metrics);
     for (const metricName of [
-      "workhorse.jobs.claimed",
-      "workhorse.jobs.completed",
+      "workhorse.tasks.claimed",
+      "workhorse.tasks.completed",
       "workhorse.handler.runtime",
     ]) {
       const metric = metricsData.find((candidate) => candidate.descriptor.name === metricName);
       expect(metric?.dataPoints).toContainEqual(
         expect.objectContaining({
           attributes: {
-            "workhorse.job.type": "mail.send",
+            "workhorse.task.type": "mail.send",
             "workhorse.queue.name": "mail",
           },
         }),
@@ -262,7 +262,7 @@ describe("OpenTelemetry", () => {
     ).toContainEqual(
       expect.objectContaining({
         attributes: {
-          "workhorse.job.type": "mail.send",
+          "workhorse.task.type": "mail.send",
           "workhorse.queue.name": "mail",
           "workhorse.handler.outcome": "succeeded",
         },
@@ -270,7 +270,7 @@ describe("OpenTelemetry", () => {
     );
   });
 
-  it("does not count an idempotent replay as a newly enqueued job", async () => {
+  it("does not count an idempotent replay as a newly enqueued task", async () => {
     spanExporter.reset();
     metricExporter.reset();
     const database = queryable(
@@ -280,7 +280,7 @@ describe("OpenTelemetry", () => {
           rows: [
             {
               ordinal: 1,
-              job_id: "00000000-0000-4000-8000-000000000004",
+              task_id: "00000000-0000-4000-8000-000000000004",
               outcome: "replayed",
             },
           ] as never[],
@@ -304,10 +304,10 @@ describe("OpenTelemetry", () => {
       .getMetrics()
       .flatMap((resource) => resource.scopeMetrics)
       .flatMap((scope) => scope.metrics)
-      .find((metric) => metric.descriptor.name === "workhorse.jobs.enqueued");
+      .find((metric) => metric.descriptor.name === "workhorse.tasks.enqueued");
     expect(enqueuedMetric?.dataPoints).not.toContainEqual(
       expect.objectContaining({
-        attributes: expect.objectContaining({ "workhorse.job.type": "mail.replayed" }),
+        attributes: expect.objectContaining({ "workhorse.task.type": "mail.replayed" }),
       }),
     );
   });
@@ -328,8 +328,8 @@ describe("OpenTelemetry", () => {
           return {
             rows: [
               {
-                job_id: "00000000-0000-4000-8000-000000000004",
-                job_type: "mail.send",
+                task_id: "00000000-0000-4000-8000-000000000004",
+                task_type: "mail.send",
                 payload: { accessToken: secret },
                 contract_version: "1",
                 result_max_bytes: 1_048_576,
@@ -367,7 +367,7 @@ describe("OpenTelemetry", () => {
     const spans = spanExporter.getFinishedSpans();
     expect(JSON.stringify(spans.map((span) => span.events))).not.toContain(secret);
     expect(JSON.stringify(spans.map((span) => span.events))).toContain(
-      "Job handler failed; details redacted",
+      "Task handler failed; details redacted",
     );
   });
 
@@ -426,12 +426,13 @@ describe("OpenTelemetry", () => {
         ?.dataPoints[0]?.value,
     ).toBe(3);
     expect(
-      metricsData.find((metric) => metric.descriptor.name === "workhorse.jobs.retried")?.dataPoints,
+      metricsData.find((metric) => metric.descriptor.name === "workhorse.tasks.retried")
+        ?.dataPoints,
     ).toContainEqual(
       expect.objectContaining({
         value: 2,
         attributes: {
-          "workhorse.job.type": "mail.recover",
+          "workhorse.task.type": "mail.recover",
           "workhorse.queue.name": "mail",
         },
       }),
@@ -449,7 +450,7 @@ describe("OpenTelemetry", () => {
         };
       }),
     );
-    const job: ClaimedJob = {
+    const task: ClaimedTask = {
       id: "00000000-0000-4000-8000-000000000003",
       queue: "mail",
       type: "mail.send",
@@ -469,34 +470,36 @@ describe("OpenTelemetry", () => {
       leaseExpiresAt: new Date(),
     };
 
-    expect(await new Queue(database, "mail").expireOwned(job, "worker-a")).toBe("timeout_exceeded");
+    expect(await new Queue(database, "mail").expireOwned(task, "worker-a")).toBe(
+      "timeout_exceeded",
+    );
     await meterProvider.forceFlush();
 
     const retrySpan = spanExporter
       .getFinishedSpans()
       .find((span) => span.name === "workhorse.retry");
     expect(retrySpan?.attributes).toMatchObject({
-      "workhorse.job.id": job.id,
-      "workhorse.job.type": job.type,
-      "workhorse.job.attempt": job.attempt,
+      "workhorse.task.id": task.id,
+      "workhorse.task.type": task.type,
+      "workhorse.task.attempt": task.attempt,
       "workhorse.retry.outcome": "scheduled",
     });
     const retriedMetric = metricExporter
       .getMetrics()
       .flatMap((resource) => resource.scopeMetrics)
       .flatMap((scope) => scope.metrics)
-      .find((metric) => metric.descriptor.name === "workhorse.jobs.retried");
+      .find((metric) => metric.descriptor.name === "workhorse.tasks.retried");
     expect(retriedMetric?.dataPoints).toContainEqual(
       expect.objectContaining({
         attributes: {
-          "workhorse.job.type": "mail.send",
+          "workhorse.task.type": "mail.send",
           "workhorse.queue.name": "mail",
         },
       }),
     );
   });
 
-  it("exports queue depth and age without per-job metric attributes", async () => {
+  it("exports queue depth and age without per-task metric attributes", async () => {
     metricExporter.reset();
     const unregister = registerQueueMetrics({
       queueMetricSnapshot: vi.fn<QueueMetricSource["queueMetricSnapshot"]>(async () => [
@@ -606,15 +609,15 @@ describe("OpenTelemetry", () => {
       expect.arrayContaining([
         expect.objectContaining({
           value: 7,
-          attributes: { "workhorse.job.state": "ready", "workhorse.queue.name": "mail" },
+          attributes: { "workhorse.task.state": "ready", "workhorse.queue.name": "mail" },
         }),
         expect.objectContaining({
           value: 3,
-          attributes: { "workhorse.job.state": "scheduled", "workhorse.queue.name": "mail" },
+          attributes: { "workhorse.task.state": "scheduled", "workhorse.queue.name": "mail" },
         }),
         expect.objectContaining({
           value: 4,
-          attributes: { "workhorse.job.state": "active", "workhorse.queue.name": "billing" },
+          attributes: { "workhorse.task.state": "active", "workhorse.queue.name": "billing" },
         }),
       ]),
     );
@@ -677,7 +680,7 @@ describe("OpenTelemetry", () => {
     );
     for (const metric of metricsData) {
       for (const point of metric.dataPoints) {
-        expect(Object.keys(point.attributes)).not.toContain("workhorse.job.id");
+        expect(Object.keys(point.attributes)).not.toContain("workhorse.task.id");
       }
     }
   });

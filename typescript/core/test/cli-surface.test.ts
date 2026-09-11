@@ -81,7 +81,7 @@ describe("the declared CLI surface", () => {
 
   it.each(CLI_COMMANDS.map((command) => command.name))("accepts every %s flag", (name) => {
     // `admin` parses nothing until it has a subcommand, so it is exercised through one.
-    const words = name === "admin" ? ["admin", "jobs"] : name.split(" ");
+    const words = name === "admin" ? ["admin", "tasks"] : name.split(" ");
     const result = runCli([...words, ...flagsOf(name), "--help"]);
     expect({ name, code: result.code, stderr: result.stderr }).toEqual({
       name,

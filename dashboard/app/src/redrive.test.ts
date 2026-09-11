@@ -11,7 +11,7 @@ function listing(overrides: Partial<Parameters<typeof describeRedriveSelection>[
   return {
     filter: "discarded" as const,
     queue: null,
-    jobType: null,
+    taskType: null,
     worker: null,
     priority: null,
     search: null,
@@ -25,7 +25,7 @@ describe("dead-letter selection", () => {
     expect(describeRedriveSelection(listing()).selected).toBe("every dead letter");
     expect(
       describeRedriveSelection(
-        listing({ queue: "billing", jobType: "invoice.charge", tags: ["eu", "retryable"] }),
+        listing({ queue: "billing", taskType: "invoice.charge", tags: ["eu", "retryable"] }),
       ).selected,
     ).toBe("every dead letter in queue billing of type invoice.charge tagged eu, retryable");
   });

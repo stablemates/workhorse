@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { dashboardRouter, isDashboardMutation, type DashboardRpcContext } from "./router.js";
 
 const AUDIT = { actor: "browser", reason: "because", requestId: "request-1" };
-const JOB_ID = "00000000-0000-4000-8000-000000000000";
+const TASK_ID = "00000000-0000-4000-8000-000000000000";
 
 /**
  * One valid input per state-changing procedure.
@@ -26,25 +26,25 @@ const MUTATION_INPUTS: Readonly<Record<string, unknown>> = {
   setWorkerPaused: { workerId: "worker-1", paused: true, audit: AUDIT },
   overrideMaintenancePolicy: { definition: { timezone: "UTC" }, audit: AUDIT },
   revertMaintenancePolicy: { settings: ["timezone"], audit: AUDIT },
-  overrideRetentionPolicy: { definition: { jobEventRetentionDays: 7 }, audit: AUDIT },
-  revertRetentionPolicy: { settings: ["jobEventRetentionDays"], audit: AUDIT },
-  runTaskNow: { id: JOB_ID, audit: AUDIT },
-  cancelTask: { id: JOB_ID, audit: AUDIT },
+  overrideRetentionPolicy: { definition: { taskEventRetentionDays: 7 }, audit: AUDIT },
+  revertRetentionPolicy: { settings: ["taskEventRetentionDays"], audit: AUDIT },
+  runTaskNow: { id: TASK_ID, audit: AUDIT },
+  cancelTask: { id: TASK_ID, audit: AUDIT },
   signalTask: {
-    id: JOB_ID,
+    id: TASK_ID,
     name: "approved",
     payload: {},
     idempotencyKey: "signal-1",
     audit: AUDIT,
   },
   completeHumanWait: {
-    id: JOB_ID,
+    id: TASK_ID,
     name: "approval",
     result: {},
     idempotencyKey: "wait-1",
     audit: AUDIT,
   },
-  redriveTask: { id: JOB_ID, audit: AUDIT },
+  redriveTask: { id: TASK_ID, audit: AUDIT },
   redriveDeadLetters: { audit: AUDIT },
 };
 

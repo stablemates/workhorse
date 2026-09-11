@@ -45,17 +45,17 @@ describe("parsing the installed schema", () => {
   });
 
   it("resolves a projected function call to the function's return type", () => {
-    expect(schema.relations.get("dashboard_job_v1")?.columns.get("payload")).toBe("jsonb");
+    expect(schema.relations.get("dashboard_task_v1")?.columns.get("payload")).toBe("jsonb");
   });
 
   it("copies the column list a LIKE clause inherits", () => {
-    expect(schema.relations.get("job_stat_bucket_day")?.columns).toEqual(
-      schema.relations.get("job_stat_bucket_hour")?.columns,
+    expect(schema.relations.get("task_stat_bucket_day")?.columns).toEqual(
+      schema.relations.get("task_stat_bucket_hour")?.columns,
     );
   });
 
   it("ignores the CREATE TABLE statements that only run inside a function body", () => {
-    expect(schemaText).toContain("CREATE TABLE workhorse.%I PARTITION OF workhorse.job_event");
+    expect(schemaText).toContain("CREATE TABLE workhorse.%I PARTITION OF workhorse.task_event");
     expect([...schema.relations.keys()].filter((name) => name.includes("%"))).toEqual([]);
   });
 
@@ -93,7 +93,7 @@ describe("deriving the governed set", () => {
   it("records what no supported release reads as an internal helper", () => {
     expect(derived.internalHelpers.functions).toContain("uuid_v7_v1");
     expect(derived.internalHelpers.relations).toContain("schema_migration");
-    expect(derived.internalHelpers.functions).not.toContain("dashboard_job_result_v1");
+    expect(derived.internalHelpers.functions).not.toContain("dashboard_task_result_v1");
   });
 });
 
@@ -101,10 +101,10 @@ describe("classifying a governed SQL change", () => {
   const promised = surface({
     functions: {
       purge_queue_v1: { arguments: ["text", "integer?"], returns: "integer" },
-      list_jobs_v1: {
+      list_tasks_v1: {
         arguments: ["jsonb"],
         returns: "table",
-        returnsColumns: { job_id: "uuid", state: "text" },
+        returnsColumns: { task_id: "uuid", state: "text" },
       },
     },
     relations: { dashboard_queue_control_v1: { kind: "view", columns: { paused: "boolean" } } },
@@ -168,15 +168,15 @@ describe("classifying a governed SQL change", () => {
     const current = surface({
       functions: {
         ...promised.functions,
-        list_jobs_v1: {
+        list_tasks_v1: {
           arguments: ["jsonb"],
           returns: "table",
-          returnsColumns: { job_id: "text" },
+          returnsColumns: { task_id: "text" },
         },
       },
     });
     const changes = classifyGovernedSurface(promised, current).map((finding) => finding.change);
-    expect(changes).toContain("output column job_id changed from uuid to text");
+    expect(changes).toContain("output column task_id changed from uuid to text");
     expect(changes).toContain("output column state was removed");
   });
 

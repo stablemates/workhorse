@@ -1,8 +1,8 @@
 import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { expectOneRow } from "../errors.js";
 import {
-  jobMetricAttributes,
-  jobSpanAttributes,
+  taskMetricAttributes,
+  taskSpanAttributes,
   logDebug,
   logInfo,
   recordCancellation,
@@ -15,7 +15,7 @@ import type {
   CancellationRequest,
   CancelResult,
   BatchExecutionRecord,
-  ClaimedJob,
+  ClaimedTask,
   ExpireOwnedStatus,
   HeartbeatStatus,
   Json,
@@ -26,8 +26,8 @@ import { QueueModule } from "./module-context.js";
 import { nullableRowTimestamp, rowTimestamp } from "./row-mapping.js";
 
 type ClaimRow = {
-  job_id: string;
-  job_type: string;
+  task_id: string;
+  task_type: string;
   priority: number;
   payload: Json;
   contract_version: string | null;
@@ -74,13 +74,13 @@ export type FailureStatus =
 class FencedLease {
   private constructor(readonly sqlParameters: readonly [string, string, string]) {}
 
-  static from(job: ClaimedJob, workerId: string): FencedLease {
-    return new FencedLease([job.id, workerId, job.fenceToken.toString()]);
+  static from(task: ClaimedTask, workerId: string): FencedLease {
+    return new FencedLease([task.id, workerId, task.fenceToken.toString()]);
   }
 }
 
-const REDACTED_ERROR_MESSAGE = "Job handler failed; details redacted";
-const REDACTED_ERROR_NAME = "RedactedJobError";
+const REDACTED_ERROR_MESSAGE = "Task handler failed; details redacted";
+const REDACTED_ERROR_NAME = "RedactedTaskError";
 
 export function errorForTelemetry(error: unknown, redactDetails: boolean): Error | string {
   if (!redactDetails) return error instanceof Error ? error : String(error);
@@ -108,42 +108,42 @@ export function recordRecoveryTelemetry(
     "workhorse.recovery.retried": recovery.retried,
   });
   telemetryMetrics.expiredLeases.add(recovery.expired_leases);
-  const retriesByJob = new Map<string, { count: number; queue: string; type: string }>();
+  const retriesByTask = new Map<string, { count: number; queue: string; type: string }>();
   for (const dimension of recovery.retry_dimensions ?? []) {
     const key = `${dimension.queue}\u0000${dimension.type}`;
-    const existing = retriesByJob.get(key);
+    const existing = retriesByTask.get(key);
     if (existing === undefined) {
-      retriesByJob.set(key, { count: 1, ...dimension });
+      retriesByTask.set(key, { count: 1, ...dimension });
     } else {
       existing.count += 1;
     }
   }
   let attributedRetries = 0;
-  for (const retry of retriesByJob.values()) {
+  for (const retry of retriesByTask.values()) {
     attributedRetries += retry.count;
     telemetryMetrics.retried.add(retry.count, {
       "workhorse.queue.name": retry.queue,
-      "workhorse.job.type": retry.type,
+      "workhorse.task.type": retry.type,
     });
   }
   if (attributedRetries < recovery.retried) {
     telemetryMetrics.retried.add(recovery.retried - attributedRetries, {
       "workhorse.queue.name": "unknown",
-      "workhorse.job.type": "unknown",
+      "workhorse.task.type": "unknown",
     });
   }
 }
 
 /** Owns cancellation, claiming, fenced settlement, heartbeat, and lease recovery. */
 export class ClaimLeaseFenceModule extends QueueModule {
-  private claimedJob<TPayload extends Json>(
+  private claimedTask<TPayload extends Json>(
     row: ClaimRow,
     queueName: string,
-  ): ClaimedJob<TPayload> {
+  ): ClaimedTask<TPayload> {
     return {
-      id: row.job_id,
+      id: row.task_id,
       queue: queueName,
-      type: row.job_type,
+      type: row.task_type,
       priority: row.priority,
       payload: row.payload as TPayload,
       contractVersion: row.contract_version,
@@ -164,44 +164,44 @@ export class ClaimLeaseFenceModule extends QueueModule {
 
   private recordClaims(
     span: WorkhorseTelemetrySpan,
-    jobs: ClaimedJob[],
+    tasks: ClaimedTask[],
     queueName: string,
     workerId: string,
     startedAt: number,
   ): void {
     telemetryMetrics.claimDuration.record(performance.now() - startedAt, {
       "workhorse.queue.name": queueName,
-      "workhorse.claim.result": jobs.length === 0 ? "empty" : "claimed",
+      "workhorse.claim.result": tasks.length === 0 ? "empty" : "claimed",
     });
-    if (jobs[0]) span.setAttributes(jobSpanAttributes(jobs[0]));
-    for (const job of jobs) {
-      telemetryMetrics.claimed.add(1, jobMetricAttributes(job));
-      logDebug("workhorse.job.claimed", "Job claimed", {
-        ...jobSpanAttributes(job),
+    if (tasks[0]) span.setAttributes(taskSpanAttributes(tasks[0]));
+    for (const task of tasks) {
+      telemetryMetrics.claimed.add(1, taskMetricAttributes(task));
+      logDebug("workhorse.task.claimed", "Task claimed", {
+        ...taskSpanAttributes(task),
         "workhorse.queue.name": queueName,
         "workhorse.worker.id": workerId,
       });
     }
   }
 
-  async cancel(jobId: string, request: CancellationRequest = {}): Promise<CancelResult> {
+  async cancel(taskId: string, request: CancellationRequest = {}): Promise<CancelResult> {
     // PostgreSQL validates metadata and serializes cancellation with every lifecycle transition.
     // requestedBy is caller attribution only; this API does not claim authorization.
     const result = await this.context.database.query<CancelRow>(SQL_STATEMENTS["cancel_v1"], [
-      jobId,
+      taskId,
       request.requestedBy ?? null,
       request.reason ?? null,
     ]);
     const row = expectOneRow(result, "workhorse.cancel_v1");
     recordCancellation(row.status);
-    logInfo("workhorse.job.cancellation_processed", "Job cancellation processed", {
-      "workhorse.job.id": jobId,
-      "workhorse.job.state": row.state ?? "not_found",
+    logInfo("workhorse.task.cancellation_processed", "Task cancellation processed", {
+      "workhorse.task.id": taskId,
+      "workhorse.task.state": row.state ?? "not_found",
       "workhorse.operation.status": row.status,
     });
     return {
       status: row.status,
-      jobId,
+      taskId,
       state: row.state,
       currentAttempt: row.current_attempt,
       requestedAt: row.requested_at,
@@ -214,7 +214,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
   async claim<TPayload extends Json = Json>(
     workerId: string,
     options: { queue?: string; leaseMs?: number } = {},
-  ): Promise<ClaimedJob<TPayload> | null> {
+  ): Promise<ClaimedTask<TPayload> | null> {
     const queueName = options.queue ?? this.context.defaultQueue;
     const startedAt = performance.now();
     return withSpan("workhorse.claim", { "workhorse.queue.name": queueName }, async (span) => {
@@ -226,9 +226,9 @@ export class ClaimLeaseFenceModule extends QueueModule {
         options.leaseMs ?? 30_000,
       ]);
       const row = result.rows[0];
-      const job = row ? this.claimedJob<TPayload>(row, queueName) : null;
-      this.recordClaims(span, job ? [job] : [], queueName, workerId, startedAt);
-      return job;
+      const task = row ? this.claimedTask<TPayload>(row, queueName) : null;
+      this.recordClaims(span, task ? [task] : [], queueName, workerId, startedAt);
+      return task;
     });
   }
 
@@ -236,7 +236,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
     workerId: string,
     limit: number,
     options: { queue?: string; leaseMs?: number } = {},
-  ): Promise<ClaimedJob<TPayload>[]> {
+  ): Promise<ClaimedTask<TPayload>[]> {
     const queueName = options.queue ?? this.context.defaultQueue;
     const startedAt = performance.now();
     return withSpan("workhorse.claim", { "workhorse.queue.name": queueName }, async (span) => {
@@ -246,18 +246,18 @@ export class ClaimLeaseFenceModule extends QueueModule {
         limit,
         options.leaseMs ?? 30_000,
       ]);
-      const jobs = result.rows.map((row) => this.claimedJob<TPayload>(row, queueName));
-      this.recordClaims(span, jobs, queueName, workerId, startedAt);
-      return jobs;
+      const tasks = result.rows.map((row) => this.claimedTask<TPayload>(row, queueName));
+      this.recordClaims(span, tasks, queueName, workerId, startedAt);
+      return tasks;
     });
   }
 
   private batchEventParameters(batch: BatchExecutionRecord): readonly unknown[] {
     return [
       batch.batchId,
-      batch.jobs.map((job) => job.id),
-      batch.jobs.map((job) => job.attempt),
-      batch.jobs.map((job) => job.fenceToken.toString()),
+      batch.tasks.map((task) => task.id),
+      batch.tasks.map((task) => task.attempt),
+      batch.tasks.map((task) => task.fenceToken.toString()),
       batch.workerId,
     ];
   }
@@ -278,7 +278,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
       SQL_STATEMENTS["record_batch_dispatch_v1"],
       this.batchEventParameters(batch),
     );
-    this.assertBatchRecorded(result, "record_batch_dispatch_v1", batch.jobs.length);
+    this.assertBatchRecorded(result, "record_batch_dispatch_v1", batch.tasks.length);
   }
 
   async recordBatchFailure(batch: BatchExecutionRecord): Promise<void> {
@@ -286,20 +286,20 @@ export class ClaimLeaseFenceModule extends QueueModule {
       SQL_STATEMENTS["record_batch_failure_v1"],
       this.batchEventParameters(batch),
     );
-    this.assertBatchRecorded(result, "record_batch_failure_v1", batch.jobs.length);
+    this.assertBatchRecorded(result, "record_batch_failure_v1", batch.tasks.length);
   }
 
-  async heartbeat(job: ClaimedJob, workerId: string, leaseMs = 30_000): Promise<boolean> {
-    return (await this.heartbeatStatus(job, workerId, leaseMs)) === "accepted";
+  async heartbeat(task: ClaimedTask, workerId: string, leaseMs = 30_000): Promise<boolean> {
+    return (await this.heartbeatStatus(task, workerId, leaseMs)) === "accepted";
   }
 
   async heartbeatStatus(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     leaseMs = 30_000,
   ): Promise<HeartbeatStatus> {
-    return withSpan("workhorse.heartbeat", jobSpanAttributes(job), async (span) => {
-      const lease = FencedLease.from(job, workerId);
+    return withSpan("workhorse.heartbeat", taskSpanAttributes(task), async (span) => {
+      const lease = FencedLease.from(task, workerId);
       // Cancellation and stale ownership both stop compatibility callers, while workers can use the
       // status API to deliver a distinct cooperative cancellation signal.
       const result = await this.context.database.query<{ status: HeartbeatStatus }>(
@@ -310,14 +310,14 @@ export class ClaimLeaseFenceModule extends QueueModule {
       span.setAttribute("workhorse.heartbeat.status", status);
       if (status !== "accepted") {
         recordHeartbeatFailure(status);
-        logInfo("workhorse.job.heartbeat_rejected", "Job heartbeat rejected", {
-          ...jobSpanAttributes(job),
+        logInfo("workhorse.task.heartbeat_rejected", "Task heartbeat rejected", {
+          ...taskSpanAttributes(task),
           "workhorse.heartbeat.status": status,
           "workhorse.worker.id": workerId,
         });
       } else {
-        logDebug("workhorse.job.heartbeat_accepted", "Job heartbeat accepted", {
-          ...jobSpanAttributes(job),
+        logDebug("workhorse.task.heartbeat_accepted", "Task heartbeat accepted", {
+          ...taskSpanAttributes(task),
           "workhorse.worker.id": workerId,
         });
       }
@@ -326,32 +326,32 @@ export class ClaimLeaseFenceModule extends QueueModule {
   }
 
   async heartbeatMany(
-    jobs: readonly ClaimedJob[],
+    tasks: readonly ClaimedTask[],
     workerId: string,
     leaseMs = 30_000,
   ): Promise<Map<string, HeartbeatStatus>> {
-    const leases = jobs.map((job) => ({
-      jobId: job.id,
-      fenceToken: job.fenceToken.toString(),
+    const leases = tasks.map((task) => ({
+      taskId: task.id,
+      fenceToken: task.fenceToken.toString(),
       leaseMs,
     }));
     const result = await this.context.database.query<{
-      job_id: string;
+      task_id: string;
       status: HeartbeatStatus;
     }>(SQL_STATEMENTS["heartbeat_many_v1"], [workerId, JSON.stringify(leases)]);
-    const statuses = new Map(result.rows.map((row) => [row.job_id, row.status]));
-    for (const job of jobs) {
-      const status = statuses.get(job.id) ?? "stale";
+    const statuses = new Map(result.rows.map((row) => [row.task_id, row.status]));
+    for (const task of tasks) {
+      const status = statuses.get(task.id) ?? "stale";
       if (status !== "accepted") {
         recordHeartbeatFailure(status);
-        logInfo("workhorse.job.heartbeat_rejected", "Job heartbeat rejected", {
-          ...jobSpanAttributes(job),
+        logInfo("workhorse.task.heartbeat_rejected", "Task heartbeat rejected", {
+          ...taskSpanAttributes(task),
           "workhorse.heartbeat.status": status,
           "workhorse.worker.id": workerId,
         });
       } else {
-        logDebug("workhorse.job.heartbeat_accepted", "Job heartbeat accepted", {
-          ...jobSpanAttributes(job),
+        logDebug("workhorse.task.heartbeat_accepted", "Task heartbeat accepted", {
+          ...taskSpanAttributes(task),
           "workhorse.worker.id": workerId,
         });
       }
@@ -359,36 +359,36 @@ export class ClaimLeaseFenceModule extends QueueModule {
     return statuses;
   }
 
-  async expireOwned(job: ClaimedJob, workerId: string): Promise<ExpireOwnedStatus> {
-    const lease = FencedLease.from(job, workerId);
+  async expireOwned(task: ClaimedTask, workerId: string): Promise<ExpireOwnedStatus> {
+    const lease = FencedLease.from(task, workerId);
     const result = await this.context.database.query<{
       status: ExpireOwnedStatus;
       retry_state: "ready" | "scheduled" | null;
     }>(SQL_STATEMENTS["expire_owned_telemetry_v1"], lease.sqlParameters);
     const expiration = expectOneRow(result, "workhorse.expire_owned_telemetry_v1");
     if (expiration.retry_state !== null) {
-      await withSpan("workhorse.retry", jobSpanAttributes(job), async (span) => {
+      await withSpan("workhorse.retry", taskSpanAttributes(task), async (span) => {
         span.setAttribute("workhorse.retry.outcome", expiration.retry_state!);
-        telemetryMetrics.retried.add(1, jobMetricAttributes(job));
+        telemetryMetrics.retried.add(1, taskMetricAttributes(task));
       });
     }
-    logInfo("workhorse.job.ownership_expired", "Owned job lease expired", {
-      ...jobSpanAttributes(job),
+    logInfo("workhorse.task.ownership_expired", "Owned task lease expired", {
+      ...taskSpanAttributes(task),
       "workhorse.expiration.status": expiration.status,
       "workhorse.worker.id": workerId,
     });
     return expiration.status;
   }
 
-  async acknowledgeCancel(job: ClaimedJob, workerId: string): Promise<boolean> {
-    const lease = FencedLease.from(job, workerId);
+  async acknowledgeCancel(task: ClaimedTask, workerId: string): Promise<boolean> {
+    const lease = FencedLease.from(task, workerId);
     const result = await this.context.database.query<{ accepted: boolean }>(
       SQL_STATEMENTS["acknowledge_cancel_v1"],
       lease.sqlParameters,
     );
     const accepted = expectOneRow(result, "workhorse.acknowledge_cancel_v1").accepted;
-    logInfo("workhorse.job.cancellation_acknowledged", "Job cancellation acknowledged", {
-      ...jobSpanAttributes(job),
+    logInfo("workhorse.task.cancellation_acknowledged", "Task cancellation acknowledged", {
+      ...taskSpanAttributes(task),
       "workhorse.cancel.accepted": accepted,
       "workhorse.worker.id": workerId,
     });
@@ -396,14 +396,14 @@ export class ClaimLeaseFenceModule extends QueueModule {
   }
 
   async complete<TResult extends Json>(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     _result: TResult,
     validateResult: () => Promise<string>,
   ): Promise<boolean> {
-    return withSpan("workhorse.complete", jobSpanAttributes(job), async (span) => {
+    return withSpan("workhorse.complete", taskSpanAttributes(task), async (span) => {
       const serializedResult = await validateResult();
-      const lease = FencedLease.from(job, workerId);
+      const lease = FencedLease.from(task, workerId);
       // Completion is conditional on the exact unexpired lease and fence. A stale worker gets false
       // rather than overwriting the result of a recovered attempt.
       const query = await this.context.database.query<{ accepted: boolean }>(
@@ -412,12 +412,12 @@ export class ClaimLeaseFenceModule extends QueueModule {
       );
       const accepted = expectOneRow(query, "workhorse.complete_v1").accepted;
       span.setAttribute("workhorse.complete.accepted", accepted);
-      if (accepted) telemetryMetrics.completed.add(1, jobMetricAttributes(job));
+      if (accepted) telemetryMetrics.completed.add(1, taskMetricAttributes(task));
       logInfo(
-        accepted ? "workhorse.job.completed" : "workhorse.job.completion_rejected",
-        accepted ? "Job completed" : "Stale job completion rejected",
+        accepted ? "workhorse.task.completed" : "workhorse.task.completion_rejected",
+        accepted ? "Task completed" : "Stale task completion rejected",
         {
-          ...jobSpanAttributes(job),
+          ...taskSpanAttributes(task),
           "workhorse.complete.accepted": accepted,
           "workhorse.worker.id": workerId,
         },
@@ -427,13 +427,13 @@ export class ClaimLeaseFenceModule extends QueueModule {
   }
 
   async fail(
-    job: ClaimedJob,
+    task: ClaimedTask,
     workerId: string,
     error: unknown,
     retryDelayMs?: number,
   ): Promise<FailureStatus> {
-    return withSpan("workhorse.retry", jobSpanAttributes(job), async (span) => {
-      const lease = FencedLease.from(job, workerId);
+    return withSpan("workhorse.retry", taskSpanAttributes(task), async (span) => {
+      const lease = FencedLease.from(task, workerId);
       // PostgreSQL decides whether retry budget remains and atomically closes the old attempt before
       // creating the next projection. Undefined selects SQL-owned backoff; a number explicitly
       // overrides it, including zero for an immediate retry.
@@ -441,21 +441,21 @@ export class ClaimLeaseFenceModule extends QueueModule {
         SQL_STATEMENTS["fail_v1"],
         [
           ...lease.sqlParameters,
-          JSON.stringify(errorEnvelope(error, job.redactErrorDetails)),
+          JSON.stringify(errorEnvelope(error, task.redactErrorDetails)),
           retryDelayMs ?? null,
         ],
       );
       const state = expectOneRow(result, "workhorse.fail_v1").state;
       span.setAttribute("workhorse.retry.outcome", state);
       telemetryMetrics.failed.add(1, {
-        ...jobMetricAttributes(job),
+        ...taskMetricAttributes(task),
         "workhorse.attempt.outcome": state,
       });
       if (state === "ready" || state === "scheduled") {
-        telemetryMetrics.retried.add(1, jobMetricAttributes(job));
+        telemetryMetrics.retried.add(1, taskMetricAttributes(task));
       }
-      logInfo("workhorse.job.failure_processed", "Job attempt failure processed", {
-        ...jobSpanAttributes(job),
+      logInfo("workhorse.task.failure_processed", "Task attempt failure processed", {
+        ...taskSpanAttributes(task),
         "workhorse.attempt.outcome": state,
         "workhorse.worker.id": workerId,
       });

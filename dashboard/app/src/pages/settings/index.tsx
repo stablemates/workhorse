@@ -97,13 +97,13 @@ export type RetentionField = {
   suffix: string;
 };
 export const retentionWindowFields: RetentionField[] = [
-  { key: "jobIdentityRetentionDays", label: "Task identity", suffix: " days" },
+  { key: "taskIdentityRetentionDays", label: "Task identity", suffix: " days" },
   {
     key: "terminalOutcomeRetentionDays",
     label: "Finished outcomes",
     suffix: " days",
   },
-  { key: "jobEventRetentionDays", label: "Task events", suffix: " days" },
+  { key: "taskEventRetentionDays", label: "Task events", suffix: " days" },
   {
     key: "attemptHistoryRetentionDays",
     label: "Attempt history",
@@ -122,7 +122,7 @@ export const retentionWindowFields: RetentionField[] = [
 ];
 export const retentionCleanupFields: RetentionField[] = [
   {
-    key: "terminalJobPruneLimit",
+    key: "terminalTaskPruneLimit",
     label: "Finished tasks per cleanup pass",
     suffix: " rows",
   },

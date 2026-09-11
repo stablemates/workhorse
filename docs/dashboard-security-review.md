@@ -61,11 +61,11 @@ controller becomes optional or mandatory; or when the authorization call moves.
 Confirm redaction happens in PostgreSQL, as [ADR 0035](decisions/0035-redact-dashboard-payloads-in-the-read-surface.md)
 decided, and not in a TypeScript caller that can forget.
 
-- Confirm `workhorse.dashboard_job_v1` projects
+- Confirm `workhorse.dashboard_task_v1` projects
   `workhorse.redact_top_level_keys_v1(payload, payload_redact_keys)` rather than `payload`.
-- Confirm `workhorse.dashboard_job_outcome_v1` projects no `result` column, and that
-  `workhorse.dashboard_job_result_v1` is the only way to read one.
-- Confirm no dashboard read reaches a raw `workhorse.job` or `workhorse.job_outcome` column.
+- Confirm `workhorse.dashboard_task_outcome_v1` projects no `result` column, and that
+  `workhorse.dashboard_task_result_v1` is the only way to read one.
+- Confirm no dashboard read reaches a raw `workhorse.task` or `workhorse.task_outcome` column.
 
 **Re-walk when** a `dashboard_*_v1` view or function changes its projection, or when a new read
 reaches a payload, a result, or a handler-supplied value.
@@ -95,7 +95,7 @@ Confirm an error body reveals nothing about container paths or package internals
   `cause`, so verify the version in `pnpm-lock.yaml` still does.
 - Confirm every deliberate `ORPCError` message is one the maintainers wrote.
 - Confirm every dashboard read that projects a persisted worker error honours
-  `redactErrorStacks`. Both `jobDetail` and `eventDetail` project
+  `redactErrorStacks`. Both `taskDetail` and `eventDetail` project
   `workhorse.attempt_history.error`, and a host that withholds stacks from one has to withhold
   them from the other.
 - Confirm the schema-compatibility `503` body carries only version information.
@@ -158,7 +158,7 @@ advisory is either outside the closure or accepted with a reason and a review da
 - Run `pnpm npm:vuln`, which runs `pnpm audit --prod` and fails on any advisory
   `scripts/npm-advisory-acceptances.json` does not accept. A green run means every advisory in the
   tree already carries a written reason.
-- Read that file rather than the raw audit. The reviewer's job is to judge the reasons, not to
+- Read that file rather than the raw audit. The reviewer's task is to judge the reasons, not to
   rediscover the advisories: confirm each entry still describes the tree, and that no entry accepts
   a path inside the published closure on grounds that have expired.
 - For a path inside the closure, prefer a lockfile bump, then a declared-range bump. When the
