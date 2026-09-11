@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-02
+- **Amended by:** [ADR 0064](0064-rename-the-unit-noun-from-job-to-task.md) (the category noun
+  is now "durable task queue")
 - **Related:** WH-554, WH-548, [ADR 0042](0042-publish-the-first-public-beta.md), [ADR 0046](0046-make-readmes-entry-points.md)
 
 ## Context

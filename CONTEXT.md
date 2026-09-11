@@ -1,16 +1,37 @@
 # Workhorse
 
-Workhorse is a durable job queue for PostgreSQL, with TypeScript, Python, and Go workers on one SQL
+Workhorse is a durable task queue for PostgreSQL, with TypeScript, Python, and Go workers on one SQL
 protocol. This glossary names the product terms that public material and implementation work use
 consistently.
 
 ## Language
 
-**Durable job queue**:
-The product category Workhorse claims: a job queue whose scheduling, retries, waits, and recovery
+**Durable task queue**:
+The product category Workhorse claims: a task queue whose scheduling, retries, waits, and recovery
 live in PostgreSQL.
 _Avoid as the category_: Durable execution protocol, durable execution platform, workflow engine,
-workflow system, task queue, background job framework
+workflow system, job queue, background job framework
+
+**Task**:
+The unit of work Workhorse enqueues, claims, retries, and records: one row in `workhorse.task`,
+with an identity that survives retries, waits, and worker changes.
+_Avoid_: Job, message, work item, activity
+
+**Handler**:
+The function a worker runs for a task type. A handler restarts from the top after a retry, a
+crash, or a durable wait.
+_Avoid_: Processor, job function, activity, task function
+
+**Checkpoint**:
+The named durable step inside one handler run whose stored result a later run replays instead of
+recomputing.
+_Avoid_: Step, sub-task, memoized call
+
+**Routine**:
+A scheduled maintenance activity a worker offers to PostgreSQL, such as the tick, history
+partitions, history retention, and terminal storage. A routine is not a task and never has a
+handler.
+_Avoid_: Maintenance task, background task, cron job
 
 **Protocol**:
 The versioned schema and SQL functions inside PostgreSQL that every Workhorse SDK calls, so three
