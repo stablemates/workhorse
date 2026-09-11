@@ -22,6 +22,7 @@ import {
   DEMO_CONCURRENCY_POLICY_NAMESPACE,
   DEMO_OPERATOR_IDEMPOTENCY_KEY,
   DEMO_OPERATOR_IDEMPOTENCY_SCOPE,
+  DEMO_OPERATOR_MAX_PENDING_JOBS,
   DEMO_SEED_IDEMPOTENCY_KEY,
   DEMO_SEED_IDEMPOTENCY_SCOPE,
   DEMO_DURABLE_STEP_MS,
@@ -59,6 +60,7 @@ import {
   LONG_RUNNING_SCHEDULE_NAME,
   LANGUAGE_WORKER_JOB_TYPE,
   PYTHON_WORKER_SCHEDULE_NAME,
+  RECURRING_JOB_TYPE,
   REPORT_SCHEDULE_NAME,
   SHARED_WORKER_JOB_TYPE,
   SHARED_WORKER_SCHEDULE_NAME,
@@ -2853,6 +2855,51 @@ describe("Workhorse demo", () => {
         status: "succeeded",
       },
     ]);
+  });
+
+  it("refuses operator admissions while the pending-work budget is saturated", async () => {
+    const { app } = createTestApplication({ operator: createLocalOperator(database) });
+    const client = dashboardClient(app);
+    const queue = new Queue(pool, DEMO_QUEUE);
+
+    // Jobs admitted outside the operator surface still occupy the same fleet budget.
+    const jobIds = await queue.enqueueMany(
+      Array.from({ length: DEMO_OPERATOR_MAX_PENDING_JOBS }, (_, index) => ({
+        type: RECURRING_JOB_TYPE,
+        payload: { source: "budget-fill", index },
+      })),
+    );
+
+    await expect(
+      client.dashboard.enqueueTest({
+        kind: "success",
+        audit: { actor: "operator", reason: "saturated budget", requestId: "audit-budget" },
+      }),
+    ).rejects.toThrow(/operator-admitted work/);
+    // Every job-creating mutation shares the ceiling, not just enqueueTest.
+    await expect(
+      client.dashboard.redriveDeadLetters({
+        queue: null,
+        jobType: null,
+        tags: [],
+        limit: 1,
+        cursor: null,
+        audit: { actor: "operator", reason: "saturated budget", requestId: "audit-budget-redrive" },
+      }),
+    ).rejects.toThrow(/operator-admitted work/);
+    // Mutations that act on existing work stay available under saturation; this one drains it.
+    await expect(
+      client.dashboard.cancelTask({
+        id: jobIds[0]!,
+        audit: { actor: "operator", requestId: "audit-budget-cancel" },
+      }),
+    ).resolves.toMatchObject({ status: "canceled" });
+    await expect(
+      client.dashboard.enqueueTest({
+        kind: "success",
+        audit: { actor: "operator", reason: "drained budget", requestId: "audit-budget-drained" },
+      }),
+    ).resolves.toMatchObject({ jobId: expect.any(String) });
   });
 
   it("pauses a local worker through RPC and audits the in-memory state change", async () => {

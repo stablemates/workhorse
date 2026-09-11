@@ -89,10 +89,44 @@ The demo container is limited to one CPU, 1 GiB of memory, and 256 processes. Th
 limited to half a CPU, 256 MiB of memory, and 128 processes. Keep equivalent limits so traffic or a
 runaway process cannot consume the host's full capacity.
 
+The demo answers a fixed public surface. `GET /up` and `GET /robots.txt` respond without touching
+the dashboard host. `GET` requests under the dashboard path serve the application shell, and `GET`
+requests under `assets/` serve packaged files. Every dashboard RPC is a `POST` to
+`<workspace>/rpc/dashboard/<procedure>`; `dashboard/v1/procedures.json` enumerates the procedures
+and marks each one that mutates. When administrator credentials are configured, `GET` and `POST`
+to `/login` and `POST` to `/logout` join the surface. No other method or path is meaningful, so the
+edge may reject everything outside it.
+
 The demo keeps anonymous operator controls available, and the server limits each client to a burst
 of five mutations and then twelve mutations per minute. The proxy in front of it must append the
 address it observes to `X-Forwarded-For`; the server uses the right-most address so a caller cannot
 choose the rate-limit key. Any replacement proxy must preserve that append-only chain.
+
+The server also bounds each request independently of the rate budget. It refuses a declared
+request body over 131,072 bytes with 413, and a `POST`, `PUT`, or `PATCH` that streams without a
+declared `Content-Length` with 411 — so the proxy must buffer request bodies and forward their
+length. More than four operator mutations executing at once answer 503, and any request still open
+after sixty seconds is closed. The three admissions that create jobs — `enqueueTest`,
+`redriveTask`, and `redriveDeadLetters` — additionally refuse once fifty jobs are ready or running,
+so a flood of distinct clients cannot pile work on the demo fleet faster than it drains.
+
+Because the demo is unauthenticated by design, the edge in front of it must carry controls of its
+own. The concrete rules live in the private operations repository; this list is the contract they
+must satisfy:
+
+- A managed WAF ruleset, such as Cloudflare Managed Rules, on the demo hostname.
+- An edge rate limit on `POST` requests to `*/rpc/dashboard/*` stricter than the server's
+  per-client bucket, so a flood spread across many addresses sheds load before it reaches the
+  container.
+- A method allowlist of `GET`, `HEAD`, `POST`, and `OPTIONS` on the demo hostname.
+- A request-body ceiling at or below the server's 131,072 bytes.
+
+Demo jobs cannot reach production credentials or outside services. Every handler is fixed code
+compiled into the image: the job path imports no network or process primitive and reads no
+environment, which `typescript/demo/src/egress.test.ts` asserts on every run. The only channel a
+job can touch is its own workspace's PostgreSQL pool. A deployment should still restrict the
+container's egress to its two databases and the telemetry collector, so a future regression has no
+network to use.
 
 The server retains successful and failed operator audit rows for seven days. It removes at most
 1,000 expired rows at startup and during each one-minute pass, so cleanup stays bounded while its
