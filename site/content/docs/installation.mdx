@@ -101,7 +101,7 @@ A Python or Go project has no `node_modules` to resolve the binary from, so it n
 package and the version:
 
 ```bash
-npx --package @stablemates/workhorse@0.1.3 workhorse schema install
+npx --package @stablemates/workhorse@0.1.4 workhorse schema install
 ```
 
 Pin that to the version of `stablemates-workhorse` or `github.com/stablemates/workhorse/go` the
@@ -188,11 +188,11 @@ instead. Download that asset from the release for the version your application d
 apply it:
 
 ```bash
-curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.1.3/schema.sql
+curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.1.4/schema.sql
 psql "$DATABASE_URL" -f schema.sql
 ```
 
-The [`v0.1.3` release](https://github.com/stablemates/workhorse/releases/tag/v0.1.3) is the page
+The [`v0.1.4` release](https://github.com/stablemates/workhorse/releases/tag/v0.1.4) is the page
 that carries the file. Change both version numbers together when you pin a different one: the
 schema the file creates is the schema that release's SDK expects.
 
