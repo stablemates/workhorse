@@ -6,6 +6,7 @@
   WH-640,
   WH-641,
   WH-645
+- **Amended by:** [ADR 0065](0065-publish-validated-deployment-references.md)
 - **Supersedes in part:** the ADR 0044 clause "Keep parameterized examples and generic deployment
   guidance in this repository"
 

@@ -1,0 +1,2 @@
+#!/bin/sh
+exec node /opt/workhorse-demo/node_modules/@stablemates/workhorse/dist/src/cli/workhorse.js "$@"

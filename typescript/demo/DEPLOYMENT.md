@@ -3,6 +3,10 @@
 This document states what a deployment of the documentation site and demo must do. It ships no
 deployment configuration.
 
+The repository's [Kubernetes reference](../../docs/kubernetes.md) is an operator-neutral example
+for applications that use Workhorse. It does not describe or deploy the public site or demo, whose
+live configuration remains in the private operations repository.
+
 That is deliberate. This repository used to carry parameterized Kamal files alongside the real ones,
 which lived in a private operations repository. The copies were complete, executable, and sitting
 under the ordinary names, so a reader looking for the deploy found them first and could not tell

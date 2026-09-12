@@ -79,6 +79,9 @@ Two boundaries worth knowing:
   requests immediate exit, so handlers must stay safe for recovery after a forced stop — which
   checkpointed, idempotent handlers already are.
 
+The [Kubernetes deployment reference](/docs/kubernetes) pairs a 110-second process deadline with a
+120-second Pod grace, then wires both probe endpoints into a worker Deployment.
+
 ## Probes for your orchestrator
 
 The optional probe listener serves exactly two endpoints: liveness (`/livez`) while the process
@@ -104,7 +107,7 @@ cadence, which is what lets a dashboard on another machine see the fleet — see
 
 - [Workers](/docs/workers) — handlers, concurrency, and local lifecycle
 - [Maintenance and retention](/docs/maintenance) — the background work these processes drive
-- [Cancellation](/docs/cancellation) — stop one task instead of one process
+- [Kubernetes](/docs/kubernetes) — deploy schema, worker, and dashboard workloads
 
 ---
 
