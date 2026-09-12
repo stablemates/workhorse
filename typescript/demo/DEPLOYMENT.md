@@ -52,6 +52,37 @@ Provisioning the registry, the databases, the edge gateway, and the host filesys
 to the operator, because credentials, recovery procedures, and network topology differ between
 installations.
 
+## Private registry access
+
+The registry must require TLS and authenticate every push and pull. Keep its username, password,
+and password verifier in the private operations repository or its secret store. The deployment
+tool must read the real password from that store and refuse to run when it is absent; a placeholder
+or fallback credential can turn a configuration error into an anonymous or unusable deployment.
+
+Restrict the registry port with a default-deny host firewall. Permit only the registry host itself
+and the build or deployment hosts in the operator's approved inventory. Binding the service to a
+private address is not sufficient, because any other client on that network could otherwise try a
+credential or exploit the registry. Record each allowed source beside its inventory owner, and
+remove its firewall rule when the host stops publishing or pulling images.
+
+Verify authentication from an allowed host without sending a credential:
+
+```sh
+curl --silent --show-error --dump-header - --output /dev/null \
+  --cacert <registry-ca> https://<registry-host>:<registry-port>/v2/
+```
+
+The response must be `401 Unauthorized` and include a `WWW-Authenticate` challenge. Repeat the
+request with the deployment credential and require `200 OK`, then verify a push and pull through
+the deployment tool. From a host outside the firewall allowlist, a TCP connection to the registry
+port must fail; an authentication challenge from that host means the network restriction is open.
+
+Rotate the credential in one maintenance window. Create a new password verifier, replace the
+deployment secret with the matching password, reload or recreate the registry, and verify an
+authenticated push and pull before retiring the previous credential. Confirm that the old
+credential fails after cutover, and record the rotation date without copying either password into
+the inventory or this repository.
+
 ## Host administrative access
 
 The host accepts SSH public keys only. Disable password and keyboard-interactive authentication,
