@@ -125,6 +125,29 @@ and `NewSQLExecutor` accepts a `*sql.Tx`. Python's `Worker` needs its own connec
 mode and raises `ValueError` otherwise, so keep the connection you enqueue on separate from the one
 a worker runs on.
 
+SQLAlchemy applications using its Psycopg dialect can reach that same driver connection through
+`sqlalchemy_connection.connection.driver_connection`. Build the queue inside SQLAlchemy's own
+transaction so it cannot outlive the application write:
+
+```python
+from sqlalchemy import create_engine, text
+
+from workhorse import Queue
+
+engine = create_engine("postgresql+psycopg://localhost/application")
+
+with engine.begin() as sqlalchemy_connection:
+    sqlalchemy_connection.execute(
+        text("INSERT INTO account (id, email) VALUES (:id, :email)"),
+        {"id": account_id, "email": email},
+    )
+    psycopg_connection = sqlalchemy_connection.connection.driver_connection
+    Queue(psycopg_connection).enqueue("account.created", {"accountId": account_id})
+```
+
+`driver_connection` is the Psycopg connection already enlisted in this transaction. SQLAlchemy
+still owns the commit, rollback, and pool checkout.
+
 One boundary to keep in mind: the transaction covers durable acceptance only. Handlers run later,
 outside your transaction, so their external effects still need their own idempotency.
 

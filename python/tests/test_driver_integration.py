@@ -5,6 +5,8 @@ from datetime import UTC, datetime, timedelta
 import asyncpg
 import psycopg
 import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
 
 from workhorse import (
     AsyncQueue,
@@ -34,6 +36,17 @@ def task_count(database_url: str) -> int:
         return int(row[0])
 
 
+def sqlalchemy_business_and_task_counts(database_url: str) -> tuple[int, int]:
+    with psycopg.connect(database_url, autocommit=True) as observer:
+        row = observer.execute(
+            "SELECT "
+            "(SELECT count(*) FROM sqlalchemy_business_row), "
+            "(SELECT count(*) FROM workhorse.task)"
+        ).fetchone()
+        assert row is not None
+        return int(row[0]), int(row[1])
+
+
 def test_psycopg_preserves_caller_owned_commit_and_rollback(database_url: str) -> None:
     with psycopg.connect(database_url) as connection:
         with connection.transaction():
@@ -50,6 +63,45 @@ def test_psycopg_preserves_caller_owned_commit_and_rollback(database_url: str) -
 
     assert task_count(database_url) == 1
     assert task_id
+
+
+def test_sqlalchemy_connection_connection_driver_connection_preserves_transaction(
+    database_url: str,
+) -> None:
+    with psycopg.connect(database_url, autocommit=True) as setup:
+        setup.execute("CREATE TABLE sqlalchemy_business_row (id text PRIMARY KEY)")
+
+    url = make_url(database_url).set(drivername="postgresql+psycopg")
+    engine = create_engine(url)
+    try:
+        with engine.begin() as sqlalchemy_connection:
+            sqlalchemy_connection.execute(
+                text("INSERT INTO sqlalchemy_business_row (id) VALUES (:id)"),
+                {"id": "committed"},
+            )
+            psycopg_connection = sqlalchemy_connection.connection.driver_connection
+            assert isinstance(psycopg_connection, psycopg.Connection)
+            Queue(psycopg_connection).enqueue("email.send", {"message": "committed"})
+            assert sqlalchemy_business_and_task_counts(database_url) == (0, 0)
+
+        assert sqlalchemy_business_and_task_counts(database_url) == (1, 1)
+
+        with (
+            pytest.raises(RuntimeError, match="application rollback"),
+            engine.begin() as connection,
+        ):
+            connection.execute(
+                text("INSERT INTO sqlalchemy_business_row (id) VALUES (:id)"),
+                {"id": "rolled-back"},
+            )
+            psycopg_connection = connection.connection.driver_connection
+            assert isinstance(psycopg_connection, psycopg.Connection)
+            Queue(psycopg_connection).enqueue("email.send", {"message": "rolled back"})
+            raise RuntimeError("application rollback")
+
+        assert sqlalchemy_business_and_task_counts(database_url) == (1, 1)
+    finally:
+        engine.dispose()
 
 
 def test_psycopg_reads_the_database_health_document(database_url: str) -> None:
