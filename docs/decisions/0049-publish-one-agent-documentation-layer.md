@@ -94,10 +94,9 @@ versions, because gating a release is a different job from telling a reader what
 `docs/decisions/` is exempt from the install sweep. An accepted record states what was decided on
 its date, so ADR 0046 keeps the pin it recorded.
 
-Two proofs stay weaker than they read. `pnpm test:site-smoke` runs in no enabled CI lane, so a smoke
-assertion added for this layer is real but ungated. Nothing in the repository runs the site's nginx,
-so the Markdown type is proved against `site/nginx.conf` text and not against a served
-response.
+The deterministic entry-point crawl runs through `pnpm test:site-smoke` in CI's `demo` lane. It
+reads repository files and the locally built site, so it needs no model credential or external
+network. The nginx smoke test proves the Markdown type against a local container separately.
 
 Per-harness packaging stays undecided. A neutral page has to exist before anything can package it,
 and the drift check and freshness mechanism for packaged text both wait on that decision.

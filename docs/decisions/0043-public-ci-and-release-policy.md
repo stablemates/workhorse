@@ -28,8 +28,9 @@ maintainer approval before any outside collaborator's workflow runs.
 The branch ruleset for `main` requires a pull request and the single `CI / required` check. That
 aggregate job fails when any job selected for that trigger fails. It accepts deliberately skipped
 jobs, so packed installs can stay out of pull requests and pushes while language lanes stay out of
-the daily packed run. Demo and site smoke tests are temporarily excluded because their full build
-dominates CI time. This stable name keeps matrix changes from invalidating branch protection.
+the daily packed run. The `demo` job builds once and gates pull requests, pushes, manual runs, and
+the weekly schedule with the demo and site smoke tests. This stable name keeps matrix changes from
+invalidating branch protection.
 
 Each language matrix runs at most two lanes concurrently. The cap limits database contention during
 the weekly compatibility run without affecting the single-lane pull request and push feedback.
