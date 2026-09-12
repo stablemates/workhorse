@@ -4,6 +4,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { resolve } from "node:path";
 import { CLI_COMMANDS } from "../src/cli/surface.js";
 import { WORKHORSE_VERSION } from "../src/version.js";
+import {
+  agentEntryPointHopBound,
+  assertAgentEntryPointReachable,
+  type CrawlSurface,
+} from "./agent-entrypoint-crawl.js";
 
 const repositoryRoot = resolve(import.meta.dirname, "../../..");
 const siteConfig = { url: "https://workhorse.run" } as const;
@@ -112,6 +117,44 @@ try {
       }
     }
   }
+
+  // Agents enter through the public site, repository and package READMEs, or
+  // an arbitrary documentation page. Follow the links exactly as published,
+  // but map every workhorse.run request onto this built preview. This keeps the
+  // proof deterministic and prevents the crawl from touching the network.
+  const publicSite = new URL(siteConfig.url);
+  const builtSurface = async (name: string, path: string): Promise<CrawlSurface> => {
+    const response = await fetch(`${baseUrl}${path}`);
+    const body = await response.text();
+    if (!response.ok) throw new Error(`${name} returned ${response.status}`);
+    return { body, name, url: new URL(path, publicSite) };
+  };
+  const readmeSurface = async (name: string, path: string): Promise<CrawlSurface> => ({
+    body: await readFile(resolve(repositoryRoot, path), "utf8"),
+    name,
+    url: new URL(`https://github.com/stablemates/workhorse/blob/main/${path}`),
+  });
+  const crawlSurfaces = await Promise.all([
+    builtSurface("site landing page", "/"),
+    builtSurface("robots.txt", "/robots.txt"),
+    readmeSurface("root README", "README.md"),
+    readmeSurface("TypeScript README", "typescript/core/README.md"),
+    readmeSurface("Python README", "python/README.md"),
+    readmeSurface("Go README", "go/README.md"),
+    builtSurface("documentation page (/docs/quickstart)", "/docs/quickstart"),
+  ]);
+  await assertAgentEntryPointReachable(
+    crawlSurfaces,
+    async (url) => {
+      if (url.origin !== publicSite.origin) {
+        throw new Error(`The local agent entry point crawl tried to fetch ${url.href}`);
+      }
+      const response = await fetch(`${baseUrl}${url.pathname}${url.search}`);
+      return response.ok ? response.text() : null;
+    },
+    publicSite.origin,
+    agentEntryPointHopBound,
+  );
 
   // `expectations` proves a page contains something. A twin has to prove the
   // opposite: that no MDX tag survived the transform. Sweep every page the
