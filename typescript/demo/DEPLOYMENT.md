@@ -48,6 +48,49 @@ Provisioning the registry, the databases, the edge gateway, and the host filesys
 to the operator, because credentials, recovery procedures, and network topology differ between
 installations.
 
+## Host administrative access
+
+The host accepts SSH public keys only. Disable password and keyboard-interactive authentication,
+disable direct root login, and allow only the named maintainer and deployment accounts. Check the
+effective configuration before reloading SSH, because included files can override the main file:
+
+```sh
+sudo sshd -t
+sudo sshd -T | grep -E \
+  '^(pubkeyauthentication|passwordauthentication|kbdinteractiveauthentication|permitrootlogin|allowusers) '
+```
+
+The effective values must enable `pubkeyauthentication`, disable `passwordauthentication` and
+`kbdinteractiveauthentication`, disable `permitrootlogin`, and contain an explicit `allowusers`
+list. Keep an existing session open while testing a second key-only login after each change, so a
+bad rule does not remove the remaining recovery path.
+
+Membership in the host's `docker` group grants control equivalent to root. Keep it limited to the
+accounts that operate Docker, and reconcile this output against the administrator inventory after
+each access change and during every access review:
+
+```sh
+getent group docker
+```
+
+Application containers must not mount the Docker daemon socket. Inspect every site and demo
+container after a deployment, and reject any mount whose source is `/var/run/docker.sock`,
+`/run/docker.sock`, or another socket configured for the daemon:
+
+```sh
+docker inspect <container> --format '{{json .Mounts}}'
+```
+
+The private operations repository owns the administrator inventory and one rotation date for every
+authorized key. Before a key reaches that date, install and test its replacement, then remove the
+old key during the same maintenance window. Record the new fingerprint and rotation date without
+copying private key material.
+
+When access is revoked, remove the key from every `authorized_keys` file and remove the account
+from the SSH allowlist and the `docker` group. Terminate its active sessions, then verify that its
+old key cannot open a new session and that `getent group docker` no longer lists the account. If the
+key may have been copied, rotate every host or deployment credential the account could read.
+
 ## Configuration the demo reads
 
 The demo server reads its configuration from the environment. These are the values a deployment must
