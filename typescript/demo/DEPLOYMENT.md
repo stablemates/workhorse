@@ -40,6 +40,10 @@ client asked for. If a CDN or cache sits in front of the site, it must honour `V
 strip the header, or a browser can receive a cached twin. After a deploy that changes negotiation,
 the operator must purge that cache.
 
+The site nginx disables origin access logging because the public privacy notice says the origin
+keeps no access log. An operator must update that notice before enabling request logs anywhere in
+the site container or retaining equivalent request data elsewhere in the deployment.
+
 ## What the deployment must provide
 
 - A Linux host with Docker, SSH access, and public ports 80 and 443.

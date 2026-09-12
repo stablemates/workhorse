@@ -3,8 +3,9 @@ title: Privacy notice
 description: What workhorse.run collects when you read it, who processes it, and how to opt out.
 ---
 
-This notice covers the documentation site at workhorse.run. It is a static site: it has no user
-accounts, no sign-in, no forms, and no comments, and it stores nothing you type. Reading it sends
+This notice covers the documentation site at workhorse.run. Anton Orel operates the site from
+Florida, United States, and decides how it uses the data described below. The site is static: it
+has no user accounts, sign-in, forms, or comments, and it stores nothing you type. Reading it sends
 the ordinary data an HTTP request carries, and two third parties see that data.
 
 ## What is collected
@@ -13,14 +14,19 @@ the ordinary data an HTTP request carries, and two third parties see that data.
 IP address, the page you asked for, your browser's user agent, and the referring page. Cloudflare
 uses this to serve the page, to cache it, and to protect the site from abuse, under
 [Cloudflare's privacy policy](https://www.cloudflare.com/privacypolicy/). The origin server behind
-Cloudflare keeps no access log.
+Cloudflare keeps no access log because its nginx configuration disables access logging.
 
 **Analytics.** Every HTML page loads Google Analytics 4 with the measurement ID `G-9NC8FKZPVB`.
 Google Analytics sets cookies in your browser, records the pages you view and how you reached them,
 and reports aggregate usage to the maintainers, under
 [Google's privacy policy](https://policies.google.com/privacy). The maintainers use the reports to
 see which pages are read and which are not. They do not sell the data, and they do not combine it
-with any other source.
+with any other source. The Google Analytics property retains user-level and event-level data for
+two months, then Google deletes it automatically. That setting does not limit the standard
+aggregated reports available to the operator.
+
+The analytics script loads without a consent prompt. The site is operated in the United States and
+is not directed to children.
 
 Machine-readable files such as `llms.txt`, the Markdown twins, `sitemap.xml`, and `openapi.json`
 load no analytics script. A client that asks for Markdown with the `Accept` header receives the
@@ -37,8 +43,17 @@ of any page by adding `.md` to its URL. The site works fully without the analyti
 The hosted demo at demo.workhorse.run is a separate application with its own logs; this notice does
 not cover it. Links to GitHub, npm, PyPI, and pkg.go.dev lead to services with their own notices.
 
-## Changes and contact
+## Operator and contact
 
-This notice took effect on 5 September 2026 and changes when the site's behaviour changes; the
-current text is always the one at this URL. Questions about it go to the channels on
-[Contact](/contact).
+Anton Orel in Florida, United States, is the operator responsible for this site. Send privacy
+questions or requests to [support@workhorse.run](mailto:support@workhorse.run). You may ask what
+data the site holds about you or ask for it to be corrected or deleted.
+
+## Changes
+
+This notice took effect on 5 September 2026. It was reviewed and last updated on 12 September 2026.
+The current text is always the one at this URL.
+
+- **12 September 2026:** Named the operator, documented analytics retention, and disabled origin
+  access logging.
+- **5 September 2026:** Published the initial notice.

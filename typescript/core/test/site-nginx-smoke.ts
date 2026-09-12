@@ -123,7 +123,7 @@ await writeFile(
     "http {",
     `  include ${mimeTypes};`,
     "  default_type application/octet-stream;",
-    "  access_log off;",
+    `  access_log ${resolve(directory, "logs", "access.log")};`,
     temp,
     `  include ${fragmentPath};`,
     "}",
@@ -458,6 +458,12 @@ try {
     throw new Error(
       `${failures.length} of ${vectors.length} vectors failed\n${failures.join("\n")}`,
     );
+  }
+  const accessLog = await readFile(resolve(directory, "logs", "access.log"), "utf8").catch(
+    () => "",
+  );
+  if (accessLog !== "") {
+    throw new Error(`site/nginx.conf wrote an origin access log:\n${accessLog}`);
   }
   for (const note of notes) console.log(`site-nginx-smoke: ${note}`);
   checkpoint({

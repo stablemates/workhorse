@@ -82,10 +82,20 @@ try {
     // publisher reads these by name, so each has to exist with real content.
     ["/about", ["Stablemates", "Apache", "public beta"]],
     ["/about.md", ["# About Workhorse", "Stablemates", "Apache"]],
-    ["/contact", ["github.com/stablemates/workhorse/issues", "security/advisories/new"]],
-    ["/contact.md", ["# Contact", "security/advisories/new"]],
-    ["/privacy", ["G-9NC8FKZPVB", "Cloudflare"]],
-    ["/privacy.md", ["# Privacy notice", "G-9NC8FKZPVB"]],
+    [
+      "/contact",
+      [
+        "support@workhorse.run",
+        "github.com/stablemates/workhorse/issues",
+        "security/advisories/new",
+      ],
+    ],
+    ["/contact.md", ["# Contact", "support@workhorse.run", "security/advisories/new"]],
+    ["/privacy", ["G-9NC8FKZPVB", "Cloudflare", "Anton Orel", "two months"]],
+    [
+      "/privacy.md",
+      ["# Privacy notice", "G-9NC8FKZPVB", "support@workhorse.run", "12 September 2026"],
+    ],
     // The 404 page and the two 404 bodies. The preview server serves them as
     // files at 200; nginx serves them with status 404 through error_page.
     ["/not-found", ["This page does not exist", 'name="robots" content="noindex"']],
@@ -258,6 +268,7 @@ try {
     // reads to verify the site. Its `@id` is what the page records point at.
     '"@type":"Organization"',
     '"@type":"ContactPoint"',
+    '"email":"support@workhorse.run"',
     `"@id":"${siteConfig.url}/#organization"`,
     'href="/about"',
     'href="/contact"',

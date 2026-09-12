@@ -18,10 +18,9 @@ export const siteConfig = {
  * by its `@id`, so an agent verifying who stands behind the site reads one
  * record rather than a copy per page.
  *
- * The contact point names the contact page and no email address, and there is
- * no postal address, because neither exists yet and the site never invents a
- * fact. When one exists, add `email` to the contact point and an `address` to
- * the organization here; nothing else changes.
+ * The contact point carries the published support address. There is no postal
+ * address because the operator has chosen not to publish one, and the site
+ * never invents a fact.
  */
 export const organization = {
   "@type": "Organization",
@@ -33,6 +32,7 @@ export const organization = {
   contactPoint: {
     "@type": "ContactPoint",
     contactType: "technical support",
+    email: "support@workhorse.run",
     url: `${siteUrl}/contact`,
     availableLanguage: "en",
   },
