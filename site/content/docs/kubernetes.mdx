@@ -304,6 +304,12 @@ kubectl rollout status deployment/workhorse-dashboard
 `workhorse schema migrate` stops before contract steps. Apply one separately only after every old
 worker and producer has left the fleet.
 
+## Test the manifests locally
+
+Run `pnpm test:kubernetes` with Docker, k3d, and kubectl available. The command applies the YAML
+above to a disposable k3s cluster and checks migration, dashboard access, worker probes, and a
+graceful task drain. It removes the cluster and fixture images when the test ends.
+
 ## Next
 
 - [Worker processes](/docs/worker-processes) — define the compiled worker module and drain contract

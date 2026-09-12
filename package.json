@@ -65,6 +65,7 @@
     "test:runtime-smoke:bun": "tsx scripts/with-env.ts bun typescript/core/test/runtime-smoke.ts",
     "test:runtime-smoke:deno": "tsx scripts/with-env.ts deno run -A typescript/core/test/runtime-smoke.ts",
     "test:demo-smoke": "pnpm build && pnpm test:demo-smoke:built",
+    "test:kubernetes": "tsx scripts/kubernetes-smoke.ts",
     "test:site-smoke": "pnpm docs:build && tsx scripts/with-env.ts tsx typescript/core/test/site-smoke.ts",
     "test:site-nginx": "pnpm docs:build && tsx scripts/with-env.ts tsx typescript/core/test/site-nginx-smoke.ts",
     "example:agentic-flow": "pnpm build:runtime && tsx scripts/with-env.ts node typescript/examples/agentic-flow.mjs",

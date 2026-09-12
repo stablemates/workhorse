@@ -325,6 +325,13 @@ kubectl rollout status deployment/workhorse-dashboard
 `workhorse schema migrate` never applies a contract step. Apply a contract step separately only
 after every old worker and producer has left the fleet.
 
+## Verify the reference on k3s
+
+Run `pnpm test:kubernetes` with Docker, k3d, and kubectl available. The smoke test builds a fixture
+from the repository runtime image, applies the YAML blocks above to a disposable k3s cluster, and
+checks the schema Job, dashboard Service, worker probes, and graceful task drain. It deletes the
+cluster and local fixture images after either success or failure.
+
 ## Sources
 
 - [Kubernetes Pod termination](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#pod-termination)
