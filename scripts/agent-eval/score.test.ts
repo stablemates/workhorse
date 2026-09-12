@@ -7,6 +7,7 @@ import { parseTranscript, sessionsRoot } from "./transcript.js";
 import { isAgentSurface, scoreRun, scoreSession } from "./score.js";
 
 const baselineRun = path.join(sessionsRoot, "2026-09-01-baseline");
+const firstRecordedRun = path.join(sessionsRoot, "2026-09-05-agent-docs");
 const scratchRoots: string[] = [];
 
 afterEach(async () => {
@@ -175,10 +176,62 @@ describe("mistake signals", () => {
     expect(signals.enqueueOutsideTransaction.verdict).toBe("clean");
   });
 
-  it("catches an application that installs the schema itself", () => {
-    const signals = readSignals("await installSchema(pool);", "typescript");
+  it("accepts schema installation in a deploy entry point with runtime verification", () => {
+    const signals = readSignals(
+      `export async function deployWorkhorse() {
+        await installSchema(pool);
+      }
+      export async function startWorker() {
+        await assertSchemaCompatible(pool);
+      }`,
+      "typescript",
+    );
+
+    expect(signals.schemaOnRuntimePath.verdict).toBe("clean");
+    expect(signals.schemaOnRuntimePath.reason).toMatch(/confined to deploy-time code/);
+  });
+
+  it("catches schema installation in a worker handler", () => {
+    const signals = readSignals(
+      'worker.handle("email", async () => { await installSchema(pool); });',
+      "typescript",
+    );
 
     expect(signals.schemaOnRuntimePath.verdict).toBe("committed");
+    expect(signals.schemaOnRuntimePath.reason).toMatch(/runtime function/);
+  });
+
+  it("catches schema installation in a fenced worker file", () => {
+    const signals = readSignals(
+      "### `src/workhorse.worker.ts`\n\n```ts\nawait installSchema(pool);\n```",
+      "typescript",
+    );
+
+    expect(signals.schemaOnRuntimePath).toMatchObject({
+      verdict: "committed",
+      reason: "schema installation runs from src/workhorse.worker.ts",
+    });
+  });
+
+  it("leaves an unplaced schema installation unclear", () => {
+    const signals = readSignals("await installSchema(pool);", "typescript");
+
+    expect(signals.schemaOnRuntimePath.verdict).toBe("unclear");
+    expect(signals.schemaOnRuntimePath.reason).toMatch(/cannot be placed/);
+  });
+});
+
+describe("the first recorded run", () => {
+  it("recognises task D's separate deploy-time schema installation", async () => {
+    const score = await scoreRun(firstRecordedRun);
+    const taskD = score.sessions.find((session) => session.task === "D");
+
+    expect(taskD?.mistakes.schemaOnRuntimePath).toMatchObject({
+      recorded: "clean",
+      signal: "clean",
+      contradicted: false,
+    });
+    expect(score.contradictions).toEqual([]);
   });
 });
 
