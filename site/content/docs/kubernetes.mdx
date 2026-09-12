@@ -1,0 +1,316 @@
+---
+title: How do I deploy Workhorse on Kubernetes?
+description: Apply a schema Job, worker Deployment, and dashboard Service with correct drain and connection budgets.
+---
+
+Run Workhorse as ordinary Kubernetes workloads. Workhorse publishes reference manifests, not a
+Helm chart, operator, or custom resource definition, so your deployment system remains responsible
+for images, Secrets, ingress, authentication, and resource sizing.
+
+Every manifest on this page was applied to a k3s v1.34.1+k3s1 cluster on 2026-09-12. They use only
+standard `batch/v1`, `apps/v1`, and `v1` resources.
+
+Replace `registry.example.com/acme/workhorse-app:1.2.3` with one immutable application image. It
+must contain the Workhorse CLI and `/app/dist/workhorse.worker.js`, the compiled worker definition
+from the [worker process guide](/docs/worker-processes).
+
+## Supply secrets by reference
+
+Create two Secrets through your secret manager or deployment system. `workhorse-database` provides
+the `url` key. `workhorse-dashboard-auth` provides `username` and `password-hash`. The manifests
+only refer to those keys; no credential belongs in Git or in a command line.
+
+## Run the schema Job first
+
+Use a versioned Job name because a Job's Pod template is immutable. The Job runs from the release
+image, migrates once, and verifies compatibility before any new process starts.
+
+```yaml title="workhorse-schema-job.yaml"
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: workhorse-schema-migrate-1-2-3
+  labels:
+    app.kubernetes.io/name: workhorse
+    app.kubernetes.io/component: schema
+    app.kubernetes.io/version: "1.2.3"
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: workhorse
+        app.kubernetes.io/component: schema
+        app.kubernetes.io/version: "1.2.3"
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: schema
+          image: registry.example.com/acme/workhorse-app:1.2.3
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              workhorse schema migrate
+              workhorse schema status --json
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: workhorse-database
+                  key: url
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+```
+
+```sh
+kubectl apply -f workhorse-schema-job.yaml
+kubectl wait --for=condition=Complete job/workhorse-schema-migrate-1-2-3 --timeout=10m
+kubectl logs job/workhorse-schema-migrate-1-2-3
+```
+
+If the Job fails, stop the release. Do not put migration in every worker's init container, because
+that turns one deliberate deployment step into concurrent migration attempts.
+
+## Deploy the worker tier
+
+Two replicas avoid making one Pod the only worker process, but replica count also multiplies task
+concurrency and database pools. Set it from your availability and capacity requirements.
+
+The resource requests below are scheduling placeholders, not sizing claims. Replace them with
+values measured for your handlers.
+
+```yaml title="workhorse-worker.yaml"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workhorse-worker
+  labels:
+    app.kubernetes.io/name: workhorse
+    app.kubernetes.io/component: worker
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: workhorse
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: workhorse
+        app.kubernetes.io/component: worker
+    spec:
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: worker
+          image: registry.example.com/acme/workhorse-app:1.2.3
+          imagePullPolicy: IfNotPresent
+          command: ["workhorse"]
+          args:
+            - worker
+            - --config
+            - /app/dist/workhorse.worker.js
+            - --shutdown-timeout-ms
+            - "110000"
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: workhorse-database
+                  key: url
+          ports:
+            - name: probes
+              containerPort: 9090
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: probes
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: probes
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+```
+
+`/readyz` returns 200 only while workers can claim. It changes to 503 as soon as drain begins.
+`/livez` stays at 200 while handlers drain; it reports process lifecycle rather than database,
+queue, or handler health.
+
+The 120-second Pod grace exceeds the 110-second Workhorse deadline. Kubernetes otherwise defaults
+to 30 seconds and sends `SIGKILL` when the grace expires, which would cut this drain short. A
+`preStop` hook consumes the same budget, so this example omits one.
+
+## Keep the dashboard internal
+
+The dashboard Deployment binds beyond loopback, so the standalone CLI requires authentication.
+This manifest reads its credentials from the Secret and exposes only an internal `ClusterIP`
+Service. Point your own authenticated HTTPS ingress at the Service and change `--public-origin`.
+
+```yaml title="workhorse-dashboard.yaml"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workhorse-dashboard
+  labels:
+    app.kubernetes.io/name: workhorse
+    app.kubernetes.io/component: dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: workhorse
+      app.kubernetes.io/component: dashboard
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: workhorse
+        app.kubernetes.io/component: dashboard
+    spec:
+      containers:
+        - name: dashboard
+          image: registry.example.com/acme/workhorse-app:1.2.3
+          imagePullPolicy: IfNotPresent
+          command: ["workhorse"]
+          args:
+            - dashboard
+            - --host
+            - 0.0.0.0
+            - --port
+            - "3000"
+            - --public-origin
+            - https://workhorse.example.com
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: workhorse-database
+                  key: url
+            - name: WORKHORSE_DASHBOARD_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: workhorse-dashboard-auth
+                  key: username
+            - name: WORKHORSE_DASHBOARD_PASSWORD_HASH_FILE
+              value: /run/secrets/workhorse/password-hash
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            - name: dashboard-auth
+              mountPath: /run/secrets/workhorse
+              readOnly: true
+      volumes:
+        - name: dashboard-auth
+          secret:
+            secretName: workhorse-dashboard-auth
+            items:
+              - key: password-hash
+                path: password-hash
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workhorse-dashboard
+  labels:
+    app.kubernetes.io/name: workhorse
+    app.kubernetes.io/component: dashboard
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: workhorse
+    app.kubernetes.io/component: dashboard
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+```
+
+Keep one standalone dashboard replica because its built-in sessions are process-local. If your
+application embeds the dashboard, use shared application authorization before scaling it out.
+
+## Count connections before replicas
+
+Let `R` be worker replicas and `P` be each node-postgres pool maximum. The tier can open `R × P`
+client connections. Notification-assisted dispatch reserves one connection inside every pool, so
+`R` replicas reserve `R` listeners and leave at most `R × (P - 1)` worker-pool slots for queries.
+
+Two replicas with `max: 10` can open 20 client connections. Two can remain on `LISTEN`, leaving 18
+for claims, heartbeats, handlers, and maintenance. Add dashboard, producer, and migration pools
+before comparing the total with your database or pooler's client limit.
+
+Transaction-mode PgBouncer keeps queue operations correct but breaks the session behind `LISTEN`.
+Use direct PostgreSQL or session-mode PgBouncer for the notification pool, or disable notifications
+and use bounded polling. Supavisor has the same boundary: transaction mode breaks `LISTEN`, while
+session or native mode preserves it. Supavisor recommends native or direct mode for migrations.
+
+## Roll forward, then roll back processes
+
+Apply the Job first and wait for success. Then apply both Deployments from the same image and wait
+for their rollouts.
+
+```sh
+kubectl apply -f workhorse-worker.yaml
+kubectl apply -f workhorse-dashboard.yaml
+kubectl rollout status deployment/workhorse-worker
+kubectl rollout status deployment/workhorse-dashboard
+```
+
+If a rollout fails after migration, undo the Deployment revision. Do not reverse the schema
+migration: migrations within a major release only add, so the previous release accepts the newer
+schema.
+
+```sh
+kubectl rollout undo deployment/workhorse-worker
+kubectl rollout undo deployment/workhorse-dashboard
+kubectl rollout status deployment/workhorse-worker
+kubectl rollout status deployment/workhorse-dashboard
+```
+
+`workhorse schema migrate` stops before contract steps. Apply one separately only after every old
+worker and producer has left the fleet.
+
+## Next
+
+- [Worker processes](/docs/worker-processes) — define the compiled worker module and drain contract
+- [Connection poolers](/docs/pgbouncer) — choose direct, session, or transaction pooling
+- [Dashboard](/docs/dashboard) — choose standalone or embedded authentication
+
+---
+
+Exact manifests and validation evidence:
+[Kubernetes deployment reference](https://github.com/stablemates/workhorse/blob/main/docs/kubernetes.md).

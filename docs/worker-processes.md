@@ -232,32 +232,9 @@ Detailed benchmark artifacts remain in:
 
 ### Kubernetes
 
-The platform grace period should exceed the Workhorse deadline:
-
-```yaml
-spec:
-  terminationGracePeriodSeconds: 35
-  containers:
-    - name: worker
-      command:
-        - workhorse
-        - worker
-        - --config
-        - ./dist/workhorse.worker.js
-      ports:
-        - name: probes
-          containerPort: 9090
-      readinessProbe:
-        httpGet:
-          path: /readyz
-          port: probes
-      livenessProbe:
-        httpGet:
-          path: /livez
-          port: probes
-```
-
-A 25-second Workhorse deadline leaves approximately ten seconds before the example platform grace expires. Choose values based on the longest handler drain that the service is willing to wait for.
+The [Kubernetes deployment reference](kubernetes.md) owns the worker Deployment, schema Job,
+dashboard Service, probes, drain timing, connection budget, and rollout order. Its Pod grace period
+exceeds the Workhorse shutdown deadline, so Kubernetes does not cut the ordinary drain short.
 
 ### systemd
 

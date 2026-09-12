@@ -89,6 +89,15 @@
       "verifiedOn": "2026-08-18"
     },
     {
+      "slug": "kubernetes",
+      "name": "Kubernetes",
+      "category": "runtimes",
+      "tier": "documented",
+      "summary": "Deploys schema migration, worker, and dashboard workloads with standard Kubernetes resources.",
+      "boundary": "Workhorse publishes reference manifests, not a Helm chart, operator, CRD, ingress, or secret store.",
+      "verifiedOn": "2026-09-12"
+    },
+    {
       "slug": "frameworks",
       "name": "Web frameworks",
       "category": "frameworks",
