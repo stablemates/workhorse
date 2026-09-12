@@ -2636,6 +2636,7 @@ class DashboardRuntimeConfig(dict)
   def setdefault(self, key, default=None)
   def update(...)
   def values(...)
+  workhorseVersion: ForwardRef('Required[str]', module='dashboard_v1')
   workspace: ForwardRef('Required[str | None]', module='dashboard_v1')
   workspaces: ForwardRef('Required[list[DashboardRuntimeConfigWorkspacesItem]]', module='dashboard_v1')
 

@@ -2,6 +2,7 @@ import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
 import type { Queryable } from "@stablemates/workhorse";
+import { WORKHORSE_VERSION } from "@stablemates/workhorse/version";
 import { describe, expect, it } from "vitest";
 import { createDashboardHost } from "../src/server/host.js";
 import {
@@ -88,6 +89,7 @@ describe("dashboard workspaces", () => {
     expect(html).toContain('"rpcUrl":"/workhorse/staging/rpc"');
     expect(html).toContain('"workspace":"staging"');
     expect(html).toContain('"auditActor":"operator:staging"');
+    expect(html).toContain(`"workhorseVersion":"${WORKHORSE_VERSION}"`);
     // Production carries its configured database labels; staging configured none, so its
     // link omits the fields rather than inventing values.
     expect(html).toContain(

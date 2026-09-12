@@ -48,7 +48,7 @@ func TestHandlerServesApplicationAndRPC(t *testing.T) {
 
 	page := httptest.NewRecorder()
 	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "https://example.test/workhorse/tasks", nil))
-	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `"auditActor":"operator@example.test"`) {
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `"auditActor":"operator@example.test"`) || !strings.Contains(page.Body.String(), `"workhorseVersion":"`+workhorse.Version+`"`) {
 		t.Fatalf("page = %d %s", page.Code, page.Body.String())
 	}
 

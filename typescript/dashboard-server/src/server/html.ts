@@ -11,6 +11,8 @@ export const dashboardRuntimeConfigSchema = z.strictObject({
   basePath: z.string(),
   rpcUrl: z.string(),
   auditActor: z.string(),
+  /** Published version of the SDK serving this browser application. */
+  workhorseVersion: z.string(),
   /** Built-in authentication routes. Null when the embedding host owns authorization. */
   authentication: z.strictObject({ loginUrl: z.string(), logoutUrl: z.string() }).nullable(),
   /** Enables the task-seeding menu. Only hosts that intentionally supply fixtures should set it. */

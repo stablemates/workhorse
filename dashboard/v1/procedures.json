@@ -1896,6 +1896,9 @@
         "auditActor": {
           "type": "string"
         },
+        "workhorseVersion": {
+          "type": "string"
+        },
         "authentication": {
           "anyOf": [
             {
@@ -1963,6 +1966,7 @@
         "basePath",
         "rpcUrl",
         "auditActor",
+        "workhorseVersion",
         "authentication",
         "demoTools",
         "workspaces",

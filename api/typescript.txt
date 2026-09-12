@@ -1039,7 +1039,7 @@ const DEFAULT_TASK_VALUE_MAX_BYTES = 1048576;
 
 const DEPENDENCY_OPERATIONS_SCAN_LIMIT = 10000;
 
-function Dashboard({ client, auditActor, demoTools, basePath: basePathInput, logoutUrl, workspaces, workspace, }: DashboardProps): import("react").JSX.Element;
+function Dashboard({ client, auditActor, demoTools, basePath: basePathInput, logoutUrl, workspaces, workspace, workhorseVersion, }: DashboardProps): import("react").JSX.Element;
 
 interface DashboardActivityBucket {
   bucketStart: string;
@@ -1597,6 +1597,8 @@ interface DashboardProps {
   workspaces?: readonly DashboardWorkspaceLink[];
   /** Workspace this document was rendered for. Omit in single-workspace mode. */
   workspace?: string | null;
+  /** SDK version displayed by the dashboard. Omit to hide it for direct React embeds. */
+  workhorseVersion?: string;
 }
 
 interface DashboardQueueController {
@@ -5157,6 +5159,7 @@ const dashboardRuntimeConfigSchema: z.ZodObject<{
   basePath: z.ZodString;
   rpcUrl: z.ZodString;
   auditActor: z.ZodString;
+  workhorseVersion: z.ZodString;
   authentication: z.ZodNullable<z.ZodObject<{
     loginUrl: z.ZodString;
     logoutUrl: z.ZodString;

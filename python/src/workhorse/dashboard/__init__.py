@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 
 from .._compatibility import assert_sync_compatible as _assert_sync_compatible
 from .._drivers import PsycopgConnection as _PsycopgConnection, SyncExecutor as _SyncExecutor
+from .._version import WORKHORSE_VERSION as _WORKHORSE_VERSION
 from ..dashboard_v1 import DashboardInputValidationError, validate_input
 from ._backend import DashboardBackend as _DashboardBackend
 from ._errors import DashboardRPCError as _DashboardRPCError
@@ -277,6 +278,7 @@ class DashboardHost:
             "basePath": self.base_path,
             "rpcUrl": self.base_path + "/rpc",
             "auditActor": actor,
+            "workhorseVersion": _WORKHORSE_VERSION,
             "authentication": None,
             "demoTools": "enqueueTest" in self._procedures,
             "workspaces": [],

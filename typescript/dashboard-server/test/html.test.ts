@@ -11,6 +11,7 @@ const runtime = {
   basePath: "/workhorse",
   rpcUrl: "/workhorse/rpc",
   auditActor: "ops@example.com",
+  workhorseVersion: "9.8.7",
   authentication: {
     loginUrl: "/workhorse/login",
     logoutUrl: "/workhorse/logout",
@@ -25,7 +26,7 @@ describe("renderDashboardHtml", () => {
     const html = renderDashboardHtml(template, { runtime });
 
     expect(html).toContain(
-      `window.workhorseDashboard={"basePath":"/workhorse","rpcUrl":"/workhorse/rpc","auditActor":"ops@example.com","authentication":{"loginUrl":"/workhorse/login","logoutUrl":"/workhorse/logout"},"demoTools":false,"workspaces":[],"workspace":null}`,
+      `window.workhorseDashboard={"basePath":"/workhorse","rpcUrl":"/workhorse/rpc","auditActor":"ops@example.com","workhorseVersion":"9.8.7","authentication":{"loginUrl":"/workhorse/login","logoutUrl":"/workhorse/logout"},"demoTools":false,"workspaces":[],"workspace":null}`,
     );
     expect(html).not.toContain(DASHBOARD_RUNTIME_CONFIG_PLACEHOLDER);
   });

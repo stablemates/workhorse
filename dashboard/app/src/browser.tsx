@@ -17,6 +17,7 @@ export interface WorkhorseDashboardRuntimeConfig {
   basePath: string;
   rpcUrl: string;
   auditActor: string;
+  workhorseVersion: string;
   authentication: DashboardAuthenticationRoutes | null;
   demoTools?: boolean;
   workspaces?: readonly DashboardWorkspaceLink[];
@@ -42,6 +43,7 @@ createRoot(document.getElementById("root")!).render(
         client={client}
         basePath={config.basePath}
         auditActor={config.auditActor}
+        workhorseVersion={config.workhorseVersion}
         logoutUrl={config.authentication?.logoutUrl}
         demoTools={
           config.demoTools && client.enqueueTest ? { enqueueTest: client.enqueueTest } : undefined

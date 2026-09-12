@@ -42,6 +42,8 @@ export interface DashboardProps {
   workspaces?: readonly DashboardWorkspaceLink[];
   /** Workspace this document was rendered for. Omit in single-workspace mode. */
   workspace?: string | null;
+  /** SDK version displayed by the dashboard. Omit to hide it for direct React embeds. */
+  workhorseVersion?: string;
 }
 export function Dashboard({
   client,
@@ -51,6 +53,7 @@ export function Dashboard({
   logoutUrl = undefined,
   workspaces = [],
   workspace = null,
+  workhorseVersion = undefined,
 }: DashboardProps) {
   const basePath = normalizeBasePath(basePathInput);
   return (
@@ -64,6 +67,7 @@ export function Dashboard({
             basePath={basePath}
             workspaces={workspaces}
             workspace={workspace}
+            workhorseVersion={workhorseVersion}
           />
         </DropdownActivityProvider>
       </RefreshBlockerProvider>

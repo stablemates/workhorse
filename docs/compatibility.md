@@ -291,6 +291,10 @@ remove, retype, or reinterpret a shipped view, so a core release remains compati
 dashboard it shipped beside. At 1.0.0 the dashboard's peer range on `@stablemates/workhorse` widens
 from the minor line to the major line; see [Retention and removal](#retention-and-removal).
 
+The shared browser bundle carries no SDK version. The TypeScript, Python, or Go host supplies its
+own published version when it renders the application, so the dashboard reports the package that
+serves it and a version-only release does not change the bundle.
+
 While the line is `0.x`, any minor release may make a breaking change in behaviour. The schema is
 not one of them: from `0.1.0` every release ships ordered, immutable migrations, and inside a major
 line a migration only adds, so a client built against schema version N accepts any installed

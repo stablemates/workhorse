@@ -2486,6 +2486,12 @@ into `go/dashboard` and `python/src/workhorse/dashboard`; `pnpm dashboard-bundle
 application and rejects a stale artifact or language copy. `go/dashboard.Files` embeds the Go copy,
 and Python distributions retain their copy as package data for `importlib.resources`.
 
+The archive contains no Workhorse package version. Each TypeScript, Python, or Go host adds its own
+published version to `DashboardRuntimeConfig.workhorseVersion` when it renders `app/index.html`.
+The browser passes that value to `DashboardProps.workhorseVersion`; a direct React embed may supply
+the same prop or omit the version display. A package-only version change therefore leaves the
+archive digest unchanged.
+
 The Vite `workhorse-dashboard-third-party-notices` plugin derives
 `app/THIRD_PARTY_NOTICES.txt` from the package roots represented in Rollup's production chunk
 module graph. Each section records the package name, version, declared licence, source URL, and the

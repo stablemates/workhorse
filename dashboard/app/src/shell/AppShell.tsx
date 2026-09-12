@@ -132,12 +132,14 @@ export function DashboardContent({
   basePath,
   workspaces,
   workspace,
+  workhorseVersion,
 }: Required<Pick<DashboardProps, "auditActor">> & {
   logoutUrl: string | null;
   demoTools: DashboardDemoTools | null;
   basePath: string;
   workspaces: readonly DashboardWorkspaceLink[];
   workspace: string | null;
+  workhorseVersion: string | undefined;
 }) {
   useDashboardWindowActivityRefreshBlocker();
   const controller = useDashboardController(auditActor, demoTools, basePath);
@@ -498,7 +500,7 @@ export function DashboardContent({
           />
           {/* Breathing room keeps the beta badge from reading as part of the link above. */}
           <Box className="dashboard-navbar__version" mt="xs" px="sm">
-            <WorkhorseVersion />
+            <WorkhorseVersion version={workhorseVersion} />
           </Box>
         </AppShell.Section>
       </AppShell.Navbar>

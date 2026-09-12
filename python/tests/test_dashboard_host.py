@@ -7,6 +7,7 @@ from typing import cast
 
 import pytest
 
+from workhorse._version import WORKHORSE_VERSION
 from workhorse.dashboard import DashboardHost, DashboardPrincipal, DashboardResponse
 
 
@@ -75,6 +76,7 @@ def test_dashboard_host_serves_the_embedded_application() -> None:
     assert headers["Content-Type"] == "text/html; charset=utf-8"
     assert b'"basePath":"/workhorse"' in body
     assert b'"auditActor":"operator@example.test"' in body
+    assert f'"workhorseVersion":"{WORKHORSE_VERSION}"'.encode() in body
 
     root = DashboardHost(
         cast(object, _Connection()),

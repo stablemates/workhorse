@@ -170,6 +170,10 @@ The dashboard and core may use different patch releases within the same minor li
 server reads core-owned versioned views and functions, so a core patch remains compatible when its
 migration preserves those contracts.
 
+The shared browser bundle carries no SDK version. The TypeScript, Python, or Go host supplies its
+own published version when it renders the application, so the dashboard reports the package that
+serves it and a version-only release does not change the bundle.
+
 The lockstep TypeScript packages release from `vX.Y.Z` after the tagged commit passes public CI.
 Their focused release gate checks the version contract, generated package assets, lint,
 dependencies, types, and unit behavior. It builds each tarball once, installs and exercises those

@@ -5,6 +5,7 @@ import { SeverityNumber, logs } from "@opentelemetry/api-logs";
 import { RPCHandler } from "@orpc/server/fetch";
 import type { DashboardSingleAdminOptions } from "@stablemates/workhorse-dashboard-contract";
 import { Admin, assertSchemaCompatible, Queue, type Queryable } from "@stablemates/workhorse";
+import { WORKHORSE_VERSION } from "@stablemates/workhorse/version";
 import type { DashboardMaintenanceLoopCadences } from "../wire.js";
 import { dashboardAssetsDirectory } from "./assets.js";
 import { createSingleAdminAuthentication } from "./authentication.js";
@@ -357,6 +358,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
         basePath: workspace.basePath,
         rpcUrl: `${workspace.basePath}/rpc`,
         auditActor: authenticatedActor,
+        workhorseVersion: WORKHORSE_VERSION,
         authentication: singleAdmin
           ? { loginUrl: `${path}/login`, logoutUrl: `${path}/logout` }
           : null,

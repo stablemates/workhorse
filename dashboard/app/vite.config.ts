@@ -2,6 +2,7 @@ import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
 import { defaultClientConditions, defineConfig } from "vite";
 import { renderDashboardHtml } from "@stablemates/workhorse-dashboard-server/server";
+import { WORKHORSE_VERSION } from "@stablemates/workhorse/version";
 import { dashboardThirdPartyNotices } from "./third-party-notices.js";
 
 /**
@@ -46,6 +47,7 @@ export default defineConfig({
               basePath: "",
               rpcUrl: "/rpc",
               auditActor,
+              workhorseVersion: WORKHORSE_VERSION,
               authentication: null,
               demoTools,
               workspaces: [],

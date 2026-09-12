@@ -302,9 +302,14 @@ func (host *handler) serveApplication(response http.ResponseWriter, actor string
 	}
 	template := string(assets["app/index.html"])
 	config := map[string]any{
-		"basePath": host.basePath, "rpcUrl": host.basePath + "/rpc", "auditActor": actor,
-		"authentication": nil, "demoTools": host.options.Procedures["enqueueTest"] != nil,
-		"workspaces": []any{}, "workspace": nil,
+		"basePath":         host.basePath,
+		"rpcUrl":           host.basePath + "/rpc",
+		"auditActor":       actor,
+		"workhorseVersion": workhorse.Version,
+		"authentication":   nil,
+		"demoTools":        host.options.Procedures["enqueueTest"] != nil,
+		"workspaces":       []any{},
+		"workspace":        nil,
 	}
 	encoded, _ := json.Marshal(config)
 	modules := strings.Builder{}
