@@ -41,7 +41,7 @@ D's saving is smaller because it starts from the GitHub README, which is unchang
 
 ## Contradictions and false positives
 
-`pnpm agent-eval:score` reports three contradictions, all false positives from scanning the produced markdown rather than the code:
+The original `pnpm agent-eval:score` result reported three contradictions, all false positives from scanning the produced markdown rather than the code:
 
 - **Task A, enqueueOutsideTransaction**: the produced text includes design prose (`TypeScript's queue.enqueue(type, payload, options, client)` takes the open pg client...) and an ORM example (`adapter.forTransaction(tx).enqueue(...)`). The actual `queue.enqueue` call in `src/orders/create-order.ts` does pass the open `client` as the fourth argument.
 - **Task D, schemaOnRuntimePath**: the produced markdown includes an optional `src/deploy/install-schema.ts` file. The runtime paths (`assertSchemaCompatible` in client, worker and handler) only verify the schema.
@@ -56,6 +56,12 @@ SM-47 (WH-665) therefore kept the twin and the fix was `Accept` negotiation. The
 ## Rescored on 2026-09-10
 
 SM-704 amended `isAgentSurface` so a `/docs/*` fetch whose response is `text/markdown` counts the way the `.md` URL does, because the response is the same file. Under that definition tasks A, B and C score a discovery index of 2 instead of `never`: their second fetch was a canonical docs page the origin negotiated to Markdown. Task D stays at 2. The 2026-09-05 runs are unchanged, because their docs fetches were served as HTML.
+
+## Rescored on 2026-09-12
+
+SM-46 taught `schemaSignal` to keep each fenced file's heading and distinguish deploy-time entry
+points from worker and handler scopes. Task D's schema installation now signals `clean`. The run
+retains the two unrelated contradictions for task A's enqueue and task D's checkpoint.
 
 ## Reproduce the scoring
 

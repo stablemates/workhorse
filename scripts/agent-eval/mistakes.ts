@@ -108,16 +108,114 @@ function enqueueSignal(source: string, language: Language): Signal {
   });
 }
 
+interface SourceRegion {
+  readonly name: string | undefined;
+  readonly body: string;
+}
+
+type SchemaCallContext = "deploy" | "runtime" | "unknown";
+
+/**
+ * Recorded programs are usually Markdown with one fenced block per proposed file. Keep the file
+ * heading with each block so a deploy entry point is not confused with the worker beside it.
+ */
+function sourceRegions(source: string): readonly SourceRegion[] {
+  const fences = [...source.matchAll(/^```[^\n]*\n([\s\S]*?)^```[ \t]*$/gm)];
+  if (fences.length === 0) {
+    return [{ name: undefined, body: source }];
+  }
+  return fences.map((fence) => {
+    const before = source.slice(0, fence.index);
+    const headings = [...before.matchAll(/^#{1,6}\s+.*`([^`\n]+)`.*$/gm)];
+    return { name: headings.at(-1)?.[1], body: fence[1] ?? "" };
+  });
+}
+
+const deployPath =
+  /(?:^|[/_.-])(deploy(?:ment)?|migrat(?:e|ion)|install[-_.]?schema|schema[-_.]?install)(?:[/_.-]|$)/i;
+const runtimePath =
+  /(?:^|[/_.-])(worker|handler|server|main|client|jobs?)(?:[/_.-]|$)|(?:^|\/)app\//i;
+const deployFunction = /\b(?:function|func|def)\s+\w*(?:deploy|migrat|install)\w*\b/i;
+const runtimeFunction = /\b(?:function|func|def)\s+\w*(?:handle|worker|run|start|main)\w*\b/i;
+const runtimeCallback = /(?:\bworker\s*\.\s*handle|\bdefineWorkerProcess|\bcreate\w*Handler)\s*\(/i;
+
+/** Headers of the brace-delimited scopes containing one call, nearest scope first. */
+function containingScopeHeaders(source: string, callIndex: number): readonly string[] {
+  const openings: number[] = [];
+  for (let index = 0; index < callIndex; index += 1) {
+    if (source[index] === "{") {
+      openings.push(index);
+    } else if (source[index] === "}") {
+      openings.pop();
+    }
+  }
+  return openings.toReversed().map((opening) => source.slice(Math.max(0, opening - 240), opening));
+}
+
+function schemaCallContext(region: SourceRegion, callIndex: number): SchemaCallContext {
+  if (region.name !== undefined && deployPath.test(region.name)) {
+    return "deploy";
+  }
+  if (region.name !== undefined && runtimePath.test(region.name)) {
+    return "runtime";
+  }
+
+  const scopeHeaders = containingScopeHeaders(region.body, callIndex);
+  if (scopeHeaders.some((header) => deployFunction.test(header))) {
+    return "deploy";
+  }
+  if (scopeHeaders.some((header) => runtimeFunction.test(header) || runtimeCallback.test(header))) {
+    return "runtime";
+  }
+
+  // Python has indentation rather than braces. The nearest function declaration owns the call.
+  const declarations = [
+    ...region.body.slice(0, callIndex).matchAll(/^\s*(?:async\s+)?def\s+(\w+)\s*\(/gm),
+  ];
+  const functionName = declarations.at(-1)?.[1];
+  if (functionName !== undefined && /deploy|migrat|install/i.test(functionName)) {
+    return "deploy";
+  }
+  if (functionName !== undefined && /handle|worker|run|start|main/i.test(functionName)) {
+    return "runtime";
+  }
+  return "unknown";
+}
+
 function schemaSignal(source: string, language: Language): Signal {
-  const installer = language === "python" ? /\binstall_schema\s*\(/ : /\b[iI]nstallSchema\s*\(/;
+  const installer = language === "python" ? /\binstall_schema\s*\(/g : /\b[iI]nstallSchema\s*\(/g;
   const verifier =
     language === "typescript"
       ? /\bassertSchemaCompatible\s*\(/
       : language === "go"
         ? /\bAssert(?:Schema)?Compatible\s*\(/
         : /\bassert_(?:schema|sync|async)_compatible\s*\(/;
-  if (installer.test(source)) {
-    return { verdict: "committed", reason: "the application installs the schema itself" };
+  const calls = sourceRegions(source).flatMap((region) =>
+    [...region.body.matchAll(installer)].map((match) => ({
+      context: schemaCallContext(region, match.index),
+      name: region.name,
+    })),
+  );
+  const runtimeCall = calls.find((call) => call.context === "runtime");
+  if (runtimeCall !== undefined) {
+    const location = runtimeCall.name === undefined ? "a runtime function" : runtimeCall.name;
+    return { verdict: "committed", reason: `schema installation runs from ${location}` };
+  }
+  if (calls.some((call) => call.context === "unknown")) {
+    return {
+      verdict: "unclear",
+      reason: "schema installation cannot be placed on a deploy-time or runtime path",
+    };
+  }
+  if (calls.length > 0) {
+    const locations = [
+      ...new Set(calls.flatMap((call) => (call.name === undefined ? [] : [call.name]))),
+    ];
+    const where = locations.length === 0 ? "a named deploy function" : locations.join(", ");
+    return {
+      verdict: "clean",
+      reason: `schema installation is confined to deploy-time code in ${where}`,
+    };
   }
   if (verifier.test(source)) {
     return {

@@ -89,6 +89,12 @@ anywhere in the source and cannot see where the call sits, so it says `committed
 The recorded read is authoritative and the disagreement is meant to be visible, so the fixture is
 left as it stands. WH-662 fixes the detector.
 
+## Rescored on 2026-09-12
+
+SM-46 taught `schemaSignal` to keep each fenced file's heading and distinguish deploy-time entry
+points from worker and handler scopes. Task D now signals `clean`, agrees with the recorded read,
+and the run exits zero with no contradictions.
+
 ## Caveat
 
 The baseline and this run do not share a harness. The baseline was reconstructed from sessions run

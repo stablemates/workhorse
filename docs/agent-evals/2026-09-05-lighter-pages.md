@@ -66,6 +66,12 @@ the documentation asks for, so the recorded read is `clean`.
 two different tasks, the same false positive: it will recur on any well-structured program.
 WH-662 fixes it.
 
+## Rescored on 2026-09-12
+
+SM-46 taught `schemaSignal` to keep each fenced file's heading and distinguish deploy-time entry
+points from worker and handler scopes. Task A now signals `clean`, agrees with the recorded read,
+and the run exits zero with no contradictions.
+
 ## Caveat
 
 One model and one prompt, and one run per side. The byte counts are exact and the twin result is
