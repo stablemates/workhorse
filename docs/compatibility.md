@@ -369,9 +369,15 @@ Adding is not breaking. A new `--json` field, a new instrument, and a new export
 changes, so a `--json` consumer must ignore fields it does not know. The CLI's human-readable stdout
 prose is not governed; scripts read `--json`.
 
-`dashboard/v1` carries its own version in its path, so a break there creates `dashboard/v2` rather
-than moving any package major. The obligation runs the other way: `dashboard/v1` is served for the
-whole major line it shipped in.
+`dashboard/v1` carries its version in its committed artifacts, not its HTTP path. Each SDK release
+binds its backend to the matching dashboard contract and browser bundle. A break creates
+`dashboard/v2` rather than moving any package major, and the release ships its backend and bundle
+together. Existing installations keep serving their bound `dashboard/v1` pair until their operator
+upgrades them.
+
+The release notes announce a `dashboard/v2` transition and give its upgrade steps. An installed
+backend serves one bound contract rather than negotiating concurrent versions, so `Deprecation`
+and `Sunset` response headers do not apply.
 
 The three language lines float independently, and each is governed on its own surfaces: a Go `/v2`
 does not move the TypeScript or Python major. Only a protocol break moves all three at once.

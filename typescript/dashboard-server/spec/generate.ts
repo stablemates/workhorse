@@ -229,7 +229,7 @@ const invokedDirectly =
   process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 
 const breakingGuidance =
-  "dashboard/v1 is served for the whole major line it shipped in, so a break here creates " +
+  "dashboard/v1 is bound to matching SDK backends and a browser bundle, so a break here creates " +
   "dashboard/v2 rather than moving a package major (ADR 0054). Restore the surface, or take the " +
   "break deliberately with --accept-breaking.";
 

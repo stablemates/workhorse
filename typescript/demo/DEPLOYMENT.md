@@ -179,6 +179,13 @@ and marks each one that mutates. When administrator credentials are configured, 
 to `/login` and `POST` to `/logout` join the surface. No other method or path is meaningful, so the
 edge may reject everything outside it.
 
+The dashboard contract version is bound to the SDK release and browser bundle, not encoded in
+these HTTP paths. One installed backend serves one matching pair. A release that moves to
+`dashboard/v2` gives operators the transition steps in its release notes, and the old pair remains
+available by keeping the installed SDK release. The host does not negotiate concurrent contract
+versions, so `Deprecation` and `Sunset` response headers do not apply. This policy leaves the
+transport and the edge allowlist unchanged.
+
 The demo keeps anonymous operator controls available, and the server limits each client to a burst
 of five mutations and then twelve mutations per minute. The proxy in front of it must append the
 address it observes to `X-Forwarded-For`; the server uses the right-most address so a caller cannot

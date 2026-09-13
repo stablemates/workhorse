@@ -66,8 +66,11 @@ Human-readable stdout prose is not governed; scripts read `--json`.
 
 **6. The `dashboard/v1` wire contract.** A breaking change is removing a procedure, removing or
 retyping a response field, or tightening request validation. The contract carries its own version in
-its path, so a break creates `dashboard/v2` rather than moving any package major. The obligation
-runs the other way: `dashboard/v1` is served for the whole major line it shipped in.
+its committed artifacts, not its HTTP path, so a break creates `dashboard/v2` rather than moving
+any package major. Each SDK release binds its backend to the matching contract and browser bundle.
+Existing installations keep serving that pair until their operator upgrades them. The release notes
+announce a new contract and its upgrade steps. `Deprecation` and `Sunset` response headers do not
+apply because one installed backend does not negotiate concurrent contract versions.
 
 **7. The OpenTelemetry instrument, span, and attribute names.** A breaking change is renaming or
 removing an instrument, span, or attribute, or changing an instrument's unit or kind. Adding one is
