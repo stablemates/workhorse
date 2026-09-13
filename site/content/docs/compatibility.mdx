@@ -127,6 +127,13 @@ use its shared procedure schemas, HTML placeholders, request order, and HTTP fix
 shipped backend for operator access; use `Queue` for application operations and `Admin` for
 operator integrations.
 
+The contract version belongs to the SDK artifacts, not the HTTP path. Each SDK release binds its
+backend to the matching dashboard contract and browser bundle. A release that moves to
+`dashboard/v2` ships the new pair together and gives operators the transition steps in its release
+notes. Existing installations keep their current pair until they are upgraded. The backend does
+not negotiate concurrent contract versions, so `Deprecation` and `Sunset` response headers do not
+apply.
+
 The Python `stablemates-workhorse` package uses Psycopg synchronously or asynchronously and asyncpg
 asynchronously. Every worker runtime delegates cron evaluation to the versioned PostgreSQL functions
 and each definition's stored IANA timezone. Its release test installs the built wheel and source

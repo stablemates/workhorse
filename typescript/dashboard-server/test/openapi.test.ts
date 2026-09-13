@@ -38,6 +38,7 @@ interface Operation {
 interface OpenApiDocument {
   openapi: string;
   jsonSchemaDialect: string;
+  info: { version: string; description: string };
   servers: { url: string; variables: Record<string, { default: string }> }[];
   paths: Record<string, Record<string, Operation>>;
   components: { schemas: Record<string, Json>; responses: Record<string, Json> };
@@ -81,6 +82,25 @@ describe("dashboard/v1/openapi.json", () => {
     expect(document.jsonSchemaDialect).toBe("https://json-schema.org/draft/2020-12/schema");
     expect(document.servers[0]!.url).toBe("{origin}{basePath}");
     expect(document.servers[0]!.variables.basePath!.default).toBe("/workhorse");
+  });
+
+  it("describes SDK-bound contract versioning without claiming a versioned HTTP path", () => {
+    expect(document.info.version).toBe(String(manifest.contractVersion));
+    expect(Object.keys(document.paths).every((path) => path.startsWith("/rpc/dashboard/"))).toBe(
+      true,
+    );
+    expect(document.info.description).toContain(
+      "The HTTP path does not carry the contract version",
+    );
+    expect(document.info.description).toContain(
+      "each SDK release binds its backend to the matching dashboard contract and browser bundle",
+    );
+    expect(document.info.description).toContain(
+      "Deprecation and Sunset response headers do not apply",
+    );
+    expect(document.info.description).not.toContain(
+      "the path carries the contract's major version",
+    );
   });
 
   it("describes exactly the manifest's procedures at their contract paths", () => {

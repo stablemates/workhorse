@@ -69,8 +69,8 @@ shared error responses, and examples lifted from the conformance fixtures. The s
 tracked file to `/openapi.json`. The document's own description says what ADR 0023 and ADR 0054
 say together: the API is served by the reader's own deployment and never by workhorse.run, SQL is
 the primary protocol, the surface is an operator surface and not an application ingress, and the
-contract is versioned in its path. Publishing a description of a governed contract changes
-neither decision.
+contract version belongs to the SDK-bound artifacts rather than the HTTP path. Publishing a
+description of a governed contract changes neither decision nor the transport.
 
 **`llms.txt` says when to use Workhorse and how to call it.** Three sections join the router:
 the jobs Workhorse is right for and the properties that disqualify it, drawn from the playbook's

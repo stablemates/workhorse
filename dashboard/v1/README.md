@@ -13,6 +13,12 @@ fail when the router and the artifacts disagree. A router change that alters the
 reviewed contract change. A change that breaks an existing client requires a new `dashboard/v2`
 directory; this directory then only receives compatible corrections.
 
+The contract version belongs to the artifacts, not the HTTP path. Each SDK release binds its
+backend to the matching contract and browser bundle, and one installed backend serves that pair at
+its configured mount path. A release that moves to `dashboard/v2` ships the matching backend and
+bundle together and gives operators the transition steps in its release notes. It does not serve
+concurrent contract versions, so `Deprecation` and `Sunset` response headers do not apply.
+
 ## Artifacts
 
 - `manifest.json` identifies the format, the transport envelope, the authentication and CSRF

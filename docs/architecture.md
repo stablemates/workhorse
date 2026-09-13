@@ -667,6 +667,13 @@ request-input JSON Schema, and response JSON Schema, with shared wire types unde
 `dashboard/v1/README.md` specifies the envelope, error codes, request handling order, and the
 application-serving surfaces.
 
+The contract version belongs to these artifacts, not the HTTP path. Each SDK release binds one
+backend to the matching contract and browser bundle and serves that pair at its configured mount
+path. A release that moves to `dashboard/v2` ships its matching pair and gives operators the
+transition steps in its release notes. Existing installations keep their bound pair until they are
+upgraded. The host does not negotiate concurrent contract versions, so it sends no `Deprecation` or
+`Sunset` response headers.
+
 Every `$defs` key carries the `Dashboard` prefix, whether or not the TypeScript symbol it was
 resolved from does. `dashboardDefinitionName` in
 `typescript/dashboard-server/spec/response-schemas.ts` applies that rule, and the
