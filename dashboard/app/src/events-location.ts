@@ -21,6 +21,8 @@ export interface EventsLocationState {
   taskType: string | null;
   worker: string | null;
   search: string | null;
+  /** Restrict the feed to the durable history for one exact task identity. */
+  taskId: string | null;
   types: DashboardEventTypeFilter[];
   /** The history record shown in the drawer, encoded as `kind:recordId`. */
   eventId: string | null;
@@ -35,6 +37,7 @@ export const defaultEventsLocation: EventsLocationState = {
   taskType: null,
   worker: null,
   search: null,
+  taskId: null,
   types: [],
   eventId: null,
 };
@@ -44,6 +47,7 @@ const kinds = new Set<EventsKindFilter>(["all", "event", "attempt"]);
 const eventTypes = new Set<string>([...dashboardTaskEventTypes, ...dashboardAttemptOutcomes]);
 const historyIdentity =
   /^(event|attempt):[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const taskIdentity = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
  * True when a value names an event type or attempt outcome the feed can filter by.
@@ -69,6 +73,7 @@ export function parseEventsLocation(search: string | URLSearchParams): EventsLoc
   const requestedPage = Number(parameters.get("page") ?? "1");
   const requestedPageSize = Number(parameters.get("per") ?? "50");
   const requestedEventId = optionalValue(parameters, "event");
+  const requestedTaskId = optionalValue(parameters, "task");
   const types = (parameters.get("events") ?? "")
     .split(",")
     .map((type) => type.trim())
@@ -84,6 +89,7 @@ export function parseEventsLocation(search: string | URLSearchParams): EventsLoc
     taskType: optionalValue(parameters, "type"),
     worker: optionalValue(parameters, "worker"),
     search: optionalValue(parameters, "q"),
+    taskId: requestedTaskId && taskIdentity.test(requestedTaskId) ? requestedTaskId : null,
     types,
     page: Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1,
     pageSize: eventPageSizes.includes(requestedPageSize as EventPageSize)
@@ -101,6 +107,7 @@ export function eventsLocationHref(state: EventsLocationState): string {
   if (state.taskType) parameters.set("type", state.taskType);
   if (state.worker) parameters.set("worker", state.worker);
   if (state.search) parameters.set("q", state.search);
+  if (state.taskId) parameters.set("task", state.taskId);
   if (state.types.length > 0) parameters.set("events", state.types.join(","));
   if (state.page > 1) parameters.set("page", String(state.page));
   if (state.pageSize !== 50) parameters.set("per", String(state.pageSize));
@@ -121,5 +128,6 @@ export function eventsListingKey(state: EventsLocationState): string {
     state.types,
     state.worker,
     state.search,
+    state.taskId,
   ]);
 }

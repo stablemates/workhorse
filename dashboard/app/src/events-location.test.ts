@@ -9,7 +9,7 @@ import {
 describe("events location state", () => {
   it("round-trips every shareable filter and the open event", () => {
     const state = parseEventsLocation(
-      "?window=24h&source=attempt&queue=orders&type=order.process&worker=worker-1&q=invoice&events=failed,timeout&page=3&per=100&event=attempt:018f0000-0000-7000-8000-000000000042",
+      "?window=24h&source=attempt&queue=orders&type=order.process&worker=worker-1&q=invoice&task=3f1c0c8e-0000-4000-8000-000000000001&events=failed,timeout&page=3&per=100&event=attempt:018f0000-0000-7000-8000-000000000042",
     );
     expect(state).toEqual({
       window: "24h",
@@ -18,6 +18,7 @@ describe("events location state", () => {
       taskType: "order.process",
       worker: "worker-1",
       search: "invoice",
+      taskId: "3f1c0c8e-0000-4000-8000-000000000001",
       types: ["failed", "timeout"],
       page: 3,
       pageSize: 100,
@@ -30,9 +31,18 @@ describe("events location state", () => {
     expect(eventsLocationHref(defaultEventsLocation)).toBe("/events");
     expect(
       parseEventsLocation(
-        "?window=7d&source=other&page=0&per=200&events=failed,unknown&event=task:42",
+        "?window=7d&source=other&page=0&per=200&events=failed,unknown&task=not-a-task&event=task:42",
       ),
     ).toEqual({ ...defaultEventsLocation, types: ["failed"] });
+  });
+
+  it("builds an exact task-scoped Events link", () => {
+    expect(
+      eventsLocationHref({
+        ...defaultEventsLocation,
+        taskId: "3f1c0c8e-0000-4000-8000-000000000001",
+      }),
+    ).toBe("/events?task=3f1c0c8e-0000-4000-8000-000000000001");
   });
 
   it("closing the drawer keeps every filter and does not change the listing key", () => {

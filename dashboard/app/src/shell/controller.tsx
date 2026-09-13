@@ -37,6 +37,7 @@ import type {
 } from "@stablemates/workhorse-dashboard-server/wire";
 import { createLatestRequestGuard, taskDrawerOpened, taskDrawerSync } from "../task-drawer.js";
 import {
+  defaultEventsLocation,
   eventsListingKey,
   eventsLocationHref,
   type EventsLocationState,
@@ -230,6 +231,11 @@ export function useDashboardController(
     (next: EventsLocationState) => navigate(eventsLocationHref(next)),
     [navigate],
   );
+  const taskEventsHref = useCallback(
+    (taskId: string) =>
+      mountedHref(basePath, eventsLocationHref({ ...defaultEventsLocation, taskId })),
+    [basePath],
+  );
 
   const handleLink = useCallback(
     (event: MouseEvent<HTMLElement>, href: string) => {
@@ -315,6 +321,7 @@ export function useDashboardController(
                   types: events.types,
                   worker: events.worker,
                   search: events.search,
+                  taskId: events.taskId,
                 }),
               };
             } else if (route === "/cron") {
@@ -850,6 +857,7 @@ export function useDashboardController(
         runDemoTask={demoTools ? runDemoTask : null}
         runningDemoTask={runningDemoTask}
         inspectTask={inspectTask}
+        taskEventsHref={taskEventsHref}
         runTaskNow={runTaskNow}
         auditActor={auditActor}
         reload={reloadTasks}
