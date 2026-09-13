@@ -24,6 +24,12 @@ Before changing tracked files:
    the conflict. Assignment is coordination, not an atomic lease.
 3. Read `CONTEXT.md` and relevant decision records when the work changes domain behavior.
 
+For iterative work, especially UI, design, copy, or exploratory changes, keep one review loop on
+the original issue. After implementation and verification, keep the issue In Progress until the
+requester accepts the result or explicitly asks to finish. Apply refinements toward the same outcome
+to that issue; if it was closed prematurely, reopen it. Create a separate issue only when feedback
+defines an independently deliverable outcome.
+
 Keep the issue current with comments for material decisions, scope changes, and verification
 evidence. Finish only after every acceptance item is verified and relevant repository checks pass.
 Record the exact evidence, update the checklist, and move the issue to Done in the same task.

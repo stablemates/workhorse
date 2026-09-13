@@ -49,11 +49,11 @@ readers can see the start of the feature navigation without shrinking the headli
 
 The Derby keeps horse selection separate from its seeded simulation. Standings share
 places when progress is tied; lanes never reorder during a race. A rematch keeps the pick,
-while “Change horse” reopens selection. The score lasts for the mounted page only.
-Reduced motion runs the same simulation directly to its result. Verify both paths,
-including a rematch with the same winner, keyboard selection, and leaving mid-race.
-The event panel retains the full race history, newest first, in a bounded scrollable
-region. It includes progress milestones and resumed work alongside failures and recovery.
+while “Change horse” reopens selection. Reduced motion runs the same simulation directly
+to its result. Verify both paths, including a rematch with the same winner, keyboard selection,
+and leaving mid-race. The event panel opens by default and retains the full race history,
+newest first, in a bounded scrollable region. It includes progress milestones and resumed work
+alongside failures and recovery.
 
 ## The integration catalog
 
