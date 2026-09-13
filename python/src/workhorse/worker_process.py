@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import signal
 from collections.abc import Callable
-from threading import Timer
+from threading import Thread, Timer
 from types import FrameType
 from typing import NoReturn
 
@@ -30,28 +30,48 @@ def run_worker_process(
     first_signal: int | None = None
     deadline: Timer | None = None
     requested_stop_version = worker._stop_version_snapshot()
+    signal_reader, signal_writer = os.pipe()
+    os.set_blocking(signal_writer, False)
+    signal_payloads: dict[int, bytes] = {
+        signum: bytes((signum,)) for signum in (signal.SIGINT, signal.SIGTERM)
+    }
 
     def handle_signal(signum: int, _frame: FrameType | None) -> None:
+        try:  # noqa: SIM105 - keep the signal handler free of context manager machinery.
+            os.write(signal_writer, signal_payloads[signum])
+        except BlockingIOError:
+            pass
+
+    def relay_signals() -> None:
         nonlocal first_signal, deadline
-        if first_signal is not None:
-            force_exit(128 + signum)
-        first_signal = signum
-        worker.stop()
-        deadline = Timer(shutdown_timeout_ms / 1000, force_exit, args=(1,))
-        deadline.daemon = True
-        deadline.start()
+        while payload := os.read(signal_reader, 1):
+            signum = payload[0]
+            if first_signal is not None:
+                force_exit(128 + signum)
+            first_signal = signum
+            deadline = Timer(shutdown_timeout_ms / 1000, force_exit, args=(1,))
+            deadline.daemon = True
+            deadline.start()
+            Thread(target=worker.stop, daemon=True).start()
 
     handled_signals = (signal.SIGINT, signal.SIGTERM)
     previous_handlers = {signum: signal.getsignal(signum) for signum in handled_signals}
-    for signum in handled_signals:
-        signal.signal(signum, handle_signal)
+    signal_relay = Thread(target=relay_signals, daemon=True)
+    signal_relay.start()
+    installed_signals: list[signal.Signals] = []
     try:
+        for signum in handled_signals:
+            signal.signal(signum, handle_signal)
+            installed_signals.append(signum)
         worker._run_continuously(requested_stop_version)
     finally:
+        for signum in installed_signals:
+            signal.signal(signum, previous_handlers[signum])
+        os.close(signal_writer)
+        signal_relay.join()
+        os.close(signal_reader)
         if deadline is not None:
             deadline.cancel()
-        for signum, previous in previous_handlers.items():
-            signal.signal(signum, previous)
 
 
 __all__ = ["run_worker_process"]

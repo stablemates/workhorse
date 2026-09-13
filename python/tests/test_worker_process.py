@@ -110,6 +110,18 @@ def test_signal_between_handler_installation_and_worker_run_is_not_lost() -> Non
     assert stderr == ""
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process signals are required")
+def test_signal_while_main_thread_holds_worker_state_lock_still_drains() -> None:
+    process = _start_fixture("state-lock", 30_000)
+
+    process.send_signal(signal.SIGTERM)
+
+    stdout, stderr = _finish(process)
+    assert process.returncode == 0, f"stdout: {stdout!r} stderr: {stderr!r}"
+    assert stdout.strip() == "stopping"
+    assert stderr == ""
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process signals are required")
 def test_killed_worker_task_is_recovered_and_completed_once(

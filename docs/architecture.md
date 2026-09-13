@@ -445,11 +445,15 @@ Handler failures pass a JSON error envelope to `fail_v1` with a null retry overr
 selects `ready`, `scheduled`, or `failed` from the persisted attempt budget and retry policy.
 
 Python `run_worker_process(worker, *, shutdown_timeout_ms, force_exit)` installs `SIGINT` and
-`SIGTERM` handlers around `Worker.run()`. The first signal calls `Worker.stop()` and starts the
-shutdown deadline. The deadline defaults to 25000 milliseconds and accepts integers from 1 through 3600000. If the worker drains before the deadline, the function restores the previous handlers and
-returns. A second signal calls `force_exit` with 128 plus its signal number, which produces 130 for
-`SIGINT` and 143 for `SIGTERM`. An expired deadline calls `force_exit(1)`. The default `force_exit`
-is `os._exit`, so hard termination leaves active leases for `recover_expired_telemetry_v1`.
+`SIGTERM` handlers around `Worker.run()`. Each handler writes its signal number to a nonblocking
+self-pipe. A control thread reads the pipe, so lock acquisition, log emission, timer creation, and
+thread creation happen outside the main thread's signal handler. The first signal starts the
+shutdown deadline and calls `Worker.stop()` on a separate thread. The deadline defaults to 25000
+milliseconds and accepts integers from 1 through 3600000. If the worker drains before the deadline,
+the function restores the previous handlers and returns. A second signal calls `force_exit` with 128
+plus its signal number, which produces 130 for `SIGINT` and 143 for `SIGTERM`. An expired deadline
+calls `force_exit(1)`. The default `force_exit` is `os._exit`, so hard termination leaves active
+leases for `recover_expired_telemetry_v1`.
 
 Python `Queue` accepts a caller-owned Psycopg connection. `AsyncQueue` accepts a caller-owned
 Psycopg `AsyncConnection` or asyncpg `Connection`. The clients never call `commit`, `rollback`, or
