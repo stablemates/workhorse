@@ -87,6 +87,7 @@ export const TasksPage = memo(function TasksPage({
   runDemoTask,
   runningDemoTask,
   inspectTask,
+  taskEventsHref,
   replace,
   taskLocation,
   runTaskNow,
@@ -100,6 +101,7 @@ export const TasksPage = memo(function TasksPage({
   runDemoTask: ((kind: DemoTaskKind, options?: DemoTaskOptions) => Promise<void>) | null;
   runningDemoTask: DemoTaskKind | null;
   inspectTask: (id: string) => void;
+  taskEventsHref: (id: string) => string;
   /**
    * Release one scheduled task, or null when the host cannot. Null is passed through to the menu
    * as a stated reason rather than removing the item.
@@ -550,6 +552,7 @@ export const TasksPage = memo(function TasksPage({
                     <Table.Td className="task-table__col--actions">
                       <TaskRowActions
                         task={task}
+                        eventsHref={taskEventsHref(task.id)}
                         onAction={runRowAction}
                         capabilities={{
                           runNow: runTaskNow !== null,

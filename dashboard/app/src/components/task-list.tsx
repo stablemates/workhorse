@@ -58,6 +58,7 @@ import {
   useElapsed,
 } from "../preferences.js";
 import { useDashboardClient } from "../core.js";
+import { taskEventsLinkProps } from "../task-events-link.js";
 
 export function DurableProgressBadge({ task }: { task: DashboardTaskRow }) {
   if (!task.durability) {
@@ -483,6 +484,21 @@ export function taskRowActionIcon(id: TaskRowActionId): ReactNode {
   if (id === "complete-human-wait") return <CheckCircle size={16} />;
   return <FunnelSimple size={16} />;
 }
+
+/** A real browser link so task history can stay open beside the task listing. */
+export function TaskEventsMenuItem({ taskId, href }: { taskId: string; href: string }) {
+  return (
+    <Menu.Item
+      component="a"
+      {...taskEventsLinkProps(taskId, href)}
+      leftSection={<Clock size={16} />}
+    >
+      <Text size="sm" lh={1.3}>
+        View task events
+      </Text>
+    </Menu.Item>
+  );
+}
 /**
  * The per-row action menu for one task.
  *
@@ -502,6 +518,7 @@ export function TaskRowActions({
   onAction,
   capabilities,
   pendingAction,
+  eventsHref,
   showOpenDetails = true,
 }: {
   task: TaskActionTarget;
@@ -509,6 +526,8 @@ export function TaskRowActions({
   capabilities: TaskRowActionCapabilities;
   /** The action currently in flight for this row, so its item can show it rather than look idle. */
   pendingAction: TaskRowActionId | null;
+  /** Mounted Events URL for this task. Omit outside the task listing. */
+  eventsHref?: string;
   showOpenDetails?: boolean;
 }) {
   const groups = taskRowActionGroups(task, capabilities);
@@ -540,6 +559,9 @@ export function TaskRowActions({
           <Fragment key={group.label}>
             {index > 0 ? <Menu.Divider /> : null}
             <Menu.Label>{group.label}</Menu.Label>
+            {group.label === "Task" && eventsHref ? (
+              <TaskEventsMenuItem taskId={task.id} href={eventsHref} />
+            ) : null}
             {group.actions.map((action) => {
               if (action.id === "inspect" && !showOpenDetails) return null;
               const pending = pendingAction === action.id;

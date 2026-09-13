@@ -2,6 +2,7 @@ import { MantineProvider } from "@mantine/core";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { taskEventsLinkProps } from "./task-events-link.js";
 
 Object.defineProperty(globalThis, "localStorage", {
   value: { getItem: () => null, setItem: () => undefined },
@@ -14,6 +15,20 @@ function render(component: unknown, props: Record<string, unknown>): string {
 }
 
 describe("task listing identity", () => {
+  it("links a task menu to its exact Events feed in a new window", () => {
+    expect(
+      taskEventsLinkProps(
+        "3f1c0c8e-0000-4000-8000-000000000001",
+        "/dashboard/events?task=3f1c0c8e-0000-4000-8000-000000000001",
+      ),
+    ).toEqual({
+      href: "/dashboard/events?task=3f1c0c8e-0000-4000-8000-000000000001",
+      target: "_blank",
+      rel: "noopener noreferrer",
+      "aria-label": "View all events for task 3f1c0c8e-0000-4000-8000-000000000001 in a new window",
+    });
+  });
+
   it("keeps the display name on one line and exposes the full name as its title", async () => {
     const { TaskName } = await import("./dashboard.js");
     const html = render(TaskName, {
