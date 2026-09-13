@@ -98,13 +98,11 @@ function Lane({
   horse,
   picked,
   disabled,
-  rank,
   onPick,
 }: {
   horse: HorseState;
   picked: boolean;
   disabled: boolean;
-  rank: number;
   onPick: () => void;
 }) {
   const percent = Math.round((horse.tasksDone / horse.tasksTotal) * 100);
@@ -126,13 +124,13 @@ function Lane({
         className="sr-only"
       />
       <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span className="w-5 font-mono text-xs text-fd-muted-foreground">
-          {disabled ? `#${rank}` : "○"}
-        </span>
         <span className="font-mono text-sm font-medium tracking-tight">{horse.id}</span>
         {picked ? <span className="text-xs font-medium text-(--wh-accent)">Your pick</span> : null}
         <span className="ml-auto">
           <StatusChip status={horse.status} />
+        </span>
+        <span className="sr-only">
+          {horse.tasksDone} of {horse.tasksTotal} tasks complete, {percent} percent
         </span>
       </span>
       <span
@@ -145,12 +143,6 @@ function Lane({
           <HorseIcon />
         </span>
       </span>
-      <span className="mt-1 flex justify-between font-mono text-[11px] text-fd-muted-foreground">
-        <span>
-          {horse.tasksDone} / {horse.tasksTotal} tasks
-        </span>
-        <span>{horse.status === "drained" ? "Finished" : `${percent}%`}</span>
-      </span>
     </label>
   );
 }
@@ -161,10 +153,9 @@ function RaceLog({ log }: { log: readonly LogLine[] }) {
       role="region"
       aria-label="Race events, newest first"
       tabIndex={0}
-      className="max-h-72 overflow-y-auto overscroll-contain border-t wh-rule px-4 py-3 focus-visible:outline-2 focus-visible:outline-(--color-fd-ring) focus-visible:-outline-offset-2"
+      className="max-h-44 overflow-y-auto overscroll-contain border-t wh-rule px-4 py-2.5 focus-visible:outline-2 focus-visible:outline-(--color-fd-ring) focus-visible:-outline-offset-2"
     >
-      <p className="mb-3 text-xs text-fd-muted-foreground">Newest first · Full race history</p>
-      <ol className="space-y-2 font-mono text-[11.5px] leading-relaxed">
+      <ol className="space-y-1.5 font-mono text-[11.5px] leading-relaxed">
         {log.toReversed().map((line) => (
           <li key={`${line.t}-${line.text}`} className={logTone[line.tone]}>
             <span className="text-fd-muted-foreground/70">{formatRaceClock(line.t)}</span>{" "}
@@ -180,7 +171,6 @@ export function TheDerby() {
   const [phase, setPhase] = useState<Phase>("pick");
   const [pickedId, setPickedId] = useState<string | null>(null);
   const [race, setRace] = useState<RaceState | null>(null);
-  const [record, setRecord] = useState({ races: 0, wins: 0 });
   const recordedRef = useRef(false);
   const intervalRef = useRef<number | null>(null);
 
@@ -199,10 +189,6 @@ export function TheDerby() {
     recordedRef.current = true;
     stopTicking();
     setPhase("done");
-    setRecord((previous) => ({
-      races: previous.races + 1,
-      wins: previous.wins + (winnerId === pickedId ? 1 : 0),
-    }));
   }, [race, winnerId, pickedId]);
 
   const start = () => {
@@ -230,27 +216,7 @@ export function TheDerby() {
 
   const horses = race?.horses ?? createHorses();
   const standings = raceStandings(horses);
-  const leader = standings[0];
   const selection = standings.find((entry) => entry.horse.id === pickedId);
-  const leaders = standings.filter((entry) => entry.rank === 1);
-  const call =
-    phase === "pick"
-      ? "Back a horse. Beat the queue."
-      : phase === "done"
-        ? `${winnerId} takes the Derby.`
-        : leaders.length > 1
-          ? "Neck and neck at the front."
-          : `${leader?.horse.id} ${leader && leader.horse.tasksDone >= 100 ? "is on the home stretch." : "takes the lead."}`;
-  const raceNote =
-    phase === "pick"
-      ? `First to drain ${DERBY_TUNING.tasksTotal} tasks wins. Retries and throttles can turn the race. Every horse starts with the same odds.`
-      : phase === "done"
-        ? winnerId === pickedId
-          ? "You picked the winner. Oats are on the house."
-          : `Your pick was #${selection?.rank} when the race ended, ${selection?.behind} tasks behind the winner.`
-        : selection?.rank === 1
-          ? "Your horse is out front. Can it hold on?"
-          : `Your pick is #${selection?.rank}, ${selection?.behind} tasks off the lead.`;
   /* The simulation never learns the visitor's pick (that is what keeps the
    * race fair), so the victory lap is appended here, outside the sim. */
   const log: readonly LogLine[] =
@@ -276,31 +242,18 @@ export function TheDerby() {
   if (phase === "pick") {
     statusLine = pickedId ? `${pickedId} at the gate — start when ready` : "pick a horse to enter";
   } else if (phase === "running") {
-    statusLine = "Race in progress — picks are locked";
+    statusLine = `racing — ${formatRaceClock(race?.tick ?? 0)}`;
   } else if (winnerId === pickedId) {
     statusLine = `${winnerId} wins — you picked the winner`;
     statusClass = "text-safety-600 dark:text-safety-400";
   } else {
-    statusLine = `${winnerId} wins — you backed ${pickedId}`;
+    statusLine = `${winnerId} wins — ${pickedId} finished #${selection?.rank}`;
   }
 
   return (
     <div className="wh-frame min-w-0" data-derby>
-      <div className="wh-frame-bar flex flex-wrap items-center justify-between gap-2 px-4 py-2">
+      <div className="wh-frame-bar px-4 py-2">
         <span className="wh-mono-label">{title}</span>
-        <span className="font-mono text-xs text-fd-muted-foreground">
-          {record.wins} {record.wins === 1 ? "win" : "wins"} / {record.races}{" "}
-          {record.races === 1 ? "race" : "races"} this visit
-        </span>
-      </div>
-      <div className="wh-rule border-b px-4 py-4">
-        <p className="text-xl font-semibold tracking-tight" aria-live="off">
-          {call}
-        </p>
-        <p className="mt-2 min-h-10 text-sm leading-relaxed text-fd-muted-foreground">{raceNote}</p>
-        <p className="mt-2 font-mono text-xs text-fd-muted-foreground">
-          Race clock {formatRaceClock(race?.tick ?? 0)}
-        </p>
       </div>
       <fieldset disabled={phase !== "pick"} className="m-0 min-w-0 border-0 p-0">
         <legend className="sr-only">Pick a horse to back in the race</legend>
@@ -311,20 +264,19 @@ export function TheDerby() {
               horse={horse}
               picked={pickedId === horse.id}
               disabled={phase !== "pick"}
-              rank={standings.find((entry) => entry.horse.id === horse.id)?.rank ?? 1}
               onPick={() => setPickedId(horse.id)}
             />
           ))}
         </div>
       </fieldset>
-      <details className="wh-rule border-t">
-        <summary className="cursor-pointer px-4 py-3 text-sm text-fd-muted-foreground focus-visible:outline-2 focus-visible:outline-(--color-fd-ring)">
-          Under the hood · race events{race ? ` (${log.length})` : ""}
+      <details open className="wh-rule border-t">
+        <summary className="cursor-pointer px-4 py-2.5 text-sm text-fd-muted-foreground focus-visible:outline-2 focus-visible:outline-(--color-fd-ring)">
+          Game log{race ? ` (${log.length})` : ""}
         </summary>
         {race ? (
           <RaceLog log={log} />
         ) : (
-          <p className="px-4 pb-3 text-sm text-fd-muted-foreground">
+          <p className="border-t wh-rule px-4 py-2.5 text-sm text-fd-muted-foreground">
             Start a race to see retries, throttles, and recovery.
           </p>
         )}
@@ -338,7 +290,7 @@ export function TheDerby() {
             <button
               type="button"
               onClick={reset}
-              className="rounded-sm px-3 py-2 text-sm hover:bg-fd-muted"
+              className="rounded-sm px-3 py-1.5 text-sm hover:bg-fd-muted"
             >
               Change horse
             </button>
@@ -347,7 +299,7 @@ export function TheDerby() {
             type="button"
             onClick={start}
             disabled={phase === "running" || !pickedId}
-            className="inline-flex items-center rounded-sm bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:pointer-events-none disabled:opacity-50 dark:bg-brand-600 dark:hover:bg-brand-700 motion-safe:active:scale-[0.97]"
+            className="inline-flex items-center rounded-sm bg-brand-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-800 disabled:pointer-events-none disabled:opacity-50 dark:bg-brand-600 dark:hover:bg-brand-700 motion-safe:active:scale-[0.97]"
           >
             {phase === "done" ? "Race again" : phase === "running" ? "Racing…" : "Start race"}
           </button>

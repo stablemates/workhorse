@@ -821,22 +821,18 @@ function Tile({ href, label, note }: { href: string; label: string; note: string
 
 function DerbySection() {
   return (
-    <section id="derby" className="mx-auto w-full max-w-7xl scroll-mt-24 px-5 py-14 lg:px-8">
+    <section id="derby" className="mx-auto w-full max-w-7xl scroll-mt-24 px-5 py-10 lg:px-8">
       <Rule label="the derby" />
-      <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)] lg:gap-12">
+      <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)] lg:gap-10">
         <div>
           <h2 className="text-balance text-2xl font-semibold leading-snug tracking-tight sm:text-[27px]">
             Pick your horse. Watch the queue race.
           </h2>
           <p className="mt-3 text-pretty text-[16px] leading-relaxed text-fd-muted-foreground">
             Back a worker and see if it drains its queue first. A retry can cost the lead, a
-            throttle can close the gap, and a dead-letter can still make a comeback.
+            throttle can close the gap, and the game log shows how each race turns.
           </p>
-          <p className="mt-3 text-sm leading-relaxed text-fd-muted-foreground">
-            A short simulation of Workhorse mechanics. No stakes, just bragging rights. Open the
-            race events to see what happened under the hood.
-          </p>
-          <p className="mt-5">
+          <p className="mt-4">
             <a href="/docs/dead-letters" className="wh-link-underline text-[15px] font-medium">
               Dead letters and redrive →
             </a>
