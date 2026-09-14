@@ -20,9 +20,25 @@ describe("task location state", () => {
     };
     const restored = parseTaskLocation(taskLocationHref(state).split("?")[1]!);
     expect(restored).toEqual(state);
+    expect(taskLocationHref(state)).toMatch(
+      /^\/tasks\?cursor=v1\.[A-Za-z0-9_-]+&direction=previous$/,
+    );
+    expect(taskLocationHref(state)).not.toContain("%7B");
     expect(taskListingKey(restored)).not.toBe(taskListingKey(parseTaskLocation("")));
     expect(parseTaskLocation("?cursor=null").cursor).toBeUndefined();
     expect(parseTaskLocation("?cursor=broken").cursor).toBeUndefined();
+    expect(parseTaskLocation("?cursor=v2.eyJpZCI6ImZ1dHVyZSJ9").cursor).toBeUndefined();
+    expect(parseTaskLocation("?cursor=v1.invalid%21").cursor).toBeUndefined();
+  });
+
+  it("continues to parse task cursor URLs generated before opaque tokens", () => {
+    const cursor = {
+      id: "01890abc-0000-7000-8000-000000000001",
+      updatedAt: "2026-09-08T01:02:03.123456Z",
+      priority: 50,
+    };
+    const legacy = new URLSearchParams({ cursor: JSON.stringify(cursor), direction: "previous" });
+    expect(parseTaskLocation(legacy)).toMatchObject({ cursor, direction: "previous" });
   });
 
   it("round-trips shareable task filters and omits defaults", () => {
