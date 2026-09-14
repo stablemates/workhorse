@@ -682,7 +682,7 @@
     {
       "name": "schedule_definition__cron_schedules",
       "arity": 1,
-      "contract": "SELECT definition.namespace, definition.schedule_name, definition.cron_expression,\n              definition.timezone,\n              definition.revision::text,\n              max(occurrence.occurrence_at) AS last_occurrence_at\n         FROM workhorse.schedule_definition definition\n         LEFT JOIN workhorse.schedule_occurrence occurrence\n           ON occurrence.namespace = definition.namespace\n          AND occurrence.schedule_name = definition.schedule_name\n        WHERE definition.enabled AND definition.namespace = ANY($1::text[])\n        GROUP BY definition.namespace, definition.schedule_name, definition.timezone\n        ORDER BY definition.namespace, definition.schedule_name",
+      "contract": "SELECT definition.namespace, definition.schedule_name, definition.cron_expression,\n              definition.timezone,\n              definition.revision::text,\n              max(occurrence.occurrence_at) AS last_occurrence_at\n         FROM workhorse.schedule_definition definition\n         LEFT JOIN workhorse.schedule_occurrence occurrence\n           ON occurrence.namespace = definition.namespace\n          AND occurrence.schedule_name = definition.schedule_name\n        WHERE definition.configured_enabled AND NOT definition.paused\n          AND definition.namespace = ANY($1::text[])\n        GROUP BY definition.namespace, definition.schedule_name, definition.timezone\n        ORDER BY definition.namespace, definition.schedule_name",
       "catalogues": ["internal"]
     },
     {

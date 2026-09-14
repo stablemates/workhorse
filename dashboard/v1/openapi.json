@@ -1467,8 +1467,8 @@
     "/rpc/dashboard/events": {
       "post": {
         "operationId": "dashboard_events",
-        "summary": "List task events and attempts in a window",
-        "description": "Returns one page of task events and attempt outcomes within a window of 15m, 1h, 6h, or 24h, filterable by kind (event, attempt, or all), queue, taskType, event types, and one taskId. retention reports how far back events and attempts are kept.",
+        "summary": "List task events and attempts in a time range",
+        "description": "Returns one page of task events and attempt outcomes within a fixed window of 15m, 1h, 6h, or 24h, or between an inclusive rangeStart instant and exclusive rangeEnd instant. The feed is filterable by kind (event, attempt, or all), queue, taskType, event types, and one taskId. retention reports how far back events and attempts are kept.",
         "tags": [
           "reads"
         ],
@@ -1491,6 +1491,32 @@
                           "1h",
                           "6h",
                           "24h"
+                        ]
+                      },
+                      "rangeStart": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "rangeEnd": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                          },
+                          {
+                            "type": "null"
+                          }
                         ]
                       },
                       "page": {
@@ -1719,11 +1745,13 @@
                         ],
                         "window": "1h",
                         "pageSize": 25,
+                        "rangeEnd": "2026-01-01T00:00:00.000Z",
                         "retention": {
                           "taskEventDays": 14,
                           "attemptHistoryDays": 14
                         },
                         "capturedAt": "2026-01-01T00:00:00.000Z",
+                        "rangeStart": "2026-01-01T00:00:00.000Z",
                         "windowSeconds": 3600
                       }
                     }
@@ -1937,19 +1965,23 @@
                             "type": "conformance.report",
                             "queue": "conformance",
                             "active": true,
-                            "enabled": true,
+                            "paused": false,
                             "identity": {
                               "kind": "user",
                               "name": "nightly-report",
                               "namespace": "conformance"
                             },
+                            "pausedAt": null,
+                            "pausedBy": null,
                             "priority": 0,
                             "revision": "1",
                             "namespace": "conformance",
                             "updatedAt": "2026-01-01T00:00:00.000Z",
                             "lastFiredAt": null,
+                            "pausedReason": null,
                             "evaluatorCount": 1,
-                            "occurrenceCount": 0
+                            "occurrenceCount": 0,
+                            "configuredEnabled": true
                           }
                         ],
                         "capturedAt": "2026-01-01T00:00:00.000Z",
@@ -1967,31 +1999,39 @@
                           "routines": [
                             {
                               "due": true,
+                              "runs": [],
                               "routine": "history_partitions",
                               "incomplete": false,
                               "lastStartedAt": null,
-                              "lastCompletedAt": null
+                              "lastCompletedAt": null,
+                              "recordedRunCount": 0
                             },
                             {
                               "due": true,
+                              "runs": [],
                               "routine": "history_retention",
                               "incomplete": false,
                               "lastStartedAt": null,
-                              "lastCompletedAt": null
+                              "lastCompletedAt": null,
+                              "recordedRunCount": 0
                             },
                             {
                               "due": true,
+                              "runs": [],
                               "routine": "terminal_storage",
                               "incomplete": false,
                               "lastStartedAt": null,
-                              "lastCompletedAt": null
+                              "lastCompletedAt": null,
+                              "recordedRunCount": 0
                             },
                             {
                               "due": true,
+                              "runs": [],
                               "routine": "tick",
                               "incomplete": false,
                               "lastStartedAt": null,
-                              "lastCompletedAt": null
+                              "lastCompletedAt": null,
+                              "recordedRunCount": 0
                             }
                           ]
                         }
@@ -4275,11 +4315,11 @@
         }
       }
     },
-    "/rpc/dashboard/setScheduleEnabled": {
+    "/rpc/dashboard/setSchedulePaused": {
       "post": {
-        "operationId": "dashboard_setScheduleEnabled",
-        "summary": "Enable or disable a schedule",
-        "description": "Flips the enabled flag of one user schedule identified by namespace and name and returns the resulting flag.",
+        "operationId": "dashboard_setSchedulePaused",
+        "summary": "Pause or resume a schedule",
+        "description": "Sets the durable operator pause for one user schedule and returns it. Deployment synchronization does not clear the pause.",
         "tags": [
           "mutations"
         ],
@@ -4306,7 +4346,7 @@
                         "type": "string",
                         "minLength": 1
                       },
-                      "enabled": {
+                      "paused": {
                         "type": "boolean"
                       },
                       "audit": {
@@ -4336,7 +4376,7 @@
                       "kind",
                       "namespace",
                       "name",
-                      "enabled",
+                      "paused",
                       "audit"
                     ]
                   }
@@ -4348,13 +4388,13 @@
               "examples": {
                 "conformance": {
                   "summary": "Request",
-                  "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: set-schedule-enabled.",
+                  "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: set-schedule-paused.",
                   "value": {
                     "json": {
                       "kind": "user",
                       "namespace": "conformance",
                       "name": "nightly-report",
-                      "enabled": false,
+                      "paused": true,
                       "audit": {
                         "actor": "browser-operator",
                         "reason": "conformance exchange",
@@ -4378,12 +4418,12 @@
                     "json": {
                       "type": "object",
                       "properties": {
-                        "enabled": {
+                        "paused": {
                           "type": "boolean"
                         }
                       },
                       "required": [
-                        "enabled"
+                        "paused"
                       ]
                     }
                   },
@@ -4394,10 +4434,10 @@
                 "examples": {
                   "conformance": {
                     "summary": "Response",
-                    "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: set-schedule-enabled.",
+                    "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: set-schedule-paused.",
                     "value": {
                       "json": {
-                        "enabled": false
+                        "paused": true
                       }
                     }
                   }
@@ -6848,6 +6888,15 @@
                     },
                     "incomplete": {
                       "type": "boolean"
+                    },
+                    "recordedRunCount": {
+                      "type": "number"
+                    },
+                    "runs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DashboardMaintenanceRun"
+                      }
                     }
                   },
                   "required": [
@@ -6855,7 +6904,9 @@
                     "lastStartedAt",
                     "lastCompletedAt",
                     "due",
-                    "incomplete"
+                    "incomplete",
+                    "recordedRunCount",
+                    "runs"
                   ]
                 }
               }
@@ -7240,6 +7291,12 @@
           "windowSeconds": {
             "type": "number"
           },
+          "rangeStart": {
+            "type": "string"
+          },
+          "rangeEnd": {
+            "type": "string"
+          },
           "events": {
             "type": "array",
             "items": {
@@ -7289,6 +7346,8 @@
           "capturedAt",
           "window",
           "windowSeconds",
+          "rangeStart",
+          "rangeEnd",
           "events",
           "page",
           "pageSize",
@@ -7657,6 +7716,93 @@
           "statisticsRecomputeBuckets",
           "provenance",
           "updatedAt"
+        ]
+      },
+      "DashboardMaintenanceRun": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "completedAt": {
+            "type": "string"
+          },
+          "durationMs": {
+            "type": "number"
+          },
+          "outcome": {
+            "enum": [
+              "failed",
+              "incomplete",
+              "succeeded"
+            ]
+          },
+          "rowsAffected": {
+            "type": "number"
+          },
+          "phases": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "phase": {
+                  "type": "string"
+                },
+                "rowsAffected": {
+                  "type": "number"
+                },
+                "durationMs": {
+                  "type": "number"
+                },
+                "error": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  ]
+                },
+                "expiredLeases": {
+                  "type": "number"
+                },
+                "retried": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "phase",
+                "rowsAffected",
+                "durationMs",
+                "error"
+              ]
+            }
+          }
+        },
+        "required": [
+          "id",
+          "startedAt",
+          "completedAt",
+          "durationMs",
+          "outcome",
+          "rowsAffected",
+          "phases"
         ]
       },
       "DashboardManagedQueueRow": {
@@ -8596,8 +8742,41 @@
           "priority": {
             "type": "number"
           },
-          "enabled": {
+          "configuredEnabled": {
             "type": "boolean"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "pausedBy": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "pausedReason": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "pausedAt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
           },
           "active": {
             "type": "boolean"
@@ -8634,7 +8813,11 @@
           "queue",
           "type",
           "priority",
-          "enabled",
+          "configuredEnabled",
+          "paused",
+          "pausedBy",
+          "pausedReason",
+          "pausedAt",
           "active",
           "revision",
           "updatedAt",

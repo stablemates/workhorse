@@ -1365,6 +1365,51 @@ INSERT INTO workhorse.maintenance_state(
   ('terminal_storage', NULL)
 ON CONFLICT (routine_name) DO NOTHING;
 
+-- Routine history is deliberately small and operational. Slow routines retain every execution;
+-- the hot tick records every error and samples successful task-changing executions once per minute.
+CREATE TABLE IF NOT EXISTS workhorse.maintenance_run (
+  run_id uuid PRIMARY KEY DEFAULT workhorse.uuid_v7_v1(),
+  routine_name text NOT NULL CHECK (
+    routine_name IN ('tick', 'history_partitions', 'history_retention', 'terminal_storage')
+  ),
+  started_at timestamptz NOT NULL CHECK (isfinite(started_at)),
+  completed_at timestamptz NOT NULL CHECK (isfinite(completed_at)),
+  outcome text NOT NULL CHECK (outcome IN ('succeeded', 'failed', 'incomplete')),
+  rows_affected integer NOT NULL CHECK (rows_affected >= 0),
+  phases jsonb NOT NULL CHECK (jsonb_typeof(phases) = 'array'),
+  CHECK (completed_at >= started_at)
+);
+CREATE INDEX IF NOT EXISTS maintenance_run_routine_started_idx
+  ON workhorse.maintenance_run(routine_name, started_at DESC, run_id DESC);
+
+CREATE OR REPLACE FUNCTION workhorse.record_maintenance_run_internal_v1(
+  p_routine_name text,
+  p_started_at timestamptz,
+  p_completed_at timestamptz,
+  p_outcome text,
+  p_rows_affected integer,
+  p_phases jsonb
+) RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO workhorse.maintenance_run(
+    routine_name, started_at, completed_at, outcome, rows_affected, phases
+  ) VALUES (
+    p_routine_name, p_started_at, p_completed_at, p_outcome, p_rows_affected, p_phases
+  );
+
+  DELETE FROM workhorse.maintenance_run run
+   WHERE run.run_id IN (
+     SELECT stale.run_id
+       FROM workhorse.maintenance_run stale
+      WHERE stale.routine_name = p_routine_name
+      ORDER BY stale.started_at DESC, stale.run_id DESC
+      OFFSET 50
+   );
+END;
+$$;
+
 -- Rolling statistics. Operator time windows are answered from bounded per-minute aggregates rather
 -- than from scans over retained history: one row per closed minute per (queue, task type) instead
 -- of one row per event. Buckets are derived from raw history and recomputed idempotently, so a pass
@@ -1539,7 +1584,16 @@ CREATE TABLE IF NOT EXISTS workhorse.schedule_definition (
         AND retry_policy = workhorse.normalize_retry_policy_v1(retry_policy)
       )
     ),
-  enabled boolean NOT NULL DEFAULT true,
+  configured_enabled boolean NOT NULL DEFAULT true,
+  paused boolean NOT NULL DEFAULT false,
+  paused_by text,
+  paused_reason text,
+  paused_at timestamptz,
+  CONSTRAINT schedule_definition_pause_attribution CHECK (
+    (NOT paused AND paused_by IS NULL AND paused_reason IS NULL AND paused_at IS NULL)
+    OR (paused AND paused_by IS NOT NULL AND paused_by <> ''
+      AND paused_reason IS NOT NULL AND paused_reason <> '' AND paused_at IS NOT NULL)
+  ),
   revision bigint NOT NULL DEFAULT 1 CHECK (revision > 0),
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   priority integer NOT NULL DEFAULT 0 CHECK (priority BETWEEN 0 AND 100),
@@ -3812,7 +3866,7 @@ BEGIN
   INSERT INTO workhorse.schedule_definition AS existing(
     namespace, schedule_name, cron_expression, timezone, queue_name, task_type, concurrency_key, priority, payload,
     contract_version, payload_max_bytes, result_max_bytes, payload_redact_keys, result_redact_keys,
-    max_attempts, retry_policy, enabled
+    max_attempts, retry_policy, configured_enabled
   )
   SELECT p_namespace, definition->>'name', definition->>'schedule',
          COALESCE(definition->>'timezone', 'UTC'), definition->>'queue',
@@ -3838,13 +3892,13 @@ BEGIN
           existing.concurrency_key, existing.priority, existing.payload,
           existing.contract_version, existing.payload_max_bytes, existing.result_max_bytes,
           existing.payload_redact_keys, existing.result_redact_keys,
-          existing.max_attempts, existing.retry_policy, existing.enabled
+          existing.max_attempts, existing.retry_policy, existing.configured_enabled
         ) IS DISTINCT FROM ROW(
           EXCLUDED.cron_expression, EXCLUDED.timezone, EXCLUDED.queue_name, EXCLUDED.task_type,
           EXCLUDED.concurrency_key, EXCLUDED.priority, EXCLUDED.payload,
           EXCLUDED.contract_version, EXCLUDED.payload_max_bytes, EXCLUDED.result_max_bytes,
           EXCLUDED.payload_redact_keys, EXCLUDED.result_redact_keys,
-          EXCLUDED.max_attempts, EXCLUDED.retry_policy, EXCLUDED.enabled
+          EXCLUDED.max_attempts, EXCLUDED.retry_policy, EXCLUDED.configured_enabled
         ) THEN 1 ELSE 0 END,
         cron_expression = EXCLUDED.cron_expression,
         timezone = EXCLUDED.timezone,
@@ -3860,14 +3914,14 @@ BEGIN
         result_redact_keys = EXCLUDED.result_redact_keys,
         max_attempts = EXCLUDED.max_attempts,
         retry_policy = EXCLUDED.retry_policy,
-        enabled = EXCLUDED.enabled,
+        configured_enabled = EXCLUDED.configured_enabled,
         updated_at = clock_timestamp();
 
   IF p_prune THEN
     UPDATE workhorse.schedule_definition definition
-       SET enabled = false, revision = definition.revision + 1, updated_at = clock_timestamp()
+       SET configured_enabled = false, revision = definition.revision + 1, updated_at = clock_timestamp()
      WHERE definition.namespace = p_namespace
-       AND definition.enabled
+       AND definition.configured_enabled
        AND NOT EXISTS (
          SELECT 1 FROM jsonb_array_elements(p_definitions) desired
           WHERE desired->>'name' = definition.schedule_name
@@ -3900,7 +3954,8 @@ BEGIN
     FROM workhorse.schedule_definition definition
    WHERE definition.namespace = p_namespace
      AND definition.schedule_name = p_schedule_name
-     AND definition.enabled
+     AND definition.configured_enabled
+     AND NOT definition.paused
      AND definition.revision = p_expected_revision
    FOR UPDATE;
   IF NOT FOUND THEN RETURN NULL; END IF;
@@ -3973,7 +4028,8 @@ BEGIN
       LEFT JOIN workhorse.schedule_occurrence occurrence
         ON occurrence.namespace = definition.namespace
        AND occurrence.schedule_name = definition.schedule_name
-     WHERE definition.enabled
+     WHERE definition.configured_enabled
+       AND NOT definition.paused
        AND definition.namespace = ANY(p_namespaces)
      GROUP BY definition.namespace, definition.schedule_name, definition.cron_expression,
               definition.timezone, definition.revision
@@ -8996,7 +9052,10 @@ AS $$
 DECLARE
   v_started_at timestamptz;
   v_tick_started_at timestamptz;
+  v_tick_completed_at timestamptz;
   v_had_error boolean := false;
+  v_rows_affected integer := 0;
+  v_phases jsonb := '[]'::jsonb;
 BEGIN
   IF NOT pg_try_advisory_xact_lock(hashtextextended('workhorse:tick', 0)) THEN
     RETURN QUERY VALUES
@@ -9027,6 +9086,11 @@ BEGIN
   duration_ms := GREATEST(
     0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
   );
+  v_rows_affected := v_rows_affected + rows_affected;
+  v_phases := v_phases || jsonb_build_array(jsonb_build_object(
+    'phase', phase, 'rowsAffected', rows_affected, 'durationMs', duration_ms,
+    'error', error
+  ));
   RETURN NEXT;
 
   phase := 'recover';
@@ -9045,12 +9109,34 @@ BEGIN
   duration_ms := GREATEST(
     0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
   );
+  v_rows_affected := v_rows_affected + rows_affected;
+  v_phases := v_phases || jsonb_build_array(jsonb_build_object(
+    'phase', phase, 'rowsAffected', rows_affected, 'durationMs', duration_ms,
+    'error', error, 'expiredLeases', expired_leases, 'retried', retried
+  ));
   RETURN NEXT;
 
+  v_tick_completed_at := clock_timestamp();
   IF NOT v_had_error THEN
     UPDATE workhorse.maintenance_state
-       SET last_completed_at = clock_timestamp(), updated_at = clock_timestamp()
+       SET last_completed_at = v_tick_completed_at, updated_at = v_tick_completed_at
      WHERE routine_name = 'tick';
+  END IF;
+  IF v_had_error OR (
+    v_rows_affected > 0
+    AND NOT EXISTS (
+      SELECT 1
+        FROM workhorse.maintenance_run recent
+       WHERE recent.routine_name = 'tick'
+         AND recent.outcome = 'succeeded'
+         AND recent.started_at > v_tick_started_at - interval '1 minute'
+    )
+  ) THEN
+    PERFORM workhorse.record_maintenance_run_internal_v1(
+      'tick', v_tick_started_at, v_tick_completed_at,
+      CASE WHEN v_had_error THEN 'failed' ELSE 'succeeded' END,
+      v_rows_affected, v_phases
+    );
   END IF;
 END;
 $$;
@@ -9376,6 +9462,9 @@ DECLARE v_suffix text;
 DECLARE v_today date := (p_now AT TIME ZONE 'UTC')::date;
 DECLARE v_policy workhorse.maintenance_policy%ROWTYPE;
 DECLARE v_state workhorse.maintenance_state%ROWTYPE;
+DECLARE v_run_started_at timestamptz;
+DECLARE v_run_completed_at timestamptz;
+DECLARE v_phases jsonb;
 BEGIN
   IF p_now IS NULL OR NOT isfinite(p_now) THEN RAISE EXCEPTION 'maintenance time is required'; END IF;
   IF NOT pg_try_advisory_xact_lock(
@@ -9393,6 +9482,7 @@ BEGIN
      ) THEN
     RETURN;
   END IF;
+  v_run_started_at := clock_timestamp();
   UPDATE workhorse.maintenance_state SET last_started_at = p_now, updated_at = clock_timestamp()
    WHERE routine_name = 'history_partitions';
 
@@ -9417,11 +9507,21 @@ BEGIN
   duration_ms := GREATEST(
     0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
   );
+  v_phases := jsonb_build_array(jsonb_build_object(
+    'phase', phase, 'rowsAffected', rows_affected, 'durationMs', duration_ms,
+    'error', error
+  ));
+  v_run_completed_at := clock_timestamp();
   IF error IS NULL THEN
     UPDATE workhorse.maintenance_state
        SET last_completed_at = p_now, updated_at = clock_timestamp()
      WHERE routine_name = 'history_partitions';
   END IF;
+  PERFORM workhorse.record_maintenance_run_internal_v1(
+    'history_partitions', v_run_started_at, v_run_completed_at,
+    CASE WHEN error IS NULL THEN 'succeeded' ELSE 'failed' END,
+    rows_affected, v_phases
+  );
   RETURN NEXT;
 END;
 $$;
@@ -10047,6 +10147,10 @@ DECLARE v_safe_before timestamptz;
 DECLARE v_rolled_up_through timestamptz;
 DECLARE v_success boolean := true;
 DECLARE v_complete boolean := false;
+DECLARE v_run_started_at timestamptz;
+DECLARE v_run_completed_at timestamptz;
+DECLARE v_rows_affected integer := 0;
+DECLARE v_phases jsonb := '[]'::jsonb;
 BEGIN
   IF p_now IS NULL OR NOT isfinite(p_now) THEN RAISE EXCEPTION 'maintenance time is required'; END IF;
   IF NOT pg_try_advisory_xact_lock(
@@ -10069,6 +10173,7 @@ BEGIN
   ) THEN
     RETURN;
   END IF;
+  v_run_started_at := clock_timestamp();
   UPDATE workhorse.maintenance_state SET last_started_at = p_now, updated_at = clock_timestamp()
    WHERE routine_name = 'history_retention';
   v_event_before := date_trunc('day', p_now AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
@@ -10109,6 +10214,11 @@ BEGIN
   duration_ms := GREATEST(
     0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
   );
+  v_rows_affected := v_rows_affected + rows_affected;
+  v_phases := v_phases || jsonb_build_array(jsonb_build_object(
+    'phase', phase, 'rowsAffected', rows_affected, 'durationMs', duration_ms,
+    'error', error
+  ));
   RETURN NEXT;
 
   phase := 'attempt_retention';
@@ -10131,6 +10241,11 @@ BEGIN
   duration_ms := GREATEST(
     0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
   );
+  v_rows_affected := v_rows_affected + rows_affected;
+  v_phases := v_phases || jsonb_build_array(jsonb_build_object(
+    'phase', phase, 'rowsAffected', rows_affected, 'durationMs', duration_ms,
+    'error', error
+  ));
   RETURN NEXT;
 
   phase := 'schedule_occurrences';
@@ -10151,6 +10266,11 @@ BEGIN
   duration_ms := GREATEST(
     0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
   );
+  v_rows_affected := v_rows_affected + rows_affected;
+  v_phases := v_phases || jsonb_build_array(jsonb_build_object(
+    'phase', phase, 'rowsAffected', rows_affected, 'durationMs', duration_ms,
+    'error', error
+  ));
   RETURN NEXT;
 
   IF v_success THEN
@@ -10174,9 +10294,17 @@ BEGIN
              last_completed_local_date = v_local_now::date,
              history_retained_before = GREATEST(history_retained_before, v_safe_before),
              updated_at = clock_timestamp()
-       WHERE routine_name = 'history_retention';
+      WHERE routine_name = 'history_retention';
     END IF;
   END IF;
+  v_run_completed_at := clock_timestamp();
+  PERFORM workhorse.record_maintenance_run_internal_v1(
+    'history_retention', v_run_started_at, v_run_completed_at,
+    CASE WHEN NOT v_success THEN 'failed'
+         WHEN v_complete THEN 'succeeded'
+         ELSE 'incomplete' END,
+    v_rows_affected, v_phases
+  );
 END;
 $$;
 
@@ -10196,6 +10324,10 @@ DECLARE v_history_before timestamptz;
 DECLARE v_success boolean := true;
 DECLARE v_identity_before timestamptz;
 DECLARE v_outcome_before timestamptz;
+DECLARE v_run_started_at timestamptz;
+DECLARE v_run_completed_at timestamptz;
+DECLARE v_rows_affected integer := 0;
+DECLARE v_phases jsonb := '[]'::jsonb;
 BEGIN
   IF p_now IS NULL OR NOT isfinite(p_now) THEN RAISE EXCEPTION 'maintenance time is required'; END IF;
   IF NOT pg_try_advisory_xact_lock(
@@ -10217,6 +10349,7 @@ BEGIN
      ) THEN
     RETURN;
   END IF;
+  v_run_started_at := clock_timestamp();
   SELECT history_retained_before INTO v_history_before
     FROM workhorse.maintenance_state WHERE routine_name = 'history_retention';
   UPDATE workhorse.maintenance_state SET last_started_at = p_now, updated_at = clock_timestamp()
@@ -10238,6 +10371,11 @@ BEGIN
   duration_ms := GREATEST(
     0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
   );
+  v_rows_affected := v_rows_affected + rows_affected;
+  v_phases := v_phases || jsonb_build_array(jsonb_build_object(
+    'phase', phase, 'rowsAffected', rows_affected, 'durationMs', duration_ms,
+    'error', error
+  ));
   RETURN NEXT;
 
   phase := 'released_dependencies';
@@ -10255,6 +10393,11 @@ BEGIN
   duration_ms := GREATEST(
     0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
   );
+  v_rows_affected := v_rows_affected + rows_affected;
+  v_phases := v_phases || jsonb_build_array(jsonb_build_object(
+    'phase', phase, 'rowsAffected', rows_affected, 'durationMs', duration_ms,
+    'error', error
+  ));
   RETURN NEXT;
 
   phase := 'terminal_tasks';
@@ -10284,11 +10427,22 @@ BEGIN
   duration_ms := GREATEST(
     0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
   );
+  v_rows_affected := v_rows_affected + rows_affected;
+  v_phases := v_phases || jsonb_build_array(jsonb_build_object(
+    'phase', phase, 'rowsAffected', rows_affected, 'durationMs', duration_ms,
+    'error', error
+  ));
+  v_run_completed_at := clock_timestamp();
   IF v_success THEN
     UPDATE workhorse.maintenance_state
        SET last_completed_at = p_now, updated_at = clock_timestamp()
      WHERE routine_name = 'terminal_storage';
   END IF;
+  PERFORM workhorse.record_maintenance_run_internal_v1(
+    'terminal_storage', v_run_started_at, v_run_completed_at,
+    CASE WHEN v_success THEN 'succeeded' ELSE 'failed' END,
+    v_rows_affected, v_phases
+  );
   RETURN NEXT;
 END;
 $$;
@@ -11452,6 +11606,9 @@ CREATE OR REPLACE VIEW workhorse.dashboard_maintenance_policy_v1 AS
 CREATE OR REPLACE VIEW workhorse.dashboard_maintenance_state_v1 AS
   SELECT routine_name, last_started_at, last_completed_at, last_completed_local_date
     FROM workhorse.maintenance_state;
+CREATE OR REPLACE VIEW workhorse.dashboard_maintenance_run_v1 AS
+  SELECT run_id, routine_name, started_at, completed_at, outcome, rows_affected, phases
+    FROM workhorse.maintenance_run;
 CREATE OR REPLACE VIEW workhorse.dashboard_queue_control_v1 AS
   SELECT queue_name, paused FROM workhorse.queue_control;
 CREATE OR REPLACE VIEW workhorse.dashboard_rate_limit_policy_v1 AS
@@ -11460,7 +11617,8 @@ CREATE OR REPLACE VIEW workhorse.dashboard_retention_policy_v1 AS
   SELECT singleton, task_event_retention_days, attempt_history_retention_days
     FROM workhorse.retention_policy;
 CREATE OR REPLACE VIEW workhorse.dashboard_schedule_definition_v1 AS
-  SELECT namespace, schedule_name, cron_expression, timezone, queue_name, task_type, enabled, revision,
+  SELECT namespace, schedule_name, cron_expression, timezone, queue_name, task_type,
+         configured_enabled, paused, paused_by, paused_reason, paused_at, revision,
          updated_at, priority FROM workhorse.schedule_definition;
 CREATE OR REPLACE VIEW workhorse.dashboard_schedule_occurrence_v1 AS
   SELECT namespace, schedule_name, occurrence_at, fired_at FROM workhorse.schedule_occurrence;
@@ -11804,105 +11962,72 @@ AS $$
     FROM windowed;
 $$;
 
+
 CREATE OR REPLACE FUNCTION workhorse.dashboard_events_v1(p_input jsonb)
 RETURNS jsonb
-LANGUAGE sql
+LANGUAGE plpgsql
 SET jit = off
 AS $$
-  WITH parameters AS (
-    SELECT clock_timestamp() AS captured_at,
-           COALESCE(NULLIF(p_input->>'window', ''), '1h') AS window,
-           COALESCE(NULLIF(p_input->>'page', '')::integer, 1) AS page,
-           COALESCE(NULLIF(p_input->>'pageSize', '')::integer, 50) AS page_size,
-           COALESCE(NULLIF(p_input->>'kind', ''), 'all') AS kind,
-           NULLIF(p_input->>'queue', '') AS queue_filter,
-           NULLIF(p_input->>'taskType', '') AS type_filter,
-           NULLIF(p_input->>'worker', '') AS worker_filter,
-           NULLIF(trim(p_input->>'search'), '') AS search_filter,
-           CASE WHEN jsonb_typeof(p_input->'types') = 'array'
-                THEN ARRAY(SELECT jsonb_array_elements_text(p_input->'types'))
-                ELSE ARRAY[]::text[] END AS event_types,
-           NULLIF(p_input->>'taskId', '')::uuid AS task_id,
-           CASE COALESCE(NULLIF(p_input->>'window', ''), '1h')
-             WHEN '15m' THEN 900 WHEN '1h' THEN 3600 WHEN '6h' THEN 21600
-             WHEN '24h' THEN 86400
-           END AS window_seconds
-  ), event_records AS NOT MATERIALIZED (
-    SELECT event.*, COALESCE(event.details->>'worker_id', (
-      SELECT history.worker_id FROM workhorse.dashboard_attempt_history_v1 history
-       WHERE history.task_id = event.task_id AND history.attempt = event.attempt
-       ORDER BY history.occurred_at DESC, history.attempt_id DESC LIMIT 1
-    )) AS resolved_worker_id
-      FROM workhorse.dashboard_task_event_v1 event
-  ), event_feed AS (
-    SELECT 'event'::text AS kind, event.event_id AS record_id, event.task_id,
-           event.occurred_at, event.attempt, event.event_type AS type, event.details,
-           event.resolved_worker_id AS worker_id, NULL::bigint AS fence_token,
-           NULL::timestamptz AS started_at, NULL::timestamptz AS finished_at,
-           NULL::jsonb AS error, 1 AS kind_rank
-      FROM event_records event CROSS JOIN parameters
-     WHERE parameters.kind <> 'attempt'
-       AND event.occurred_at >= parameters.captured_at
-                                   - make_interval(secs => parameters.window_seconds)
-       AND (parameters.task_id IS NULL OR event.task_id = parameters.task_id)
-       AND (parameters.worker_filter IS NULL OR event.resolved_worker_id = parameters.worker_filter)
-       AND (parameters.search_filter IS NULL
-         OR strpos(lower(concat_ws(' ', event.task_id::text, event.event_type, event.resolved_worker_id, event.details::text)), lower(parameters.search_filter)) > 0
-         OR EXISTS (SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = event.task_id
-           AND strpos(lower(concat_ws(' ', task.queue_name, task.task_type)), lower(parameters.search_filter)) > 0))
-       AND (cardinality(parameters.event_types) = 0
-            OR event.event_type = ANY (parameters.event_types))
-       AND ((parameters.queue_filter IS NULL AND parameters.type_filter IS NULL) OR EXISTS (
-         SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = event.task_id
-           AND (parameters.queue_filter IS NULL OR task.queue_name = parameters.queue_filter)
-           AND (parameters.type_filter IS NULL OR task.task_type = parameters.type_filter)
-       ))
-     ORDER BY event.occurred_at DESC, event.event_id DESC
-     LIMIT (SELECT page * page_size FROM parameters)
-  ), attempt_feed AS (
-    SELECT 'attempt'::text AS kind, history.attempt_id AS record_id, history.task_id,
-           history.occurred_at, history.attempt, history.outcome AS type,
-           NULL::jsonb AS details, history.worker_id, history.fence_token,
-           history.started_at, history.finished_at, history.error, 0 AS kind_rank
-      FROM workhorse.dashboard_attempt_history_v1 history CROSS JOIN parameters
-     WHERE parameters.kind <> 'event'
-       AND history.occurred_at >= parameters.captured_at
-                                     - make_interval(secs => parameters.window_seconds)
-       AND (parameters.task_id IS NULL OR history.task_id = parameters.task_id)
-       AND (parameters.worker_filter IS NULL OR history.worker_id = parameters.worker_filter)
-       AND (parameters.search_filter IS NULL
-         OR strpos(lower(concat_ws(' ', history.task_id::text, history.outcome, history.worker_id, history.error->>'message')), lower(parameters.search_filter)) > 0
-         OR EXISTS (SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = history.task_id
-           AND strpos(lower(concat_ws(' ', task.queue_name, task.task_type)), lower(parameters.search_filter)) > 0))
-       AND (cardinality(parameters.event_types) = 0
-            OR history.outcome = ANY (parameters.event_types))
-       AND ((parameters.queue_filter IS NULL AND parameters.type_filter IS NULL) OR EXISTS (
-         SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = history.task_id
-           AND (parameters.queue_filter IS NULL OR task.queue_name = parameters.queue_filter)
-           AND (parameters.type_filter IS NULL OR task.task_type = parameters.type_filter)
-       ))
-     ORDER BY history.occurred_at DESC, history.attempt_id DESC
-     LIMIT (SELECT page * page_size FROM parameters)
-  ), merged AS MATERIALIZED (
-    SELECT * FROM event_feed UNION ALL SELECT * FROM attempt_feed
-  ), event_page AS MATERIALIZED (
-    SELECT merged.* FROM merged
-     ORDER BY occurred_at DESC, kind_rank DESC, record_id DESC
-     LIMIT (SELECT page_size FROM parameters)
-    OFFSET (SELECT (page - 1) * page_size FROM parameters)
-  ), total AS (
-    SELECT count(*) AS count FROM (
-      SELECT event.event_id
+DECLARE
+  v_from timestamptz := NULLIF(p_input->>'rangeStart', '')::timestamptz;
+  v_to timestamptz := NULLIF(p_input->>'rangeEnd', '')::timestamptz;
+  v_captured_at timestamptz := clock_timestamp();
+BEGIN
+  IF (v_from IS NULL) <> (v_to IS NULL) THEN
+    RAISE EXCEPTION 'rangeStart and rangeEnd must be supplied together' USING ERRCODE = '22023';
+  END IF;
+  IF v_from IS NOT NULL AND v_from >= v_to THEN
+    RAISE EXCEPTION 'rangeEnd must be later than rangeStart' USING ERRCODE = '22023';
+  END IF;
+
+  IF v_from IS NULL THEN
+    v_to := v_captured_at;
+    v_from := v_captured_at - make_interval(secs => CASE
+      COALESCE(NULLIF(p_input->>'window', ''), '1h')
+      WHEN '15m' THEN 900 WHEN '1h' THEN 3600 WHEN '6h' THEN 21600
+      WHEN '24h' THEN 86400
+    END);
+  END IF;
+
+  RETURN (
+    WITH parameters AS (
+      SELECT v_captured_at AS captured_at, v_from AS range_start, v_to AS range_end,
+             COALESCE(NULLIF(p_input->>'window', ''), '1h') AS window,
+             round(extract(epoch FROM v_to - v_from)) AS window_seconds,
+             COALESCE(NULLIF(p_input->>'page', '')::integer, 1) AS page,
+             COALESCE(NULLIF(p_input->>'pageSize', '')::integer, 50) AS page_size,
+             COALESCE(NULLIF(p_input->>'kind', ''), 'all') AS kind,
+             NULLIF(p_input->>'queue', '') AS queue_filter,
+             NULLIF(p_input->>'taskType', '') AS type_filter,
+             NULLIF(p_input->>'worker', '') AS worker_filter,
+             NULLIF(trim(p_input->>'search'), '') AS search_filter,
+             CASE WHEN jsonb_typeof(p_input->'types') = 'array'
+                  THEN ARRAY(SELECT jsonb_array_elements_text(p_input->'types'))
+                  ELSE ARRAY[]::text[] END AS event_types,
+             NULLIF(p_input->>'taskId', '')::uuid AS task_id
+    ), event_records AS NOT MATERIALIZED (
+      SELECT event.*, COALESCE(event.details->>'worker_id', (
+        SELECT history.worker_id FROM workhorse.dashboard_attempt_history_v1 history
+         WHERE history.task_id = event.task_id AND history.attempt = event.attempt
+         ORDER BY history.occurred_at DESC, history.attempt_id DESC LIMIT 1
+      )) AS resolved_worker_id
+        FROM workhorse.dashboard_task_event_v1 event
+    ), event_feed AS (
+      SELECT 'event'::text AS kind, event.event_id AS record_id, event.task_id,
+             event.occurred_at, event.attempt, event.event_type AS type, event.details,
+             event.resolved_worker_id AS worker_id, NULL::bigint AS fence_token,
+             NULL::timestamptz AS started_at, NULL::timestamptz AS finished_at,
+             NULL::jsonb AS error, 1 AS kind_rank
         FROM event_records event CROSS JOIN parameters
        WHERE parameters.kind <> 'attempt'
-         AND event.occurred_at >= parameters.captured_at
-                                     - make_interval(secs => parameters.window_seconds)
+         AND event.occurred_at >= parameters.range_start
+         AND event.occurred_at < parameters.range_end
          AND (parameters.task_id IS NULL OR event.task_id = parameters.task_id)
-       AND (parameters.worker_filter IS NULL OR event.resolved_worker_id = parameters.worker_filter)
-       AND (parameters.search_filter IS NULL
-         OR strpos(lower(concat_ws(' ', event.task_id::text, event.event_type, event.resolved_worker_id, event.details::text)), lower(parameters.search_filter)) > 0
-         OR EXISTS (SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = event.task_id
-           AND strpos(lower(concat_ws(' ', task.queue_name, task.task_type)), lower(parameters.search_filter)) > 0))
+         AND (parameters.worker_filter IS NULL OR event.resolved_worker_id = parameters.worker_filter)
+         AND (parameters.search_filter IS NULL
+           OR strpos(lower(concat_ws(' ', event.task_id::text, event.event_type, event.resolved_worker_id, event.details::text)), lower(parameters.search_filter)) > 0
+           OR EXISTS (SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = event.task_id
+             AND strpos(lower(concat_ws(' ', task.queue_name, task.task_type)), lower(parameters.search_filter)) > 0))
          AND (cardinality(parameters.event_types) = 0
               OR event.event_type = ANY (parameters.event_types))
          AND ((parameters.queue_filter IS NULL AND parameters.type_filter IS NULL) OR EXISTS (
@@ -11910,18 +12035,23 @@ AS $$
              AND (parameters.queue_filter IS NULL OR task.queue_name = parameters.queue_filter)
              AND (parameters.type_filter IS NULL OR task.task_type = parameters.type_filter)
          ))
-      UNION ALL
-      SELECT history.attempt_id
+       ORDER BY event.occurred_at DESC, event.event_id DESC
+       LIMIT (SELECT page * page_size FROM parameters)
+    ), attempt_feed AS (
+      SELECT 'attempt'::text AS kind, history.attempt_id AS record_id, history.task_id,
+             history.occurred_at, history.attempt, history.outcome AS type,
+             NULL::jsonb AS details, history.worker_id, history.fence_token,
+             history.started_at, history.finished_at, history.error, 0 AS kind_rank
         FROM workhorse.dashboard_attempt_history_v1 history CROSS JOIN parameters
        WHERE parameters.kind <> 'event'
-         AND history.occurred_at >= parameters.captured_at
-                                       - make_interval(secs => parameters.window_seconds)
+         AND history.occurred_at >= parameters.range_start
+         AND history.occurred_at < parameters.range_end
          AND (parameters.task_id IS NULL OR history.task_id = parameters.task_id)
-       AND (parameters.worker_filter IS NULL OR history.worker_id = parameters.worker_filter)
-       AND (parameters.search_filter IS NULL
-         OR strpos(lower(concat_ws(' ', history.task_id::text, history.outcome, history.worker_id, history.error->>'message')), lower(parameters.search_filter)) > 0
-         OR EXISTS (SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = history.task_id
-           AND strpos(lower(concat_ws(' ', task.queue_name, task.task_type)), lower(parameters.search_filter)) > 0))
+         AND (parameters.worker_filter IS NULL OR history.worker_id = parameters.worker_filter)
+         AND (parameters.search_filter IS NULL
+           OR strpos(lower(concat_ws(' ', history.task_id::text, history.outcome, history.worker_id, history.error->>'message')), lower(parameters.search_filter)) > 0
+           OR EXISTS (SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = history.task_id
+             AND strpos(lower(concat_ws(' ', task.queue_name, task.task_type)), lower(parameters.search_filter)) > 0))
          AND (cardinality(parameters.event_types) = 0
               OR history.outcome = ANY (parameters.event_types))
          AND ((parameters.queue_filter IS NULL AND parameters.type_filter IS NULL) OR EXISTS (
@@ -11929,38 +12059,90 @@ AS $$
              AND (parameters.queue_filter IS NULL OR task.queue_name = parameters.queue_filter)
              AND (parameters.type_filter IS NULL OR task.task_type = parameters.type_filter)
          ))
-    ) records
-  )
-  SELECT jsonb_build_object(
-    'capturedAt', workhorse.dashboard_iso_v1(parameters.captured_at),
-    'window', parameters.window, 'windowSeconds', parameters.window_seconds,
-    'page', parameters.page, 'pageSize', parameters.page_size,
-    'total', (SELECT count FROM total),
-    'retention', jsonb_build_object(
-      'taskEventDays', retention.task_event_retention_days,
-      'attemptHistoryDays', retention.attempt_history_retention_days),
-    'events', COALESCE((
-      SELECT jsonb_agg(jsonb_build_object(
-        'id', event_page.kind || ':' || event_page.record_id::text,
-        'kind', event_page.kind, 'recordId', event_page.record_id::text,
-        'taskId', event_page.task_id::text, 'queue', task.queue_name,
-        'taskType', task.task_type,
-        'occurredAt', workhorse.dashboard_iso_v1(event_page.occurred_at),
-        'attempt', event_page.attempt, 'type', event_page.type,
-        'details', event_page.details, 'workerId', event_page.worker_id,
-        'fenceToken', event_page.fence_token::text,
-        'durationMs', CASE WHEN event_page.started_at IS NULL
-                                OR event_page.finished_at IS NULL THEN NULL
-                           ELSE round(extract(epoch FROM event_page.finished_at
-                                                        - event_page.started_at) * 1000) END,
-        'errorMessage', event_page.error->>'message')
-        ORDER BY event_page.occurred_at DESC, event_page.kind_rank DESC,
-                 event_page.record_id DESC)
-        FROM event_page
-        LEFT JOIN workhorse.dashboard_task_v1 task ON task.id = event_page.task_id
-    ), '[]'::jsonb))
-    FROM parameters CROSS JOIN workhorse.dashboard_retention_policy_v1 retention
-   WHERE retention.singleton;
+       ORDER BY history.occurred_at DESC, history.attempt_id DESC
+       LIMIT (SELECT page * page_size FROM parameters)
+    ), merged AS MATERIALIZED (
+      SELECT * FROM event_feed UNION ALL SELECT * FROM attempt_feed
+    ), event_page AS MATERIALIZED (
+      SELECT merged.* FROM merged
+       ORDER BY occurred_at DESC, kind_rank DESC, record_id DESC
+       LIMIT (SELECT page_size FROM parameters)
+      OFFSET (SELECT (page - 1) * page_size FROM parameters)
+    ), total AS (
+      SELECT count(*) AS count FROM (
+        SELECT event.event_id
+          FROM event_records event CROSS JOIN parameters
+         WHERE parameters.kind <> 'attempt'
+           AND event.occurred_at >= parameters.range_start
+           AND event.occurred_at < parameters.range_end
+           AND (parameters.task_id IS NULL OR event.task_id = parameters.task_id)
+           AND (parameters.worker_filter IS NULL OR event.resolved_worker_id = parameters.worker_filter)
+           AND (parameters.search_filter IS NULL
+             OR strpos(lower(concat_ws(' ', event.task_id::text, event.event_type, event.resolved_worker_id, event.details::text)), lower(parameters.search_filter)) > 0
+             OR EXISTS (SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = event.task_id
+               AND strpos(lower(concat_ws(' ', task.queue_name, task.task_type)), lower(parameters.search_filter)) > 0))
+           AND (cardinality(parameters.event_types) = 0
+                OR event.event_type = ANY (parameters.event_types))
+           AND ((parameters.queue_filter IS NULL AND parameters.type_filter IS NULL) OR EXISTS (
+             SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = event.task_id
+               AND (parameters.queue_filter IS NULL OR task.queue_name = parameters.queue_filter)
+               AND (parameters.type_filter IS NULL OR task.task_type = parameters.type_filter)
+           ))
+        UNION ALL
+        SELECT history.attempt_id
+          FROM workhorse.dashboard_attempt_history_v1 history CROSS JOIN parameters
+         WHERE parameters.kind <> 'event'
+           AND history.occurred_at >= parameters.range_start
+           AND history.occurred_at < parameters.range_end
+           AND (parameters.task_id IS NULL OR history.task_id = parameters.task_id)
+           AND (parameters.worker_filter IS NULL OR history.worker_id = parameters.worker_filter)
+           AND (parameters.search_filter IS NULL
+             OR strpos(lower(concat_ws(' ', history.task_id::text, history.outcome, history.worker_id, history.error->>'message')), lower(parameters.search_filter)) > 0
+             OR EXISTS (SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = history.task_id
+               AND strpos(lower(concat_ws(' ', task.queue_name, task.task_type)), lower(parameters.search_filter)) > 0))
+           AND (cardinality(parameters.event_types) = 0
+                OR history.outcome = ANY (parameters.event_types))
+           AND ((parameters.queue_filter IS NULL AND parameters.type_filter IS NULL) OR EXISTS (
+             SELECT 1 FROM workhorse.dashboard_task_v1 task WHERE task.id = history.task_id
+               AND (parameters.queue_filter IS NULL OR task.queue_name = parameters.queue_filter)
+               AND (parameters.type_filter IS NULL OR task.task_type = parameters.type_filter)
+           ))
+      ) records
+    )
+    SELECT jsonb_build_object(
+      'capturedAt', workhorse.dashboard_iso_v1(parameters.captured_at),
+      'window', parameters.window, 'windowSeconds', parameters.window_seconds,
+      'rangeStart', workhorse.dashboard_iso_v1(parameters.range_start),
+      'rangeEnd', workhorse.dashboard_iso_v1(parameters.range_end),
+      'page', parameters.page, 'pageSize', parameters.page_size,
+      'total', (SELECT count FROM total),
+      'retention', jsonb_build_object(
+        'taskEventDays', retention.task_event_retention_days,
+        'attemptHistoryDays', retention.attempt_history_retention_days),
+      'events', COALESCE((
+        SELECT jsonb_agg(jsonb_build_object(
+          'id', event_page.kind || ':' || event_page.record_id::text,
+          'kind', event_page.kind, 'recordId', event_page.record_id::text,
+          'taskId', event_page.task_id::text, 'queue', task.queue_name,
+          'taskType', task.task_type,
+          'occurredAt', workhorse.dashboard_iso_v1(event_page.occurred_at),
+          'attempt', event_page.attempt, 'type', event_page.type,
+          'details', event_page.details, 'workerId', event_page.worker_id,
+          'fenceToken', event_page.fence_token::text,
+          'durationMs', CASE WHEN event_page.started_at IS NULL
+                                  OR event_page.finished_at IS NULL THEN NULL
+                             ELSE round(extract(epoch FROM event_page.finished_at
+                                                          - event_page.started_at) * 1000) END,
+          'errorMessage', event_page.error->>'message')
+          ORDER BY event_page.occurred_at DESC, event_page.kind_rank DESC,
+                   event_page.record_id DESC)
+          FROM event_page
+          LEFT JOIN workhorse.dashboard_task_v1 task ON task.id = event_page.task_id
+      ), '[]'::jsonb))
+      FROM parameters CROSS JOIN workhorse.dashboard_retention_policy_v1 retention
+     WHERE retention.singleton
+  );
+END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.dashboard_event_detail_v1(p_input jsonb)
@@ -12217,7 +12399,9 @@ LANGUAGE sql
 AS $$
   WITH schedule_rows AS (
     SELECT definition.namespace, definition.schedule_name, definition.cron_expression,
-           definition.queue_name, definition.task_type, definition.priority, definition.enabled,
+           definition.queue_name, definition.task_type, definition.priority,
+           definition.configured_enabled, definition.paused, definition.paused_by,
+           definition.paused_reason, definition.paused_at,
            definition.revision, definition.updated_at,
            count(occurrence.occurrence_at)::integer AS occurrence_count,
            max(occurrence.fired_at) AS last_fired_at,
@@ -12232,7 +12416,9 @@ AS $$
        AND occurrence.schedule_name = definition.schedule_name
      GROUP BY definition.namespace, definition.schedule_name, definition.cron_expression,
               definition.queue_name, definition.task_type, definition.priority,
-              definition.enabled, definition.revision, definition.updated_at
+              definition.configured_enabled, definition.paused, definition.paused_by,
+              definition.paused_reason, definition.paused_at,
+              definition.revision, definition.updated_at
      ORDER BY definition.namespace, definition.schedule_name
      LIMIT 50
   ), schedules AS (
@@ -12241,8 +12427,11 @@ AS $$
       'identity', jsonb_build_object(
         'kind', 'user', 'namespace', namespace, 'name', schedule_name),
       'namespace', namespace, 'name', schedule_name, 'cron', cron_expression,
-      'queue', queue_name, 'type', task_type, 'priority', priority, 'enabled', enabled,
-      'active', enabled, 'revision', revision::text,
+      'queue', queue_name, 'type', task_type, 'priority', priority,
+      'configuredEnabled', configured_enabled, 'paused', paused,
+      'pausedBy', paused_by, 'pausedReason', paused_reason,
+      'pausedAt', workhorse.dashboard_iso_v1(paused_at),
+      'active', configured_enabled AND NOT paused, 'revision', revision::text,
       'updatedAt', workhorse.dashboard_iso_v1(updated_at),
       'occurrenceCount', occurrence_count,
       'lastFiredAt', workhorse.dashboard_iso_v1(last_fired_at),
@@ -12277,7 +12466,30 @@ AS $$
         ELSE false END,
       'incomplete', state.last_started_at IS NOT NULL
         AND (state.last_completed_at IS NULL
-          OR state.last_started_at > state.last_completed_at)
+          OR state.last_started_at > state.last_completed_at),
+      'recordedRunCount', (
+        SELECT count(*)::integer
+          FROM workhorse.dashboard_maintenance_run_v1 counted
+         WHERE counted.routine_name = state.routine_name
+      ),
+      'runs', COALESCE((
+        SELECT jsonb_agg(jsonb_build_object(
+          'id', recent.run_id::text,
+          'startedAt', workhorse.dashboard_iso_v1(recent.started_at),
+          'completedAt', workhorse.dashboard_iso_v1(recent.completed_at),
+          'durationMs', GREATEST(0, round(extract(epoch FROM
+            recent.completed_at - recent.started_at) * 1000)::integer),
+          'outcome', recent.outcome,
+          'rowsAffected', recent.rows_affected,
+          'phases', recent.phases
+        ) ORDER BY recent.started_at DESC, recent.run_id DESC)
+          FROM (
+            SELECT run.* FROM workhorse.dashboard_maintenance_run_v1 run
+             WHERE run.routine_name = state.routine_name
+             ORDER BY run.started_at DESC, run.run_id DESC
+             LIMIT 5
+          ) recent
+      ), '[]'::jsonb)
     ) ORDER BY state.routine_name), '[]'::jsonb) AS value
       FROM workhorse.dashboard_maintenance_state_v1 state
       CROSS JOIN policy

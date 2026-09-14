@@ -17,9 +17,9 @@ import type {
  * harness: authorize every request as `harness.authenticatedActor`, report `harness.environment`,
  * and expose a writable deployment whose controllers execute through the shared versioned SQL
  * surface — plus a second, read-only deployment of the same backend. The `enqueueTest` operator
- * and `setScheduleEnabled` controller have no shared SQL function; the harness supplies the
+ * and `setSchedulePaused` controller have no shared SQL function; the harness supplies the
  * minimal implementations the fixtures assume (enqueue one `conformance.demo-{kind}` task on the
- * `conformance-demo` queue; flip `workhorse.schedule_definition.enabled`).
+ * `conformance-demo` queue; set `workhorse.schedule_definition.paused`).
  */
 export function createDashboardConformanceTransport(
   database: Queryable,
@@ -45,17 +45,21 @@ export function createDashboardConformanceTransport(
     },
   };
   const scheduleController: DashboardScheduleController = {
-    async setScheduleEnabled(namespace, name, enabled) {
-      const result = await database.query<{ enabled: boolean }>(
+    async setSchedulePaused(namespace, name, paused, audit) {
+      const result = await database.query<{ paused: boolean }>(
         `UPDATE workhorse.schedule_definition
-            SET enabled = $3, revision = revision + 1, updated_at = clock_timestamp()
+            SET paused = $3,
+                paused_by = CASE WHEN $3 THEN $4 ELSE NULL END,
+                paused_reason = CASE WHEN $3 THEN $5 ELSE NULL END,
+                paused_at = CASE WHEN $3 THEN $6::timestamptz ELSE NULL END,
+                revision = revision + 1, updated_at = clock_timestamp()
           WHERE namespace = $1 AND schedule_name = $2
-          RETURNING enabled`,
-        [namespace, name, enabled],
+          RETURNING paused`,
+        [namespace, name, paused, audit.actor, audit.reason, audit.occurredAt],
       );
       const updated = result.rows[0];
       if (!updated) throw new Error(`Schedule ${namespace}/${name} not found`);
-      return { enabled: updated.enabled };
+      return { paused: updated.paused };
     },
   };
 

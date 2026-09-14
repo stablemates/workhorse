@@ -397,7 +397,13 @@ export interface DashboardScheduleRow {
   type: string;
   /** User-task dispatch priority. System maintenance rows have no queue priority. */
   priority: number;
-  enabled: boolean;
+  /** Deployment-declared intent from the most recent namespace synchronization. */
+  configuredEnabled: boolean;
+  /** Durable operator override. Deployment synchronization never clears it. */
+  paused: boolean;
+  pausedBy: string | null;
+  pausedReason: string | null;
+  pausedAt: string | null;
   active: boolean;
   revision: string;
   updatedAt: string;
@@ -581,8 +587,27 @@ export interface DashboardCronPage {
       lastCompletedAt: string | null;
       due: boolean;
       incomplete: boolean;
+      recordedRunCount: number;
+      runs: DashboardMaintenanceRun[];
     }>;
   };
+}
+
+export interface DashboardMaintenanceRun {
+  id: string;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  outcome: "succeeded" | "failed" | "incomplete";
+  rowsAffected: number;
+  phases: Array<{
+    phase: string;
+    rowsAffected: number;
+    durationMs: number;
+    error: { code: string; message: string } | null;
+    expiredLeases?: number;
+    retried?: number;
+  }>;
 }
 
 export interface DashboardQueuesPage {
@@ -949,6 +974,10 @@ export interface DashboardEventsPage {
   capturedAt: string;
   window: DashboardEventsWindow;
   windowSeconds: number;
+  /** Inclusive lower bound used by the history query. */
+  rangeStart: string;
+  /** Exclusive upper bound used by the history query. */
+  rangeEnd: string;
   events: DashboardEventRow[];
   /** 1-based page index, matching the task listing. */
   page: number;

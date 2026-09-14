@@ -15,6 +15,7 @@ import {
 import { isEventTypeFilter, type EventsLocationState } from "../events-location.js";
 import {
   Box,
+  Button,
   Code,
   Group,
   Loader,
@@ -73,6 +74,30 @@ export function uniqueSorted(values: Array<string | null>): string[] {
   // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
   return [...new Set(values.filter((value): value is string => value !== null))].sort();
 }
+
+function padDateTimePart(part: number): string {
+  return String(part).padStart(2, "0");
+}
+
+/** Format an instant for the browser's local `datetime-local` control. */
+export function dateTimeLocalValue(value: string | Date): string {
+  const date = typeof value === "string" ? new Date(value) : value;
+  return `${date.getFullYear()}-${padDateTimePart(date.getMonth() + 1)}-${padDateTimePart(date.getDate())}T${padDateTimePart(date.getHours())}:${padDateTimePart(date.getMinutes())}`;
+}
+
+export type ParsedEventRange = { from: string; to: string } | { error: string };
+
+/** Turn the picker values into the UTC instants sent to the events procedure. */
+export function parseEventRange(fromValue: string, toValue: string): ParsedEventRange {
+  if (!fromValue || !toValue) return { error: "Choose both a start and end time." };
+  const from = new Date(fromValue);
+  const to = new Date(toValue);
+  if (Number.isNaN(from.valueOf()) || Number.isNaN(to.valueOf())) {
+    return { error: "Enter a valid start and end time." };
+  }
+  if (from >= to) return { error: "The end time must be after the start time." };
+  return { from: from.toISOString(), to: to.toISOString() };
+}
 /**
  * The fleet-wide feed of durable lifecycle history.
  *
@@ -97,6 +122,14 @@ export function EventsPage({
   inspectEvent: (event: DashboardEventRow) => void;
 }) {
   const [searchDraft, setSearchDraft] = useState<string | null>(null);
+  const [customRangeOpen, setCustomRangeOpen] = useState(query.from !== null);
+  const [fromDraft, setFromDraft] = useState(() =>
+    query.from === null ? "" : dateTimeLocalValue(query.from),
+  );
+  const [toDraft, setToDraft] = useState(() =>
+    query.to === null ? "" : dateTimeLocalValue(query.to),
+  );
+  const [rangeError, setRangeError] = useState<string | null>(null);
   useEffect(() => {
     if (searchDraft === null) return;
     const timer = setTimeout(() => {
@@ -106,6 +139,16 @@ export function EventsPage({
     }, 300);
     return () => clearTimeout(timer);
   }, [searchDraft, query, setQuery]);
+  useEffect(() => {
+    if (query.from === null || query.to === null) {
+      setCustomRangeOpen(false);
+      return;
+    }
+    setCustomRangeOpen(true);
+    setFromDraft(dateTimeLocalValue(query.from));
+    setToDraft(dateTimeLocalValue(query.to));
+    setRangeError(null);
+  }, [query.from, query.to]);
   const eventFacets = useTaskFacets({
     queue: query.queue,
     worker: query.worker,
@@ -133,11 +176,109 @@ export function EventsPage({
     setQuery({ ...query, ...next, page: 1, eventId: null });
   const totalPages = Math.max(1, Math.ceil(data.total / data.pageSize));
   const facetMessage = eventFacets.loading ? "Loading filters…" : eventFacets.error;
+  const rangeDescription =
+    query.from !== null && query.to !== null
+      ? `between ${formatExact(query.from)} and ${formatExact(query.to)}`
+      : `in the last ${query.window}`;
 
   return (
     <Stack gap="xl">
       <Paper withBorder p="md">
-        <Group gap="md" align="flex-end" wrap="wrap">
+        <Group gap="md" align="flex-end" wrap="wrap" mih={55} role="group" aria-label="Event scope">
+          <Box>
+            <Text c="dimmed" fw={600} size="xs" mb={4}>
+              Source
+            </Text>
+            <SegmentedControl
+              size="xs"
+              value={query.kind}
+              data={eventsKindOptions}
+              onChange={(value) => filter({ kind: value as EventsLocationState["kind"] })}
+            />
+          </Box>
+          <Box>
+            <Text c="dimmed" fw={600} size="xs" mb={4}>
+              Window
+            </Text>
+            <SegmentedControl
+              size="xs"
+              value={customRangeOpen ? "custom" : query.window}
+              data={[...eventsWindowOptions, { value: "custom", label: "Custom" }]}
+              onChange={(value) => {
+                if (value === "custom") {
+                  setCustomRangeOpen(true);
+                  setRangeError(null);
+                  if (!fromDraft || !toDraft) {
+                    const to = new Date();
+                    to.setSeconds(0, 0);
+                    const from = new Date(to.valueOf() - 60 * 60 * 1000);
+                    setFromDraft(dateTimeLocalValue(from));
+                    setToDraft(dateTimeLocalValue(to));
+                  }
+                  return;
+                }
+                setCustomRangeOpen(false);
+                setRangeError(null);
+                filter({
+                  window: value as DashboardEventsWindow,
+                  from: null,
+                  to: null,
+                });
+              }}
+            />
+          </Box>
+          {customRangeOpen ? (
+            <>
+              <TextInput
+                size="xs"
+                type="datetime-local"
+                label="From"
+                value={fromDraft}
+                onChange={(event) => {
+                  setFromDraft(event.currentTarget.value);
+                  setRangeError(null);
+                }}
+              />
+              <TextInput
+                size="xs"
+                type="datetime-local"
+                label="To"
+                value={toDraft}
+                onChange={(event) => {
+                  setToDraft(event.currentTarget.value);
+                  setRangeError(null);
+                }}
+              />
+              <Button
+                size="xs"
+                onClick={() => {
+                  const range = parseEventRange(fromDraft, toDraft);
+                  if ("error" in range) {
+                    setRangeError(range.error);
+                    return;
+                  }
+                  setRangeError(null);
+                  filter(range);
+                }}
+              >
+                Apply range
+              </Button>
+              {rangeError === null ? null : (
+                <Text c="red" size="xs" role="alert" pb={6}>
+                  {rangeError}
+                </Text>
+              )}
+            </>
+          ) : null}
+        </Group>
+        <Group
+          mt="md"
+          gap="md"
+          align="flex-end"
+          wrap="wrap"
+          role="group"
+          aria-label="Event filters"
+        >
           <TextInput
             size="xs"
             label="Search"
@@ -212,30 +353,6 @@ export function EventsPage({
               })
             }
           />
-          <Group ms="auto" gap="md" align="flex-end" justify="flex-end" wrap="wrap">
-            <Box>
-              <Text c="dimmed" fw={600} size="xs" mb={4}>
-                Window
-              </Text>
-              <SegmentedControl
-                size="xs"
-                value={query.window}
-                data={[...eventsWindowOptions]}
-                onChange={(value) => filter({ window: value as DashboardEventsWindow })}
-              />
-            </Box>
-            <Box>
-              <Text c="dimmed" fw={600} size="xs" mb={4}>
-                Source
-              </Text>
-              <SegmentedControl
-                size="xs"
-                value={query.kind}
-                data={eventsKindOptions}
-                onChange={(value) => filter({ kind: value as EventsLocationState["kind"] })}
-              />
-            </Box>
-          </Group>
         </Group>
       </Paper>
       {/* Queue and task filters are matched against the task a history row points at. History
@@ -243,8 +360,8 @@ export function EventsPage({
           be reached with those filters cleared. */}
       {data.events.length === 0 ? (
         <EmptyState>
-          Workhorse recorded no matching events in the last {query.window}. Retention limits
-          available history: {retentionNote}.
+          Workhorse recorded no matching events {rangeDescription}. Retention limits available
+          history: {retentionNote}.
         </EmptyState>
       ) : (
         <Paper withBorder>

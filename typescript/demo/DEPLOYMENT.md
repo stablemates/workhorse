@@ -363,6 +363,7 @@ remember.
 
 ### Dashboard schema
 
-The current build requires Workhorse schema version 1. The clean-install schema includes event
-worker/search filters, task detail tags and human-decision metadata, and task enqueue modes.
+The current build requires Workhorse schema version 1. The baseline includes custom event date-time
+ranges, event worker/search filters, task detail tags and human-decision metadata, and task enqueue
+modes.
 Runtime processes validate compatibility and never install or migrate the schema at startup.

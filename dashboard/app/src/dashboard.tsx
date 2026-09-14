@@ -22,7 +22,7 @@ export {
 } from "./components/task-list.js";
 export { SignalWaitCard } from "./components/signal-task.js";
 export { ExternalWaitAlert, QueuePressure, SystemKpiList } from "./charts/system.js";
-export { EventDetails, eventTypeColor } from "./pages/events.js";
+export { EventDetails, eventTypeColor, parseEventRange } from "./pages/events.js";
 export { QueuesPage } from "./pages/queues.js";
 export { SettingsPage, type SettingsPageProps } from "./pages/settings/index.js";
 export { WorkersPage } from "./pages/workers.js";

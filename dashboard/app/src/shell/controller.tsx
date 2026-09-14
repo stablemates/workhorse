@@ -313,6 +313,8 @@ export function useDashboardController(
                 route: "/events",
                 value: await client.events({
                   window: events.window,
+                  rangeStart: events.from,
+                  rangeEnd: events.to,
                   page: events.page,
                   pageSize: events.pageSize,
                   kind: events.kind,
@@ -389,26 +391,26 @@ export function useDashboardController(
   );
 
   const toggleSchedule = useCallback(
-    async (namespace: string, name: string, enabled: boolean) => {
+    async (namespace: string, name: string, paused: boolean) => {
       const scheduleKey = `${namespace}:${name}`;
       setTogglingSchedule(scheduleKey);
       try {
-        await client.setScheduleEnabled({
+        await client.setSchedulePaused({
           kind: "user",
           namespace,
           name,
-          enabled,
+          paused,
           audit: {
             actor: auditActor,
-            reason: `${enabled ? "Enable" : "Disable"} ${namespace}/${name} from the dashboard`,
+            reason: `${paused ? "Pause" : "Resume"} ${namespace}/${name} from the dashboard`,
             requestId: crypto.randomUUID(),
           },
         });
         notifyDashboard({
-          title: enabled ? "Schedule enabled" : "Schedule disabled",
-          message: enabled
-            ? `${scheduleKey} fires again from its next occurrence.`
-            : `${scheduleKey} stopped firing. Occurrences already enqueued are untouched.`,
+          title: paused ? "Schedule paused" : "Schedule resumed",
+          message: paused
+            ? `${scheduleKey} stopped firing and stays paused across deploys. Occurrences already enqueued are untouched.`
+            : `${scheduleKey} can fire again when its deployment configuration is enabled.`,
           tone: "success",
         });
         await loadPage();
@@ -877,8 +879,11 @@ export function useDashboardController(
       <CronPage
         data={loadState.data.value}
         togglingSchedule={togglingSchedule}
-        setScheduleEnabled={(namespace, name, enabled) =>
-          void toggleSchedule(namespace, name, enabled)
+        taskTypeHref={(taskType) =>
+          mountedHref(basePath, `/tasks?type=${encodeURIComponent(taskType)}`)
+        }
+        setSchedulePaused={(namespace, name, paused) =>
+          void toggleSchedule(namespace, name, paused)
         }
       />
     );

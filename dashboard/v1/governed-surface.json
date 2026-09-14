@@ -296,6 +296,9 @@
         "maintenance.routines[].lastStartedAt": {
           "type": "null|string"
         },
+        "maintenance.routines[].recordedRunCount": {
+          "type": "number"
+        },
         "maintenance.routines[].routine": {
           "type": "enum",
           "enum": [
@@ -304,6 +307,65 @@
             "terminal_storage",
             "tick"
           ]
+        },
+        "maintenance.routines[].runs": {
+          "type": "array"
+        },
+        "maintenance.routines[].runs[]": {
+          "type": "object"
+        },
+        "maintenance.routines[].runs[].completedAt": {
+          "type": "string"
+        },
+        "maintenance.routines[].runs[].durationMs": {
+          "type": "number"
+        },
+        "maintenance.routines[].runs[].id": {
+          "type": "string"
+        },
+        "maintenance.routines[].runs[].outcome": {
+          "type": "enum",
+          "enum": [
+            "failed",
+            "incomplete",
+            "succeeded"
+          ]
+        },
+        "maintenance.routines[].runs[].phases": {
+          "type": "array"
+        },
+        "maintenance.routines[].runs[].phases[]": {
+          "type": "object"
+        },
+        "maintenance.routines[].runs[].phases[].durationMs": {
+          "type": "number"
+        },
+        "maintenance.routines[].runs[].phases[].error": {
+          "type": "null|object"
+        },
+        "maintenance.routines[].runs[].phases[].error.code": {
+          "type": "string"
+        },
+        "maintenance.routines[].runs[].phases[].error.message": {
+          "type": "string"
+        },
+        "maintenance.routines[].runs[].phases[].expiredLeases": {
+          "type": "number"
+        },
+        "maintenance.routines[].runs[].phases[].phase": {
+          "type": "string"
+        },
+        "maintenance.routines[].runs[].phases[].retried": {
+          "type": "number"
+        },
+        "maintenance.routines[].runs[].phases[].rowsAffected": {
+          "type": "number"
+        },
+        "maintenance.routines[].runs[].rowsAffected": {
+          "type": "number"
+        },
+        "maintenance.routines[].runs[].startedAt": {
+          "type": "string"
         },
         "schedules": {
           "type": "array"
@@ -314,11 +376,11 @@
         "schedules[].active": {
           "type": "boolean"
         },
+        "schedules[].configuredEnabled": {
+          "type": "boolean"
+        },
         "schedules[].cron": {
           "type": "string"
-        },
-        "schedules[].enabled": {
-          "type": "boolean"
         },
         "schedules[].evaluatorCount": {
           "type": "number"
@@ -355,6 +417,18 @@
         },
         "schedules[].occurrenceCount": {
           "type": "number"
+        },
+        "schedules[].paused": {
+          "type": "boolean"
+        },
+        "schedules[].pausedAt": {
+          "type": "null|string"
+        },
+        "schedules[].pausedBy": {
+          "type": "null|string"
+        },
+        "schedules[].pausedReason": {
+          "type": "null|string"
         },
         "schedules[].priority": {
           "type": "number"
@@ -555,6 +629,14 @@
           "type": "null|string",
           "required": false
         },
+        "rangeEnd": {
+          "type": "null|string",
+          "required": false
+        },
+        "rangeStart": {
+          "type": "null|string",
+          "required": false
+        },
         "search": {
           "type": "null|string",
           "required": false
@@ -695,6 +777,12 @@
         },
         "pageSize": {
           "type": "number"
+        },
+        "rangeEnd": {
+          "type": "string"
+        },
+        "rangeStart": {
+          "type": "string"
         },
         "retention": {
           "type": "object"
@@ -1498,7 +1586,7 @@
         }
       }
     },
-    "setScheduleEnabled": {
+    "setSchedulePaused": {
       "mutation": true,
       "request": {
         "audit": {
@@ -1517,10 +1605,6 @@
           "type": "string",
           "required": true
         },
-        "enabled": {
-          "type": "boolean",
-          "required": true
-        },
         "kind": {
           "type": "enum",
           "enum": [
@@ -1535,10 +1619,14 @@
         "namespace": {
           "type": "string",
           "required": true
+        },
+        "paused": {
+          "type": "boolean",
+          "required": true
         }
       },
       "response": {
-        "enabled": {
+        "paused": {
           "type": "boolean"
         }
       }

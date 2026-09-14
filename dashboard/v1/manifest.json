@@ -112,7 +112,7 @@
     "enqueueTest": {
       "mutation": true
     },
-    "setScheduleEnabled": {
+    "setSchedulePaused": {
       "mutation": true
     },
     "setQueuePaused": {

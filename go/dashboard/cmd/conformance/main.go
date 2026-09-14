@@ -50,16 +50,16 @@ func main() {
 				id, err := queue.Enqueue(ctx, "conformance.demo-"+fmt.Sprint(value["kind"]), map[string]any{}, workhorse.EnqueueOptions{Priority: priority})
 				return map[string]any{"taskId": id}, err
 			}
-			procedures["setScheduleEnabled"] = func(ctx context.Context, input any, _ string) (any, error) {
+			procedures["setSchedulePaused"] = func(ctx context.Context, input any, actor string) (any, error) {
 				value := input.(map[string]any)
-				rows, err := executor.Query(ctx, `UPDATE workhorse.schedule_definition SET enabled=$1,revision=revision+1,updated_at=clock_timestamp() WHERE namespace=$2 AND schedule_name=$3 RETURNING enabled`, value["enabled"], value["namespace"], value["name"])
+				rows, err := executor.Query(ctx, `UPDATE workhorse.schedule_definition SET paused=$1,paused_by=CASE WHEN $1 THEN $4 ELSE NULL END,paused_reason=CASE WHEN $1 THEN $5 ELSE NULL END,paused_at=CASE WHEN $1 THEN clock_timestamp() ELSE NULL END,revision=revision+1,updated_at=clock_timestamp() WHERE namespace=$2 AND schedule_name=$3 RETURNING paused`, value["paused"], value["namespace"], value["name"], actor, "Dashboard operator request")
 				if err != nil {
 					return nil, err
 				}
 				if len(rows) == 0 {
 					return nil, &dashboard.RPCError{Status: 404, Code: "NOT_FOUND", Message: "Schedule not found"}
 				}
-				return map[string]any{"enabled": rows[0]["enabled"]}, nil
+				return map[string]any{"paused": rows[0]["paused"]}, nil
 			}
 		}
 		handler, err := dashboard.NewHandler(dashboard.HandlerOptions{Executor: executor,

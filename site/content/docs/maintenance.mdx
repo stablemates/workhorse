@@ -41,6 +41,11 @@ const worker = new Worker(queue, {
 The `WorkerMaintenanceTelemetry` result names the phase, affected rows, duration, lock outcome,
 and any error — enough to chart cleanup throughput in whatever monitoring you already run.
 
+PostgreSQL retains recent execution history for the maintenance routines shown on the Schedules
+page. Expand a routine there to inspect outcomes, duration, affected rows, phase timings, and error
+details. Slow routines record each eligible execution; the fast tick records work and failures but
+omits successful idle polls.
+
 ## Set retention policy
 
 Retention decides how long evidence lives. `queue.syncRetentionPolicy` stores your application's

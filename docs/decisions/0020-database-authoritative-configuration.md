@@ -38,6 +38,17 @@ The process keeps what belongs to its own resources: `concurrency`, `leaseMs`, `
 
 Two things currently sit on the wrong side of that line and move: the rolling-statistics cadence (`WorkerOptions.statisticsRollupIntervalMs`) is a global cadence and belongs in `maintenance_policy` beside the other three, and the rollup's `groupLimit` and `recomputeBuckets` are policy rather than per-process parameters.
 
+### Schedule configuration and pause are separate facts
+
+Application synchronization owns whether a schedule definition is configured to run. An operator
+owns a separate schedule pause, which synchronization preserves when it updates, removes, or
+re-adds that definition. A schedule fires only when configuration enables it and no operator pause
+is present.
+
+This separation keeps deploy intent observable without allowing a deploy to undo an incident
+control. The dashboard calls the operator state a pause and records its actor, reason, and time, so
+it cannot be confused with `ScheduleDefinition.enabled` in application code.
+
 ### Process-owned settings are shown, not hidden
 
 The settings surface displays process-owned options read-only, with their provenance. A page that presents itself as the system's configuration while silently omitting half of it is worse than no page: it invites an operator to conclude a setting does not exist.
@@ -54,5 +65,5 @@ The settings surface displays process-owned options read-only, with their proven
 
 - Moving per-process resource options into the database. The boundary above is the decision, not a step toward erasing it.
 - A general-purpose key/value settings store. Every policy value stays a typed, constrained column that PostgreSQL validates, exactly as retention and maintenance do today.
-- Editing schedule _definitions_ from the dashboard. Definitions are typed application code synchronized by namespace; only their enablement is operator state.
+- Editing schedule _definitions_ from the dashboard. Definitions are typed application code synchronized by namespace; only their pause is operator state.
 - Runtime reconfiguration of a running worker's concurrency. That is a deployment change, and pausing already covers the incident case.

@@ -66,6 +66,12 @@ invalid expression fails the call rather than leaving a partial deployment. Pass
 `{ prune: false }` only when you deliberately want an additive update — the normal deployment path
 supplies the complete namespace so code remains the owner of intent.
 
+`ScheduleDefinition.enabled` records deployment intent. The dashboard's Pause action records a
+separate durable operator override, so a later deployment cannot silently resume incident-paused
+work. The pause survives definition updates, removal, and re-addition until an operator chooses
+Resume. The Schedules page labels definitions disabled by code as **Config off**, separately from
+operator-paused definitions.
+
 ## Let workers offer schedule namespaces
 
 There is no scheduler process and no PostgreSQL extension. A `Worker` offers the namespaces listed
@@ -99,9 +105,14 @@ synchronize, or its schedules sit idle.
 Workers offer namespaces rather than private schedule copies. PostgreSQL stores the current
 definitions, so workers that offer the same namespace evaluate the same desired state. The
 Schedules page reports how many live workers offer each namespace.
+Open an application schedule's run count to view tasks of that type in a new browser tab.
 
 The page also lists Workhorse maintenance beside application schedules. Maintenance runs directly
 in PostgreSQL instead of creating a task, and its last-run value records that direct execution.
+Expand a maintenance row to inspect recent outcomes, durations, affected rows, phase timings, and
+errors. The row reports the retained total while the expanded history identifies its recent subset.
+It also states that Workhorse samples successful task-changing ticks and records tick errors
+immediately. Workhorse records every eligible slow-routine execution.
 
 The synchronous Python `Worker` provides the same participation through `schedule_namespaces` and
 `schedule_catchup_limit`. Go uses `WorkerOptions.ScheduleNamespaces` and
@@ -132,8 +143,9 @@ same occurrence. If several cron fields land on one instant, Workhorse creates o
 
 The occurrence creates an ordinary task with the definition's queue, payload, attempt budget, and
 retry policy. From there the usual rules apply — at-least-once delivery, retries, cancellation.
-Canceling one fired task does not disable its definition; tomorrow's occurrence still runs. Disable
-future occurrences through the next synchronization.
+Canceling one fired task does not pause its definition; tomorrow's occurrence still runs. Use the
+dashboard to pause future occurrences, or change `ScheduleDefinition.enabled` and synchronize the
+namespace when the deployment should own the change.
 
 Three related calls round out the API:
 

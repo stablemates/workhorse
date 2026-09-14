@@ -14,6 +14,10 @@ type EventsKindFilter = DashboardEventKind | "all";
 
 export interface EventsLocationState {
   window: DashboardEventsWindow;
+  /** Inclusive custom range bound, or null while a fixed window is active. */
+  from: string | null;
+  /** Exclusive custom range bound, or null while a fixed window is active. */
+  to: string | null;
   page: number;
   pageSize: EventPageSize;
   kind: EventsKindFilter;
@@ -30,6 +34,8 @@ export interface EventsLocationState {
 
 export const defaultEventsLocation: EventsLocationState = {
   window: "1h",
+  from: null,
+  to: null,
   page: 1,
   pageSize: 50,
   kind: "all",
@@ -63,6 +69,12 @@ function optionalValue(parameters: URLSearchParams, key: string): string | null 
   return parameters.get(key)?.trim() || null;
 }
 
+function isoInstant(value: string | null): string | null {
+  if (value === null) return null;
+  const instant = new Date(value);
+  return Number.isNaN(instant.valueOf()) ? null : instant.toISOString();
+}
+
 export function parseEventsLocation(search: string | URLSearchParams): EventsLocationState {
   const parameters =
     typeof search === "string"
@@ -74,6 +86,12 @@ export function parseEventsLocation(search: string | URLSearchParams): EventsLoc
   const requestedPageSize = Number(parameters.get("per") ?? "50");
   const requestedEventId = optionalValue(parameters, "event");
   const requestedTaskId = optionalValue(parameters, "task");
+  const requestedFrom = isoInstant(optionalValue(parameters, "from"));
+  const requestedTo = isoInstant(optionalValue(parameters, "to"));
+  const customRange =
+    requestedFrom !== null && requestedTo !== null && requestedFrom < requestedTo
+      ? { from: requestedFrom, to: requestedTo }
+      : { from: null, to: null };
   const types = (parameters.get("events") ?? "")
     .split(",")
     .map((type) => type.trim())
@@ -84,6 +102,7 @@ export function parseEventsLocation(search: string | URLSearchParams): EventsLoc
 
   return {
     window: requestedWindow && windows.has(requestedWindow) ? requestedWindow : "1h",
+    ...customRange,
     kind: requestedKind && kinds.has(requestedKind) ? requestedKind : "all",
     queue: optionalValue(parameters, "queue"),
     taskType: optionalValue(parameters, "type"),
@@ -102,6 +121,10 @@ export function parseEventsLocation(search: string | URLSearchParams): EventsLoc
 export function eventsLocationHref(state: EventsLocationState): string {
   const parameters = new URLSearchParams();
   if (state.window !== "1h") parameters.set("window", state.window);
+  if (state.from !== null && state.to !== null) {
+    parameters.set("from", state.from);
+    parameters.set("to", state.to);
+  }
   if (state.kind !== "all") parameters.set("source", state.kind);
   if (state.queue) parameters.set("queue", state.queue);
   if (state.taskType) parameters.set("type", state.taskType);
@@ -120,6 +143,8 @@ export function eventsLocationHref(state: EventsLocationState): string {
 export function eventsListingKey(state: EventsLocationState): string {
   return JSON.stringify([
     state.window,
+    state.from,
+    state.to,
     state.page,
     state.pageSize,
     state.kind,

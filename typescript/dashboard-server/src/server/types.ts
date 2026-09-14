@@ -56,12 +56,12 @@ export interface DashboardOperator {
 }
 
 export interface DashboardScheduleController {
-  setScheduleEnabled?: (
+  setSchedulePaused?: (
     namespace: string,
     name: string,
-    enabled: boolean,
+    paused: boolean,
     audit: DashboardAuditContext,
-  ) => Promise<{ enabled: boolean }>;
+  ) => Promise<{ paused: boolean }>;
 }
 
 export interface DashboardQueueController {

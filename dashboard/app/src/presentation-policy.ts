@@ -1,6 +1,7 @@
 import type {
   DashboardActivityPage,
   DashboardCronPage,
+  DashboardMaintenanceRun,
   DashboardRetentionCategory,
   DashboardScheduleRow,
   DashboardSettingsPage,
@@ -430,6 +431,8 @@ export interface PresentedScheduleRow extends Omit<
     status: "scheduled" | "due" | "incomplete";
     lastStartedAt: string | null;
     lastCompletedAt: string | null;
+    recordedRunCount: number;
+    runs: DashboardMaintenanceRun[];
   } | null;
 }
 
@@ -465,6 +468,8 @@ export function presentSchedules(page: DashboardCronPage): PresentedScheduleRow[
       status: row?.incomplete ? "incomplete" : row?.due ? "due" : "scheduled",
       lastStartedAt: row?.lastStartedAt ?? null,
       lastCompletedAt: row?.lastCompletedAt ?? null,
+      recordedRunCount: row?.recordedRunCount ?? 0,
+      runs: row?.runs ?? [],
     };
   };
   const system = (
@@ -483,7 +488,11 @@ export function presentSchedules(page: DashboardCronPage): PresentedScheduleRow[
     queue: null,
     type,
     priority: null,
-    enabled: true,
+    configuredEnabled: true,
+    paused: false,
+    pausedBy: null,
+    pausedReason: null,
+    pausedAt: null,
     active: true,
     revision: "1",
     updatedAt: policy.updatedAt,

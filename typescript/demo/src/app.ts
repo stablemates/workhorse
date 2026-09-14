@@ -247,12 +247,12 @@ export interface DashboardOperator {
 }
 
 export interface ScheduleController {
-  setScheduleEnabled?: (
+  setSchedulePaused?: (
     namespace: string,
     name: string,
-    enabled: boolean,
+    paused: boolean,
     audit: AuditContext,
-  ) => Promise<{ enabled: boolean }>;
+  ) => Promise<{ paused: boolean }>;
 }
 
 interface QueueController {
@@ -806,40 +806,27 @@ export async function installDemoSchema(database: DemoDatabase): Promise<void> {
 
 export async function syncDemoSchedules(database: Pool): Promise<void> {
   const queue = new Queue(database, DEMO_QUEUE);
-  const existing = await database.query<{ name: string; enabled: boolean }>(
-    `SELECT schedule_name AS name, enabled
-       FROM workhorse.schedule_definition
-      WHERE namespace = $1`,
-    [DEMO_SCHEDULE_NAMESPACE],
-  );
-  const enabledByName = new Map(existing.rows.map((schedule) => [schedule.name, schedule.enabled]));
   await queue.syncSchedules(DEMO_SCHEDULE_NAMESPACE, [
-    heartbeatSchedule(enabledByName.get(HEARTBEAT_SCHEDULE_NAME) ?? true),
+    heartbeatSchedule(true),
     languageWorkerSchedule(
       TYPESCRIPT_WORKER_SCHEDULE_NAME,
       "*/3 * * * *",
       "typescript",
       DEMO_QUEUE,
-      enabledByName.get(TYPESCRIPT_WORKER_SCHEDULE_NAME) ?? true,
+      true,
     ),
     languageWorkerSchedule(
       PYTHON_WORKER_SCHEDULE_NAME,
       "1-59/3 * * * *",
       "python",
       DEMO_PYTHON_QUEUE,
-      enabledByName.get(PYTHON_WORKER_SCHEDULE_NAME) ?? true,
+      true,
     ),
-    languageWorkerSchedule(
-      GO_WORKER_SCHEDULE_NAME,
-      "2-59/3 * * * *",
-      "go",
-      DEMO_GO_QUEUE,
-      enabledByName.get(GO_WORKER_SCHEDULE_NAME) ?? true,
-    ),
-    sharedWorkerSchedule(enabledByName.get(SHARED_WORKER_SCHEDULE_NAME) ?? true),
-    reportSchedule(enabledByName.get(REPORT_SCHEDULE_NAME) ?? true),
-    longRunningSchedule(enabledByName.get(LONG_RUNNING_SCHEDULE_NAME) ?? true),
-    ...featureShowcaseSchedules(enabledByName),
+    languageWorkerSchedule(GO_WORKER_SCHEDULE_NAME, "2-59/3 * * * *", "go", DEMO_GO_QUEUE, true),
+    sharedWorkerSchedule(true),
+    reportSchedule(true),
+    longRunningSchedule(true),
+    ...featureShowcaseSchedules(new Map()),
   ]);
 }
 
@@ -1097,31 +1084,36 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
 
 export function createLocalScheduleController(database: DemoDatabase): ScheduleController {
   return {
-    async setScheduleEnabled(namespace, name, enabled, audit) {
+    async setSchedulePaused(namespace, name, paused, audit) {
       const rows = await database.transaction(async (transaction) => {
-        const before = await transaction.execute<{ enabled: boolean }>(sql`
-          SELECT enabled FROM workhorse.schedule_definition
+        const before = await transaction.execute<{ paused: boolean }>(sql`
+          SELECT paused FROM workhorse.schedule_definition
            WHERE namespace = ${namespace} AND schedule_name = ${name}
            FOR UPDATE
         `);
         if (before.rows.length === 0) throw new Error(`Schedule ${namespace}/${name} not found`);
-        const updated = await transaction.execute<{ enabled: boolean }>(sql`
+        const updated = await transaction.execute<{ paused: boolean }>(sql`
           UPDATE workhorse.schedule_definition
-             SET enabled = ${enabled}, revision = revision + 1, updated_at = clock_timestamp()
+             SET paused = ${paused},
+                 paused_by = CASE WHEN ${paused} THEN ${audit.actor} ELSE NULL END,
+                 paused_reason = CASE WHEN ${paused} THEN ${audit.reason} ELSE NULL END,
+                 paused_at = CASE WHEN ${paused}
+                   THEN ${audit.occurredAt ?? new Date().toISOString()}::timestamptz ELSE NULL END,
+                 revision = revision + 1, updated_at = clock_timestamp()
            WHERE namespace = ${namespace} AND schedule_name = ${name}
-           RETURNING enabled
+           RETURNING paused
         `);
         await transaction.execute(sql`
           INSERT INTO public.workhorse_demo_audit
             (actor, reason, request_id, occurred_at, action, target, before, after, status)
           VALUES
             (${audit.actor}, ${audit.reason}, ${audit.requestId},
-             ${audit.occurredAt ?? new Date().toISOString()}, 'setScheduleEnabled', ${`schedule:${namespace}:${name}`},
-             ${JSON.stringify(before.rows[0])}::jsonb, ${JSON.stringify({ enabled })}::jsonb, 'succeeded')
+             ${audit.occurredAt ?? new Date().toISOString()}, 'setSchedulePaused', ${`schedule:${namespace}:${name}`},
+             ${JSON.stringify(before.rows[0])}::jsonb, ${JSON.stringify({ paused })}::jsonb, 'succeeded')
         `);
         return updated.rows;
       });
-      return { enabled: rows[0]!.enabled };
+      return { paused: rows[0]!.paused };
     },
   };
 }

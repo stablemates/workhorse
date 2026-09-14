@@ -34,6 +34,11 @@ still have something to point at.
 The **namespace** keeps one deployment's schedules separate from another's, so two services
 sharing a database don't prune each other's definitions.
 
+The `enabled` field belongs to deployment configuration. The dashboard's Pause action creates a
+separate operator override, so later synchronization cannot resume the schedule. A paused schedule
+stays paused when a deployment updates, removes, or re-adds its definition. Resume it explicitly
+from the dashboard.
+
 ## Why it can't fire twice
 
 Several workers are running. They all offer the same namespace when the schedule may be due.
@@ -53,9 +58,14 @@ namespace, so different namespace sets can make progress independently.
 Workers offer namespaces, not private copies of schedule definitions. PostgreSQL stores the current
 definitions, so workers that offer the same namespace always evaluate the same desired state. The
 dashboard shows how many live workers can evaluate each namespace.
+Open an application schedule's run count to view tasks of that type in a new browser tab.
 
 The dashboard also lists Workhorse maintenance beside application schedules. Maintenance runs
 directly in PostgreSQL instead of creating a task. Its last-run value records that direct execution.
+Expand a maintenance row to inspect recent outcomes, durations, affected rows, phase timings, and
+errors. The row reports the retained total while the expanded history identifies its recent subset.
+It also states that Workhorse samples successful task-changing ticks and records tick errors
+immediately. Workhorse records every eligible slow-routine execution.
 
 ## Deploys don't cause duplicates either
 

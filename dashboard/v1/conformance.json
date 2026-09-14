@@ -2329,11 +2329,17 @@
                 ],
                 "window": "1h",
                 "pageSize": 25,
+                "rangeEnd": {
+                  "$type": "timestamp"
+                },
                 "retention": {
                   "taskEventDays": 14,
                   "attemptHistoryDays": 14
                 },
                 "capturedAt": {
+                  "$type": "timestamp"
+                },
+                "rangeStart": {
                   "$type": "timestamp"
                 },
                 "windowSeconds": 3600
@@ -2413,12 +2419,14 @@
                     "type": "conformance.report",
                     "queue": "conformance",
                     "active": true,
-                    "enabled": true,
+                    "paused": false,
                     "identity": {
                       "kind": "user",
                       "name": "nightly-report",
                       "namespace": "conformance"
                     },
+                    "pausedAt": null,
+                    "pausedBy": null,
                     "priority": 0,
                     "revision": "1",
                     "namespace": "conformance",
@@ -2426,8 +2434,10 @@
                       "$type": "timestamp"
                     },
                     "lastFiredAt": null,
+                    "pausedReason": null,
                     "evaluatorCount": 1,
-                    "occurrenceCount": 0
+                    "occurrenceCount": 0,
+                    "configuredEnabled": true
                   }
                 ],
                 "capturedAt": {
@@ -2449,31 +2459,39 @@
                   "routines": [
                     {
                       "due": true,
+                      "runs": [],
                       "routine": "history_partitions",
                       "incomplete": false,
                       "lastStartedAt": null,
-                      "lastCompletedAt": null
+                      "lastCompletedAt": null,
+                      "recordedRunCount": 0
                     },
                     {
                       "due": true,
+                      "runs": [],
                       "routine": "history_retention",
                       "incomplete": false,
                       "lastStartedAt": null,
-                      "lastCompletedAt": null
+                      "lastCompletedAt": null,
+                      "recordedRunCount": 0
                     },
                     {
                       "due": true,
+                      "runs": [],
                       "routine": "terminal_storage",
                       "incomplete": false,
                       "lastStartedAt": null,
-                      "lastCompletedAt": null
+                      "lastCompletedAt": null,
+                      "recordedRunCount": 0
                     },
                     {
                       "due": true,
+                      "runs": [],
                       "routine": "tick",
                       "incomplete": false,
                       "lastStartedAt": null,
-                      "lastCompletedAt": null
+                      "lastCompletedAt": null,
+                      "recordedRunCount": 0
                     }
                   ]
                 }
@@ -5662,14 +5680,14 @@
           }
         },
         {
-          "id": "set-schedule-enabled-cross-origin",
-          "procedure": "setScheduleEnabled",
+          "id": "set-schedule-paused-cross-origin",
+          "procedure": "setSchedulePaused",
           "request": {
             "json": {
               "kind": "user",
               "namespace": "conformance",
               "name": "nightly-report",
-              "enabled": false,
+              "paused": true,
               "audit": {
                 "actor": "browser-operator",
                 "reason": "conformance exchange",
@@ -6037,14 +6055,14 @@
           }
         },
         {
-          "id": "set-schedule-enabled-read-only",
-          "procedure": "setScheduleEnabled",
+          "id": "set-schedule-paused-read-only",
+          "procedure": "setSchedulePaused",
           "request": {
             "json": {
               "kind": "user",
               "namespace": "conformance",
               "name": "nightly-report",
-              "enabled": false,
+              "paused": true,
               "audit": {
                 "actor": "browser-operator",
                 "reason": "conformance exchange",
@@ -7661,14 +7679,14 @@
           }
         },
         {
-          "id": "set-schedule-enabled",
-          "procedure": "setScheduleEnabled",
+          "id": "set-schedule-paused",
+          "procedure": "setSchedulePaused",
           "request": {
             "json": {
               "kind": "user",
               "namespace": "conformance",
               "name": "nightly-report",
-              "enabled": false,
+              "paused": true,
               "audit": {
                 "actor": "browser-operator",
                 "reason": "conformance exchange",
@@ -7680,7 +7698,7 @@
             "status": 200,
             "body": {
               "json": {
-                "enabled": false
+                "paused": true
               }
             }
           }
@@ -7920,11 +7938,17 @@
                 ],
                 "window": "1h",
                 "pageSize": 25,
+                "rangeEnd": {
+                  "$type": "timestamp"
+                },
                 "retention": {
                   "taskEventDays": 14,
                   "attemptHistoryDays": 14
                 },
                 "capturedAt": {
+                  "$type": "timestamp"
+                },
+                "rangeStart": {
                   "$type": "timestamp"
                 },
                 "windowSeconds": 3600

@@ -33,6 +33,11 @@ partitions, history retention, and terminal storage. A routine is not a task and
 handler.
 _Avoid_: Maintenance task, background task, cron job
 
+**Schedule pause**:
+A durable operator override that prevents a configured recurring schedule from firing until an
+operator resumes it. Deployment synchronization does not clear it.
+_Avoid_: Schedule disable, operator disable
+
 **Protocol**:
 The versioned schema and SQL functions inside PostgreSQL that every Workhorse SDK calls, so three
 languages share one behaviour.

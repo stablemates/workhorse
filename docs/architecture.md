@@ -737,7 +737,7 @@ authorization hook return a complete denial or redirect response. The host autho
 `workhorse.dashboard._backend.DashboardBackend`. Its `procedures()` implements every
 database-owned contract procedure through
 versioned dashboard views and lifecycle functions. The host supplies `enqueueTest` and
-`setScheduleEnabled`, whose behavior belongs to the embedding runtime.
+`setSchedulePaused`, whose behavior belongs to the embedding runtime.
 `python/tests/test_dashboard_conformance.py` executes all six
 scenarios and all 78 exchanges against both writable and read-only hosts.
 
@@ -764,7 +764,7 @@ complete denial or redirect. The handler preserves the same authorization, compa
 validation, attribution, and dispatch order as Python. `RPCError` carries defined status, code,
 message, and data. `typescript/dashboard-server/test/go-conformance.test.ts` runs the shared
 fixture verifier against the Go HTTP backend, with `go/dashboard/cmd/conformance` supplying the
-contract's `enqueueTest` and `setScheduleEnabled` extensions and writable/read-only deployments.
+contract's `enqueueTest` and `setSchedulePaused` extensions and writable/read-only deployments.
 
 ADR 0037 keeps presentation policy out of those backends. `settings.recommendationInputs` returns
 health reasons, rollup measurements, fallback-partition counts, and the measured enqueue rate.
@@ -1192,7 +1192,11 @@ erDiagram
     text[] payload_redact_keys
     text[] result_redact_keys
     jsonb retry_policy
-    boolean enabled
+    boolean configured_enabled
+    boolean paused
+    text paused_by
+    text paused_reason
+    timestamptz paused_at
   }
   schedule_occurrence {
     text namespace PK
@@ -1788,17 +1792,36 @@ that window contained a prerequisite protected by a dependency edge. Workers pol
 database-scheduled routines — the statistics rollup included — every minute by default, while
 PostgreSQL performs the global due check and advisory-lock coordination.
 
+`maintenance_run` retains the newest 50 recorded executions for each of those four routines.
+Each row stores its UUIDv7 `run_id`, start and completion instants, `succeeded`, `failed`, or
+`incomplete` outcome, total affected rows, and the ordered JSON phase results. The
+`record_maintenance_run_internal_v1` insert prunes older rows for the same routine in the caller's
+transaction. Slow routines record every eligible execution. `tick_v1` records only executions that
+return a phase error or affect at least one task. It records errors immediately and samples
+successful task-changing executions at most once per minute, so neither an idle nor continuously
+busy one-second cadence creates unbounded write churn.
+
 ### Declarative schedules
 
 `sync_schedule_definitions_v1` validates the cron expression and IANA `timezone`, then stores them with the accepted `contract_version`, both size limits, and both redaction-key arrays beside each schedule payload. Any change increments the schedule revision. `fire_schedule_v1` copies that metadata into the occurrence task, so a later deployment cannot reinterpret an already-synchronized definition with a different current contract.
 
-`schedule_definition` is the target database's desired-state record for one deployment namespace. It stores validated cron text, a typed Workhorse task definition, and a monotonically increasing revision, never arbitrary SQL. Removed definitions are disabled rather than deleted so occurrence history remains attributable.
+`schedule_definition` is the target database's desired-state record for one deployment namespace.
+It stores validated cron text, a typed Workhorse task definition, and a monotonically increasing
+revision, never arbitrary SQL. `configured_enabled` stores deployment intent. `paused`,
+`paused_by`, `paused_reason`, and `paused_at` store the durable operator override and attribution.
+Synchronization updates `configured_enabled` without changing those pause columns. Removed
+definitions set `configured_enabled = false` rather than deleting the row, so occurrence history
+and a pause remain attributable when a deployment later re-adds the definition.
 
 `schedule_occurrence` provides one durable key per `(namespace, schedule_name, occurrence_at)` second. `fire_schedule_v1` inserts that key and enqueues through `enqueue_v1` in one transaction. A repeated fire for the same second returns null, so only the call that creates the task reports a fire.
 
 Scheduling metadata and occurrence evaluation live in the target database. `cron_occurrences_v1(expression, last_occurrence_at, now, limit, timezone)` is `IMMUTABLE` and `PARALLEL SAFE`. It implements the five- or six-field dialect in `protocol/v1/cron.md`, including lists, ranges, steps, names, `?`, `L`, `<DOW>L`, `<DOW>#<ordinal>`, the fixed macro set, and `H` expansion. It advances a nonexistent wall time across a daylight-saving gap and selects the first instant in a fold. If several wall-clock fields normalize to one instant, it returns that instant once. It searches at most 128 years and accepts limits from 1 through 10,000. `protocol/v1/cron-occurrences.json` fixes the inputs and expected UTC instants.
 
-`fire_due_schedules_v1(namespaces, now, catchup_limit)` lists enabled definitions and their last durable occurrence, calls `cron_occurrences_v1`, then delegates every result to revision-fenced `fire_schedule_v1` in one database round trip. TypeScript `WorkerOptions.scheduleNamespaces`, Python `Worker.schedule_namespaces`, and Go `WorkerOptions.ScheduleNamespaces` select definitions. TypeScript `scheduleCatchupLimit`, Python `schedule_catchup_limit`, and Go `WorkerOptions.ScheduleCatchupLimit` accept 1 through 10,000 and default to 100. Python `maintenance_interval_ms` accepts integers of at least 100 and defaults to 1,000. Every runtime calls `fire_due_schedules_v1` on that cadence independently of the `tick_v1` lock. The function takes one transaction advisory lock per namespace. Concurrent callers for one namespace return without evaluation, while workers offering different namespaces can progress in parallel. Persisted occurrence keys remain the final duplicate barrier. Schedules fire once per occurrence while any worker offering their namespace remains live.
+`fire_due_schedules_v1(namespaces, now, catchup_limit)` lists definitions whose
+`configured_enabled` is true and `paused` is false, then loads their last durable occurrence,
+calls `cron_occurrences_v1`, and delegates every result to revision-fenced `fire_schedule_v1` in
+one database round trip. `fire_schedule_v1` repeats both state checks under the definition row
+lock. TypeScript `WorkerOptions.scheduleNamespaces`, Python `Worker.schedule_namespaces`, and Go `WorkerOptions.ScheduleNamespaces` select definitions. TypeScript `scheduleCatchupLimit`, Python `schedule_catchup_limit`, and Go `WorkerOptions.ScheduleCatchupLimit` accept 1 through 10,000 and default to 100. Python `maintenance_interval_ms` accepts integers of at least 100 and defaults to 1,000. Every runtime calls `fire_due_schedules_v1` on that cadence independently of the `tick_v1` lock. The function takes one transaction advisory lock per namespace. Concurrent callers for one namespace return without evaluation, while workers offering different namespaces can progress in parallel. Persisted occurrence keys remain the final duplicate barrier. Schedules fire once per occurrence while any worker offering their namespace remains live.
 
 The four-argument `run_task_now_v1(task_id, requested_by, reason, request_id)` releases an
 ordinary future-scheduled task without changing its recurring definition or bypassing a durable
@@ -1876,7 +1899,7 @@ Every TypeScript, Python, and Go worker calls `run_maintenance_v1(p_now)` from i
 
 Terminal-task pruning selects a bounded candidate window of identities with outcomes, both minimum windows elapsed, no live runtime, no retained schedule occurrence, and history boundaries behind the global retained-through watermark. The bounded delete cascades outcome, checkpoints, and waits. History insert triggers serialize with parent deletion and move the watermark backward for late old history, while queue purge explicitly removes history before identity.
 
-All maintenance functions return one row per phase, `(phase, rows_affected, duration_ms, skipped_lock, error)`. `WorkerMaintenanceLoop` is the shared `tick | statistics_rollup | background_routines` taxonomy for phase telemetry and drift metrics. The worker exposes the latest phase rows through `worker.maintenanceTelemetry()` and forwards each row to the optional `onMaintenance` callback. Between passes a worker issues only the claim query.
+All maintenance functions return one row per phase, `(phase, rows_affected, duration_ms, skipped_lock, error)`. The four dashboard routines persist the same phase measurements in `maintenance_run`; history retention uses `incomplete` when bounded work remains without a phase error. `WorkerMaintenanceLoop` is the shared `tick | statistics_rollup | background_routines` taxonomy for phase telemetry and drift metrics. The worker exposes the latest phase rows through `worker.maintenanceTelemetry()` and forwards each row to the optional `onMaintenance` callback. Between passes a worker issues only the claim query.
 
 ## OpenTelemetry metrics
 
@@ -2234,11 +2257,12 @@ Core owns the dashboard's relational read contract. The version 1 views expose t
 - `dashboard_task_v1`: `id`, `queue_name`, `task_type`, `concurrency_key`, `payload`, `payload_redact_keys`, `result_redact_keys`, `tags`, `max_attempts`, `retry_policy`, `deadline_at`, `execution_timeout_ms`, `created_at`, `priority`. `payload` is `redact_top_level_keys_v1(payload, payload_redact_keys)`; the key arrays are projected so a reader can report how many keys were withheld.
 - `dashboard_task_wait_v1`: `task_id`, `wait_name`, `mode`, `duration_ms`, `requested_wake_at`, `wake_at`, `attempt`, `fence_token`, `worker_id`, `created_at`.
 - `dashboard_maintenance_policy_v1`: `singleton`, `timezone`, `partition_preparation_interval_ms`, `terminal_cleanup_interval_ms`, `history_retention_local_time`, `statistics_rollup_interval_ms`, `statistics_group_limit`, `statistics_recompute_buckets`, `updated_at`.
+- `dashboard_maintenance_run_v1`: `run_id`, `routine_name`, `started_at`, `completed_at`, `outcome`, `rows_affected`, `phases`.
 - `dashboard_maintenance_state_v1`: `routine_name`, `last_started_at`, `last_completed_at`, `last_completed_local_date`.
 - `dashboard_queue_control_v1`: `queue_name`, `paused`.
 - `dashboard_rate_limit_policy_v1`: `queue_name`.
 - `dashboard_retention_policy_v1`: `singleton`, `task_event_retention_days`, `attempt_history_retention_days`.
-- `dashboard_schedule_definition_v1`: `namespace`, `schedule_name`, `cron_expression`, `timezone`, `queue_name`, `task_type`, `enabled`, `revision`, `updated_at`.
+- `dashboard_schedule_definition_v1`: `namespace`, `schedule_name`, `cron_expression`, `timezone`, `queue_name`, `task_type`, `configured_enabled`, `paused`, `paused_by`, `paused_reason`, `paused_at`, `revision`, `updated_at`, `priority`.
 - `dashboard_schedule_occurrence_v1`: `namespace`, `schedule_name`, `occurrence_at`, `fired_at`.
 - `dashboard_signal_wait_v1`: `task_id`, `queue_name`, `task_type`, `signal_name`, `attempt`, `created_at`, `deadline_at`.
 - `dashboard_worker_registry_v1`: `worker_id`, `hostname`, `pid`, `queue_name`, `concurrency`, `lease_ms`, `heartbeat_ms`, `poll_ms`, `maintenance_interval_ms`, `maintenance_routine_poll_ms`, `registry_interval_ms`, `active_slots`, `draining`, `paused`, `started_at`, `last_heartbeat_at`, `queue_names`, `schedule_namespaces`.
@@ -2293,13 +2317,15 @@ when worker grouping or filtering requires that value. It returns the complete v
 JSON document with UTC bucket timestamps rendered by `dashboard_iso_v1`. The wire validator limits
 each string filter to 200 characters before the backend calls the function.
 
-`dashboard_events_v1(p_input jsonb)` applies `window`, `kind`, `queue`, `taskType`, `types`, and
+`dashboard_events_v1(p_input jsonb)` accepts a fixed `window` or an inclusive `rangeStart` and
+exclusive `rangeEnd`. Callers must supply both ISO-8601 range instants, and `rangeEnd` must be later
+than `rangeStart`. The function applies the time bound, `kind`, `queue`, `taskType`, `types`, and
 `taskId` before merging `dashboard_task_event_v1` with `dashboard_attempt_history_v1`. Each source
 reads at most `page * pageSize` rows before the merge, while separate bounded counts produce
 `total`. The wire validator limits `page` to 100 and each string filter to 200 characters before
 the backend calls the function. The function disables JIT because compiling its generic partitioned
 plan costs more than executing the bounded reads. It returns the complete version 1 events JSON
-document, including retention days from `dashboard_retention_policy_v1`.
+document, including the effective range and retention days from `dashboard_retention_policy_v1`.
 
 The event listing also accepts `worker` and `search`.
 Both filters apply before source limits and in the total count.
@@ -2331,6 +2357,15 @@ registrations whose `schedule_namespaces` contains the definition namespace and 
 `history_partitions`, `history_retention`, and `terminal_storage` from
 `dashboard_maintenance_state_v1`, the supplied tick cadence, the policy, and the current database
 time. The Schedules page uses the tick state's completion time as the built-in tick row's last run.
+Each application schedule's occurrence count links to `/tasks?type=<task type>` in a new browser
+tab. Application rows return `configuredEnabled`, `paused`, `pausedBy`, `pausedReason`, `pausedAt`,
+and effective `active`. Compact rows show the queue, evaluator count, and Pause or Resume action. A
+deployment-disabled definition shows `Config off`; focusable tooltips carry the task type,
+priority, worker wording, pause durability, and full maintenance status.
+Each routine includes `recordedRunCount` for its retained total and its five newest recorded
+`maintenance_run` rows. The Schedules page labels the retained total, identifies the five-row
+display subset, states the tick sampling policy, and shows the run outcome, duration, affected-row
+total, phase timings, and phase errors.
 
 `dashboard_queues_v1(p_input jsonb)` returns the complete version 1 queue-page JSON document and
 calls `queue_health_v1()` once per invocation. If the task estimate is at least 50,000, it runs one
@@ -2945,7 +2980,7 @@ Schedule occurrence deduplication prevents duplicate enqueue for one occurrence 
 `Queue.syncSchedules(namespace, definitions, { prune })` is a desired-state reconciler:
 
 1. It validates stable namespace and schedule names plus queue task definitions, including optional retry policies.
-2. It atomically upserts target definitions and by default deactivates omitted names through `sync_schedule_definitions_v1`.
+2. It atomically upserts deployment intent and by default deactivates omitted names through `sync_schedule_definitions_v1`, without changing the durable operator pause.
 3. A per-namespace advisory lock serializes concurrent deployments of the same namespace.
 
 Because definitions live only in the target database, a deployment is one transaction: there is no second metadata database to converge. Every material definition change increments a revision, and worker fires pass the revision they loaded. A stale in-process schedule therefore becomes a no-op instead of running a new payload at an old cadence. Definition row locking also makes a disable deployment wait for a fire that already began before returning.

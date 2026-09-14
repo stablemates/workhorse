@@ -622,7 +622,7 @@ describe("Workhorse demo", () => {
 
     expect(
       await pool.query(
-        `SELECT schedule_name, cron_expression, task_type, queue_name, enabled
+        `SELECT schedule_name, cron_expression, task_type, queue_name, configured_enabled
            FROM workhorse.schedule_definition
           WHERE namespace = $1
           ORDER BY schedule_name`,
@@ -635,56 +635,56 @@ describe("Workhorse demo", () => {
           cron_expression: "* * * * *",
           task_type: "demo.long-running",
           queue_name: DEMO_QUEUE,
-          enabled: true,
+          configured_enabled: true,
         },
         {
           schedule_name: REPORT_SCHEDULE_NAME,
           cron_expression: "*/5 * * * *",
           task_type: "demo.report",
           queue_name: DEMO_QUEUE,
-          enabled: true,
+          configured_enabled: true,
         },
         {
           schedule_name: HEARTBEAT_SCHEDULE_NAME,
           cron_expression: "* * * * *",
           task_type: "demo.recurring",
           queue_name: DEMO_QUEUE,
-          enabled: true,
+          configured_enabled: true,
         },
         {
           schedule_name: GO_WORKER_SCHEDULE_NAME,
           cron_expression: "2-59/3 * * * *",
           task_type: LANGUAGE_WORKER_TASK_TYPE,
           queue_name: DEMO_GO_QUEUE,
-          enabled: true,
+          configured_enabled: true,
         },
         {
           schedule_name: PYTHON_WORKER_SCHEDULE_NAME,
           cron_expression: "1-59/3 * * * *",
           task_type: LANGUAGE_WORKER_TASK_TYPE,
           queue_name: DEMO_PYTHON_QUEUE,
-          enabled: true,
+          configured_enabled: true,
         },
         {
           schedule_name: TYPESCRIPT_WORKER_SCHEDULE_NAME,
           cron_expression: "*/3 * * * *",
           task_type: LANGUAGE_WORKER_TASK_TYPE,
           queue_name: DEMO_QUEUE,
-          enabled: true,
+          configured_enabled: true,
         },
         {
           schedule_name: SHARED_WORKER_SCHEDULE_NAME,
           cron_expression: "* * * * *",
           task_type: SHARED_WORKER_TASK_TYPE,
           queue_name: DEMO_SHARED_QUEUE,
-          enabled: true,
+          configured_enabled: true,
         },
         ...DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) => ({
           schedule_name: family.scheduleName,
           cron_expression: family.schedule,
           task_type: family.taskType,
           queue_name: DEMO_QUEUE,
-          enabled: true,
+          configured_enabled: true,
         })).toSorted((left, right) => left.schedule_name.localeCompare(right.schedule_name)),
       ],
     });
@@ -2496,11 +2496,11 @@ describe("Workhorse demo", () => {
       }),
     ).rejects.toThrow(/read-only|FORBIDDEN/i);
     await expect(
-      client.dashboard.setScheduleEnabled({
+      client.dashboard.setSchedulePaused({
         kind: "user",
         namespace: DEMO_SCHEDULE_NAMESPACE,
         name: HEARTBEAT_SCHEDULE_NAME,
-        enabled: false,
+        paused: true,
         audit: { actor: "test", reason: "verify read-only", requestId: "readonly-toggle" },
       }),
     ).rejects.toThrow(/read-only|FORBIDDEN/i);
@@ -2817,22 +2817,22 @@ describe("Workhorse demo", () => {
       payload: { source: "operator" },
     });
     expect(
-      await client.dashboard.setScheduleEnabled({
+      await client.dashboard.setSchedulePaused({
         kind: "user",
         namespace: DEMO_SCHEDULE_NAMESPACE,
         name: REPORT_SCHEDULE_NAME,
-        enabled: false,
+        paused: true,
         audit: { actor: "operator", reason: "pause reports", requestId: "audit-toggle" },
       }),
-    ).toEqual({ enabled: false });
+    ).toEqual({ paused: true });
     await syncDemoSchedules(pool);
     expect(
       await pool.query(
-        `SELECT enabled FROM workhorse.schedule_definition
+        `SELECT configured_enabled, paused FROM workhorse.schedule_definition
           WHERE namespace = $1 AND schedule_name = $2`,
         [DEMO_SCHEDULE_NAMESPACE, REPORT_SCHEDULE_NAME],
       ),
-    ).toMatchObject({ rows: [{ enabled: false }] });
+    ).toMatchObject({ rows: [{ configured_enabled: true, paused: true }] });
     expect(
       (
         await pool.query(
@@ -2852,13 +2852,13 @@ describe("Workhorse demo", () => {
         status: "succeeded",
       },
       {
-        action: "setScheduleEnabled",
+        action: "setSchedulePaused",
         target: `schedule:${DEMO_SCHEDULE_NAMESPACE}:${REPORT_SCHEDULE_NAME}`,
         actor: "local-demo",
         reason: "pause reports",
         request_id: "audit-toggle",
-        before: { enabled: true },
-        after: { enabled: false },
+        before: { paused: false },
+        after: { paused: true },
         status: "succeeded",
       },
     ]);
@@ -3560,35 +3560,37 @@ describe("Workhorse demo", () => {
       ]),
     );
 
-    await client.dashboard.setScheduleEnabled({
+    await client.dashboard.setSchedulePaused({
       kind: "user",
       namespace: DEMO_SCHEDULE_NAMESPACE,
       name: HEARTBEAT_SCHEDULE_NAME,
-      enabled: false,
+      paused: true,
       audit: { actor: "operator", reason: "pause schedule", requestId: "schedule-disable" },
     });
     expect((await client.dashboard.cron()).schedules).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           name: HEARTBEAT_SCHEDULE_NAME,
-          enabled: false,
+          configuredEnabled: true,
+          paused: true,
           active: false,
         }),
       ]),
     );
 
-    await client.dashboard.setScheduleEnabled({
+    await client.dashboard.setSchedulePaused({
       kind: "user",
       namespace: DEMO_SCHEDULE_NAMESPACE,
       name: HEARTBEAT_SCHEDULE_NAME,
-      enabled: true,
+      paused: false,
       audit: { actor: "operator", reason: "resume schedule", requestId: "schedule-enable" },
     });
     expect((await client.dashboard.cron()).schedules).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           name: HEARTBEAT_SCHEDULE_NAME,
-          enabled: true,
+          configuredEnabled: true,
+          paused: false,
           active: true,
         }),
       ]),
@@ -4224,17 +4226,17 @@ describe("Workhorse demo", () => {
     await expect(client.dashboard.taskDetail({ id: occurrenceTaskId })).resolves.toMatchObject({
       identity: { state: "canceled" },
     });
-    // Cancelling one materialized run says nothing about the schedule, which stays enabled and
+    // Cancelling one materialized run says nothing about the schedule, which stays active and
     // keeps its next occurrence.
     const cron = await client.dashboard.cron();
-    for (const schedule of cron.schedules) expect(schedule.enabled).toBe(true);
+    for (const schedule of cron.schedules) expect(schedule.active).toBe(true);
     expect(
       (
-        await pool.query<{ enabled: boolean }>(
-          `SELECT enabled FROM workhorse.schedule_definition WHERE namespace = $1`,
+        await pool.query<{ configured_enabled: boolean; paused: boolean }>(
+          `SELECT configured_enabled, paused FROM workhorse.schedule_definition WHERE namespace = $1`,
           [DEMO_SCHEDULE_NAMESPACE],
         )
-      ).rows.every((row) => row.enabled),
+      ).rows.every((row) => row.configured_enabled && !row.paused),
     ).toBe(true);
   });
 

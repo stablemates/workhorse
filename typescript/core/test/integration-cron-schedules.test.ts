@@ -174,7 +174,7 @@ describe("cron schedules", () => {
       (
         await pool.query(
           `SELECT schedule_name, cron_expression, timezone, queue_name, task_type, payload, max_attempts,
-                  enabled, revision::text
+                  configured_enabled, paused, revision::text
              FROM workhorse.schedule_definition
             WHERE namespace = 'integration'
             ORDER BY schedule_name`,
@@ -189,7 +189,8 @@ describe("cron schedules", () => {
         task_type: "generate-report",
         payload: { scope: "daily" },
         max_attempts: 5,
-        enabled: true,
+        configured_enabled: true,
+        paused: false,
         revision: "1",
       },
       {
@@ -200,7 +201,8 @@ describe("cron schedules", () => {
         task_type: "cleanup",
         payload: null,
         max_attempts: 25,
-        enabled: false,
+        configured_enabled: false,
+        paused: false,
         revision: "1",
       },
     ]);
@@ -224,29 +226,84 @@ describe("cron schedules", () => {
     expect(
       (
         await pool.query(
-          "SELECT namespace, schedule_name, enabled, revision::text FROM workhorse.schedule_definition ORDER BY namespace, schedule_name",
+          "SELECT namespace, schedule_name, configured_enabled, paused, revision::text FROM workhorse.schedule_definition ORDER BY namespace, schedule_name",
         )
       ).rows,
     ).toEqual([
       {
         namespace: "integration",
         schedule_name: "daily-report",
-        enabled: true,
+        configured_enabled: true,
+        paused: false,
         revision: "2",
       },
       {
         namespace: "integration",
         schedule_name: "disabled-cleanup",
-        enabled: false,
+        configured_enabled: false,
+        paused: false,
         revision: "1",
       },
       {
         namespace: "integration-other",
         schedule_name: "other-report",
-        enabled: true,
+        configured_enabled: true,
+        paused: false,
         revision: "1",
       },
     ]);
+  });
+
+  it("preserves an operator pause across deployment synchronization and re-addition", async () => {
+    const definition = {
+      name: "daily-report",
+      schedule: "0 6 * * *",
+      task: { type: "generate-report", payload: { scope: "daily" } },
+    } as const;
+    await queue.syncSchedules("durable-pause", [definition]);
+    await pool.query(
+      `UPDATE workhorse.schedule_definition
+          SET paused = true, paused_by = 'operator', paused_reason = 'incident',
+              paused_at = clock_timestamp(), revision = revision + 1
+        WHERE namespace = 'durable-pause' AND schedule_name = 'daily-report'`,
+    );
+
+    await queue.syncSchedules("durable-pause", [definition]);
+    await queue.syncSchedules("durable-pause", []);
+    await queue.syncSchedules("durable-pause", [definition]);
+
+    const stored = await pool.query<{
+      configured_enabled: boolean;
+      paused: boolean;
+      paused_by: string;
+      paused_reason: string;
+    }>(
+      `SELECT configured_enabled, paused, paused_by, paused_reason
+         FROM workhorse.schedule_definition
+        WHERE namespace = 'durable-pause' AND schedule_name = 'daily-report'`,
+    );
+    expect(stored.rows).toEqual([
+      {
+        configured_enabled: true,
+        paused: true,
+        paused_by: "operator",
+        paused_reason: "incident",
+      },
+    ]);
+    const schedule = (
+      await pool.query<{ revision: string }>(
+        `SELECT revision::text FROM workhorse.schedule_definition
+          WHERE namespace = 'durable-pause' AND schedule_name = 'daily-report'`,
+      )
+    ).rows[0]!;
+    await expect(
+      queue.fireSchedule(
+        "durable-pause",
+        "daily-report",
+        BigInt(schedule.revision),
+        new Date("2026-08-11T06:00:00Z"),
+      ),
+    ).resolves.toBeNull();
   });
 
   it("rejects invalid cron expressions before persisting a schedule", async () => {
@@ -552,7 +609,7 @@ describe("cron schedules", () => {
       },
     ]);
     const scheduleBefore = await pool.query(
-      `SELECT namespace, schedule_name, cron_expression, revision, enabled, updated_at
+      `SELECT namespace, schedule_name, cron_expression, revision, configured_enabled, paused, updated_at
          FROM workhorse.schedule_definition
         WHERE namespace = 'integration' AND schedule_name = 'daily-report'`,
     );
@@ -607,7 +664,7 @@ describe("cron schedules", () => {
     });
     await expect(
       pool.query(
-        `SELECT namespace, schedule_name, cron_expression, revision, enabled, updated_at
+        `SELECT namespace, schedule_name, cron_expression, revision, configured_enabled, paused, updated_at
            FROM workhorse.schedule_definition
           WHERE namespace = 'integration' AND schedule_name = 'daily-report'`,
       ),

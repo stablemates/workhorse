@@ -157,7 +157,7 @@ def test_dashboard_host_assigns_the_authenticated_actor() -> None:
 def test_dashboard_host_forbids_an_unavailable_optional_mutation() -> None:
     status, _, body = _request(
         _host(),
-        "/workhorse/rpc/dashboard/setScheduleEnabled",
+        "/workhorse/rpc/dashboard/setSchedulePaused",
         method="POST",
         origin="https://example.test",
         body={"json": None},

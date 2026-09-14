@@ -42,4 +42,19 @@ describe("dashboard read RPC input bounds", () => {
     await expect(client.dashboard[rpc](input)).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(rpcContext.database.execute).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { rangeStart: "2026-08-15T12:00:00.000Z" },
+    { rangeEnd: "2026-08-15T13:00:00.000Z" },
+    {
+      rangeStart: "2026-08-15T14:00:00.000Z",
+      rangeEnd: "2026-08-15T13:00:00.000Z",
+    },
+  ])("rejects an incomplete or reversed event range before querying", async (input) => {
+    const rpcContext = context();
+    const client = createRouterClient(dashboardRouter, { context: rpcContext });
+
+    await expect(client.dashboard.events(input)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(rpcContext.database.execute).not.toHaveBeenCalled();
+  });
 });

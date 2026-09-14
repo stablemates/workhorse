@@ -76,6 +76,7 @@ describe("workers page", () => {
     expect(html).toContain("billing");
     expect(html).toContain("Several workers can offer the same namespace safely");
     expect(html).toContain('aria-haspopup="dialog"');
+    expect(html).toContain("deploy that replaces it clears the pause");
     expect(html).not.toContain('role="alert"');
   });
 });

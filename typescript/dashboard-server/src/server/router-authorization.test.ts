@@ -14,11 +14,11 @@ const TASK_ID = "00000000-0000-4000-8000-000000000000";
  */
 const MUTATION_INPUTS: Readonly<Record<string, unknown>> = {
   enqueueTest: { kind: "success", audit: AUDIT },
-  setScheduleEnabled: {
+  setSchedulePaused: {
     kind: "user",
     namespace: "reports",
     name: "nightly",
-    enabled: true,
+    paused: true,
     audit: AUDIT,
   },
   setQueuePaused: { queue: "default", paused: true, audit: AUDIT },

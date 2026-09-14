@@ -81,4 +81,30 @@ describe("dashboard event filters and detail metadata", () => {
     );
     expect(missing.rows[0]!.detail).toBeNull();
   });
+
+  it("uses an inclusive start and exclusive end for a custom range", async () => {
+    const task = await database.pool.query<{ id: string }>(`
+      INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts)
+      VALUES ('range-test', 'range.test', '{}', 1)
+      RETURNING id
+    `);
+    const taskId = task.rows[0]!.id;
+    await database.pool.query(
+      `INSERT INTO workhorse.task_event(task_id, event_type, details, occurred_at)
+       VALUES ($1, 'enqueued', '{}', '2026-08-15T12:00:00.000Z'),
+              ($1, 'promoted', '{}', '2026-08-15T13:00:00.000Z')`,
+      [taskId],
+    );
+
+    const page = await events({
+      queue: "range-test",
+      rangeStart: "2026-08-15T12:00:00.000Z",
+      rangeEnd: "2026-08-15T13:00:00.000Z",
+    });
+
+    expect(page.rangeStart).toBe("2026-08-15T12:00:00.000Z");
+    expect(page.rangeEnd).toBe("2026-08-15T13:00:00.000Z");
+    expect(page.events.map((event) => event.type)).toEqual(["enqueued"]);
+    expect(page.total).toBe(1);
+  });
 });

@@ -27,18 +27,31 @@ def test_python_dashboard_read_procedures_match_the_shared_contract(database_url
             execute_step(connection, "seed", step, references)
         with psycopg.connect(database_url, autocommit=True) as dashboard_connection:
 
-            def set_schedule_enabled(input: object, _actor: str) -> object:
+            def set_schedule_paused(input: object, actor: str) -> object:
                 value = cast(dict[str, object], input)
                 with dashboard_connection.cursor() as cursor:
                     cursor.execute(
                         """UPDATE workhorse.schedule_definition
-                              SET enabled=%s,revision=revision+1,updated_at=clock_timestamp()
-                            WHERE namespace=%s AND schedule_name=%s RETURNING enabled""",
-                        (value["enabled"], value["namespace"], value["name"]),
+                              SET paused=%s,
+                                  paused_by=CASE WHEN %s THEN %s ELSE NULL END,
+                                  paused_reason=CASE WHEN %s THEN %s ELSE NULL END,
+                                  paused_at=CASE WHEN %s THEN clock_timestamp() ELSE NULL END,
+                                  revision=revision+1,updated_at=clock_timestamp()
+                            WHERE namespace=%s AND schedule_name=%s RETURNING paused""",
+                        (
+                            value["paused"],
+                            value["paused"],
+                            actor,
+                            value["paused"],
+                            "Dashboard operator request",
+                            value["paused"],
+                            value["namespace"],
+                            value["name"],
+                        ),
                     )
                     row = cursor.fetchone()
                 assert row is not None
-                return {"enabled": row[0]}
+                return {"paused": row[0]}
 
             host = DashboardHost(
                 dashboard_connection,
@@ -56,7 +69,7 @@ def test_python_dashboard_read_procedures_match_the_shared_contract(database_url
                         ),
                     )
                 },
-                set_schedule_enabled=set_schedule_enabled,
+                set_schedule_paused=set_schedule_paused,
             )
             read_only_host = DashboardHost(
                 dashboard_connection,

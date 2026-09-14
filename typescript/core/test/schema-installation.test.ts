@@ -277,6 +277,15 @@ describe("schema installation", () => {
         "statistics_recompute_buckets",
         "updated_at",
       ],
+      dashboard_maintenance_run_v1: [
+        "run_id",
+        "routine_name",
+        "started_at",
+        "completed_at",
+        "outcome",
+        "rows_affected",
+        "phases",
+      ],
       dashboard_maintenance_state_v1: [
         "routine_name",
         "last_started_at",
@@ -297,7 +306,11 @@ describe("schema installation", () => {
         "timezone",
         "queue_name",
         "task_type",
-        "enabled",
+        "configured_enabled",
+        "paused",
+        "paused_by",
+        "paused_reason",
+        "paused_at",
         "revision",
         "updated_at",
         "priority",
@@ -449,6 +462,7 @@ describe("schema installation", () => {
       partitions: string | null;
       retention: string | null;
       releasedDependencies: string | null;
+      recordRun: string | null;
       terminal: string | null;
     }>(`SELECT
         to_regprocedure('workhorse.maintain_v1(integer,integer,integer,integer)')::text AS maintain,
@@ -457,6 +471,7 @@ describe("schema installation", () => {
         to_regprocedure('workhorse.prepare_history_partitions_v1(boolean,timestamp with time zone)')::text AS partitions,
         to_regprocedure('workhorse.retain_history_v1(boolean,timestamp with time zone)')::text AS retention,
         to_regprocedure('workhorse.prune_released_dependencies_v1(integer)')::text AS "releasedDependencies",
+        to_regprocedure('workhorse.record_maintenance_run_internal_v1(text,timestamp with time zone,timestamp with time zone,text,integer,jsonb)')::text AS "recordRun",
         to_regprocedure('workhorse.prune_terminal_storage_v1(boolean,timestamp with time zone)')::text AS terminal`);
     expect(maintenanceFunctions.rows[0]).toEqual({
       maintain: null,
@@ -465,6 +480,8 @@ describe("schema installation", () => {
       partitions: "prepare_history_partitions_v1(boolean,timestamp with time zone)",
       retention: "retain_history_v1(boolean,timestamp with time zone)",
       releasedDependencies: "prune_released_dependencies_v1(integer)",
+      recordRun:
+        "record_maintenance_run_internal_v1(text,timestamp with time zone,timestamp with time zone,text,integer,jsonb)",
       terminal: "prune_terminal_storage_v1(boolean,timestamp with time zone)",
     });
 

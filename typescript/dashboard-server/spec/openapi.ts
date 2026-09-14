@@ -102,9 +102,9 @@ export const procedureDocs: Record<ProcedureName, ProcedureDoc> = {
       "Returns time-bucketed counts for one task filter over a period of 15m, 1h, 6h, 24h, or 7d, grouped by queue, worker, task type, or status, optionally narrowed by tags, queue, and worker. bucketSeconds gives the width of each bucket.",
   },
   events: {
-    summary: "List task events and attempts in a window",
+    summary: "List task events and attempts in a time range",
     description:
-      "Returns one page of task events and attempt outcomes within a window of 15m, 1h, 6h, or 24h, filterable by kind (event, attempt, or all), queue, taskType, event types, and one taskId. retention reports how far back events and attempts are kept.",
+      "Returns one page of task events and attempt outcomes within a fixed window of 15m, 1h, 6h, or 24h, or between an inclusive rangeStart instant and exclusive rangeEnd instant. The feed is filterable by kind (event, attempt, or all), queue, taskType, event types, and one taskId. retention reports how far back events and attempts are kept.",
   },
   eventDetail: {
     summary: "Read one event or attempt",
@@ -158,10 +158,10 @@ export const procedureDocs: Record<ProcedureName, ProcedureDoc> = {
     description:
       "Enqueues one demonstration task of the given kind on the demo queue and returns its taskId. outcome reports whether the request accepted a new task or replayed an identical earlier request under a retained key; hosts that do not track the distinction may omit it. feature is required when kind is feature. Available only where the host wires a demo operator; other deployments answer FORBIDDEN.",
   },
-  setScheduleEnabled: {
-    summary: "Enable or disable a schedule",
+  setSchedulePaused: {
+    summary: "Pause or resume a schedule",
     description:
-      "Flips the enabled flag of one user schedule identified by namespace and name and returns the resulting flag.",
+      "Sets the durable operator pause for one user schedule and returns it. Deployment synchronization does not clear the pause.",
   },
   setQueuePaused: {
     summary: "Pause or resume a queue",

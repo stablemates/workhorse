@@ -117,7 +117,7 @@ func TestHandlerForbidsUnavailableOptionalMutation(t *testing.T) {
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodPost,
-		"https://example.test/workhorse/rpc/dashboard/setScheduleEnabled",
+		"https://example.test/workhorse/rpc/dashboard/setSchedulePaused",
 		strings.NewReader(`{"json":null}`),
 	)
 	request.Header.Set("Origin", "https://example.test")

@@ -212,18 +212,40 @@ const checkedDemoFeatureValues: CompleteDashboardOptions<
  * from a browser can never reach a filter that would otherwise scan the whole retained window for
  * a value no row can hold.
  */
-const eventsInput = z.object({
-  window: z.enum(["15m", "1h", "6h", "24h"]).default("1h"),
-  page: dashboardPage,
-  pageSize: z.union([z.literal(25), z.literal(50), z.literal(100)]).default(50),
-  kind: z.enum(["all", "event", "attempt"]).default("all"),
-  queue: dashboardFilterString.nullable().default(null),
-  taskType: dashboardFilterString.nullable().default(null),
-  worker: dashboardFilterString.nullable().default(null),
-  search: dashboardFilterString.nullable().default(null),
-  types: z.array(eventType).max(eventType.options.length).default([]),
-  taskId: z.uuid().nullable().default(null),
-});
+const eventsInput = z
+  .object({
+    window: z.enum(["15m", "1h", "6h", "24h"]).default("1h"),
+    rangeStart: z.iso.datetime().nullable().default(null),
+    rangeEnd: z.iso.datetime().nullable().default(null),
+    page: dashboardPage,
+    pageSize: z.union([z.literal(25), z.literal(50), z.literal(100)]).default(50),
+    kind: z.enum(["all", "event", "attempt"]).default("all"),
+    queue: dashboardFilterString.nullable().default(null),
+    taskType: dashboardFilterString.nullable().default(null),
+    worker: dashboardFilterString.nullable().default(null),
+    search: dashboardFilterString.nullable().default(null),
+    types: z.array(eventType).max(eventType.options.length).default([]),
+    taskId: z.uuid().nullable().default(null),
+  })
+  .superRefine((input, context) => {
+    if ((input.rangeStart === null) !== (input.rangeEnd === null)) {
+      context.addIssue({
+        code: "custom",
+        message: "rangeStart and rangeEnd must be supplied together",
+        path: [input.rangeStart === null ? "rangeStart" : "rangeEnd"],
+      });
+    } else if (
+      input.rangeStart !== null &&
+      input.rangeEnd !== null &&
+      Date.parse(input.rangeStart) >= Date.parse(input.rangeEnd)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "rangeEnd must be later than rangeStart",
+        path: ["rangeEnd"],
+      });
+    }
+  });
 const enqueueTestInput = z
   .object({
     kind: z.enum(checkedDemoTaskKindValues),
@@ -236,11 +258,11 @@ const enqueueTestInput = z
     message: "The feature demo kind requires a feature family",
     path: ["feature"],
   });
-const setScheduleEnabledInput = z.object({
+const setSchedulePausedInput = z.object({
   kind: z.literal("user"),
   namespace: z.string().trim().min(1),
   name: z.string().trim().min(1),
-  enabled: z.boolean(),
+  paused: z.boolean(),
   audit: auditSchema,
 });
 const setQueuePausedInput = z.object({
@@ -499,19 +521,19 @@ export const dashboardRouter = {
         input.feature,
       );
     }),
-    setScheduleEnabled: mutationProcedure
-      .input(setScheduleEnabledInput)
+    setSchedulePaused: mutationProcedure
+      .input(setSchedulePausedInput)
       .handler(async ({ context, input }) => {
         if (
           context.operator.mode !== "writable" ||
-          !context.scheduleController?.setScheduleEnabled
+          !context.scheduleController?.setSchedulePaused
         ) {
           throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
         }
-        return context.scheduleController.setScheduleEnabled(
+        return context.scheduleController.setSchedulePaused(
           input.namespace,
           input.name,
-          input.enabled,
+          input.paused,
           auditWithOccurredAt(input.audit, context.authenticatedActor),
         );
       }),

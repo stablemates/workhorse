@@ -69,7 +69,7 @@ type handler struct {
 }
 
 var mutations = map[string]bool{
-	"enqueueTest": true, "setScheduleEnabled": true, "setQueuePaused": true,
+	"enqueueTest": true, "setSchedulePaused": true, "setQueuePaused": true,
 	"purgeQueue": true, "setWorkerPaused": true, "overrideMaintenancePolicy": true,
 	"revertMaintenancePolicy": true, "overrideRetentionPolicy": true,
 	"revertRetentionPolicy": true, "runTaskNow": true, "cancelTask": true,
@@ -78,7 +78,7 @@ var mutations = map[string]bool{
 }
 
 var optionalMutations = map[string]bool{
-	"enqueueTest": true, "setScheduleEnabled": true,
+	"enqueueTest": true, "setSchedulePaused": true,
 }
 
 var contentTypes = map[string]string{

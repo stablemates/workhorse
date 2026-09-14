@@ -209,7 +209,8 @@ as `authenticatedActor` (the fixtures pin server-assigned attribution to it), re
 and must be supplied by the harness exactly as the reference harness
 (`typescript/dashboard-server/test/support/conformance-harness.ts`) does: an `enqueueTest`
 operator that enqueues one `conformance.demo-{kind}` task on the `conformance-demo` queue, and a
-`setScheduleEnabled` controller that flips `workhorse.schedule_definition.enabled`.
+`setSchedulePaused` controller that sets `workhorse.schedule_definition.paused` and its actor,
+reason, and timestamp without changing deployment-owned `configured_enabled`.
 
 `pnpm dashboard-conformance:generate` regenerates every exchange's `expect` block by replaying
 the file twice against the reference server on two fresh databases: values identical across both

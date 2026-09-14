@@ -51,6 +51,21 @@ async function renderExport(
 }
 
 describe("dashboard event history", () => {
+  it("validates and converts local custom event ranges", async () => {
+    const { parseEventRange } = await import("./dashboard.js");
+    const range = parseEventRange("2026-08-15T12:00", "2026-08-15T13:30");
+    expect(range).toEqual({
+      from: new Date("2026-08-15T12:00").toISOString(),
+      to: new Date("2026-08-15T13:30").toISOString(),
+    });
+    expect(parseEventRange("", "2026-08-15T13:30")).toEqual({
+      error: "Choose both a start and end time.",
+    });
+    expect(parseEventRange("2026-08-15T14:00", "2026-08-15T13:30")).toEqual({
+      error: "The end time must be after the start time.",
+    });
+  });
+
   it("opens the event task in a new window without replacing the Events page", async () => {
     const { EventDetails } = await import("./dashboard.js");
     const event = {

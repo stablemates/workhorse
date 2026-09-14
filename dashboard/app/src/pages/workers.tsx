@@ -179,8 +179,8 @@ export function WorkersPage({
                             </Text>
                             <Text c="dimmed" mt={4} size="xs">
                               A paused worker finishes active tasks but accepts no new ones. If the
-                              process restarts, it resumes automatically. If work must stay paused,
-                              pause the queue instead.
+                              process restarts or a deploy replaces it, the new instance resumes
+                              automatically. If work must stay paused, pause the queue instead.
                             </Text>
                           </Popover.Dropdown>
                         </Popover>
@@ -236,9 +236,10 @@ export function WorkersPage({
       <Text c="dimmed" size="xs">
         This page covers the whole fleet because workers register with Workhorse. A worker reports
         busy slots, while Workhorse counts active tasks, so the values can differ briefly. Startup
-        sets capacity, and the dashboard cannot change it. A draining worker stops after its active
-        handlers finish. If a worker stops registering, Workhorse marks it offline and later removes
-        it from the fleet.
+        sets capacity, and the dashboard cannot change it. A Claims pause applies to this worker
+        instance; a restart or deploy that replaces it clears the pause. Pause the queue when work
+        must stay paused. A draining worker stops after its active handlers finish. If a worker
+        stops registering, Workhorse marks it offline and later removes it from the fleet.
       </Text>
     </Stack>
   );

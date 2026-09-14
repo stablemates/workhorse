@@ -25,7 +25,7 @@ from ._errors import DashboardRPCError as _DashboardRPCError
 _MUTATIONS = frozenset(
     {
         "enqueueTest",
-        "setScheduleEnabled",
+        "setSchedulePaused",
         "setQueuePaused",
         "purgeQueue",
         "setWorkerPaused",
@@ -41,7 +41,7 @@ _MUTATIONS = frozenset(
         "redriveDeadLetters",
     }
 )
-_OPTIONAL_MUTATIONS = frozenset({"enqueueTest", "setScheduleEnabled"})
+_OPTIONAL_MUTATIONS = frozenset({"enqueueTest", "setSchedulePaused"})
 _CONTENT_TYPES = {
     ".css": "text/css; charset=utf-8",
     ".html": "text/html; charset=utf-8",
@@ -94,7 +94,7 @@ class DashboardHost:
         configured_workers: tuple[str, ...] = (),
         maintenance_loops: Mapping[str, int] | None = None,
         enqueue_test: DashboardProcedure | None = None,
-        set_schedule_enabled: DashboardProcedure | None = None,
+        set_schedule_paused: DashboardProcedure | None = None,
         _procedures: Mapping[str, DashboardProcedure] | None = None,
         _skip_compatibility_check: bool = False,
     ) -> None:
@@ -117,8 +117,8 @@ class DashboardHost:
         extensions = dict(_procedures or {})
         if enqueue_test is not None:
             extensions["enqueueTest"] = enqueue_test
-        if set_schedule_enabled is not None:
-            extensions["setScheduleEnabled"] = set_schedule_enabled
+        if set_schedule_paused is not None:
+            extensions["setSchedulePaused"] = set_schedule_paused
         self._procedures = {**backend.procedures(), **extensions}
         self._skip_compatibility_check = _skip_compatibility_check
         self._compatible = False

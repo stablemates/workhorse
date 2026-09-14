@@ -10,6 +10,10 @@ PostgreSQL orders statistics, partition preparation, retention, terminal cleanup
 cleanup, while each routine keeps its own due check and lock. A fleet that runs only Python or Go
 therefore keeps the same evidence and partition guarantees as a TypeScript fleet.
 
+PostgreSQL also keeps bounded execution history for the dashboard's maintenance routines. The
+Schedules page expands each routine into recent outcomes, affected rows, phase timings, and errors.
+Successful idle ticks are omitted because their latest completion already proves the loop is alive.
+
 ## Windows are minimums, not deadlines
 
 You configure how long to keep each category of data — finished tasks, outcomes, events,

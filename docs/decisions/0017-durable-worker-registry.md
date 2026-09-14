@@ -34,6 +34,9 @@ instance takes over the same worker id.
 
 The alternative, a pause that survives restarts, was considered and rejected. It requires stable worker identities, and it turns a 3am incident action into a flag that silently idles a worker after an unrelated deployment weeks later. Queue pause already provides a durable "stop this work" lever, keyed by queue name and unaffected by worker lifecycles, so the two controls stay distinct rather than overlapping.
 
+The dashboard must name this lifecycle boundary beside the control: a restart or deploy that
+replaces the worker instance clears its claim pause. Operators who need persistence use queue pause.
+
 Without `instance_id`, PostgreSQL could not distinguish a routine heartbeat from a restart, and the flag would be either indefinitely sticky or cleared by the worker's own next heartbeat.
 
 ### Identity and placement are separate columns

@@ -202,6 +202,91 @@ describe("retention maintenance", () => {
     expect(await queue.pruneTerminalStorage({ force: true, now })).toHaveLength(3);
   });
 
+  it("retains bounded routine history while omitting idle tick executions", async () => {
+    await queue.tick();
+    await expect(
+      pool.query(
+        "SELECT count(*)::integer AS count FROM workhorse.maintenance_run WHERE routine_name = 'tick'",
+      ),
+    ).resolves.toMatchObject({ rows: [{ count: 0 }] });
+
+    const taskId = await queue.enqueue(
+      "maintenance-history",
+      {},
+      { runAt: new Date(Date.now() + 60_000) },
+    );
+    await pool.query(
+      "UPDATE workhorse.task_runtime SET run_at = clock_timestamp() - interval '1 second' WHERE task_id = $1",
+      [taskId],
+    );
+    await queue.tick();
+    await expect(
+      pool.query(
+        `SELECT outcome, rows_affected, jsonb_array_length(phases) AS phase_count
+           FROM workhorse.maintenance_run WHERE routine_name = 'tick'`,
+      ),
+    ).resolves.toMatchObject({
+      rows: [{ outcome: "succeeded", rows_affected: 1, phase_count: 2 }],
+    });
+
+    const secondTaskId = await queue.enqueue(
+      "maintenance-history-second",
+      {},
+      { runAt: new Date(Date.now() + 60_000) },
+    );
+    await pool.query(
+      "UPDATE workhorse.task_runtime SET run_at = clock_timestamp() - interval '1 second' WHERE task_id = $1",
+      [secondTaskId],
+    );
+    await queue.tick();
+    await expect(
+      pool.query(
+        "SELECT count(*)::integer AS count FROM workhorse.maintenance_run WHERE routine_name = 'tick'",
+      ),
+    ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+
+    await pool.query(`
+      SELECT workhorse.record_maintenance_run_internal_v1(
+        'history_partitions',
+        clock_timestamp() + make_interval(secs => sequence),
+        clock_timestamp() + make_interval(secs => sequence + 0.001),
+        'succeeded', sequence,
+        jsonb_build_array(jsonb_build_object(
+          'phase', 'history_partitions', 'rowsAffected', sequence,
+          'durationMs', 1, 'error', NULL
+        ))
+      )
+        FROM generate_series(1, 55) AS runs(sequence)
+    `);
+    await expect(
+      pool.query(
+        `SELECT count(*)::integer AS count, min(rows_affected)::integer AS oldest_retained
+           FROM workhorse.maintenance_run WHERE routine_name = 'history_partitions'`,
+      ),
+    ).resolves.toMatchObject({ rows: [{ count: 50, oldest_retained: 6 }] });
+
+    const dashboard = await pool.query<{
+      result: { maintenance: { routines: Array<{ routine: string; runs: unknown[] }> } };
+    }>(
+      `SELECT workhorse.dashboard_cron_v1(
+        '{"maintenanceLoops":{"tickIntervalMs":1000}}'::jsonb
+      ) AS result`,
+    );
+    expect(dashboard.rows[0]!.result.maintenance.routines).toContainEqual(
+      expect.objectContaining({
+        routine: "history_partitions",
+        recordedRunCount: 50,
+        runs: expect.arrayContaining([
+          expect.objectContaining({ outcome: "succeeded", rowsAffected: 55 }),
+        ]),
+      }),
+    );
+    const partitionRoutine = dashboard.rows[0]!.result.maintenance.routines.find(
+      (routine) => routine.routine === "history_partitions",
+    );
+    expect(partitionRoutine?.runs).toHaveLength(5);
+  });
+
   it("isolates housekeeping phases when partition replenishment fails", async () => {
     await pool.query(
       `INSERT INTO workhorse.schedule_definition(
@@ -235,6 +320,16 @@ describe("retention maintenance", () => {
         rowsAffected: 0,
         skippedLock: false,
         error: { message: "forced partition replenishment failure" },
+      });
+      await expect(
+        pool.query(
+          `SELECT outcome, phases->0->'error'->>'message' AS message
+             FROM workhorse.maintenance_run
+            WHERE routine_name = 'history_partitions'
+            ORDER BY started_at DESC, run_id DESC LIMIT 1`,
+        ),
+      ).resolves.toMatchObject({
+        rows: [{ outcome: "failed", message: "forced partition replenishment failure" }],
       });
       const retentionResults = await queue.retainHistory({ force: true });
       expect(retentionResults[2]).toMatchObject({

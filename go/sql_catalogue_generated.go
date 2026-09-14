@@ -95,7 +95,8 @@ var internalStatementRegistry = map[string]string{
          LEFT JOIN workhorse.schedule_occurrence occurrence
            ON occurrence.namespace = definition.namespace
           AND occurrence.schedule_name = definition.schedule_name
-        WHERE definition.enabled AND definition.namespace = ANY($1::text[])
+        WHERE definition.configured_enabled AND NOT definition.paused
+          AND definition.namespace = ANY($1::text[])
         GROUP BY definition.namespace, definition.schedule_name, definition.timezone
         ORDER BY definition.namespace, definition.schedule_name`,
 	"fire_schedule_v1": `SELECT workhorse.fire_schedule_v1($1::text, $2::text, $3::bigint, $4::timestamptz) AS task_id`,

@@ -370,6 +370,7 @@ interface DashboardIdempotencyEvidence
 type DashboardLifecycleState
 interface DashboardMaintenanceLoopCadences
 type DashboardMaintenancePolicy
+interface DashboardMaintenanceRun
 interface DashboardManagedQueueRow
 interface DashboardMetricBucket
 interface DashboardQueueRow
@@ -592,6 +593,7 @@ interface DashboardIdempotencyEvidence
 type DashboardLifecycleState
 interface DashboardMaintenanceLoopCadences
 type DashboardMaintenancePolicy
+interface DashboardMaintenanceRun
 interface DashboardManagedQueueRow
 interface DashboardMetricBucket
 interface DashboardQueueRow
@@ -1174,6 +1176,8 @@ interface DashboardCronPage {
       lastCompletedAt: string | null;
       due: boolean;
       incomplete: boolean;
+      recordedRunCount: number;
+      runs: DashboardMaintenanceRun[];
     }>;
   };
 }
@@ -1290,6 +1294,10 @@ interface DashboardEventsPage {
   capturedAt: string;
   window: DashboardEventsWindow;
   windowSeconds: number;
+  /** Inclusive lower bound used by the history query. */
+  rangeStart: string;
+  /** Exclusive upper bound used by the history query. */
+  rangeEnd: string;
   events: DashboardEventRow[];
   /** 1-based page index, matching the task listing. */
   page: number;
@@ -1442,6 +1450,26 @@ interface DashboardMaintenanceLoopCadences {
 type DashboardMaintenancePolicy = Omit<MaintenancePolicy, "updatedAt"> & {
   updatedAt: string;
 };
+
+interface DashboardMaintenanceRun {
+  id: string;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  outcome: "succeeded" | "failed" | "incomplete";
+  rowsAffected: number;
+  phases: Array<{
+    phase: string;
+    rowsAffected: number;
+    durationMs: number;
+    error: {
+      code: string;
+      message: string;
+    } | null;
+    expiredLeases?: number;
+    retried?: number;
+  }>;
+}
 
 interface DashboardManagedQueueRow {
   queue: string;
@@ -1732,8 +1760,8 @@ type DashboardRunNowStatus = "released" | "already_ready" | "not_scheduled" | "w
 type DashboardRuntimeConfig = z.infer<typeof dashboardRuntimeConfigSchema>;
 
 interface DashboardScheduleController {
-  setScheduleEnabled?: (namespace: string, name: string, enabled: boolean, audit: DashboardAuditContext) => Promise<{
-    enabled: boolean;
+  setSchedulePaused?: (namespace: string, name: string, paused: boolean, audit: DashboardAuditContext) => Promise<{
+    paused: boolean;
   }>;
 }
 
@@ -1751,7 +1779,13 @@ interface DashboardScheduleRow {
   type: string;
   /** User-task dispatch priority. System maintenance rows have no queue priority. */
   priority: number;
-  enabled: boolean;
+  /** Deployment-declared intent from the most recent namespace synchronization. */
+  configuredEnabled: boolean;
+  /** Durable operator override. Deployment synchronization never clears it. */
+  paused: boolean;
+  pausedBy: string | null;
+  pausedReason: string | null;
+  pausedAt: string | null;
   active: boolean;
   revision: string;
   updatedAt: string;
@@ -4815,6 +4849,8 @@ const dashboardRouter: {
         "6h": "6h";
         "24h": "24h";
       }>>;
+      rangeStart: z.ZodDefault<z.ZodNullable<z.ZodISODateTime>>;
+      rangeEnd: z.ZodDefault<z.ZodNullable<z.ZodISODateTime>>;
       page: z.ZodDefault<z.ZodNumber>;
       pageSize: z.ZodDefault<z.ZodUnion<readonly [z.ZodLiteral<25>, z.ZodLiteral<50>, z.ZodLiteral<100>]>>;
       kind: z.ZodDefault<z.ZodEnum<{
@@ -4948,20 +4984,20 @@ const dashboardRouter: {
         requestId: z.ZodString;
       }, z.core.$strip>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("./types.js").DashboardEnqueueTestResult, import("./types.js").DashboardEnqueueTestResult>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    setScheduleEnabled: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
+    setSchedulePaused: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
       kind: z.ZodLiteral<"user">;
       namespace: z.ZodString;
       name: z.ZodString;
-      enabled: z.ZodBoolean;
+      paused: z.ZodBoolean;
       audit: z.ZodObject<{
         actor: z.ZodString;
         reason: z.ZodString;
         requestId: z.ZodString;
       }, z.core.$strip>;
     }, z.core.$strip>, import("@orpc/server").Schema<{
-      enabled: boolean;
+      paused: boolean;
     }, {
-      enabled: boolean;
+      paused: boolean;
     }>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     setQueuePaused: import("@orpc/server").DecoratedProcedure<DashboardRpcContext & Record<never, never>, DashboardRpcContext, z.ZodObject<{
       queue: z.ZodString;

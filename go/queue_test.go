@@ -733,7 +733,7 @@ func TestQueueSynchronizesSchedulesInsideCallerTransaction(t *testing.T) {
 	}
 	rows, err := pool.Query(
 		ctx,
-		"SELECT schedule_name, enabled, revision FROM workhorse.schedule_definition WHERE namespace = $1 ORDER BY schedule_name",
+		"SELECT schedule_name, configured_enabled, revision FROM workhorse.schedule_definition WHERE namespace = $1 ORDER BY schedule_name",
 		"go-integration",
 	)
 	if err != nil {

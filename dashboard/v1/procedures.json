@@ -433,6 +433,32 @@
               "24h"
             ]
           },
+          "rangeStart": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rangeEnd": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "page": {
             "default": 1,
             "type": "integer",
@@ -898,8 +924,8 @@
         "$ref": "#/$defs/DashboardEnqueueTestResult"
       }
     },
-    "setScheduleEnabled": {
-      "path": "/rpc/dashboard/setScheduleEnabled",
+    "setSchedulePaused": {
+      "path": "/rpc/dashboard/setSchedulePaused",
       "mutation": true,
       "input": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -917,7 +943,7 @@
             "type": "string",
             "minLength": 1
           },
-          "enabled": {
+          "paused": {
             "type": "boolean"
           },
           "audit": {
@@ -947,19 +973,19 @@
           "kind",
           "namespace",
           "name",
-          "enabled",
+          "paused",
           "audit"
         ]
       },
       "output": {
         "type": "object",
         "properties": {
-          "enabled": {
+          "paused": {
             "type": "boolean"
           }
         },
         "required": [
-          "enabled"
+          "paused"
         ]
       }
     },
@@ -2381,6 +2407,15 @@
                   },
                   "incomplete": {
                     "type": "boolean"
+                  },
+                  "recordedRunCount": {
+                    "type": "number"
+                  },
+                  "runs": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/DashboardMaintenanceRun"
+                    }
                   }
                 },
                 "required": [
@@ -2388,7 +2423,9 @@
                   "lastStartedAt",
                   "lastCompletedAt",
                   "due",
-                  "incomplete"
+                  "incomplete",
+                  "recordedRunCount",
+                  "runs"
                 ]
               }
             }
@@ -2773,6 +2810,12 @@
         "windowSeconds": {
           "type": "number"
         },
+        "rangeStart": {
+          "type": "string"
+        },
+        "rangeEnd": {
+          "type": "string"
+        },
         "events": {
           "type": "array",
           "items": {
@@ -2822,6 +2865,8 @@
         "capturedAt",
         "window",
         "windowSeconds",
+        "rangeStart",
+        "rangeEnd",
         "events",
         "page",
         "pageSize",
@@ -3190,6 +3235,93 @@
         "statisticsRecomputeBuckets",
         "provenance",
         "updatedAt"
+      ]
+    },
+    "DashboardMaintenanceRun": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "completedAt": {
+          "type": "string"
+        },
+        "durationMs": {
+          "type": "number"
+        },
+        "outcome": {
+          "enum": [
+            "failed",
+            "incomplete",
+            "succeeded"
+          ]
+        },
+        "rowsAffected": {
+          "type": "number"
+        },
+        "phases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "phase": {
+                "type": "string"
+              },
+              "rowsAffected": {
+                "type": "number"
+              },
+              "durationMs": {
+                "type": "number"
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "code": {
+                        "type": "string"
+                      },
+                      "message": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "code",
+                      "message"
+                    ]
+                  }
+                ]
+              },
+              "expiredLeases": {
+                "type": "number"
+              },
+              "retried": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "phase",
+              "rowsAffected",
+              "durationMs",
+              "error"
+            ]
+          }
+        }
+      },
+      "required": [
+        "id",
+        "startedAt",
+        "completedAt",
+        "durationMs",
+        "outcome",
+        "rowsAffected",
+        "phases"
       ]
     },
     "DashboardManagedQueueRow": {
@@ -4129,8 +4261,41 @@
         "priority": {
           "type": "number"
         },
-        "enabled": {
+        "configuredEnabled": {
           "type": "boolean"
+        },
+        "paused": {
+          "type": "boolean"
+        },
+        "pausedBy": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "pausedReason": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "pausedAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
         },
         "active": {
           "type": "boolean"
@@ -4167,7 +4332,11 @@
         "queue",
         "type",
         "priority",
-        "enabled",
+        "configuredEnabled",
+        "paused",
+        "pausedBy",
+        "pausedReason",
+        "pausedAt",
         "active",
         "revision",
         "updatedAt",

@@ -141,18 +141,21 @@ func newDashboardConformanceHandler(t *testing.T, harness dashboardHarness, exec
 			}
 			return map[string]any{"taskId": taskID}, nil
 		}
-		procedures["setScheduleEnabled"] = func(ctx context.Context, input any, _ string) (any, error) {
+		procedures["setSchedulePaused"] = func(ctx context.Context, input any, actor string) (any, error) {
 			value := input.(map[string]any)
 			rows, err := executor.Query(ctx, `UPDATE workhorse.schedule_definition
-SET enabled=$1,revision=revision+1,updated_at=clock_timestamp()
-WHERE namespace=$2 AND schedule_name=$3 RETURNING enabled`, value["enabled"], value["namespace"], value["name"])
+SET paused=$1,paused_by=CASE WHEN $1 THEN $4 ELSE NULL END,
+paused_reason=CASE WHEN $1 THEN $5 ELSE NULL END,
+paused_at=CASE WHEN $1 THEN clock_timestamp() ELSE NULL END,
+revision=revision+1,updated_at=clock_timestamp()
+WHERE namespace=$2 AND schedule_name=$3 RETURNING paused`, value["paused"], value["namespace"], value["name"], actor, "Dashboard operator request")
 			if err != nil {
 				return nil, err
 			}
 			if len(rows) != 1 {
-				return nil, fmt.Errorf("setScheduleEnabled updated %d schedules", len(rows))
+				return nil, fmt.Errorf("setSchedulePaused updated %d schedules", len(rows))
 			}
-			return map[string]any{"enabled": rows[0]["enabled"]}, nil
+			return map[string]any{"paused": rows[0]["paused"]}, nil
 		}
 	}
 	handler, err := NewHandler(HandlerOptions{

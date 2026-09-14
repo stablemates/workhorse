@@ -334,6 +334,10 @@ export interface DashboardEventsQuery {
   worker?: string | null;
   search?: string | null;
   window?: DashboardEventsWindow;
+  /** Inclusive ISO-8601 lower bound. Must be supplied with `rangeEnd`. */
+  rangeStart?: string | null;
+  /** Exclusive ISO-8601 upper bound. Must be supplied with `rangeStart`. */
+  rangeEnd?: string | null;
   /** 1-based page index. */
   page?: number;
   pageSize?: number;

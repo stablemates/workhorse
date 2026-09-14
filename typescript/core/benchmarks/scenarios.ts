@@ -1831,15 +1831,18 @@ async function cancellationLifecycle(
     (await context.admin.getTask(nextOccurrenceId!))?.state,
     "ready",
   );
-  const enabledSchedule = await context.pool.query<{ enabled: boolean }>(
-    `SELECT enabled FROM workhorse.schedule_definition
+  const enabledSchedule = await context.pool.query<{
+    configured_enabled: boolean;
+    paused: boolean;
+  }>(
+    `SELECT configured_enabled, paused FROM workhorse.schedule_definition
       WHERE namespace = $1 AND schedule_name = $2`,
     [scheduleNamespace, schedule.name],
   );
   recordInvariant(
     assertions,
     "canceling an occurrence leaves schedule enabled",
-    enabledSchedule.rows[0]?.enabled,
+    enabledSchedule.rows[0]?.configured_enabled && !enabledSchedule.rows[0]?.paused,
     true,
   );
 
