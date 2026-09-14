@@ -42,6 +42,55 @@ function optionalValue(parameters: URLSearchParams, key: string): string | null 
   return parameters.get(key)?.trim() || null;
 }
 
+const taskCursorVersion = "v1";
+
+function validTaskCursor(candidate: unknown): candidate is DashboardTaskCursor {
+  if (!candidate || typeof candidate !== "object") return false;
+  const cursor = candidate as Partial<DashboardTaskCursor>;
+  return (
+    typeof cursor.id === "string" &&
+    /^[0-9a-f-]{36}$/i.test(cursor.id) &&
+    typeof cursor.updatedAt === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(cursor.updatedAt) &&
+    Number.isFinite(Date.parse(cursor.updatedAt)) &&
+    typeof cursor.priority === "number" &&
+    Number.isInteger(cursor.priority) &&
+    cursor.priority >= 0 &&
+    cursor.priority <= 100
+  );
+}
+
+/** The location owns the cursor representation; callers only carry the returned token. */
+function encodeTaskCursor(cursor: DashboardTaskCursor): string {
+  const payload = btoa(JSON.stringify([cursor.id, cursor.updatedAt, cursor.priority]))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+  return `${taskCursorVersion}.${payload}`;
+}
+
+function decodeTaskCursor(encoded: string): DashboardTaskCursor | null {
+  try {
+    if (encoded.startsWith(`${taskCursorVersion}.`)) {
+      const payload = encoded.slice(taskCursorVersion.length + 1);
+      if (!/^[A-Za-z0-9_-]+$/.test(payload)) return null;
+      const base64 = payload.replaceAll("-", "+").replaceAll("_", "/");
+      const decoded = JSON.parse(
+        atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, "=")),
+      ) as unknown;
+      if (!Array.isArray(decoded) || decoded.length !== 3) return null;
+      const candidate = { id: decoded[0], updatedAt: decoded[1], priority: decoded[2] };
+      return validTaskCursor(candidate) ? candidate : null;
+    }
+
+    // URLs generated before SM-728 exposed the cursor as JSON. Keep them usable as bookmarks.
+    const candidate = JSON.parse(encoded) as unknown;
+    return validTaskCursor(candidate) ? candidate : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * How a change of the open task should enter browser history.
  *
@@ -82,26 +131,8 @@ export function parseTaskLocation(
     .slice(0, 20);
   const requestedTaskId = optionalValue(parameters, "task");
 
-  let cursor: DashboardTaskCursor | null = null;
   const encoded = optionalValue(parameters, "cursor");
-  if (encoded && encoded.length <= 500) {
-    try {
-      const candidate = JSON.parse(encoded) as DashboardTaskCursor;
-      if (
-        typeof candidate.id === "string" &&
-        /^[0-9a-f-]{36}$/i.test(candidate.id) &&
-        typeof candidate.updatedAt === "string" &&
-        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(candidate.updatedAt) &&
-        Number.isFinite(Date.parse(candidate.updatedAt)) &&
-        Number.isInteger(candidate.priority) &&
-        candidate.priority >= 0 &&
-        candidate.priority <= 100
-      )
-        cursor = candidate;
-    } catch {
-      /* Ignore malformed location state. */
-    }
-  }
+  const cursor = encoded && encoded.length <= 500 ? decodeTaskCursor(encoded) : null;
   return {
     ...(cursor
       ? {
@@ -143,7 +174,7 @@ export function taskLocationHref(state: TaskLocationState): string {
   if (state.taskType) parameters.set("type", state.taskType);
   if (state.sort !== "updated") parameters.set("sort", state.sort);
   if (state.cursor) {
-    parameters.set("cursor", JSON.stringify(state.cursor));
+    parameters.set("cursor", encodeTaskCursor(state.cursor));
     if (state.direction === "previous") parameters.set("direction", "previous");
   }
   if (state.page > 1) parameters.set("page", String(state.page));
