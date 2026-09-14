@@ -15,6 +15,28 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 `0.1.0` the schema upgrades in place: every release ships ordered, immutable migrations, and inside
 a major line a migration only adds. Breaking changes are always listed with upgrade steps.
 
+## 0.1.5 — 2026-09-14
+
+The npm packages, Python distribution, and Go module release from one source commit.
+
+Requires **schema v1**, Node.js **22** or newer, and PostgreSQL **15** or newer.
+
+**A 0.1.4 database must be dropped and reinstalled.** This release re-cuts schema v1 to separate
+deployment-owned schedule activation from durable operator pauses and to retain maintenance-run
+history; no migration exists between 0.1.4 and 0.1.5.
+
+- Preserve operator schedule pauses across deployment synchronization, removal, and re-addition.
+  The dashboard distinguishes deployment configuration from the effective state and requires
+  confirmation before Resume can enqueue bounded catch-up occurrences.
+- Record recent maintenance executions with phase timings, errors, and affected-row counts. The
+  Schedules page shows those runs and supports exact event time ranges.
+- Use opaque, versioned task cursor URLs while continuing to accept old JSON cursors, link task
+  menus directly to scoped event history, and keep event pagination beside its table.
+- Report the version of the TypeScript, Python, or Go SDK serving the dashboard instead of baking a
+  version into the shared browser bundle.
+- Publish deployment guidance for Kubernetes, schema-first rollouts, worker draining, connection
+  budgets, and host administration.
+
 ## 0.1.4 — 2026-09-11
 
 The npm packages, Python distribution, and Go module release from one source commit.

@@ -8,6 +8,26 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## 0.1.5 — 2026-09-14
+
+The npm packages, Python distribution, and Go module release from one source commit.
+
+Requires **schema v1** and Go **1.25** or newer.
+
+**A 0.1.4 database must be dropped and reinstalled.** This release re-cuts schema v1 to separate
+deployment-owned schedule activation from durable operator pauses and to retain maintenance-run
+history; no migration exists between 0.1.4 and 0.1.5.
+
+- Preserve operator schedule pauses across deployment synchronization, removal, and re-addition,
+  and expose the configured, paused, and effective states through the dashboard bindings.
+- Record recent maintenance executions with phase timings, errors, and affected-row counts. The
+  shared dashboard shows those runs and supports exact event time ranges.
+- Use opaque, versioned task cursor URLs while continuing to accept old JSON cursors, and link task
+  menus directly to scoped event history.
+- Report the Go module version from the dashboard host instead of baking a version into the shared
+  browser bundle.
+- Update the OpenTelemetry dependencies to their current supported releases.
+
 ## 0.1.4 — 2026-09-11
 
 The npm packages, Python distribution, and Go module release from one source commit.

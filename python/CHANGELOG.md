@@ -8,6 +8,26 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## 0.1.5 — 2026-09-14
+
+The npm packages, Python distribution, and Go module release from one source commit.
+
+Requires **schema v1** and Python **3.12** or newer.
+
+**A 0.1.4 database must be dropped and reinstalled.** This release re-cuts schema v1 to separate
+deployment-owned schedule activation from durable operator pauses and to retain maintenance-run
+history; no migration exists between 0.1.4 and 0.1.5.
+
+- Preserve operator schedule pauses across deployment synchronization, removal, and re-addition,
+  and expose the configured, paused, and effective states through the dashboard bindings.
+- Record recent maintenance executions with phase timings, errors, and affected-row counts. The
+  shared dashboard shows those runs and supports exact event time ranges.
+- Defer `SIGINT` and `SIGTERM` shutdown through a nonblocking self-pipe, so the signal handler stays
+  responsive while worker state is locked and a second signal can still force an exit.
+- Verify and document transactional enqueue through SQLAlchemy's synchronous connection accessor.
+- Report the Python distribution version from the dashboard host instead of baking a version into
+  the shared browser bundle.
+
 ## 0.1.4 — 2026-09-11
 
 The npm packages, Python distribution, and Go module release from one source commit.
