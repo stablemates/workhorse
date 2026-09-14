@@ -92,6 +92,8 @@ describe("schema migrations", () => {
       fixtureDatabase.pool.query("DROP SCHEMA workhorse CASCADE"),
       fixtureCleanDatabase.pool.query("DROP SCHEMA workhorse CASCADE"),
     ]);
+    await contractDatabase.pool.query("DELETE FROM workhorse.schema_migration WHERE version > 1");
+    await contractDatabase.pool.query("UPDATE workhorse.schema_version SET version = 1");
     // The released-artifact loop seeds history rows into a fixed history day, and a partition is a
     // schema object. The clean installation the loop compares dumps against creates the same day so
     // the comparison stays byte-for-byte on everything else.
@@ -467,7 +469,7 @@ describe("schema migrations", () => {
       const protocols = await releaseDatabase.pool.query<{ version: number }>(
         "SELECT version FROM workhorse.protocol_version ORDER BY version",
       );
-      expect(protocols.rows).toEqual([{ version: 1 }]);
+      expect(protocols.rows).toEqual([{ version: 1 }, { version: 2 }]);
       const migrations = await releaseDatabase.pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_migration ORDER BY version",
       );

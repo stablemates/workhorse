@@ -63,7 +63,7 @@ func TestCompatibilityFixtures(t *testing.T) {
 }
 
 func TestAssertSchemaCompatibleChecksEveryCall(t *testing.T) {
-	executor := &recordingExecutor{rows: []workhorse.Row{{"kind": "schema", "version": int32(testSchemaVersion)}, {"kind": "protocol", "version": int32(1)}}}
+	executor := &recordingExecutor{rows: []workhorse.Row{{"kind": "schema", "version": int32(testSchemaVersion)}, {"kind": "protocol", "version": int32(workhorse.ProtocolVersion)}}}
 
 	for range 2 {
 		if err := workhorse.AssertSchemaCompatible(context.Background(), executor); err != nil {
@@ -77,7 +77,7 @@ func TestAssertSchemaCompatibleChecksEveryCall(t *testing.T) {
 }
 
 func TestCachedCompatibilityCheckQueriesOnce(t *testing.T) {
-	executor := &recordingExecutor{rows: []workhorse.Row{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(1)}}}
+	executor := &recordingExecutor{rows: []workhorse.Row{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(workhorse.ProtocolVersion)}}}
 	check := workhorse.NewCachedCompatibilityCheck(executor)
 
 	for range 2 {

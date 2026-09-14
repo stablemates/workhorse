@@ -16,7 +16,7 @@ from workhorse import (
     RateLimit,
     RateLimitPolicyDefinition,
 )
-from workhorse._statements import MINIMUM_SCHEMA_VERSION
+from workhorse._statements import MINIMUM_SCHEMA_VERSION, PROTOCOL_VERSION
 
 
 def test_sync_client_synchronizes_and_maps_concurrency_policies() -> None:
@@ -25,7 +25,7 @@ def test_sync_client_synchronizes_and_maps_concurrency_policies() -> None:
         [
             [
                 {"kind": "schema", "version": MINIMUM_SCHEMA_VERSION},
-                {"kind": "protocol", "version": 1},
+                {"kind": "protocol", "version": PROTOCOL_VERSION},
             ],
             [
                 {

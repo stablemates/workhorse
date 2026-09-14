@@ -376,6 +376,14 @@
         "schedules[].active": {
           "type": "boolean"
         },
+        "schedules[].catchupPolicy": {
+          "type": "enum",
+          "enum": [
+            "all",
+            "latest",
+            "skip"
+          ]
+        },
         "schedules[].configuredEnabled": {
           "type": "boolean"
         },

@@ -100,6 +100,7 @@ def serialize_schedules(definitions: Sequence[ScheduleDefinition], default_queue
                 "name": definition.name,
                 "schedule": definition.schedule,
                 "timezone": definition.timezone,
+                "catchupPolicy": definition.catchup_policy,
                 "enabled": definition.enabled,
                 "queue": task.queue or default_queue,
                 "priority": task.priority,

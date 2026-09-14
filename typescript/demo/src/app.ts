@@ -564,6 +564,7 @@ function heartbeatSchedule(enabled = true) {
   return {
     name: HEARTBEAT_SCHEDULE_NAME,
     schedule: "* * * * *",
+    catchupPolicy: "latest",
     enabled,
     task: {
       type: RECURRING_TASK_TYPE,
@@ -625,6 +626,7 @@ function longRunningSchedule(enabled = true) {
   return {
     name: LONG_RUNNING_SCHEDULE_NAME,
     schedule: "* * * * *",
+    catchupPolicy: "latest",
     enabled,
     task: {
       type: LONG_RUNNING_TASK_TYPE,
@@ -1093,15 +1095,10 @@ export function createLocalScheduleController(database: DemoDatabase): ScheduleC
         `);
         if (before.rows.length === 0) throw new Error(`Schedule ${namespace}/${name} not found`);
         const updated = await transaction.execute<{ paused: boolean }>(sql`
-          UPDATE workhorse.schedule_definition
-             SET paused = ${paused},
-                 paused_by = CASE WHEN ${paused} THEN ${audit.actor} ELSE NULL END,
-                 paused_reason = CASE WHEN ${paused} THEN ${audit.reason} ELSE NULL END,
-                 paused_at = CASE WHEN ${paused}
-                   THEN ${audit.occurredAt ?? new Date().toISOString()}::timestamptz ELSE NULL END,
-                 revision = revision + 1, updated_at = clock_timestamp()
-           WHERE namespace = ${namespace} AND schedule_name = ${name}
-           RETURNING paused
+          SELECT workhorse.set_schedule_paused_v1(
+            ${namespace}, ${name}, ${paused}, ${audit.actor}, ${audit.reason},
+            ${audit.occurredAt ?? new Date().toISOString()}::timestamptz
+          ) AS paused
         `);
         await transaction.execute(sql`
           INSERT INTO public.workhorse_demo_audit

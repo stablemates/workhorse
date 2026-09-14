@@ -2428,6 +2428,7 @@
                     "pausedAt": null,
                     "pausedBy": null,
                     "priority": 0,
+                    "catchupPolicy": "skip",
                     "revision": "1",
                     "namespace": "conformance",
                     "updatedAt": {

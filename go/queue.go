@@ -135,14 +135,24 @@ type ScheduledTask struct {
 	RetryPolicy    map[string]any
 }
 
+// ScheduleCatchupPolicy controls occurrences missed between worker evaluations.
+type ScheduleCatchupPolicy string
+
+const (
+	ScheduleCatchupSkip   ScheduleCatchupPolicy = scheduleCatchupSkipValue
+	ScheduleCatchupLatest ScheduleCatchupPolicy = scheduleCatchupLatestValue
+	ScheduleCatchupAll    ScheduleCatchupPolicy = scheduleCatchupAllValue
+)
+
 // ScheduleDefinition is one desired recurring schedule.
 // A nil Enabled value enables the definition by default.
 type ScheduleDefinition struct {
-	Name     string
-	Schedule string
-	Timezone string
-	Task     ScheduledTask
-	Enabled  *bool
+	Name          string
+	Schedule      string
+	Timezone      string
+	CatchupPolicy ScheduleCatchupPolicy
+	Task          ScheduledTask
+	Enabled       *bool
 }
 
 // SyncSchedulesOptions controls desired-state reconciliation.
@@ -559,6 +569,7 @@ type scheduleInput struct {
 	Name                 string   `json:"name"`
 	Schedule             string   `json:"schedule"`
 	Timezone             string   `json:"timezone"`
+	CatchupPolicy        string   `json:"catchupPolicy"`
 	Enabled              bool     `json:"enabled"`
 	Queue                string   `json:"queue"`
 	Priority             int      `json:"priority"`
@@ -600,8 +611,16 @@ func serializeScheduleDefinitions(definitions []ScheduleDefinition, defaultQueue
 		if timezone == emptyString {
 			timezone = defaultScheduleTimezone
 		}
+		catchupPolicy := definition.CatchupPolicy
+		if catchupPolicy == ScheduleCatchupPolicy(emptyString) {
+			catchupPolicy = ScheduleCatchupSkip
+		}
+		if catchupPolicy != ScheduleCatchupSkip && catchupPolicy != ScheduleCatchupLatest && catchupPolicy != ScheduleCatchupAll {
+			return nil, fmt.Errorf(scheduleDefinitionErrorFormat, index+1, ErrInvalidScheduleDefinition)
+		}
 		input[index] = scheduleInput{
-			Name: definition.Name, Schedule: definition.Schedule, Timezone: timezone, Enabled: enabled,
+			Name: definition.Name, Schedule: definition.Schedule, Timezone: timezone,
+			CatchupPolicy: string(catchupPolicy), Enabled: enabled,
 			Queue: queueName, Priority: definition.Task.Priority,
 			ConcurrencyKey: nilIfEmpty(definition.Task.ConcurrencyKey), Type: definition.Task.Type,
 			Payload: definition.Task.Payload, MaxAttempts: maxAttempts,

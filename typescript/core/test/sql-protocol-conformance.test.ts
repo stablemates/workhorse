@@ -42,7 +42,14 @@ import type {
   SuspensionReplayRuntimeFixture,
   TracePropagationRuntimeFixture,
 } from "../../../scripts/verify-sql-protocol.js";
-import { Admin, Queue, Worker, WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
+import {
+  Admin,
+  MINIMUM_SCHEMA_VERSION,
+  PROTOCOL_VERSION,
+  Queue,
+  Worker,
+  WORKHORSE_SCHEMA_VERSION,
+} from "../src/index.js";
 import { createDatabaseTestHarness } from "./support/db.js";
 
 const compatibilityDatabase = createDatabaseTestHarness(
@@ -744,13 +751,13 @@ describe("SQL protocol conformance fixtures", () => {
 
     expect(fixtures.manifest).toMatchObject({
       formatVersion: 1,
-      protocolVersion: 1,
+      protocolVersion: PROTOCOL_VERSION,
       schema: {
         installedVersion: WORKHORSE_SCHEMA_VERSION,
-        minimumVersion: WORKHORSE_SCHEMA_VERSION,
+        minimumVersion: MINIMUM_SCHEMA_VERSION,
         maximumVersion: WORKHORSE_SCHEMA_VERSION,
       },
-      supportedClientProtocol: { minimumVersion: 1, maximumVersion: 1 },
+      supportedClientProtocol: { minimumVersion: 1, maximumVersion: PROTOCOL_VERSION },
       views: [
         expect.objectContaining({ name: "dashboard_signal_wait_v1" }),
         expect.objectContaining({ name: "dashboard_human_wait_v1" }),
@@ -799,7 +806,7 @@ describe("SQL protocol conformance fixtures", () => {
     const fixtures = await loadSqlProtocolFixtures(repository);
     try {
       await expect(
-        assertSqlProtocolCompatible(compatibilityDatabase.pool, fixtures.manifest, 2),
+        assertSqlProtocolCompatible(compatibilityDatabase.pool, fixtures.manifest, 3),
       ).rejects.toMatchObject({
         name: "SqlProtocolCompatibilityError",
         code: "client-protocol-too-new",
@@ -810,7 +817,7 @@ describe("SQL protocol conformance fixtures", () => {
         // Below the supported minimum, which is 1 now that the baseline was reset.
         await client.query("UPDATE workhorse.schema_version SET version = 0");
         await expect(
-          assertSqlProtocolCompatible(client, fixtures.manifest, 1),
+          assertSqlProtocolCompatible(client, fixtures.manifest, PROTOCOL_VERSION),
         ).rejects.toMatchObject({
           name: "SqlProtocolCompatibilityError",
           code: "schema-too-old",

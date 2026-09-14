@@ -9,7 +9,7 @@ from protocol_fixtures import assert_fixture_execution, read_protocol_fixture
 from test_protocol_conformance import assert_value
 
 from workhorse import EnqueueOptions, EnqueueRequest, Idempotency, ProtocolCompatibilityError, Queue
-from workhorse._statements import MINIMUM_SCHEMA_VERSION
+from workhorse._statements import MINIMUM_SCHEMA_VERSION, PROTOCOL_VERSION
 
 
 class Cursor:
@@ -51,7 +51,7 @@ def test_serializes_every_shared_request_fixture_and_returns_the_canonical_resul
             [
                 [
                     {"kind": "schema", "version": MINIMUM_SCHEMA_VERSION},
-                    {"kind": "protocol", "version": 1},
+                    {"kind": "protocol", "version": PROTOCOL_VERSION},
                 ],
                 [
                     {
@@ -121,7 +121,7 @@ def test_cancel_returns_postgres_cancellation_metadata() -> None:
         [
             [
                 {"kind": "schema", "version": MINIMUM_SCHEMA_VERSION},
-                {"kind": "protocol", "version": 1},
+                {"kind": "protocol", "version": PROTOCOL_VERSION},
             ],
             [
                 {
@@ -162,7 +162,7 @@ def test_batch_preserves_result_order() -> None:
         [
             [
                 {"kind": "schema", "version": MINIMUM_SCHEMA_VERSION},
-                {"kind": "protocol", "version": 1},
+                {"kind": "protocol", "version": PROTOCOL_VERSION},
             ],
             [
                 {"ordinal": 1, "task_id": "one", "outcome": "accepted", "reason": None},

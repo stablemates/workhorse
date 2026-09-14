@@ -2413,6 +2413,12 @@ describe("Workhorse demo", () => {
 
   it("fires a recurring definition and exposes its occurrence and task in the dashboard", async () => {
     await syncDemoSchedules(pool);
+    await pool.query(
+      `UPDATE workhorse.schedule_definition
+          SET last_evaluated_at = clock_timestamp() - interval '1 hour'
+        WHERE namespace = $1 AND schedule_name = ANY($2::text[])`,
+      [DEMO_SCHEDULE_NAMESPACE, [HEARTBEAT_SCHEDULE_NAME, LONG_RUNNING_SCHEDULE_NAME]],
+    );
     const { app, workhorse } = createTestApplication();
     workhorse.start();
 

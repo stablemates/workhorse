@@ -18,6 +18,7 @@ await queue.syncSchedules(
       name: "nightly-invoice-run",
       schedule: nightlyCron,
       timezone: "America/New_York",
+      catchupPolicy: "skip",
       task: { type: "generate-invoices", payload: {} },
     },
   ],
@@ -39,6 +40,16 @@ separate operator override, so later synchronization cannot resume the schedule.
 stays paused when a deployment updates, removes, or re-adds its definition. Resume it explicitly
 from the dashboard.
 
+## Choosing what happens after a gap
+
+Workhorse skips missed occurrences by default. A worker evaluates the current maintenance window,
+then waits for the next occurrence. This prevents a schedule pause or worker outage from creating
+a task backlog.
+
+Set `catchupPolicy` to `latest` when one current task can replace the missed work. Set it to `all`
+when every occurrence must create a task. The worker's catch-up limit bounds each `all` pass, and
+later passes continue until the schedule catches up.
+
 ## Why it can't fire twice
 
 Several workers are running. They all offer the same namespace when the schedule may be due.
@@ -52,7 +63,7 @@ race and the outcome is one task.
 
 TypeScript workers select definitions with `scheduleNamespaces`. Python workers use
 `schedule_namespaces`, and Go workers use `WorkerOptions.ScheduleNamespaces`. Each worker asks
-`fire_due_schedules_v1` to evaluate the namespaces it offers. PostgreSQL coordinates each
+`fire_due_schedules_v2` to evaluate the namespaces it offers. PostgreSQL coordinates each
 namespace, so different namespace sets can make progress independently.
 
 Workers offer namespaces, not private copies of schedule definitions. PostgreSQL stores the current
@@ -76,9 +87,9 @@ becomes a no-op.
 
 ## Things to know
 
-- **Schedules only fire while a worker is running** with a matching namespace. Nothing fires
-  if the whole fleet is down; when workers come back, catch-up is bounded rather than
-  replaying every missed occurrence.
+- **Schedules only fire while a worker is running** with a matching namespace. When workers
+  return, the definition's catch-up policy decides whether Workhorse skips, coalesces, or replays
+  missed occurrences.
 - **Firing waits for the next maintenance tick.** This is not a real-time scheduler.
 - **Store the intended IANA timezone** on each definition. UTC avoids clock changes. If local clocks
   skip a scheduled time, Workhorse fires after the clock advances. If clocks repeat a time,

@@ -171,11 +171,11 @@ func TestQueueSynchronizesAndListsRateLimitPoliciesThroughDatabaseSQL(t *testing
 }
 
 func TestPolicySynchronizationRefusesIncompatibleSchemaBeforeMutation(t *testing.T) {
-	// The installed schema declares that it serves protocol 2 only, so it has crossed a major
+	// The installed schema declares that it serves a later protocol only, so it has crossed a major
 	// boundary and no longer answers this client. A newer schema version alone is not a refusal.
 	executor := &queueExecutor{responses: [][]workhorse.Row{{
 		{"kind": "schema", "version": int64(5)},
-		{"kind": "protocol", "version": int64(2)},
+		{"kind": "protocol", "version": int64(workhorse.ProtocolVersion + 1)},
 	}}}
 	queue := workhorse.NewQueue(executor, "default")
 

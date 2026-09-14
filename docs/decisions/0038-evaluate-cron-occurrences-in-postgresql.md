@@ -1,6 +1,6 @@
 # ADR 0038: Evaluate cron occurrences in PostgreSQL
 
-- **Status:** Accepted
+- **Status:** Accepted, amended by [ADR 0066](0066-skip-missed-schedule-occurrences-by-default.md)
 - **Date:** 2026-08-22
 - **Amends:** [ADR 0003](0003-worker-owned-scheduler.md)
 - **Related:** [ADR 0025](0025-worker-schedule-cadence.md)

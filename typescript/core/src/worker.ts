@@ -309,7 +309,12 @@ export interface WorkerQueueApi {
     revision: bigint,
     occurrenceAt: Date,
   ): Promise<string | null>;
-  fireDueSchedules(namespaces: readonly string[], now: Date, catchupLimit: number): Promise<void>;
+  fireDueSchedules(
+    namespaces: readonly string[],
+    now: Date,
+    catchupLimit: number,
+    evaluationWindowMs: number,
+  ): Promise<void>;
   registerWorker(registration: WorkerRegistration): Promise<{ paused: boolean }>;
   deregisterWorker(workerId: string): Promise<boolean>;
   pruneWorkerRegistry(maxAgeMs?: number): Promise<number>;
@@ -1683,6 +1688,7 @@ export class Worker {
           this.scheduleNamespaces,
           new Date(),
           this.scheduleCatchupLimit,
+          this.maintenanceIntervalMs,
         );
       }
     }

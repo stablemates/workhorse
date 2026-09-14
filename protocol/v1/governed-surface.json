@@ -195,6 +195,16 @@
         "task_id": "uuid"
       }
     },
+    "fire_due_schedules_v2": {
+      "arguments": ["text[]", "timestamptz", "integer", "bigint"],
+      "returns": "table",
+      "returnsColumns": {
+        "namespace": "text",
+        "occurrence_at": "timestamptz",
+        "schedule_name": "text",
+        "task_id": "uuid"
+      }
+    },
     "fire_schedule_v1": {
       "arguments": ["text", "text", "bigint", "timestamptz?"],
       "returns": "uuid"
@@ -531,6 +541,10 @@
       "arguments": ["text", "boolean", "text", "text", "text"],
       "returns": "boolean"
     },
+    "set_schedule_paused_v1": {
+      "arguments": ["text", "text", "boolean", "text", "text", "timestamptz?"],
+      "returns": "boolean"
+    },
     "set_worker_paused_v1": {
       "arguments": ["text", "boolean", "text", "text", "text"],
       "returns": "table",
@@ -628,6 +642,10 @@
       "returns": "workhorse.retention_policy"
     },
     "sync_schedule_definitions_v1": {
+      "arguments": ["text", "jsonb", "boolean?"],
+      "returns": "void"
+    },
+    "sync_schedule_definitions_v2": {
       "arguments": ["text", "jsonb", "boolean?"],
       "returns": "void"
     },
@@ -811,6 +829,7 @@
     "dashboard_schedule_definition_v1": {
       "kind": "view",
       "columns": {
+        "catchup_policy": "text",
         "configured_enabled": "boolean",
         "cron_expression": "text",
         "namespace": "text",
@@ -1060,6 +1079,7 @@
     "schedule_definition": {
       "kind": "table",
       "columns": {
+        "catchup_policy": "text",
         "concurrency_key": "text",
         "configured_enabled": "boolean",
         "contract_version": "text",

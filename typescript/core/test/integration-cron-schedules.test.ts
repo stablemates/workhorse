@@ -37,10 +37,11 @@ class ScheduleEvaluationQueue extends Queue {
     namespaces: readonly string[],
     _now: Date,
     catchupLimit: number,
+    evaluationWindowMs: number,
   ): Promise<void> {
     await this.coordination.before?.();
     try {
-      await super.fireDueSchedules(namespaces, this.evaluationAt, catchupLimit);
+      await super.fireDueSchedules(namespaces, this.evaluationAt, catchupLimit, evaluationWindowMs);
     } finally {
       this.coordination.after?.();
     }
@@ -371,6 +372,102 @@ describe("cron schedules", () => {
     ).toBe(1);
   });
 
+  it("skips missed occurrences by default and supports latest or all catch-up", async () => {
+    await queue.syncSchedules("catchup-policies", [
+      {
+        name: "skip",
+        schedule: "0 * * * * *",
+        task: { type: "cron-skip", payload: null },
+      },
+      {
+        name: "latest",
+        schedule: "0 * * * * *",
+        catchupPolicy: "latest",
+        task: { type: "cron-latest", payload: null },
+      },
+      {
+        name: "all",
+        schedule: "0 * * * * *",
+        catchupPolicy: "all",
+        task: { type: "cron-all", payload: null },
+      },
+    ]);
+    await pool.query(
+      `UPDATE workhorse.schedule_definition
+          SET last_evaluated_at = '2026-09-14T10:00:30Z'
+        WHERE namespace = 'catchup-policies'`,
+    );
+
+    await queue.fireDueSchedules(["catchup-policies"], new Date("2026-09-14T10:05:30Z"), 2, 1_000);
+
+    const occurrences = await pool.query<{ schedule_name: string; occurrence_at: Date }>(
+      `SELECT schedule_name, occurrence_at
+         FROM workhorse.schedule_occurrence
+        WHERE namespace = 'catchup-policies'
+        ORDER BY schedule_name, occurrence_at`,
+    );
+    expect(
+      occurrences.rows.map((row) => [row.schedule_name, row.occurrence_at.toISOString()]),
+    ).toEqual([
+      ["all", "2026-09-14T10:01:00.000Z"],
+      ["all", "2026-09-14T10:02:00.000Z"],
+      ["latest", "2026-09-14T10:05:00.000Z"],
+    ]);
+
+    await queue.fireDueSchedules(["catchup-policies"], new Date("2026-09-14T10:05:30Z"), 2, 1_000);
+    await queue.fireDueSchedules(["catchup-policies"], new Date("2026-09-14T10:05:30Z"), 2, 1_000);
+    await queue.fireDueSchedules(
+      ["catchup-policies"],
+      new Date("2026-09-14T10:06:00.500Z"),
+      2,
+      1_000,
+    );
+
+    const caughtUp = await pool.query<{ schedule_name: string; count: number }>(
+      `SELECT schedule_name, count(*)::integer AS count
+         FROM workhorse.schedule_occurrence
+        WHERE namespace = 'catchup-policies'
+        GROUP BY schedule_name
+        ORDER BY schedule_name`,
+    );
+    expect(caughtUp.rows).toEqual([
+      { schedule_name: "all", count: 6 },
+      { schedule_name: "latest", count: 2 },
+      { schedule_name: "skip", count: 1 },
+    ]);
+  });
+
+  it("advances a skip schedule when an operator resumes it", async () => {
+    await queue.syncSchedules("resume-skip", [
+      {
+        name: "hourly",
+        schedule: "0 0 * * * *",
+        task: { type: "cron-resume", payload: null },
+      },
+    ]);
+    await pool.query(
+      `UPDATE workhorse.schedule_definition
+          SET paused = true, paused_by = 'operator', paused_reason = 'maintenance',
+              paused_at = '2026-09-14T08:00:00Z',
+              last_evaluated_at = '2026-09-14T08:00:00Z'
+        WHERE namespace = 'resume-skip' AND schedule_name = 'hourly'`,
+    );
+    await pool.query(
+      `SELECT workhorse.set_schedule_paused_v1(
+        'resume-skip', 'hourly', false, 'operator', 'resume', '2026-09-14T10:30:00Z'
+      )`,
+    );
+
+    await queue.fireDueSchedules(["resume-skip"], new Date("2026-09-14T10:30:00Z"), 100, 1_000);
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::integer AS count FROM workhorse.schedule_occurrence WHERE namespace = 'resume-skip'",
+        )
+      ).rows[0]?.count,
+    ).toBe(0);
+  });
+
   it("treats adjacent recurring occurrences as distinct coordinated work", async () => {
     await queue.syncSchedules("adjacent", [
       {
@@ -451,9 +548,13 @@ describe("cron schedules", () => {
       {
         name: "hashed-minute",
         schedule: "H * * * *",
+        catchupPolicy: "latest",
         task: { type: "cron-tick", payload: {} },
       },
     ]);
+    await pool.query(
+      "UPDATE workhorse.schedule_definition SET last_evaluated_at = clock_timestamp() - interval '2 hours' WHERE namespace = 'integration'",
+    );
     const worker = new Worker(queue, {
       workerId: "hashed-schedule-worker",
       scheduleNamespaces: ["integration"],

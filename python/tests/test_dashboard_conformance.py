@@ -31,22 +31,15 @@ def test_python_dashboard_read_procedures_match_the_shared_contract(database_url
                 value = cast(dict[str, object], input)
                 with dashboard_connection.cursor() as cursor:
                     cursor.execute(
-                        """UPDATE workhorse.schedule_definition
-                              SET paused=%s,
-                                  paused_by=CASE WHEN %s THEN %s ELSE NULL END,
-                                  paused_reason=CASE WHEN %s THEN %s ELSE NULL END,
-                                  paused_at=CASE WHEN %s THEN clock_timestamp() ELSE NULL END,
-                                  revision=revision+1,updated_at=clock_timestamp()
-                            WHERE namespace=%s AND schedule_name=%s RETURNING paused""",
+                        """SELECT workhorse.set_schedule_paused_v1(
+                              %s, %s, %s, %s, %s
+                            ) AS paused""",
                         (
-                            value["paused"],
-                            value["paused"],
-                            actor,
-                            value["paused"],
-                            "Dashboard operator request",
-                            value["paused"],
                             value["namespace"],
                             value["name"],
+                            value["paused"],
+                            actor,
+                            "Dashboard operator request",
                         ),
                     )
                     row = cursor.fetchone()

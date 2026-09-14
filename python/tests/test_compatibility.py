@@ -11,7 +11,7 @@ from workhorse._compatibility import (
     assert_async_compatible,
     assert_sync_compatible,
 )
-from workhorse._statements import MINIMUM_SCHEMA_VERSION
+from workhorse._statements import MINIMUM_SCHEMA_VERSION, PROTOCOL_VERSION
 
 
 class SyncExecutor:
@@ -36,7 +36,10 @@ class AsyncExecutor:
 
 def test_sync_compatibility_check_queries_on_every_call() -> None:
     executor = SyncExecutor(
-        [{"kind": "schema", "version": MINIMUM_SCHEMA_VERSION}, {"kind": "protocol", "version": 1}]
+        [
+            {"kind": "schema", "version": MINIMUM_SCHEMA_VERSION},
+            {"kind": "protocol", "version": PROTOCOL_VERSION},
+        ]
     )
 
     assert_sync_compatible(executor)
@@ -47,7 +50,10 @@ def test_sync_compatibility_check_queries_on_every_call() -> None:
 
 def test_sync_cached_compatibility_check_queries_once() -> None:
     executor = SyncExecutor(
-        [{"kind": "schema", "version": MINIMUM_SCHEMA_VERSION}, {"kind": "protocol", "version": 1}]
+        [
+            {"kind": "schema", "version": MINIMUM_SCHEMA_VERSION},
+            {"kind": "protocol", "version": PROTOCOL_VERSION},
+        ]
     )
     check = CachedCompatibilityCheck(executor)
 
@@ -72,7 +78,10 @@ def test_sync_cached_compatibility_check_reuses_a_refusal() -> None:
 @pytest.mark.asyncio
 async def test_async_compatibility_check_queries_on_every_call() -> None:
     executor = AsyncExecutor(
-        [{"kind": "schema", "version": MINIMUM_SCHEMA_VERSION}, {"kind": "protocol", "version": 1}]
+        [
+            {"kind": "schema", "version": MINIMUM_SCHEMA_VERSION},
+            {"kind": "protocol", "version": PROTOCOL_VERSION},
+        ]
     )
 
     await assert_async_compatible(executor)
@@ -84,7 +93,10 @@ async def test_async_compatibility_check_queries_on_every_call() -> None:
 @pytest.mark.asyncio
 async def test_async_cached_compatibility_check_queries_once() -> None:
     executor = AsyncExecutor(
-        [{"kind": "schema", "version": MINIMUM_SCHEMA_VERSION}, {"kind": "protocol", "version": 1}]
+        [
+            {"kind": "schema", "version": MINIMUM_SCHEMA_VERSION},
+            {"kind": "protocol", "version": PROTOCOL_VERSION},
+        ]
     )
     check = AsyncCachedCompatibilityCheck(executor)
 
@@ -122,7 +134,7 @@ class FakeCursor:
         return None
 
     def fetchall(self) -> list[tuple[str, int]]:
-        return [("schema", self._version), ("protocol", 1)]
+        return [("schema", self._version), ("protocol", PROTOCOL_VERSION)]
 
 
 class FakeConnection:

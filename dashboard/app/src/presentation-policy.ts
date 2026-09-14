@@ -488,6 +488,7 @@ export function presentSchedules(page: DashboardCronPage): PresentedScheduleRow[
     queue: null,
     type,
     priority: null,
+    catchupPolicy: "skip",
     configuredEnabled: true,
     paused: false,
     pausedBy: null,

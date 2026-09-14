@@ -615,8 +615,11 @@ class RedriveResult
 
 type RetryPolicy = Mapping[str, Json]
 
+type ScheduleCatchupPolicy = Literal["skip", "latest", "all"]
+
 class ScheduleDefinition
-  def __init__(self, name: str, schedule: str, task: ScheduledTask, timezone: str = 'UTC', enabled: bool = True) -> None
+  def __init__(self, name: str, schedule: str, task: ScheduledTask, timezone: str = 'UTC', catchup_policy: ScheduleCatchupPolicy = 'skip', enabled: bool = True) -> None
+  catchup_policy: ScheduleCatchupPolicy = 'skip'
   enabled: bool = True
   name: str
   schedule: str
@@ -2744,6 +2747,7 @@ class DashboardScheduleRow(dict)
   def __init__(self, *args, **kwargs)
   def __iter__(self)
   active: ForwardRef('Required[bool]', module='dashboard_v1')
+  catchupPolicy: ForwardRef("Required[Literal['all', 'latest', 'skip']]", module='dashboard_v1')
   def clear(...)
   configuredEnabled: ForwardRef('Required[bool]', module='dashboard_v1')
   def copy(...)
@@ -5703,8 +5707,11 @@ class RateLimitPolicyDefinition
 
 type RetryPolicy = Mapping[str, Json]
 
+type ScheduleCatchupPolicy = Literal["skip", "latest", "all"]
+
 class ScheduleDefinition
-  def __init__(self, name: str, schedule: str, task: ScheduledTask, timezone: str = 'UTC', enabled: bool = True) -> None
+  def __init__(self, name: str, schedule: str, task: ScheduledTask, timezone: str = 'UTC', catchup_policy: ScheduleCatchupPolicy = 'skip', enabled: bool = True) -> None
+  catchup_policy: ScheduleCatchupPolicy = 'skip'
   enabled: bool = True
   name: str
   schedule: str

@@ -47,14 +47,9 @@ export function createDashboardConformanceTransport(
   const scheduleController: DashboardScheduleController = {
     async setSchedulePaused(namespace, name, paused, audit) {
       const result = await database.query<{ paused: boolean }>(
-        `UPDATE workhorse.schedule_definition
-            SET paused = $3,
-                paused_by = CASE WHEN $3 THEN $4 ELSE NULL END,
-                paused_reason = CASE WHEN $3 THEN $5 ELSE NULL END,
-                paused_at = CASE WHEN $3 THEN $6::timestamptz ELSE NULL END,
-                revision = revision + 1, updated_at = clock_timestamp()
-          WHERE namespace = $1 AND schedule_name = $2
-          RETURNING paused`,
+        `SELECT workhorse.set_schedule_paused_v1(
+           $1::text, $2::text, $3::boolean, $4::text, $5::text, $6::timestamptz
+         ) AS paused`,
         [namespace, name, paused, audit.actor, audit.reason, audit.occurredAt],
       );
       const updated = result.rows[0];

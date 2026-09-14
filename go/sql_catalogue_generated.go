@@ -4,11 +4,11 @@ package workhorse
 
 const (
 	// ProtocolVersion is the SQL protocol version implemented by this module.
-	ProtocolVersion        = 1
+	ProtocolVersion        = 2
 	minimumProtocolVersion = 1
-	maximumProtocolVersion = 1
+	maximumProtocolVersion = 2
 	minimumSchemaVersion   = 1
-	maximumSchemaVersion   = 1
+	maximumSchemaVersion   = 2
 	// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
 	MaxEnqueueBatchSize      = 1000
 	defaultTaskValueMaxBytes = 1048576
@@ -16,8 +16,8 @@ const (
 
 var internalStatementRegistry = map[string]string{
 	"deregister_worker_v1": `SELECT workhorse.deregister_worker_v1($1::text) AS deregistered`,
-	"fire_due_schedules_v1": `SELECT namespace, schedule_name, occurrence_at, task_id
-  FROM workhorse.fire_due_schedules_v1($1::text[], $2::timestamptz, $3::integer)`,
+	"fire_due_schedules_v2": `SELECT namespace, schedule_name, occurrence_at, task_id
+  FROM workhorse.fire_due_schedules_v2($1::text[], $2::timestamptz, $3::integer, $4::bigint)`,
 	"list_checkpoint":           `SELECT checkpoint_value FROM workhorse.task_checkpoint WHERE task_id = $1::uuid AND checkpoint_name = $2::text`,
 	"list_concurrency_policies": `SELECT namespace, queue_name, max_active, max_active_per_key, updated_at FROM workhorse.concurrency_policy, (SELECT $1::text[] AS names) AS filter WHERE cardinality(filter.names) = 0 OR queue_name = ANY(filter.names) ORDER BY queue_name`,
 	"list_progress": `SELECT progress_value, revision::text, attempt, fence_token::text,
@@ -36,7 +36,7 @@ var internalStatementRegistry = map[string]string{
 	"schema_version":               `SELECT version FROM workhorse.schema_version ORDER BY version`,
 	"sync_concurrency_policies_v1": `SELECT * FROM workhorse.sync_concurrency_policies_v1($1::text, $2::jsonb, $3::boolean)`,
 	"sync_rate_limit_policies_v1":  `SELECT * FROM workhorse.sync_rate_limit_policies_v1($1::text, $2::jsonb, $3::boolean)`,
-	"sync_schedule_definitions_v1": `SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean)`,
+	"sync_schedule_definitions_v2": `SELECT workhorse.sync_schedule_definitions_v2($1::text, $2::jsonb, $3::boolean)`,
 	"tick_v1":                      `SELECT * FROM workhorse.tick_v1($1::integer, $2::integer)`,
 	"run_task_now_v1":              `SELECT status, state, run_at FROM workhorse.run_task_now_v1($1::uuid, $2::text, $3::text, $4::text)`,
 	"purge_queue_v1":               `SELECT * FROM workhorse.purge_queue_v1($1::text, $2::text, $3::text, $4::text)`,
@@ -88,7 +88,7 @@ var internalStatementRegistry = map[string]string{
         WHERE task_id = $1::uuid
         ORDER BY created_at, wait_name`,
 	"schedule_definition__cron_schedules": `SELECT definition.namespace, definition.schedule_name, definition.cron_expression,
-              definition.timezone,
+              definition.timezone, definition.catchup_policy,
               definition.revision::text,
               max(occurrence.occurrence_at) AS last_occurrence_at
          FROM workhorse.schedule_definition definition

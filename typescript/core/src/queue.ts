@@ -77,7 +77,12 @@ import {
   TaskValueSizeLimitError,
   validateQueueOptions,
 } from "./queue/enqueue-contracts.js";
-import type { ScheduleDefinition, ScheduledTask, StoredSchedule } from "./queue/cron-schedules.js";
+import type {
+  ScheduleCatchupPolicy,
+  ScheduleDefinition,
+  ScheduledTask,
+  StoredSchedule,
+} from "./queue/cron-schedules.js";
 import type { MaintenancePhaseResult } from "./queue/retention-maintenance.js";
 import {
   ChildConflictError,
@@ -175,7 +180,7 @@ export type {
   ExternalWaitCursor,
   ExternalWaitQuery,
 };
-export type { ScheduleDefinition, ScheduledTask, StoredSchedule };
+export type { ScheduleCatchupPolicy, ScheduleDefinition, ScheduledTask, StoredSchedule };
 
 // Deprecated 0.x aliases for the names Python and Go already shared. Removed in 1.0.0.
 export type { SendSignalResult, SendSignalStatus } from "./queue/signals.js";
@@ -481,8 +486,14 @@ export class Queue {
     namespaces: readonly string[],
     now: Date,
     catchupLimit: number,
+    evaluationWindowMs: number,
   ): Promise<void> {
-    return this.modules.cronSchedules.fireDueSchedules(namespaces, now, catchupLimit);
+    return this.modules.cronSchedules.fireDueSchedules(
+      namespaces,
+      now,
+      catchupLimit,
+      evaluationWindowMs,
+    );
   }
 
   async cancel(taskId: string, request: CancellationRequest = {}): Promise<CancelResult> {

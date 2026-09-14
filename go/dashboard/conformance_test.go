@@ -143,12 +143,8 @@ func newDashboardConformanceHandler(t *testing.T, harness dashboardHarness, exec
 		}
 		procedures["setSchedulePaused"] = func(ctx context.Context, input any, actor string) (any, error) {
 			value := input.(map[string]any)
-			rows, err := executor.Query(ctx, `UPDATE workhorse.schedule_definition
-SET paused=$1,paused_by=CASE WHEN $1 THEN $4 ELSE NULL END,
-paused_reason=CASE WHEN $1 THEN $5 ELSE NULL END,
-paused_at=CASE WHEN $1 THEN clock_timestamp() ELSE NULL END,
-revision=revision+1,updated_at=clock_timestamp()
-WHERE namespace=$2 AND schedule_name=$3 RETURNING paused`, value["paused"], value["namespace"], value["name"], actor, "Dashboard operator request")
+			rows, err := executor.Query(ctx, `SELECT workhorse.set_schedule_paused_v1(
+$1::text, $2::text, $3::boolean, $4::text, $5::text) AS paused`, value["namespace"], value["name"], value["paused"], actor, "Dashboard operator request")
 			if err != nil {
 				return nil, err
 			}

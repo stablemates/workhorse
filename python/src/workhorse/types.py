@@ -10,6 +10,7 @@ from typing import Literal, TypedDict, TypeVar, cast
 type Json = bool | int | float | str | list["Json"] | dict[str, "Json"] | None
 type QueueHealth = dict[str, Json]
 type RetryPolicy = Mapping[str, Json]
+type ScheduleCatchupPolicy = Literal["skip", "latest", "all"]
 type EnqueueOutcome = Literal["accepted", "replayed", "replaced", "non_replaceable", "coalesced"]
 type EnqueueNonReplaceableReason = Literal[
     "incompatible_key_mode", "not_pending", "window_elapsed_pending"
@@ -560,6 +561,7 @@ class ScheduleDefinition:
     schedule: str
     task: ScheduledTask
     timezone: str = "UTC"
+    catchup_policy: ScheduleCatchupPolicy = "skip"
     enabled: bool = True
 
 
@@ -603,6 +605,7 @@ __all__ = [
     "RateLimitPolicy",
     "RateLimitPolicyDefinition",
     "RetryPolicy",
+    "ScheduleCatchupPolicy",
     "ScheduleDefinition",
     "ScheduledTask",
     "SignalDeliveryResult",
