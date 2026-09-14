@@ -175,6 +175,32 @@ export function EventsPage({
   const filter = (next: Partial<EventsLocationState>) =>
     setQuery({ ...query, ...next, page: 1, eventId: null });
   const totalPages = Math.max(1, Math.ceil(data.total / data.pageSize));
+  const pagination = (label: string) =>
+    totalPages > 1 ? (
+      <Pagination
+        value={Math.min(data.page, totalPages)}
+        onChange={(page) => setQuery({ ...query, page, eventId: null })}
+        total={totalPages}
+        size="xs"
+        aria-label={label}
+        style={{ "--pagination-control-size": "calc(1.875rem * var(--mantine-scale))" }}
+      />
+    ) : null;
+  const pageSizeSelector = (label: string) => (
+    <Select
+      size="xs"
+      w={76}
+      allowDeselect={false}
+      data={["25", "50", "100"]}
+      value={String(query.pageSize)}
+      onChange={(value) =>
+        filter({
+          pageSize: Number(value ?? 50) as EventsLocationState["pageSize"],
+        })
+      }
+      aria-label={label}
+    />
+  );
   const facetMessage = eventFacets.loading ? "Loading filters…" : eventFacets.error;
   const rangeDescription =
     query.from !== null && query.to !== null
@@ -227,6 +253,8 @@ export function EventsPage({
               }}
             />
           </Box>
+          {pagination("Events pagination above table")}
+          {pageSizeSelector("Events per page above table")}
           {customRangeOpen ? (
             <>
               <TextInput
@@ -340,19 +368,6 @@ export function EventsPage({
             value={query.types}
             onChange={(value) => filter({ types: value.filter(isEventTypeFilter) })}
           />
-          <Select
-            size="xs"
-            label="Rows"
-            w={100}
-            allowDeselect={false}
-            data={["25", "50", "100"]}
-            value={String(query.pageSize)}
-            onChange={(value) =>
-              filter({
-                pageSize: Number(value ?? 50) as EventsLocationState["pageSize"],
-              })
-            }
-          />
         </Group>
       </Paper>
       {/* Queue and task filters are matched against the task a history row points at. History
@@ -411,24 +426,19 @@ export function EventsPage({
           </ScrollArea>
         </Paper>
       )}
-      {totalPages > 1 ? (
-        <Group justify="space-between" wrap="wrap" gap="xs">
-          <Pagination
-            value={Math.min(data.page, totalPages)}
-            onChange={(page) => setQuery({ ...query, page, eventId: null })}
-            total={totalPages}
-            size="xs"
-            aria-label="Events pagination"
-          />
-          {/* Pages are offsets into a list whose head keeps moving, so say so rather than let an
-              operator wonder why a row they were reading moved down a page. */}
-          {data.page > 1 ? (
-            <Text c="dimmed" size="xs">
-              When the dashboard refreshes, new events can move rows between pages.
-            </Text>
-          ) : null}
+      <Group justify="space-between" wrap="wrap" gap="xs">
+        <Group gap="xs" wrap="wrap">
+          {pagination("Events pagination below table")}
+          {pageSizeSelector("Events per page below table")}
         </Group>
-      ) : null}
+        {/* Pages are offsets into a list whose head keeps moving, so say so rather than let an
+            operator wonder why a row they were reading moved down a page. */}
+        {totalPages > 1 && data.page > 1 ? (
+          <Text c="dimmed" size="xs">
+            When the dashboard refreshes, new events can move rows between pages.
+          </Text>
+        ) : null}
+      </Group>
       <Text c="dimmed" size="xs">
         A task completion can record both a lifecycle transition and an attempt outcome. Use Source
         to view either separately. This feed stays complete when notifications are missed because

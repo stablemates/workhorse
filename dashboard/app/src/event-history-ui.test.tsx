@@ -3,10 +3,14 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type {
+  DashboardEventsPage,
   DashboardEventRow,
   DashboardTaskDetail,
 } from "@stablemates/workhorse-dashboard-server/wire";
+import type { DashboardClient } from "@stablemates/workhorse-dashboard-server";
 import { dashboardTaskEventTypes } from "@stablemates/workhorse-dashboard-server/wire";
+import { DashboardClientContext } from "./core.js";
+import { defaultEventsLocation } from "./events-location.js";
 import { taskStatusColors } from "./status-colors.js";
 
 Object.defineProperty(globalThis, "localStorage", {
@@ -51,6 +55,55 @@ async function renderExport(
 }
 
 describe("dashboard event history", () => {
+  it("places pagination beside the window selector and the page size after bottom pagination", async () => {
+    const { EventsPage } = await import("./pages/events.js");
+    const data = {
+      capturedAt: "2026-08-16T12:00:00.000Z",
+      window: "1h",
+      windowSeconds: 3600,
+      rangeStart: "2026-08-16T11:00:00.000Z",
+      rangeEnd: "2026-08-16T12:00:00.000Z",
+      events: [],
+      page: 1,
+      pageSize: 50,
+      total: 101,
+      retention: { taskEventDays: null, attemptHistoryDays: null },
+    } satisfies DashboardEventsPage;
+    const client = {
+      taskFacets: async () => ({ queues: [], workers: [], taskTypes: [], tags: [] }),
+    } as DashboardClient;
+    const html = renderToStaticMarkup(
+      createElement(
+        MantineProvider,
+        null,
+        createElement(
+          DashboardClientContext.Provider,
+          { value: client },
+          createElement(EventsPage, {
+            data,
+            query: defaultEventsLocation,
+            setQuery: () => undefined,
+            inspectEvent: () => undefined,
+          }),
+        ),
+      ),
+    );
+
+    const windowSelector = html.indexOf(">Window<");
+    const topPagination = html.indexOf('aria-label="Events pagination above table"');
+    const topPageSize = html.indexOf('aria-label="Events per page above table"');
+    const filters = html.indexOf('aria-label="Event filters"');
+    const bottomPagination = html.indexOf('aria-label="Events pagination below table"');
+    const bottomPageSize = html.indexOf('aria-label="Events per page below table"');
+
+    expect(windowSelector).toBeGreaterThan(-1);
+    expect(topPagination).toBeGreaterThan(windowSelector);
+    expect(topPageSize).toBeGreaterThan(topPagination);
+    expect(filters).toBeGreaterThan(topPageSize);
+    expect(bottomPagination).toBeGreaterThan(filters);
+    expect(bottomPageSize).toBeGreaterThan(bottomPagination);
+  });
+
   it("validates and converts local custom event ranges", async () => {
     const { parseEventRange } = await import("./dashboard.js");
     const range = parseEventRange("2026-08-15T12:00", "2026-08-15T13:30");
