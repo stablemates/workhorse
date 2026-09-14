@@ -15,3 +15,4 @@ baseline github.com/stablemates/workhorse/go@v0.1.4 (tag go/v0.1.4)
 - ./dashboard.SetScheduleEnabledInput: removed
 - ./dashboard.SetScheduleEnabledOutput: removed
 - ./dashboard.ValidateSetScheduleEnabledInput: removed
+- Version: value changed from "0.1.4" to "0.1.5"

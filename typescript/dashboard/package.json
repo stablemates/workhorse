@@ -1,6 +1,6 @@
 {
   "name": "@stablemates/workhorse-dashboard",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Public beta compatibility facade for the Workhorse dashboard application",
   "homepage": "https://workhorse.run",
   "bugs": {
