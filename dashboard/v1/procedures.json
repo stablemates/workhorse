@@ -4261,6 +4261,13 @@
         "priority": {
           "type": "number"
         },
+        "catchupPolicy": {
+          "enum": [
+            "all",
+            "latest",
+            "skip"
+          ]
+        },
         "configuredEnabled": {
           "type": "boolean"
         },
@@ -4332,6 +4339,7 @@
         "queue",
         "type",
         "priority",
+        "catchupPolicy",
         "configuredEnabled",
         "paused",
         "pausedBy",
@@ -5607,13 +5615,13 @@
         "completed": {
           "type": "number"
         },
+        "all": {
+          "type": "number"
+        },
         "waiting": {
           "type": "number"
         },
         "running": {
-          "type": "number"
-        },
-        "all": {
           "type": "number"
         },
         "retried": {
@@ -5631,9 +5639,9 @@
         "blocked",
         "scheduled",
         "completed",
+        "all",
         "waiting",
         "running",
-        "all",
         "retried",
         "queued",
         "discarded"

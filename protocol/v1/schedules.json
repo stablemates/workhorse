@@ -9,6 +9,7 @@
         "name": "monthly-invoice",
         "schedule": "0 0 1 * *",
         "timezone": "America/New_York",
+        "catchupPolicy": "all",
         "enabled": true,
         "task": {
           "type": "invoice.create",
@@ -27,6 +28,7 @@
         "name": "disabled-cleanup",
         "schedule": "0 2 * * 0",
         "timezone": "UTC",
+        "catchupPolicy": "latest",
         "enabled": false,
         "task": {
           "type": "billing.cleanup",
@@ -45,6 +47,7 @@
         "schedule": "0 0 1 * *",
         "timezone": "America/New_York",
         "enabled": true,
+        "catchupPolicy": "all",
         "queue": "mail",
         "priority": 80,
         "concurrencyKey": null,
@@ -68,6 +71,7 @@
         "schedule": "0 2 * * 0",
         "timezone": "UTC",
         "enabled": false,
+        "catchupPolicy": "latest",
         "queue": "maintenance",
         "priority": 0,
         "concurrencyKey": "billing",
@@ -93,6 +97,7 @@
         "name": "daily-cleanup",
         "schedule": "0 3 * * *",
         "timezone": "UTC",
+        "catchupPolicy": "skip",
         "enabled": true,
         "task": {
           "type": "maintenance.cleanup",
@@ -109,6 +114,7 @@
         "schedule": "0 3 * * *",
         "timezone": "UTC",
         "enabled": true,
+        "catchupPolicy": "skip",
         "queue": "default",
         "priority": 0,
         "concurrencyKey": null,

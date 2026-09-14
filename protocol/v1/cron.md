@@ -25,8 +25,10 @@ The supported descriptors are `@yearly`, `@annually`, `@monthly`, `@weekly`, `@d
 Each definition stores an IANA timezone. PostgreSQL advances a nonexistent wall time across a
 daylight-saving gap and selects the first instant when a wall time repeats. Occurrences have
 one-second precision. If several wall-clock fields normalize to the same instant, PostgreSQL emits
-that instant once. A new definition returns the latest occurrence at or before `now`; an
-existing definition returns occurrences strictly after its last durable key and at or before
-`now`, capped by the supplied catch-up limit. The search horizon is 128 years.
+that instant once. A new evaluator can return the latest occurrence at or before `now`; an
+evaluator with a durable position returns occurrences strictly after that position and at or
+before `now`. A schedule's catch-up policy selects the position and result: `skip` uses the current
+evaluation window, `latest` returns only the most recent missed occurrence, and `all` returns
+ordered occurrences capped by the supplied catch-up limit. The search horizon is 128 years.
 
 [`cron-occurrences.json`](cron-occurrences.json) is the executable fixture for these rules.

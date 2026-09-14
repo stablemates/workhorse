@@ -314,6 +314,7 @@ describe("schema installation", () => {
         "revision",
         "updated_at",
         "priority",
+        "catchup_policy",
       ],
       dashboard_schedule_occurrence_v1: ["namespace", "schedule_name", "occurrence_at", "fired_at"],
       dashboard_worker_registry_v1: [
@@ -395,7 +396,10 @@ describe("schema installation", () => {
           AND relname ~ '_v[0-9]+$' AND relname !~ '_v1$'
         ORDER BY name`,
     );
-    expect(versioned.rows).toEqual([]);
+    expect(versioned.rows).toEqual([
+      { name: "fire_due_schedules_v2" },
+      { name: "sync_schedule_definitions_v2" },
+    ]);
 
     const orphaned = await pool.query<{ name: string }>(
       `WITH successors AS (
@@ -448,12 +452,15 @@ describe("schema installation", () => {
     );
     // A clean install records the whole lineage, so it agrees with a migrated database about the
     // baseline..current range rather than claiming to have started where the runtime now is.
-    expect(migrations.rows).toEqual([{ version: 1, description: "baseline" }]);
+    expect(migrations.rows).toEqual([
+      { version: 1, description: "baseline" },
+      { version: 2, description: "schedule catch-up policies" },
+    ]);
 
     const protocols = await pool.query<{ version: number }>(
       "SELECT version FROM workhorse.protocol_version ORDER BY version",
     );
-    expect(protocols.rows).toEqual([{ version: 1 }]);
+    expect(protocols.rows).toEqual([{ version: 1 }, { version: 2 }]);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -640,7 +647,8 @@ describe("schema installation", () => {
 
   it("refuses a schema that stopped serving this protocol with a typed too-new error", async () => {
     await withRolledBackSchema(
-      `UPDATE workhorse.protocol_version SET version = ${String(PROTOCOL_VERSION + 1)}`,
+      `DELETE FROM workhorse.protocol_version;
+       INSERT INTO workhorse.protocol_version(version) VALUES (${String(PROTOCOL_VERSION + 1)})`,
       async (client) => {
         const thrown = await assertSchemaCompatible(client).then(
           () => null,

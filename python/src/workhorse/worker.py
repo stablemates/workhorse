@@ -1499,7 +1499,12 @@ class Worker:
         now = datetime.now(UTC)
         fired_occurrences = self._executor.rows(
             _STATEMENTS.fire_due_schedules,
-            (list(self.schedule_namespaces), now, self.schedule_catchup_limit),
+            (
+                list(self.schedule_namespaces),
+                now,
+                self.schedule_catchup_limit,
+                self.maintenance_interval_ms,
+            ),
         )
         for fired in fired_occurrences:
             occurrence = cast(datetime, fired["occurrence_at"])

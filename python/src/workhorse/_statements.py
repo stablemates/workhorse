@@ -6,11 +6,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 MINIMUM_PROTOCOL_VERSION = 1
-MAXIMUM_PROTOCOL_VERSION = 1
+MAXIMUM_PROTOCOL_VERSION = 2
 MINIMUM_SCHEMA_VERSION = 1
-MAXIMUM_SCHEMA_VERSION = 1
+MAXIMUM_SCHEMA_VERSION = 2
 DEFAULT_VALUE_MAX_BYTES = 1048576
 MAX_BATCH_SIZE = 1000
 
@@ -83,9 +83,9 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
         "SELECT workhorse.fail_v1(%s::uuid, %s::text, %s::bigint, %s::jsonb, %s::integer) AS state",
         "SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state",
     ),
-    "fire_due_schedules_v1": (
-        "SELECT namespace, schedule_name, occurrence_at, task_id\n  FROM workhorse.fire_due_schedules_v1(%s::text[], %s::timestamptz, %s::integer)",
-        "SELECT namespace, schedule_name, occurrence_at, task_id\n  FROM workhorse.fire_due_schedules_v1($1::text[], $2::timestamptz, $3::integer)",
+    "fire_due_schedules_v2": (
+        "SELECT namespace, schedule_name, occurrence_at, task_id\n  FROM workhorse.fire_due_schedules_v2(%s::text[], %s::timestamptz, %s::integer, %s::bigint)",
+        "SELECT namespace, schedule_name, occurrence_at, task_id\n  FROM workhorse.fire_due_schedules_v2($1::text[], $2::timestamptz, $3::integer, $4::bigint)",
     ),
     "get_checkpoint": (
         "SELECT task_id::text task_id,checkpoint_name,checkpoint_value,attempt,fence_token::text fence_token,worker_id,created_at FROM workhorse.task_checkpoint WHERE task_id=%s::uuid AND checkpoint_name=%s::text",
@@ -239,9 +239,9 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
         "SELECT * FROM workhorse.sync_rate_limit_policies_v1(%s::text, %s::jsonb, %s::boolean)",
         "SELECT * FROM workhorse.sync_rate_limit_policies_v1($1::text, $2::jsonb, $3::boolean)",
     ),
-    "sync_schedule_definitions_v1": (
-        "SELECT workhorse.sync_schedule_definitions_v1(%s::text, %s::jsonb, %s::boolean)",
-        "SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean)",
+    "sync_schedule_definitions_v2": (
+        "SELECT workhorse.sync_schedule_definitions_v2(%s::text, %s::jsonb, %s::boolean)",
+        "SELECT workhorse.sync_schedule_definitions_v2($1::text, $2::jsonb, $3::boolean)",
     ),
     "tick_v1": (
         "SELECT * FROM workhorse.tick_v1(%s::integer, %s::integer)",
@@ -312,8 +312,8 @@ SQL_STATEMENTS: dict[str, tuple[str, str]] = {
         "SELECT task_id, wait_name, mode, duration_ms::text, requested_wake_at, wake_at,\n              attempt, fence_token::text, worker_id, created_at\n         FROM workhorse.task_wait\n        WHERE task_id = $1::uuid\n        ORDER BY created_at, wait_name",
     ),
     "schedule_definition__cron_schedules": (
-        "SELECT definition.namespace, definition.schedule_name, definition.cron_expression,\n              definition.timezone,\n              definition.revision::text,\n              max(occurrence.occurrence_at) AS last_occurrence_at\n         FROM workhorse.schedule_definition definition\n         LEFT JOIN workhorse.schedule_occurrence occurrence\n           ON occurrence.namespace = definition.namespace\n          AND occurrence.schedule_name = definition.schedule_name\n        WHERE definition.configured_enabled AND NOT definition.paused\n          AND definition.namespace = ANY(%s::text[])\n        GROUP BY definition.namespace, definition.schedule_name, definition.timezone\n        ORDER BY definition.namespace, definition.schedule_name",
-        "SELECT definition.namespace, definition.schedule_name, definition.cron_expression,\n              definition.timezone,\n              definition.revision::text,\n              max(occurrence.occurrence_at) AS last_occurrence_at\n         FROM workhorse.schedule_definition definition\n         LEFT JOIN workhorse.schedule_occurrence occurrence\n           ON occurrence.namespace = definition.namespace\n          AND occurrence.schedule_name = definition.schedule_name\n        WHERE definition.configured_enabled AND NOT definition.paused\n          AND definition.namespace = ANY($1::text[])\n        GROUP BY definition.namespace, definition.schedule_name, definition.timezone\n        ORDER BY definition.namespace, definition.schedule_name",
+        "SELECT definition.namespace, definition.schedule_name, definition.cron_expression,\n              definition.timezone, definition.catchup_policy,\n              definition.revision::text,\n              max(occurrence.occurrence_at) AS last_occurrence_at\n         FROM workhorse.schedule_definition definition\n         LEFT JOIN workhorse.schedule_occurrence occurrence\n           ON occurrence.namespace = definition.namespace\n          AND occurrence.schedule_name = definition.schedule_name\n        WHERE definition.configured_enabled AND NOT definition.paused\n          AND definition.namespace = ANY(%s::text[])\n        GROUP BY definition.namespace, definition.schedule_name, definition.timezone\n        ORDER BY definition.namespace, definition.schedule_name",
+        "SELECT definition.namespace, definition.schedule_name, definition.cron_expression,\n              definition.timezone, definition.catchup_policy,\n              definition.revision::text,\n              max(occurrence.occurrence_at) AS last_occurrence_at\n         FROM workhorse.schedule_definition definition\n         LEFT JOIN workhorse.schedule_occurrence occurrence\n           ON occurrence.namespace = definition.namespace\n          AND occurrence.schedule_name = definition.schedule_name\n        WHERE definition.configured_enabled AND NOT definition.paused\n          AND definition.namespace = ANY($1::text[])\n        GROUP BY definition.namespace, definition.schedule_name, definition.timezone\n        ORDER BY definition.namespace, definition.schedule_name",
     ),
     "fire_schedule_v1": (
         "SELECT workhorse.fire_schedule_v1(%s::text, %s::text, %s::bigint, %s::timestamptz) AS task_id",
@@ -533,7 +533,7 @@ STATEMENTS = StatementRegistry(
     enqueue_many=_statement("enqueue_many_v1"),
     expire_owned=_statement("expire_owned_telemetry_v1"),
     fail=_statement("fail_v1"),
-    fire_due_schedules=_statement("fire_due_schedules_v1"),
+    fire_due_schedules=_statement("fire_due_schedules_v2"),
     get_contract=_statement("get_contract_definition_v1"),
     heartbeat_many=_statement("heartbeat_many_v1"),
     list_checkpoints=_statement("list_checkpoints"),
@@ -554,7 +554,7 @@ STATEMENTS = StatementRegistry(
     sync_concurrency_policies=_statement("sync_concurrency_policies_v1"),
     sync_contracts=_statement("sync_contract_definitions_v1"),
     sync_rate_limit_policies=_statement("sync_rate_limit_policies_v1"),
-    sync_schedules=_statement("sync_schedule_definitions_v1"),
+    sync_schedules=_statement("sync_schedule_definitions_v2"),
     tick=_statement("tick_v1"),
     update_progress=_statement("update_progress_v1"),
     wait_for_human=_statement("wait_for_human_v1"),

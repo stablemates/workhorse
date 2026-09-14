@@ -24,6 +24,9 @@ func TestWorkerFiresSchedulesWhenAnotherWorkerOwnsTheMaintenanceTick(t *testing.
 	}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := pool.Exec(ctx, "UPDATE workhorse.schedule_definition SET last_evaluated_at = clock_timestamp() - interval '1 second'"); err != nil {
+		t.Fatal(err)
+	}
 
 	lock, err := pool.Begin(ctx)
 	if err != nil {
@@ -60,7 +63,8 @@ func TestWorkerLimitsScheduleCatchup(t *testing.T) {
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "scheduled")
 	if err := queue.SyncSchedules(ctx, "go-worker", []workhorse.ScheduleDefinition{{
 		Name: "billing-rollup", Schedule: "* * * * * *",
-		Task: workhorse.ScheduledTask{Type: "billing.rollup", Payload: map[string]any{}},
+		CatchupPolicy: workhorse.ScheduleCatchupAll,
+		Task:          workhorse.ScheduledTask{Type: "billing.rollup", Payload: map[string]any{}},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -78,6 +82,9 @@ func TestWorkerLimitsScheduleCatchup(t *testing.T) {
 		"SELECT workhorse.fire_schedule_v1($1, $2, $3, $4)",
 		"go-worker", "billing-rollup", revision, seed,
 	).Scan(&seededTaskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE workhorse.schedule_definition SET last_evaluated_at = $1 WHERE namespace = 'go-worker'", seed); err != nil {
 		t.Fatal(err)
 	}
 

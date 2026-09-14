@@ -191,6 +191,7 @@ interface RunWorkerProcessOptions
 const SCHEMA_MIGRATION_LOCK_TIMEOUT_MS
 const SUPPORTED_NODE_MAJORS
 const SUPPORTED_POSTGRES_MAJORS
+type ScheduleCatchupPolicy
 interface ScheduleDefinition
 type ScheduleTaskDefinition
 type ScheduleWaitRequest
@@ -1779,6 +1780,8 @@ interface DashboardScheduleRow {
   type: string;
   /** User-task dispatch priority. System maintenance rows have no queue priority. */
   priority: number;
+  /** How Workhorse handles occurrences missed between worker evaluations. */
+  catchupPolicy: "skip" | "latest" | "all";
   /** Deployment-declared intent from the most recent namespace synchronization. */
   configuredEnabled: boolean;
   /** Durable operator override. Deployment synchronization never clears it. */
@@ -2894,9 +2897,9 @@ interface LiveProtocolWorker {
   readonly lastHeartbeatAt: Date;
 }
 
-const MAXIMUM_PROTOCOL_VERSION = 1;
+const MAXIMUM_PROTOCOL_VERSION = 2;
 
-const MAXIMUM_SCHEMA_VERSION = 1;
+const MAXIMUM_SCHEMA_VERSION = 2;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -3044,7 +3047,7 @@ class MissingRowError extends WorkhorseError {
 
 type OptionalDashboardProcedure = "runTaskNow" | "enqueueTest" | "redriveTask" | "redriveDeadLetters";
 
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 
 interface ParsedHumanWaitResult {
   value: Json;
@@ -3237,7 +3240,7 @@ class Queue {
   }): Promise<void>;
   schedules(namespaces: readonly string[]): Promise<StoredSchedule[]>;
   fireSchedule(namespace: string, name: string, revision: bigint, occurrenceAt: Date): Promise<string | null>;
-  fireDueSchedules(namespaces: readonly string[], now: Date, catchupLimit: number): Promise<void>;
+  fireDueSchedules(namespaces: readonly string[], now: Date, catchupLimit: number, evaluationWindowMs: number): Promise<void>;
   cancel(taskId: string, request?: CancellationRequest): Promise<CancelResult>;
   claim<TPayload extends Json = Json>(workerId: string, options?: {
     queue?: string;
@@ -3760,11 +3763,15 @@ const SUPPORTED_NODE_MAJORS: readonly number[];
 
 const SUPPORTED_POSTGRES_MAJORS: readonly number[];
 
+type ScheduleCatchupPolicy = "skip" | "latest" | "all";
+
 interface ScheduleDefinition {
   name: string;
   schedule: string;
   /** IANA timezone used to interpret cron wall-clock fields. */
   timezone?: string;
+  /** What to do with occurrences missed between worker evaluations. Defaults to `skip`. */
+  catchupPolicy?: ScheduleCatchupPolicy;
   enabled?: boolean;
   task: ScheduledTask;
 }
@@ -3907,6 +3914,7 @@ interface StoredSchedule {
   name: string;
   schedule: string;
   timezone: string;
+  catchupPolicy: ScheduleCatchupPolicy;
   revision: bigint;
   lastOccurrenceAt: Date | null;
 }
@@ -4298,7 +4306,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 1;
 
-const WORKHORSE_SCHEMA_VERSION = 1;
+const WORKHORSE_SCHEMA_VERSION = 2;
 
 const WORKHORSE_VERSION = "0.1.5";
 
@@ -4548,7 +4556,7 @@ interface WorkerQueueApi {
   }): Promise<MaintenancePhaseResult[]>;
   schedules(namespaces: readonly string[]): Promise<StoredSchedule[]>;
   fireSchedule(namespace: string, name: string, revision: bigint, occurrenceAt: Date): Promise<string | null>;
-  fireDueSchedules(namespaces: readonly string[], now: Date, catchupLimit: number): Promise<void>;
+  fireDueSchedules(namespaces: readonly string[], now: Date, catchupLimit: number, evaluationWindowMs: number): Promise<void>;
   registerWorker(registration: WorkerRegistration): Promise<{
     paused: boolean;
   }>;

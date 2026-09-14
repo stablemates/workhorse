@@ -397,6 +397,8 @@ export interface DashboardScheduleRow {
   type: string;
   /** User-task dispatch priority. System maintenance rows have no queue priority. */
   priority: number;
+  /** How Workhorse handles occurrences missed between worker evaluations. */
+  catchupPolicy: "skip" | "latest" | "all";
   /** Deployment-declared intent from the most recent namespace synchronization. */
   configuredEnabled: boolean;
   /** Durable operator override. Deployment synchronization never clears it. */

@@ -807,6 +807,7 @@ func (worker *Worker) fireDueSchedules(ctx context.Context, executor Executor, n
 		worker.scheduleNamespaces,
 		now,
 		worker.scheduleCatchupLimit,
+		worker.maintenanceInterval.Milliseconds(),
 	)
 	return err
 }

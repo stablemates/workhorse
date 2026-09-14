@@ -1,23 +1,23 @@
 [
   {
     "id": "current",
-    "installedSchemaVersion": 1,
-    "clientProtocolVersion": 1,
-    "servedProtocolVersions": [1],
+    "installedSchemaVersion": 2,
+    "clientProtocolVersion": 2,
+    "servedProtocolVersions": [1, 2],
     "compatible": true
   },
   {
     "id": "schema-newer-inside-major-line",
-    "installedSchemaVersion": 2,
-    "clientProtocolVersion": 1,
-    "servedProtocolVersions": [1],
+    "installedSchemaVersion": 3,
+    "clientProtocolVersion": 2,
+    "servedProtocolVersions": [1, 2],
     "compatible": true,
     "note": "Inside a major line a migration only adds, so a newer schema still serves this client. Refusing it would make every rolling deployment an outage."
   },
   {
     "id": "served-protocol-undeclared",
     "installedSchemaVersion": 1,
-    "clientProtocolVersion": 1,
+    "clientProtocolVersion": 2,
     "servedProtocolVersions": [],
     "compatible": true,
     "note": "A schema that declares no served protocol has made no statement to enforce."
@@ -25,7 +25,7 @@
   {
     "id": "schema-not-installed",
     "installedSchemaVersion": null,
-    "clientProtocolVersion": 1,
+    "clientProtocolVersion": 2,
     "servedProtocolVersions": [],
     "compatible": false,
     "refusalCode": "schema-not-installed",
@@ -34,8 +34,8 @@
   {
     "id": "schema-too-old",
     "installedSchemaVersion": 0,
-    "clientProtocolVersion": 1,
-    "servedProtocolVersions": [1],
+    "clientProtocolVersion": 2,
+    "servedProtocolVersions": [2],
     "compatible": false,
     "refusalCode": "schema-too-old",
     "refusal": "Refuse every mutation until the database is migrated."
@@ -43,8 +43,8 @@
   {
     "id": "schema-no-longer-serves-client",
     "installedSchemaVersion": 5,
-    "clientProtocolVersion": 1,
-    "servedProtocolVersions": [2],
+    "clientProtocolVersion": 2,
+    "servedProtocolVersions": [3],
     "compatible": false,
     "refusalCode": "schema-too-new",
     "refusal": "Refuse every mutation because a major release stopped serving this client's protocol."
@@ -61,8 +61,8 @@
   {
     "id": "client-protocol-too-new",
     "installedSchemaVersion": 1,
-    "clientProtocolVersion": 2,
-    "servedProtocolVersions": [1],
+    "clientProtocolVersion": 3,
+    "servedProtocolVersions": [1, 2],
     "compatible": false,
     "refusalCode": "client-protocol-too-new",
     "refusal": "Refuse every mutation because the client protocol is outside the supported range."

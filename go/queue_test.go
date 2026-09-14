@@ -47,7 +47,7 @@ func (executor *queueExecutor) Query(
 
 func TestQueueSerializesMinimalRequestsAndReturnsCanonicalResults(t *testing.T) {
 	executor := &queueExecutor{responses: [][]workhorse.Row{
-		{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(1)}},
+		{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(workhorse.ProtocolVersion)}},
 		{
 			{"ordinal": int32(1), "task_id": "first", "outcome": "accepted", "reason": nil},
 			{"ordinal": int32(2), "task_id": "second", "outcome": "replayed", "reason": nil},
@@ -88,7 +88,7 @@ func TestQueueSerializesMinimalRequestsAndReturnsCanonicalResults(t *testing.T) 
 
 func TestQueueHealthReturnsTheVersionedPostgreSQLDocument(t *testing.T) {
 	executor := &queueExecutor{responses: [][]workhorse.Row{
-		{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(1)}},
+		{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(workhorse.ProtocolVersion)}},
 		{{"snapshot": []byte(`{"status":{"level":"healthy","reasons":[]},"ready":"3"}`)}},
 	}}
 	queue := workhorse.NewQueue(executor, "default")
@@ -109,7 +109,7 @@ func TestQueueHealthReturnsTheVersionedPostgreSQLDocument(t *testing.T) {
 func TestQueueCancelReturnsPostgreSQLCancellationMetadata(t *testing.T) {
 	requestedAt := time.Date(2026, time.August, 23, 2, 0, 0, 0, time.UTC)
 	executor := &queueExecutor{responses: [][]workhorse.Row{
-		{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(1)}},
+		{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(workhorse.ProtocolVersion)}},
 		{{
 			"status": "cancel_requested", "state": "active", "current_attempt": int32(2),
 			"requested_at": requestedAt, "requested_by": "api", "reason": "request ended",
@@ -142,7 +142,7 @@ func TestQueueCancelReturnsPostgreSQLCancellationMetadata(t *testing.T) {
 
 func TestQueueCancelPreservesExplicitlyEmptyAttributionForPostgreSQLValidation(t *testing.T) {
 	executor := &queueExecutor{responses: [][]workhorse.Row{
-		{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(1)}},
+		{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(workhorse.ProtocolVersion)}},
 		{{
 			"status": "not_found", "state": nil, "current_attempt": nil,
 			"requested_at": nil, "requested_by": nil, "reason": nil, "finished_at": nil,
@@ -179,7 +179,7 @@ func TestQueueSatisfiesSharedRequestFixturesWithinCurrentScope(t *testing.T) {
 	for _, fixture := range fixtures {
 		t.Run(fixture.ID, func(t *testing.T) {
 			executor := &queueExecutor{responses: [][]workhorse.Row{
-				{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(1)}},
+				{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(workhorse.ProtocolVersion)}},
 				{{"ordinal": int32(1), "task_id": "fixture", "outcome": "accepted", "reason": nil}},
 			}}
 			queueName, ok := fixture.Postgres["queue"].(string)
@@ -233,11 +233,12 @@ func TestQueueSerializesEverySharedScheduleFixture(t *testing.T) {
 		DefaultQueue string `json:"defaultQueue"`
 		Prune        bool   `json:"prune"`
 		Application  []struct {
-			Name     string `json:"name"`
-			Schedule string `json:"schedule"`
-			Timezone string `json:"timezone"`
-			Enabled  bool   `json:"enabled"`
-			Task     struct {
+			Name          string                          `json:"name"`
+			Schedule      string                          `json:"schedule"`
+			Timezone      string                          `json:"timezone"`
+			CatchupPolicy workhorse.ScheduleCatchupPolicy `json:"catchupPolicy"`
+			Enabled       bool                            `json:"enabled"`
+			Task          struct {
 				Type           string         `json:"type"`
 				Payload        any            `json:"payload"`
 				Queue          string         `json:"queue"`
@@ -253,13 +254,14 @@ func TestQueueSerializesEverySharedScheduleFixture(t *testing.T) {
 	executed := make(map[string]struct{}, len(fixtures))
 	for _, fixture := range fixtures {
 		t.Run(fixture.ID, func(t *testing.T) {
-			executor := &queueExecutor{responses: [][]workhorse.Row{{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(1)}}, {}}}
+			executor := &queueExecutor{responses: [][]workhorse.Row{{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(workhorse.ProtocolVersion)}}, {}}}
 			queue := workhorse.NewQueue(executor, fixture.DefaultQueue)
 			definitions := make([]workhorse.ScheduleDefinition, len(fixture.Application))
 			for index, definition := range fixture.Application {
 				enabled := definition.Enabled
 				definitions[index] = workhorse.ScheduleDefinition{
-					Name: definition.Name, Schedule: definition.Schedule, Timezone: definition.Timezone, Enabled: &enabled,
+					Name: definition.Name, Schedule: definition.Schedule, Timezone: definition.Timezone,
+					CatchupPolicy: definition.CatchupPolicy, Enabled: &enabled,
 					Task: workhorse.ScheduledTask{
 						Type: definition.Task.Type, Payload: definition.Task.Payload, Queue: definition.Task.Queue,
 						Priority: definition.Task.Priority, ConcurrencyKey: definition.Task.ConcurrencyKey,
@@ -376,7 +378,7 @@ func TestQueueSerializesDelayedAndDurableOptions(t *testing.T) {
 	runAt := time.Date(2026, time.August, 22, 1, 2, 3, 456_789_000, time.FixedZone("EDT", -4*60*60))
 	deadline := runAt.Add(2 * time.Hour)
 	executor := &queueExecutor{responses: [][]workhorse.Row{
-		{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(1)}},
+		{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(workhorse.ProtocolVersion)}},
 		{
 			{"ordinal": int32(1), "task_id": "delayed", "outcome": "accepted", "reason": nil},
 			{"ordinal": int32(2), "task_id": "debounced", "outcome": "accepted", "reason": nil},
@@ -510,7 +512,7 @@ func TestQueueRejectsInvalidOptionCombinationsBeforeQuery(t *testing.T) {
 
 func TestQueuePlacesResultsByValidatedOrdinal(t *testing.T) {
 	executor := &queueExecutor{responses: [][]workhorse.Row{
-		{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(1)}},
+		{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(workhorse.ProtocolVersion)}},
 		{
 			{"ordinal": int32(2), "task_id": "second", "outcome": "accepted", "reason": nil},
 			{"ordinal": int32(1), "task_id": "first", "outcome": "accepted", "reason": nil},
@@ -532,7 +534,7 @@ func TestQueuePlacesResultsByValidatedOrdinal(t *testing.T) {
 
 func TestQueueRejectsIncompleteOrdinalResults(t *testing.T) {
 	executor := &queueExecutor{responses: [][]workhorse.Row{
-		{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(1)}},
+		{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(workhorse.ProtocolVersion)}},
 		{},
 	}}
 	queue := workhorse.NewQueue(executor, "default")
@@ -609,7 +611,7 @@ func TestQueueTranslatesStructuredPostgreSQLErrors(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			executor := &queueExecutor{
-				responses: [][]workhorse.Row{{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(1)}}},
+				responses: [][]workhorse.Row{{{"kind": "schema", "version": int64(testSchemaVersion)}, {"kind": "protocol", "version": int64(workhorse.ProtocolVersion)}}},
 				errors:    []error{nil, &pgconn.PgError{Code: test.code, Detail: test.detail}},
 			}
 			queue := workhorse.NewQueue(executor, "default")

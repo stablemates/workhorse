@@ -452,6 +452,7 @@ type DashboardScheduleRow struct {
 	Queue             string  `json:"queue"`
 	Type              string  `json:"type"`
 	Priority          float64 `json:"priority"`
+	CatchupPolicy     string  `json:"catchupPolicy"`
 	ConfiguredEnabled bool    `json:"configuredEnabled"`
 	Paused            bool    `json:"paused"`
 	PausedBy          *string `json:"pausedBy"`
@@ -728,9 +729,9 @@ type DashboardTaskCounts struct {
 	Blocked   float64 `json:"blocked"`
 	Scheduled float64 `json:"scheduled"`
 	Completed float64 `json:"completed"`
+	All       float64 `json:"all"`
 	Waiting   float64 `json:"waiting"`
 	Running   float64 `json:"running"`
-	All       float64 `json:"all"`
 	Retried   float64 `json:"retried"`
 	Queued    float64 `json:"queued"`
 	Discarded float64 `json:"discarded"`

@@ -76,7 +76,7 @@ operator-paused definitions.
 
 There is no scheduler process and no PostgreSQL extension. A `Worker` offers the namespaces listed
 in `WorkerOptions.scheduleNamespaces` as part of its normal maintenance cadence. PostgreSQL then
-evaluates and fires each due definition through `fire_due_schedules_v1`, so every SDK uses one
+evaluates and fires each due definition through `fire_due_schedules_v2`, so every SDK uses one
 parser and one stored IANA timezone.
 
 <Tabs items={["TypeScript", "Python", "Go"]}>
@@ -132,9 +132,11 @@ on change. PostgreSQL reads that revision while evaluating the namespace, then r
 revision when it reserves the occurrence. If a deployment changes or disables the definition
 between those operations, the fire becomes a no-op.
 
-If the whole fleet is down, nothing fires. When workers return, catch-up is bounded rather than
-replaying every missed occurrence. Schedules provide durable recurring work, not hard real-time
-alarms; prefer UTC unless the schedule follows local civil time. If local clocks skip a scheduled time, Workhorse fires after
+If the whole fleet is down, nothing fires. Workhorse skips missed occurrences by default when
+workers return. Set `catchupPolicy` to `latest` when one current task can replace the missed work,
+or to `all` when every occurrence must create a task. The worker's catch-up limit bounds each
+`all` pass, and later passes continue until the schedule catches up. Schedules provide durable
+recurring work, not hard real-time alarms; prefer UTC unless the schedule follows local civil time. If local clocks skip a scheduled time, Workhorse fires after
 the clock advances. If clocks repeat a time, Workhorse fires its first occurrence only. Hashed `H`
 fields choose a stable offset across TypeScript, Python, and Go workers, so every runtime fires the
 same occurrence. If several cron fields land on one instant, Workhorse creates one occurrence.

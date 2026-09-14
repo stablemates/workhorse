@@ -19,11 +19,15 @@ export interface ScheduledTask {
 /** @deprecated Renamed to {@link ScheduledTask}. Removed in 1.0.0. */
 export type ScheduleTaskDefinition = ScheduledTask;
 
+export type ScheduleCatchupPolicy = "skip" | "latest" | "all";
+
 export interface ScheduleDefinition {
   name: string;
   schedule: string;
   /** IANA timezone used to interpret cron wall-clock fields. */
   timezone?: string;
+  /** What to do with occurrences missed between worker evaluations. Defaults to `skip`. */
+  catchupPolicy?: ScheduleCatchupPolicy;
   enabled?: boolean;
   task: ScheduledTask;
 }
@@ -33,6 +37,7 @@ export interface StoredSchedule {
   name: string;
   schedule: string;
   timezone: string;
+  catchupPolicy: ScheduleCatchupPolicy;
   revision: bigint;
   lastOccurrenceAt: Date | null;
 }
@@ -60,6 +65,7 @@ export class CronSchedulesModule extends QueueModule {
         name: definition.name,
         schedule: definition.schedule,
         timezone: definition.timezone ?? "UTC",
+        catchupPolicy: definition.catchupPolicy ?? "skip",
         enabled: definition.enabled ?? true,
         queue: definition.task.queue ?? this.context.defaultQueue,
         priority: validateTaskPriority(definition.task.priority),
@@ -74,7 +80,7 @@ export class CronSchedulesModule extends QueueModule {
       "workhorse.schedule.synchronize",
       { "workhorse.schedule.definition_count": definitions.length },
       async () => {
-        await this.context.database.query(SQL_STATEMENTS["sync_schedule_definitions_v1"], [
+        await this.context.database.query(SQL_STATEMENTS["sync_schedule_definitions_v2"], [
           namespace,
           JSON.stringify(scheduleInputs),
           options.prune ?? true,
@@ -94,6 +100,7 @@ export class CronSchedulesModule extends QueueModule {
       schedule_name: string;
       cron_expression: string;
       timezone: string;
+      catchup_policy: ScheduleCatchupPolicy;
       revision: string;
       last_occurrence_at: Date | null;
     }>(SQL_STATEMENTS["schedule_definition__cron_schedules"], [namespaces]);
@@ -102,6 +109,7 @@ export class CronSchedulesModule extends QueueModule {
       name: row.schedule_name,
       schedule: row.cron_expression,
       timezone: row.timezone,
+      catchupPolicy: row.catchup_policy,
       revision: BigInt(row.revision),
       lastOccurrenceAt: row.last_occurrence_at,
     }));
@@ -111,6 +119,7 @@ export class CronSchedulesModule extends QueueModule {
     namespaces: readonly string[],
     now: Date,
     catchupLimit: number,
+    evaluationWindowMs: number,
   ): Promise<void> {
     if (namespaces.length === 0) return;
     const result = await this.context.database.query<{
@@ -118,7 +127,12 @@ export class CronSchedulesModule extends QueueModule {
       schedule_name: string;
       occurrence_at: Date | string;
       task_id: string | null;
-    }>(SQL_STATEMENTS["fire_due_schedules_v1"], [namespaces, now.toISOString(), catchupLimit]);
+    }>(SQL_STATEMENTS["fire_due_schedules_v2"], [
+      namespaces,
+      now.toISOString(),
+      catchupLimit,
+      evaluationWindowMs,
+    ]);
     for (const row of result.rows) {
       if (row.task_id !== null) {
         const occurrenceAt =

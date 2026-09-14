@@ -144,6 +144,7 @@ export type {
   ExternalWaitDeliveryRequest,
   ExternalWaitCursor,
   ExternalWaitQuery,
+  ScheduleCatchupPolicy,
   ScheduleDefinition,
   ScheduledTask,
   StoredSchedule,

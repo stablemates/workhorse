@@ -1,15 +1,15 @@
 {
   "formatVersion": 1,
-  "protocolVersion": 1,
+  "protocolVersion": 2,
   "schema": {
-    "installedVersion": 1,
+    "installedVersion": 2,
     "minimumVersion": 1,
-    "maximumVersion": 1,
+    "maximumVersion": 2,
     "baselineVersion": 1
   },
   "supportedClientProtocol": {
     "minimumVersion": 1,
-    "maximumVersion": 1
+    "maximumVersion": 2
   },
   "limits": {
     "defaultTaskValueMaxBytes": 1048576,
@@ -312,10 +312,10 @@
       "catalogues": ["protocol"]
     },
     {
-      "name": "fire_due_schedules_v1",
+      "name": "fire_due_schedules_v2",
       "pythonBinding": "fire_due_schedules",
-      "arity": 3,
-      "contract": "SELECT namespace, schedule_name, occurrence_at, task_id\n  FROM workhorse.fire_due_schedules_v1($1::text[], $2::timestamptz, $3::integer)",
+      "arity": 4,
+      "contract": "SELECT namespace, schedule_name, occurrence_at, task_id\n  FROM workhorse.fire_due_schedules_v2($1::text[], $2::timestamptz, $3::integer, $4::bigint)",
       "catalogues": ["internal"]
     },
     {
@@ -567,10 +567,10 @@
       "catalogues": ["internal"]
     },
     {
-      "name": "sync_schedule_definitions_v1",
+      "name": "sync_schedule_definitions_v2",
       "pythonBinding": "sync_schedules",
       "arity": 3,
-      "contract": "SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean)",
+      "contract": "SELECT workhorse.sync_schedule_definitions_v2($1::text, $2::jsonb, $3::boolean)",
       "catalogues": ["internal"]
     },
     {
@@ -682,7 +682,7 @@
     {
       "name": "schedule_definition__cron_schedules",
       "arity": 1,
-      "contract": "SELECT definition.namespace, definition.schedule_name, definition.cron_expression,\n              definition.timezone,\n              definition.revision::text,\n              max(occurrence.occurrence_at) AS last_occurrence_at\n         FROM workhorse.schedule_definition definition\n         LEFT JOIN workhorse.schedule_occurrence occurrence\n           ON occurrence.namespace = definition.namespace\n          AND occurrence.schedule_name = definition.schedule_name\n        WHERE definition.configured_enabled AND NOT definition.paused\n          AND definition.namespace = ANY($1::text[])\n        GROUP BY definition.namespace, definition.schedule_name, definition.timezone\n        ORDER BY definition.namespace, definition.schedule_name",
+      "contract": "SELECT definition.namespace, definition.schedule_name, definition.cron_expression,\n              definition.timezone, definition.catchup_policy,\n              definition.revision::text,\n              max(occurrence.occurrence_at) AS last_occurrence_at\n         FROM workhorse.schedule_definition definition\n         LEFT JOIN workhorse.schedule_occurrence occurrence\n           ON occurrence.namespace = definition.namespace\n          AND occurrence.schedule_name = definition.schedule_name\n        WHERE definition.configured_enabled AND NOT definition.paused\n          AND definition.namespace = ANY($1::text[])\n        GROUP BY definition.namespace, definition.schedule_name, definition.timezone\n        ORDER BY definition.namespace, definition.schedule_name",
       "catalogues": ["internal"]
     },
     {

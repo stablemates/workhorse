@@ -666,6 +666,8 @@ type RetryPolicy = {
   maxDelayMs: number;
 };
 
+type ScheduleCatchupPolicy = "skip" | "latest" | "all";
+
 type SchemaCompatibilityCode = "schema-not-installed" | "schema-too-old" | "schema-too-new" | "client-protocol-too-old" | "client-protocol-too-new";
 
 interface SchemaStatusReport {
@@ -740,6 +742,7 @@ interface StoredSchedule {
   name: string;
   schedule: string;
   timezone: string;
+  catchupPolicy: ScheduleCatchupPolicy;
   revision: bigint;
   lastOccurrenceAt: Date | null;
 }

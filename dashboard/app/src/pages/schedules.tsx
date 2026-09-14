@@ -22,9 +22,12 @@ import { EmptyState, PageHeader } from "../components/task-list.js";
 import { formatDuration, formatExact, formatRelative } from "../preferences.js";
 import { presentSchedules } from "../presentation-policy.js";
 
-export const resumeScheduleWarning =
-  "Workhorse may enqueue missed occurrences through its bounded catch-up window as soon as a " +
-  "worker evaluates this schedule. Tasks already enqueued are unchanged.";
+export const resumeScheduleWarnings = {
+  skip: "Workhorse will skip occurrences missed while this schedule was paused. The next occurrence will fire on schedule. Tasks already enqueued are unchanged.",
+  latest:
+    "Workhorse may enqueue the most recent missed occurrence as soon as a worker evaluates this schedule. Earlier missed occurrences will be skipped. Tasks already enqueued are unchanged.",
+  all: "Workhorse may enqueue missed occurrences in bounded batches as soon as a worker evaluates this schedule. It will continue until the schedule catches up. Tasks already enqueued are unchanged.",
+} as const;
 
 export function MaintenanceRunHistory({
   runs,
@@ -94,6 +97,7 @@ export function CronPage({
   const [confirmingResume, setConfirmingResume] = useState<{
     namespace: string;
     name: string;
+    catchupPolicy: "skip" | "latest" | "all";
   } | null>(null);
   useConfirmationActivity(confirmingResume !== null);
   return (
@@ -104,7 +108,7 @@ export function CronPage({
         title="Resume schedule?"
         centered
       >
-        <Text size="sm">{resumeScheduleWarning}</Text>
+        <Text size="sm">{resumeScheduleWarnings[confirmingResume?.catchupPolicy ?? "skip"]}</Text>
         {confirmingResume ? (
           <Code block mt="sm">
             {confirmingResume.namespace}/{confirmingResume.name}
@@ -310,6 +314,7 @@ export function CronPage({
                                       setConfirmingResume({
                                         namespace: schedule.namespace,
                                         name: schedule.name,
+                                        catchupPolicy: schedule.catchupPolicy,
                                       });
                                     } else {
                                       setSchedulePaused(schedule.namespace, schedule.name, true);

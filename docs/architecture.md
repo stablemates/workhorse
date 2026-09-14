@@ -1803,7 +1803,11 @@ busy one-second cadence creates unbounded write churn.
 
 ### Declarative schedules
 
-`sync_schedule_definitions_v1` validates the cron expression and IANA `timezone`, then stores them with the accepted `contract_version`, both size limits, and both redaction-key arrays beside each schedule payload. Any change increments the schedule revision. `fire_schedule_v1` copies that metadata into the occurrence task, so a later deployment cannot reinterpret an already-synchronized definition with a different current contract.
+`sync_schedule_definitions_v2` delegates the version 1 definition reconciliation, validates and
+stores `catchup_policy`, and updates `last_evaluated_at` when an evaluation boundary changes. Any
+definition change increments the schedule revision once. `fire_schedule_v1` copies task metadata
+into the occurrence task, so a later deployment cannot reinterpret an already-synchronized
+definition with a different current contract.
 
 `schedule_definition` is the target database's desired-state record for one deployment namespace.
 It stores validated cron text, a typed Workhorse task definition, and a monotonically increasing
@@ -1813,15 +1817,32 @@ Synchronization updates `configured_enabled` without changing those pause column
 definitions set `configured_enabled = false` rather than deleting the row, so occurrence history
 and a pause remain attributable when a deployment later re-adds the definition.
 
+`catchup_policy` is `skip`, `latest`, or `all` and defaults to `skip`. `last_evaluated_at` is the
+durable schedule position. It remains independent of occurrence retention and advances without a
+revision change during evaluation. `set_schedule_paused_v1` moves that position to the resume time
+for `skip`; `latest` and `all` retain their prior position.
+
 `schedule_occurrence` provides one durable key per `(namespace, schedule_name, occurrence_at)` second. `fire_schedule_v1` inserts that key and enqueues through `enqueue_v1` in one transaction. A repeated fire for the same second returns null, so only the call that creates the task reports a fire.
 
 Scheduling metadata and occurrence evaluation live in the target database. `cron_occurrences_v1(expression, last_occurrence_at, now, limit, timezone)` is `IMMUTABLE` and `PARALLEL SAFE`. It implements the five- or six-field dialect in `protocol/v1/cron.md`, including lists, ranges, steps, names, `?`, `L`, `<DOW>L`, `<DOW>#<ordinal>`, the fixed macro set, and `H` expansion. It advances a nonexistent wall time across a daylight-saving gap and selects the first instant in a fold. If several wall-clock fields normalize to one instant, it returns that instant once. It searches at most 128 years and accepts limits from 1 through 10,000. `protocol/v1/cron-occurrences.json` fixes the inputs and expected UTC instants.
 
-`fire_due_schedules_v1(namespaces, now, catchup_limit)` lists definitions whose
+`fire_due_schedules_v2(namespaces, now, catchup_limit, evaluation_window_ms)` lists definitions whose
 `configured_enabled` is true and `paused` is false, then loads their last durable occurrence,
-calls `cron_occurrences_v1`, and delegates every result to revision-fenced `fire_schedule_v1` in
-one database round trip. `fire_schedule_v1` repeats both state checks under the definition row
-lock. TypeScript `WorkerOptions.scheduleNamespaces`, Python `Worker.schedule_namespaces`, and Go `WorkerOptions.ScheduleNamespaces` select definitions. TypeScript `scheduleCatchupLimit`, Python `schedule_catchup_limit`, and Go `WorkerOptions.ScheduleCatchupLimit` accept 1 through 10,000 and default to 100. Python `maintenance_interval_ms` accepts integers of at least 100 and defaults to 1,000. Every runtime calls `fire_due_schedules_v1` on that cadence independently of the `tick_v1` lock. The function takes one transaction advisory lock per namespace. Concurrent callers for one namespace return without evaluation, while workers offering different namespaces can progress in parallel. Persisted occurrence keys remain the final duplicate barrier. Schedules fire once per occurrence while any worker offering their namespace remains live.
+calls `cron_occurrences_v1`, and delegates selected results to revision-fenced `fire_schedule_v1`
+in one database round trip. `skip` evaluates only occurrences newer than both the durable position
+and `now - evaluation_window_ms`. `latest` selects the newest occurrence after the durable
+position. `all` selects ordered occurrences after the durable position and advances only through
+the bounded result when the pass reaches its limit. The worker supplies its
+`maintenanceIntervalMs`, `maintenance_interval_ms`, or `MaintenanceInterval` as the evaluation
+window. `fire_schedule_v1` repeats both state checks under the definition row lock.
+
+TypeScript `ScheduleDefinition.catchupPolicy`, Python `ScheduleDefinition.catchup_policy`, and Go
+`ScheduleDefinition.CatchupPolicy` default to `skip`. TypeScript `scheduleCatchupLimit`, Python
+`schedule_catchup_limit`, and Go `WorkerOptions.ScheduleCatchupLimit` accept 1 through 10,000 and
+default to 100. Every runtime calls `fire_due_schedules_v2` on the maintenance cadence independently
+of the `tick_v1` lock. The function takes one transaction advisory lock per namespace. Concurrent
+callers for one namespace return without evaluation, while workers offering different namespaces
+can progress in parallel. Persisted occurrence keys remain the final duplicate barrier.
 
 The four-argument `run_task_now_v1(task_id, requested_by, reason, request_id)` releases an
 ordinary future-scheduled task without changing its recurring definition or bypassing a durable
@@ -3176,7 +3197,8 @@ interactive stdin and stdout is refused with exit 1.
   `uuid_v7_v1()` uses core UUID and byte functions rather than `pgcrypto` or `uuid-ossp`.
 - Schedules fire only while one worker has matching `scheduleNamespaces` or `schedule_namespaces`.
   `maintenanceIntervalMs` or `maintenance_interval_ms` bounds drift. `scheduleCatchupLimit` or
-  `schedule_catchup_limit` bounds catch-up after downtime.
+  `schedule_catchup_limit` bounds each `all` catch-up pass after downtime. Definitions default to
+  `skip`; `latest` coalesces missed occurrences to one task.
 - Task, outcome, event, attempt, and schedule-occurrence retention default to 14 days and remain independently configurable. Enqueue-idempotency bindings expire by their request TTL and are cleaned before terminal identity pruning.
 - Default work bounds are 1,000 terminal tasks, four history partitions per category, 10,000 default-partition rows per category, and 10,000 schedule occurrences per maintenance pass.
 - Health snapshots scan at most 100,001 terminal outcomes and 100,001 statistic buckets when counting; capped counts are flagged, exact-until-the-cap lower bounds.

@@ -6,7 +6,7 @@ from protocol_fixtures import assert_fixture_execution, read_protocol_fixture
 from test_enqueue import Connection
 
 from workhorse import Queue, ScheduleDefinition, ScheduledTask
-from workhorse._statements import MINIMUM_SCHEMA_VERSION
+from workhorse._statements import MINIMUM_SCHEMA_VERSION, PROTOCOL_VERSION
 
 
 def test_synchronizes_every_shared_schedule_fixture_through_the_versioned_sql_function() -> None:
@@ -17,7 +17,7 @@ def test_synchronizes_every_shared_schedule_fixture_through_the_versioned_sql_fu
             [
                 [
                     {"kind": "schema", "version": MINIMUM_SCHEMA_VERSION},
-                    {"kind": "protocol", "version": 1},
+                    {"kind": "protocol", "version": PROTOCOL_VERSION},
                 ],
                 [],
             ]
@@ -30,6 +30,7 @@ def test_synchronizes_every_shared_schedule_fixture_through_the_versioned_sql_fu
                     name=definition["name"],
                     schedule=definition["schedule"],
                     timezone=definition["timezone"],
+                    catchup_policy=definition["catchupPolicy"],
                     enabled=definition["enabled"],
                     task=ScheduledTask(
                         type=definition["task"]["type"],
@@ -46,7 +47,7 @@ def test_synchronizes_every_shared_schedule_fixture_through_the_versioned_sql_fu
             prune=fixture["prune"],
         )
 
-        assert "workhorse.sync_schedule_definitions_v1" in connection.calls[1][0]
+        assert "workhorse.sync_schedule_definitions_v2" in connection.calls[1][0]
         assert connection.calls[1][1][0] == fixture["namespace"]
         assert json.loads(connection.calls[1][1][1]) == fixture["postgres"]
         assert connection.calls[1][1][2] is fixture["prune"]

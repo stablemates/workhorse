@@ -20,6 +20,7 @@ const page: DashboardCronPage = {
       queue: "billing",
       type: "invoice.generate",
       priority: 0,
+      catchupPolicy: "skip",
       configuredEnabled: true,
       paused: false,
       pausedBy: null,
@@ -75,7 +76,7 @@ const page: DashboardCronPage = {
 
 describe("schedules page", () => {
   it("explains that a maintenance destination is not a queue", async () => {
-    const { CronPage, MaintenanceRunHistory, resumeScheduleWarning } =
+    const { CronPage, MaintenanceRunHistory, resumeScheduleWarnings } =
       await import("./pages/schedules.js");
     const { presentSchedules } = await import("./presentation-policy.js");
     const { formatExact } = await import("./preferences.js");
@@ -107,8 +108,9 @@ describe("schedules page", () => {
     expect(html).toContain('href="/tasks?type=invoice.generate"');
     expect(html).toContain('target="_blank"');
     expect(html).not.toContain(">system<");
-    expect(resumeScheduleWarning).toContain("bounded catch-up window");
-    expect(resumeScheduleWarning).toContain("Tasks already enqueued are unchanged");
+    expect(resumeScheduleWarnings.skip).toContain("skip occurrences missed");
+    expect(resumeScheduleWarnings.latest).toContain("most recent missed occurrence");
+    expect(resumeScheduleWarnings.all).toContain("continue until the schedule catches up");
 
     const runHtml = renderToStaticMarkup(
       createElement(

@@ -42,7 +42,15 @@ export {
 // Version 1 is the permanent baseline, installed whole from sql/schema.sql; every later version
 // arrives as one ordered, immutable step here. Each step declares its kind in this list and in
 // the file's own first line, and the runner refuses a step whose two declarations disagree.
-export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [];
+export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
+  {
+    fromVersion: 1,
+    toVersion: 2,
+    file: "0002-schedule-catchup-policies.sql",
+    description: "schedule catch-up policies",
+    kind: "additive",
+  },
+];
 
 function schemaMigrationPlan(lockTimeoutMs?: number): SchemaMigrationPlan {
   return {
