@@ -100,15 +100,15 @@ describe("the 0.1.5 release", () => {
     }
   });
 
-  it("names the released version on the site from the package and its commands from support.json", async () => {
-    const landing = await read("site/src/routes/index.tsx");
-    expect(landing).toContain('import { WORKHORSE_VERSION } from "@stablemates/workhorse/version"');
-    expect(landing).toContain('import support from "../../../support.json"');
-    // `site/src/routes/index.tsx` owns this mark, and its `BetaMark` renders the imported constant.
-    // The check pins that interpolation, not the words beside it. The mark has been reworded once
-    // already, and the `not.toMatch` below is what forbids a hand-typed version.
-    expect(landing).toContain("v{WORKHORSE_VERSION}");
-    expect(landing).not.toMatch(/\d+\.\d+\.\d+/);
+  it("names the released version on the site from the package", async () => {
+    // SM-734 took the beta mark and the install panel off the landing page. The docs layout's
+    // sidebar banner is the surface that still prints the version, and it must interpolate the
+    // package constant. The `not.toMatch` below forbids a hand-typed version on either route.
+    const docsLayout = await read("site/src/routes/docs.tsx");
+    expect(docsLayout).toContain('import { WORKHORSE_VERSION } from "@stablemates/workhorse/version"');
+    expect(docsLayout).toContain("v{WORKHORSE_VERSION}");
+    expect(docsLayout).not.toMatch(/\d+\.\d+\.\d+/);
+    expect(await read("site/src/routes/index.tsx")).not.toMatch(/\d+\.\d+\.\d+/);
 
     expect(await read("docs/compatibility.md")).toContain(
       `The current release is \`${releaseVersion}\`.`,
@@ -150,7 +150,6 @@ describe("the public beta line", () => {
   it("labels public surfaces and keeps the compatibility boundary in durable documentation", async () => {
     const surfaces = [
       "README.md",
-      "site/src/routes/index.tsx",
       "site/content/docs/index.mdx",
       "dashboard/app/src/brand.tsx",
       "CHANGELOG.md",
