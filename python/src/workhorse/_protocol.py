@@ -76,18 +76,27 @@ def assert_compatible(rows: Sequence[Mapping[str, object]]) -> None:
         raise ProtocolCompatibilityError(refusal)
 
 
+def serialize_request_values(
+    requests: Sequence[EnqueueRequest],
+    default_queue: str,
+    trace_context: Mapping[str, str] | None = None,
+) -> list[dict[str, Json]]:
+    """Return the batch as the values enqueue_many_v1 receives, before JSON encoding."""
+    if len(requests) > MAX_BATCH_SIZE:
+        raise ValueError(f"enqueue_many accepts at most {MAX_BATCH_SIZE} requests")
+    return [serialize_request(request, default_queue, trace_context) for request in requests]
+
+
 def serialize_requests(
     requests: Sequence[EnqueueRequest],
     default_queue: str,
     trace_context: Mapping[str, str] | None = None,
 ) -> str:
-    if len(requests) > MAX_BATCH_SIZE:
-        raise ValueError(f"enqueue_many accepts at most {MAX_BATCH_SIZE} requests")
-    return json.dumps(
-        [serialize_request(request, default_queue, trace_context) for request in requests],
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
+    return encode_request_values(serialize_request_values(requests, default_queue, trace_context))
+
+
+def encode_request_values(values: Sequence[Mapping[str, Json]]) -> str:
+    return json.dumps(list(values), separators=(",", ":"), ensure_ascii=False)
 
 
 def serialize_schedules(definitions: Sequence[ScheduleDefinition], default_queue: str) -> str:

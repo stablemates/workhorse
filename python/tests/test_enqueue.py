@@ -8,7 +8,16 @@ import pytest
 from protocol_fixtures import assert_fixture_execution, read_protocol_fixture
 from test_protocol_conformance import assert_value
 
-from workhorse import EnqueueOptions, EnqueueRequest, Idempotency, ProtocolCompatibilityError, Queue
+from workhorse import (
+    EnqueueOptions,
+    EnqueueRequest,
+    Idempotency,
+    ProtocolCompatibilityError,
+    Queue,
+    TaskContractValidationError,
+    TaskContractVersion,
+    TaskTypeContracts,
+)
 from workhorse._statements import MINIMUM_SCHEMA_VERSION, PROTOCOL_VERSION
 
 
@@ -182,3 +191,58 @@ def test_batch_preserves_result_order() -> None:
         ("one", "accepted"),
         ("two", "replayed"),
     ]
+
+
+def test_contracted_batches_look_each_task_type_up_once() -> None:
+    compatibility = [
+        {"kind": "schema", "version": MINIMUM_SCHEMA_VERSION},
+        {"kind": "protocol", "version": PROTOCOL_VERSION},
+    ]
+    definition = {
+        "version": "v1",
+        "schema": {"payload": {"type": "object", "required": ["name"]}, "result": True},
+        "payload_max_bytes": 2048,
+        "result_max_bytes": 4096,
+        "payload_redact_keys": ["secret"],
+        "result_redact_keys": [],
+    }
+    connection = Connection(
+        [
+            compatibility,
+            [{"synced": True}],
+            compatibility,
+            [definition],
+            [],
+            [
+                {"ordinal": 1, "task_id": "first", "outcome": "accepted", "reason": None},
+                {"ordinal": 2, "task_id": "second", "outcome": "accepted", "reason": None},
+                {"ordinal": 3, "task_id": "third", "outcome": "accepted", "reason": None},
+            ],
+        ]
+    )
+    queue = Queue(connection, default_queue="go-contract")
+    queue.sync_contracts({"email.send": TaskTypeContracts("v1", {"v1": TaskContractVersion()})})
+
+    results = queue.enqueue_many_with_results(
+        [
+            EnqueueRequest("email.send", {"name": "one"}),
+            EnqueueRequest("email.send", {"name": "two"}),
+            EnqueueRequest("audit.log", {}),
+        ]
+    )
+    assert [result.task_id for result in results] == ["first", "second", "third"]
+    lookups = [sql for sql, _ in connection.calls if "get_contract_definition_v1" in sql]
+    assert len(lookups) == 2
+    assert len(connection.calls) == 6
+    serialized = json.loads(str(connection.calls[5][1][0]))
+    assert serialized[0]["contractVersion"] == "v1"
+    assert serialized[1]["contractVersion"] == "v1"
+    assert serialized[0]["payloadMaxBytes"] == 2048
+    assert serialized[0]["sensitivePayloadKeys"] == ["secret"]
+    assert serialized[2]["contractVersion"] is None
+    assert serialized[2]["payloadMaxBytes"] == 1048576
+
+    connection.responses = [compatibility, [definition]]
+    with pytest.raises(TaskContractValidationError) as rejected:
+        queue.enqueue_many_with_results([EnqueueRequest("email.send", {"missing": "name"})])
+    assert rejected.value.kind == "payload"

@@ -29,7 +29,8 @@ from ._external_waits import (
     validate_wait_name as _validate_wait_name,
 )
 from ._protocol import (
-    serialize_requests as _serialize_requests,
+    encode_request_values as _encode_request_values,
+    serialize_request_values as _serialize_request_values,
     serialize_schedules as _serialize_schedules,
 )
 from ._statements import STATEMENTS as _STATEMENTS
@@ -118,18 +119,20 @@ class Queue:
         if not requests:
             return []
         _assert_sync_compatible(self._executor)
-        values = cast(
-            list[dict[str, Json]],
-            json.loads(_serialize_requests(requests, self.default_queue, _inject_trace_context())),
-        )
+        values = _serialize_request_values(requests, self.default_queue, _inject_trace_context())
         if self._contracts_enabled:
+            # One lookup per distinct task type: a batch of one type costs one round trip.
+            definitions: dict[str, _Row | None] = {}
             for request, value in zip(requests, values, strict=True):
-                rows = self._executor.rows(_STATEMENTS.get_contract, (request.type, None))
-                if rows:
+                if request.type not in definitions:
+                    rows = self._executor.rows(_STATEMENTS.get_contract, (request.type, None))
+                    definitions[request.type] = rows[0] if rows else None
+                definition = definitions[request.type]
+                if definition is not None:
                     _apply_contract(
-                        rows[0], request.type, request.payload, value, self._contract_validators
+                        definition, request.type, request.payload, value, self._contract_validators
                     )
-        payload = json.dumps(values, separators=(",", ":"), ensure_ascii=False)
+        payload = _encode_request_values(values)
         try:
             return _results(self._executor.rows(_STATEMENTS.enqueue_many, (payload,)))
         except Exception as error:
@@ -298,18 +301,19 @@ class AsyncQueue:
         if not requests:
             return []
         await _assert_async_compatible(self._executor)
-        values = cast(
-            list[dict[str, Json]],
-            json.loads(_serialize_requests(requests, self.default_queue, _inject_trace_context())),
-        )
+        values = _serialize_request_values(requests, self.default_queue, _inject_trace_context())
         if self._contracts_enabled:
+            definitions: dict[str, _Row | None] = {}
             for request, value in zip(requests, values, strict=True):
-                rows = await self._executor.rows(_STATEMENTS.get_contract, (request.type, None))
-                if rows:
+                if request.type not in definitions:
+                    rows = await self._executor.rows(_STATEMENTS.get_contract, (request.type, None))
+                    definitions[request.type] = rows[0] if rows else None
+                definition = definitions[request.type]
+                if definition is not None:
                     _apply_contract(
-                        rows[0], request.type, request.payload, value, self._contract_validators
+                        definition, request.type, request.payload, value, self._contract_validators
                     )
-        payload = json.dumps(values, separators=(",", ":"), ensure_ascii=False)
+        payload = _encode_request_values(values)
         try:
             return _results(await self._executor.rows(_STATEMENTS.enqueue_many, (payload,)))
         except Exception as error:
