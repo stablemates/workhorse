@@ -2338,3 +2338,84 @@ func assertHandledWithin(t *testing.T, handled <-chan string, expected string, t
 		t.Fatalf("notification did not wake %q before the poll interval", expected)
 	}
 }
+
+type statementRecordingTracer struct {
+	mu         sync.Mutex
+	statements []string
+}
+
+func (tracer *statementRecordingTracer) TraceQueryStart(
+	ctx context.Context,
+	_ *pgx.Conn,
+	data pgx.TraceQueryStartData,
+) context.Context {
+	tracer.mu.Lock()
+	tracer.statements = append(tracer.statements, data.SQL)
+	tracer.mu.Unlock()
+	return ctx
+}
+
+func (*statementRecordingTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func (tracer *statementRecordingTracer) count(fragment string) int {
+	tracer.mu.Lock()
+	defer tracer.mu.Unlock()
+	total := 0
+	for _, statement := range tracer.statements {
+		if strings.Contains(statement, fragment) {
+			total++
+		}
+	}
+	return total
+}
+
+func TestWorkerClaimPathLeavesPromotionToTheMaintenanceTick(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-claim-statements")
+	ctx := context.Background()
+	tracer := &statementRecordingTracer{}
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ConnConfig.Tracer = tracer
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-claim-statements")
+	retryAt := time.Now().Add(-time.Second)
+	if _, err := queue.Enqueue(ctx, "noop", map[string]any{}, workhorse.EnqueueOptions{RunAt: &retryAt}); err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queues: []string{"go-claim-statements", "go-claim-statements-secondary"}, WorkerID: "go-claim-statements",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.Handle("noop", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+		return nil, nil
+	})
+
+	tracer.mu.Lock()
+	tracer.statements = nil
+	tracer.mu.Unlock()
+	processed, err := worker.RunOnce(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !processed {
+		t.Fatal("worker did not claim the due task")
+	}
+	if promotions := tracer.count("promote_v1"); promotions != 0 {
+		t.Fatalf("claim path issued promote_v1 %d times; promotion belongs to tick_v1", promotions)
+	}
+	if ticks := tracer.count("tick_v1"); ticks != 1 {
+		t.Fatalf("expected one maintenance tick, recorded %d", ticks)
+	}
+	if claims := tracer.count("claim_many_v1"); claims != 1 {
+		t.Fatalf("expected one claim for the first queue, recorded %d", claims)
+	}
+}

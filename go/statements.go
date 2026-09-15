@@ -72,7 +72,6 @@ const (
 	deregisterWorkerStatementName        = "deregister_worker_v1"
 	fireDueSchedulesStatementName        = "fire_due_schedules_v2"
 	defaultScheduleTimezone              = "UTC"
-	promoteStatementName                 = "promote_v1"
 	claimManyStatementName               = "claim_many_v1"
 	heartbeatManyStatementName           = "heartbeat_many_v1"
 	expireOwnedStatementName             = "expire_owned_telemetry_v1"

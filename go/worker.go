@@ -834,14 +834,10 @@ func (worker *Worker) claimNext(ctx context.Context, executor Executor) (*Claime
 	return &tasks[0], nil
 }
 
+// claimNextMany fills up to limit slots from the configured queues in round-robin order.
+// Promotion of due scheduled rows belongs to the maintenance tick, which every worker runs on
+// its maintenance interval, so the claim path issues only claim_many_v1.
 func (worker *Worker) claimNextMany(ctx context.Context, executor Executor, limit int) ([]ClaimedTask, error) {
-	if _, err := executor.Query(
-		ctx,
-		internalStatementRegistry[promoteStatementName],
-		workerPromotionLimit,
-	); err != nil {
-		return nil, err
-	}
 	tasks := make([]ClaimedTask, 0, limit)
 	for range worker.queues {
 		queue := worker.queues[worker.nextQueueIndex]

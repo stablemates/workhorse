@@ -510,7 +510,8 @@ whole-millisecond values.
 `Worker.Run` and `Worker.RunOnce` share one execution permit. Concurrent calls serialize, so they
 cannot multiply the concurrency budget or race the queue cursor.
 
-`Worker.RunOnce` calls `tick_v1(100, 100)` and then `promote_v1(100)`. If the tick lock is available,
+`Worker.RunOnce` calls `tick_v1(100, 100)`, which promotes due scheduled rows and recovers expired
+leases. The claim path issues no separate `promote_v1`. If the tick lock is available,
 it also evaluates every configured schedule namespace before claiming. It then
 checks configured queues in round-robin order until one `claim_many_v1(..., 1, ...)` succeeds or every queue is empty.
 It executes at most one matching handler outside a transaction. It calls `complete_v1` or `fail_v1`
