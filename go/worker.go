@@ -793,9 +793,13 @@ func (worker *Worker) recordRecovery(ctx context.Context, row Row) {
 			slog.LevelInfo,
 			leasesRecoveredEvent,
 			leasesRecoveredLogMessage,
-			slog.Int(recoveryRowsAffectedAttribute, rowsAffected),
-			slog.Int(recoveryExpiredLeasesAttribute, expired),
-			slog.Int(recoveryRetriedAttribute, retried),
+			func() []any {
+				return []any{
+					slog.Int(recoveryRowsAffectedAttribute, rowsAffected),
+					slog.Int(recoveryExpiredLeasesAttribute, expired),
+					slog.Int(recoveryRetriedAttribute, retried),
+				}
+			},
 		)
 	}
 }
@@ -882,7 +886,7 @@ func (worker *Worker) claimNextMany(ctx context.Context, executor Executor, limi
 				slog.LevelDebug,
 				taskClaimedEvent,
 				taskClaimedLogMessage,
-				taskLogAttributes(task, worker.workerID)...,
+				func() []any { return taskLogAttributes(task, worker.workerID) },
 			)
 			if worker.metrics.enabled {
 				worker.metrics.claimed.Add(ctx, 1, taskMetricOptions(task))
@@ -917,22 +921,24 @@ func (worker *Worker) execute(
 		slog.LevelDebug,
 		handlerStartedEvent,
 		handlerStartedLogMessage,
-		taskLogAttributes(task, worker.workerID)...,
+		func() []any { return taskLogAttributes(task, worker.workerID) },
 	)
 	defer func() {
 		finishHandlerSpan(span, outcome, resultError)
 		worker.metrics.recordHandler(handlerParent, task, outcome, time.Since(startedAt))
-		attributes := append(
-			taskLogAttributes(task, worker.workerID),
-			slog.String(handlerOutcomeAttribute, string(outcome)),
-		)
+		attributes := func() []any {
+			return append(
+				taskLogAttributes(task, worker.workerID),
+				slog.String(handlerOutcomeAttribute, string(outcome)),
+			)
+		}
 		logWorkerEvent(
 			handlerParent,
 			worker.logger,
 			slog.LevelInfo,
 			executionFinishedEvent,
 			executionFinishedLogMessage,
-			attributes...,
+			attributes,
 		)
 		logWorkerEvent(
 			handlerParent,
@@ -940,7 +946,7 @@ func (worker *Worker) execute(
 			slog.LevelDebug,
 			handlerFinishedEvent,
 			handlerFinishedLogMessage,
-			attributes...,
+			attributes,
 		)
 	}()
 	cancelDeadline := func() {}
@@ -1237,7 +1243,9 @@ func (worker *Worker) recordRejectedHeartbeat(
 	}
 	logWorkerEvent(
 		ctx, worker.logger, slog.LevelInfo, heartbeatRejectedEvent, heartbeatRejectedLogMessage,
-		append(taskLogAttributes(task, worker.workerID), slog.String(heartbeatStatusAttribute, string(status)))...,
+		func() []any {
+			return append(taskLogAttributes(task, worker.workerID), slog.String(heartbeatStatusAttribute, string(status)))
+		},
 	)
 }
 
@@ -1439,7 +1447,7 @@ func (worker *Worker) complete(ctx context.Context, executor Executor, task Clai
 		slog.LevelInfo,
 		taskCompletedEvent,
 		taskCompletedLogMessage,
-		taskLogAttributes(task, worker.workerID)...,
+		func() []any { return taskLogAttributes(task, worker.workerID) },
 	)
 	return nil
 }
@@ -1535,7 +1543,9 @@ func (worker *Worker) failWithState(
 		slog.LevelInfo,
 		taskFailureProcessedEvent,
 		taskFailureProcessedLogMessage,
-		append(taskLogAttributes(task, worker.workerID), slog.String(attemptOutcomeAttribute, state))...,
+		func() []any {
+			return append(taskLogAttributes(task, worker.workerID), slog.String(attemptOutcomeAttribute, state))
+		},
 	)
 	switch state {
 	case workerFailureReady, workerFailureScheduled, workerFailureFailed:

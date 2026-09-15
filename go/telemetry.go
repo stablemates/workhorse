@@ -279,16 +279,22 @@ func taskLogAttributes(task ClaimedTask, workerID string) []any {
 	}
 }
 
+// logWorkerEvent emits one structured worker event. Attributes are built lazily so the
+// default discard logger costs no allocation on the per-task path.
 func logWorkerEvent(
 	ctx context.Context,
 	logger *slog.Logger,
 	level slog.Level,
 	event string,
 	message string,
-	attributes ...any,
+	attributes func() []any,
 ) {
-	values := make([]any, 0, len(attributes)+1)
+	if !logger.Enabled(ctx, level) {
+		return
+	}
+	built := attributes()
+	values := make([]any, 0, len(built)+1)
 	values = append(values, slog.String(eventNameAttribute, event))
-	values = append(values, attributes...)
+	values = append(values, built...)
 	logger.Log(ctx, level, message, values...)
 }

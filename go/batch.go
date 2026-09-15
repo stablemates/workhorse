@@ -255,12 +255,16 @@ func (coordinator *batchCoordinator) dispatch(batch []*batchMember) {
 		slog.LevelDebug,
 		batchDispatchedEvent,
 		batchDispatchedLogMessage,
-		slog.String(queueNameAttribute, queue),
-		slog.String(taskTypeAttribute, coordinator.taskType),
-		slog.String(workerIDAttribute, coordinator.worker.workerID),
-		slog.Int(batchSizeAttribute, len(batch)),
-		slog.Float64(batchLingerAttribute, float64(linger)/float64(time.Millisecond)),
-		slog.Bool(batchFullAttribute, full),
+		func() []any {
+			return []any{
+				slog.String(queueNameAttribute, queue),
+				slog.String(taskTypeAttribute, coordinator.taskType),
+				slog.String(workerIDAttribute, coordinator.worker.workerID),
+				slog.Int(batchSizeAttribute, len(batch)),
+				slog.Float64(batchLingerAttribute, float64(linger)/float64(time.Millisecond)),
+				slog.Bool(batchFullAttribute, full),
+			}
+		},
 	)
 	batchID, hasBatchID := newUUID()
 	if hasBatchID {
