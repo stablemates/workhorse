@@ -4,39 +4,38 @@ This is the authoritative implementation snapshot for schema version 1. “Suppo
 
 ## At a glance
 
-| Supported core                                             | Partial today                                 | Not supported today                    |
-| ---------------------------------------------------------- | --------------------------------------------- | -------------------------------------- |
-| Transactional idempotent immediate/delayed batch enqueue   |                                               |                                        |
-| FIFO `SKIP LOCKED` claims                                  |                                               |                                        |
-| Leases, heartbeats, fencing, recovery                      |                                               | Cross-queue concurrency policies       |
-| Deploy-synchronized worker-owned schedules                 |                                               | Arbitrary scheduled SQL                |
-| Persisted retry policies and terminal failure              | Success-path comparative baseline             | Workflow runtime                       |
-| Queue pause/resume/purge controls and OpenTelemetry        | Operations dashboard without SSO or RBAC      | Rust SDK                               |
-| Four ORM providers and framework-neutral dashboard host    |                                               | Online production migration guarantees |
-| Python and Go SDKs at full parity with TypeScript          |                                               | Public HTTP ingress API                |
-| Live runtime plus immutable outcomes                       |                                               |                                        |
-| Append-only events and attempt history                     |                                               |                                        |
-| Immutable named checkpoint replay                          |                                               |                                        |
-|                                                            | Task-drawer outcome and checkpoint inspection |                                        |
-| Lease-releasing named durable timer waits                  |                                               |                                        |
-| Idempotent attributed signals to waiting executions        |                                               |                                        |
-| Bounded attribution-safe automated retention               |                                               |                                        |
-| Configurable bounded worker concurrency                    |                                               |                                        |
-| Durable queue and keyed concurrency policies               |                                               |                                        |
-| Durable queue and keyed token-bucket rate limits           |                                               |                                        |
-| Immediate and cooperative fenced cancellation              |                                               |                                        |
-| Dedicated worker process CLI and graceful signal drain     |                                               |                                        |
-| Absolute deadlines and per-attempt execution timeouts      |                                               |                                        |
-| Cursor dead letters and audited idempotent redrive         |                                               |                                        |
-| Cross-state operator listing and merged lifecycle timeline |                                               |                                        |
-| Fenced bounded latest-value progress                       |                                               |                                        |
-| Durable worker fleet registration and remote pause         |                                               |                                        |
-| Framework-neutral dashboard host and Node bridge           |                                               |                                        |
-| Database-authoritative settings and audited operator UI    |                                               |                                        |
-| Project scaffolding and schema CLI commands                |                                               |                                        |
-| Strict priorities, keyed debounce, and keyed throttle      |                                               |                                        |
-| Notification-assisted dispatch with polling fallback       |                                               |                                        |
-| Consistent bounded operational health snapshots            |                                               |                                        |
+| Supported core                                             | Partial today                            | Not supported today                    |
+| ---------------------------------------------------------- | ---------------------------------------- | -------------------------------------- |
+| Transactional idempotent immediate/delayed batch enqueue   |                                          |                                        |
+| FIFO `SKIP LOCKED` claims                                  |                                          |                                        |
+| Leases, heartbeats, fencing, recovery                      |                                          | Cross-queue concurrency policies       |
+| Deploy-synchronized worker-owned schedules                 |                                          | Arbitrary scheduled SQL                |
+| Persisted retry policies and terminal failure              | Success-path comparative baseline        | Workflow runtime                       |
+| Queue pause/resume/purge controls and OpenTelemetry        | Operations dashboard without SSO or RBAC | Rust SDK                               |
+| Four ORM providers and framework-neutral dashboard host    |                                          | Online production migration guarantees |
+| Python and Go SDKs at full parity with TypeScript          |                                          | Public HTTP ingress API                |
+| Live runtime plus immutable outcomes                       |                                          |                                        |
+| Append-only events and attempt history                     |                                          |                                        |
+| Immutable named checkpoint replay                          |                                          |                                        |
+| Lease-releasing named durable timer waits                  |                                          |                                        |
+| Idempotent attributed signals to waiting executions        |                                          |                                        |
+| Bounded attribution-safe automated retention               |                                          |                                        |
+| Configurable bounded worker concurrency                    |                                          |                                        |
+| Durable queue and keyed concurrency policies               |                                          |                                        |
+| Durable queue and keyed token-bucket rate limits           |                                          |                                        |
+| Immediate and cooperative fenced cancellation              |                                          |                                        |
+| Dedicated worker process CLI and graceful signal drain     |                                          |                                        |
+| Absolute deadlines and per-attempt execution timeouts      |                                          |                                        |
+| Cursor dead letters and audited idempotent redrive         |                                          |                                        |
+| Cross-state operator listing and merged lifecycle timeline |                                          |                                        |
+| Fenced bounded latest-value progress                       |                                          |                                        |
+| Durable worker fleet registration and remote pause         |                                          |                                        |
+| Framework-neutral dashboard host and Node bridge           |                                          |                                        |
+| Database-authoritative settings and audited operator UI    |                                          |                                        |
+| Project scaffolding and schema CLI commands                |                                          |                                        |
+| Strict priorities, keyed debounce, and keyed throttle      |                                          |                                        |
+| Notification-assisted dispatch with polling fallback       |                                          |                                        |
+| Consistent bounded operational health snapshots            |                                          |                                        |
 
 The terminal operator surface also supports cursor continuation for tasks, timelines, and failures;
 filtered bulk redrive with read-only previews and explicit replay identities; and attributed signal
