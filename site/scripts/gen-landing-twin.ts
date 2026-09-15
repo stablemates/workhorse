@@ -33,6 +33,11 @@ const twin = new URL("../dist/client/index.md", import.meta.url);
 /** Elements whose content is navigation or decoration rather than the page's argument. */
 const skipped = new Set(["nav", "footer", "header", "script", "style", "noscript", "svg", "input"]);
 
+/** Skipped tags, plus anything the page itself hides from assistive technology. */
+function isSkipped(element: Element): boolean {
+  return skipped.has(element.tagName) || attribute(element, "aria-hidden") === "true";
+}
+
 function isElement(node: ChildNode): node is Element {
   return "tagName" in node;
 }
@@ -69,7 +74,7 @@ function textOf(node: ParentNode): string {
   let text = "";
   for (const child of childrenOf(node)) {
     if (isText(child)) text += child.value;
-    else if (isElement(child) && !skipped.has(child.tagName)) text += textOf(child);
+    else if (isElement(child) && !isSkipped(child)) text += textOf(child);
   }
   return text;
 }
@@ -85,7 +90,7 @@ function inline(node: ParentNode): string {
       out += child.value;
       continue;
     }
-    if (!isElement(child) || skipped.has(child.tagName)) continue;
+    if (!isElement(child) || isSkipped(child)) continue;
     if (child.tagName === "code") {
       out += `\`${textOf(child).trim()}\``;
     } else if (child.tagName === "a") {
@@ -166,7 +171,7 @@ function isFileName(element: Element): boolean {
 /** Whether a subtree holds anything `blocks` would emit on its own. */
 function hasBlock(node: ParentNode): boolean {
   for (const child of childrenOf(node)) {
-    if (!isElement(child) || skipped.has(child.tagName)) continue;
+    if (!isElement(child) || isSkipped(child)) continue;
     if (/^h[1-6]$/.test(child.tagName)) return true;
     if (["p", "li", "pre"].includes(child.tagName)) return true;
     if (child.tagName === "code" && classesOf(child).includes("block")) return true;
@@ -204,7 +209,7 @@ function blocks(node: ParentNode, out: string[]): void {
       pending += child.value;
       continue;
     }
-    if (!isElement(child) || skipped.has(child.tagName)) continue;
+    if (!isElement(child) || isSkipped(child)) continue;
 
     if (/^h[1-6]$/.test(child.tagName)) {
       flush();

@@ -72,8 +72,7 @@ export function SiteFooter() {
             <span className="text-[14px] font-semibold tracking-tight">Workhorse</span>
           </div>
           <p className="mt-3 max-w-xs text-[13px] leading-relaxed text-fd-muted-foreground">
-            A durable task queue for PostgreSQL. Evidence-first, and explicit about what it does not
-            promise.
+            A durable task queue for PostgreSQL.
           </p>
         </div>
 

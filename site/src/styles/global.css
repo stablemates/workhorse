@@ -117,32 +117,6 @@ body {
 
 /* ---------- Structural primitives ---------- */
 
-/* A soft accent wash behind the hero. One gradient, no texture. */
-.wh-hero-glow {
-  background: radial-gradient(
-    58% 48% at 50% 0%,
-    color-mix(in oklab, var(--wh-accent) 9%, transparent),
-    transparent 72%
-  );
-}
-
-/* ---------- Wide-viewport density ----------
- *
- * On wide monitors the site was judged best at the density of ~150% browser
- * zoom; these rules reproduce that verdict at 100%. `zoom` scales layout,
- * type, and spacing together, and each threshold leaves the scaled layout
- * comfortable inside the viewport, so breakpoint styles never disagree with
- * the zoomed layout. Narrower screens, where the layout already fills the
- * width, stay 1:1.
- */
-/* Leave room below the hero on laptop screens, including browser chrome. */
-@media (min-width: 1024px) and (max-width: 1679px) {
-  .wh-hero-copy,
-  .wh-hero-install {
-    padding-block: 3rem;
-  }
-}
-
 .wh-derby-track {
   position: relative;
   height: 1.25rem;
@@ -179,18 +153,6 @@ body {
   .wh-derby-runner,
   .wh-derby-distance {
     transition: transform 120ms linear;
-  }
-}
-
-@media (min-width: 1680px) {
-  .wh-page-scale {
-    zoom: 1.25;
-  }
-}
-
-@media (min-width: 2048px) {
-  .wh-page-scale {
-    zoom: 1.5;
   }
 }
 
@@ -528,23 +490,105 @@ body {
   --wh-accent: var(--color-brand-600);
   --wh-rule: color-mix(in oklab, var(--color-ink-900) 14%, transparent);
   --wh-panel: #fff;
-  --wh-grid-line: color-mix(in oklab, var(--color-ink-900) 5%, transparent);
 }
 
 .dark .wh-landing {
   --wh-accent: var(--color-brand-400);
   --wh-rule: color-mix(in oklab, var(--color-ink-50) 16%, transparent);
   --wh-panel: color-mix(in oklab, var(--color-ink-900) 88%, black);
-  --wh-grid-line: color-mix(in oklab, var(--color-ink-50) 6%, transparent);
 }
 
-/* Blueprint grid behind the hero. Static by design, so no motion preference branch. */
+/* ---------- Hero: the work ledger ----------
+ *
+ * The first view keeps the page surface in both schemes. A static schema
+ * grid sits behind the copy and fades out before the ledger.
+ */
 .wh-hero-grid {
+  top: 2rem;
+  block-size: 50%;
+  --wh-grid-line: color-mix(in oklab, var(--color-ink-900) 9%, transparent);
   background-image:
     linear-gradient(to right, var(--wh-grid-line) 1px, transparent 1px),
     linear-gradient(to bottom, var(--wh-grid-line) 1px, transparent 1px);
   background-size: 48px 48px;
-  mask-image: linear-gradient(to bottom, black, transparent 82%);
+  mask-image: linear-gradient(to bottom, transparent, black 15%, black 70%, transparent);
+}
+
+.dark .wh-hero-grid {
+  --wh-grid-line: color-mix(in oklab, var(--color-ink-50) 8%, transparent);
+}
+
+.wh-ledger-head,
+.wh-ledger-row {
+  grid-template-columns: 5.5rem 7rem minmax(0, 1fr) 6.5rem 4rem 6rem;
+  border-color: var(--wh-rule);
+}
+
+@media (max-width: 639px) {
+  .wh-ledger-head,
+  .wh-ledger-row {
+    grid-template-columns: 5rem minmax(0, 1fr) auto;
+  }
+  .wh-ledger-head > :nth-child(2),
+  .wh-ledger-head > :nth-child(3),
+  .wh-ledger-head > :nth-child(5),
+  .wh-ledger-row > :nth-child(2),
+  .wh-ledger-row > :nth-child(3),
+  .wh-ledger-row > :nth-child(5) {
+    display: none;
+  }
+}
+
+.wh-ledger-window {
+  block-size: 13.5rem;
+  mask-image: linear-gradient(to bottom, transparent, black 10%, black 70%, transparent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .wh-ledger-roll {
+    animation: wh-ledger-roll 42s linear infinite;
+  }
+}
+
+@keyframes wh-ledger-roll {
+  to {
+    transform: translateY(-50%);
+  }
+}
+
+.wh-ledger-dot {
+  block-size: 0.4rem;
+  inline-size: 0.4rem;
+  border-radius: 9999px;
+  background-color: currentColor;
+}
+
+.wh-ledger-ok {
+  color: var(--color-safety-600);
+}
+.dark .wh-ledger-ok {
+  color: var(--color-safety-400);
+}
+.wh-ledger-live {
+  color: var(--wh-accent);
+}
+.wh-ledger-live .wh-ledger-dot {
+  animation: wh-pulse 2.4s ease-in-out infinite;
+}
+.wh-ledger-idle {
+  color: var(--color-fd-muted-foreground);
+}
+.wh-ledger-warn {
+  color: var(--color-signal-700);
+}
+.dark .wh-ledger-warn {
+  color: var(--color-signal-300);
+}
+.wh-ledger-dead {
+  color: color-mix(in oklab, var(--color-ink-900) 70%, var(--color-signal-700));
+}
+.dark .wh-ledger-dead {
+  color: var(--color-ink-300);
 }
 
 .wh-band-grid {

@@ -129,39 +129,6 @@ function Stepper({ steps }: { steps: readonly StepperStep[] }) {
   );
 }
 
-/* ---------- 01 · transactional enqueue ---------- */
-
-export function EnqueueDiagram() {
-  return (
-    <Diagram label="one transaction, one fate">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-0">
-        <div className="wh-rule shrink-0 rounded-lg border border-dashed px-3.5 py-3">
-          <p className="wh-mono-label">begin … commit</p>
-          <div className="mt-2.5 flex flex-col gap-1.5">
-            <Chip>INSERT INTO orders</Chip>
-            <Chip>enqueue(&quot;order.confirm&quot;)</Chip>
-          </div>
-        </div>
-        <Wire className="hidden flex-1 sm:block sm:min-w-5" arrow />
-        <div className="flex shrink-0 flex-col gap-2.5 sm:pl-2">
-          <p className="flex items-center gap-2.5 text-[13px]">
-            <Pip tone="good" />
-            <span className="font-mono font-medium tracking-tight">COMMIT</span>
-            <span className="text-fd-muted-foreground">the order and its task appear together</span>
-          </p>
-          <p className="flex items-center gap-2.5 text-[13px]">
-            <Pip tone="off" />
-            <span className="font-mono font-medium tracking-tight">ROLLBACK</span>
-            <span className="text-fd-muted-foreground">
-              neither exists, so nothing needs cleanup
-            </span>
-          </p>
-        </div>
-      </div>
-    </Diagram>
-  );
-}
-
 /* ---------- 02 · checkpoints ---------- */
 
 const crashSteps: readonly StepperStep[] = [

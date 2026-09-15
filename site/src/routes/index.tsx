@@ -1,9 +1,6 @@
-import { WORKHORSE_VERSION } from "@stablemates/workhorse/version";
 import { createFileRoute } from "@tanstack/react-router";
 import { HomeLayout } from "fumadocs-ui/layouts/home";
 import { useState, type ReactNode } from "react";
-
-import support from "../../../support.json";
 
 import { baseOptions } from "@/app/layout.config";
 import { type CodeTab, CodeTabs } from "@/components/code-sample";
@@ -15,7 +12,6 @@ import {
   DeadLettersDiagram,
   DebounceDiagram,
   DependenciesDiagram,
-  EnqueueDiagram,
   ExternalWaitsDiagram,
   FleetOperationsDiagram,
   FlowControlDiagram,
@@ -105,23 +101,6 @@ interface Feature {
 }
 
 const features: readonly Feature[] = [
-  {
-    id: "transactional-enqueue",
-    kicker: "transactional enqueue",
-    title: "The task and your data commit together.",
-    lede: (
-      <>
-        Pass your open transaction as the last argument and the task becomes one more row in it. If
-        the order rolls back, the task was never enqueued. No outbox table, no relay process, no
-        two-phase anything.
-      </>
-    ),
-    file: "create-order.ts",
-    snippet: "enqueue",
-    href: "/docs/enqueue",
-    linkLabel: "Enqueue and transactions",
-    diagram: <EnqueueDiagram />,
-  },
   {
     id: "checkpoints",
     kicker: "checkpoints",
@@ -426,13 +405,6 @@ const ormTabs: readonly CodeTab[] = integrations
     snippet: entry.landingSnippet as LandingSnippetId,
   }));
 
-/** Equivalent enqueue calls through every supported language client. */
-const languageTabs: readonly CodeTab[] = [
-  { label: "typescript", file: "enqueue.ts", snippet: "languageTypeScript" },
-  { label: "python", file: "enqueue.py", snippet: "languagePython" },
-  { label: "go", file: "enqueue.go", snippet: "languageGo" },
-];
-
 const deployTabs: readonly CodeTab[] = [
   {
     label: "typescript",
@@ -518,42 +490,6 @@ function FeatureSection({ feature, index }: { feature: Feature; index: number })
   );
 }
 
-function BetaMark() {
-  return (
-    <div className="flex flex-wrap items-center gap-2 font-mono text-xs">
-      <span className="rounded-full bg-brand-100 px-2.5 py-1 font-semibold uppercase tracking-[0.12em] text-brand-800 dark:bg-brand-500/15 dark:text-brand-200">
-        Public beta
-      </span>
-      <a href="/docs/compatibility" className="wh-link-underline text-fd-muted-foreground">
-        v{WORKHORSE_VERSION} · compatibility
-      </a>
-    </div>
-  );
-}
-
-function InstallCommands() {
-  const commands = [
-    ["npm", support.install.node],
-    ["python", support.install.python],
-    ["go", support.install.go],
-  ] as const;
-
-  return (
-    <div className="space-y-3">
-      {commands.map(([language, command]) => (
-        <div key={language}>
-          <p className="mb-1 font-mono text-[10px] uppercase tracking-[0.14em] text-fd-muted-foreground">
-            {language}
-          </p>
-          <code className="block overflow-x-auto whitespace-nowrap rounded-md border px-3.5 py-2.5 font-mono text-[12px] wh-rule bg-(--wh-panel) text-fd-foreground">
-            <span className="wh-accent-text">$</span> {command}
-          </code>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function HeroActions() {
   return (
     <div className="flex flex-wrap items-center gap-3">
@@ -567,7 +503,7 @@ function HeroActions() {
         href={demoUrl}
         target="_blank"
         rel="noreferrer noopener"
-        className="inline-flex items-center gap-2 rounded-md border border-brand-700/30 px-5 py-2.5 text-[15px] font-medium text-brand-800 transition-colors hover:border-brand-700/60 hover:bg-brand-50 dark:border-brand-300/25 dark:text-brand-200 dark:hover:border-brand-300/50 dark:hover:bg-brand-500/10"
+        className="inline-flex items-center gap-2 rounded-md border border-brand-700/30 bg-(--wh-panel) px-5 py-2.5 text-[15px] font-medium text-brand-800 shadow-sm transition-colors hover:border-brand-700/60 hover:bg-brand-50 dark:border-brand-300/25 dark:text-brand-200 dark:hover:border-brand-300/50 dark:hover:bg-brand-500/10"
       >
         <span className="wh-status-dot" aria-hidden />
         Live demo
@@ -576,88 +512,110 @@ function HeroActions() {
   );
 }
 
+/**
+ * The first view is a work ledger. A schema grid sits behind the copy, the
+ * position line sits centered in one unbroken row, and a table of task rows
+ * rolls slowly beneath it: the product's own evidence rather than a picture
+ * of it. The headline's size follows the viewport so it never
+ * wraps, from a phone to a wide monitor.
+ */
 function Hero() {
   return (
-    <section className="relative overflow-hidden pt-6 sm:pt-8">
+    <section className="wh-hero relative overflow-hidden">
       <div aria-hidden className="wh-hero-grid pointer-events-none absolute inset-0" />
-      <div className="relative mx-auto grid w-full max-w-7xl border-t wh-rule lg:grid-cols-2">
-        <div className="wh-hero-copy flex flex-col justify-center border-b px-5 py-14 wh-rule sm:px-10 sm:py-20 lg:border-b-0 lg:border-r lg:px-8">
-          <BetaMark />
-          <h1 className="mt-7 max-w-xl text-balance text-4xl font-semibold leading-[1.08] tracking-[-0.035em] sm:text-5xl lg:text-[3.25rem]">
-            Durable tasks. <span className="wh-accent-text">The Postgres you already run.</span>
-          </h1>
-          <p className="mt-6 max-w-xl text-pretty text-lg leading-relaxed text-fd-muted-foreground">
-            Commit tasks with your application data. Recover after a crash. Wait without holding a
-            worker. A durable task queue for TypeScript, Python, and Go, with no separate broker.
-          </p>
-          <div className="mt-8">
-            <HeroActions />
-          </div>
-          <div className="mt-10 border-l-2 border-(--wh-accent) pl-4 text-sm leading-relaxed text-fd-muted-foreground">
-            PostgreSQL coordinates claims, retries, waits, schedules, and recovery. Your application
-            keeps its existing transaction and deployment model.
-          </div>
+      <div className="relative mx-auto flex w-full max-w-7xl flex-col items-center px-5 pt-16 text-center sm:pt-24 lg:px-8">
+        <h1 className="text-balance text-[clamp(1.75rem,2.5vw,2.5rem)] font-semibold sm:whitespace-nowrap leading-[1.08] tracking-[-0.035em]">
+          Harness <span className="wh-accent-text">the Postgres you already run.</span>
+        </h1>
+        <p className="mt-5 max-w-2xl text-pretty text-base leading-relaxed text-fd-muted-foreground sm:text-lg">
+          Durable tasks and fleet-wide concurrency control, run by the database you already trust.
+          No broker, no scheduler, nothing else to keep alive.
+        </p>
+        <div className="mt-8 flex justify-center">
+          <HeroActions />
         </div>
-        <div className="wh-hero-install bg-[#F2F0ED] px-5 py-14 sm:px-10 sm:py-20 lg:px-12 dark:bg-(--wh-panel)">
-          <p className="font-mono text-xs uppercase tracking-[0.14em] text-fd-muted-foreground">
-            Choose your runtime
-          </p>
-          <h2 className="mt-4 max-w-md text-2xl font-semibold tracking-tight">
-            One database protocol, three clients.
-          </h2>
-          <div className="mt-8">
-            <InstallCommands />
-          </div>
-          <a
-            href="/docs/installation"
-            className="wh-link-underline mt-5 inline-block text-sm font-medium"
-          >
-            Installation options →
-          </a>
-        </div>
+      </div>
+      <Ledger />
+      <div className="relative mx-auto w-full max-w-7xl px-5 pb-6 pt-6 lg:px-8">
+        <p className="mx-auto max-w-3xl text-center font-mono text-[11.5px] uppercase tracking-[0.12em] text-fd-muted-foreground sm:whitespace-nowrap">
+          PostgreSQL coordinates claims, retries, waits, schedules, and recovery
+        </p>
       </div>
     </section>
   );
 }
 
-function FeatureNavigation() {
+/**
+ * Rows for the hero ledger. The data is fixed so the server and the browser
+ * render the same markup; the states and timings are the shapes a real queue
+ * shows, not a live feed.
+ */
+const ledgerRows = [
+  ["a41f09c2", "billing", "invoice.finalize", "succeeded", "1/1", "184 ms"],
+  ["9be27d10", "notifications", "email.send", "succeeded", "2/5", "402 ms"],
+  ["c07d3e55", "billing", "settle-order", "sleeping", "1/3", "until 09:00"],
+  ["3f8a61b9", "indexing", "search.reindex", "running", "1/1", "2.1 s"],
+  ["e2c4907a", "exports", "report.csv", "retried", "3/5", "backoff 40 s"],
+  ["71d5b3ce", "notifications", "sms.send", "succeeded", "1/1", "96 ms"],
+  ["b8e01f4d", "approvals", "refund.review", "waiting", "1/1", "for a person"],
+  ["58c9a2e7", "billing", "capture", "succeeded", "1/1", "231 ms"],
+  ["d63f7b08", "webhooks", "stripe.deliver", "succeeded", "2/8", "318 ms"],
+  ["0a9e4c61", "indexing", "search.reindex", "waiting", "1/1", "on parent"],
+  ["f47b2d93", "exports", "report.pdf", "dead letter", "5/5", "redrive ready"],
+  ["2c15e8a4", "billing", "invoice.finalize", "succeeded", "1/1", "177 ms"],
+  ["6ed0b97f", "schedules", "nightly.rollup", "running", "1/1", "14.8 s"],
+  ["93a7c1e2", "notifications", "email.send", "succeeded", "1/1", "388 ms"],
+] as const;
+
+type LedgerState = (typeof ledgerRows)[number][3];
+
+const ledgerStateClass: Record<LedgerState, string> = {
+  succeeded: "wh-ledger-ok",
+  running: "wh-ledger-live",
+  sleeping: "wh-ledger-idle",
+  retried: "wh-ledger-warn",
+  waiting: "wh-ledger-idle",
+  "dead letter": "wh-ledger-dead",
+};
+
+/**
+ * A table of task rows rolling upward behind a fade at both edges. It is
+ * decoration, so it is hidden from assistive technology and from the
+ * Markdown twin, and it holds still under reduced motion.
+ */
+function Ledger() {
+  const rows = [...ledgerRows, ...ledgerRows];
   return (
-    <nav aria-labelledby="feature-navigation-title" className="wh-rule border-b">
-      <div className="mx-auto grid w-full max-w-7xl gap-7 px-5 py-9 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] lg:gap-14 lg:px-8">
-        <div>
-          <p id="feature-navigation-title" className="text-lg font-semibold tracking-tight">
-            Find the guarantee your task needs.
-          </p>
-          <p className="mt-2 max-w-sm text-sm leading-relaxed text-fd-muted-foreground">
-            Explore working examples below, or follow the quickstart to run your first task.
-          </p>
-          <a
-            href="/docs/quickstart"
-            className="wh-link-underline mt-3 inline-block text-sm font-medium"
-          >
-            Start with the quickstart →
-          </a>
-          <a href="#derby" className="wh-link-underline ml-5 inline-block text-sm font-medium">
-            Play the Derby →
-          </a>
-        </div>
-        <ul className="grid gap-x-6 sm:grid-cols-2">
-          {features.map((feature, index) => (
-            <li key={feature.id}>
-              <a
-                href={`#${feature.id}`}
-                className="wh-rule flex items-baseline gap-3 border-b py-2.5 text-sm hover:text-(--wh-accent)"
-              >
-                <span aria-hidden className="font-mono text-xs text-fd-muted-foreground">
-                  {String(index + 1).padStart(2, "0")}
-                </span>
-                <span className="first-letter:uppercase">{feature.kicker}</span>
-              </a>
-            </li>
-          ))}
-        </ul>
+    <div aria-hidden className="wh-ledger relative mx-auto mt-14 w-full max-w-4xl px-5 sm:mt-16">
+      <div className="wh-ledger-head grid gap-x-4 border-b px-3 pb-2 font-mono text-[10.5px] uppercase tracking-[0.14em] text-fd-muted-foreground">
+        <span>task</span>
+        <span>queue</span>
+        <span>type</span>
+        <span>state</span>
+        <span className="text-right">attempt</span>
+        <span className="text-right">took</span>
       </div>
-    </nav>
+      <div className="wh-ledger-window overflow-hidden">
+        <div className="wh-ledger-roll">
+          {rows.map(([id, queue, type, state, attempt, took], index) => (
+            <div
+              key={`${id}-${index}`}
+              className="wh-ledger-row grid items-center gap-x-4 border-b px-3 py-2 font-mono text-[12px]"
+            >
+              <span className="text-fd-muted-foreground">{id}</span>
+              <span>{queue}</span>
+              <span className="truncate">{type}</span>
+              <span className={`flex items-center gap-1.5 ${ledgerStateClass[state]}`}>
+                <span aria-hidden className="wh-ledger-dot" />
+                {state}
+              </span>
+              <span className="text-right text-fd-muted-foreground">{attempt}</span>
+              <span className="whitespace-nowrap text-right text-fd-muted-foreground">{took}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -879,37 +837,10 @@ function ClosingCall() {
 
 function HomePage() {
   return (
-    /* wh-page-scale: on wide monitors the page renders at the density
-       of about 150% browser zoom. See the media rules in global.css. */
-    <div className="wh-page-scale flex flex-1 flex-col">
+    <div className="flex flex-1 flex-col">
       <HomeLayout {...baseOptions} className="flex-1">
         <Hero />
-        <FeatureNavigation />
         <DemoScreenshots />
-
-        {/* ---------- Language clients ---------- */}
-        <section className="mx-auto w-full max-w-7xl px-5 py-16 lg:px-8">
-          <Rule label="language clients" />
-          <div className="mt-10 grid gap-8 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] lg:gap-14">
-            <div>
-              <h2 className="text-balance text-2xl font-semibold leading-snug tracking-tight sm:text-[27px]">
-                Use the language you already deploy.
-              </h2>
-              <p className="mt-3 text-pretty text-[16px] leading-relaxed text-fd-muted-foreground">
-                TypeScript, Python, and Go clients send the same durable operations to PostgreSQL.
-                Each keeps your connection and transaction under application control.
-              </p>
-              <p className="mt-4">
-                <a href="/docs/quickstart" className="wh-link-underline text-[15px] font-medium">
-                  Run the quickstart →
-                </a>
-              </p>
-            </div>
-            <div className="min-w-0">
-              <CodeTabs name="languages" tabs={languageTabs} />
-            </div>
-          </div>
-        </section>
 
         {/* ---------- Feature tour: one real example per feature ---------- */}
         <div className="mx-auto w-full max-w-7xl px-5 lg:px-8">

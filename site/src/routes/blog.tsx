@@ -15,7 +15,7 @@ export const Route = createFileRoute("/blog")({
  */
 function BlogLayout() {
   return (
-    <div className="wh-page-scale flex flex-1 flex-col">
+    <div className="flex flex-1 flex-col">
       <HomeLayout {...baseOptions} className="flex-1">
         <Outlet />
         <SiteFooter />

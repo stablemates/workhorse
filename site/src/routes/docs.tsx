@@ -130,9 +130,7 @@ export const Route = createFileRoute("/docs")({
 
 function DocsRootLayout() {
   return (
-    /* wh-page-scale: on wide monitors the docs render at the density of
-       ~150% browser zoom — see the media rules in global.css. */
-    <div className="wh-page-scale flex flex-1 flex-col">
+    <div className="flex flex-1 flex-col">
       <DocsLayout
         {...baseOptions}
         tree={tree}

@@ -40,7 +40,7 @@ function SitePage() {
   const Content = pageLoader.getComponent(path);
 
   return (
-    <div className="wh-page-scale flex flex-1 flex-col">
+    <div className="flex flex-1 flex-col">
       <HomeLayout {...baseOptions} className="flex-1">
         <Content />
         <SiteFooter />
