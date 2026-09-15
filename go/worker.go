@@ -11,6 +11,7 @@ import (
 	pseudorand "math/rand/v2"
 	"os"
 	"reflect"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -184,6 +185,7 @@ type Worker struct {
 	maintenanceInterval  time.Duration
 	registryInterval     time.Duration
 	registryEnabled      bool
+	hostname             string
 	instanceID           string
 	scheduleNamespaces   []string
 	scheduleCatchupLimit int
@@ -348,6 +350,7 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		maintenanceInterval:  maintenanceInterval,
 		registryInterval:     registryInterval,
 		registryEnabled:      !options.DisableRegistry,
+		hostname:             workerHostname(),
 		scheduleNamespaces:   scheduleNamespaces,
 		scheduleCatchupLimit: scheduleCatchupLimit,
 		shutdownGracePeriod:  shutdownGracePeriod,
@@ -634,17 +637,13 @@ func (worker *Worker) refreshRegistration(ctx context.Context, executor Executor
 	if !worker.registryEnabled {
 		return
 	}
-	hostname, err := os.Hostname()
-	if err != nil || hostname == emptyString {
-		hostname = defaultWorkerName
-	}
 	maintenanceMS := max(int(worker.maintenanceInterval/time.Millisecond), 100)
 	rows, err := executor.Query(
 		ctx,
 		internalStatementRegistry[registerWorkerStatementName],
 		worker.workerID,
 		worker.instanceID,
-		hostname,
+		worker.hostname,
 		os.Getpid(),
 		worker.queues,
 		worker.scheduleNamespaces,
@@ -1138,10 +1137,17 @@ func (worker *Worker) unregisterHeartbeat(member *heartbeatMember) {
 	}
 }
 
-func (worker *Worker) heartbeatRegistered(member *heartbeatMember) bool {
+// registeredHeartbeats reports which of members are still registered, under one lock
+// acquisition for the whole fan-out.
+func (worker *Worker) registeredHeartbeats(members []*heartbeatMember) map[*heartbeatMember]bool {
+	registered := make(map[*heartbeatMember]bool, len(members))
 	worker.heartbeatMu.Lock()
 	defer worker.heartbeatMu.Unlock()
-	_, registered := worker.heartbeatMembers[member]
+	for _, member := range members {
+		if _, ok := worker.heartbeatMembers[member]; ok {
+			registered[member] = true
+		}
+	}
 	return registered
 }
 
@@ -1175,11 +1181,12 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 		FenceToken string `json:"fenceToken"`
 		LeaseMS    int    `json:"leaseMs"`
 	}
+	leaseMS := int(worker.leaseDuration / time.Millisecond)
 	requests := make([]lease, 0, len(members))
 	for _, member := range members {
 		requests = append(requests, lease{
-			TaskID: member.task.ID, FenceToken: fmt.Sprint(member.task.FenceToken),
-			LeaseMS: int(worker.leaseDuration / time.Millisecond),
+			TaskID: member.task.ID, FenceToken: strconv.FormatInt(member.task.FenceToken, 10),
+			LeaseMS: leaseMS,
 		})
 	}
 	payload, err := json.Marshal(requests)
@@ -1199,15 +1206,16 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 	}
 	statuses := make(map[string]ownershipStatus, len(rows))
 	for _, row := range rows {
-		status, parseErr := parseOwnershipStatus([]Row{row})
+		status, parseErr := parseOwnershipStatusRow(row)
 		if parseErr != nil {
 			worker.deliverHeartbeatError(members, parseErr)
 			return
 		}
 		statuses[stringValue(row[rowTaskIDField])] = status
 	}
+	registered := worker.registeredHeartbeats(members)
 	for _, member := range members {
-		if !worker.heartbeatRegistered(member) {
+		if !registered[member] {
 			continue
 		}
 		status := statuses[member.task.ID]
@@ -1224,8 +1232,9 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember) {
 }
 
 func (worker *Worker) deliverHeartbeatError(members []*heartbeatMember, err error) {
+	registered := worker.registeredHeartbeats(members)
 	for _, member := range members {
-		if worker.heartbeatRegistered(member) {
+		if registered[member] {
 			member.cancelHandler(err)
 			member.result <- ownershipResult{err: err}
 		}
@@ -1318,7 +1327,11 @@ func parseOwnershipStatus(rows []Row) (ownershipStatus, error) {
 	if len(rows) != 1 {
 		return emptyString, errors.New(invalidOwnershipResultMessage)
 	}
-	value, ok := rows[0][rowStatusField].(string)
+	return parseOwnershipStatusRow(rows[0])
+}
+
+func parseOwnershipStatusRow(row Row) (ownershipStatus, error) {
+	value, ok := row[rowStatusField].(string)
 	if !ok {
 		return emptyString, errors.New(invalidOwnershipResultMessage)
 	}
@@ -1661,11 +1674,18 @@ func handlerErrorEnvelope(err error, redact bool) map[string]any {
 	return map[string]any{errorNameField: name, errorMessageField: err.Error()}
 }
 
-func defaultWorkerID() string {
+// workerHostname resolves the process hostname once per worker; registration reports it on
+// every registry interval.
+func workerHostname() string {
 	hostname, err := os.Hostname()
 	if err != nil || hostname == emptyString {
-		hostname = defaultWorkerName
+		return defaultWorkerName
 	}
+	return hostname
+}
+
+func defaultWorkerID() string {
+	hostname := workerHostname()
 	var suffix [8]byte
 	if _, err := rand.Read(suffix[:]); err != nil {
 		return fmt.Sprintf(workerIDFallbackFormat, hostname, os.Getpid())

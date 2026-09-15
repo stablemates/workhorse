@@ -397,22 +397,50 @@ func serializeChildRequest(
 	return request, string(encoded), nil
 }
 
-func orderedChildResults(value any, mode childJoinMode) (any, error) {
-	decoded, err := decodedJSON(value)
-	if err != nil {
-		return nil, err
+type childSetRow struct {
+	Name    string         `json:"name"`
+	Result  any            `json:"result"`
+	Outcome map[string]any `json:"outcome"`
+}
+
+// decodeChildSetRows reads the children column once. pgx delivers jsonb already decoded, so
+// that shape is walked directly; raw JSON from database/sql is unmarshalled once.
+func decodeChildSetRows(value any) ([]childSetRow, error) {
+	var encoded []byte
+	switch value := value.(type) {
+	case []byte:
+		encoded = value
+	case string:
+		encoded = []byte(value)
+	case []any:
+		children := make([]childSetRow, len(value))
+		for index, item := range value {
+			document, ok := item.(map[string]any)
+			if !ok {
+				return nil, errors.New(invalidChildrenResultMessage)
+			}
+			name, ok := document[rowNameField].(string)
+			if !ok {
+				return nil, errors.New(invalidChildrenResultMessage)
+			}
+			outcome, _ := document[rowOutcomeField].(map[string]any)
+			children[index] = childSetRow{Name: name, Result: document[rowResultField], Outcome: outcome}
+		}
+		return children, nil
+	default:
+		return nil, errors.New(invalidChildrenResultMessage)
 	}
-	encoded, err := json.Marshal(decoded)
-	if err != nil {
-		return nil, err
-	}
-	var children []struct {
-		Name    string         `json:"name"`
-		Result  any            `json:"result"`
-		Outcome map[string]any `json:"outcome"`
-	}
+	var children []childSetRow
 	if err := json.Unmarshal(encoded, &children); err != nil {
 		return nil, errors.New(invalidChildrenResultMessage)
+	}
+	return children, nil
+}
+
+func orderedChildResults(value any, mode childJoinMode) (any, error) {
+	children, err := decodeChildSetRows(value)
+	if err != nil {
+		return nil, err
 	}
 	if mode == childAllSuccessModeValue {
 		results := make([]ChildSuccessResult, len(children))

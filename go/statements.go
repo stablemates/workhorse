@@ -105,6 +105,7 @@ const (
 	rowPayloadField                      = "payload"
 	rowResultField                       = "result"
 	rowChildrenField                     = "children"
+	rowNameField                         = "name"
 	rowResultBytesField                  = "result_bytes"
 	rowResultLimitBytesField             = "result_limit_bytes"
 	rowDeliveredAtField                  = "delivered_at"
