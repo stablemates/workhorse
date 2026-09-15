@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // MaxTaskDependencies is PostgreSQL's prerequisite fan-in limit for one task.
@@ -429,7 +430,7 @@ func (queue *Queue) EnqueueManyWithResults(
 	if len(requests) > MaxEnqueueBatchSize {
 		return nil, ErrEnqueueBatchTooLarge
 	}
-	payload, err := serializeEnqueueRequests(
+	inputs, err := serializeEnqueueRequests(
 		requests,
 		queue.defaultQueue,
 		time.Now().UTC(),
@@ -441,7 +442,10 @@ func (queue *Queue) EnqueueManyWithResults(
 	if err := AssertSchemaCompatible(ctx, queue.executor); err != nil {
 		return nil, err
 	}
-	payload, err = queue.applyPayloadContracts(ctx, requests, payload)
+	if err := queue.applyPayloadContracts(ctx, inputs); err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(inputs)
 	if err != nil {
 		return nil, err
 	}
@@ -470,67 +474,105 @@ func (queue *Queue) EnqueueManyWithResults(
 	return results, nil
 }
 
-func (queue *Queue) applyPayloadContracts(
-	ctx context.Context,
-	requests []EnqueueRequest,
-	payload []byte,
-) ([]byte, error) {
+// applyPayloadContracts validates each contracted payload and stamps the batch with the
+// contract fields PostgreSQL enforces. It looks each distinct task type up once per batch, so a
+// batch of one type costs one get_contract_definition_v1 round trip rather than one per request.
+func (queue *Queue) applyPayloadContracts(ctx context.Context, inputs []enqueueInput) error {
 	queue.contracts.mu.RLock()
 	contractsEnabled := queue.contracts.enabled
 	queue.contracts.mu.RUnlock()
 	if !contractsEnabled {
-		return payload, nil
+		return nil
 	}
-	var values []map[string]any
-	if err := decodeContractJSON(payload, &values); err != nil {
-		return nil, err
-	}
-	for index, request := range requests {
-		rows, err := queue.executor.Query(
-			ctx,
-			protocolStatementRegistry[getContractDefinitionStatementName],
-			request.Type,
-			nil,
-		)
-		if err != nil {
-			return nil, err
+	definitions := make(map[string]*payloadContract, len(inputs))
+	for index := range inputs {
+		input := &inputs[index]
+		contract, known := definitions[input.Type]
+		if !known {
+			loaded, err := queue.loadPayloadContract(ctx, input.Type)
+			if err != nil {
+				return err
+			}
+			contract = loaded
+			definitions[input.Type] = contract
 		}
-		if len(rows) == 0 {
+		if contract == nil {
 			continue
 		}
-		if len(rows) != 1 {
-			return nil, errorsNewInvalidContract()
-		}
-		row := rows[0]
-		version, ok := row[contractVersionField].(string)
-		if !ok {
-			return nil, errorsNewInvalidContract()
-		}
-		document, err := contractDocument(row[contractSchemaField])
+		encoded, err := json.Marshal(input.Payload)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		validator, err := queue.contracts.validator(
-			request.Type+contractCacheSeparator+version+contractCacheSeparator+contractPayloadKind,
-			document[contractPayloadSchemaField],
-		)
-		if err != nil {
-			return nil, err
+		var payload any
+		if err := decodeContractJSON(encoded, &payload); err != nil {
+			return err
 		}
-		if err := validator.Validate(values[index][rowPayloadField]); err != nil {
-			return nil, &TaskContractValidationError{
-				TaskType: request.Type,
-				Version:  version,
+		if err := contract.validator.Validate(payload); err != nil {
+			return &TaskContractValidationError{
+				TaskType: input.Type,
+				Version:  contract.version,
 				Kind:     contractPayloadKind,
 			}
 		}
-		values[index][contractVersionJSONField] = version
-		values[index][contractMaxPayloadBytesJSONField] = row[rowPayloadMaxBytesField]
-		values[index][contractMaxResultBytesJSONField] = row[rowResultMaxBytesField]
-		values[index][contractSensitivePayloadJSONField] = row[rowPayloadRedactKeysField]
-		values[index][contractSensitiveResultJSONField] = row[rowResultRedactKeysField]
+		input.ContractVersion = contract.version
+		input.PayloadMaxBytes = contract.payloadMaxBytes
+		input.ResultMaxBytes = contract.resultMaxBytes
+		input.SensitivePayloadKeys = contract.sensitivePayloadKeys
+		input.SensitiveResultKeys = contract.sensitiveResultKeys
 	}
-	return json.Marshal(values)
+	return nil
+}
+
+type payloadContract struct {
+	version              string
+	validator            *jsonschema.Schema
+	payloadMaxBytes      any
+	resultMaxBytes       any
+	sensitivePayloadKeys any
+	sensitiveResultKeys  any
+}
+
+// loadPayloadContract returns the current contract for a task type, or nil when the type has none.
+func (queue *Queue) loadPayloadContract(ctx context.Context, taskType string) (*payloadContract, error) {
+	rows, err := queue.executor.Query(
+		ctx,
+		protocolStatementRegistry[getContractDefinitionStatementName],
+		taskType,
+		nil,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	if len(rows) != 1 {
+		return nil, errorsNewInvalidContract()
+	}
+	row := rows[0]
+	version, ok := row[contractVersionField].(string)
+	if !ok {
+		return nil, errorsNewInvalidContract()
+	}
+	document, err := contractDocument(row[contractSchemaField])
+	if err != nil {
+		return nil, err
+	}
+	validator, err := queue.contracts.validator(
+		taskType+contractCacheSeparator+version+contractCacheSeparator+contractPayloadKind,
+		document[contractPayloadSchemaField],
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &payloadContract{
+		version:              version,
+		validator:            validator,
+		payloadMaxBytes:      row[rowPayloadMaxBytesField],
+		resultMaxBytes:       row[rowResultMaxBytesField],
+		sensitivePayloadKeys: row[rowPayloadRedactKeysField],
+		sensitiveResultKeys:  row[rowResultRedactKeysField],
+	}, nil
 }
 
 // SyncSchedules atomically reconciles one namespace of recurring definitions.
@@ -638,10 +680,10 @@ type enqueueInput struct {
 	Payload              any               `json:"payload"`
 	Priority             int               `json:"priority"`
 	ContractVersion      any               `json:"contractVersion"`
-	PayloadMaxBytes      int               `json:"payloadMaxBytes"`
-	ResultMaxBytes       int               `json:"resultMaxBytes"`
-	SensitivePayloadKeys []string          `json:"sensitivePayloadKeys"`
-	SensitiveResultKeys  []string          `json:"sensitiveResultKeys"`
+	PayloadMaxBytes      any               `json:"payloadMaxBytes"`
+	ResultMaxBytes       any               `json:"resultMaxBytes"`
+	SensitivePayloadKeys any               `json:"sensitivePayloadKeys"`
+	SensitiveResultKeys  any               `json:"sensitiveResultKeys"`
 	RunAt                *string           `json:"runAt,omitempty"`
 	Deadline             *string           `json:"deadline"`
 	ConcurrencyKey       any               `json:"concurrencyKey"`
@@ -662,7 +704,7 @@ func serializeEnqueueRequests(
 	defaultQueue string,
 	now time.Time,
 	traceContext map[string]string,
-) ([]byte, error) {
+) ([]enqueueInput, error) {
 	input := make([]enqueueInput, len(requests))
 	for index, request := range requests {
 		value, err := serializeEnqueueRequest(request, defaultQueue, now)
@@ -672,7 +714,7 @@ func serializeEnqueueRequests(
 		input[index] = value
 		input[index].TraceContext = traceContext
 	}
-	return json.Marshal(input)
+	return input, nil
 }
 
 func serializeEnqueueRequest(request EnqueueRequest, defaultQueue string, now time.Time) (enqueueInput, error) {

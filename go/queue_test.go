@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -917,5 +918,94 @@ func assertScheduleCount(t *testing.T, pool *pgxpool.Pool, namespace string, wan
 	}
 	if count != want {
 		t.Fatalf("schedule count: expected %d, received %d", want, count)
+	}
+}
+
+func TestQueueLooksEachContractedTaskTypeUpOncePerBatch(t *testing.T) {
+	compatibility := []workhorse.Row{
+		{"kind": "schema", "version": int64(testSchemaVersion)},
+		{"kind": "protocol", "version": int64(workhorse.ProtocolVersion)},
+	}
+	definition := workhorse.Row{
+		"version": "v1",
+		"schema": map[string]any{
+			"payload": map[string]any{"type": "object", "required": []any{"name"}},
+			"result":  true,
+		},
+		"payload_max_bytes":   int32(2048),
+		"result_max_bytes":    int32(4096),
+		"payload_redact_keys": []string{"secret"},
+		"result_redact_keys":  []string{},
+	}
+	executor := &queueExecutor{responses: [][]workhorse.Row{
+		compatibility,
+		{},
+		compatibility,
+		{definition},
+		{},
+		{
+			{"ordinal": int32(1), "task_id": "first", "outcome": "accepted", "reason": nil},
+			{"ordinal": int32(2), "task_id": "second", "outcome": "accepted", "reason": nil},
+			{"ordinal": int32(3), "task_id": "third", "outcome": "accepted", "reason": nil},
+		},
+	}}
+	queue := workhorse.NewQueue(executor, "go-contract")
+	ctx := context.Background()
+	err := queue.SyncContracts(ctx, map[string]workhorse.TaskTypeContracts{
+		"email.send": {CurrentVersion: "v1", Versions: map[string]workhorse.TaskContractVersion{"v1": {}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := queue.EnqueueManyWithResults(ctx, []workhorse.EnqueueRequest{
+		{Type: "email.send", Payload: map[string]any{"name": "one"}},
+		{Type: "email.send", Payload: map[string]any{"name": "two"}},
+		{Type: "audit.log", Payload: map[string]any{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected three results, received %d", len(results))
+	}
+	lookups := 0
+	for _, call := range executor.calls {
+		if strings.Contains(call.statement, "get_contract_definition_v1") {
+			lookups++
+		}
+	}
+	if lookups != 2 {
+		t.Fatalf("expected one contract lookup per distinct task type, recorded %d", lookups)
+	}
+	if len(executor.calls) != 6 {
+		t.Fatalf("expected six statements, recorded %d", len(executor.calls))
+	}
+	var request []map[string]any
+	encoded, ok := executor.calls[5].arguments[0].([]byte)
+	if !ok {
+		t.Fatalf("enqueue argument is %T, expected []byte", executor.calls[5].arguments[0])
+	}
+	if err := json.Unmarshal(encoded, &request); err != nil {
+		t.Fatal(err)
+	}
+	if request[0]["contractVersion"] != "v1" || request[1]["contractVersion"] != "v1" ||
+		request[0]["payloadMaxBytes"] != float64(2048) || request[0]["resultMaxBytes"] != float64(4096) {
+		t.Fatalf("contracted requests were not stamped: %#v", request[:2])
+	}
+	if keys, _ := request[0]["sensitivePayloadKeys"].([]any); len(keys) != 1 || keys[0] != "secret" {
+		t.Fatalf("sensitive payload keys were not carried: %#v", request[0]["sensitivePayloadKeys"])
+	}
+	if request[2]["contractVersion"] != nil || request[2]["payloadMaxBytes"] != float64(1048576) {
+		t.Fatalf("uncontracted request was altered: %#v", request[2])
+	}
+
+	executor.responses = [][]workhorse.Row{compatibility, {definition}}
+	_, err = queue.EnqueueManyWithResults(ctx, []workhorse.EnqueueRequest{
+		{Type: "email.send", Payload: map[string]any{"missing": "name"}},
+	})
+	var validation *workhorse.TaskContractValidationError
+	if !errors.As(err, &validation) || validation.Kind != "payload" || validation.Version != "v1" {
+		t.Fatalf("expected payload validation error, received %v", err)
 	}
 }
