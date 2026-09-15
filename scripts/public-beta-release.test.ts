@@ -105,7 +105,9 @@ describe("the 0.1.5 release", () => {
     // sidebar banner is the surface that still prints the version, and it must interpolate the
     // package constant. The `not.toMatch` below forbids a hand-typed version on either route.
     const docsLayout = await read("site/src/routes/docs.tsx");
-    expect(docsLayout).toContain('import { WORKHORSE_VERSION } from "@stablemates/workhorse/version"');
+    expect(docsLayout).toContain(
+      'import { WORKHORSE_VERSION } from "@stablemates/workhorse/version"',
+    );
     expect(docsLayout).toContain("v{WORKHORSE_VERSION}");
     expect(docsLayout).not.toMatch(/\d+\.\d+\.\d+/);
     expect(await read("site/src/routes/index.tsx")).not.toMatch(/\d+\.\d+\.\d+/);
