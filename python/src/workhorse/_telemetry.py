@@ -120,6 +120,16 @@ except ModuleNotFoundError as error:
     _OTEL_AVAILABLE = False
 else:
     _OTEL_AVAILABLE = True
+    _PROPAGATOR = TraceContextTextMapPropagator()
+    # The API returns proxies that follow a provider installed later, so resolving them once at
+    # import time is safe and saves a lookup per span and per log record.
+    _TRACER = trace.get_tracer(INSTRUMENTATION_NAME)
+    _LOGGER = get_logger(INSTRUMENTATION_NAME)
+    _SEVERITY_NUMBERS = {
+        "DEBUG": SeverityNumber.DEBUG,
+        "INFO": SeverityNumber.INFO,
+        "WARN": SeverityNumber.WARN,
+    }
 
 
 def _counter(name: str, description: str, unit: str) -> _Counter:
@@ -228,8 +238,8 @@ def start_span(
             for key, value in trace_context.items()
             if isinstance(key, str) and isinstance(value, str)
         }
-        parent = TraceContextTextMapPropagator().extract(carrier=carrier)
-    with trace.get_tracer(INSTRUMENTATION_NAME).start_as_current_span(
+        parent = _PROPAGATOR.extract(carrier=carrier)
+    with _TRACER.start_as_current_span(
         name,
         context=parent,
         kind=SpanKind.CONSUMER if consumer else SpanKind.INTERNAL,
@@ -248,7 +258,7 @@ def inject_trace_context() -> dict[str, str] | None:
     if not _OTEL_AVAILABLE:
         return None
     carrier: dict[str, str] = {}
-    TraceContextTextMapPropagator().inject(carrier)
+    _PROPAGATOR.inject(carrier)
     if "traceparent" not in carrier:
         return None
     encoded = json.dumps(carrier, separators=(",", ":"), ensure_ascii=False).encode()
@@ -270,13 +280,8 @@ def emit_log(
 ) -> None:
     if not _OTEL_AVAILABLE:
         return
-    severity_number = {
-        "DEBUG": SeverityNumber.DEBUG,
-        "INFO": SeverityNumber.INFO,
-        "WARN": SeverityNumber.WARN,
-    }[severity]
-    get_logger(INSTRUMENTATION_NAME).emit(
-        severity_number=severity_number,
+    _LOGGER.emit(
+        severity_number=_SEVERITY_NUMBERS[severity],
         severity_text=severity,
         event_name=event_name,
         body=body,
@@ -292,8 +297,12 @@ def record_claim(queue: str, duration_ms: float, tasks: Sequence[TaskRecord]) ->
             "workhorse.claim.result": "empty" if not tasks else "claimed",
         },
     )
+    # Every task in one claim shares the queue, so one add per task type is enough.
+    counts: dict[str, int] = {}
     for task in tasks:
-        _claimed.add(1, task_metric_attributes(task))
+        counts[task.type] = counts.get(task.type, 0) + 1
+    for task_type, count in counts.items():
+        _claimed.add(count, {"workhorse.queue.name": queue, "workhorse.task.type": task_type})
 
 
 def record_completion(task: TaskRecord) -> None:

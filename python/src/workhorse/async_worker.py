@@ -85,7 +85,8 @@ class _AsyncExecutorBridge:
             raise RuntimeError("AsyncWorker database bridge is not bound")
         async with lock:
             rows = await self._executor.rows(statement, parameters)
-        return [dict(row) for row in rows]
+        # Executors already return fresh dicts per row; nothing else holds them.
+        return list(rows)
 
 
 class _CheckpointContext(Protocol):

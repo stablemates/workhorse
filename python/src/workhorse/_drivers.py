@@ -85,10 +85,18 @@ class AsyncpgExecutor:
         self, statement: DriverStatement, parameters: Sequence[object] = ()
     ) -> list[Row]:
         records = await self.connection.fetch(statement.for_dialect(self.dialect), *parameters)
-        return [
-            {key: _decode_asyncpg_json(key, value) for key, value in dict(record).items()}
-            for record in records
-        ]
+        if not records:
+            return []
+        json_columns = _JSON_COLUMNS.intersection(records[0].keys())
+        rows: list[Row] = []
+        for record in records:
+            row = dict(record.items())
+            for column in json_columns:
+                value = row[column]
+                if isinstance(value, str):
+                    row[column] = json.loads(value)
+            rows.append(row)
+        return rows
 
 
 _JSON_COLUMNS = frozenset(
@@ -106,12 +114,6 @@ _JSON_COLUMNS = frozenset(
         "trace_context",
     }
 )
-
-
-def _decode_asyncpg_json(column: str, value: object) -> object:
-    if column in _JSON_COLUMNS and isinstance(value, str):
-        return json.loads(value)
-    return value
 
 
 def _mapping_rows(

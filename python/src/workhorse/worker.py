@@ -849,6 +849,7 @@ class Worker:
         self._last_maintenance_at = float("-inf")
         self._last_registry_refresh_at = float("-inf")
         self._instance_id = ""
+        self._hostname = socket.gethostname() or "python-worker"
         self._registered = False
         self._next_queue_index = 0
         self._state_lock = Lock()
@@ -1550,7 +1551,7 @@ class Worker:
                     (
                         self.worker_id,
                         self._instance_id,
-                        socket.gethostname() or "python-worker",
+                        self._hostname,
                         os.getpid(),
                         list(self.queues),
                         list(self.schedule_namespaces),
@@ -2116,38 +2117,41 @@ def _outcome_for_status(status: object, *, neutral: frozenset[str]) -> _AttemptO
         raise RuntimeError(f"PostgreSQL returned unknown lifecycle status {status!r}") from error
 
 
+_TELEMETRY_OUTCOMES: dict[_AttemptOutcome | None, _TaskExecutionOutcome] = {
+    "completed": "succeeded",
+    "failed": "failed",
+    "retry": "retry",
+    "lease_expired": "lease_lost",
+    "deadline_exceeded": "deadline_exceeded",
+    "attempt_timeout": "timeout",
+    "cancelled": "canceled",
+    "suspended_for_wait": "suspended",
+    "suspended_for_child": "suspended",
+    None: "unknown",
+}
+
+_HANDLER_SPAN_OUTCOMES: dict[_AttemptOutcome | None, str] = {
+    "completed": "succeeded",
+    "failed": "failed",
+    "retry": "retry",
+    "lease_expired": "stale",
+    "deadline_exceeded": "deadline_exceeded",
+    "attempt_timeout": "timeout_exceeded",
+    "cancelled": "canceled",
+    "suspended_for_wait": "suspended",
+    "suspended_for_child": "suspended",
+    None: "unknown",
+}
+
+
 def _telemetry_outcome(
     outcome: _AttemptOutcome | None,
 ) -> _TaskExecutionOutcome:
-    outcomes: dict[_AttemptOutcome | None, _TaskExecutionOutcome] = {
-        "completed": "succeeded",
-        "failed": "failed",
-        "retry": "retry",
-        "lease_expired": "lease_lost",
-        "deadline_exceeded": "deadline_exceeded",
-        "attempt_timeout": "timeout",
-        "cancelled": "canceled",
-        "suspended_for_wait": "suspended",
-        "suspended_for_child": "suspended",
-        None: "unknown",
-    }
-    return outcomes[outcome]
+    return _TELEMETRY_OUTCOMES[outcome]
 
 
 def _handler_span_outcome(outcome: _AttemptOutcome | None) -> str:
-    outcomes: dict[_AttemptOutcome | None, str] = {
-        "completed": "succeeded",
-        "failed": "failed",
-        "retry": "retry",
-        "lease_expired": "stale",
-        "deadline_exceeded": "deadline_exceeded",
-        "attempt_timeout": "timeout_exceeded",
-        "cancelled": "canceled",
-        "suspended_for_wait": "suspended",
-        "suspended_for_child": "suspended",
-        None: "unknown",
-    }
-    return outcomes[outcome]
+    return _HANDLER_SPAN_OUTCOMES[outcome]
 
 
 def _earliest_expiration(task: ClaimedTask) -> datetime | None:
