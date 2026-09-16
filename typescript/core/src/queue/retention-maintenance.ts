@@ -2,6 +2,10 @@ import { SQL_STATEMENTS } from "./sql-catalogue.generated.js";
 import { expectOneRow } from "../errors.js";
 import { logInfo, withSpan } from "../telemetry.js";
 import type {
+  ColdExportDataset,
+  ColdExportDatasetStatus,
+  ColdExportPolicyDefinition,
+  ColdExportStatus,
   Json,
   MaintenancePolicy,
   MaintenancePolicyDefinition,
@@ -73,6 +77,18 @@ export type RetentionPolicyRow = {
   application_statistics_rows_per_pass: number;
   operator_overrides: string[];
   updated_at: Date;
+};
+
+type ColdExportStatusRow = {
+  enabled: boolean;
+  dataset: ColdExportDataset;
+  exported_through: Date | null;
+  exportable_through: Date;
+  complete_segments: string | number;
+  exporting_segment_start: Date | null;
+  exporting_attempts: number | null;
+  last_error: Json | null;
+  updated_at: Date | null;
 };
 
 type MaintenancePolicyRow = {
@@ -184,6 +200,32 @@ function maintenancePolicy(row: MaintenancePolicyRow): MaintenancePolicy {
     ) as MaintenancePolicy["provenance"],
     updatedAt: row.updated_at,
   };
+}
+
+function coldExportStatus(rows: readonly ColdExportStatusRow[]): ColdExportStatus {
+  const datasets = Object.fromEntries(
+    rows.map((row): [ColdExportDataset, ColdExportDatasetStatus] => [
+      row.dataset,
+      {
+        exportedThrough: row.exported_through,
+        exportableThrough: row.exportable_through,
+        completeSegments: Number(row.complete_segments),
+        exporting:
+          row.exporting_segment_start === null
+            ? null
+            : { segmentStart: row.exporting_segment_start, attempts: row.exporting_attempts ?? 0 },
+        lastError: row.last_error,
+      },
+    ]),
+  ) as ColdExportStatus["datasets"];
+  const updatedAt = rows
+    .map((row) => row.updated_at)
+    .filter((value): value is Date => value !== null)
+    .reduce<Date | null>(
+      (latest, value) => (latest === null || value > latest ? value : latest),
+      null,
+    );
+  return { enabled: rows[0]?.enabled ?? false, datasets, updatedAt };
 }
 
 function maintenancePhaseResult(row: MaintenancePhaseRow): MaintenancePhaseResult {
@@ -423,6 +465,25 @@ export class RetentionMaintenanceModule extends QueueModule {
       [policyColumnNames(settings, MAINTENANCE_POLICY_COLUMNS)],
     );
     return maintenancePolicy(expectOneRow(result, "workhorse.revert_maintenance_policy_v1"));
+  }
+
+  async setColdExportPolicy(definition: ColdExportPolicyDefinition): Promise<ColdExportStatus> {
+    const result = await this.context.database.query<ColdExportStatusRow>(
+      SQL_STATEMENTS["set_cold_export_policy_v1"],
+      [definition.enabled, definition.from ?? null],
+    );
+    const status = coldExportStatus(result.rows);
+    logInfo("workhorse.cold_export_policy.synchronized", "Cold export policy synchronized", {
+      "workhorse.cold_export.enabled": status.enabled,
+    });
+    return status;
+  }
+
+  async getColdExportStatus(): Promise<ColdExportStatus> {
+    const result = await this.context.database.query<ColdExportStatusRow>(
+      SQL_STATEMENTS["get_cold_export_status_v1"],
+    );
+    return coldExportStatus(result.rows);
   }
 
   async getMaintenancePolicy(): Promise<MaintenancePolicy> {

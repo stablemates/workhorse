@@ -169,6 +169,7 @@ export type WorkhorseLogEvent =
   | "workhorse.tasks.promoted"
   | "workhorse.tasks.redrive_processed"
   | "workhorse.leases.recovered"
+  | "workhorse.cold_export_policy.synchronized"
   | "workhorse.maintenance.completed"
   | "workhorse.maintenance_policy.synchronized"
   | "workhorse.queue.paused"

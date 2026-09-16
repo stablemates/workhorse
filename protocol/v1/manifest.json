@@ -1,15 +1,15 @@
 {
   "formatVersion": 1,
-  "protocolVersion": 3,
+  "protocolVersion": 4,
   "schema": {
-    "installedVersion": 3,
+    "installedVersion": 4,
     "minimumVersion": 1,
-    "maximumVersion": 3,
+    "maximumVersion": 4,
     "baselineVersion": 1
   },
   "supportedClientProtocol": {
     "minimumVersion": 1,
-    "maximumVersion": 3
+    "maximumVersion": 4
   },
   "limits": {
     "defaultTaskValueMaxBytes": 1048576,
@@ -811,6 +811,42 @@
       "name": "prune_terminal_storage_v1",
       "arity": 2,
       "contract": "SELECT * FROM workhorse.prune_terminal_storage_v1($1::boolean, $2::timestamptz)",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "set_cold_export_policy_v1",
+      "arity": 2,
+      "contract": "SELECT * FROM workhorse.set_cold_export_policy_v1($1::boolean, $2::timestamptz)",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "get_cold_export_status_v1",
+      "arity": 0,
+      "contract": "SELECT * FROM workhorse.get_cold_export_status_v1()",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "claim_cold_export_segment_v1",
+      "arity": 4,
+      "contract": "SELECT * FROM workhorse.claim_cold_export_segment_v1($1::text, $2::text, $3::integer, $4::timestamptz)",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "read_cold_export_rows_v1",
+      "arity": 6,
+      "contract": "SELECT * FROM workhorse.read_cold_export_rows_v1($1::text, $2::timestamptz, $3::timestamptz, $4::timestamptz, $5::uuid, $6::integer)",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "complete_cold_export_segment_v1",
+      "arity": 8,
+      "contract": "SELECT workhorse.complete_cold_export_segment_v1($1::text, $2::timestamptz, $3::integer, $4::text, $5::text, $6::text, $7::bigint, $8::bigint) AS exported_through",
+      "catalogues": ["internal"]
+    },
+    {
+      "name": "fail_cold_export_segment_v1",
+      "arity": 4,
+      "contract": "SELECT workhorse.fail_cold_export_segment_v1($1::text, $2::timestamptz, $3::integer, $4::jsonb)",
       "catalogues": ["internal"]
     },
     {

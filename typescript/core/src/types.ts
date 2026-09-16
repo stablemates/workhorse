@@ -951,6 +951,35 @@ export interface RetentionPolicyImpact {
   };
 }
 
+/** The history relations cold export copies, one UTC day per segment. */
+export type ColdExportDataset = "task_event" | "attempt_history";
+
+/**
+ * Turn cold export on or off. Enabling starts each dataset at the UTC day of its oldest retained
+ * row unless `from` names a day; the start never moves once a dataset has one.
+ */
+export interface ColdExportPolicyDefinition {
+  enabled: boolean;
+  from?: Date;
+}
+
+export interface ColdExportDatasetStatus {
+  /** Exclusive, UTC-day-aligned. Every history day below it has a complete segment. */
+  exportedThrough: Date | null;
+  /** The newest day boundary a segment may end at: the day is closed and the rollup has passed it. */
+  exportableThrough: Date;
+  completeSegments: number;
+  /** The segment an exporter currently holds, or was abandoned mid-export, if any. */
+  exporting: { segmentStart: Date; attempts: number } | null;
+  lastError: Json | null;
+}
+
+export interface ColdExportStatus {
+  enabled: boolean;
+  datasets: Record<ColdExportDataset, ColdExportDatasetStatus>;
+  updatedAt: Date | null;
+}
+
 export interface MaintenancePolicyDefinition {
   timezone: string;
   partitionPreparationIntervalMs?: number;

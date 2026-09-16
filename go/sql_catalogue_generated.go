@@ -4,11 +4,11 @@ package workhorse
 
 const (
 	// ProtocolVersion is the SQL protocol version implemented by this module.
-	ProtocolVersion        = 3
+	ProtocolVersion        = 4
 	minimumProtocolVersion = 1
-	maximumProtocolVersion = 3
+	maximumProtocolVersion = 4
 	minimumSchemaVersion   = 1
-	maximumSchemaVersion   = 3
+	maximumSchemaVersion   = 4
 	// MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
 	MaxEnqueueBatchSize      = 1000
 	defaultTaskValueMaxBytes = 1048576
@@ -305,6 +305,12 @@ var internalStatementRegistry = map[string]string{
 	"rollup_stats_v1":                           `SELECT * FROM workhorse.rollup_stats_v1($1::boolean, $2::timestamptz, $3::integer)`,
 	"retain_history_v1":                         `SELECT * FROM workhorse.retain_history_v1($1::boolean, $2::timestamptz)`,
 	"prune_terminal_storage_v1":                 `SELECT * FROM workhorse.prune_terminal_storage_v1($1::boolean, $2::timestamptz)`,
+	"set_cold_export_policy_v1":                 `SELECT * FROM workhorse.set_cold_export_policy_v1($1::boolean, $2::timestamptz)`,
+	"get_cold_export_status_v1":                 `SELECT * FROM workhorse.get_cold_export_status_v1()`,
+	"claim_cold_export_segment_v1":              `SELECT * FROM workhorse.claim_cold_export_segment_v1($1::text, $2::text, $3::integer, $4::timestamptz)`,
+	"read_cold_export_rows_v1":                  `SELECT * FROM workhorse.read_cold_export_rows_v1($1::text, $2::timestamptz, $3::timestamptz, $4::timestamptz, $5::uuid, $6::integer)`,
+	"complete_cold_export_segment_v1":           `SELECT workhorse.complete_cold_export_segment_v1($1::text, $2::timestamptz, $3::integer, $4::text, $5::text, $6::text, $7::bigint, $8::bigint) AS exported_through`,
+	"fail_cold_export_segment_v1":               `SELECT workhorse.fail_cold_export_segment_v1($1::text, $2::timestamptz, $3::integer, $4::jsonb)`,
 	"sync_retention_policy_v1": `SELECT (policy).* FROM workhorse.sync_retention_policy_v1(
          $1::integer, $2::integer, $3::integer, $4::integer, $5::integer,
          $6::integer, $7::integer, $8::integer, $9::integer, $10::integer,
