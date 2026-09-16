@@ -21,8 +21,11 @@ import { createDashboardConformanceTransport } from "./conformance-harness.js";
  * across both runs is committed literally; a value that differs is nondeterministic by
  * construction and becomes a `$type` matcher (or a `$ref` when both runs returned an identifier
  * captured earlier). Per-exchange `coerce` entries force matchers onto values that happen to be
- * stable on one machine but are environment- or time-dependent. Review the diff like any contract
- * change: `pnpm dashboard-conformance:generate`.
+ * stable on one machine but are environment- or time-dependent. `reads/cron` coerces the
+ * `history_retention` routine's `due` flag because `dashboard_cron_v1` derives it from the wall
+ * clock against `historyRetentionLocalTime`, so two idle runs agree while runs before 03:00 UTC
+ * disagree with runs after it. Review the diff like any contract change:
+ * `pnpm dashboard-conformance:generate`.
  */
 
 type RawExchange = Omit<DashboardConformanceExchange, "expect"> & {
