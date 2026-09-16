@@ -134,11 +134,13 @@ links, and the single reference link.
 
 For either documentation layer:
 
-- Keep one idea per sentence and stay under 25 words where practical.
+- Keep one idea per sentence and stay under 25 words where practical. A contrast between two
+  things is one idea.
 - Avoid noun clusters longer than three words.
-- Put the condition first.
+- Put the condition first. An imperative may put its condition last.
 - Name the actor. Workhorse performs a state transition and gives a product-wide guarantee; the
   worker performs process behavior. Say PostgreSQL only when the point is that the database, not the
   worker, holds the authority.
-- Explain what a mechanism is for before explaining how it works.
+- Explain what a mechanism is for before explaining how it works. This holds per guide: state the
+  purpose once, early, and a later section may be pure mechanism.
 - Give each term one meaning and one part of speech.
