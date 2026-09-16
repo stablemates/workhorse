@@ -90,8 +90,8 @@ that attempt, while the worker stays alive to serve later tasks.
 
 A few consequences worth knowing:
 
-- A claim already in flight may still land after shutdown starts. That task gets drained
-  properly, not abandoned.
+- A claim already in flight may still land after shutdown starts. The worker drains that
+  task properly rather than abandoning it.
 - There's a configurable drain deadline after which the process exits anyway. A handler
   that ignores its abort signal doesn't get to block a deploy forever.
 - A hard kill leaves tasks marked active. That's fine: their leases expire and

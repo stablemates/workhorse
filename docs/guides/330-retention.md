@@ -42,8 +42,8 @@ Three constraints stop cleanup from destroying its own evidence.
 its window must be at least as long as every window that depends on it. Configure it shorter
 and Workhorse rejects the configuration rather than letting you orphan an audit trail.
 
-**Nothing is deleted before it's been summarised.** Statistics can only be rebuilt from raw
-history, so cleanup won't pass the statistics watermark. See
+**Cleanup deletes nothing before the rollup has summarised it.** Statistics can only be rebuilt
+from raw history, so cleanup won't pass the statistics watermark. See
 [320-statistics.md](320-statistics.md).
 
 **A task with descendants stays.** If a failed task was [redriven](340-redrive.md), it's the

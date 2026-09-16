@@ -55,7 +55,7 @@ write yourself.
 Suppose a cancellation and a completion arrive at almost the same moment. Both need the same
 row lock, so one gets there first and that one wins:
 
-- Cancel first? The later completion is refused. It can't resurrect the task.
+- Cancel first? Workhorse refuses the later completion. It can't resurrect the task.
 - Complete first? The cancellation reports the task already succeeded.
 
 Either way the answer is consistent, and repeating the request doesn't create duplicate

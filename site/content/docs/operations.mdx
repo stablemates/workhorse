@@ -56,8 +56,8 @@ inert and worker behavior is unchanged.
 
 TypeScript applications install `@stablemates/workhorse-otel` and compatible OpenTelemetry API
 peers. Configure the global SDK providers first, then call `registerOpenTelemetry()` once during
-process startup. Importing core or the adapter has no registration side effect, and a competing
-active provider is rejected. Keep the returned cleanup as `unregisterTelemetry`, then call
+process startup. Importing core or the adapter has no registration side effect, and Workhorse
+rejects a competing active provider. Keep the returned cleanup as `unregisterTelemetry`, then call
 `unregisterTelemetry()` after workers and observers stop.
 
 Worker metrics use queue, task type, and a closed outcome vocabulary. Task IDs remain on sampled
