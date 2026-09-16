@@ -93,6 +93,18 @@ tenant isolation.
 Workaround: mount the dashboard behind your application's existing authentication boundary and
 return its verified operator from `authorize`.
 
+## Tenant isolation is a database boundary
+
+Workhorse enforces a tenant boundary only between databases. Inside one database, a task carries
+its tenant as a concurrency key, a budget name, and a tag, which give fair share, a per-tenant cap,
+and filterable reads. Nothing checks that those three agree, retention windows apply to every
+tenant alike, and an administrator sees and acts on every tenant's tasks. Tenant-scoped operator
+access waits on the authenticated principal that roles would introduce.
+
+Workaround: give a tenant that needs data separation or its own retention windows its own
+database, and follow the [multi-tenancy](/docs/multi-tenancy) page for the shared-database
+convention.
+
 ## Next
 
 - [Core concepts](/docs/concepts) — the guarantees behind these boundaries

@@ -4,6 +4,8 @@ This runbook explains how to execute Workhorse's benchmark suite, preserve repro
 
 ## Recorded evidence
 
+- [2026-09-16 tenant cardinality analysis](benchmarks/2026-09-16-tenant-cardinality-analysis.md): claim admission, tag filter, budget, and health cost from 100 through 100,000 tenants on one queue, interpreted in [ADR 0069](decisions/0069-isolate-tenants-by-database-and-carry-tenant-identity-as-task-metadata.md).
+- [`results/2026-09-16-tenant-cardinality.json`](benchmarks/results/2026-09-16-tenant-cardinality.json): keyed and budgeted profile artifact with plan node types and relation sizes per rung.
 - [`results/2026-08-24-dashboard-read-surface.json`](benchmarks/results/2026-08-24-dashboard-read-surface.json): loaded dashboard plans plus WH-388 task and queue request comparisons with statement counts and latency percentiles.
 - [2026-08-14 dependency operations smoke analysis](benchmarks/2026-08-14-dependency-operations-smoke-analysis.md): fan-in, cancellation policy, dependency health, and claim-plan cost against retained terminal history.
 - [`results/2026-08-14-dependency-operations-smoke.json`](benchmarks/results/2026-08-14-dependency-operations-smoke.json): provenance-bearing dependency operations smoke artifact on PostgreSQL 18.

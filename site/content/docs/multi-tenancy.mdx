@@ -1,0 +1,138 @@
+---
+title: Multi-tenancy
+description: Run many tenants on Workhorse, with one database each or one shared database whose tasks carry the tenant.
+---
+
+A tenant is a customer, team, or account whose work you must keep fair and bounded, and sometimes
+apart. Workhorse offers two ways to do that, and the difference is who enforces the boundary.
+
+**Isolated tenancy** gives each tenant its own database, and PostgreSQL enforces the boundary.
+**Shared tenancy** puts every tenant in one database, and every task carries its tenant as
+metadata the application keeps consistent. Pick isolated tenancy when a tenant's rows may not sit
+in the same tables as another's. Pick shared tenancy when many tenants need fair share and
+per-tenant limits rather than data separation.
+
+## Isolated tenancy: one database per tenant
+
+Install the schema into one database per tenant and point one worker fleet at each. Tasks, queues,
+schedules, policies, budgets, retention, and the dashboard are separate because the databases are.
+Nothing in the schema has to know about tenants.
+
+The cost is operational. Each database upgrades on its own, so `workhorse schema migrate` runs once
+per tenant on a deploy. Each fleet holds its own connections, and each worker binds to one
+database. Telemetry is separate too: the process resource attributes name the tenant, one fleet at
+a time.
+
+## Shared tenancy: the tenant rides on the task
+
+In a shared database the tenant is not a column. It is the same identifier written to three enqueue
+options that Workhorse already enforces:
+
+- `concurrencyKey` gives the tenant fair share inside a queue. A concurrency policy with
+  `maxActivePerKey` caps how many of one tenant's tasks run at once, and a rate policy with `perKey`
+  gives each tenant its own token bucket. See [concurrency policies](/docs/concurrency-policies)
+  and [rate limits](/docs/rate-limits).
+- `budget` caps one tenant's work across every queue. Synchronize one budget per tenant with
+  `Queue.syncBudgets`, and each task names its tenant's budget.
+- A `tenant:` tag makes the tenant filterable. `Admin.listTasks`, dead-letter listing, redrive
+  filters, and the dashboard task list accept a tag filter, so an operator can see one tenant's work
+  at a glance.
+
+<Tabs items={["TypeScript", "Python", "Go"]}>
+  <Tab value="TypeScript">
+    ```ts
+    const tenant = "acme";
+
+    await queue.syncConcurrencyPolicies("workers", [
+      { queue: "reports", maxActive: 40, maxActivePerKey: 4 },
+    ]);
+    await queue.syncBudgets("workers", [{ name: tenant, maxActive: 8 }]);
+
+    await queue.enqueue("report.generate", { month: "2026-08" }, {
+      queue: "reports", concurrencyKey: tenant, budget: tenant, tags: [`tenant:${tenant}`],
+    });
+    ```
+
+  </Tab>
+  <Tab value="Python">
+    ```python
+    tenant = "acme"
+
+    queue.sync_concurrency_policies("workers", [
+        ConcurrencyPolicyDefinition(queue="reports", max_active=40, max_active_per_key=4),
+    ])
+    queue.sync_budgets("workers", [BudgetDefinition(name=tenant, max_active=8)])
+
+    queue.enqueue("report.generate", {"month": "2026-08"}, EnqueueOptions(
+        queue="reports", concurrency_key=tenant, budget=tenant, tags=[f"tenant:{tenant}"],
+    ))
+    ```
+
+  </Tab>
+  <Tab value="Go">
+    ```go
+    tenant := "acme"
+    perTenant, tenantCap := 4, 8
+
+    _, err := queue.SyncConcurrencyPolicies(ctx, "workers", []workhorse.ConcurrencyPolicyDefinition{{
+    	Queue: "reports", MaxActive: 40, MaxActivePerKey: &perTenant,
+    }})
+    _, err = queue.SyncBudgets(ctx, "workers", []workhorse.BudgetDefinition{{
+    	Name: tenant, MaxActive: &tenantCap,
+    }})
+
+    _, err = queue.Enqueue(ctx, "report.generate", map[string]any{"month": "2026-08"},
+    	workhorse.EnqueueOptions{
+    		Queue: "reports", ConcurrencyKey: tenant, Budget: tenant, Tags: []string{"tenant:" + tenant},
+    	})
+    ```
+
+  </Tab>
+</Tabs>
+
+Go applications set `ConcurrencyKey`, `Budget`, and `Tags` on `EnqueueOptions` and synchronize
+with `Queue.SyncBudgets`. Python applications set `concurrency_key`, `budget`, and `tags` and
+synchronize with `Queue.sync_budgets` or `AsyncQueue.sync_budgets`.
+
+A queue is a dispatch lane, not a tenant. Tenants share queues, and the key and budget keep them
+fair. A queue per tenant works for a handful of tenants, but it multiplies health rows, worker
+queue lists, and policy rows without adding any isolation.
+
+A recurring schedule names its tenant through the `concurrencyKey` in its task definition. Schedule
+definitions do not carry tags or a budget yet, so a scheduled task has fair share but no cross-queue
+cap until the handler enqueues follow-up work with the full set.
+
+## What shared tenancy does not do
+
+The boundary is a convention your application keeps. Nothing rejects a task whose key, tag, and
+budget disagree.
+
+Retention is per installation. Every tenant's history ages under the same windows. A tenant that
+needs its own windows needs its own database.
+
+Operator access is not tenant-scoped. An administrator sees every tenant's tasks, and an authorized
+cancel, redrive, or purge acts on any task. A tag filter narrows a view; it does not enforce a
+boundary. Workhorse will scope operator actions to a tenant once it has an authenticated principal
+to scope them to. The [limitations](/docs/limitations) page tracks that gap.
+
+Metrics never carry the tenant. Queue and task type bound the cardinality of every counter and
+histogram, and a tag or key would let tenant count multiply the series. A handler that wants the
+tenant on its own spans reads it from the payload.
+
+## Dispatch cost does not grow with tenant count
+
+Workhorse counts a tenant's active tasks through a partial index on the key, and a budget's active
+tasks through a partial index on the budget name, so admitting one task never scans the other
+tenants. When the tenants at the head of a queue are all at capacity, `claim_v1` passes over them
+inside a bounded window of 100 ready rows and admits the next tenant's work.
+
+The tenant cardinality benchmark loads one queue with 100 through 100,000 tenants, each carrying a
+key, a tag, and its own budget, with the first 40 tenants already at capacity at the head of the
+queue. Claim latency stays flat across the ladder. The exact figures are in the repository's
+benchmark analysis for 2026-09-16.
+
+## Next
+
+- [Concurrency policies](/docs/concurrency-policies) — fair share inside a queue and a cap across queues
+- [Rate limits](/docs/rate-limits) — one token bucket per tenant
+- [Maintenance](/docs/maintenance) — the installation-wide retention windows shared tenants live under
